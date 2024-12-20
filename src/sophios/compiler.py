@@ -896,6 +896,12 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                 val_list.append(populate_scalar_val(
                     {'type': in_dict['type']['items'], 'value': val, 'format': in_dict.get('format')}))
             new_keyval = {key: val_list}
+        elif isinstance(in_dict['type'], list) and 'array' == in_dict['type'][1]['type']:
+            val_list = []
+            for val in in_dict['value']:
+                val_list.append(populate_scalar_val(
+                    {'type': in_dict['type'][1]['items'][1], 'value': val, 'format': in_dict.get('format')}))
+            new_keyval = {key: val_list}
         else:
             new_keyval = {key: populate_scalar_val(in_dict)}
         # else:
