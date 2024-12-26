@@ -68,12 +68,12 @@ jobs:
     runs-on: [self-hosted, linux]
 
     steps:
-    - name: Checkout workflow-inference-compiler
+    - name: Checkout sophios
       uses: actions/checkout@v3
       with:
-        repository: ${{ inputs.wic_owner }}/workflow-inference-compiler
+        repository: ${{ inputs.wic_owner }}/sophios
         ref: ${{ inputs.wic_ref }}
-        path: workflow-inference-compiler
+        path: sophios
 
     - name: Checkout biobb_adapters
       if: always()
@@ -109,7 +109,7 @@ jobs:
     # Using pypy increases performance / decreases cwltool runtime by about a minute.
     - name: Append pypy to conda environment files
       if: runner.os != 'Windows'
-      run: cd workflow-inference-compiler/install/ && echo "  - pypy" >> system_deps.yml
+      run: cd sophios/install/ && echo "  - pypy" >> system_deps.yml
 
     - name: Remove old mamba environment
       if: always()
@@ -128,7 +128,7 @@ jobs:
       with:
         miniforge-variant: Miniforge-pypy3
         miniforge-version: 24.7.1-0
-        environment-file: workflow-inference-compiler/install/system_deps.yml
+        environment-file: sophios/install/system_deps.yml
         activate-environment: wic_github_actions
         channels: conda-forge
         python-version: "3.9.*" # pypy is not yet compatible with 3.10 and 3.11
@@ -140,7 +140,7 @@ jobs:
 
     - name: Install Workflow Inference Compiler
       if: always()
-      run: cd workflow-inference-compiler/ && pip install ".[all_except_runner_src]"
+      run: cd sophios/ && pip install ".[all_except_runner_src]"
 
     - name: Install Molecular Modeling Workflows
       if: always()
@@ -153,48 +153,48 @@ jobs:
 
     - name: Generate Sophios Python API Workflows (*.py -> *.wic)
       if: always()
-      run: cd workflow-inference-compiler/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
+      run: cd sophios/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
 
     - name: Generate Sophios Validation Jsonschema
       if: always()
-      run: cd workflow-inference-compiler/ && sophios --generate_schemas
+      run: cd sophios/ && sophios --generate_schemas
 
       # Please read docs/validation.md#Property-Based-Testing
       # This is essentially an integration test for all of the
       # WIC Python API workflows as well as the WIC Python API itself.
     - name: Validate Sophios Python API Workflows (*.py -> *.wic)
       if: always()
-      run: cd workflow-inference-compiler/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
+      run: cd sophios/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
 
     - name: cwl-docker-extract (i.e. recursively docker pull)
       if: always()
-      run: cd workflow-inference-compiler/ && pytest tests/test_examples.py -k test_cwl_docker_extract
+      run: cd sophios/ && pytest tests/test_examples.py -k test_cwl_docker_extract
       # For self-hosted runners, make sure the docker cache is up-to-date.
 
     - name: PyTest Run Workflows
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd workflow-inference-compiler/ && pytest tests/test_examples.py -k test_run_workflows_on_push --workers 8 --cwl_runner cwltool # --cov
+      run: cd sophios/ && pytest tests/test_examples.py -k test_run_workflows_on_push --workers 8 --cwl_runner cwltool # --cov
 
     - name: PyTest Run REST Core Tests
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd workflow-inference-compiler/ && pytest tests/test_rest_core.py -k test_rest_core --cwl_runner cwltool
+      run: cd sophios/ && pytest tests/test_rest_core.py -k test_rest_core --cwl_runner cwltool
 
     - name: PyTest Run REST WFB Tests
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd workflow-inference-compiler/ && pytest tests/test_rest_wfb.py -k test_rest_wfb --cwl_runner cwltool
+      run: cd sophios/ && pytest tests/test_rest_wfb.py -k test_rest_wfb --cwl_runner cwltool
 
     - name: PyTest Run ICT to CLT conversion Tests
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd workflow-inference-compiler/ && pytest tests/test_ict_to_clt_conversion.py -k test_ict_to_clt
+      run: cd sophios/ && pytest tests/test_ict_to_clt_conversion.py -k test_ict_to_clt
 
     - name: PyTest Run update wfb payload Tests
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd workflow-inference-compiler/ && pytest tests/test_fix_payload.py -k test_fix
+      run: cd sophios/ && pytest tests/test_fix_payload.py -k test_fix
 
     # NOTE: The steps below are for repository_dispatch only. For all other steps, please insert above
     # this comment.
@@ -232,7 +232,7 @@ jobs:
       # https://github.com/actions/runner/issues/834#issuecomment-907096707
       # Use inputs.sender_repo to reply the original sender.
       if: always()
-      uses: ./workflow-inference-compiler/.github/my_actions/reply_sender/ # Must start with ./
+      uses: ./sophios/.github/my_actions/reply_sender/ # Must start with ./
       with:
         github_repository: ${{ github.repository }}
         event_type: ${{ inputs.event_type }}

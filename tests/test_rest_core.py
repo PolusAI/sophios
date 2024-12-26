@@ -132,6 +132,7 @@ def prepare_call_rest_api(inp_path: Path) -> Json:
     res: Json = asyncio.run(restapi.compile_wf(req))  # call to rest api
     return res
 
+
 @pytest.mark.skip_pypi_ci
 @pytest.mark.fast
 def test_rest_core_single_node() -> None:
@@ -148,6 +149,7 @@ def test_rest_core_single_node() -> None:
     retval = run_cwl_local(workflow_name, 'cwltool', 'docker', False)
     assert retval == 0
 
+
 @pytest.mark.skip_pypi_ci
 def test_rest_core_single_node_bbbc() -> None:
     """A simple single node sophios/restapi test"""
@@ -162,6 +164,7 @@ def test_rest_core_single_node_bbbc() -> None:
     write_out_to_disk(res, workflow_name)
     retval = run_cwl_local(workflow_name, 'cwltool', 'docker', False)
     assert retval == 0
+
 
 @pytest.mark.skip_pypi_ci
 def test_rest_core_bbbc_download_wfb() -> None:
