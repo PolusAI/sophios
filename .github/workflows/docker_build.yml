@@ -23,8 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         # NOTE: Use a matrix (instead of dockerBuild.sh) for parallelism
-        dockerfile: [amazon, debian, fedora, redhat,
-                     amazon_pypy, debian_pypy, fedora_pypy, redhat_pypy]
+        dockerfile: [amazon, debian, fedora, redhat]
     runs-on: [ubuntu-latest]
 
     steps:

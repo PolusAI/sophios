@@ -1,4 +1,4 @@
-FROM condaforge/Miniforge-pypy3
+FROM condaforge/miniforge3
 
 RUN mamba install -c conda-forge numpy scipy
 
