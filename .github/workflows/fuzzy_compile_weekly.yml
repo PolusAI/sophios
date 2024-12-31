@@ -35,13 +35,13 @@ jobs:
     runs-on: [self-hosted, linux]
 
     steps:
-      - name: Checkout workflow-inference-compiler
+      - name: Checkout sophios
         if: always()
         uses: actions/checkout@v3
         with:
-          repository: ${{ github.repository_owner }}/workflow-inference-compiler
+          repository: ${{ github.repository_owner }}/sophios
           ref: master
-          path: workflow-inference-compiler
+          path: sophios
 
       - name: Checkout biobb_adapters
         if: always()
@@ -73,14 +73,14 @@ jobs:
         with:
           miniforge-variant: Miniforge-pypy3
           miniforge-version: 24.7.1-0
-          environment-file: workflow-inference-compiler/install/system_deps.yml
+          environment-file: sophios/install/system_deps.yml
           activate-environment: wic
           channels: conda-forge
           python-version: "3.9.*" # pypy is not yet compatible with 3.10 and 3.11
 
       - name: Install Workflow Inference Compiler
         if: always()
-        run: cd workflow-inference-compiler/ && pip install ".[all_except_runner_src]"
+        run: cd sophios/ && pip install ".[all_except_runner_src]"
 
       - name: Install Molecular Modeling Workflows
         if: always()
@@ -93,47 +93,47 @@ jobs:
 
       - name: Generate Sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd workflow-inference-compiler/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
+        run: cd sophios/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
 
       - name: Generate Sophios Validation Jsonschema
         if: always()
-        run: cd workflow-inference-compiler/ && sophios --generate_schemas
+        run: cd sophios/ && sophios --generate_schemas
 
         # Please read docs/validation.md#Property-Based-Testing
         # This is essentially an integration test for all of the
         # WIC Python API workflows as well as the WIC Python API itself.
       - name: Validate Sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd workflow-inference-compiler/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
+        run: cd sophios/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
 
 # Since a randomly chosen subschema is used every time, repeat 10X for more coverage.
 
       - name: PyTest Fuzzy Compile
-        run: cd workflow-inference-compiler/ && pytest -k test_fuzzy_compile
+        run: cd sophios/ && pytest -k test_fuzzy_compile
 
       - name: PyTest Fuzzy Compile
-        run: cd workflow-inference-compiler/ && pytest -k test_fuzzy_compile
+        run: cd sophios/ && pytest -k test_fuzzy_compile
 
       - name: PyTest Fuzzy Compile
-        run: cd workflow-inference-compiler/ && pytest -k test_fuzzy_compile
+        run: cd sophios/ && pytest -k test_fuzzy_compile
 
       - name: PyTest Fuzzy Compile
-        run: cd workflow-inference-compiler/ && pytest -k test_fuzzy_compile
+        run: cd sophios/ && pytest -k test_fuzzy_compile
 
       - name: PyTest Fuzzy Compile
-        run: cd workflow-inference-compiler/ && pytest -k test_fuzzy_compile
+        run: cd sophios/ && pytest -k test_fuzzy_compile
 
       - name: PyTest Fuzzy Compile
-        run: cd workflow-inference-compiler/ && pytest -k test_fuzzy_compile
+        run: cd sophios/ && pytest -k test_fuzzy_compile
 
       - name: PyTest Fuzzy Compile
-        run: cd workflow-inference-compiler/ && pytest -k test_fuzzy_compile
+        run: cd sophios/ && pytest -k test_fuzzy_compile
 
       - name: PyTest Fuzzy Compile
-        run: cd workflow-inference-compiler/ && pytest -k test_fuzzy_compile
+        run: cd sophios/ && pytest -k test_fuzzy_compile
 
       - name: PyTest Fuzzy Compile
-        run: cd workflow-inference-compiler/ && pytest -k test_fuzzy_compile
+        run: cd sophios/ && pytest -k test_fuzzy_compile
 
       - name: PyTest Fuzzy Compile
-        run: cd workflow-inference-compiler/ && pytest -k test_fuzzy_compile
+        run: cd sophios/ && pytest -k test_fuzzy_compile

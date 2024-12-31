@@ -34,12 +34,12 @@ jobs:
     runs-on: [self-hosted, linux]
 
     steps:
-    - name: Checkout workflow-inference-compiler
+    - name: Checkout sophios
       uses: actions/checkout@v3
       with:
-        repository: ${{ github.repository_owner }}/workflow-inference-compiler
+        repository: ${{ github.repository_owner }}/sophios
         ref: master
-        path: workflow-inference-compiler
+        path: sophios
 
     - name: Checkout biobb_adapters
       if: always()
@@ -78,7 +78,7 @@ jobs:
     # Toil is currently incompatible with pypy
     # - name: Append pypy to conda environment files
     #   if: runner.os != 'Windows'
-    #   run: cd workflow-inference-compiler/install/ && echo "  - pypy" >> system_deps.yml
+    #   run: cd sophios/install/ && echo "  - pypy" >> system_deps.yml
 
     - name: Setup miniforge (linux, macos)
       if: always()
@@ -90,7 +90,7 @@ jobs:
         # another environment, better to avoid the problem altogether by
         # not using Miniforge-pypy3
         miniforge-version: 24.7.1-0
-        environment-file: workflow-inference-compiler/install/system_deps.yml
+        environment-file: sophios/install/system_deps.yml
         activate-environment: wic_github_actions
         use-mamba: true
         channels: conda-forge
@@ -103,7 +103,7 @@ jobs:
 
     - name: Install Workflow Inference Compiler
       if: always()
-      run: cd workflow-inference-compiler/ && pip install ".[all_except_runner_src]"
+      run: cd sophios/ && pip install ".[all_except_runner_src]"
 
     - name: Install Molecular Modeling Workflows
       if: always()
@@ -116,40 +116,40 @@ jobs:
 
     - name: Generate Sophios Python API Workflows (*.py -> *.wic)
       if: always()
-      run: cd workflow-inference-compiler/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
+      run: cd sophios/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
 
     - name: Generate Sophios Validation Jsonschema
       if: always()
-      run: cd workflow-inference-compiler/ && sophios --generate_schemas
+      run: cd sophios/ && sophios --generate_schemas
 
       # Please read docs/validation.md#Property-Based-Testing
       # This is essentially an integration test for all of the
       # Sophios Python API workflows as well as the WIC Python API itself.
     - name: Validate Sophios Python API Workflows (*.py -> *.wic)
       if: always()
-      run: cd workflow-inference-compiler/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
+      run: cd sophios/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
 
     - name: cwl-docker-extract (i.e. recursively docker pull)
       if: always()
-      run: cd workflow-inference-compiler/ && pytest -k test_cwl_docker_extract
+      run: cd sophios/ && pytest -k test_cwl_docker_extract
       # For self-hosted runners, make sure the docker cache is up-to-date.
 
     - name: PyTest Run Workflows (On Push)
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd workflow-inference-compiler/ && pytest -k test_run_workflows_on_push --workers 8 --cwl_runner toil-cwl-runner # --cov
+      run: cd sophios/ && pytest -k test_run_workflows_on_push --workers 8 --cwl_runner toil-cwl-runner # --cov
 
     - name: PyTest Run Inlined Workflows (On Push)
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd workflow-inference-compiler/ && pytest -k test_run_inlined_workflows_on_push --workers 8 --cwl_runner toil-cwl-runner # --cov
+      run: cd sophios/ && pytest -k test_run_inlined_workflows_on_push --workers 8 --cwl_runner toil-cwl-runner # --cov
 
     - name: PyTest Run Workflows (Weekly)
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd workflow-inference-compiler/ && pytest -k test_run_workflows_weekly --workers 8 --cwl_runner toil-cwl-runner # --cov
+      run: cd sophios/ && pytest -k test_run_workflows_weekly --workers 8 --cwl_runner toil-cwl-runner # --cov
 
     - name: PyTest Run Inlined Workflows (Weekly)
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd workflow-inference-compiler/ && pytest -k test_run_inlined_workflows_weekly --workers 8 --cwl_runner toil-cwl-runner # --cov
+      run: cd sophios/ && pytest -k test_run_inlined_workflows_weekly --workers 8 --cwl_runner toil-cwl-runner # --cov

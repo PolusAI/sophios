@@ -35,13 +35,13 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - name: Checkout workflow-inference-compiler
+      - name: Checkout sophios
         if: always()
         uses: actions/checkout@v3
         with:
-          repository: ${{ github.repository_owner }}/workflow-inference-compiler
+          repository: ${{ github.repository_owner }}/sophios
           ref: master
-          path: workflow-inference-compiler
+          path: sophios
 
       - name: Checkout biobb_adapters
         if: always()
@@ -73,7 +73,7 @@ jobs:
         with:
           miniforge-variant: Miniforge-pypy3
           miniforge-version: 24.7.1-0
-          environment-file: workflow-inference-compiler/install/system_deps.yml
+          environment-file: sophios/install/system_deps.yml
           activate-environment: wic
           use-mamba: true
           channels: conda-forge
@@ -82,11 +82,11 @@ jobs:
       - name: ShellCheck Script Quality
         if: always()
         # "SC1017 (error): Literal carriage return. Run script through tr -d '\r' ."
-        run: shellcheck -e SC1017 $(find workflow-inference-compiler/ -name "*.sh" -and -not -path "./3/*")
+        run: shellcheck -e SC1017 $(find sophios/ -name "*.sh" -and -not -path "./3/*")
 
       - name: Install Workflow Inference Compiler
         if: always()
-        run: cd workflow-inference-compiler/ && pip install ".[all_except_runner_src]"
+        run: cd sophios/ && pip install ".[all_except_runner_src]"
 
       - name: Install Molecular Modeling Workflows
         if: always()
@@ -99,39 +99,39 @@ jobs:
 
       - name: Generate Sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd workflow-inference-compiler/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
+        run: cd sophios/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
 
       - name: Generate Sophios Validation Jsonschema
         if: always()
-        run: cd workflow-inference-compiler/ && sophios --generate_schemas
+        run: cd sophios/ && sophios --generate_schemas
 
         # Please read docs/validation.md#Property-Based-Testing
         # This is essentially an integration test for all of the
         # Sophios Python API workflows as well as the Sophios Python API itself.
       - name: Validate Sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd workflow-inference-compiler/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
+        run: cd sophios/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
 
       - name: Build Documentation
         if: always()
-        run: cd workflow-inference-compiler/docs && make html
+        run: cd sophios/docs && make html
 
       - name: MyPy Check Type Annotations
         if: always()
-        run: cd workflow-inference-compiler/ && mypy src/ examples/ tests/
+        run: cd sophios/ && mypy src/ examples/ tests/
         # NOTE: Do not use `mypy .` because then mypy will check both src/ and build/ causing:
-        # src/workflow-inference-compiler/__init__.py: error: Duplicate module named "wic"
-        # (also at "./build/lib/workflow-inference-compiler/__init__.py")
+        # src/sophios/__init__.py: error: Duplicate module named "wic"
+        # (also at "./build/lib/sophios/__init__.py")
 
       - name: PyLint Check Code Quality
         if: always()
-        run: cd workflow-inference-compiler/ && pylint src/ examples/**/*.py tests/
+        run: cd sophios/ && pylint src/ examples/**/*.py tests/
         # NOTE: See fail-under threshold in .pylintrc
 
       - name: PEP8 Code Formatting
         if: always()
         id: autopep8
-        run: cd workflow-inference-compiler/ && autopep8 --exit-code --recursive --diff --max-line-length 120 examples/ src/ tests/
+        run: cd sophios/ && autopep8 --exit-code --recursive --diff --max-line-length 120 examples/ src/ tests/
       - name: Fail if autopep8 made changes
         if: steps.autopep8.outputs.exit-code == 2
         run: exit 1
@@ -140,12 +140,12 @@ jobs:
 
       - name: PyTest CWL Embedding Independence
         if: always()
-        run: cd workflow-inference-compiler/ && pytest -k test_cwl_embedding_independence # --cov --cov-config=.coveragerc_serial
+        run: cd sophios/ && pytest -k test_cwl_embedding_independence # --cov --cov-config=.coveragerc_serial
         # NOTE: This test MUST be run in serial! See is_isomorphic_with_timeout()
         timeout-minutes: 20 # backup timeout for windows
 
       - name: PyTest Inline Subworkflows
         if: always()
-        run: cd workflow-inference-compiler/ && pytest -k test_inline_subworkflows # --cov --cov-config=.coveragerc_serial
+        run: cd sophios/ && pytest -k test_inline_subworkflows # --cov --cov-config=.coveragerc_serial
         # NOTE: This test MUST be run in serial! See is_isomorphic_with_timeout()
         timeout-minutes: 20 # backup timeout for windows
