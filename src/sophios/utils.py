@@ -140,8 +140,12 @@ def get_steps_keys(steps: List[Yaml]) -> List[str]:
     Returns:
         List[str]: The name of each step in the given CWL workflow
     """
-    steps_keys = [step_dict['id'] for step_dict in steps]
-    # print(steps_keys)
+    steps_keys = []
+    for step_dict in steps:
+        if isinstance(step_dict, dict):
+            steps_keys.append(step_dict.get('id', ''))
+        else:
+            steps_keys.append('')
     return steps_keys
 
 
@@ -155,7 +159,7 @@ def get_subkeys(steps_keys: List[str]) -> List[str]:
     Returns:
         List[str]: The list of step keys associated with subworkflows of the current workflow.
     """
-    return [key for key in steps_keys if key.endswith('.wic')]
+    return [key for key in steps_keys if key and key.endswith('.wic')]
 
 
 def extract_implementation(yaml_tree: Yaml, wic: Yaml, yaml_path: Path) -> Tuple[str, Yaml]:
