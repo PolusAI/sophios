@@ -8,7 +8,7 @@ from typing import Dict, Any
 DRIVER_SCRIPT = '/python_cwl_driver.py'
 TYPES_SCRIPT = '/workflow_types.py'
 
-TYPES_SCRIPT_REL = '../workflow-inference-compiler/examples/scripts/workflow_types.py'
+TYPES_SCRIPT_REL = '../sophios/examples/scripts/workflow_types.py'
 
 # NOTE: VERY IMPORTANT: Since we have to programmatically import the python file in the compiler,
 # and since the act of importing it executes the entire file (i.e. including import statements),

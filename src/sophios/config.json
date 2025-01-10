@@ -1,7 +1,7 @@
 {
     "search_paths_cwl": {
         "global": [
-            "../workflow-inference-compiler/cwl_adapters",
+            "../sophios/cwl_adapters",
             "../image-workflows/cwl_adapters",
             "../biobb_adapters/biobb_adapters",
             "../mm-workflows/cwl_adapters"
@@ -12,7 +12,7 @@
     },
     "search_paths_wic": {
         "global": [
-            "../workflow-inference-compiler/docs/tutorials",
+            "../sophios/docs/tutorials",
             "../image-workflows/workflows",
             "../mm-workflows/examples"
         ]

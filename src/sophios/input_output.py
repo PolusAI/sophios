@@ -141,6 +141,21 @@ def write_config_to_disk(config: Json, config_file: Path) -> None:
         json.dump(config, f, indent=4, sort_keys=True)
 
 
+def check_sister_directories(parent_dir: Path, target_names: list[str]) -> bool:
+    """Checks if sister directories with given names exist."""
+
+    parent_path = Path(parent_dir)
+    if not parent_path.is_dir():
+        return False
+
+    for target_name in target_names:
+        sister_path = parent_path.parent / target_name
+        if not sister_path.is_dir():
+            return False
+
+    return True
+
+
 def get_config(config_file: Path, default_config_file: Path) -> Json:
     """Returns the config json object from config_file with absolute paths
 
@@ -152,10 +167,10 @@ def get_config(config_file: Path, default_config_file: Path) -> Json:
         Json: The config json object with absolute filepaths
     """
     global_config: Json = {}
-    proj_root_dir = 'workflow-inference-compiler'
+    ci_sister_dirs = ['mm-workflows', 'image-workflows']
     if not config_file.exists():
-        # check if sophios is run from  'project root' dir
-        if str(Path.cwd()).endswith(proj_root_dir):
+        # check if sophios is run from  'ci environment' dir
+        if check_sister_directories(Path.cwd(), ci_sister_dirs):
             if config_file == default_config_file:
                 global_config = get_default_config()
                 # write the default config object to the 'global_config.json' file in user's ~/wic directory

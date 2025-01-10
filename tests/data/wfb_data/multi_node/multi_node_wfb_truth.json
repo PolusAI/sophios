@@ -100,8 +100,8 @@
                 "width": 250,
                 "settings": {
                     "inputs": {
-                        "stitchPath": "omeconverter_2-outDir",
-                        "imgPath": "montage_4-outDir"
+                        "stitchPath": "montage_4-outDir",
+                        "imgPath": "omeconverter_2-outDir"
                     },
                     "outputs": {
                         "outDir": "imageassembler_5-outDir"

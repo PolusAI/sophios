@@ -6,6 +6,7 @@ on:
   schedule:
   # Run it every Tuesday at midnight.
     - cron: '0 0 * * 2'
+  workflow_dispatch:
 
 permissions:
   actions: read
