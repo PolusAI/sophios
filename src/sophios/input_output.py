@@ -152,10 +152,15 @@ def get_config(config_file: Path, default_config_file: Path) -> Json:
         Json: The config json object with absolute filepaths
     """
     global_config: Json = {}
-    proj_root_dir = 'sophios'
+    # project root dir end is "sophios"
+    # in both git install and pip install
+    # this is a cleaner way to generate config for CI without changing the yml file
+    # other wise the default config with buit-in cwl_adapters/ and examples
+    # won't be generated
+    file_root_dir = 'src/sophios'
     if not config_file.exists():
         # check if sophios is run from  'project root' dir
-        if str(Path.cwd()).endswith(proj_root_dir):
+        if str(Path(__file__).parent).endswith(file_root_dir):
             if config_file == default_config_file:
                 global_config = get_default_config()
                 # write the default config object to the 'global_config.json' file in user's ~/wic directory
