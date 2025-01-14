@@ -746,7 +746,7 @@ class Workflow(BaseModel):
 
         return compiler_info
 
-    def toJson(self) -> Json:
+    def get_cwl_workflow(self) -> Json:
         """Return the compiled Cwl and its inputs in one payload Json
         Returns:
             Json: Contains the compiled CWL and yaml inputs to the workflow.
