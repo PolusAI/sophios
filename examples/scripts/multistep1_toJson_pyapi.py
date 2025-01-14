@@ -25,7 +25,7 @@ def workflow() -> Workflow:
 
 if __name__ == '__main__':
     multistep1 = workflow()
-    workflow_json = multistep1.toJson()  # .run() here inside main
+    workflow_json = multistep1.get_cwl_workflow()  # .run() here inside main
     fname = 'workflow.json'
     paren_dir = Path(__file__).parent
     with open(paren_dir / 'ground_truth_multistep1.json', 'r', encoding='utf-8') as file:
