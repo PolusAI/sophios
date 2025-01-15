@@ -28,8 +28,8 @@ parser.add_argument('--version', action='version', version=__version__,
 parser.add_argument('--homedir', type=str, required=False, default=str(Path().home()),
                     help='''The users home directory.
                     This is necessary because CWL clears environment variables (e.g. HOME)''')
-parser.add_argument('--singularity_pull_dir', type=str, required=False, default=str(Path().cwd()),
-                    help='''The user specified pull directory for singularity image pull.
+parser.add_argument('--pull_dir', type=str, required=False, default=str(Path().cwd()),
+                    help='''The user specified pull directory for (singularity) image pull.
                     The default is the current working directory i.e. `pwd`''')
 parser.add_argument('--insert_steps_automatically', default=False, action="store_true",
                     help='''Attempt to fix inference failures by speculatively
