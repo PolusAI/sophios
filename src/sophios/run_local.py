@@ -245,7 +245,7 @@ def run_local(args: argparse.Namespace, rose_tree: RoseTree, cachedir: Optional[
         # https://github.com/DataBiosphere/toil/blob/6558c7f97fb37c6ef6f469c7ae614109050322f4/src/toil/options/cwl.py#L152
         docker_pull = []  # toil supports --force-docker-pull, but not --disable-pull
         cmd = ['toil-cwl-runner'] + docker_pull + net + provenance + docker_cmd_ + path_check
-        cmd += ['--outdir', 'outdir_toil',
+        cmd += ['--outdir', f'outdir_toil_{yaml_stem}',
                 '--jobStore', f'file:./jobStore_{yaml_stem}',  # NOTE: This is the equivalent of --cachedir
                 # TODO: Check --clean, --cleanWorkDir, --restart
                 '--clean', 'always',  # This effectively disables caching, but is reproducible
