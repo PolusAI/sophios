@@ -230,7 +230,7 @@ def run_workflows(yml_path_str: str, yml_path: Path, cwl_runner: str, args: argp
 
     # Finally, since there is an output file copying bug in cwltool,
     # we need to copy the output files manually. See comment above.
-    if args.copy_output_files:
+    if args.cwl_runner == 'cwltool' and args.copy_output_files:
         sophios.run_local.copy_output_files(yaml_stem)
 
 

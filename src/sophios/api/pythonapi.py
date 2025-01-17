@@ -797,7 +797,7 @@ class Workflow(BaseModel):
 
         # Finally, since there is an output file copying bug in cwltool,
         # we need to copy the output files manually. See comment above.
-        if args.copy_output_files:
+        if args.cwl_runner == 'cwltool' and args.copy_output_files:
             run_local_module.copy_output_files(self.process_name)
 
 # Process = Union[Step, Workflow]
