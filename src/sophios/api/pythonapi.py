@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 from sophios import compiler, input_output, plugins, utils_cwl, post_compile
 from sophios import run_local as run_local_module
-from sophios.cli import get_args
+from sophios.cli import get_args, get_known_and_unknown_args
 from sophios.utils_graphs import get_graph_reps
 from sophios.wic_types import CompilerInfo, RoseTree, StepId, Tool, Tools, YamlTree, Json
 
@@ -785,7 +785,7 @@ class Workflow(BaseModel):
         logger.info(f"Running {self.process_name}")
         plugins.logging_filters()
         compiler_info = self.compile(write_to_disk=True)
-        args = get_args(self.process_name, self.user_args)  # Use mock CLI args
+        args, unknown_args = get_known_and_unknown_args(self.process_name, self.user_args)  # Use mock CLI args
         rose_tree: RoseTree = compiler_info.rose
 
         post_compile.cwl_docker_extract(args.container_engine, args.pull_dir, self.process_name)
@@ -793,7 +793,11 @@ class Workflow(BaseModel):
             rose_tree = post_compile.remove_entrypoints(args.container_engine, rose_tree)
         post_compile.find_and_create_output_dirs(rose_tree)
         # Do NOT capture stdout and/or stderr and pipe warnings and errors into a black hole.
-        retval = run_local_module.run_local(args, rose_tree, args.cachedir, args.cwl_runner, True)
+        if args.toil_passthrough_flags == 'yes':
+            run_local_module.run_local(args, rose_tree, args.cachedir, args.cwl_runner,
+                                       True, passthrough_args=unknown_args)
+        else:
+            run_local_module.run_local(args, rose_tree, args.cachedir, args.cwl_runner, True)
 
         # Finally, since there is an output file copying bug in cwltool,
         # we need to copy the output files manually. See comment above.
