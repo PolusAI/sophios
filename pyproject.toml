@@ -21,6 +21,7 @@ dependencies = [
     # install separately using either `conda install graphviz` or `sudo apt install graphviz`.
     # This 'graphviz' is equivalent to `conda install python-graphviz` or
     # `sudo apt install python3-graphviz` ONLY.
+    "cwltool",
     "graphviz",
     "jsonschema",
     "pyyaml",
@@ -108,7 +109,6 @@ runners = [
 ]
 runners-src = [
     "toil[cwl] @ git+https://github.com/sameeul/toil.git",
-    "cwltool @ git+https://github.com/sameeul/cwltool.git",
     "cwl-utils @ git+https://github.com/sameeul/cwl-utils.git",
 ]
 # See docs/requirements.txt
