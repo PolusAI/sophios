@@ -125,6 +125,33 @@ parser.add_argument('--graph_dark_theme', default=False, action="store_true",
 parser.add_argument('--custom_net', type=str, required=False,
                     help='Passes --custom-net flag to cwltool.')
 
+# Toil pass through flags
+parser.add_argument('--toil_batchsystem', type=str, required=False, default='slurm',
+                    help='pass through flag for toil batch system')
+parser.add_argument('--toil_defaultMemory', type=str, required=False, default='10GB',
+                    help='pass through flag for toil default memory')
+parser.add_argument('--toil_defaulDisk', type=str, required=False, default='10Gi',
+                    help='pass through flag for toil default disk usage')
+parser.add_argument('--toil_maxCores', type=int, required=False, default=128,
+                    help='pass through flag for toil max number of cpu core usage')
+parser.add_argument('--toil_maxLocalJobs', type=int, required=False, default=128,
+                    help='pass through flag for toil max number of local jobs')
+parser.add_argument('--toil_slurmArgs', type=str, required=False,
+                    default='--export=ALL --partition=normal_cpu --error=serror.txt',
+                    help='pass through flag for toil slurm arguments')
+parser.add_argument('--toil_defaultCores', type=int, required=False, default=2,
+                    help='pass through flag for toil default number of cores per job')
+parser.add_argument('--toil_logLevel', type=str, required=False, default='CRITICAL',
+                    help='pass through flag for toil log level (OFF, CRITICAL, INFO, ERROR, WARN, INFO, DEBUG)')
+parser.add_argument('--toil_clusterStats', type=str, required=False, default='clusterStats.json',
+                    help='pass through flag for toil dumping cluster stats')
+parser.add_argument('--toil_coordinationDir', type=str, required=False, default=str(Path.cwd()),
+                    help='pass through flag for toil coordinationDir')
+parser.add_argument('--toil_workDir', type=str, required=False, default=str(Path.cwd()),
+                    help='pass through flag for toil workDir')
+parser.add_argument('--batchLogsDir', type=str, required=False, default=str(Path.cwd() / 'slurmlogs'),
+                    help='pass through flag for toil dumping directory for batch logs')
+
 
 def get_args(yaml_path: str = '', suppliedargs: list[str] = []) -> argparse.Namespace:
     """This is used to get mock command line arguments, default + suppled args
