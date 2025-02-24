@@ -132,8 +132,8 @@ def get_args(yaml_path: str = '', suppliedargs: list[str] = []) -> argparse.Name
     Returns:
         argparse.Namespace: The mocked command line arguments
     """
-    defaultargs = ['wic', '--yaml', yaml_path]  # ignore --yaml
+    defaultargs = ['sophios', '--yaml', yaml_path]  # ignore --yaml
     testargs = defaultargs + suppliedargs
     with patch.object(sys, 'argv', testargs):
-        args: argparse.Namespace = parser.parse_args()
+        args = parser.parse_args()
     return args

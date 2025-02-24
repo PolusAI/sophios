@@ -15,7 +15,7 @@ from sophios import compiler, input_output, plugins, utils_cwl, post_compile
 from sophios import run_local as run_local_module
 from sophios.cli import get_args
 from sophios.utils_graphs import get_graph_reps
-from sophios.wic_types import CompilerInfo, RoseTree, StepId, Tool, Tools, YamlTree, Json, Cwl, NodeData
+from sophios.wic_types import CompilerInfo, RoseTree, StepId, Tool, Tools, YamlTree, Json
 
 from ._types import ScatterMethod
 
