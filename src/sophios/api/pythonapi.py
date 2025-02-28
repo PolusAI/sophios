@@ -2,7 +2,7 @@
 """CLT utilities."""
 import logging
 from pathlib import Path
-from typing import Any, ClassVar, Optional, TypeVar, Union
+from typing import Any, ClassVar, Optional, TypeVar, Union, Dict, List
 
 import cwl_utils.parser as cu_parser
 import yaml
@@ -465,6 +465,10 @@ class Step(BaseModel):  # pylint: disable=too-few-public-methods
         ) as file:
             file.write(yaml.dump(self.yaml))
 
+    def get_inp_attr(self, __name: str) -> Any:
+        """Returns the input object of the given name"""
+        return self.inputs[self._input_names.index(__name)]
+
 
 def extract_tools_paths_NONPORTABLE(steps: list[Step]) -> Tools:
     """extract a Tools global configuration object from the NONPORTABLE paths hardcoded in the Steps.
@@ -488,7 +492,6 @@ class Workflow(BaseModel):
 
     steps: list  # list[Process]  # and cannot use Process defined after Workflow within a Workflow
     process_name: str
-    user_args: list[str]
     inputs: list[ProcessInput] = []
     outputs: list[ProcessOutput] = []
     _input_names: list[str] = PrivateAttr(default_factory=list)
@@ -499,11 +502,10 @@ class Workflow(BaseModel):
     # field(default=None, init=False, repr=False)
     # TypeError: 'ModelPrivateAttr' object is not iterable
 
-    def __init__(self, steps: list, workflow_name: str, user_args: list[str] = []):
+    def __init__(self, steps: list, workflow_name: str):
         data = {
             "process_name": workflow_name,
-            "steps": steps,
-            "user_args": user_args
+            "steps": steps
         }
         super().__init__(**data)
 
@@ -713,7 +715,21 @@ class Workflow(BaseModel):
                 subworkflows += step.flatten_subworkflows()
         return subworkflows
 
-    def compile(self, write_to_disk: bool = False) -> CompilerInfo:
+    def _convert_args_dict_to_args_list(self, args_dict: Dict[str, str]) -> List[str]:
+        """ A simple utility converting a dict whose keys are CLI flag/args and
+            values are CLI flag values
+        Args:
+            args_dict: A dictionary containing args and values
+
+        Returns:
+            List[str]: A syntactically correct list of arguments (CLI flags) and values
+        """
+        args_list: List[str] = []
+        for arg_name, arg_value in args_dict.items():
+            args_list += ['--' + arg_name, arg_value]
+        return args_list
+
+    def compile(self, write_to_disk: bool = False, args_dict: Dict[str, str] = {}) -> CompilerInfo:
         """Compile Workflow using WIC.
 
         Args:
@@ -726,7 +742,8 @@ class Workflow(BaseModel):
         """
         global global_config
         self._validate()
-        args = get_args(self.process_name, self.user_args)  # Use mock CLI args
+        user_args = self._convert_args_dict_to_args_list(args_dict)
+        args = get_args(self.process_name, user_args)  # Use mock CLI args
 
         graph = get_graph_reps(self.process_name)
         yaml_tree = YamlTree(StepId(self.process_name, 'global'), self.yaml)
@@ -746,13 +763,14 @@ class Workflow(BaseModel):
 
         return compiler_info
 
-    def get_cwl_workflow(self) -> Json:
+    def get_cwl_workflow(self, args_dict: Dict[str, str] = {}) -> Json:
         """Return the compiled Cwl and its inputs in one payload Json
         Returns:
             Json: Contains the compiled CWL and yaml inputs to the workflow.
         """
-        compiler_info = self.compile(write_to_disk=False)
-        args = get_args(self.process_name, self.user_args)
+        user_args = self._convert_args_dict_to_args_list(args_dict)
+        args = get_args(self.process_name, user_args)
+        compiler_info = self.compile(args_dict=args_dict, write_to_disk=False)
         rose_tree = compiler_info.rose
 
         # this is unfortunately necessary for now
@@ -780,12 +798,13 @@ class Workflow(BaseModel):
         }
         return workflow_json
 
-    def run(self) -> None:
+    def run(self, compile_args_dict: Dict[str, str] = {}, run_args_dict: Dict[str, str] = {}) -> None:
         """Run compiled workflow."""
         logger.info(f"Running {self.process_name}")
         plugins.logging_filters()
-        compiler_info = self.compile(write_to_disk=True)
-        args, unknown_args = get_known_and_unknown_args(self.process_name, self.user_args)  # Use mock CLI args
+        compiler_info = self.compile(args_dict=compile_args_dict, write_to_disk=True)
+        user_args = self._convert_args_dict_to_args_list({**compile_args_dict, **run_args_dict})
+        args, unknown_args = get_known_and_unknown_args(self.process_name, user_args)  # Use mock CLI args
         rose_tree: RoseTree = compiler_info.rose
 
         post_compile.cwl_docker_extract(args.container_engine, args.pull_dir, self.process_name)
