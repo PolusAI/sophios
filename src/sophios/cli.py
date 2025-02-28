@@ -1,6 +1,7 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import List, Tuple
 from unittest.mock import patch
 
 from . import _version
@@ -124,6 +125,11 @@ parser.add_argument('--graph_dark_theme', default=False, action="store_true",
                     help='Changees the color of the fonts and edges from white to black.')
 parser.add_argument('--custom_net', type=str, required=False,
                     help='Passes --custom-net flag to cwltool.')
+parser.add_argument('--toil_passthrough_flags', type=str, default='no', required=False,
+                    help='''Indicates that the user is passing flags to the Toil backend.
+                    No checks are done on the flags or values passed. User must verify that they are sending correct flags.
+                    only two valid values of this flag 'yes' or 'no'.
+                    If set to 'no' (default) passthrough flags won't be sent to the Toil backend.''')
 
 
 def get_args(yaml_path: str = '', suppliedargs: list[str] = []) -> argparse.Namespace:
@@ -137,3 +143,16 @@ def get_args(yaml_path: str = '', suppliedargs: list[str] = []) -> argparse.Name
     with patch.object(sys, 'argv', testargs):
         args = parser.parse_args()
     return args
+
+
+def get_known_and_unknown_args(yaml_path: str = '', suppliedargs: list[str] = []) -> Tuple[argparse.Namespace, List[str]]:
+    """This is used to get mock command line arguments, default + suppled args
+
+    Returns:
+        argparse.Namespace: The mocked command line arguments
+    """
+    defaultargs = ['sophios', '--yaml', yaml_path]  # ignore --yaml
+    testargs = defaultargs + suppliedargs
+    with patch.object(sys, 'argv', testargs):
+        known_args, unknown_args = parser.parse_known_args()
+    return known_args, unknown_args
