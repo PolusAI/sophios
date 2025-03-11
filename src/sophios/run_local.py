@@ -9,8 +9,11 @@ from pathlib import Path
 import shutil
 import platform
 import traceback
+import yaml
 from typing import Dict, List, Optional
 from datetime import datetime
+import sophios.post_compile as pc
+from sophios.wic_types import Json
 
 try:
     import cwltool.main
@@ -347,6 +350,141 @@ def copy_output_files(yaml_stem: str) -> None:
             dests.add(dest)
             cmd = ['cp', source, dest]
             sub.run(cmd, check=True)
+
+
+def build_cmd(workflow_name: str, basepath: str, cwl_runner: str, container_cmd: str) -> List[str]:
+    """Build the command to run the workflow in an environment
+
+    Args:
+        workflow_name (str): Name of the .cwl workflow file to be executed
+        basepath (str): The path at which the workflow to be executed
+        cwl_runner (str): The CWL runner used to execute the workflow
+        container_cmd (str): The container engine command
+    Returns:
+        cmd (List[str]): The command to run the workflow
+    """
+    quiet = ['--quiet']
+    skip_schemas = ['--skip-schemas']
+    provenance = ['--provenance', f'provenance/{workflow_name}']
+    container_cmd_: List[str] = []
+    if container_cmd == 'docker':
+        container_cmd_ = []
+    elif container_cmd == 'singularity':
+        container_cmd_ = ['--singularity']
+    else:
+        container_cmd_ = ['--user-space-docker-cmd', container_cmd]
+    write_summary = ['--write-summary', f'output_{workflow_name}.json']
+    path_check = ['--relax-path-checks']
+    # See https://github.com/common-workflow-language/cwltool/blob/5a645dfd4b00e0a704b928cc0bae135b0591cc1a/cwltool/command_line_tool.py#L94
+    # NOTE: Using --leave-outputs to disable --outdir
+    # See https://github.com/dnanexus/dx-cwl/issues/20
+    # --outdir has one or more bugs which will cause workflows to fail!!!
+    container_pull = ['--disable-pull']  # Use cwl-docker-extract to pull images
+    script = 'cwltool_filterlog' if cwl_runner == 'cwltool' else cwl_runner
+    cmd = [script] + container_pull + quiet + provenance + \
+        container_cmd_ + write_summary + skip_schemas + path_check
+    if cwl_runner == 'cwltool':
+        cmd += ['--leave-outputs',
+                f'{basepath}/{workflow_name}.cwl', f'{basepath}/{workflow_name}_inputs.yml']
+    elif cwl_runner == 'toil-cwl-runner':
+        container_pull = []
+        now = datetime.now()
+        date_time = now.strftime("%Y%m%d%H%M%S")
+        cmd = [script] + container_pull + provenance + container_cmd_ + path_check
+        cmd += ['--outdir', f'outdir_toil_{workflow_name}_{date_time}',
+                '--jobStore', f'file:./jobStore_{workflow_name}',  # NOTE: This is the equivalent of --cachedir
+                '--clean', 'always',  # This effectively disables caching, but is reproducible
+                '--disableProgress',  # disable the progress bar in the terminal, saves UI cycle
+                '--workDir', '/data1',
+                '--coordinationDir', '/data1',
+                '--logLevel', 'INFO',
+                f'{basepath}/{workflow_name}.cwl', f'{basepath}/{workflow_name}_inputs.yml']
+    else:
+        pass
+    return cmd
+
+
+def run_cwl_workflow(workflow_name: str, basepath: str, cwl_runner: str, container_cmd: str, use_subprocess: bool, env_commands: List[str] = []) -> int:
+    """Run the CWL workflow in an environment
+
+    Args:
+        workflow_name (str): Name of the .cwl workflow file to be executed
+        basepath (str): The path at which the workflow to be executed
+        cwl_runner (str): The CWL runner used to execute the workflow
+        container_cmd (str): The container engine command
+        use_subprocess (bool): When using cwltool, determines whether to use subprocess.run(...)
+        or use the cwltool python api.
+        env_commands (List[str]): environment variables and commands needed to be run before running the workflow
+    Returns:
+        retval: The return value
+    """
+    cmd = build_cmd(workflow_name, basepath, cwl_runner, container_cmd)
+    cmdline = ' '.join(cmd)
+
+    retval = 1  # overwrite on success
+    print('Running ' + cmdline)
+    if use_subprocess:
+        # To run in parallel (i.e. pytest ... --workers 8 ...), we need to
+        # use separate processes. Otherwise:
+        # "signal only works in main thread or with __pypy__.thread.enable_signals()"
+        proc = sub.run(cmd, check=False)
+        retval = proc.returncode
+    else:
+        print('via cwltool.main.main python API')
+        try:
+            if cwl_runner == 'cwltool':
+                retval = cwltool.main.main(cmd[1:])
+            elif cwl_runner == 'toil-cwl-runner':
+                _ = sub.run(env_commands, shell=True, check=False, executable="/bin/bash")
+                retval = toil.cwl.cwltoil.main(cmd[1:])
+            else:
+                raise Exception("Invalid cwl_runner!")
+
+            print(f'Final output json metadata blob is in output_{workflow_name}.json')
+        except Exception as e:
+            print('Failed to execute', workflow_name)
+            print(f'See error_{workflow_name}.txt for detailed technical information.')
+            # Do not display a nasty stack trace to the user; hide it in a file.
+            with open(f'error_{workflow_name}.txt', mode='w', encoding='utf-8') as f:
+                # https://mypy.readthedocs.io/en/stable/common_issues.html#python-version-and-system-platform-checks
+                if sys.version_info >= (3, 10):
+                    traceback.print_exception(type(e), value=e, tb=None, file=f)
+            print(e)  # we are always running this on CI
+    # only copy output files if using cwltool
+    if cwl_runner == 'cwltool':
+        copy_output_files(workflow_name)
+    return retval
+
+
+async def run_cwl_serialized_async(workflow: Json, basepath: str,
+                                   cwl_runner: str, container_cmd: str,
+                                   env_commands: List[str] = []) -> None:
+    """Prepare and run compiled and serialized CWL workflow asynchronously
+
+    Args:
+        workflow_json (Json): Compiled and serialized CWL workflow
+        basepath (str): The path at which the workflow to be executed
+        cwl_runner (str): The CWL runner used to execute the workflow
+        container_cmd (str): The container engine command
+        env_commands (List[str]): environment variables and commands needed to be run before running the workflow
+    """
+    workflow_name = workflow['name']
+    output_dirs = pc.find_output_dirs(workflow)
+    pc.create_output_dirs(output_dirs, basepath)
+    compiled_cwl = workflow_name + '.cwl'
+    inputs_yml = workflow_name + '_inputs.yml'
+    # write _input.yml file
+    with open(Path.cwd() / basepath / inputs_yml, 'w', encoding='utf-8') as f:
+        yaml.dump(workflow['yaml_inputs'], f)
+    workflow.pop('retval', None)
+    workflow.pop('yaml_inputs', None)
+    workflow.pop('name', None)
+    # write compiled .cwl file
+    with open(Path.cwd() / basepath / compiled_cwl, 'w', encoding='utf-8') as f:
+        yaml.dump(workflow, f)
+    retval = run_cwl_workflow(workflow_name, basepath,
+                              cwl_runner, container_cmd, False, env_commands=env_commands)
+    assert retval == 0
 
 
 def stage_input_files(yml_inputs: Yaml, root_yml_dir_abs: Path,
