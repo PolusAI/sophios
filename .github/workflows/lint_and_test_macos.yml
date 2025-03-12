@@ -84,9 +84,13 @@ jobs:
         # "SC1017 (error): Literal carriage return. Run script through tr -d '\r' ."
         run: shellcheck -e SC1017 $(find sophios/ -name "*.sh" -and -not -path "./3/*")
 
-      - name: Install Workflow Inference Compiler
+      - name: Install Sophios
         if: always()
         run: cd sophios/ && pip install ".[all_except_runner_src]"
+
+      - name: Update Sophios Config
+        if: always()
+        run: cd sophios/ && python .github/update_sophios_config.py
 
       - name: Install Molecular Modeling Workflows
         if: always()
@@ -99,7 +103,7 @@ jobs:
 
       - name: Generate Sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd sophios/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
+        run: cd sophios/ && pytest -k test_compile_python_workflows
 
       - name: Generate Sophios Validation Jsonschema
         if: always()
@@ -110,7 +114,7 @@ jobs:
         # Sophios Python API workflows as well as the Sophios Python API itself.
       - name: Validate Sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd sophios/ && python -c 'import sophios; import sophios.plugins; sophios.plugins.blindly_execute_python_workflows()'
+        run: cd sophios/ && pytest -k test_compile_python_workflows
 
       - name: Build Documentation
         if: always()

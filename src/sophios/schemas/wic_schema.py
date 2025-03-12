@@ -639,8 +639,8 @@ def compile_workflow_generate_schema(homedir: str,
     graphdata = GraphData(str(yml_path))
     graph = GraphReps(graph_gv, graph_nx, graphdata)
     args = get_args(str(yml_path), ['--allow_raw_cwl'] if allow_raw_cwl else [])
-    compiler_info = sophios.compiler.compile_workflow(yaml_tree, args, [], [graph], {}, {}, {}, {},
-                                                      tools_cwl, True, relative_run_path=True, testing=True)
+    compiler_info = compiler.compile_workflow(yaml_tree, args, [], [graph], {}, {}, {}, {},
+                                              tools_cwl, True, relative_run_path=True, testing=True)
     rose_tree = compiler_info.rose
     sub_node_data: NodeData = rose_tree.data
 

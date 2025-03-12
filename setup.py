@@ -18,27 +18,21 @@ class build_py(_build_py):
         copytree(adapters_dir, adapters_target_dir, dirs_exist_ok=True)
         copytree(examples_dir, examples_target_dir, ignore=ignore_patterns(*extlist), dirs_exist_ok=True)
         # Never overwrite user config
-        if not (Path.home() / 'wic').exists():
-            # config_path
-            config_path = Path.home() / 'wic'
-            # global config file in ~/wic
-            global_config_file = config_path / 'global_config.json'
+        global_config_file = Path.home() / 'wic/global_config.json'
 
-            # setup.py always gets executed in the project_root
-            config_file = Path(__file__).parent / 'src' / 'sophios' / 'config.json'
+        if not global_config_file.exists():
+            config_path = global_config_file.parent
+            config_path.mkdir(parents=True, exist_ok=True)
+            basic_config_file = Path(__file__).parent / 'src' / 'sophios' / 'config_basic.json'
             config = {}
             # config_file can contain absolute or relative paths
-            with open(config_file, 'r', encoding='utf-8') as f:
+            with open(basic_config_file, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-            conf_tags = ['search_paths_cwl', 'search_paths_wic']
-            for tag in conf_tags:
-                for ns in config[tag]:
-                    abs_paths = [str(Path(path).absolute()) for path in config[tag][ns]]
-                    config[tag][ns] = abs_paths
-            config_path.mkdir(parents=True, exist_ok=True)
+            config['search_paths_cwl']['global'] = [str(adapters_dir)]
+            config['search_paths_wic']['global'] = [str(examples_dir)]
             # write out the config file with paths
             with open(global_config_file, 'w', encoding='utf-8') as f:
-                json.dump(config, f)
+                json.dump(config, f, indent=4)
 
         # Continue with the standard build process
         super().run()

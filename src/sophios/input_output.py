@@ -141,21 +141,6 @@ def write_config_to_disk(config: Json, config_file: Path) -> None:
         json.dump(config, f, indent=4, sort_keys=True)
 
 
-def check_sister_directories(parent_dir: Path, target_names: list[str]) -> bool:
-    """Checks if sister directories with given names exist."""
-
-    parent_path = Path(parent_dir)
-    if not parent_path.is_dir():
-        return False
-
-    for target_name in target_names:
-        sister_path = parent_path.parent / target_name
-        if not sister_path.is_dir():
-            return False
-
-    return True
-
-
 def get_config(config_file: Path, default_config_file: Path) -> Json:
     """Returns the config json object from config_file with absolute paths
 
@@ -167,26 +152,13 @@ def get_config(config_file: Path, default_config_file: Path) -> Json:
         Json: The config json object with absolute filepaths
     """
     global_config: Json = {}
-    ci_sister_dirs = ['mm-workflows', 'image-workflows']
     if not config_file.exists():
-        # check if sophios is run from  'ci environment' dir
-        if check_sister_directories(Path.cwd(), ci_sister_dirs):
-            if config_file == default_config_file:
-                global_config = get_default_config()
-                # write the default config object to the 'global_config.json' file in user's ~/wic directory
-                # for user to inspect and or modify the config json file
-                write_config_to_disk(global_config, default_config_file)
-                print(f'default config file : {default_config_file} generated')
-            else:
-                print(f"Error user specified config file {config_file} doesn't exist")
-                sys.exit()
-        else:
-            global_config = get_basic_config()
-            # write the basic config object to the 'global_config.json' file in user's ~/wic directory
-            # for user to inspect and or modify the config json file
-            write_config_to_disk(global_config, default_config_file)
-            move_adapters_and_examples(global_config)
-            print(f'default config file : {default_config_file} generated')
+        global_config = get_basic_config()
+        # write the basic config object to the 'global_config.json' file in user's ~/wic directory
+        # for user to inspect and or modify the config json file
+        write_config_to_disk(global_config, default_config_file)
+        move_adapters_and_examples(global_config)
+        print(f'default config file : {default_config_file} generated')
     else:
         # reading user specified config file only if it exists
         # never overwrite user's config file or generate another file in user's non-default directory
@@ -240,19 +212,6 @@ def read_config_from_disk(config_file: Path, abspath: bool = True) -> Json:
         else:  # this is a hacky way to fix global paths wrt ~/home/wic/
             config[tag] = get_home_paths(config[tag])
     return config
-
-
-def get_default_config() -> Json:
-    """Returns the default config with absolute paths
-
-    Returns:
-        Json: The config json object with absolute filepaths
-    """
-    src_dir = Path(__file__).parent
-    default_config: Json = {}
-    # read_config_from_disk handles converting them to absolute paths
-    default_config = read_config_from_disk(src_dir/'config.json')
-    return default_config
 
 
 def get_basic_config() -> Json:

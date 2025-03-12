@@ -1,0 +1,171 @@
+{
+  "name": "multistep1_toJson_pyapi_py",
+  "yaml_inputs": {
+    "multistep1_toJson_pyapi_py__step__1__touch___filename": "empty.txt",
+    "multistep1_toJson_pyapi_py__step__2__append___str": "Hello"
+  },
+  "steps": [
+    {
+      "id": "multistep1_toJson_pyapi_py__step__1__touch",
+      "in": {
+        "filename": {
+          "source": "multistep1_toJson_pyapi_py__step__1__touch___filename"
+        }
+      },
+      "out": [
+        "file"
+      ],
+      "run": {
+        "cwlVersion": "v1.0",
+        "class": "CommandLineTool",
+        "requirements": {
+          "DockerRequirement": {
+            "dockerPull": "docker.io/bash:4.4"
+          },
+          "InlineJavascriptRequirement": {}
+        },
+        "baseCommand": "touch",
+        "inputs": {
+          "filename": {
+            "type": "string",
+            "inputBinding": {
+              "position": 1
+            }
+          }
+        },
+        "outputs": {
+          "file": {
+            "type": "File",
+            "outputBinding": {
+              "glob": "$(inputs.filename)"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "multistep1_toJson_pyapi_py__step__2__append",
+      "in": {
+        "file": {
+          "source": "multistep1_toJson_pyapi_py__step__1__touch/file"
+        },
+        "str": {
+          "source": "multistep1_toJson_pyapi_py__step__2__append___str"
+        }
+      },
+      "out": [
+        "file"
+      ],
+      "run": {
+        "class": "CommandLineTool",
+        "cwlVersion": "v1.0",
+        "requirements": {
+          "ShellCommandRequirement": {},
+          "InlineJavascriptRequirement": {},
+          "InitialWorkDirRequirement": {
+            "listing": [
+              "$(inputs.file)"
+            ]
+          }
+        },
+        "inputs": {
+          "str": {
+            "type": "string",
+            "inputBinding": {
+              "shellQuote": false,
+              "position": 1,
+              "prefix": "echo"
+            }
+          },
+          "file": {
+            "type": "File",
+            "inputBinding": {
+              "shellQuote": false,
+              "position": 2,
+              "prefix": ">>"
+            }
+          }
+        },
+        "outputs": {
+          "file": {
+            "type": "File",
+            "outputBinding": {
+              "glob": "$(inputs.file.basename)"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "multistep1_toJson_pyapi_py__step__3__cat",
+      "in": {
+        "file": {
+          "source": "multistep1_toJson_pyapi_py__step__2__append/file"
+        }
+      },
+      "out": [
+        "output"
+      ],
+      "run": {
+        "class": "CommandLineTool",
+        "cwlVersion": "v1.0",
+        "requirements": {
+          "DockerRequirement": {
+            "dockerPull": "docker.io/bash:4.4"
+          },
+          "InlineJavascriptRequirement": {}
+        },
+        "baseCommand": [
+          "cat"
+        ],
+        "inputs": {
+          "file": {
+            "type": "File"
+          }
+        },
+        "outputs": {
+          "output": {
+            "type": "string",
+            "outputBinding": {
+              "glob": "output",
+              "loadContents": true,
+              "outputEval": "$(self[0].contents)"
+            }
+          }
+        },
+        "stdin": "$(inputs.file.path)",
+        "stdout": "output"
+      }
+    }
+  ],
+  "cwlVersion": "v1.2",
+  "class": "Workflow",
+  "$namespaces": {
+    "edam": "https://edamontology.org/"
+  },
+  "$schemas": [
+    "https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl"
+  ],
+  "inputs": {
+    "multistep1_toJson_pyapi_py__step__1__touch___filename": {
+      "type": "string"
+    },
+    "multistep1_toJson_pyapi_py__step__2__append___str": {
+      "type": "string"
+    }
+  },
+  "outputs": {
+    "multistep1_toJson_pyapi_py__step__1__touch___file": {
+      "type": "File",
+      "outputSource": "multistep1_toJson_pyapi_py__step__1__touch/file"
+    },
+    "multistep1_toJson_pyapi_py__step__2__append___file": {
+      "type": "File",
+      "outputSource": "multistep1_toJson_pyapi_py__step__2__append/file"
+    },
+    "multistep1_toJson_pyapi_py__step__3__cat___output": {
+      "type": "string",
+      "outputSource": "multistep1_toJson_pyapi_py__step__3__cat/output"
+    }
+  }
+}

@@ -1,7 +1,7 @@
 name: Build and Test Wheel
 
 on:
-  pull_request: 
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -32,7 +32,7 @@ jobs:
           python -m build --sdist
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
             name: sophios-wheels
             path: dist/*

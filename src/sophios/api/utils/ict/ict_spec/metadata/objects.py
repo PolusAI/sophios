@@ -88,13 +88,13 @@ class DOI(RootModel):
         raise TypeError(msg)
 
 
-@DOI.__eq__.register(str)  # type: ignore  # pylint: disable=no-member
-def _(self, other):
+@DOI.__eq__.register(str)  # type: ignore # pylint: disable=no-member
+def _(self: Author, other: str) -> Any:
     return self.root == other
 
 
-@DOI.__eq__.register(DOI)  # type: ignore  # pylint: disable=no-member
-def _(self, other):
+@DOI.__eq__.register(DOI)  # type: ignore # pylint: disable=no-member
+def _(self: Author, other: DOI) -> Any:
     return self.root == other.root
 
 
