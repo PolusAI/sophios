@@ -107,10 +107,6 @@ runners = [
     "toil[cwl]",
     "cwl-utils",
 ]
-runners-src = [
-    "toil[cwl] @ git+https://github.com/sameeul/toil.git",
-    "cwl-utils @ git+https://github.com/sameeul/cwl-utils.git",
-]
 # See docs/requirements.txt
 doc = [
     "sphinx",
@@ -120,7 +116,6 @@ doc = [
 plots = ["matplotlib"]
 cyto = ["ipycytoscape"] # only for DAG visualization
 all_except_runner_src = ["sophios[test,doc,plots,cyto,mypy-types]"]
-all = ["sophios[test,doc,plots,cyto,runners-src,mypy-types]"]
 
 [project.scripts]
 sophios = "sophios.main:main"
