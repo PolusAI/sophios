@@ -150,7 +150,6 @@ def run_local(args: argparse.Namespace, rose_tree: RoseTree, cachedir: Optional[
     # will cause github to terminate the CI Action...
     skip_schemas = ['--skip-schemas'] if not args.no_skip_dollar_schemas else []
 
-    yaml_stem = yaml_stem + '_inline' if args.cwl_inline_subworkflows else yaml_stem
     if cwl_runner == 'cwltool':
         parallel = ['--parallel'] if args.parallel else []
         # NOTE: --parallel is required for real-time analysis / real-time plots,
