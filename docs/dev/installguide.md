@@ -5,13 +5,13 @@
 You will first need to install the [git](https://git-scm.com) version control system. Then run the following commands:
 
 ```
-git clone https://github.com/PolusAI/workflow-inference-compiler.git
+git clone https://github.com/PolusAI/sophios.git
 cd workflow-inference-compiler
 
 cd install/
 ./install_conda.sh
 source ~/.bashrc
-conda create --name wic
+conda create --name wic # or any name
 conda activate wic
 ./install_system_deps.sh
 cd ..
@@ -19,13 +19,13 @@ cd ..
 pip install -e ".[all]"
 pre-commit install  # Required for developers
 
-wic --generate_schemas
+sophios --generate_schemas
 ```
 
 Developers should fork the upstream repository and clone their fork using the git@ url, then run the command
 
 ```
-git remote add polusai https://github.com/PolusAI/workflow-inference-compiler.git
+git remote add polusai https://github.com/PolusAI/sophios.git
 ```
 
 ## docker
