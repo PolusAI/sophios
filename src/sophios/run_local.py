@@ -473,13 +473,14 @@ async def run_cwl_serialized_async(workflow: Json, basepath: str,
     compiled_cwl = workflow_name + '.cwl'
     inputs_yml = workflow_name + '_inputs.yml'
     # write _input.yml file
-    with open(Path.cwd() / basepath / inputs_yml, 'w', encoding='utf-8') as f:
+    with open(basepath / inputs_yml, 'w', encoding='utf-8') as f:
         yaml.dump(workflow['yaml_inputs'], f)
     workflow.pop('retval', None)
     workflow.pop('yaml_inputs', None)
     workflow.pop('name', None)
+    basepath = basepath.rstrip("/") if basepath != "/" else basepath
     # write compiled .cwl file
-    with open(Path.cwd() / basepath / compiled_cwl, 'w', encoding='utf-8') as f:
+    with open(basepath / compiled_cwl, 'w', encoding='utf-8') as f:
         yaml.dump(workflow, f)
     retval = run_cwl_workflow(workflow_name, basepath,
                               cwl_runner, container_cmd, False, env_commands=env_commands)
