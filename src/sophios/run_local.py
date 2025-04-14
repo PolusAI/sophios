@@ -6,6 +6,7 @@ import sys
 import os
 import stat
 from pathlib import Path
+from pathlib import PurePath
 import shutil
 import platform
 import traceback
@@ -468,11 +469,14 @@ async def run_cwl_serialized_async(workflow: Json, basepath: str,
         env_commands (List[str]): environment variables and commands needed to be run before running the workflow
     """
     workflow_name = workflow['name']
+    workflow_name = workflow_name.lstrip("/").lstrip(" ")
+    parts = PurePath(workflow_name).parts
+    workflow_name = ''.join(part for part in parts if part)
+    basepath = basepath.rstrip("/") if basepath != "/" else basepath
     output_dirs = pc.find_output_dirs(workflow)
     pc.create_output_dirs(output_dirs, basepath)
     compiled_cwl = workflow_name + '.cwl'
     inputs_yml = workflow_name + '_inputs.yml'
-    basepath = basepath.rstrip("/") if basepath != "/" else basepath
     # write _input.yml file
     with open(Path(basepath) / inputs_yml, 'w', encoding='utf-8') as f:
         yaml.dump(workflow['yaml_inputs'], f)
