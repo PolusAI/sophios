@@ -6,7 +6,7 @@ You will first need to install the [git](https://git-scm.com) version control sy
 
 ```
 git clone https://github.com/PolusAI/sophios.git
-cd workflow-inference-compiler
+cd sophios
 
 cd install/
 ./install_conda.sh
