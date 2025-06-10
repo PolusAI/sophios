@@ -369,9 +369,9 @@ def get_inference_rules(wic: Yaml, step_key_parent: str) -> Dict[str, str]:
     """
     # NOTE: Here, we simply return all inference rules. The call site then
     # determines whether to apply any of the rules by doing a lookup.
+    rules: Dict[str, str] = {}
     if 'steps' in wic.get('wic', {}):
         wic_steps = wic['wic']['steps']
-        rules = {}
         for keystr, wic_child in wic_steps.items():
             (step_num, step_key) = utils.parse_int_string_tuple(keystr)
             namespace = utils.step_name_str(Path(step_key_parent).stem, step_num - 1, step_key)
