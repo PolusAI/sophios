@@ -177,25 +177,7 @@ jobs:
         # (Many of the packages conflict with pypy.)
         run: cd mm-workflows/ && pip install ".[test]" && mm-workflows --generate_schemas
 
-      - name: Generate Sophios Python API Workflows (*.py -> *.wic)
-        if: always()
-        run: cd sophios/ && pytest -k test_compile_python_workflows
-
-      - name: Generate Sophios Validation Jsonschema
-        if: always()
-        run: cd sophios/ && sophios --generate_schemas
-
-        # Please read docs/validation.md#Property-Based-Testing
-        # This is essentially an integration test for all of the
-        # Sophios Python API workflows as well as the Sophios Python API itself.
-      - name: Validate sophios Python API Workflows (*.py -> *.wic)
-        if: always()
-        run: cd sophios/ && pytest -k test_compile_python_workflows
-
-      - name: Build Documentation
-        if: always()
-        run: cd sophios/docs && make html
-
+      # Do the static analysis, type and style check first
       - name: MyPy Check Type Annotations
         if: always()
         run: cd sophios/ && mypy src/ examples/ tests/
@@ -215,6 +197,26 @@ jobs:
       - name: Fail if autopep8 made changes
         if: steps.autopep8.outputs.exit-code == 2
         run: exit 1
+
+
+      - name: Generate Sophios Python API Workflows (*.py -> *.wic)
+        if: always()
+        run: cd sophios/ && pytest -k test_compile_python_workflows
+
+      - name: Generate Sophios Validation Jsonschema
+        if: always()
+        run: cd sophios/ && sophios --generate_schemas
+
+        # Please read docs/validation.md#Property-Based-Testing
+        # This is essentially an integration test for all of the
+        # Sophios Python API workflows as well as the Sophios Python API itself.
+      - name: Validate sophios Python API Workflows (*.py -> *.wic)
+        if: always()
+        run: cd sophios/ && pytest -k test_compile_python_workflows
+
+      - name: Build Documentation
+        if: always()
+        run: cd sophios/docs && make html
 
   # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
 
