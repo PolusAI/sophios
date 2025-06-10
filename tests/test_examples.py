@@ -399,6 +399,6 @@ def test_inline_subworkflows(yml_path_str: str, yml_path: Path) -> None:
         sub_graph_nx = sub_node_data.graph.networkx
         sub_graph_fakeroot_nx = inline_sub_node_data.graph.networkx
         # assert isomorphism.faster_could_be_isomorphic(sub_graph_nx, sub_graph_fakeroot_nx)
-        g_m = isomorphism.GraphMatcher(sub_graph_nx, sub_graph_fakeroot_nx)
+        g_m = isomorphism.DiGraphMatcher(sub_graph_nx, sub_graph_fakeroot_nx)
         print('is_isomorphic()?', yml_path_str, namespaces)
         is_isomorphic_with_timeout(g_m, yml_path_str)
