@@ -106,10 +106,7 @@ jobs:
       run: rm -rf "/home/$(whoami)/wic/" && rm -rf "/home/$(whoami)/.toil/"
       # For self-hosted runners, make sure we use new global config settings
 
-    # Using pypy increases performance / decreases cwltool runtime by about a minute.
-    - name: Append pypy to conda environment files
-      if: runner.os != 'Windows'
-      run: cd sophios/install/ && echo "  - pypy" >> system_deps.yml
+    # Completely moving away from pypy
 
     - name: Remove old mamba environment
       if: always()
@@ -131,7 +128,7 @@ jobs:
         environment-file: sophios/install/system_deps.yml
         activate-environment: wic_github_actions
         channels: conda-forge
-        python-version: "3.9.*" # pypy is not yet compatible with 3.10 and 3.11
+        python-version: "3.11.*"
 
     # - name: Docker pull
     #   if: always()

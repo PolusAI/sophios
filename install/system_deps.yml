@@ -3,8 +3,7 @@ channels:
   - defaults
 
 dependencies:
-# Keep the python constraint in case we want to install pypy.
-  - "python<3.11"
+  - "python>=3.11"
 # NOTE: cwltool needs nodejs for InlineJavascriptRequirement
   - nodejs
   - graphviz
@@ -40,5 +39,5 @@ dependencies:
 # Needs binary PyQt5 dependencies.
   - kubernetes-helm
   - zstandard
-# Needed for orjson wheels
-  - orjson
+# # Needed for orjson wheels
+#   - orjson

@@ -65,9 +65,6 @@ def test_compile_python_workflows() -> None:
 
         except Exception as e:
             any_import_errors = True
-            if sys.version_info >= (3, 10):
-                traceback.print_exception(type(e), value=e, tb=None)
-            else:
-                traceback.print_exception(etype=type(e), value=e, tb=None)
+            traceback.print_exception(type(e), value=e, tb=None)
     if any_import_errors:
         sys.exit(1)  # Make sure the CI fails

@@ -124,15 +124,7 @@ jobs:
           ref: ${{ inputs.image-workflows_ref }}
           path: image-workflows
 
-      # NOTE: pypy actually decreases performance for lint_and_test.yml (by a factor of ~2)
-      # - name: Append pypy to conda environment files
-      #   if: runner.os != 'Windows'
-      #   run: cd sophios/install/ && echo "  - pypy" >> system_deps.yml
-
-      # - name: Append pypy to conda environment files
-      #   if: runner.os == 'Windows'
-      #   run: cd sophios/install/ && echo "  - pypy" >> system_deps_windows.yml
-
+      # Completely moving away from pypy
       - name: Setup miniforge (linux, macos)
         if: runner.os != 'Windows'
         uses: conda-incubator/setup-miniconda@v3.0.1
@@ -142,7 +134,7 @@ jobs:
           environment-file: sophios/install/system_deps.yml
           activate-environment: wic
           channels: conda-forge
-          python-version: "3.9.*" # pypy is not yet compatible with 3.10 and 3.11
+          python-version: "3.11.*"
 
       - name: Setup miniforge (windows)
         if: runner.os == 'Windows'
@@ -153,7 +145,7 @@ jobs:
           environment-file: sophios/install/system_deps_windows.yml
           activate-environment: wic
           channels: conda-forge
-          python-version: "3.9.*" # pypy is not yet compatible with 3.10 and 3.11
+          python-version: "3.11.*"
 
       - name: ShellCheck Script Quality
         if: always()

@@ -1,7 +1,0 @@
-channels:
-  - conda-forge
-  - defaults
-
-dependencies:
-  - psutil==5.9.8
-  - httptools

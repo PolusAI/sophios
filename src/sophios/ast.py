@@ -52,10 +52,7 @@ def read_ast_from_disk(homedir: str,
         # Do not display a nasty stack trace to the user; hide it in a file.
         with open(f'validation_{yaml_path.stem}.txt', mode='w', encoding='utf-8') as f:
             # https://mypy.readthedocs.io/en/stable/common_issues.html#python-version-and-system-platform-checks
-            if sys.version_info >= (3, 10):
-                traceback.print_exception(type(e), value=e, tb=None, file=f)
-            else:
-                traceback.print_exception(etype=type(e), value=e, tb=None, file=f)
+            traceback.print_exception(type(e), value=e, tb=None, file=f)
         sys.exit(1)
 
     wic = {'wic': yaml_tree.get('wic', {})}
