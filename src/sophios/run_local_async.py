@@ -1,8 +1,9 @@
 from pathlib import Path
 import traceback
 import os
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 import asyncio
+import aiofiles
 import yaml
 # we are already using fastapi elsewhere in this project
 # so use the run_in_threadpool to run sequential functions
@@ -41,7 +42,7 @@ async def run_cwl_workflow(workflow_name: str, basepath: str,
     """
     cmd = await run_in_threadpool(build_cmd, workflow_name, basepath, cwl_runner, container_cmd)
 
-    retval: Optional[int] = 1  # overwrite on success
+    retval = 1  # overwrite on success
     print('Running ' + (' '.join(cmd)))
     print('via command line')
     runner_cmnds = ['cwltool', 'toil-cwl-runner']
@@ -52,10 +53,23 @@ async def run_cwl_workflow(workflow_name: str, basepath: str,
 
             proc = await asyncio.create_subprocess_exec(*cmd,
                                                         env=exec_env,
-                                                        stdout=asyncio.subprocess.DEVNULL,
-                                                        stderr=asyncio.subprocess.DEVNULL)
-            _, _ = await proc.communicate()  # Don't care about stdout or stderr
-            retval = proc.returncode
+                                                        stdout=asyncio.subprocess.PIPE,
+                                                        stderr=asyncio.subprocess.PIPE)
+
+            async def stream_to_file(stream: Any, filename: Path) -> None:
+                filename.parent.mkdir(parents=True, exist_ok=True)
+                async with aiofiles.open(filename, mode='wb') as f:
+                    while True:
+                        data = await stream.read(1024)  # 1KB chunks
+                        if not data:
+                            break
+                        await f.write(data)
+
+            await asyncio.gather(
+                stream_to_file(proc.stdout, Path(basepath) / 'LOGS' / 'stdout.txt'),
+                stream_to_file(proc.stderr, Path(basepath) / 'LOGS' / 'stderr.txt')
+            )
+            retval = await proc.wait()
         else:
             raise ValueError(
                 f'Invalid or Unsupported cwl_runner command! Only these are the supported runners {runner_cmnds}')
