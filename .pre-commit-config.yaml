@@ -69,6 +69,7 @@ repos:
         - types-setuptools
         - types-six
         - types-urllib3
+        - types-aiofiles
 -   repo: https://github.com/pre-commit/pygrep-hooks
     rev: v1.10.0
     hooks:

@@ -39,5 +39,3 @@ dependencies:
 # Needs binary PyQt5 dependencies.
   - kubernetes-helm
   - zstandard
-# # Needed for orjson wheels
-#   - orjson

@@ -96,6 +96,7 @@ mypy-types = [
     "types-setuptools",
     "types-six",
     "types-urllib3",
+    "types-aiofiles"
 ]
 # NOTE: toil and cwltool have a somewhat continuous release model. However,
 # there can be updates and bugfixes in main that have not yet been released.
