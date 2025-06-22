@@ -1,13 +1,10 @@
 import copy
 import logging
-import json
 import glob
 import os
 from pathlib import Path
 import re
-import sys
 import tempfile
-import traceback
 from typing import Any, Dict, Union
 
 import cwltool.load_tool
@@ -16,8 +13,7 @@ import podman
 import docker
 
 
-from . import input_output as io, utils_cwl, cli
-from .python_cwl_adapter import import_python_file
+from . import utils_cwl, cli
 from .wic_types import Cwl, NodeData, RoseTree, StepId, Tool, Tools, Json
 
 
@@ -182,19 +178,21 @@ def cwl_update_inline_runtag(cwl: Cwl, path: Path, relative_run_path: bool) -> C
     cwl_mod = copy.deepcopy(cwl)
     for step in cwl_mod['steps']:
         runtag_orig = step.get('run', '')
-        if isinstance(runtag_orig, str) and runtag_orig.endswith('.cwl'):
-            if relative_run_path:
-                yml_path = Path.cwd() / path / runtag_orig
-            else:
-                yml_path = Path(runtag_orig)  # Assume absolute path in the runtag
-            with open(yml_path, mode='r', encoding='utf-8') as f:
-                runtag_raw = yaml.safe_load(f.read())
-                # local $namespace and $schema tag shouldn't be in inline cwl steps
-                runtag_raw.pop('$namespaces', None)
-                runtag_raw.pop('$schemas', None)
-                step['run'] = runtag_raw
-        else:
-            pass  # We only care if the runtag is a cwl filepath
+        match runtag_orig:
+            case str():
+                if runtag_orig.endswith('.cwl'):
+                    if relative_run_path:
+                        yml_path = Path.cwd() / path / runtag_orig
+                    else:
+                        yml_path = Path(runtag_orig)  # Assume absolute path in the runtag
+                    with open(yml_path, mode='r', encoding='utf-8') as f:
+                        runtag_raw = yaml.safe_load(f.read())
+                        # local $namespace and $schema tag shouldn't be in inline cwl steps
+                        runtag_raw.pop('$namespaces', None)
+                        runtag_raw.pop('$schemas', None)
+                        step['run'] = runtag_raw
+            case _:
+                pass  # We only care if the runtag is a cwl filepath
     return cwl_mod
 
 

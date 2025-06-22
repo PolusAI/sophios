@@ -3,7 +3,6 @@ import copy
 from shutil import copytree, ignore_patterns
 import json
 from pathlib import Path
-import sys
 from typing import Any, List, Tuple
 
 import yaml
