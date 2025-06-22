@@ -229,15 +229,19 @@ def canonicalize_type(type_obj: Any) -> Any:
     Returns:
         Any: The JSON canonical normal form associated with type_obj
     """
-    if isinstance(type_obj, str):
-        if len(type_obj) >= 1 and type_obj[-1:] == '?':
-            return ['null', canonicalize_type(type_obj[:-1])]
-        if len(type_obj) >= 2 and type_obj[-2:] == '[]':
-            return {'type': 'array', 'items': canonicalize_type(type_obj[:-2])}
-    if isinstance(type_obj, Dict):
-        if type_obj.get('type') == 'array':
-            return {**type_obj, 'items': canonicalize_type(type_obj['items'])}
-    return type_obj
+    match type_obj:
+        case str() as str_obj:
+            if len(str_obj) >= 1 and str_obj[-1:] == '?':
+                return ['null', canonicalize_type(str_obj[:-1])]
+            if len(str_obj) >= 2 and str_obj[-2:] == '[]':
+                return {'type': 'array', 'items': canonicalize_type(str_obj[:-2])}
+            return str_obj
+        case dict() as dict_obj:
+            if dict_obj.get('type') == 'array':
+                return {**dict_obj, 'items': canonicalize_type(dict_obj['items'])}
+            return dict_obj
+        case _:
+            return type_obj
 
 
 def canonicalize_steps_list(steps: Yaml) -> List[Yaml]:
