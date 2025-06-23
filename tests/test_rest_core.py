@@ -118,7 +118,6 @@ def prepare_call_rest_api(inp_path: Path) -> Json:
     """prepare payload and call rest api"""
     with open(inp_path, 'r', encoding='utf-8') as f:
         inp = json.load(f)
-    print('----------- from rest api ----------- \n\n')
     scope = {}
     scope['type'] = 'http'
 

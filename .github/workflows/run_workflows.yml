@@ -172,11 +172,6 @@ jobs:
       run: cd sophios/ && pytest tests/test_examples.py -k test_cwl_docker_extract
       # For self-hosted runners, make sure the docker cache is up-to-date.
 
-    - name: PyTest Run Workflows
-      if: always()
-      # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd sophios/ && pytest tests/test_examples.py -k test_run_workflows_on_push --workers 8 --cwl_runner cwltool # --cov
-
     - name: PyTest Run REST Core Tests
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
@@ -196,6 +191,11 @@ jobs:
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
       run: cd sophios/ && pytest tests/test_fix_payload.py -k test_fix
+
+    - name: PyTest Run Workflows
+      if: always()
+      # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
+      run: cd sophios/ && pytest tests/test_examples.py -k test_run_workflows_on_push --workers 8 --cwl_runner cwltool # --cov
 
     # NOTE: The steps below are for repository_dispatch only. For all other steps, please insert above
     # this comment.
