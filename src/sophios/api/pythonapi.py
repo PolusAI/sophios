@@ -782,13 +782,6 @@ class Workflow(BaseModel):
         sub_node_data = rose_tree.data
         cwl_ast = sub_node_data.compiled_cwl
 
-        # Copy samee's workaround for duplicate outs
-        for step in cwl_ast['steps']:
-            out_vars = step['out']
-            out_vars_unique = list(set(out_vars))
-            out_vars_unique.sort()
-            step['out'] = out_vars_unique
-
         yaml_inputs = sub_node_data.workflow_inputs_file
         workflow_json: Json = {}
         workflow_json = {

@@ -92,6 +92,7 @@ def add_yamldict_keyval_out(steps_i: Yaml, step_key: str, strs: List[str]) -> Ya
     if steps_i:
         if 'out' in steps_i:
             new_strs = steps_i['out'] + strs
+            new_strs = list(set(new_strs))
             new_keyvals = dict([(k, v) if k != 'out' else (k, new_strs) for k, v in steps_i.items()])
         else:
             new_keyvals = dict(list(steps_i.items()) + [('out', strs)])
