@@ -165,37 +165,6 @@ def cwl_update_outputs_optional(cwl: Cwl) -> Cwl:
     return cwl_mod
 
 
-def cwl_update_inline_runtag(cwl: Cwl, path: Path, relative_run_path: bool) -> Cwl:
-    """Updates 'run' tag with inline content
-
-    Args:
-        cwl (Cwl): A CWL Workflow
-        path (Path): The directory in which to read files from
-        relative_run_path (bool): Controls whether to use subdirectories or just one directory
-    Returns:
-        Cwl: A CWL Workflow with inline run (if any)
-    """
-    cwl_mod = copy.deepcopy(cwl)
-    for step in cwl_mod['steps']:
-        runtag_orig = step.get('run', '')
-        match runtag_orig:
-            case str():
-                if runtag_orig.endswith('.cwl'):
-                    if relative_run_path:
-                        yml_path = Path.cwd() / path / runtag_orig
-                    else:
-                        yml_path = Path(runtag_orig)  # Assume absolute path in the runtag
-                    with open(yml_path, mode='r', encoding='utf-8') as f:
-                        runtag_raw = yaml.safe_load(f.read())
-                        # local $namespace and $schema tag shouldn't be in inline cwl steps
-                        runtag_raw.pop('$namespaces', None)
-                        runtag_raw.pop('$schemas', None)
-                        step['run'] = runtag_raw
-            case _:
-                pass  # We only care if the runtag is a cwl filepath
-    return cwl_mod
-
-
 Client = Union[docker.DockerClient, podman.PodmanClient]  # type: ignore
 
 
@@ -263,30 +232,6 @@ def remove_entrypoints_podman() -> None:
 
     with podman.PodmanClient(base_url=uri) as client:
         remove_entrypoints(client, podman.domain.images_build.BuildMixin())
-
-
-def cwl_update_inline_runtag_rosetree(rose_tree: RoseTree, path: Path, relative_run_path: bool) -> RoseTree:
-    """Inlines the compiled CWL files runtag
-
-    Args:
-        rose_tree (RoseTree): The data associated with compiled subworkflows
-        path (Path): The directory in which to read files from
-        relative_run_path (bool): Controls whether to use subdirectories or just one directory.
-    Returns:
-        RoseTree: rose_tree with inline cwl runtag
-    """
-    n_d: NodeData = rose_tree.data
-    if n_d.compiled_cwl['class'] == 'Workflow':
-        outputs_cwl_inline_runtag = cwl_update_inline_runtag(n_d.compiled_cwl, path, relative_run_path)
-    else:
-        outputs_cwl_inline_runtag = n_d.compiled_cwl
-
-    sub_trees_path = [cwl_update_inline_runtag_rosetree(sub_rose_tree, path, relative_run_path) for
-                      sub_rose_tree in rose_tree.sub_trees]
-    node_data_path = NodeData(n_d.namespaces, n_d.name, n_d.yml, outputs_cwl_inline_runtag, n_d.tool,
-                              n_d.workflow_inputs_file, n_d.explicit_edge_defs, n_d.explicit_edge_calls,
-                              n_d.graph, n_d.inputs_workflow, n_d.step_name_1)
-    return RoseTree(node_data_path, sub_trees_path)
 
 
 def cwl_update_outputs_optional_rosetree(rose_tree: RoseTree) -> RoseTree:
