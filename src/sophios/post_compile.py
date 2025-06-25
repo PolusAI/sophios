@@ -74,7 +74,7 @@ def cwl_docker_extract(container_engine: str, pull_dir: str, file_name: str) -> 
 
 
 def cwl_inline_runtag(rose_tree: RoseTree) -> RoseTree:
-    """Transforms the compiled CWL files with inline cwl of steps in the runtag
+    """Transforms the compiled CWL within the rose_tree with inline cwl of steps in the runtag
     Args:
         rose_tree (RoseTree): The data associated with compiled subworkflows
     Returns:
