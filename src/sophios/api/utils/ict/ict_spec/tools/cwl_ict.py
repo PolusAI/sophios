@@ -53,12 +53,11 @@ def clt_dict(ict_: "ICT", network_access: bool) -> dict:
 
 def remove_none(d: Union[dict, str]) -> Union[dict, str]:
     """Recursively remove keys with None values."""
-    if isinstance(d, dict):
-        return {k: remove_none(v) for k, v in d.items() if v is not None}
-    elif isinstance(d, str):
-        return d  # Return the string unchanged
-    else:
-        return d  # Return other types of values unchanged
+    match d:
+        case dict():
+            return {k: remove_none(v) for k, v in d.items() if v is not None}
+        case str():
+            return d
 
 
 def input_output_dict(ict_: "ICT") -> Union[dict, str]:
