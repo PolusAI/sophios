@@ -523,11 +523,13 @@ class Workflow(BaseModel):
         # subworkflows will NOT have all required inputs.
         for s in self.steps:
             try:
-                if isinstance(s, Step):
-                    s._validate()  # pylint: disable=W0212
-                if isinstance(s, Workflow):
-                    # recursively validate subworkflows ?
-                    s._validate()  # pylint: disable=W0212
+                match s:
+                    case Step():
+                        s._validate()
+                    case Workflow():
+                        s._validate()
+                    case _:
+                        pass
             except BaseException as exc:
                 raise InvalidStepError(
                     f"{s.process_name} is missing required inputs"
@@ -558,21 +560,23 @@ class Workflow(BaseModel):
         # TODO: outputs?
         steps = []
         for s in self.steps:
-            if isinstance(s, Step):
-                steps.append(s._yml)
-            elif isinstance(s, Workflow):
-                ins = {
-                    inp.name: inp.value
-                    for inp in s.inputs
-                    if inp.value is not None  # Subworkflow args are not required
-                }
-                parentargs: dict[str, Any] = {"in": ins} if ins else {}
-                # See the second to last line of ast.read_ast_from_disk()
-                d = {'id': self.process_name + '.wic',
-                     'subtree': s.yaml,  # recursively call .yaml (i.e. on s, not self)
-                     'parentargs': parentargs}
-                steps.append(d)
-            #  else: ...
+            match s:
+                case Step():
+                    steps.append(s._yml)
+                case Workflow() as sw:
+                    ins = {
+                        inp.name: inp.value
+                        for inp in sw.inputs
+                        if inp.value is not None  # Subworkflow args are not required
+                    }
+                    parentargs: dict[str, Any] = {"in": ins} if ins else {}
+                    # See the second to last line of ast.read_ast_from_disk()
+                    d = {'id': self.process_name + '.wic',
+                         'subtree': sw.yaml,  # recursively call .yaml (i.e. on s, not self)
+                         'parentargs': parentargs}
+                    steps.append(d)
+                case _:
+                    pass
         yaml_contents = {"inputs": inputs, "steps": steps} if inputs else {"steps": steps}
         return yaml_contents
 
