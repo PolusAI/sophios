@@ -39,8 +39,6 @@ def main() -> None:
                                       args.validate_plugins,
                                       not args.no_skip_dollar_schemas,
                                       args.quiet)
-    # This takes ~1 second but it is not really necessary.
-    # utils_graphs.make_plugins_dag(tools_cwl, args.graph_dark_theme)
     # pass around config object instead of reading from the disk!
     yml_paths = plugins.get_yml_paths(global_config)
 
@@ -55,7 +53,7 @@ def main() -> None:
 
     # Generating yml schemas every time takes ~20 seconds and guarantees the
     # subworkflow schemas are always up to date. However, since it compiles all
-    # yml files, if there are any errors in any of the yml files, the user may
+    # wic files, if there are any errors in any of the wic files, the user may
     # be confused by an error message when the --yaml file is correct.
     # For now, require the user to update the schemas manually. In the future,
     # we may use a filewatcher.

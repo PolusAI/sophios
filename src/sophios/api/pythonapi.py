@@ -405,34 +405,39 @@ class Step(BaseModel):  # pylint: disable=too-few-public-methods
     def _yml(self) -> dict:
         in_dict: dict[str, Any] = {}  # NOTE: input values can be arbitrary JSON; not just strings!
         for inp in self.inputs:
-            if inp.value is not None:
-                if isinstance(inp.value, Path):
-                    # Special case for Path since it does not inherit from YAMLObject
-                    in_dict[inp.name] = str(inp.value)
-                elif isinstance(inp.value, dict) and isinstance(inp.value.get('wic_alias', {}), Path):
-                    # Special case for Path since it does not inherit from YAMLObject
-                    in_dict[inp.name] = {'wic_alias': str(inp.value['wic_alias'])}
-                elif isinstance(inp.value, dict) and isinstance(inp.value.get('wic_inline_input', {}), Path):
-                    # Special case for Path since it does not inherit from YAMLObject
-                    in_dict[inp.name] = {'wic_inline_input': str(inp.value['wic_inline_input'])}
-                elif isinstance(inp.value, dict) and isinstance(inp.value.get('wic_inline_input', {}), str):
-                    # Special case for inline str since it does not inherit from YAMLObject
-                    in_dict[inp.name] = {'wic_inline_input': inp.value.get('wic_inline_input')}
-                elif isinstance(inp.value, str):
-                    in_dict[inp.name] = inp.value  # Obviously strings are serializable
-                elif isinstance(inp.value, yaml.YAMLObject):
-                    # Serialization and deserialization logic should always be
-                    # encapsulated within each object. For the pyyaml library,
-                    # each object should inherit from pyyaml.YAMLObject.
-                    # See https://pyyaml.org/wiki/PyYAMLDocumentation
-                    # Section "Constructors, representers, resolvers"
-                    # class Monster(yaml.YAMLObject): ...
-                    in_dict[inp.name] = inp.value
-                else:
-                    logger.warning(f'Warning! input name {inp.name} input value {inp.value}')
-                    logger.warning('is not an instance of YAMLObject. The default str() serialization')
-                    logger.warning('logic often gives bad results. Please explicitly inherit from YAMLObject.')
-                    in_dict[inp.name] = inp.value
+            if inp.value:
+                match inp.value:
+                    case Path():
+                        # Special case for Path since it does not inherit from YAMLObject
+                        in_dict[inp.name] = str(inp.value)
+                    case {'wic_alias': wic_alias, **rest_of_dict}:
+                        match wic_alias:
+                            case Path():
+                                # Special case for Path since it does not inherit from YAMLObject
+                                in_dict[inp.name] = {'wic_alias': str(inp.value['wic_alias'])}
+                    case {'wic_inline_input': wic_inline_input, **rest_of_dict}:
+                        match wic_inline_input:
+                            case Path():
+                                # Special case for Path since it does not inherit from YAMLObject
+                                in_dict[inp.name] = {'wic_inline_input': str(inp.value['wic_inline_input'])}
+                            case str():
+                                # Special case for inline str since it does not inherit from YAMLObject
+                                in_dict[inp.name] = {'wic_inline_input': inp.value.get('wic_inline_input')}
+                    case str():
+                        in_dict[inp.name] = inp.value  # Obviously strings are serializable
+                    case yaml.YAMLObject():
+                        # Serialization and deserialization logic should always be
+                        # encapsulated within each object. For the pyyaml library,
+                        # each object should inherit from pyyaml.YAMLObject.
+                        # See https://pyyaml.org/wiki/PyYAMLDocumentation
+                        # Section "Constructors, representers, resolvers"
+                        # class Monster(yaml.YAMLObject): ...
+                        in_dict[inp.name] = inp.value
+                    case _:
+                        logger.warning(f'Warning! input name {inp.name} input value {inp.value}')
+                        logger.warning('is not an instance of YAMLObject. The default str() serialization')
+                        logger.warning('logic often gives bad results. Please explicitly inherit from YAMLObject.')
+                        in_dict[inp.name] = inp.value
 
         out_list: list = []  # The out: tag is a list, not a dict
         out_list = [{out.name: out.value} for out in self.outputs if out.value]
@@ -523,11 +528,13 @@ class Workflow(BaseModel):
         # subworkflows will NOT have all required inputs.
         for s in self.steps:
             try:
-                if isinstance(s, Step):
-                    s._validate()  # pylint: disable=W0212
-                if isinstance(s, Workflow):
-                    # recursively validate subworkflows ?
-                    s._validate()  # pylint: disable=W0212
+                match s:
+                    case Step():
+                        s._validate()
+                    case Workflow():
+                        s._validate()
+                    case _:
+                        pass
             except BaseException as exc:
                 raise InvalidStepError(
                     f"{s.process_name} is missing required inputs"
@@ -558,21 +565,23 @@ class Workflow(BaseModel):
         # TODO: outputs?
         steps = []
         for s in self.steps:
-            if isinstance(s, Step):
-                steps.append(s._yml)
-            elif isinstance(s, Workflow):
-                ins = {
-                    inp.name: inp.value
-                    for inp in s.inputs
-                    if inp.value is not None  # Subworkflow args are not required
-                }
-                parentargs: dict[str, Any] = {"in": ins} if ins else {}
-                # See the second to last line of ast.read_ast_from_disk()
-                d = {'id': self.process_name + '.wic',
-                     'subtree': s.yaml,  # recursively call .yaml (i.e. on s, not self)
-                     'parentargs': parentargs}
-                steps.append(d)
-            #  else: ...
+            match s:
+                case Step():
+                    steps.append(s._yml)
+                case Workflow() as sw:
+                    ins = {
+                        inp.name: inp.value
+                        for inp in sw.inputs
+                        if inp.value is not None  # Subworkflow args are not required
+                    }
+                    parentargs: dict[str, Any] = {"in": ins} if ins else {}
+                    # See the second to last line of ast.read_ast_from_disk()
+                    d = {'id': self.process_name + '.wic',
+                         'subtree': sw.yaml,  # recursively call .yaml (i.e. on s, not self)
+                         'parentargs': parentargs}
+                    steps.append(d)
+                case _:
+                    pass
         yaml_contents = {"inputs": inputs, "steps": steps} if inputs else {"steps": steps}
         return yaml_contents
 
@@ -700,10 +709,11 @@ class Workflow(BaseModel):
         """
         steps = []
         for step in self.steps:
-            if isinstance(step, Step):
-                steps.append(step)
-            if isinstance(step, Workflow):
-                steps += step.flatten_steps()
+            match step:
+                case Step():
+                    steps.append(step)
+                case Workflow():
+                    steps += step.flatten_steps()
         return steps
 
     # NOTE: Cannot return list[Workflow] because Workflow is not yet defined.
@@ -773,8 +783,6 @@ class Workflow(BaseModel):
         Returns:
             Json: Contains the compiled CWL and yaml inputs to the workflow.
         """
-        user_args = self._convert_args_dict_to_args_list(args_dict)
-        args = get_args(self.process_name, user_args)
         compiler_info = self.compile(args_dict=args_dict, write_to_disk=False)
         rose_tree = compiler_info.rose
 
