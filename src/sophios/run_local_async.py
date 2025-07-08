@@ -103,8 +103,8 @@ async def run_cwl_serialized(workflow: Json, basepath: str,
     """
     workflow_name = workflow['name']
     basepath = basepath.rstrip("/") if basepath != "/" else basepath
-    output_dirs = pc.find_output_dirs(workflow)
-    pc.create_output_dirs(output_dirs, basepath)
+    output_dirs = await run_in_threadpool(pc.find_output_dirs, workflow)
+    await run_in_threadpool(pc.create_output_dirs, output_dirs, basepath)
     compiled_cwl = workflow_name + '.cwl'
     inputs_yml = workflow_name + '_inputs.yml'
     # write _input.yml file

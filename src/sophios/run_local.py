@@ -50,7 +50,7 @@ def generate_run_script(cmdline: str) -> None:
 
 def verify_container_engine_config(container_engine: str, ignore_container_install: bool) -> None:
     """Verify that the container_engine is correctly installed and has
-        correct permissions for the user.
+    correct permissions for the user.
     Args:
         workflow_name (str): Name of the .cwl workflow file to be executed
         basepath (str): The path at which the workflow to be executed
@@ -227,12 +227,13 @@ def run_local(args: argparse.Namespace, rose_tree: RoseTree, cachedir: Optional[
         retval = proc.returncode
         return retval  # Skip copying files to outdir/ for CI
     else:
-        print('via toil.cwl.cwltoil.main python API')
         try:
             if cwl_runner == 'cwltool':
+                print('via cwltool.main.main python API')
                 retval = cwltool.main.main(cmd[1:])
                 print(f'Final output json metadata blob is in output_{yaml_stem}.json')
             elif cwl_runner == 'toil-cwl-runner':
+                print('via toil.cwl.cwltoil.main python API')
                 retval = toil.cwl.cwltoil.main(cmd[1:])
             else:
                 raise ValueError('unsupported cwl_runner')
