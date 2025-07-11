@@ -228,11 +228,6 @@ def run_workflows(yml_path_str: str, yml_path: Path, cwl_runner: str, args: argp
     retval = sophios.run_local.run_local(args, rose_tree, None, cwl_runner, True)
     assert retval == 0
 
-    # Finally, since there is an output file copying bug in cwltool,
-    # we need to copy the output files manually. See comment above.
-    if args.cwl_runner == 'cwltool' and args.copy_output_files:
-        sophios.run_local.copy_output_files(yaml_stem)
-
 
 @pytest.mark.fast
 @pytest.mark.serial

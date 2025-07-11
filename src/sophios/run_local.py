@@ -165,7 +165,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
     cmd = [script] + container_pull + quiet + provenance + \
         container_cmd_ + write_summary + skip_schemas + path_check
     if cwl_runner == 'cwltool':
-        cmd += ['--leave-outputs', '--enable-ext',
+        cmd += ['--move-outputs', '--enable-ext',
                 f'{basepath}/{workflow_name}.cwl', f'{basepath}/{workflow_name}_inputs.yml']
     elif cwl_runner == 'toil-cwl-runner':
         container_pull = []
@@ -176,8 +176,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
                 '--jobStore', f'file:{basepath}/jobStore_{workflow_name}',  # NOTE: This is the equivalent of --cachedir
                 '--clean', 'always',  # This effectively disables caching, but is reproducible
                 '--disableProgress',  # disable the progress bar in the terminal, saves UI cycle
-                '--workDir', '/data1',
-                '--coordinationDir', '/data1',
+                '--enable-ext',
                 '--logLevel', 'INFO',
                 f'{basepath}/{workflow_name}.cwl', f'{basepath}/{workflow_name}_inputs.yml']
         cmd += passthrough_args
@@ -232,6 +231,8 @@ def run_local(args: argparse.Namespace, rose_tree: RoseTree, cachedir: Optional[
                 print('via cwltool.main.main python API')
                 retval = cwltool.main.main(cmd[1:])
                 print(f'Final output json metadata blob is in output_{yaml_stem}.json')
+                if args.copy_output_files:
+                    copy_output_files(yaml_stem)
             elif cwl_runner == 'toil-cwl-runner':
                 print('via toil.cwl.cwltoil.main python API')
                 retval = toil.cwl.cwltoil.main(cmd[1:])
