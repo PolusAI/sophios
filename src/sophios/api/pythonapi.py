@@ -821,9 +821,4 @@ class Workflow(BaseModel):
         else:
             run_local_module.run_local(args, rose_tree, args.cachedir, args.cwl_runner, True)
 
-        # Finally, since there is an output file copying bug in cwltool,
-        # we need to copy the output files manually. See comment above.
-        if args.cwl_runner == 'cwltool' and args.copy_output_files:
-            run_local_module.copy_output_files(self.process_name)
-
 # Process = Union[Step, Workflow]
