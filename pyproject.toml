@@ -109,7 +109,6 @@ runners = [
     "cwl-utils",
 ]
 runners-src = [
-    "toil[cwl] @ git+https://github.com/sameeul/toil.git",
     "cwl-utils @ git+https://github.com/sameeul/cwl-utils.git",
 ]
 # See docs/requirements.txt
