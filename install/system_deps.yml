@@ -3,7 +3,7 @@ channels:
   - defaults
 
 dependencies:
-  - "python>=3.11"
+  - "python<3.13"  # avoid 3.13 for now, known deps issue
 # NOTE: cwltool needs nodejs for InlineJavascriptRequirement
   - nodejs
   - graphviz
