@@ -137,6 +137,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
     Returns:
         cmd (List[str]): The command to run the workflow
     """
+    basepath = str(Path(basepath).absolute().resolve())
     quiet = ['--quiet']
     # NOTE: By default, cwltool will attempt to download schema files.
     # $schemas:
@@ -172,15 +173,17 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
                 f'{basepath}/{workflow_name}.cwl', f'{basepath}/{workflow_name}_inputs.yml']
     elif cwl_runner == 'toil-cwl-runner':
         container_pull = []
-        cmd = [script] + container_pull + provenance + container_cmd_ + path_check
+        cmd = [script] + container_pull + container_cmd_ + path_check
+        if 'slurm' not in passthrough_args:
+            cmd += provenance
+
         cmd += ['--outdir', f'{basepath}/outdir_toil_{date_time}',
                 '--jobStore', f'file:{basepath}/jobStore_{workflow_name}',  # NOTE: This is the equivalent of --cachedir
-                '--clean', 'always',  # This effectively disables caching, but is reproducible
-                '--disableProgress',  # disable the progress bar in the terminal, saves UI cycle
-                '--enable-ext',
-                '--logLevel', 'INFO',
-                f'{basepath}/{workflow_name}.cwl', f'{basepath}/{workflow_name}_inputs.yml']
+                '--noLinkImports',
+                '--disableProgress',  # disable the progress bar in the terminal, saves UI cycles
+                ]
         cmd += passthrough_args
+        cmd += [f'{basepath}/{workflow_name}.cwl', f'{basepath}/{workflow_name}_inputs.yml']
     else:
         pass
     return cmd

@@ -121,7 +121,7 @@ async def run_cwl_workflow(
         print(
             f'Failed to execute workflow "{workflow_name}". See {error_log_path} for detailed technical information.')
 
-        run_in_threadpool(error_log_path.parent.mkdir, parents=True, exist_ok=True)
+        await run_in_threadpool(error_log_path.parent.mkdir, parents=True, exist_ok=True)
 
         with open(error_log_path, mode='w', encoding='utf-8') as f:
             traceback.print_exc(file=f)
@@ -156,6 +156,8 @@ async def run_cwl_serialized(workflow: Json, basepath: str,
     await run_in_threadpool(pc.create_output_dirs, output_dirs, basepath)
     compiled_cwl = workflow_name + '.cwl'
     inputs_yml = workflow_name + '_inputs.yml'
+    # make parent dirs async way
+    await run_in_threadpool(Path(basepath).mkdir, parents=True, exist_ok=True)
     # write _input.yml file
     await run_in_threadpool(yaml.dump, workflow['yaml_inputs'],
                             open(Path(basepath) / inputs_yml, 'w', encoding='utf-8'))
