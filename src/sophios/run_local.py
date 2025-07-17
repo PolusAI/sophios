@@ -154,8 +154,10 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
         container_cmd_ = ['--singularity']
     else:
         container_cmd_ = ['--user-space-docker-cmd', container_cmd]
-    write_summary = ['--write-summary', f'output_{workflow_name}.json']
+    write_summary = ['--write-summary', f'{basepath}/output_{workflow_name}.json']
     path_check = ['--relax-path-checks']
+    now = datetime.now()
+    date_time = now.strftime("%Y_%m_%d_%H.%M.%S")
     # See https://github.com/common-workflow-language/cwltool/blob/5a645dfd4b00e0a704b928cc0bae135b0591cc1a/cwltool/command_line_tool.py#L94
     # NOTE: Using --leave-outputs to disable --outdir
     # See https://github.com/dnanexus/dx-cwl/issues/20
@@ -166,11 +168,10 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
         container_cmd_ + write_summary + skip_schemas + path_check
     if cwl_runner == 'cwltool':
         cmd += ['--move-outputs', '--enable-ext',
+                '--outdir', f'{basepath}/outdir_cwltool_{date_time}',
                 f'{basepath}/{workflow_name}.cwl', f'{basepath}/{workflow_name}_inputs.yml']
     elif cwl_runner == 'toil-cwl-runner':
         container_pull = []
-        now = datetime.now()
-        date_time = now.strftime("%Y_%m_%d_%H.%M.%S")
         cmd = [script] + container_pull + provenance + container_cmd_ + path_check
         cmd += ['--outdir', f'{basepath}/outdir_toil_{date_time}',
                 '--jobStore', f'file:{basepath}/jobStore_{workflow_name}',  # NOTE: This is the equivalent of --cachedir
