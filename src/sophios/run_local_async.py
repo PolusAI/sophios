@@ -154,10 +154,11 @@ async def run_cwl_serialized(workflow: Json, basepath: str,
     basepath = basepath.rstrip("/") if basepath != "/" else basepath
     output_dirs = await run_in_threadpool(pc.find_output_dirs, workflow)
     await run_in_threadpool(pc.create_output_dirs, output_dirs, basepath)
+    # the creation of basepath parentdir (if it doesn't exist) is necessary here
+    await run_in_threadpool(Path(basepath).mkdir, parents=True, exist_ok=True)
+    # writing the final cwl workflow file and inputs yml file
     compiled_cwl = workflow_name + '.cwl'
     inputs_yml = workflow_name + '_inputs.yml'
-    # make parent dirs async way
-    await run_in_threadpool(Path(basepath).mkdir, parents=True, exist_ok=True)
     # write _input.yml file
     await run_in_threadpool(yaml.dump, workflow['yaml_inputs'],
                             open(Path(basepath) / inputs_yml, 'w', encoding='utf-8'))
