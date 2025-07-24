@@ -146,7 +146,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
     (yaml_path_orig, yaml_tree_orig) = copy.deepcopy(yaml_tree_ast)
 
     if not testing:
-        print(' starting', ('  ' * len(namespaces)) + yaml_path)
+        print(' starting compilation of', ('  ' * len(namespaces)) + yaml_path)
 
     # Check for top-level yml dsl args
     wic = {'wic': yaml_tree.get('wic', {})}
@@ -909,7 +909,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
         yaml_inputs.update(new_keyval)
 
     if not testing:
-        print('finishing', ('  ' * len(namespaces)) + yaml_path)
+        print('finishing compilation of', ('  ' * len(namespaces)) + yaml_path)
     # Note: We do not necessarily need to return inputs_workflow.
     # 'Internal' inputs are encoded in yaml_tree. See Comment above.
     node_data = NodeData(namespaces, yaml_stem, yaml_tree_orig, yaml_tree, tool_i, yaml_inputs,

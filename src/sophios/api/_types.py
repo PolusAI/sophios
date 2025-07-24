@@ -1,7 +1,5 @@
 """CWL Types."""
 from enum import Enum
-from pathlib import Path
-from typing import Any
 
 
 class CWLTypesEnum(str, Enum):
