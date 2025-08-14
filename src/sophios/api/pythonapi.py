@@ -769,7 +769,7 @@ class Workflow(BaseModel):
         compiler_info = self.compile(
             args_dict=compile_args_dict, write_to_disk=False)
         rose_tree: RoseTree = compiler_info.rose
-        # rose_tree = post_compile.cwl_inline_runtag(rose_tree)
+        rose_tree = post_compile.cwl_inline_runtag(rose_tree)
         post_compile.find_and_create_output_dirs(rose_tree)
         # only write out after all the transformations
         input_output.write_to_disk(rose_tree, Path(

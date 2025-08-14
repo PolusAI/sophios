@@ -52,12 +52,8 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
     """Verify that the container_engine is correctly installed and has
     correct permissions for the user.
     Args:
-        workflow_name (str): Name of the .cwl workflow file to be executed
-        basepath (str): The path at which the workflow to be executed
-        cwl_runner (str): The CWL runner used to execute the workflow
-        container_cmd (str): The container engine command
-    Returns:
-        cmd (List[str]): The command to run the workflow
+        container_engine (str): The container engine command
+        ignore_container_install (bool): whether to ignore if container engine is not installed and run workflow anyway
     """
     docker_like_engines = ['docker', 'podman']
     container_cmd: str = container_engine

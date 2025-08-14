@@ -7,7 +7,6 @@ import sys
 import time
 from pathlib import Path
 from typing import Dict, List
-from unittest.mock import patch
 
 import graphviz
 import networkx as nx

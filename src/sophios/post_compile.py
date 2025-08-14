@@ -88,9 +88,14 @@ def cwl_inline_runtag(rose_tree: RoseTree) -> RoseTree:
         for sub_rose_tree in rose_tree_mod.sub_trees:
             sub_node_data: NodeData = sub_rose_tree.data
             sub_step_name = sub_node_data.namespaces[-1]
-            step_to_update = next(item for item in cwl_tree['steps'] if item.get('id') == sub_step_name)
+            step_to_update = next(
+                item for item in cwl_tree['steps'] if item.get('id') == sub_step_name)
             step_to_update['run'] = sub_node_data.compiled_cwl
-            # The below two lines needed to avoid parsing errors of the run tag
+            # merge the steps/clt namespaces to global namespaces
+            # as the run tag can't have namespaces and schemas
+            cwl_tree['$namespaces'] = cwl_tree['$namespaces'] | step_to_update['run'].get(
+                '$namespaces', {})
+            # and then get rid off $namespaces and $schemas in the run tag
             step_to_update['run'].pop('$namespaces', None)
             step_to_update['run'].pop('$schemas', None)
             sub_rose_tree = cwl_inline_runtag(sub_rose_tree)

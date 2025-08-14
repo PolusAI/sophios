@@ -40,8 +40,6 @@ async def run_cwl_workflow(
         cwl_runner (str): The command for the CWL runner (e.g., 'cwltool', 'toil-cwl-runner').
         container_cmd (str): The command for the container engine (e.g., 'docker', 'podman').
         user_env (Dict[str, str]): A dictionary of environment variables to set for the subprocess.
-        supported_runners (Optional[List[str]]): A list of explicitly supported CWL runner commands.
-                                                 If None, defaults to ['cwltool', 'toil-cwl-runner'].
 
     Returns:
         Optional[int]: The exit code of the executed workflow process, or None if an

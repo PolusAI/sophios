@@ -44,7 +44,8 @@ dependencies = [
     "fastapi",
     "python-jose",
     "uvicorn",
-    "referencing"
+    "referencing",
+    "aiofiles"
 ]
 
 [project.readme]
