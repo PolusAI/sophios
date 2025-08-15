@@ -511,6 +511,7 @@ def get_output_mapping(output_mapping: Dict[str, str], out_key: str) -> str:
 def convert_args_dict_to_args_list(args_dict: Dict[str, str]) -> List[str]:
     """ A simple utility converting a dict whose keys are CLI flag/args and
         values are CLI flag values
+
     Args:
         args_dict: A dictionary containing args and values
 

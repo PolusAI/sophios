@@ -125,7 +125,7 @@ parser.add_argument('--graph_dark_theme', default=False, action="store_true",
                     help='Changees the color of the fonts and edges from white to black.')
 parser.add_argument('--custom_net', type=str, required=False,
                     help='Passes --custom-net flag to cwltool.')
-parser.add_argument('--toil_passthrough_flags', type=str, default='no', required=False,
+parser.add_argument('--passthrough_flags', type=str, default='no', required=False,
                     help='''Indicates that the user is passing flags to the Toil backend.
                     No checks are done on the flags or values passed. User must verify that they are sending correct flags.
                     only two valid values of this flag 'yes' or 'no'.

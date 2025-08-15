@@ -54,7 +54,7 @@ async def run_cwl_workflow(
         )
 
     # build_cmd doesn't need to be offloaded
-    cmd = build_cmd(workflow_name, basepath, cwl_runner, container_cmd)
+    cmd = build_cmd(workflow_name, basepath, cwl_runner, container_cmd, passthrough_args=[])
     full_cmd_str = ' '.join(cmd)
 
     retval: Optional[int] = None
