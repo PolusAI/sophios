@@ -4,7 +4,7 @@ from typing import Union
 
 from yaml import safe_load
 
-from sophios.api.utils.ict.ict_spec.model import ICT
+from sophios.apis.utils.ict.ict_spec.model import ICT
 
 
 def cast_to_ict(ict: Union[Path, str, dict]) -> ICT:

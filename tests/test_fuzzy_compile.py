@@ -10,10 +10,7 @@ import pytest
 import sophios
 import sophios.ast
 import sophios.cli
-import sophios.main
 import sophios.plugins
-import sophios.schemas
-import sophios.schemas.wic_schema
 import sophios.utils
 from sophios.wic_types import GraphData, GraphReps, Yaml, YamlTree, StepId
 

@@ -8,11 +8,11 @@ from typing import Optional, TypeVar
 import yaml
 from pydantic import model_validator
 
-from sophios.api.utils.ict.ict_spec.hardware import HardwareRequirements
-from sophios.api.utils.ict.ict_spec.io import IO
-from sophios.api.utils.ict.ict_spec.metadata import Metadata
-from sophios.api.utils.ict.ict_spec.tools import clt_dict, ict_dict
-from sophios.api.utils.ict.ict_spec.ui import UIItem
+from sophios.apis.utils.ict.ict_spec.hardware import HardwareRequirements
+from sophios.apis.utils.ict.ict_spec.io import IO
+from sophios.apis.utils.ict.ict_spec.metadata import Metadata
+from sophios.apis.utils.ict.ict_spec.tools import clt_dict, ict_dict
+from sophios.apis.utils.ict.ict_spec.ui import UIItem
 
 StrPath = TypeVar("StrPath", str, Path)
 

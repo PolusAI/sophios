@@ -16,12 +16,12 @@ def test_compile_python_workflows() -> None:
        The python files should NOT call the .run() method!
        (from any code path that is automatically executed on import)
     """
-    from sophios.api import pythonapi  # pylint: disable=C0415:import-outside-toplevel
+    from sophios.apis.python import api  # pylint: disable=C0415:import-outside-toplevel
     # Since this is completely different test path we have to copy
     # default .txt files to default global_config.json
     config_file = Path().home()/'wic'/'global_config.json'
     global_config = io.read_config_from_disk(config_file)
-    pythonapi.global_config = sophios.plugins.get_tools_cwl(global_config)  # Use path fallback in the CI
+    api.global_config = sophios.plugins.get_tools_cwl(global_config)  # Use path fallback in the CI
     paths = sophios.plugins.get_py_paths(global_config)
     # Above we are assuming that config is default
     paths_tuples = [(path_str, path)
@@ -38,7 +38,7 @@ def test_compile_python_workflows() -> None:
             # Let's require all python API files to define a function, say
             # def workflow() -> Workflow
             # so we can programmatically call it here:
-            retval: pythonapi.Workflow = module.workflow()  # no arguments
+            retval: api.Workflow = module.workflow()  # no arguments
             # which allows us to programmatically call Workflow methods:
             compiler_info = retval.compile()  # hopefully retval is actually a Workflow object!
             # But since this is python (i.e. not Haskell) that in no way eliminates
@@ -57,7 +57,7 @@ def test_compile_python_workflows() -> None:
                     json_contents = json.load(r)
             run_blacklist: list[str] = json_contents.get('run_blacklist', [])
             # Use [1:] for proper subworkflows only
-            subworkflows: list[pythonapi.Workflow] = retval.flatten_subworkflows()[1:]
+            subworkflows: list[api.Workflow] = retval.flatten_subworkflows()[1:]
             run_blacklist += [wf.process_name for wf in subworkflows]
             json_contents['run_blacklist'] = run_blacklist
             with open(config_ci, mode='w', encoding='utf-8') as f:

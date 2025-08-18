@@ -136,7 +136,7 @@ async def run_cwl_workflow(
 
 
 async def run_cwl_serialized(workflow: Json, basepath: str,
-                             cwl_runner: str, container_cmd: str,
+                             cwl_runner: str, container_engine: str,
                              user_env: Dict[str, str]) -> None:
     """Prepare and run compiled and serialized CWL workflow asynchronously
 
@@ -144,7 +144,7 @@ async def run_cwl_serialized(workflow: Json, basepath: str,
         workflow_json (Json): Compiled and serialized CWL workflow
         basepath (str): The path at which the workflow to be executed
         cwl_runner (str): The CWL runner used to execute the workflow
-        container_cmd (str): The container engine command
+        container_engine (str): The container engine command
         env_commands (List[str]): environment variables and commands
         needed to be run before running the workflow
     """
@@ -170,6 +170,11 @@ async def run_cwl_serialized(workflow: Json, basepath: str,
     await run_in_threadpool(yaml.dump, workflow,
                             open(Path(basepath) / compiled_cwl, 'w', encoding='utf-8'))
 
+    # do the cwl-docker-extract to get the images
+    # await run_in_threadpool(cwl_docker_extract,run_args_dict.get(
+    #         'container_engine', 'docker'), run_args_dict.get('pull_dir', str(Path.cwd())),
+    #         workflow_name)
+
     retval = await run_cwl_workflow(workflow_name, basepath,
-                                    cwl_runner, container_cmd, user_env=user_env)
+                                    cwl_runner, container_engine, user_env=user_env)
     assert retval == 0

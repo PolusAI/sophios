@@ -9,7 +9,7 @@ import pytest
 from sophios.wic_types import Json
 
 
-from sophios.api.http import restapi
+from sophios.apis.rest import api
 
 
 def test_rest_multinode_wfb() -> None:
@@ -30,5 +30,5 @@ def test_rest_multinode_wfb() -> None:
     # create a request object and pack it with our json payload
     req: Request = Request(scope)
     req._receive = receive
-    res: Json = asyncio.run(restapi.compile_wf(req))  # call to rest api
+    res: Json = asyncio.run(api.compile_wf(req))  # call to rest api
     assert int(res['retval']) == 0

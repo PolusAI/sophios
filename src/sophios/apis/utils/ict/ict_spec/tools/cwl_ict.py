@@ -2,7 +2,7 @@
 from typing import Union, Dict, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sophios.api.utils.ict.ict_spec.model import ICT
+    from sophios.apis.utils.ict.ict_spec.model import ICT
 
 
 def requirements(ict_: "ICT", network_access: bool) -> dict:

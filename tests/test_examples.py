@@ -11,7 +11,6 @@ import yaml
 from networkx.algorithms import isomorphism
 from mergedeep import merge, Strategy
 
-import sophios.cli
 import sophios.compiler
 import sophios.inlineing
 import sophios.input_output

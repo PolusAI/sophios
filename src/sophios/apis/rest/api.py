@@ -16,7 +16,7 @@ from sophios import utils_cwl
 from sophios.post_compile import cwl_inline_runtag, remove_entrypoints
 from sophios.cli import get_args
 from sophios.wic_types import CompilerInfo, Json, Tool, Tools, StepId, YamlTree, Cwl, NodeData
-from sophios.api.utils import converter
+from sophios.apis.utils import converter
 import sophios.plugins as plugins
 # from .auth.auth import authenticate
 

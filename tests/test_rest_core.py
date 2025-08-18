@@ -15,7 +15,7 @@ from sophios.wic_types import Json, List
 import sophios.post_compile as pc
 
 
-from sophios.api.http import restapi
+from sophios.apis.rest import api
 
 try:
     import cwltool.main
@@ -128,7 +128,7 @@ def prepare_call_rest_api(inp_path: Path) -> Json:
     # create a request object and pack it with our json payload
     req: Request = Request(scope)
     req._receive = receive
-    res: Json = asyncio.run(restapi.compile_wf(req))  # call to rest api
+    res: Json = asyncio.run(api.compile_wf(req))  # call to rest api
     return res
 
 
