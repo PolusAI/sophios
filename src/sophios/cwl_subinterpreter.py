@@ -14,7 +14,7 @@ from jsonschema import Draft202012Validator
 
 from . import input_output as io
 from . import ast, cli, compiler, inference, utils
-from .run_local import stage_input_files
+from .post_compile import stage_input_files
 from .plugins import get_tools_cwl, get_yml_paths, logging_filters
 from .schemas import wic_schema
 from .wic_types import GraphData, GraphReps, Json, StepId, Tools, YamlTree
@@ -127,7 +127,7 @@ def rerun_cwltool(homedir: str, _directory_realtime: Path, cachedir_path: Path, 
         print(f'compile time for {cwl_tool}: {round(time_final - time_initial, 4)} seconds')
 
         yaml_inputs = rose_tree.data.workflow_inputs_file
-        stage_input_files(yaml_inputs, root_workflow_yml_path, relative_run_path=False, throw=False)
+        stage_input_files(yaml_inputs, root_workflow_yml_path, str(working_dir), use_subdirs_cwl=False, throw=False)
 
         # NOTE: Since we are running cwltool 'within' cwltool, the inner
         # cwltool command will get run from working_dir, but then cwl_tool

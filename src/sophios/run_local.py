@@ -1,4 +1,3 @@
-import argparse
 import glob
 import json
 import subprocess as sub
@@ -8,7 +7,7 @@ import stat
 from pathlib import Path
 import shutil
 import traceback
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime
 
 try:
@@ -28,7 +27,6 @@ except ImportError as exc:
 
 from . import auto_gen_header
 from . import utils  # , utils_graphs
-from .wic_types import Yaml, RoseTree
 from .plugins import logging_filters
 
 
@@ -46,79 +44,6 @@ def generate_run_script(cmdline: str) -> None:
     # chmod +x run.sh
     st = os.stat('run.sh')
     os.chmod('run.sh', st.st_mode | stat.S_IEXEC)
-
-
-def verify_container_engine_config(container_engine: str, ignore_container_install: bool) -> None:
-    """Verify that the container_engine is correctly installed and has
-    correct permissions for the user.
-    Args:
-        container_engine (str): The container engine command
-        ignore_container_install (bool): whether to ignore if container engine is not installed and run workflow anyway
-    """
-    docker_like_engines = ['docker', 'podman']
-    container_cmd: str = container_engine
-    # Check that docker is installed, so users don't get a nasty runtime error.
-    if container_cmd in docker_like_engines:
-        cmd = [container_cmd, 'run', '--rm', 'hello-world']
-        output = ''
-        try:
-            container_cmd_exists = True
-            proc = sub.run(cmd, check=False, stdout=sub.PIPE, stderr=sub.STDOUT)
-            output = proc.stdout.decode("utf-8")
-        except FileNotFoundError:
-            container_cmd_exists = False
-        out_d = "Hello from Docker!"
-        out_p = "Hello Podman World"
-        permission_denied = 'permission denied while trying to connect to the Docker daemon socket at'
-        if ((not container_cmd_exists
-            or not (proc.returncode == 0 and out_d in output or out_p in output))
-                and not ignore_container_install):
-
-            if permission_denied in output:
-                print('Warning! docker appears to be installed, but not configured as a non-root user.')
-                print('See https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user')
-                print('TL;DR you probably just need to run the following command (and then restart your machine)')
-                print('sudo usermod -aG docker $USER')
-                sys.exit(1)
-
-            print(f'Warning! The {container_cmd} command does not appear to be installed.')
-            print(f"""Most workflows require docker containers and
-                  will fail at runtime if {container_cmd} is not installed.""")
-            print('If you want to try running the workflow anyway, use --ignore_docker_install')
-            print("""Note that --ignore_docker_install does
-                  NOT change whether or not any step in your workflow uses docker""")
-            sys.exit(1)
-
-        # If docker is installed, check for too many running processes. (on linux, macos)
-        if container_cmd_exists and sys.platform != "win32":
-            cmd = 'pgrep com.docker | wc -l'  # type: ignore
-            proc = sub.run(cmd, check=False, stdout=sub.PIPE, stderr=sub.STDOUT, shell=True)
-            output = proc.stdout.decode("utf-8")
-            num_processes = int(output.strip())
-            max_processes = 1000
-            if num_processes > max_processes and not ignore_container_install:
-                print(f'Warning! There are {num_processes} running docker processes.')
-                print(f'More than {max_processes} may potentially cause intermittent hanging issues.')
-                print('It is recommended to terminate the processes using the command')
-                print('`sudo pkill com.docker && sudo pkill Docker`')
-                print('and then restart Docker.')
-                print('If you want to run the workflow anyway, use --ignore_docker_processes')
-                sys.exit(1)
-    else:
-        cmd = [container_cmd, '--version']
-        output = ''
-        try:
-            container_cmd_exists = True
-            proc = sub.run(cmd, check=False, stdout=sub.PIPE, stderr=sub.STDOUT)
-            output = proc.stdout.decode("utf-8")
-        except FileNotFoundError:
-            container_cmd_exists = False
-        if not container_cmd_exists and not ignore_container_install:
-            print(f'Warning! The {container_cmd} command does not appear to be installed.')
-            print('If you want to try running the workflow anyway, use --ignore_docker_install')
-            print('Note that --ignore_docker_install does NOT change whether or not')
-            print('any step in your workflow uses docker or any other containers')
-            sys.exit(1)
 
 
 def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
@@ -169,8 +94,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
         cmd += passthrough_args
         cmd += [f'{basepath}/{workflow_name}.cwl', f'{basepath}/{workflow_name}_inputs.yml']
     elif cwl_runner == 'toil-cwl-runner':
-        container_pull = []
-        cmd = [script] + container_pull + container_cmd_ + path_check
+        cmd = [script] + container_cmd_ + path_check
         if 'slurm' not in passthrough_args:
             cmd += provenance
 
@@ -186,35 +110,32 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
     return cmd
 
 
-def run_local(args: argparse.Namespace, rose_tree: RoseTree, cachedir: Optional[str], cwl_runner: str,
-              use_subprocess: bool, passthrough_args: List[str], basepath: str = 'autogenerated') -> int:
+def run_local(run_args_dict: Dict[str, str], use_subprocess: bool,
+              passthrough_args: List[str], workflow_name: str,
+              basepath: str) -> Optional[int]:
     """This function runs the compiled workflow locally.
 
     Args:
-        args (argparse.Namespace): The command line arguments
-        rose_tree (RoseTree): The compiled workflow
-        cachedir (Optional[str]): The --cachedir to use (if any)
-        cwl_runner (str): Either 'cwltool' or 'toil-cwl-runner'
+        run_args_dict (Dict[str,str]): The command line arguments dict for run_local
         use_subprocess (bool): When using cwltool, determines whether to use subprocess.run(...)
         or use the cwltool python api.
+        basepath (str): The path at which the workflow to be executed
 
     Returns:
-        retval: The return value
+        retval (Optional[int]): The return value indicating if run succeeded (0) or not
     """
-    container_engine = args.container_engine
-    verify_container_engine_config(container_engine, args.ignore_docker_install)
-
-    yaml_path = args.yaml
-    yaml_stem = Path(yaml_path).stem
-
-    yaml_inputs = rose_tree.data.workflow_inputs_file
-    stage_input_files(yaml_inputs, Path(args.yaml).parent.absolute())
-
     retval = 1  # overwrite if successful
 
-    cmd = build_cmd(yaml_stem, basepath, cwl_runner, container_engine, passthrough_args)
+    container_engine = run_args_dict['container_engine']
+    yaml_path = Path(basepath) / workflow_name
+    cwl_runner = run_args_dict['cwl_runner']
+    cachedir = run_args_dict.get('cachedir', 'cachedir')  # 'cachedir' is the default value
+
+    # build the runner command
+    cmd = build_cmd(workflow_name, basepath, cwl_runner, container_engine, passthrough_args)
     cmdline = ' '.join(cmd)
-    if args.generate_run_script:
+
+    if run_args_dict.get('generate_run_script', 'no') == 'yes':
         generate_run_script(cmdline)
         return 0  # Do not actually run
 
@@ -231,9 +152,9 @@ def run_local(args: argparse.Namespace, rose_tree: RoseTree, cachedir: Optional[
             if cwl_runner == 'cwltool':
                 print('via cwltool.main.main python API')
                 retval = cwltool.main.main(cmd[1:])
-                print(f'Final output json metadata blob is in output_{yaml_stem}.json')
-                if args.copy_output_files:
-                    copy_output_files(yaml_stem)
+                print(f'Final output json metadata blob is in output_{workflow_name}.json')
+                if run_args_dict.get('copy_output_files', 'no') == 'yes':
+                    copy_output_files(workflow_name)
             elif cwl_runner == 'toil-cwl-runner':
                 print('via toil.cwl.cwltoil.main python API')
                 retval = toil.cwl.cwltoil.main(cmd[1:])
@@ -243,9 +164,9 @@ def run_local(args: argparse.Namespace, rose_tree: RoseTree, cachedir: Optional[
         except Exception as e:
             retval = 1
             print('Failed to execute', yaml_path)
-            print(f'See error_{yaml_stem}.txt for detailed technical information.')
+            print(f'See error_{workflow_name}.txt for detailed technical information.')
             # Do not display a nasty stack trace to the user; hide it in a file.
-            with open(f'error_{yaml_stem}.txt', mode='w', encoding='utf-8') as f:
+            with open(f'error_{workflow_name}.txt', mode='w', encoding='utf-8') as f:
                 traceback.print_exception(type(e), value=e, tb=None, file=f)
             if not cachedir:  # if running on CI
                 print(e)
@@ -317,40 +238,6 @@ def copy_output_files(yaml_stem: str, basepath: str = '') -> None:
             dests.add(dest)
             cmd = ['cp', source, dest]
             sub.run(cmd, check=True)
-
-
-def stage_input_files(yml_inputs: Yaml, root_yml_dir_abs: Path,
-                      relative_run_path: bool = True, throw: bool = True) -> None:
-    """Copies the input files in yml_inputs to the working directory.
-
-    Args:
-        yml_inputs (Yaml): The yml inputs file for the root workflow.
-        root_yml_dir_abs (Path): The absolute path of the root workflow yml file.
-        relative_run_path (bool): Controls whether to use subdirectories or\n
-        just one directory when writing the compiled CWL files to disk
-        throw (bool): Controls whether to raise/throw a FileNotFoundError.
-
-    Raises:
-        FileNotFoundError: If throw and it any of the input files do not exist.
-    """
-    for key, val in yml_inputs.items():
-        match val:
-            case {'class': 'File', **rest_of_val}:
-                path = root_yml_dir_abs / Path(val['path'])
-                if not path.exists() and throw:
-                    # raise FileNotFoundError(f'Error! {path} does not exist!')
-                    print(f'Error! {path} does not exist!')
-                    sys.exit(1)
-
-                relpath = Path('autogenerated/') if relative_run_path else Path('.')
-                pathauto = relpath / Path(val['path'])  # .name # NOTE: Use .name ?
-                pathauto.parent.mkdir(parents=True, exist_ok=True)
-
-                if path != pathauto:
-                    cmd = ['cp', str(path), str(pathauto)]
-                    _ = sub.run(cmd, check=False)
-            case _:
-                pass
 
 
 def cwltool_main() -> int:

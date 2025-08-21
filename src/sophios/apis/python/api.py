@@ -3,7 +3,7 @@
 import logging
 import os
 from pathlib import Path, PurePath
-from typing import Any, ClassVar, Optional, TypeVar, Union, Dict, List
+from typing import Any, ClassVar, Optional, TypeVar, Union, Dict
 
 import cwl_utils.parser as cu_parser
 import yaml
@@ -12,8 +12,9 @@ from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
-from sophios import compiler, input_output, plugins, utils_cwl, post_compile
+from sophios import compiler, input_output, plugins, utils_cwl
 from sophios import run_local as run_local_module
+from sophios import post_compile as pc
 from sophios.cli import get_args, get_known_and_unknown_args
 from sophios.utils_graphs import get_graph_reps
 from sophios.utils import convert_args_dict_to_args_list
@@ -697,20 +698,6 @@ class Workflow(BaseModel):
                 subworkflows += step.flatten_subworkflows()
         return subworkflows
 
-    def _convert_args_dict_to_args_list(self, args_dict: Dict[str, str]) -> List[str]:
-        """ A simple utility converting a dict whose keys are CLI flag/args and
-            values are CLI flag values
-        Args:
-            args_dict: A dictionary containing args and values
-
-        Returns:
-            List[str]: A syntactically correct list of arguments (CLI flags) and values
-        """
-        args_list: List[str] = []
-        for arg_name, arg_value in args_dict.items():
-            args_list += ['--' + arg_name, arg_value]
-        return args_list
-
     def compile(self, write_to_disk: bool = False) -> CompilerInfo:
         """Compile Workflow using WIC.
 
@@ -752,7 +739,7 @@ class Workflow(BaseModel):
         compiler_info = self.compile(write_to_disk=False)
         rose_tree = compiler_info.rose
 
-        rose_tree = post_compile.cwl_inline_runtag(rose_tree)
+        rose_tree = pc.cwl_inline_runtag(rose_tree)
         sub_node_data = rose_tree.data
         cwl_ast = sub_node_data.compiled_cwl
 
@@ -779,30 +766,29 @@ class Workflow(BaseModel):
         # compile the workflow
         compiler_info = self.compile(write_to_disk=False)
         rose_tree: RoseTree = compiler_info.rose
-        rose_tree = post_compile.cwl_inline_runtag(rose_tree)
-        post_compile.find_and_create_output_dirs(rose_tree)
+        rose_tree = pc.cwl_inline_runtag(rose_tree)
+        pc.find_and_create_output_dirs(rose_tree)
+        # verify container_engine install and config
+        pc.verify_container_engine_config(run_args_dict['container_engine'], False)
         # only write out after all the transformations
         input_output.write_to_disk(rose_tree, Path(basepath), True, run_args_dict.get('inputs_file', ''))
         # prepare for running
-        post_compile.cwl_docker_extract(run_args_dict['container_engine'],
-                                        run_args_dict['pull_dir'],
-                                        self.process_name)
+        pc.cwl_docker_extract(run_args_dict['container_engine'],
+                              run_args_dict['pull_dir'],
+                              self.process_name)
         if run_args_dict.get('docker_remove_entrypoints', None):
-            rose_tree = post_compile.remove_entrypoints(run_args_dict['container_engine'], rose_tree)
+            rose_tree = pc.remove_entrypoints(run_args_dict['container_engine'], rose_tree)
         user_args = convert_args_dict_to_args_list(run_args_dict)
 
-        # set up user envs
-        # update the environment
+        # update the environment with user supplied env args
         for k, v in user_env.items():
             os.environ[k] = v
-        args, unknown_args = get_known_and_unknown_args(
+        _, unknown_args = get_known_and_unknown_args(
             self.process_name, user_args)  # Use mock CLI args
-        # Do NOT capture stdout and/or stderr and pipe warnings and errors into a black hole.
-        if run_args_dict.get('passthrough_flags', '') == 'yes':
-            run_local_module.run_local(args, rose_tree, args.cachedir, args.cwl_runner,
-                                       True, passthrough_args=unknown_args, basepath=basepath)
-        else:
-            run_local_module.run_local(
-                args, rose_tree, args.cachedir, args.cwl_runner, True, passthrough_args=[], basepath=basepath)
+        # if there are no unknown_args then unkown_args will be an empty list []
+        # so no need for a separate check of a particular flag!
+        run_local_module.run_local(run_args_dict, False,
+                                   workflow_name=self.process_name,
+                                   basepath=basepath, passthrough_args=unknown_args)
 
 # Process = Union[Step, Workflow]
