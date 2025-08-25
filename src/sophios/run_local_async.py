@@ -1,6 +1,5 @@
 from pathlib import Path
 import traceback
-import os
 from typing import Optional, Dict, Any
 import asyncio
 import aiofiles
@@ -12,16 +11,7 @@ from fastapi.concurrency import run_in_threadpool
 
 import sophios.post_compile as pc
 from sophios.wic_types import Json
-from .run_local import build_cmd, copy_output_files
-
-
-def create_safe_env(user_env: Dict[str, str]) -> dict:
-    """Generate a sanitized environment dict without applying it"""
-    forbidden = {"PATH", "LD_", "PYTHON", "SECRET_", "BASH_ENV"}
-    for key in user_env:
-        if any(key.startswith(prefix) for prefix in forbidden):
-            raise ValueError(f"Prohibited key: {key}")
-    return {**os.environ, **user_env}
+from .run_local import build_cmd, copy_output_files, create_safe_env
 
 
 async def run_cwl_workflow(

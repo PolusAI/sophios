@@ -3,12 +3,16 @@ import json
 import subprocess as sub
 import sys
 import os
+import re
 import stat
 from pathlib import Path
+from pprint import pprint
 import shutil
 import traceback
-from typing import List, Optional, Dict
 from datetime import datetime
+from typing import List, Optional, Dict
+import requests
+from sophios.wic_types import Json
 
 try:
     import cwltool.main
@@ -28,6 +32,47 @@ except ImportError as exc:
 from . import auto_gen_header
 from . import utils  # , utils_graphs
 from .plugins import logging_filters
+
+
+def sanitize_env_vars(env_vars: Dict[str, str]) -> Dict[str, str]:
+    """
+    Sanitizes a dictionary of user-defined environment variables, assuming all
+    values are strings.
+
+    - Ensures keys are valid Bash variable names.
+    - Removes potentially dangerous characters from string values.
+
+    Args:
+        env_vars (Dict[str, str]): A dictionary of string key-value pairs.
+
+    Returns:
+        Dict[str, str]: A new dictionary with sanitized key-value pairs.
+    """
+    sanitized = {}
+
+    # Regex for a valid Bash variable name
+    valid_key_pattern = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+    # Characters to remove from values to prevent command injection
+    dangerous_chars_pattern = re.compile(r'[;`\'"$()|<>&!\n\r]')
+
+    for key, value in env_vars.items():
+        # Step 1: Validate the key.
+        if not valid_key_pattern.fullmatch(key):
+            print(f"Warning: Invalid environment variable key '{key}' skipped.")
+            continue
+
+        # Step 2: Sanitize the value.
+        sanitized_value = dangerous_chars_pattern.sub('', value)
+        sanitized[key] = sanitized_value
+
+    return sanitized
+
+
+def create_safe_env(user_env: Dict[str, str]) -> dict:
+    """Generate a sanitized environment dict without applying it"""
+    sanitized_user_env = sanitize_env_vars(user_env)
+    return {**os.environ, **sanitized_user_env}
 
 
 def generate_run_script(cmdline: str) -> None:
@@ -186,6 +231,66 @@ def run_local(run_args_dict: Dict[str, str], use_subprocess: bool,
             if not d == cachedir_path:
                 shutil.rmtree(d)  # Be VERY careful when programmatically deleting directories!
 
+    return retval
+
+
+def run_compute(workflow_name: str, workflow: Json, workflow_inputs: Json,
+                submit_url: str, user_env_vars: Dict[str, str] = {}) -> Optional[int]:
+    """This function runs the compiled workflow through compute.
+
+    Args:
+        workflow_name (str): The name of the workflow
+        workflow (Json): The compiled CWL workflow
+        workflow_inputs (Json): The inputs for compiled CWL workflow
+        submit_url (str): URL of Compute where the job is to be submitted
+        user_env_vars (Dict[str,str]): User supplied environment variables
+
+    Returns:
+        retval (Optional[int]): The return value indicating if run succeeded (0) or not
+    """
+    # update the environment with user supplied env args
+    os.environ.update(sanitize_env_vars(user_env_vars))
+
+    connect_timeout = 5  # in seconds
+    read_timeout = 30  # in seconds
+    timeout_tuple = (connect_timeout, read_timeout)
+    # construct compute_workflow object to be submitted
+    # append timestamp to the job/workflow name to create jobid
+    now = datetime.now()
+    date_time = now.strftime("%Y_%m_%d_%H.%M.%S")
+    jobid = workflow_name + '__' + str(date_time) + '__'
+    compute_workflow = {
+        'cwlWorkflow': workflow,
+        'cwlJobInputs': workflow_inputs,
+        'id': jobid,
+        'jobs': {}
+    }
+
+    base_url = submit_url
+
+    print('Sending request to Compute')
+    res = requests.post(base_url, json=compute_workflow, timeout=timeout_tuple)
+    print('Post response code: ' + str(res.status_code))
+
+    res = requests.get(base_url + f'{jobid}/outputs/', timeout=timeout_tuple)
+    print('Output response code: ' + str(res.status_code))
+    retval = 0 if res.status_code == 200 else 1
+    print('Toil output: ' + str(res.text))
+
+    res = requests.get(base_url + f'{jobid}/logs/', timeout=timeout_tuple)
+    # 1. Parse the JSON string into a Python dictionary
+    log_data = json.loads(res.text)
+
+    # 2. Extract the first key-value pair, which contains the main log content.
+    # The key is the filename, and the value is the log text.
+    first_key = list(log_data.keys())[0]
+    log_content = log_data[first_key]
+
+    print('Toil logs: ')
+    pprint(log_content, indent=4)
+
+    with open(f'compute_logs_{jobid}.txt', 'w', encoding='utf-8') as f:
+        f.write(log_content)
     return retval
 
 
