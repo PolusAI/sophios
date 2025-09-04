@@ -1,5 +1,6 @@
 import copy
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
@@ -522,3 +523,19 @@ def convert_args_dict_to_args_list(args_dict: Dict[str, str]) -> List[str]:
     for arg_name, arg_value in args_dict.items():
         args_list += ['--' + arg_name, arg_value]
     return args_list
+
+
+def is_valid_url(url: str) -> bool:
+    """A simple utility that tells if the string is a valid url
+
+    Args:
+        url(str): A string that is supposed to be an URL
+
+    Returns:
+        bool: True if it is an URL
+    """
+    try:
+        result = urlparse(url)
+        return all([result.scheme, result.netloc]) and result.scheme in ('http', 'https')
+    except ValueError:
+        return False

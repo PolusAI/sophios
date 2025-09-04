@@ -266,18 +266,21 @@ def run_compute(workflow_name: str, workflow: Json, workflow_inputs: Json,
         'jobs': {}
     }
 
-    base_url = submit_url
+    # sanity check if the string has the form of an URL
+    if not utils.is_valid_url(submit_url):
+        print("Ill-formed URL string detected! Please provide a valid URL")
+        return 1
 
     print('Sending request to Compute')
-    res = requests.post(base_url, json=compute_workflow, timeout=timeout_tuple)
+    res = requests.post(submit_url, json=compute_workflow, timeout=timeout_tuple)
     print('Post response code: ' + str(res.status_code))
 
-    res = requests.get(base_url + f'{jobid}/outputs/', timeout=timeout_tuple)
+    res = requests.get(submit_url + f'{jobid}/outputs/', timeout=timeout_tuple)
     print('Output response code: ' + str(res.status_code))
     retval = 0 if res.status_code == 200 else 1
     print('Toil output: ' + str(res.text))
 
-    res = requests.get(base_url + f'{jobid}/logs/', timeout=timeout_tuple)
+    res = requests.get(submit_url + f'{jobid}/logs/', timeout=timeout_tuple)
     # 1. Parse the JSON string into a Python dictionary
     log_data = json.loads(res.text)
 
