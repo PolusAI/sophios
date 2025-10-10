@@ -209,6 +209,12 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
     tools_lst: List[Tool] = []
 
+    graph_settings = {}
+    graph_settings['graph_dark_theme'] = args.graph_dark_theme
+    graph_settings['graph_inline_depth'] = args.graph_inline_depth
+    graph_settings['graph_label_edges'] = args.graph_label_edges
+    graph_settings['graph_show_outputs'] = args.graph_show_outputs
+
     for i, step_key in enumerate(steps_keys):
         step_name_i = utils.step_name_str(yaml_stem, i, step_key)
         stem = Path(step_key).stem
@@ -315,7 +321,8 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                 # Use auto-discovery mechanism (with run tag)
                 tool_i = tools[stepid_runtag]
             else:
-                msg = f"Error! Neither {stepid.stem} nor {stepid_runtag.stem} found!, check your 'search_paths_cwl' in global_config.json"
+                msg = f"Error! Neither {stepid.stem} nor {stepid_runtag.stem} found!"
+                msg += "check your 'search_paths_cwl' in global_config.json"
                 raise Exception(msg)
             # Programmatically modify tool_i here
             graph_dummy = graph  # Just use anything here to satisfy mypy
@@ -604,7 +611,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                         else:
                             nss_call = namespaces + [step_name_or_key] + nss_call_embedded
 
-                        utils_graphs.add_graph_edge(args, graph_init, nss_def, nss_call, label, color='blue')
+                        utils_graphs.add_graph_edge(graph_settings, graph_init, nss_def, nss_call, label, color='blue')
             elif isinstance(arg_val, Dict) and 'wic_inline_input' in arg_val:
                 arg_val = arg_val['wic_inline_input']
 
@@ -747,7 +754,8 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                 insertions: List[StepId] = []
                 in_name_in_inputs_file_workflow: bool = (in_name in inputs_file_workflow)
                 arg_key_in_yaml_tree_inputs: bool = (arg_key in yaml_tree.get('inputs', {}))
-                steps[i] = inference.perform_edge_inference(args, tools, tools_lst, steps_keys,
+                inference_use_naming_conventions = args.inference_use_naming_conventions
+                steps[i] = inference.perform_edge_inference(inference_use_naming_conventions, graph_settings, tools, tools_lst, steps_keys,
                                                             yaml_stem, i, steps, arg_key, graph, is_root, namespaces,
                                                             vars_workflow_output_internal, input_mapping_copy, output_mapping_copy, inputs_workflow, in_name,
                                                             in_name_in_inputs_file_workflow, arg_key_in_yaml_tree_inputs, insertions, wic_steps, testing)
@@ -820,7 +828,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
     vars_workflow_output_internal = list(set(vars_workflow_output_internal))  # Get uniques
     # (Why are we getting uniques?)
-    workflow_outputs = utils_cwl.get_workflow_outputs(args, namespaces, is_root, yaml_stem,
+    workflow_outputs = utils_cwl.get_workflow_outputs(graph_settings, namespaces, is_root, yaml_stem,
                                                       steps, outputs_workflow, vars_workflow_output_internal,
                                                       graph, tools_lst, step_node_name, tools)
     # Add the provided workflow outputs to the workflow outputs from each step

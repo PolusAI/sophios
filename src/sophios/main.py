@@ -162,7 +162,8 @@ def main() -> None:
     rose_tree = plugins.cwl_prepend_dockerFile_include_path_rosetree(rose_tree)
 
     if args.partial_failure_enable:
-        rose_tree = plugins.cwl_update_outputs_optional_rosetree(rose_tree)
+        rose_tree = plugins.cwl_update_outputs_optional_rosetree(
+            rose_tree, args.partial_failure_success_codes_range, args.partial_failure_success_codes)
 
     if args.cwl_inline_runtag:
         rose_tree = pc.cwl_inline_runtag(rose_tree)

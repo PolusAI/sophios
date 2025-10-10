@@ -1,6 +1,6 @@
 import argparse
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Any
 
 import graphviz
 import networkx as nx
@@ -8,7 +8,7 @@ import networkx as nx
 from .wic_types import (GraphData, GraphReps, Json, Namespaces, Tool, Tools)
 
 
-def add_graph_edge(args: argparse.Namespace, graph: GraphReps,
+def add_graph_edge(graph_settings: Dict[str, Any], graph: GraphReps,
                    nss1: Namespaces, nss2: Namespaces,
                    label: str, color: str = '') -> None:
     """Adds edges to (all of) our graph representations, with the ability to
@@ -28,10 +28,10 @@ def add_graph_edge(args: argparse.Namespace, graph: GraphReps,
         color (str, optional): The edge color
     """
     if color == '':
-        color = 'black' if args.graph_dark_theme else 'white'
-    nss1 = nss1[:(1 + args.graph_inline_depth)]
+        color = 'black' if graph_settings['graph_dark_theme'] else 'white'
+    nss1 = nss1[:(1 + graph_settings['graph_inline_depth'])]
     edge_node1 = '___'.join(nss1)
-    nss2 = nss2[:(1 + args.graph_inline_depth)]
+    nss2 = nss2[:(1 + graph_settings['graph_inline_depth'])]
     edge_node2 = '___'.join(nss2)
     graph_gv = graph.graphviz
     graph_nx = graph.networkx
@@ -40,7 +40,7 @@ def add_graph_edge(args: argparse.Namespace, graph: GraphReps,
     # Hide internal self-edges
     if edge_node1 != edge_node2:
         attrs = {'color': color}
-        if args.graph_label_edges:
+        if graph_settings['graph_label_edges']:
             attrs['label'] = label
 
         graph_gv.edge(edge_node1, edge_node2, **attrs)

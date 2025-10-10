@@ -9,9 +9,9 @@ from mergedeep import merge, Strategy
 from jsonschema import Draft202012Validator
 import yaml
 
+from sophios.utils_yaml import wic_loader
 from . import python_cwl_adapter, utils, utils_cwl
 from .wic_types import Yaml, Tools, YamlTree, YamlForest, StepId, Tool
-from sophios.utils_yaml import wic_loader
 
 # NOTE: AST = Abstract Syntax Tree
 

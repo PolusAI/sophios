@@ -1,4 +1,3 @@
-import argparse
 import copy
 from pathlib import Path
 from typing import Any, Dict, List
@@ -102,7 +101,7 @@ def add_yamldict_keyval_out(steps_i: Yaml, step_key: str, strs: List[str]) -> Ya
     return steps_i
 
 
-def get_workflow_outputs(args: argparse.Namespace,
+def get_workflow_outputs(graph_settings: Dict[str, Any],
                          namespaces: Namespaces,
                          is_root: bool,
                          yaml_stem: str,
@@ -116,7 +115,7 @@ def get_workflow_outputs(args: argparse.Namespace,
     """Chooses a subset of the CWL outputs: to actually output
 
     Args:
-        args (argparse.Namespace): The command line arguments
+        graph_settings (Dict[str, Any]): The settings dict for graphpviz graphs
         namespaces (Namespaces): Specifies the path in the AST of the current subworkflow
         is_root (bool): True if this is the root workflow
         yaml_stem (str): The name of the current subworkflow (stem of the yaml filepath)
@@ -148,7 +147,7 @@ def get_workflow_outputs(args: argparse.Namespace,
             out_var = f'{step_name_or_key}/{out_key}'
             # Avoid duplicating intermediate outputs in GraphViz
             out_key_no_namespace = out_key.split('___')[-1]
-            if args.graph_show_outputs:
+            if graph_settings['graph_show_outputs']:
                 vars_nss = [var.replace('/', '___') for var in vars_workflow_output_internal]
                 case1 = (tool_i['class'] == 'Workflow') and (not out_key in vars_nss)
                 # Avoid duplicating outputs from subgraphs in parent graphs.
@@ -164,8 +163,8 @@ def get_workflow_outputs(args: argparse.Namespace,
                     attrs = {'label': out_key_no_namespace, 'shape': 'box',
                              'style': 'rounded, filled', 'fillcolor': 'lightyellow'}
                     graph_gv.node(namespaced_output_name, **attrs)
-                    font_edge_color = 'black' if args.graph_dark_theme else 'white'
-                    if args.graph_label_edges:
+                    font_edge_color = 'black' if graph_settings['graph_dark_theme'] else 'white'
+                    if graph_settings['graph_label_edges']:
                         graph_gv.edge(step_node_name, namespaced_output_name, color=font_edge_color,
                                       label=out_key_no_namespace)  # Is labeling necessary?
                     else:

@@ -225,7 +225,8 @@ def run_workflows(yml_path_str: str, yml_path: Path, cwl_runner: str, args: argp
     sophios.input_output.write_to_disk(rose_tree, Path(basepath), True, args.inputs_file)
 
     if args.partial_failure_enable:
-        rose_tree = sophios.plugins.cwl_update_outputs_optional_rosetree(rose_tree)
+        rose_tree = sophios.plugins.cwl_update_outputs_optional_rosetree(
+            rose_tree, args.partial_failure_success_codes_range, args.partial_failure_success_codes)
         sophios.input_output.write_to_disk(rose_tree, Path(basepath), True, args.inputs_file)
     # NOTE: Do not use --cachedir; we want to actually test everything.
     # stage input files for run

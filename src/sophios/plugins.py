@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
-from typing import Any, Dict, Union
+from typing import Any, Dict, Union, List
 
 import cwltool.load_tool
 import yaml
@@ -13,7 +13,7 @@ import podman
 import docker
 
 
-from . import utils_cwl, cli
+from . import utils_cwl
 from .wic_types import Cwl, NodeData, RoseTree, StepId, Tool, Tools, Json
 
 
@@ -137,24 +137,24 @@ def get_tools_cwl(config: Json, validate_plugins: bool = False,
     return tools_cwl
 
 
-def cwl_update_outputs_optional(cwl: Cwl) -> Cwl:
+def cwl_update_outputs_optional(cwl: Cwl, failure_code_range: List[int],
+                                direct_failure_codes: List[int]) -> Cwl:
     """Updates outputs as optional (if any)
 
     Args:
         cwl (Cwl): A CWL CommandLineTool
+        failure_code_range: A range of (u, l) allowed failure codes range
+        direct_failure_codes: A list of allowed failure codes
 
     Returns:
         Cwl: A CWL CommandLineTool with outputs optional (if any)
     """
     cwl_mod = copy.deepcopy(cwl)
     # Update success codes to allow simple failures
-    args = cli.parser.parse_args()
     # default value of cwl_mod['successCodes'] = 0 and 'partial_failure_success_codes' = [0,1]
     # take the Union of 0 and partial_failure_success_codes, the 'successCodes' might not be set
     # never discard 0 (actual success)
-    failure_code_range = args.partial_failure_success_codes_range
     codes_from_range = list(range(failure_code_range[0], failure_code_range[1]))
-    direct_failure_codes = args.partial_failure_success_codes
     assert failure_code_range[0] <= failure_code_range[1], \
         f"lower {failure_code_range[0]}  value can't be greater than higher {failure_code_range[1]} value"
     cwl_mod['successCodes'] = list(set([0] + direct_failure_codes + codes_from_range))
@@ -234,22 +234,26 @@ def remove_entrypoints_podman() -> None:
         remove_entrypoints(client, podman.domain.images_build.BuildMixin())
 
 
-def cwl_update_outputs_optional_rosetree(rose_tree: RoseTree) -> RoseTree:
+def cwl_update_outputs_optional_rosetree(rose_tree: RoseTree,
+                                         failure_code_range: List[int],
+                                         direct_failure_codes: List[int]) -> RoseTree:
     """Updates outputs optional for every CWL CommandLineTool
 
     Args:
         rose_tree (RoseTree): The RoseTree returned from compile_workflow(...).rose_tree
+        failure_code_range: A range of (u, l) allowed failure codes range
+        direct_failure_codes: A list of allowed failure codes
 
     Returns:
         RoseTree: rose_tree with output optional updates to every CWL CommandLineTool
     """
     n_d: NodeData = rose_tree.data
     if n_d.compiled_cwl['class'] == 'CommandLineTool':
-        outputs_optional_cwl = cwl_update_outputs_optional(n_d.compiled_cwl)
+        outputs_optional_cwl = cwl_update_outputs_optional(n_d.compiled_cwl, failure_code_range, direct_failure_codes)
     else:
         outputs_optional_cwl = n_d.compiled_cwl
 
-    sub_trees_path = [cwl_update_outputs_optional_rosetree(sub_rose_tree) for
+    sub_trees_path = [cwl_update_outputs_optional_rosetree(sub_rose_tree, failure_code_range, direct_failure_codes) for
                       sub_rose_tree in rose_tree.sub_trees]
     node_data_path = NodeData(n_d.namespaces, n_d.name, n_d.yml, outputs_optional_cwl, n_d.tool,
                               n_d.workflow_inputs_file, n_d.explicit_edge_defs, n_d.explicit_edge_calls,

@@ -275,7 +275,6 @@ def write_absolute_yaml_tags(args: argparse.Namespace, in_dict_in: Yaml, namespa
     # cachedir_path needs to be an absolute path, but for reproducibility
     # we don't want users' home directories in the yml files.
     cachedir_path = Path(args.cachedir).absolute()
-    # print('setting cachedir_path to', cachedir_path)
     in_dict_in['root_workflow_yml_path'] = {'wic_inline_input': str(Path(args.yaml).parent.absolute())}
 
     in_dict_in['cachedir_path'] = {'wic_inline_input': str(cachedir_path)}

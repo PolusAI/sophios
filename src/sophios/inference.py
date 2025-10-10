@@ -1,4 +1,3 @@
-import argparse
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -31,7 +30,8 @@ def types_match(in_type: Any, out_type: Any) -> bool:
     return False
 
 
-def perform_edge_inference(args: argparse.Namespace,
+def perform_edge_inference(inference_use_naming_conventions: bool,
+                           graph_settings: Dict[str, Any],
                            tools: Tools,
                            tools_lst: List[Tool],
                            steps_keys: List[str],
@@ -56,7 +56,8 @@ def perform_edge_inference(args: argparse.Namespace,
     NOTE: steps[i], vars_workflow_output_internal, inputs_workflow are mutably updated.
 
     Args:
-        args (argparse.Namespace): The command line arguments
+        inference_use_naming_conventions (bool): If to do inference using naming conventions
+        graph_settings(Dict[str,Any]) : The settings needed for graphviz graph generation
         tools (Tools): The CWL CommandLineTool definitions found using get_tools_cwl()
         tools_lst (List[Tool]): A list of the CWL CommandLineTools or compiled subworkflows for the current workflow.
         steps_keys (List[str]): The name of each step in the current CWL workflow
@@ -183,7 +184,7 @@ def perform_edge_inference(args: argparse.Namespace,
             # By default, simply choose the first (i.e. most-recent) matching format
             out_key = format_matches[0][0]
 
-            if args.inference_use_naming_conventions:  # default False
+            if inference_use_naming_conventions:  # default False
                 if len(format_matches) == 1:
                     # Great! We found a unique format match.
                     out_key = format_matches[0][0]
@@ -276,7 +277,7 @@ def perform_edge_inference(args: argparse.Namespace,
                 # TODO: check this
                 out_key_no_namespace = out_key.split('___')[-1]
                 label = out_key_no_namespace if tool_j.cwl['class'] == 'Workflow' else out_key
-                utils_graphs.add_graph_edge(args, graph, nss1, nss2, label)
+                utils_graphs.add_graph_edge(graph_settings, graph, nss1, nss2, label)
 
             return steps_i  # Short circuit
 

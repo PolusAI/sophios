@@ -3,7 +3,6 @@ import copy
 from pathlib import Path
 import asyncio
 import subprocess as sub
-import sys
 import traceback
 import yaml
 
@@ -91,9 +90,7 @@ def run_cwl_local(workflow_name: str, cwl_runner: str, docker_cmd: str, use_subp
             print(f'See error_{workflow_name}.txt for detailed technical information.')
             # Do not display a nasty stack trace to the user; hide it in a file.
             with open(f'error_{workflow_name}.txt', mode='w', encoding='utf-8') as f:
-                # https://mypy.readthedocs.io/en/stable/common_issues.html#python-version-and-system-platform-checks
-                if sys.version_info >= (3, 10):
-                    traceback.print_exception(type(e), value=e, tb=None, file=f)
+                traceback.print_exception(type(e), value=e, tb=None, file=f)
             print(e)  # we are always running this on CI
     return retval
 
