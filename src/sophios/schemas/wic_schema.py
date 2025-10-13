@@ -12,7 +12,7 @@ import yaml
 
 import sophios
 from sophios import ast, compiler, utils_cwl
-from sophios.cli import get_args
+from sophios.cli import get_args, get_dicts_for_compilation
 from sophios.utils_yaml import wic_loader
 from sophios.wic_types import GraphData, GraphReps, NodeData, StepId, Yaml, YamlTree
 from ..wic_types import Json, Tools
@@ -639,8 +639,11 @@ def compile_workflow_generate_schema(homedir: str,
     graphdata = GraphData(str(yml_path))
     graph = GraphReps(graph_gv, graph_nx, graphdata)
     args = get_args(str(yml_path), ['--allow_raw_cwl'] if allow_raw_cwl else [])
-    compiler_info = compiler.compile_workflow(yaml_tree, args, [], [graph], {}, {}, {}, {},
-                                              tools_cwl, True, relative_run_path=True, testing=True)
+
+    compiler_options, graph_settings, yaml_tag_paths = get_dicts_for_compilation()
+
+    compiler_info = compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths, [], [graph],
+                                              {}, {}, {}, {}, tools_cwl, True, relative_run_path=True, testing=True)
     rose_tree = compiler_info.rose
     sub_node_data: NodeData = rose_tree.data
 

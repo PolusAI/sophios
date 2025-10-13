@@ -60,10 +60,13 @@ class TestFuzzyCompile(unittest.TestCase):
         graph_nx = nx.DiGraph()
         graphdata = GraphData(str(yml_path))
         graph = GraphReps(graph_gv, graph_nx, graphdata)
+
+        compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation()
+
         try:
-            compiler_info = sophios.compiler.compile_workflow(yaml_tree, args, [], [graph], {}, {}, {},
-                                                              {}, tools_cwl, True, relative_run_path=True,
-                                                              testing=True)
+            compiler_info = sophios.compiler.compile_workflow(yaml_tree, compiler_options, graph_settings,
+                                                              yaml_tag_paths, [], [graph], {}, {}, {}, {},
+                                                              tools_cwl, True, relative_run_path=True, testing=True)
         except Exception as e:
             multi_def_str = 'Error! Multiple definitions of &'
             unbound_lit_var = 'Error! Unbound literal variable ~'

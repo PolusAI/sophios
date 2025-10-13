@@ -1,4 +1,3 @@
-import argparse
 import copy
 import json
 import os
@@ -10,7 +9,6 @@ import graphviz
 from mergedeep import merge, Strategy
 import networkx as nx
 import yaml
-
 
 from . import input_output as io
 from . import inference, utils, utils_cwl, utils_graphs
@@ -24,7 +22,9 @@ inference_rules: Dict[str, str] = {}
 
 
 def compile_workflow(yaml_tree_ast: YamlTree,
-                     args: argparse.Namespace,
+                     compiler_options: Dict[str, bool],
+                     graph_settings: Dict[str, Any],
+                     yaml_tag_paths: Dict[str, str],
                      namespaces: Namespaces,
                      subgraphs_: List[GraphReps],
                      explicit_edge_defs: ExplicitEdgeDefs,
@@ -40,7 +40,9 @@ def compile_workflow(yaml_tree_ast: YamlTree,
 
     Args:
         yaml_tree_ast (YamlTree): A tuple of name and yml AST
-        args (Any): all of the other positional arguments for compile_workflow_once
+        compiler_options (Dict[str, bool]): The core flags needed for compilation and transformation into CWL
+        graph_settings (Dict[str, Any]): The settings dict for graphpviz graphs
+        yaml_tag_paths (Dict[str,str]): The paths that need to be included in (generated) yaml tags
         kwargs (Any): all of the other keyword arguments for compile_workflow_once
 
     Returns:
@@ -58,8 +60,8 @@ def compile_workflow(yaml_tree_ast: YamlTree,
     i = 0
     while ast_modified and i < max_iters:
         subgraphs = copy.deepcopy(subgraphs_)  # See comment below!
-        compiler_info = compile_workflow_once(yaml_tree, args, namespaces, subgraphs,
-                                              explicit_edge_defs, explicit_edge_calls,
+        compiler_info = compile_workflow_once(yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
+                                              namespaces, subgraphs, explicit_edge_defs, explicit_edge_calls,
                                               input_mapping, output_mapping,
                                               tools, is_root, relative_run_path, testing)
         node_data: NodeData = compiler_info.rose.data
@@ -95,14 +97,15 @@ def compile_workflow(yaml_tree_ast: YamlTree,
         subgraph_.networkx.update(subgraphs[i].networkx.edges, subgraphs[i].networkx.nodes)
 
     if i == max_iters:
-        import yaml
         print(yaml.dump(node_data.yml))
         raise Exception(f'Error! Maximum number of iterations ({max_iters}) reached in compile_workflow!')
     return compiler_info
 
 
 def compile_workflow_once(yaml_tree_ast: YamlTree,
-                          args: argparse.Namespace,
+                          compiler_options: Dict[str, bool],
+                          graph_settings: Dict[str, Any],
+                          yaml_tag_paths: Dict[str, str],
                           namespaces: Namespaces,
                           subgraphs: List[GraphReps],
                           explicit_edge_defs: ExplicitEdgeDefs,
@@ -118,7 +121,9 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
     Args:
         yaml_tree_ast (YamlTree): A tuple of name and yml AST
-        args (argparse.Namespace): The command line arguments
+        graph_settings (Dict[str, Any]): The settings dict for graphpviz graphs
+        yaml_tag_paths (Dict[str,str]): The paths that need to be included in (generated) yaml tags
+        compiler_options (Dict[str, bool]): The core flags needed for compilation and transformation into CWL
         namespaces (Namespaces): Specifies the path in the yml AST to the current subworkflow
         subgraphs (List[Graph]): The graphs associated with the parent workflows of the current subworkflow
         explicit_edge_defs (ExplicitEdgeDefs): Stores the (path, value) of the explicit edge definition sites
@@ -209,19 +214,6 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
     tools_lst: List[Tool] = []
 
-    # to be given to graph util functions
-    graph_settings = {}
-    graph_settings['graph_dark_theme'] = args.graph_dark_theme
-    graph_settings['graph_inline_depth'] = args.graph_inline_depth
-    graph_settings['graph_label_edges'] = args.graph_label_edges
-    graph_settings['graph_show_outputs'] = args.graph_show_outputs
-
-    # to be gieven io absolute_yaml_tags function
-    yaml_tag_paths: Dict[str, str] = {}
-    yaml_tag_paths['cachedir'] = args.cachedir
-    yaml_tag_paths['yaml'] = args.yaml
-    yaml_tag_paths['homedir'] = args.homedir
-
     for i, step_key in enumerate(steps_keys):
         step_name_i = utils.step_name_str(yaml_stem, i, step_key)
         stem = Path(step_key).stem
@@ -254,9 +246,9 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
             graphdata = GraphData(step_key)
             subgraph = GraphReps(subgraph_gv, subgraph_nx, graphdata)
 
-            sub_compiler_info = compile_workflow(sub_yaml_tree, args, namespaces + [step_name_or_key],
-                                                 subgraphs + [subgraph], explicit_edge_defs_copy,
-                                                 explicit_edge_calls_copy,
+            sub_compiler_info = compile_workflow(sub_yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
+                                                 namespaces + [step_name_or_key], subgraphs + [subgraph],
+                                                 explicit_edge_defs_copy, explicit_edge_calls_copy,
                                                  input_mapping_copy, output_mapping_copy,
                                                  tools, False, relative_run_path, testing)
 
@@ -340,14 +332,6 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
             rose_tree_list.append(rose_tree_base_case)
         tools_lst.append(tool_i)
 
-        if not testing:
-            # Disable for testing because when testing in parallel, the *.gv Graphviz files
-            # can be written/read to/from disk simultaneously, which results in
-            # intermittent 'syntax errors'.
-            pass
-            # Actually, this is a significant performance bottleneck and isn't really necessary.
-            # utils_graphs.make_tool_dag(stem, tool_i, args.graph_dark_theme)
-
         # Add run tag, using relative or flat-directory paths
         # NOTE: run: path issues were causing test_cwl_embedding_independence()
         # to fail, so I simply ignore the run tag in that test.
@@ -419,13 +403,11 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
         # (Solution: refactor all required arguments out of config and list
         # them as explicit inputs in the cwl files, then modify the python
         # files accordingly.)
-        # print(args_required)
 
         sub_args_provided = [arg for arg in args_required if arg in explicit_edge_calls_copy]
-        # print(sub_args_provided)
 
         label = step_key
-        if args.graph_label_stepname:
+        if graph_settings['graph_label_stepname']:
             label = step_name_or_key
         step_node_name = '___'.join(namespaces + [step_name_or_key])
 
@@ -439,11 +421,11 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
             graph_gv.node(step_node_name, **attrs)
             graph_nx.add_node(step_node_name)
             graphdata.nodes.append((step_node_name, attrs))
-        elif not (step_key in subkeys and len(namespaces) < args.graph_inline_depth):
+        elif not (step_key in subkeys and len(namespaces) < graph_settings['graph_inline_depth']):
             nssnode = namespaces + [step_name_or_key]
             # Just like in add_graph_edge(), here we can hide all of the details
             # below a given depth by simply truncating the node's namespaces.
-            nssnode = nssnode[:(1 + args.graph_inline_depth)]
+            nssnode = nssnode[:(1 + graph_settings['graph_inline_depth'])]
             step_node_name = '___'.join(nssnode)
             # NOTE: NOT wic_graphviz_step_i
             # get the label (if any) from the subworkflow
@@ -633,11 +615,11 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                 new_val = {'source': in_name}
                 steps[i]['in'][arg_key] = new_val
 
-                if args.graph_show_inputs:
+                if graph_settings['graph_show_inputs']:
                     input_node_name = '___'.join(namespaces + [step_name_or_key, arg_key])
                     attrs = {'label': arg_key, 'shape': 'box', 'style': 'rounded, filled', 'fillcolor': 'lightgreen'}
                     graph_gv.node(input_node_name, **attrs)
-                    font_edge_color = 'black' if args.graph_dark_theme else 'white'
+                    font_edge_color = 'black' if graph_settings['graph_dark_theme'] else 'white'
                     graph_gv.edge(input_node_name, step_node_name, color=font_edge_color)
                     graph_nx.add_node(input_node_name)
                     graph_nx.add_edge(input_node_name, step_node_name)
@@ -668,18 +650,10 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                 except Exception:
                     pass
 
-                if not args.allow_raw_cwl and (not hashable or arg_var not in yaml_tree.get('inputs', {})):
-                    if not args.allow_raw_cwl:
-                        print(f"Warning! Did you forget to use !ii before {arg_var} in {yaml_stem}.wic?")
-                        print('If you want to compile the workflow anyway, use --allow_raw_cwl')
-                        sys.exit(1)
-
-                    inputs = yaml_tree.get('inputs', {})
-                    unbound_lit_var = 'Error! Unbound literal variable'
-                    if inputs == {}:
-                        raise Exception(f"{unbound_lit_var}{arg_var} not in inputs: tag in {yaml_stem}.wic")
-                    inputs_dump = yaml.dump({'inputs': inputs})
-                    raise Exception(f"{unbound_lit_var}{arg_var} not in\n{inputs_dump}\nin {yaml_stem}.wic")
+                if not compiler_options['allow_raw_cwl'] and (not hashable or arg_var not in yaml_tree.get('inputs', {})):
+                    print(f"Warning! Did you forget to use !ii before {arg_var} in {yaml_stem}.wic?")
+                    print('If you want to compile the workflow anyway, use --allow_raw_cwl')
+                    sys.exit(1)
 
                 if 'doc' in inputs_key_dict:
                     inputs_key_dict['doc'] += '\\n' + in_dict.get('doc', '')
@@ -757,22 +731,24 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                 # NOTE: We already added an edge to the appropriate subgraph above.
                 # TODO: vars_workflow_output_internal?
             else:
-                if args.inference_disable:
+                if compiler_options['inference_disable']:
                     continue
                 insertions: List[StepId] = []
                 in_name_in_inputs_file_workflow: bool = (in_name in inputs_file_workflow)
                 arg_key_in_yaml_tree_inputs: bool = (arg_key in yaml_tree.get('inputs', {}))
-                inference_use_naming_conventions = args.inference_use_naming_conventions
-                steps[i] = inference.perform_edge_inference(inference_use_naming_conventions, graph_settings, tools, tools_lst, steps_keys,
-                                                            yaml_stem, i, steps, arg_key, graph, is_root, namespaces,
-                                                            vars_workflow_output_internal, input_mapping_copy, output_mapping_copy, inputs_workflow, in_name,
-                                                            in_name_in_inputs_file_workflow, arg_key_in_yaml_tree_inputs, insertions, wic_steps, testing)
+                steps[i] = inference.perform_edge_inference(compiler_options['inference_use_naming_conventions'],
+                                                            graph_settings, tools, tools_lst, steps_keys,
+                                                            yaml_stem, i, steps, arg_key, graph,
+                                                            is_root, namespaces, vars_workflow_output_internal,
+                                                            input_mapping_copy, output_mapping_copy, inputs_workflow,
+                                                            in_name, in_name_in_inputs_file_workflow,
+                                                            arg_key_in_yaml_tree_inputs, insertions, wic_steps, testing)
                 # NOTE: For now, perform_edge_inference mutably appends to
                 # inputs_workflow and vars_workflow_output_internal.
 
                 # Automatically insert steps
                 insertions = list(set(insertions))  # Remove duplicates
-                if len(insertions) != 0 and args.insert_steps_automatically:
+                if len(insertions) != 0 and compiler_options['insert_steps_automatically']:
                     insertion = insertions[0]
                     print('Automaticaly inserting step', insertion, i)
                     if len(insertions) != 1:
@@ -802,7 +778,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
         steps[i] = utils_cwl.add_yamldict_keyval_out(steps[i], step_key, list(tool_i.cwl['outputs'].keys()))
 
-        if args.partial_failure_enable:
+        if compiler_options['partial_failure_enable']:
             when_null_clauses = []
             for arg_in in args_required:
                 when_null_clauses.append(f'inputs["{arg_in}"] != null')

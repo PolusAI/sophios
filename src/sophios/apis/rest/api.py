@@ -13,7 +13,7 @@ from sophios.utils_graphs import get_graph_reps
 from sophios.utils_yaml import wic_loader
 from sophios import utils_cwl
 from sophios.post_compile import cwl_inline_runtag
-from sophios.cli import get_args
+from sophios.cli import get_args, get_dicts_for_compilation
 from sophios.wic_types import CompilerInfo, Json, Tool, Tools, StepId, YamlTree, Cwl, NodeData
 from sophios.apis.utils import converter
 import sophios.plugins as plugins
@@ -111,8 +111,11 @@ async def compile_wf(request: Request) -> Json:
     graph = get_graph_reps(wkflw_name)
     yaml_tree: YamlTree = YamlTree(StepId(wkflw_name, plugin_ns), workflow_can)
 
+    compiler_options, graph_settings, yaml_tag_paths = get_dicts_for_compilation()
+
     # ========= COMPILE WORKFLOW ================
-    compiler_info: CompilerInfo = compiler.compile_workflow(yaml_tree, args, [], [graph], {}, {}, {}, {},
+    compiler_info: CompilerInfo = compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
+                                                            [], [graph], {}, {}, {}, {},
                                                             tools_cwl, True, relative_run_path=True, testing=False)
 
     rose_tree = compiler_info.rose

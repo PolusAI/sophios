@@ -142,8 +142,12 @@ def main() -> None:
         subgraph_nx = nx.DiGraph()
         graphdata = GraphData(yaml_path)
         subgraph = GraphReps(subgraph_gv, subgraph_nx, graphdata)
+
+        compiler_options, graph_settings, yaml_tag_paths = cli.get_dicts_for_compilation()
+
         try:
-            compiler_info = compiler.compile_workflow(yaml_tree, args, [], [subgraph], {}, {}, {}, {},
+            compiler_info = compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
+                                                      [], [subgraph], {}, {}, {}, {},
                                                       tools_cwl, True, relative_run_path=True, testing=False)
         except Exception as e:
             # Certain constraints are conditionally dependent on values and are
