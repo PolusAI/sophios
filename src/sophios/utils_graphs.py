@@ -1,4 +1,3 @@
-import argparse
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -20,7 +19,7 @@ def add_graph_edge(graph_settings: Dict[str, Any], graph: GraphReps,
     (and do the same when creating the nodes)
 
     Args:
-        args (argparse.Namespace): The command line arguments
+        graph_settings (Dict[str, Any]): The settings for graphviz visualization
         graph (GraphReps): A tuple of a GraphViz DiGraph and a networkx DiGraph
         nss1 (Namespaces): The namespaces associated with the first node
         nss2 (Namespaces): The namespaces associated with the second node
@@ -184,7 +183,7 @@ def make_plugins_dag(tools: Tools, graph_dark_theme: bool) -> None:
         graph.render(format='png')
 
 
-def add_subgraphs(args: argparse.Namespace,
+def add_subgraphs(graph_settings: Dict[str, Any],
                   graph: GraphReps,
                   sibling_subgraphs: List[GraphReps],
                   namespaces: Namespaces,
@@ -194,7 +193,7 @@ def add_subgraphs(args: argparse.Namespace,
     below a given depth, which allows us to hide irrelevant details.
 
     Args:
-        args (argparse.Namespace): The command line arguments
+        graph_settings (Dict[str, Any]): The settings for graphviz visualization
         graph (GraphReps): A tuple of a GraphViz DiGraph and a networkx DiGraph
         sibling_subgraphs (List[Graph]): The subgraphs of the immediate children of the current workflow
         namespaces (Namespaces): Specifies the path in the AST of the current subworkflow
@@ -207,7 +206,7 @@ def add_subgraphs(args: argparse.Namespace,
     # reverse order to trick the graphviz layout algorithm.
     for sibling in sibling_subgraphs[::-1]:  # Reverse!
         (sib_graph_gv, sib_graph_nx, sib_graphdata) = sibling
-        if len(namespaces) < args.graph_inline_depth:
+        if len(namespaces) < graph_settings['graph_inline_depth']:
             graph_gv.subgraph(sib_graph_gv)
         graph_nx.add_nodes_from(sib_graph_nx.nodes)
         graph_nx.add_edges_from(sib_graph_nx.edges)
@@ -215,8 +214,9 @@ def add_subgraphs(args: argparse.Namespace,
         graph.graphdata.subgraphs.append(sibling.graphdata)
     # Align the cluster subgraphs using the same rank as the first node of each subgraph.
     # See https://stackoverflow.com/questions/6824431/placing-clusters-on-the-same-rank-in-graphviz
-    if len(namespaces) < args.graph_inline_depth:
-        step_1_names_display = [name for name in step_1_names if len(name.split('___')) < 2 + args.graph_inline_depth]
+    if len(namespaces) < graph_settings['graph_inline_depth']:
+        step_1_names_display = [name for name in step_1_names if len(
+            name.split('___')) < 2 + graph_settings['graph_inline_depth']]
         if len(step_1_names_display) > 1:
             nodes_same_rank = '\t{rank=same; ' + '; '.join(step_1_names_display) + '}\n'
             graph_gv.body.append(nodes_same_rank)

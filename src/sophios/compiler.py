@@ -209,11 +209,18 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
     tools_lst: List[Tool] = []
 
+    # to be given to graph util functions
     graph_settings = {}
     graph_settings['graph_dark_theme'] = args.graph_dark_theme
     graph_settings['graph_inline_depth'] = args.graph_inline_depth
     graph_settings['graph_label_edges'] = args.graph_label_edges
     graph_settings['graph_show_outputs'] = args.graph_show_outputs
+
+    # to be gieven io absolute_yaml_tags function
+    yaml_tag_paths: Dict[str, str] = {}
+    yaml_tag_paths['cachedir'] = args.cachedir
+    yaml_tag_paths['yaml'] = args.yaml
+    yaml_tag_paths['homedir'] = args.homedir
 
     for i, step_key in enumerate(steps_keys):
         step_name_i = utils.step_name_str(yaml_stem, i, step_key)
@@ -378,7 +385,8 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
         if 'cwl_subinterpreter' == step_key:
             in_dict_in = steps[i]['in']  # NOTE: Mutates in_dict_in
-            io.write_absolute_yaml_tags(args, in_dict_in, namespaces, step_name_or_key, explicit_edge_calls_copy)
+            io.write_absolute_yaml_tags(yaml_tag_paths, in_dict_in, namespaces,
+                                        step_name_or_key, explicit_edge_calls_copy)
 
         args_provided = []
         if 'in' in steps[i]:
@@ -814,7 +822,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
         step_name_num = utils.step_name_str(yaml_stem, num-1, name)
         step_name_nss = '___'.join(namespaces + [step_name_num])
         steps_ranksame.append(f'"{step_name_nss}"')  # Escape with double quotes.
-    utils_graphs.add_subgraphs(args, graph, sibling_subgraphs, namespaces, step_1_names, steps_ranksame)
+    utils_graphs.add_subgraphs(graph_settings, graph, sibling_subgraphs, namespaces, step_1_names, steps_ranksame)
     step_name_1 = utils.get_step_name_1(step_1_names, yaml_stem, namespaces, steps_keys, subkeys)
 
     # Add the provided workflow inputs to the workflow inputs from each step

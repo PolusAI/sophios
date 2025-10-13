@@ -1,9 +1,8 @@
-import argparse
 import copy
 from shutil import copytree, ignore_patterns
 import json
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any, List, Tuple, Dict
 
 import yaml
 
@@ -260,12 +259,12 @@ def get_home_paths(sub_config: Json) -> Json:
     return abs_sub_config
 
 
-def write_absolute_yaml_tags(args: argparse.Namespace, in_dict_in: Yaml, namespaces: Namespaces,
+def write_absolute_yaml_tags(yaml_tag_paths: Dict[str, str], in_dict_in: Yaml, namespaces: Namespaces,
                              step_name_i: str, explicit_edge_calls_copy: ExplicitEdgeCalls) -> None:
     """cwl_subinterpreter requires all paths to be absolute.
 
     Args:
-        args (argparse.Namespace): The command line arguments
+        yaml_tag_paths (Dict[str,str]): The paths that need to be included in (generated) yaml tags
         in_dict_in (Yaml): The in: subtag of a cwl_subinterpreter: tag. (Mutates in_dict_in)
         namespaces (Namespaces): Specifies the path in the yml AST to the current subworkflow
         step_name_i (str): The name of the current workflow step
@@ -274,11 +273,11 @@ def write_absolute_yaml_tags(args: argparse.Namespace, in_dict_in: Yaml, namespa
 
     # cachedir_path needs to be an absolute path, but for reproducibility
     # we don't want users' home directories in the yml files.
-    cachedir_path = Path(args.cachedir).absolute()
-    in_dict_in['root_workflow_yml_path'] = {'wic_inline_input': str(Path(args.yaml).parent.absolute())}
+    cachedir_path = Path(yaml_tag_paths['cachedir']).absolute()
+    in_dict_in['root_workflow_yml_path'] = {'wic_inline_input': str(Path(yaml_tag_paths['yaml']).parent.absolute())}
 
     in_dict_in['cachedir_path'] = {'wic_inline_input': str(cachedir_path)}
-    in_dict_in['homedir'] = {'wic_inline_input': args.homedir}
+    in_dict_in['homedir'] = {'wic_inline_input': yaml_tag_paths['homedir']}
 
     # Add a 'dummy' values to explicit_edge_calls, because
     # that determines sub_args_provided when the recursion returns.
