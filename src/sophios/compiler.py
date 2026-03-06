@@ -841,49 +841,121 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
         steps_list.append(step_i_copy)
     yaml_tree.update({'steps': steps_list})  # steps_list ?
 
-    def populate_scalar_val(in_dict: dict) -> Any:
-        newval: Any = ()
-        if 'File' == in_dict['type']:
-            newval = {'class': 'File', 'path': in_dict['value']}
-            if 'format' in in_dict:
-                in_format = in_dict['format']
-                if isinstance(in_format, List):
-                    in_format = list(set(in_format))  # get uniques
-                    if len(in_format) > 1:
-                        print(f'NOTE: More than one input file format for {key}')
-                        print(f'formats: {in_format}')
-                        print(f'Choosing {in_format[0]}')
-                    in_format = in_format[0]
-                newval['format'] = in_format
-        elif 'Directory' == in_dict['type']:
-            newval = {'class': 'Directory', 'location': in_dict['value']}
-        elif 'string' == in_dict['type'] or 'string?' == in_dict['type']:
-            # We cannot store string values as a dict, so use type: ignore
-            newval = str(in_dict['value'])
-        # TODO: Check for all valid types?
-        else:
-            newval = in_dict['value']
-        return newval
+    # --------------------------------------------------------
+    # Helpers for generating yaml_inputs for workflow execution from inputs_workflow
+    # --------------------------------------------------------
+    def type_includes_null(cwl_type: Any) -> bool:
+        if isinstance(cwl_type, list):
+            return "null" in cwl_type
+        if isinstance(cwl_type, str) and cwl_type.endswith("?"):
+            return True
+        return False
 
-    # Dump the workflow inputs to a separate yml file.
+    def strip_null_from_union(cwl_type: Any) -> Any:
+        if isinstance(cwl_type, list):
+            non_null = [t for t in cwl_type if t != "null"]
+            if len(non_null) == 1:
+                return non_null[0]
+            return non_null
+        if isinstance(cwl_type, str) and cwl_type.endswith("?"):
+            return cwl_type[:-1]
+        return cwl_type
+
+    def emit_file_or_dir(type_name: str, value: Any, fmt: Any = None) -> Dict[str, Any]:
+        obj: Dict[str, Any] = {
+            "class": type_name,
+            "location": value
+        }
+        if type_name == "File" and fmt:
+            obj["format"] = fmt
+        return obj
+
+    # --------------------------------------------------------
+    # Scalar emission for each primitive type, as well as File and Directory
+    # --------------------------------------------------------
+    def populate_scalar_val(cwl_type: Any, value: Any, fmt: Any = None) -> Any:
+        match cwl_type:
+            case "File":
+                return emit_file_or_dir("File", value, fmt)
+
+            case "Directory":
+                return emit_file_or_dir("Directory", value)
+
+            case "string":
+                return str(value)
+
+            case "int":
+                return int(value)
+
+            case "float":
+                return float(value)
+
+            case "boolean":
+                return bool(value)
+
+            case _:
+                # Unknown or already structured type
+                return value
+
+    # --------------------------------------------------------
+    # Main input handling for yaml_inputs
+    # --------------------------------------------------------
+    def populate_input_value(in_dict: Dict[str, Any]) -> Any:
+        raw_type = in_dict["type"]
+        value = in_dict.get("value")
+        fmt = in_dict.get("format")
+
+        # ---------- Null handling ----------
+        if value is None:
+            if type_includes_null(raw_type):
+                return None
+            raise ValueError(
+                f"Required input of type {raw_type} was not provided."
+            )
+
+        # Normalize type (strip null / ?)
+        cwl_type = strip_null_from_union(raw_type)
+
+        # Normalize type
+        cwl_type = strip_null_from_union(raw_type)
+
+        # ---------- Array handling ----------
+        # Case: {"type": "array", "items": ...}
+        if isinstance(cwl_type, dict) and cwl_type.get("type") == "array":
+            item_type = strip_null_from_union(cwl_type["items"])
+            # wrap scalar into list if necessary for lenient shape handling
+            values = value if isinstance(value, list) else [value]
+            return [
+                populate_scalar_val(item_type, v, fmt)
+                for v in values
+            ]
+
+        # Case: union including array
+        if isinstance(cwl_type, list):
+            for t in cwl_type:
+                if isinstance(t, dict) and t.get("type") == "array":
+                    item_type = strip_null_from_union(t["items"])
+                    # wrap scalar into list if necessary for lenient shape handling
+                    values = value if isinstance(value, list) else [value]
+                    return [
+                        populate_scalar_val(item_type, v, fmt)
+                        for v in values
+                    ]
+
+        # ---------- Scalar case ----------
+        return populate_scalar_val(cwl_type, value, fmt)
+
+    # --------------------------------------------------------
+    # Generate yaml_inputs by populating values from inputs_file_workflow
+    # To be dumped in *_yaml_inputs.yml and passed to CWL workflow execution as --inputs-file
+    # --------------------------------------------------------
     yaml_inputs: WorkflowInputsFile = {}
     for key, in_dict in inputs_file_workflow.items():
-        new_keyval: WorkflowInputsFile = {}
-        if isinstance(in_dict['type'], dict) and 'array' == in_dict['type']['type']:
-            val_list = []
-            for val in in_dict['value']:
-                val_list.append(populate_scalar_val(
-                    {'type': in_dict['type']['items'], 'value': val, 'format': in_dict.get('format')}))
-            new_keyval = {key: val_list}
-        elif isinstance(in_dict['type'], list) and isinstance(in_dict['type'][1], dict) and 'array' == in_dict['type'][1]['type']:
-            val_list = []
-            for val in in_dict['value']:
-                val_list.append(populate_scalar_val(
-                    {'type': in_dict['type'][1]['items'][1], 'value': val, 'format': in_dict.get('format')}))
-            new_keyval = {key: val_list}
-        else:
-            new_keyval = {key: populate_scalar_val(in_dict)}
-        yaml_inputs.update(new_keyval)
+        val = populate_input_value(in_dict)
+        # Omit optional null fields only
+        if val is None:
+            continue
+        yaml_inputs[key] = val
 
     if not testing:
         print('finishing compilation of', ('  ' * len(namespaces)) + yaml_path)

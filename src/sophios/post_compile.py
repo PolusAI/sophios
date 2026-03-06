@@ -1,8 +1,10 @@
 from pathlib import Path
 import sys
 import copy
+import shutil
+from urllib.parse import urlparse
 import subprocess as sub
-from typing import Dict, Union
+from typing import Dict, Union, Any
 from . import plugins
 from .wic_types import RoseTree, NodeData, Yaml
 
@@ -188,8 +190,10 @@ def remove_entrypoints(container_engine: str, rose_tree: RoseTree) -> RoseTree:
     return plugins.dockerPull_append_noentrypoint_rosetree(rose_tree)
 
 
-def stage_input_files(yml_inputs: Yaml, root_yml_dir_abs: Path,
-                      basepath: str, use_subdirs_cwl: bool = True,
+def stage_input_files(yml_inputs: Yaml,
+                      root_yml_dir_abs: Path,
+                      basepath: str,
+                      use_subdirs_cwl: bool = True,
                       throw: bool = True) -> None:
     """Copies the input files in yml_inputs to the working directory.
 
@@ -197,28 +201,54 @@ def stage_input_files(yml_inputs: Yaml, root_yml_dir_abs: Path,
         yml_inputs (Yaml): The yml inputs file for the root workflow.
         root_yml_dir_abs (Path): The absolute path of the root workflow yml file.
         basepath (str): The path at which the workflow to be executed
-        use_subdirs_cwl (bool): Controls whether to use subdirectories or\n
+        use_subdirs_cwl (bool): Controls whether to use subdirectories or
         just one directory when writing the compiled CWL files to disk
         throw (bool): Controls whether to raise/throw a FileNotFoundError.
 
     Raises:
-        FileNotFoundError: If throw and it any of the input files do not exist.
+        FileNotFoundError: If throw and any of the input files do not exist.
     """
-    for key, val in yml_inputs.items():
+
+    def resolve_location(location: str) -> Path:
+        parsed = urlparse(location)
+        if parsed.scheme == "file":
+            return Path(parsed.path)
+        p = Path(location)
+        return p if p.is_absolute() else root_yml_dir_abs / p
+
+    relroot = Path(basepath) if use_subdirs_cwl else Path(".")
+    root_abs = root_yml_dir_abs.resolve()
+
+    for val in yml_inputs.values():
         match val:
-            case {'class': 'File', **rest_of_val}:
-                path = root_yml_dir_abs / Path(val['path'])
-                if not path.exists() and throw:
-                    # raise FileNotFoundError(f'Error! {path} does not exist!')
-                    print(f'Error! {path} does not exist!')
-                    sys.exit(1)
+            case {"class": cls, "location": location, **_rest} if cls in {"File", "Directory"}:
 
-                relpath = Path(basepath) if use_subdirs_cwl else Path('.')
-                pathauto = relpath / Path(val['path'])  # .name # NOTE: Use .name ?
-                pathauto.parent.mkdir(parents=True, exist_ok=True)
+                src_path = resolve_location(location)
+                if not src_path.exists():
+                    if throw:
+                        raise FileNotFoundError(f"{src_path} does not exist")
+                    print(f"Warning: {src_path} does not exist")
+                    continue
 
-                if path != pathauto:
-                    cmd = ['cp', str(path), str(pathauto)]
-                    _ = sub.run(cmd, check=False)
+                src_abs = src_path.resolve()
+                if src_abs.is_relative_to(root_abs):
+                    rel = src_abs.relative_to(root_abs)
+                    dst_path = relroot / rel
+                else:
+                    dst_path = relroot / src_abs.name
+
+                dst_path.parent.mkdir(parents=True, exist_ok=True)
+                # Avoid copying onto itself or copying into a subpath of source
+                dst_resolved = dst_path.resolve()
+                if dst_resolved.is_relative_to(src_abs):
+                    # nothing to do, or would cause recursive copy
+                    continue
+
+                if cls == "File":
+                    shutil.copy2(src_abs, dst_path)
+                else:
+                    # Directory: merge/overwrite into dst_path
+                    shutil.copytree(src_abs, dst_path, dirs_exist_ok=True)
+
             case _:
-                pass
+                continue

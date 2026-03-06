@@ -10,6 +10,7 @@ from typing import Any, Dict, Union, List
 import cwltool.load_tool
 import yaml
 import podman
+from podman.domain.images_build import BuildMixin
 import docker
 
 
@@ -113,11 +114,9 @@ def get_tools_cwl(config: Json, validate_plugins: bool = False,
             for cwl_path_str in cwl_paths:
                 if 'biobb_md' in cwl_path_str:
                     continue  # biobb_md is deprecated (in favor of biobb_gromacs)
-                # print(cwl_path)
                 with open(cwl_path_str, mode='r', encoding='utf-8') as f:
                     tool: Cwl = yaml.safe_load(f.read())
                 stem = Path(cwl_path_str).stem
-                # print(stem)
 
                 if validate_plugins:
                     validate_cwl(cwl_path_str, skip_schemas)
@@ -132,8 +131,6 @@ def get_tools_cwl(config: Json, validate_plugins: bool = False,
                         tool.update({'stderr': f'{stem}.err'})
                 cwl_path_abs = os.path.abspath(cwl_path_str)
                 tools_cwl[StepId(stem, plugin_ns)] = Tool(cwl_path_abs, tool)
-                # print(tool)
-                # utils_graphs.make_tool_dag(stem, (cwl_path_str, tool))
     return tools_cwl
 
 
@@ -231,7 +228,7 @@ def remove_entrypoints_podman() -> None:
     uri = "unix:///run/user/1000/podman/podman.sock"
 
     with podman.PodmanClient(base_url=uri) as client:
-        remove_entrypoints(client, podman.domain.images_build.BuildMixin())
+        remove_entrypoints(client, BuildMixin())
 
 
 def cwl_update_outputs_optional_rosetree(rose_tree: RoseTree,

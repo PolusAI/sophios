@@ -3,7 +3,7 @@ channels:
   - defaults
 
 dependencies:
-  - python  # no issues with python 3.13
+  - python < 3.14  # no issues with python 3.13
 # NOTE: cwltool needs nodejs for InlineJavascriptRequirement
   - nodejs
   - graphviz
