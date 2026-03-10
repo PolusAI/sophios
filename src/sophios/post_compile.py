@@ -209,46 +209,22 @@ def stage_input_files(yml_inputs: Yaml,
         FileNotFoundError: If throw and any of the input files do not exist.
     """
 
-    def resolve_location(location: str) -> Path:
-        parsed = urlparse(location)
-        if parsed.scheme == "file":
-            return Path(parsed.path)
-        p = Path(location)
-        return p if p.is_absolute() else root_yml_dir_abs / p
-
-    relroot = Path(basepath) if use_subdirs_cwl else Path(".")
-    root_abs = root_yml_dir_abs.resolve()
-
-    for val in yml_inputs.values():
+    for _, val in yml_inputs.items():
         match val:
-            case {"class": cls, "location": location, **_rest} if cls in {"File", "Directory"}:
+            case {"class": "File", **_rest_of_val}:
+                path = root_yml_dir_abs / Path(val["location"])
 
-                src_path = resolve_location(location)
-                if not src_path.exists():
-                    if throw:
-                        raise FileNotFoundError(f"{src_path} does not exist")
-                    print(f"Warning: {src_path} does not exist")
-                    continue
+                if not path.exists() and throw:
+                    print(f"Error! {path} does not exist!")
+                    sys.exit(1)
 
-                src_abs = src_path.resolve()
-                if src_abs.is_relative_to(root_abs):
-                    rel = src_abs.relative_to(root_abs)
-                    dst_path = relroot / rel
-                else:
-                    dst_path = relroot / src_abs.name
+                relpath = Path(basepath) if use_subdirs_cwl else Path(".")
+                pathauto = relpath / Path(val["location"])
+                pathauto.parent.mkdir(parents=True, exist_ok=True)
 
-                dst_path.parent.mkdir(parents=True, exist_ok=True)
-                # Avoid copying onto itself or copying into a subpath of source
-                dst_resolved = dst_path.resolve()
-                if dst_resolved.is_relative_to(src_abs):
-                    # nothing to do, or would cause recursive copy
-                    continue
-
-                if cls == "File":
-                    shutil.copy2(src_abs, dst_path)
-                else:
-                    # Directory: merge/overwrite into dst_path
-                    shutil.copytree(src_abs, dst_path, dirs_exist_ok=True)
+                if path != pathauto:
+                    cmd = ["cp", str(path), str(pathauto)]
+                    _ = sub.run(cmd, check=False)
 
             case _:
-                continue
+                pass
