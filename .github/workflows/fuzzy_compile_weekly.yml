@@ -76,7 +76,7 @@ jobs:
           environment-file: sophios/install/system_deps.yml
           activate-environment: wic
           channels: conda-forge
-          python-version: "3.9.*" # pypy is not yet compatible with 3.10 and 3.11
+          python-version: "3.11.*"
 
       - name: Install Sophios
         if: always()
@@ -97,7 +97,7 @@ jobs:
 
       - name: Generate Sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd sophios/ && pytest -k test_compile_python_workflows 
+        run: cd sophios/ && pytest -k test_compile_python_workflows
 
       - name: Generate Sophios Validation Jsonschema
         if: always()

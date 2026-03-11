@@ -74,27 +74,19 @@ jobs:
       if: always()
       run: rm -rf "/home/$(whoami)/miniconda3/envs/wic_github_actions/"
       # For self-hosted runners, make sure we install into a new mamba environment
-
-    # Toil is currently incompatible with pypy
-    # - name: Append pypy to conda environment files
-    #   if: runner.os != 'Windows'
-    #   run: cd sophios/install/ && echo "  - pypy" >> system_deps.yml
+      # Completely moving away from pypy
 
     - name: Setup miniforge (linux, macos)
       if: always()
       uses: conda-incubator/setup-miniconda@v3.0.1
       with:
-        miniforge-variant: Miniforge3  # NOT Miniforge-pypy3
-        # Toil is (currently) incompatible with pypy. Miniforge-pypy3
-        # installs pypy in the base environment (only). Although we are using
-        # another environment, better to avoid the problem altogether by
-        # not using Miniforge-pypy3
+        miniforge-variant: Miniforge3
         miniforge-version: 24.7.1-2
         environment-file: sophios/install/system_deps.yml
         activate-environment: wic_github_actions
         use-mamba: true
         channels: conda-forge
-        python-version: "3.9.*" # pypy is not yet compatible with 3.10 and 3.11
+        python-version: "3.11.*"
 
     # - name: Docker pull
     #   if: always()

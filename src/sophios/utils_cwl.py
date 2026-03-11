@@ -1,4 +1,3 @@
-import argparse
 import copy
 from pathlib import Path
 from typing import Any, Dict, List
@@ -92,6 +91,7 @@ def add_yamldict_keyval_out(steps_i: Yaml, step_key: str, strs: List[str]) -> Ya
     if steps_i:
         if 'out' in steps_i:
             new_strs = steps_i['out'] + strs
+            new_strs = list(set(new_strs))
             new_keyvals = dict([(k, v) if k != 'out' else (k, new_strs) for k, v in steps_i.items()])
         else:
             new_keyvals = dict(list(steps_i.items()) + [('out', strs)])
@@ -101,7 +101,7 @@ def add_yamldict_keyval_out(steps_i: Yaml, step_key: str, strs: List[str]) -> Ya
     return steps_i
 
 
-def get_workflow_outputs(args: argparse.Namespace,
+def get_workflow_outputs(graph_settings: Dict[str, Any],
                          namespaces: Namespaces,
                          is_root: bool,
                          yaml_stem: str,
@@ -115,7 +115,7 @@ def get_workflow_outputs(args: argparse.Namespace,
     """Chooses a subset of the CWL outputs: to actually output
 
     Args:
-        args (argparse.Namespace): The command line arguments
+        graph_settings (Dict[str, Any]): The settings dict for graphpviz graphs
         namespaces (Namespaces): Specifies the path in the AST of the current subworkflow
         is_root (bool): True if this is the root workflow
         yaml_stem (str): The name of the current subworkflow (stem of the yaml filepath)
@@ -147,7 +147,7 @@ def get_workflow_outputs(args: argparse.Namespace,
             out_var = f'{step_name_or_key}/{out_key}'
             # Avoid duplicating intermediate outputs in GraphViz
             out_key_no_namespace = out_key.split('___')[-1]
-            if args.graph_show_outputs:
+            if graph_settings['graph_show_outputs']:
                 vars_nss = [var.replace('/', '___') for var in vars_workflow_output_internal]
                 case1 = (tool_i['class'] == 'Workflow') and (not out_key in vars_nss)
                 # Avoid duplicating outputs from subgraphs in parent graphs.
@@ -163,8 +163,8 @@ def get_workflow_outputs(args: argparse.Namespace,
                     attrs = {'label': out_key_no_namespace, 'shape': 'box',
                              'style': 'rounded, filled', 'fillcolor': 'lightyellow'}
                     graph_gv.node(namespaced_output_name, **attrs)
-                    font_edge_color = 'black' if args.graph_dark_theme else 'white'
-                    if args.graph_label_edges:
+                    font_edge_color = 'black' if graph_settings['graph_dark_theme'] else 'white'
+                    if graph_settings['graph_label_edges']:
                         graph_gv.edge(step_node_name, namespaced_output_name, color=font_edge_color,
                                       label=out_key_no_namespace)  # Is labeling necessary?
                     else:
@@ -229,15 +229,19 @@ def canonicalize_type(type_obj: Any) -> Any:
     Returns:
         Any: The JSON canonical normal form associated with type_obj
     """
-    if isinstance(type_obj, str):
-        if len(type_obj) >= 1 and type_obj[-1:] == '?':
-            return ['null', canonicalize_type(type_obj[:-1])]
-        if len(type_obj) >= 2 and type_obj[-2:] == '[]':
-            return {'type': 'array', 'items': canonicalize_type(type_obj[:-2])}
-    if isinstance(type_obj, Dict):
-        if type_obj.get('type') == 'array':
-            return {**type_obj, 'items': canonicalize_type(type_obj['items'])}
-    return type_obj
+    match type_obj:
+        case str() as str_obj:
+            if len(str_obj) >= 1 and str_obj[-1:] == '?':
+                return ['null', canonicalize_type(str_obj[:-1])]
+            if len(str_obj) >= 2 and str_obj[-2:] == '[]':
+                return {'type': 'array', 'items': canonicalize_type(str_obj[:-2])}
+            return str_obj
+        case dict() as dict_obj:
+            if dict_obj.get('type') == 'array':
+                return {**dict_obj, 'items': canonicalize_type(dict_obj['items'])}
+            return dict_obj
+        case _:
+            return type_obj
 
 
 def canonicalize_steps_list(steps: Yaml) -> List[Yaml]:

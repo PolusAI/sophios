@@ -12,8 +12,8 @@ import sophios.plugins
 import sophios.schemas
 import sophios.schemas.wic_schema
 import sophios.utils
-import sophios.api
-import sophios.api.pythonapi
+import sophios.apis
+import sophios.apis.python.api
 from sophios.wic_types import Json, Yaml
 
 
@@ -21,7 +21,7 @@ args = sophios.cli.get_args()
 # Just read from the disk and pass around config object
 global_config = io.get_config(Path(args.config_file), Path(args.config_file))
 tools_cwl = sophios.plugins.get_tools_cwl(global_config, quiet=args.quiet)
-sophios.api.pythonapi.global_config = tools_cwl  # Use path fallback in the CI
+sophios.apis.python.api.global_config = tools_cwl  # Use path fallback in the CI
 yml_paths = sophios.plugins.get_yml_paths(global_config)
 
 

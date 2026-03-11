@@ -3,7 +3,6 @@ import copy
 from pathlib import Path
 import asyncio
 import subprocess as sub
-import sys
 import traceback
 import yaml
 
@@ -15,7 +14,7 @@ from sophios.wic_types import Json, List
 import sophios.post_compile as pc
 
 
-from sophios.api.http import restapi
+from sophios.apis.rest import api
 
 try:
     import cwltool.main
@@ -91,9 +90,7 @@ def run_cwl_local(workflow_name: str, cwl_runner: str, docker_cmd: str, use_subp
             print(f'See error_{workflow_name}.txt for detailed technical information.')
             # Do not display a nasty stack trace to the user; hide it in a file.
             with open(f'error_{workflow_name}.txt', mode='w', encoding='utf-8') as f:
-                # https://mypy.readthedocs.io/en/stable/common_issues.html#python-version-and-system-platform-checks
-                if sys.version_info >= (3, 10):
-                    traceback.print_exception(type(e), value=e, tb=None, file=f)
+                traceback.print_exception(type(e), value=e, tb=None, file=f)
             print(e)  # we are always running this on CI
     return retval
 
@@ -118,7 +115,6 @@ def prepare_call_rest_api(inp_path: Path) -> Json:
     """prepare payload and call rest api"""
     with open(inp_path, 'r', encoding='utf-8') as f:
         inp = json.load(f)
-    print('----------- from rest api ----------- \n\n')
     scope = {}
     scope['type'] = 'http'
 
@@ -129,7 +125,7 @@ def prepare_call_rest_api(inp_path: Path) -> Json:
     # create a request object and pack it with our json payload
     req: Request = Request(scope)
     req._receive = receive
-    res: Json = asyncio.run(restapi.compile_wf(req))  # call to rest api
+    res: Json = asyncio.run(api.compile_wf(req))  # call to rest api
     return res
 
 

@@ -14,7 +14,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 dependencies = [
     # NOTE: This 'graphviz' refers to the python bindings to the underlying
     # system binary graphviz package (i.e. the `dot` executable) which we need to
@@ -44,7 +44,8 @@ dependencies = [
     "fastapi",
     "python-jose",
     "uvicorn",
-    "referencing"
+    "referencing",
+    "aiofiles"
 ]
 
 [project.readme]
@@ -96,6 +97,7 @@ mypy-types = [
     "types-setuptools",
     "types-six",
     "types-urllib3",
+    "types-aiofiles"
 ]
 # NOTE: toil and cwltool have a somewhat continuous release model. However,
 # there can be updates and bugfixes in main that have not yet been released.

@@ -38,8 +38,8 @@ Tools = Dict[StepId, Tool]
 Namespace = str
 Namespaces = List[Namespace]
 
-WorkflowInputs = Dict[str, Dict[str, str]]
-WorkflowInputsFile = Dict[str, Dict[str, str]]
+WorkflowInputs = Dict[str, Any]
+WorkflowInputsFile = Dict[str, Any]
 WorkflowOutputs = List[Yaml]
 InternalOutputs = List[str]
 ExplicitEdgeDef = Tuple[Namespaces, str]

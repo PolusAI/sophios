@@ -10,7 +10,7 @@ See [overview](overview.md)
 
 Many software packages have a way of automatically discovering files which they can use. (examples: [pytest](https://docs.pytest.org/en/latest/explanation/goodpractices.html#conventions-for-python-test-discovery) [pylint](https://pylint.pycqa.org/en/latest/user_guide/usage/run.html))
 
-By default, wic will recursively search for tools / workflows within the directories (and subdirectories) listed in the config file's json tags `search_paths_cwl` and `search_paths_wic`. The paths listed can be absolute or relative. The default `config.json` is shown.
+By default, sophios will recursively search for tools / workflows within the directories (and subdirectories) listed in the config file's json tags `search_paths_cwl` and `search_paths_wic`. The paths listed can be absolute or relative. The default `config.json` is shown.
 
 ***`We strongly recommend placing all repositories of tools / workflows in the same parent directory.`***
 
@@ -39,7 +39,7 @@ By default, wic will recursively search for tools / workflows within the directo
 .....
 ```
 
-If you do not specify config file using the command line argument `--config`, it will be automatically created for you the first time you run wic in `~/wic/global_config.json`. (Because of this, the first time you run wic you should be in the root directory of any one of your repos.) Then you can manually edit this file with additional sources of tools / workflows.
+If you do not specify config file using the command line argument `--config`, it will be automatically created for you the first time you run sophios in `~/wic/global_config.json`. (Because of this, the first time you run sophios you should be in the root directory of any one of your repos.) Then you can manually edit this file with additional sources of tools / workflows.
 
 To avoid dealing with relative file paths in YAML files, by default
 
@@ -74,7 +74,7 @@ steps:
       message: !ii Hello World
 ```
 
-Note that this is one key difference between WIC and CWL. In CWL, all inputs must be given in a separate file. In WIC, inputs can be given inline with !ii and after compilation they will be automatically extracted into the separate file.
+Note that this is one key difference between sophios and CWL. In CWL, all inputs must be given in a separate file. In sophios, inputs can be given inline with !ii and after compilation they will be automatically extracted into the separate file.
 
 (NOTE: raw CWL is still supported with the --allow_raw_cwl flag.)
 
@@ -288,7 +288,7 @@ Similar to `scatter`, `when` is a **special (and optional)** attribute to any st
 The `when` attribute of a step object exposes the exact same js embedded syntax of `when` tag of the YAML/CWL syntax. One has to be careful about appropriate escaping in the string input of `when` in Python API. In the above case the comparison is between two strings so "" is around the literal 27 (i.e. value after `toString` step).
 ## Partial Failures
 
-In running workflows at scale, sometimes it is the case that one of the workflow steps may crash due to a bug causing the entire workflow to crash. In this case can use `--partial_failure_enable` flag. For special cases when the exit status of a workflow step isn't 1, and a different error code is returned (for example 142), then the user can supply the error code to wic as a success code to prevent workflow from crashing with `--partial_failure_success_codes 0 1 142`. By default partial failure flag will consider only 0 and 1 as success codes. An example line snippet of the error code being printed is shown below.
+In running workflows at scale, sometimes it is the case that one of the workflow steps may crash due to a bug causing the entire workflow to crash. In this case can use `--partial_failure_enable` flag. For special cases when the exit status of a workflow step isn't 1, and a different error code is returned (for example 142), then the user can supply the error code to sophios as a success code to prevent workflow from crashing with `--partial_failure_success_codes 0 1 142`. By default partial failure flag will consider only 0 and 1 as success codes. An example line snippet of the error code being printed is shown below.
 ```
 [1;30mWARNING[0m [33m[job compare_extract_protein_pdbbind__step__4__topology_check] exited with status: 139[0m
 ```

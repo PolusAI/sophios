@@ -2,7 +2,7 @@ import pytest
 import json
 import pathlib
 
-from sophios.api.utils.converter import update_payload_missing_inputs_outputs
+from sophios.apis.utils.converter import update_payload_missing_inputs_outputs
 
 
 @pytest.mark.fast

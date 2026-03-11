@@ -1,8 +1,9 @@
 # pylint: disable=W1203
 """CLT utilities."""
 import logging
-from pathlib import Path
-from typing import Any, ClassVar, Optional, TypeVar, Union, Dict, List
+import os
+from pathlib import Path, PurePath
+from typing import Any, ClassVar, Optional, TypeVar, Union, Dict
 
 import cwl_utils.parser as cu_parser
 import yaml
@@ -11,13 +12,16 @@ from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
-from sophios import compiler, input_output, plugins, utils_cwl, post_compile
-from sophios import run_local as run_local_module
-from sophios.cli import get_args, get_known_and_unknown_args
+from sophios import compiler, input_output, plugins, utils_cwl
+from sophios import run_local as rl
+from sophios import post_compile as pc
+from sophios.cli import get_known_and_unknown_args, get_dicts_for_compilation
 from sophios.utils_graphs import get_graph_reps
+from sophios.utils import convert_args_dict_to_args_list
 from sophios.wic_types import CompilerInfo, RoseTree, StepId, Tool, Tools, YamlTree, Json
 
 from ._types import ScatterMethod
+from .api_config import default_values
 
 
 global_config: Tools = {}
@@ -36,9 +40,6 @@ class DisableEverythingFilter(logging.Filter):
 # disable any and all warnings coming from autodiscovery.
 logger_wicad = logging.getLogger("wicautodiscovery")
 logger_wicad.addFilter(DisableEverythingFilter())
-
-
-_WIC_PATH = Path(__file__).parent.parent.parent.parent  # WIC dir
 
 
 class InvalidInputValueError(Exception):
@@ -404,34 +405,39 @@ class Step(BaseModel):  # pylint: disable=too-few-public-methods
     def _yml(self) -> dict:
         in_dict: dict[str, Any] = {}  # NOTE: input values can be arbitrary JSON; not just strings!
         for inp in self.inputs:
-            if inp.value is not None:
-                if isinstance(inp.value, Path):
-                    # Special case for Path since it does not inherit from YAMLObject
-                    in_dict[inp.name] = str(inp.value)
-                elif isinstance(inp.value, dict) and isinstance(inp.value.get('wic_alias', {}), Path):
-                    # Special case for Path since it does not inherit from YAMLObject
-                    in_dict[inp.name] = {'wic_alias': str(inp.value['wic_alias'])}
-                elif isinstance(inp.value, dict) and isinstance(inp.value.get('wic_inline_input', {}), Path):
-                    # Special case for Path since it does not inherit from YAMLObject
-                    in_dict[inp.name] = {'wic_inline_input': str(inp.value['wic_inline_input'])}
-                elif isinstance(inp.value, dict) and isinstance(inp.value.get('wic_inline_input', {}), str):
-                    # Special case for inline str since it does not inherit from YAMLObject
-                    in_dict[inp.name] = {'wic_inline_input': inp.value.get('wic_inline_input')}
-                elif isinstance(inp.value, str):
-                    in_dict[inp.name] = inp.value  # Obviously strings are serializable
-                elif isinstance(inp.value, yaml.YAMLObject):
-                    # Serialization and deserialization logic should always be
-                    # encapsulated within each object. For the pyyaml library,
-                    # each object should inherit from pyyaml.YAMLObject.
-                    # See https://pyyaml.org/wiki/PyYAMLDocumentation
-                    # Section "Constructors, representers, resolvers"
-                    # class Monster(yaml.YAMLObject): ...
-                    in_dict[inp.name] = inp.value
-                else:
-                    logger.warning(f'Warning! input name {inp.name} input value {inp.value}')
-                    logger.warning('is not an instance of YAMLObject. The default str() serialization')
-                    logger.warning('logic often gives bad results. Please explicitly inherit from YAMLObject.')
-                    in_dict[inp.name] = inp.value
+            if inp.value:
+                match inp.value:
+                    case Path():
+                        # Special case for Path since it does not inherit from YAMLObject
+                        in_dict[inp.name] = str(inp.value)
+                    case {'wic_alias': wic_alias, **rest_of_dict}:
+                        match wic_alias:
+                            case Path():
+                                # Special case for Path since it does not inherit from YAMLObject
+                                in_dict[inp.name] = {'wic_alias': str(inp.value['wic_alias'])}
+                    case {'wic_inline_input': wic_inline_input, **rest_of_dict}:
+                        match wic_inline_input:
+                            case Path():
+                                # Special case for Path since it does not inherit from YAMLObject
+                                in_dict[inp.name] = {'wic_inline_input': str(inp.value['wic_inline_input'])}
+                            case str():
+                                # Special case for inline str since it does not inherit from YAMLObject
+                                in_dict[inp.name] = {'wic_inline_input': inp.value.get('wic_inline_input')}
+                    case str():
+                        in_dict[inp.name] = inp.value  # Obviously strings are serializable
+                    case yaml.YAMLObject():
+                        # Serialization and deserialization logic should always be
+                        # encapsulated within each object. For the pyyaml library,
+                        # each object should inherit from pyyaml.YAMLObject.
+                        # See https://pyyaml.org/wiki/PyYAMLDocumentation
+                        # Section "Constructors, representers, resolvers"
+                        # class Monster(yaml.YAMLObject): ...
+                        in_dict[inp.name] = inp.value
+                    case _:
+                        logger.warning(f'Warning! input name {inp.name} input value {inp.value}')
+                        logger.warning('is not an instance of YAMLObject. The default str() serialization')
+                        logger.warning('logic often gives bad results. Please explicitly inherit from YAMLObject.')
+                        in_dict[inp.name] = inp.value
 
         out_list: list = []  # The out: tag is a list, not a dict
         out_list = [{out.name: out.value} for out in self.outputs if out.value]
@@ -454,16 +460,6 @@ class Step(BaseModel):  # pylint: disable=too-few-public-methods
         if self.when != '':
             d["when"] = self.when
         return d
-
-    def _save_cwl(self, path: Path) -> None:
-        cwl_adapters = path.joinpath("cwl_adapters")
-        cwl_adapters.mkdir(exist_ok=True, parents=True)
-        with open(
-            cwl_adapters.joinpath(f"{self.process_name}.cwl"),
-            "w",
-            encoding="utf-8",
-        ) as file:
-            file.write(yaml.dump(self.yaml))
 
     def get_inp_attr(self, __name: str) -> Any:
         """Returns the input object of the given name"""
@@ -497,12 +493,17 @@ class Workflow(BaseModel):
     _input_names: list[str] = PrivateAttr(default_factory=list)
     _output_names: list[str] = PrivateAttr(default_factory=list)
     yml_path: Optional[Path] = Field(default=None)
+
     # Cannot use field() from dataclasses. Otherwise:
     # from dataclasses import field
     # field(default=None, init=False, repr=False)
     # TypeError: 'ModelPrivateAttr' object is not iterable
 
     def __init__(self, steps: list, workflow_name: str):
+        workflow_name = workflow_name.lstrip('/').lstrip(' ')
+        parts = PurePath(workflow_name).parts
+        workflow_name = ('_'.join(part for part in parts if part)).lstrip("_")
+        workflow_name = workflow_name.replace(' ', '_')
         data = {
             "process_name": workflow_name,
             "steps": steps
@@ -518,11 +519,13 @@ class Workflow(BaseModel):
         # subworkflows will NOT have all required inputs.
         for s in self.steps:
             try:
-                if isinstance(s, Step):
-                    s._validate()  # pylint: disable=W0212
-                if isinstance(s, Workflow):
-                    # recursively validate subworkflows ?
-                    s._validate()  # pylint: disable=W0212
+                match s:
+                    case Step():
+                        s._validate()
+                    case Workflow():
+                        s._validate()
+                    case _:
+                        pass
             except BaseException as exc:
                 raise InvalidStepError(
                     f"{s.process_name} is missing required inputs"
@@ -553,21 +556,23 @@ class Workflow(BaseModel):
         # TODO: outputs?
         steps = []
         for s in self.steps:
-            if isinstance(s, Step):
-                steps.append(s._yml)
-            elif isinstance(s, Workflow):
-                ins = {
-                    inp.name: inp.value
-                    for inp in s.inputs
-                    if inp.value is not None  # Subworkflow args are not required
-                }
-                parentargs: dict[str, Any] = {"in": ins} if ins else {}
-                # See the second to last line of ast.read_ast_from_disk()
-                d = {'id': self.process_name + '.wic',
-                     'subtree': s.yaml,  # recursively call .yaml (i.e. on s, not self)
-                     'parentargs': parentargs}
-                steps.append(d)
-            #  else: ...
+            match s:
+                case Step():
+                    steps.append(s._yml)
+                case Workflow() as sw:
+                    ins = {
+                        inp.name: inp.value
+                        for inp in sw.inputs
+                        if inp.value is not None  # Subworkflow args are not required
+                    }
+                    parentargs: dict[str, Any] = {"in": ins} if ins else {}
+                    # See the second to last line of ast.read_ast_from_disk()
+                    d = {'id': self.process_name + '.wic',
+                         'subtree': sw.yaml,  # recursively call .yaml (i.e. on s, not self)
+                         'parentargs': parentargs}
+                    steps.append(d)
+                case _:
+                    pass
         yaml_contents = {"inputs": inputs, "steps": steps} if inputs else {"steps": steps}
         return yaml_contents
 
@@ -633,10 +638,6 @@ class Workflow(BaseModel):
         self.outputs.append(out)
         return out
 
-    # def __repr__(self) -> str:
-    #     repr_ = ...
-    #     return repr_
-
     def __setattr__(self, __name: str, __value: Any) -> Any:
         if __name in ["inputs", "outputs", "yaml", "cfg_yaml", "process_name", "_input_names", "_output_names",
                       "__private_attributes__", "__pydantic_private__"]:
@@ -668,25 +669,6 @@ class Workflow(BaseModel):
         # The same goes for __setattr__ and __delattr__, see: https://github.com/pydantic/pydantic/issues/8643"
         return super().__getattr__(__name)  # type: ignore
 
-    def _save_yaml(self) -> None:
-        _WIC_PATH.mkdir(parents=True, exist_ok=True)
-        self.yml_path = _WIC_PATH.joinpath(f"{self.process_name}.wic")
-        with open(f"{self.process_name}.wic", "w", encoding="utf-8") as file:
-            file.write(yaml.dump(self.yaml))
-
-    def _save_all_cwl(self) -> None:
-        """Save CWL files to cwl_adapters.
-
-        This is necessary for WIC to compile the workflow.
-        """
-        _WIC_PATH.mkdir(parents=True, exist_ok=True)
-        for s in self.steps:
-            try:
-                if isinstance(s, Step):
-                    s._save_cwl(_WIC_PATH)  # pylint: disable=W0212
-            except BaseException as exc:
-                raise exc
-
     def flatten_steps(self) -> list[Step]:
         """Flattens all Steps into a linear list. This is similar, but different, from inlineing.
 
@@ -695,10 +677,11 @@ class Workflow(BaseModel):
         """
         steps = []
         for step in self.steps:
-            if isinstance(step, Step):
-                steps.append(step)
-            if isinstance(step, Workflow):
-                steps += step.flatten_steps()
+            match step:
+                case Step():
+                    steps.append(step)
+                case Workflow():
+                    steps += step.flatten_steps()
         return steps
 
     # NOTE: Cannot return list[Workflow] because Workflow is not yet defined.
@@ -715,21 +698,7 @@ class Workflow(BaseModel):
                 subworkflows += step.flatten_subworkflows()
         return subworkflows
 
-    def _convert_args_dict_to_args_list(self, args_dict: Dict[str, str]) -> List[str]:
-        """ A simple utility converting a dict whose keys are CLI flag/args and
-            values are CLI flag values
-        Args:
-            args_dict: A dictionary containing args and values
-
-        Returns:
-            List[str]: A syntactically correct list of arguments (CLI flags) and values
-        """
-        args_list: List[str] = []
-        for arg_name, arg_value in args_dict.items():
-            args_list += ['--' + arg_name, arg_value]
-        return args_list
-
-    def compile(self, write_to_disk: bool = False, args_dict: Dict[str, str] = {}) -> CompilerInfo:
+    def compile(self, write_to_disk: bool = False) -> CompilerInfo:
         """Compile Workflow using WIC.
 
         Args:
@@ -742,8 +711,6 @@ class Workflow(BaseModel):
         """
         global global_config
         self._validate()
-        user_args = self._convert_args_dict_to_args_list(args_dict)
-        args = get_args(self.process_name, user_args)  # Use mock CLI args
 
         graph = get_graph_reps(self.process_name)
         yaml_tree = YamlTree(StepId(self.process_name, 'global'), self.yaml)
@@ -752,42 +719,31 @@ class Workflow(BaseModel):
         steps_config = extract_tools_paths_NONPORTABLE(self.flatten_steps())
         global_config = merge(steps_config, global_config, strategy=Strategy.TYPESAFE_REPLACE)
 
+        compiler_options, graph_settings, yaml_tag_paths = get_dicts_for_compilation()
+
         # The compile_workflow function is 100% in-memory
-        compiler_info = compiler.compile_workflow(yaml_tree, args, [], [graph], {}, {}, {}, {},
+        compiler_info = compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
+                                                  [], [graph], {}, {}, {}, {},
                                                   global_config, True, relative_run_path=True, testing=False)
 
         if write_to_disk:
             # Now we can choose whether to write_to_disk or not
             rose_tree: RoseTree = compiler_info.rose
-            input_output.write_to_disk(rose_tree, Path('autogenerated/'), True, args.inputs_file)
+            input_output.write_to_disk(rose_tree, Path('autogenerated/'), True)
 
         return compiler_info
 
-    def get_cwl_workflow(self, args_dict: Dict[str, str] = {}) -> Json:
+    def get_cwl_workflow(self) -> Json:
         """Return the compiled Cwl and its inputs in one payload Json
         Returns:
             Json: Contains the compiled CWL and yaml inputs to the workflow.
         """
-        user_args = self._convert_args_dict_to_args_list(args_dict)
-        args = get_args(self.process_name, user_args)
-        compiler_info = self.compile(args_dict=args_dict, write_to_disk=False)
+        compiler_info = self.compile(write_to_disk=False)
         rose_tree = compiler_info.rose
 
-        # this is unfortunately necessary for now
-        # TODO: uncouple dumping to file and getting cwl steps
-        # then remove this write_to_disk call here
-        input_output.write_to_disk(rose_tree, Path('autogenerated/'), True, args.inputs_file)
-
-        rose_tree = post_compile.cwl_inline_runtag(rose_tree)
+        rose_tree = pc.cwl_inline_runtag(rose_tree)
         sub_node_data = rose_tree.data
         cwl_ast = sub_node_data.compiled_cwl
-
-        # Copy samee's workaround for duplicate outs
-        for step in cwl_ast['steps']:
-            out_vars = step['out']
-            out_vars_unique = list(set(out_vars))
-            out_vars_unique.sort()
-            step['out'] = out_vars_unique
 
         yaml_inputs = sub_node_data.workflow_inputs_file
         workflow_json: Json = {}
@@ -798,29 +754,44 @@ class Workflow(BaseModel):
         }
         return workflow_json
 
-    def run(self, compile_args_dict: Dict[str, str] = {}, run_args_dict: Dict[str, str] = {}) -> None:
-        """Run compiled workflow."""
+    def run(self, run_args_dict: Dict[str, str] = default_values.default_run_args_dict,
+            user_env_vars: Dict[str, str] = {}, basepath: str = 'autogenerated') -> None:
+        """Run the built CWL workflow.
+
+        Args:
+            run_args_dict (Dict[str, str]): A dictionary containing run time arguments for cwl-runners and tools
+            user_env (Dict[str, str]): A dictionary of user environment values that need to set to run the workflow
+            basepath (str): the path at which the workflow needs to run
+        """
         logger.info(f"Running {self.process_name}")
         plugins.logging_filters()
-        compiler_info = self.compile(args_dict=compile_args_dict, write_to_disk=True)
-        user_args = self._convert_args_dict_to_args_list({**compile_args_dict, **run_args_dict})
-        args, unknown_args = get_known_and_unknown_args(self.process_name, user_args)  # Use mock CLI args
+        # compile the workflow
+        compiler_info = self.compile(write_to_disk=False)
         rose_tree: RoseTree = compiler_info.rose
+        rose_tree = pc.cwl_inline_runtag(rose_tree)
+        pc.find_and_create_output_dirs(rose_tree)
+        # verify container_engine install and config
+        pc.verify_container_engine_config(run_args_dict['container_engine'], False)
+        # only write out after all the transformations
+        input_output.write_to_disk(rose_tree, Path(basepath), True, run_args_dict.get('inputs_file', ''))
+        # prepare for running
+        pc.cwl_docker_extract(run_args_dict['container_engine'],
+                              run_args_dict['pull_dir'],
+                              self.process_name)
+        if run_args_dict.get('docker_remove_entrypoints', None):
+            rose_tree = pc.remove_entrypoints(run_args_dict['container_engine'], rose_tree)
+        user_args = convert_args_dict_to_args_list(run_args_dict)
 
-        post_compile.cwl_docker_extract(args.container_engine, args.pull_dir, self.process_name)
-        if args.docker_remove_entrypoints:
-            rose_tree = post_compile.remove_entrypoints(args.container_engine, rose_tree)
-        post_compile.find_and_create_output_dirs(rose_tree)
-        # Do NOT capture stdout and/or stderr and pipe warnings and errors into a black hole.
-        if args.toil_passthrough_flags == 'yes':
-            run_local_module.run_local(args, rose_tree, args.cachedir, args.cwl_runner,
-                                       True, passthrough_args=unknown_args)
-        else:
-            run_local_module.run_local(args, rose_tree, args.cachedir, args.cwl_runner, True)
+        # update the environment with user supplied env args
+        os.environ.update(rl.sanitize_env_vars(user_env_vars))
 
-        # Finally, since there is an output file copying bug in cwltool,
-        # we need to copy the output files manually. See comment above.
-        if args.cwl_runner == 'cwltool' and args.copy_output_files:
-            run_local_module.copy_output_files(self.process_name)
+        _, unknown_args = get_known_and_unknown_args(
+            self.process_name, user_args)  # Use mock CLI args
+
+        # if there are no unknown_args then unkown_args will be an empty list []
+        # so no need for a separate check of a particular flag!
+        rl.run_local(run_args_dict, False,
+                     workflow_name=self.process_name,
+                     basepath=basepath, passthrough_args=unknown_args)
 
 # Process = Union[Step, Workflow]

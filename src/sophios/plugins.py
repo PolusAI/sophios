@@ -1,23 +1,20 @@
 import copy
 import logging
-import json
 import glob
 import os
 from pathlib import Path
 import re
-import sys
 import tempfile
-import traceback
-from typing import Any, Dict, Union
+from typing import Any, Dict, Union, List
 
 import cwltool.load_tool
 import yaml
 import podman
+from podman.domain.images_build import BuildMixin
 import docker
 
 
-from . import input_output as io, utils_cwl, cli
-from .python_cwl_adapter import import_python_file
+from . import utils_cwl
 from .wic_types import Cwl, NodeData, RoseTree, StepId, Tool, Tools, Json
 
 
@@ -117,11 +114,9 @@ def get_tools_cwl(config: Json, validate_plugins: bool = False,
             for cwl_path_str in cwl_paths:
                 if 'biobb_md' in cwl_path_str:
                     continue  # biobb_md is deprecated (in favor of biobb_gromacs)
-                # print(cwl_path)
                 with open(cwl_path_str, mode='r', encoding='utf-8') as f:
                     tool: Cwl = yaml.safe_load(f.read())
                 stem = Path(cwl_path_str).stem
-                # print(stem)
 
                 if validate_plugins:
                     validate_cwl(cwl_path_str, skip_schemas)
@@ -136,29 +131,27 @@ def get_tools_cwl(config: Json, validate_plugins: bool = False,
                         tool.update({'stderr': f'{stem}.err'})
                 cwl_path_abs = os.path.abspath(cwl_path_str)
                 tools_cwl[StepId(stem, plugin_ns)] = Tool(cwl_path_abs, tool)
-                # print(tool)
-                # utils_graphs.make_tool_dag(stem, (cwl_path_str, tool))
     return tools_cwl
 
 
-def cwl_update_outputs_optional(cwl: Cwl) -> Cwl:
+def cwl_update_outputs_optional(cwl: Cwl, failure_code_range: List[int],
+                                direct_failure_codes: List[int]) -> Cwl:
     """Updates outputs as optional (if any)
 
     Args:
         cwl (Cwl): A CWL CommandLineTool
+        failure_code_range: A range of (u, l) allowed failure codes range
+        direct_failure_codes: A list of allowed failure codes
 
     Returns:
         Cwl: A CWL CommandLineTool with outputs optional (if any)
     """
     cwl_mod = copy.deepcopy(cwl)
     # Update success codes to allow simple failures
-    args = cli.parser.parse_args()
     # default value of cwl_mod['successCodes'] = 0 and 'partial_failure_success_codes' = [0,1]
     # take the Union of 0 and partial_failure_success_codes, the 'successCodes' might not be set
     # never discard 0 (actual success)
-    failure_code_range = args.partial_failure_success_codes_range
     codes_from_range = list(range(failure_code_range[0], failure_code_range[1]))
-    direct_failure_codes = args.partial_failure_success_codes
     assert failure_code_range[0] <= failure_code_range[1], \
         f"lower {failure_code_range[0]}  value can't be greater than higher {failure_code_range[1]} value"
     cwl_mod['successCodes'] = list(set([0] + direct_failure_codes + codes_from_range))
@@ -166,35 +159,6 @@ def cwl_update_outputs_optional(cwl: Cwl) -> Cwl:
     for out_key, out_val_dict in cwl_mod['outputs'].items():
         if isinstance(out_val_dict['type'], str) and out_val_dict['type'][-1] != '?':
             out_val_dict['type'] += '?'
-    return cwl_mod
-
-
-def cwl_update_inline_runtag(cwl: Cwl, path: Path, relative_run_path: bool) -> Cwl:
-    """Updates 'run' tag with inline content
-
-    Args:
-        cwl (Cwl): A CWL Workflow
-        path (Path): The directory in which to read files from
-        relative_run_path (bool): Controls whether to use subdirectories or just one directory
-    Returns:
-        Cwl: A CWL Workflow with inline run (if any)
-    """
-    cwl_mod = copy.deepcopy(cwl)
-    for step in cwl_mod['steps']:
-        runtag_orig = step.get('run', '')
-        if isinstance(runtag_orig, str) and runtag_orig.endswith('.cwl'):
-            if relative_run_path:
-                yml_path = Path.cwd() / path / runtag_orig
-            else:
-                yml_path = Path(runtag_orig)  # Assume absolute path in the runtag
-            with open(yml_path, mode='r', encoding='utf-8') as f:
-                runtag_raw = yaml.safe_load(f.read())
-                # local $namespace and $schema tag shouldn't be in inline cwl steps
-                runtag_raw.pop('$namespaces', None)
-                runtag_raw.pop('$schemas', None)
-                step['run'] = runtag_raw
-        else:
-            pass  # We only care if the runtag is a cwl filepath
     return cwl_mod
 
 
@@ -264,49 +228,29 @@ def remove_entrypoints_podman() -> None:
     uri = "unix:///run/user/1000/podman/podman.sock"
 
     with podman.PodmanClient(base_url=uri) as client:
-        remove_entrypoints(client, podman.domain.images_build.BuildMixin())
+        remove_entrypoints(client, BuildMixin())
 
 
-def cwl_update_inline_runtag_rosetree(rose_tree: RoseTree, path: Path, relative_run_path: bool) -> RoseTree:
-    """Inlines the compiled CWL files runtag
-
-    Args:
-        rose_tree (RoseTree): The data associated with compiled subworkflows
-        path (Path): The directory in which to read files from
-        relative_run_path (bool): Controls whether to use subdirectories or just one directory.
-    Returns:
-        RoseTree: rose_tree with inline cwl runtag
-    """
-    n_d: NodeData = rose_tree.data
-    if n_d.compiled_cwl['class'] == 'Workflow':
-        outputs_cwl_inline_runtag = cwl_update_inline_runtag(n_d.compiled_cwl, path, relative_run_path)
-    else:
-        outputs_cwl_inline_runtag = n_d.compiled_cwl
-
-    sub_trees_path = [cwl_update_inline_runtag_rosetree(sub_rose_tree, path, relative_run_path) for
-                      sub_rose_tree in rose_tree.sub_trees]
-    node_data_path = NodeData(n_d.namespaces, n_d.name, n_d.yml, outputs_cwl_inline_runtag, n_d.tool,
-                              n_d.workflow_inputs_file, n_d.explicit_edge_defs, n_d.explicit_edge_calls,
-                              n_d.graph, n_d.inputs_workflow, n_d.step_name_1)
-    return RoseTree(node_data_path, sub_trees_path)
-
-
-def cwl_update_outputs_optional_rosetree(rose_tree: RoseTree) -> RoseTree:
+def cwl_update_outputs_optional_rosetree(rose_tree: RoseTree,
+                                         failure_code_range: List[int],
+                                         direct_failure_codes: List[int]) -> RoseTree:
     """Updates outputs optional for every CWL CommandLineTool
 
     Args:
         rose_tree (RoseTree): The RoseTree returned from compile_workflow(...).rose_tree
+        failure_code_range: A range of (u, l) allowed failure codes range
+        direct_failure_codes: A list of allowed failure codes
 
     Returns:
         RoseTree: rose_tree with output optional updates to every CWL CommandLineTool
     """
     n_d: NodeData = rose_tree.data
     if n_d.compiled_cwl['class'] == 'CommandLineTool':
-        outputs_optional_cwl = cwl_update_outputs_optional(n_d.compiled_cwl)
+        outputs_optional_cwl = cwl_update_outputs_optional(n_d.compiled_cwl, failure_code_range, direct_failure_codes)
     else:
         outputs_optional_cwl = n_d.compiled_cwl
 
-    sub_trees_path = [cwl_update_outputs_optional_rosetree(sub_rose_tree) for
+    sub_trees_path = [cwl_update_outputs_optional_rosetree(sub_rose_tree, failure_code_range, direct_failure_codes) for
                       sub_rose_tree in rose_tree.sub_trees]
     node_data_path = NodeData(n_d.namespaces, n_d.name, n_d.yml, outputs_optional_cwl, n_d.tool,
                               n_d.workflow_inputs_file, n_d.explicit_edge_defs, n_d.explicit_edge_calls,

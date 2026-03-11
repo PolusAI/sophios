@@ -8,9 +8,9 @@ from jsonschema import Draft202012Validator
 from sophios.utils_yaml import wic_loader
 
 from sophios.wic_types import Json, Cwl
-from sophios.api.utils.ict.ict_spec.model import ICT
-from sophios.api.utils.ict.ict_spec.cast import cast_to_ict
-from sophios.api.utils.wfb_util import get_node_config
+from sophios.apis.utils.ict.ict_spec.model import ICT
+from sophios.apis.utils.ict.ict_spec.cast import cast_to_ict
+from sophios.apis.utils.wfb_util import get_node_config
 
 SCHEMA_FILE = Path(__file__).parent / "input_object_schema.json"
 SCHEMA: Json = {}

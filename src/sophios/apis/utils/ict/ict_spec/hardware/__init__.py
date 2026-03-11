@@ -1,6 +1,6 @@
 """Hardware Requirements for ICT."""
 
-from sophios.api.utils.ict.ict_spec.hardware.objects import (
+from sophios.apis.utils.ict.ict_spec.hardware.objects import (
     CPU,
     GPU,
     HardwareRequirements,

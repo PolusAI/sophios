@@ -5,8 +5,9 @@ FROM debian:stable-slim
 # Install conda / mamba
 RUN apt-get update -y && apt-get install -y wget
 
-RUN CONDA="Miniforge3-Linux-x86_64.sh" && \
-    wget --quiet https://github.com/conda-forge/miniforge/releases/latest/download/$CONDA && \
+ARG CONDA="Miniforge3-Linux-x86_64.sh"
+
+RUN wget --quiet https://github.com/conda-forge/miniforge/releases/latest/download/$CONDA && \
     chmod +x $CONDA && \
     ./$CONDA -b -p /miniforge && \
     rm -f $CONDA
@@ -15,8 +16,8 @@ ENV PATH /miniforge/bin:$PATH
 # Install wic
 RUN apt-get install -y git
 
-COPY . /workflow-inference-compiler
-WORKDIR /workflow-inference-compiler
+COPY . /sophios
+WORKDIR /sophios
 
 #RUN conda create --name wic
 #RUN conda activate wic

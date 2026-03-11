@@ -3,20 +3,21 @@
 FROM fedora
 
 # Install conda / mamba
-RUN yum update -y && yum install -y wget
+RUN dnf update -y && dnf install -y wget awk
 
-RUN CONDA="Miniforge3-Linux-x86_64.sh" && \
-    wget --quiet https://github.com/conda-forge/miniforge/releases/latest/download/$CONDA && \
+ARG CONDA="Miniforge3-Linux-x86_64.sh"
+
+RUN wget --quiet https://github.com/conda-forge/miniforge/releases/latest/download/$CONDA && \
     chmod +x $CONDA && \
     ./$CONDA -b -p /miniforge && \
     rm -f $CONDA
-ENV PATH /miniforge/bin:$PATH
+ENV PATH=/miniforge/bin:$PATH
 
-# Install wic
-RUN yum install -y git
+# Install sophios
+RUN dnf install -y git
 
-COPY . /workflow-inference-compiler
-WORKDIR /workflow-inference-compiler
+COPY . /sophios
+WORKDIR /sophios
 
 #RUN conda create --name wic
 #RUN conda activate wic
@@ -30,6 +31,6 @@ RUN pip install -e ".[all_except_runner_src]"
 
 RUN mamba clean --all --yes
 RUN pip cache purge
-RUN yum clean all
+RUN dnf clean all
 
 ADD docker/Dockerfile_fedora .

@@ -3,8 +3,7 @@ channels:
   - defaults
 
 dependencies:
-# Keep the python constraint in case we want to install pypy.
-  - "python<3.11"
+  - "python>=3.11"
 # NOTE: cwltool needs nodejs for InlineJavascriptRequirement
   - nodejs
   - graphviz
@@ -35,7 +34,7 @@ dependencies:
 # Similarly, toil[cwl] depends on ruamel.yaml.clib for performance.
 # Install it with conda/mamba here.
   - ruamel.yaml.clib
-# Simiarly, cryptography needs to build binary wheels
+# Similarly, cryptography needs to build binary wheels
   - cryptography
 # Needs binary PyQt5 dependencies.
   - kubernetes-helm

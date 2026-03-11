@@ -42,7 +42,7 @@ class Author(RootModel):
         return self.root
 
     @singledispatchmethod
-    def __eq__(self, other: Any) -> bool:  # type: ignore
+    def __eq__(self, other: Any) -> bool:  # type: ignore[override, unused-ignore] # pylint: disable=incompatible-type
         """Compare if two Author objects are equal."""
         msg = "invalid type for comparison."
         raise TypeError(msg)
@@ -82,7 +82,7 @@ class DOI(RootModel):
         return self.root
 
     @singledispatchmethod
-    def __eq__(self, other: Any) -> bool:  # type: ignore
+    def __eq__(self, other: Any) -> bool:  # type: ignore[override, unused-ignore] # pylint: disable=incompatible-type
         """Compare if two DOI objects are equal."""
         msg = "invalid type for comparison."
         raise TypeError(msg)
