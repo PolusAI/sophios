@@ -92,10 +92,10 @@ steps:
       message: !ii Hello World
 ```
 
-The Python API closely follows the YAML syntax. We create steps and from steps we create workflows. The API exposes the means to create Step and Workflow objects. The steps and workflows are just plain objects in Python which can be passed around, manipulated, composed and reused. We can write the above workflow as follows using Python API.
+The Python API closely follows the YAML syntax. We create steps and from steps we create workflows. The API exposes the means to create Step and Workflow objects. The steps and workflows are just plain objects in Python which can be passed around, manipulated, composed and reused. Import `Step` and `Workflow` from `sophios.apis.python.api`. We can write the above workflow as follows using Python API.
 
 ```
-from sophios.api.pythonapi import Step, Workflow
+from sophios.apis.python.api import Step, Workflow
 
 
 def workflow() -> Workflow:
@@ -137,7 +137,7 @@ steps:
 We can write the above workflow as follows using the Python API.
 
 ```
-from sophios.api.pythonapi import Step, Workflow
+from sophios.apis.python.api import Step, Workflow
 
 
 def workflow() -> Workflow:
@@ -191,7 +191,7 @@ steps:
 We can write the above workflow as follows using the Python API.
 
 ```
-from sophios.api.pythonapi import Step, Workflow
+from sophios.apis.python.api import Step, Workflow
 
 def workflow() -> Workflow:
     # scatter on a subset of inputs
@@ -252,7 +252,7 @@ steps:
 We can write the above workflow as follows using the Python API.
 
 ```
-from sophios.api.pythonapi import Step, Workflow
+from sophios.apis.python.api import Step, Workflow
 
 
 def workflow() -> Workflow:
@@ -264,8 +264,6 @@ def workflow() -> Workflow:
     echo = Step(clt_path='../../cwl_adapters/echo.cwl')
     echo.message = toString.output
     # add a when clause
-    # alternate js syntax
-    # echo.when = '$(inputs["message"] < 27)'
     echo.when = '$(inputs.message < "27")'
     # since the condition is not met the echo step is skipped!
 
