@@ -1,18 +1,19 @@
 import json
-import sys
 import traceback
 from pathlib import Path
 
+import pytest
 import sophios
 import sophios.plugins
 from sophios import input_output as io
 from sophios.python_cwl_adapter import import_python_file
 
 
+@pytest.mark.fast
 def test_compile_python_workflows() -> None:
     """This function imports (read: blindly executes) all python files in 'search_paths_wic'
        The python files are assumed to have a top-level workflow() function
-       which returns a sophios.api.pythonapi.Workflow object.
+       which returns a sophios.apis.python.api.Workflow object.
        The python files should NOT call the .run() method!
        (from any code path that is automatically executed on import)
     """
@@ -27,7 +28,7 @@ def test_compile_python_workflows() -> None:
     paths_tuples = [(path_str, path)
                     for namespace, paths_dict in paths.items()
                     for path_str, path in paths_dict.items()]
-    any_import_errors = False
+    import_errors: list[str] = []
     for path_stem, path in paths_tuples:
         if 'mm-workflows' in str(path) or 'docs/tutorials/' in str(path):
             # Exclude paths that only contain 'regular' python files.
@@ -64,7 +65,7 @@ def test_compile_python_workflows() -> None:
                 json.dump(json_contents, f)
 
         except Exception as e:
-            any_import_errors = True
+            import_errors.append(f"{path_stem}: {type(e).__name__}: {e}")
             traceback.print_exception(type(e), value=e, tb=None)
-    if any_import_errors:
-        sys.exit(1)  # Make sure the CI fails
+    if import_errors:
+        pytest.fail("Python workflow imports failed:\n" + "\n".join(import_errors))

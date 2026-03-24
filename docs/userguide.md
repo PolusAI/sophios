@@ -94,6 +94,8 @@ steps:
 
 The Python API closely follows the YAML syntax. We create steps and from steps we create workflows. The API exposes the means to create Step and Workflow objects. The steps and workflows are just plain objects in Python which can be passed around, manipulated, composed and reused. Import `Step` and `Workflow` from `sophios.apis.python.api`. We can write the above workflow as follows using Python API.
 
+The legacy shorthand `append.file = touch.file` is still supported, but the preferred explicit form is `append.inputs.file = touch.outputs.file`. Likewise, named step inputs can be read explicitly through `step.inputs.<name>`.
+
 ```
 from sophios.apis.python.api import Step, Workflow
 
