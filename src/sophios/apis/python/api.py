@@ -5,16 +5,15 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
 from pathlib import Path, PurePath
-from typing import Any, Dict, Iterator, Optional, TypeVar, Union
+from typing import Any, Dict, Optional, TypeVar, Union
 
 import cwl_utils.parser as cu_parser
 import yaml
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
-from sophios import compiler, input_output, plugins, utils_cwl
+from sophios import compiler, input_output, plugins
 from sophios import post_compile as pc
 from sophios import run_local as rl
 from sophios.cli import get_dicts_for_compilation, get_known_and_unknown_args
@@ -22,7 +21,31 @@ from sophios.utils import convert_args_dict_to_args_list
 from sophios.utils_graphs import get_graph_reps
 from sophios.wic_types import CompilerInfo, Json, RoseTree, StepId, Tool, Tools, YamlTree
 
+from ._errors import (
+    InvalidCLTError,
+    InvalidInputValueError,
+    InvalidLinkError,
+    InvalidStepError,
+    MissingRequiredValueError,
+)
+from ._ports import (
+    ProcessInput,
+    ProcessOutput,
+    StepInputs,
+    StepOutputs,
+    WorkflowInputReference,
+    WorkflowInputs,
+    WorkflowOutputs,
+    AliasBinding as _AliasBinding,
+    InlineBinding as _InlineBinding,
+    WorkflowBinding as _WorkflowBinding,
+)
 from ._types import ScatterMethod
+from ._utils import (
+    default_dict as _default_dict,
+    get_value_from_cfg as _get_value_from_cfg,
+    load_yaml as _load_yaml,
+)
 from .api_config import default_values
 
 
@@ -44,26 +67,6 @@ logger_wicad = logging.getLogger("wicautodiscovery")
 logger_wicad.addFilter(DisableEverythingFilter())
 
 
-class InvalidInputValueError(Exception):
-    pass
-
-
-class MissingRequiredValueError(Exception):
-    pass
-
-
-class InvalidStepError(Exception):
-    pass
-
-
-class InvalidLinkError(Exception):
-    pass
-
-
-class InvalidCLTError(ValueError):
-    pass
-
-
 CWLInputParameter = Union[
     cu_parser.cwl_v1_0.CommandInputParameter,
     cu_parser.cwl_v1_1.CommandInputParameter,
@@ -77,83 +80,6 @@ CWLOutputParameter = Union[
 ]
 
 StrPath = TypeVar("StrPath", str, Path)
-
-
-@dataclass(frozen=True)
-class _InlineBinding:
-    value: Any
-
-
-@dataclass(frozen=True)
-class _AliasBinding:
-    alias: Any
-
-
-@dataclass(frozen=True)
-class _WorkflowBinding:
-    name: str
-
-
-InputBinding = Union[_InlineBinding, _AliasBinding, _WorkflowBinding]
-
-
-def _default_dict() -> dict[str, Any]:
-    return {}
-
-
-def _normalize_port_name(cwl_id: str) -> str:
-    """Return the local port name from a CWL id."""
-    return cwl_id.split("#")[-1]
-
-
-def _normalize_port_type(port_type: Any) -> tuple[Any, bool]:
-    """Return the canonicalized port type and whether it is required."""
-    canonical = utils_cwl.canonicalize_type(port_type)
-    match canonical:
-        case list() as options:
-            required = "null" not in options
-            non_null_types = [entry for entry in options if entry != "null"]
-            canonical = non_null_types[0] if non_null_types else options[0]
-        case _:
-            required = True
-    return canonical, required
-
-
-def _serialize_value(value: Any) -> Any:
-    """Convert Path objects into YAML-safe values while preserving structure."""
-    match value:
-        case Path():
-            return str(value)
-        case list() as items:
-            return [_serialize_value(item) for item in items]
-        case tuple() as items:
-            return [_serialize_value(item) for item in items]
-        case dict() as items:
-            return {key: _serialize_value(item) for key, item in items.items()}
-        case _:
-            return value
-
-
-def _get_value_from_cfg(value: Any) -> Any:
-    match value:
-        case dict() as data if "Directory" in data.values():
-            try:
-                value_ = Path(data["location"])
-            except Exception as exc:
-                raise InvalidInputValueError() from exc
-            if not value_.is_dir():
-                raise InvalidInputValueError(f"{str(value_)} is not a directory")
-            return value_
-        case dict():
-            return value
-        case _:
-            return value
-
-
-def _load_yaml(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as file_handle:
-        loaded = yaml.safe_load(file_handle)
-    return loaded or {}
 
 
 def _load_clt(clt_path: Path) -> tuple[CWLCommandLineTool, dict[str, Any]]:
@@ -183,255 +109,6 @@ def _load_clt(clt_path: Path) -> tuple[CWLCommandLineTool, dict[str, Any]]:
     logger.warning("Warning! %s does not exist, and", clt_path)
     logger.warning("%s was not found in the global config.", clt_path.stem)
     raise InvalidCLTError(f"invalid cwl file: {clt_path}")
-
-
-class ProcessInput:
-    """Input of a CWL CommandLineTool or Workflow."""
-
-    inp_type: Any
-    name: str
-    parent_obj: Any
-    required: bool
-    linked: bool
-    _binding: Optional[InputBinding]
-
-    def __init__(self, name: str, inp_type: Any, parent_obj: Any = None) -> None:
-        normalized_type, required = _normalize_port_type(inp_type)
-        self.inp_type = normalized_type
-        self.name = _normalize_port_name(name)
-        self.parent_obj = parent_obj
-        self.required = required
-        self.linked = False
-        self._binding: Optional[InputBinding] = None
-
-    def __repr__(self) -> str:
-        return f"ProcessInput(name={self.name!r}, inp_type={self.inp_type!r})"
-
-    @property
-    def value(self) -> Any:
-        """Compatibility view of the current binding."""
-        match self._binding:
-            case None:
-                return None
-            case _InlineBinding(value=value):
-                return value
-            case _AliasBinding(alias=alias):
-                return {"wic_alias": _serialize_value(alias)}
-            case _WorkflowBinding(name=name):
-                return name
-        return None
-
-    def _set_value(self, value: Any, linked: bool = False) -> None:
-        """Compatibility helper used by older internal code paths."""
-        match value:
-            case {"wic_alias": alias} if linked:
-                self._binding = _AliasBinding(alias)
-                self.linked = True
-            case {"wic_inline_input": inline_value} if not linked:
-                self._binding = _InlineBinding(inline_value)
-                self.linked = False
-            case str() as workflow_name if linked:
-                self._binding = _WorkflowBinding(workflow_name)
-                self.linked = True
-            case _:
-                self._binding = _InlineBinding(value)
-                self.linked = linked
-
-    def _set_binding(self, binding: Optional[InputBinding]) -> None:
-        self._binding = binding
-        match binding:
-            case _AliasBinding() | _WorkflowBinding():
-                self.linked = True
-            case _:
-                self.linked = False
-
-    def is_bound(self) -> bool:
-        return self._binding is not None
-
-    def to_yaml_value(self) -> Any:
-        match self._binding:
-            case None:
-                return None
-            case _InlineBinding(value=value):
-                return {"wic_inline_input": _serialize_value(value)}
-            case _AliasBinding(alias=alias):
-                return {"wic_alias": _serialize_value(alias)}
-            case _WorkflowBinding(name=name):
-                return name
-        return None
-
-
-class ProcessOutput:
-    """Output of a CWL CommandLineTool or Workflow."""
-
-    out_type: Any
-    name: str
-    parent_obj: Any
-    required: bool
-    linked: bool
-    _anchor_name: Optional[str]
-
-    def __init__(self, name: str, out_type: Any, parent_obj: Any = None) -> None:
-        normalized_type, required = _normalize_port_type(out_type)
-        self.out_type = normalized_type
-        self.name = _normalize_port_name(name)
-        self.parent_obj = parent_obj
-        self.required = required
-        self.linked = False
-        self._anchor_name: Optional[str] = None
-
-    def __repr__(self) -> str:
-        return f"ProcessOutput(name={self.name!r}, out_type={self.out_type!r})"
-
-    @property
-    def value(self) -> Any:
-        if self._anchor_name is None:
-            return None
-        return {"wic_anchor": self._anchor_name}
-
-    def ensure_anchor(self, suggested_name: str) -> str:
-        if self._anchor_name is None:
-            self._anchor_name = suggested_name
-        self.linked = True
-        return self._anchor_name
-
-    def _set_value(self, value: Any, linked: bool = False) -> None:
-        match value:
-            case {"wic_anchor": anchor_name}:
-                self._anchor_name = str(anchor_name)
-            case str() as anchor_name:
-                self._anchor_name = anchor_name
-            case None:
-                self._anchor_name = None
-        self.linked = linked or self._anchor_name is not None
-
-
-class WorkflowInputReference:
-    """A symbolic reference to a workflow input variable."""
-
-    workflow: Workflow
-    name: str
-
-    def __init__(self, workflow: Workflow, name: str) -> None:
-        self.workflow = workflow
-        self.name = name
-
-    def __repr__(self) -> str:
-        return f"WorkflowInputReference(workflow={self.workflow.process_name!r}, name={self.name!r})"
-
-
-class StepInputs:
-    """List-like view of a Step's inputs with explicit named access."""
-
-    _step: Step
-
-    def __init__(self, step: Step) -> None:
-        object.__setattr__(self, "_step", step)
-
-    def __iter__(self) -> Iterator[ProcessInput]:
-        return iter(self._step._inputs)
-
-    def __len__(self) -> int:
-        return len(self._step._inputs)
-
-    def __getitem__(self, index: int) -> ProcessInput:
-        return self._step._inputs[index]
-
-    def __getattr__(self, name: str) -> ProcessInput:
-        return self._step.get_inp_attr(name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name == "_step":
-            object.__setattr__(self, name, value)
-            return
-        self._step.bind_input(name, value)
-
-    def __repr__(self) -> str:
-        return repr(self._step._inputs)
-
-
-class StepOutputs:
-    """List-like view of a Step's outputs with explicit named access."""
-
-    _step: Step
-
-    def __init__(self, step: Step) -> None:
-        object.__setattr__(self, "_step", step)
-
-    def __iter__(self) -> Iterator[ProcessOutput]:
-        return iter(self._step._outputs)
-
-    def __len__(self) -> int:
-        return len(self._step._outputs)
-
-    def __getitem__(self, index: int) -> ProcessOutput:
-        return self._step._outputs[index]
-
-    def __getattr__(self, name: str) -> ProcessOutput:
-        return self._step.get_output(name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        raise AttributeError(f"Step outputs are read-only; cannot set {name!r}")
-
-    def __repr__(self) -> str:
-        return repr(self._step._outputs)
-
-
-class WorkflowInputs:
-    """List-like view of a Workflow's inputs with explicit named access."""
-
-    _workflow: Workflow
-
-    def __init__(self, workflow: Workflow) -> None:
-        object.__setattr__(self, "_workflow", workflow)
-
-    def __iter__(self) -> Iterator[ProcessInput]:
-        return iter(self._workflow._inputs)
-
-    def __len__(self) -> int:
-        return len(self._workflow._inputs)
-
-    def __getitem__(self, index: int) -> ProcessInput:
-        return self._workflow._inputs[index]
-
-    def __getattr__(self, name: str) -> WorkflowInputReference:
-        return self._workflow._ensure_input_reference(name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name == "_workflow":
-            object.__setattr__(self, name, value)
-            return
-        self._workflow.bind_input(name, value)
-
-    def __repr__(self) -> str:
-        return repr(self._workflow._inputs)
-
-
-class WorkflowOutputs:
-    """List-like view of a Workflow's declared outputs."""
-
-    _workflow: Workflow
-
-    def __init__(self, workflow: Workflow) -> None:
-        object.__setattr__(self, "_workflow", workflow)
-
-    def __iter__(self) -> Iterator[ProcessOutput]:
-        return iter(self._workflow._outputs)
-
-    def __len__(self) -> int:
-        return len(self._workflow._outputs)
-
-    def __getitem__(self, index: int) -> ProcessOutput:
-        return self._workflow._outputs[index]
-
-    def __getattr__(self, name: str) -> ProcessOutput:
-        return self._workflow.add_output(name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        raise AttributeError(f"Workflow outputs are read-only; cannot set {name!r}")
-
-    def __repr__(self) -> str:
-        return repr(self._workflow._outputs)
 
 
 def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
@@ -573,7 +250,7 @@ class Step:
                 case "when", str() as condition if condition:
                     if not condition.startswith("$(") or not condition.endswith(")"):
                         raise ValueError("Invalid input to when. The js string must start with '$(' and end with ')'")
-                case "when", value if value:
+                case "when", invalid if invalid:
                     raise ValueError("Invalid input to when. The js string must start with '$(' and end with ')'")
             object.__setattr__(self, name, value)
             return
