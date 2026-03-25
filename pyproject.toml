@@ -32,9 +32,7 @@ dependencies = [
     # CommandInputParameter attr changed from `type_` to `type` and back to `type_`
     # between versions 0.30, 0.31, 0.32
     # See https://github.com/common-workflow-language/cwl-utils/releases/
-    "typeguard",
     "pydantic>=2.6",
-    "pydantic-settings",
     "pydantic[email]",
     "docker",
     # FYI also need uidmap to run podman rootless
@@ -42,7 +40,6 @@ dependencies = [
     # We are using the official release for these packages for now
     "toil[cwl]",
     "fastapi",
-    "python-jose",
     "uvicorn",
     "referencing",
     "aiofiles"
