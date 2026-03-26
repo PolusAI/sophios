@@ -1,59 +1,153 @@
-"""Port and collection models for the Python API."""
+"""Parameter and namespace helpers for the Python workflow API."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Iterator, Optional, Union
+from dataclasses import dataclass, field
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Callable, Generic, Iterator, TypeVar
 
-from ._utils import normalize_port_name, normalize_port_type, serialize_value
+from ._utils import (infer_literal_parameter_type,
+                     is_array_type,
+                     normalize_parameter_name,
+                     normalize_parameter_type,
+                     serialize_value)
 
 if TYPE_CHECKING:
-    from .api import Step, Workflow
+    from .api import Workflow
 
 
-@dataclass(frozen=True)
+ParameterT = TypeVar("ParameterT")
+ViewT = TypeVar("ViewT")
+
+
+@dataclass(frozen=True, slots=True)
 class InlineBinding:
+    """Inline literal bound to an input parameter."""
+
     value: Any
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AliasBinding:
+    """Reference to an upstream step output anchor."""
+
     alias: Any
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class WorkflowBinding:
+    """Reference to a formal workflow input."""
+
     name: str
 
 
-InputBinding = Union[InlineBinding, AliasBinding, WorkflowBinding]
+InputBinding = InlineBinding | AliasBinding | WorkflowBinding
 
 
-class ProcessInput:
-    """Input of a CWL CommandLineTool or Workflow."""
+@dataclass(frozen=True, slots=True)
+class OutputSourceBinding:
+    """Source exposed as a formal workflow output."""
 
-    inp_type: Any
-    name: str
-    parent_obj: Any
-    required: bool
-    linked: bool
-    _binding: Optional[InputBinding]
+    step_id: str | None
+    source_name: str
 
-    def __init__(self, name: str, inp_type: Any, parent_obj: Any = None) -> None:
-        normalized_type, required = normalize_port_type(inp_type)
-        self.inp_type = normalized_type
-        self.name = normalize_port_name(name)
-        self.parent_obj = parent_obj
-        self.required = required
-        self.linked = False
-        self._binding = None
+    def to_output_source(self, step_id_overrides: Mapping[str, str] | None = None) -> str:
+        """Render the CWL `outputSource` string for a workflow output.
+
+        Args:
+            step_id_overrides (Mapping[str, str] | None): Optional mapping from
+                user-facing step names to compiler-assigned concrete step ids.
+
+        Returns:
+            str: The serialized CWL `outputSource` value.
+        """
+        if self.step_id is None:
+            return self.source_name
+        resolved_step_id = step_id_overrides.get(self.step_id, self.step_id) if step_id_overrides else self.step_id
+        return f"{resolved_step_id}/{self.source_name}"
+
+
+@dataclass(slots=True)
+class ParameterStore(Generic[ParameterT]):
+    """Ordered name -> parameter mapping.
+
+    Python dicts preserve insertion order, so one mapping is enough to support
+    both explicit lookup and list-like indexing for the `.inputs[...]` style.
+    """
+
+    parameters: dict[str, ParameterT] = field(default_factory=dict)
+
+    def add(self, parameter: ParameterT, *, name: str | None = None) -> ParameterT:
+        self.parameters[name or getattr(parameter, "name")] = parameter
+        return parameter
+
+    def get(self, name: str) -> ParameterT:
+        return self.parameters[name]
+
+    def ensure(self, name: str, factory: Callable[[str], ParameterT]) -> ParameterT:
+        if name not in self.parameters:
+            self.parameters[name] = factory(name)
+        return self.parameters[name]
+
+    def __contains__(self, name: object) -> bool:
+        return name in self.parameters
+
+    def __iter__(self) -> Iterator[ParameterT]:
+        return iter(self.parameters.values())
+
+    def __len__(self) -> int:
+        return len(self.parameters)
+
+    def __getitem__(self, index: int) -> ParameterT:
+        return tuple(self.parameters.values())[index]
 
     def __repr__(self) -> str:
-        return f"ProcessInput(name={self.name!r}, inp_type={self.inp_type!r})"
+        return repr(tuple(self.parameters.values()))
+
+
+@dataclass(slots=True)
+class _ParameterBase:
+    """Shared state for named workflow/tool interface parameters."""
+
+    name: str
+    parameter_type: Any
+    parent_obj: Any = None
+    required: bool = field(init=False)
+    linked: bool = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        self.set_parameter_type(self.parameter_type)
+        self.name = normalize_parameter_name(self.name)
+
+    def set_parameter_type(self, value: Any) -> None:
+        """Normalize and assign a parameter type expression."""
+        self.parameter_type, self.required = normalize_parameter_type(value)
+
+    def cwl_type(self) -> Any:
+        """Return the CWL type expression including optionality."""
+        if self.parameter_type is None:
+            return None
+        if self.required:
+            return serialize_value(self.parameter_type)
+        match self.parameter_type:
+            case list() as options if "null" in options:
+                return serialize_value(options)
+            case list() as options:
+                return ["null", *serialize_value(options)]
+            case _:
+                return ["null", serialize_value(self.parameter_type)]
+
+
+@dataclass(slots=True)
+class InputParameter(_ParameterBase):
+    """Input parameter of a CWL `CommandLineTool` or `Workflow`."""
+
+    _binding: InputBinding | None = field(default=None, init=False, repr=False)
+    _bound_parameter_type: Any = field(default=None, init=False, repr=False)
 
     @property
     def value(self) -> Any:
-        """Compatibility view of the current binding."""
+        """Return the bound value in the legacy compatibility shape."""
         match self._binding:
             case None:
                 return None
@@ -63,31 +157,40 @@ class ProcessInput:
                 return {"wic_alias": serialize_value(alias)}
             case WorkflowBinding(name=name):
                 return name
-        return None
 
     def _set_value(self, value: Any, linked: bool = False) -> None:
-        """Compatibility helper used by older internal code paths."""
+        """Translate legacy serialized values into the internal binding model."""
         match value:
             case {"wic_alias": alias} if linked:
-                self._binding = AliasBinding(alias)
-                self.linked = True
-            case {"wic_inline_input": inline_value} if not linked:
-                self._binding = InlineBinding(inline_value)
-                self.linked = False
+                self._set_binding(AliasBinding(alias))
+            case {"wic_inline_input": inline_value}:
+                self._set_binding(InlineBinding(inline_value))
+                self.set_bound_parameter_type(infer_literal_parameter_type(inline_value))
             case str() as workflow_name if linked:
-                self._binding = WorkflowBinding(workflow_name)
-                self.linked = True
+                self._set_binding(WorkflowBinding(workflow_name))
             case _:
-                self._binding = InlineBinding(value)
+                self._set_binding(InlineBinding(value))
+                self.set_bound_parameter_type(infer_literal_parameter_type(value))
                 self.linked = linked
 
-    def _set_binding(self, binding: Optional[InputBinding]) -> None:
+    def _set_binding(self, binding: InputBinding | None) -> None:
         self._binding = binding
-        match binding:
-            case AliasBinding() | WorkflowBinding():
-                self.linked = True
+        self.linked = isinstance(binding, (AliasBinding, WorkflowBinding))
+
+    def set_bound_parameter_type(self, value: Any) -> None:
+        """Record the type of the bound value when it is known."""
+        normalized, _required = normalize_parameter_type(value)
+        self._bound_parameter_type = normalized
+
+    def is_scatterable(self) -> bool:
+        """Return whether the current binding can be scattered safely."""
+        match self._binding:
+            case InlineBinding(value=list() | tuple()):
+                return True
+            case None:
+                return False
             case _:
-                self.linked = False
+                return is_array_type(self._bound_parameter_type)
 
     def is_bound(self) -> bool:
         return self._binding is not None
@@ -102,36 +205,18 @@ class ProcessInput:
                 return {"wic_alias": serialize_value(alias)}
             case WorkflowBinding(name=name):
                 return name
-        return None
 
 
-class ProcessOutput:
-    """Output of a CWL CommandLineTool or Workflow."""
+@dataclass(slots=True)
+class OutputParameter(_ParameterBase):
+    """Output parameter of a CWL `CommandLineTool` or `Workflow`."""
 
-    out_type: Any
-    name: str
-    parent_obj: Any
-    required: bool
-    linked: bool
-    _anchor_name: Optional[str]
-
-    def __init__(self, name: str, out_type: Any, parent_obj: Any = None) -> None:
-        normalized_type, required = normalize_port_type(out_type)
-        self.out_type = normalized_type
-        self.name = normalize_port_name(name)
-        self.parent_obj = parent_obj
-        self.required = required
-        self.linked = False
-        self._anchor_name = None
-
-    def __repr__(self) -> str:
-        return f"ProcessOutput(name={self.name!r}, out_type={self.out_type!r})"
+    _anchor_name: str | None = field(default=None, init=False, repr=False)
+    _source: OutputSourceBinding | None = field(default=None, init=False, repr=False)
 
     @property
     def value(self) -> Any:
-        if self._anchor_name is None:
-            return None
-        return {"wic_anchor": self._anchor_name}
+        return None if self._anchor_name is None else {"wic_anchor": self._anchor_name}
 
     def ensure_anchor(self, suggested_name: str) -> str:
         if self._anchor_name is None:
@@ -139,140 +224,105 @@ class ProcessOutput:
         self.linked = True
         return self._anchor_name
 
+    def bind_source(self, source: OutputSourceBinding) -> None:
+        self._source = source
+        self.linked = True
+
+    def has_source(self) -> bool:
+        return self._source is not None
+
+    def to_workflow_output(
+        self,
+        *,
+        step_id_overrides: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Serialize this workflow output parameter to CWL.
+
+        Args:
+            step_id_overrides (Mapping[str, str] | None): Optional mapping from
+                user-facing step names to compiler-assigned concrete step ids.
+
+        Raises:
+            ValueError: If the output has no source or no resolved type.
+
+        Returns:
+            dict[str, Any]: Serialized CWL workflow output definition.
+        """
+        if self._source is None:
+            raise ValueError(f"workflow output {self.name!r} has no source binding")
+        cwl_type = self.cwl_type()
+        if cwl_type is None:
+            raise ValueError(f"workflow output {self.name!r} has no resolved type")
+        return {
+            "type": cwl_type,
+            "outputSource": self._source.to_output_source(step_id_overrides),
+        }
+
     def _set_value(self, value: Any, linked: bool = False) -> None:
         match value:
             case {"wic_anchor": anchor_name}:
                 self._anchor_name = str(anchor_name)
             case str() as anchor_name:
-                self._anchor_name = anchor_name
+                self._anchor_name = str(anchor_name)
             case None:
                 self._anchor_name = None
         self.linked = linked or self._anchor_name is not None
 
 
+@dataclass(frozen=True, slots=True)
 class WorkflowInputReference:
-    """A symbolic reference to a workflow input variable."""
+    """Symbolic reference to a workflow input variable."""
 
     workflow: Workflow
     name: str
-
-    def __init__(self, workflow: Workflow, name: str) -> None:
-        self.workflow = workflow
-        self.name = name
-
-    def __repr__(self) -> str:
-        return f"WorkflowInputReference(workflow={self.workflow.process_name!r}, name={self.name!r})"
+    implicit: bool = False
 
 
-class StepInputs:
-    """List-like view of a Step's inputs with explicit named access."""
+class ParameterNamespace(Generic[ParameterT, ViewT]):
+    """List-like attribute namespace for input and output parameters.
 
-    _step: Step
+    The "magic" lives here: `step.inputs.foo`, `workflow.inputs.foo`, and
+    `step.outputs.bar` all route through the same tiny proxy instead of four
+    near-duplicate wrapper classes.
+    """
 
-    def __init__(self, step: Step) -> None:
-        object.__setattr__(self, "_step", step)
+    _store: ParameterStore[ParameterT]
+    _getter: Callable[[str], ViewT]
+    _setter: Callable[[str, Any], None] | None
+    _read_only_error: str
 
-    def __iter__(self) -> Iterator[ProcessInput]:
-        return iter(self._step._inputs)
+    def __init__(
+        self,
+        store: ParameterStore[ParameterT],
+        getter: Callable[[str], ViewT],
+        setter: Callable[[str, Any], None] | None,
+        *,
+        read_only_error: str,
+    ) -> None:
+        object.__setattr__(self, "_store", store)
+        object.__setattr__(self, "_getter", getter)
+        object.__setattr__(self, "_setter", setter)
+        object.__setattr__(self, "_read_only_error", read_only_error)
+
+    def __iter__(self) -> Iterator[ParameterT]:
+        return iter(self._store)
 
     def __len__(self) -> int:
-        return len(self._step._inputs)
+        return len(self._store)
 
-    def __getitem__(self, index: int) -> ProcessInput:
-        return self._step._inputs[index]
+    def __getitem__(self, index: int) -> ParameterT:
+        return self._store[index]
 
-    def __getattr__(self, name: str) -> ProcessInput:
-        return self._step.get_inp_attr(name)
+    def __getattr__(self, name: str) -> ViewT:
+        return self._getter(name)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        if name == "_step":
+        if name.startswith("_"):
             object.__setattr__(self, name, value)
             return
-        self._step.bind_input(name, value)
+        if self._setter is None:
+            raise AttributeError(self._read_only_error.format(name=name))
+        self._setter(name, value)
 
     def __repr__(self) -> str:
-        return repr(self._step._inputs)
-
-
-class StepOutputs:
-    """List-like view of a Step's outputs with explicit named access."""
-
-    _step: Step
-
-    def __init__(self, step: Step) -> None:
-        object.__setattr__(self, "_step", step)
-
-    def __iter__(self) -> Iterator[ProcessOutput]:
-        return iter(self._step._outputs)
-
-    def __len__(self) -> int:
-        return len(self._step._outputs)
-
-    def __getitem__(self, index: int) -> ProcessOutput:
-        return self._step._outputs[index]
-
-    def __getattr__(self, name: str) -> ProcessOutput:
-        return self._step.get_output(name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        raise AttributeError(f"Step outputs are read-only; cannot set {name!r}")
-
-    def __repr__(self) -> str:
-        return repr(self._step._outputs)
-
-
-class WorkflowInputs:
-    """List-like view of a Workflow's inputs with explicit named access."""
-
-    _workflow: Workflow
-
-    def __init__(self, workflow: Workflow) -> None:
-        object.__setattr__(self, "_workflow", workflow)
-
-    def __iter__(self) -> Iterator[ProcessInput]:
-        return iter(self._workflow._inputs)
-
-    def __len__(self) -> int:
-        return len(self._workflow._inputs)
-
-    def __getitem__(self, index: int) -> ProcessInput:
-        return self._workflow._inputs[index]
-
-    def __getattr__(self, name: str) -> WorkflowInputReference:
-        return self._workflow._ensure_input_reference(name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name == "_workflow":
-            object.__setattr__(self, name, value)
-            return
-        self._workflow.bind_input(name, value)
-
-    def __repr__(self) -> str:
-        return repr(self._workflow._inputs)
-
-
-class WorkflowOutputs:
-    """List-like view of a Workflow's declared outputs."""
-
-    _workflow: Workflow
-
-    def __init__(self, workflow: Workflow) -> None:
-        object.__setattr__(self, "_workflow", workflow)
-
-    def __iter__(self) -> Iterator[ProcessOutput]:
-        return iter(self._workflow._outputs)
-
-    def __len__(self) -> int:
-        return len(self._workflow._outputs)
-
-    def __getitem__(self, index: int) -> ProcessOutput:
-        return self._workflow._outputs[index]
-
-    def __getattr__(self, name: str) -> ProcessOutput:
-        return self._workflow.add_output(name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        raise AttributeError(f"Workflow outputs are read-only; cannot set {name!r}")
-
-    def __repr__(self) -> str:
-        return repr(self._workflow._outputs)
+        return repr(self._store)

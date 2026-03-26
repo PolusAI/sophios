@@ -148,7 +148,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
     yaml_path = step_id.stem
     # We also want another copy of the original AST so that if we need to modify it,
     # we can return the modified AST to the call site and re-compile.
-    (yaml_path_orig, yaml_tree_orig) = copy.deepcopy(yaml_tree_ast)
+    (_, yaml_tree_orig) = copy.deepcopy(yaml_tree_ast)
 
     if not testing:
         print(' starting compilation of', ('  ' * len(namespaces)) + yaml_path)
@@ -162,7 +162,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
     yaml_stem = Path(yaml_path).stem
 
-    (back_name_, yaml_tree) = utils.extract_implementation(yaml_tree, wic['wic'], Path(yaml_path))
+    (_, yaml_tree) = utils.extract_implementation(yaml_tree, wic['wic'], Path(yaml_path))
     steps: List[Yaml] = yaml_tree['steps']
 
     steps_keys = utils.get_steps_keys(steps)

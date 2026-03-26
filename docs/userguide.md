@@ -82,6 +82,10 @@ Note that this is one key difference between sophios and CWL. In CWL, all inputs
 In addition to YAML based language for building workflows Sophios also provides a Python API. The aspirational goal of this API is to be close to regular
 usage of Python. This API leverages YAML based syntax by transforming the Python workflow internally into a regular Sophios YAML workflow. All the Python API examples discussed here can be found in directory [`examples/scripts`](https://github.com/PolusAI/workflow-inference-compiler/tree/master/examples/scripts) in the Sophios repository.
 
+Sophios also provides a separate Python API for authoring a single CWL `CommandLineTool` directly, without going through the workflow DSL. If you want to generate CLTs from Python and validate the result with `cwltool` and schema-salad, see {doc}`Building a CWL CommandLineTool in Python <cwl_builder_sam3>`.
+
+If you want to build a CLT in Python and then compose it directly into a `Workflow` without writing an intermediate `.cwl` file, see {doc}`Using cwl_builder and the Workflow Python API Together <cwl_builder_workflow>`.
+
 ### basics
 Let us take the most basic workflow *`hello world`*. This is how we write it in YAML syntax.
 

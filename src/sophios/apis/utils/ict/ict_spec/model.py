@@ -35,19 +35,6 @@ class ICT(Metadata):
             ui_keys = [ui.key.root.split(".") for ui in self.ui]
             for ui_ in ui_keys:
                 io_dict[ui_[0]].append(ui_[1])
-            input_names = [io.name for io in self.inputs]
-            output_names = [io.name for io in self.outputs]
-            inp_bool = [x in input_names for x in io_dict["inputs"]]
-            out_bool = [x in output_names for x in io_dict["outputs"]]
-
-            # if not all(inp_bool):
-            #     raise ValueError(
-            #         f"The ui keys must match the inputs and outputs keys. Unmatched: inputs.{set(io_dict['inputs'])-set(input_names)}"
-            #     )
-            # if not all(out_bool):
-            #     raise ValueError(
-            #         f"The ui keys must match the inputs and outputs keys. Unmatched: outputs.{set(io_dict['outputs'])-set(output_names)}"
-            #     )
 
         return self
 

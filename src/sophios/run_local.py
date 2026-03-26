@@ -5,12 +5,13 @@ import sys
 import os
 import re
 import stat
+from contextlib import contextmanager
 from pathlib import Path
 from pprint import pprint
 import shutil
 import traceback
 from datetime import datetime
-from typing import List, Optional, Dict
+from typing import Iterator, List, Optional, Dict
 import requests
 from sophios.wic_types import Json
 
@@ -73,6 +74,29 @@ def create_safe_env(user_env: Dict[str, str]) -> dict:
     """Generate a sanitized environment dict without applying it"""
     sanitized_user_env = sanitize_env_vars(user_env)
     return {**os.environ, **sanitized_user_env}
+
+
+@contextmanager
+def temporary_env(user_env: Dict[str, str]) -> Iterator[dict[str, str]]:
+    """Temporarily apply sanitized environment variables and restore them after use.
+
+    Args:
+        user_env (Dict[str, str]): User-defined environment variables.
+
+    Yields:
+        dict: The sanitized environment mapping applied for the duration of the context.
+    """
+    sanitized_user_env = sanitize_env_vars(user_env)
+    previous_values = {key: os.environ.get(key) for key in sanitized_user_env}
+    os.environ.update(sanitized_user_env)
+    try:
+        yield {**os.environ}
+    finally:
+        for key, previous_value in previous_values.items():
+            if previous_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous_value
 
 
 def generate_run_script(cmdline: str) -> None:
@@ -157,7 +181,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
 
 def run_local(run_args_dict: Dict[str, str], use_subprocess: bool,
               passthrough_args: List[str], workflow_name: str,
-              basepath: str) -> Optional[int]:
+              basepath: str, user_env_vars: Optional[Dict[str, str]] = None) -> Optional[int]:
     """This function runs the compiled workflow locally.
 
     Args:
@@ -165,20 +189,22 @@ def run_local(run_args_dict: Dict[str, str], use_subprocess: bool,
         use_subprocess (bool): When using cwltool, determines whether to use subprocess.run(...)
         or use the cwltool python api.
         basepath (str): The path at which the workflow to be executed
+        user_env_vars (Optional[Dict[str, str]]): User supplied environment variables.
 
     Returns:
         retval (Optional[int]): The return value indicating if run succeeded (0) or not
     """
     retval = 1  # overwrite if successful
 
-    container_engine = run_args_dict['container_engine']
     yaml_path = Path(basepath) / workflow_name
     cwl_runner = run_args_dict['cwl_runner']
     cachedir = run_args_dict.get('cachedir', 'cachedir')  # 'cachedir' is the default value
+    container_engine = run_args_dict['container_engine']
 
     # build the runner command
     cmd = build_cmd(workflow_name, basepath, cwl_runner, container_engine, passthrough_args)
     cmdline = ' '.join(cmd)
+    exec_env = create_safe_env(user_env_vars or {})
 
     if run_args_dict.get('generate_run_script', 'no') == 'yes':
         generate_run_script(cmdline)
@@ -189,22 +215,23 @@ def run_local(run_args_dict: Dict[str, str], use_subprocess: bool,
         # To run in parallel (i.e. pytest ... --workers 8 ...), we need to
         # use separate processes. Otherwise:
         # "signal only works in main thread or with __pypy__.thread.enable_signals()"
-        proc = sub.run(cmd, check=False)
+        proc = sub.run(cmd, check=False, env=exec_env)
         retval = proc.returncode
         return retval  # Skip copying files to outdir/ for CI
     else:
         try:
-            if cwl_runner == 'cwltool':
-                print('via cwltool.main.main python API')
-                retval = cwltool.main.main(cmd[1:])
-                print(f'Final output json metadata blob is in output_{workflow_name}.json')
-                if run_args_dict.get('copy_output_files', 'no') == 'yes':
-                    copy_output_files(workflow_name)
-            elif cwl_runner == 'toil-cwl-runner':
-                print('via toil.cwl.cwltoil.main python API')
-                retval = toil.cwl.cwltoil.main(cmd[1:])
-            else:
-                raise ValueError('unsupported cwl_runner')
+            with temporary_env(user_env_vars or {}):
+                if cwl_runner == 'cwltool':
+                    print('via cwltool.main.main python API')
+                    retval = cwltool.main.main(cmd[1:])
+                    print(f'Final output json metadata blob is in output_{workflow_name}.json')
+                    if run_args_dict.get('copy_output_files', 'no') == 'yes':
+                        copy_output_files(workflow_name)
+                elif cwl_runner == 'toil-cwl-runner':
+                    print('via toil.cwl.cwltoil.main python API')
+                    retval = toil.cwl.cwltoil.main(cmd[1:])
+                else:
+                    raise ValueError('unsupported cwl_runner')
 
         except Exception as e:
             retval = 1
@@ -248,9 +275,6 @@ def run_compute(workflow_name: str, workflow: Json, workflow_inputs: Json,
     Returns:
         retval (Optional[int]): The return value indicating if run succeeded (0) or not
     """
-    # update the environment with user supplied env args
-    os.environ.update(sanitize_env_vars(user_env_vars))
-
     connect_timeout = 5  # in seconds
     read_timeout = 30  # in seconds
     timeout_tuple = (connect_timeout, read_timeout)
@@ -271,13 +295,14 @@ def run_compute(workflow_name: str, workflow: Json, workflow_inputs: Json,
         print("Ill-formed URL string detected! Please provide a valid URL")
         return 1
 
-    print('Sending request to Compute')
-    res = requests.post(submit_url, json=compute_workflow, timeout=timeout_tuple)
-    print('Post response code: ' + str(res.status_code))
+    with temporary_env(user_env_vars):
+        print('Sending request to Compute')
+        res = requests.post(submit_url, json=compute_workflow, timeout=timeout_tuple)
+        print('Post response code: ' + str(res.status_code))
 
-    res = requests.get(submit_url + f'{jobid}/outputs/', timeout=timeout_tuple)
-    print('Output response code: ' + str(res.status_code))
-    retval = 0 if res.status_code == 200 else 1
+        res = requests.get(submit_url + f'{jobid}/outputs/', timeout=timeout_tuple)
+        print('Output response code: ' + str(res.status_code))
+        retval = 0 if res.status_code == 200 else 1
     print('Toil output: ' + str(res.text))
 
     res = requests.get(submit_url + f'{jobid}/logs/', timeout=timeout_tuple)

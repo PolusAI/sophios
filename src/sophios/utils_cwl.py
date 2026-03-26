@@ -207,14 +207,12 @@ def get_workflow_outputs(graph_settings: Dict[str, Any],
     # Note that this error is not detected using --validate.
     # One workaround is to simply output all files.
     # TODO: glob "." is still returning null; need to use InitialWorkDirRequirement??
-    output_all = {'output_all':
-                  {'type':
-                   {'type': 'array',
-                    'items': ['Directory', 'File']},
-                   'outputBinding': {'glob': '\".\"'},
-                   'format': 'edam:format_2330'}}  # 'Textual format'
     # This crashes toil-cwl-runner, but not cwltool.
-    # workflow_outputs.update(output_all) # type: ignore
+    # workflow_outputs['output_all'] = {
+    #     'type': {'type': 'array', 'items': ['Directory', 'File']},
+    #     'outputBinding': {'glob': '\".\"'},
+    #     'format': 'edam:format_2330',
+    # }
     return workflow_outputs
 
 

@@ -90,7 +90,6 @@ def read_ast_from_disk(homedir: str,
 
             paths_ns_i = yml_paths.get(plugin_ns, {})
             if paths_ns_i == {}:
-                wicdir = Path(homedir) / 'wic'
                 raise Exception(
                     f"Error! namespace {plugin_ns} not found in yaml paths. Check 'search_paths_wic' in your config file")
             if stem not in paths_ns_i:
@@ -108,8 +107,8 @@ def read_ast_from_disk(homedir: str,
                 sub_yaml_tree_raw: Yaml = yaml.load(y.read(), Loader=wic_loader())
 
             y_t = YamlTree(StepId(step_key, plugin_ns), sub_yaml_tree_raw)
-            (step_id_, sub_yml_tree) = read_ast_from_disk(homedir, y_t, yml_paths, tools, validator,
-                                                          ignore_validation_errors)
+            (_, sub_yml_tree) = read_ast_from_disk(homedir, y_t, yml_paths, tools, validator,
+                                                   ignore_validation_errors)
 
             steps_i_copy = {**steps[i]}
             step_i_id = steps[i]['id']
@@ -171,7 +170,7 @@ def merge_yml_trees(yaml_tree_tuple: YamlTree,
             sub_wic = wic_steps.get(f'({i+1}, {step_key})', {})
 
             y_t = YamlTree(StepId(step_key, step_id.plugin_ns), sub_yml_tree_initial)
-            (step_key_, sub_yml_tree) = merge_yml_trees(y_t, sub_wic, tools)
+            (_, sub_yml_tree) = merge_yml_trees(y_t, sub_wic, tools)
             # Now mutably overwrite the self args with the merged args
             steps[i]['subtree'] = sub_yml_tree
 
@@ -234,7 +233,7 @@ def tree_to_forest(yaml_tree_tuple: YamlTree, tools: Tools) -> YamlForest:
 
             sub_yaml_tree = steps[i]['subtree']
             sub_yml_forest = tree_to_forest(YamlTree(StepId(step_key, plugin_ns_i), sub_yaml_tree), tools)
-            (sub_yml_tree_step_id, sub_yml_tree_) = sub_yml_forest.yaml_tree
+            sub_yml_tree_step_id, _sub_yml_tree = sub_yml_forest.yaml_tree
             yaml_forest_list.append((sub_yml_tree_step_id, sub_yml_forest))
 
     return YamlForest(YamlTree(step_id, yaml_tree), yaml_forest_list)
@@ -274,7 +273,7 @@ def python_script_generate_cwl(yaml_tree_tuple: YamlTree,
         if step_key in subkeys:
             sub_yml_tree_initial = steps[i]['subtree']
             y_t = YamlTree(StepId(step_key, step_id.plugin_ns), sub_yml_tree_initial)
-            (step_key_, sub_yml_tree) = python_script_generate_cwl(y_t, root_yml_dir_abs, tools)
+            (_, sub_yml_tree) = python_script_generate_cwl(y_t, root_yml_dir_abs, tools)
             steps[i]['subtree'] = sub_yml_tree
 
         if step_key not in subkeys:

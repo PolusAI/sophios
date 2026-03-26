@@ -1,68 +1,30 @@
-"""Python workflow API exports."""
+"""Python workflow and CWL builder API exports."""
 
-from .api import (
-    InvalidCLTError,
-    InvalidInputValueError,
-    InvalidLinkError,
-    InvalidStepError,
-    MissingRequiredValueError,
-    ProcessInput,
-    ProcessOutput,
-    Step,
-    Workflow,
-    WorkflowInputReference,
-    extract_tools_paths_NONPORTABLE,
-    global_config,
-    set_input_Step_Workflow,
-)
-from .cwl_builder import (
-    CWLBuilderValidationError,
-    CommandArgument,
-    CommandInput,
-    CommandLineBinding,
-    CommandLineToolBuilder,
-    CommandOutput,
-    CommandOutputBinding,
-    Dirent,
-    DockerRequirement,
-    EnvironmentDef,
-    EnvVarRequirement,
-    Field,
-    FieldSpec,
-    InitialWorkDirRequirement,
-    Input,
-    InputSpec,
-    InlineJavascriptRequirement,
-    InplaceUpdateRequirement,
-    LoadListingRequirement,
-    NetworkAccess,
-    Output,
-    OutputSpec,
-    ResourceRequirement,
-    SchemaDefRequirement,
-    SecondaryFile,
-    ShellCommandRequirement,
-    SoftwarePackage,
-    SoftwareRequirement,
-    ToolTimeLimit,
-    Type,
-    ValidationResult,
-    WorkReuse,
-    array_type,
-    enum_type,
-    record_field,
-    record_type,
-    secondary_file,
-    validate_cwl_document,
-)
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
 
-__all__ = [
+
+_API_EXPORTS = {
+    "InvalidLinkError",
+    "InvalidStepError",
+    "MissingRequiredValueError",
+    "Step",
+    "Workflow",
+}
+
+_ERROR_EXPORTS = {
+    "InvalidCLTError",
+    "InvalidInputValueError",
+    "InvalidLinkError",
+    "InvalidStepError",
+    "MissingRequiredValueError",
+}
+
+_CWL_BUILDER_EXPORTS = {
     "CWLBuilderValidationError",
     "CommandArgument",
-    "CommandInput",
     "CommandLineBinding",
-    "CommandLineToolBuilder",
-    "CommandOutput",
+    "CommandLineTool",
     "CommandOutputBinding",
     "Dirent",
     "DockerRequirement",
@@ -70,42 +32,106 @@ __all__ = [
     "EnvVarRequirement",
     "Field",
     "FieldSpec",
-    "InvalidCLTError",
-    "InvalidInputValueError",
-    "InvalidLinkError",
-    "InvalidStepError",
     "InitialWorkDirRequirement",
-    "Input",
-    "InputSpec",
     "InlineJavascriptRequirement",
     "InplaceUpdateRequirement",
+    "Input",
+    "InputSpec",
+    "Inputs",
     "LoadListingRequirement",
-    "MissingRequiredValueError",
     "NetworkAccess",
     "Output",
     "OutputSpec",
-    "ProcessInput",
-    "ProcessOutput",
+    "Outputs",
     "ResourceRequirement",
     "SchemaDefRequirement",
     "SecondaryFile",
     "ShellCommandRequirement",
     "SoftwarePackage",
     "SoftwareRequirement",
-    "Step",
     "ToolTimeLimit",
-    "Type",
-    "Workflow",
-    "WorkflowInputReference",
+    "ValidationResult",
     "WorkReuse",
     "array_type",
+    "cwl",
     "enum_type",
-    "extract_tools_paths_NONPORTABLE",
-    "global_config",
     "record_field",
     "record_type",
     "secondary_file",
-    "set_input_Step_Workflow",
-    "ValidationResult",
+    "step_from_command_line_tool",
     "validate_cwl_document",
-]
+}
+
+__all__ = sorted(_API_EXPORTS | _ERROR_EXPORTS | _CWL_BUILDER_EXPORTS)
+
+
+if TYPE_CHECKING:
+    from ._errors import (
+        InvalidCLTError,
+        InvalidInputValueError,
+        InvalidLinkError,
+        InvalidStepError,
+        MissingRequiredValueError,
+    )
+    from .api import (
+        Step,
+        Workflow,
+    )
+    from .cwl_builder import (
+        CWLBuilderValidationError,
+        CommandArgument,
+        CommandLineBinding,
+        CommandLineTool,
+        CommandOutputBinding,
+        Dirent,
+        DockerRequirement,
+        EnvironmentDef,
+        EnvVarRequirement,
+        Field,
+        FieldSpec,
+        InitialWorkDirRequirement,
+        InlineJavascriptRequirement,
+        InplaceUpdateRequirement,
+        Input,
+        InputSpec,
+        Inputs,
+        LoadListingRequirement,
+        NetworkAccess,
+        Output,
+        OutputSpec,
+        Outputs,
+        ResourceRequirement,
+        SchemaDefRequirement,
+        SecondaryFile,
+        ShellCommandRequirement,
+        SoftwarePackage,
+        SoftwareRequirement,
+        ToolTimeLimit,
+        ValidationResult,
+        WorkReuse,
+        array_type,
+        cwl,
+        enum_type,
+        record_field,
+        record_type,
+        secondary_file,
+        step_from_command_line_tool,
+        validate_cwl_document,
+    )
+
+
+def __getattr__(name: str) -> Any:
+    if name in _ERROR_EXPORTS:
+        module = import_module("._errors", __name__)
+        return getattr(module, name)
+    if name in _API_EXPORTS:
+        module = import_module(".api", __name__)
+        return getattr(module, name)
+    if name in _CWL_BUILDER_EXPORTS:
+        module = import_module(".cwl_builder", __name__)
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

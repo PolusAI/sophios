@@ -64,9 +64,9 @@ class TestFuzzyCompile(unittest.TestCase):
         compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation()
 
         try:
-            compiler_info = sophios.compiler.compile_workflow(yaml_tree, compiler_options, graph_settings,
-                                                              yaml_tag_paths, [], [graph], {}, {}, {}, {},
-                                                              tools_cwl, True, relative_run_path=True, testing=True)
+            sophios.compiler.compile_workflow(yaml_tree, compiler_options, graph_settings,
+                                              yaml_tag_paths, [], [graph], {}, {}, {}, {},
+                                              tools_cwl, True, relative_run_path=True, testing=True)
         except Exception as e:
             multi_def_str = 'Error! Multiple definitions of &'
             unbound_lit_var = 'Error! Unbound literal variable ~'
