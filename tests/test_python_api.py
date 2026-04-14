@@ -192,6 +192,16 @@ def test_falsey_inline_values_are_preserved() -> None:
 
 
 @pytest.mark.fast
+def test_step_merge_helpers_preserve_single_step_shape() -> None:
+    step_with_input = utils_cwl.add_yamldict_keyval_in({}, "demo", {
+                                                       "file": "x"})
+    step_with_output = utils_cwl.add_yamldict_keyval_out({}, "demo", ["out"])
+
+    assert step_with_input == {"id": "demo", "in": {"file": "x"}}
+    assert step_with_output == {"id": "demo", "out": ["out"]}
+
+
+@pytest.mark.fast
 def test_subworkflow_inputs_use_child_workflow_name_and_formal_parameters() -> None:
     touch = Step(_adapter("touch"))
     touch.inputs.filename = "empty.txt"

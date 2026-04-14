@@ -109,6 +109,10 @@ def add_yamldict_keyval_in(steps_i: Yaml, step_key: str, keyval: Yaml) -> Yaml:
     Returns:
         Yaml: The first Yaml dict with the second Yaml dict merged into it.
     """
+    # Compiler and inference call sites pass a single step dictionary here.
+    # If that step dict is temporarily empty, preserve the single-step shape by
+    # synthesizing an explicit `id` instead of the legacy `{step_key: {...}}`
+    # mapping form.
     # TODO: Check whether we can just use deepmerge.merge()
     if steps_i:
         if 'in' in steps_i:
@@ -120,7 +124,7 @@ def add_yamldict_keyval_in(steps_i: Yaml, step_key: str, keyval: Yaml) -> Yaml:
             new_keyvals = dict(list(steps_i.items()) + [('in', new_keys)])
         steps_i.update(new_keyvals)
     else:
-        steps_i = {step_key: {'in': keyval}}
+        steps_i = {'id': step_key, 'in': keyval}
     return steps_i
 
 
@@ -135,6 +139,8 @@ def add_yamldict_keyval_out(steps_i: Yaml, step_key: str, strs: List[str]) -> Ya
     Returns:
         Yaml: The first Yaml dict with the second Yaml dict merged into it.
     """
+    # See add_yamldict_keyval_in(): keep the returned value in single-step form
+    # even when `steps_i` is empty.
     # TODO: Check whether we can just use deepmerge.merge()
     if steps_i:
         if 'out' in steps_i:
@@ -146,7 +152,7 @@ def add_yamldict_keyval_out(steps_i: Yaml, step_key: str, strs: List[str]) -> Ya
             new_keyvals = dict(list(steps_i.items()) + [('out', strs)])
         steps_i.update(new_keyvals)
     else:
-        steps_i = {step_key: {'out': strs}}
+        steps_i = {'id': step_key, 'out': strs}
     return steps_i
 
 
