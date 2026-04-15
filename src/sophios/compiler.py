@@ -508,6 +508,10 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
             # Replace it here with a new variable name
             arg_val = steps[i]['in'][arg_key]
 
+            if arg_key not in in_tool:
+                raise Exception(
+                    f"Error! Provided input {arg_key} not found in interface of step {step_key}.")
+
             # Convert native YAML to a JSON-encoded string for specific tags.
             tags = ['config']
             if arg_key in tags and isinstance(arg_val, Dict) and ('wic_inline_input' in arg_val):

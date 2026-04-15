@@ -44,7 +44,8 @@ class TestFuzzyCompile(unittest.TestCase):
             # we need to supply a fake --yaml. Using [0] works because we are
             # using k=1 in wic_main_schema.
             yml_path_stem = Path(subkeys[0]).stem
-            yml_path = yml_paths[plugin_ns][yml_path_stem]
+            if yml_path_stem in yml_paths.get(plugin_ns, {}):
+                yml_path = yml_paths[plugin_ns][yml_path_stem]
 
         args = sophios.cli.get_args(str(yml_path))
 
@@ -84,6 +85,7 @@ class TestFuzzyCompile(unittest.TestCase):
                 'Error! There should only be one non-empty string anchor per out: list entry!',
                 'Error! Each out: list entry should be a string or a single-key dictionary.',
                 'Error! Each out: list entry should resolve to a string output name before workflow compilation.',
+                'Error! Provided input ',
                 "Error! Neither ",
                 'Error! No implementations and/or steps in ',
                 'Error! workflows must define at least one step.',
