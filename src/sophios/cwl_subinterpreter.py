@@ -145,7 +145,7 @@ def rerun_cwltool(homedir: str, _directory_realtime: Path, cachedir_path: Path, 
         # proc = sub.run(self.cmd, cwd=working_dir)
         # cmd = self.cmd
         print('Running', cmd)
-        proc = sub.run(cmd, cwd=working_dir, check=False)  # See below!
+        sub.run(cmd, cwd=working_dir, check=False)  # See below!
         print('inner cwltool completed')
         # Don't check the return code because the file may not exist yet, or
         # because speculative execution may fail for any number of reasons.

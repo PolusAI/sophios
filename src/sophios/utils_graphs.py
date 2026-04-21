@@ -175,7 +175,7 @@ def make_plugins_dag(tools: Tools, graph_dark_theme: bool) -> None:
         font_edge_color = 'black' if graph_dark_theme else 'white'
         graph.attr(fontcolor=font_edge_color)
         for tool in list(tools)[i*num_tools_half:(i+1)*num_tools_half]:
-            (tool_path, tool_cwl) = tools[tool]
+            tool_path, _tool_cwl = tools[tool]
             attrs = {'shape': 'box', 'style': 'rounded, filled'}
             graph.node(Path(tool_path).stem, fillcolor='lightblue', fontsize="24", width='0.75', **attrs)
         # NOTE: Since there are no edges in this DAG and thus no edge constraints,
@@ -205,7 +205,7 @@ def add_subgraphs(graph_settings: Dict[str, Any],
     # Add the cluster subgraphs to the main graph, but we need to add them in
     # reverse order to trick the graphviz layout algorithm.
     for sibling in sibling_subgraphs[::-1]:  # Reverse!
-        (sib_graph_gv, sib_graph_nx, sib_graphdata) = sibling
+        sib_graph_gv, sib_graph_nx, _sib_graphdata = sibling
         if len(namespaces) < graph_settings['graph_inline_depth']:
             graph_gv.subgraph(sib_graph_gv)
         graph_nx.add_nodes_from(sib_graph_nx.nodes)

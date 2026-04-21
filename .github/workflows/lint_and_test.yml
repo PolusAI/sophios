@@ -148,13 +148,13 @@ jobs:
           python-version: "3.11.*"
 
       - name: ShellCheck Script Quality
-        if: always()
+        if: runner.os == 'Linux'
         # "SC1017 (error): Literal carriage return. Run script through tr -d '\r' ."
         run: shellcheck -e SC1017 $(find sophios/ -name "*.sh" -and -not -path "./3/*")
 
       - name: Install Sophios
         if: always()
-        run: cd sophios/ && pip install ".[all_except_runner_src]"
+        run: cd sophios/ && pip install -e ".[all_except_runner_src]"
 
       - name: Update Sophios Config
         if: always()
@@ -167,33 +167,33 @@ jobs:
         # NOTE: Use ".[test]" instead of ".[all_except_runner_src]"
         # We do not want or need to install the workflow_deps extra.
         # (Many of the packages conflict with pypy.)
-        run: cd mm-workflows/ && pip install ".[test]" && mm-workflows --generate_schemas
+        run: cd mm-workflows/ && pip install -e ".[test]" && mm-workflows --generate_schemas
 
       # Do the static analysis, type and style check first
       - name: MyPy Check Type Annotations
-        if: always()
+        if: runner.os == 'Linux'
         run: cd sophios/ && mypy src/ examples/ tests/
         # NOTE: Do not use `mypy .` because then mypy will check both src/ and build/ causing:
         # src/sophios/__init__.py: error: Duplicate module named "wic"
         # (also at "./build/lib/sophios/__init__.py")
 
       - name: PyLint Check Code Quality
-        if: always()
+        if: runner.os == 'Linux'
         run: cd sophios/ && pylint src/ examples/**/*.py tests/
         # NOTE: See fail-under threshold in .pylintrc
 
       - name: PEP8 Code Formatting
-        if: always()
+        if: runner.os == 'Linux'
         id: autopep8
         run: cd sophios/ && autopep8 --exit-code --recursive --diff --max-line-length 120 examples/ src/ tests/
       - name: Fail if autopep8 made changes
-        if: steps.autopep8.outputs.exit-code == 2
+        if: runner.os == 'Linux' && steps.autopep8.outputs.exit-code == 2
         run: exit 1
 
 
       - name: Generate Sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd sophios/ && pytest -k test_compile_python_workflows
+        run: cd sophios/ && pytest tests/test_python_api.py -k test_compile_python_workflows
 
       - name: Generate Sophios Validation Jsonschema
         if: always()
@@ -204,10 +204,10 @@ jobs:
         # Sophios Python API workflows as well as the Sophios Python API itself.
       - name: Validate sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd sophios/ && pytest -k test_compile_python_workflows
+        run: cd sophios/ && pytest tests/test_python_api.py -k test_validate_generated_python_workflows
 
       - name: Build Documentation
-        if: always()
+        if: runner.os == 'Linux'
         run: cd sophios/docs && make html
 
   # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252

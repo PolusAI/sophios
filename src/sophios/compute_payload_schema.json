@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://polusai.github.io/compute/compute-slurm/workflow-request.schema.json",
+  "title": "Slurm Driver Workflow Request",
+  "description": "Payload accepted by the compute-slurm create-workflow endpoint. The service requires cwlWorkflow, cwlJobInputs, and jobs. The CWL objects are passed through to cwl-docker-extract and toil-cwl-runner, so this schema intentionally treats them as opaque objects.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "cwlWorkflow",
+    "cwlJobInputs",
+    "jobs"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Optional workflow identifier. If omitted, the driver attempts to read the id from cwlWorkflow.id."
+    },
+    "cwlWorkflow": {
+      "type": "object",
+      "description": "A standards-compliant CWL Workflow document, including any supported extensions.",
+      "additionalProperties": true
+    },
+    "cwlJobInputs": {
+      "type": "object",
+      "description": "CWL job inputs/yaml_inputs payload passed through to the workflow runner.",
+      "additionalProperties": true
+    },
+    "computeConfig": {
+      "type": "object",
+      "description": "Optional compute service configuration grouped by concern.",
+      "additionalProperties": false,
+      "properties": {
+        "toilConfig": {
+          "type": "object",
+          "description": "Toil runner configuration applied to the outer toil-cwl-runner command.",
+          "additionalProperties": false,
+          "default": {},
+          "properties": {
+            "logLevel": {
+              "type": "string",
+              "description": "Value passed to toil-cwl-runner --logLevel. Default: INFO."
+            }
+          }
+        },
+        "outputConfig": {
+          "type": "object",
+          "description": "Output placement configuration for the outer toil-cwl-runner invocation.",
+          "additionalProperties": false,
+          "default": {},
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "serviceDefault",
+                "userSpecified",
+                "workflowDeclared"
+              ],
+              "description": "Controls whether compute-slurm uses a service-managed --outdir, a user-specified --outdir, or omits --outdir entirely."
+            },
+            "outputDir": {
+              "type": "string",
+              "description": "Workflow output directory passed to toil-cwl-runner --outdir when mode is userSpecified."
+            }
+          }
+        },
+        "slurmConfig": {
+          "type": "object",
+          "description": "Outer sbatch wrapper job configuration.",
+          "additionalProperties": false,
+          "default": {},
+          "properties": {
+            "jobName": {
+              "type": "string",
+              "description": "SLURM job name. Defaults to the resolved workflow id."
+            },
+            "partition": {
+              "type": "string",
+              "description": "SLURM partition. Default: normal_gpu."
+            },
+            "slurmJobGpuCount": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "GPU count provisioned for the outer sbatch wrapper job."
+            },
+            "cpusPerTask": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "SLURM cpus-per-task value. Default: 4."
+            },
+            "nodes": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "SLURM node count. Default: 1."
+            },
+            "tasksPerNode": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "SLURM ntasks-per-node value. Default: 1."
+            },
+            "output": {
+              "type": "string",
+              "description": "SLURM stdout file path/pattern. Default: slurm-{workflowId}.out."
+            },
+            "error": {
+              "type": "string",
+              "description": "SLURM stderr file path/pattern. Default: slurm-{workflowId}.err."
+            },
+            "time": {
+              "type": "string",
+              "description": "SLURM time limit. Default: 1:00:00."
+            },
+            "memory": {
+              "type": "string",
+              "description": "Overall SLURM memory allocation used for #SBATCH --mem. Default: 8G."
+            }
+          }
+        }
+      }
+    },
+    "jobs": {
+      "type": "object",
+      "description": "Required compatibility object. Include an empty object when no job-level compatibility fields are needed.",
+      "additionalProperties": false,
+      "default": {},
+      "properties": {}
+    }
+  },
+  "examples": [
+    {
+      "id": "ome_seg_test_workflow",
+      "cwlWorkflow": {
+        "class": "Workflow",
+        "cwlVersion": "v1.2"
+      },
+      "cwlJobInputs": {
+        "exampleInput": {
+          "class": "Directory",
+          "location": "/path/to/input"
+        }
+      },
+      "computeConfig": {
+        "slurmConfig": {
+          "cpusPerTask": 4,
+          "partition": "normal_gpu"
+        },
+        "toilConfig": {
+          "logLevel": "INFO"
+        },
+        "outputConfig": {
+          "mode": "userSpecified",
+          "outputDir": "/path/to/output"
+        }
+      },
+      "jobs": {}
+    }
+  ]
+}

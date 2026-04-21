@@ -106,18 +106,11 @@ jobs:
       run: rm -rf "/home/$(whoami)/wic/" && rm -rf "/home/$(whoami)/.toil/"
       # For self-hosted runners, make sure we use new global config settings
 
-    # Completely moving away from pypy
 
     - name: Remove old mamba environment
       if: always()
       run: rm -rf "/home/$(whoami)/miniconda3/envs/wic_github_actions/"
       # For self-hosted runners, make sure we install into a new mamba environment
-      # NOTE: Every time the github self-hosted runner executes, it sets "set -e" in ~/.bash_profile
-      # So if we rm -rf the old mamba environment without also removing the mamba init code in ~/.bash_profile
-      # (or removing the file altogether), then unless we immediately re-create the environment,
-      # (i.e. if we try to run any other commands between removing and re-creating the environment)
-      # we will get "EnvironmentNameNotFound: Could not find conda environment: wic_github_actions"
-      # and (again, due to "set -e") the workflow step will fail.
 
     - name: Setup miniforge (linux, macos)
       if: always()
@@ -137,7 +130,7 @@ jobs:
 
     - name: Install Sophios
       if: always()
-      run: cd sophios/ && pip install ".[all_except_runner_src]"
+      run: cd sophios/ && pip install -e ".[all_except_runner_src]"
 
     - name: Update Sophios Config
       if: always()
@@ -150,11 +143,23 @@ jobs:
       # NOTE: Use ".[test]" instead of ".[all_except_runner_src]"
       # We do not want or need to install the workflow_deps extra.
       # (Many of the packages conflict with pypy.)
-      run: cd mm-workflows/ && pip install ".[test]" && mm-workflows --generate_schemas
+      run: cd mm-workflows/ && pip install -e ".[test]" && mm-workflows --generate_schemas
+
+    - name: Configure pytest worker count
+      if: always()
+      run: |
+        PYTEST_WORKERS="$(python - <<'PY'
+        import os
+
+        cpu_count = os.cpu_count() or 8
+        print(max(8, min(16, cpu_count - 2)))
+        PY
+        )"
+        echo "PYTEST_WORKERS=${PYTEST_WORKERS}" >> "$GITHUB_ENV"
 
     - name: Generate Sophios Python API Workflows (*.py -> *.wic)
       if: always()
-      run: cd sophios/ && pytest -k test_compile_python_workflows
+      run: cd sophios/ && pytest tests/test_python_api.py -k test_compile_python_workflows
 
     - name: Generate Sophios Validation Jsonschema
       if: always()
@@ -165,22 +170,30 @@ jobs:
       # WIC Python API workflows as well as the WIC Python API itself.
     - name: Validate Sophios Python API Workflows (*.py -> *.wic)
       if: always()
-      run: cd sophios/ && pytest -k test_compile_python_workflows
+      run: cd sophios/ && pytest tests/test_python_api.py -k test_validate_generated_python_workflows
 
     - name: cwl-docker-extract (i.e. recursively docker pull)
       if: always()
       run: cd sophios/ && pytest tests/test_examples.py -k test_cwl_docker_extract
       # For self-hosted runners, make sure the docker cache is up-to-date.
 
+    - name: PyTest CWL Builder
+      if: always()
+      run: cd sophios/ && pytest tests/test_cwl_builder.py -k test_cwl_builder
+
+    - name: PyTest Python API
+      if: always()
+      run: cd sophios/ && pytest tests/test_python_api.py -k "not test_compile_python_workflows and not test_validate_generated_python_workflows"
+
     - name: PyTest Run REST Core Tests
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd sophios/ && pytest tests/test_rest_core.py -k test_rest_core --cwl_runner cwltool
+      run: cd sophios/ && pytest tests/test_rest_api.py -k test_rest_core --cwl_runner cwltool
 
     - name: PyTest Run REST WFB Tests
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd sophios/ && pytest tests/test_rest_wfb.py -k test_rest_wfb --cwl_runner cwltool
+      run: cd sophios/ && pytest tests/test_rest_api.py -k test_rest_wfb --cwl_runner cwltool
 
     - name: PyTest Run ICT to CLT conversion Tests
       if: always()
@@ -189,13 +202,11 @@ jobs:
 
     - name: PyTest Run update wfb payload Tests
       if: always()
-      # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
       run: cd sophios/ && pytest tests/test_fix_payload.py -k test_fix
 
     - name: PyTest Run Workflows
       if: always()
-      # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd sophios/ && pytest tests/test_examples.py -k test_run_workflows_on_push --workers 8 --cwl_runner cwltool # --cov
+      run: cd sophios/ && pytest tests/test_examples.py -k test_run_workflows_on_push --workers "${PYTEST_WORKERS}" --cwl_runner cwltool # --cov
 
     # NOTE: The steps below are for repository_dispatch only. For all other steps, please insert above
     # this comment.

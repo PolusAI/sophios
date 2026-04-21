@@ -54,40 +54,31 @@ def logging_filters(allow_pf: bool = False) -> None:
 logger_wicad = logging.getLogger("wicautodiscovery")
 
 
-def validate_cwl(cwl_path_str: str, skip_schemas: bool) -> None:
-    """This is the body of cwltool.load_tool.load_tool but exposes skip_schemas for performance.
-    Skipping significantly improves initial validation performance, but this is not always desired.
-    See https://github.com/common-workflow-language/cwltool/issues/623
+def validate_cwl(cwl_path_str: str) -> None:
+    """Validate a CWL file using `cwltool.load_tool`.
 
     Args:
         cwl_path_str (str): The path to the CWL file.
-        skip_schemas (bool): Skips processing $schemas tags.
     """
     # NOTE: This uses NoResolvedFilter to suppress the info messages to stdout.
     loading_context, workflowobj, uri = cwltool.load_tool.fetch_document(cwl_path_str)
-    # NOTE: There has been a breaking change in the API for skip_schemas.
-    # TODO: re-enable skip_schemas while satisfying mypy
-    # loading_context.skip_schemas = skip_schemas
     loading_context, uri = cwltool.load_tool.resolve_and_validate_document(
-        loading_context, workflowobj, uri, preprocess_only=False  # , skip_schemas=skip_schemas
+        loading_context, workflowobj, uri, preprocess_only=False
     )
     # NOTE: Although resolve_and_validate_document does some validation,
     # some additional validation is done in make_tool, i.e.
     # resolve_and_validate_document does not in fact throw an exception for
     # some invalid CWL files, but make_tool does!
-    process_ = cwltool.load_tool.make_tool(uri, loading_context)
-    # return process_ # ignore process_ for now
+    cwltool.load_tool.make_tool(uri, loading_context)
 
 
-def get_tools_cwl(config: Json, validate_plugins: bool = False,
-                  skip_schemas: bool = False, quiet: bool = False) -> Tools:
+def get_tools_cwl(config: Json, validate_plugins: bool = False, quiet: bool = False) -> Tools:
     """Uses glob() to find all of the CWL CommandLineTool definition files within any subdirectory of cwl_dir
 
     Args:
         config_file (Json): The user specified (or default generated) config json object
         cwl_dirs_file (Path): The subdirectories in which to search for CWL CommandLineTools
         validate_plugins (bool, optional): Performs validation on all CWL CommandLiineTools. Defaults to False.
-        skip_schemas (bool, optional): Skips processing $schemas tags. Defaults to False.
         quiet (bool, optional): Determines whether it captures stdout or stderr. Defaults to False.
 
     Returns:
@@ -119,7 +110,7 @@ def get_tools_cwl(config: Json, validate_plugins: bool = False,
                 stem = Path(cwl_path_str).stem
 
                 if validate_plugins:
-                    validate_cwl(cwl_path_str, skip_schemas)
+                    validate_cwl(cwl_path_str)
 
                 tool = utils_cwl.desugar_into_canonical_normal_form(tool)
 
@@ -156,7 +147,7 @@ def cwl_update_outputs_optional(cwl: Cwl, failure_code_range: List[int],
         f"lower {failure_code_range[0]}  value can't be greater than higher {failure_code_range[1]} value"
     cwl_mod['successCodes'] = list(set([0] + direct_failure_codes + codes_from_range))
     # Update outputs optional
-    for out_key, out_val_dict in cwl_mod['outputs'].items():
+    for out_val_dict in cwl_mod['outputs'].values():
         if isinstance(out_val_dict['type'], str) and out_val_dict['type'][-1] != '?':
             out_val_dict['type'] += '?'
     return cwl_mod
@@ -207,7 +198,7 @@ def remove_entrypoints(client: Client, build: Any) -> None:
                         f.write(dockerfile_content)
 
                     # Build the new Docker image from the Dockerfile
-                    new_image, build_logs = build.build(
+                    build.build(
                         path=tempdir,
                         dockerfile="Dockerfile_tmp",
                         tag=f"{tag}-noentrypoint"

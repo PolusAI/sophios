@@ -1,30 +1,55 @@
-# pylint: disable=W1203
-"""CLT utilities."""
+# pylint: disable=logging-fstring-interpolation,too-many-lines,protected-access
+"""Python API for building CWL/WIC workflows."""
+
+from __future__ import annotations
+
 import logging
-import os
-from pathlib import Path, PurePath
-from typing import Any, ClassVar, Optional, TypeVar, Union, Dict
+import warnings
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any, ClassVar, Mapping
 
-import cwl_utils.parser as cu_parser
-import yaml
-from mergedeep import merge, Strategy
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
-from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
-from sophios import compiler, input_output, plugins, utils_cwl
-from sophios import run_local as rl
-from sophios import post_compile as pc
-from sophios.cli import get_known_and_unknown_args, get_dicts_for_compilation
-from sophios.utils_graphs import get_graph_reps
-from sophios.utils import convert_args_dict_to_args_list
-from sophios.wic_types import CompilerInfo, RoseTree, StepId, Tool, Tools, YamlTree, Json
+from sophios.inference import types_match
+from sophios.wic_types import CompilerInfo, Json, Tools
 
+from ._errors import (
+    InvalidLinkError,
+    InvalidStepError,
+    MissingRequiredValueError,
+)
+from ._ports import (
+    AliasBinding as _AliasBinding,
+    InputParameter,
+    InlineBinding as _InlineBinding,
+    OutputSourceBinding,
+    OutputParameter,
+    ParameterNamespace,
+    ParameterStore,
+    WorkflowBinding as _WorkflowBinding,
+    WorkflowInputReference,
+)
+from ._utils import (
+    infer_literal_parameter_type as _infer_literal_parameter_type,
+    get_value_from_cfg as _get_value_from_cfg,
+    load_yaml as _load_yaml,
+)
 from ._types import ScatterMethod
-from .api_config import default_values
-
-
-global_config: Tools = {}
+from ._workflow_runtime import (
+    coerce_path as _coerce_path,
+    compile_workflow as _compile_workflow,
+    load_clt_document as _load_clt_document,
+    load_clt as _load_clt,
+    lookup_parameter as _lookup_parameter,
+    normalize_workflow_name as _normalize_workflow_name,
+    populate_parameters as _populate_parameters,
+    run_workflow as _run_workflow,
+    validate_step_assignment as _validate_step_assignment,
+    workflow_document as _workflow_document,
+    compiled_cwl_json as _compiled_cwl_json,
+    write_workflow_ast_to_disk as _write_workflow_ast_to_disk,
+)
 
 
 logger = logging.getLogger("WIC Python API")
@@ -42,756 +67,713 @@ logger_wicad = logging.getLogger("wicautodiscovery")
 logger_wicad.addFilter(DisableEverythingFilter())
 
 
-class InvalidInputValueError(Exception):
-    pass
+StrPath = str | Path
 
 
-class MissingRequiredValueError(Exception):
-    pass
+def _parameter_namespace(
+    store: ParameterStore[Any],
+    getter: Any,
+    setter: Any,
+    *,
+    read_only_error: str,
+) -> ParameterNamespace[Any, Any]:
+    """Create the list-like attribute proxy used for `.inputs` and `.outputs`."""
+    return ParameterNamespace(store, getter, setter, read_only_error=read_only_error)
 
 
-class InvalidStepError(Exception):
-    pass
+def _resolve_parameter_type(
+    parameter: InputParameter | OutputParameter,
+    candidate_type: Any,
+    *,
+    context: str,
+) -> None:
+    """Infer or validate a parameter type against a new candidate."""
+    if candidate_type is None:
+        return
+    if parameter.parameter_type is None:
+        parameter.set_parameter_type(candidate_type)
+        return
+    if not types_match(parameter.parameter_type, candidate_type):
+        raise InvalidLinkError(
+            f"{context} has incompatible types: expected {parameter.parameter_type!r}, got {candidate_type!r}"
+        )
 
 
-class InvalidLinkError(Exception):
-    pass
+def _warn_implicit_workflow_parameter(workflow: Workflow, name: str, kind: str) -> None:
+    """Warn when compatibility syntax implicitly declares workflow interface."""
+    warnings.warn(
+        (
+            f"Implicitly declaring workflow {kind} {name!r} on {workflow.process_name!r}. "
+            f"Prefer explicit {kind}s via workflow.add_{kind}(...), workflow.{kind}s.{name}, "
+            f"or typed bindings so interface drift is easier to spot."
+        ),
+        UserWarning,
+        stacklevel=3,
+    )
 
 
-class InvalidCLTError(ValueError):
-    pass
+def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
+    input_port = process_self.get_inp_attr(input_name)
+
+    # This is the central compatibility switchboard for the Python API:
+    # - workflow.input_name means "formal workflow parameter"
+    # - step.output_name means "link to upstream step output"
+    # - everything else is treated as a literal inline value
+    match value:
+        case WorkflowInputReference(workflow=workflow, name=name, implicit=implicit):
+            workflow_input = workflow._ensure_input(name, parameter_type=input_port.parameter_type, implicit=implicit)
+            input_port._set_binding(_WorkflowBinding(name))
+            input_port.set_bound_parameter_type(workflow_input.parameter_type)
+        case OutputParameter(parent_obj=Workflow(), name=name):
+            raise InvalidLinkError(
+                f"Workflow output {name!r} cannot be bound as an input. "
+                f"Use workflow.inputs.{name} for formal inputs or workflow.outputs.{name} = ... for outputs."
+            )
+        case OutputParameter() as output:
+            _resolve_parameter_type(
+                input_port,
+                output.parameter_type,
+                context=f"{process_self.process_name}.{input_name}",
+            )
+            anchor_name = output.ensure_anchor(f"{input_name}{process_self.process_name}")
+            input_port._set_binding(_AliasBinding(anchor_name))
+            input_port.set_bound_parameter_type(output.parameter_type)
+        case _:
+            input_port._set_binding(_InlineBinding(value))
+            input_port.set_bound_parameter_type(_infer_literal_parameter_type(value))
 
 
-CWLInputParameter = Union[
-    cu_parser.cwl_v1_0.CommandInputParameter,
-    cu_parser.cwl_v1_1.CommandInputParameter,
-    cu_parser.cwl_v1_2.CommandInputParameter,
-]  # cwl_utils does not have CommandInputParameter union
-
-CWLOutputParameter = Union[
-    cu_parser.cwl_v1_0.CommandOutputParameter,
-    cu_parser.cwl_v1_1.CommandOutputParameter,
-    cu_parser.cwl_v1_2.CommandOutputParameter,
-]  # cwl_utils does not have CommandInputParameter union
-
-StrPath = TypeVar("StrPath", str, Path)
-
-
-class ProcessInput(BaseModel):  # pylint: disable=too-few-public-methods
-    """Input of CWL CommandLineTool or Workflow."""
-
-    inp_type: Any
-    name: str
-    # NOTE: Not optional, but we can't initialize it yet
-    parent_obj: Any = Field(default=None)  # Process: Union[Step, Workflow]
-    value: Any = Field(default=None)  # validation happens at assignment
-    required: bool = True
-    linked: bool = False
-
-    def __init__(self, name: str, inp_type: Any) -> None:
-        inp_type = utils_cwl.canonicalize_type(inp_type)
-        if isinstance(inp_type, list) and "null" in inp_type:
-            required = False
-        else:
-            required = True
-        super().__init__(inp_type=inp_type, name=name, required=required)
-
-    @field_validator("name", mode="before")
-    @classmethod
-    def get_name_from_id(cls, cwl_id: str) -> Any:
-        """Return name of input from InputParameter.id."""
-        return cwl_id.split("#")[-1]
-
-    @field_validator("inp_type", mode="before")
-    @classmethod
-    def set_inp_type(cls, inp: Any) -> Any:
-        """Return inp_type."""
-        if isinstance(inp, list):  # optional inps
-            inp = inp[1]
-        return inp
-
-    def _set_value(
-        self, __value: Any, linked: bool = False
-    ) -> None:
-        """Set input value."""
-        self.value = __value  # to be used for linking inputs */&
-        if linked:
-            self.linked = True
+def _bind_workflow_output(workflow: Workflow, output_name: str, value: Any) -> None:
+    output_parameter = workflow.add_output(output_name, implicit=True)
+    match value:
+        case OutputParameter(parent_obj=Step(process_name=process_name), name=name) as source:
+            _resolve_parameter_type(
+                output_parameter,
+                source.parameter_type,
+                context=f"{workflow.process_name}.outputs.{output_name}",
+            )
+            output_parameter.bind_source(OutputSourceBinding(process_name, name))
+            source.linked = True
+        case WorkflowInputReference(workflow=source_workflow, name=name) if source_workflow is workflow:
+            input_parameter = workflow._ensure_input(name)
+            _resolve_parameter_type(
+                output_parameter,
+                input_parameter.parameter_type,
+                context=f"{workflow.process_name}.outputs.{output_name}",
+            )
+            output_parameter.bind_source(OutputSourceBinding(None, name))
+        case _:
+            raise InvalidLinkError(
+                "workflow outputs must be bound to a step output or a workflow input reference"
+            )
 
 
-class ProcessOutput(BaseModel):  # pylint: disable=too-few-public-methods
-    """Output of CWL CommandLineTool or Workflow."""
+class Step:
+    """A workflow step backed by a CWL `CommandLineTool`.
 
-    out_type: Any
-    name: str
-    # NOTE: Not optional, but we can't initialize it yet
-    parent_obj: Any = Field(default=None)  # Process: Union[Step, Workflow]
-    value: Any = Field(default=None)  # validation happens at assignment
-    required: bool = True
-    linked: bool = False
+    Attribute writes like `step.message = "hi"` bind named step inputs.
+    Attribute reads like `step.output_file` resolve named step outputs. The
+    same ports are also available through the explicit `step.inputs.*` and
+    `step.outputs.*` namespaces.
+    """
 
-    def __init__(self, name: str, out_type: Any) -> None:
-        out_type = utils_cwl.canonicalize_type(out_type)
-        if isinstance(out_type, list) and "null" in out_type:
-            required = False
-        else:
-            required = True
-        super().__init__(out_type=out_type, name=name, required=required)
-
-    @field_validator("name", mode="before")
-    @classmethod
-    def get_name_from_id(cls, cwl_id: str) -> Any:
-        """Return name of input from InputParameter.id."""
-        return cwl_id.split("#")[-1]
-
-    @field_validator("out_type", mode="before")
-    @classmethod
-    def set_out_type(cls, out: Any) -> Any:
-        """Return out_type."""
-        if isinstance(out, list):  # optional outs
-            out = out[1]
-        return out
-
-    def _set_value(
-        self, __value: Any, linked: bool = False
-    ) -> None:
-        """Set output value."""
-        self.value = __value  # to be used for linking inputs */&
-        if linked:
-            self.linked = True
-
-
-def _default_dict() -> dict:
-    return {}
-
-
-def _get_value_from_cfg(value: Any) -> Any:  # validation happens in Step
-    if isinstance(value, dict):
-        if "Directory" in value.values():
-            try:
-                value_ = Path(value["location"])
-            except BaseException as exc:
-                raise InvalidInputValueError() from exc
-            if not value_.is_dir():
-                raise InvalidInputValueError(f"{str(value_)} is not a directory")
-            return value_
-        return value
-    return value
-
-
-# Process = Union[Step, Workflow]
-
-
-def set_input_Step_Workflow(process_self: Any, __name: str, __value: Any) -> Any:
-    index = process_self._input_names.index(__name)
-    if isinstance(__value, ProcessOutput):
-        process_other = __value.parent_obj
-        if not __value.linked:
-            try:
-                local_input = process_self.inputs[index]
-                # NOTE: Relax exact equality for Any type
-                # if not local_input.inp_type == __value.out_type and not local_input.inp_type == Any and not __value.out_type == Any:
-                #     raise InvalidLinkError(
-                #         f"links must have the same input type. "
-                #         f"cannot link {local_input.name} to {__value.name}"
-                #         f"with types {local_input.inp_type} to {__value.out_type}"
-                #     )
-                if isinstance(process_other, Workflow):
-                    tmp = __value.name  # Use the formal parameter / variable name
-                    local_input._set_value(f"{tmp}", linked=True)
-                    __value._set_value(f"{tmp}", linked=True)
-                else:
-                    # Use the current value so we can exactly reproduce hand-crafted wic files.
-                    # (Very useful for regression testing!)
-                    # NOTE: process_name is either clt name or workflow name
-                    tmp = __value.value if __value.value else f"{__name}{process_self.process_name}"
-                    alias_dict = {'wic_alias': tmp}
-                    local_input._set_value(alias_dict, linked=True)
-                    anchor_dict = {'wic_anchor': tmp}
-                    __value._set_value(anchor_dict, linked=True)
-            except BaseException as exc:
-                raise exc
-        else:  # value is already linked to another inp
-            try:
-                local_input = process_self.inputs[index]
-                # NOTE: Relax exact equality for Any type
-                # if not local_input.inp_type == __value.out_type and not local_input.inp_type == Any and not __value.out_type == Any:
-                #     raise InvalidLinkError(
-                #         f"links must have the same input type. "
-                #         f"cannot link {local_input.name} to {__value.name} "
-                #         f"with types {local_input.inp_type} to {__value.out_type}"
-                #     )
-                if isinstance(process_other, Workflow):
-                    tmp = __value.name  # Use the formal parameter / variable name
-                    local_input._set_value(f"{tmp}", linked=True)
-                    __value._set_value(f"{tmp}", linked=True)
-                else:
-                    anchor_dict = __value.value
-                    alias_dict = {'wic_alias': anchor_dict['wic_anchor']}
-                    local_input._set_value(alias_dict, linked=True)
-            except BaseException as exc:
-                raise exc
-
-    else:
-        # obj = process_self.inputs[index]
-        # NOTE: "TypeError: typing.Any cannot be used with isinstance()"
-        # if not obj.inp_type == Any and not isinstance(__value, obj.inp_type) and not isinstance(__value, list):
-        #     raise TypeError(
-        #         f"invalid attribute type for {obj.name}: "
-        #         f"got {__value.__class__.__name__}, "
-        #         f"expected {obj.inp_type.__name__}"
-        #     )
-        ii_dict = {'wic_inline_input': __value}
-        process_self.inputs[index]._set_value(ii_dict)
-
-
-class Step(BaseModel):  # pylint: disable=too-few-public-methods
-    """Base class for Step of Workflow."""
-    model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
+    _SYSTEM_ATTRS: ClassVar[set[str]] = {
+        "clt",
+        "clt_path",
+        "process_name",
+        "cwl_version",
+        "yaml",
+        "cfg_yaml",
+        "_tool_registry",
+        "_inputs",
+        "_outputs",
+        "inputs",
+        "outputs",
+        "scatter",
+        "scatterMethod",
+        "when",
+    }
 
     clt: CWLCommandLineTool
     clt_path: Path
     process_name: str
     cwl_version: str
-    inputs: list[ProcessInput]
-    outputs: list[ProcessOutput]
     yaml: dict[str, Any]
-    cfg_yaml: dict = Field(default_factory=_default_dict)
+    cfg_yaml: dict[str, Any]
+    _tool_registry: Tools
+    _inputs: ParameterStore[InputParameter]
+    _outputs: ParameterStore[OutputParameter]
+    inputs: ParameterNamespace[InputParameter, InputParameter]
+    outputs: ParameterNamespace[OutputParameter, OutputParameter]
+    scatter: list[InputParameter]
+    scatterMethod: str
+    when: str
 
-    # these are not part of 'clt data'
-    scatter: list[ProcessInput] = []
-    scatterMethod: str = ''
-    # use when tag to enable conditional steps
-    when: str = ''
-    _input_names: list[str] = PrivateAttr(default_factory=list)
-    _output_names: list[str] = PrivateAttr(default_factory=list)
+    def __init__(
+        self,
+        clt_path: StrPath,
+        config_path: StrPath | None = None,
+        *,
+        tool_registry: Tools | None = None,
+    ):
+        """Create a `Step` from a CWL CommandLineTool file.
 
-    def __init__(self, clt_path: StrPath, config_path: Optional[StrPath] = None):
-        # validate using cwl.utils
-        if not isinstance(clt_path, (Path, str)):
-            raise TypeError("cwl_path must be a Path or str")
-        clt_path_ = Path(clt_path) if isinstance(clt_path, str) else clt_path
-        stepid = StepId(clt_path_.stem, 'global')
+        Args:
+            clt_path (StrPath): Path to the CWL tool definition.
+            config_path (StrPath | None): Optional YAML config used to pre-bind inputs.
+            tool_registry (Tools | None): Optional fallback registry for known tools.
 
-        if clt_path_.exists():
-            try:
-                clt = load_document_by_uri(clt_path_)
-            except Exception as exc:
-                raise InvalidCLTError(f"invalid cwl file: {clt_path_}") from exc
-            with clt_path_.open("r", encoding="utf-8") as file:
-                yaml_file = yaml.safe_load(file)
+        Raises:
+            TypeError: If `clt_path` or `config_path` uses an unsupported type.
+            InvalidCLTError: If the CWL tool cannot be loaded from disk or the registry.
 
-            # Add the Tool to the global config dictionary. See explanation below.
-            global_config[stepid] = Tool(clt_path_.stem, yaml_file)
-        elif stepid in global_config:
-            # Use the path fallback mechanism.
-            # In other words, if the hardcoded, nonportable, system-dependent paths
-            # are not found above (i.e. because someone else is trying to run
-            # the workflow on another machine), then try to load the CLT from
-            # a global dictionary, which can be pre-configured to have paths
-            # that exist on the target machine.
-            # Again, global_config is just a dictionary; it couldn't be more pythonic.
-            # You can initialize it however you want (or not at all!).
-            tool = global_config[stepid]
+        Returns:
+            None: The step is initialized in place.
+        """
+        clt_path_ = _coerce_path(clt_path, field_name="clt_path")
+        config_path_ = _coerce_path(config_path, field_name="config_path", allow_none=True)
+        assert clt_path_ is not None
+        resolved_registry = {} if tool_registry is None else tool_registry
+        clt, yaml_file = _load_clt(clt_path_, resolved_registry)
+        cfg_yaml = _load_yaml(config_path_) if config_path_ is not None else {}
 
-            logger.info(f'{clt_path_} does not exist, but {clt_path_.stem} was found in the global config.')
-            logger.info(f'Using file contents from {tool.run_path}')
+        self._initialize_loaded_tool(
+            clt=clt,
+            yaml_file=yaml_file,
+            clt_path=clt_path_,
+            cfg_yaml=cfg_yaml,
+            tool_registry=resolved_registry,
+        )
 
-            yaml_file = tool.cwl
-            clt = load_document_by_yaml(yaml_file, tool.run_path)
-        else:
-            logger.warning(f'Warning! {clt_path_} does not exist, and')
-            logger.warning(f'{clt_path_.stem} was not found in the global config.')
-            raise InvalidCLTError(f"invalid cwl file: {clt_path_}")
+    @classmethod
+    def from_cwl(
+        cls,
+        document: Mapping[str, Any],
+        *,
+        process_name: str | None = None,
+        run_path: StrPath | None = None,
+        config: Mapping[str, Any] | None = None,
+        tool_registry: Tools | None = None,
+    ) -> Step:
+        # pylint: disable=too-many-arguments
+        """Create a `Step` from an in-memory CWL CommandLineTool document.
 
-        if config_path:
-            cfg_path_ = Path(config_path) if isinstance(config_path, str) else config_path
-            with cfg_path_.open("r", encoding="utf-8") as file:
-                cfg_yaml = yaml.safe_load(file)
-        else:
-            cfg_yaml = _default_dict()  # redundant, to avoid it being unbound
-        process_name = clt_path_.stem
-        data = {
-            "clt": clt,
-            "clt_path": clt_path_,
-            "cwl_version": clt.cwlVersion,
-            "process_name": process_name,
-            "inputs": clt.inputs,
-            "outputs": clt.outputs,
-            "yaml": yaml_file,
-            "cfg_yaml": cfg_yaml,
-        }
-        super().__init__(**data)
-        for inp in self.inputs:
-            inp.parent_obj = self  # Create a reference to the parent Step object
-        self._input_names = [inp.id.split("#")[-1] for inp in clt.inputs]
-        for out in self.outputs:
-            out.parent_obj = self  # Create a reference to the parent Step object
-        self._output_names = [out.id.split("#")[-1] for out in clt.outputs]
-        if config_path:
+        Args:
+            document (Mapping[str, Any]): Parsed CWL CommandLineTool fields.
+            process_name (str | None): Optional step name override.
+            run_path (StrPath | None): Optional virtual `.cwl` path for compiler bookkeeping.
+            config (Mapping[str, Any] | None): Optional input values to pre-bind.
+            tool_registry (Tools | None): Optional tool registry retained on the step.
+
+        Raises:
+            TypeError: If `run_path` uses an unsupported type.
+            InvalidCLTError: If the CWL document cannot be parsed.
+
+        Returns:
+            Step: A fully initialized step backed by the in-memory tool.
+        """
+        default_name = process_name or str(document.get("id") or "in_memory_tool")
+        run_path_value = run_path or f"{default_name}.cwl"
+        clt_path = _coerce_path(run_path_value, field_name="run_path")
+        assert clt_path is not None
+        resolved_registry = {} if tool_registry is None else tool_registry
+        clt, yaml_file = _load_clt_document(document, run_path=clt_path)
+
+        step = cls.__new__(cls)
+        step._initialize_loaded_tool(
+            clt=clt,
+            yaml_file=yaml_file,
+            clt_path=clt_path,
+            cfg_yaml=dict(config or {}),
+            tool_registry=resolved_registry,
+            process_name=process_name,
+        )
+        return step
+
+    def _initialize_loaded_tool(
+        self,
+        *,
+        clt: CWLCommandLineTool,
+        yaml_file: dict[str, Any],
+        clt_path: Path,
+        cfg_yaml: Mapping[str, Any],
+        tool_registry: Tools,
+        process_name: str | None = None,
+    ) -> None:
+        # pylint: disable=too-many-arguments
+        """Populate a step from an already parsed CLT and optional config.
+
+        Args:
+            clt (CWLCommandLineTool): Parsed CWL tool object.
+            yaml_file (dict[str, Any]): Raw CWL document.
+            clt_path (Path): Filesystem or virtual path representing the tool.
+            cfg_yaml (Mapping[str, Any]): Optional input bindings to apply.
+            tool_registry (Tools): Tool registry preserved on the step.
+            process_name (str | None): Optional explicit step name override.
+
+        Returns:
+            None: The step is initialized in place.
+        """
+        resolved_name = process_name or clt_path.stem
+
+        object.__setattr__(self, "clt", clt)
+        object.__setattr__(self, "clt_path", clt_path)
+        object.__setattr__(self, "process_name", resolved_name)
+        object.__setattr__(self, "cwl_version", clt.cwlVersion)
+        object.__setattr__(self, "yaml", yaml_file)
+        object.__setattr__(self, "cfg_yaml", dict(cfg_yaml))
+        object.__setattr__(self, "_tool_registry", tool_registry)
+        object.__setattr__(self, "_inputs", ParameterStore())
+        object.__setattr__(self, "_outputs", ParameterStore())
+        # This proxy is the main bit of API "magic": it supports both
+        # list-style access (`step.inputs[0]`) and named attribute access
+        # (`step.inputs.message`) without duplicating wrapper classes.
+        object.__setattr__(
+            self,
+            "inputs",
+            _parameter_namespace(self._inputs, self.get_inp_attr, self.bind_input, read_only_error=""),
+        )
+        object.__setattr__(
+            self,
+            "outputs",
+            _parameter_namespace(
+                self._outputs,
+                self.get_output,
+                None,
+                read_only_error="Step outputs are read-only; cannot set {name!r}",
+            ),
+        )
+        object.__setattr__(self, "scatter", [])
+        object.__setattr__(self, "scatterMethod", "")
+        object.__setattr__(self, "when", "")
+
+        _populate_parameters(clt.inputs, self._inputs, InputParameter, parent=self)
+        _populate_parameters(clt.outputs, self._outputs, OutputParameter, parent=self)
+
+        if self.cfg_yaml:
             self._set_from_io_cfg()
 
-    @field_validator("inputs", mode="before")
-    @classmethod
-    def cast_to_process_input_model(
-        cls, cwl_inps: list[CWLInputParameter]
-    ) -> list[ProcessInput]:
-        """Populate inputs from cwl.inputs."""
-        # NOTE: .type in version 0.31 only!
-        # NOTE: Cannot initialize .parent_obj = self here due to @classmethod
-        return [ProcessInput(str(x.id), x.type_) for x in cwl_inps]
-
-    @field_validator("outputs", mode="before")
-    @classmethod
-    def cast_to_process_output_model(
-        cls, cwl_outs: list[CWLOutputParameter]
-    ) -> list[ProcessOutput]:
-        """Populate outputs from cwl.outputs."""
-        # NOTE: .type in version 0.31 only!
-        # NOTE: Cannot initialize .parent_obj = self here due to @classmethod
-        return [ProcessOutput(str(x.id), x.type_) for x in cwl_outs]
-
     def __repr__(self) -> str:
-        repr_ = f"Step(clt_path={self.clt_path.__repr__()})"
-        return repr_
+        return f"Step(clt_path={self.clt_path!r})"
 
-    def __setattr__(self, __name: str, __value: Any) -> Any:
-        if __name in ["inputs", "outputs", "yaml", "cfg_yaml", "process_name", "_input_names", "_output_names",
-                      "__private_attributes__", "__pydantic_private__"]:
-            return super().__setattr__(__name, __value)
-        if __name == "scatterMethod":
-            if hasattr(ScatterMethod, __value):
-                return super().__setattr__(__name, __value)
-            else:
-                raise ValueError(
-                    f"Invalid value for scatterMethod the valid values are : \n {ScatterMethod.dotproduct.value} "
-                    f"{ScatterMethod.flat_crossproduct.value} {ScatterMethod.nested_crossproduct.value}\n")
-        if __name == "scatter":
-            if not all([isinstance(x, ProcessInput) for x in __value]):
-                raise TypeError("all scatter inputs must be ProcessInput type")
-            return super().__setattr__(__name, __value)
-        if __name == "when":
-            if (isinstance(__value, str)) and __value.startswith('$(') and __value.endswith(')'):
-                return super().__setattr__(__name, __value)
-            else:
-                raise ValueError("Invalid input to when.The js string must start with '$(' and end with ')'")
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in self._SYSTEM_ATTRS:
+            _validate_step_assignment(name, value, owner=self)
+            object.__setattr__(self, name, value)
+            return
 
-        if hasattr(self, "_input_names") and __name in self._input_names:
-            set_input_Step_Workflow(self, __name, __value)
-        else:
-            return super().__setattr__(__name, __value)
+        # Legacy sugar is intentionally preserved: assigning to a known input
+        # parameter name binds that input instead of setting a plain attribute.
+        if "_inputs" in self.__dict__ and name in self._inputs:
+            self.bind_input(name, value)
+            return
+        if "_outputs" in self.__dict__ and name in self._outputs:
+            raise AttributeError(f"Step outputs are read-only; cannot set {name!r}")
+        raise AttributeError(
+            f"{self.process_name!r} has no input named {name!r}. "
+            "Use step.inputs.<name> for declared inputs only."
+        )
 
-    def __getattr__(self, __name: str) -> Any:
-        if __name in ["__pydantic_private__", "__class__", "__private_attributes__"]:
-            return super().__getattribute__(__name)
-        if __name != "_output_names" and __name in self._output_names:  # and hasattr(self, "_output_names") ?
-            return self.outputs[self._output_names.index(__name)]
-        # https://github.com/pydantic/pydantic/blob/812516d71a8696d5e29c5bdab40336d82ccde412/pydantic/main.py#L743-744
-        # "We put `__getattr__` in a non-TYPE_CHECKING block because otherwise, mypy allows arbitrary attribute access
-        # The same goes for __setattr__ and __delattr__, see: https://github.com/pydantic/pydantic/issues/8643"
-        return super().__getattr__(__name)  # type: ignore
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("__"):
+            raise AttributeError(name)
+        if name in self._outputs:
+            return self._outputs.get(name)
+        raise AttributeError(f"{self.__class__.__name__!s} has no attribute {name!r}")
+
+    def bind_input(self, name: str, value: Any) -> None:
+        """Bind a value or upstream output to a named step input parameter.
+
+        Args:
+            name (str): The input parameter name.
+            value (Any): A literal value, a workflow input reference, or a step output.
+
+        Raises:
+            AttributeError: If the named input does not exist on the step.
+
+        Returns:
+            None: The step is mutated in place.
+        """
+        _lookup_parameter(self._inputs, name, owner_name=self.process_name, kind="input")
+        _bind_process_input(self, name, value)
+
+    def get_inp_attr(self, name: str) -> InputParameter:
+        """Return a named input parameter from this step.
+
+        Args:
+            name (str): The input parameter name.
+
+        Raises:
+            AttributeError: If the input does not exist.
+
+        Returns:
+            InputParameter: The requested step input parameter.
+        """
+        return _lookup_parameter(self._inputs, name, owner_name=self.process_name, kind="input")
+
+    def get_output(self, name: str) -> OutputParameter:
+        """Return a named output parameter from this step.
+
+        Args:
+            name (str): The output parameter name.
+
+        Raises:
+            AttributeError: If the output does not exist.
+
+        Returns:
+            OutputParameter: The requested step output parameter.
+        """
+        return _lookup_parameter(self._outputs, name, owner_name=self.process_name, kind="output")
 
     def _set_from_io_cfg(self) -> None:
         for name, value in self.cfg_yaml.items():
-            value_ = _get_value_from_cfg(value)
-            setattr(self, name, value_)
+            setattr(self, name, _get_value_from_cfg(value))
 
     def _validate(self) -> None:
-        for inp in self.inputs:
-            if inp.required and inp.value is None:
-                raise MissingRequiredValueError(f"{inp.name} is required")
+        for input_port in self._inputs:
+            if input_port.required and not input_port.is_bound():
+                raise MissingRequiredValueError(f"{input_port.name} is required")
+
+    def flatten_steps(self) -> list[Step]:
+        """Return this step as a single-item list for recursive traversal."""
+        return [self]
+
+    def flatten_subworkflows(self) -> list[Workflow]:
+        """Return an empty subworkflow list because steps do not nest workflows."""
+        return []
+
+    def _as_workflow_step(self, *, inline_subtrees: bool, directory: Path | None = None) -> dict[str, Any]:
+        del inline_subtrees, directory
+        return self._yml
 
     @property
-    def _yml(self) -> dict:
-        in_dict: dict[str, Any] = {}  # NOTE: input values can be arbitrary JSON; not just strings!
-        for inp in self.inputs:
-            if inp.value:
-                match inp.value:
-                    case Path():
-                        # Special case for Path since it does not inherit from YAMLObject
-                        in_dict[inp.name] = str(inp.value)
-                    case {'wic_alias': wic_alias, **rest_of_dict}:
-                        match wic_alias:
-                            case Path():
-                                # Special case for Path since it does not inherit from YAMLObject
-                                in_dict[inp.name] = {'wic_alias': str(inp.value['wic_alias'])}
-                    case {'wic_inline_input': wic_inline_input, **rest_of_dict}:
-                        match wic_inline_input:
-                            case Path():
-                                # Special case for Path since it does not inherit from YAMLObject
-                                in_dict[inp.name] = {'wic_inline_input': str(inp.value['wic_inline_input'])}
-                            case str():
-                                # Special case for inline str since it does not inherit from YAMLObject
-                                in_dict[inp.name] = {'wic_inline_input': inp.value.get('wic_inline_input')}
-                    case str():
-                        in_dict[inp.name] = inp.value  # Obviously strings are serializable
-                    case yaml.YAMLObject():
-                        # Serialization and deserialization logic should always be
-                        # encapsulated within each object. For the pyyaml library,
-                        # each object should inherit from pyyaml.YAMLObject.
-                        # See https://pyyaml.org/wiki/PyYAMLDocumentation
-                        # Section "Constructors, representers, resolvers"
-                        # class Monster(yaml.YAMLObject): ...
-                        in_dict[inp.name] = inp.value
-                    case _:
-                        logger.warning(f'Warning! input name {inp.name} input value {inp.value}')
-                        logger.warning('is not an instance of YAMLObject. The default str() serialization')
-                        logger.warning('logic often gives bad results. Please explicitly inherit from YAMLObject.')
-                        in_dict[inp.name] = inp.value
-
-        out_list: list = []  # The out: tag is a list, not a dict
-        out_list = [{out.name: out.value} for out in self.outputs if out.value]
-        # list of inputs to be scattered on
-        scatter_list: list = []
-        scatter_list = [sc_inp.name for sc_inp in self.scatter]
-
-        d = {
+    def _yml(self) -> dict[str, Any]:
+        """Return the internal WIC step representation for this step."""
+        step_yaml: dict[str, Any] = {
             "id": self.process_name,
-            "in": in_dict,
-            "out": out_list,
+            "in": {port.name: port.to_yaml_value() for port in self._inputs if port.is_bound()},
+            "out": [{port.name: port.value} for port in self._outputs if port.value is not None],
         }
-        # scatter operates on input sink
+
         if self.scatter:
-            d["scatter"] = scatter_list
-            if '' == self.scatterMethod:
-                self.scatterMethod = ScatterMethod.dotproduct.value
-            d["scatterMethod"] = self.scatterMethod
-        # when operates on step
-        if self.when != '':
-            d["when"] = self.when
-        return d
+            step_yaml["scatter"] = [input_port.name for input_port in self.scatter]
+            step_yaml["scatterMethod"] = self.scatterMethod or ScatterMethod.dotproduct.value
 
-    def get_inp_attr(self, __name: str) -> Any:
-        """Returns the input object of the given name"""
-        return self.inputs[self._input_names.index(__name)]
+        if self.when:
+            step_yaml["when"] = self.when
+
+        return step_yaml
 
 
-def extract_tools_paths_NONPORTABLE(steps: list[Step]) -> Tools:
-    """extract a Tools global configuration object from the NONPORTABLE paths hardcoded in the Steps.
+class Workflow:
+    """A WIC workflow composed from `Step` objects and nested `Workflow`s."""
 
-    Args:
-        steps (list[Step]): A list of Steps.
+    _SYSTEM_ATTRS: ClassVar[set[str]] = {
+        "steps",
+        "process_name",
+        "_inputs",
+        "_outputs",
+        "inputs",
+        "outputs",
+        "yml_path",
+    }
 
-    Returns:
-        Tools: A Tools object, which is just a dictionary mapping a globally unique
-        (i.e. portable) identifier to a system-dependendent Path.
-    """
-    return {StepId(step.process_name, 'global'): Tool(str(step.clt_path), step.yaml) for step in steps}
-
-
-# Analogous to cu_parser.Process, we want to create our own Union. However,
-# Process = Union[Step, Workflow]  # Cannot define Process before Workflow
-
-
-class Workflow(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
-
-    steps: list  # list[Process]  # and cannot use Process defined after Workflow within a Workflow
+    steps: list[Step | Workflow]
     process_name: str
-    inputs: list[ProcessInput] = []
-    outputs: list[ProcessOutput] = []
-    _input_names: list[str] = PrivateAttr(default_factory=list)
-    _output_names: list[str] = PrivateAttr(default_factory=list)
-    yml_path: Optional[Path] = Field(default=None)
+    _inputs: ParameterStore[InputParameter]
+    _outputs: ParameterStore[OutputParameter]
+    inputs: ParameterNamespace[InputParameter, WorkflowInputReference]
+    outputs: ParameterNamespace[OutputParameter, OutputParameter]
+    yml_path: Path | None
 
-    # Cannot use field() from dataclasses. Otherwise:
-    # from dataclasses import field
-    # field(default=None, init=False, repr=False)
-    # TypeError: 'ModelPrivateAttr' object is not iterable
+    def __init__(self, steps: Sequence[Step | Workflow], workflow_name: str):
+        """Create a workflow from steps and/or nested subworkflows.
 
-    def __init__(self, steps: list, workflow_name: str):
-        workflow_name = workflow_name.lstrip('/').lstrip(' ')
-        parts = PurePath(workflow_name).parts
-        workflow_name = ('_'.join(part for part in parts if part)).lstrip("_")
-        workflow_name = workflow_name.replace(' ', '_')
-        data = {
-            "process_name": workflow_name,
-            "steps": steps
-        }
-        super().__init__(**data)
+        Args:
+            steps (Sequence[Step | Workflow]): Child workflow nodes in execution order.
+            workflow_name (str): User-facing workflow name.
 
-    def __post_init__(self) -> None:
-        self._validate()
+        Returns:
+            None: The workflow is initialized in place.
+        """
+        object.__setattr__(self, "steps", list(steps))
+        object.__setattr__(self, "process_name", _normalize_workflow_name(workflow_name))
+        object.__setattr__(self, "_inputs", ParameterStore())
+        object.__setattr__(self, "_outputs", ParameterStore())
+        object.__setattr__(
+            self,
+            "inputs",
+            _parameter_namespace(
+                self._inputs,
+                self._input_reference,
+                self._bind_input_from_namespace,
+                read_only_error="",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "outputs",
+            _parameter_namespace(
+                self._outputs,
+                self.add_output,
+                self._bind_output_from_namespace,
+                read_only_error="",
+            ),
+        )
+        object.__setattr__(self, "yml_path", None)
+
+    def __repr__(self) -> str:
+        return f"Workflow(process_name={self.process_name!r}, steps={len(self.steps)})"
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in self._SYSTEM_ATTRS:
+            object.__setattr__(self, name, value)
+            return
+
+        if "_inputs" in self.__dict__:
+            if name in self._outputs:
+                self.bind_output(name, value)
+                return
+            self.bind_input(name, value)
+            return
+
+        object.__setattr__(self, name, value)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return self._input_reference(name, implicit=True)
+
+    def _ensure_input(self, name: str, parameter_type: Any = None, *, implicit: bool = True) -> InputParameter:
+        def create_input(parameter_name: str) -> InputParameter:
+            logger.warning("Adding a new input %s to workflow %s", parameter_name, self.process_name)
+            if implicit:
+                _warn_implicit_workflow_parameter(self, parameter_name, "input")
+            return InputParameter(parameter_name, parameter_type, parent_obj=self)
+
+        input_parameter = self._inputs.ensure(name, create_input)
+        _resolve_parameter_type(
+            input_parameter,
+            parameter_type,
+            context=f"{self.process_name}.inputs.{name}",
+        )
+        return input_parameter
+
+    def _input_reference(self, name: str, *, implicit: bool = False) -> WorkflowInputReference:
+        return WorkflowInputReference(self, name, implicit=implicit)
+
+    def add_input(self, name: str, parameter_type: Any = None) -> InputParameter:
+        """Declare a workflow input explicitly.
+
+        Args:
+            name (str): The workflow input name.
+            parameter_type (Any): Optional CWL type expression for the input.
+
+        Returns:
+            InputParameter: The created or existing workflow input parameter.
+        """
+        return self._ensure_input(name, parameter_type=parameter_type, implicit=False)
+
+    def add_output(
+        self,
+        name: str,
+        source: Any = None,
+        *,
+        parameter_type: Any = None,
+        implicit: bool = False,
+    ) -> OutputParameter:
+        """Declare a workflow output explicitly.
+
+        Args:
+            name (str): The workflow output name.
+            source (Any): Optional step output or workflow input reference to expose.
+            parameter_type (Any): Optional CWL type expression for the output.
+
+        Returns:
+            OutputParameter: The created or existing workflow output parameter.
+        """
+        def create_output(parameter_name: str) -> OutputParameter:
+            logger.warning("Adding a new output %s to workflow %s", parameter_name, self.process_name)
+            if implicit:
+                _warn_implicit_workflow_parameter(self, parameter_name, "output")
+            return OutputParameter(parameter_name, parameter_type, parent_obj=self)
+
+        output_parameter = self._outputs.ensure(name, create_output)
+        _resolve_parameter_type(
+            output_parameter,
+            parameter_type,
+            context=f"{self.process_name}.outputs.{name}",
+        )
+        if source is not None:
+            self.bind_output(name, source)
+        return output_parameter
+
+    def bind_input(self, name: str, value: Any) -> None:
+        """Bind a literal value or upstream output to a workflow input.
+
+        Args:
+            name (str): The workflow input name.
+            value (Any): A literal value, workflow reference, or step output.
+
+        Returns:
+            None: The workflow is mutated in place.
+        """
+        self._ensure_input(name)
+        _bind_process_input(self, name, value)
+
+    def _bind_input_from_namespace(self, name: str, value: Any) -> None:
+        self._ensure_input(name, implicit=False)
+        _bind_process_input(self, name, value)
+
+    def bind_output(self, name: str, value: Any) -> None:
+        """Bind a named workflow output to a step output or workflow input.
+
+        Args:
+            name (str): The workflow output name.
+            value (Any): A step output or workflow input reference to expose.
+
+        Returns:
+            None: The workflow is mutated in place.
+        """
+        _bind_workflow_output(self, name, value)
+
+    def _bind_output_from_namespace(self, name: str, value: Any) -> None:
+        self.add_output(name, implicit=False)
+        _bind_workflow_output(self, name, value)
+
+    def get_inp_attr(self, name: str) -> InputParameter:
+        """Return a named workflow input, creating it if needed.
+
+        Args:
+            name (str): The workflow input name.
+
+        Returns:
+            InputParameter: The created or existing workflow input parameter.
+        """
+        return self._ensure_input(name)
+
+    def append(self, step_: Any) -> None:
+        """Append a step or nested workflow to this workflow.
+
+        Args:
+            step_ (Any): The `Step` or `Workflow` to append.
+
+        Raises:
+            TypeError: If `step_` is neither a `Step` nor a `Workflow`.
+
+        Returns:
+            None: The workflow is mutated in place.
+        """
+        match step_:
+            case Step() | Workflow():
+                self.steps.append(step_)
+            case _:
+                raise TypeError("step must be either a Step or a Workflow")
 
     def _validate(self) -> None:
-        # Only the root workflow should have all required inputs and can be validated.
-        # Cannot validate subworkflows because by definition,
-        # subworkflows will NOT have all required inputs.
-        for s in self.steps:
+        for output_parameter in self._outputs:
+            if not output_parameter.has_source():
+                raise InvalidStepError(f"{self.process_name} has unbound output {output_parameter.name!r}")
+        for step in self.steps:
             try:
-                match s:
-                    case Step():
-                        s._validate()
-                    case Workflow():
-                        s._validate()
-                    case _:
-                        pass
-            except BaseException as exc:
-                raise InvalidStepError(
-                    f"{s.process_name} is missing required inputs"
-                ) from exc
-
-    def append(self, step_: Step) -> None:
-        """Append step to Workflow."""
-        if not isinstance(step_, (Step, Workflow)):
-            raise TypeError("step must be either a Step or a Workflow")
-        self.steps.append(step_)
-
-        # for name in step_._input_names:
-        #     self._input_names.append(name)
-        # for inp in step_.inputs:
-        #     self.inputs.append(inp)
-
-        # for name in step_._output_names:
-        #     self._output_names.append(name)
-        # for out in step_.outputs:
-        #     self.outputs.append(out)
+                step._validate()
+            except Exception as exc:
+                raise InvalidStepError(f"{step.process_name} is missing required inputs") from exc
 
     @property
     def yaml(self) -> dict[str, Any]:
-        """Converts a Workflow to the equivalent underlying WIC YML representation, in-memory."""
-        # NOTE: Use the CWL v1.2 `Any` type for lack of actual type information.
-        # TODO: try inp.inp_type (if initialized?)
-        inputs: dict[str, Any] = {inp.name: {'type': 'Any'} for inp in self.inputs}
-        # TODO: outputs?
-        steps = []
-        for s in self.steps:
-            match s:
-                case Step():
-                    steps.append(s._yml)
-                case Workflow() as sw:
-                    ins = {
-                        inp.name: inp.value
-                        for inp in sw.inputs
-                        if inp.value is not None  # Subworkflow args are not required
-                    }
-                    parentargs: dict[str, Any] = {"in": ins} if ins else {}
-                    # See the second to last line of ast.read_ast_from_disk()
-                    d = {'id': self.process_name + '.wic',
-                         'subtree': sw.yaml,  # recursively call .yaml (i.e. on s, not self)
-                         'parentargs': parentargs}
-                    steps.append(d)
-                case _:
-                    pass
-        yaml_contents = {"inputs": inputs, "steps": steps} if inputs else {"steps": steps}
-        return yaml_contents
+        """Return the in-memory WIC YAML representation of this workflow.
+
+        Returns:
+            dict[str, Any]: A WIC-compatible YAML tree represented as a Python dict.
+        """
+        return _workflow_document(self, inline_subtrees=True)
 
     def write_ast_to_disk(self, directory: Path) -> None:
-        """Converts a Workflow to the equivalent underlying WIC YML representation,
-        and writes each subworkflow to disk as a separate yml file.
+        """Write this workflow tree to disk as `.wic` files.
 
         Args:
-            directory (Path): The directory to write the yml file(s).
+            directory (Path): Directory where the workflow AST should be written.
+
+        Returns:
+            None: Files are written to disk as a side effect.
         """
-        # NOTE: Use the CWL v1.2 `Any` type for lack of actual type information.
-        # TODO: try inp.inp_type (if initialized?)
-        inputs: dict[str, Any] = {inp.name: {'type': 'Any'} for inp in self.inputs}
-        # TODO: outputs?
-        steps = []
-        for s in self.steps:
-            if isinstance(s, Step):
-                steps.append(s._yml)
-            elif isinstance(s, Workflow):
-                ins = {
-                    inp.name: inp.value
-                    for inp in s.inputs
-                    if inp.value is not None  # Subworkflow args are not required
-                }
-                parentargs: dict[str, Any] = {"in": ins} if ins else {}
-                s.write_ast_to_disk(directory)  # recursively call
-                steps.append({'id': s.process_name + '.wic', **parentargs})
-            #  else: ...
-        yaml_contents = {"inputs": inputs, "steps": steps} if inputs else {"steps": steps}
-        # NOTE: For various reasons, process_name should be globally unique.
-        # In this case, it is to avoid overwriting files.
-        directory.mkdir(exist_ok=True, parents=True)
-        with open(str(directory / self.process_name) + '.wic', mode='w', encoding='utf-8') as f:
-            f.write(yaml.dump(yaml_contents, sort_keys=False, line_break='\n', indent=2))
-
-    def add_input(self, __name: str) -> Any:
-        # Assume the user wants to auto-generate an input on the fly
-        # Ideally, we need to figure out how to distinguish whether an attribute
-        # workflow = Workflow(...)
-        # workflow.foo
-        # workflow.bar
-        # is an explicit input and/or
-        # workflow.workflowname__step__1__stepname
-        # an auto-generated internal name
-        # (See https://workflow-inference-compiler.readthedocs.io/en/latest/dev/algorithms.html#namespacing)
-        # or if it is just a regular python field/method, etc.
-        # workflow.__repr__
-        # (and thus has nothing to do with CWL and should NOT be added as an input)
-        # For now, let's completely ignore that distinction, and hopefully
-        # the user never wants to get or set built-in python attributes!
-        logger.warning(f'Adding a new input {__name} to workflow {self.process_name}')
-        self._input_names.append(__name)
-        inp = ProcessInput(__name, 'Any')  # Use Any type
-        inp.parent_obj = self  # Create a reference to the parent Workflow object
-        self.inputs.append(inp)
-        return inp
-
-    def add_output(self, __name: str) -> Any:
-        logger.warning(f'Adding a new output {__name} to workflow {self.process_name}')
-        self._output_names.append(__name)
-        out = ProcessOutput(__name, 'Any')  # Use Any type
-        out.parent_obj = self  # Create a reference to the parent Workflow object
-        self.outputs.append(out)
-        return out
-
-    def __setattr__(self, __name: str, __value: Any) -> Any:
-        if __name in ["inputs", "outputs", "yaml", "cfg_yaml", "process_name", "_input_names", "_output_names",
-                      "__private_attributes__", "__pydantic_private__"]:
-            return super().__setattr__(__name, __value)
-        # NOTE: Unlike the syntax `... = workflow.attribute`
-        # where attribute is interpreted to be a formal parameter / an input variable for the workflow,
-        # the syntax `workflow.attribute = ...` is ambiguous.
-        # attribute could refer to the actual parameter / input value, or
-        # attribute could refer to a formal output variable for the workflow.
-        # By default, we have arbitrarily chosen the former.
-        if hasattr(self, "_input_names"):
-            if __name not in self._input_names:
-                self.add_input(__name)
-            set_input_Step_Workflow(self, __name, __value)
-        else:
-            return super().__setattr__(__name, __value)
-
-    def __getattr__(self, __name: str) -> Any:
-        if __name in ["__pydantic_private__", "__class__", "__private_attributes__"]:
-            return super().__getattribute__(__name)
-        # TODO: double check the following logic.
-        if __name != "_input_names" and __name != "_output_names":  # and hasattr(self, "_output_names") ?
-            if __name in self._output_names:
-                return self.outputs[self._output_names.index(__name)]
-            else:
-                return self.add_output(__name)
-        # https://github.com/pydantic/pydantic/blob/812516d71a8696d5e29c5bdab40336d82ccde412/pydantic/main.py#L743-744
-        # "We put `__getattr__` in a non-TYPE_CHECKING block because otherwise, mypy allows arbitrary attribute access
-        # The same goes for __setattr__ and __delattr__, see: https://github.com/pydantic/pydantic/issues/8643"
-        return super().__getattr__(__name)  # type: ignore
+        _write_workflow_ast_to_disk(self, directory)
 
     def flatten_steps(self) -> list[Step]:
-        """Flattens all Steps into a linear list. This is similar, but different, from inlineing.
+        """Return every concrete step in this workflow tree.
 
         Returns:
-            list[Step]: a linear list of Steps
+            list[Step]: All `Step` instances reachable from this workflow.
         """
-        steps = []
-        for step in self.steps:
-            match step:
-                case Step():
-                    steps.append(step)
-                case Workflow():
-                    steps += step.flatten_steps()
-        return steps
+        return [step for child in self.steps for step in child.flatten_steps()]
 
-    # NOTE: Cannot return list[Workflow] because Workflow is not yet defined.
-    def flatten_subworkflows(self) -> list:
-        """Flattens all sub-Workflows into a linear list. The root workflow will be at index 0,
-        i.e. to get a list of all proper subworkflows, just use [1:]
+    def flatten_subworkflows(self) -> list[Workflow]:
+        """Return this workflow and all nested subworkflows.
 
         Returns:
-            list: a linear list of sub-Workflows.
+            list[Workflow]: This workflow followed by nested subworkflows.
         """
-        subworkflows = [self]
-        for step in self.steps:
-            if isinstance(step, Workflow):
-                subworkflows += step.flatten_subworkflows()
-        return subworkflows
+        return [self, *[workflow for child in self.steps for workflow in child.flatten_subworkflows()]]
 
-    def compile(self, write_to_disk: bool = False) -> CompilerInfo:
-        """Compile Workflow using WIC.
+    def compile(self, write_to_disk: bool = False, *, tool_registry: Tools | None = None) -> CompilerInfo:
+        """Compile this workflow into CWL.
 
         Args:
-            write_to_disk (bool, optional): Save the compiled CWL Workflow to disk. Defaults to False.
+            write_to_disk (bool): Whether to also write generated CWL to `autogenerated/`.
+            tool_registry (Tools | None): Optional tool registry override.
 
         Returns:
-            CompilerInfo: Contains the data associated with compiled subworkflows\n
-            (in the Rose Tree) together with mutable cumulative environment\n
-            information which needs to be passed through the recursion.
+            CompilerInfo: The compiler result tree for this workflow.
         """
-        global global_config
-        self._validate()
+        return _compile_workflow(self, write_to_disk=write_to_disk, tool_registry=tool_registry)
 
-        graph = get_graph_reps(self.process_name)
-        yaml_tree = YamlTree(StepId(self.process_name, 'global'), self.yaml)
-
-        # NOTE: This is critical for control flow in the compiler. See utils.get_subkeys()
-        steps_config = extract_tools_paths_NONPORTABLE(self.flatten_steps())
-        global_config = merge(steps_config, global_config, strategy=Strategy.TYPESAFE_REPLACE)
-
-        compiler_options, graph_settings, yaml_tag_paths = get_dicts_for_compilation()
-
-        # The compile_workflow function is 100% in-memory
-        compiler_info = compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
-                                                  [], [graph], {}, {}, {}, {},
-                                                  global_config, True, relative_run_path=True, testing=False)
-
-        if write_to_disk:
-            # Now we can choose whether to write_to_disk or not
-            rose_tree: RoseTree = compiler_info.rose
-            input_output.write_to_disk(rose_tree, Path('autogenerated/'), True)
-
-        return compiler_info
-
-    def get_cwl_workflow(self) -> Json:
-        """Return the compiled Cwl and its inputs in one payload Json
-        Returns:
-            Json: Contains the compiled CWL and yaml inputs to the workflow.
-        """
-        compiler_info = self.compile(write_to_disk=False)
-        rose_tree = compiler_info.rose
-
-        rose_tree = pc.cwl_inline_runtag(rose_tree)
-        sub_node_data = rose_tree.data
-        cwl_ast = sub_node_data.compiled_cwl
-
-        yaml_inputs = sub_node_data.workflow_inputs_file
-        workflow_json: Json = {}
-        workflow_json = {
-            "name": self.process_name,
-            "yaml_inputs": yaml_inputs,
-            **cwl_ast
-        }
-        return workflow_json
-
-    def run(self, run_args_dict: Dict[str, str] = default_values.default_run_args_dict,
-            user_env_vars: Dict[str, str] = {}, basepath: str = 'autogenerated') -> None:
-        """Run the built CWL workflow.
+    def get_cwl_workflow(self, *, tool_registry: Tools | None = None) -> Json:
+        """Return the compiled CWL workflow JSON and generated input object.
 
         Args:
-            run_args_dict (Dict[str, str]): A dictionary containing run time arguments for cwl-runners and tools
-            user_env (Dict[str, str]): A dictionary of user environment values that need to set to run the workflow
-            basepath (str): the path at which the workflow needs to run
+            tool_registry (Tools | None): Optional tool registry override.
+
+        Returns:
+            Json: A JSON-serializable representation of the compiled CWL workflow.
         """
-        logger.info(f"Running {self.process_name}")
-        plugins.logging_filters()
-        # compile the workflow
-        compiler_info = self.compile(write_to_disk=False)
-        rose_tree: RoseTree = compiler_info.rose
-        rose_tree = pc.cwl_inline_runtag(rose_tree)
-        pc.find_and_create_output_dirs(rose_tree)
-        # verify container_engine install and config
-        pc.verify_container_engine_config(run_args_dict['container_engine'], False)
-        # only write out after all the transformations
-        input_output.write_to_disk(rose_tree, Path(basepath), True, run_args_dict.get('inputs_file', ''))
-        # prepare for running
-        pc.cwl_docker_extract(run_args_dict['container_engine'],
-                              run_args_dict['pull_dir'],
-                              self.process_name)
-        if run_args_dict.get('docker_remove_entrypoints', None):
-            rose_tree = pc.remove_entrypoints(run_args_dict['container_engine'], rose_tree)
-        user_args = convert_args_dict_to_args_list(run_args_dict)
+        return _compiled_cwl_json(self, tool_registry=tool_registry)
 
-        # update the environment with user supplied env args
-        os.environ.update(rl.sanitize_env_vars(user_env_vars))
+    def run(
+        self,
+        run_args_dict: dict[str, str] | None = None,
+        user_env_vars: dict[str, str] | None = None,
+        basepath: str = "autogenerated",
+        tool_registry: Tools | None = None,
+    ) -> None:
+        """Compile and execute this workflow locally.
 
-        _, unknown_args = get_known_and_unknown_args(
-            self.process_name, user_args)  # Use mock CLI args
+        Args:
+            run_args_dict (dict[str, str] | None): Runtime CLI options for local execution.
+            user_env_vars (dict[str, str] | None): Environment variables to expose to the run.
+            basepath (str): Directory used for generated files and execution artifacts.
+            tool_registry (Tools | None): Optional tool registry override.
 
-        # if there are no unknown_args then unkown_args will be an empty list []
-        # so no need for a separate check of a particular flag!
-        rl.run_local(run_args_dict, False,
-                     workflow_name=self.process_name,
-                     basepath=basepath, passthrough_args=unknown_args)
+        Returns:
+            None: The workflow is executed as a side effect.
+        """
+        _run_workflow(
+            self,
+            run_args_dict=run_args_dict,
+            user_env_vars=user_env_vars,
+            basepath=basepath,
+            tool_registry=tool_registry,
+        )
 
-# Process = Union[Step, Workflow]
+    def _as_workflow_step(self, *, inline_subtrees: bool, directory: Path | None = None) -> dict[str, Any]:
+        # Nested workflows are serialized in one of two ways:
+        # 1. inline during in-memory compilation (`subtree`)
+        # 2. as sibling `.wic` files when writing an AST to disk
+        bound_inputs = {port.name: port.to_yaml_value() for port in self._inputs if port.is_bound()}
+        parentargs = {"in": bound_inputs} if bound_inputs else {}
+        if inline_subtrees:
+            return {"id": f"{self.process_name}.wic", "subtree": self.yaml, "parentargs": parentargs}
+        if directory is None:
+            raise ValueError("directory is required when serializing subworkflows to disk")
+        self.write_ast_to_disk(directory)
+        return {"id": f"{self.process_name}.wic", **parentargs}
