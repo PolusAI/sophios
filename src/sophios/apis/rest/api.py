@@ -55,7 +55,7 @@ app.add_middleware(
 
 @app.get("/", status_code=status.HTTP_200_OK)
 # @authenticate
-async def root(request: Request) -> Json:
+async def root() -> Json:
     """The api has 1 route: compile
 
     Returns:
@@ -95,10 +95,7 @@ async def compile_wf(request: Request) -> Json:
     # The default list
     tools_cwl: Tools = {}
     global_config = input_output.get_config(Path(args.config_file), Path(args.homedir)/'wic'/'global_config.json')
-    tools_cwl = plugins.get_tools_cwl(global_config,
-                                      args.validate_plugins,
-                                      not args.no_skip_dollar_schemas,
-                                      args.quiet)
+    tools_cwl = plugins.get_tools_cwl(global_config, args.validate_plugins, args.quiet)
     # Add to the default list if the tool is 'inline' in run tag
     # run tag will have the actual CommandLineTool
     for can_step in workflow_can["steps"]:

@@ -48,7 +48,8 @@ def read_ast_from_disk(homedir: str,
     except Exception as e:
         yaml_path = Path(step_id.stem)
         print('Failed to validate', yaml_path)
-        print(f'See validation_{yaml_path.stem}.txt for detailed technical information.')
+        print(
+            f'See validation_{yaml_path.stem}.txt for detailed technical information.')
         # Do not display a nasty stack trace to the user; hide it in a file.
         with open(f'validation_{yaml_path.stem}.txt', mode='w', encoding='utf-8') as f:
             # https://mypy.readthedocs.io/en/stable/common_issues.html#python-version-and-system-platform-checks
@@ -90,7 +91,6 @@ def read_ast_from_disk(homedir: str,
 
             paths_ns_i = yml_paths.get(plugin_ns, {})
             if paths_ns_i == {}:
-                wicdir = Path(homedir) / 'wic'
                 raise Exception(
                     f"Error! namespace {plugin_ns} not found in yaml paths. Check 'search_paths_wic' in your config file")
             if stem not in paths_ns_i:
@@ -101,22 +101,25 @@ def read_ast_from_disk(homedir: str,
             yaml_path = paths_ns_i[stem]
 
             if not (yaml_path.exists() and yaml_path.suffix == '.wic'):
-                raise Exception(f'Error! {yaml_path} does not exist or is not a .wic file.')
+                raise Exception(
+                    f'Error! {yaml_path} does not exist or is not a .wic file.')
 
             # Load the high-level yaml sub workflow file.
             with open(yaml_path, mode='r', encoding='utf-8') as y:
-                sub_yaml_tree_raw: Yaml = yaml.load(y.read(), Loader=wic_loader())
+                sub_yaml_tree_raw: Yaml = yaml.load(
+                    y.read(), Loader=wic_loader())
 
             y_t = YamlTree(StepId(step_key, plugin_ns), sub_yaml_tree_raw)
-            (step_id_, sub_yml_tree) = read_ast_from_disk(homedir, y_t, yml_paths, tools, validator,
-                                                          ignore_validation_errors)
+            (_, sub_yml_tree) = read_ast_from_disk(homedir, y_t, yml_paths, tools, validator,
+                                                   ignore_validation_errors)
 
             steps_i_copy = {**steps[i]}
-            step_i_id = steps[i]['id']
+            step_i_id = utils.require_step_id(steps[i])
             del steps_i_copy['id']
             # Do not merge these two dicts; use subtree and parentargs so we can
             # apply subtree before compilation and parentargs after compilation.
-            steps[i] = {'id': step_i_id, 'subtree': sub_yml_tree, 'parentargs': steps_i_copy}
+            steps[i] = {'id': step_i_id, 'subtree': sub_yml_tree,
+                        'parentargs': steps_i_copy}
 
     return YamlTree(step_id, yaml_tree)
 
@@ -154,7 +157,8 @@ def merge_yml_trees(yaml_tree_tuple: YamlTree,
         # Require back_name to be .wic? For now, yes.
         implementations_trees = []
         for stepid, back in wic['wic']['implementations'].items():
-            implementations_tree = merge_yml_trees(YamlTree(stepid, back), wic_parent, tools)
+            implementations_tree = merge_yml_trees(
+                YamlTree(stepid, back), wic_parent, tools)
             implementations_trees.append(implementations_tree)
         yaml_tree['wic']['implementations'] = dict(implementations_trees)
         return YamlTree(step_id, yaml_tree)
@@ -170,8 +174,9 @@ def merge_yml_trees(yaml_tree_tuple: YamlTree,
             sub_yml_tree_initial = steps[i]['subtree']
             sub_wic = wic_steps.get(f'({i+1}, {step_key})', {})
 
-            y_t = YamlTree(StepId(step_key, step_id.plugin_ns), sub_yml_tree_initial)
-            (step_key_, sub_yml_tree) = merge_yml_trees(y_t, sub_wic, tools)
+            y_t = YamlTree(StepId(step_key, step_id.plugin_ns),
+                           sub_yml_tree_initial)
+            (_, sub_yml_tree) = merge_yml_trees(y_t, sub_wic, tools)
             # Now mutably overwrite the self args with the merged args
             steps[i]['subtree'] = sub_yml_tree
 
@@ -189,7 +194,7 @@ def merge_yml_trees(yaml_tree_tuple: YamlTree,
                 del clt_args['wic']
             sub_yml_tree = clt_args
             args_provided_dict_self = steps[i]
-            steps_i_id = steps[i]['id']
+            steps_i_id = utils.require_step_id(steps[i])
             # NOTE: To support overloading, the parent args must overwrite the child args!
             args_provided_dict = merge(args_provided_dict_self, sub_yml_tree,
                                        strategy=Strategy.TYPESAFE_REPLACE)  # TYPESAFE_ADDITIVE ?
@@ -215,7 +220,8 @@ def tree_to_forest(yaml_tree_tuple: YamlTree, tools: Tools) -> YamlForest:
     if 'implementations' in wic['wic']:
         implementations_forest_list = []
         for stepid, back in wic['wic']['implementations'].items():
-            implementation_forest = (stepid, tree_to_forest(YamlTree(stepid, back), tools))
+            implementation_forest = (
+                stepid, tree_to_forest(YamlTree(stepid, back), tools))
             implementations_forest_list.append(implementation_forest)
         return YamlForest(YamlTree(step_id, yaml_tree), implementations_forest_list)
 
@@ -233,8 +239,9 @@ def tree_to_forest(yaml_tree_tuple: YamlTree, tools: Tools) -> YamlForest:
             plugin_ns_i = wic_step_i.get('wic', {}).get('namespace', 'global')
 
             sub_yaml_tree = steps[i]['subtree']
-            sub_yml_forest = tree_to_forest(YamlTree(StepId(step_key, plugin_ns_i), sub_yaml_tree), tools)
-            (sub_yml_tree_step_id, sub_yml_tree_) = sub_yml_forest.yaml_tree
+            sub_yml_forest = tree_to_forest(
+                YamlTree(StepId(step_key, plugin_ns_i), sub_yaml_tree), tools)
+            sub_yml_tree_step_id, _sub_yml_tree = sub_yml_forest.yaml_tree
             yaml_forest_list.append((sub_yml_tree_step_id, sub_yml_forest))
 
     return YamlForest(YamlTree(step_id, yaml_tree), yaml_forest_list)
@@ -261,7 +268,8 @@ def python_script_generate_cwl(yaml_tree_tuple: YamlTree,
     if 'implementations' in wic['wic']:
         implementations_trees = []
         for stepid, back in wic['wic']['implementations'].items():
-            implementations_tree = python_script_generate_cwl(YamlTree(stepid, back), root_yml_dir_abs, tools)
+            implementations_tree = python_script_generate_cwl(
+                YamlTree(stepid, back), root_yml_dir_abs, tools)
             implementations_trees.append(implementations_tree)
         yaml_tree['wic']['implementations'] = dict(implementations_trees)
         return YamlTree(step_id, yaml_tree)
@@ -273,8 +281,10 @@ def python_script_generate_cwl(yaml_tree_tuple: YamlTree,
     for i, step_key in enumerate(steps_keys):
         if step_key in subkeys:
             sub_yml_tree_initial = steps[i]['subtree']
-            y_t = YamlTree(StepId(step_key, step_id.plugin_ns), sub_yml_tree_initial)
-            (step_key_, sub_yml_tree) = python_script_generate_cwl(y_t, root_yml_dir_abs, tools)
+            y_t = YamlTree(StepId(step_key, step_id.plugin_ns),
+                           sub_yml_tree_initial)
+            (_, sub_yml_tree) = python_script_generate_cwl(
+                y_t, root_yml_dir_abs, tools)
             steps[i]['subtree'] = sub_yml_tree
 
         if step_key not in subkeys:
@@ -286,15 +296,18 @@ def python_script_generate_cwl(yaml_tree_tuple: YamlTree,
                     python_script_path = python_script_path['wic_inline_input']
                 # NOTE: The existence of the script: tag should now be guaranteed in the schema
                 del yml_args['script']
-                python_script_docker_pull = yml_args.get('dockerPull', '')  # Optional
+                python_script_docker_pull = yml_args.get(
+                    'dockerPull', '')  # Optional
                 if isinstance(python_script_docker_pull, dict) and 'wic_inline_input' in python_script_docker_pull:
                     python_script_docker_pull = python_script_docker_pull['wic_inline_input']
                 if 'dockerPull' in yml_args:
                     del yml_args['dockerPull']
                     del steps[i]['in']['dockerPull']
-                python_script_path = root_yml_dir_abs / Path(python_script_path)
+                python_script_path = root_yml_dir_abs / \
+                    Path(python_script_path)
                 python_script_mod = Path(python_script_path).name[:-3]
-                module = python_cwl_adapter.get_module(python_script_mod, python_script_path, yml_args)
+                module = python_cwl_adapter.get_module(
+                    python_script_mod, python_script_path, yml_args)
                 generated_cwl = python_cwl_adapter.generate_CWL_CommandLineTool(
                     module.inputs, module.outputs, python_script_docker_pull)
                 # See https://docs.python.org/3/library/uuid.html#uuid.uuid4
@@ -305,7 +318,8 @@ def python_script_generate_cwl(yaml_tree_tuple: YamlTree,
                 # CWL CommandLineTools in-memory so we can defer writing to disk
                 filepath = 'autogenerated/' + unique_id + '.cwl'
                 with open(filepath, mode='w', encoding='utf-8') as f:
-                    f.write(yaml.dump(generated_cwl, sort_keys=False, line_break='\n', indent=2))
+                    f.write(yaml.dump(generated_cwl, sort_keys=False,
+                            line_break='\n', indent=2))
 
                 # Now replace step_key with unique_id in the workflow
                 # NOTE: In addition to duplicate keys,

@@ -79,7 +79,6 @@ def get_main_args(module_: ModuleType) -> Dict[str, Any]:
     import inspect  # pylint: disable=import-outside-toplevel
 
     anns = inspect.getfullargspec(module_.main).annotations
-    ret = {'return': anns.get('return')}  # Separate out the return type
     if 'return' in anns:
         del anns['return']
     # print(anns)
@@ -131,11 +130,8 @@ def generate_CWL_CommandLineTool(module_inputs: Dict[str, Any], module_outputs: 
     yaml_tree['$schemas'] = ['https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl']
     yaml_tree['baseCommand'] = 'python3'
 
-    types_entry = '$(inputs.workflow_types)'
-    driver_entry = '$(inputs.driver_script)'
-    script_entry = '$(inputs.script)'
     requirements: Dict[str, Any] = {}
-    requirements = {  # 'InitialWorkDirRequirement': {'listing': [script_entry]}, #[types_entry,driver_entry,script_entry]
+    requirements = {
         'InlineJavascriptRequirement': {}}
     if python_script_docker_pull:
         requirements['DockerRequirement'] = {'dockerPull': python_script_docker_pull}
@@ -160,16 +156,8 @@ def generate_CWL_CommandLineTool(module_inputs: Dict[str, Any], module_outputs: 
     yaml_tree['inputs'] = inputs
 
     outputs: Dict[str, Any] = {}
-    for i, (arg_key, (glob_pattern, arg_val)) in enumerate(module_outputs.items()):
+    for arg_key, (glob_pattern, arg_val) in module_outputs.items():
         outputs[arg_key] = {**arg_val, 'outputBinding': {'glob': glob_pattern}}
-    # output_all is optional, but good for debugging bad glob patterns
-    output_all = {'type':
-                  {'type': 'array',
-                   'items': ['Directory', 'File']},
-                  'outputBinding': {'glob': '.'},
-                  'format': 'edam:format_2330'}  # 'Textual format'
-    # This crashes toil-cwl-runner, but not cwltool.
-    # outputs['output_all'] = output_all
     yaml_tree['outputs'] = outputs
 
     yaml_tree['stdout'] = 'stdout'
@@ -217,7 +205,7 @@ def get_inputs_workflow(module_inputs: Dict[str, Any], python_script_path: str,
     """
     inputs_workflow = {}
     inputs_workflow['script'] = {'class': 'File', 'format': 'edam:format_2330', 'path': python_script_path}
-    for i, (arg, yml_val) in enumerate(yml_args.items()):
+    for arg, yml_val in yml_args.items():
         if module_inputs[arg]['type'] == 'string':
             inputs_workflow[arg] = yml_val
         else:

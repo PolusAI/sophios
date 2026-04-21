@@ -5,7 +5,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-from .wic_types import (Namespaces, RoseTree, StepId, Json, Yaml, YamlForest, YamlTree)
+from .wic_types import (Namespaces, RoseTree, StepId,
+                        Json, Yaml, YamlForest, YamlTree)
 
 
 def step_name_str(yaml_stem: str, i: int, step_key: str) -> str:
@@ -104,7 +105,8 @@ def restore_namespaced_output_name(yaml_stem_init: str, shortened_output_name: s
         for shortened_step_name_str in namespaces:
             words = shortened_step_name_str.split(sep)
             if len(words) != 3:
-                raise Exception(f'Error! {shortened_step_name_str} is not of the correct format!')
+                raise Exception(
+                    f'Error! {shortened_step_name_str} is not of the correct format!')
             _, num, name_yml = words
             strs.append(f'{yaml_stem}{sep}step{sep}{num}{sep}{name_yml}')
             yaml_stem = Path(name_yml).stem
@@ -127,7 +129,8 @@ def partition_by_lowest_common_ancestor(nss1: Namespaces, nss2: Namespaces) -> T
     if nss1 == [] or nss2 == []:
         return ([], nss1)  # Base case
     if nss1[0] == nss2[0]:  # Keep going
-        (nss1_heads, nss1_tails) = partition_by_lowest_common_ancestor(nss1[1:], nss2[1:])
+        (nss1_heads, nss1_tails) = partition_by_lowest_common_ancestor(
+            nss1[1:], nss2[1:])
         return ([nss1[0]] + nss1_heads, nss1_tails)
     return ([], nss1)
 
@@ -148,6 +151,28 @@ def get_steps_keys(steps: List[Yaml]) -> List[str]:
         else:
             steps_keys.append('')
     return steps_keys
+
+
+def require_step_id(step_dict: Yaml, context: str = "step") -> str:
+    """Return a validated step id from a step dictionary.
+
+    Args:
+        step_dict (Yaml): Candidate step object.
+        context (str): Context string used in error messages.
+
+    Raises:
+        Exception: If `step_dict` is not a dictionary with a non-empty string `id`.
+
+    Returns:
+        str: The validated step identifier.
+    """
+    if not isinstance(step_dict, dict):
+        raise Exception(f"Error! {context} should be a dictionary.")
+    step_id = step_dict.get('id')
+    if not isinstance(step_id, str) or step_id == '':
+        raise Exception(
+            'Error! Each step dictionary must contain a non-empty string id: tag.')
+    return step_id
 
 
 def get_subkeys(steps_keys: List[str]) -> List[str]:
@@ -195,7 +220,8 @@ def extract_implementation(yaml_tree: Yaml, wic: Yaml, yaml_path: Path) -> Tuple
             print(yaml.dump(yaml_tree))
             print(yaml.dump(wic))
             print(wic['implementations'])
-            raise Exception(f'Error! No steps for implementation {stepid} in {yaml_path}!')
+            raise Exception(
+                f'Error! No steps for implementation {stepid} in {yaml_path}!')
         steps = wic['implementations'][stepid]['steps']
         yaml_tree_copy.update({'steps': steps})
         # TODO: Use the entire back_tree? Useful for inputs:
@@ -206,7 +232,8 @@ def extract_implementation(yaml_tree: Yaml, wic: Yaml, yaml_path: Path) -> Tuple
     elif 'steps' in yaml_tree_copy:
         pass  # steps = yaml_tree_copy['steps']
     else:
-        raise Exception(f'Error! No implementations and/or steps in {yaml_path}!')
+        raise Exception(
+            f'Error! No implementations and/or steps in {yaml_path}!')
     return (implementation, yaml_tree_copy)
 
 
@@ -388,7 +415,11 @@ def get_step_name_1(step_1_names: List[str],
     Returns:
         str: The name of the first step
     """
+    if not steps_keys:
+        raise Exception('Error! workflows must define at least one step.')
     if steps_keys[0] in subkeys:
+        if not step_1_names:
+            raise Exception('Error! Subworkflow has no concrete first step.')
         step_name_1 = step_1_names[0]
     else:
         step_name_1 = step_name_str(yaml_stem, 0, steps_keys[0])
@@ -412,7 +443,8 @@ def parse_provenance_output_files(output_json: Json) -> List[Tuple[str, str, str
     """
     files = []
     for namespaced_output_name, obj in output_json.items():
-        files.append(parse_provenance_output_files_(obj, namespaced_output_name))
+        files.append(parse_provenance_output_files_(
+            obj, namespaced_output_name))
     return [y for x in files for y in x]
 
 
@@ -428,9 +460,11 @@ def parse_provenance_output_files_(obj: Any, parentdirs: str) -> List[Tuple[str,
     """
     if isinstance(obj, Dict):
         if obj.get('class', '') == 'File':
-            return [(str(obj['location']), parentdirs, str(obj['basename']))]  # This basename is a file name
+            # This basename is a file name
+            return [(str(obj['location']), parentdirs, str(obj['basename']))]
         if obj.get('class', '') == 'Directory':
-            subdir = parentdirs + '/' + obj['basename']  # This basename is a directory name
+            # This basename is a directory name
+            subdir = parentdirs + '/' + obj['basename']
             return parse_provenance_output_files_(obj['listing'], subdir)
     if isinstance(obj, List):
         files = []
@@ -470,7 +504,8 @@ def get_input_mappings(input_mapping: Dict[str, List[str]], arg_keys: List[str],
                 if arg_key_ in input_mapping:
                     # Remove the intermediate variables associated with subworkflow boundaries.
                     arg_key_init_namespaces = arg_key_.split('___')[:-1]
-                    temp = ['___'.join(arg_key_init_namespaces + [s]) for s in input_mapping[arg_key_]]
+                    temp = ['___'.join(arg_key_init_namespaces + [s])
+                            for s in input_mapping[arg_key_]]
                     arg_keys_accum.append(temp)
                     done = False
                 else:
@@ -502,7 +537,8 @@ def get_output_mapping(output_mapping: Dict[str, str], out_key: str) -> str:
         if out_key in output_mapping:
             # Remove the intermediate variables associated with subworkflow boundaries.
             out_key_init_namespaces = out_key.split('___')[:-1]
-            out_key = '___'.join(out_key_init_namespaces + [output_mapping[out_key]])
+            out_key = '___'.join(out_key_init_namespaces +
+                                 [output_mapping[out_key]])
             done = False
         # print('out_key', out_key)
 

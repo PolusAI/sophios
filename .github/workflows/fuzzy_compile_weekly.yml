@@ -97,7 +97,7 @@ jobs:
 
       - name: Generate Sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd sophios/ && pytest -k test_compile_python_workflows
+        run: cd sophios/ && pytest tests/test_python_api.py -k test_compile_python_workflows
 
       - name: Generate Sophios Validation Jsonschema
         if: always()
@@ -108,7 +108,11 @@ jobs:
         # WIC Python API workflows as well as the WIC Python API itself.
       - name: Validate Sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd sophios/ && pytest -k test_compile_python_workflows
+        run: cd sophios/ && pytest tests/test_python_api.py -k test_validate_generated_python_workflows
+
+      - name: PyTest CWL Builder
+        if: always()
+        run: cd sophios/ && pytest tests/test_cwl_builder.py -k test_cwl_builder
 
 # Since a randomly chosen subschema is used every time, repeat 10X for more coverage.
 

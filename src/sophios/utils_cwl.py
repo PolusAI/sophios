@@ -8,6 +8,51 @@ from .wic_types import (GraphReps, InternalOutputs, Namespaces, Tool, Tools,
                         WorkflowOutputs, Yaml, StepId)
 
 
+def validate_out_tag(out_vals: Any) -> None:
+    """Validate the structure of a step `out:` tag.
+
+    Args:
+        out_vals (Any): Candidate `out:` payload.
+
+    Raises:
+        Exception: If `out:` is not a list of strings and/or single-key dictionaries.
+    """
+    if not isinstance(out_vals, list):
+        raise Exception('Error! The `out` tag should be a list.')
+
+    for out_val in out_vals:
+        if isinstance(out_val, str):
+            continue
+        if isinstance(out_val, dict):
+            keys = list(out_val.keys())
+            if len(keys) != 1 or not isinstance(keys[0], str) or keys[0] == '':
+                raise Exception(
+                    'Error! There should only be one non-empty string anchor per out: list entry!')
+            continue
+        raise Exception(
+            'Error! Each out: list entry should be a string or a single-key dictionary.')
+
+
+def require_string_out_keys(out_vals: Any) -> List[str]:
+    """Return validated string output names from an `out:` tag.
+
+    Args:
+        out_vals (Any): Candidate `out:` payload.
+
+    Raises:
+        Exception: If any `out:` list entries are not strings.
+
+    Returns:
+        List[str]: Validated output names.
+    """
+    validate_out_tag(out_vals)
+    out_keys = [out_val for out_val in out_vals if isinstance(out_val, str)]
+    if len(out_keys) != len(out_vals):
+        raise Exception(
+            'Error! Each out: list entry should resolve to a string output name before workflow compilation.')
+    return out_keys
+
+
 def maybe_add_requirements(yaml_tree: Yaml, steps_keys: List[str],
                            wic_steps: Yaml, subkeys: List[str]) -> None:
     """Adds any necessary CWL requirements
@@ -36,7 +81,8 @@ def maybe_add_requirements(yaml_tree: Yaml, steps_keys: List[str],
             del sub_wic_copy['wic']
         if (utils.recursively_contains_dict_key('valueFrom', in_step) or
                 utils.recursively_contains_dict_key('valueFrom', sub_wic_copy)):
-            stepinp = ['StepInputExpressionRequirement', 'InlineJavascriptRequirement']
+            stepinp = ['StepInputExpressionRequirement',
+                       'InlineJavascriptRequirement']
 
     if not subkeys == []:
         subwork = ['SubworkflowFeatureRequirement']
@@ -45,7 +91,8 @@ def maybe_add_requirements(yaml_tree: Yaml, steps_keys: List[str],
     if reqs:
         reqsdict: Dict[str, Dict] = {r: {} for r in set(reqs)}
         if 'requirements' in yaml_tree:
-            new_reqs = dict(list(yaml_tree['requirements'].items()) + list(reqsdict.items()))
+            new_reqs = dict(
+                list(yaml_tree['requirements'].items()) + list(reqsdict.items()))
             yaml_tree['requirements'].update(new_reqs)
         else:
             yaml_tree['requirements'] = reqsdict
@@ -62,17 +109,22 @@ def add_yamldict_keyval_in(steps_i: Yaml, step_key: str, keyval: Yaml) -> Yaml:
     Returns:
         Yaml: The first Yaml dict with the second Yaml dict merged into it.
     """
+    # Compiler and inference call sites pass a single step dictionary here.
+    # If that step dict is temporarily empty, preserve the single-step shape by
+    # synthesizing an explicit `id` instead of the legacy `{step_key: {...}}`
+    # mapping form.
     # TODO: Check whether we can just use deepmerge.merge()
     if steps_i:
         if 'in' in steps_i:
             new_keys = dict(list(steps_i['in'].items()) + list(keyval.items()))
-            new_keyvals = dict([(k, v) if k != 'in' else (k, new_keys) for k, v in steps_i.items()])
+            new_keyvals = dict([(k, v) if k != 'in' else (
+                k, new_keys) for k, v in steps_i.items()])
         else:
             new_keys = keyval
             new_keyvals = dict(list(steps_i.items()) + [('in', new_keys)])
         steps_i.update(new_keyvals)
     else:
-        steps_i = {step_key: {'in': keyval}}
+        steps_i = {'id': step_key, 'in': keyval}
     return steps_i
 
 
@@ -87,17 +139,20 @@ def add_yamldict_keyval_out(steps_i: Yaml, step_key: str, strs: List[str]) -> Ya
     Returns:
         Yaml: The first Yaml dict with the second Yaml dict merged into it.
     """
+    # See add_yamldict_keyval_in(): keep the returned value in single-step form
+    # even when `steps_i` is empty.
     # TODO: Check whether we can just use deepmerge.merge()
     if steps_i:
         if 'out' in steps_i:
-            new_strs = steps_i['out'] + strs
+            new_strs = require_string_out_keys(steps_i['out']) + strs
             new_strs = list(set(new_strs))
-            new_keyvals = dict([(k, v) if k != 'out' else (k, new_strs) for k, v in steps_i.items()])
+            new_keyvals = dict([(k, v) if k != 'out' else (
+                k, new_strs) for k, v in steps_i.items()])
         else:
             new_keyvals = dict(list(steps_i.items()) + [('out', strs)])
         steps_i.update(new_keyvals)
     else:
-        steps_i = {step_key: {'out': strs}}
+        steps_i = {'id': step_key, 'out': strs}
     return steps_i
 
 
@@ -142,20 +197,25 @@ def get_workflow_outputs(graph_settings: Dict[str, Any],
             or step_id in tools \
             or Path(step_key).stem == Path(tools_lst[i].run_path).stem else step_key
         # step_name_or_key = step_name_i if stepid in tools else step_key
-        out_keys = steps[i]['out']
+        out_keys = require_string_out_keys(steps[i]['out'])
         for out_key in out_keys:
             out_var = f'{step_name_or_key}/{out_key}'
             # Avoid duplicating intermediate outputs in GraphViz
             out_key_no_namespace = out_key.split('___')[-1]
             if graph_settings['graph_show_outputs']:
-                vars_nss = [var.replace('/', '___') for var in vars_workflow_output_internal]
-                case1 = (tool_i['class'] == 'Workflow') and (not out_key in vars_nss)
+                vars_nss = [var.replace('/', '___')
+                            for var in vars_workflow_output_internal]
+                case1 = (tool_i['class'] == 'Workflow') and (
+                    not out_key in vars_nss)
                 # Avoid duplicating outputs from subgraphs in parent graphs.
-                namespaced_output_name = '___'.join(namespaces + [step_name_or_key, out_key])
-                lengths_off_by_one = (len(step_node_name.split('___')) + 1 == len(namespaced_output_name.split('___')))
+                namespaced_output_name = '___'.join(
+                    namespaces + [step_name_or_key, out_key])
+                lengths_off_by_one = (len(step_node_name.split(
+                    '___')) + 1 == len(namespaced_output_name.split('___')))
                 # TODO: check is_root here
                 case1 = case1 and not is_root and lengths_off_by_one
-                case2 = (tool_i['class'] == 'CommandLineTool') and (not out_var in vars_workflow_output_internal)
+                case2 = (tool_i['class'] == 'CommandLineTool') and (
+                    not out_var in vars_workflow_output_internal)
                 if case1 or case2:
                     graph_gv = graph.graphviz
                     graph_nx = graph.networkx
@@ -168,11 +228,13 @@ def get_workflow_outputs(graph_settings: Dict[str, Any],
                         graph_gv.edge(step_node_name, namespaced_output_name, color=font_edge_color,
                                       label=out_key_no_namespace)  # Is labeling necessary?
                     else:
-                        graph_gv.edge(step_node_name, namespaced_output_name, color=font_edge_color)
+                        graph_gv.edge(
+                            step_node_name, namespaced_output_name, color=font_edge_color)
                     graph_nx.add_node(namespaced_output_name)
                     graph_nx.add_edge(step_node_name, namespaced_output_name)
                     graphdata.nodes.append((namespaced_output_name, attrs))
-                    graphdata.edges.append((step_node_name, namespaced_output_name, {}))
+                    graphdata.edges.append(
+                        (step_node_name, namespaced_output_name, {}))
             # NOTE: Unless we are in the root workflow, we always need to
             # output everything. This is because while we are within a
             # subworkflow, we do not yet know if a subworkflow output will be used as
@@ -186,7 +248,8 @@ def get_workflow_outputs(graph_settings: Dict[str, Any],
             # Exclude intermediate 'output' files.
             if out_var in vars_workflow_output_internal:  # and is_root
                 continue
-            out_name = f'{step_name_or_key}___{out_key}'  # Use triple underscore for namespacing so we can split later
+            # Use triple underscore for namespacing so we can split later
+            out_name = f'{step_name_or_key}___{out_key}'
             # print('out_name', out_name)
 
         for out_key, out_dict in outputs_workflow[i].items():
@@ -195,9 +258,11 @@ def get_workflow_outputs(graph_settings: Dict[str, Any],
                 # Promote scattered output types to arrays
                 out_dict['type'] = {'type': 'array', 'items': out_dict['type']}
 
-            out_name = f'{step_name_or_key}___{out_key}'  # Use triple underscore for namespacing so we can split later
+            # Use triple underscore for namespacing so we can split later
+            out_name = f'{step_name_or_key}___{out_key}'
             out_var = f'{step_name_or_key}/{out_key}'
-            workflow_outputs.update({out_name: {**out_dict, 'outputSource': out_var}})
+            workflow_outputs.update(
+                {out_name: {**out_dict, 'outputSource': out_var}})
         # print('workflow_outputs', workflow_outputs)
     # NOTE: The fix_conflicts 'feature' of cwltool prevents files from being
     # overwritten by appending _2, _3 etc.
@@ -207,14 +272,12 @@ def get_workflow_outputs(graph_settings: Dict[str, Any],
     # Note that this error is not detected using --validate.
     # One workaround is to simply output all files.
     # TODO: glob "." is still returning null; need to use InitialWorkDirRequirement??
-    output_all = {'output_all':
-                  {'type':
-                   {'type': 'array',
-                    'items': ['Directory', 'File']},
-                   'outputBinding': {'glob': '\".\"'},
-                   'format': 'edam:format_2330'}}  # 'Textual format'
     # This crashes toil-cwl-runner, but not cwltool.
-    # workflow_outputs.update(output_all) # type: ignore
+    # workflow_outputs['output_all'] = {
+    #     'type': {'type': 'array', 'items': ['Directory', 'File']},
+    #     'outputBinding': {'glob': '\".\"'},
+    #     'format': 'edam:format_2330',
+    # }
     return workflow_outputs
 
 
@@ -250,9 +313,17 @@ def canonicalize_steps_list(steps: Yaml) -> List[Yaml]:
         if not all_dicts:
             msg = 'Error! If steps: tag is a List then all its elements should be Dictionaries!'
             raise Exception(f"{msg}\n{yaml.dump(steps)}")
+        for step in steps:
+            utils.require_step_id(step)
         return steps
     if isinstance(steps, dict):
-        items = [(key, {}) if val is None else (key, val) for key, val in steps.items()]
+        invalid_keys = [key for key in steps if not isinstance(
+            key, str) or key == '']
+        if invalid_keys:
+            msg = 'Error! If steps: tag is a Dictionary then all its keys should be non-empty strings!'
+            raise Exception(f"{msg}\n{yaml.dump(steps)}")
+        items = [(key, {}) if val is None else (key, val)
+                 for key, val in steps.items()]
         all_dicts = all([isinstance(val, dict) for key, val in items])
         if not all_dicts:
             msg = 'Error! If steps: tag is a Dictionary then all its values should be Dictionaries!'
@@ -265,7 +336,7 @@ def canonicalize_steps_list(steps: Yaml) -> List[Yaml]:
 def remove_id_tags(list_of_dicts_with_id_keys: list) -> dict[str, Yaml]:
     d_canon = {}
     for d in list_of_dicts_with_id_keys:
-        id_tag = d['id']
+        id_tag = utils.require_step_id(d)
         del d['id']
         # NOTE: The order of the steps may not be preserved!
         d_canon[id_tag] = d
@@ -359,7 +430,8 @@ def copy_cwl_input_output_dict(io_dict: Dict, remove_qmark: bool = False) -> Dic
     """
     io_type = io_dict['type']
     if isinstance(io_type, str) and remove_qmark:
-        io_type = io_type.replace('?', '')  # Providing optional arguments makes them required
+        # Providing optional arguments makes them required
+        io_type = io_type.replace('?', '')
     new_dict = {'type': canonicalize_type(io_type)}
     for key in ['format', 'label', 'doc']:
         if key in io_dict:

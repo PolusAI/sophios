@@ -147,7 +147,7 @@ def inline_subworkflow(yaml_tree_tuple: YamlTree, namespaces: Namespaces) -> Tup
     else:
         # Strip off one initial namespace
         y_t = YamlTree(StepId(step_key, step_id.plugin_ns), sub_yml_tree)
-        (step_key_, sub_yml_tree), len_substeps = inline_subworkflow(y_t, namespaces[1:])
+        (_, sub_yml_tree), len_substeps = inline_subworkflow(y_t, namespaces[1:])
         # TODO: re-index wic: steps: ? We probably should, although
         # inlineing after merging should not affect CWL args.
         # Re-indexing could be tricky w.r.t. overloading.
@@ -187,7 +187,7 @@ def apply_args(sub_yml_tree: Yaml, sub_parentargs: Yaml) -> Yaml:
         if not argkey in inputs_workflow:
             raise Exception(f'Error while inlineing {argkey}\n{yaml.dump(sub_yml_tree)}\n{yaml.dump(sub_parentargs)}')
 
-        for i, step_key in enumerate(steps_keys):
+        for i, _step_key in enumerate(steps_keys):
             # NOTE: We should probably be using
             # sub_keys = utils.get_subkeys(steps_keys, tools)
             # to check whether or not `step_key in sub_keys` and thus

@@ -158,7 +158,7 @@ def test_run_inlined_workflows_weekly(yml_path_str: str, yml_path: Path, cwl_run
 def test_cwl_docker_extract(yml_path_str: str, yml_path: Path) -> None:
     """ Uses cwl-docker-extract to recursively `docker pull`"""
     args = get_args(str(yml_path))
-    run_workflows(yml_path_str, yml_path, 'cwltool', args, True)
+    run_workflows(yml_path_str, yml_path, 'cwltool', args, docker_pull_only=True)
     return
 
 
@@ -220,7 +220,7 @@ def run_workflows(yml_path_str: str, yml_path: Path, cwl_runner: str, args: argp
     verify_container_engine_config(args.container_engine, args.ignore_docker_install)
 
     if docker_pull_only:
-        cwl_docker_extract(args.container_engine, args.pull_dir, Path(yml_path).stem)
+        cwl_docker_extract(args.container_engine, args.pull_dir, Path(basepath) / f'{Path(yml_path).stem}.cwl')
         return
 
     if args.docker_remove_entrypoints:
