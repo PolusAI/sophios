@@ -82,14 +82,6 @@ Note that this is one key difference between sophios and CWL. In CWL, all inputs
 In addition to YAML based language for building workflows Sophios also provides a Python API. The aspirational goal of this API is to be close to regular
 usage of Python. This API leverages YAML based syntax by transforming the Python workflow internally into a regular Sophios YAML workflow. All the Python API examples discussed here can be found in directory [`examples/scripts`](https://github.com/PolusAI/workflow-inference-compiler/tree/master/examples/scripts) in the Sophios repository.
 
-Sophios also provides a separate Python API for authoring a single CWL `CommandLineTool` directly, without going through the workflow DSL. If you want to generate CLTs from Python and validate the result with `cwltool` and schema-salad, see [Building a CWL CommandLineTool in Python](cwl_builder_sam3.md).
-
-If you want to build a CLT in Python and then compose it directly into a `Workflow` without writing an intermediate `.cwl` file, see [Using `cwl_builder` and the Workflow Python API Together](cwl_builder_workflow.md).
-
-If you want the canonical end-to-end Python story today, from CLT authoring through workflow construction to compute-slurm submission, see [Canonical Python-to-Compute-Slurm Flow with `ichnaea_compact.py`](ichnaea_compact_compute.md).
-
-If you want the lower-level compute payload API by itself, see [From Python Workflow to Compute Payload](compute_payload_workflow.md).
-
 ### basics
 Let us take the most basic workflow *`hello world`*. This is how we write it in YAML syntax.
 
@@ -100,12 +92,10 @@ steps:
       message: !ii Hello World
 ```
 
-The Python API closely follows the YAML syntax. We create steps and from steps we create workflows. The API exposes the means to create Step and Workflow objects. The steps and workflows are just plain objects in Python which can be passed around, manipulated, composed and reused. Import `Step` and `Workflow` from `sophios.apis.python.api`. We can write the above workflow as follows using Python API.
-
-The legacy shorthand `append.file = touch.file` is still supported, but the preferred explicit form is `append.inputs.file = touch.outputs.file`. Likewise, named step inputs can be read explicitly through `step.inputs.<name>`.
+The Python API closely follows the YAML syntax. We create steps and from steps we create workflows. The API exposes the means to create Step and Workflow objects. The steps and workflows are just plain objects in Python which can be passed around, manipulated, composed and reused. We can write the above workflow as follows using Python API.
 
 ```
-from sophios.apis.python.api import Step, Workflow
+from sophios.api.pythonapi import Step, Workflow
 
 
 def workflow() -> Workflow:
@@ -147,7 +137,7 @@ steps:
 We can write the above workflow as follows using the Python API.
 
 ```
-from sophios.apis.python.api import Step, Workflow
+from sophios.api.pythonapi import Step, Workflow
 
 
 def workflow() -> Workflow:
@@ -201,7 +191,7 @@ steps:
 We can write the above workflow as follows using the Python API.
 
 ```
-from sophios.apis.python.api import Step, Workflow
+from sophios.api.pythonapi import Step, Workflow
 
 def workflow() -> Workflow:
     # scatter on a subset of inputs
@@ -262,7 +252,7 @@ steps:
 We can write the above workflow as follows using the Python API.
 
 ```
-from sophios.apis.python.api import Step, Workflow
+from sophios.api.pythonapi import Step, Workflow
 
 
 def workflow() -> Workflow:
@@ -274,6 +264,8 @@ def workflow() -> Workflow:
     echo = Step(clt_path='../../cwl_adapters/echo.cwl')
     echo.message = toString.output
     # add a when clause
+    # alternate js syntax
+    # echo.when = '$(inputs["message"] < 27)'
     echo.when = '$(inputs.message < "27")'
     # since the condition is not met the echo step is skipped!
 
