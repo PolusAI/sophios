@@ -11,8 +11,8 @@ cd sophios
 cd install/
 ./install_conda.sh
 source ~/.bashrc
-conda create --name wic # or any name
-conda activate wic
+conda create --name sophios # or any name
+conda activate sophios
 ./install_system_deps.sh
 cd ..
 
@@ -61,20 +61,20 @@ You can install conda and the system dependencies with the following commands:
 ```
 ./install_conda.sh
 source ~/.bashrc
-conda create --name wic
-conda activate wic
+conda create --name sophios
+conda activate sophios
 ./install_system_deps.sh
 ```
 
-Note that if you close your terminal, the next time you open your terminal you will need to re-activate the wic environment:
+Note that if you close your terminal, the next time you open your terminal you will need to re-activate the environment:
 
 ```
-conda activate wic
+conda activate sophios
 ```
 
 ## install
 
-To install into the wic environment, simply use the following command:
+To install into the environment, simply use the following command:
 
 ```
 pip install -e ".[all]"
@@ -85,14 +85,14 @@ Developers should also install the git pre-commit hooks:
 pre-commit install
 ```
 
-You should now have the `wic` executable available in your terminal.
+You should now have the `sophios` executable available in your terminal.
 
 ## testing
 
 To test your installation, you can run the example in README.md:
 
 ```
-sophios --yaml ../workflow-inference-compiler/docs/tutorials/helloworld.wic --run_local --quiet
+sophios --yaml docs/tutorials/helloworld.wic --run_local --copy_output_files --quiet
 ```
 
 You can also run the automated test suite. Note that the tests are based on the workflows; if you have more workflows, the tests will take longer.
@@ -125,7 +125,7 @@ It does not appear to cause any problems, and moreover the suggested solutions d
 
 ## documentation
 
-The latest documentation is available on [readthedocs](https://workflow-inference-compiler.readthedocs.io/en/latest/) as well as under the `docs/` folder. To build the documentation in html format, use the commands
+The documentation for this repository lives under `docs/`. To build it in HTML format, use the commands
 
 ```
 cd docs/
@@ -140,15 +140,15 @@ When you open the project folder, VSCode should prompt you to install the follow
 
 These vscode extensions are strongly recommended for users:
 
-* YAML (Red Hat)
+- YAML (Red Hat)
 
 These vscode extensions are recommended for developers:
 
-* Python
-* MyPy
-* Remote Development
-* Docker
-* CWL (Rabix/Benten)
-* Git Extension Pack
-* Github Actions (Mathieu Dutour)
-* autoDocstring
+- Python
+- MyPy
+- Remote Development
+- Docker
+- CWL (Rabix/Benten)
+- Git Extension Pack
+- Github Actions (Mathieu Dutour)
+- autoDocstring

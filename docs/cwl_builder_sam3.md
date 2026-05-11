@@ -10,7 +10,7 @@ The design goal is simple:
 - and optional CWL details should feel like optional add-ons, not required boilerplate.
 
 The full working example lives in
-[examples/scripts/sam3_cwl_builder.py](https://github.com/PolusAI/workflow-inference-compiler/blob/master/examples/scripts/sam3_cwl_builder.py).
+[examples/scripts/sam3_cwl_builder.py](https://github.com/PolusAI/sophios/blob/main/examples/scripts/sam3_cwl_builder.py).
 
 ## The core idea
 
