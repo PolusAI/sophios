@@ -16,7 +16,7 @@ You do not need to write an intermediate `.cwl` file just to produce the
 compute request body.
 
 A runnable version of this pattern lives in
-[examples/scripts/compute_payload_workflow.py](https://github.com/PolusAI/workflow-inference-compiler/blob/master/examples/scripts/compute_payload_workflow.py).
+[examples/scripts/compute_payload_workflow.py](https://github.com/PolusAI/sophios/blob/main/examples/scripts/compute_payload_workflow.py).
 
 If you want the canonical production-like example that starts from the Ichnaea
 autosegmentation CLT and carries that tool all the way through workflow
@@ -31,7 +31,7 @@ This split gives you confidence at the right boundaries:
 - `Workflow.get_cwl_workflow()` gives you the exact compiled workflow plus job inputs.
 - `ComputeWorkflowPayload.get_compute_payload()` validates that request against the checked-in compute schema.
 
-That last point matters. The payload is not just "some JSON that happens to look right". It is checked against [`src/sophios/compute_payload_schema.json`](https://github.com/PolusAI/workflow-inference-compiler/blob/master/src/sophios/compute_payload_schema.json) before you submit it.
+That last point matters. The payload is not just "some JSON that happens to look right". It is checked against [`src/sophios/compute_payload_schema.json`](https://github.com/PolusAI/sophios/blob/main/src/sophios/compute_payload_schema.json) before you submit it.
 
 ## Minimal mental model
 

@@ -64,28 +64,28 @@ INFO [job test.cwl] completed success
 {
     "output": [
         {
-            "location": "file:///home/walkerbd/workflow-inference-compiler/cwl_adapters/1.txt",
+            "location": "file:///home/walkerbd/sophios/cwl_adapters/1.txt",
             "basename": "1.txt",
             "class": "File",
             "checksum": "sha1$da39a3ee5e6b4b0d3255bfef95601890afd80709",
             "size": 0,
-            "path": "/home/walkerbd/workflow-inference-compiler/cwl_adapters/1.txt"
+            "path": "/home/walkerbd/sophios/cwl_adapters/1.txt"
         },
         {
-            "location": "file:///home/walkerbd/workflow-inference-compiler/cwl_adapters/2.txt",
+            "location": "file:///home/walkerbd/sophios/cwl_adapters/2.txt",
             "basename": "2.txt",
             "class": "File",
             "checksum": "sha1$da39a3ee5e6b4b0d3255bfef95601890afd80709",
             "size": 0,
-            "path": "/home/walkerbd/workflow-inference-compiler/cwl_adapters/2.txt"
+            "path": "/home/walkerbd/sophios/cwl_adapters/2.txt"
         },
         {
-            "location": "file:///home/walkerbd/workflow-inference-compiler/cwl_adapters/3.txt",
+            "location": "file:///home/walkerbd/sophios/cwl_adapters/3.txt",
             "basename": "3.txt",
             "class": "File",
             "checksum": "sha1$da39a3ee5e6b4b0d3255bfef95601890afd80709",
             "size": 0,
-            "path": "/home/walkerbd/workflow-inference-compiler/cwl_adapters/3.txt"
+            "path": "/home/walkerbd/sophios/cwl_adapters/3.txt"
         }
     ]
 ```

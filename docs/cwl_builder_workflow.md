@@ -17,7 +17,7 @@ This guide shows the intended end-to-end pattern:
 The important part is that the handoff stays **in memory**. You do not need to write a temporary `.cwl` file just to use a freshly built tool inside a workflow.
 
 A runnable version of this pattern lives in
-[examples/scripts/cwl_builder_workflow.py](https://github.com/PolusAI/workflow-inference-compiler/blob/master/examples/scripts/cwl_builder_workflow.py).
+[examples/scripts/cwl_builder_workflow.py](https://github.com/PolusAI/sophios/blob/main/examples/scripts/cwl_builder_workflow.py).
 
 ## When to use this pattern
 
@@ -61,7 +61,7 @@ We will build a tiny tool called `emit_text`:
 Then we will:
 
 - convert that built tool into a Sophios `Step`,
-- feed its file output into the existing checked-in [`cat.cwl`](https://github.com/PolusAI/workflow-inference-compiler/blob/master/cwl_adapters/cat.cwl),
+- feed its file output into the existing checked-in [`cat.cwl`](https://github.com/PolusAI/sophios/blob/main/cwl_adapters/cat.cwl),
 - expose a workflow input called `message`,
 - and expose a workflow output called `result`.
 

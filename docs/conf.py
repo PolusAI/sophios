@@ -18,7 +18,7 @@ from typing import Dict
 
 # -- Project information -----------------------------------------------------
 
-project = 'Workflow Inference Compiler'
+project = 'Sophios'
 copyright = '2023, Axle Informatics'
 author = 'Jake Fennick'
 

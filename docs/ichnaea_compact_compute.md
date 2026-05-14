@@ -4,7 +4,7 @@ This document describes the recommended Python path in Sophios for taking a
 tool definition all the way to a compute-slurm submission payload.
 
 The canonical reference implementation is
-[`examples/scripts/ichnaea_compact.py`](https://github.com/PolusAI/workflow-inference-compiler/blob/master/examples/scripts/ichnaea_compact.py).
+[`examples/scripts/ichnaea_compact.py`](https://github.com/PolusAI/sophios/blob/main/examples/scripts/ichnaea_compact.py).
 
 The goal of the example is precise:
 
@@ -106,7 +106,7 @@ It makes the example suitable both as documentation and as a reference client.
 ## Layer 1: the CLT definition
 
 The first major function in the example is
-[`build_autoseg_CLT()`](https://github.com/PolusAI/workflow-inference-compiler/blob/master/examples/scripts/ichnaea_compact.py).
+[`build_autoseg_CLT()`](https://github.com/PolusAI/sophios/blob/main/examples/scripts/ichnaea_compact.py).
 
 This function belongs entirely to the `cwl_builder` layer.
 It is responsible for the CLT itself:
@@ -149,7 +149,7 @@ If you need a slower introduction to this style of CLT construction, return to
 ## Layer 2: the workflow wrapper
 
 The second major function is
-[`workflow(...)`](https://github.com/PolusAI/workflow-inference-compiler/blob/master/examples/scripts/ichnaea_compact.py).
+[`workflow(...)`](https://github.com/PolusAI/sophios/blob/main/examples/scripts/ichnaea_compact.py).
 
 This function is intentionally small.
 Its purpose is not to redescribe the tool.
@@ -241,7 +241,7 @@ That explicit separation keeps the transition to the compute layer transparent.
 ## Layer 4: compute-slurm payload construction
 
 The next function,
-[`create_compute_payload(...)`](https://github.com/PolusAI/workflow-inference-compiler/blob/master/examples/scripts/ichnaea_compact.py),
+[`create_compute_payload(...)`](https://github.com/PolusAI/sophios/blob/main/examples/scripts/ichnaea_compact.py),
 packages those pieces into a schema-backed `ComputeWorkflowPayload`.
 
 The construction is intentionally direct:
@@ -332,7 +332,7 @@ The compact example is the canonical path because it stays in memory as long as
 possible.
 
 However, Sophios also provides
-[`examples/scripts/ichnaea_integrated.py`](https://github.com/PolusAI/workflow-inference-compiler/blob/master/examples/scripts/ichnaea_integrated.py)
+[`examples/scripts/ichnaea_integrated.py`](https://github.com/PolusAI/sophios/blob/main/examples/scripts/ichnaea_integrated.py)
 for cases where explicit artifacts are desirable.
 
 It follows the same overall logic, but writes outputs at each major boundary.
