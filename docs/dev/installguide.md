@@ -125,7 +125,7 @@ It does not appear to cause any problems, and moreover the suggested solutions d
 
 ## documentation
 
-The documentation for this repository lives under `docs/`. To build it in HTML format, use the commands
+The latest documentation is available on [readthedocs](https://workflow-inference-compiler.readthedocs.io/en/latest/) as well as under the `docs/` folder. To build it in HTML format, use the commands
 
 ```
 cd docs/
