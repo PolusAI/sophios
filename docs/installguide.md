@@ -12,7 +12,7 @@ or use the repository examples directly from a checkout, use the
 ## Python Requirement
 
 Sophios declares its supported Python range in `pyproject.toml`. For the current
-package, use Python 3.11 or newer.
+package, use Python 3.10 or newer.
 
 Check your interpreter:
 

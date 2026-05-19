@@ -16,7 +16,7 @@ A developer install has three layers:
 - an editable `pip` install so imports come from the checkout.
 
 The Python requirement is declared in `pyproject.toml`. For this checkout, use
-Python 3.11 or newer.
+Python 3.10 or newer.
 
 ## Step 1: Clone the Repository
 

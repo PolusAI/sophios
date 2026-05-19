@@ -14,7 +14,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     # NOTE: This 'graphviz' refers to the python bindings to the underlying
     # system binary graphviz package (i.e. the `dot` executable) which we need to
@@ -50,8 +50,8 @@ file = "README.md"
 content-type = "text/markdown"
 
 [project.urls]
-Homepage = "https://github.com/PolusAI/workflow-inference-compiler"
-"Bug Tracker" = "https://github.com/PolusAI/workflow-inference-compiler/issues"
+Homepage = "https://github.com/PolusAI/sophios"
+"Bug Tracker" = "https://github.com/PolusAI/sophios/issues"
 
 [project.optional-dependencies]
 
