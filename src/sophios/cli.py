@@ -4,8 +4,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from . import _version
-__version__ = _version.get_versions()['version']
+from . import __version__
 
 parser = argparse.ArgumentParser(prog='main', description='Convert a high-level yaml workflow file to CWL.')
 

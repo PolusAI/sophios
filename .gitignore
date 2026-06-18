@@ -11,6 +11,7 @@ provenance/
 build/
 dist/
 *.egg-info/
+src/sophios/_version.py
 docs/_build/
 .DS_Store
 .coverage
@@ -19,6 +20,7 @@ gromacs_mdp.html
 NCI*
 error_*.txt
 *config.json
+!release-please-config.json
 validation_*.txt
 .hypothesis/
 .env
