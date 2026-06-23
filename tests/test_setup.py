@@ -1,10 +1,12 @@
 import json
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 import time
 from typing import Dict
 
 from hypothesis.strategies import SearchStrategy
 import hypothesis_jsonschema as hj
+import pytest
 import yaml
 
 import sophios
@@ -159,3 +161,13 @@ wic_strategy = wic_strategy.filter(wic_yaml_filter_top_level_types)
 time_final = time.time()
 print(f'from_schema time: {round(time_final - time_initial, 4)} seconds')
 print()
+
+
+def test_version_resolution_warns_when_package_metadata_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing_version(distribution_name: str) -> str:
+        raise PackageNotFoundError(distribution_name)
+
+    monkeypatch.setattr(sophios, "version", missing_version)
+
+    with pytest.warns(RuntimeWarning, match="sophios is not installed"):
+        assert sophios._resolve_version() == "unknown"

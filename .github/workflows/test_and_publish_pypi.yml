@@ -1,10 +1,12 @@
 name: Test and Publish PyPi
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag to publish, for example v0.5.1"
+        required: true
+        type: string
 
 jobs:
   package:
@@ -14,7 +16,7 @@ jobs:
       - name: Checkout 🛎️
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.event.inputs.ref }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -24,11 +26,9 @@ jobs:
           python-version: 3.11
 
       - name: Verify version detection
-        run: |
-          git fetch --force --tags
-          git status --short
-          python -m pip install setuptools-scm
-          python -m setuptools_scm
+        uses: ./.github/actions/verify-version
+        with:
+          expected-ref: ${{ github.event.inputs.ref }}
 
       - name: Remove old global config
         if: always()

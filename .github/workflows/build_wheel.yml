@@ -21,11 +21,9 @@ jobs:
           python-version: 3.11
 
       - name: Verify version detection
-        run: |
-          git fetch --force --tags
-          git status --short
-          python -m pip install setuptools-scm
-          python -m setuptools_scm
+        uses: ./.github/actions/verify-version
+        with:
+          allow-fallback: "true"
 
       - name: Install sophios 🔧
         run: |

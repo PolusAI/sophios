@@ -6,20 +6,18 @@ on:
       - master
   workflow_dispatch:
 
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
-
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
       version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: google-github-actions/release-please-action@v4
+      - uses: google-github-actions/release-please-action@e4dc86ba9405554aeba3c6bb2d169500e7d3b4ee
         id: release
         with:
           config-file: release-please-config.json
@@ -33,12 +31,15 @@ jobs:
       actions: write
     steps:
       - name: Trigger PyPI publish
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
         with:
           script: |
             github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'test_and_publish_pypi.yml',
-              ref: '${{ needs.release-please.outputs.tag_name }}'
+              ref: '${{ needs.release-please.outputs.tag_name }}',
+              inputs: {
+                ref: '${{ needs.release-please.outputs.tag_name }}'
+              }
             })

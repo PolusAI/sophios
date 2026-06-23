@@ -1,0 +1,67 @@
+name: Verify setuptools-scm version
+description: Verify that setuptools-scm resolves a real version from git metadata.
+
+inputs:
+  expected-ref:
+    description: Optional version tag that must match the resolved package version.
+    required: false
+    default: ""
+  allow-fallback:
+    description: Allow sentinel fallback versions for non-release wheel builds.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Verify version
+      shell: bash
+      env:
+        EXPECTED_REF: ${{ inputs.expected-ref }}
+        ALLOW_FALLBACK: ${{ inputs.allow-fallback }}
+      run: |
+        git fetch --force --tags
+        git status --short
+
+        python -m pip install packaging setuptools-scm
+
+        VERSION="$(python -m setuptools_scm)"
+        export VERSION
+        echo "setuptools-scm detected version: ${VERSION}"
+
+        case "${VERSION}" in
+          0.0.0*|0.0.post*)
+            if [ "${ALLOW_FALLBACK}" = "true" ] && [ -z "${EXPECTED_REF}" ]; then
+              echo "WARNING: setuptools-scm used fallback_version (${VERSION}). This is allowed for this non-release build."
+            else
+              echo "ERROR: setuptools-scm used fallback_version (${VERSION}). Check tag checkout and git history."
+              exit 1
+            fi
+            ;;
+        esac
+
+        if [ -n "${EXPECTED_REF}" ]; then
+          python - <<'PY'
+        import os
+        import sys
+        from packaging.version import InvalidVersion, Version
+
+        expected_ref = os.environ["EXPECTED_REF"]
+        actual_text = os.environ["VERSION"]
+
+        if not expected_ref.startswith("v"):
+            print(f"ERROR: expected ref must be a version tag starting with 'v': {expected_ref}")
+            sys.exit(1)
+
+        try:
+            expected = Version(expected_ref[1:].replace("-dev", ".dev"))
+            actual = Version(actual_text)
+        except InvalidVersion as exc:
+            print(f"ERROR: invalid version while checking publish ref: {exc}")
+            sys.exit(1)
+
+        if actual != expected:
+            print(f"ERROR: setuptools-scm resolved {actual}, expected {expected} from {expected_ref}")
+            sys.exit(1)
+        PY
+        fi
