@@ -1,7 +1,7 @@
 import copy
 from pathlib import Path
 from urllib.parse import urlparse
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import yaml
 
@@ -78,40 +78,6 @@ def shorten_namespaced_output_name(namespaced_output_name: str, sep: str = ' ') 
             strs.append(f'step{sep}{i+1}{sep}{step_key}')
     shortened = '___'.join(strs + [output_name])
     return (yaml_stem_init, shortened)
-
-
-def restore_namespaced_output_name(yaml_stem_init: str, shortened_output_name: str, sep: Optional[str] = None) -> str:
-    """The inverse function to shorten_namespaced_output_name()
-
-    Args:
-        yaml_stem_init (str): The initial yaml_stem prefix
-        shortened_output_name (str): The shortened namespaced_output_name
-        sep (Optional[str], optional): The separator used for shortening. Defaults to None.
-
-    Raises:
-        Exception: If the argument is not of the same form as returned by shorten_namespaced_output_name
-
-    Returns:
-        str: The original namespaced_output_name before shortening.
-    """
-    if yaml_stem_init == '':
-        return shortened_output_name
-    else:
-        split = shortened_output_name.split('___')
-        namespaces = split[:-1]
-        output_name = split[-1]
-        yaml_stem = yaml_stem_init
-        strs = []
-        for shortened_step_name_str in namespaces:
-            words = shortened_step_name_str.split(sep)
-            if len(words) != 3:
-                raise Exception(
-                    f'Error! {shortened_step_name_str} is not of the correct format!')
-            _, num, name_yml = words
-            strs.append(f'{yaml_stem}{sep}step{sep}{num}{sep}{name_yml}')
-            yaml_stem = Path(name_yml).stem
-        restored = '___'.join(strs + [output_name])
-        return restored
 
 
 def partition_by_lowest_common_ancestor(nss1: Namespaces, nss2: Namespaces) -> Tuple[Namespaces, Namespaces]:
@@ -224,13 +190,8 @@ def extract_implementation(yaml_tree: Yaml, wic: Yaml, yaml_path: Path) -> Tuple
                 f'Error! No steps for implementation {stepid} in {yaml_path}!')
         steps = wic['implementations'][stepid]['steps']
         yaml_tree_copy.update({'steps': steps})
-        # TODO: Use the entire back_tree? Useful for inputs:
-        # back_tree = wic['implementations'][stepid]
-        # if 'wic' in back_tree:
-        #    del back_tree['wic']
-        # yaml_tree_copy.update(back_tree)
     elif 'steps' in yaml_tree_copy:
-        pass  # steps = yaml_tree_copy['steps']
+        pass
     else:
         raise Exception(
             f'Error! No implementations and/or steps in {yaml_path}!')
@@ -331,9 +292,9 @@ def recursively_delete_dict_key(key: str, obj: Any) -> Any:
     Returns:
         Any: The original dict with the given key recursively deleted.
     """
-    if isinstance(obj, List):
+    if isinstance(obj, list):
         return [recursively_delete_dict_key(key, x) for x in obj]
-    if isinstance(obj, Dict):
+    if isinstance(obj, dict):
         new_dict = {}
         for key_ in obj.keys():
             if not key_ == key:  # i.e. effectively delete key
@@ -352,9 +313,9 @@ def recursively_contains_dict_key(key: str, obj: Any) -> bool:
     Returns:
         bool: True if key is found, else False.
     """
-    if isinstance(obj, List):
+    if isinstance(obj, list):
         return any([recursively_contains_dict_key(key, x) for x in obj])
-    if isinstance(obj, Dict):
+    if isinstance(obj, dict):
         return (key in obj.keys()) or any(recursively_contains_dict_key(key, val) for val in obj.values())
     return False
 
@@ -458,7 +419,7 @@ def parse_provenance_output_files_(obj: Any, parentdirs: str) -> List[Tuple[str,
     Returns:
         List[Tuple[str, str, str]]: A List of (location, parentdirs, basename) for each output file.
     """
-    if isinstance(obj, Dict):
+    if isinstance(obj, dict):
         if obj.get('class', '') == 'File':
             # This basename is a file name
             return [(str(obj['location']), parentdirs, str(obj['basename']))]
@@ -466,7 +427,7 @@ def parse_provenance_output_files_(obj: Any, parentdirs: str) -> List[Tuple[str,
             # This basename is a directory name
             subdir = parentdirs + '/' + obj['basename']
             return parse_provenance_output_files_(obj['listing'], subdir)
-    if isinstance(obj, List):
+    if isinstance(obj, list):
         files = []
         for o in obj:
             files.append(parse_provenance_output_files_(o, parentdirs))
@@ -487,7 +448,6 @@ def get_input_mappings(input_mapping: Dict[str, List[str]], arg_keys: List[str],
     Returns:
         List[str]: A list of the workflow step inputs / call sites, recursively namespaced.
     """
-    # print('arg_keys', arg_keys)
     # Since each workflow input can be used in many workflow steps, we
     # need to (recursively) find all of the leaves of the mapping tree
     # corresponding to the root arg_key/in_name. Since we already added all
@@ -511,7 +471,6 @@ def get_input_mappings(input_mapping: Dict[str, List[str]], arg_keys: List[str],
                 else:
                     arg_keys_accum.append([arg_key_])
             arg_keys = [y for x in arg_keys_accum for y in x]
-            # print('arg_keys', arg_keys)
 
     return arg_keys
 
@@ -526,7 +485,6 @@ def get_output_mapping(output_mapping: Dict[str, str], out_key: str) -> str:
     Returns:
         str: The workflow step output / return location, recursively namespaced.
     """
-    # print('out_key', out_key)
     # Similarly, we need to find the fixed-point of output_mapping.
     # This is simpler since a workflow output can only come from one workflow step.
     # if not out_key_in_yaml_tree_outputs:
@@ -540,24 +498,35 @@ def get_output_mapping(output_mapping: Dict[str, str], out_key: str) -> str:
             out_key = '___'.join(out_key_init_namespaces +
                                  [output_mapping[out_key]])
             done = False
-        # print('out_key', out_key)
 
     return out_key
 
 
-def convert_args_dict_to_args_list(args_dict: Dict[str, str]) -> List[str]:
-    """ A simple utility converting a dict whose keys are CLI flag/args and
-        values are CLI flag values
+def convert_args_dict_to_args_list(
+    args_dict: Dict[str, Any],
+    boolean_flags: set[str] | None = None,
+) -> List[str]:
+    """Convert an argument dictionary into CLI-style tokens.
 
     Args:
         args_dict: A dictionary containing args and values
+        boolean_flags: Keys that should be emitted as store-true CLI flags.
 
     Returns:
         List[str]: A syntactically correct list of arguments (CLI flags) and values
     """
     args_list: List[str] = []
+    boolean_flags = set(boolean_flags or ())
     for arg_name, arg_value in args_dict.items():
-        args_list += ['--' + arg_name, arg_value]
+        flag = '--' + arg_name
+        if arg_name in boolean_flags:
+            normalized = str(arg_value).strip().lower()
+            if normalized in {'1', 'true', 'yes', 'on'}:
+                args_list.append(flag)
+            elif normalized not in {'0', 'false', 'no', 'off', ''}:
+                args_list += [flag, str(arg_value)]
+            continue
+        args_list += [flag, str(arg_value)]
     return args_list
 
 

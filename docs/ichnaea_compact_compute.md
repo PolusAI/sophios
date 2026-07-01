@@ -1,10 +1,10 @@
-# Canonical Python-to-Compute-Slurm Flow with `ichnaea_compact.py`
+# Canonical Python-to-Compute Flow with `ichnaea_compact.py`
 
 This document describes the recommended Python path in Sophios for taking a
-tool definition all the way to a compute-slurm submission payload.
+tool definition all the way to a validated compute submission request.
 
 The canonical reference implementation is
-[`examples/scripts/ichnaea_compact.py`](https://github.com/PolusAI/workflow-inference-compiler/blob/master/examples/scripts/ichnaea_compact.py).
+[`examples/scripts/ichnaea_compact.py`](https://github.com/PolusAI/sophios/blob/main/examples/scripts/ichnaea_compact.py).
 
 The goal of the example is precise:
 
@@ -12,48 +12,50 @@ The goal of the example is precise:
 2. convert that tool into a Sophios `Step`,
 3. wrap the step in a `Workflow`,
 4. compile the workflow fully in memory,
-5. package the compiled workflow and job inputs as a schema-valid
-   compute-slurm payload,
-6. submit that payload to a compute-slurm service chosen by the user.
+5. package the compiled workflow and job inputs as a schema-valid compute
+   request,
+6. submit that request to the compute service chosen by the user.
 
 This guide is intended to be read after:
 
-- [Building a CWL CommandLineTool in Python](cwl_builder_sam3.md)
-- [Using `cwl_builder` and the Workflow Python API Together](cwl_builder_workflow.md)
-- [From Python Workflow to Compute Payload](compute_payload_workflow.md)
+- [Building Tool Contracts in Python](tool_builder_sam3.md)
+- [Using Tool Builder and the Workflow Python API Together](tool_builder_workflow.md)
+- [From Python Workflow to Compute Request](compute_request_workflow.md)
 
 Those documents explain the individual APIs.
 This one explains how they fit together in the current end-to-end path.
 
 ## Scope
 
-This document is specifically about submission to **compute-slurm**.
+This document is specifically about the compute submission path currently
+implemented by Sophios.
 
 That distinction matters for two reasons:
 
-- the payload schema is the compute-slurm schema checked into Sophios
-- the submission helper is designed around the compute-slurm HTTP API
+- the request schema is checked into Sophios,
+- the submission helper expects the HTTP API shape used by that compute
+  service.
 
-This is not a generic remote-execution tutorial, and it does not describe
-arbitrary third-party compute backends.
+This is not a generic remote-execution tutorial, and it does not describe every
+possible third-party compute backend.
 
 ## What this example demonstrates
 
 `ichnaea_compact.py` is the canonical example because it captures the intended
 division of responsibilities across the Python surface:
 
-- `cwl_builder` defines the tool contract
+- `tool_builder` defines the tool contract
 - the workflow Python API defines orchestration
-- `ComputeWorkflowPayload` defines the compute-slurm submission payload
-- `submit_compute_payload(...)` performs submission and status polling
+- `ComputeRequest` defines the submission request
+- `ComputeRequest.submit(...)` performs typed submission and status polling
 
 That separation is the architectural point of the example.
 
 Sophios is not asking one object to behave simultaneously as:
 
 - a CLT authoring API,
-- a workflow DSL,
-- a JSON payload builder,
+- a workflow API,
+- a JSON request builder,
 - and a network client.
 
 Instead, each layer contributes one well-scoped transformation.
@@ -67,8 +69,8 @@ Python CLT definition
     -> Sophios Step
     -> Sophios Workflow
     -> compiled CWL workflow + job inputs
-    -> compute-slurm payload
-    -> compute-slurm submission
+    -> compute request
+    -> compute submission
 ```
 
 This is the simplest useful mental model for the example.
@@ -77,16 +79,16 @@ This is the simplest useful mental model for the example.
 
 The Python documentation now forms a sequence:
 
-1. [cwl_builder_sam3](cwl_builder_sam3.md) explains how to author one CLT in Python
-2. [cwl_builder_workflow](cwl_builder_workflow.md) explains how a built CLT becomes a workflow step
-3. [compute_payload_workflow](compute_payload_workflow.md) explains the generic compute payload API
-4. this document explains the recommended end-to-end compute-slurm path
+1. [tool_builder_sam3](tool_builder_sam3.md) explains how to author one CLT in Python
+2. [tool_builder_workflow](tool_builder_workflow.md) explains how a built CLT becomes a workflow step
+3. [compute_request_workflow](compute_request_workflow.md) explains the generic compute request API
+4. this document explains the recommended end-to-end compute submission path
 
 For most users, that means:
 
 - learn the CLT builder first
 - learn the CLT-to-workflow bridge second
-- use this document when moving to real compute-slurm submission
+- use this document when moving to real compute submission
 
 ## What `ichnaea_compact.py` is responsible for
 
@@ -97,7 +99,7 @@ Instead, it demonstrates one coherent workflow:
 - define the Ichnaea autosegmentation CLT
 - turn it into a one-step Sophios workflow
 - compile that workflow
-- package the compiled result for compute-slurm
+- package the compiled result for compute submission
 - optionally submit it
 
 That narrow scope is deliberate.
@@ -106,9 +108,9 @@ It makes the example suitable both as documentation and as a reference client.
 ## Layer 1: the CLT definition
 
 The first major function in the example is
-[`build_autoseg_CLT()`](https://github.com/PolusAI/workflow-inference-compiler/blob/master/examples/scripts/ichnaea_compact.py).
+[`build_autoseg_CLT()`](https://github.com/PolusAI/sophios/blob/main/examples/scripts/ichnaea_compact.py).
 
-This function belongs entirely to the `cwl_builder` layer.
+This function belongs entirely to the `tool_builder` layer.
 It is responsible for the CLT itself:
 
 - inputs
@@ -144,32 +146,32 @@ For example, the following all belong in the CLT:
 Those are properties of the tool itself.
 
 If you need a slower introduction to this style of CLT construction, return to
-[cwl_builder_sam3](cwl_builder_sam3.md).
+[tool_builder_sam3](tool_builder_sam3.md).
 
 ## Layer 2: the workflow wrapper
 
 The second major function is
-[`workflow(...)`](https://github.com/PolusAI/workflow-inference-compiler/blob/master/examples/scripts/ichnaea_compact.py).
+[`workflow(...)`](https://github.com/PolusAI/sophios/blob/main/examples/scripts/ichnaea_compact.py).
 
-This function is intentionally small.
+This function is narrow by design.
 Its purpose is not to redescribe the tool.
 Its purpose is to place the tool in a Sophios workflow context.
 
 It does two things:
 
-1. converts the generated CLT into a `Step`
+1. builds a `Step` from the generated CLT
 2. binds concrete input values and wraps that step in a `Workflow`
 
-### CLT-to-step conversion
+### Build a step from the CLT
 
 The boundary crossing is:
 
 ```python
 autoseg_clt = build_autoseg_CLT()
-autoseg = autoseg_clt.to_step(step_name="autoseg")
+autoseg = Step(autoseg_clt, step_name="autoseg")
 ```
 
-This is the intended handoff from `cwl_builder` to the workflow API.
+This is the intended handoff from `tool_builder` to the workflow API.
 
 No intermediate `.cwl` file is required.
 The CLT remains in memory and becomes a normal Sophios `Step`.
@@ -205,95 +207,85 @@ That is an acceptable and useful use of the workflow API.
 The next boundary is the compiled workflow object:
 
 ```python
-workflow_json = autoseg_workflow.get_cwl_workflow()
+compiled_workflow = autoseg_workflow.compile()
 ```
 
 This object contains:
 
-- the workflow name
-- the generated `yaml_inputs`
-- the compiled CWL workflow document
+- `compiled_workflow.name`
+- `compiled_workflow.cwl_workflow`
+- `compiled_workflow.cwl_job_inputs`
 
-The example then separates those pieces explicitly:
+This boundary is intentionally named and structured. The workflow layer owns DAG
+composition and compilation; the compute layer consumes the compiled result.
 
 ```python
-workflow_name = workflow_json["name"]
-workflow_inputs = copy.deepcopy(workflow_json["yaml_inputs"])
-workflow_json.pop("name")
-workflow_json.pop("yaml_inputs")
-compiled_cwl_workflow = copy.deepcopy(workflow_json)
+workflow_name = compiled_workflow.name
 ```
 
-This split is not incidental.
-It is the exact boundary between:
+This handoff is the exact boundary between:
 
 - the result of workflow compilation
-- the input expected by the compute-slurm payload layer
+- the input expected by the compute request layer
 
-After the split:
+That explicit separation keeps the transition to the compute layer transparent
+without asking users to pick apart a legacy dictionary shape.
 
-- `compiled_cwl_workflow` is the CWL workflow document
-- `workflow_inputs` is the compute job input object
-- `workflow_name` is the submission identifier
-
-That explicit separation keeps the transition to the compute layer transparent.
-
-## Layer 4: compute-slurm payload construction
+## Layer 4: compute request construction
 
 The next function,
-[`create_compute_payload(...)`](https://github.com/PolusAI/workflow-inference-compiler/blob/master/examples/scripts/ichnaea_compact.py),
-packages those pieces into a schema-backed `ComputeWorkflowPayload`.
+[`create_compute_request(...)`](https://github.com/PolusAI/sophios/blob/main/examples/scripts/ichnaea_compact.py),
+packages the compiled workflow into a `ComputeRequest`.
 
 The construction is intentionally direct:
 
 ```python
-compute_object = ComputeWorkflowPayload(
+compute_request = ComputeRequest(
+    compiled_workflow,
     workflow_id=workflow_id,
-    cwl_workflow=cwl_workflow,
-    cwl_job_inputs=cwl_job_inputs,
-    compute_config=ComputeConfig(
-        toil=ToilConfig(log_level="INFO"),
-        output=OutputConfig.workflow_declared(),
-        slurm=SlurmConfig(partition="normal_gpu", cpus_per_task=4),
+    compute_config=ComputeExecutionConfig(
+        toil=ToilRuntimeConfig(log_level="INFO"),
+        output=ComputeOutputConfig.workflow_declared(),
+        slurm=SlurmJobConfig(partition="normal_gpu", cpus_per_task=4),
     ),
 )
 ```
 
-This is where compute-slurm-specific concerns are meant to live:
+This is where compute-specific concerns are meant to live:
 
 - Toil configuration
 - output handling
 - Slurm scheduler settings
 
 The workflow layer should not encode those concerns directly.
-Likewise, the compute payload layer should not need to know how the workflow was
+Likewise, the compute request layer should not need to know how the workflow was
 authored.
 
-That is why the payload layer stays small and declarative.
+That is why the request layer stays focused and declarative.
 
-If you want the lower-level payload API in isolation, see
-[compute_payload_workflow](compute_payload_workflow.md).
+If you want the lower-level request API in isolation, see
+[compute_request_workflow](compute_request_workflow.md).
 
 ## Submission behavior
 
 The final step is submission:
 
 ```python
-submit_compute_payload(compute_object, submit_url)
+submission = compute_request.submit(submit_url)
+return submission.exit_code
 ```
 
-The compute-slurm URL is supplied by the user:
+The compute service URL is supplied by the user in Python:
 
-```bash
-PYTHONPATH=src python examples/scripts/ichnaea_compact.py \
-  --submit-url http://127.0.0.1:7998/compute/
+```python
+SUBMIT_URL = "http://127.0.0.1:7998/compute/"
 ```
 
 This is the correct contract for an example client:
 
 - the script does not assume a fixed deployment endpoint
 - the user decides whether a real submission should occur
-- omitting `--submit-url` keeps the script in build-only mode
+- leaving `SUBMIT_URL = None` keeps the script in build-only mode
 
 That makes the script useful both as documentation and as a real client entry
 point.
@@ -313,17 +305,17 @@ The workflow can be compiled fully in memory before any submission occurs.
 
 ### Compute boundary
 
-The payload is constructed through `ComputeWorkflowPayload`, which validates the
-result against the checked-in compute-slurm schema.
+The request is constructed through `ComputeRequest`, which validates the
+result against the checked-in compute schema.
 
-This means the trust model is incremental:
+This means validation is incremental:
 
 - first confirm the tool
 - then confirm the workflow
-- then confirm the payload
+- then confirm the request
 - only then submit
 
-That is a much stronger model than assembling one large opaque object at the
+That is more reliable than assembling one large opaque object at the
 end.
 
 ## The verification-oriented sibling: `ichnaea_integrated.py`
@@ -332,7 +324,7 @@ The compact example is the canonical path because it stays in memory as long as
 possible.
 
 However, Sophios also provides
-[`examples/scripts/ichnaea_integrated.py`](https://github.com/PolusAI/workflow-inference-compiler/blob/master/examples/scripts/ichnaea_integrated.py)
+[`examples/scripts/ichnaea_integrated.py`](https://github.com/PolusAI/sophios/blob/main/examples/scripts/ichnaea_integrated.py)
 for cases where explicit artifacts are desirable.
 
 It follows the same overall logic, but writes outputs at each major boundary.
@@ -342,7 +334,7 @@ It follows the same overall logic, but writes outputs at each major boundary.
 The CLT is written to disk with validation:
 
 ```python
-autoseg_clt.save(
+autoseg_clt.write_cwl(
     Path(__file__).with_name("built-ichnaea-autosegmentation.cwl"),
     validate=True,
 )
@@ -350,21 +342,27 @@ autoseg_clt.save(
 
 ### Compiled workflow artifacts
 
-The workflow is compiled with disk output enabled:
+The workflow is compiled, then the compiled boundary writes its artifacts:
 
 ```python
-autoseg_workflow.compile(write_to_disk=True)
+compiled_workflow = autoseg_workflow.compile()
+compiled_workflow.write_cwl("autogenerated")
+compiled_workflow.write_job_inputs("autogenerated")
 ```
 
-This writes the compiled workflow artifacts under `autogenerated/`.
+This writes the compiled workflow artifacts under `autogenerated/` and returns
+the same `CompiledWorkflow` boundary used by the in-memory path.
 
 ### Compute JSON
 
-The exact compute payload is written before submission:
+The exact compute request JSON is written before submission:
 
 ```python
-with open(f"compute_{workflow_name}_integrated.json", "w", encoding="utf-8") as f:
-    json.dump(compute_json, f, indent=4, sort_keys=True)
+compute_request_json = compute_request.to_json(indent=4, sort_keys=True)
+Path(f"compute_{workflow_id}_integrated.json").write_text(
+    compute_request_json,
+    encoding="utf-8",
+)
 ```
 
 That makes `ichnaea_integrated.py` the appropriate choice when:
@@ -376,9 +374,9 @@ That makes `ichnaea_integrated.py` the appropriate choice when:
 In other words:
 
 - use `ichnaea_compact.py` as the example to follow when creating your own
-  end-to-end Python workflow submission scripts for compute-slurm
+  end-to-end Python workflow submission scripts
 - use `ichnaea_integrated.py` when the same structure is needed but the CLT,
-  compiled workflow artifacts, and final payload must also be written to disk
+  compiled workflow artifacts, and final request must also be written to disk
 
 ## Recommended reading order
 
@@ -386,40 +384,40 @@ For a first reading of the example, the most useful order is:
 
 1. `build_autoseg_CLT()`
 2. `workflow(...)`
-3. `create_compute_payload(...)`
+3. `create_compute_request(...)`
 4. `main()`
 
 That order follows the actual transformation pipeline:
 
 - tool definition
 - workflow construction
-- payload construction
+- request construction
 - orchestration and optional submission
 
 ## Practical guidance
 
 Use `ichnaea_compact.py` as the example to follow when creating or adapting
-your own end-to-end compute-slurm submission scripts. Its structure is the
+your own end-to-end compute submission scripts. Its structure is the
 recommended baseline:
 
 - define the CLT in Python
 - convert it to a Sophios workflow
 - compile the workflow in memory
-- construct the compute-slurm payload from the compiled result
-- submit only when a concrete compute-slurm URL is supplied
+- construct the compute request from the compiled result
+- submit only when a concrete compute service URL is supplied
 
 Use `ichnaea_integrated.py` when the same overall structure is required but the
 workflow must also produce explicit artifacts:
 
 - the generated CLT on disk
 - the compiled workflow artifacts on disk
-- the exact compute payload JSON on disk
+- the exact compute request JSON on disk
 
 When diagnosing problems, the most effective order is:
 
 1. validate the CLT
 2. inspect the compiled workflow
-3. inspect the compute payload
+3. inspect the compute request
 4. then investigate submission or runtime behavior
 
 That keeps the investigation aligned with the actual system boundaries.
@@ -429,34 +427,30 @@ That keeps the investigation aligned with the actual system boundaries.
 Compact path:
 
 ```bash
-PYTHONPATH=src python examples/scripts/ichnaea_compact.py
-PYTHONPATH=src python examples/scripts/ichnaea_compact.py \
-  --submit-url http://127.0.0.1:7998/compute/
+python examples/scripts/ichnaea_compact.py
 ```
 
 Integrated path:
 
 ```bash
-PYTHONPATH=src python examples/scripts/ichnaea_integrated.py
-PYTHONPATH=src python examples/scripts/ichnaea_integrated.py \
-  --submit-url http://127.0.0.1:7998/compute/
+python examples/scripts/ichnaea_integrated.py
 ```
 
-The first integrated command writes the generated CLT, compiled workflow
-artifacts, and compute JSON without submission.
-The second performs the same steps and then submits the payload to
-compute-slurm.
+The integrated command writes the generated CLT, compiled workflow artifacts,
+and compute JSON without submission.
+To submit from either script, set `SUBMIT_URL` near the top of the file before
+running it.
 
 ## Summary
 
 `ichnaea_compact.py` is the canonical Sophios Python example for
-compute-slurm submission because it keeps the four layers of the system clear:
+compute submission because it keeps the four layers of the system clear:
 
 - CLT authoring
 - workflow composition
-- payload construction
+- request construction
 - submission
 
 That clarity is the main value of the example.
-It makes the path from Python-authored tool to compute-slurm payload direct,
+It makes the path from Python-authored tool to compute request direct,
 verifiable, and suitable for both documentation and real client use.

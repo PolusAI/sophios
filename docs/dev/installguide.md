@@ -1,154 +1,228 @@
-# Install Guide
+# Developer Install Guide
 
-## download
+This page is for working from a Sophios source checkout. Use it when you want
+to edit Sophios, run tests, build the docs, or work with repository examples.
 
-You will first need to install the [git](https://git-scm.com) version control system. Then run the following commands:
+If you only want to install Sophios as a package, use the
+[user install guide](../installguide.md).
 
+## What the Developer Install Provides
+
+A developer install has three layers:
+
+- a source checkout managed with Git,
+- a Python environment with the system tools used by tests and local workflow
+  execution,
+- an editable `pip` install so imports come from the checkout.
+
+The Python requirement is declared in `pyproject.toml`. For this checkout, use
+Python 3.11 or newer.
+
+## Step 1: Clone the Repository
+
+If you have a fork, clone your fork:
+
+```bash
+git clone git@github.com:<your-github-user>/sophios.git
+cd sophios
+git remote add upstream https://github.com/PolusAI/sophios.git
 ```
+
+If you only need a read-only checkout of upstream:
+
+```bash
 git clone https://github.com/PolusAI/sophios.git
 cd sophios
-
-cd install/
-./install_conda.sh
-source ~/.bashrc
-conda create --name wic # or any name
-conda activate wic
-./install_system_deps.sh
-cd ..
-
-pip install -e ".[all]"
-pre-commit install  # Required for developers
-
-sophios --generate_schemas
 ```
 
-Developers should fork the upstream repository and clone their fork using the git@ url, then run the command
+Check the remotes:
 
-```
-git remote add polusai https://github.com/PolusAI/sophios.git
-```
-
-## docker
-
-Most of the plugins have been packaged up into [docker](https://www.docker.com) containers. If docker is not installed, you can compile workflows and generate DAGs but the workflows will fail at runtime.
-
-### known issues
-
-When running Docker for Mac, in some cases execution will hang. See [all containers hang](https://github.com/docker/for-mac/issues/5081) and [error waiting for container](https://github.com/docker/for-mac/issues/5139) for details. The current workaround is to simply restart Docker.
-
-If you are experiencing hanging, and if the command `ps aux | grep com.docker | wc -l` returns more than 1000, this is likely the issue. If restarting Docker via the GUI doesn't work, try `sudo pkill com.docker && sudo pkill Docker`.
-
-## podman
-
-Alternatively, instead of docker you can use [podman](https://podman.io/whatis.html). podman is a daemonless (more secure) way to run containers. On linux, you can install podman via conda `conda install -c conda-forge podman` or using distro-specific methods. To run workflows with podman, simply append `--container_engine podman` after `--run_local`.
-
-## Installation on Windows
-
-Although compiling workflows natively on Windows is supported, the underlying `cwltool` runner currently requires [Windows Subsystem for Linux](https://learn.microsoft.com/en-us/windows/wsl/install#install-wsl-command). To install WSL, simply open PowerShell or Windows Command Prompt in **administrator** mode and run the command `wsl --install`. For more information about WSL, see the official [FAQ](https://learn.microsoft.com/en-us/windows/wsl/faq).
-
-To install podman inside of WSL, simply run (from inside WSL) `sudo apt-get update && sudo apt-get install uidmap podman`.
-
-### known issues
-
-Network performance on WSL can be [very slow](https://github.com/microsoft/WSL/issues/4901). This appears to be caused by the "Large Send Offload Version 2" network setting. See [this article](https://townsyio.medium.com/wsl2-how-to-fix-download-speed-3edb0c348e29) for how to disable this setting.
-
-## conda
-
-[conda](https://en.wikipedia.org/wiki/Conda_(package_manager)) is an open source, cross platform package management system. It can install both Python dependencies and system binary dependencies, so conda is essentially a replacement for `pip`. The associated package distributions named `anaconda` and `miniconda` provide a database of packages that can be used with the `conda` command. (There is also an open source package distribution called [conda-forge](https://conda-forge.org)) Either one works, so if you already have anaconda installed then great. Otherwise, [miniconda](https://docs.conda.io/en/latest/miniconda.html) is all you need.
-
-You can install conda and the system dependencies with the following commands:
-
-```
-./install_conda.sh
-source ~/.bashrc
-conda create --name wic
-conda activate wic
-./install_system_deps.sh
+```bash
+git remote -v
 ```
 
-Note that if you close your terminal, the next time you open your terminal you will need to re-activate the wic environment:
+## Step 2: Create the Development Environment
 
-```
-conda activate wic
+Conda or mamba is the recommended source-development path because the test and
+documentation workflows need a few non-Python executables such as Node.js and
+Graphviz.
+
+On macOS and Linux:
+
+```bash
+conda env create -n sophios_dev -f install/system_deps.yml
+conda activate sophios_dev
+python --version
 ```
 
-## install
+On Windows:
 
-To install into the wic environment, simply use the following command:
+```bash
+conda env create -n sophios_dev -f install/system_deps_windows.yml
+conda activate sophios_dev
+python --version
+```
 
-```
-pip install -e ".[all]"
+If the environment already exists, update it:
+
+```bash
+conda activate sophios_dev
+conda env update -n sophios_dev -f install/system_deps.yml --prune
 ```
 
-Developers should also install the git pre-commit hooks:
+The environment files install binary dependencies used by development and
+testing. They do not install Sophios itself.
+
+## Step 3: Install Sophios in Editable Mode
+
+From the repository root:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -e ".[all_except_runner_src]"
 ```
+
+This mirrors the main CI install: it includes test, documentation, plotting,
+cytoscape, and mypy-type extras while keeping released runner packages.
+
+For a lighter install that is enough for most API tests and docs work:
+
+```bash
+python -m pip install -e ".[test,doc,mypy-types]"
+```
+
+Use `.[all]` only when you intentionally want the source-runner extra declared
+in `pyproject.toml`. That extra installs `cwl-utils` from a Git source instead
+of using only released runner packages.
+
+Install the pre-commit hooks after the editable install:
+
+```bash
 pre-commit install
 ```
 
-You should now have the `wic` executable available in your terminal.
+## Step 4: Verify the Checkout
 
-## testing
+Confirm that Python imports Sophios from this checkout:
 
-To test your installation, you can run the example in README.md:
+```bash
+python - <<'PY'
+import sophios
+from sophios.api.python.workflow import Step, Workflow
+from sophios.api.python.tool_builder import CommandLineTool, Input, Output, cwl
 
-```
-sophios --yaml ../workflow-inference-compiler/docs/tutorials/helloworld.wic --run_local --quiet
-```
-
-You can also run the automated test suite. Note that the tests are based on the workflows; if you have more workflows, the tests will take longer.
-
-(Also, if your workflows require CUDA, you will need an Nvidia GPU.)
-
-```
-pytest -m serial && pytest -m "not serial" --workers 8
+print(f"Sophios version: {sophios.__version__}")
+print(f"Sophios module:  {sophios.__file__}")
+print("Workflow API and tool builder API are available")
+PY
 ```
 
-If you're in a hurry, just run
+The printed module path should point inside the checkout.
 
+Confirm the CLI:
+
+```bash
+sophios --help
 ```
+
+## Step 5: Build the Documentation
+
+Build the RTD site locally with:
+
+```bash
+sphinx-build -b html docs docs/_build/html
+```
+
+Open `docs/_build/html/index.html` to inspect the generated site.
+
+To build a unified PDF of the user docs followed by the developer docs, run:
+
+```bash
+cd docs
+make pdf
+```
+
+The PDF builder reuses the Sphinx documentation source, builds a single HTML
+document with a PDF-specific table of contents, and prints it with a local
+Chrome or Chromium executable. The generated file is written to
+`docs/_build/pdf/sophios-docs.pdf`.
+
+## Step 6: Run Tests
+
+For a fast local confidence check:
+
+```bash
+pytest -m fast
+```
+
+For the focused Python API and tool-builder tests:
+
+```bash
+pytest tests/test_python_api.py tests/test_tool_builder.py -q
+```
+
+For the serial tests:
+
+```bash
 pytest -m serial
 ```
 
-which tests the compiler only (not the runtime) and only takes about a minute.
+For the non-serial tests with pytest-parallel:
 
-### known issues
-
-At runtime, the following warning message may be printed to the console repeatedly:
-
-```
-WARNING: No ICDs were found. Either,
-- Install a conda package providing a OpenCL implementation (pocl, oclgrind, intel-compute-runtime, beignet) or
-- Make your system-wide implementation visible by installing ocl-icd-system conda package.
+```bash
+pytest -m "not serial" --workers 8
 ```
 
-It does not appear to cause any problems, and moreover the suggested solutions don't seem to work, so it appears that this warning can be ignored.
+Some workflow runtime tests require Docker or Podman and may pull container
+images. Slow workflow tests can take substantially longer than API-only tests.
 
-## documentation
+## Step 7: Run Static Checks
 
-The latest documentation is available on [readthedocs](https://workflow-inference-compiler.readthedocs.io/en/latest/) as well as under the `docs/` folder. To build the documentation in html format, use the commands
+The main CI workflows run mypy and pylint over source, examples, and tests.
+Before pushing substantial changes, run:
 
+```bash
+mypy src/ examples/ tests/
+pylint src/ examples/**/*.py tests/
 ```
-cd docs/
-make html
+
+The exact CI jobs are defined in `.github/workflows/`.
+
+## Optional: Configure `.wic` Discovery
+
+Sophios uses `~/wic/global_config.json` as the default discovery config for CWL
+tools and `.wic` workflows. Generate a starter config with:
+
+```bash
+sophios --generate_config
 ```
 
-Then simply open the file `docs/_build/html/index.html` using any web browser.
+Generate schemas for editor validation with:
 
-## vscode extensions
+```bash
+sophios --generate_schemas
+```
 
-When you open the project folder, VSCode should prompt you to install the following list of recommended extensions.
+If discovery looks stale after adding, removing, or renaming tools, inspect
+`~/wic/global_config.json` and regenerate schemas. Do not delete `~/wic`
+blindly if it contains local configuration you want to keep.
 
-These vscode extensions are strongly recommended for users:
+## Optional: External Workflow Repositories
 
-* YAML (Red Hat)
+Some CI jobs and workflow-regression paths use external workflow repositories
+such as `mm-workflows`. They are not required for ordinary Sophios development,
+API tests, documentation builds, or package work.
 
-These vscode extensions are recommended for developers:
+The scripts in `install/install_*.sh` are legacy helpers for specialized
+external workflow setups. The primary Sophios developer setup is the conda
+environment file plus editable `pip` install described above.
 
-* Python
-* MyPy
-* Remote Development
-* Docker
-* CWL (Rabix/Benten)
-* Git Extension Pack
-* Github Actions (Mathieu Dutour)
-* autoDocstring
+## Container Runtime Notes
+
+Docker or Podman is required for local execution of containerized CWL tools.
+Compilation and most Python API tests do not require a running container engine.
+
+On macOS, Docker Desktop can occasionally leave many background processes and
+cause local workflow execution to hang. Restarting Docker Desktop is usually the
+first fix. On Linux, Podman can be used by passing `container_engine: "podman"`
+to Python `Workflow.run(...)` or `--container_engine podman` to the CLI.

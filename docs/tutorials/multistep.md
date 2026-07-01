@@ -51,7 +51,7 @@ The first thing you might notice is the `!&` and `!*` notation. This is the synt
 
 Creating explicit edges can be a bit tedious and verbose, but in many cases the correct edges can be determined automatically. In this case, all of the steps take the previous file as input and produce an output file, so this is rather trivial. However, for more complex workflows edge inference can drastically simplify the wic files. Note that explicit edges are drawn in blue, and inferred edges are drawn in black/white.
 
-For technical reasons edge inference is not perfect, so ***`users should always check that edge inference actually produces the intended graph`***. For details on the algorithm, see the [user guide](../userguide.md/#edge-inference-algorithm).
+For technical reasons edge inference is not perfect, so ***`users should always check that edge inference actually produces the intended graph`***. For details on the algorithm, see [Advanced YAML and Operations](../advanced.md#edge-inference).
 
 <table>
 <tr>

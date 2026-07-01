@@ -1,29 +1,15 @@
 import importlib
 import importlib.util
-# import json
 import sys
 from pathlib import Path
 from types import ModuleType
 
 workflow_types_path = sys.argv[1]
-# print('workflow_types_path', workflow_types_path)
 workflow_types_mod = Path(workflow_types_path).name[:-3]
-# print('workflow_types_mod', workflow_types_mod)
 
 python_script_path = sys.argv[2]
-# print('python_script_path', python_script_path)
 python_script_mod = Path(python_script_path).name[:-3]
-# print('python_script_mod', python_script_mod)
 
-# Method #1: Just use a single giant JSON-encoded dict.
-# cli_args = sys.argv[3]
-# print('cli_args', cli_args)
-# cli_args_dict = json.loads(cli_args)
-# print('cli_args_dict', cli_args_dict)
-
-# Method #2: Assume the remaining arguments are key-val pairs.
-# This has the advantage of not requiring an additional config_tag_* step,
-# and thus the 'speculative compilation' feature.
 cli_args = sys.argv[3:]
 if len(cli_args) % 2 != 0:
     print("Error! len(cli_args) is not even!")
@@ -55,10 +41,7 @@ def import_python_file(python_module_name: str, python_file_path: Path) -> Modul
     # file into its own temporary directory. If you use an initial workdir, the
     # symlinks are now all in the same directory, but their sources are still
     # pointing wherever. Thus, import_module will never work!
-    # module = importlib.import_module(python_script_mod)
-    # ModuleNotFoundError: No module named ...
-
-    # The solution is buried in the examples at the bottom of the documentation
+    # The solution is in the examples at the bottom of the documentation
     # https://docs.python.org/3/library/importlib.html#importing-a-source-file-directly
     # and https://stackoverflow.com/questions/65206129/importlib-not-utilising-recognising-path
     spec = importlib.util.spec_from_file_location(
@@ -73,8 +56,6 @@ def import_python_file(python_module_name: str, python_file_path: Path) -> Modul
         else:
             print(f'Error! Cannot load {spec}')
             sys.exit(1)
-        # Note that now (after calling exec_module) we can call import_module without error
-        # module_ = importlib.import_module(python_module_name)
     else:
         print(f'Error! Cannot load {spec}')
         sys.exit(1)
@@ -91,7 +72,5 @@ module = import_python_file(python_script_mod, Path(python_script_path))
 # NOW we can call main()
 retval = module.main(**cli_args_dict)
 
-# TODO: Although CWL globs for the existence of output files,
-# we could do it here too, perhaps with better error messages.
 print('retval', retval)
 sys.exit(retval)

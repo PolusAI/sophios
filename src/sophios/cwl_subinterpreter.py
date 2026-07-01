@@ -19,10 +19,6 @@ from .plugins import get_tools_cwl, get_yml_paths, logging_filters
 from .schemas import wic_schema
 from .wic_types import GraphData, GraphReps, Json, StepId, Tools, YamlTree
 
-# from watchdog.observers import Observer
-# from watchdog.observers.polling import PollingObserver
-# from watchdog.events import FileSystemEvent, PatternMatchingEventHandler
-
 
 def absolute_paths(config: Json, cachedir_path: Path) -> Json:
     """Recursively searches for paths in config and makes them absolute by prepending cachedir_path.
@@ -36,7 +32,7 @@ def absolute_paths(config: Json, cachedir_path: Path) -> Json:
     """
     new_json: Json = {}
     for key, val in config.items():
-        if isinstance(val, Dict):
+        if isinstance(val, dict):
             new_val = absolute_paths(val, cachedir_path)
         else:
             new_val = val
@@ -83,13 +79,10 @@ def rerun_cwltool(homedir: str, _directory_realtime: Path, cachedir_path: Path, 
         args_vals_new = absolute_paths(args_vals, cachedir_path)
 
         # Construct a single-step workflow and add its arguments
-        # import yaml
         if Path(cwl_tool).suffix == '.wic':
             yaml_path = cwl_tool
             wic_steps = {'steps': {f'(1, {cwl_tool})': {'wic': {'steps': args_vals_new}}}}
             root_yaml_tree = {'wic': wic_steps, 'steps': [{cwl_tool: None}]}
-            # print('root_yaml_tree')
-            # print(yaml.dump(root_yaml_tree))
             # TODO: Support other namespaces
             plugin_ns = 'global'  # wic['wic'].get('namespace', 'global')
             step_id = StepId(yaml_path, plugin_ns)
@@ -100,9 +93,6 @@ def rerun_cwltool(homedir: str, _directory_realtime: Path, cachedir_path: Path, 
             yml = yaml_tree.yml
         else:
             yml = {'steps': [{cwl_tool: args_vals_new}]}
-        # print('yml')
-        # print(yml)
-        # print(yaml.dump(yml))
 
         # Measure compile time
         time_initial = time.time()
@@ -142,14 +132,11 @@ def rerun_cwltool(homedir: str, _directory_realtime: Path, cachedir_path: Path, 
         # make the paths absolute in f'{cwl_tool}_only_inputs.yml' here.
         cmd: List[str] = ['cwltool', '--cachedir', str(cachedir_path),
                           f'{cwl_tool}_only.cwl', f'{cwl_tool}_only_inputs.yml']
-        # proc = sub.run(self.cmd, cwd=working_dir)
-        # cmd = self.cmd
         print('Running', cmd)
         sub.run(cmd, cwd=working_dir, check=False)  # See below!
         print('inner cwltool completed')
         # Don't check the return code because the file may not exist yet, or
         # because speculative execution may fail for any number of reasons.
-        # proc.check_returncode()
     except FileNotFoundError as e:
         # The file may not exist yet.
         print(e)
@@ -164,29 +151,6 @@ def rerun_cwltool(homedir: str, _directory_realtime: Path, cachedir_path: Path, 
 # solution is to use polling. However, for unknown reasons, simply replacing
 # Observer with PollingObserver doesn't seem to work! So we are forced to write
 # our own basic file watcher using glob.
-
-
-# class SubprocessHandler(PatternMatchingEventHandler):
-
-#     def __init__(self, cmd: List[str], cachedir_path: str, cwl_tool: str, args_vals: Json, tools_cwl: Tools, **kwargs: Any) -> None:
-#         self.cmd = cmd
-#         self.lock = False
-#         self.cachedir_path = cachedir_path
-#         self.cwl_tool = cwl_tool
-#         self.args_vals = args_vals
-#         self.tools_cwl = tools_cwl
-#         super().__init__(**kwargs)
-
-#     def on_any_event(self, event: FileSystemEvent) -> None:
-#         # Use a lock to prevent us from DOS'ing ourselves
-#         global lock
-#         if event.event_type == 'modified' and not lock:
-#             directory = Path(event._src_path).parent
-#             print('directory', directory)
-#             # self.lock = True
-#             print(event)
-#             rerun_cwltool(directory, self.cachedir_path, self.cwl_tool, self.args_vals, self.tools_cwl)
-#             # self.lock = False
 
 
 def file_watcher_glob(cachedir_path: Path, pattern: str, prev_files: Dict[str, float]) -> Dict[str, float]:
@@ -276,14 +240,6 @@ def main() -> None:
     cachedir_hash_path = Path('.').absolute()
     print('cachedir_hash_path', cachedir_hash_path)
 
-    """cmd: List[str] = ['cwltool', '--cachedir', cachedir_path,
-                         f'{cachedir_hash_path}/{cwl_tool}_only.cwl',
-                         f'{cachedir_hash_path}/{cwl_tool}_only_inputs.yml']
-    event_handler = SubprocessHandler(cmd, cachedir_path, cwl_tool, args_vals, tools_cwl, patterns=[file_pattern])
-    observer = PollingObserver()  # This does not work!
-    observer.schedule(event_handler, cachedir_path, recursive=True)
-    observer.start()"""
-
     # Specify a maximum number of iterations to guarantee termination.
     # Total runtime will be (sleep time + compile time + run time) * max_iters
     # For now, there is no way to estimate max_iters such that polling will end
@@ -296,7 +252,6 @@ def main() -> None:
         while i < max_times:
             # Use our own polling file watcher, see above.
             changed_files = file_watcher_glob(cachedir_path, file_pattern, prev_files)
-            # print('len(changed_files)', len(changed_files))
             for file in changed_files:
                 if file_pattern[1:] in file:
                     print(file)
@@ -309,8 +264,6 @@ def main() -> None:
             i += 1
     except KeyboardInterrupt:
         pass
-    # observer.stop()
-    # observer.join()
 
     failed = False  # Your analysis goes here
     if failed:

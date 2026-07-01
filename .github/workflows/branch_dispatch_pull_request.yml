@@ -63,22 +63,22 @@ jobs:
         run: |
           echo "commit_message=$(git show -s --format=%s)" >> $GITHUB_ENV
 
-      - name: Check existence of wic
+      - name: Check existence of Sophios
         uses: ./.github/my_actions/check_existence/ # Must start with ./
         id: ce_wic
         with:
-          repository: workflow-inference-compiler
+          repository: sophios
           sender_repo_owner: ${{ github.event.pull_request.head.repo.owner.login }}
           sender_repo_ref: ${{ github.event.pull_request.head.ref }}
           default_owner: PolusAI
           default_branch: master
           access_token: ${{ steps.generate_token.outputs.token }}
 
-      - name: Check existence of dispatch ref in wic
+      - name: Check existence of dispatch ref in Sophios
         uses: ./.github/my_actions/check_existence/ # Must start with ./
         id: ce_wic_dispatch
         with:
-          repository: workflow-inference-compiler
+          repository: sophios
           sender_repo_owner: ${{ github.repository_owner }}
           sender_repo_ref: ${{ github.event.pull_request.head.ref }}
           default_owner: PolusAI
@@ -112,7 +112,7 @@ jobs:
         uses: ./.github/my_actions/branch_dispatch/ # Must start with ./
         id: bd_lint_and_test
         with:
-          repository: workflow-inference-compiler
+          repository: sophios
           workflow_yml: lint_and_test.yml
           sender_repo: ${{ github.event.pull_request.head.repo.owner.login }}/${{ github.event.pull_request.head.repo.name }}
           sender_repo_owner: ${{ github.event.pull_request.head.repo.owner.login }}
@@ -131,7 +131,7 @@ jobs:
         uses: ./.github/my_actions/branch_dispatch/ # Must start with ./
         id: bd_run_workflows
         with:
-          repository: workflow-inference-compiler
+          repository: sophios
           workflow_yml: run_workflows.yml
           sender_repo: ${{ github.event.pull_request.head.repo.owner.login }}/${{ github.event.pull_request.head.repo.name }}
           sender_repo_owner: ${{ github.event.pull_request.head.repo.owner.login }}

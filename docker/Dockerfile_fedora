@@ -13,19 +13,12 @@ RUN wget --quiet https://github.com/conda-forge/miniforge/releases/latest/downlo
     rm -f $CONDA
 ENV PATH=/miniforge/bin:$PATH
 
-# Install sophios
+# Install Sophios
 RUN dnf install -y git
 
 COPY . /sophios
 WORKDIR /sophios
 
-#RUN conda create --name wic
-#RUN conda activate wic
-# The above command prints
-# CommandNotFoundError: Your shell has not been properly configured to use 'conda activate'.
-# It still prints that even if we run `conda init bash` first.
-# But this is a Docker image; we don't necessarily need to additionally isolate
-# wic within a conda environment. Let's just install it globally!
 RUN mamba env update --name base --file install/system_deps.yml
 RUN pip install -e ".[all_except_runner_src]"
 

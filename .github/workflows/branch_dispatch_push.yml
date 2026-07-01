@@ -27,11 +27,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Check existence of wic
+      - name: Check existence of Sophios
         uses: ./.github/my_actions/check_existence/ # Must start with ./
         id: ce_wic
         with:
-          repository: workflow-inference-compiler
+          repository: sophios
           sender_repo_owner: ${{ github.repository_owner }}
           sender_repo_ref: ${{ github.ref_name }}
           default_owner: PolusAI
@@ -65,7 +65,7 @@ jobs:
         uses: ./.github/my_actions/branch_dispatch/ # Must start with ./
         id: bd_lint_and_test
         with:
-          repository: workflow-inference-compiler
+          repository: sophios
           workflow_yml: lint_and_test.yml
           sender_repo: ${{ github.repository }}
           sender_repo_owner: ${{ github.repository_owner }}
@@ -84,7 +84,7 @@ jobs:
         uses: ./.github/my_actions/branch_dispatch/ # Must start with ./
         id: bd_run_workflows
         with:
-          repository: workflow-inference-compiler
+          repository: sophios
           workflow_yml: run_workflows.yml
           sender_repo: ${{ github.repository }}
           sender_repo_owner: ${{ github.repository_owner }}

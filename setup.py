@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 from shutil import copytree, ignore_patterns
+from typing import Any, cast
 from setuptools import setup, find_packages
 from setuptools.command.build_py import build_py as _build_py
-import versioneer
 
 
 class build_py(_build_py):
@@ -40,14 +40,13 @@ class build_py(_build_py):
 
 setup(
     name='sophios',
-    version=versioneer.get_version(),
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     include_package_data=True,
-    cmdclass={
+    cmdclass=cast(Any, {
         'build_py': build_py,
-    },
-    package_data={
-        "sophios": ["cwl_adapters/*.cwl", "examples/*.wic"]
-    }
+    }),
+    package_data=cast(Any, {
+        "sophios": ["cwl_adapters/*.cwl", "examples/*.wic", "*.json"]
+    })
 )

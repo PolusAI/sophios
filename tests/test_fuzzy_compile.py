@@ -1,4 +1,3 @@
-from datetime import timedelta
 from pathlib import Path
 import unittest
 
@@ -103,8 +102,6 @@ class TestFuzzyCompile(unittest.TestCase):
             elif any(msg in str(e) for msg in expected_messages):
                 pass
             else:
-                # import yaml
-                # print(yaml.dump(yml))
                 raise e
 
 

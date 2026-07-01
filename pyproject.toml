@@ -1,6 +1,6 @@
 # Based on https://packaging.python.org/en/latest/tutorials/packaging-projects/
 [build-system]
-requires = ["setuptools>=42", "wheel", "versioneer[toml]==0.29", "tomli"]
+requires = ["setuptools>=64", "setuptools-scm>=8", "wheel"]
 
 build-backend = "setuptools.build_meta"
 
@@ -50,8 +50,8 @@ file = "README.md"
 content-type = "text/markdown"
 
 [project.urls]
-Homepage = "https://github.com/PolusAI/workflow-inference-compiler"
-"Bug Tracker" = "https://github.com/PolusAI/workflow-inference-compiler/issues"
+Homepage = "https://github.com/PolusAI/sophios"
+"Bug Tracker" = "https://github.com/PolusAI/sophios/issues"
 
 [project.optional-dependencies]
 
@@ -123,10 +123,6 @@ cwltool_filterlog = "sophios.run_local:cwltool_main"
 # Need an extra entrypoint to avoid mixing up WIC cli flags with cwltool cli flags
 cwltool_filterlog_pf = "sophios.run_local:cwltool_main_pf"
 
-# Need the following defined in order to make versioneer work with git tags
-[tool.setuptools.dynamic]
-version = {attr = "sophios.__version__"}
-
 [tool.setuptools]
 package-dir = {"" = "src"}
 include-package-data = true
@@ -142,12 +138,11 @@ namespaces = true
 [tool.aliases]
 test = "pytest --workers 8"
 
-[tool.versioneer]
-VCS = "git"
-style = "pep440-pre"
-versionfile_source = "src/sophios/_version.py"
-versionfile_build = "sophios/_version.py"
-tag_prefix = "v"
+[tool.setuptools_scm]
+fallback_version = "0.0.0.dev0"
+version_scheme = "no-guess-dev"
+local_scheme = "no-local-version"
+tag_regex = "^v(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+(?:[.-]dev[0-9]+)?)$"
 
 [tool.build_sphinx]
 source_dir = "docs"
@@ -200,13 +195,6 @@ warn_return_any = true
 # Ignores all non-fatal errors.
 ignore_errors = false
 
-# Probably because it is in the root directory, I was unable to add
-# versioneer to the exclude=regex above, but this works.
-
-[[tool.mypy.overrides]]
-module = ["sophios._version", "versioneer"]
-ignore_errors = true
-
 [[tool.mypy.overrides]]
 module = [
     "graphviz.*",
@@ -228,6 +216,7 @@ markers = [
     "fast: (i.e. for maximum speed, use 'pytest -m fast')",
     "slow: (i.e. for medium speed, use 'pytest -m \"not slow\"')",
     "serial: (These tests CANNOT be run in parallel with --workers n > 1)",
+    "skip_pypi_ci: tests intentionally excluded from PyPI package-build CI",
 ]
 addopts = ""
 
@@ -240,7 +229,8 @@ ignore-words = "codespellwords.txt"
 
 [tool.pylint.main]
 
-# TODO: Add class and module docstrings.
+# Docstring coverage is enforced selectively; the legacy compiler still has many
+# modules where mandatory docstrings add noise before they add clarity.
 disable=[
         "missing-class-docstring",
         "missing-module-docstring",

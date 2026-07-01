@@ -1,31 +1,28 @@
-from sophios.apis.python.api import Step, Workflow
+from pathlib import Path
+
+from sophios.api.python.workflow import Step, Workflow
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ADAPTERS = REPO_ROOT / "cwl_adapters"
 
 
 def workflow() -> Workflow:
-    # conditional on input
-    # step toString
-    toString = Step(clt_path='../../cwl_adapters/toString.cwl')
-    toString.input = 27
-    # step echo
-    echo = Step(clt_path='../../cwl_adapters/echo.cwl')
-    echo.message = toString.output
-    # add a when clause
-    # alternate js syntax
+    """Build a workflow with a conditional step."""
+    to_string = Step(clt_path=ADAPTERS / "toString.cwl")
+    to_string.inputs.input = 27
+
+    echo = Step(clt_path=ADAPTERS / "echo.cwl")
+    echo.inputs.message = to_string.outputs.output
+
+    # Alternate JavaScript syntax:
     # echo.when = '$(inputs["message"] < "27")'
     echo.when = '$(inputs.message < "27")'
-    # since the condition is not met the echo step is skipped!
 
-    # arrange steps
-    steps = [toString, echo]
-
-    # create workflow
-    filename = 'when_pyapi_py'  # .yml
-    wkflw = Workflow(steps, filename)
-    return wkflw
+    return Workflow([to_string, echo], "when_pyapi_py")
 
 
 # Do NOT .run() here
 
-if __name__ == '__main__':
-    when_wic = workflow()
-    when_wic.run()  # .run() here inside main
+if __name__ == "__main__":
+    workflow().run()

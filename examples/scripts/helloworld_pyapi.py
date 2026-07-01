@@ -1,21 +1,21 @@
-from sophios.apis.python.api import Step, Workflow
+from pathlib import Path
+
+from sophios.api.python.workflow import Step, Workflow
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ADAPTERS = REPO_ROOT / "cwl_adapters"
 
 
 def workflow() -> Workflow:
-    # step echo
-    echo = Step(clt_path='../../cwl_adapters/echo.cwl')
-    echo.message = 'hello world'
-    # arrange steps
-    steps = [echo]
+    """Build the smallest useful Sophios workflow."""
+    echo = Step(clt_path=ADAPTERS / "echo.cwl")
+    echo.inputs.message = "hello world"
 
-    # create workflow
-    filename = 'helloworld_pyapi_py'
-    wkflw = Workflow(steps, filename)
-    return wkflw
+    return Workflow([echo], "helloworld_pyapi_py")
+
 
 # Do NOT .run() here
 
-
-if __name__ == '__main__':
-    scatter_wic = workflow()
-    scatter_wic.run()  # .run() here inside main
+if __name__ == "__main__":
+    workflow().run()

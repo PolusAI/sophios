@@ -23,11 +23,11 @@ on:
         required: true
         type: string
       wic_owner:
-        description: The account name of the wic repository
+        description: The account name of the Sophios repository
         required: true
         type: string
       wic_ref:
-        description: The branch name within the wic repository
+        description: The branch name within the Sophios repository
         required: true
         type: string
       mm-workflows_owner:

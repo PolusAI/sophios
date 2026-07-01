@@ -1,0 +1,1548 @@
+{
+  "extension_to_formats": {
+    "2bit": [
+      "edam:format_3009"
+    ],
+    "a2m": [
+      "edam:format_3281"
+    ],
+    "aaindex": [
+      "edam:format_1504"
+    ],
+    "ab1": [
+      "edam:format_3000"
+    ],
+    "abcd": [
+      "edam:format_3708"
+    ],
+    "abi": [
+      "edam:format_1628"
+    ],
+    "ace": [
+      "edam:format_3001"
+    ],
+    "acedb": [
+      "edam:format_1923"
+    ],
+    "affymetrix": [
+      "edam:format_1639"
+    ],
+    "affymetrix-exp": [
+      "edam:format_1641"
+    ],
+    "afg": [
+      "edam:format_3582"
+    ],
+    "agp": [
+      "edam:format_3693"
+    ],
+    "alignment": [
+      "edam:format_1921"
+    ],
+    "ambiguous": [
+      "edam:format_2097"
+    ],
+    "andi-ms": [
+      "edam:format_3650"
+    ],
+    "announcement.json": [
+      "edam:format_4072"
+    ],
+    "arb": [
+      "edam:format_3830"
+    ],
+    "arff": [
+      "edam:format_3581"
+    ],
+    "article": [
+      "edam:format_2020"
+    ],
+    "avi": [
+      "edam:format_3990"
+    ],
+    "axt": [
+      "edam:format_3013"
+    ],
+    "bai": [
+      "edam:format_3327"
+    ],
+    "bam": [
+      "edam:format_2572"
+    ],
+    "bcf": [
+      "edam:format_3020"
+    ],
+    "bcf.gz": [
+      "edam:format_3020"
+    ],
+    "bcforms": [
+      "edam:format_3951"
+    ],
+    "bcml": [
+      "edam:format_3689"
+    ],
+    "bdml": [
+      "edam:format_3690"
+    ],
+    "beast": [
+      "edam:format_3843"
+    ],
+    "bed": [
+      "edam:format_3003"
+    ],
+    "bed.gz": [
+      "edam:format_3003"
+    ],
+    "bed12": [
+      "edam:format_3586"
+    ],
+    "bed6": [
+      "edam:format_3585"
+    ],
+    "bedgraph": [
+      "edam:format_3583"
+    ],
+    "bedstrict": [
+      "edam:format_3584"
+    ],
+    "bel": [
+      "edam:format_3691"
+    ],
+    "bgz": [
+      "edam:format_3615"
+    ],
+    "bgzip": [
+      "edam:format_3615"
+    ],
+    "bigbed": [
+      "edam:format_3004"
+    ],
+    "bigwig": [
+      "edam:format_3006"
+    ],
+    "binary": [
+      "edam:format_2333"
+    ],
+    "binpos": [
+      "edam:format_3885"
+    ],
+    "bioc": [
+      "edam:format_3782"
+    ],
+    "biojson": [
+      "edam:format_2352"
+    ],
+    "biom": [
+      "edam:format_3746"
+    ],
+    "biopax": [
+      "edam:format_3156"
+    ],
+    "bioxsd": [
+      "edam:format_2352"
+    ],
+    "bioyaml": [
+      "edam:format_2352",
+      "edam:format_3773"
+    ],
+    "blc": [
+      "edam:format_3313"
+    ],
+    "bmp": [
+      "edam:format_3592"
+    ],
+    "bngl": [
+      "edam:format_3972"
+    ],
+    "bpforms": [
+      "edam:format_3909"
+    ],
+    "brat": [
+      "edam:format_3785"
+    ],
+    "bsml": [
+      "edam:format_3487"
+    ],
+    "btrack": [
+      "edam:format_3776"
+    ],
+    "caf": [
+      "edam:format_1630"
+    ],
+    "cdsxml": [
+      "edam:format_2184"
+    ],
+    "cel": [
+      "edam:format_1638"
+    ],
+    "cellml": [
+      "edam:format_3240"
+    ],
+    "cfg": [
+      "edam:format_4005"
+    ],
+    "chado-xml": [
+      "edam:format_3844"
+    ],
+    "chain": [
+      "edam:format_3982"
+    ],
+    "chemml": [
+      "edam:format_4023"
+    ],
+    "chp": [
+      "edam:format_1644"
+    ],
+    "chrominfo": [
+      "edam:format_3587"
+    ],
+    "cif": [
+      "edam:format_4024"
+    ],
+    "cigar": [
+      "edam:format_3992"
+    ],
+    "citexplore-all": [
+      "edam:format_1737"
+    ],
+    "citexplore-core": [
+      "edam:format_1736"
+    ],
+    "clustal": [
+      "edam:format_1982"
+    ],
+    "clustalw": [
+      "edam:format_1982"
+    ],
+    "cml": [
+      "edam:format_4023"
+    ],
+    "codata": [
+      "edam:format_1925"
+    ],
+    "commonwl": [
+      "edam:format_3857"
+    ],
+    "connect": [
+      "edam:format_3309"
+    ],
+    "consensus": [
+      "edam:format_1209"
+    ],
+    "consensusxml": [
+      "edam:format_3832"
+    ],
+    "contig": [
+      "edam:format_3978"
+    ],
+    "copasiml": [
+      "edam:format_3239"
+    ],
+    "cram": [
+      "edam:format_3462"
+    ],
+    "csfasta": [
+      "edam:format_3589"
+    ],
+    "csv": [
+      "edam:format_3752"
+    ],
+    "ct": [
+      "edam:format_3309"
+    ],
+    "customtrack": [
+      "edam:format_3588"
+    ],
+    "cwl": [
+      "edam:format_3857"
+    ],
+    "cytoband": [
+      "edam:format_3235"
+    ],
+    "daf": [
+      "edam:format_1393"
+    ],
+    "das": [
+      "edam:format_1967"
+    ],
+    "dasdna": [
+      "edam:format_1968"
+    ],
+    "dasgff": [
+      "edam:format_1978"
+    ],
+    "dat": [
+      "edam:format_1637"
+    ],
+    "data": [
+      "edam:format_1915"
+    ],
+    "dbgap": [
+      "edam:format_3729"
+    ],
+    "dbid": [
+      "edam:format_1926"
+    ],
+    "debug": [
+      "edam:format_1983"
+    ],
+    "debug-feat": [
+      "edam:format_1979"
+    ],
+    "debug-seq": [
+      "edam:format_1969"
+    ],
+    "dhf": [
+      "edam:format_1336"
+    ],
+    "dialign": [
+      "edam:format_1392"
+    ],
+    "dicom": [
+      "edam:format_3548"
+    ],
+    "dna": [
+      "edam:format_1212"
+    ],
+    "doc": [
+      "edam:format_3506"
+    ],
+    "document": [
+      "edam:format_3507"
+    ],
+    "docx": [
+      "edam:format_3506"
+    ],
+    "dot-bracket": [
+      "edam:format_1457"
+    ],
+    "dssp": [
+      "edam:format_1454"
+    ],
+    "dsv": [
+      "edam:format_3751"
+    ],
+    "dta": [
+      "edam:format_3652"
+    ],
+    "ebwt": [
+      "edam:format_3484"
+    ],
+    "ebwtl": [
+      "edam:format_3491"
+    ],
+    "eland": [
+      "edam:format_3818"
+    ],
+    "embl": [
+      "edam:format_1927"
+    ],
+    "embl-html": [
+      "edam:format_2311"
+    ],
+    "embl-like": [
+      "edam:format_2543"
+    ],
+    "emblxml": [
+      "edam:format_2183"
+    ],
+    "eml": [
+      "edam:format_3556"
+    ],
+    "eps": [
+      "edam:format_3466"
+    ],
+    "est2genome": [
+      "edam:format_1316"
+    ],
+    "exchange": [
+      "edam:format_1915"
+    ],
+    "exp": [
+      "edam:format_1631"
+    ],
+    "fasta": [
+      "edam:format_1929",
+      "edam:format_2200"
+    ],
+    "fasta-aln": [
+      "edam:format_1984"
+    ],
+    "fasta-html": [
+      "edam:format_2310"
+    ],
+    "fasta-like": [
+      "edam:format_2546"
+    ],
+    "fastaq": [
+      "edam:format_1930"
+    ],
+    "fastg": [
+      "edam:format_3823"
+    ],
+    "fastq": [
+      "edam:format_1930"
+    ],
+    "fastq-illumina": [
+      "edam:format_1931"
+    ],
+    "fastq-like": [
+      "edam:format_2545"
+    ],
+    "fastq-sanger": [
+      "edam:format_1932"
+    ],
+    "fastq-solexa": [
+      "edam:format_1933"
+    ],
+    "featurexml": [
+      "edam:format_3833"
+    ],
+    "file": [
+      "edam:format_1915"
+    ],
+    "findkm": [
+      "edam:format_1582"
+    ],
+    "format": [
+      "edam:format_1915"
+    ],
+    "fq": [
+      "edam:format_1930"
+    ],
+    "g.vcf": [
+      "edam:format_4018"
+    ],
+    "g.vcf.gz": [
+      "edam:format_4018"
+    ],
+    "ga": [
+      "edam:format_3985"
+    ],
+    "galaxywf": [
+      "edam:format_3985"
+    ],
+    "gcdml": [
+      "edam:format_3163"
+    ],
+    "gcg": [
+      "edam:format_1935"
+    ],
+    "gct": [
+      "edam:format_3709"
+    ],
+    "gde": [
+      "edam:format_3312"
+    ],
+    "gelml": [
+      "edam:format_3249"
+    ],
+    "gen": [
+      "edam:format_3812"
+    ],
+    "genbank": [
+      "edam:format_1936"
+    ],
+    "genbank-html": [
+      "edam:format_2532"
+    ],
+    "genbank-like": [
+      "edam:format_2559"
+    ],
+    "genepred": [
+      "edam:format_3011"
+    ],
+    "geneseq": [
+      "edam:format_2186"
+    ],
+    "genpept": [
+      "edam:format_1937"
+    ],
+    "gfa": [
+      "edam:format_3975",
+      "edam:format_3976"
+    ],
+    "gff": [
+      "edam:format_1975",
+      "edam:format_2305"
+    ],
+    "gff.gz": [
+      "edam:format_1975"
+    ],
+    "gff2": [
+      "edam:format_1974"
+    ],
+    "gff2-seq": [
+      "edam:format_1938"
+    ],
+    "gff3": [
+      "edam:format_1975"
+    ],
+    "gff3-seq": [
+      "edam:format_1939"
+    ],
+    "gff3.gz": [
+      "edam:format_1975"
+    ],
+    "gif": [
+      "edam:format_3467"
+    ],
+    "gifasta": [
+      "edam:format_1940"
+    ],
+    "gml": [
+      "edam:format_3822"
+    ],
+    "gp": [
+      "edam:format_3011"
+    ],
+    "gpml": [
+      "edam:format_3657"
+    ],
+    "gpr": [
+      "edam:format_3829"
+    ],
+    "graph": [
+      "edam:format_3617"
+    ],
+    "gsuite": [
+      "edam:format_3775"
+    ],
+    "gtf": [
+      "edam:format_2306"
+    ],
+    "gtf.gz": [
+      "edam:format_2306"
+    ],
+    "gtrack": [
+      "edam:format_3164"
+    ],
+    "gvcf": [
+      "edam:format_4018"
+    ],
+    "gvf": [
+      "edam:format_3019"
+    ],
+    "gxformat2": [
+      "edam:format_3985"
+    ],
+    "gz": [
+      "edam:format_3989"
+    ],
+    "gzip": [
+      "edam:format_3989"
+    ],
+    "h5": [
+      "edam:format_3590"
+    ],
+    "hdf": [
+      "edam:format_3873"
+    ],
+    "hdf5": [
+      "edam:format_3590"
+    ],
+    "hennig86": [
+      "edam:format_1941"
+    ],
+    "hmmer": [
+      "edam:format_1370"
+    ],
+    "hmmer-aln": [
+      "edam:format_1391"
+    ],
+    "hmmer2": [
+      "edam:format_3328"
+    ],
+    "hmmer3": [
+      "edam:format_3329"
+    ],
+    "hsaml": [
+      "edam:format_3845"
+    ],
+    "hssp": [
+      "edam:format_1455"
+    ],
+    "html": [
+      "edam:format_2331"
+    ],
+    "i_investigation.txt": [
+      "edam:format_4066"
+    ],
+    "ibd": [
+      "edam:format_3839"
+    ],
+    "idat": [
+      "edam:format_3578"
+    ],
+    "idxml": [
+      "edam:format_3764"
+    ],
+    "ig": [
+      "edam:format_1942"
+    ],
+    "igstrict": [
+      "edam:format_1943"
+    ],
+    "ihop": [
+      "edam:format_1740"
+    ],
+    "im": [
+      "edam:format_3593"
+    ],
+    "image": [
+      "edam:format_3547"
+    ],
+    "imzml": [
+      "edam:format_3682"
+    ],
+    "inchi": [
+      "edam:format_1197"
+    ],
+    "inchikey": [
+      "edam:format_1199"
+    ],
+    "index": [
+      "edam:format_3623"
+    ],
+    "inpcrd": [
+      "edam:format_3878"
+    ],
+    "insdseq": [
+      "edam:format_2185"
+    ],
+    "ipi": [
+      "edam:format_2189"
+    ],
+    "isa-json": [
+      "edam:format_4069"
+    ],
+    "isa-tab": [
+      "edam:format_3687"
+    ],
+    "jackknifer": [
+      "edam:format_1944"
+    ],
+    "jackknifernon": [
+      "edam:format_1970"
+    ],
+    "jaspar": [
+      "edam:format_1367"
+    ],
+    "jcamp-dx": [
+      "edam:format_3859"
+    ],
+    "jpeg": [
+      "edam:format_3579"
+    ],
+    "jpg": [
+      "edam:format_3579"
+    ],
+    "json": [
+      "edam:format_3464",
+      "edam:format_3969",
+      "edam:format_3970",
+      "edam:format_4025",
+      "edam:format_4069"
+    ],
+    "json-ld": [
+      "edam:format_3749"
+    ],
+    "jsonld": [
+      "edam:format_3749"
+    ],
+    "kgml": [
+      "edam:format_3847"
+    ],
+    "latex": [
+      "edam:format_3817"
+    ],
+    "lav": [
+      "edam:format_3014"
+    ],
+    "lhf": [
+      "edam:format_1337"
+    ],
+    "literature": [
+      "edam:format_2020"
+    ],
+    "loom": [
+      "edam:format_3913"
+    ],
+    "lsm": [
+      "edam:format_3988"
+    ],
+    "m": [
+      "edam:format_4007"
+    ],
+    "madmp": [
+      "edam:format_4041"
+    ],
+    "maf": [
+      "edam:format_3008"
+    ],
+    "mage-ml": [
+      "edam:format_3161"
+    ],
+    "mage-tab": [
+      "edam:format_3162"
+    ],
+    "map": [
+      "edam:format_2060",
+      "edam:format_3285"
+    ],
+    "markx0": [
+      "edam:format_1985"
+    ],
+    "markx1": [
+      "edam:format_1986"
+    ],
+    "markx10": [
+      "edam:format_1987"
+    ],
+    "markx2": [
+      "edam:format_1988"
+    ],
+    "markx3": [
+      "edam:format_1989"
+    ],
+    "mase": [
+      "edam:format_1945"
+    ],
+    "mat": [
+      "edam:format_3626"
+    ],
+    "match": [
+      "edam:format_1990"
+    ],
+    "matlab": [
+      "edam:format_4007"
+    ],
+    "matrix": [
+      "edam:format_3033"
+    ],
+    "mcpd": [
+      "edam:format_3777"
+    ],
+    "mdcrd": [
+      "edam:format_3878"
+    ],
+    "medline": [
+      "edam:format_2194"
+    ],
+    "mega": [
+      "edam:format_1991"
+    ],
+    "mega-seq": [
+      "edam:format_1946"
+    ],
+    "meganon": [
+      "edam:format_1992"
+    ],
+    "meme-motif": [
+      "edam:format_1360"
+    ],
+    "metalmage": [
+      "edam:format_3550"
+    ],
+    "mf": [
+      "edam:format_1198"
+    ],
+    "mgf": [
+      "edam:format_3651"
+    ],
+    "mhd": [
+      "edam:format_3550",
+      "edam:format_4071"
+    ],
+    "mhd.json": [
+      "edam:format_4071"
+    ],
+    "mht": [
+      "edam:format_3556"
+    ],
+    "mhtml": [
+      "edam:format_3556"
+    ],
+    "mif": [
+      "edam:format_3158"
+    ],
+    "mira": [
+      "edam:format_1629"
+    ],
+    "mirgff3": [
+      "edam:format_3864"
+    ],
+    "mirtop": [
+      "edam:format_3864"
+    ],
+    "mmcif": [
+      "edam:format_1477"
+    ],
+    "mol2": [
+      "edam:format_3816"
+    ],
+    "molfile": [
+      "edam:format_3815"
+    ],
+    "mp4": [
+      "edam:format_3997"
+    ],
+    "mpeg-4": [
+      "edam:format_3997"
+    ],
+    "msaml": [
+      "edam:format_3849"
+    ],
+    "msf": [
+      "edam:format_3702"
+    ],
+    "msh": [
+      "edam:format_3911"
+    ],
+    "msp": [
+      "edam:format_4039"
+    ],
+    "mspcrunch": [
+      "edam:format_1334"
+    ],
+    "mtx": [
+      "edam:format_3916"
+    ],
+    "mwtab": [
+      "edam:format_4070"
+    ],
+    "mzdata": [
+      "edam:format_3834"
+    ],
+    "mzidentml": [
+      "edam:format_3247"
+    ],
+    "mzml": [
+      "edam:format_3244"
+    ],
+    "mzquantml": [
+      "edam:format_3248"
+    ],
+    "mztab": [
+      "edam:format_4058",
+      "edam:format_3681"
+    ],
+    "mztab-l": [
+      "edam:format_4059"
+    ],
+    "mztab-m": [
+      "edam:format_4058"
+    ],
+    "mzxml": [
+      "edam:format_3654"
+    ],
+    "n-quads": [
+      "edam:format_3956"
+    ],
+    "n-triples": [
+      "edam:format_3256"
+    ],
+    "n3": [
+      "edam:format_3257"
+    ],
+    "nbrf": [
+      "edam:format_1948"
+    ],
+    "ncbi": [
+      "edam:format_1972"
+    ],
+    "net": [
+      "edam:format_3983"
+    ],
+    "netcdf": [
+      "edam:format_3650"
+    ],
+    "neuroml": [
+      "edam:format_3971"
+    ],
+    "newick": [
+      "edam:format_1910"
+    ],
+    "nexml": [
+      "edam:format_3160"
+    ],
+    "nextflow": [
+      "edam:format_4048"
+    ],
+    "nexus": [
+      "edam:format_1912"
+    ],
+    "nexus-seq": [
+      "edam:format_1949"
+    ],
+    "nexusnon": [
+      "edam:format_1973"
+    ],
+    "nf": [
+      "edam:format_4048"
+    ],
+    "nh": [
+      "edam:format_1910"
+    ],
+    "nib": [
+      "edam:format_3010"
+    ],
+    "nifti": [
+      "edam:format_3549",
+      "edam:format_4001"
+    ],
+    "nifti-1": [
+      "edam:format_3549"
+    ],
+    "nii": [
+      "edam:format_3549"
+    ],
+    "nlp": [
+      "edam:format_3841"
+    ],
+    "nmredata": [
+      "edam:format_3906"
+    ],
+    "nmrml": [
+      "edam:format_3825"
+    ],
+    "notation3": [
+      "edam:format_3257"
+    ],
+    "npy": [
+      "edam:format_4003"
+    ],
+    "nq": [
+      "edam:format_3956"
+    ],
+    "nrrd": [
+      "edam:format_3551"
+    ],
+    "nt": [
+      "edam:format_3256"
+    ],
+    "nucleotide": [
+      "edam:format_1207"
+    ],
+    "numpy": [
+      "edam:format_4003"
+    ],
+    "objtables": [
+      "edam:format_3977"
+    ],
+    "obo": [
+      "edam:format_2196",
+      "edam:format_2549"
+    ],
+    "obo-xml": [
+      "edam:format_2550"
+    ],
+    "ome-tiff": [
+      "edam:format_3727"
+    ],
+    "ontology": [
+      "edam:format_2195"
+    ],
+    "orthoxml": [
+      "edam:format_3850"
+    ],
+    "oscar": [
+      "edam:format_1741"
+    ],
+    "out": [
+      "edam:format_3758"
+    ],
+    "owl": [
+      "edam:format_2197",
+      "edam:format_3262"
+    ],
+    "oxlicg": [
+      "edam:format_3665"
+    ],
+    "pair": [
+      "edam:format_1996"
+    ],
+    "parm7": [
+      "edam:format_3881"
+    ],
+    "pbm": [
+      "edam:format_3601"
+    ],
+    "pcazip": [
+      "edam:format_3874"
+    ],
+    "pcd": [
+      "edam:format_3594"
+    ],
+    "pcx": [
+      "edam:format_3595"
+    ],
+    "pdb": [
+      "edam:format_1476"
+    ],
+    "pdbatom": [
+      "edam:format_1950"
+    ],
+    "pdbatomnuc": [
+      "edam:format_1951"
+    ],
+    "pdbml": [
+      "edam:format_1478"
+    ],
+    "pdbqt": [
+      "edam:format_4036"
+    ],
+    "pdbseqres": [
+      "edam:format_1953"
+    ],
+    "pdbseqresnuc": [
+      "edam:format_1952"
+    ],
+    "pdf": [
+      "edam:format_3508"
+    ],
+    "pearson": [
+      "edam:format_1954"
+    ],
+    "ped": [
+      "edam:format_3286"
+    ],
+    "pepxml": [
+      "edam:format_3655"
+    ],
+    "perl": [
+      "edam:format_3998"
+    ],
+    "petab": [
+      "edam:format_4015"
+    ],
+    "pgm": [
+      "edam:format_3602"
+    ],
+    "pgsnp": [
+      "edam:format_3012"
+    ],
+    "ph": [
+      "edam:format_1997"
+    ],
+    "phd": [
+      "edam:format_1633"
+    ],
+    "phy": [
+      "edam:format_1997"
+    ],
+    "phylip": [
+      "edam:format_1997"
+    ],
+    "phylipnon": [
+      "edam:format_1998"
+    ],
+    "phyloxml": [
+      "edam:format_3159"
+    ],
+    "pickle": [
+      "edam:format_4002"
+    ],
+    "pileup": [
+      "edam:format_3015"
+    ],
+    "pir": [
+      "edam:format_1948",
+      "edam:format_1976"
+    ],
+    "pkl": [
+      "edam:format_3653"
+    ],
+    "pl": [
+      "edam:format_3998"
+    ],
+    "pmc": [
+      "edam:format_1739"
+    ],
+    "pmml": [
+      "edam:format_3726"
+    ],
+    "png": [
+      "edam:format_3603"
+    ],
+    "po": [
+      "edam:format_3330"
+    ],
+    "postscript": [
+      "edam:format_3696"
+    ],
+    "ppm": [
+      "edam:format_3596"
+    ],
+    "pptx": [
+      "edam:format_3838"
+    ],
+    "pqr": [
+      "edam:format_4035"
+    ],
+    "prmtop": [
+      "edam:format_3881"
+    ],
+    "prmtop7": [
+      "edam:format_3881"
+    ],
+    "probam": [
+      "edam:format_3826"
+    ],
+    "probed": [
+      "edam:format_3827"
+    ],
+    "prosite-pattern": [
+      "edam:format_1356"
+    ],
+    "prosite-profile": [
+      "edam:format_1366"
+    ],
+    "protein": [
+      "edam:format_1208"
+    ],
+    "protxml": [
+      "edam:format_3747"
+    ],
+    "ps": [
+      "edam:format_3696"
+    ],
+    "psd": [
+      "edam:format_3597"
+    ],
+    "psdml": [
+      "edam:format_3851"
+    ],
+    "psf": [
+      "edam:format_3882"
+    ],
+    "psi-par": [
+      "edam:format_3243"
+    ],
+    "psl": [
+      "edam:format_3007"
+    ],
+    "pubannotation": [
+      "edam:format_3781"
+    ],
+    "pubtator": [
+      "edam:format_3783"
+    ],
+    "pure": [
+      "edam:format_2094"
+    ],
+    "py": [
+      "edam:format_3996"
+    ],
+    "python": [
+      "edam:format_3996"
+    ],
+    "qcml": [
+      "edam:format_3683"
+    ],
+    "qmap": [
+      "edam:format_3984"
+    ],
+    "qual": [
+      "edam:format_3607"
+    ],
+    "qual454": [
+      "edam:format_3611"
+    ],
+    "qualillumina": [
+      "edam:format_3609"
+    ],
+    "qualsolexa": [
+      "edam:format_3608"
+    ],
+    "qualsolid": [
+      "edam:format_3610"
+    ],
+    "query": [
+      "edam:format_3787"
+    ],
+    "quicktandem": [
+      "edam:format_1295"
+    ],
+    "r": [
+      "edam:format_3999"
+    ],
+    "rast": [
+      "edam:format_3605"
+    ],
+    "raw": [
+      "edam:format_1957"
+    ],
+    "rcc": [
+      "edam:format_3580"
+    ],
+    "rdf": [
+      "edam:format_3261",
+      "edam:format_2376"
+    ],
+    "refseqp": [
+      "edam:format_1958"
+    ],
+    "repz": [
+      "edam:format_4004"
+    ],
+    "res": [
+      "edam:format_3709"
+    ],
+    "restover": [
+      "edam:format_1319"
+    ],
+    "restrict": [
+      "edam:format_1318"
+    ],
+    "restrt": [
+      "edam:format_3886"
+    ],
+    "rgb": [
+      "edam:format_3600"
+    ],
+    "rmd": [
+      "edam:format_4000"
+    ],
+    "rna": [
+      "edam:format_1213"
+    ],
+    "rnaml": [
+      "edam:format_3311"
+    ],
+    "rpkm": [
+      "edam:format_3980"
+    ],
+    "rsf": [
+      "edam:format_3485"
+    ],
+    "rst": [
+      "edam:format_3886"
+    ],
+    "rst7": [
+      "edam:format_3886"
+    ],
+    "sam": [
+      "edam:format_2573"
+    ],
+    "sbgn-ml": [
+      "edam:format_3692"
+    ],
+    "sbml": [
+      "edam:format_2585"
+    ],
+    "sbol": [
+      "edam:format_3725"
+    ],
+    "sbrml": [
+      "edam:format_3155"
+    ],
+    "sbtab": [
+      "edam:format_3688"
+    ],
+    "scf": [
+      "edam:format_1632"
+    ],
+    "scores": [
+      "edam:format_1999"
+    ],
+    "script": [
+      "edam:format_2032"
+    ],
+    "sdf": [
+      "edam:format_3814"
+    ],
+    "sdrf": [
+      "edam:format_4050"
+    ],
+    "sed-ml": [
+      "edam:format_3685"
+    ],
+    "selex": [
+      "edam:format_2000"
+    ],
+    "sequin": [
+      "edam:format_3701"
+    ],
+    "seqxml": [
+      "edam:format_3852"
+    ],
+    "sff": [
+      "edam:format_3284"
+    ],
+    "sif": [
+      "edam:format_3619"
+    ],
+    "smarts": [
+      "edam:format_1200"
+    ],
+    "smiles": [
+      "edam:format_1196"
+    ],
+    "smith-waterman": [
+      "edam:format_1335"
+    ],
+    "smk": [
+      "edam:format_4049"
+    ],
+    "snakemake": [
+      "edam:format_4049"
+    ],
+    "snpeffdb": [
+      "edam:format_3624"
+    ],
+    "sparql": [
+      "edam:format_3790"
+    ],
+    "spml": [
+      "edam:format_3250"
+    ],
+    "spss": [
+      "edam:format_3555"
+    ],
+    "sql": [
+      "edam:format_3788"
+    ],
+    "sqlite": [
+      "edam:format_3621"
+    ],
+    "sra": [
+      "edam:format_3698"
+    ],
+    "srf": [
+      "edam:format_3017"
+    ],
+    "srs": [
+      "edam:format_2002"
+    ],
+    "srspair": [
+      "edam:format_2003"
+    ],
+    "ss": [
+      "edam:format_3310"
+    ],
+    "staden": [
+      "edam:format_1960"
+    ],
+    "stereolithography": [
+      "edam:format_3993"
+    ],
+    "stl": [
+      "edam:format_3993"
+    ],
+    "stockholm": [
+      "edam:format_1961"
+    ],
+    "strider": [
+      "edam:format_1962"
+    ],
+    "svg": [
+      "edam:format_3604"
+    ],
+    "swissprot": [
+      "edam:format_1963"
+    ],
+    "t-coffee": [
+      "edam:format_2004"
+    ],
+    "tab": [
+      "edam:format_3475"
+    ],
+    "tab-delimited": [
+      "edam:format_3475"
+    ],
+    "tabix": [
+      "edam:format_3616"
+    ],
+    "tabular": [
+      "edam:format_3751"
+    ],
+    "tar": [
+      "edam:format_3981"
+    ],
+    "tarball": [
+      "edam:format_3981"
+    ],
+    "tbi": [
+      "edam:format_3616"
+    ],
+    "tex": [
+      "edam:format_3995"
+    ],
+    "textual": [
+      "edam:format_2330"
+    ],
+    "tiff": [
+      "edam:format_3591"
+    ],
+    "tng": [
+      "edam:format_3876"
+    ],
+    "topology": [
+      "edam:format_3879"
+    ],
+    "trackdb": [
+      "edam:format_3991"
+    ],
+    "trajectory": [
+      "edam:format_3866"
+    ],
+    "traml": [
+      "edam:format_3246"
+    ],
+    "treebase": [
+      "edam:format_1436"
+    ],
+    "treecon": [
+      "edam:format_1911"
+    ],
+    "treecon-seq": [
+      "edam:format_2005"
+    ],
+    "treefam": [
+      "edam:format_1437"
+    ],
+    "trr": [
+      "edam:format_3910"
+    ],
+    "tsv": [
+      "edam:format_3475",
+      "edam:format_4050",
+      "edam:format_4073"
+    ],
+    "turtle": [
+      "edam:format_3255"
+    ],
+    "txt": [
+      "edam:format_1964",
+      "edam:format_4050",
+      "edam:format_4066",
+      "edam:format_4067",
+      "edam:format_4068",
+      "edam:format_4070",
+      "edam:format_2330"
+    ],
+    "u3d": [
+      "edam:format_3994"
+    ],
+    "uniprot": [
+      "edam:format_1963",
+      "edam:format_2188"
+    ],
+    "uniprotkb": [
+      "edam:format_1963"
+    ],
+    "uniprotkb-like": [
+      "edam:format_2547"
+    ],
+    "unpure": [
+      "edam:format_2095"
+    ],
+    "uri": [
+      "edam:format_2334"
+    ],
+    "vcf": [
+      "edam:format_3016"
+    ],
+    "vcf.gz": [
+      "edam:format_3016"
+    ],
+    "vdb": [
+      "edam:format_3699"
+    ],
+    "vega": [
+      "edam:format_3969"
+    ],
+    "vega-lite": [
+      "edam:format_3970"
+    ],
+    "visml": [
+      "edam:format_3821"
+    ],
+    "wego": [
+      "edam:format_3979"
+    ],
+    "wiff": [
+      "edam:format_3710"
+    ],
+    "wig": [
+      "edam:format_3005"
+    ],
+    "wmv": [
+      "edam:format_3986"
+    ],
+    "workflow": [
+      "edam:format_2032"
+    ],
+    "xbm": [
+      "edam:format_3598"
+    ],
+    "xgmml": [
+      "edam:format_3618"
+    ],
+    "xls": [
+      "edam:format_3468"
+    ],
+    "xlsx": [
+      "edam:format_3977",
+      "edam:format_3620"
+    ],
+    "xmfa": [
+      "edam:format_3811"
+    ],
+    "xml": [
+      "edam:format_2332"
+    ],
+    "xpm": [
+      "edam:format_3599"
+    ],
+    "xq": [
+      "edam:format_3789"
+    ],
+    "xquery": [
+      "edam:format_3789"
+    ],
+    "xqy": [
+      "edam:format_3789"
+    ],
+    "xsd": [
+      "edam:format_3804"
+    ],
+    "xtc": [
+      "edam:format_3875"
+    ],
+    "xyz": [
+      "edam:format_3877"
+    ],
+    "yaml": [
+      "edam:format_3750"
+    ],
+    "yml": [
+      "edam:format_3750"
+    ],
+    "zarr": [
+      "edam:format_3915"
+    ],
+    "zarray": [
+      "edam:format_3915"
+    ],
+    "zgroup": [
+      "edam:format_3915"
+    ],
+    "zip": [
+      "edam:format_3987"
+    ],
+    "zst": [
+      "edam:format_4006"
+    ],
+    "zstandard": [
+      "edam:format_4006"
+    ],
+    "ztr": [
+      "edam:format_3018"
+    ]
+  },
+  "notes": "Generated from EDAM file_extension annotations plus extension-like labels, exact synonyms, and filext seeAlso URLs.",
+  "source": "https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl",
+  "source_sha256": "629b53b9f7bd4a5a9ba3dcee43eeb4cdad7595567e6cc20237d1ff78221c4249"
+}

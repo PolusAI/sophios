@@ -1,52 +1,94 @@
 # Coding Standards
 
-## Tooling
+This page describes the development checks used in the Sophios repository. For
+environment setup, start with the [Developer Install Guide](installguide.md).
 
-Tooling is essential to maximizing a developer's productivity and to minimizing the chance of introducing bugs. I highly recommend vscode, with the extensions listed in the [installation guide](../installguide.md#vscode). Most importantly, vscode provides [IntelliSense](https://code.visualstudio.com/docs/editor/intellisense) code completion.
+## Type Checking
 
-## MyPy Type Annotations
+Sophios uses mypy type annotations throughout the source tree. The active mypy
+configuration lives in `pyproject.toml`.
 
-The code makes extensive use of mypy type annotations for static analysis. Together with the mypy vscode extension, this gives developers IntelliSense code completion which is absolutely critical. For various reasons mypy isn't perfect, but it's infinitely better than nothing at all. Please read the detailed comments in `wic_types.py` for additional considerations w.r.t. [Algebraic Data Types](https://en.wikipedia.org/wiki/Algebraic_data_type).
+Run the same broad paths used by CI:
+
+```bash
+mypy src/ examples/ tests/
+```
+
+When adding or changing public APIs, prefer explicit types at the API boundary.
+Internal helper code can still be compact, but typed inputs and return values
+make the workflow compiler and Python API much easier to maintain.
 
 ## Docstrings
 
-I use the vscode extension `autoDocstring` to help generate docstrings. If you wait until after you add mypy type annotations to all of a function's arguments, autoDocstring will insert the types into the docstrings as well. Docstrings complement mypy type annotations; they do not replace them. We need to use both.
+Docstrings should explain what a function or class is responsible for, what its
+important arguments mean, and what callers can expect back.
 
-The contents of the docstrings should try to describe the purpose of the function and the arguments at a high level. For example:
+Use docstrings to clarify behavior, not to repeat obvious type information. For
+example, this is useful because it explains the naming convention:
 
 ```python
 def step_name_str(yaml_stem: str, i: int, step_key: str) -> str:
-    """Returns a string which uniquely and hierarchically identifies a step in a workflow
-
-    Args:
-        yaml_stem (str): The name of the workflow (filepath stem)
-        i (int): The (zero-based) step number
-        step_key (str): The name of the step (used as a dict key)
-
-    Returns:
-        str: The parameters (and the word 'step') joined together with double underscores
-    """
+    """Return the stable internal name for one workflow step."""
     ...
 ```
 
-## Integration / Regression Tests
+## Tests
 
-We have a small number of integration / regression tests located in `tests/`. These tests are very powerful and have been extremely helpful in catching various issues. The command `pytest -m serial && pytest -m "not serial" --workers 8` will run the full set of tests, which takes about an hour on a laptop with a GPU. For interactive development purposes this is too slow, so you can use `pytest -m serial`. This command tests the compiler only (not the runtime) and only takes about a minute.
+Tests live under `tests/` and use pytest markers declared in `pyproject.toml`:
 
-In addition to the above tests, we need to add some unit tests. Due to the highly recursive nature of the compilation algorithm, it has proven difficult to test functions in isolation. There will probably need to be some refactoring to facilitate this.
+- `fast`: quick API, schema, and unit-style checks,
+- `serial`: tests that should not run in parallel,
+- `slow`: workflow or integration checks that can take longer.
 
-### Code Coverage
+Useful local commands:
 
-We are using the pytest-cov code coverage plugin to make sure our tests are exercising most of the code. See `.coveragerc` for details. To generate a coverage report, simply use the `--cov` flag as shown below.
+```bash
+pytest -m fast
+pytest tests/test_python_api.py tests/test_tool_builder.py -q
+pytest -m serial
+pytest -m "not serial" --workers 8
+```
 
-## CI/CD
+Runtime workflow tests may need Docker or Podman and can pull container images.
+Prefer the focused API tests while iterating on Python API or documentation
+changes.
 
-Our Continuous Integration / Continuous Delivery files can be found in `.github/workflows/*.yml`. After every `git push`, this creates an isolated development environment and runs `mypy --no-incremental src/ tests/`, `pylint src/ tests/`, and `pytest`. Before pushing, please run `pytest -m serial` or preferably the full `pytest -m serial && pytest -m "not serial" --workers 8`.
+## Coverage
+
+The repository includes `pytest-cov`. To generate a coverage report, add
+`--cov` and use the checked-in `.coveragerc`:
+
+```bash
+pytest -m fast --cov --cov-config=.coveragerc
+```
 
 ## Linting
 
-We use pylint to check the code for style, formatting, and common mistakes. See `.pylintrc` for our configuration.
+Sophios uses pylint for style, formatting, and common mistake detection. The
+configuration lives in `pyproject.toml`.
 
-### Line Lengths
+Run:
 
-We are currently using `max-line-length=120`, although there are still some cases where lines exceed that length. Some developers feel strongly about a hard maximum of 100 or even 80 characters; we can try to accommodate a lower limit as necessary.
+```bash
+pylint src/ examples/**/*.py tests/
+```
+
+The current configured maximum line length is 120 characters.
+
+## CI Checks
+
+GitHub Actions workflows live under `.github/workflows/`. The main Linux CI
+workflow installs `.[all_except_runner_src]` and runs:
+
+- `mypy src/ examples/ tests/`,
+- `pylint src/ examples/**/*.py tests/`,
+- focused Python API and workflow tests,
+- selected runtime workflow tests.
+
+Before pushing a broad change, run the focused checks that match the area you
+touched. For Python API or docs changes, the most useful baseline is:
+
+```bash
+sphinx-build -b html docs docs/_build/html
+pytest tests/test_python_api.py tests/test_tool_builder.py -q
+```

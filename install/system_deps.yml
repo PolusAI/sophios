@@ -3,7 +3,7 @@ channels:
   - defaults
 
 dependencies:
-  - python < 3.14  # no issues with python 3.13
+  - "python>=3.11"
 # NOTE: cwltool needs nodejs for InlineJavascriptRequirement
   - nodejs
   - graphviz
@@ -15,10 +15,10 @@ dependencies:
 # wget and zip cause errors in the setup-miniconda github action on windows.
   - wget
   - zip
-# scipy is only used for least_squares fitting in the tests, but
-# it needs to build binary wheels.
+# scipy is used by example workflow tools and is easiest to keep ABI-stable
+# through conda rather than pip-built wheels.
   - scipy
-# NOTE: Although wic doesn't have an explicit dependency on numpy, several
+# NOTE: Although Sophios doesn't have an explicit dependency on numpy, several
 # issues arise when numpy is installed as a transitive dependency of matplotlib.
 # On linux and macos, using pip to install numpy may cause this error with pytest:
 # "Fatal Python error: Illegal instruction"

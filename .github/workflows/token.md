@@ -99,9 +99,9 @@ private keys of the PolusAI GitHub App.
 As a reminder, using this approach requires users to fork all repositories on which
 workflows will be run in the cross-repo CIs, although changes might only be made on
 one repository. For example, push on `mm-workflow` triggers workflow runs on
-`workflow-inference-compiler`. Even new features are only added to `mm-workflow` and
+`sophios`. Even new features are only added to `mm-workflow` and
 the testing only needs code form the default `master` branch of
-`workflow-inference-compiler`, `workflow-inference-compiler` should still be forked,
+`sophios`, `sophios` should still be forked,
 because the user's GitHub App is not installed on PolusAI and can only anthenticate API
 calls to repositories owned by the user.
 
@@ -134,7 +134,7 @@ step of checking membership against a whitelist is added to all workflows that c
 be triggered by `pull_request_target` (directly or indirectly by cross-repo CIs).
 They include the workflows with `repository_dispatch` as the triggering event since
 the dispatches could be sent from PRs onto dependent repositories, e.g. PRs to `PolusAI/mm-workflows` would send dispatches to
-`PolusAI/workflow-inference-compiler`. In this step, we check whether the **sender** of the event is an external collaborator of the repository or a member of the PolusAI organization. If not, this step will fail and stop the workflow.
+`PolusAI/sophios`. In this step, we check whether the **sender** of the event is an external collaborator of the repository or a member of the PolusAI organization. If not, this step will fail and stop the workflow.
 
 See `.github/my_actions/check_membership` and the `Check Membership` step in
 `branch_dispatch_pull_request.yml`.

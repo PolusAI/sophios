@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, NamedTuple, Tuple
+from typing import Any, NamedTuple, TypeAlias
 
 import networkx as nx
 
@@ -11,10 +11,11 @@ import networkx as nx
 # However, I can't seem to get it to work.
 # TODO: Consider removing all type aliases in favor of classes.
 
-KV = Dict[str, Any]
-Cwl = KV
-Json = KV
-Yaml = KV
+KV: TypeAlias = dict[str, Any]
+Cwl: TypeAlias = KV
+Json: TypeAlias = KV
+RawJson: TypeAlias = str
+Yaml: TypeAlias = KV
 
 # In python there are unfortunately an enormous number of ways to represent the humble struct.
 # See https://stackoverflow.com/questions/53409117/what-are-the-main-differences-of-namedtuple-and-typeddict-in-python-mypy
@@ -32,38 +33,38 @@ class StepId(NamedTuple):
     plugin_ns: str  # left column of yml_paths.txt
 
 
-Tools = Dict[StepId, Tool]
+Tools: TypeAlias = dict[StepId, Tool]
 
 # NOTE: Please read the Namespacing section of docs/devguide.md !!!
-Namespace = str
-Namespaces = List[Namespace]
+Namespace: TypeAlias = str
+Namespaces: TypeAlias = list[Namespace]
 
-WorkflowInputs = Dict[str, Any]
-WorkflowInputsFile = Dict[str, Any]
-WorkflowOutputs = List[Yaml]
-InternalOutputs = List[str]
-ExplicitEdgeDef = Tuple[Namespaces, str]
-ExplicitEdgeDefs = Dict[str, ExplicitEdgeDef]
-ExplicitEdgeCalls = Dict[str, ExplicitEdgeDef]
-PluginID = int
-StepName1 = str
-DiGraph = Any  # graphviz.DiGraph
+WorkflowInputs: TypeAlias = dict[str, Any]
+WorkflowInputsFile: TypeAlias = dict[str, Any]
+WorkflowOutputs: TypeAlias = list[Yaml]
+InternalOutputs: TypeAlias = list[str]
+ExplicitEdgeDef: TypeAlias = tuple[Namespaces, str]
+ExplicitEdgeDefs: TypeAlias = dict[str, ExplicitEdgeDef]
+ExplicitEdgeCalls: TypeAlias = dict[str, ExplicitEdgeDef]
+PluginID: TypeAlias = int
+StepName1: TypeAlias = str
+DiGraph: TypeAlias = Any  # graphviz.DiGraph
 
 
 class GraphData():
     # pylint:disable=too-few-public-methods
     def __init__(self,
                  name: str,  # TODO: Should this be StepId?
-                 nodes: List[Tuple[str, Dict]] = [],
-                 edges: List[Tuple[str, str, Dict]] = [],
-                 subgraphs: List[Any] = [],
-                 ranksame: List[str] = []) -> None:
+                 nodes: list[tuple[str, dict]] | None = None,
+                 edges: list[tuple[str, str, dict]] | None = None,
+                 subgraphs: list[Any] | None = None,
+                 ranksame: list[str] | None = None) -> None:
         # NOTE: See comments in utils_graphs.flatten_graphdata() !!!
         self.name = name
-        self.nodes = nodes
-        self.edges = edges
-        self.subgraphs = subgraphs
-        self.ranksame = ranksame
+        self.nodes = [] if nodes is None else nodes
+        self.edges = [] if edges is None else edges
+        self.subgraphs = [] if subgraphs is None else subgraphs
+        self.ranksame = [] if ranksame is None else ranksame
 
 
 # This groups together the classes which represent our graph.
@@ -75,7 +76,7 @@ class GraphReps(NamedTuple):
     graphdata: GraphData
 
 
-YamlDSLArgs = Yaml
+YamlDSLArgs: TypeAlias = Yaml
 
 # Since we cannot store extra tags in CWL files, we need a data structure
 # to store temporary compiler info that gets passed through the recursion.
@@ -83,12 +84,12 @@ YamlDSLArgs = Yaml
 # Rose Tree https://en.wikipedia.org/wiki/Rose_tree
 # Unfortunately, since mypy does not support Algebraic Data Types (ADTs)
 # we have to break the recursion by replacing the recursive instance of RoseTree with Any :(
-DataType = Any
+DataType: TypeAlias = Any
 
 
 class RoseTree(NamedTuple):
     data: DataType
-    sub_trees: List[Any]  # Any = RoseTree
+    sub_trees: list[Any]  # Any = RoseTree
 # Note that instead of DataType we could provide a specific type, but remember that
 # a Rose Tree is defined by its structure, not by the specific type of data it contains.
 # We can simply cast to a specific type at each call site, i.e.
@@ -114,8 +115,8 @@ class NodeData(NamedTuple):
 
 
 class EnvData(NamedTuple):
-    input_mapping: Dict[str, List[str]]
-    output_mapping: Dict[str, str]
+    input_mapping: dict[str, list[str]]
+    output_mapping: dict[str, str]
     inputs_file_workflow: WorkflowInputsFile
     vars_workflow_output_internal: InternalOutputs
     explicit_edge_defs: ExplicitEdgeDefs
@@ -145,4 +146,4 @@ class YamlTree(NamedTuple):
 
 class YamlForest(NamedTuple):
     yaml_tree: YamlTree
-    sub_forests: List[Tuple[StepId, Any]]  # Any = YamlForest
+    sub_forests: list[tuple[StepId, Any]]  # Any = YamlForest

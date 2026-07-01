@@ -1,0 +1,235 @@
+@page {
+    size: Letter;
+    margin: 0.68in 0.72in;
+}
+
+html,
+body {
+    background: #fff;
+    color: #17202a;
+}
+
+body {
+    font-family: Aptos, "Helvetica Neue", Arial, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.45;
+    margin: 0;
+    padding: 0;
+}
+
+div.document,
+div.bodywrapper,
+div.body {
+    margin: 0 !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+    width: auto !important;
+}
+
+div.documentwrapper {
+    float: none;
+}
+
+div.related,
+div.footer,
+div.sphinxsidebar,
+.headerlink,
+.viewcode-link {
+    display: none !important;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    color: #101820;
+    font-weight: 700;
+    line-height: 1.18;
+    page-break-after: avoid;
+}
+
+h1 {
+    border-bottom: 2px solid #22313f;
+    break-before: page;
+    font-size: 22pt;
+    letter-spacing: -0.02em;
+    margin: 0 0 0.24in;
+    padding-bottom: 0.12in;
+}
+
+h1:first-of-type {
+    break-before: auto;
+}
+
+h2 {
+    border-bottom: 1px solid #d5dde5;
+    font-size: 15pt;
+    margin: 0.32in 0 0.14in;
+    padding-bottom: 0.06in;
+}
+
+h3 {
+    font-size: 12.5pt;
+    margin: 0.22in 0 0.08in;
+}
+
+h4,
+h5,
+h6 {
+    font-size: 10.5pt;
+    margin: 0.18in 0 0.06in;
+}
+
+p {
+    margin: 0 0 0.12in;
+}
+
+div.body p,
+div.body dd,
+div.body li,
+div.body blockquote {
+    hyphens: none !important;
+    overflow-wrap: normal;
+    text-align: left;
+}
+
+a {
+    color: #075985;
+    text-decoration: none;
+}
+
+ul,
+ol {
+    margin: 0 0 0.14in 0.24in;
+    padding: 0;
+}
+
+li {
+    margin: 0.03in 0;
+}
+
+blockquote {
+    border-left: 3px solid #d5dde5;
+    color: #34495e;
+    margin: 0.14in 0;
+    padding: 0.02in 0 0.02in 0.14in;
+}
+
+code,
+tt {
+    background: #f3f6f8;
+    border: 1px solid #e3e8ee;
+    border-radius: 3px;
+    color: #1f2933;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-size: 8.7pt;
+    padding: 0.01in 0.035in;
+}
+
+pre {
+    background: #f7f9fb;
+    border: 1px solid #d8e0e8;
+    border-radius: 5px;
+    color: #16212b;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-size: 8.3pt;
+    line-height: 1.36;
+    margin: 0.12in 0 0.18in;
+    overflow-wrap: anywhere;
+    padding: 0.12in;
+    white-space: pre-wrap;
+}
+
+pre code {
+    background: transparent;
+    border: 0;
+    padding: 0;
+}
+
+table {
+    border-collapse: collapse;
+    font-size: 8.8pt;
+    margin: 0.14in 0 0.18in;
+    page-break-inside: avoid;
+    width: 100%;
+}
+
+th,
+td {
+    border: 1px solid #d8e0e8;
+    padding: 0.055in 0.07in;
+    text-align: left;
+    vertical-align: top;
+}
+
+th {
+    background: #edf2f7;
+    color: #101820;
+    font-weight: 700;
+}
+
+img,
+figure,
+table,
+pre,
+.admonition {
+    break-inside: avoid;
+}
+
+img {
+    max-width: 100%;
+}
+
+.admonition {
+    border: 1px solid #d8e0e8;
+    border-left: 4px solid #2c7da0;
+    border-radius: 5px;
+    margin: 0.16in 0;
+    padding: 0.1in 0.14in;
+}
+
+.admonition-title {
+    color: #123047;
+    font-weight: 700;
+    margin: 0 0 0.06in;
+}
+
+.contents {
+    background: #f8fafc;
+    border: 1px solid #e3e8ee;
+    border-radius: 6px;
+    margin: 0.14in 0 0.22in;
+    padding: 0.12in 0.16in;
+}
+
+.toctree-wrapper {
+    margin: 0;
+    padding: 0;
+}
+
+span[id^="document-"] + section {
+    break-before: page;
+}
+
+span[id="document-overview"] + section {
+    break-before: auto;
+}
+
+span[id^="document-"] + section > h2,
+span[id^="document-"] + section > h3 {
+    border-bottom: 2px solid #22313f;
+    color: #101820;
+    font-size: 20pt;
+    letter-spacing: -0.02em;
+    margin: 0 0 0.22in;
+    padding-bottom: 0.1in;
+}
+
+.section,
+section {
+    orphans: 3;
+    widows: 3;
+}

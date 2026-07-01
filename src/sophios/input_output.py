@@ -2,39 +2,13 @@ import copy
 from shutil import copytree, ignore_patterns
 import json
 from pathlib import Path
-from typing import Any, List, Tuple, Dict
+from typing import Any, Dict
 
 import yaml
 
 from . import auto_gen_header
+from .runtime_inputs import normalize_rose_tree_cwl, normalize_rose_tree_job_inputs
 from .wic_types import (Namespaces, NodeData, RoseTree, Yaml, ExplicitEdgeCalls, Json)
-
-
-def read_lines_pairs(filename: Path) -> List[Tuple[str, str]]:
-    """Reads a whitespace-delimited file containing two paired entries per line (i.e. a serialized Dict).
-
-    Args:
-        filename (Path): The full path of the file to be read.
-
-    Raises:
-        Exception: If any non-blank, non-comment lines do not contain exactly two entries.
-
-    Returns:
-        List[Tuple[str, str]]: The file contents, with blank lines and comments removed.
-    """
-    with open(filename, mode='r', encoding='utf-8') as f:
-        lines = []
-        for line in f.readlines():
-            if line.strip() == '':  # Skip blank lines
-                continue
-            if line.startswith('#'):  # Skip comment lines
-                continue
-            l_s = line.split()
-            if not len(l_s) == 2:
-                print(line)
-                raise Exception("Error! Line must contain exactly two entries!")
-            lines.append((l_s[0], l_s[1]))
-    return lines
 
 
 # snakeyaml (a cromwell dependency) refuses to parse yaml files with more than
@@ -75,7 +49,7 @@ def write_to_disk(rose_tree: RoseTree, path: Path, relative_run_path: bool, inpu
     _write_to_disk(rose_tree, path, relative_run_path, inputs)
 
 
-def _write_to_disk(rose_tree: RoseTree, path: Path, relative_run_path: bool, inputs: Yaml = {}) -> None:
+def _write_to_disk(rose_tree: RoseTree, path: Path, relative_run_path: bool, inputs: Yaml | None = None) -> None:
     """Writes the compiled CWL files and their associated yml inputs files to disk.
 
     NOTE: Only the yml input file associated with the root workflow is
@@ -89,11 +63,12 @@ def _write_to_disk(rose_tree: RoseTree, path: Path, relative_run_path: bool, inp
         relative_run_path (bool): Controls whether to use subdirectories or just one directory.
         inputs (Yaml): Optional additional inputs
     """
+    inputs = {} if inputs is None else inputs
     node_data: NodeData = rose_tree.data
     namespaces = node_data.namespaces
     yaml_stem = node_data.name
-    cwl_tree = node_data.compiled_cwl
-    yaml_inputs = {**node_data.workflow_inputs_file, **inputs}
+    cwl_tree = normalize_rose_tree_cwl(rose_tree)
+    yaml_inputs = normalize_rose_tree_job_inputs(rose_tree, {**node_data.workflow_inputs_file, **inputs})
 
     path.mkdir(parents=True, exist_ok=True)
     if relative_run_path:

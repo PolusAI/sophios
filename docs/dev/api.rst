@@ -13,6 +13,11 @@ sophios.compiler
 ------------------------------------
 .. automodule:: sophios.compiler
 
+sophios.compute_request
+------------------------------------
+.. automodule:: sophios.compute_request
+   :no-index:
+
 sophios.cwl_subinterpreter
 ------------------------------------
 .. automodule:: sophios.cwl_subinterpreter
@@ -45,6 +50,10 @@ sophios.run_local
 ------------------------------------
 .. automodule:: sophios.run_local
 
+sophios.run_local_async
+------------------------------------
+.. automodule:: sophios.run_local_async
+
 sophios.schemas.wic_schema
 ------------------------------------
 .. automodule:: sophios.schemas.wic_schema
@@ -60,6 +69,10 @@ sophios.utils_cwl
 sophios.utils_graphs
 ------------------------------------
 .. automodule:: sophios.utils_graphs
+
+sophios.utils_yaml
+------------------------------------
+.. automodule:: sophios.utils_yaml
 
 sophios.wic_types
 ------------------------------------

@@ -3,7 +3,7 @@ import importlib.util
 from pathlib import Path
 import sys
 from types import ModuleType
-from typing import Dict, Any
+from typing import Any
 
 DRIVER_SCRIPT = '/python_cwl_driver.py'
 TYPES_SCRIPT = '/workflow_types.py'
@@ -37,10 +37,7 @@ def import_python_file(python_module_name: str, python_file_path: Path) -> Modul
     # file into its own temporary directory. If you use an initial workdir, the
     # symlinks are now all in the same directory, but their sources are still
     # pointing wherever. Thus, import_module will never work!
-    # module = importlib.import_module(python_script_mod)
-    # ModuleNotFoundError: No module named ...
-
-    # The solution is buried in the examples at the bottom of the documentation
+    # The solution is in the examples at the bottom of the documentation
     # https://docs.python.org/3/library/importlib.html#importing-a-source-file-directly
     # and https://stackoverflow.com/questions/65206129/importlib-not-utilising-recognising-path
     spec = importlib.util.spec_from_file_location(
@@ -58,14 +55,12 @@ def import_python_file(python_module_name: str, python_file_path: Path) -> Modul
                 raise Exception
         except Exception as e:
             raise Exception(f'Error! Cannot load python_script {python_file_path}') from e
-        # Note that now (after calling exec_module) we can call import_module without error
-        # module_ = importlib.import_module(python_module_name)
     else:
         raise Exception(f'Error! Cannot load python_script spec {spec} from file\n{python_file_path}')
     return module_
 
 
-def get_main_args(module_: ModuleType) -> Dict[str, Any]:
+def get_main_args(module_: ModuleType) -> dict[str, Any]:
     """Uses inspect to get the arguments to the main() function of the given module.
 
     Args:
@@ -81,15 +76,10 @@ def get_main_args(module_: ModuleType) -> Dict[str, Any]:
     anns = inspect.getfullargspec(module_.main).annotations
     if 'return' in anns:
         del anns['return']
-    # print(anns)
-    # print(ret)
-
-    # print(inspect.signature(module_.main).parameters)
-    # print(inspect.signature(module_.main).return_annotation)
     return anns
 
 
-def check_args_match_inputs(module_: ModuleType, args: Dict[str, Any], check: bool = False) -> None:
+def check_args_match_inputs(module_: ModuleType, args: dict[str, Any], check: bool = False) -> None:
     """Checks that the keys (only) of the args dict match the keys of the top-level inputs attribute.
 
     Args:
@@ -111,8 +101,8 @@ def check_args_match_inputs(module_: ModuleType, args: Dict[str, Any], check: bo
         sys.exit(1)
 
 
-def generate_CWL_CommandLineTool(module_inputs: Dict[str, Any], module_outputs: Dict[str, Any],
-                                 python_script_docker_pull: str = '') -> Dict[str, Any]:
+def generate_CWL_CommandLineTool(module_inputs: dict[str, Any], module_outputs: dict[str, Any],
+                                 python_script_docker_pull: str = '') -> dict[str, Any]:
     """Generates a CWL CommandLineTool for an arbitrary (annotated) python script.
 
     Args:
@@ -123,39 +113,34 @@ def generate_CWL_CommandLineTool(module_inputs: Dict[str, Any], module_outputs: 
     Returns:
         Dict[str, Any]: A CWL CommandLineTool with the given inputs and outputs.
     """
-    yaml_tree: Dict[str, Any] = {}
+    yaml_tree: dict[str, Any] = {}
     yaml_tree['cwlVersion'] = 'v1.0'
     yaml_tree['class'] = 'CommandLineTool'
     yaml_tree['$namespaces'] = {'edam': 'https://edamontology.org/'}
     yaml_tree['$schemas'] = ['https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl']
     yaml_tree['baseCommand'] = 'python3'
 
-    requirements: Dict[str, Any] = {}
-    requirements = {
-        'InlineJavascriptRequirement': {}}
+    requirements: dict[str, Any] = {'InlineJavascriptRequirement': {}}
     if python_script_docker_pull:
         requirements['DockerRequirement'] = {'dockerPull': python_script_docker_pull}
     yaml_tree['requirements'] = requirements
 
-    def input_binding(position: int, prefix: str = '') -> Dict[str, Any]:
+    def input_binding(position: int, prefix: str = '') -> dict[str, Any]:
         if prefix == '':
             return {'inputBinding': {'position': position}}
         return {'inputBinding': {'position': position, 'prefix': f'--{prefix}'}}
 
-    inputs: Dict[str, Any] = {}
-    # driver_script_file = {'class': 'File', 'path': driver_script}
+    inputs: dict[str, Any] = {}
     inputs['driver_script'] = {'type': 'string', 'format': 'edam:format_2330',
-                               **input_binding(1), 'default': DRIVER_SCRIPT}  # driver_script_file
-    # workflow_types_file = {'class': 'File', 'path': types_script}
+                               **input_binding(1), 'default': DRIVER_SCRIPT}
     inputs['workflow_types'] = {'type': 'string', 'format': 'edam:format_2330',
-                                **input_binding(2), 'default': TYPES_SCRIPT}  # workflow_types_file
+                                **input_binding(2), 'default': TYPES_SCRIPT}
     inputs['script'] = {'type': 'File', 'format': 'edam:format_2330', **input_binding(3)}
     for i, (arg_key, arg_val) in enumerate(module_inputs.items()):
         inputs[arg_key] = {**arg_val, **input_binding(i+4, arg_key)}
-    # inputs['args'] = {'type': 'string', **input_binding(4)}
     yaml_tree['inputs'] = inputs
 
-    outputs: Dict[str, Any] = {}
+    outputs: dict[str, Any] = {}
     for arg_key, (glob_pattern, arg_val) in module_outputs.items():
         outputs[arg_key] = {**arg_val, 'outputBinding': {'glob': glob_pattern}}
     yaml_tree['outputs'] = outputs
@@ -164,7 +149,7 @@ def generate_CWL_CommandLineTool(module_inputs: Dict[str, Any], module_outputs: 
     return yaml_tree
 
 
-def get_module(python_script_mod: str, python_script_path: Path, yml_args: Dict[str, Any]) -> ModuleType:
+def get_module(python_script_mod: str, python_script_path: Path, yml_args: dict[str, Any]) -> ModuleType:
     """Imports the given python script and validates its top-level annotations.
 
     Args:
@@ -177,8 +162,6 @@ def get_module(python_script_mod: str, python_script_path: Path, yml_args: Dict[
     """
     import_python_file('workflow_types', Path(TYPES_SCRIPT_REL))
     module_ = import_python_file(python_script_mod, python_script_path)
-    # print(module_.inputs)
-    # print(module_.outputs)
 
     main_args = get_main_args(module_)
     check_args_match_inputs(module_, main_args)
@@ -187,29 +170,3 @@ def get_module(python_script_mod: str, python_script_path: Path, yml_args: Dict[
 
     check_args_match_inputs(module_, yml_args)
     return module_
-
-
-def get_inputs_workflow(module_inputs: Dict[str, Any], python_script_path: str,
-                        yml_args: Dict[str, Any]) -> Dict[str, Any]:
-    """This generates the contents of the inputs file associated with generate_CWL_CommandLineTool\n
-    Note that this is already taken care of in the compiler, but this function\n
-    is useful for standalone purposes. (Alternatively, just make a single-step workflow.)
-
-    Args:
-        module_inputs (Dict[str, Any]): The top-level inputs attribute of the python module.
-        python_script_path (str): The path to the given python script.
-        yml_args (Dict[str, Any]): The contents of the python_script in: yml tag.
-
-    Returns:
-        Dict[str, Any]: The contents of the CWL inputs file.
-    """
-    inputs_workflow = {}
-    inputs_workflow['script'] = {'class': 'File', 'format': 'edam:format_2330', 'path': python_script_path}
-    for arg, yml_val in yml_args.items():
-        if module_inputs[arg]['type'] == 'string':
-            inputs_workflow[arg] = yml_val
-        else:
-            inputs_workflow[arg] = {'class': 'File', 'format': module_inputs[arg]['format'], 'path': yml_val}
-    # inputs_workflow = {'script': f'{python_script}.py', **yml_args}
-    # inputs_workflow = {'script': f'{python_script}.py', 'args': json.dumps(yml_args)}
-    return inputs_workflow

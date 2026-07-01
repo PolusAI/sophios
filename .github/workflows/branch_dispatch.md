@@ -55,7 +55,7 @@ to generate commands (e.g. defined after `run:`) to be run inside shells.
 
 Finally, the dispatches and other GitHub API calls requires authentication. Even if they don't,
 it is a good idea to [use authentication to increase the rate limit of calling API in GitHub Actions](https://docs.github.com/en/rest/overview/resources-in-the-rest-api?apiVersion=2022-11-28#rate-limiting).
-See [`token.md`](https://github.com/PolusAI/workflow-inference-compiler/blob/master/.github/workflows/token.md)
+See [`token.md`](https://github.com/PolusAI/sophios/blob/master/.github/workflows/token.md)
 in this folder for a detailed discussion.
 
 

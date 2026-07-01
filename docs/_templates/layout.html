@@ -1,4 +1,6 @@
 {% extends "!layout.html" %}
 {% block extrahead %}
+    {% if not building_pdf %}
     <link href="{{ pathto("_static/style.css", True) }}" rel="stylesheet" type="text/css">
+    {% endif %}
 {% endblock %}

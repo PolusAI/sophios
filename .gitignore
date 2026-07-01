@@ -19,6 +19,7 @@ gromacs_mdp.html
 NCI*
 error_*.txt
 *config.json
+!release-please-config.json
 validation_*.txt
 .hypothesis/
 .env

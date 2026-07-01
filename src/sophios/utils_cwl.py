@@ -250,7 +250,6 @@ def get_workflow_outputs(graph_settings: Dict[str, Any],
                 continue
             # Use triple underscore for namespacing so we can split later
             out_name = f'{step_name_or_key}___{out_key}'
-            # print('out_name', out_name)
 
         for out_key, out_dict in outputs_workflow[i].items():
             out_dict['type'] = canonicalize_type(out_dict['type'])
@@ -263,7 +262,6 @@ def get_workflow_outputs(graph_settings: Dict[str, Any],
             out_var = f'{step_name_or_key}/{out_key}'
             workflow_outputs.update(
                 {out_name: {**out_dict, 'outputSource': out_var}})
-        # print('workflow_outputs', workflow_outputs)
     # NOTE: The fix_conflicts 'feature' of cwltool prevents files from being
     # overwritten by appending _2, _3 etc.
     # The problem is that these renamed files now no longer match the glob

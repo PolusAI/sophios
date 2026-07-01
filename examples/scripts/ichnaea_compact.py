@@ -1,17 +1,22 @@
-"""Canonical end-to-end example: cwl_builder -> Workflow -> compute payload."""
+"""Canonical end-to-end example: tool_builder -> Workflow -> compute request."""
 
-from argparse import ArgumentParser
-import copy
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
-from sophios.apis.python.api import Workflow
-from sophios.wic_types import Json
+from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
 
-from sophios.apis.python.cwl_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.compute_payload import ComputeWorkflowPayload, ComputeConfig, ToilConfig, OutputConfig, SlurmConfig
-from sophios.compute_submit import submit_compute_payload
+from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.compute_request import (
+    ComputeExecutionConfig,
+    ComputeOutputConfig,
+    ComputeRequest,
+    SlurmJobConfig,
+    ToilRuntimeConfig,
+)
+
+
+SUBMIT_URL: str | None = None
 
 
 def build_autoseg_CLT() -> CommandLineTool:
@@ -74,8 +79,8 @@ def workflow(input_dicts: Dict[str, str], workflow_name: str) -> Workflow:
     # =========== BUILD CLT ==========================
     autoseg_clt = build_autoseg_CLT()  # directly building the CLT in memory
     # =========== CREATE A STEP ======================
-    # converting the built CLT into a workflow step
-    autoseg = autoseg_clt.to_step(step_name='autoseg')
+    # build a step from the defined CLT
+    autoseg = Step(autoseg_clt, step_name='autoseg')
     # assign input values to the step
     autoseg.output = input_dicts['output_dir']
     autoseg.input = input_dicts['input_dir']
@@ -89,33 +94,21 @@ def workflow(input_dicts: Dict[str, str], workflow_name: str) -> Workflow:
     return wkflw
 
 
-def create_compute_payload(workflow_id: str, cwl_workflow: Json, cwl_job_inputs: Json) -> ComputeWorkflowPayload:
-    """Returns a compute payload object"""
-    # =========== BUILD COMPUTE PAYLOAD OBJECT =======
-    # Build the compute payload object here
-    compute_object = ComputeWorkflowPayload(
+def create_compute_request(workflow_id: str, compiled_workflow: CompiledWorkflow) -> ComputeRequest:
+    """Return a compute request object for the compiled workflow."""
+    return ComputeRequest(
+        compiled_workflow,
         workflow_id=workflow_id,
-        cwl_workflow=cwl_workflow,
-        cwl_job_inputs=cwl_job_inputs,
-        compute_config=ComputeConfig(
-            toil=ToilConfig(log_level="INFO"),
-            output=OutputConfig.workflow_declared(),
-            slurm=SlurmConfig(partition="normal_gpu", cpus_per_task=4)
-        )
+        compute_config=ComputeExecutionConfig(
+            toil=ToilRuntimeConfig(log_level="INFO"),
+            output=ComputeOutputConfig.workflow_declared(),
+            slurm=SlurmJobConfig(partition="normal_gpu", cpus_per_task=4),
+        ),
     )
-    # =========== RETURN COMPUTE PAYLOAD OBJECT ======
-    return compute_object
 
 
 def main() -> int:
-    """Build the workflow, create the compute payload, and optionally submit it."""
-    parser = ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--submit-url",
-        help="Optional compute create-workflow endpoint. If omitted, only build the payload in memory.",
-    )
-    args = parser.parse_args()
-
+    """Build the workflow, create the compute request, and optionally submit it."""
     # ========== INPUTS TO WORKFLOW ==================
     # The main directory constants
     inputs_dir = Path('/projects/collabs/mock_common/')
@@ -126,33 +119,25 @@ def main() -> int:
 
     # ========== BUILD WORKFLOW ======================
     autoseg_workflow = workflow(input_dicts, "autoseg_workflow")
-    workflow_json = autoseg_workflow.get_cwl_workflow()
+    compiled_workflow = autoseg_workflow.compile()
 
     # ========== COMPUTE INPUT =======================
     # workflow Name
-    workflow_name = workflow_json['name']
+    workflow_name = compiled_workflow.name
     # adjust workflow name/id to distinguish after submit using a timestamp
     workflow_name = workflow_name + '__' + \
         datetime.now().strftime('%Y_%m_%d_%H.%M.%S') + '__'
-    # workflow Inputs
-    workflow_inputs = copy.deepcopy(workflow_json['yaml_inputs'])
-    # workflow CWL
-    workflow_json.pop('name')
-    workflow_json.pop('yaml_inputs')
-    compiled_cwl_workflow = copy.deepcopy(workflow_json)
 
     # ========== CONSTRUCT COMPUTE OBJECT ============
-    compute_object = create_compute_payload(
-        workflow_name, compiled_cwl_workflow, workflow_inputs)
+    compute_request = create_compute_request(workflow_name, compiled_workflow)
 
-    if args.submit_url is None:
-        print("Built compute payload object in memory. Pass --submit-url to submit it.")
+    if SUBMIT_URL is None:
+        print("Built compute request object in memory. Set SUBMIT_URL to submit it.")
         return 0
 
     # =========  SUBMIT TO COMPUTE ===================
-    submission_status: int = submit_compute_payload(
-        compute_object, args.submit_url)
-    return submission_status
+    submission = compute_request.submit(SUBMIT_URL)
+    return submission.exit_code
 
 
 if __name__ == '__main__':

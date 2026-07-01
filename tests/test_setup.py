@@ -1,10 +1,11 @@
 import json
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
-import time
 from typing import Dict
 
 from hypothesis.strategies import SearchStrategy
 import hypothesis_jsonschema as hj
+import pytest
 import yaml
 
 import sophios
@@ -14,8 +15,8 @@ import sophios.plugins
 import sophios.schemas
 import sophios.schemas.wic_schema
 import sophios.utils
-import sophios.apis
-import sophios.apis.python.api
+import sophios.api
+import sophios.api.python.workflow
 from sophios.wic_types import Json, Yaml
 from sophios.utils_yaml import wic_loader
 
@@ -145,8 +146,6 @@ def wic_yaml_filter_implementations_or_steps(yml: Yaml) -> bool:
     return ('implementations' in yml or 'steps' in yml)
 
 
-time_initial = time.time()
-
 wic_schema = sophios.schemas.wic_schema.wic_main_schema(
     tools_cwl, yaml_stems, schema_store, hypothesis=True)
 wic_strategy: SearchStrategy = hj.from_schema(wic_schema)
@@ -156,6 +155,12 @@ wic_strategy = wic_strategy.filter(wic_yaml_filter_blank_steps)
 wic_strategy = wic_strategy.filter(wic_yaml_filter_implementations_or_steps)
 wic_strategy = wic_strategy.filter(wic_yaml_filter_top_level_types)
 
-time_final = time.time()
-print(f'from_schema time: {round(time_final - time_initial, 4)} seconds')
-print()
+
+def test_version_resolution_warns_when_package_metadata_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing_version(distribution_name: str) -> str:
+        raise PackageNotFoundError(distribution_name)
+
+    monkeypatch.setattr(sophios, "version", missing_version)
+
+    with pytest.warns(RuntimeWarning, match="sophios is not installed"):
+        assert sophios._resolve_version() == "unknown"

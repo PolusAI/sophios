@@ -1,7 +1,7 @@
 import copy
 from pathlib import Path
 import re
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 
 from mergedeep import merge, Strategy
 import yaml
@@ -19,7 +19,7 @@ from .wic_types import Namespaces, Yaml, Tools, YamlTree, StepId, NodeData, Rose
 def get_inlineable_subworkflows(yaml_tree_tuple: YamlTree,
                                 tools: Tools,
                                 implementation: bool = False,
-                                namespaces_init: Namespaces = []) -> List[Namespaces]:
+                                namespaces_init: Namespaces | None = None) -> List[Namespaces]:
     """Traverses a yml AST and finds all subworkflows which can be inlined into their parent workflow.
 
     Args:
@@ -31,6 +31,7 @@ def get_inlineable_subworkflows(yaml_tree_tuple: YamlTree,
     Returns:
         List[Namespaces]: The subworkflows which can be inlined into their parent workflows.
     """
+    namespaces_init = [] if namespaces_init is None else namespaces_init
     (step_id, yaml_tree) = yaml_tree_tuple
     yaml_name = step_id.stem
 
@@ -299,18 +300,12 @@ def inline_subworkflow_cwl(rose_tree: RoseTree) -> RoseTree:
 
     node_data: NodeData = rose_tree.data
     cwl_tree = copy.deepcopy(node_data.compiled_cwl)
-    # print('cwl_tree', yaml.dump(cwl_tree))
-    # print('subtrees')
-    # for t in rose_tree.sub_trees:
-    #    print(yaml.dump(t.data.compiled_cwl))
 
     steps = cwl_tree['steps']
     steps_keys = list(steps.keys())
     # NOTE: Only use the last namespace since we are recursively inlineing.
     subkeysdict = {t.data.namespaces[-1]: copy.deepcopy(t.data.compiled_cwl)
                    for t in sub_trees}  # NOT rose_tree.sub_trees
-    # print('subkeys', list(subkeysdict.keys()))
-    # print('steps_keys', steps_keys)
     steps_new = {}
 
     count = 0
@@ -332,7 +327,7 @@ def inline_subworkflow_cwl(rose_tree: RoseTree) -> RoseTree:
                         source = move_slash_last(subinputval)
                         substep_inputs_new[subinputkey] = step_key + '___' + subinputval
 
-                    if isinstance(subinputval, Dict):
+                    if isinstance(subinputval, dict):
                         source = subinputval['source']
                         source_new = move_slash_last(subinputval['source'])
                         subinputval['source'] = step_key + '___' + source_new
@@ -348,7 +343,7 @@ def inline_subworkflow_cwl(rose_tree: RoseTree) -> RoseTree:
                             # NOTE: Do not namespace; already namespaced in parent workflow.
                             newval = source_new  # step_key + '___' + source_new
 
-                        if isinstance(newval, Dict) and 'source' in newval:
+                        if isinstance(newval, dict) and 'source' in newval:
                             source_new = move_slash_last(newval['source'])
                             # NOTE: Do not namespace; already namespaced in parent workflow.
                             newval['source'] = source_new  # step_key + '___' + source_new
@@ -376,7 +371,7 @@ def inline_subworkflow_cwl(rose_tree: RoseTree) -> RoseTree:
 # but for now let's require the user to manually modify their yml.
                     if scattervars:
                         if ((isinstance(subinputval, str) and '/' in subinputval) or
-                                (isinstance(subinputval, Dict) and '/' in subinputval['source'])):
+                                (isinstance(subinputval, dict) and '/' in subinputval['source'])):
                             if 'scatter' in substepval:
                                 if subinputkey not in substepval['scatter']:
                                     substepval['scatter'] += [subinputkey]
@@ -426,10 +421,5 @@ def inline_subworkflow_cwl(rose_tree: RoseTree) -> RoseTree:
                     node_data.tool, node_data.workflow_inputs_file, node_data.explicit_edge_defs,
                     node_data.explicit_edge_calls, node_data.graph,
                     node_data.inputs_workflow, node_data.step_name_1)
-
-    # print('cwl_tree', yaml.dump(cwl_tree))
-    # print('subtrees')
-    # for t in rose_tree.sub_trees:
-    #    print(yaml.dump(t.data.compiled_cwl))
 
     return RoseTree(data, [])

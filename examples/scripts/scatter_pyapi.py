@@ -1,58 +1,45 @@
-from sophios.apis.python.api import Step, Workflow
+from pathlib import Path
+
+from sophios.api.python.workflow import Step, Workflow
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ADAPTERS = REPO_ROOT / "cwl_adapters"
 
 
 def small_workflow() -> Workflow:
-    # scatter on all inputs
-    # step array_ind
-    array_ind = Step(clt_path='../../cwl_adapters/array_indices.cwl')
-    array_ind.input_array = ["hello world", "not", "what world?"]
-    array_ind.input_indices = [0, 1]
-    # step echo
-    echo = Step(clt_path='../../cwl_adapters/echo.cwl')
-    echo.message = array_ind.output_array
-    # set up inputs for scattering
-    scatter_inps = echo.inputs[0]
-    # assign the scatter and scatterMethod fields
-    echo.scatter = [scatter_inps]
+    """Scatter one echo step over the selected array values."""
+    array_ind = Step(clt_path=ADAPTERS / "array_indices.cwl")
+    array_ind.inputs.input_array = ["hello world", "not", "what world?"]
+    array_ind.inputs.input_indices = [0, 1]
 
-    # arrange steps
-    steps = [array_ind, echo]
+    echo = Step(clt_path=ADAPTERS / "echo.cwl")
+    echo.inputs.message = array_ind.outputs.output_array
+    echo.scatter_on(echo.inputs.message)
 
-    # create workflow
-    filename = 'scatter_pyapi_py'  # .yml
-    wkflw = Workflow(steps, filename)
-    return wkflw
+    return Workflow([array_ind, echo], "scatter_pyapi_py")
 
 
 def workflow() -> Workflow:
-    # scatter on a subset of inputs
-    # step array_indices
-    array_ind = Step(clt_path='../../cwl_adapters/array_indices.cwl')
-    array_ind.input_array = ["hello world", "not", "what world?"]
-    array_ind.input_indices = [0, 2]
-    # step echo_3
-    echo_3 = Step(clt_path='../../cwl_adapters/echo_3.cwl')
-    echo_3.message1 = array_ind.output_array
-    echo_3.message2 = array_ind.output_array
-    echo_3.message3 = 'scalar'
-    # set up inputs for scattering
-    msg1 = echo_3.inputs[0]
-    msg2 = echo_3.inputs[1]
-    # assign the scatter and scatterMethod fields
-    echo_3.scatter = [msg1, msg2]
-    echo_3.scatterMethod = 'flat_crossproduct'
+    """Scatter one step over two array-valued inputs with a cross product."""
+    array_ind = Step(clt_path=ADAPTERS / "array_indices.cwl")
+    array_ind.inputs.input_array = ["hello world", "not", "what world?"]
+    array_ind.inputs.input_indices = [0, 2]
 
-    # arrange steps
-    steps = [array_ind, echo_3]
+    echo_3 = Step(clt_path=ADAPTERS / "echo_3.cwl")
+    echo_3.inputs.message1 = array_ind.outputs.output_array
+    echo_3.inputs.message2 = array_ind.outputs.output_array
+    echo_3.inputs.message3 = "scalar"
+    echo_3.scatter_on(
+        echo_3.inputs.message1,
+        echo_3.inputs.message2,
+        method="flat_crossproduct",
+    )
 
-    # create workflow
-    filename = 'scatter_pyapi_py'  # .yml
-    wkflw = Workflow(steps, filename)
-    return wkflw
+    return Workflow([array_ind, echo_3], "scatter_pyapi_py")
 
 
 # Do NOT .run() here
 
-if __name__ == '__main__':
-    scatter_wic = workflow()
-    scatter_wic.run()  # .run() here inside main
+if __name__ == "__main__":
+    workflow().run()

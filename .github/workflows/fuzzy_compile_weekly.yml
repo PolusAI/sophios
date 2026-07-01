@@ -110,9 +110,9 @@ jobs:
         if: always()
         run: cd sophios/ && pytest tests/test_python_api.py -k test_validate_generated_python_workflows
 
-      - name: PyTest CWL Builder
+      - name: PyTest Tool Builder
         if: always()
-        run: cd sophios/ && pytest tests/test_cwl_builder.py -k test_cwl_builder
+        run: cd sophios/ && pytest tests/test_tool_builder.py -k test_tool_builder
 
 # Since a randomly chosen subschema is used every time, repeat 10X for more coverage.
 

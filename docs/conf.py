@@ -1,3 +1,6 @@
+from pathlib import Path
+import os
+import sys
 from typing import Dict
 # Configuration file for the Sphinx documentation builder.
 #
@@ -11,14 +14,12 @@ from typing import Dict
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
-# import os
-# import sys
-# sys.path.insert(0, os.path.abspath('.'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 
 # -- Project information -----------------------------------------------------
 
-project = 'Workflow Inference Compiler'
+project = 'Sophios'
 copyright = '2023, Axle Informatics'
 author = 'Jake Fennick'
 
@@ -37,7 +38,7 @@ extensions = [
     # from the function signature and inserts them into the docstring.
     # This avoids duplication and looks much cleaner. (particularly
     # since type aliases get expanded and the trick below isn't working...)
-    # TODO: Remove all of the duplicated type annotations in the docstrings.
+    # Docstrings should avoid repeating type annotations already present in signatures.
     'sphinx.ext.duration',
     'sphinx.ext.doctest',
     'sphinx.ext.autodoc',
@@ -69,8 +70,7 @@ autodoc_default_options = {
 # See https://www.sphinx-doc.org/en/master/usage/extensions/napoleon.html#confval-napoleon_type_aliases
 # The sphinx autodoc documentation claims type aliases defined in wic_types.py
 # can be added to autodoc_type_aliases instead of showing their expansions.
-# However, I can't seem to get it to work.
-# TODO: Consider removing all type aliases in favor of classes.
+# The automatic alias expansion is disabled until it works reliably.
 autodoc_type_aliases: Dict[str, str] = {
 }
 napoleon_use_param = True
@@ -83,15 +83,27 @@ templates_path = ['_templates']
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
+building_pdf = os.environ.get('SOPHIOS_BUILD_PDF') == '1'
+
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+if building_pdf:
+    exclude_patterns.append('index.rst')
+else:
+    exclude_patterns.append('pdf_index.rst')
 
 
 # -- Options for HTML output -------------------------------------------------
 
-# The theme to use for HTML and HTML Help pages.  See the documentation for
-# a list of builtin themes.
-#
-html_theme = 'alabaster'
+# The regular documentation site keeps the RTD-facing theme. The PDF build uses
+# Sphinx's minimal theme plus a dedicated print stylesheet so the generated
+# document reads like a native PDF instead of a captured web page.
+if building_pdf:
+    html_theme = 'basic'
+    html_css_files = ['pdf.css']
+else:
+    html_theme = 'alabaster'
+    html_css_files = []
+html_context = {'building_pdf': building_pdf}
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,

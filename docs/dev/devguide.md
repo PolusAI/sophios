@@ -1,6 +1,7 @@
 # Developer Guide
 
-See [algorithms](algorithms.md) for a description of the compilation algorithms and some high-level implementation considerations. I hope you like recursion! ;)
+See [algorithms](algorithms.md) for a description of the compilation
+algorithms and high-level implementation considerations.
 
 ## Coding Standards
 
@@ -10,11 +11,17 @@ See [coding standards](codingstandards.md)
 
 See [git etiquette](gitetiquette.md)
 
-## Known Issues
+## Runtime Notes And Known Issues
 
 ### Globbing Unexpected File Order
 
-If a workflow step generates a file with some association between a filename and numerical value, if the numerical values are being extracted in order of each row/column from the file then there is no guarantee that using glob to retrieve files will produce the same order consistent with the extracted numerical value array. Another example is illustrated below without scattering, where using glob will result in inconsistency between input order and output order of files. With scattering it is possible in some cases to induce the correct output ordering consistent with input order, however it is best practice to adopt reading filename indices from an output file rather than using glob to ensure consistent order. This way developer does not have to think about which cases glob might or might now work in.
+Do not rely on `glob` order when output order matters. CWL runners may return
+globbed files in a different order than the input values that produced them.
+
+When order is semantically important, write an explicit manifest or index file
+from the tool and read that file downstream.
+
+The simplified example below shows the problem:
 
 ```
 input: [3, 2, 1]  # Here is the order of the input array.
@@ -64,37 +71,43 @@ INFO [job test.cwl] completed success
 {
     "output": [
         {
-            "location": "file:///home/walkerbd/workflow-inference-compiler/cwl_adapters/1.txt",
+            "location": "file:///home/walkerbd/sophios/cwl_adapters/1.txt",
             "basename": "1.txt",
             "class": "File",
             "checksum": "sha1$da39a3ee5e6b4b0d3255bfef95601890afd80709",
             "size": 0,
-            "path": "/home/walkerbd/workflow-inference-compiler/cwl_adapters/1.txt"
+            "path": "/home/walkerbd/sophios/cwl_adapters/1.txt"
         },
         {
-            "location": "file:///home/walkerbd/workflow-inference-compiler/cwl_adapters/2.txt",
+            "location": "file:///home/walkerbd/sophios/cwl_adapters/2.txt",
             "basename": "2.txt",
             "class": "File",
             "checksum": "sha1$da39a3ee5e6b4b0d3255bfef95601890afd80709",
             "size": 0,
-            "path": "/home/walkerbd/workflow-inference-compiler/cwl_adapters/2.txt"
+            "path": "/home/walkerbd/sophios/cwl_adapters/2.txt"
         },
         {
-            "location": "file:///home/walkerbd/workflow-inference-compiler/cwl_adapters/3.txt",
+            "location": "file:///home/walkerbd/sophios/cwl_adapters/3.txt",
             "basename": "3.txt",
             "class": "File",
             "checksum": "sha1$da39a3ee5e6b4b0d3255bfef95601890afd80709",
             "size": 0,
-            "path": "/home/walkerbd/workflow-inference-compiler/cwl_adapters/3.txt"
+            "path": "/home/walkerbd/sophios/cwl_adapters/3.txt"
         }
     ]
 ```
 
-As can be seen from the output json blob the order returned is not the same as input order.
+The output array is sorted by filename, not by the original input order.
 
 
 ## Partial Failures
-When the partial failures feature is enabled although the subprocess for the workflow step itself will pass, the post-processing javascript can potentially crash as seen below. The Sophios compiler only semantically understands Sophios/CWL. It is theoretically impossible to correct mistakes in the embedded JS of any arbitrary workflow. The corresponding cwl snippet is also shown.
+
+When partial failures are enabled, the command for a workflow step can succeed
+while a CWL JavaScript post-processing expression still fails. Sophios can
+compile the CWL structure, but it cannot automatically repair arbitrary
+JavaScript embedded in a tool.
+
+For example, this output expression assumes that `self[0]` exists:
 ```
 outputs:
 
@@ -119,7 +132,7 @@ stderr was: 'evalmachine.<anonymous>:45
                         ^
 TypeError: Cannot read properties of undefined (reading 'contents')
 ```
-To fix this the developer needs to add a javascript snippet to check if the self object being globbed exists, shown below.
+Fix the tool by checking that the globbed object exists before reading it:
 ```
 outputs:
 
@@ -143,19 +156,33 @@ outputs:
 ```
 
 ## Workflow Development
-When adding new .cwl or .wic files its best to remove the .wic folder containing paths to .cwl and .yml files
-```
-rm -r ~/wic
+
+When adding new `.cwl` or `.wic` files, regenerate the discovery config and
+schemas when editor validation or tool discovery looks stale:
+
+```bash
+sophios --generate_config
+sophios --generate_schemas
 ```
 
+Sophios uses `~/wic/global_config.json` by default. Inspect that file before
+deleting `~/wic`, because it may contain local search paths you want to keep.
+
 ## Singularity
-When building images with Singularity its best to clean the cache to avoid potential errors with cwltool or cwl-docker-extract.
+
+When building images with Singularity, clear the cache if `cwltool` or
+`cwl-docker-extract` reports stale-image or cache-related failures:
+
 ```
 singularity cache clean
 ```
 
 ## Toil
-When working with toil be sure to clean the working state as well as the configuration file, otherwise if you change input flags the configuration file will not be updated.
+
+When working with Toil, stale job stores can preserve older runtime state. If
+changing workflow inputs or runner flags produces surprising behavior, clean the
+Toil state:
+
 ```
 toil clean
 rm -r ~/.toil

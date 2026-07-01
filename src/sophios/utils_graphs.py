@@ -68,9 +68,6 @@ def flatten_graphdata(graphdata: GraphData, parent: str = '') -> GraphData:
     # This makes absolutely no sense. Since the lists are defined at the
     # instance level (NOT the class level), there should be zero sharing!
     g_d = GraphData(str(graphdata.name), [], [], [], [])  # This is fine
-    # g_d = GraphData(str(graphdata.name)) # This is NOT fine!
-    # i.e. The following statement will NOT print zeros (in the second case)!
-    # print(g_d.name, len(g_d.nodes), len(g_d.edges), len(g_d.subgraphs), len(g_d.ranksame))
 
     for subgraph in subgraphs:
         # We need to add a placeholder node for each subgraph first

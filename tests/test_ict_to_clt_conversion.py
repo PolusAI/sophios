@@ -2,7 +2,7 @@ import pytest
 import json
 import pathlib
 
-from sophios.apis.utils.converter import ict_to_clt
+from sophios.api.utils.converter import ict_to_clt
 
 
 @pytest.mark.fast

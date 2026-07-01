@@ -23,11 +23,11 @@ on:
         required: true
         type: string
       wic_owner:
-        description: The account name of the wic repository
+        description: The account name of the Sophios repository
         required: true
         type: string
       wic_ref:
-        description: The branch name within the wic repository
+        description: The branch name within the Sophios repository
         required: true
         type: string
       mm-workflows_owner:
@@ -177,9 +177,9 @@ jobs:
       run: cd sophios/ && pytest tests/test_examples.py -k test_cwl_docker_extract
       # For self-hosted runners, make sure the docker cache is up-to-date.
 
-    - name: PyTest CWL Builder
+    - name: PyTest Tool Builder
       if: always()
-      run: cd sophios/ && pytest tests/test_cwl_builder.py -k test_cwl_builder
+      run: cd sophios/ && pytest tests/test_tool_builder.py -k test_tool_builder
 
     - name: PyTest Python API
       if: always()

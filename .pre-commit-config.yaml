@@ -91,3 +91,4 @@ repos:
   rev: v2.2.6
   hooks:
   - id: codespell
+    exclude: ^src/sophios/edam_format_index\.json$

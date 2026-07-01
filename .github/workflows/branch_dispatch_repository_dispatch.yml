@@ -48,22 +48,22 @@ jobs:
           account_name: ${{ github.event.client_payload.owner }}
           access_token: ${{ steps.generate_token.outputs.token }}
 
-      - name: Check existence of wic
+      - name: Check existence of Sophios
         uses: ./.github/my_actions/check_existence/ # Must start with ./
         id: ce_wic
         with:
-          repository: workflow-inference-compiler
+          repository: sophios
           sender_repo_owner: ${{ github.event.client_payload.owner }}
           sender_repo_ref: ${{ github.event.client_payload.ref_name }}
           default_owner: PolusAI
           default_branch: master
           access_token: ${{ steps.generate_token.outputs.token }}
 
-      - name: Check existence of dispatch ref in wic
+      - name: Check existence of dispatch ref in Sophios
         uses: ./.github/my_actions/check_existence/ # Must start with ./
         id: ce_wic_dispatch
         with:
-          repository: workflow-inference-compiler
+          repository: sophios
           sender_repo_owner: ${{ github.repository_owner }}
           sender_repo_ref: ${{ github.event.client_payload.ref_name }}
           default_owner: PolusAI
@@ -97,7 +97,7 @@ jobs:
         uses: ./.github/my_actions/branch_dispatch/ # Must start with ./
         id: bd_lint_and_test
         with:
-          repository: workflow-inference-compiler
+          repository: sophios
           workflow_yml: lint_and_test.yml
           sender_repo: ${{ github.event.client_payload.repository }}
           sender_repo_owner: ${{ github.event.client_payload.owner }}
@@ -116,7 +116,7 @@ jobs:
         uses: ./.github/my_actions/branch_dispatch/ # Must start with ./
         id: bd_run_workflows
         with:
-          repository: workflow-inference-compiler
+          repository: sophios
           workflow_yml: run_workflows.yml
           sender_repo: ${{ github.event.client_payload.repository }}
           sender_repo_owner: ${{ github.event.client_payload.owner }}

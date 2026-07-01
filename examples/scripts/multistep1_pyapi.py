@@ -1,26 +1,28 @@
-from sophios.apis.python.api import Step, Workflow
+from pathlib import Path
+
+from sophios.api.python.workflow import Step, Workflow
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ADAPTERS = REPO_ROOT / "cwl_adapters"
 
 
 def workflow() -> Workflow:
-    # step echo
-    touch = Step(clt_path='../../cwl_adapters/touch.cwl')
-    touch.filename = 'empty.txt'
-    append = Step(clt_path='../../cwl_adapters/append.cwl')
-    append.file = touch.file
-    append.str = 'Hello'
-    cat = Step(clt_path='../../cwl_adapters/cat.cwl')
-    cat.file = append.file
-    # arrange steps
-    steps = [touch, append, cat]
+    """Build a three-step workflow that creates, appends, and reads a file."""
+    touch = Step(clt_path=ADAPTERS / "touch.cwl")
+    touch.inputs.filename = "empty.txt"
 
-    # create workflow
-    filename = 'multistep1_pyapi_py'
-    wkflw = Workflow(steps, filename)
-    return wkflw
+    append = Step(clt_path=ADAPTERS / "append.cwl")
+    append.inputs.file = touch.outputs.file
+    append.inputs.str = "Hello"
+
+    cat = Step(clt_path=ADAPTERS / "cat.cwl")
+    cat.inputs.file = append.outputs.file
+
+    return Workflow([touch, append, cat], "multistep1_pyapi_py")
+
 
 # Do NOT .run() here
 
-
-if __name__ == '__main__':
-    multistep1 = workflow()
-    multistep1.run()  # .run() here inside main
+if __name__ == "__main__":
+    workflow().run()
