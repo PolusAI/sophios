@@ -1,4 +1,3 @@
-from typing import List
 import argparse
 import sys
 
@@ -14,12 +13,12 @@ parser.add_argument('--slope_max', type=float)
 args = parser.parse_args()
 
 
-def check_linear_fit(xs: List[float], ys: List[float], tol_quad: float, slope_min: float, slope_max: float) -> bool:
+def check_linear_fit(xs: list[float], ys: list[float], tol_quad: float, slope_min: float, slope_max: float) -> bool:
     """return true if the fitted slope is between slope_min and slope_max
 
     Args:
-        xs (List[float]): x values
-        ys (List[float]): y values
+        xs (list[float]): x values
+        ys (list[float]): y values
         tol_quad (float): tolerance quad value
         slope_min (float): minimum slope
         slope_max (float): maximum slope

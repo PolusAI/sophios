@@ -3,7 +3,6 @@ import subprocess as sub
 from pathlib import Path
 import signal
 import sys
-from typing import List
 import argparse
 
 import pytest
@@ -49,7 +48,7 @@ for _yml_namespaces in search_paths_wic_tag:
 # Due to the computational complexity of the graph isomorphism problem, we
 # need to manually exclude large workflows.
 # See https://en.wikipedia.org/wiki/Graph_isomorphism_problem
-large_workflows: List[str] = config_ci.get("large_workflows", [])
+large_workflows: list[str] = config_ci.get("large_workflows", [])
 
 
 def _is_workflow_document(yml_path: Path) -> bool:
@@ -70,9 +69,9 @@ yml_paths_tuples_not_large = [
 
 # NOTE: Most of the workflows in this list have free variables because they are subworkflows
 # i.e. if you try to run them, you will get "Missing required input parameter"
-run_blacklist: List[str] = config_ci.get("run_blacklist", [])
-run_weekly: List[str] = config_ci.get("run_weekly", [])
-run_partial_failures: List[str] = config_ci.get("run_partial_failures", [])
+run_blacklist: list[str] = config_ci.get("run_blacklist", [])
+run_weekly: list[str] = config_ci.get("run_weekly", [])
+run_partial_failures: list[str] = config_ci.get("run_partial_failures", [])
 
 yml_paths_tuples_weekly = [(s, p) for (s, p) in yml_paths_tuples if s in run_weekly]
 
@@ -284,7 +283,7 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path) -> None:
 
     # NOTE: The entire purpose of parsing an entire yaml forest is so we
     # can easily access the subtrees here. (i.e. without re-walking the AST)
-    yaml_forest = sophios.ast.tree_to_forest(yaml_tree, tools_cwl)
+    yaml_forest = sophios.ast._tree_to_forest(yaml_tree, tools_cwl)
     yaml_forest_lst = sophios.utils.flatten_forest(yaml_forest)
     yaml_forest_lst = [yf for yf in yaml_forest_lst if ".wic" not in yf.yaml_tree.step_id.stem]
 
@@ -297,7 +296,7 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path) -> None:
                                                       [], [graph], {}, {}, {}, {}, tools_cwl,
                                                       is_root, relative_run_path=False, testing=True)
     rose_tree = compiler_info.rose
-    node_data_lst: List[NodeData] = sophios.utils.flatten_rose_tree(rose_tree)
+    node_data_lst: list[NodeData] = sophios.utils.flatten_rose_tree(rose_tree)
     node_data_lst = [node for node in node_data_lst if ".wic" in node.name[0]]
 
     # This test doesn't necessarily need to write to disk, but useful for debugging.

@@ -29,9 +29,14 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
         out_d = "Hello from Docker!"
         out_p = "Hello Podman World"
         permission_denied = 'permission denied while trying to connect to the Docker daemon socket at'
-        if ((not container_cmd_exists
-            or not (proc.returncode == 0 and out_d in output or out_p in output))
-                and not ignore_container_install):
+
+        # docker_ok is True iff the command exists AND the hello-world container printed
+        # its expected greeting. container_cmd_exists is checked first so that `proc` is
+        # never accessed when it was not assigned (i.e. when the command does not exist).
+        docker_ok = container_cmd_exists and (
+            (proc.returncode == 0 and out_d in output) or out_p in output)
+
+        if not docker_ok and not ignore_container_install:
 
             if permission_denied in output:
                 print('Warning! docker appears to be installed, but not configured as a non-root user.')
@@ -55,7 +60,8 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
             output = proc.stdout.decode("utf-8")
             num_processes = int(output.strip())
             max_processes = 1000
-            if num_processes > max_processes and not ignore_container_install:
+            too_many_processes = num_processes > max_processes
+            if too_many_processes and not ignore_container_install:
                 print(f'Warning! There are {num_processes} running docker processes.')
                 print(f'More than {max_processes} may potentially cause intermittent hanging issues.')
                 print('It is recommended to terminate the processes using the command')
@@ -72,7 +78,9 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
             output = proc.stdout.decode("utf-8")
         except FileNotFoundError:
             container_cmd_exists = False
-        if not container_cmd_exists and not ignore_container_install:
+        singularity_ok = container_cmd_exists
+
+        if not singularity_ok and not ignore_container_install:
             print(f'Warning! The {container_cmd} command does not appear to be installed.')
             print('If you want to try running the workflow anyway, use --ignore_docker_install')
             print('Note that --ignore_docker_install does NOT change whether or not')

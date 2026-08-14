@@ -1,4 +1,4 @@
-from typing import Any, Dict, Type
+from typing import Any
 
 import yaml
 
@@ -7,45 +7,58 @@ import yaml
 # (i.e. the python api) cannot simply emit the dictionaries returned here,
 # because then these constructors will fire again.
 
+# Custom wic yaml tags (used when constructing yaml strings to feed back into wic_loader()).
+TAG_ANCHOR = '!&'
+TAG_ALIAS = '!*'
+TAG_INLINE_INPUT = '!ii'
 
-def anchor_constructor(loader: yaml.SafeLoader, node: yaml.nodes.ScalarNode) -> Dict[str, Any]:
+# The dict keys the tags above are rewritten to by the constructors below.
+# (Deliberately different from the tags themselves; see NOTE above.)
+KEY_ANCHOR = 'wic_anchor'
+KEY_ALIAS = 'wic_alias'
+KEY_INLINE_INPUT = 'wic_inline_input'
+
+
+def anchor_constructor(loader: yaml.SafeLoader, node: yaml.nodes.ScalarNode) -> dict[str, Any]:
+    """PyYAML constructor for the custom `!&` (wic anchor) tag."""
     val = loader.construct_scalar(node)
-    name = 'wic_anchor'  # NOT '!&'
-    return {name: val}
+    return {KEY_ANCHOR: val}
 
 
-def alias_constructor(loader: yaml.SafeLoader, node: yaml.nodes.ScalarNode) -> Dict[str, Any]:
+def alias_constructor(loader: yaml.SafeLoader, node: yaml.nodes.ScalarNode) -> dict[str, Any]:
+    """PyYAML constructor for the custom `!*` (wic alias) tag."""
     val = loader.construct_scalar(node)
-    name = 'wic_alias'  # NOT '!*'
-    return {name: val}
+    return {KEY_ALIAS: val}
 
 
-def inlineinput_constructor(loader: yaml.SafeLoader, node: yaml.nodes.Node) -> Dict[str, Dict[str, Any]]:
+def inlineinput_constructor(loader: yaml.SafeLoader, node: yaml.nodes.Node) -> dict[str, dict[str, Any]]:
+    """PyYAML constructor for the custom `!ii` (wic inline input) tag."""
     val: Any
-    if isinstance(node, yaml.nodes.ScalarNode):
-        try:
-            # loader.construct_scalar always returns a string, whereas
-            if node.value == "":
-                val = ""
-            else:
-                val = yaml.safe_load(node.value)
-            # yaml.safe_load returns the correct primitive types
-        except Exception:
-            # but fallback to a string if it is not actually a primitive type.
-            val = loader.construct_scalar(node)
-    elif isinstance(node, yaml.nodes.MappingNode):
-        val = loader.construct_mapping(node)
-    elif isinstance(node, yaml.nodes.SequenceNode):
-        val = loader.construct_sequence(node)
-    else:
-        raise Exception(f'Unknown yaml node type! {node}')
-    name = 'wic_inline_input'  # NOT '!ii'
-    return {name: val}
+    match node:
+        case yaml.nodes.ScalarNode():
+            try:
+                # loader.construct_scalar always returns a string, whereas
+                if node.value == "":
+                    val = ""
+                else:
+                    val = yaml.safe_load(node.value)
+                # yaml.safe_load returns the correct primitive types
+            except Exception:
+                # but fallback to a string if it is not actually a primitive type.
+                val = loader.construct_scalar(node)
+        case yaml.nodes.MappingNode():
+            val = loader.construct_mapping(node)
+        case yaml.nodes.SequenceNode():
+            val = loader.construct_sequence(node)
+        case _:
+            raise TypeError(f'Unknown yaml node type! {node}')
+    return {KEY_INLINE_INPUT: val}
 
 
-def wic_loader() -> Type[yaml.SafeLoader]:
+def wic_loader() -> type[yaml.SafeLoader]:
+    """Return a `yaml.SafeLoader` with the `!&`, `!*`, and `!ii` wic tags registered."""
     loader = yaml.SafeLoader
-    loader.add_constructor("!&", anchor_constructor)
-    loader.add_constructor("!*", alias_constructor)
-    loader.add_constructor("!ii", inlineinput_constructor)
+    loader.add_constructor(TAG_ANCHOR, anchor_constructor)
+    loader.add_constructor(TAG_ALIAS, alias_constructor)
+    loader.add_constructor(TAG_INLINE_INPUT, inlineinput_constructor)
     return loader

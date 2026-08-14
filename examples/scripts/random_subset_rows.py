@@ -1,5 +1,4 @@
 import argparse
-from typing import List
 import random
 
 parser = argparse.ArgumentParser()
@@ -11,7 +10,7 @@ args = parser.parse_args()
 
 
 def random_subset_rows(input_file: str, num_of_samples: int,
-                       random_seed: int, output_file: str) -> List[int]:
+                       random_seed: int, output_file: str) -> list[int]:
     """return subset indices
 
     Args:
@@ -20,14 +19,14 @@ def random_subset_rows(input_file: str, num_of_samples: int,
         random_seed (int): random seed used for selection
         output_file (str): output file of index list
     Returns:
-        List[int]: index list of the selected samples.
+        list[int]: index list of the selected samples.
     """
     with open(input_file, mode='r', encoding='utf-8') as f:
         numlines = len(f.readlines())
     indices = list(range(numlines))
 
     random.seed(random_seed)
-    subset: List[int] = random.sample(indices, num_of_samples)
+    subset: list[int] = random.sample(indices, num_of_samples)
 
     with open(output_file, mode='w', encoding='utf-8') as f:
         for i in subset[:-1]:

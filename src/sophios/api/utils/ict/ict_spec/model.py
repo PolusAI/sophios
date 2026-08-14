@@ -3,7 +3,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Optional, TypeVar
+from typing import Any, TypeVar
 
 import yaml
 from pydantic import model_validator
@@ -24,8 +24,8 @@ class ICT(Metadata):
 
     inputs: list[IO]
     outputs: list[IO]
-    ui: Optional[list[UIItem]] = None
-    hardware: Optional[HardwareRequirements] = None
+    ui: list[UIItem] | None = None
+    hardware: HardwareRequirements | None = None
 
     @model_validator(mode="after")
     def validate_ui(self) -> "ICT":
