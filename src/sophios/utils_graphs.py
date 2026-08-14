@@ -35,6 +35,16 @@ def add_graph_edge(graph_settings: Dict[str, Any], graph: GraphReps,
     graph_gv = graph.graphviz
     graph_nx = graph.networkx
     graphdata = graph.graphdata
+    edge_exists = graph_nx.has_edge(edge_node1, edge_node2)
+
+    # A workflow can connect several ports between the same pair of steps. At
+    # the collapsed step level those connections describe one dependency, and
+    # drawing each port connection as a separate unlabeled edge produces
+    # indistinguishable parallel arrows. Preserve parallel edges when labels
+    # are requested because the labels carry the port-level distinction.
+    if edge_exists and not graph_settings['graph_label_edges']:
+        return
+
     attrs = {}
     # Hide internal self-edges
     if edge_node1 != edge_node2:
