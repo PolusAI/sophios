@@ -1,10 +1,10 @@
 import copy
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 import yaml
 
 from . import utils
-from .wic_types import (GraphReps, InternalOutputs, Namespaces, Tool, Tools,
+from .wic_types import (GraphReps, GraphSettings, InternalOutputs, Namespaces, Tool, Tools,
                         WorkflowOutputs, Yaml, StepId)
 
 
@@ -15,10 +15,10 @@ def validate_out_tag(out_vals: Any) -> None:
         out_vals (Any): Candidate `out:` payload.
 
     Raises:
-        Exception: If `out:` is not a list of strings and/or single-key dictionaries.
+        ValueError: If `out:` is not a list of strings and/or single-key dictionaries.
     """
     if not isinstance(out_vals, list):
-        raise Exception('Error! The `out` tag should be a list.')
+        raise ValueError('Error! The `out` tag should be a list.')
 
     for out_val in out_vals:
         if isinstance(out_val, str):
@@ -26,42 +26,42 @@ def validate_out_tag(out_vals: Any) -> None:
         if isinstance(out_val, dict):
             keys = list(out_val.keys())
             if len(keys) != 1 or not isinstance(keys[0], str) or keys[0] == '':
-                raise Exception(
+                raise ValueError(
                     'Error! There should only be one non-empty string anchor per out: list entry!')
             continue
-        raise Exception(
+        raise ValueError(
             'Error! Each out: list entry should be a string or a single-key dictionary.')
 
 
-def require_string_out_keys(out_vals: Any) -> List[str]:
+def require_string_out_keys(out_vals: Any) -> list[str]:
     """Return validated string output names from an `out:` tag.
 
     Args:
         out_vals (Any): Candidate `out:` payload.
 
     Raises:
-        Exception: If any `out:` list entries are not strings.
+        ValueError: If any `out:` list entries are not strings.
 
     Returns:
-        List[str]: Validated output names.
+        list[str]: Validated output names.
     """
     validate_out_tag(out_vals)
     out_keys = [out_val for out_val in out_vals if isinstance(out_val, str)]
     if len(out_keys) != len(out_vals):
-        raise Exception(
+        raise ValueError(
             'Error! Each out: list entry should resolve to a string output name before workflow compilation.')
     return out_keys
 
 
-def maybe_add_requirements(yaml_tree: Yaml, steps_keys: List[str],
-                           wic_steps: Yaml, subkeys: List[str]) -> None:
+def maybe_add_requirements(yaml_tree: Yaml, steps_keys: list[str],
+                           wic_steps: Yaml, subkeys: list[str]) -> None:
     """Adds any necessary CWL requirements
 
     Args:
         yaml_tree (Yaml): A tuple of name and yml AST
-        steps_keys (List[str]): The name of each step in the current CWL workflow
+        steps_keys (list[str]): The name of each step in the current CWL workflow
         wic_steps (Yaml): The metadata associated with the workflow steps
-        subkeys (List[str]): The keys associated with subworkflows
+        subkeys (list[str]): The keys associated with subworkflows
     """
     subwork = []
     scatter = []
@@ -84,17 +84,15 @@ def maybe_add_requirements(yaml_tree: Yaml, steps_keys: List[str],
             stepinp = ['StepInputExpressionRequirement',
                        'InlineJavascriptRequirement']
 
-    if not subkeys == []:
+    if subkeys:
         subwork = ['SubworkflowFeatureRequirement']
 
     reqs = subwork + scatter + stepinp + jsreq
     if reqs:
-        reqsdict: Dict[str, Dict] = {r: {} for r in set(reqs)}
+        reqsdict: dict[str, dict] = {r: {} for r in set(reqs)}
         # NOTE: A bare `requirements:` parses to None, so check the value, not the key.
         if isinstance(yaml_tree.get('requirements'), dict):
-            new_reqs = dict(
-                list(yaml_tree['requirements'].items()) + list(reqsdict.items()))
-            yaml_tree['requirements'].update(new_reqs)
+            yaml_tree['requirements'].update(reqsdict)
         else:
             yaml_tree['requirements'] = reqsdict
 
@@ -117,19 +115,18 @@ def add_yamldict_keyval_in(steps_i: Yaml, step_key: str, keyval: Yaml) -> Yaml:
     # TODO: Check whether we can just use deepmerge.merge()
     if steps_i:
         if 'in' in steps_i:
-            new_keys = dict(list(steps_i['in'].items()) + list(keyval.items()))
-            new_keyvals = dict([(k, v) if k != 'in' else (
-                k, new_keys) for k, v in steps_i.items()])
+            new_keys = {**steps_i['in'], **keyval}
+            new_keyvals = {k: (new_keys if k == 'in' else v) for k, v in steps_i.items()}
         else:
             new_keys = keyval
-            new_keyvals = dict(list(steps_i.items()) + [('in', new_keys)])
+            new_keyvals = {**steps_i, 'in': new_keys}
         steps_i.update(new_keyvals)
     else:
         steps_i = {'id': step_key, 'in': keyval}
     return steps_i
 
 
-def add_yamldict_keyval_out(steps_i: Yaml, step_key: str, strs: List[str]) -> Yaml:
+def add_yamldict_keyval_out(steps_i: Yaml, step_key: str, strs: list[str]) -> Yaml:
     """Convenience function used to (mutably) merge two Yaml dicts.
 
     Args:
@@ -147,45 +144,44 @@ def add_yamldict_keyval_out(steps_i: Yaml, step_key: str, strs: List[str]) -> Ya
         if 'out' in steps_i:
             new_strs = require_string_out_keys(steps_i['out']) + strs
             new_strs = list(set(new_strs))
-            new_keyvals = dict([(k, v) if k != 'out' else (
-                k, new_strs) for k, v in steps_i.items()])
+            new_keyvals = {k: (new_strs if k == 'out' else v) for k, v in steps_i.items()}
         else:
-            new_keyvals = dict(list(steps_i.items()) + [('out', strs)])
+            new_keyvals = {**steps_i, 'out': strs}
         steps_i.update(new_keyvals)
     else:
         steps_i = {'id': step_key, 'out': strs}
     return steps_i
 
 
-def get_workflow_outputs(graph_settings: Dict[str, Any],
+def get_workflow_outputs(graph_settings: GraphSettings,
                          namespaces: Namespaces,
                          is_root: bool,
                          yaml_stem: str,
-                         steps: List[Yaml],
+                         steps: list[Yaml],
                          outputs_workflow: WorkflowOutputs,
                          vars_workflow_output_internal: InternalOutputs,
                          graph: GraphReps,
-                         tools_lst: List[Tool],
+                         tools_lst: list[Tool],
                          step_node_name: str,
-                         tools: Tools) -> Dict[str, Dict[str, str]]:
+                         tools: Tools) -> dict[str, dict[str, str]]:
     """Chooses a subset of the CWL outputs: to actually output
 
     Args:
-        graph_settings (Dict[str, Any]): The settings dict for graphpviz graphs
+        graph_settings (GraphSettings): The settings dict for graphpviz graphs
         namespaces (Namespaces): Specifies the path in the AST of the current subworkflow
         is_root (bool): True if this is the root workflow
         yaml_stem (str): The name of the current subworkflow (stem of the yaml filepath)
-        steps (List[Yaml]): The steps: tag of a CWL workflow
+        steps (list[Yaml]): The steps: tag of a CWL workflow
         outputs_workflow (WorkflowOutputs): Contains the contents of the out: tags for each step.
         vars_workflow_output_internal (InternalOutputs): Keeps track of output\n
         variables which are internal to the root workflow, but not necessarily to subworkflows.
         graph (GraphReps): A tuple of a GraphViz DiGraph and a networkx DiGraph
-        tools_lst (List[Tool]): A list of the CWL CommandLineTools or compiled subworkflows for the current workflow.
+        tools_lst (list[Tool]): A list of the CWL CommandLineTools or compiled subworkflows for the current workflow.
         step_node_name (str): The namespaced name of the current step
         tools (Tools): The CWL CommandLineTool definitions found using get_tools_cwl()
 
     Returns:
-        Dict[str, Dict[str, str]]: The actual outputs to be specified in the generated CWL file
+        dict[str, dict[str, str]]: The actual outputs to be specified in the generated CWL file
     """
     # Add the outputs of each step to the workflow outputs
     workflow_outputs = {}
@@ -272,11 +268,6 @@ def get_workflow_outputs(graph_settings: Dict[str, Any],
     # One workaround is to simply output all files.
     # TODO: glob "." is still returning null; need to use InitialWorkDirRequirement??
     # This crashes toil-cwl-runner, but not cwltool.
-    # workflow_outputs['output_all'] = {
-    #     'type': {'type': 'array', 'items': ['Directory', 'File']},
-    #     'outputBinding': {'glob': '\".\"'},
-    #     'format': 'edam:format_2330',
-    # }
     return workflow_outputs
 
 
@@ -306,12 +297,17 @@ def canonicalize_type(type_obj: Any) -> Any:
             return type_obj
 
 
-def canonicalize_steps_list(steps: Yaml) -> List[Yaml]:
+def _require_list_of_dicts(items: list, msg: str) -> None:
+    """Raise ValueError (with a yaml dump of items appended) unless every element of items is a dict."""
+    if not all(isinstance(elt, dict) for elt in items):
+        raise ValueError(f"{msg}\n{yaml.dump(items)}")
+
+
+def canonicalize_steps_list(steps: Yaml) -> list[Yaml]:
+    """Converts the steps: tag (either a List or a Dictionary) into canonical List form."""
     if isinstance(steps, list):
-        all_dicts = all([isinstance(elt, dict) for elt in steps])
-        if not all_dicts:
-            msg = 'Error! If steps: tag is a List then all its elements should be Dictionaries!'
-            raise Exception(f"{msg}\n{yaml.dump(steps)}")
+        _require_list_of_dicts(
+            steps, 'Error! If steps: tag is a List then all its elements should be Dictionaries!')
         for step in steps:
             utils.require_step_id(step)
         return steps
@@ -320,19 +316,18 @@ def canonicalize_steps_list(steps: Yaml) -> List[Yaml]:
             key, str) or key == '']
         if invalid_keys:
             msg = 'Error! If steps: tag is a Dictionary then all its keys should be non-empty strings!'
-            raise Exception(f"{msg}\n{yaml.dump(steps)}")
+            raise ValueError(f"{msg}\n{yaml.dump(steps)}")
         items = [(key, {}) if val is None else (key, val)
                  for key, val in steps.items()]
-        all_dicts = all([isinstance(val, dict) for key, val in items])
-        if not all_dicts:
-            msg = 'Error! If steps: tag is a Dictionary then all its values should be Dictionaries!'
-            raise Exception(f"{msg}\n{yaml.dump(steps)}")
+        msg = 'Error! If steps: tag is a Dictionary then all its values should be Dictionaries!'
+        _require_list_of_dicts([val for _, val in items], msg)
         return [{'id': key, **val} for key, val in items]
     # steps should either be a list or a dict, but...
     return steps
 
 
 def remove_id_tags(list_of_dicts_with_id_keys: list) -> dict[str, Yaml]:
+    """Converts a List of Dictionaries with `id` tags into a Dictionary keyed on those `id` tags."""
     d_canon = {}
     for d in list_of_dicts_with_id_keys:
         id_tag = utils.require_step_id(d)
@@ -342,65 +337,48 @@ def remove_id_tags(list_of_dicts_with_id_keys: list) -> dict[str, Yaml]:
     return d_canon
 
 
-def canonicalize_steps_dict(steps: Yaml) -> Dict[str, Yaml]:
-    if isinstance(steps, list):
-        all_dicts = all([isinstance(elt, dict) for elt in steps])
-        if not all_dicts:
-            msg = 'Error! If steps: tag is a List then all its elements should be Dictionaries!'
-            raise Exception(f"{msg}\n{yaml.dump(steps)}")
-        return remove_id_tags(steps)
-    if isinstance(steps, dict):
-        all_dicts = all([isinstance(val, dict) for val in steps.values()])
-        if not all_dicts:
-            msg = 'Error! If steps: tag is a dictionary then all its values should be dictionaries!'
-            raise Exception(f"{msg}\n{yaml.dump(steps)}")
-        return steps
-    # steps should either be a list or a dict, but...
-    return steps
-
-
-def canonicalize_inputs_dict(inputs: Yaml) -> Dict[str, Yaml]:
+def canonicalize_inputs_dict(inputs: Yaml) -> dict[str, Yaml]:
+    """Converts the inputs: tag (either a List or a Dictionary) into canonical Dictionary form."""
     inputs_canon = {}
     if isinstance(inputs, dict):
         for key, val in inputs.items():
-            if isinstance(val, dict):
-                inputs_canon[key] = val
-            elif isinstance(val, str):
-                inputs_canon[key] = {'type': val}  # NOTICE
-            else:
-                msg = 'Error! If inputs: tag is a dictionary, then all its values should be either strings (representing types) or dictionaries.'
-                raise Exception(f"{msg}\n{yaml.dump(inputs)}")
+            match val:
+                case dict():
+                    inputs_canon[key] = val
+                case str():
+                    inputs_canon[key] = {'type': val}  # NOTICE
+                case _:
+                    msg = ('Error! If inputs: tag is a dictionary, then all its values should be '
+                           'either strings (representing types) or dictionaries.')
+                    raise ValueError(f"{msg}\n{yaml.dump(inputs)}")
     if isinstance(inputs, list):
-        all_dicts = all([isinstance(elt, dict) for elt in inputs])
-        if not all_dicts:
-            msg = 'Error! If inputs: tag is a list then all its elements should be dictionaries!'
-            raise Exception(f"{msg}\n{yaml.dump(inputs)}")
+        _require_list_of_dicts(
+            inputs, 'Error! If inputs: tag is a list then all its elements should be dictionaries!')
         return remove_id_tags(inputs)
     return inputs_canon
 
 
-def canonicalize_outputs_dict(outputs: Yaml) -> Dict[str, Yaml]:
-    outputs_canon = {}
+def canonicalize_outputs_dict(outputs: Yaml) -> dict[str, Yaml]:
+    """Converts the outputs: tag (either a List or a Dictionary) into canonical Dictionary form."""
+    outputs_canon: dict[str, Yaml] = {}
     if isinstance(outputs, dict):
         for key, val in outputs.items():
-            if isinstance(val, dict):
-                outputs_canon[key] = val
-            elif isinstance(val, str):
-                # TODO need to lookup output file mapping!
+            if isinstance(val, (dict, str)):
+                # TODO need to lookup output file mapping for the str (output file) case!
                 outputs_canon[key] = val  # type: ignore
             else:
-                msg = 'Error! outputs: tag should be a dictionary whose values are either strings (representing output files) or dictionaries.'
-                raise Exception(f"{msg}\n{yaml.dump(outputs)}")
+                msg = ('Error! outputs: tag should be a dictionary whose values are either '
+                       'strings (representing output files) or dictionaries.')
+                raise ValueError(f"{msg}\n{yaml.dump(outputs)}")
     if isinstance(outputs, list):
-        all_dicts = all([isinstance(elt, dict) for elt in outputs])
-        if not all_dicts:
-            msg = 'Error! If outputs: tag is a list then all its elements should be dictionaries!'
-            raise Exception(f"{msg}\n{yaml.dump(outputs)}")
+        _require_list_of_dicts(
+            outputs, 'Error! If outputs: tag is a list then all its elements should be dictionaries!')
         return remove_id_tags(outputs)
     return outputs_canon
 
 
 def desugar_into_canonical_normal_form(cwl: Yaml) -> Yaml:
+    """Desugars the inputs:, outputs:, and steps: tags of a CWL AST into their canonical forms."""
     if 'inputs' in cwl:
         # Arbitrarily choose dict form
         cwl['inputs'] = canonicalize_inputs_dict(cwl['inputs'])
@@ -417,15 +395,15 @@ def desugar_into_canonical_normal_form(cwl: Yaml) -> Yaml:
     return cwl
 
 
-def copy_cwl_input_output_dict(io_dict: Dict, remove_qmark: bool = False) -> Dict:
+def copy_cwl_input_output_dict(io_dict: dict, remove_qmark: bool = False) -> dict:
     """Copies the type, format, label, and doc entries. Does NOT copy inputBinding and outputBinding.
 
     Args:
-        io_dict (Dict): A dictionary
+        io_dict (dict): A dictionary
         remove_qmark (bool): Determines whether to remove question marks and thus make optional types required
 
     Returns:
-        Dict: A copy of the dictionary.
+        dict: A copy of the dictionary.
     """
     io_type = io_dict['type']
     if isinstance(io_type, str) and remove_qmark:

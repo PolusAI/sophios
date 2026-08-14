@@ -18,9 +18,9 @@ import sophios.api.python._workflow_runtime as python_runtime
 import sophios.compute_request as compute_request_module
 import sophios.main as main_module
 import sophios.plugins
-import sophios.run_local as run_local
-import sophios.run_local_async as run_local_async
 from sophios import input_output as io
+from sophios import run_local
+from sophios import run_local_async
 from sophios import utils, utils_cwl
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import CompiledWorkflow, InvalidLinkError, InvalidStepError, Step, Workflow
@@ -830,7 +830,7 @@ def test_run_compute_does_not_apply_local_env(monkeypatch: pytest.MonkeyPatch) -
         del user_env
         raise AssertionError("run_compute must not apply local environment variables")
 
-    monkeypatch.setattr(run_local, "temporary_env", fail_temporary_env)
+    monkeypatch.setattr(run_local, "_temporary_env", fail_temporary_env)
     monkeypatch.setattr(run_local.utils, "is_valid_url", lambda _url: True)
     monkeypatch.setattr(ComputeRequest, "submit", fake_submit)
 

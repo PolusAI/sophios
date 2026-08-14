@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 import random
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import networkx as nx
 import graphviz
@@ -58,19 +58,6 @@ def named_schema(name: str, schema: Json) -> Json:
     return schema_
 
 
-def named_null_schema(name: str) -> Json:
-    """Creates a schema which starts with name and contains nothing else
-
-    Args:
-        name (str): The identifier of the string
-
-    Returns:
-        Json: A schema which matches name and nothing else
-    """
-    # NOTE: Use this together with anyOf to allow no explicit arguments
-    return named_schema(name, {'type': 'null'})
-
-
 def named_id_schema(name: str) -> Json:
     """Creates a schema which consists of an 'id' with the given name and nothing else.
 
@@ -84,6 +71,29 @@ def named_id_schema(name: str) -> Json:
     return named_schema('id', {'type': 'string', 'const': name})
 
 
+# Flat literal-to-literal mapping for the primitive (str-valued) CWL types
+# handled by cwl_type_to_jsonschema_type() below. json does not have any File
+# or Directory types, so those (and their Writable variants) map to None.
+_CWL_PRIMITIVE_JSON_TYPES: dict[str, Any] = {
+    '': None,  # Obviously ignore empty types
+    'null': 'null',  # The 'null' type is valid; it does not indicate an error.
+    'int': 'integer',  # There are only two numeric types in json
+    'long': 'integer',
+    'float': 'number',
+    'double': 'number',
+    'bool': 'boolean',  # Rename common abbreviations
+    'str': 'string',
+    'Any': {},  # CWL supports an Any type; map this to the empty wildcard {} schema
+    'File': None,
+    'Directory': None,
+    'WritableFile': None,
+    'WritableDirectory': None,
+}
+# Sentinel to distinguish "not found in _CWL_PRIMITIVE_JSON_TYPES" from a
+# mapped value of None (e.g. 'File' legitimately maps to None).
+_UNMAPPED_CWL_TYPE = object()
+
+
 def cwl_type_to_jsonschema_type_schema(type_obj: Json) -> Json:
     """Converts a canonicalized CWL type into the equivalent jsonschema type schema, if possible.
 
@@ -95,7 +105,7 @@ def cwl_type_to_jsonschema_type_schema(type_obj: Json) -> Json:
     """
     jsontype = cwl_type_to_jsonschema_type(type_obj)
     if jsontype is not None:
-        if isinstance(jsontype, (List, str)):
+        if isinstance(jsontype, (list, str)):
             return {'type': jsontype}
     return jsontype
 
@@ -110,34 +120,11 @@ def cwl_type_to_jsonschema_type(type_obj: Json) -> Json:
         Json: A JSON type schema corresponding to type_obj if valid else None
     """
     if isinstance(type_obj, str):
-        # Obviously ignore empty types
-        if type_obj == '':
-            return None
-        # The 'null' type is valid; it does not indicate an error.
-        if type_obj == 'null':
-            return 'null'
-        # There are only two numeric types in json
-        if type_obj == 'int' or type_obj == 'long':
-            return 'integer'
-        if type_obj == 'float' or type_obj == 'double':
-            return 'number'
-        # Rename common abbreviations
-        if type_obj == 'bool':
-            return 'boolean'
-        if type_obj == 'str':
-            return 'string'
-        # CWL supports an Any type; map this to the empty wildcard {} schema
-        if type_obj == 'Any':
-            return {}
-        # json does not have any File or Directory types
-        if type_obj == 'File':
-            return None
-        if type_obj == 'Directory':
-            return None
-        if type_obj == 'WritableFile':
-            return None
-        if type_obj == 'WritableDirectory':
-            return None
+        jsontype = _CWL_PRIMITIVE_JSON_TYPES.get(type_obj, _UNMAPPED_CWL_TYPE)
+        if jsontype is not _UNMAPPED_CWL_TYPE:
+            return jsontype
+        # Unmapped strings (e.g. CWL record type names) fall through and are
+        # returned as-is at the bottom of this function.
 
     if isinstance(type_obj, dict):
         if type_obj.get('type') == 'array' and 'items' in type_obj:
@@ -154,7 +141,7 @@ def cwl_type_to_jsonschema_type(type_obj: Json) -> Json:
 
     if isinstance(type_obj, list):
         items = [cwl_type_to_jsonschema_type(item) for item in type_obj]
-        if any([item is None for item in items]):
+        if any(item is None for item in items):
             return None  # Propagate any type failures
         # See https://cswr.github.io/JsonSchema/spec/multiple_types/
         # In a list, if some of the types are themselves arrays or objects,
@@ -168,21 +155,12 @@ def cwl_type_to_jsonschema_type(type_obj: Json) -> Json:
     return type_obj
 
 
-def cwl_schema(name: str, cwl: Json, id_prefix: str) -> Json:
-    """Generates a schema (including documentation) based on the inputs of a CWL CommandLineTool or Workflow.
-
-    Args:
-        name (str): The name of the CWL CommandLineTool or Workflow
-        cwl (Json): The CWL CommandLineTool or Workflow
-        id_prefix (str): Either the string 'tools' or 'workflows'
-
-    Returns:
-        Json: An autogenerated, documented schema based on the inputs and outputs of a CWL CommandLineTool or Workflow.
-    """
+def _cwl_schema_inputs_props(name: str, cwl_inputs: Json) -> Json:
+    """Builds the `in:` properties dict (one entry per CWL input) for _cwl_schema()."""
     inputs_props: Json = {}
 
     str_nonempty = {'type': 'string', 'minLength': 1}
-    anytype: Dict[Any, Any] = {}
+    anytype: dict[Any, Any] = {}
 
     # See utils_yaml.py
     alias = default_schema()
@@ -191,14 +169,9 @@ def cwl_schema(name: str, cwl: Json, id_prefix: str) -> Json:
     ii = default_schema()
     ii['properties'] = {'wic_inline_input': anytype}  # !ii
 
-    # required = []
-    for key, val in cwl['inputs'].items():
+    for key, val in cwl_inputs.items():
         metadata = {'title': val.get('label', ''), 'description': val.get('doc', '')}
         str_nonempty = {'type': 'string', 'minLength': 1, **metadata}
-
-        # Determine required keys
-        # if key == 'config' or not ('?' in cwltype or 'default' in val):
-        #    required.append(key)
 
         # Handle special cases
         if key == 'config' and name in config_schemas:
@@ -210,7 +183,7 @@ def cwl_schema(name: str, cwl: Json, id_prefix: str) -> Json:
             # This may cause problems with hypothesis, but since the
             # cwl_subinterpreter config tag takes an arbitrary Json-encoded string
             # as input, we cannot restrict this particular sub-schema.
-            empty_schema: Dict = {}
+            empty_schema: dict = {}
             inputs_props[key] = empty_schema
             continue
 
@@ -237,12 +210,11 @@ def cwl_schema(name: str, cwl: Json, id_prefix: str) -> Json:
 
     # Do not mark properties which are required for CWL as required for yml,
     # because the whole point of inference is that we shouldn't have to!
-    # if not required == []:
-    #    inputs_props['required'] = required
+    return inputs_props
 
-    inputs = default_schema()
-    inputs['properties'] = inputs_props
 
+def _cwl_schema_scatter(inputs_props: Json) -> Json:
+    """Builds the `scatter:`/`scatterMethod:` properties dict for _cwl_schema(), if there are any inputs."""
     scatter = {}
     if inputs_props:
         # NOTE: The CWL specification defines what happens when a scattered input array is empty at runtime.
@@ -257,9 +229,13 @@ def cwl_schema(name: str, cwl: Json, id_prefix: str) -> Json:
         scattermethod_props: Json = {'type': 'string', 'enum': scattermethods}
         scatter = {'scatter': scatter_props,
                    'scatterMethod': scattermethod_props}  # NOTE: capital M
+    return scatter
 
+
+def _cwl_schema_outputs_props(cwl_outputs: Json) -> Json:
+    """Builds the `out:` properties dict (one entry per CWL output) for _cwl_schema()."""
     outputs_props: Json = {}
-    for key, val in cwl['outputs'].items():
+    for key, val in cwl_outputs.items():
         metadata = {'title': val.get('label', ''), 'description': val.get('doc', '')}
         str_nonempty = {'type': 'string', 'minLength': 1, **metadata}
 
@@ -270,26 +246,47 @@ def cwl_schema(name: str, cwl: Json, id_prefix: str) -> Json:
             outputs_props[key] = {'anyOf': [str_nonempty, {**jsontype, **metadata}]}
         else:
             outputs_props[key] = str_nonempty
+    return outputs_props
 
-    outputs = default_schema()
-    outputs['properties'] = outputs_props
+
+def _cwl_schema_out_tag(cwl_outputs: Json) -> Json:
+    """Builds the schema for the `out:` tag (a list of output keys, used at call sites) for _cwl_schema()."""
+    str_nonempty = {'type': 'string', 'minLength': 1}
 
     # See utils_yaml.py
     anchor = default_schema()
     anchor['properties'] = {'wic_anchor': str_nonempty}  # !&
 
     keys_anchors: Json = {}
-    for key in cwl['outputs'].keys():
+    for key in cwl_outputs.keys():
         key_schema = default_schema()
         key_schema['properties'] = {key: anchor}
 
     # NOTE: This function generates schemas compatible with call sites in a
     # workflow. Specifically, the types of `inputs:` and `in:` are the same (Json)
-    # but we want to use out, NOT outputs below, which has type List[str].
-    outputs_keys = {'type': 'string', 'enum': list(cwl['outputs'].keys())}
+    # but we want to use out, NOT outputs below, which has type list[str].
+    outputs_keys = {'type': 'string', 'enum': list(cwl_outputs.keys())}
     # Moreover, we want to support the wic_anchor !& syntax in the out: tag
-    out = {'type': 'array', 'items': {'anyOf': [outputs_keys, keys_anchors]}}
+    return {'type': 'array', 'items': {'anyOf': [outputs_keys, keys_anchors]}}
 
+
+def _cwl_schema(name: str, cwl: Json, id_prefix: str) -> Json:
+    """Generates a schema (including documentation) based on the inputs of a CWL CommandLineTool or Workflow."""
+    # Build the `in:` schema from the CWL inputs.
+    inputs_props = _cwl_schema_inputs_props(name, cwl['inputs'])
+    inputs = default_schema()
+    inputs['properties'] = inputs_props
+
+    scatter = _cwl_schema_scatter(inputs_props)
+
+    # Build the `out:` schema from the CWL outputs.
+    outputs_props = _cwl_schema_outputs_props(cwl['outputs'])
+    outputs = default_schema()
+    outputs['properties'] = outputs_props
+
+    out = _cwl_schema_out_tag(cwl['outputs'])  # NOT outputs! See comment in _cwl_schema_out_tag()
+
+    # Assemble the top-level step schema.
     step_name = name + '.wic' if id_prefix == 'workflows' else name
 
     step_props = default_schema()
@@ -314,15 +311,8 @@ def cwl_schema(name: str, cwl: Json, id_prefix: str) -> Json:
     return step_props
 
 
-def wic_tag_schema(hypothesis: bool = False) -> Json:
-    """The schema of the (recursive) wic: metadata annotation tag.
-
-    Args:
-        hypothesis (bool): Determines whether we should restrict the search space.
-
-    Returns:
-        Json: The schema of the (recursive) wic: metadata annotation tag.
-    """
+def _wic_tag_schema(hypothesis: bool = False) -> Json:
+    """The (recursive) schema of the wic: metadata annotation tag."""
     # NOTE: This schema needs to be recursive. Use dynamic anchors / references.
     # See https://json-schema.org/draft/2020-12/json-schema-core.html#dynamic-ref
     # and https://stackoverflow.com/questions/69728686/explanation-of-dynamicref-dynamicanchor-in-json-schema-as-opposed-to-ref-and
@@ -368,16 +358,14 @@ def wic_tag_schema(hypothesis: bool = False) -> Json:
     # additionalProperties = False still works with patternProperties FYI
     steps['patternProperties'] = {pat_int_str: choices}
 
-    # implementations = default_schema()
-    implementations: Dict[Any, Any] = {}
+    implementations: dict[Any, Any] = {}
     implementations['type'] = 'object'
     implementations['additionalProperties'] = True
     # TODO: Restrict the implementation properties and make default_implementation an enum
 
     str_nonempty = {'type': 'string', 'minLength': 1}
 
-    namespace: Dict[Any, Any] = str_nonempty
-    # namespace['enum'] = ...
+    namespace: dict[Any, Any] = str_nonempty
     # TODO: Restrict the namespace properties to only those in search_paths_wic
 
     implementation = str_nonempty
@@ -404,41 +392,35 @@ def wic_tag_schema(hypothesis: bool = False) -> Json:
     return schema
 
 
-def wic_main_schema(tools_cwl: Tools, yml_stems: List[str], schema_store: Dict[str, Json], hypothesis: bool = False) -> Json:
+def wic_main_schema(tools_cwl: Tools, yml_stems: list[str], schema_store: dict[str, Json],
+                    hypothesis: bool = False) -> Json:
     """The main schema which is used to validate yml files.
 
     Args:
         tools_cwl (Tools): The CWL CommandLineTool definitions found using get_tools_cwl()
-        yml_stems (List[str]): The names of the yml workflow definitions found using get_yml_paths()
-        schema_store (Dict[str, Json]): A global mapping between ids and schemas
+        yml_stems (list[str]): The names of the yml workflow definitions found using get_yml_paths()
+        schema_store (dict[str, Json]): A global mapping between ids and schemas
         hypothesis (bool): Determines whether we should restrict the search space.
 
     Returns:
         Json: The main schema which is used to validate yml files.
     """
-    wildcard_schema: Json = {}
-    wildcard_schema['type'] = 'object'
-    wildcard_schema['additionalProperties'] = True
-
     # NOTE: As mentioned below, using $ref's with external schema files
     # (coincidentally?) works with the VSCode YAML extension, and for the
     # jsonschema library we can supply an explicit schemastore. The API of the
     # hypothesis-jsonschema library, however, only takes a schema. So we either
     # need to bundle the external file contents into wic.json (using $def's),
     # or (since there is only one call site per file) simply inline the contents.
-    schemas_tools: List[Tuple[str, Json, Json, Json]] = \
+    schemas_tools: list[tuple[str, Json, Json]] = \
         [(step_id.stem,
           schema_store.get(f'tools/{step_id.stem}.json',
                            {'$ref': f'tools/{step_id.stem}.json'}),
-          named_null_schema(step_id.stem),
           named_id_schema(step_id.stem))
          for step_id in tools_cwl if not step_id.stem.startswith('python_script')]
-    schemas_tools_list: List[Json] = [{'anyOf': [schema, schema_id]}
-                                      for name, schema, schema_null, schema_id in schemas_tools]
+    schemas_tools_list: list[Json] = [{'anyOf': [schema, schema_id]}
+                                      for name, schema, schema_id in schemas_tools]
     schemas_tools_dict: dict[str, Json] = {name: {'anyOf': [schema, {}]}
-                                           for name, schema, schema_null, schema_id in schemas_tools}
-#    tools_schemas: List[Json] = [{'anyOf': [{'$ref': f'tools/{step_id.stem}.json'},
-#                                            named_null_schema(step_id.stem)]} for step_id in tools_cwl]
+                                           for name, schema, schema_id in schemas_tools}
     # NOTE: See comment in get_validator(). Nonetheless, the vscode YAML extension
     # appears to be resolving ids w.r.t. relative local paths. jsonschema
     # (correctly) treats f'tools/{name}.json' as an uninterpreted string,
@@ -446,19 +428,16 @@ def wic_main_schema(tools_cwl: Tools, yml_stems: List[str], schema_store: Dict[s
 
     # NOTE: We could/should re-validate after every AST modification. This will
     # require substantial code changes, so let's not worry about it for now.
-    schemas_yml: List[Tuple[str, Json, Json, Json]] = \
+    schemas_yml: list[tuple[str, Json, Json]] = \
         [(yml_stem,
           schema_store.get(f'workflows/{yml_stem}.json',
                            {'$ref': f'workflows/{yml_stem}.json'}),
-          named_null_schema(yml_stem),
           named_id_schema(yml_stem))
          for yml_stem in yml_stems]
-    schemas_yml_list: List[Json] = [{'anyOf': [schema, schema_id]}
-                                    for name, schema, schema_null, schema_id in schemas_yml]
+    schemas_yml_list: list[Json] = [{'anyOf': [schema, schema_id]}
+                                    for name, schema, schema_id in schemas_yml]
     schemas_yml_dict: dict[str, Json] = {name: {'anyOf': [schema, {}]}
-                                         for name, schema, schema_null, schema_id in schemas_yml}
-#    yml_schemas: List[Json] = [{'anyOf': [{'$ref': f'workflows/{yml_stem}.json'},
-#                                          named_null_schema(f'{yml_stem}.wic')]} for yml_stem in yml_stems]
+                                         for name, schema, schema_id in schemas_yml}
 
     steps_list: Json = {}
     steps_list['type'] = 'array'
@@ -515,6 +494,9 @@ def wic_main_schema(tools_cwl: Tools, yml_stems: List[str], schema_store: Dict[s
         # let's just use a wildcard schema with arbitrary keys and values.
         # (So for now intellisense code completion is unavailable for these steps.)
         # Crucially, code completion *is preserved* for tools_schemas and yml_schemas!
+        wildcard_schema: Json = {}
+        wildcard_schema['type'] = 'object'
+        wildcard_schema['additionalProperties'] = True
         steps_schemas_list += [wildcard_schema]
 
     steps_list['items'] = {'anyOf': steps_schemas_list, 'minItems': 1, 'title': 'Valid workflow steps'}
@@ -523,23 +505,24 @@ def wic_main_schema(tools_cwl: Tools, yml_stems: List[str], schema_store: Dict[s
         # This should (hopefully) avoid hypothesis.errors.DeadlineExceeded
         steps_list['items']['maxItems'] = 5
 
+    steps = {'anyOf': [steps_list, steps_dict]}
+
     # TODO: Use the real CWL inputs schema
-    inputs: Dict[Any, Any] = {}
+    inputs: dict[Any, Any] = {}
     inputs['type'] = 'object'
     inputs['additionalProperties'] = True
 
     # TODO: Use the real CWL outputs schema
-    outputs: Dict[Any, Any] = {}
+    outputs: dict[Any, Any] = {}
     outputs['type'] = 'object'
     outputs['additionalProperties'] = True
+
+    str_nonempty = {'type': 'string', 'minLength': 1}
 
     schema = default_schema(url=True)
     schema['$id'] = 'wic_main'
     schema['title'] = 'Validating against the Sophios workflow schema'
-    # schema['description'] = ''
-    # schema['required'] = ['steps'] # steps are not required, e.g. npt.wic
-
-    steps = {'anyOf': [steps_list, steps_dict]}
+    # NOTE: 'steps' is intentionally not in schema['required']: it is optional (e.g. npt.wic).
 
     schema_props = {'steps': steps,
                     'class': str_nonempty,
@@ -556,11 +539,11 @@ def wic_main_schema(tools_cwl: Tools, yml_stems: List[str], schema_store: Dict[s
                     'requirements': {},  # TODO
                     'label': str_nonempty,
                     'doc': str_nonempty}
-    # schema_props['wic'] = wic_tag_schema(hypothesis) # NOTE: This technically 'works'
-    # with hypothesis, but the wic_tag_schema still needs some work.
+    # schema_props['wic'] = _wic_tag_schema(hypothesis) # NOTE: This technically 'works'
+    # with hypothesis, but the _wic_tag_schema still needs some work.
 
     if not hypothesis:
-        schema_props['wic'] = wic_tag_schema(hypothesis)
+        schema_props['wic'] = _wic_tag_schema(hypothesis)
         # {'additionalProperties': True} can cause problems with hypothesis.
         schema_props['inputs'] = inputs
         schema_props['outputs'] = outputs
@@ -575,7 +558,7 @@ def wic_main_schema(tools_cwl: Tools, yml_stems: List[str], schema_store: Dict[s
 def compile_workflow_generate_schema(homedir: str,
                                      yml_path_str: str, yml_path: Path,
                                      tools_cwl: Tools,
-                                     yml_paths: Dict[str, Dict[str, Path]],
+                                     yml_paths: dict[str, dict[str, Path]],
                                      validator: Draft202012Validator,
                                      ignore_validation_errors: bool,
                                      write_intermediate_wic: bool = False) -> Json:
@@ -586,7 +569,7 @@ def compile_workflow_generate_schema(homedir: str,
         yml_path_str (str): The stem of the path to the yml file
         yml_path (Path): The path to the yml file
         tools_cwl (Tools): The CWL CommandLineTool definitions found using get_tools_cwl()
-        yml_paths (Dict[str, Dict[str, Path]]): The yml workflow definitions found using get_yml_paths()
+        yml_paths (dict[str, dict[str, Path]]): The yml workflow definitions found using get_yml_paths()
         validator (Draft202012Validator): Used to validate the yml files against the autogenerated schema.
         ignore_validation_errors (bool): Temporarily ignore validation errors. Do not use this permanently!
         write_intermediate_wic (bool): Write compiler-internal `.wic` trees to `autogenerated/`.
@@ -594,6 +577,7 @@ def compile_workflow_generate_schema(homedir: str,
     Returns:
         Json: An autogenerated, documented schema based on the inputs and outputs of the Workflow.
     """
+    # Phase 1: Load and assemble the (recursive) yaml/AST tree for the workflow.
     # First compile the workflow.
     # Load the high-level yaml workflow file.
     with open(yml_path, mode='r', encoding='utf-8') as y:
@@ -609,9 +593,10 @@ def compile_workflow_generate_schema(homedir: str,
     yaml_tree = ast.python_script_generate_cwl(yaml_tree, root_yml_dir_abs, tools_cwl)
     if write_intermediate_wic:
         Path('autogenerated/').mkdir(parents=True, exist_ok=True)
-        with open(f'autogenerated/{Path(yml_path).stem}_tree_python_script.wic', mode='w', encoding='utf-8') as f:
-            f.write(yaml.dump(yaml_tree.yml))
+        with open(f'autogenerated/{Path(yml_path).stem}_tree_python_script.wic', mode='w', encoding='utf-8') as wic_f:
+            wic_f.write(yaml.dump(yaml_tree.yml))
 
+    # Phase 2: Compile the assembled yaml tree and derive the schema from the compiled CWL.
     graph_gv = graphviz.Digraph(name=f'cluster_{yml_path}')
     graph_gv.attr(newrank='True')
     graph_nx = nx.DiGraph()
@@ -624,23 +609,19 @@ def compile_workflow_generate_schema(homedir: str,
     rose_tree = compiler_info.rose
     sub_node_data: NodeData = rose_tree.data
 
-    # wic.io.write_to_disk(rose_tree, Path('autogenerated/'), relative_run_path=True)
-    schema = cwl_schema(step_id.stem, sub_node_data.compiled_cwl, 'workflows')
-
-    # with open(f'autogenerated/schemas/workflows/{step_id.stem}.json', mode='w', encoding='utf-8') as f:
-    #    f.write(json.dumps(schema, indent=2))
+    schema = _cwl_schema(step_id.stem, sub_node_data.compiled_cwl, 'workflows')
 
     return schema
 
 
-def get_validator(tools_cwl: Tools, yml_stems: List[str], schema_store: Dict[str, Json] | None = None,
+def get_validator(tools_cwl: Tools, yml_stems: list[str], schema_store: dict[str, Json] | None = None,
                   write_to_disk: bool = False, hypothesis: bool = False) -> Draft202012Validator:
     """Generates the main schema used to check the yml files for correctness and returns a validator.
 
     Args:
         tools_cwl (Tools): The CWL CommandLineTool definitions found using get_tools_cwl()
-        yml_stems (List[str]): The names of the yml workflow definitions found using get_yml_paths()
-        schema_store (Dict[str, Json]): A global mapping between ids and schemas
+        yml_stems (list[str]): The names of the yml workflow definitions found using get_yml_paths()
+        schema_store (dict[str, Json]): A global mapping between ids and schemas
         write_to_disk (bool): Controls whether to write the schemas to disk.
         hypothesis (bool): Determines whether we should restrict the search space.
 
@@ -649,11 +630,8 @@ def get_validator(tools_cwl: Tools, yml_stems: List[str], schema_store: Dict[str
     """
     schema_store = {} if schema_store is None else schema_store
     for step_id, tool in tools_cwl.items():
-        schema_tool = cwl_schema(step_id.stem, tool.cwl, 'tools')
+        schema_tool = _cwl_schema(step_id.stem, tool.cwl, 'tools')
         schema_store[schema_tool['$id']] = schema_tool
-        # if write_to_disk:
-        #    with open(f'autogenerated/schemas/tools/{step_id.stem}.json', mode='w', encoding='utf-8') as f:
-        #        f.write(json.dumps(schema_tool, indent=2))
 
     # Add temporary placeholders to the schema_store so we don't get
     # "jsonschema.exceptions.RefResolutionError: unknown url type: 'workflows/*.json'"
@@ -664,8 +642,8 @@ def get_validator(tools_cwl: Tools, yml_stems: List[str], schema_store: Dict[str
     schema = wic_main_schema(tools_cwl, yml_stems, schema_store, hypothesis)
     schema_store[schema['$id']] = schema
     if write_to_disk:
-        with open('autogenerated/schemas/wic.json', mode='w', encoding='utf-8') as f:
-            f.write(json.dumps(schema, indent=2))
+        with open('autogenerated/schemas/wic.json', mode='w', encoding='utf-8') as schema_f:
+            schema_f.write(json.dumps(schema, indent=2))
 
     # Load cached schema from disk
     # NOTE: This may or may not be the correct solution. We should double check
@@ -680,13 +658,12 @@ def get_validator(tools_cwl: Tools, yml_stems: List[str], schema_store: Dict[str
     # i.e. schema_store.
     schema_store_resource: Resource = Resource(contents=schema_store, specification=DRAFT202012)  # type: ignore
     registry: Registry = Registry().with_resource(uri="wic_schema_store", resource=schema_store_resource)
-    wic_tag_schema_resource: Resource = Resource(contents=wic_tag_schema(
+    wic_tag_schema_resource: Resource = Resource(contents=_wic_tag_schema(
         hypothesis), specification=DRAFT202012)  # type: ignore
     registry = registry.with_resource(uri="wic_tag", resource=wic_tag_schema_resource)
-    """ Use check_schema to 'first verify that the provided schema is
-    itself valid, since not doing so can lead to less obvious error
-    messages and fail in less obvious or consistent ways.'
-    """
+    # Use check_schema to 'first verify that the provided schema is itself valid,
+    # since not doing so can lead to less obvious error messages and fail in
+    # less obvious or consistent ways.'
     # i.e. This should match 'https://json-schema.org/draft/2020-12/schema'
     # NOTE: If you get nasty errors while developing the schema such as:
     # "jsonschema.exceptions.SchemaError: ... is not valid under any of the given schemas"

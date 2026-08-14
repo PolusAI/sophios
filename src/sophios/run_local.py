@@ -11,7 +11,7 @@ import shutil
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterator, List, Optional, Dict
+from typing import Iterator
 from sophios.wic_types import Json
 from .compute_request import ComputeRequest
 
@@ -42,20 +42,8 @@ class _CompiledWorkflowForCompute:
     cwl_job_inputs: Json
 
 
-def sanitize_env_vars(env_vars: Dict[str, str]) -> Dict[str, str]:
-    """
-    Sanitizes a dictionary of user-defined environment variables, assuming all
-    values are strings.
-
-    - Ensures keys are valid Bash variable names.
-    - Removes potentially dangerous characters from string values.
-
-    Args:
-        env_vars (Dict[str, str]): A dictionary of string key-value pairs.
-
-    Returns:
-        Dict[str, str]: A new dictionary with sanitized key-value pairs.
-    """
+def _sanitize_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
+    """Drop keys that aren't valid Bash variable names and strip dangerous characters from values."""
     sanitized = {}
 
     # Regex for a valid Bash variable name
@@ -78,23 +66,16 @@ def sanitize_env_vars(env_vars: Dict[str, str]) -> Dict[str, str]:
     return sanitized
 
 
-def create_safe_env(user_env: Dict[str, str]) -> dict:
+def create_safe_env(user_env: dict[str, str]) -> dict:
     """Generate a sanitized environment dict without applying it"""
-    sanitized_user_env = sanitize_env_vars(user_env)
+    sanitized_user_env = _sanitize_env_vars(user_env)
     return {**os.environ, **sanitized_user_env}
 
 
 @contextmanager
-def temporary_env(user_env: Dict[str, str]) -> Iterator[dict[str, str]]:
-    """Temporarily apply sanitized environment variables and restore them after use.
-
-    Args:
-        user_env (Dict[str, str]): User-defined environment variables.
-
-    Yields:
-        dict: The sanitized environment mapping applied for the duration of the context.
-    """
-    sanitized_user_env = sanitize_env_vars(user_env)
+def _temporary_env(user_env: dict[str, str]) -> Iterator[dict[str, str]]:
+    """Temporarily apply sanitized environment variables and restore them after use."""
+    sanitized_user_env = _sanitize_env_vars(user_env)
     previous_values = {key: os.environ.get(key) for key in sanitized_user_env}
     os.environ.update(sanitized_user_env)
     try:
@@ -132,7 +113,7 @@ def _runner_outdir(basepath: str, cwl_runner: str, date_time: str, outdir: str |
 
 
 def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
-              container_cmd: str, passthrough_args: List[str], outdir: str | None = None) -> List[str]:
+              container_cmd: str, passthrough_args: list[str], outdir: str | None = None) -> list[str]:
     """Build the command to run the workflow in an environment
 
     Args:
@@ -141,7 +122,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
         cwl_runner (str): The CWL runner used to execute the workflow
         container_cmd (str): The container engine command
     Returns:
-        cmd (List[str]): The command to run the workflow
+        cmd (list[str]): The command to run the workflow
     """
     basepath = str(Path(basepath).absolute().resolve())
     quiet = ['--quiet']
@@ -154,7 +135,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
     # These ~30 second timeouts will eventually add up to >6 hours, which will cause github to terminate the CI Action!
     skip_schemas = ['--skip-schemas']
     provenance = ['--provenance', f'{basepath}/provenance/{workflow_name}']
-    container_cmd_: List[str] = []
+    container_cmd_: list[str] = []
     if container_cmd == 'docker':
         container_cmd_ = []
     elif container_cmd == 'singularity':
@@ -197,28 +178,77 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
         cmd += passthrough_args
         cmd += [f'{basepath}/{workflow_name}.cwl',
                 f'{basepath}/{workflow_name}_inputs.yml']
-    else:
-        pass
     return cmd
 
 
-def run_local(run_args_dict: Dict[str, str], use_subprocess: bool,
-              passthrough_args: List[str], workflow_name: str,
-              basepath: str, user_env_vars: Optional[Dict[str, str]] = None) -> Optional[int]:
+def _execute_inprocess(cmd: list[str], cwl_runner: str, workflow_name: str,
+                       run_args_dict: dict[str, str], user_env_vars: dict[str, str] | None,
+                       yaml_path: Path, cachedir: str) -> int:
+    """Execute the workflow in-process via the cwltool or toil python API, handling errors."""
+    retval = 1
+    try:
+        with _temporary_env(user_env_vars or {}):
+            if cwl_runner == 'cwltool':
+                print('via cwltool.main.main python API')
+                retval = cwltool.main.main(cmd[1:])
+                print(
+                    f'Final output json metadata blob is in output_{workflow_name}.json')
+                if run_args_dict.get('copy_output_files', 'no') == 'yes':
+                    copy_output_files(workflow_name)
+            elif cwl_runner == 'toil-cwl-runner':
+                print('via toil.cwl.cwltoil.main python API')
+                retval = toil.cwl.cwltoil.main(cmd[1:])
+            else:
+                raise ValueError('unsupported cwl_runner')
+
+    except Exception as e:
+        retval = 1
+        print('Failed to execute', yaml_path)
+        print(
+            f'See error_{workflow_name}.txt for detailed technical information.')
+        # Do not display a nasty stack trace to the user; hide it in a file.
+        with open(f'error_{workflow_name}.txt', mode='w', encoding='utf-8') as f:
+            traceback.print_exception(type(e), value=e, tb=None, file=f)
+        if not cachedir:  # if running on CI
+            print(e)
+    return retval
+
+
+def _report_outcome(retval: int | None, cmd: list[str], basepath: str) -> None:
+    """Print the success/failure summary message after execution."""
+    if retval == 0:
+        output_location = cmd[cmd.index('--outdir') + 1] if '--outdir' in cmd else basepath
+        print(f'Success! Runner outputs are under {output_location}/')
+    else:
+        print('Failure! Please scroll up and find the FIRST error message.')
+        print('(You may have to scroll up A LOT.)')
+
+
+def _cleanup_cachedir(cachedir: str) -> None:
+    """Remove the annoying cachedir* directories. NOTE: cachedir must not be absolute, or this deletes the drive."""
+    cachedir_path = str(cachedir)
+    if not Path(cachedir_path).is_absolute():
+        for d in glob.glob(cachedir_path + '*'):
+            if not d == cachedir_path:
+                # Be VERY careful when programmatically deleting directories!
+                shutil.rmtree(d)
+
+
+def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
+              passthrough_args: list[str], workflow_name: str,
+              basepath: str, user_env_vars: dict[str, str] | None = None) -> int | None:
     """This function runs the compiled workflow locally.
 
     Args:
-        run_args_dict (Dict[str,str]): The command line arguments dict for run_local
+        run_args_dict (dict[str,str]): The command line arguments dict for run_local
         use_subprocess (bool): When using cwltool, determines whether to use subprocess.run(...)
         or use the cwltool python api.
         basepath (str): The path at which the workflow to be executed
-        user_env_vars (Optional[Dict[str, str]]): User supplied environment variables.
+        user_env_vars (dict[str, str] | None): User supplied environment variables.
 
     Returns:
-        retval (Optional[int]): The return value indicating if run succeeded (0) or not
+        retval (int | None): The return value indicating if run succeeded (0) or not
     """
-    retval = 1  # overwrite if successful
-
     yaml_path = Path(basepath) / workflow_name
     cwl_runner = run_args_dict['cwl_runner']
     # 'cachedir' is the default value
@@ -241,57 +271,20 @@ def run_local(run_args_dict: Dict[str, str], use_subprocess: bool,
         # use separate processes. Otherwise:
         # "signal only works in main thread or with __pypy__.thread.enable_signals()"
         proc = sub.run(cmd, check=False, env=exec_env)
-        retval = proc.returncode
-        return retval  # Skip copying files to outdir/ for CI
-    else:
-        try:
-            with temporary_env(user_env_vars or {}):
-                if cwl_runner == 'cwltool':
-                    print('via cwltool.main.main python API')
-                    retval = cwltool.main.main(cmd[1:])
-                    print(
-                        f'Final output json metadata blob is in output_{workflow_name}.json')
-                    if run_args_dict.get('copy_output_files', 'no') == 'yes':
-                        copy_output_files(workflow_name)
-                elif cwl_runner == 'toil-cwl-runner':
-                    print('via toil.cwl.cwltoil.main python API')
-                    retval = toil.cwl.cwltoil.main(cmd[1:])
-                else:
-                    raise ValueError('unsupported cwl_runner')
+        return proc.returncode  # Skip copying files to outdir/ for CI
 
-        except Exception as e:
-            retval = 1
-            print('Failed to execute', yaml_path)
-            print(
-                f'See error_{workflow_name}.txt for detailed technical information.')
-            # Do not display a nasty stack trace to the user; hide it in a file.
-            with open(f'error_{workflow_name}.txt', mode='w', encoding='utf-8') as f:
-                traceback.print_exception(type(e), value=e, tb=None, file=f)
-            if not cachedir:  # if running on CI
-                print(e)
+    retval = _execute_inprocess(cmd, cwl_runner, workflow_name, run_args_dict,
+                                user_env_vars, yaml_path, cachedir)
 
-    if retval == 0:
-        output_location = cmd[cmd.index('--outdir') + 1] if '--outdir' in cmd else basepath
-        print(f'Success! Runner outputs are under {output_location}/')
-    else:
-        print('Failure! Please scroll up and find the FIRST error message.')
-        print('(You may have to scroll up A LOT.)')
+    _report_outcome(retval, cmd, basepath)
 
-    # Remove the annoying cachedir* directories that somehow aren't getting automatically deleted.
-    # NOTE: Do NOT allow cachedir to be absolute; otherwise
-    # if users pass in "/" this will delete their entire hard drive.
-    cachedir_path = str(cachedir)
-    if not Path(cachedir_path).is_absolute():
-        for d in glob.glob(cachedir_path + '*'):
-            if not d == cachedir_path:
-                # Be VERY careful when programmatically deleting directories!
-                shutil.rmtree(d)
+    _cleanup_cachedir(cachedir)
 
     return retval
 
 
 def run_compute(workflow_name: str, workflow: Json, workflow_inputs: Json,
-                submit_url: str) -> Optional[int]:
+                submit_url: str) -> int | None:
     """Submit a compiled workflow to compute-slurm.
 
     Args:
@@ -300,7 +293,7 @@ def run_compute(workflow_name: str, workflow: Json, workflow_inputs: Json,
         workflow_inputs (Json): The inputs for compiled CWL workflow.
         submit_url (str): URL of Compute where the job is to be submitted.
     Returns:
-        Optional[int]: The return value indicating if submission succeeded (`0`) or not.
+        int | None: The return value indicating if submission succeeded (`0`) or not.
     """
     now = datetime.now()
     date_time = now.strftime("%Y_%m_%d_%H.%M.%S")
@@ -338,14 +331,14 @@ def copy_output_files(yaml_stem: str, basepath: str = '') -> None:
             output_json = json.loads(f.read())
         files = utils.parse_provenance_output_files(output_json)
 
-        dests = set()
+        dests: set[str] = set()
         for location, namespaced_output_name, basename in files:
             try:
                 yaml_stem_init, shortened = utils.shorten_namespaced_output_name(
                     namespaced_output_name)
                 parentdirs = yaml_stem_init + '/' + \
                     shortened.replace('___', '/')
-            except:
+            except Exception:
                 parentdirs = namespaced_output_name  # For --allow_raw_cwl
             Path('outdir/' + parentdirs).mkdir(parents=True, exist_ok=True)
             source = f'provenance/{yaml_stem}/workflow/' + location
@@ -355,7 +348,6 @@ def copy_output_files(yaml_stem: str, basepath: str = '') -> None:
             # except do it BEFORE the extension.
             # This could still cause problems with slicing, i.e. if you scatter across
             # indices 11-20 first, then 1-10 second, the output file indices will get switched.
-            dest = ''
             if basepath:
                 dest = basepath + '/' + 'outdir/' + parentdirs + '/' + basename
             else:

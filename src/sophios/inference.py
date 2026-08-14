@@ -1,19 +1,20 @@
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from . import utils, utils_cwl, utils_graphs
-from .wic_types import (GraphReps, InternalOutputs, Namespaces, StepId, Tool, Tools,
+from .wic_types import (GraphReps, GraphSettings, InternalOutputs, Namespaces, StepId, Tool, Tools,
                         WorkflowInputs, Yaml)
 
 # NOTE: This must be initialized in main.py and/or cwl_subinterpreter.py
-renaming_conventions: List[Tuple[str, str]] = []
+renaming_conventions: list[tuple[str, str]] = []
 
 
 def types_match(in_type: Any, out_type: Any) -> bool:
+    """True if the CWL input type in_type and output type out_type are compatible."""
     if in_type == out_type:
         return True
     if isinstance(in_type, list) and not isinstance(out_type, list):
-        return any([x == out_type for x in in_type])
+        return any(x == out_type for x in in_type)
     if isinstance(out_type, list) and not isinstance(in_type, list):
         # If only some of the output types match the input type, and
         # if at runtime the actual output is one of those matches,
@@ -23,33 +24,135 @@ def types_match(in_type: Any, out_type: Any) -> bool:
         # common use cases (format: ["null", ...]) and there are plenty of
         # other ways to fail at runtime, so for now let's allow it.
         # (If inference makes the 'wrong' choice, just use an explicit edge!)
-        return any([x == in_type for x in out_type])
+        return any(x == in_type for x in out_type)
     if isinstance(in_type, list) and isinstance(out_type, list):
         # Same comment here
-        return any([x in in_type for x in out_type])
+        return any(x in in_type for x in out_type)
     return False
 
 
+def _match_outputs_of_step(*, out_keys: list[str], out_tool: dict, step_j: Yaml, in_dict: dict,
+                           in_formats: list, inference_rules: dict[str, str],
+                           break_inference: bool) -> tuple[list[tuple[str, str]], list[tuple[str, str]], bool]:
+    """Type/format-matches each of out_keys (reverse-ordered outputs of a previously-compiled
+    step) against in_dict/in_formats. Returns (format_matches, attempted_matches, break_inference);
+    break_inference may flip True partway through if a 'break' inference rule fires."""
+    format_matches: list[tuple[str, str]] = []
+    attempted_matches: list[tuple[str, str]] = []
+    namespace_emb_last_break = ''
+    for out_key in out_keys:
+        namespaces_embedded = out_key.split('___')
+        namespace_emb_last = '' if len(namespaces_embedded) <= 1 else namespaces_embedded[:-1][-1]  # -2?
+        if break_inference and namespace_emb_last != namespace_emb_last_break:
+            break  # Only break once the namespace changes, i.e. on the next step
+        inference_rule = inference_rules.get(out_key, 'default')
+        # NOTE: A 'continue' rule (skip matching this out_key entirely) is not
+        # implemented: applying it before the match check below causes an infinite loop.
+
+        out_dict = utils_cwl.copy_cwl_input_output_dict(out_tool[out_key])
+
+        if 'scatter' in step_j:
+            # Promote scattered output types to arrays
+            out_dict['type'] = {'type': 'array', 'items': out_dict['type']}
+
+        out_format = ''
+        if 'format' in out_tool[out_key]:
+            out_format = out_tool[out_key]['format']
+            out_dict['format'] = out_format
+        attempted_matches.append((out_key, out_format))
+        # Great! We found an 'exact' type and format match.
+        if types_match(in_dict['type'], out_dict['type']) and (  # First we have to match the types.
+                not in_formats or out_format == in_formats or out_format in in_formats):
+            # Then, if we have an input format or formats, the output format has to match.
+            # Otherwise, formats are optional and we match only on type.
+            format_matches.append((out_key, out_format))
+
+        # Apply 'break' rule after iteration, to allow matching
+        if inference_rule == 'break':
+            break_inference = True
+            namespace_emb_last_break = namespace_emb_last
+
+    return format_matches, attempted_matches, break_inference
+
+
+def _finalize_matched_edge(*, out_key: str, tool_j: Tool, j: int, yaml_stem: str, steps_keys: list[str],
+                           step_key: str, arg_key: str, steps: list[Yaml], i: int,
+                           input_mapping: dict[str, list[str]], in_name: str,
+                           arg_key_in_yaml_tree_inputs: bool, output_mapping: dict[str, str],
+                           namespaces: Namespaces, step_name_i: str, graph_settings: GraphSettings,
+                           graph: GraphReps, vars_workflow_output_internal: InternalOutputs) -> Yaml:
+    """Finalizes a matched edge for out_key: records it as an internal workflow-output
+    variable, updates steps[i] with the inferred input value, and wires the new edge into
+    the graph representations. Mutates vars_workflow_output_internal and graph in place."""
+    # Generate a new namespace for out_key using the step number and add to inputs
+    step_name_j = utils.step_name_str(yaml_stem, j, steps_keys[j])
+
+    # We also need to keep track of the 'internal' output variables
+    if tool_j.cwl['class'] == 'Workflow':
+        vars_workflow_output_internal.append(out_key)
+    else:
+        vars_workflow_output_internal.append(f'{step_name_j}/{out_key}')
+
+    arg_val = f'{step_name_j}/{out_key}'
+    arg_keyval = {arg_key: arg_val}
+    steps_i = utils_cwl.add_yamldict_keyval_in(steps[i], step_key, arg_keyval)
+
+    arg_keys = [in_name] if in_name in input_mapping else [arg_key]
+    arg_keys = utils.get_input_mappings(input_mapping, arg_keys, arg_key_in_yaml_tree_inputs)
+
+    out_key = utils.get_output_mapping(output_mapping, out_key)
+
+    nss_embedded1 = out_key.split('___')[:-1]
+
+    # NOTE: This if statement is unmotivated and probably masking some other bug, but it works.
+    if out_key.startswith('___'.join(namespaces + [step_name_j])):
+        nss1 = nss_embedded1
+    elif out_key.startswith(step_name_j):
+        nss1 = namespaces + nss_embedded1
+    else:
+        nss1 = namespaces + [step_name_j] + nss_embedded1
+
+    for arg_key_ in arg_keys:
+        # Determine which head and tail node to use for the new edge
+        # First we need to extract the embedded namespaces
+        nss_embedded2 = arg_key_.split('___')[:-1]
+
+        # NOTE: This if statement is unmotivated and probably masking some other bug, but it works.
+        if arg_key_.startswith('___'.join(namespaces + [step_name_i])):
+            nss2 = nss_embedded2
+        elif arg_key_.startswith(step_name_i):
+            nss2 = namespaces + nss_embedded2
+        else:
+            nss2 = namespaces + [step_name_i] + nss_embedded2
+
+        # TODO: check this
+        out_key_no_namespace = out_key.split('___')[-1]
+        label = out_key_no_namespace if tool_j.cwl['class'] == 'Workflow' else out_key
+        utils_graphs.add_graph_edge(graph_settings, graph, nss1, nss2, label)
+
+    return steps_i
+
+
 def perform_edge_inference(inference_use_naming_conventions: bool,
-                           graph_settings: Dict[str, Any],
+                           graph_settings: GraphSettings,
                            tools: Tools,
-                           tools_lst: List[Tool],
-                           steps_keys: List[str],
+                           tools_lst: list[Tool],
+                           steps_keys: list[str],
                            yaml_stem: str,
                            i: int,
-                           steps: List[Yaml],
+                           steps: list[Yaml],
                            arg_key: str,
                            graph: GraphReps,
                            is_root: bool,
                            namespaces: Namespaces,
                            vars_workflow_output_internal: InternalOutputs,
-                           input_mapping: Dict[str, List[str]],
-                           output_mapping: Dict[str, str],
+                           input_mapping: dict[str, list[str]],
+                           output_mapping: dict[str, str],
                            inputs_workflow: WorkflowInputs,
                            in_name: str,
                            in_name_in_inputs_file_workflow: bool,
                            arg_key_in_yaml_tree_inputs: bool,
-                           insertions: List[StepId],
+                           insertions: list[StepId],
                            wic_steps: Yaml,
                            testing: bool) -> Yaml:
     """This function implements the core edge inference feature.
@@ -57,29 +160,29 @@ def perform_edge_inference(inference_use_naming_conventions: bool,
 
     Args:
         inference_use_naming_conventions (bool): If to do inference using naming conventions
-        graph_settings(Dict[str,Any]) : The settings needed for graphviz graph generation
+        graph_settings(GraphSettings) : The settings needed for graphviz graph generation
         tools (Tools): The CWL CommandLineTool definitions found using get_tools_cwl()
-        tools_lst (List[Tool]): A list of the CWL CommandLineTools or compiled subworkflows for the current workflow.
-        steps_keys (List[str]): The name of each step in the current CWL workflow
+        tools_lst (list[Tool]): A list of the CWL CommandLineTools or compiled subworkflows for the current workflow.
+        steps_keys (list[str]): The name of each step in the current CWL workflow
         yaml_stem (str): The name (filename without extension) of the current CWL workflow
         i (int): The (zero-based) step number w.r.t. the current subworkflow.\n
         Since we are trying to infer inputs from previous outputs, this will not\n
         perform any inference (again, w.r.t. the current subworkflow) if i == 0.
-        steps (List[Yaml]): The steps: tag of the current CWL workflow
+        steps (list[Yaml]): The steps: tag of the current CWL workflow
         arg_key (str): The name of the CWL input tag that needs a concrete input value inferred
         graph (GraphReps): A tuple of a GraphViz DiGraph and a networkx DiGraph
         is_root (bool): True if this is the root workflow (for debugging only)
         namespaces (Namespaces): Specifies the path in the AST of the current subworkflow
         vars_workflow_output_internal (InternalOutputs): Keeps track of output\n
         variables which are internal to the root workflow, but not necessarily to subworkflows.
-        input_mapping (Dict[str, List[str]]): Maps workflow inputs to workflow step inputs, recursively namespaced.
-        output_mapping (Dict[str, str]): Maps workflow outputs to workflow step outputs, recursively namespaced.
+        input_mapping (dict[str, list[str]]): Maps workflow inputs to workflow step inputs, recursively namespaced.
+        output_mapping (dict[str, str]): Maps workflow outputs to workflow step outputs, recursively namespaced.
         inputs_workflow (WorkflowInputs): Keeps track of CWL inputs: variables for the current workflow.
         in_name (str): The input name
         in_name_in_inputs_file_workflow (bool): Used to determine whether\n
         failure to find a match should be considered an error.
         arg_key_in_yaml_tree_inputs (bool): Determines whether at least one level of recursion has been performed.
-        insertions (List[StepId]): If exact inference fails, a list of possible steps to automatically insert is stored here.
+        insertions (list[StepId]): If exact inference fails, a list of possible steps to automatically insert is stored here.
         wic_steps (Yaml): The metadata associated with the given workflow.
         testing: Used to disable some optional features which are unnecessary for testing.
 
@@ -120,46 +223,10 @@ def perform_edge_inference(inference_use_naming_conventions: bool,
         # it doesn't necessarily make sense for CommandLineTools, but the
         # important thing is that we just define the order for users some way.
         out_keys = list(tool_j.cwl['outputs'])[::-1]  # Reverse order!
-        format_matches = []
-        attempted_matches = []
         inference_rules = get_inference_rules(wic_step_j, Path(steps_keys[j]).stem)
-        namespace_emb_last_break = ''
-        for out_key in out_keys:
-            namespaces_embedded = out_key.split('___')
-            namespace_emb_last = '' if len(namespaces_embedded) <= 1 else namespaces_embedded[:-1][-1]  # -2?
-            if break_inference and namespace_emb_last != namespace_emb_last_break:
-                break  # Only break once the namespace changes, i.e. on the next step
-            inference_rule = inference_rules.get(out_key, 'default')
-            # Apply 'continue' rule before iteration, to prevent matching
-            # TODO: This currently causes an infinite loop.
-            # if inference_rule == 'continue':
-            #    continue
-
-            out_dict = utils_cwl.copy_cwl_input_output_dict(out_tool[out_key])
-
-            if 'scatter' in steps[j]:
-                # Promote scattered output types to arrays
-                out_dict['type'] = {'type': 'array', 'items': out_dict['type']}
-
-            out_format = ''
-            if 'format' in out_tool[out_key]:
-                out_format = out_tool[out_key]['format']
-                out_dict['format'] = out_format
-            attempted_matches.append((out_key, out_format))
-            # Great! We found an 'exact' type and format match.
-            if types_match(in_dict['type'], out_dict['type']):  # First we have to match the types.
-                if in_formats:
-                    # Then, if we have an input format or formats, the output format has to match.
-                    if out_format == in_formats or out_format in in_formats:
-                        format_matches.append((out_key, out_format))
-                else:
-                    # Otherwise, formats are optional and we match only on type.
-                    format_matches.append((out_key, out_format))
-
-            # Apply 'break' rule after iteration, to allow matching
-            if inference_rule == 'break':
-                break_inference = True
-                namespace_emb_last_break = namespace_emb_last
+        format_matches, attempted_matches, break_inference = _match_outputs_of_step(
+            out_keys=out_keys, out_tool=out_tool, step_j=steps[j], in_dict=in_dict,
+            in_formats=in_formats, inference_rules=inference_rules, break_inference=break_inference)
 
         format_matches_all.append(format_matches)
         attempted_matches_all.append(attempted_matches)
@@ -182,7 +249,7 @@ def perform_edge_inference(inference_use_naming_conventions: bool,
                     # Great! We found a unique format match.
                     out_key = format_matches[0][0]
                 else:
-                    name_matches = []
+                    name_matches: list[tuple[str, str]] = []
                     # NOTE: The biobb CWL files do not use consistent naming
                     # conventions, so we need to perform some renamings here.
                     # Eventually, the CWL files themselves should be fixed.
@@ -211,53 +278,13 @@ def perform_edge_inference(inference_use_naming_conventions: bool,
                     else:
                         out_key = name_matches[0][0]
 
-            # Generate a new namespace for out_key using the step number and add to inputs
-            step_name_j = utils.step_name_str(yaml_stem, j, steps_keys[j])
-
-            # We also need to keep track of the 'internal' output variables
-            if tool_j.cwl['class'] == 'Workflow':
-                vars_workflow_output_internal.append(out_key)
-            else:
-                vars_workflow_output_internal.append(f'{step_name_j}/{out_key}')
-
-            arg_val = f'{step_name_j}/{out_key}'
-            arg_keyval = {arg_key: arg_val}
-            steps_i = utils_cwl.add_yamldict_keyval_in(steps[i], step_key, arg_keyval)
-
-            arg_keys = [in_name] if in_name in input_mapping else [arg_key]
-            arg_keys = utils.get_input_mappings(input_mapping, arg_keys, arg_key_in_yaml_tree_inputs)
-
-            out_key = utils.get_output_mapping(output_mapping, out_key)
-
-            nss_embedded1 = out_key.split('___')[:-1]
-
-            # NOTE: This if statement is unmotivated and probably masking some other bug, but it works.
-            if out_key.startswith('___'.join(namespaces + [step_name_j])):
-                nss1 = nss_embedded1
-            elif out_key.startswith(step_name_j):
-                nss1 = namespaces + nss_embedded1
-            else:
-                nss1 = namespaces + [step_name_j] + nss_embedded1
-
-            for arg_key_ in arg_keys:
-                # Determine which head and tail node to use for the new edge
-                # First we need to extract the embedded namespaces
-                nss_embedded2 = arg_key_.split('___')[:-1]
-
-                # NOTE: This if statement is unmotivated and probably masking some other bug, but it works.
-                if arg_key_.startswith('___'.join(namespaces + [step_name_i])):
-                    nss2 = nss_embedded2
-                elif arg_key_.startswith(step_name_i):
-                    nss2 = namespaces + nss_embedded2
-                else:
-                    nss2 = namespaces + [step_name_i] + nss_embedded2
-
-                # TODO: check this
-                out_key_no_namespace = out_key.split('___')[-1]
-                label = out_key_no_namespace if tool_j.cwl['class'] == 'Workflow' else out_key
-                utils_graphs.add_graph_edge(graph_settings, graph, nss1, nss2, label)
-
-            return steps_i  # Short circuit
+            return _finalize_matched_edge(  # Short circuit
+                out_key=out_key, tool_j=tool_j, j=j, yaml_stem=yaml_stem, steps_keys=steps_keys,
+                step_key=step_key, arg_key=arg_key, steps=steps, i=i, input_mapping=input_mapping,
+                in_name=in_name, arg_key_in_yaml_tree_inputs=arg_key_in_yaml_tree_inputs,
+                output_mapping=output_mapping, namespaces=namespaces, step_name_i=step_name_i,
+                graph_settings=graph_settings, graph=graph,
+                vars_workflow_output_internal=vars_workflow_output_internal)
 
         # Stop performing inference if the inference rule is 'break'
         if break_inference:
@@ -297,42 +324,37 @@ def perform_edge_inference(inference_use_naming_conventions: bool,
                     # We may have found an insertion.
                     insertions.append(step_id)
 
-    match = False
-    if not match:
-        # Use triple underscore for namespacing so we can split later
-        in_name = f'{step_name_i}___{arg_key}'  # {step_name_i}_input___{arg_key}
+    # No match was found in the loop above (any match there returns immediately),
+    # so we need to defer to the parent workflow.
+    # Use triple underscore for namespacing so we can split later
+    in_name = f'{step_name_i}___{arg_key}'  # {step_name_i}_input___{arg_key}
 
-        # This just means we need to defer to the parent workflow.
-        # There will actually be an error only if no parent supplies an
-        # input value and thus there is no entry in inputs_file_workflow.
-        if is_root and not in_name_in_inputs_file_workflow and not testing:
-            print('Error! No match found for input', i + 1, step_key, arg_key)
-            # NOTE: The following print statement is a bit misleading because
-            # we don't print out any attempted matches in the recursive case.
-            print('number of attempted matches ', len(utils.flatten(attempted_matches_all)))
-            for a_m in attempted_matches_all:
-                for m in a_m:
-                    print(m)
+    # There will actually be an error only if no parent supplies an
+    # input value and thus there is no entry in inputs_file_workflow.
+    if is_root and not in_name_in_inputs_file_workflow and not testing:
+        print('Error! No match found for input', i + 1, step_key, arg_key)
+        # NOTE: The following print statement is a bit misleading because
+        # we don't print out any attempted matches in the recursive case.
+        print('number of attempted matches ', len(utils.flatten(attempted_matches_all)))
+        for a_m in attempted_matches_all:
+            for m in a_m:
+                print(m)
 
-        # Add an input name to this subworkflow (only). Do not add to
-        # inputs_file_workflow because this may be an internal input,
-        # i.e. it may simply be split across subworkflow boundaries and
-        # the input may be supplied in one of the parent workflows.
-        # We also do not (necessarily) need to explicitly pass this list
-        # to the parent workflow since we are compiling the 'in' tag here,
-        # which should match in the parent workflow.
-        inputs_workflow.update({in_name: in_dict})
+    # Add an input name to this subworkflow (only). Do not add to
+    # inputs_file_workflow because this may be an internal input,
+    # i.e. it may simply be split across subworkflow boundaries and
+    # the input may be supplied in one of the parent workflows.
+    # We also do not (necessarily) need to explicitly pass this list
+    # to the parent workflow since we are compiling the 'in' tag here,
+    # which should match in the parent workflow.
+    inputs_workflow.update({in_name: in_dict})
 
-        arg_keyval = {arg_key: in_name}
-        steps_i = utils_cwl.add_yamldict_keyval_in(steps[i], step_key, arg_keyval)
-        return steps_i
-
-    # Add an explicit return statement here so mypy doesn't complain.
-    # (mypy's static analysis cannot determine that this is dead code.)
-    return steps[i]
+    arg_keyval = {arg_key: in_name}
+    steps_i = utils_cwl.add_yamldict_keyval_in(steps[i], step_key, arg_keyval)
+    return steps_i
 
 
-def get_inference_rules(wic: Yaml, step_key_parent: str) -> Dict[str, str]:
+def get_inference_rules(wic: Yaml, step_key_parent: str) -> dict[str, str]:
     """Recursively traverses the wic: metadata annotation AST and extracts any inference rules.\n
     See docs/userguide.md for more information.
 
@@ -341,11 +363,11 @@ def get_inference_rules(wic: Yaml, step_key_parent: str) -> Dict[str, str]:
         step_key_parent (str): The name of one of the steps in the current workflow.
 
     Returns:
-        Dict[str, str]: A dictionary of the inference rules for the workflow step named step_key_parent.
+        dict[str, str]: A dictionary of the inference rules for the workflow step named step_key_parent.
     """
     # NOTE: Here, we simply return all inference rules. The call site then
     # determines whether to apply any of the rules by doing a lookup.
-    rules: Dict[str, str] = {}
+    rules: dict[str, str] = {}
     if 'steps' in wic.get('wic', {}):
         wic_steps = wic['wic']['steps']
         for keystr, wic_child in wic_steps.items():

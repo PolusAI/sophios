@@ -1,4 +1,4 @@
-from typing import Any, NamedTuple, TypeAlias
+from typing import Any, NamedTuple, TypeAlias, TypedDict
 
 import networkx as nx
 
@@ -9,13 +9,11 @@ import networkx as nx
 # The sphinx autodoc documentation claims type aliases can be added to
 # autodoc_type_aliases in docs/conf.py instead of showing their expansions.
 # However, I can't seem to get it to work.
-# TODO: Consider removing all type aliases in favor of classes.
 
-KV: TypeAlias = dict[str, Any]
-Cwl: TypeAlias = KV
-Json: TypeAlias = KV
+Cwl: TypeAlias = dict[str, Any]
+Json: TypeAlias = dict[str, Any]
 RawJson: TypeAlias = str
-Yaml: TypeAlias = KV
+Yaml: TypeAlias = dict[str, Any]
 
 # In python there are unfortunately an enormous number of ways to represent the humble struct.
 # See https://stackoverflow.com/questions/53409117/what-are-the-main-differences-of-namedtuple-and-typeddict-in-python-mypy
@@ -46,8 +44,6 @@ InternalOutputs: TypeAlias = list[str]
 ExplicitEdgeDef: TypeAlias = tuple[Namespaces, str]
 ExplicitEdgeDefs: TypeAlias = dict[str, ExplicitEdgeDef]
 ExplicitEdgeCalls: TypeAlias = dict[str, ExplicitEdgeDef]
-PluginID: TypeAlias = int
-StepName1: TypeAlias = str
 DiGraph: TypeAlias = Any  # graphviz.DiGraph
 
 
@@ -59,7 +55,9 @@ class GraphData():
                  edges: list[tuple[str, str, dict]] | None = None,
                  subgraphs: list[Any] | None = None,
                  ranksame: list[str] | None = None) -> None:
-        # NOTE: See comments in utils_graphs.flatten_graphdata() !!!
+        # NOTE: Use None as the sentinel default (instead of a mutable list literal)
+        # so each instance gets its own fresh list; a literal [] default would be
+        # shared (and mutated!) across every instance that doesn't pass an argument.
         self.name = name
         self.nodes = [] if nodes is None else nodes
         self.edges = [] if edges is None else edges
@@ -76,21 +74,18 @@ class GraphReps(NamedTuple):
     graphdata: GraphData
 
 
-YamlDSLArgs: TypeAlias = Yaml
-
 # Since we cannot store extra tags in CWL files, we need a data structure
 # to store temporary compiler info that gets passed through the recursion.
 # The number of subworkflows is arbitrary (zero or more), so what we want is a
 # Rose Tree https://en.wikipedia.org/wiki/Rose_tree
 # Unfortunately, since mypy does not support Algebraic Data Types (ADTs)
 # we have to break the recursion by replacing the recursive instance of RoseTree with Any :(
-DataType: TypeAlias = Any
 
 
 class RoseTree(NamedTuple):
-    data: DataType
+    data: Any
     sub_trees: list[Any]  # Any = RoseTree
-# Note that instead of DataType we could provide a specific type, but remember that
+# Note that instead of Any we could provide a specific type, but remember that
 # a Rose Tree is defined by its structure, not by the specific type of data it contains.
 # We can simply cast to a specific type at each call site, i.e.
 # data: SpecificType = rose_tree.data
@@ -111,7 +106,7 @@ class NodeData(NamedTuple):
     explicit_edge_calls: ExplicitEdgeCalls
     graph: GraphReps
     inputs_workflow: WorkflowInputs
-    step_name_1: StepName1
+    step_name_1: str
 
 
 class EnvData(NamedTuple):
@@ -147,3 +142,36 @@ class YamlTree(NamedTuple):
 class YamlForest(NamedTuple):
     yaml_tree: YamlTree
     sub_forests: list[tuple[StepId, Any]]  # Any = YamlForest
+
+
+class CompilerOptions(TypedDict):
+    """Core compiler flags needed for compilation and transformation into CWL."""
+    partial_failure_enable: bool
+    inference_use_naming_conventions: bool
+    insert_steps_automatically: bool
+    inference_disable: bool
+    allow_raw_cwl: bool
+
+
+class GraphSettings(TypedDict):
+    """Settings dict for graphviz graph generation."""
+    graph_dark_theme: bool
+    graph_inline_depth: int
+    graph_label_edges: bool
+    graph_label_stepname: bool
+    graph_show_outputs: bool
+    graph_show_inputs: bool
+
+
+class YamlTagPaths(TypedDict):
+    """Paths that need to be included in (generated) yaml tags."""
+    cachedir: str
+    yaml: str
+    homedir: str
+
+
+class PluginNodeConfig(TypedDict):
+    """The UI-derived input/output configuration for a single WFB plugin node."""
+    ui: list[Json]
+    inputs: list[Json]
+    outputs: list[Json]

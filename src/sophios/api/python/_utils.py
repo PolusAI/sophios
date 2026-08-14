@@ -1,6 +1,7 @@
 """Internal helpers for the Python API."""
 
 import keyword
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -81,8 +82,40 @@ def serialize_value(value: Any) -> Any:
             return value
 
 
-def infer_literal_parameter_type(value: Any) -> Any:
-    """Infer a CWL type expression from a Python literal when practical."""
+def _infer_fs_object_type(path: Path) -> str:
+    """Infer whether a `Path` literal denotes a CWL `File` or `Directory`."""
+    if path.exists():
+        return CWLAtomicType.DIRECTORY.value if path.is_dir() else CWLAtomicType.FILE.value
+    if path.suffix:
+        return CWLAtomicType.FILE.value
+    return CWLAtomicType.DIRECTORY.value
+
+
+def _infer_array_parameter_type(items: Sequence[Any]) -> Any:
+    """Infer a CWL array type from a homogeneous list/tuple literal, or `None` if it isn't one."""
+    if not items:
+        return None
+    inferred_item_types = []
+    for item in items:
+        inferred = infer_literal_parameter_type(item)
+        if inferred is None:
+            return None
+        inferred_item_types.append(inferred)
+    unique_types = []
+    for inferred in inferred_item_types:
+        if inferred not in unique_types:
+            unique_types.append(inferred)
+    if len(unique_types) != 1:
+        return None
+    return {"type": "array", "items": unique_types[0]}
+
+
+def infer_literal_parameter_type(value: Any) -> Any:  # pylint: disable=too-many-return-statements
+    """Infer a CWL type expression from a Python literal when practical.
+
+    One `return` per atomic CWL type keeps this dispatch table-like and easy
+    to scan; collapsing cases to reduce the count would hurt readability.
+    """
     match value:
         case None:
             return CWLAtomicType.NULL.value
@@ -94,28 +127,10 @@ def infer_literal_parameter_type(value: Any) -> Any:
             return CWLAtomicType.FLOAT.value
         case str():
             return CWLAtomicType.STRING.value
-        case Path() as path if path.exists():
-            return CWLAtomicType.DIRECTORY.value if path.is_dir() else CWLAtomicType.FILE.value
-        case Path() as path if path.suffix:
-            return CWLAtomicType.FILE.value
-        case Path():
-            return CWLAtomicType.DIRECTORY.value
+        case Path() as path:
+            return _infer_fs_object_type(path)
         case list() | tuple() as items:
-            if not items:
-                return None
-            inferred_item_types = []
-            for item in items:
-                inferred = infer_literal_parameter_type(item)
-                if inferred is None:
-                    return None
-                inferred_item_types.append(inferred)
-            unique_types = []
-            for inferred in inferred_item_types:
-                if inferred not in unique_types:
-                    unique_types.append(inferred)
-            if len(unique_types) != 1:
-                return None
-            return {"type": "array", "items": unique_types[0]}
+            return _infer_array_parameter_type(items)
         case {"class": "File" | "Directory" as class_name}:
             return class_name
         case _:
@@ -161,6 +176,7 @@ def get_value_from_cfg(value: Any) -> Any:
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
+    """Load a YAML file, returning an empty dict for an empty/null document."""
     with path.open("r", encoding="utf-8") as file_handle:
         loaded = yaml.safe_load(file_handle)
     return loaded or {}

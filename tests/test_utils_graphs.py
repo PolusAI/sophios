@@ -1,9 +1,8 @@
-from typing import Any
-
 from sophios.utils_graphs import add_graph_edge, get_graph_reps
+from sophios.wic_types import GraphSettings
 
 
-def _graph_settings(*, label_edges: bool) -> dict[str, Any]:
+def _graph_settings(*, label_edges: bool) -> GraphSettings:
     return {
         'graph_dark_theme': False,
         'graph_inline_depth': 1,
