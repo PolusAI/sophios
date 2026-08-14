@@ -56,7 +56,7 @@ def read_ast_from_disk(homedir: str,
             traceback.print_exception(type(e), value=e, tb=None, file=f)
         sys.exit(1)
 
-    wic = {'wic': yaml_tree.get('wic', {})}
+    wic = {'wic': yaml_tree.get('wic') or {}}
     if 'implementations' in wic['wic']:
         # Recursively expand each implementation, but do NOT choose a specific implementation.
         # Require back_name to be .wic? For now, yes.
@@ -145,7 +145,7 @@ def merge_yml_trees(yaml_tree_tuple: YamlTree,
     (step_id, yaml_tree) = yaml_tree_tuple
 
     # Check for top-level yml dsl args
-    wic_self = {'wic': yaml_tree.get('wic', {})}
+    wic_self = {'wic': yaml_tree.get('wic') or {}}
     wic = merge(wic_self, wic_parent, strategy=Strategy.TYPESAFE_REPLACE)
     # Here we want to ADD wic: as a top-level yaml tag.
     # In the compilation phase, we want to remove it.
@@ -216,7 +216,7 @@ def tree_to_forest(yaml_tree_tuple: YamlTree, tools: Tools) -> YamlForest:
     """
     (step_id, yaml_tree) = yaml_tree_tuple
 
-    wic = {'wic': yaml_tree.get('wic', {})}
+    wic = {'wic': yaml_tree.get('wic') or {}}
     if 'implementations' in wic['wic']:
         implementations_forest_list = []
         for stepid, back in wic['wic']['implementations'].items():
@@ -263,7 +263,7 @@ def python_script_generate_cwl(yaml_tree_tuple: YamlTree,
     """
     (step_id, yaml_tree) = yaml_tree_tuple
 
-    wic = {'wic': yaml_tree.get('wic', {})}
+    wic = {'wic': yaml_tree.get('wic') or {}}
 
     if 'implementations' in wic['wic']:
         implementations_trees = []

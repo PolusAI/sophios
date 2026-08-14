@@ -84,15 +84,15 @@ def compile_workflow(yaml_tree_ast: YamlTree,
     # (Also note that you have to do this element-wise; you cannot simply write
     # subgraphs_ = subgraphs because that will only overwrite the local binding
     # and thus it will not affect the call site of compile_workflow!)
-    for i, subgraph_ in enumerate(subgraphs_):
-        subgraph_.graphviz.body = subgraphs[i].graphviz.body
-        subgraph_.graphdata.name = subgraphs[i].graphdata.name
-        subgraph_.graphdata.nodes = subgraphs[i].graphdata.nodes
-        subgraph_.graphdata.edges = subgraphs[i].graphdata.edges
-        subgraph_.graphdata.subgraphs = subgraphs[i].graphdata.subgraphs
+    for si, subgraph_ in enumerate(subgraphs_):
+        subgraph_.graphviz.body = subgraphs[si].graphviz.body
+        subgraph_.graphdata.name = subgraphs[si].graphdata.name
+        subgraph_.graphdata.nodes = subgraphs[si].graphdata.nodes
+        subgraph_.graphdata.edges = subgraphs[si].graphdata.edges
+        subgraph_.graphdata.subgraphs = subgraphs[si].graphdata.subgraphs
         subgraph_.networkx.clear()
         subgraph_.networkx.update(
-            subgraphs[i].networkx.edges, subgraphs[i].networkx.nodes)
+            subgraphs[si].networkx.edges, subgraphs[si].networkx.nodes)
 
     if i == max_iters:
         print(yaml.dump(node_data.yml))
@@ -153,7 +153,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
         print(' starting compilation of', ('  ' * len(namespaces)) + yaml_path)
 
     # Check for top-level yml dsl args
-    wic = {'wic': yaml_tree.get('wic', {})}
+    wic = {'wic': yaml_tree.get('wic') or {}}
     if 'wic' in yaml_tree:
         del yaml_tree['wic']
     wic_steps = wic['wic'].get('steps', {})
@@ -285,7 +285,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                 # relevant yaml_tree and wic: tags in the parent with the child
                 # values.
                 print('AST modified', step_key)
-                wic_steps[f'({i+1}, {step_key})'] = {'wic': sub_node_data.yml.get('wic', {})}
+                wic_steps[f'({i+1}, {step_key})'] = {'wic': sub_node_data.yml.get('wic') or {}}
                 wic_step_i = wic_steps.get(f'({i+1}, {step_key})', {})
 
             # Add arguments to the compiled subworkflow (if any), being careful

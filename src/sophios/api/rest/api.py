@@ -80,7 +80,7 @@ async def compile_wf(request: Request) -> Json:
         if can_step.get("run", None):
             # add a new tool
             tools_cwl[StepId(can_step["id"], "global")] = Tool(".", can_step["run"])
-    wic_obj = {'wic': workflow_can.get('wic', {})}
+    wic_obj = {'wic': workflow_can.get('wic') or {}}
     plugin_ns = wic_obj['wic'].get('namespace', 'global')
 
     graph = get_graph_reps(wkflw_name)
