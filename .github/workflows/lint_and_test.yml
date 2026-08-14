@@ -92,7 +92,7 @@ jobs:
     steps:
       - name: Checkout sophios
         if: always()
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
         with:
           repository: ${{ inputs.wic_owner }}/sophios
           ref: ${{ inputs.wic_ref }}
@@ -100,7 +100,7 @@ jobs:
 
       - name: Checkout biobb_adapters
         if: always()
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
         with:
           # NOTE: temporarily hardcode sameeul & master because we can only
           # have up to 10 input parameters for workflow_dispatch
@@ -110,7 +110,7 @@ jobs:
 
       - name: Checkout mm-workflows
         if: always()
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
         with:
           repository: ${{ inputs.mm-workflows_owner }}/mm-workflows
           ref: ${{ inputs.mm-workflows_ref }}
@@ -118,7 +118,7 @@ jobs:
 
       - name: Checkout image-workflows
         if: always()
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
         with:
           repository: ${{ inputs.image-workflows_owner }}/image-workflows
           ref: ${{ inputs.image-workflows_ref }}

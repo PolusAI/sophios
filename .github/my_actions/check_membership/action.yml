@@ -14,5 +14,5 @@ outputs:
   verified:
     description: 'Whether the account is a verified member or trusted account'
 runs:
-  using: 'node16'
+  using: 'node24'
   main: 'dist/index.js'

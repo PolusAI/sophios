@@ -37,15 +37,16 @@ jobs:
     steps:
       - name: Checkout sophios
         if: always()
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
         with:
           repository: ${{ github.repository_owner }}/sophios
           ref: master
           path: sophios
+          fetch-depth: 0 # setuptools-scm needs full history to resolve the version from tags
 
       - name: Checkout biobb_adapters
         if: always()
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
         with:
           repository: vjaganat90/biobb_adapters
           ref: master
@@ -53,7 +54,7 @@ jobs:
 
       - name: Checkout mm-workflows
         if: always()
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
         with:
           repository: ${{ github.repository_owner }}/mm-workflows
           ref: main
@@ -61,7 +62,7 @@ jobs:
 
       - name: Checkout image-workflows
         if: always()
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
         with:
           repository: ${{ github.repository_owner }}/image-workflows
           ref: main
@@ -86,6 +87,11 @@ jobs:
 
       - name: Install Sophios
         if: always()
+        # macos-latest runners can be slow enough that setuptools-scm's default 40s
+        # subprocess timeout (for its internal `git rev-parse HEAD` sanity check) is
+        # exceeded, failing the build with `subprocess.TimeoutExpired`. Raise it.
+        env:
+          SETUPTOOLS_SCM_SUBPROCESS_TIMEOUT: "120"
         run: cd sophios/ && pip install ".[all_except_runner_src]"
 
       - name: Update Sophios Config
