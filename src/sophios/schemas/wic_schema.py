@@ -598,7 +598,7 @@ def compile_workflow_generate_schema(homedir: str,
     # Load the high-level yaml workflow file.
     with open(yml_path, mode='r', encoding='utf-8') as y:
         root_yaml_tree: Yaml = yaml.load(y.read(), Loader=wic_loader())
-    wic_tag = {'wic': root_yaml_tree.get('wic', {})}
+    wic_tag = {'wic': root_yaml_tree.get('wic') or {}}
     plugin_ns = wic_tag['wic'].get('namespace', 'global')
     step_id = StepId(yml_path_str, plugin_ns)
     y_t = YamlTree(step_id, root_yaml_tree)

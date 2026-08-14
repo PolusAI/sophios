@@ -90,7 +90,8 @@ def maybe_add_requirements(yaml_tree: Yaml, steps_keys: List[str],
     reqs = subwork + scatter + stepinp + jsreq
     if reqs:
         reqsdict: Dict[str, Dict] = {r: {} for r in set(reqs)}
-        if 'requirements' in yaml_tree:
+        # NOTE: A bare `requirements:` parses to None, so check the value, not the key.
+        if isinstance(yaml_tree.get('requirements'), dict):
             new_reqs = dict(
                 list(yaml_tree['requirements'].items()) + list(reqsdict.items()))
             yaml_tree['requirements'].update(new_reqs)

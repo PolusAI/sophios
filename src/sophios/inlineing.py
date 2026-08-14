@@ -36,7 +36,7 @@ def get_inlineable_subworkflows(yaml_tree_tuple: YamlTree,
     yaml_name = step_id.stem
 
     # Check for top-level yml dsl args
-    wic = {'wic': yaml_tree.get('wic', {})}
+    wic = {'wic': yaml_tree.get('wic') or {}}
 
     if 'implementations' in wic['wic']:
         # Use yaml_name (instead of back_name) and do not append to namespace_init.
@@ -83,7 +83,7 @@ def inline_subworkflow(yaml_tree_tuple: YamlTree, namespaces: Namespaces) -> Tup
     (step_id, yaml_tree) = copy.deepcopy(yaml_tree_tuple)
     yaml_name = step_id.stem
 
-    wic = {'wic': yaml_tree.get('wic', {})}
+    wic = {'wic': yaml_tree.get('wic') or {}}
     if 'implementations' in wic['wic']:
         if len(namespaces) == 1:  # and namespaces[0] == yaml_name ?
             (back_name_, yaml_tree) = utils.extract_implementation(yaml_tree, wic['wic'], Path(''))

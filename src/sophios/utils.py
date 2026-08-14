@@ -250,7 +250,7 @@ def flatten_forest(forest: YamlForest) -> List[YamlForest]:
     if forest == {}:
         return []
     yaml_tree = forest.yaml_tree.yml
-    wic = {'wic': yaml_tree.get('wic', {})}
+    wic = {'wic': yaml_tree.get('wic') or {}}
     plugin_ns = wic['wic'].get('namespace', 'global')
 
     if 'implementations' in wic['wic']:
