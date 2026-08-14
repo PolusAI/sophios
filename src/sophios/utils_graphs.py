@@ -1,13 +1,23 @@
-from pathlib import Path
-from typing import List, Dict, Any
-
 import graphviz
 import networkx as nx
 
-from .wic_types import (GraphData, GraphReps, Json, Namespaces, Tool, Tools)
+from .wic_types import (GraphData, GraphReps, GraphSettings, Namespaces)
 
 
-def add_graph_edge(graph_settings: Dict[str, Any], graph: GraphReps,
+def _collapsed_node_name(nss: Namespaces, graph_inline_depth: int) -> str:
+    """Collapse a namespace path down to the node name used at the given inline depth.
+
+    Args:
+        nss (Namespaces): The namespaces associated with a node
+        graph_inline_depth (int): The depth below which details are hidden
+
+    Returns:
+        str: The (possibly truncated) node name
+    """
+    return '___'.join(nss[:(1 + graph_inline_depth)])
+
+
+def add_graph_edge(graph_settings: GraphSettings, graph: GraphReps,
                    nss1: Namespaces, nss2: Namespaces,
                    label: str, color: str = '') -> None:
     """Adds edges to (all of) our graph representations, with the ability to
@@ -19,7 +29,7 @@ def add_graph_edge(graph_settings: Dict[str, Any], graph: GraphReps,
     (and do the same when creating the nodes)
 
     Args:
-        graph_settings (Dict[str, Any]): The settings for graphviz visualization
+        graph_settings (GraphSettings): The settings for graphviz visualization
         graph (GraphReps): A tuple of a GraphViz DiGraph and a networkx DiGraph
         nss1 (Namespaces): The namespaces associated with the first node
         nss2 (Namespaces): The namespaces associated with the second node
@@ -28,10 +38,8 @@ def add_graph_edge(graph_settings: Dict[str, Any], graph: GraphReps,
     """
     if color == '':
         color = 'black' if graph_settings['graph_dark_theme'] else 'white'
-    nss1 = nss1[:(1 + graph_settings['graph_inline_depth'])]
-    edge_node1 = '___'.join(nss1)
-    nss2 = nss2[:(1 + graph_settings['graph_inline_depth'])]
-    edge_node2 = '___'.join(nss2)
+    edge_node1 = _collapsed_node_name(nss1, graph_settings['graph_inline_depth'])
+    edge_node2 = _collapsed_node_name(nss2, graph_settings['graph_inline_depth'])
     graph_gv = graph.graphviz
     graph_nx = graph.networkx
     graphdata = graph.graphdata
@@ -70,19 +78,12 @@ def flatten_graphdata(graphdata: GraphData, parent: str = '') -> GraphData:
     """
     subgraphs = [flatten_graphdata(subgraph, str(graphdata.name)) for subgraph in graphdata.subgraphs]
 
-    # NOTE: Even though all of the following default list arguments are [],
-    # you MUST explicitly supply the empty lists!!! Otherwise, after
-    # instantiation, the lists will contain values from previous instances!!!
-    # This shallow copy causes an infinite loop because as we copy nodes,
-    # they end up getting appended to the original lists!
-    # This makes absolutely no sense. Since the lists are defined at the
-    # instance level (NOT the class level), there should be zero sharing!
-    g_d = GraphData(str(graphdata.name), [], [], [], [])  # This is fine
+    g_d = GraphData(str(graphdata.name))
 
     for subgraph in subgraphs:
         # We need to add a placeholder node for each subgraph first
         attrs = {} if parent == '' else {'parent': parent}
-        # NOTE: This does not yet work with args.graph_inline_depth
+        # NOTE: This does not yet fully respect the --graph_inline_depth setting.
         g_d.nodes.append((subgraph.name, attrs))
 
     for subgraph in subgraphs:
@@ -103,109 +104,37 @@ def flatten_graphdata(graphdata: GraphData, parent: str = '') -> GraphData:
     return g_d
 
 
-def graphdata_to_cytoscape(graphdata: GraphData) -> Json:
-    """Converts a flattened graph into cytoscape json format.
+def _add_ranksame(graph: GraphReps, names: list[str]) -> None:
+    """Align the given node names on the same graphviz rank, if there is more than one.
+
+    See https://stackoverflow.com/questions/6824431/placing-clusters-on-the-same-rank-in-graphviz
 
     Args:
-        graphdata (GraphData): A flattened GraphData instance
-
-    Returns:
-        Json: A Json object compatible with cytoscape.
+        graph (GraphReps): A tuple of a GraphViz DiGraph and a networkx DiGraph
+        names (list[str]): The node names to align on the same rank
     """
-    nodes = []
-    for (node, attrs) in list(graphdata.nodes):
-        nodes.append({'data': {'id': node, **attrs}})
-    edges = []
-    for (node1, node2, attrs) in list(graphdata.edges):
-        edges.append({'data': {'source': node1, 'target': node2, **attrs}})
-    return {'nodes': nodes, 'edges': edges}
+    if len(names) > 1:
+        nodes_same_rank = '\t{rank=same; ' + '; '.join(names) + '}\n'
+        graph.graphviz.body.append(nodes_same_rank)
+        graph.graphdata.ranksame = names
 
 
-def make_tool_dag(tool_stem: str, tool: Tool, graph_dark_theme: bool) -> None:
-    """Uses the `dot` executable from the graphviz package to make a Directed
-    Acyclic Graph corresponding to the given CWL CommandLineTool
-
-    Args:
-        tool_stem (str): The name of the Tool
-        tool (Tool): The CWL ComandLineTool
-        graph_dark_theme (bool): See args.graph_dark_theme
-    """
-    (tool_path, tool_cwl) = tool
-    yaml_path = f'autogenerated/DAG/{tool_path}'
-    Path(yaml_path).parent.mkdir(parents=True, exist_ok=True)
-    graph = graphviz.Digraph(name=yaml_path)
-    graph.attr(bgcolor="transparent")  # Useful for making slides
-    font_edge_color = 'black' if graph_dark_theme else 'white'
-    graph.attr(fontcolor=font_edge_color)
-    graph.attr(rankdir='LR')
-    attrs = {'shape': 'box', 'style': 'rounded, filled'}
-    graph.node(tool_stem, fillcolor='lightblue', **attrs)
-    for input_cwl in tool_cwl['inputs']:
-        input_initial_ns = input_cwl.split('___')[0].split('__')[0]
-        input_no_initial_ns = input_cwl.replace(f'{input_initial_ns}__', '')
-        # Hide optional inputs that could be confusing.
-        if not 'output' in input_no_initial_ns:
-            graph.node(f'input_{input_cwl}', label=input_no_initial_ns, fillcolor='lightgreen', **attrs)
-            graph.edge(f'input_{input_cwl}', tool_stem, color=font_edge_color)
-    for output_cwl in tool_cwl['outputs']:
-        output_initial_ns = output_cwl.split('___')[0].split('__')[0]
-        output_no_initial_ns = output_cwl.replace(f'{output_initial_ns}__', '')
-        graph.node(f'output_{output_cwl}', label=output_no_initial_ns, fillcolor='lightyellow', **attrs)
-        graph.edge(tool_stem, f'output_{output_cwl}', color=font_edge_color)
-    # NOTE: Since there may be many inputs/outputs and thus edges in complex subworkflows,
-    # the layout algorithm for this this .render() call may be very slow! (10+ seconds)
-    graph.render(format='png')
-
-
-def make_plugins_dag(tools: Tools, graph_dark_theme: bool) -> None:
-    """Uses the `neato` executable from the graphviz package to make a Directed
-    Acyclic Graph consisting of a node for each CWL CommandLineTool and no edges.
-
-    Args:
-        tools (Tools): The CWL CommandLineTool definitions found using get_tools_cwl()
-        graph_dark_theme (bool): See args.graph_dark_theme
-    """
-    # NOTE: Do not use the default 'dot' engine. Use neato / fdp / sfdp
-    # and set pack=0 to remove the massive blank space around each node.
-    # Also note that despite my best efforts, I cannot force graphviz to
-    # change the aspect ratio (to double the width for making slides)
-    # without simply stretching it and distorting the nodes, so we can just
-    # partition the tools into two squares and display them side by side.
-    num_tools_half = int(len(list(tools)) / 2)
-    for i in [0, 1]:
-        yaml_path = f'autogenerated/DAG/plugins{i}'
-        Path(yaml_path).mkdir(parents=True, exist_ok=True)
-        graph = graphviz.Digraph(name=yaml_path)
-        graph.engine = 'neato'
-        graph.attr(pack='0')
-        graph.attr(bgcolor="transparent")  # Useful for making slides
-        font_edge_color = 'black' if graph_dark_theme else 'white'
-        graph.attr(fontcolor=font_edge_color)
-        for tool in list(tools)[i*num_tools_half:(i+1)*num_tools_half]:
-            tool_path, _tool_cwl = tools[tool]
-            attrs = {'shape': 'box', 'style': 'rounded, filled'}
-            graph.node(Path(tool_path).stem, fillcolor='lightblue', fontsize="24", width='0.75', **attrs)
-        # NOTE: Since there are no edges in this DAG and thus no edge constraints,
-        # the layout algorithm for this .render() call is fast. (about 1 second)
-        graph.render(format='png')
-
-
-def add_subgraphs(graph_settings: Dict[str, Any],
+def add_subgraphs(graph_settings: GraphSettings,
                   graph: GraphReps,
-                  sibling_subgraphs: List[GraphReps],
+                  sibling_subgraphs: list[GraphReps],
                   namespaces: Namespaces,
-                  step_1_names: List[str],
-                  steps_ranksame: List[str]) -> None:
+                  step_1_names: list[str],
+                  steps_ranksame: list[str]) -> None:
     """Add all subgraphs to the current graph, except for GraphViz subgraphs
     below a given depth, which allows us to hide irrelevant details.
 
     Args:
-        graph_settings (Dict[str, Any]): The settings for graphviz visualization
+        graph_settings (GraphSettings): The settings for graphviz visualization
         graph (GraphReps): A tuple of a GraphViz DiGraph and a networkx DiGraph
-        sibling_subgraphs (List[Graph]): The subgraphs of the immediate children of the current workflow
+        sibling_subgraphs (list[Graph]): The subgraphs of the immediate children of the current workflow
         namespaces (Namespaces): Specifies the path in the AST of the current subworkflow
-        step_1_names (List[str]): The names of the first step
-        steps_ranksame (List[str]): Additional node names to be aligned using ranksame
+        step_1_names (list[str]): The names of the first step
+        steps_ranksame (list[str]): Additional node names to be aligned using ranksame
     """
     graph_gv = graph.graphviz
     graph_nx = graph.networkx
@@ -220,18 +149,11 @@ def add_subgraphs(graph_settings: Dict[str, Any],
     for sibling in sibling_subgraphs:
         graph.graphdata.subgraphs.append(sibling.graphdata)
     # Align the cluster subgraphs using the same rank as the first node of each subgraph.
-    # See https://stackoverflow.com/questions/6824431/placing-clusters-on-the-same-rank-in-graphviz
     if len(namespaces) < graph_settings['graph_inline_depth']:
         step_1_names_display = [name for name in step_1_names if len(
             name.split('___')) < 2 + graph_settings['graph_inline_depth']]
-        if len(step_1_names_display) > 1:
-            nodes_same_rank = '\t{rank=same; ' + '; '.join(step_1_names_display) + '}\n'
-            graph_gv.body.append(nodes_same_rank)
-            graph.graphdata.ranksame = step_1_names_display
-        if len(steps_ranksame) > 1:
-            nodes_same_rank = '\t{rank=same; ' + '; '.join(steps_ranksame) + '}\n'
-            graph_gv.body.append(nodes_same_rank)
-            graph.graphdata.ranksame = steps_ranksame
+        _add_ranksame(graph, step_1_names_display)
+        _add_ranksame(graph, steps_ranksame)
 
 
 def get_graph_reps(name: str) -> GraphReps:

@@ -1,3 +1,8 @@
+from sophios.wic_types import PluginNodeConfig
+
+_DIRECTORY_TYPES = {"directory", "file", "path", "collection", "csvCollection"}
+
+
 def is_directory(input_dict: dict) -> bool:
     """Check if the given input dictionary represents a directory.
 
@@ -7,27 +12,22 @@ def is_directory(input_dict: dict) -> bool:
     Returns:
         bool: True if the input represents a directory, False otherwise.
     """
+    if input_dict.get("type", "") in _DIRECTORY_TYPES:
+        return True
 
-    is_dir: bool = input_dict.get("type", "") == "directory" \
-        or input_dict.get("type", "") == "file" \
-        or input_dict.get("type", "") == "path" \
-        or input_dict.get("type", "") == "collection" \
-        or input_dict.get("type", "") == "csvCollection" \
-        or input_dict.get("name", "").lower() == "file" \
-        or input_dict.get("name", "").lower().endswith("path") \
-        or input_dict.get("name", "").lower().endswith("dir")
-
+    name = input_dict.get("name", "").lower()
+    is_dir: bool = name == "file" or name.endswith("path") or name.endswith("dir")
     return is_dir
 
 
-def get_node_config(plugin: dict) -> dict:
+def get_node_config(plugin: dict) -> PluginNodeConfig:
     """Get the UI configuration for a specific plugin.
 
     Args:
         plugin (dict): The plugin dictionary containing UI and inputs.
 
     Returns:
-        dict: A dictionary containing UI inputs, non-UI inputs, and outputs.
+        PluginNodeConfig: A dictionary containing UI inputs, non-UI inputs, and outputs.
     """
     uis = plugin.get("ui", [])
     plugin_inputs = plugin.get("inputs", [])
@@ -36,36 +36,34 @@ def get_node_config(plugin: dict) -> dict:
     non_ui_inputs = []  # circle inlets on the left side of the node
     ui_inputs = []  # UI inputs such as text fields, checkboxes, etc.
 
-    for i in range(len(plugin_inputs) - 1, -1, -1):
-        input = plugin_inputs[i]
-
+    for plugin_input in reversed(plugin_inputs):
         # find the UI element that corresponds to this input
         ui_input = next(
-            (x for x in uis if "key" in x and x["key"] == "inputs." + input["name"]),
+            (x for x in uis if "key" in x and x["key"] == "inputs." + plugin_input["name"]),
             None,
         )
-        is_dir = is_directory(input)
+        is_dir = is_directory(plugin_input)
 
         # if input is a directory - move it to the non-UI section
         if is_dir:
-            non_ui_inputs.append(input)
+            non_ui_inputs.append(plugin_input)
 
         # in some cases UI is missing for the input, so we need to create it
         # but only if it's not a directory
         if not ui_input and not is_dir:
             calculated_ui_input = {
-                "key": "inputs." + input["name"],
-                "type": input["type"],
-                "title": input["name"],
-                "required": input["required"],
-                "format": input["format"],
+                "key": "inputs." + plugin_input["name"],
+                "type": plugin_input["type"],
+                "title": plugin_input["name"],
+                "required": plugin_input["required"],
+                "format": plugin_input["format"],
             }
 
             ui_inputs.append(calculated_ui_input)
 
         if ui_input and not is_dir:
-            ui_input["required"] = input["required"]
-            ui_input["format"] = input["format"]
+            ui_input["required"] = plugin_input["required"]
+            ui_input["format"] = plugin_input["format"]
             ui_inputs.append(ui_input)
 
     outputs = plugin.get("outputs", [])
@@ -80,5 +78,5 @@ def get_node_config(plugin: dict) -> dict:
         if ui_output:
             ui_inputs.append(ui_output)
 
-    result = {"ui": ui_inputs, "inputs": non_ui_inputs, "outputs": outputs}
+    result: PluginNodeConfig = {"ui": ui_inputs, "inputs": non_ui_inputs, "outputs": outputs}
     return result

@@ -1,13 +1,14 @@
 
 import copy
+from collections import deque
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any
 import json
 import yaml
 from jsonschema import Draft202012Validator
-from sophios.utils_yaml import wic_loader
+from sophios.utils_yaml import wic_loader, TAG_ANCHOR, TAG_ALIAS, TAG_INLINE_INPUT, KEY_ANCHOR
 
-from sophios.wic_types import Json, Cwl
+from sophios.wic_types import Json, Cwl, PluginNodeConfig
 from sophios.api.utils.ict.ict_spec.model import ICT
 from sophios.api.utils.ict.ict_spec.cast import cast_to_ict
 from sophios.api.utils.wfb_util import get_node_config
@@ -18,14 +19,14 @@ with open(SCHEMA_FILE, 'r', encoding='utf-8') as f:
     SCHEMA = json.load(f)
 
 
-def del_irrelevant_keys(ldict: List[Dict[Any, Any]], relevant_keys: List[Any]) -> None:
+def del_irrelevant_keys(dicts: list[dict[Any, Any]], relevant_keys: list[Any]) -> None:
     """deletes irrelevant keys from every dict in the list of dicts"""
-    for elem in ldict:
-        ekeys = list(elem.keys())
-        for ek in ekeys:
-            if ek not in relevant_keys:
+    for elem in dicts:
+        keys = list(elem.keys())
+        for key in keys:
+            if key not in relevant_keys:
                 # delete the key if it exists
-                elem.pop(ek, None)
+                elem.pop(key, None)
 
 
 def validate_schema_and_object(schema: Json, jobj: Json) -> bool:
@@ -56,21 +57,26 @@ def normalize_plugin_ui(wfb_data: Json) -> None:
             ui_item.setdefault("type", source.get("type", "string"))
 
 
-def extract_state(inp: Json) -> Json:
+def _find_by_id(items: list[Json], key: str, value: Any) -> Json | None:
+    """Return the first item whose `key` field equals `value`, or None if none match."""
+    return next((item for item in items if item[key] == value), None)
+
+
+def extract_state(wfb_payload: Json) -> Json:
     """Extract only the state information from the incoming wfb object.
        It includes converting "ICT" nodes to "CLT" using "plugins" tag of the object.
     """
     inp_restrict: Json = {}
-    if not inp.get('plugins'):
-        inp_restrict = copy.deepcopy(inp['state'])
+    if not wfb_payload.get('plugins'):
+        inp_restrict = copy.deepcopy(wfb_payload['state'])
     else:
-        inp_inter = copy.deepcopy(inp)
+        inp_inter = copy.deepcopy(wfb_payload)
         # drop all 'internal' nodes and all edges with 'internal' nodes
-        step_nodes = [snode for snode in inp['state']
+        step_nodes = [snode for snode in wfb_payload['state']
                       ['nodes'] if not snode['internal']]
         step_node_ids = [step_node['id'] for step_node in step_nodes]
-        step_edges = [edg for edg in inp_inter['state']['links'] if edg['sourceId']
-                      in step_node_ids and edg['targetId'] in step_node_ids]
+        step_edges = [edge for edge in inp_inter['state']['links'] if edge['sourceId']
+                      in step_node_ids and edge['targetId'] in step_node_ids]
         # overwrite 'links' and 'nodes'
         inp_inter['state'].pop('nodes', None)
         inp_inter['state'].pop('links', None)
@@ -82,8 +88,7 @@ def extract_state(inp: Json) -> Json:
         # Here goes the ICT to CLT extraction logic
         for node in inp_inter['state']['nodes']:
             node_pid = node["pluginId"]
-            plugin = next(
-                (ict for ict in plugins if ict['pid'] == node_pid), None)
+            plugin = _find_by_id(plugins, 'pid', node_pid)
             clt: Json = {}
             if plugin:
                 # by default have network access true
@@ -95,9 +100,9 @@ def extract_state(inp: Json) -> Json:
     return inp_restrict
 
 
-def raw_wfb_to_lean_wfb(inp: Json) -> Json:
+def raw_wfb_to_lean_wfb(wfb_payload: Json) -> Json:
     """Drop all the unnecessary info from incoming wfb object"""
-    inp_restrict = extract_state(inp)
+    inp_restrict = extract_state(wfb_payload)
     keys = list(inp_restrict.keys())
     # To avoid deserialization
     # required attributes from schema
@@ -111,13 +116,13 @@ def raw_wfb_to_lean_wfb(inp: Json) -> Json:
         if k not in prop_req:
             del inp_restrict[k]
         elif k == 'links':
-            lems = inp_restrict[k]
+            link_items = inp_restrict[k]
             rel_links_keys = links_req + do_not_rem_links_prop
-            del_irrelevant_keys(lems, rel_links_keys)
+            del_irrelevant_keys(link_items, rel_links_keys)
         elif k == 'nodes':
-            nems = inp_restrict[k]
+            node_items = inp_restrict[k]
             rel_nodes_keys = nodes_req + do_not_rem_nodes_prop
-            del_irrelevant_keys(nems, rel_nodes_keys)
+            del_irrelevant_keys(node_items, rel_nodes_keys)
 
     return inp_restrict
 
@@ -149,15 +154,12 @@ def get_topological_order(links: list[dict[str, str]]) -> list[str]:
         in_degree[target] += 1
 
     # Initialize queue with nodes that have 0 in-degree
-    queue: list[str] = []
-    for node in in_degree:
-        if in_degree[node] == 0:
-            queue.append(node)
+    queue: deque[str] = deque(node for node, degree in in_degree.items() if degree == 0)
 
     # Process the queue
     result: list[str] = []
     while queue:
-        node = queue.pop(0)
+        node = queue.popleft()
         result.append(node)
 
         # Reduce in-degree of neighbors
@@ -169,34 +171,53 @@ def get_topological_order(links: list[dict[str, str]]) -> list[str]:
     return result
 
 
-def wfb_to_wic(inp: Json, plugins: List[dict[str, Any]]) -> Cwl:
+def _tag_value(tag: str, value: Any) -> dict:
+    """Tag a value with a wic yaml tag (TAG_ANCHOR/TAG_ALIAS/TAG_INLINE_INPUT)."""
+    tagged: dict = yaml.load(f'{tag} ' + str(value), Loader=wic_loader())
+    return tagged
+
+
+def _find_edge_nodes(edge: Json, nodes: list[Json]) -> tuple[Json, Json]:
+    """Look up an edge's source and target nodes by id, asserting both exist."""
+    src_node = _find_by_id(nodes, 'id', edge['sourceId'])
+    tgt_node = _find_by_id(nodes, 'id', edge['targetId'])
+    assert src_node, f'output(s) of source node of edge{edge} must exist!'
+    assert tgt_node, f'input(s) of target node of edge{edge} must exist!'
+    return src_node, tgt_node
+
+
+def _resolve_wic_anchor(value: Any) -> Any:
+    """Unwrap a `!&`-tagged (wic_anchor) output value to its underlying value."""
+    if isinstance(value, dict) and KEY_ANCHOR in value:
+        return value[KEY_ANCHOR]
+    return value
+
+
+def _build_plugin_config_map(plugins: list[dict[str, Any]]) -> dict[str, PluginNodeConfig]:
+    """Map each plugin's pid to its UI-derived input/output configuration."""
+    config_map: dict[str, PluginNodeConfig] = {}
+    for plugin in plugins:
+        pid: str = plugin.get("pid", "")
+        if pid == "":
+            continue
+        config_map[pid] = get_node_config(plugin)
+    return config_map
+
+
+def wfb_to_wic(wfb_payload: Json, plugins: list[dict[str, Any]]) -> Cwl:
     """Convert lean wfb json to compliant wic"""
     def sanitize_step_id(raw: Any) -> str:
-        """Normalize a candidate step id into a WIC-friendly identifier.
-
-        Args:
-            raw (Any): Candidate identifier value.
-
-        Returns:
-            str: Sanitized identifier, or the empty string if none can be derived.
-        """
+        """Normalize a candidate step id into a WIC-friendly identifier."""
         return str(raw).strip().replace(' ', '_').replace('/', '_')
 
     def node_to_step_id(node: Json) -> str:
-        """Derive a stable non-empty WIC step id from a WFB node.
-
-        Args:
-            node (Json): Workflow-builder node object.
-
-        Returns:
-            str: Non-empty step identifier suitable for WIC/CWL workflows.
-        """
+        """Derive a stable non-empty WIC step id from a WFB node."""
         cached_step_id = sanitize_step_id(node.get('_wic_step_id', ''))
         if cached_step_id != '':
             return cached_step_id
 
         plugin_id = sanitize_step_id(
-            str(node.get('pluginId', '')).split('@')[0])
+            str(node.get('pluginId', '')).split('@', maxsplit=1)[0])
         if plugin_id != '':
             return plugin_id
 
@@ -207,20 +228,15 @@ def wfb_to_wic(inp: Json, plugins: List[dict[str, Any]]) -> Cwl:
         return f"step_{node.get('id', 'unknown')}"
 
     # non-schema preserving changes
-    inp_restrict = copy.deepcopy(inp)
-    plugin_config_map: dict[str, dict] = {}
-    for plugin in plugins:
-        pid: str = plugin.get("pid", "")
-        if pid == "":
-            continue
-        plugin_config_map[pid] = get_node_config(plugin)
+    inp_restrict = copy.deepcopy(wfb_payload)
+    plugin_config_map = _build_plugin_config_map(plugins)
 
     for node in inp_restrict['nodes']:
         node['_wic_step_id'] = node_to_step_id(node)
         if node.get('settings'):
             node['in'] = node['settings'].get('inputs')
             if node['settings'].get('outputs'):
-                node['out'] = list({k: yaml.load('!& ' + v, Loader=wic_loader())} for k, v in node['settings']
+                node['out'] = list({k: _tag_value(TAG_ANCHOR, v)} for k, v in node['settings']
                                    # outputs always have to be list
                                    ['outputs'].items())
             # remove these (now) superfluous keys
@@ -229,9 +245,7 @@ def wfb_to_wic(inp: Json, plugins: List[dict[str, Any]]) -> Cwl:
 
     # setting the inputs of the non-sink nodes i.e. whose input doesn't depend on any other node's output
     # first get all target node ids
-    target_node_ids = []
-    for edg in inp_restrict['links']:
-        target_node_ids.append(edg['targetId'])
+    target_node_ids = [edge['targetId'] for edge in inp_restrict['links']]
     # keep track of all the args that processed
     node_arg_map: dict[int, set] = {}
     # now set inputs on non-sink nodes as inline input '!ii '
@@ -244,52 +258,40 @@ def wfb_to_wic(inp: Json, plugins: List[dict[str, Any]]) -> Cwl:
         if node.get('in'):
             for nkey in node['in']:
                 if str(node['in'][nkey]) != "":
-                    node['in'][nkey] = yaml.load(
-                        '!ii ' + str(node['in'][nkey]), Loader=wic_loader())
+                    node['in'][nkey] = _tag_value(TAG_INLINE_INPUT, node['in'][nkey])
                     node_arg_map[node['id']].add(nkey)
 
     if plugins != []:  # use the look up logic similar to WFB
-        for edg in inp_restrict['links']:
+        for edge in inp_restrict['links']:
             # links = edge. nodes and edges is the correct terminology!
-            src_id = edg['sourceId']
-            tgt_id = edg['targetId']
-            src_node = next(
-                (node for node in inp_restrict['nodes'] if node['id'] == src_id), None)
-            tgt_node = next(
-                (node for node in inp_restrict['nodes'] if node['id'] == tgt_id), None)
-            assert src_node, f'output(s) of source node of edge{edg} must exist!'
-            assert tgt_node, f'input(s) of target node of edge{edg} must exist!'
+            src_id = edge['sourceId']
+            tgt_id = edge['targetId']
+            src_node, tgt_node = _find_edge_nodes(edge, inp_restrict['nodes'])
             if src_id not in node_arg_map:
                 node_arg_map[src_id] = set()
 
             if tgt_id not in node_arg_map:
                 node_arg_map[tgt_id] = set()
 
-            src_node_ui_config = plugin_config_map.get(
-                src_node['pluginId'], None)
-            tgt_node_ui_config = plugin_config_map.get(
-                tgt_node['pluginId'], None)
+            src_node_ui_config = plugin_config_map.get(src_node['pluginId'], None)
+            tgt_node_ui_config = plugin_config_map.get(tgt_node['pluginId'], None)
             if src_node_ui_config and tgt_node_ui_config:
-                inlet_index = edg['inletIndex']
-                outlet_index = edg['outletIndex']
+                inlet_index = edge['inletIndex']
+                outlet_index = edge['outletIndex']
 
                 src_node_out_arg = src_node_ui_config['outputs'][outlet_index]["name"]
                 tgt_node_in_arg = tgt_node_ui_config['inputs'][inlet_index]["name"]
 
                 if tgt_node.get('in'):
-                    source_output = src_node['out'][0][src_node_out_arg]
-                    if isinstance(source_output, dict) and 'wic_anchor' in source_output:
-                        source_output = source_output["wic_anchor"]
-                    tgt_node['in'][tgt_node_in_arg] = yaml.load(
-                        '!* ' + str(source_output), Loader=wic_loader())
+                    source_output = _resolve_wic_anchor(src_node['out'][0][src_node_out_arg])
+                    tgt_node['in'][tgt_node_in_arg] = _tag_value(TAG_ALIAS, source_output)
                     node_arg_map[tgt_id].add(tgt_node_in_arg)
 
         for node in inp_restrict['nodes']:
             output_dict = node['settings'].get('outputs', {})
             for key in output_dict:
                 if str(output_dict[key]) != "":
-                    node['in'][key] = yaml.load(
-                        '!ii ' + str(output_dict[key]), Loader=wic_loader())
+                    node['in'][key] = _tag_value(TAG_INLINE_INPUT, output_dict[key])
                     node_arg_map[node['id']].add(key)
             node.pop('settings', None)
 
@@ -299,22 +301,13 @@ def wfb_to_wic(inp: Json, plugins: List[dict[str, Any]]) -> Cwl:
                     unprocessed_args = unprocessed_args.difference(
                         node_arg_map[node['id']])
                 for arg in unprocessed_args:
-                    node['in'][arg] = yaml.load(
-                        '!ii ' + str(node['in'][arg]), Loader=wic_loader())
+                    node['in'][arg] = _tag_value(TAG_INLINE_INPUT, node['in'][arg])
     else:  # No plugins, use the node/link mapping directly.
         for node in inp_restrict['nodes']:
             node.pop('settings', None)
 
-        for edg in inp_restrict['links']:
-            # links = edge. nodes and edges is the correct terminology!
-            src_id = edg['sourceId']
-            tgt_id = edg['targetId']
-            src_node = next(
-                (node for node in inp_restrict['nodes'] if node['id'] == src_id), None)
-            tgt_node = next(
-                (node for node in inp_restrict['nodes'] if node['id'] == tgt_id), None)
-            assert src_node, f'output(s) of source node of edge{edg} must exist!'
-            assert tgt_node, f'input(s) of target node of edge{edg} must exist!'
+        for edge in inp_restrict['links']:
+            src_node, tgt_node = _find_edge_nodes(edge, inp_restrict['nodes'])
             # flattened list of keys
             if src_node.get('out') and tgt_node.get('in'):
                 src_out_keys = [sk for sout in src_node['out']
@@ -328,26 +321,20 @@ def wfb_to_wic(inp: Json, plugins: List[dict[str, Any]]) -> Cwl:
                     if tgt_node['in'].get(sk):
                         # if the output is a dict, it is a wic_anchor, so we need to get the anchor
                         # and use that as the input
-                        src_node_out_arg = src_node['out'][0][sk]
-                        source_output = src_node['out'][0][sk]
-                        if isinstance(source_output, dict) and 'wic_anchor' in source_output:
-                            source_output = source_output["wic_anchor"]
-                        tgt_node['in'][sk] = yaml.load(
-                            '!* ' + str(source_output), Loader=wic_loader())
+                        source_output = _resolve_wic_anchor(src_node['out'][0][sk])
+                        tgt_node['in'][sk] = _tag_value(TAG_ALIAS, source_output)
                 # the inputs which aren't dependent on previous/other steps
                 # they are by default inline input
                 diff_keys = set(tgt_in_keys) - set(src_out_keys)
                 for dfk in diff_keys:
-                    tgt_node['in'][dfk] = yaml.load(
-                        '!ii ' + str(tgt_node['in'][dfk]), Loader=wic_loader())
+                    tgt_node['in'][dfk] = _tag_value(TAG_INLINE_INPUT, tgt_node['in'][dfk])
 
     workflow_temp: Cwl = {}
     if inp_restrict["links"] != []:
         node_order = get_topological_order(inp_restrict["links"])
         workflow_temp["steps"] = []
-        for id in node_order:
-            node = next(
-                (n for n in inp_restrict["nodes"] if n["id"] == id), None)
+        for node_id in node_order:
+            node = _find_by_id(inp_restrict["nodes"], "id", node_id)
             if node:
                 # just reuse name as node's pluginId, wic id is same as wfb name
                 node['id'] = node_to_step_id(node)
@@ -367,12 +354,12 @@ def wfb_to_wic(inp: Json, plugins: List[dict[str, Any]]) -> Cwl:
     return workflow_temp
 
 
-def ict_to_clt(ict: Union[ICT, Path, str, dict], network_access: bool = False) -> dict:
+def ict_to_clt(ict: ICT | Path | str | dict, network_access: bool = False) -> dict:
     """
     Convert ICT to CWL CommandLineTool
 
     Args:
-        ict (Union[ICT, Path, str, dict]): ICT to convert to CLT. ICT can be an ICT object,
+        ict (ICT | Path | str | dict): ICT to convert to CLT. ICT can be an ICT object,
         a path to a yaml file, or a dictionary containing ICT
 
     Returns:
@@ -401,27 +388,24 @@ def update_payload_missing_inputs_outputs(wfb_data: Json) -> Json:
     plugins = wfb_data_copy["plugins"]
 
     if plugins != []:
-        plugin_config_map: dict[str, dict] = {}
+        plugin_config_map = _build_plugin_config_map(plugins)
         plugin_output_map: dict[str, list] = {}
         for plugin in plugins:
             pid: str = plugin.get("pid", "")
             if pid == "":
                 continue
-            plugin_config_map[pid] = get_node_config(plugin)
             plugin_output_map[pid] = plugin.get("outputs", [])
 
         # add missing outputs
         for node in nodes:
-            base_name = node["name"].replace(
-                " ", "").lower() + "_" + str(node["id"])
+            base_name = node["name"].replace(" ", "").lower() + "_" + str(node["id"])
             if "outputs" not in node["settings"]:
                 node["settings"]["outputs"] = {}
             node_outputs = node["settings"]["outputs"]
             plugin_outputs: list = plugin_output_map.get(node["pluginId"], [])
             for output in plugin_outputs:
                 if output["type"] == "path" and output["name"] not in node_outputs:
-                    node_outputs[output["name"]] = base_name + \
-                        "-" + output["name"]
+                    node_outputs[output["name"]] = base_name + "-" + output["name"]
 
         # hashmap of node id to nodes for fast node lookup
         nodes_dict = {node['id']: node for node in nodes}
@@ -430,10 +414,8 @@ def update_payload_missing_inputs_outputs(wfb_data: Json) -> Json:
             src_node = nodes_dict[link['sourceId']]
             tgt_node = nodes_dict[link['targetId']]
 
-            src_node_ui_config = plugin_config_map.get(
-                src_node['pluginId'], None)
-            tgt_node_ui_config = plugin_config_map.get(
-                tgt_node['pluginId'], None)
+            src_node_ui_config = plugin_config_map.get(src_node['pluginId'], None)
+            tgt_node_ui_config = plugin_config_map.get(tgt_node['pluginId'], None)
 
             if src_node_ui_config and tgt_node_ui_config:
                 inlet_index = link['inletIndex']
