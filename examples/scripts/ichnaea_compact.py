@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from pathlib import Path
-from typing import Dict
 
 from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
 
@@ -74,7 +73,7 @@ def build_autoseg_CLT() -> CommandLineTool:
     )
 
 
-def workflow(input_dicts: Dict[str, str], workflow_name: str) -> Workflow:
+def workflow(input_dicts: dict[str, str], workflow_name: str) -> Workflow:
     """Build the test workflow and return Workflow object"""
     # =========== BUILD CLT ==========================
     autoseg_clt = build_autoseg_CLT()  # directly building the CLT in memory

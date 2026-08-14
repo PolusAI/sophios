@@ -1,7 +1,7 @@
 """IO objects for ICT."""
 
 import enum
-from typing import Optional, Union, Any
+from typing import Any
 
 from pydantic import BaseModel, Field
 from sophios.api.utils.wfb_util import is_directory
@@ -50,12 +50,12 @@ class IO(BaseModel):
         description="Defines the parameter passed to the ICT tool based on broad categories of basic types.",
         examples=["string"],
     )
-    description: Optional[str] = Field(
+    description: str | None = Field(
         None,
         description="Short text description of expected value for field.",
         examples=["Algorithm type for thresholding"],
     )
-    defaultValue: Optional[Any] = Field(
+    defaultValue: Any | None = Field(
         None,
         description="Optional default value.",
         examples=["42"],
@@ -65,7 +65,7 @@ class IO(BaseModel):
         + "field needs an associated value.",
         examples=["true"],
     )
-    io_format: Union[list[str], dict] = Field(
+    io_format: list[str] | dict = Field(
         ...,
         alias="format",
         description="Defines the actual value(s) that the input/output parameter"
@@ -121,8 +121,7 @@ class IO(BaseModel):
                 }
                 if (
                     not isinstance(self.io_format, list)
-                    and self.io_format.get("uri", None)
-                    is not None  # pylint: disable=no-member
+                    and self.io_format.get("uri", None) is not None  # pylint: disable=no-member
                 ):
                     # pylint: disable-next=unsubscriptable-object
                     cwl_dict_["format"] = self.convert_uri_format(self.io_format["uri"])

@@ -52,11 +52,11 @@ def import_python_file(python_module_name: str, python_file_path: Path) -> Modul
             if spec.loader:
                 spec.loader.exec_module(module_)  # guard behind if to satisfy mypy
             else:
-                raise Exception
+                raise ImportError
         except Exception as e:
-            raise Exception(f'Error! Cannot load python_script {python_file_path}') from e
+            raise ImportError(f'Error! Cannot load python_script {python_file_path}') from e
     else:
-        raise Exception(f'Error! Cannot load python_script spec {spec} from file\n{python_file_path}')
+        raise ImportError(f'Error! Cannot load python_script spec {spec} from file\n{python_file_path}')
     return module_
 
 
@@ -67,7 +67,7 @@ def get_main_args(module_: ModuleType) -> dict[str, Any]:
         module_ (ModuleType): A ModuleType object returned from import_python_file
 
     Returns:
-        Dict[str, Any]: A dictionary of keys value pairs
+        dict[str, Any]: A dictionary of keys value pairs
     """
     # importing at the top-level causes a circular import error
     # (jsonschema transitively imports inspect)
@@ -84,7 +84,7 @@ def check_args_match_inputs(module_: ModuleType, args: dict[str, Any], check: bo
 
     Args:
         module_ (ModuleType): A ModuleType object returned from import_python_file
-        args (Dict[str, Any]): A dictionary of keys value pairs
+        args (dict[str, Any]): A dictionary of keys value pairs
     """
     error = False
     for arg in args:
@@ -106,12 +106,12 @@ def generate_CWL_CommandLineTool(module_inputs: dict[str, Any], module_outputs: 
     """Generates a CWL CommandLineTool for an arbitrary (annotated) python script.
 
     Args:
-        module_inputs (Dict[str, Any]): The top-level inputs attribute of the python module.
-        module_outputs (Dict[str, Any]): The top-level inputs attribute of the python module.
+        module_inputs (dict[str, Any]): The top-level inputs attribute of the python module.
+        module_outputs (dict[str, Any]): The top-level inputs attribute of the python module.
         python_script_docker_pull (str): The username/image to use with docker pull ...
 
     Returns:
-        Dict[str, Any]: A CWL CommandLineTool with the given inputs and outputs.
+        dict[str, Any]: A CWL CommandLineTool with the given inputs and outputs.
     """
     yaml_tree: dict[str, Any] = {}
     yaml_tree['cwlVersion'] = 'v1.0'
@@ -155,7 +155,7 @@ def get_module(python_script_mod: str, python_script_path: Path, yml_args: dict[
     Args:
         python_script_mod (str): The module name of the given python script.
         python_script_path (Path): The path to the given python script.
-        yml_args (Dict[str, Any]): The contents of the python_script in: yml tag.
+        yml_args (dict[str, Any]): The contents of the python_script in: yml tag.
 
     Returns:
         ModuleType: The Module object associated with the given python script.

@@ -33,13 +33,15 @@ def clt_dict(ict_: "ICT", network_access: bool) -> dict[str, Any]:
         "class": "CommandLineTool",
         "cwlVersion": "v1.2",
         "inputs": {
-            io.name: io._input_to_cwl()  # pylint: disable=W0212
+            # IO deliberately keeps _input_to_cwl/_output_to_cwl protected: they are
+            # implementation details of the ICT<->CWL conversion that only this module needs.
+            io.name: io._input_to_cwl()  # pylint: disable=protected-access
             for io in ict_.inputs + ict_.outputs
         },
         "outputs": {
-            io.name: io._output_to_cwl(
+            io.name: io._output_to_cwl(  # pylint: disable=protected-access
                 [io.name for io in ict_.outputs]
-            )  # pylint: disable=W0212
+            )
             for io in ict_.outputs
         },
         "requirements": requirements(ict_, network_access),

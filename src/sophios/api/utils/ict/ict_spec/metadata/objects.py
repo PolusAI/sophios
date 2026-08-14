@@ -3,7 +3,7 @@
 import re
 from functools import singledispatchmethod
 from pathlib import Path
-from typing import Annotated, Any, Optional, Union
+from typing import Annotated, Any
 
 from pydantic import (
     AnyHttpUrl,
@@ -118,15 +118,15 @@ class Metadata(BaseModel):
         ),
         examples=["wipp/threshold:1.1.1"],
     )
-    entrypoint: Union[EntrypointPath, str] = Field(
+    entrypoint: EntrypointPath | str = Field(
         description="Absolute path to initial script or command within packaged image."
     )
-    title: Optional[str] = Field(
+    title: str | None = Field(
         None,
         description="(optional) Descriptive human-readable name, will default to `name` if omitted.",
         examples=["Thresholding Plugin"],
     )
-    description: Optional[str] = Field(
+    description: str | None = Field(
         None,
         description="(optional) Brief description of plugin.",
         examples=["Thresholding methods from ImageJ"],
@@ -138,7 +138,7 @@ class Metadata(BaseModel):
         ),
         examples=["Mohammed Ouladi"],
     )
-    contact: Union[EmailStr, AnyHttpUrl] = Field(
+    contact: EmailStr | AnyHttpUrl = Field(
         description="Email or link to point of contact (ie. GitHub user page) for questions or issues.",
         examples=["mohammed.ouladi@labshare.org"],
     )
@@ -146,11 +146,11 @@ class Metadata(BaseModel):
         description="Url for public or private repository hosting source code.",
         examples=["https://github.com/polusai/polus-plugins"],
     )
-    documentation: Optional[AnyHttpUrl] = Field(
+    documentation: AnyHttpUrl | None = Field(
         None,
         description="Url for hosted documentation about using or modifying the plugin.",
     )
-    citation: Optional[DOI] = Field(
+    citation: DOI | None = Field(
         None,
         description="DOI link to relevant citation, plugin user should use this citation when using this plugin.",
     )

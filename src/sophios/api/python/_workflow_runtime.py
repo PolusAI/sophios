@@ -10,14 +10,16 @@ Python-facing workflow authoring.
 # legacy compiler/runtime internals, so reaching internal state is intentional.
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING, Any, Mapping, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 import yaml
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
 from sophios import compiler, input_output, plugins, post_compile as pc, run_local as rl
+from sophios.input_output import dump_wic_yaml as _dump_yaml
 from sophios.cli import get_dicts_for_compilation, get_known_and_unknown_args
 from sophios.runtime_inputs import normalize_rose_tree_cwl, normalize_rose_tree_job_inputs
 from sophios.utils import convert_args_dict_to_args_list, step_name_str
@@ -353,16 +355,6 @@ def _wic_output_path(workflow: "Workflow", path: str | Path | None) -> Path:
     if output_path.suffix:
         raise ValueError("path must be a .wic file or a directory")
     return output_path / f"{workflow.process_name}.wic"
-
-
-def _dump_yaml(document: Mapping[str, Any]) -> str:
-    return yaml.dump(
-        document,
-        sort_keys=False,
-        line_break="\n",
-        indent=2,
-        Dumper=input_output.NoAliasDumper,
-    )
 
 
 def workflow_wic_yaml(workflow: "Workflow", *, inline_subworkflows: bool = True) -> str:

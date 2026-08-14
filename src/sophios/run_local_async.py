@@ -7,9 +7,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import aiofiles
-import yaml
 
-from sophios.input_output import NoAliasDumper
+from sophios.input_output import dump_wic_yaml
 from sophios.runtime_inputs import normalize_cwl_document, normalize_job_inputs
 from sophios.wic_types import Json
 
@@ -135,13 +134,7 @@ async def _stream_to_file(stream: Any, filename: Path) -> None:
 
 
 async def _write_yaml(path: Path, document: Json, *, shebang: bool = False) -> None:
-    yaml_content = yaml.dump(
-        document,
-        sort_keys=False,
-        line_break="\n",
-        indent=2,
-        Dumper=NoAliasDumper,
-    )
+    yaml_content = dump_wic_yaml(document)
     async with aiofiles.open(path, mode="w", encoding="utf-8") as file:
         if shebang:
             await file.write("#!/usr/bin/env cwl-runner\n")

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
-from typing import Any, Dict, Union, List
+from typing import Any, TypeAlias
 
 import cwltool.load_tool
 import yaml
@@ -39,19 +39,22 @@ class NoPartialFailureNullWarning(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         err_str = "Source is from conditional step and may produce `null`"
         # this will indiscriminately filter this error string
-        return not err_str in record.getMessage()
+        return err_str not in record.getMessage()
 
 
 def logging_filters(allow_pf: bool = False) -> None:
+    """Install logging filters that silence known-noisy cwltool/salad log messages.
+
+    Args:
+        allow_pf (bool): Also silence the "may produce `null`" warning emitted
+            for conditional steps when partial failure is enabled.
+    """
     logger_salad = logging.getLogger("salad")
     logger_salad.addFilter(NoPreviouslyDefinedFilter())
     logger_cwltool = logging.getLogger("cwltool")
     logger_cwltool.addFilter(NoResolvedFilter())
     if allow_pf:
         logger_cwltool.addFilter(NoPartialFailureNullWarning())
-
-
-logger_wicad = logging.getLogger("wicautodiscovery")
 
 
 def validate_cwl(cwl_path_str: str) -> None:
@@ -115,17 +118,17 @@ def get_tools_cwl(config: Json, validate_plugins: bool = False, quiet: bool = Fa
 
                 if quiet:
                     # Capture stdout and stderr
-                    if not 'stdout' in tool:
+                    if 'stdout' not in tool:
                         tool.update({'stdout': f'{stem}.out'})
-                    if not 'stderr' in tool:
+                    if 'stderr' not in tool:
                         tool.update({'stderr': f'{stem}.err'})
                 cwl_path_abs = os.path.abspath(cwl_path_str)
                 tools_cwl[StepId(stem, plugin_ns)] = Tool(cwl_path_abs, tool)
     return tools_cwl
 
 
-def cwl_update_outputs_optional(cwl: Cwl, failure_code_range: List[int],
-                                direct_failure_codes: List[int]) -> Cwl:
+def cwl_update_outputs_optional(cwl: Cwl, failure_code_range: list[int],
+                                direct_failure_codes: list[int]) -> Cwl:
     """Updates outputs as optional (if any)
 
     Args:
@@ -152,7 +155,7 @@ def cwl_update_outputs_optional(cwl: Cwl, failure_code_range: List[int],
     return cwl_mod
 
 
-Client = Union[docker.DockerClient, podman.PodmanClient]  # type: ignore
+Client: TypeAlias = docker.DockerClient | podman.PodmanClient  # type: ignore
 
 
 def remove_entrypoints(client: Client, build: Any) -> None:
@@ -175,7 +178,8 @@ def remove_entrypoints(client: Client, build: Any) -> None:
 
     Without entrypoints, to switch between 1 and 2, simply comment out DockerRequirement ... that's it!
     The point is that we want a uniform API so that we can programmatically switch between 1 and 2 in the CI.
-    We want to run the integration tests first, and only push releases to dockerhub when the tests pass (NOT vice versa!).
+    We want to run the integration tests first, and only push releases to dockerhub
+    when the tests pass (NOT vice versa!).
     """
     # Get a list of all Docker images
     images = client.images.list()
@@ -222,8 +226,8 @@ def remove_entrypoints_podman() -> None:
 
 
 def cwl_update_outputs_optional_rosetree(rose_tree: RoseTree,
-                                         failure_code_range: List[int],
-                                         direct_failure_codes: List[int]) -> RoseTree:
+                                         failure_code_range: list[int],
+                                         direct_failure_codes: list[int]) -> RoseTree:
     """Updates outputs optional for every CWL CommandLineTool
 
     Args:
@@ -270,8 +274,7 @@ def dockerPull_append_noentrypoint(cwl: Cwl) -> Cwl:
         cwl_noentrypoint = copy.deepcopy(cwl)
         cwl_noentrypoint['requirements']['DockerRequirement']['dockerPull'] = image_noentrypoint
         return cwl_noentrypoint
-    else:
-        return cwl
+    return cwl
 
 
 def dockerPull_append_noentrypoint_rosetree(rose_tree: RoseTree) -> RoseTree:
@@ -289,9 +292,9 @@ def dockerPull_append_noentrypoint_rosetree(rose_tree: RoseTree) -> RoseTree:
     compiled_cwl_noent = dockerPull_append_noentrypoint(n_d.compiled_cwl)
 
     sub_trees_noent = [dockerPull_append_noentrypoint_rosetree(sub_rose_tree) for sub_rose_tree in rose_tree.sub_trees]
-    node_data_noent = NodeData(n_d.namespaces, n_d.name, n_d.yml, compiled_cwl_noent, n_d.tool, n_d.workflow_inputs_file,
-                               n_d.explicit_edge_defs, n_d.explicit_edge_calls, n_d.graph, n_d.inputs_workflow,
-                               n_d.step_name_1)
+    node_data_noent = NodeData(n_d.namespaces, n_d.name, n_d.yml, compiled_cwl_noent,
+                               n_d.tool, n_d.workflow_inputs_file, n_d.explicit_edge_defs,
+                               n_d.explicit_edge_calls, n_d.graph, n_d.inputs_workflow, n_d.step_name_1)
     return RoseTree(node_data_noent, sub_trees_noent)
 
 
@@ -337,7 +340,7 @@ def cwl_prepend_dockerFile_include_path_rosetree(rose_tree: RoseTree) -> RoseTre
     return RoseTree(node_data_path, sub_trees_path)
 
 
-def get_workflow_paths(config: Json, extension: str) -> Dict[str, Dict[str, Path]]:
+def get_workflow_paths(config: Json, extension: str) -> dict[str, dict[str, Path]]:
     """Uses glob() to recursively find all of the yml workflow definition files
     within any subdirectory of each yml_dir in search_paths_wic.
     NOTE: This function assumes all yml files found are workflow definition files,
@@ -349,11 +352,11 @@ def get_workflow_paths(config: Json, extension: str) -> Dict[str, Dict[str, Path
         extension (str): The filename extension (either 'wic' or 'py')
 
     Returns:
-        Dict[str, Dict[str, Path]]: A dict containing the filepath stem and filepath of each yml file
+        dict[str, dict[str, Path]]: A dict containing the filepath stem and filepath of each yml file
     """
     search_paths_wic_tag = config['search_paths_wic']
     # Glob all of the yml files too, so we don't have to deal with relative paths.
-    yml_paths_all: Dict[str, Dict[str, Path]] = {}
+    yml_paths_all: dict[str, dict[str, Path]] = {}
     for yml_namespace in search_paths_wic_tag:
         yml_dirs = search_paths_wic_tag[yml_namespace]
         for yml_dir in yml_dirs:
@@ -381,9 +384,11 @@ def get_workflow_paths(config: Json, extension: str) -> Dict[str, Dict[str, Path
     return yml_paths_all
 
 
-def get_yml_paths(config: Json) -> Dict[str, Dict[str, Path]]:
+def get_yml_paths(config: Json) -> dict[str, dict[str, Path]]:
+    """Find all `.wic` workflow definition files. See `get_workflow_paths`."""
     return get_workflow_paths(config, 'wic')
 
 
-def get_py_paths(config: Json) -> Dict[str, Dict[str, Path]]:
+def get_py_paths(config: Json) -> dict[str, dict[str, Path]]:
+    """Find all `.py` workflow definition files. See `get_workflow_paths`."""
     return get_workflow_paths(config, 'py')

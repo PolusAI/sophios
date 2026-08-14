@@ -1,6 +1,7 @@
-import pytest
 import json
 import pathlib
+
+import pytest
 
 from sophios.api.utils.converter import ict_to_clt
 

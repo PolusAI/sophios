@@ -1,11 +1,10 @@
 """Parameter and namespace helpers for the Python workflow API."""
 
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Callable, Generic, Iterator, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from ._utils import (contains_any_type,
-                     infer_literal_parameter_type,
                      is_array_type,
                      normalize_parameter_name,
                      normalize_parameter_type,
@@ -30,14 +29,17 @@ class InputBinding:
 
     @property
     def linked(self) -> bool:
+        """Return whether this binding references another parameter rather than an inline literal."""
         return self.kind != "inline"
 
     def legacy_value(self) -> Any:
+        """Return this binding's value in the legacy `.value` compatibility shape."""
         if self.kind == "alias":
             return {"wic_alias": serialize_value(self.value)}
         return self.value
 
     def to_yaml_value(self) -> Any:
+        """Return the CWL-serializable representation of this binding."""
         cwl_key = {"inline": "wic_inline_input", "alias": "wic_alias"}.get(self.kind)
         return self.value if cwl_key is None else {cwl_key: serialize_value(self.value)}
 
@@ -76,13 +78,16 @@ class ParameterStore(Generic[ParameterT]):
     parameters: dict[str, ParameterT] = field(default_factory=dict)
 
     def add(self, parameter: ParameterT, *, name: str | None = None) -> ParameterT:
+        """Store `parameter` under `name` (or its own `.name`) and return it."""
         self.parameters[name or getattr(parameter, "name")] = parameter
         return parameter
 
     def get(self, name: str) -> ParameterT:
+        """Return the stored parameter with the given name."""
         return self.parameters[name]
 
     def ensure(self, name: str, factory: Callable[[str], ParameterT]) -> ParameterT:
+        """Return the existing parameter named `name`, creating it via `factory` if needed."""
         if name not in self.parameters:
             self.parameters[name] = factory(name)
         return self.parameters[name]
@@ -161,27 +166,13 @@ class InputParameter(_ParameterBase):
         """Return the bound value in the legacy compatibility shape."""
         return None if self._binding is None else self._binding.legacy_value()
 
-    def _set_value(self, value: Any, linked: bool = False) -> None:
-        """Translate legacy serialized values into the internal binding model."""
-        match value:
-            case {"wic_alias": alias} if linked:
-                self._set_binding(InputBinding("alias", alias))
-            case {"wic_inline_input": inline_value}:
-                self._set_binding(InputBinding("inline", inline_value))
-                self.set_bound_parameter_type(infer_literal_parameter_type(inline_value))
-            case str() as workflow_name if linked:
-                self._set_binding(InputBinding("workflow", workflow_name))
-            case _:
-                self._set_binding(InputBinding("inline", value))
-                self.set_bound_parameter_type(infer_literal_parameter_type(value))
-                self.linked = linked
-
     def _set_binding(self, binding: InputBinding | None) -> None:
         self._binding = binding
         self.linked = False if binding is None else binding.linked
 
     @property
     def source_parameter(self) -> Any:
+        """Return the upstream output parameter this input is aliased to, if any."""
         return None if self._binding is None or self._binding.kind != "alias" else self._binding.source
 
     def set_bound_parameter_type(self, value: Any) -> None:
@@ -200,9 +191,11 @@ class InputParameter(_ParameterBase):
         )
 
     def is_bound(self) -> bool:
+        """Return whether this input currently has a bound value."""
         return self._binding is not None
 
     def to_yaml_value(self) -> Any:
+        """Return the CWL-serializable representation of this input's binding."""
         return None if self._binding is None else self._binding.to_yaml_value()
 
 
@@ -216,20 +209,24 @@ class OutputParameter(_ParameterBase):
 
     @property
     def value(self) -> Any:
+        """Return the anchor reference for this output, if one has been assigned."""
         return None if self._anchor_name is None else {"wic_anchor": self._anchor_name}
 
     def ensure_anchor(self, suggested_name: str) -> str:
+        """Return this output's anchor name, assigning `suggested_name` if none exists yet."""
         if self._anchor_name is None:
             self._anchor_name = suggested_name
         self.linked = True
         return self._anchor_name
 
     def bind_source(self, source: OutputSourceBinding, source_parameter: Any = None) -> None:
+        """Bind this output to an upstream source and mark it as linked."""
         self._source = source
         self._source_parameter = source_parameter
         self.linked = True
 
     def has_source(self) -> bool:
+        """Return whether this output is bound to a source."""
         return self._source is not None
 
     def to_workflow_output(
@@ -258,16 +255,6 @@ class OutputParameter(_ParameterBase):
             "type": cwl_type,
             "outputSource": self._source.to_output_source(step_id_overrides),
         }
-
-    def _set_value(self, value: Any, linked: bool = False) -> None:
-        match value:
-            case {"wic_anchor": anchor_name}:
-                self._anchor_name = str(anchor_name)
-            case str() as anchor_name:
-                self._anchor_name = str(anchor_name)
-            case None:
-                self._anchor_name = None
-        self.linked = linked or self._anchor_name is not None
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,7 +2,7 @@
 
 import enum
 import re
-from typing import Annotated, Literal, Optional, Union, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, RootModel, field_validator
 
@@ -80,19 +80,19 @@ class UIBase(BaseModel):
         description="User friendly label used in UI.",
         examples=["Thresholding Value"],
     )
-    description: Optional[str] = Field(
+    description: str | None = Field(
         None,
         description="Short user friendly instructions for selecting appropriate parameter.",
         examples=["Enter a threshold value"],
     )
-    customType: Optional[str] = Field(
+    customType: str | None = Field(
         None, description="Optional label for a non-standard expected user interface."
     )
-    condition: Optional[ConditionalStatement] = Field(
+    condition: ConditionalStatement | None = Field(
         None,
         json_schema_extra={"pattern": r"^(inputs|outputs)\.\w+(==|!=|<|>|<=|>=|&&)\w+$"},
-        description="Conditional statement that resolves to a boolean value based on UI configuration and selected value, "
-        + "used to dictate relationship between parameters.",
+        description="Conditional statement that resolves to a boolean value based on UI configuration and selected "
+        "value, used to dictate relationship between parameters.",
         examples=["inputs.thresholdtype=='Manual'"],
     )
 
@@ -100,9 +100,9 @@ class UIBase(BaseModel):
 class UIText(UIBase, extra="forbid"):
     """Any arbitrary length string."""
 
-    default: Optional[str] = Field(None, description="Prefilled value.")
-    regex: Optional[str] = Field(None, description="Regular expression for validation.")
-    toolbar: Optional[bool] = Field(
+    default: str | None = Field(None, description="Prefilled value.")
+    regex: str | None = Field(None, description="Regular expression for validation.")
+    toolbar: bool | None = Field(
         None, description="Boolean value to add text formatting toolbar."
     )
     ui_type: Literal["text"] = Field(
@@ -115,11 +115,11 @@ class UIText(UIBase, extra="forbid"):
 class UINumber(UIBase, extra="forbid"):
     """Any numerical value."""
 
-    default: Optional[Union[int, float]] = Field(None, description="Prefilled value.")
-    integer: Optional[bool] = Field(
+    default: int | float | None = Field(None, description="Prefilled value.")
+    integer: bool | None = Field(
         None, description="Boolean value to force integers only."
     )
-    number_range: Optional[tuple[Union[int, float], Union[int, float]]] = Field(
+    number_range: tuple[int | float, int | float] | None = Field(
         None, alias="range", description="Minimum and maximum range as a tuple."
     )
     ui_type: Literal["number"] = Field(
@@ -132,7 +132,7 @@ class UINumber(UIBase, extra="forbid"):
 class UICheckbox(UIBase, extra="forbid"):
     """Boolean operator, checked for `true` unchecked for `false`."""
 
-    default: Optional[bool] = Field(
+    default: bool | None = Field(
         None, description="Prefilled value, either `true` or `false`."
     )
     ui_type: Literal["checkbox"] = Field(
@@ -146,7 +146,7 @@ class UISelect(UIBase, extra="forbid"):
     """Single string value from a set of options."""
 
     fields: list[str] = Field(description="Required array of options.")
-    optional: Optional[bool] = Field(None, description="Leave blank by default.")
+    optional: bool | None = Field(None, description="Leave blank by default.")
     ui_type: Literal["select"] = Field(
         ...,
         alias="type",
@@ -158,8 +158,8 @@ class UIMultiselect(UIBase, extra="forbid"):
     """One or more string values from a set of options."""
 
     fields: list[str] = Field(description="Required array of options.")
-    optional: Optional[bool] = Field(None, description="Leave blank by default.")
-    limit: Optional[int] = Field(None, description="Maximum number of selections.")
+    optional: bool | None = Field(None, description="Leave blank by default.")
+    limit: int | None = Field(None, description="Maximum number of selections.")
     ui_type: Literal["multiselect"] = Field(
         ...,
         alias="type",
@@ -205,7 +205,7 @@ class UIDatetime(UIBase, extra="forbid"):
 class UIPath(UIBase, extra="forbid"):
     """Absolute or relative path to file/directory using Unix conventions."""
 
-    ext: Optional[list[str]] = Field(
+    ext: list[str] | None = Field(
         None, description="Array of allowed file extensions."
     )
     ui_type: Literal["path"] = Field(
@@ -218,11 +218,11 @@ class UIPath(UIBase, extra="forbid"):
 class UIFile(UIBase, extra="forbid"):
     """User uploaded binary data."""
 
-    ext: Optional[list[str]] = Field(
+    ext: list[str] | None = Field(
         None, description="Array of allowed file extensions."
     )
-    limit: Optional[int] = Field(None, description="Maximum number of uploaded files.")
-    size: Optional[int] = Field(None, description="Total size file limit.")
+    limit: int | None = Field(None, description="Maximum number of uploaded files.")
+    size: int | None = Field(None, description="Total size file limit.")
     ui_type: Literal["file"] = Field(
         ...,
         alias="type",
@@ -231,16 +231,6 @@ class UIFile(UIBase, extra="forbid"):
 
 
 UIItem = Annotated[
-    Union[
-        UIText,
-        UINumber,
-        UICheckbox,
-        UISelect,
-        UIMultiselect,
-        UIColor,
-        UIDatetime,
-        UIPath,
-        UIFile,
-    ],
+    UIText | UINumber | UICheckbox | UISelect | UIMultiselect | UIColor | UIDatetime | UIPath | UIFile,
     Field(discriminator="ui_type"),
 ]

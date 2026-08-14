@@ -10,7 +10,7 @@ from typing import Any, ClassVar, overload
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
 from sophios.inference import types_match
-from sophios.wic_types import CompilerInfo, Json, Tools
+from sophios.wic_types import CompilerInfo, Tools
 
 from ._compiled import CompiledWorkflow
 from ._errors import (
@@ -183,7 +183,9 @@ def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) ->
             )
 
 
-class _ProcessBase:
+class _ProcessBase:  # pylint: disable=too-few-public-methods
+    """Shared helpers for `Step`/`Workflow`; not meant to grow public surface of its own."""
+
     process_name: str
     _inputs: ParameterStore[InputParameter]
 
@@ -326,8 +328,7 @@ class Step(_ProcessBase):
             case _ if (tool_name := _tool_builder_source_name(source)) is not None:
                 if config_path is not None:
                     raise TypeError("config_path is only supported when Step is created from a CWL file path")
-                if source is None:
-                    raise TypeError("Step requires clt_path or a CommandLineTool-like source")
+                assert source is not None
                 resolved_name = step_name or tool_name
                 run_path = Path(f"{resolved_name}.cwl")
                 match source.to_cwl_document():

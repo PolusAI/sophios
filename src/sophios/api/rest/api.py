@@ -15,7 +15,7 @@ from sophios.cli import get_args, get_dicts_for_compilation
 from sophios.runtime_inputs import normalize_rose_tree_cwl, normalize_rose_tree_job_inputs
 from sophios.wic_types import CompilerInfo, Json, Tool, Tools, StepId, YamlTree, NodeData
 from sophios.api.utils import converter
-import sophios.plugins as plugins
+from sophios import plugins
 
 
 app = FastAPI()
@@ -32,7 +32,6 @@ app.add_middleware(
 
 
 @app.get("/", status_code=status.HTTP_200_OK)
-# @authenticate
 async def root() -> Json:
     """The api has 1 route: compile
 
@@ -43,7 +42,6 @@ async def root() -> Json:
 
 
 @app.post("/compile")
-# @authenticate
 async def compile_wf(request: Request) -> Json:
     """The compile route compiles the json object from http request object built elsewhere
 

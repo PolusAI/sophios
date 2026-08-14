@@ -9,7 +9,6 @@ from fastapi import Request
 import pytest
 import yaml
 
-import sophios.post_compile as pc
 from sophios.api.rest import api
 from sophios.wic_types import Json
 

@@ -97,11 +97,6 @@ def _merge_if_set(target: dict[str, Any], key: str, value: Any) -> None:
         target[key] = _render(value)
 
 
-def _merge_if_present(target: dict[str, Any], key: str, value: Any) -> None:
-    if value is not _SUPPORT.unset:
-        target[key] = _render(value)
-
-
 def _render_doc(value: str | list[str] | None) -> str | list[str] | None:
     match value:
         case None:

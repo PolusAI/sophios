@@ -2,7 +2,7 @@ import copy
 from shutil import copytree, ignore_patterns
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import yaml
 
@@ -21,6 +21,22 @@ from .wic_types import (Namespaces, NodeData, RoseTree, Yaml, ExplicitEdgeCalls,
 class NoAliasDumper(yaml.SafeDumper):
     def ignore_aliases(self, data: Any) -> bool:
         return True
+
+
+def dump_wic_yaml(document: Json) -> str:
+    """Serializes a compiled CWL document or job inputs to a YAML string.
+
+    Uses NoAliasDumper to inline anchors/aliases (see module docstring above)
+    and preserves key order (sort_keys=False) so e.g. workflow steps stay in order.
+
+    Args:
+        document (Json): The document to serialize, e.g. a compiled CWL tree
+            or a job inputs mapping.
+
+    Returns:
+        str: The YAML-serialized document.
+    """
+    return yaml.dump(document, sort_keys=False, line_break='\n', indent=2, Dumper=NoAliasDumper)
 
 
 def write_to_disk(rose_tree: RoseTree, path: Path, relative_run_path: bool, inputs_file: str = '') -> None:
@@ -80,13 +96,13 @@ def _write_to_disk(rose_tree: RoseTree, path: Path, relative_run_path: bool, inp
 
     # Dump the compiled CWL file contents to disk.
     # Use sort_keys=False to preserve the order of the steps.
-    yaml_content = yaml.dump(cwl_tree, sort_keys=False, line_break='\n', indent=2, Dumper=NoAliasDumper)
+    yaml_content = dump_wic_yaml(cwl_tree)
     with open(path / filename_cwl, mode='w', encoding='utf-8') as w:
         w.write('#!/usr/bin/env cwl-runner\n')
         w.write(auto_gen_header)
         w.write(''.join(yaml_content))
 
-    yaml_content = yaml.dump(yaml_inputs, sort_keys=False, line_break='\n', indent=2, Dumper=NoAliasDumper)
+    yaml_content = dump_wic_yaml(yaml_inputs)
     with open(path / filename_yml, mode='w', encoding='utf-8') as inp:
         inp.write(auto_gen_header)
         inp.write(yaml_content)
@@ -234,12 +250,12 @@ def get_home_paths(sub_config: Json) -> Json:
     return abs_sub_config
 
 
-def write_absolute_yaml_tags(yaml_tag_paths: Dict[str, str], in_dict_in: Yaml, namespaces: Namespaces,
+def write_absolute_yaml_tags(yaml_tag_paths: dict[str, str], in_dict_in: Yaml, namespaces: Namespaces,
                              step_name_i: str, explicit_edge_calls_copy: ExplicitEdgeCalls) -> None:
     """cwl_subinterpreter requires all paths to be absolute.
 
     Args:
-        yaml_tag_paths (Dict[str,str]): The paths that need to be included in (generated) yaml tags
+        yaml_tag_paths (dict[str,str]): The paths that need to be included in (generated) yaml tags
         in_dict_in (Yaml): The in: subtag of a cwl_subinterpreter: tag. (Mutates in_dict_in)
         namespaces (Namespaces): Specifies the path in the yml AST to the current subworkflow
         step_name_i (str): The name of the current workflow step

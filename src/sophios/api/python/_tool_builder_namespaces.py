@@ -8,7 +8,8 @@ The builder surface is intentionally small:
   from Python keyword arguments
 """
 
-from typing import Any, Iterator, Mapping, TypeVar
+from collections.abc import Iterator, Mapping
+from typing import Any, TypeVar
 
 from ._tool_builder_specs import FieldSpec, InputSpec, OutputSpec
 from ._tool_builder_support import (

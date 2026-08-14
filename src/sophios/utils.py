@@ -1,7 +1,7 @@
 import copy
 from pathlib import Path
 from urllib.parse import urlparse
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import yaml
 
@@ -25,32 +25,32 @@ def step_name_str(yaml_stem: str, i: int, step_key: str) -> str:
     return f'{yaml_stem}__step__{i+1}__{step_key}'
 
 
-def parse_step_name_str(step_name: str) -> Tuple[str, int, str]:
+def parse_step_name_str(step_name: str) -> tuple[str, int, str]:
     """The inverse function to step_name_str()
 
     Args:
         step_name (str): A string of the same form as returned by step_name_str()
 
     Raises:
-        Exception: If the argument is not of the same form as returned by step_name_str()
+        ValueError: If the argument is not of the same form as returned by step_name_str()
 
     Returns:
-        Tuple[str, int, str]: The parameters used to create step_name
+        tuple[str, int, str]: The parameters used to create step_name
     """
     vals = step_name.split('__')  # double underscore
-    if not len(vals) == 4:
-        raise Exception(f"Error! {step_name} is not of the format \n"
-                        + '{yaml_stem}__step__{i+1}__{step_key}\n'
-                        + 'yaml_stem and step_key should not contain any double underscores.')
+    if len(vals) != 4:
+        raise ValueError(f"Error! {step_name} is not of the format \n"
+                         + '{yaml_stem}__step__{i+1}__{step_key}\n'
+                         + 'yaml_stem and step_key should not contain any double underscores.')
     try:
         i = int(vals[2])
-    except Exception as ex:
-        raise Exception(f"Error! {step_name} is not of the format \n"
-                        + '{yaml_stem}__step__{i+1}__{step_key}') from ex
+    except ValueError as ex:
+        raise ValueError(f"Error! {step_name} is not of the format \n"
+                         + '{yaml_stem}__step__{i+1}__{step_key}') from ex
     return (vals[0], i-1, vals[3])
 
 
-def shorten_namespaced_output_name(namespaced_output_name: str, sep: str = ' ') -> Tuple[str, str]:
+def shorten_namespaced_output_name(namespaced_output_name: str, sep: str = ' ') -> tuple[str, str]:
     """Removes the intentionally redundant yaml_stem prefixes from the list of
     step_name_str's embedded in namespaced_output_name which allows each
     step_name_str to be context-free and unique. This is potentially dangerous,
@@ -62,7 +62,7 @@ def shorten_namespaced_output_name(namespaced_output_name: str, sep: str = ' ') 
         sep (str): The separator used to construct the shortened step name strings.
 
     Returns:
-        Tuple[str, str]: the first yaml_stem, so this function can be inverted,
+        tuple[str, str]: the first yaml_stem, so this function can be inverted,
         and namespaced_output_name, with the embedded yaml_stem prefixes
         removed and double underscores replaced with a single space.
     """
@@ -80,7 +80,7 @@ def shorten_namespaced_output_name(namespaced_output_name: str, sep: str = ' ') 
     return (yaml_stem_init, shortened)
 
 
-def partition_by_lowest_common_ancestor(nss1: Namespaces, nss2: Namespaces) -> Tuple[Namespaces, Namespaces]:
+def partition_by_lowest_common_ancestor(nss1: Namespaces, nss2: Namespaces) -> tuple[Namespaces, Namespaces]:
     """See https://en.wikipedia.org/wiki/Lowest_common_ancestor
 
     Args:
@@ -88,7 +88,7 @@ def partition_by_lowest_common_ancestor(nss1: Namespaces, nss2: Namespaces) -> T
         nss2 (Namespaces): The namespaces associated with the second node
 
     Returns:
-        Tuple[Namespaces, Namespaces]: nss1, partitioned by lowest common ancestor
+        tuple[Namespaces, Namespaces]: nss1, partitioned by lowest common ancestor
     """
     # Only partition nss1; if you want to partition nss1
     # just switch the arguments at the call site.
@@ -101,14 +101,14 @@ def partition_by_lowest_common_ancestor(nss1: Namespaces, nss2: Namespaces) -> T
     return ([], nss1)
 
 
-def get_steps_keys(steps: List[Yaml]) -> List[str]:
+def get_steps_keys(steps: list[Yaml]) -> list[str]:
     """Returns the name (dict key) of each step in the given CWL workflow
 
     Args:
-        steps (List[Yaml]): The steps: tag of a CWL workflow
+        steps (list[Yaml]): The steps: tag of a CWL workflow
 
     Returns:
-        List[str]: The name of each step in the given CWL workflow
+        list[str]: The name of each step in the given CWL workflow
     """
     steps_keys = []
     for step_dict in steps:
@@ -127,34 +127,35 @@ def require_step_id(step_dict: Yaml, context: str = "step") -> str:
         context (str): Context string used in error messages.
 
     Raises:
-        Exception: If `step_dict` is not a dictionary with a non-empty string `id`.
+        TypeError: If `step_dict` is not a dictionary.
+        ValueError: If `step_dict` does not contain a non-empty string `id`.
 
     Returns:
         str: The validated step identifier.
     """
     if not isinstance(step_dict, dict):
-        raise Exception(f"Error! {context} should be a dictionary.")
+        raise TypeError(f"Error! {context} should be a dictionary.")
     step_id = step_dict.get('id')
     if not isinstance(step_id, str) or step_id == '':
-        raise Exception(
+        raise ValueError(
             'Error! Each step dictionary must contain a non-empty string id: tag.')
     return step_id
 
 
-def get_subkeys(steps_keys: List[str]) -> List[str]:
+def get_subkeys(steps_keys: list[str]) -> list[str]:
     """This function determines which step keys are associated with subworkflows.\n
     This is critical for the control flow in many areas of the compiler.
 
     Args:
-        steps_keys (List[str]): All of the step keys for the current workflow.
+        steps_keys (list[str]): All of the step keys for the current workflow.
 
     Returns:
-        List[str]: The list of step keys associated with subworkflows of the current workflow.
+        list[str]: The list of step keys associated with subworkflows of the current workflow.
     """
     return [key for key in steps_keys if key and key.endswith('.wic')]
 
 
-def extract_implementation(yaml_tree: Yaml, wic: Yaml, yaml_path: Path) -> Tuple[str, Yaml]:
+def extract_implementation(yaml_tree: Yaml, wic: Yaml, yaml_path: Path) -> tuple[str, Yaml]:
     """Chooses a specific implementation for a given CWL workflow step.
 
     The implementations should be thought of as either 'exactly' identical, or at
@@ -165,10 +166,10 @@ def extract_implementation(yaml_tree: Yaml, wic: Yaml, yaml_path: Path) -> Tuple
         yaml_path (Path): The filepath of yaml_tree, only used for error reporting.
 
     Raises:
-        Exception: If the steps: and/or implementation: tags are not present.
+        ValueError: If the steps: and/or implementation: tags are not present.
 
     Returns:
-        Tuple[str, Yaml]: The Yaml AST dict of the chosen implementation.
+        tuple[str, Yaml]: The Yaml AST dict of the chosen implementation.
     """
     yaml_tree_copy = copy.deepcopy(yaml_tree)
     implementation = ''
@@ -178,7 +179,7 @@ def extract_implementation(yaml_tree: Yaml, wic: Yaml, yaml_path: Path) -> Tuple
         if 'implementation' in wic:
             implementation = wic['implementation']
         if implementation == '':
-            raise Exception(f'Error! No implementation in {yaml_path}!')
+            raise ValueError(f'Error! No implementation in {yaml_path}!')
 
         plugin_ns = wic.get('namespace', 'global')
         stepid = StepId(implementation, plugin_ns)
@@ -186,38 +187,38 @@ def extract_implementation(yaml_tree: Yaml, wic: Yaml, yaml_path: Path) -> Tuple
             print(yaml.dump(yaml_tree))
             print(yaml.dump(wic))
             print(wic['implementations'])
-            raise Exception(
+            raise ValueError(
                 f'Error! No steps for implementation {stepid} in {yaml_path}!')
         steps = wic['implementations'][stepid]['steps']
         yaml_tree_copy.update({'steps': steps})
     elif 'steps' in yaml_tree_copy:
         pass
     else:
-        raise Exception(
+        raise ValueError(
             f'Error! No implementations and/or steps in {yaml_path}!')
     return (implementation, yaml_tree_copy)
 
 
-def flatten(lists: List[List[Any]]) -> List[Any]:
+def flatten(lists: list[list[Any]]) -> list[Any]:
     """Concatenates a list of lists into a single list.
 
     Args:
-        lists (List[List[Any]]): A list of lists
+        lists (list[list[Any]]): A list of lists
 
     Returns:
-        List[Any]: A single list
+        list[Any]: A single list
     """
     return [x for lst in lists for x in lst]
 
 
-def flatten_rose_tree(rose_tree: RoseTree) -> List[Any]:
+def flatten_rose_tree(rose_tree: RoseTree) -> list[Any]:
     """Flattens the data contained in the Rose Tree into a List
 
     Args:
         rose_tree (RoseTree): A Rose Tree
 
     Returns:
-        List[Any]: The list of data associated with each node in the RoseTree
+        list[Any]: The list of data associated with each node in the RoseTree
     """
     sub_rose_trees = [flatten_rose_tree(r) for r in rose_tree.sub_trees]
     return [rose_tree.data] + flatten(sub_rose_trees)
@@ -234,19 +235,18 @@ def pretty_print_forest(forest: YamlForest) -> None:
     print(yaml.dump(forest.sub_forests))
 
 
-def flatten_forest(forest: YamlForest) -> List[YamlForest]:
+def flatten_forest(forest: YamlForest) -> list[YamlForest]:
     """Flattens the sub-trees encountered while traversing an AST
 
     Args:
         forest (YamlForest): The yaml AST forest to be flattened
 
     Raises:
-        Exception: If implementation: tags are missing.
+        ValueError: If implementation: tags are missing.
 
     Returns:
-        List[YamlForest]: The flattened forest
+        list[YamlForest]: The flattened forest
     """
-    # pretty_print_forest(forest)
     if forest == {}:
         return []
     yaml_tree = forest.yaml_tree.yml
@@ -254,7 +254,6 @@ def flatten_forest(forest: YamlForest) -> List[YamlForest]:
     plugin_ns = wic['wic'].get('namespace', 'global')
 
     if 'implementations' in wic['wic']:
-        # pretty_print_forest(forest)
         back_name = ''
         if 'default_implementation' in wic['wic']:
             back_name = wic['wic']['default_implementation']
@@ -262,7 +261,7 @@ def flatten_forest(forest: YamlForest) -> List[YamlForest]:
             back_name = wic['wic']['implementation']
         if back_name == '':
             pretty_print_forest(forest)
-            raise Exception('Error! No implementation in yaml forest!\n')
+            raise ValueError('Error! No implementation in yaml forest!\n')
         sub_forests_dict = dict(forest.sub_forests)
         step_id = StepId(back_name, plugin_ns)
         yaml_tree_back: YamlTree = sub_forests_dict[step_id].yaml_tree
@@ -314,20 +313,20 @@ def recursively_contains_dict_key(key: str, obj: Any) -> bool:
         bool: True if key is found, else False.
     """
     if isinstance(obj, list):
-        return any([recursively_contains_dict_key(key, x) for x in obj])
+        return any(recursively_contains_dict_key(key, x) for x in obj)
     if isinstance(obj, dict):
-        return (key in obj.keys()) or any(recursively_contains_dict_key(key, val) for val in obj.values())
+        return key in obj or any(recursively_contains_dict_key(key, val) for val in obj.values())
     return False
 
 
-def parse_int_string_tuple(string: str) -> Tuple[int, str]:
+def parse_int_string_tuple(string: str) -> tuple[int, str]:
     """Parses a string of the form '(int, string)'
 
     Args:
         string (str): A string with the above encoding
 
     Returns:
-        Tuple[int, str]: The parsed result
+        tuple[int, str]: The parsed result
     """
     string_no_parens = string.strip()[1:-1]
     (str1, str2) = string_no_parens.split(',')
@@ -356,31 +355,31 @@ def reindex_wic_steps(wic_steps: Yaml, index: int, num_steps: int = 1) -> Yaml:
     return wic_steps_reindexed
 
 
-def get_step_name_1(step_1_names: List[str],
+def get_step_name_1(step_1_names: list[str],
                     yaml_stem: str,
                     namespaces: Namespaces,
-                    steps_keys: List[str],
-                    subkeys: List[str]) -> str:
+                    steps_keys: list[str],
+                    subkeys: list[str]) -> str:
     """Finds the name of the first step in the current subworkflow. If the first
     step is itself subworkflow, the call site recurses until it finds a node.
     This is necessary because ranksame in GraphViz can only be applied to
     individual nodes, not cluster_subgraphs.
 
     Args:
-        step_1_names (List[str]): The list of potential first node names
+        step_1_names (list[str]): The list of potential first node names
         yaml_stem (str): The name of the current subworkflow (stem of the yaml filepath)
         namespaces (Namespaces): Specifies the path in the AST of the current subworkflow
-        steps_keys (List[str]): The name of each step in the current CWL workflow
-        subkeys (List[str]): The keys associated with subworkflows
+        steps_keys (list[str]): The name of each step in the current CWL workflow
+        subkeys (list[str]): The keys associated with subworkflows
 
     Returns:
         str: The name of the first step
     """
     if not steps_keys:
-        raise Exception('Error! workflows must define at least one step.')
+        raise ValueError('Error! workflows must define at least one step.')
     if steps_keys[0] in subkeys:
         if not step_1_names:
-            raise Exception('Error! Subworkflow has no concrete first step.')
+            raise ValueError('Error! Subworkflow has no concrete first step.')
         step_name_1 = step_1_names[0]
     else:
         step_name_1 = step_name_str(yaml_stem, 0, steps_keys[0])
@@ -393,14 +392,14 @@ def get_step_name_1(step_1_names: List[str],
     return step_name_1
 
 
-def parse_provenance_output_files(output_json: Json) -> List[Tuple[str, str, str]]:
+def parse_provenance_output_files(output_json: Json) -> list[tuple[str, str, str]]:
     """Parses the primary workflow provenance JSON object.
 
     Args:
         output_json (Json): The JSON results object, containing the metadata for all output files.
 
     Returns:
-        List[Tuple[str, str, str]]: A List of (location, parentdirs, basename) for each output file.
+        list[tuple[str, str, str]]: A List of (location, parentdirs, basename) for each output file.
     """
     files = []
     for namespaced_output_name, obj in output_json.items():
@@ -409,7 +408,7 @@ def parse_provenance_output_files(output_json: Json) -> List[Tuple[str, str, str
     return [y for x in files for y in x]
 
 
-def parse_provenance_output_files_(obj: Any, parentdirs: str) -> List[Tuple[str, str, str]]:
+def parse_provenance_output_files_(obj: Any, parentdirs: str) -> list[tuple[str, str, str]]:
     """Parses the primary workflow provenance JSON object.
 
     Args:
@@ -417,7 +416,7 @@ def parse_provenance_output_files_(obj: Any, parentdirs: str) -> List[Tuple[str,
         parentdirs (str): The directory associated with obj.
 
     Returns:
-        List[Tuple[str, str, str]]: A List of (location, parentdirs, basename) for each output file.
+        list[tuple[str, str, str]]: A List of (location, parentdirs, basename) for each output file.
     """
     if isinstance(obj, dict):
         if obj.get('class', '') == 'File':
@@ -436,17 +435,17 @@ def parse_provenance_output_files_(obj: Any, parentdirs: str) -> List[Tuple[str,
     return []
 
 
-def get_input_mappings(input_mapping: Dict[str, List[str]], arg_keys: List[str],
-                       arg_key_in_yaml_tree_inputs: bool) -> List[str]:
+def get_input_mappings(input_mapping: dict[str, list[str]], arg_keys: list[str],
+                       arg_key_in_yaml_tree_inputs: bool) -> list[str]:
     """Gets all of the workflow step inputs / call sites that are mapped from the given workflow inputs.
 
     Args:
-        input_mapping (Dict[str, List[str]]): Maps workflow inputs to workflow step inputs, recursively namespaced.
-        arg_keys (List[str]): A (singleton) list of root workflow inputs.
+        input_mapping (dict[str, list[str]]): Maps workflow inputs to workflow step inputs, recursively namespaced.
+        arg_keys (list[str]): A (singleton) list of root workflow inputs.
         arg_key_in_yaml_tree_inputs (bool): Determines whether at least one level of recursion has been performed.
 
     Returns:
-        List[str]: A list of the workflow step inputs / call sites, recursively namespaced.
+        list[str]: A list of the workflow step inputs / call sites, recursively namespaced.
     """
     # Since each workflow input can be used in many workflow steps, we
     # need to (recursively) find all of the leaves of the mapping tree
@@ -475,11 +474,11 @@ def get_input_mappings(input_mapping: Dict[str, List[str]], arg_keys: List[str],
     return arg_keys
 
 
-def get_output_mapping(output_mapping: Dict[str, str], out_key: str) -> str:
+def get_output_mapping(output_mapping: dict[str, str], out_key: str) -> str:
     """Gets the workflow step output / return location that is mapped to the given workflow output.
 
     Args:
-        output_mapping (Dict[str, str]): Maps workflow outputs to workflow step outputs, recursively namespaced.
+        output_mapping (dict[str, str]): Maps workflow outputs to workflow step outputs, recursively namespaced.
         out_key (str): The root workflow output.
 
     Returns:
@@ -503,9 +502,9 @@ def get_output_mapping(output_mapping: Dict[str, str], out_key: str) -> str:
 
 
 def convert_args_dict_to_args_list(
-    args_dict: Dict[str, Any],
+    args_dict: dict[str, Any],
     boolean_flags: set[str] | None = None,
-) -> List[str]:
+) -> list[str]:
     """Convert an argument dictionary into CLI-style tokens.
 
     Args:
@@ -513,9 +512,9 @@ def convert_args_dict_to_args_list(
         boolean_flags: Keys that should be emitted as store-true CLI flags.
 
     Returns:
-        List[str]: A syntactically correct list of arguments (CLI flags) and values
+        list[str]: A syntactically correct list of arguments (CLI flags) and values
     """
-    args_list: List[str] = []
+    args_list: list[str] = []
     boolean_flags = set(boolean_flags or ())
     for arg_name, arg_value in args_dict.items():
         flag = '--' + arg_name

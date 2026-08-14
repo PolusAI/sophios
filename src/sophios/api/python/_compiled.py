@@ -3,20 +3,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-
-from sophios import input_output
+from sophios.input_output import dump_wic_yaml
 from sophios.wic_types import Json
-
-
-def _yaml(document: Json) -> str:
-    return yaml.dump(
-        document,
-        sort_keys=False,
-        line_break="\n",
-        indent=2,
-        Dumper=input_output.NoAliasDumper,
-    )
 
 
 def _artifact_path(
@@ -39,7 +27,7 @@ def _artifact_path(
 
 def _write_yaml(path: Path, document: Json) -> Path:
     path.parent.mkdir(exist_ok=True, parents=True)
-    path.write_text(_yaml(document), encoding="utf-8")
+    path.write_text(dump_wic_yaml(document), encoding="utf-8")
     return path
 
 
@@ -53,7 +41,7 @@ class CompiledWorkflow:
 
     def to_cwl_yaml(self) -> str:
         """Return the compiled CWL workflow as YAML."""
-        return _yaml(self.cwl_workflow)
+        return dump_wic_yaml(self.cwl_workflow)
 
     def write_cwl(self, path: str | Path | None = None) -> Path:
         """Write the compiled CWL workflow to a `.cwl` file."""
@@ -64,7 +52,7 @@ class CompiledWorkflow:
 
     def to_job_inputs_yaml(self) -> str:
         """Return the generated CWL job inputs as YAML."""
-        return _yaml(self.cwl_job_inputs)
+        return dump_wic_yaml(self.cwl_job_inputs)
 
     def write_job_inputs(self, path: str | Path | None = None) -> Path:
         """Write the generated CWL job inputs to a YAML file."""

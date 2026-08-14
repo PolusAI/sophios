@@ -6,8 +6,9 @@
 # These frozen dataclasses mirror the CWL schema closely, so field-rich
 # constructors and small fluent helpers are intentional rather than accidental.
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields as dataclass_fields
-from typing import Any, Callable, ClassVar, Mapping, NamedTuple, TypeVar, cast
+from typing import Any, ClassVar, NamedTuple, TypeVar, cast
 
 from ._tool_builder_support import (
     _SUPPORT,

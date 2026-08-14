@@ -1,7 +1,6 @@
 import copy
 from pathlib import Path
 import re
-from typing import List, Tuple
 
 from mergedeep import merge, Strategy
 import yaml
@@ -19,7 +18,7 @@ from .wic_types import Namespaces, Yaml, Tools, YamlTree, StepId, NodeData, Rose
 def get_inlineable_subworkflows(yaml_tree_tuple: YamlTree,
                                 tools: Tools,
                                 implementation: bool = False,
-                                namespaces_init: Namespaces | None = None) -> List[Namespaces]:
+                                namespaces_init: Namespaces | None = None) -> list[Namespaces]:
     """Traverses a yml AST and finds all subworkflows which can be inlined into their parent workflow.
 
     Args:
@@ -29,7 +28,7 @@ def get_inlineable_subworkflows(yaml_tree_tuple: YamlTree,
         namespaces_init (Namespaces): The initial subworkflow to start the traversal ([] == root)
 
     Returns:
-        List[Namespaces]: The subworkflows which can be inlined into their parent workflows.
+        list[Namespaces]: The subworkflows which can be inlined into their parent workflows.
     """
     namespaces_init = [] if namespaces_init is None else namespaces_init
     (step_id, yaml_tree) = yaml_tree_tuple
@@ -46,7 +45,7 @@ def get_inlineable_subworkflows(yaml_tree_tuple: YamlTree,
             sub_namespaces_list.append(sub_namespaces)
         return utils.flatten(sub_namespaces_list)
 
-    steps: List[Yaml] = yaml_tree['steps']
+    steps: list[Yaml] = yaml_tree['steps']
     steps_keys = utils.get_steps_keys(steps)
     subkeys = utils.get_subkeys(steps_keys)
 
@@ -67,7 +66,7 @@ def get_inlineable_subworkflows(yaml_tree_tuple: YamlTree,
     return namespaces
 
 
-def inline_subworkflow(yaml_tree_tuple: YamlTree, namespaces: Namespaces) -> Tuple[YamlTree, int]:
+def inline_subworkflow(yaml_tree_tuple: YamlTree, namespaces: Namespaces) -> tuple[YamlTree, int]:
     """Inlines the given subworkflow into its immediate parent workflow.
 
     Args:
@@ -88,18 +87,17 @@ def inline_subworkflow(yaml_tree_tuple: YamlTree, namespaces: Namespaces) -> Tup
         if len(namespaces) == 1:  # and namespaces[0] == yaml_name ?
             (back_name_, yaml_tree) = utils.extract_implementation(yaml_tree, wic['wic'], Path(''))
             yaml_tree = {'steps': yaml_tree['steps']}  # Remove wic tag
-            len_substeps = len(yaml_tree['steps'])
             return YamlTree(StepId(back_name_, step_id.plugin_ns), yaml_tree), 0  # len_substeps  # TODO: check step_id
 
         # Pass namespaces through unmodified
         implementations_trees = []
         for stepid, back in wic['wic']['implementations'].items():
-            implementation_tree, len_substeps = inline_subworkflow(YamlTree(stepid, back), namespaces)
+            implementation_tree, _len_substeps = inline_subworkflow(YamlTree(stepid, back), namespaces)
             implementations_trees.append(implementation_tree)
         yaml_tree['wic']['implementations'] = dict(implementations_trees)
         return YamlTree(step_id, yaml_tree), 0  # choose len_substeps from which implementation?
 
-    steps: List[Yaml] = yaml_tree['steps']
+    steps: list[Yaml] = yaml_tree['steps']
     steps_keys = utils.get_steps_keys(steps)
     yaml_stem = Path(yaml_name).stem
     step_names = [utils.step_name_str(yaml_stem, i, step_key)
@@ -107,7 +105,7 @@ def inline_subworkflow(yaml_tree_tuple: YamlTree, namespaces: Namespaces) -> Tup
 
     if namespaces[0] not in step_names:
         # This should never happen (if namespaces comes from get_inlineable_subworkflows)
-        raise Exception(f'Error! {namespaces[0]} not in {step_names}')
+        raise ValueError(f'Error! {namespaces[0]} not in {step_names}')
 
     # TODO: We really need to inline the wic tags as well. This may be complicated
     # because due to overloading we may need to modify parent wic tags.
@@ -123,7 +121,7 @@ def inline_subworkflow(yaml_tree_tuple: YamlTree, namespaces: Namespaces) -> Tup
         # ~ syntax, specifically apply sub_parentargs to all inputs: call sites in sub_yml_tree
         sub_yml_tree = apply_args(sub_yml_tree, sub_parentargs)
         # Inline sub-steps.
-        sub_steps: List[Yaml] = sub_yml_tree['steps']
+        sub_steps: list[Yaml] = sub_yml_tree['steps']
         yaml_tree['steps'] = steps_inits + sub_steps + steps_tails
         # Need to re-index both the sub-step numbers as well as the
         # subsequent steps in this workflow? No, except for wic: steps:
@@ -164,6 +162,7 @@ def inline_subworkflow(yaml_tree_tuple: YamlTree, namespaces: Namespaces) -> Tup
 
 
 def apply_args(sub_yml_tree: Yaml, sub_parentargs: Yaml) -> Yaml:
+    """Applies (~ syntax) parent workflow arguments to their call sites in a subworkflow. Mutates sub_yml_tree."""
     # Do we need to deepcopy? We are already deepcopy'ing at the only call site,
     # so looks like no.
     inputs_workflow = sub_yml_tree.get('inputs', {})
@@ -185,8 +184,8 @@ def apply_args(sub_yml_tree: Yaml, sub_parentargs: Yaml) -> Yaml:
     for argkey, argval in sub_parentargs.get('in', {}).items():
         # If we are attempting to apply a parameter given in the parent workflow,
         # that parameter had better exist in the subworkflow!
-        if not argkey in inputs_workflow:
-            raise Exception(f'Error while inlineing {argkey}\n{yaml.dump(sub_yml_tree)}\n{yaml.dump(sub_parentargs)}')
+        if argkey not in inputs_workflow:
+            raise ValueError(f'Error while inlineing {argkey}\n{yaml.dump(sub_yml_tree)}\n{yaml.dump(sub_parentargs)}')
 
         for i, _step_key in enumerate(steps_keys):
             # NOTE: We should probably be using
@@ -320,14 +319,15 @@ def inline_subworkflow_cwl(rose_tree: RoseTree) -> RoseTree:
             sub_steps_new = {}
             for substepkey, substepval in sub_steps.items():
                 substep_inputs = substepval['in']
-                substep_inputs_new = {}
+                substep_inputs_new: Yaml = {}
                 for subinputkey, subinputval in substep_inputs.items():
+                    source = None
                     # By default, copy the inputs and prepend namespace
                     if isinstance(subinputval, str):
                         source = move_slash_last(subinputval)
                         substep_inputs_new[subinputkey] = step_key + '___' + subinputval
 
-                    if isinstance(subinputval, dict):
+                    elif isinstance(subinputval, dict):
                         source = subinputval['source']
                         source_new = move_slash_last(subinputval['source'])
                         subinputval['source'] = step_key + '___' + source_new
@@ -343,7 +343,7 @@ def inline_subworkflow_cwl(rose_tree: RoseTree) -> RoseTree:
                             # NOTE: Do not namespace; already namespaced in parent workflow.
                             newval = source_new  # step_key + '___' + source_new
 
-                        if isinstance(newval, dict) and 'source' in newval:
+                        elif isinstance(newval, dict) and 'source' in newval:
                             source_new = move_slash_last(newval['source'])
                             # NOTE: Do not namespace; already namespaced in parent workflow.
                             newval['source'] = source_new  # step_key + '___' + source_new
@@ -364,19 +364,19 @@ def inline_subworkflow_cwl(rose_tree: RoseTree) -> RoseTree:
 
                     # Distribute scatter unconditionally across ALL subworkflow dependencies
                     # i.e. https://en.wikipedia.org/wiki/Distributive_property
-# NOTE: This code assumes the user has manually performed https://en.wikipedia.org/wiki/Loop-invariant_code_motion
-# on the yml. In other words, it assumes that the user has separated / extracted all non-scattered steps from all
-# steps that should be scattered. i.e. 1 receptor vs N ligands. Otherwise, we need to transitively follow the edges
-# until we can determine the cardinality. It may be possible to avoid the transitive search by bootstrapping in-order,
-# but for now let's require the user to manually modify their yml.
+                    # NOTE: This code assumes the user has manually performed loop-invariant code
+                    # motion (https://en.wikipedia.org/wiki/Loop-invariant_code_motion) on the yml.
+                    # In other words, it assumes that the user has separated / extracted all
+                    # non-scattered steps from all steps that should be scattered, i.e. 1 receptor
+                    # vs N ligands. Otherwise, we need to transitively follow the edges until we can
+                    # determine the cardinality. It may be possible to avoid the transitive search by
+                    # bootstrapping in-order, but for now let's require the user to manually modify their yml.
                     if scattervars:
                         if ((isinstance(subinputval, str) and '/' in subinputval) or
                                 (isinstance(subinputval, dict) and '/' in subinputval['source'])):
-                            if 'scatter' in substepval:
-                                if subinputkey not in substepval['scatter']:
-                                    substepval['scatter'] += [subinputkey]
-                            else:
-                                substepval['scatter'] = [subinputkey]
+                            substepval.setdefault('scatter', [])
+                            if subinputkey not in substepval['scatter']:
+                                substepval['scatter'].append(subinputkey)
                             substepval['scatterMethod'] = 'dotproduct'
 
                 # Overwrite inputs

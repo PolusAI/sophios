@@ -1,11 +1,12 @@
 """Schema-backed compute request objects."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, fields as dataclass_fields
 from functools import lru_cache
 import json
 from pathlib import Path
 import time
-from typing import Any, Mapping, Protocol, cast
+from typing import Any, Protocol, cast
 
 from jsonschema import Draft202012Validator
 import requests
@@ -30,17 +31,14 @@ class CompiledWorkflowLike(Protocol):
     @property
     def name(self) -> str:
         """Compiled workflow name."""
-        ...
 
     @property
     def cwl_workflow(self) -> Json:
         """Compiled CWL workflow document."""
-        ...
 
     @property
     def cwl_job_inputs(self) -> Json:
         """Compiled CWL job inputs."""
-        ...
 
 
 def _json_value(value: Any) -> Any:
@@ -101,6 +99,7 @@ class _ComputeClient:
     timeout: tuple[int, int]
 
     def post(self, request_json: RawJson) -> _HttpResult:
+        """Submit a new compute request and return its parsed response."""
         response = self.session.post(
             self._url(),
             data=request_json,
@@ -110,10 +109,12 @@ class _ComputeClient:
         return _response_result(response)
 
     def status(self, workflow_id: str) -> _HttpResult:
+        """Fetch the current status for a submitted workflow."""
         response = self.session.get(self._url(workflow_id, "status"), timeout=self.timeout)
         return _response_result(response)
 
     def logs(self, workflow_id: str) -> _HttpResult:
+        """Fetch the logs for a submitted workflow."""
         response = self.session.get(self._url(workflow_id, "logs"), timeout=self.timeout)
         return _response_result(response)
 
