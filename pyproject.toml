@@ -221,6 +221,7 @@ markers = [
     "slow: (i.e. for medium speed, use 'pytest -m \"not slow\"')",
     "serial: (These tests CANNOT be run in parallel with --workers n > 1)",
     "skip_pypi_ci: tests intentionally excluded from PyPI package-build CI",
+    "contrib: exercises a peripheral surface (ICT, Workflow Builder, REST) rather than the core compiler; run core only with 'pytest -m \"not contrib\"'",
 ]
 addopts = ""
 

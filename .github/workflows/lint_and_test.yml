@@ -224,6 +224,19 @@ jobs:
         # NOTE: This test MUST be run in serial! See is_isomorphic_with_timeout()
         timeout-minutes: 20 # backup timeout for windows
 
+      # Spec 0: the core/contrib boundary. Core must never import contrib.
+      # This is a static scan of the module graph; it needs no containers.
+      - name: PyTest Core/Contrib Boundary
+        if: always()
+        run: cd sophios/ && pytest tests/test_zone_boundary.py
+
+      # Contrib surfaces (ICT, Workflow Builder, REST) run in core CI, but as
+      # their own step, so a red build is attributable to a zone without
+      # bisecting. See design_docs/core-refactor-design.md, Spec 0.
+      - name: PyTest Contrib Surfaces
+        if: always()
+        run: cd sophios/ && pytest -m contrib
+
       - name: PyTest Scattering Scaling
         if: runner.os == 'Linux'
         # Avoid Windows and macOS due to 2X and 10X minute multipliers.

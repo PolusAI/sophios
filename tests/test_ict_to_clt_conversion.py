@@ -5,6 +5,10 @@ import pytest
 
 from sophios.api.utils.converter import ict_to_clt
 
+# Contrib zone: this module exercises a peripheral surface, not the core
+# compiler. See design_docs/core-refactor-design.md, Spec 0.
+pytestmark = pytest.mark.contrib
+
 
 @pytest.mark.fast
 def test_ict_to_clt_label_to_vector_conversion() -> None:

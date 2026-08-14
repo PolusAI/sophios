@@ -12,6 +12,10 @@ import yaml
 from sophios.api.rest import api
 from sophios.wic_types import Json
 
+# Contrib zone: this module exercises a peripheral surface, not the core
+# compiler. See design_docs/core-refactor-design.md, Spec 0.
+pytestmark = pytest.mark.contrib
+
 try:
     import cwltool.main
     import toil.cwl.cwltoil  # transitively imports cwltool
