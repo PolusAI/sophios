@@ -4,7 +4,7 @@ import enum
 from typing import Any
 
 from pydantic import BaseModel, Field
-from sophios.api.utils.wfb_util import is_directory
+from sophios.contrib.wfb_util import is_directory
 
 
 CWL_IO_DICT: dict[str, str] = {

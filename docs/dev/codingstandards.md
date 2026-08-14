@@ -44,7 +44,7 @@ Useful local commands:
 
 ```bash
 pytest -m fast
-pytest tests/test_python_api.py tests/test_tool_builder.py -q
+pytest tests/core/test_python_api.py tests/core/test_tool_builder.py -q
 pytest -m serial
 pytest -m "not serial" --workers 8
 ```
@@ -90,5 +90,5 @@ touched. For Python API or docs changes, the most useful baseline is:
 
 ```bash
 sphinx-build -b html docs docs/_build/html
-pytest tests/test_python_api.py tests/test_tool_builder.py -q
+pytest tests/core/test_python_api.py tests/core/test_tool_builder.py -q
 ```

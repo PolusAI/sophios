@@ -159,7 +159,7 @@ jobs:
 
     - name: Generate Sophios Python API Workflows (*.py -> *.wic)
       if: always()
-      run: cd sophios/ && pytest tests/test_python_api.py -k test_compile_python_workflows
+      run: cd sophios/ && pytest tests/core/test_python_api.py -k test_compile_python_workflows
 
     - name: Generate Sophios Validation Jsonschema
       if: always()
@@ -170,43 +170,43 @@ jobs:
       # WIC Python API workflows as well as the WIC Python API itself.
     - name: Validate Sophios Python API Workflows (*.py -> *.wic)
       if: always()
-      run: cd sophios/ && pytest tests/test_python_api.py -k test_validate_generated_python_workflows
+      run: cd sophios/ && pytest tests/core/test_python_api.py -k test_validate_generated_python_workflows
 
     - name: cwl-docker-extract (i.e. recursively docker pull)
       if: always()
-      run: cd sophios/ && pytest tests/test_examples.py -k test_cwl_docker_extract
+      run: cd sophios/ && pytest tests/core/test_examples.py -k test_cwl_docker_extract
       # For self-hosted runners, make sure the docker cache is up-to-date.
 
     - name: PyTest Tool Builder
       if: always()
-      run: cd sophios/ && pytest tests/test_tool_builder.py -k test_tool_builder
+      run: cd sophios/ && pytest tests/core/test_tool_builder.py -k test_tool_builder
 
     - name: PyTest Python API
       if: always()
-      run: cd sophios/ && pytest tests/test_python_api.py -k "not test_compile_python_workflows and not test_validate_generated_python_workflows"
+      run: cd sophios/ && pytest tests/core/test_python_api.py -k "not test_compile_python_workflows and not test_validate_generated_python_workflows"
 
     - name: PyTest Run REST Core Tests
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd sophios/ && pytest tests/test_rest_api.py -k test_rest_core --cwl_runner cwltool
+      run: cd sophios/ && pytest tests/contrib/test_rest_api.py -k test_rest_core --cwl_runner cwltool
 
     - name: PyTest Run REST WFB Tests
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd sophios/ && pytest tests/test_rest_api.py -k test_rest_wfb --cwl_runner cwltool
+      run: cd sophios/ && pytest tests/contrib/test_rest_api.py -k test_rest_wfb --cwl_runner cwltool
 
     - name: PyTest Run ICT to CLT conversion Tests
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
-      run: cd sophios/ && pytest tests/test_ict_to_clt_conversion.py -k test_ict_to_clt
+      run: cd sophios/ && pytest tests/contrib/test_ict_to_clt_conversion.py -k test_ict_to_clt
 
     - name: PyTest Run update wfb payload Tests
       if: always()
-      run: cd sophios/ && pytest tests/test_fix_payload.py -k test_fix
+      run: cd sophios/ && pytest tests/contrib/test_fix_payload.py -k test_fix
 
     - name: PyTest Run Workflows
       if: always()
-      run: cd sophios/ && pytest tests/test_examples.py -k test_run_workflows_on_push --workers "${PYTEST_WORKERS}" --cwl_runner cwltool # --cov
+      run: cd sophios/ && pytest tests/core/test_examples.py -k test_run_workflows_on_push --workers "${PYTEST_WORKERS}" --cwl_runner cwltool # --cov
 
     # NOTE: The steps below are for repository_dispatch only. For all other steps, please insert above
     # this comment.

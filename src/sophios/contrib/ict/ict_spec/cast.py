@@ -3,7 +3,7 @@ from pathlib import Path
 
 from yaml import safe_load
 
-from sophios.api.utils.ict.ict_spec.model import ICT
+from sophios.contrib.ict.ict_spec.model import ICT
 
 
 def cast_to_ict(ict: Path | str | dict) -> ICT:

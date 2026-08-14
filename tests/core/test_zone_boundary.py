@@ -7,21 +7,33 @@ See design_docs/core-refactor-design.md, Spec 0:
 
 This is checked over the real module graph rather than a fixed list, so a newly
 added core module is covered without anyone remembering to update a whitelist.
+
+LIMITS OF THIS CHECK — read before trusting a green result.
+
+The scan is static. It sees `import`, `from ... import`, and relative imports,
+and it also catches `import_module("sophios.contrib.x")` when the target is a
+string literal. It cannot see a dynamic import whose target is computed:
+
+    import_module(f".{name}", __name__)      # invisible to this scan
+
+That construction is not hypothetical — `sophios/api/__init__.py` and
+`sophios/api/python/__init__.py` both resolve submodules that way. A green
+result therefore means "no statically visible crossing", which is weaker than
+"no crossing". Enforcing the stronger claim would need import-time
+instrumentation; that is not what this test does.
 """
 import ast
 from pathlib import Path
 
 import pytest
 
-SRC_ROOT = Path(__file__).resolve().parent.parent / 'src'
+SRC_ROOT = Path(__file__).resolve().parents[2] / 'src'
 PACKAGE = 'sophios'
 
-# The peripheral zone. Everything else under src/sophios is core.
-CONTRIB_PREFIXES = (
-    'sophios.api.utils.ict',
-    'sophios.api.utils.converter',
-    'sophios.api.rest',
-)
+# The peripheral zone is a single subtree. Everything else under src/sophios
+# is core. Core is deliberately NOT relocated: moving it would rename every
+# path clients import and all four console entry points.
+CONTRIB_PREFIXES = ('sophios.contrib',)
 
 
 def _module_name(path: Path) -> str:
@@ -52,6 +64,20 @@ def _resolve_relative(module: str, node: ast.ImportFrom, is_package: bool) -> st
     return '.'.join(parts)
 
 
+def _dynamic_target(node: ast.Call) -> str | None:
+    """Return the target of `import_module("literal")`, if it is a literal.
+
+    A computed target cannot be resolved statically; see the module docstring.
+    """
+    name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, 'id', None)
+    if name != 'import_module' or not node.args:
+        return None
+    first = node.args[0]
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        return first.value if first.value.startswith(PACKAGE) else None
+    return None
+
+
 def _imports_of(path: Path, module: str) -> set[str]:
     """Return the in-package modules that `path` imports, absolute and relative."""
     tree = ast.parse(path.read_text(encoding='utf-8'))
@@ -59,6 +85,10 @@ def _imports_of(path: Path, module: str) -> set[str]:
     found: set[str] = set()
     for node in ast.walk(tree):
         match node:
+            case ast.Call():
+                target = _dynamic_target(node)
+                if target is not None:
+                    found.add(target)
             case ast.Import():
                 found.update(a.name for a in node.names if a.name.startswith(PACKAGE))
             case ast.ImportFrom(level=0, module=str() as mod) if mod.startswith(PACKAGE):

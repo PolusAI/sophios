@@ -31,7 +31,7 @@ Run the focused tests for the area you changed. For Python API changes, this is
 a good baseline:
 
 ```bash
-pytest tests/test_python_api.py tests/test_tool_builder.py -q
+pytest tests/core/test_python_api.py tests/core/test_tool_builder.py -q
 ```
 
 For broader workflow changes, also run:

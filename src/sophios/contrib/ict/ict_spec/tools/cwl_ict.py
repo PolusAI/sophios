@@ -3,12 +3,12 @@
 from collections.abc import Iterable
 from typing import Any, TYPE_CHECKING, cast
 
-from sophios.api.utils.ict.ict_spec.hardware import HardwareRequirements
-from sophios.api.utils.ict.ict_spec.io import IO
-from sophios.api.utils.ict.ict_spec.ui import UIItem
+from sophios.contrib.ict.ict_spec.hardware import HardwareRequirements
+from sophios.contrib.ict.ict_spec.io import IO
+from sophios.contrib.ict.ict_spec.ui import UIItem
 
 if TYPE_CHECKING:
-    from sophios.api.utils.ict.ict_spec.model import ICT
+    from sophios.contrib.ict.ict_spec.model import ICT
 
 
 def requirements(ict_: "ICT", network_access: bool) -> dict[str, Any]:

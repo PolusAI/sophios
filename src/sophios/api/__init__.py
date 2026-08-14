@@ -4,7 +4,7 @@ from importlib import import_module
 from types import ModuleType
 
 
-__all__ = ["python", "rest", "utils"]
+__all__ = ["python"]
 
 
 def __getattr__(name: str) -> ModuleType:

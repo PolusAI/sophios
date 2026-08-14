@@ -14,7 +14,7 @@ from sophios.post_compile import cwl_inline_runtag
 from sophios.cli import get_args, get_dicts_for_compilation
 from sophios.runtime_inputs import normalize_rose_tree_cwl, normalize_rose_tree_job_inputs
 from sophios.wic_types import CompilerInfo, Json, Tool, Tools, StepId, YamlTree, NodeData
-from sophios.api.utils import converter
+from sophios.contrib import converter
 from sophios import plugins
 
 

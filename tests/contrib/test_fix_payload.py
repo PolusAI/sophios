@@ -3,11 +3,7 @@ import pathlib
 
 import pytest
 
-from sophios.api.utils.converter import update_payload_missing_inputs_outputs
-
-# Contrib zone: this module exercises a peripheral surface, not the core
-# compiler. See design_docs/core-refactor-design.md, Spec 0.
-pytestmark = pytest.mark.contrib
+from sophios.contrib.converter import update_payload_missing_inputs_outputs
 
 
 @pytest.mark.fast

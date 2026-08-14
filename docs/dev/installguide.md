@@ -158,7 +158,7 @@ pytest -m fast
 For the focused Python API and tool-builder tests:
 
 ```bash
-pytest tests/test_python_api.py tests/test_tool_builder.py -q
+pytest tests/core/test_python_api.py tests/core/test_tool_builder.py -q
 ```
 
 For the serial tests:

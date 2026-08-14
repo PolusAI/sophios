@@ -193,7 +193,7 @@ jobs:
 
       - name: Generate Sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd sophios/ && pytest tests/test_python_api.py -k test_compile_python_workflows
+        run: cd sophios/ && pytest tests/core/test_python_api.py -k test_compile_python_workflows
 
       - name: Generate Sophios Validation Jsonschema
         if: always()
@@ -204,7 +204,7 @@ jobs:
         # Sophios Python API workflows as well as the Sophios Python API itself.
       - name: Validate sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd sophios/ && pytest tests/test_python_api.py -k test_validate_generated_python_workflows
+        run: cd sophios/ && pytest tests/core/test_python_api.py -k test_validate_generated_python_workflows
 
       - name: Build Documentation
         if: runner.os == 'Linux'
@@ -224,18 +224,25 @@ jobs:
         # NOTE: This test MUST be run in serial! See is_isomorphic_with_timeout()
         timeout-minutes: 20 # backup timeout for windows
 
-      # Spec 0: the core/contrib boundary. Core must never import contrib.
-      # This is a static scan of the module graph; it needs no containers.
-      - name: PyTest Core/Contrib Boundary
+      # design_docs/core-refactor-design.md, Spec 0: both Spec 0 mechanisms —
+      # the core/contrib import boundary and entry-point resolution. Neither
+      # needs containers; both are static checks over the repository.
+      - name: PyTest Spec 0 Invariants
         if: always()
-        run: cd sophios/ && pytest tests/test_zone_boundary.py
+        run: cd sophios/ && pytest tests/core/test_zone_boundary.py tests/core/test_entry_points.py
 
       # Contrib surfaces (ICT, Workflow Builder, REST) run in core CI, but as
       # their own step, so a red build is attributable to a zone without
       # bisecting. See design_docs/core-refactor-design.md, Spec 0.
+      #
+      # skip_pypi_ci excludes the cases that shell out to a CWL runner against
+      # pre-pulled Docker images. This matrix is GitHub-hosted and has no
+      # cwl-docker-extract step, and windows-latest cannot run Linux containers
+      # at all; those cases already run on the self-hosted runners in
+      # run_workflows.yml, which do pre-pull.
       - name: PyTest Contrib Surfaces
         if: always()
-        run: cd sophios/ && pytest -m contrib
+        run: cd sophios/ && pytest tests/contrib -m "not skip_pypi_ci"
 
       - name: PyTest Scattering Scaling
         if: runner.os == 'Linux'
