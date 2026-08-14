@@ -38,5 +38,5 @@ outputs:
   response:
     description: 'The response text'
 runs:
-  using: 'node16'
+  using: 'node24'
   main: 'dist/index.js'

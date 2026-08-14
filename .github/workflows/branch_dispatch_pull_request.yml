@@ -35,7 +35,7 @@ jobs:
       # always checkout the base branch of the PR to use trustful actions before the identity
       # could be verified.
       - name: Checkout commit sha (Pull Request only)
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.base.sha }} # Check out the base to use trustworthy actions
 
@@ -51,17 +51,16 @@ jobs:
         run: |
           echo "commit_message=$COMMIT_MESSAGE" >> $GITHUB_ENV
 
-      # Unbelievably, for pull requests only, there is apparently no way to get
-      # the commit message directly via the github API.
-      # See https://github.com/orgs/community/discussions/28474
-      - name: Checkout commit sha (Pull Request only)
-        uses: actions/checkout@v3
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-
+      # Fetch the head commit's subject line via the GitHub API (by SHA) instead of
+      # checking out the PR's fork content. We only need commit metadata, not the fork's
+      # files, so this avoids `actions/checkout`'s fork-PR safety guard (and the need to
+      # opt in to `allow-unsafe-pr-checkout`) entirely, regardless of the prior membership check.
       - name: Get commit message (Pull Request only)
+        env:
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
         run: |
-          echo "commit_message=$(git show -s --format=%s)" >> $GITHUB_ENV
+          subject=$(gh api "repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}" --jq '.commit.message' | head -n1)
+          echo "commit_message=$subject" >> "$GITHUB_ENV"
 
       - name: Check existence of Sophios
         uses: ./.github/my_actions/check_existence/ # Must start with ./

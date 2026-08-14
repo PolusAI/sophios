@@ -35,7 +35,7 @@ jobs:
 
     steps:
     - name: Checkout sophios
-      uses: actions/checkout@v3
+      uses: actions/checkout@v5
       with:
         repository: ${{ github.repository_owner }}/sophios
         ref: master
@@ -43,7 +43,7 @@ jobs:
 
     - name: Checkout biobb_adapters
       if: always()
-      uses: actions/checkout@v3
+      uses: actions/checkout@v5
       with:
         repository: vjaganat90/biobb_adapters
         ref: master
@@ -51,7 +51,7 @@ jobs:
 
     - name: Checkout mm-workflows
       if: always()
-      uses: actions/checkout@v3
+      uses: actions/checkout@v5
       with:
         repository: ${{ github.repository_owner }}/mm-workflows
         ref: main
@@ -59,7 +59,7 @@ jobs:
 
     - name: Checkout image-workflows
       if: always()
-      uses: actions/checkout@v3
+      uses: actions/checkout@v5
       with:
         repository: ${{ github.repository_owner }}/image-workflows
         ref: main

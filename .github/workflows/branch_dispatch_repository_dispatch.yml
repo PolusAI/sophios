@@ -36,7 +36,7 @@ jobs:
       # guarantee the subsequent workflows after workflow dispatch don't checkout altered actions.
       # Therefore, membership must be checked to authorize the repository dispatch to run workflows.
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
 
       # Note: It is the initial sender of the series of cross-repo CI who needs to verified, not the
       # sender of the current event. For example, the repository_dispatch event could be triggered by a
