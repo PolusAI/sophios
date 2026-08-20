@@ -30,9 +30,7 @@ from sophios.lang import (
 )
 from sophios.lang.render import render
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CORPUS_DIRS = (REPO_ROOT / 'docs' / 'tutorials', REPO_ROOT / 'examples')
-CORPUS = sorted(p for d in CORPUS_DIRS if d.is_dir() for p in d.rglob('*.wic'))
+from .wic_corpus import CORPUS, corpus_id
 
 FAST = settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 
@@ -46,8 +44,12 @@ FAST = settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], 
 # structure, and comparison strips spans rather than pretending they survive.
 
 
-def _shape(node: Any) -> Any:
-    """Reduce an AST to its structure, discarding source positions."""
+def _shape(node: Any) -> Any:  # pylint: disable=too-many-return-statements
+    """Reduce an AST to its structure, discarding source positions.
+
+    One return per node kind. Collapsing them into a lookup would hide which
+    fields each kind contributes, which is the only thing this function says.
+    """
     match node:
         case Document():
             return ('doc',
@@ -169,7 +171,7 @@ def test_rendering_is_idempotent(source: str) -> None:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('path', CORPUS, ids=lambda p: p.name)
+@pytest.mark.parametrize('path', CORPUS, ids=corpus_id)
 def test_corpus_round_trips(path: Path) -> None:
     """Every corpus file survives a render/parse cycle unchanged in structure."""
     source = path.read_text(encoding='utf-8')

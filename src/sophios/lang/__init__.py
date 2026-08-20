@@ -25,13 +25,23 @@ from .nodes import (
     UnresolvedName,
     WicSidecar,
 )
-from .parser import INTERPRETED_STEP_KEYS, TAG_RAW_CWL, ParseResult, parse
+from .parser import (
+    DESUGARED_KEYS,
+    INTERPRETED_STEP_KEYS,
+    TAG_RAW_CWL,
+    WIC_STEP_KEY_PATTERN,
+    ParseResult,
+    parse,
+)
 from .render import render, to_json
+from .schema import wic_schema
 from .spans import SourceSpan
 
 __all__ = [
+    'DESUGARED_KEYS',
     'INTERPRETED_STEP_KEYS',
     'TAG_RAW_CWL',
+    'WIC_STEP_KEY_PATTERN',
     'Code',
     'Diagnostic',
     'Diagnostics',
@@ -53,4 +63,5 @@ __all__ = [
     'parse',
     'render',
     'to_json',
+    'wic_schema',
 ]

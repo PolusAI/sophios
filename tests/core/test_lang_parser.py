@@ -39,11 +39,9 @@ from sophios.lang import (
 from sophios.lang.spans import SourceSpan
 from sophios.utils_yaml import wic_loader
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CORPUS_DIRS = (REPO_ROOT / 'docs' / 'tutorials', REPO_ROOT / 'examples')
+from .wic_corpus import CORPUS, corpus_id
 
 FAST = settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-CORPUS = sorted(p for d in CORPUS_DIRS if d.is_dir() for p in d.rglob('*.wic'))
 
 
 # --------------------------------------------------------------------------
@@ -249,7 +247,7 @@ def test_p06_diagnostic_spans_index_real_source(text: str) -> None:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('path', CORPUS, ids=lambda p: p.name)
+@pytest.mark.parametrize('path', CORPUS, ids=corpus_id)
 def test_p07_corpus_files_parse(path: Path) -> None:
     """P07: every `.wic` in the repository corpus parses without error.
 

@@ -333,6 +333,14 @@ _DESUGARED_FORMS: Final[dict[str, Callable[[yaml.nodes.Node, str, Diagnostics, S
     KEY_RAW_CWL: lambda n, f, d, s: RawCwlRef(_name_text(n, f, d), s),
 }
 
+#: The desugared construct keys, as a set. Derived from the table above so a
+#: construct added there needs no second edit anywhere else.
+DESUGARED_KEYS: Final = frozenset(_DESUGARED_FORMS)
+
+#: The regular expression a `wic: steps:` key must match, for consumers that
+#: need to state the rule rather than apply it.
+WIC_STEP_KEY_PATTERN: Final = _WIC_STEP_KEY.pattern
+
 
 def _outputs(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[OutputBinding, ...]:
     """Parse a step's `out:` sequence."""

@@ -276,7 +276,28 @@ Two obligations follow, and both are enforced by tests rather than convention:
 The second obligation is checked as a property over generated inputs, not by
 example — see `tests/core/test_lang_parser.py`.
 
-### 6.3 What this does *not* cover
+### 6.3 The machine-readable schema
+
+`sophios.lang.wic_schema()` exports a JSON Schema for editors. It is generated
+from the parser's own tables — the construct keys, the interpreted step keys,
+the `wic:` step-key pattern — so a construct added to the parser appears in the
+schema without anyone editing a schema file. There is no hand-maintained copy.
+
+It is an **over-approximation**, for two reasons that come from the language
+itself rather than from any shortcut:
+
+- **JSON has no YAML tags.** A validator sees the document after loading, so
+  `!ii x` is invisible to it. The schema therefore describes the *desugared*
+  projection of §6.1 — what `sophios.lang.to_json` produces.
+- **Passthrough is open by definition.** Since §1 says anything outside the
+  interpreted set is copied through untouched, the schema cannot close any
+  object that might carry passthrough CWL.
+
+So the schema catches structural mistakes — `steps:` that is a string, `in:`
+that is a list, a malformed `(index, name)` key — and admits everything else.
+It is an editor aid, not a second implementation of this document.
+
+### 6.4 What this does *not* cover
 
 This document defines **syntax**: whether a Sophios document is well-formed. Two
 further questions are deliberately separate because they depend on the

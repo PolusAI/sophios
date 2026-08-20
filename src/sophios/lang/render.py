@@ -60,14 +60,12 @@ _WIC_TAGS: Final = frozenset({TAG_INLINE_INPUT, TAG_ANCHOR, TAG_ALIAS, TAG_RAW_C
 _PLAIN_SAFE: Final = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_./-]*\Z')
 
 
+@dataclass(frozen=True, slots=True)
 class _Tagged:
     """A value carrying a wic tag, so the YAML dumper emits `!tag value`."""
 
-    __slots__ = ('tag', 'value')
-
-    def __init__(self, tag: str, value: str) -> None:
-        self.tag = tag
-        self.value = value
+    tag: str
+    value: str
 
 
 # --------------------------------------------------------------------------
