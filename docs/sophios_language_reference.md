@@ -45,7 +45,7 @@ point of this document:
 | **Interpreted CWL** | Reads it *and acts on it* | `scatter`, `scatterMethod`, `when`, inline `run` |
 | **Passthrough CWL** | Copies it out unchanged | `$namespaces`, `$schemas`, `requirements`, `hints`, everything else |
 
-The interpreted set is closed and listed in §4.2. **Anything not in it is
+The interpreted set is closed and listed in §4.3. **Anything not in it is
 passthrough, by definition.** That rule is what makes the leak a contract
 rather than a surprise.
 
@@ -177,7 +177,23 @@ A tag outside the four above (`!foo`) is an error, not a fifth-and-a-half
 form. The loader has always rejected such documents, and the syntax layer
 must never accept more than the language it specifies.
 
-### 4.2 Interpreted CWL keys
+### 4.2 Each input is bound once
+
+An `in:` mapping may name a given input only once. Binding it twice is an
+error, not a last-one-wins:
+
+```yaml
+in:
+  f: !ii a
+  f: !ii b     # error: input 'f' is bound more than once
+```
+
+YAML itself leaves repeated keys undefined, so honouring either binding would
+mean choosing silently on the writer's behalf. The second binding is almost
+always a copy-paste mistake, and saying so costs less than debugging the one
+that got dropped.
+
+### 4.3 Interpreted CWL keys
 
 The complete set Sophios reads and acts upon:
 
@@ -239,7 +255,11 @@ desugared spelling.
 ### 6.2 What each surface must do
 
 **`.wic` files** are the YAML surface as written. They are parsed by
-`sophios.lang.parse`, which accepts both spellings above.
+`sophios.lang.parse`, which accepts both spellings above, and written by
+`sophios.lang.render`, which emits the tagged one. The two are inverses:
+parsing a rendered document reproduces the document it came from, which is what
+lets a disagreement between this text and the parser show up as a test failure
+rather than as a surprise.
 
 **The Python API** (`Workflow`, `Step`) is the second surface of the same
 language. `Workflow.write_wic()` and `.to_wic_yaml()` emit `.wic` documents,

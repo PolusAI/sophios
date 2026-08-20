@@ -234,11 +234,29 @@ def _step_body(
 
 
 def _inputs(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[tuple[str, InputValue], ...]:
-    """Parse a step's `in:` mapping into typed input values."""
+    """Parse a step's `in:` mapping into typed input values.
+
+    A repeated key is reported rather than silently resolved: binding the same
+    input twice is ambiguous, and picking either one would hide a mistake.
+    """
     if not isinstance(node, yaml.nodes.MappingNode):
         diags.error(Code.EXPECTED_MAPPING, f'in: must be a mapping, found {_kind(node)}', SourceSpan.of(file, node))
         return ()
-    return tuple((_key_text(k, file, diags), _input_value(v, file, diags)) for k, v in node.value)
+
+    seen: set[str] = set()
+    bindings: list[tuple[str, InputValue]] = []
+    for key_node, value_node in node.value:
+        name = _key_text(key_node, file, diags)
+        if name in seen:
+            diags.error(
+                Code.DUPLICATE_KEY,
+                f'input {name!r} is bound more than once',
+                SourceSpan.of(file, key_node),
+            )
+            continue
+        seen.add(name)
+        bindings.append((name, _input_value(value_node, file, diags)))
+    return tuple(bindings)
 
 
 def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputValue:
