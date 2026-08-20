@@ -27,6 +27,21 @@ the `wic:` block, the `!ii` / `!&` / `!*` tags, and the `wic_*` desugared keys.
 Those are concrete syntax that existing workflows depend on, so they stay as
 they are; they are not evidence that the language is called wic.
 
+## Implementation status
+
+This document specifies the language. Two parts of it are **specified but not
+yet wired into the compiler**, and are marked where they appear:
+
+| Construct | Specified | Accepted by `sophios.lang` | Usable in a compiled workflow |
+|---|---|---|---|
+| `!cwl` raw CWL reference (§4.1) | Yes | Yes | **Not yet** — CR-104 |
+| `wic_version` resolution (§7) | Yes | — | **Not yet** — CR-103 |
+
+Everything else describes what Sophios does today. Writing `!cwl` in a `.wic`
+file will not work until CR-104 lands, because the loader the compiler uses does
+not yet know the tag. It is documented now because the specification is what
+the implementation is being built against, not a record written afterwards.
+
 ---
 
 ## 1. What kind of language this is
@@ -144,7 +159,7 @@ A step input is exactly one of these. There is no sixth form.
 | Inline literal | `f: !ii empty.txt` | A literal value. Never an edge. |
 | Edge definition | `f: !& name` | Defines an explicit edge at this point |
 | Edge reference | `f: !* name` | Consumes an edge defined elsewhere |
-| Raw CWL reference | `f: !cwl step/out` | Opaque to Sophios; passed through unresolved |
+| Raw CWL reference | `f: !cwl step/out` | Opaque to Sophios; passed through unresolved. **Not yet usable — CR-104** |
 | Unresolved name | `f: some_input` | Must resolve to a workflow input |
 
 An untagged bare string is an **unresolved name**. If it does not name a
@@ -313,6 +328,11 @@ without the right plugins installed. That is not a language error.
 
 ## 7. Versioning
 
+> **Not yet implemented.** This section specifies how versioning will behave;
+> `lang_version` is not read or reported by any code path today. Tracked as
+> CR-103. Until it lands, every file is compiled by the one implementation that
+> exists, and no tag has any effect.
+
 `lang_version` starts at **0.0.1**, defined against CWL v1.2. The Sophios
 version and its CWL substrate move together.
 
@@ -329,6 +349,6 @@ compiles — not merely the newest version available. That means:
 You need a tag only to pin a file for reproducibility, or where a construct is
 valid under two versions with different meanings.
 
-The version Sophios actually chose is always reported — on the command line, on
+The version Sophios chose will always be reported — on the command line, on
 `CompiledWorkflow`, and as an annotation in the emitted CWL. You should never
 have to guess which language your file was read as.

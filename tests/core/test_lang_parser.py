@@ -261,8 +261,15 @@ def test_p07_corpus_files_parse(path: Path) -> None:
 
 @pytest.mark.fast
 def test_corpus_is_not_empty() -> None:
-    """The corpus scan must find files, or P07 passes vacuously."""
-    assert CORPUS, 'no corpus .wic files discovered'
+    """Discovery must find workflows, or P07 passes vacuously.
+
+    The corpus is whatever `search_paths_wic` reaches — the same discovery the
+    compiler uses, so there is nothing separate to keep complete. An empty
+    result does not mean a small corpus; it means discovery itself broke, and
+    that is a failure, not a skip. CI provisions the config that reaches the
+    sibling repositories, and CI is the arbiter of full coverage.
+    """
+    assert CORPUS, 'get_yml_paths found no workflows; check search_paths_wic'
 
 
 @pytest.mark.fast
