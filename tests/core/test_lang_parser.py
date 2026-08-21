@@ -287,7 +287,7 @@ def test_surface_forms_are_equivalent(form: tuple[str, str, type], payload: str)
     Humans write `!ii x`; the Python API emits `{wic_inline_input: x}`, because
     a constructor that re-emitted its own tag would fire again on reload. Both
     are the same language, so both must produce the same AST — otherwise the
-    two front-ends have quietly diverged.
+    two surfaces have quietly diverged.
     """
     tag, key, expected = form
     tagged = parse(f'steps:\n- id: s\n  in:\n    f: {tag} {payload}\n', 'a.wic')
@@ -406,9 +406,9 @@ def test_passthrough_keys_are_retained() -> None:
 
 @pytest.mark.fast
 def test_python_api_emits_documents_this_parser_accepts() -> None:
-    """The Python API is a second front-end over the same language.
+    """The Python API is the second surface of the same language.
 
-    Whatever it emits must parse, or the two front-ends have diverged and the
+    Whatever it emits must parse, or the two surfaces have diverged and the
     language reference is describing something that does not exist. See
     docs/sophios_language_reference.md, section 6.
     """

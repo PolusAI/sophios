@@ -1,4 +1,4 @@
-"""Write a `.wic` AST back out, in either of the language's two spellings.
+"""Write a Sophios AST back out, in either of the YAML surface's two spellings.
 
 Rendering is the inverse of parsing, and having both is what makes the syntax
 layer checkable: `parse(render(document))` must reproduce the document it
@@ -16,7 +16,7 @@ spelling to use, rather than as two walks that have to be kept in agreement:
 to write. `to_json` produces the desugared form because that is the projection
 a JSON-shaped consumer sees — JSON has no notion of a YAML tag.
 
-See docs/wic_language_reference.md.
+See docs/sophios_language_reference.md.
 """
 import re
 from collections.abc import Callable

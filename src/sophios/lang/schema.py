@@ -1,4 +1,4 @@
-"""Export a JSON Schema for `.wic`, derived from the language definition.
+"""Export a JSON Schema for Sophios, derived from the language definition.
 
 The schema is generated from the same constants the parser dispatches on — the
 desugared construct keys, the interpreted step keys, the `wic:` step-key
@@ -23,7 +23,7 @@ The result is a deliberate over-approximation: everything the parser accepts
 validates, and the structural mistakes the parser reports are rejected. It is
 an editor aid, not a second implementation of the language.
 
-See docs/wic_language_reference.md.
+See docs/sophios_language_reference.md.
 """
 from typing import Any, Final
 
@@ -37,7 +37,7 @@ SCHEMA_ID: Final = 'https://raw.githubusercontent.com/PolusAI/sophios/master/wic
 
 
 def wic_schema() -> dict[str, Any]:
-    """Build the JSON Schema describing a desugared `.wic` document.
+    """Build the JSON Schema describing a desugared Sophios document.
 
     Returned fresh each call: the result is mutable, and a shared instance a
     caller edited would corrupt every later export.
@@ -46,7 +46,7 @@ def wic_schema() -> dict[str, Any]:
         '$schema': DIALECT,
         '$id': SCHEMA_ID,
         'title': 'Sophios .wic workflow',
-        'description': 'Desugared projection of a .wic document. See docs/wic_language_reference.md.',
+        'description': 'Desugared projection of a Sophios document. See docs/sophios_language_reference.md.',
         'type': 'object',
         'properties': {
             'wic': _wic_block(),

@@ -35,7 +35,7 @@ yet wired into the compiler**, and are marked where they appear:
 | Construct | Specified | Accepted by `sophios.lang` | Usable in a compiled workflow |
 |---|---|---|---|
 | `!cwl` raw CWL reference (§4.1) | Yes | Yes | **Not yet** — CR-104 |
-| `wic_version` resolution (§7) | Yes | — | **Not yet** — CR-103 |
+| `lang_version` resolution (§7) | Yes | — | **Not yet** — CR-103 |
 
 Everything else describes what Sophios does today. Writing `!cwl` in a `.wic`
 file will not work until CR-104 lands, because the loader the compiler uses does

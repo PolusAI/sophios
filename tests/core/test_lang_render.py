@@ -1,4 +1,4 @@
-"""Properties of the `.wic` renderer (CR-101, T1.3).
+"""Properties of the Sophios renderer (CR-101, T1.3).
 
 Rendering is the inverse of parsing. Having both is what makes the syntax layer
 checkable, because a round-trip either reproduces the document or proves one of
@@ -109,7 +109,7 @@ literal_texts = st.sampled_from([
 
 @st.composite
 def documents(draw: st.DrawFn) -> str:
-    """A well-formed `.wic` document exercising every input form."""
+    """A well-formed Sophios document exercising every input form."""
     lines = ['steps:']
     for _ in range(draw(st.integers(min_value=1, max_value=3))):
         lines.append(f'- id: {draw(identifiers)}')

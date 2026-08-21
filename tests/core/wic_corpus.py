@@ -1,4 +1,4 @@
-"""The conformance corpus: every workflow Sophios can reach.
+"""The Sophios conformance corpus: every workflow the compiler can reach
 
 There is no discovery mechanism here — Sophios already has one. The config's
 `search_paths_wic` defines where workflows live, `plugins.get_yml_paths` finds
