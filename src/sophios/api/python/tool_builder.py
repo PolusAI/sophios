@@ -63,6 +63,7 @@ from ._tool_builder_support import (
     ValidationResult,
     validate_cwl_document,
 )
+from ...lang.cwl import CWL_VERSION
 
 if TYPE_CHECKING:
     from .workflow import Step
@@ -76,7 +77,7 @@ class CommandLineTool:
     name: str
     inputs: Inputs
     outputs: Outputs
-    cwl_version: str = "v1.2"
+    cwl_version: str = CWL_VERSION
     label_text: str | None = None
     doc_text: str | list[str] | None = None
     _base_command: list[str] = field(default_factory=list)
@@ -100,7 +101,7 @@ class CommandLineTool:
         inputs: Inputs,
         outputs: Outputs,
         *,
-        cwl_version: str = "v1.2",
+        cwl_version: str = CWL_VERSION,
     ) -> None:
         self.name = name
         self.inputs = inputs

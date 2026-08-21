@@ -17,6 +17,7 @@ from .wic_types import (CompilerInfo, CompilerOptions, EnvData, ExplicitEdgeCall
                         ExplicitEdgeDefs, GraphData, GraphReps, GraphSettings, Namespaces,
                         NodeData, RoseTree, Tool, Tools, WorkflowInputs, WorkflowInputsFile,
                         WorkflowOutputs, Yaml, YamlTagPaths, YamlTree, StepId)
+from .lang.cwl import CWL_VERSION
 
 # NOTE: This must be initialized in main.py and/or cwl_subinterpreter.py
 inference_rules: dict[str, str] = {}
@@ -196,9 +197,12 @@ def _prepare_compilation_state(yaml_tree_ast: YamlTree,
         raise ValueError('Error! workflows must define at least one step.')
 
     # Add headers
-    # Use 1.0 because cromwell only supports 1.0 and we are not using 1.1 / 1.2 features.
-    # Eventually we will want to use 1.2 to support conditional workflows and 1.3 to support loops.
-    yaml_tree['cwlVersion'] = yaml_tree.get('cwlVersion', 'v1.2')
+    # The one substrate version, owned by lang/cwl.py. The old comment here
+    # claimed cromwell as the reason to stay on 1.0; nothing in this tree
+    # runs cromwell (cwltool and toil are the supported runners), and 1.2 is
+    # what conditional workflows already rely on. A static scan bans version
+    # literals outside the owner module (tests/core/test_cwl_version.py).
+    yaml_tree['cwlVersion'] = yaml_tree.get('cwlVersion', CWL_VERSION)
     yaml_tree['class'] = 'Workflow'
     namespaces_value = yaml_tree.get('$namespaces', {})
     if namespaces_value is None:

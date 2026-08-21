@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 from types import ModuleType
 from typing import Any
+from .lang.cwl import CWL_VERSION
 
 DRIVER_SCRIPT = '/python_cwl_driver.py'
 TYPES_SCRIPT = '/workflow_types.py'
@@ -114,7 +115,7 @@ def generate_CWL_CommandLineTool(module_inputs: dict[str, Any], module_outputs: 
         dict[str, Any]: A CWL CommandLineTool with the given inputs and outputs.
     """
     yaml_tree: dict[str, Any] = {}
-    yaml_tree['cwlVersion'] = 'v1.0'
+    yaml_tree['cwlVersion'] = CWL_VERSION
     yaml_tree['class'] = 'CommandLineTool'
     yaml_tree['$namespaces'] = {'edam': 'https://edamontology.org/'}
     yaml_tree['$schemas'] = ['https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl']

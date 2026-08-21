@@ -16,6 +16,7 @@ from sophios.cli import get_dicts_for_compilation
 from sophios.utils_yaml import wic_loader
 from sophios.wic_types import GraphData, GraphReps, NodeData, StepId, Yaml, YamlTree
 from ..wic_types import Json, Tools
+from ..lang.cwl import CWL_VERSIONS
 
 
 config_schemas = {}
@@ -526,7 +527,7 @@ def wic_main_schema(tools_cwl: Tools, yml_stems: list[str], schema_store: dict[s
 
     schema_props = {'steps': steps,
                     'class': str_nonempty,
-                    'cwlVersion': str_nonempty,  # TODO enum https://www.commonwl.org/v1.2/Workflow.html#CWLVersion
+                    'cwlVersion': {'enum': list(CWL_VERSIONS)},
                     # TODO https://www.commonwl.org/v1.2/SchemaSalad.html#Explicit_context
                     '$base': str_nonempty,
                     '$namespaces': {},  # TODO

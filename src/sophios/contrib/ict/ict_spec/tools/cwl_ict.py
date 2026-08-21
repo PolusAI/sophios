@@ -6,6 +6,7 @@ from typing import Any, TYPE_CHECKING, cast
 from sophios.contrib.ict.ict_spec.hardware import HardwareRequirements
 from sophios.contrib.ict.ict_spec.io import IO
 from sophios.contrib.ict.ict_spec.ui import UIItem
+from sophios.lang.cwl import CWL_VERSION
 
 if TYPE_CHECKING:
     from sophios.contrib.ict.ict_spec.model import ICT
@@ -31,7 +32,7 @@ def clt_dict(ict_: "ICT", network_access: bool) -> dict[str, Any]:
 
     clt_: dict[str, Any] = {
         "class": "CommandLineTool",
-        "cwlVersion": "v1.2",
+        "cwlVersion": CWL_VERSION,
         "inputs": {
             # IO deliberately keeps _input_to_cwl/_output_to_cwl protected: they are
             # implementation details of the ICT<->CWL conversion that only this module needs.

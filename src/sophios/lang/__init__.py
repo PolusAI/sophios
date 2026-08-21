@@ -11,6 +11,7 @@ is a pointer to it, not a second copy that can drift.
 
 See design_docs/core-refactor-design.md, Spec 1.
 """
+from .cwl import CWL_VERSION, CWL_VERSIONS, CwlVersion
 from .diagnostics import Code, Diagnostic, Diagnostics, Severity
 from .nodes import (
     Document,
@@ -39,6 +40,9 @@ from .schema import wic_schema
 from .spans import SourceSpan
 
 __all__ = [
+    'CWL_VERSION',
+    'CWL_VERSIONS',
+    'CwlVersion',
     'DESUGARED_KEYS',
     'INTERPRETED_STEP_KEYS',
     'TAG_RAW_CWL',
