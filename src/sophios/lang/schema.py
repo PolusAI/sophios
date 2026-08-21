@@ -29,20 +29,29 @@ See docs/sophios_language_reference.md.
 from collections.abc import Callable, Mapping
 from dataclasses import fields
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, final
 
 from .nodes import Document, OutputBinding, Shape, Step, WicSidecar, surface_of
-from .parser import DESUGARED_KEYS, INTERPRETED_STEP_KEYS, WIC_STEP_KEY_PATTERN
+from .parser import Forms, Grammar
 
-#: Draft this schema targets. 2020-12 is what current editors consume.
-DIALECT: Final = 'https://json-schema.org/draft/2020-12/schema'
 
-#: Stable identifier. A URN, deliberately: the previous value was a
-#: raw.githubusercontent URL that nothing in the repository or CI ever
-#: publishes, so an editor following it got a 404 — a stable identifier that
-#: dereferences to nothing is a promise the repo does not keep. When a
-#: publishing step exists, this becomes its URL in the same commit.
-SCHEMA_ID: Final = 'urn:sophios:schema:lang'
+@final
+class Json:  # pylint: disable=too-few-public-methods  # a namespace, not a type
+    """What this module needs to speak JSON Schema, and nothing more.
+
+    The vocabulary being translated belongs to `nodes.Shape`; this namespace
+    holds only the target format's own constants.
+    """
+
+    #: Draft this schema targets. 2020-12 is what current editors consume.
+    DIALECT: Final = 'https://json-schema.org/draft/2020-12/schema'
+
+    #: Stable identifier, so an editor can bind it to `*.wic` by URI.
+    #: A URN, deliberately: the previous value was a raw.githubusercontent URL
+    #: that nothing publishes, so an editor following it got a 404. When a
+    #: publishing step exists, this becomes its URL in the same commit.
+    SCHEMA_ID: Final = 'urn:sophios:schema:lang'
+
 
 #: How each declared shape is expressed in JSON Schema — as builders, not as
 #: fragments.
@@ -74,7 +83,7 @@ _SHAPE_SCHEMA: Final[Mapping[Shape, Callable[[], dict[str, Any]]]] = MappingProx
     Shape.SIDECAR_STEPS: lambda: {
         'description': 'Per-step metadata, keyed "(index, name)".',
         'type': 'object',
-        'patternProperties': {WIC_STEP_KEY_PATTERN: {'$ref': '#/$defs/wicBlock'}},
+        'patternProperties': {Grammar.WIC_STEP_KEY_PATTERN: {'$ref': '#/$defs/wicBlock'}},
         'additionalProperties': False,
     },
     #: Structure only. A field's own constraints live with that field: the
@@ -96,8 +105,8 @@ def wic_schema() -> dict[str, Any]:
     """
     document = _object_schema(Document)
     return {
-        '$schema': DIALECT,
-        '$id': SCHEMA_ID,
+        '$schema': Json.DIALECT,
+        '$id': Json.SCHEMA_ID,
         'title': 'Sophios workflow',
         'description': 'Desugared projection of a Sophios document. '
                        'See docs/sophios_language_reference.md.',
@@ -127,7 +136,7 @@ def _object_schema(node_type: type, *, omit: frozenset[str] = frozenset()) -> di
             case Shape.INTERPRETED:
                 # A closed set of CWL keys, listed for editor completion but
                 # left unconstrained — Sophios reads them, CWL owns their shapes.
-                for key in sorted(INTERPRETED_STEP_KEYS):
+                for key in sorted(Grammar.INTERPRETED_STEP_KEYS):
                     properties[key] = {'description': f'Interpreted by Sophios: {key} (§4.3).'}
             case _ if form.key is not None:
                 properties[form.key] = _SHAPE_SCHEMA[form.shape]()
@@ -232,6 +241,6 @@ def _construct() -> dict[str, Any]:
         'type': 'object',
         'minProperties': 1,
         'maxProperties': 1,
-        'properties': {key: {} for key in sorted(DESUGARED_KEYS)},
+        'properties': {key: {} for key in sorted(Forms.DESUGARED_KEYS)},
         'additionalProperties': False,
     }

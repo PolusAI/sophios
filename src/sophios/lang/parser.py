@@ -10,20 +10,12 @@ See design_docs/core-refactor-design.md, Spec 1.
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Final
+from types import MappingProxyType
+from typing import Any, Final, Mapping, TypeAlias, final
 
 import yaml
 
-from ..utils_yaml import (
-    KEY_ALIAS,
-    KEY_ANCHOR,
-    KEY_INLINE_INPUT,
-    KEY_RAW_CWL,
-    TAG_ALIAS,
-    TAG_ANCHOR,
-    TAG_INLINE_INPUT,
-    TAG_RAW_CWL,
-)
+from ..utils_yaml import Key, Tag
 from .diagnostics import Code, Diagnostics
 from .nodes import (
     Document,
@@ -41,13 +33,32 @@ from .nodes import (
 )
 from .spans import SourceSpan
 
-#: CWL keys on a step that Sophios reads *and acts upon*. Everything else on a
-#: step is passthrough, by definition. Enumerating this set is what makes the
-#: leak boundary a specification rather than an accident.
-INTERPRETED_STEP_KEYS: Final = frozenset({'scatter', 'scatterMethod', 'when', 'run'})
 
-#: `wic:` sidecar step keys have the surface form "(1, step_name)".
-_WIC_STEP_KEY: Final = re.compile(r'^\(\s*(\d+)\s*,\s*(.+?)\s*\)$')
+@final
+class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a type
+    """The syntax layer's fixed vocabulary.
+
+    A namespace rather than loose module constants: these describe one thing —
+    what the language admits — and reading them together is how you check that.
+    Every member is immutable and built once at import, so they are shared
+    safely across threads and survive `fork` without coordination.
+    """
+
+    #: CWL keys on a step that Sophios reads *and acts upon*. Everything else
+    #: on a step is passthrough, by definition. Enumerating this set is what
+    #: makes the leak boundary a specification rather than an accident.
+    INTERPRETED_STEP_KEYS: Final = frozenset({'scatter', 'scatterMethod', 'when', 'run'})
+
+    #: `wic:` sidecar step keys have the surface form "(1, step_name)".
+    WIC_STEP_KEY: Final = re.compile(r'^\(\s*(\d+)\s*,\s*(.+?)\s*\)$')
+
+    #: The same rule as a string, for consumers that need to state it rather
+    #: than apply it — the exported JSON Schema, principally.
+    WIC_STEP_KEY_PATTERN: Final = WIC_STEP_KEY.pattern
+
+    # NOTE: no SCALAR_TAGS table here. Scalar resolution is delegated to
+    # PyYAML's SafeConstructor (see _resolved_scalar) — a hand-written table
+    # diverged from the loader, which review caught.
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,7 +268,7 @@ def _step_body(
             inputs = _inputs(value_node, file, diags)
         elif key == 'out':
             outputs = _outputs(value_node, file, diags)
-        elif key in INTERPRETED_STEP_KEYS:
+        elif key in Grammar.INTERPRETED_STEP_KEYS:
             interpreted.append((key, _opaque(value_node, file, diags)))
         else:
             passthrough.append((key, _opaque(value_node, file, diags)))
@@ -314,7 +325,7 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
     """
     span = SourceSpan.of(file, node)
 
-    build = _TAGGED_FORMS.get(node.tag)
+    build = Forms.TAGGED.get(node.tag)
     if build is not None:
         return build(node, file, diags, span)
 
@@ -346,39 +357,45 @@ def _desugared_form(
     if not isinstance(node, yaml.nodes.MappingNode) or len(node.value) != 1:
         return None
     key_node, value_node = node.value[0]
-    build = _DESUGARED_FORMS.get(_key_text(key_node, file, diags))
+    build = Forms.DESUGARED.get(_key_text(key_node, file, diags))
     if build is None:
         return None
     return build(value_node, file, diags, span)
 
 
-#: Tagged spellings to the node they build, paired with _DESUGARED_FORMS below.
-#: A table rather than a comparison chain: one lookup instead of four, and the
-#: two spellings of each construct stay side by side.
-_TAGGED_FORMS: Final[dict[str, Callable[[yaml.nodes.Node, str, Diagnostics, SourceSpan], InputValue]]] = {
-    TAG_INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_literal(n, f, d), s, text=_literal_text(n)),
-    TAG_ANCHOR: lambda n, f, d, s: EdgeDef(_name_text(n, f, d), s),
-    TAG_ALIAS: lambda n, f, d, s: EdgeRef(_name_text(n, f, d), s),
-    TAG_RAW_CWL: lambda n, f, d, s: RawCwlRef(_name_text(n, f, d), s),
-}
+#: One builder: a YAML node and its context in, one input node out.
+Builder: TypeAlias = Callable[[yaml.nodes.Node, str, Diagnostics, SourceSpan], InputValue]
 
-#: Desugared keys to the node they build. A table rather than a branch chain:
-#: adding a construct means adding a row, and the tagged and desugared spellings
-#: stay visibly paired.
-_DESUGARED_FORMS: Final[dict[str, Callable[[yaml.nodes.Node, str, Diagnostics, SourceSpan], InputValue]]] = {
-    KEY_INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_opaque(n, f, d), s),
-    KEY_ANCHOR: lambda n, f, d, s: EdgeDef(_name_text(n, f, d), s),
-    KEY_ALIAS: lambda n, f, d, s: EdgeRef(_name_text(n, f, d), s),
-    KEY_RAW_CWL: lambda n, f, d, s: RawCwlRef(_name_text(n, f, d), s),
-}
 
-#: The desugared construct keys, as a set. Derived from the table above so a
-#: construct added there needs no second edit anywhere else.
-DESUGARED_KEYS: Final = frozenset(_DESUGARED_FORMS)
+@final
+class Forms:  # pylint: disable=too-few-public-methods  # a namespace, not a type
+    """Each construct's two spellings, and what each builds.
 
-#: The regular expression a `wic: steps:` key must match, for consumers that
-#: need to state the rule rather than apply it.
-WIC_STEP_KEY_PATTERN: Final = _WIC_STEP_KEY.pattern
+    Kept side by side and in one namespace because the language's claim is that
+    the two spellings are equivalent (§6.1). Splitting them into separate
+    module globals is how they drift apart — which is exactly the defect CE-02
+    recorded. Both tables are read-only views.
+    """
+
+    #: Tagged spellings — what people write.
+    TAGGED: Final[Mapping[str, Builder]] = MappingProxyType({
+        Tag.INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_literal(n, f, d), s, text=_literal_text(n)),
+        Tag.ANCHOR: lambda n, f, d, s: EdgeDef(_name_text(n, f, d), s),
+        Tag.ALIAS: lambda n, f, d, s: EdgeRef(_name_text(n, f, d), s),
+        Tag.RAW_CWL: lambda n, f, d, s: RawCwlRef(_name_text(n, f, d), s),
+    })
+
+    #: Desugared spellings — what tooling emits.
+    DESUGARED: Final[Mapping[str, Builder]] = MappingProxyType({
+        Key.INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_opaque(n, f, d), s),
+        Key.ANCHOR: lambda n, f, d, s: EdgeDef(_name_text(n, f, d), s),
+        Key.ALIAS: lambda n, f, d, s: EdgeRef(_name_text(n, f, d), s),
+        Key.RAW_CWL: lambda n, f, d, s: RawCwlRef(_name_text(n, f, d), s),
+    })
+
+    #: The desugared construct keys. Derived from the table above so a
+    #: construct added there needs no second edit anywhere else.
+    DESUGARED_KEYS: Final = frozenset(DESUGARED)
 
 
 def _outputs(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[OutputBinding, ...]:
@@ -446,11 +463,11 @@ def _child_sidecar_node(node: yaml.nodes.Node) -> yaml.nodes.Node:
 
 def _out_edge_def(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> EdgeDef | None:
     """Recognise an edge definition in either spelling, or None."""
-    if node.tag == TAG_ANCHOR:
+    if node.tag == Tag.ANCHOR:
         return EdgeDef(_name_text(node, file, diags), SourceSpan.of(file, node))
     if isinstance(node, yaml.nodes.MappingNode) and len(node.value) == 1:
         key_node, value_node = node.value[0]
-        if _key_text(key_node, file, diags) == KEY_ANCHOR:
+        if _key_text(key_node, file, diags) == Key.ANCHOR:
             return EdgeDef(_name_text(value_node, file, diags), SourceSpan.of(file, value_node))
     return None
 
@@ -507,7 +524,7 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
 
 def _step_key(text: str) -> StepKey | None:
     """Normalise a `"(1, name)"` sidecar key, or None if it is malformed."""
-    match = _WIC_STEP_KEY.match(text)
+    match = Grammar.WIC_STEP_KEY.match(text)
     if match is None:
         return None
     return StepKey(int(match.group(1)), match.group(2))
@@ -579,7 +596,7 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
         return None
     path = _path | {id(node)}
 
-    if node.tag.startswith('!') and node.tag not in (TAG_ANCHOR, TAG_ALIAS, TAG_INLINE_INPUT, TAG_RAW_CWL):
+    if node.tag.startswith('!') and node.tag not in Tag.ALL:
         # Passthrough is CWL, and CWL has no custom YAML tags: the loader
         # rejects this text, so accepting it here would specify a superset of
         # the language. Reported; the payload is materialised for recovery.
@@ -587,8 +604,8 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
                     f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
                     SourceSpan.of(file, node))
 
-    if node.tag in (TAG_ANCHOR, TAG_ALIAS, TAG_RAW_CWL) or (
-            node.tag == TAG_INLINE_INPUT and isinstance(node, yaml.nodes.ScalarNode)):
+    if node.tag in (Tag.ANCHOR, Tag.ALIAS, Tag.RAW_CWL) or (
+            node.tag == Tag.INLINE_INPUT and isinstance(node, yaml.nodes.ScalarNode)):
         # Name-carrying tags route through the construct builder whatever the
         # node kind: `!& []` is a diagnostic — a name cannot be a collection,
         # and the loader rejects the same text. Falling through would strip
@@ -599,7 +616,7 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
 
     content: OpaqueCwl
     match node:
-        case yaml.nodes.ScalarNode() if node.tag == TAG_INLINE_INPUT:
+        case yaml.nodes.ScalarNode() if node.tag == Tag.INLINE_INPUT:
             content = None  # pragma: no cover — routed above; keeps match total
         case yaml.nodes.ScalarNode():
             content = _resolved_scalar(node)
@@ -610,7 +627,7 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
         case _:  # pragma: no cover — compose() emits only the three kinds above
             content = node.value
 
-    if node.tag == TAG_INLINE_INPUT and _wrap_self:
+    if node.tag == Tag.INLINE_INPUT and _wrap_self:
         # A collection literal: `!ii {a: 1}` in passthrough is the same
         # construct as in input position, wrapped around its materialised
         # content rather than re-dispatched into an infinite loop. `_literal`

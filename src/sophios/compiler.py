@@ -12,7 +12,7 @@ import yaml
 
 from . import input_output as io
 from . import inference, utils, utils_cwl, utils_graphs
-from .utils_yaml import KEY_ALIAS, KEY_INLINE_INPUT
+from .utils_yaml import Key
 from .wic_types import (CompilerInfo, CompilerOptions, EnvData, ExplicitEdgeCalls,
                         ExplicitEdgeDefs, GraphData, GraphReps, GraphSettings, Namespaces,
                         NodeData, RoseTree, Tool, Tools, WorkflowInputs, WorkflowInputsFile,
@@ -686,9 +686,9 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
             # Convert native YAML to a JSON-encoded string for specific tags.
             tags = ['config']
-            if arg_key in tags and isinstance(arg_val, dict) and (KEY_INLINE_INPUT in arg_val):
-                arg_val = {KEY_INLINE_INPUT: json.dumps(
-                    arg_val[KEY_INLINE_INPUT])}
+            if arg_key in tags and isinstance(arg_val, dict) and (Key.INLINE_INPUT in arg_val):
+                arg_val = {Key.INLINE_INPUT: json.dumps(
+                    arg_val[Key.INLINE_INPUT])}
 
             # Use triple underscore for namespacing so we can split later
             in_name = f'{step_name_or_key}___{arg_key}'
@@ -706,11 +706,11 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                 in_tool[arg_key], True)
 
             # NOTE: match-mapping patterns require literal keys, so the
-            # KEY_ALIAS / KEY_INLINE_INPUT constants cannot be used in the
+            # Key.ALIAS / Key.INLINE_INPUT constants cannot be used in the
             # `case` patterns themselves (only where compared/indexed below).
             match arg_val:
                 case {'wic_alias': _}:
-                    arg_val = arg_val[KEY_ALIAS]
+                    arg_val = arg_val[Key.ALIAS]
                     if not setup.explicit_edge_defs_copy.get(arg_val):
                         if is_root and not testing:
                             # Even if is_root, we don't want to raise an Exception
@@ -825,7 +825,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                             utils_graphs.add_graph_edge(
                                 graph_settings, graph_init, nss_def, nss_call, label, color='blue')
                 case {'wic_inline_input': _}:
-                    arg_val = arg_val[KEY_INLINE_INPUT]
+                    arg_val = arg_val[Key.INLINE_INPUT]
 
                     if arg_key in setup.steps[i].get('scatter', []):
                         # Promote scattered input types to arrays

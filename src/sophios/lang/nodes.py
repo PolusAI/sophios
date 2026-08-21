@@ -12,7 +12,7 @@ waste.
 from dataclasses import dataclass, field, fields
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Any, TypeAlias
+from typing import Any, Final, TypeAlias
 
 from .spans import SourceSpan
 

@@ -62,6 +62,11 @@ scalar_payload_texts = st.sampled_from([
     'x', '0', '-3', '1.5', '1.0e+300', '.inf', '.nan',
     'true', 'false', 'null', 'on', '2020-01-01',
     "'0'", "'true'", "'null'", "'on'", "''", "'a b'",
+    # Spellings YAML normalises away: the value no longer knows how it was
+    # written, so anything that re-serialises the value instead of emitting
+    # the source text loses them. They are the only spellings that can tell
+    # transcription apart from reconstruction, and none of the above can.
+    '0777', '1.50', 'yes', '0x1f', '1:30', '+5', '00',
 ])
 
 #: Construct leaves that may appear nested inside an `!ii` payload.

@@ -26,7 +26,7 @@ import jsonschema
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from sophios.lang import DESUGARED_KEYS, INTERPRETED_STEP_KEYS, Code, parse, to_json, wic_schema
+from sophios.lang import Code, Forms, Grammar, parse, to_json, wic_schema
 from sophios.lang.nodes import (
     Document,
     EdgeDef,
@@ -42,7 +42,6 @@ from sophios.lang.nodes import (
     surface,
     surface_of,
 )
-from sophios.lang.parser import WIC_STEP_KEY_PATTERN
 
 from .test_lang_parser import documents
 from .wic_corpus import CORPUS, corpus_id
@@ -78,13 +77,13 @@ def test_schema_is_derived_from_the_parser() -> None:
     without anyone remembering to edit it.
     """
     construct = SCHEMA['$defs']['construct']
-    assert set(construct['properties']) == set(DESUGARED_KEYS)
+    assert set(construct['properties']) == set(Forms.DESUGARED_KEYS)
 
     step_keys = set(SCHEMA['$defs']['stepBody']['properties'])
-    assert INTERPRETED_STEP_KEYS <= step_keys
+    assert Grammar.INTERPRETED_STEP_KEYS <= step_keys
 
     steps = SCHEMA['$defs']['wicBlock']['properties']['steps']
-    assert set(steps['patternProperties']) == {WIC_STEP_KEY_PATTERN}
+    assert set(steps['patternProperties']) == {Grammar.WIC_STEP_KEY_PATTERN}
 
 
 @pytest.mark.fast
@@ -162,7 +161,7 @@ def test_rejects_what_the_parser_reports(label: str, source: str, projection: An
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('key', sorted(DESUGARED_KEYS))
+@pytest.mark.parametrize('key', sorted(Forms.DESUGARED_KEYS))
 def test_each_construct_validates(key: str) -> None:
     """Every desugared construct is accepted where an input value is expected."""
     assert _accepts({'steps': {'s': {'in': {'f': {key: 'x'}}}}})
@@ -233,7 +232,7 @@ def test_schema_keys_come_only_from_the_ast() -> None:
     the mapping key rather than a key inside it.
     """
     declared = {surface_of(Step, f.name).key for f in fields(Step)} - {None}
-    declared |= set(INTERPRETED_STEP_KEYS)
+    declared |= set(Grammar.INTERPRETED_STEP_KEYS)
 
     for form in ('sequenceStep', 'stepBody'):
         keys = set(SCHEMA['$defs'][form]['properties'])

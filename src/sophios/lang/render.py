@@ -29,18 +29,11 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, final
 
 import yaml
 
-from ..utils_yaml import (
-    KEY_ALIAS,
-    KEY_ANCHOR,
-    KEY_INLINE_INPUT,
-    TAG_ALIAS,
-    TAG_ANCHOR,
-    TAG_INLINE_INPUT,
-)
+from ..utils_yaml import Key, Tag
 from .nodes import (
     Document,
     EdgeDef,
@@ -54,14 +47,23 @@ from .nodes import (
     UnresolvedName,
     WicSidecar,
 )
-from .parser import KEY_RAW_CWL, SIDECAR_WRAPPER_KEY, TAG_RAW_CWL
+from .parser import SIDECAR_WRAPPER_KEY
 
-#: Every tag the tagged spelling emits.
-_WIC_TAGS: Final = frozenset({TAG_INLINE_INPUT, TAG_ANCHOR, TAG_ALIAS, TAG_RAW_CWL})
 
-#: Text needing no quoting after a tag: no leading YAML indicator, no
-#: whitespace, and nothing that would start a comment or end the scalar.
-_PLAIN_SAFE: Final = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_./-]*\Z')
+@final
+class _Emit:  # pylint: disable=too-few-public-methods  # a namespace, not a type
+    """Everything the emitter needs to decide how to write a value.
+
+    Grouped so the two rules that govern output style sit together, and
+    immutable so they can be read from any thread without coordination.
+    """
+
+    #: Every tag the tagged spelling emits.
+    WIC_TAGS: Final = Tag.ALL
+
+    #: Text needing no quoting after a tag: no leading YAML indicator, no
+    #: whitespace, and nothing that would start a comment or end the scalar.
+    PLAIN_SAFE: Final = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_./-]*\Z')
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,11 +154,11 @@ class _Writer:
             case InlineLiteral():
                 return self._literal(value)
             case EdgeDef(name=name):
-                return _Tagged(TAG_ANCHOR, name) if self.mode == 'tagged' else {KEY_ANCHOR: name}
+                return _Tagged(Tag.ANCHOR, name) if self.mode == 'tagged' else {Key.ANCHOR: name}
             case EdgeRef(name=name):
-                return _Tagged(TAG_ALIAS, name) if self.mode == 'tagged' else {KEY_ALIAS: name}
+                return _Tagged(Tag.ALIAS, name) if self.mode == 'tagged' else {Key.ALIAS: name}
             case RawCwlRef(expression=expression):
-                return _Tagged(TAG_RAW_CWL, expression) if self.mode == 'tagged' else {KEY_RAW_CWL: expression}
+                return _Tagged(Tag.RAW_CWL, expression) if self.mode == 'tagged' else {Key.RAW_CWL: expression}
             case UnresolvedName(name=name):
                 return name
 
@@ -172,26 +174,26 @@ class _Writer:
         value at all.
         """
         if self.mode != 'tagged':
-            return {KEY_INLINE_INPUT: self.plain(literal.value)}
+            return {Key.INLINE_INPUT: self.plain(literal.value)}
 
         if literal.text is not None:
-            return _Tagged(TAG_INLINE_INPUT, literal.text)
+            return _Tagged(Tag.INLINE_INPUT, literal.text)
 
         if isinstance(literal.value, (list, dict)):
-            return _Tagged(TAG_INLINE_INPUT, self.plain(literal.value))
+            return _Tagged(Tag.INLINE_INPUT, self.plain(literal.value))
 
         if isinstance(literal.value, (InlineLiteral, EdgeDef, EdgeRef, RawCwlRef, UnresolvedName)):
             # A construct as the direct payload has no tagged spelling — two
             # tags cannot share a node — so the desugared form carries it.
-            return {KEY_INLINE_INPUT: self.plain(literal.value)}
+            return {Key.INLINE_INPUT: self.plain(literal.value)}
 
         spelled = _spell_scalar(literal.value)
         if spelled is not None:
-            return _Tagged(TAG_INLINE_INPUT, spelled)
+            return _Tagged(Tag.INLINE_INPUT, spelled)
         # The tagged form has no spelling for this value (e.g. the string
         # '0' — the composer strips quotes before the payload is re-resolved),
         # so the desugared spelling carries it instead of a lossy tag.
-        return {KEY_INLINE_INPUT: self.plain(literal.value)}
+        return {Key.INLINE_INPUT: self.plain(literal.value)}
 
     def plain(self, value: OpaqueCwl) -> Any:
         """Passthrough content, exhaustively over the closed `OpaqueCwl` union.
@@ -254,7 +256,7 @@ def _represent_tagged(dumper: yaml.SafeDumper, data: _Tagged) -> yaml.nodes.Node
             return dumper.represent_sequence(data.tag, data.value)
         case _:
             text = str(data.value)
-            style = '' if _PLAIN_SAFE.match(text) else None
+            style = '' if _Emit.PLAIN_SAFE.match(text) else None
             return dumper.represent_scalar(data.tag, text, style=style)
 
 
@@ -274,7 +276,7 @@ class _WicDumper(yaml.SafeDumper):
         tags whenever the value analyses as safe to write bare.
         """
         event = self.event
-        if isinstance(event, yaml.events.ScalarEvent) and event.tag in _WIC_TAGS and event.style == '':
+        if isinstance(event, yaml.events.ScalarEvent) and event.tag in _Emit.WIC_TAGS and event.style == '':
             if self.analysis is None:
                 self.analysis = self.analyze_scalar(event.value)
             if self.analysis.allow_block_plain:

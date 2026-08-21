@@ -33,11 +33,17 @@ from sophios.lang import (
 from sophios.lang.render import render
 from sophios.utils_yaml import wic_loader
 
-from .test_lang_parser import documents
+from .test_lang_parser import documents, scalar_payload_texts
 
 from .wic_corpus import CORPUS, corpus_id
 
 FAST = settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+
+#: The spellings whose source text IS the scalar's content — every payload
+#: above except the quoted ones, where the quotes belong to the YAML syntax
+#: rather than to the scalar, and the tagged form cannot carry them at all
+#: (the string '0' is the standing example; it renders desugared).
+unquoted_spellings = scalar_payload_texts.filter(lambda text: not text.startswith("'"))
 
 
 # --------------------------------------------------------------------------
@@ -262,3 +268,57 @@ def test_empty_sidecar_renders_as_mapping_not_null() -> None:
     assert document is not None
     rendered = render(document)
     assert 'null' not in rendered and '~' not in rendered
+
+
+# --------------------------------------------------------------------------
+# Transcription: a parsed literal is emitted as it was written
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+@given(unquoted_spellings)
+@FAST
+@example('0777')   # octal: value 511 knows nothing of how it was spelled
+@example('1.50')   # trailing zero
+@example('yes')    # YAML 1.1 boolean
+@example('0x1f')   # hexadecimal
+@example('1:30')   # sexagesimal
+def test_a_tagged_literal_keeps_its_source_spelling(spelling: str) -> None:
+    """`!ii <spelling>` renders back as `!ii <spelling>`, character for
+    character.
+
+    This is the renderer's founding claim — transcription, not
+    reconstruction — and the only claim that distinguishes the two. The
+    round-trip property cannot: it compares parsed values, and every spelling
+    here parses to a value that re-serialises to *some* valid spelling, just
+    not the one the author wrote. So when the parser silently stopped
+    recording the source text, every property stayed green while `!ii 0777`
+    began compiling as `!ii 511`.
+    """
+    source = f'steps:\n- id: s\n  in:\n    f: !ii {spelling}\n'
+    result = parse(source, 'transcribe.wic')
+    assert result.ok, [str(d) for d in result.diagnostics]
+    assert result.document is not None
+
+    payload = render(result.document).split('!ii ', 1)[1].rstrip('\n')
+    # Up to quoting, which the emitter adds when a plain scalar would be
+    # unsafe (`1:30` carries a colon). Quoting a tagged payload changes
+    # nothing: the composer strips the quotes before the content is
+    # re-resolved, which is why `!ii '1:30'` and `!ii 1:30` mean the same
+    # thing and why neither can be confused with the reconstructed `!ii 90`.
+    assert payload in (spelling, f"'{spelling}'"), f'{spelling!r} came back as {payload!r}'
+
+
+@pytest.mark.fast
+@given(unquoted_spellings)
+@FAST
+def test_a_parsed_literal_records_the_text_it_came_from(spelling: str) -> None:
+    """The mechanism behind the claim above: a literal parsed from tagged
+    YAML carries its spelling. Stated separately so a regression names the
+    cause rather than only the symptom."""
+    source = f'steps:\n- id: s\n  in:\n    f: !ii {spelling}\n'
+    document = parse(source, 'transcribe.wic').document
+    assert document is not None
+    literal = dict(document.steps[0].inputs)['f']
+    assert isinstance(literal, InlineLiteral)
+    assert literal.text == spelling
