@@ -300,9 +300,29 @@ example — see `tests/core/test_lang_parser.py`.
 ### 6.3 The machine-readable schema
 
 `sophios.lang.wic_schema()` exports a JSON Schema for editors. It is generated
-from the parser's own tables — the construct keys, the interpreted step keys,
-the `wic:` step-key pattern — so a construct added to the parser appears in the
-schema without anyone editing a schema file. There is no hand-maintained copy.
+from the AST, not written by hand.
+
+Every field of every AST node declares how it is written, next to the field
+itself:
+
+```python
+class Step:
+    id:      ... = surface(Shape.IDENTITY,        'id')
+    inputs:  ... = surface(Shape.INPUT_BINDINGS,  'in')
+    outputs: ... = surface(Shape.OUTPUT_BINDINGS, 'out')
+    passthrough: ... = surface(Shape.PASSTHROUGH)      # every unclaimed key
+    span:        ... = surface(Shape.INTERNAL)         # not syntax at all
+```
+
+That declaration is the single source of truth for the mapping between the AST
+and the surface, and it is what this document's tables describe in English.
+The schema generator walks those declarations; the construct keys and the
+`wic:` step-key pattern come from the parser's own tables. Nothing restates the
+shape of a document a second time, so nothing can disagree about it.
+
+Add a field to a node and one of two things happens: the schema gains the key,
+or generation fails because the field never said how it is written. There is no
+third outcome in which the schema quietly describes an older language.
 
 `to_json`'s output is always JSON-serialisable; YAML values with no JSON
 counterpart are projected — dates and datetimes become ISO-8601 strings.

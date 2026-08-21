@@ -9,11 +9,87 @@ mutate is not a specification of anything; slotted because these are allocated
 once per construct in a document and the dict-per-instance overhead is pure
 waste.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import date, datetime
+from enum import StrEnum
 from typing import Any, TypeAlias
 
 from .spans import SourceSpan
+
+
+class Shape(StrEnum):
+    """What a field looks like in the YAML surface.
+
+    Semantic, not serialisation-specific: this says *what kind of thing* a
+    field is, and downstream consumers decide how to express it. A JSON Schema
+    generator turns `INPUT_BINDINGS` into an object of input values; a
+    different consumer could turn it into something else. Neither gets to
+    invent the fact that `Step.inputs` is spelled `in:`.
+    """
+
+    #: Not surface syntax at all — source spans, surface-form flags.
+    INTERNAL = 'internal'
+    #: The node's own name, carried by its position rather than a key.
+    IDENTITY = 'identity'
+    #: `in:` — a mapping of input name to one of the five input forms.
+    INPUT_BINDINGS = 'input_bindings'
+    #: `out:` — a sequence of bare names or single-key edge bindings.
+    OUTPUT_BINDINGS = 'output_bindings'
+    #: `steps:` — a mapping keyed by step name, or a sequence.
+    STEPS = 'steps'
+    #: `wic:` — the metadata sidecar.
+    SIDECAR = 'sidecar'
+    #: `wic: steps:` — a mapping keyed by `(index, name)`.
+    SIDECAR_STEPS = 'sidecar_steps'
+    #: A fixed set of CWL keys Sophios reads and acts upon.
+    INTERPRETED = 'interpreted'
+    #: Any key not claimed above: CWL, copied through untouched.
+    PASSTHROUGH = 'passthrough'
+
+
+@dataclass(frozen=True, slots=True)
+class Surface:
+    """How one AST field appears in the language's YAML surface.
+
+    Declared beside the field it describes, so the mapping between the AST and
+    the syntax lives in exactly one place. Everything that needs to know the
+    shape of a document — the exported JSON Schema, the reference table —
+    reads this rather than restating it.
+    """
+
+    shape: Shape
+    #: The surface key this field occupies, when it occupies exactly one.
+    key: str | None = None
+
+
+def surface(shape: Shape, key: str | None = None, **kwargs: Any) -> Any:
+    """Declare a field's surface form. Thin wrapper over `dataclasses.field`.
+
+    The `field()` call is made here rather than at each use site so that every
+    declaration is one readable line. Pylint expects `field()` to appear
+    literally inside a class body and cannot see through the indirection.
+    """
+    # pylint: disable=invalid-field-call
+    return field(metadata={'surface': Surface(shape, key)}, **kwargs)
+
+
+def surface_of(node_type: type, field_name: str) -> Surface:
+    """The declared surface form of one field.
+
+    Raises if the field was never declared. That is the point: a field added
+    to a node without saying how it is written is a hole in the specification,
+    and it should stop the build rather than silently widen the language.
+    """
+    for declared in fields(node_type):
+        if declared.name == field_name:
+            found = declared.metadata.get('surface')
+            if found is None:
+                raise TypeError(
+                    f'{node_type.__name__}.{field_name} has no surface declaration; '
+                    f'add one with surface(Shape.…) so downstream consumers can see it'
+                )
+            return found  # type: ignore[no-any-return]
+    raise AttributeError(f'{node_type.__name__} has no field {field_name!r}')
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,25 +104,25 @@ class InlineLiteral:
     surface is what makes the round-trip exact by construction.
     """
 
-    value: 'OpaqueCwl'
-    span: SourceSpan
-    text: str | None = None
+    value: 'OpaqueCwl' = surface(Shape.IDENTITY)
+    span: SourceSpan = surface(Shape.INTERNAL)
+    text: str | None = surface(Shape.INTERNAL, default=None)
 
 
 @dataclass(frozen=True, slots=True)
 class EdgeDef:
     """`!& name` — an explicit edge definition site."""
 
-    name: str
-    span: SourceSpan
+    name: str = surface(Shape.IDENTITY)
+    span: SourceSpan = surface(Shape.INTERNAL)
 
 
 @dataclass(frozen=True, slots=True)
 class EdgeRef:
     """`!* name` — an explicit edge call site."""
 
-    name: str
-    span: SourceSpan
+    name: str = surface(Shape.IDENTITY)
+    span: SourceSpan = surface(Shape.INTERNAL)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,8 +133,8 @@ class RawCwlRef:
     local, visible form of what `--allow_raw_cwl` does globally.
     """
 
-    expression: str
-    span: SourceSpan
+    expression: str = surface(Shape.IDENTITY)
+    span: SourceSpan = surface(Shape.INTERNAL)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,8 +145,8 @@ class UnresolvedName:
     `!ii` for a literal, `!cwl` for a raw CWL reference.
     """
 
-    name: str
-    span: SourceSpan
+    name: str = surface(Shape.IDENTITY)
+    span: SourceSpan = surface(Shape.INTERNAL)
 
 
 #: The complete set of forms a step input may take. Closed by construction:
@@ -102,9 +178,9 @@ class OutputBinding:
     an edge definition (`- file: !& file_touch`).
     """
 
-    name: str
-    edge_def: EdgeDef | None
-    span: SourceSpan
+    name: str = surface(Shape.IDENTITY)
+    edge_def: EdgeDef | None = surface(Shape.IDENTITY)
+    span: SourceSpan = surface(Shape.INTERNAL)
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,12 +192,12 @@ class Step:
     preserved verbatim.
     """
 
-    id: str
-    inputs: tuple[tuple[str, InputValue], ...] = ()
-    outputs: tuple[OutputBinding, ...] = ()
-    interpreted: tuple[tuple[str, OpaqueCwl], ...] = ()
-    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
-    span: SourceSpan | None = None
+    id: str = surface(Shape.IDENTITY, 'id')
+    inputs: tuple[tuple[str, InputValue], ...] = surface(Shape.INPUT_BINDINGS, 'in', default=())
+    outputs: tuple[OutputBinding, ...] = surface(Shape.OUTPUT_BINDINGS, 'out', default=())
+    interpreted: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.INTERPRETED, default=())
+    passthrough: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.PASSTHROUGH, default=())
+    span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
 
     def input(self, name: str) -> InputValue | None:
         """Return the value bound to `name`, or None if unbound."""
@@ -136,8 +212,8 @@ class StepKey:
     should ever parse that string again.
     """
 
-    index: int
-    name: str
+    index: int = surface(Shape.IDENTITY)
+    name: str = surface(Shape.IDENTITY)
 
     def __str__(self) -> str:
         return f'({self.index}, {self.name})'
@@ -152,9 +228,9 @@ class WicSidecar:
     the sidecar's surface is unchanged by this specification.
     """
 
-    steps: tuple[tuple[StepKey, 'WicSidecar'], ...] = ()
-    entries: tuple[tuple[str, OpaqueCwl], ...] = ()
-    span: SourceSpan | None = None
+    steps: tuple[tuple[StepKey, 'WicSidecar'], ...] = surface(Shape.SIDECAR_STEPS, 'steps', default=())
+    entries: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.PASSTHROUGH, default=())
+    span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
 
     def entry(self, name: str) -> OpaqueCwl | None:
         """Return a non-`steps` sidecar entry by name."""
@@ -170,12 +246,12 @@ class Document:
     preserved so it can be emitted unchanged.
     """
 
-    steps: tuple[Step, ...] = ()
-    sidecar: WicSidecar | None = None
-    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
-    span: SourceSpan | None = None
+    steps: tuple[Step, ...] = surface(Shape.STEPS, 'steps', default=())
+    sidecar: WicSidecar | None = surface(Shape.SIDECAR, 'wic', default=None)
+    passthrough: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.PASSTHROUGH, default=())
+    span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
     #: True when `steps:` was written as a mapping rather than a sequence.
-    steps_as_mapping: bool = field(default=False)
+    steps_as_mapping: bool = surface(Shape.INTERNAL, default=False)
 
     def step(self, step_id: str) -> Step | None:
         """Return the first step with the given id, or None."""

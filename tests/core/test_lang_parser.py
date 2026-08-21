@@ -121,12 +121,19 @@ def input_lines(draw: st.DrawFn, name: str | None = None, indent: str = '      '
             return f'{indent}{name}: {draw(identifiers)}'
 
 
+#: Output names as source text, including the empty one. `out: ['']` parses
+#: without a diagnostic, so it is inside the language — and a generator whose
+#: names were all non-empty is why a schema constraint that rejected it went
+#: unnoticed. The alphabet has to reach the edges of what the parser admits.
+output_name_texts = st.one_of(identifiers, st.just("''"))
+
+
 @st.composite
 def _out_lines(draw: st.DrawFn, indent: str) -> list[str]:
     """An `out:` block: bare names and `!&`-bound names, in both spellings."""
     lines = [f'{indent}out:']
     for _ in range(draw(st.integers(min_value=1, max_value=2))):
-        name = draw(identifiers)
+        name = draw(output_name_texts)
         match draw(st.sampled_from(['bare', 'edge', 'edge_desugared'])):
             case 'bare':
                 lines.append(f'{indent}- {name}')
