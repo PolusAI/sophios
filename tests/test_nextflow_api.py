@@ -3,13 +3,22 @@
 # pylint: disable=missing-function-docstring,protected-access,redefined-outer-name
 
 import copy
+import os
 from pathlib import Path
+import shutil
+import subprocess
 from typing import Any, cast
 
 import pytest
 
 from sophios import inference
 from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
+from sophios import cli
+from sophios.input_output_nf import (
+    render_nextflow,
+    write_nextflow_artifacts,
+    write_nextflow_files,
+)
 from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
 from sophios.nf_types import NfConnection, NfPort, NfProcess, NextflowWorkflow
 from sophios.utils_nf import cwl_rosetree_to_nextflow, cwl_type_to_nf_qualifier
@@ -453,3 +462,209 @@ def test_nf101_t14_rejects_unknown_connection_source() -> None:
     )
     with pytest.raises(ValueError, match="unknown source process"):
         cwl_rosetree_to_nextflow(rose)
+
+
+# NF-102 — deterministic artifacts and core runtime semantics.
+
+
+def _runtime_workflow() -> NextflowWorkflow:
+    produce = NfProcess(
+        "PRODUCE",
+        [NfPort("message", "val")],
+        [NfPort("result", "path", "result")],
+        'printf \'%s\' "$message" > message.txt',
+        directives={"_output_glob.result": "message.txt"},
+    )
+    copy_process = NfProcess(
+        "COPY",
+        [NfPort("source", "path")],
+        [NfPort("copy", "path", "copy")],
+        'cp "$source" copy.txt',
+        directives={"_output_glob.copy": "copy.txt"},
+    )
+    return NextflowWorkflow(
+        "PIPELINE",
+        [produce, copy_process],
+        [
+            NfConnection(None, "message", "PRODUCE", "message"),
+            NfConnection("PRODUCE", "result", "COPY", "source"),
+            NfConnection("COPY", "copy", None, "result"),
+        ],
+        {"message": "hello from Sophios"},
+    )
+
+
+@pytest.mark.serial
+def test_nf102_t21_writes_four_deterministic_artifacts(tmp_path: Path) -> None:
+    workflow = _runtime_workflow()
+    before = workflow.to_json()
+    paths = write_nextflow_artifacts(workflow, tmp_path)
+    first = {path.name: path.read_bytes() for path in paths}
+    assert [path.name for path in paths] == [
+        "nextflow_workflow.json",
+        "workflow.nf",
+        "nextflow.config",
+        "nextflow_params.json",
+    ]
+    write_nextflow_artifacts(workflow, tmp_path)
+    assert {path.name: path.read_bytes() for path in paths} == first
+    assert workflow.to_json() == before
+
+
+@pytest.mark.serial
+def test_nf102_t21_renders_named_workflow_and_entry_wrapper() -> None:
+    rendered = render_nextflow(_runtime_workflow())
+    assert "workflow PIPELINE {" in rendered
+    assert "take:\n    message" in rendered
+    assert "COPY(PRODUCE.out.result)" in rendered
+    assert "result = COPY.out.copy" in rendered
+    assert "workflow {\n    PIPELINE(Channel.value(params.message))\n}" in rendered
+
+
+@pytest.mark.serial
+def test_nf102_t21_renders_supported_process_metadata() -> None:
+    process = NfProcess(
+        "TASK",
+        [NfPort("source", "path")],
+        [NfPort("report", "path", "report")],
+        "touch report.txt",
+        container="ubuntu:24.04",
+        directives={"cpus": "2", "memory": "1024 MB", "_output_glob.report": "report.txt"},
+    )
+    rendered = render_nextflow(NextflowWorkflow(
+        "WF",
+        [process],
+        [NfConnection(None, "source", "TASK", "source")],
+        {"source": "input.txt"},
+    ))
+    assert 'container "ubuntu:24.04"' in rendered
+    assert "cpus 2" in rendered
+    assert 'memory "1024 MB"' in rendered
+    assert 'path "report.txt", emit: report' in rendered
+
+
+@pytest.mark.serial
+def test_nf102_t21_rejects_cyclic_or_multiply_connected_dags() -> None:
+    a = NfProcess("A", [NfPort("value", "val")], [NfPort("out", "val", "out")], "true")
+    b = NfProcess("B", [NfPort("value", "val")], [NfPort("out", "val", "out")], "true")
+    cyclic = NextflowWorkflow(
+        "WF",
+        [a, b],
+        [NfConnection("A", "out", "B", "value"), NfConnection("B", "out", "A", "value")],
+        {},
+    )
+    with pytest.raises(ValueError, match="cycle"):
+        render_nextflow(cyclic)
+
+    duplicate = NextflowWorkflow(
+        "WF",
+        [a, b],
+        [
+            NfConnection(None, "first", "A", "value"),
+            NfConnection(None, "second", "A", "value"),
+        ],
+        {"first": 1, "second": 2},
+    )
+    with pytest.raises(ValueError, match="one source"):
+        render_nextflow(duplicate)
+
+
+def _nextflow_executable() -> str:
+    executable = shutil.which("nextflow")
+    if executable is None:
+        pytest.skip("Nextflow executable is not available")
+    return executable
+
+
+def _run_nextflow(workflow: NextflowWorkflow, directory: Path) -> subprocess.CompletedProcess[str]:
+    write_nextflow_artifacts(workflow, directory)
+    run_env = dict(os.environ)
+    run_env.update({
+        "NXF_ANSI_LOG": "false",
+        "NXF_HOME": str(directory / ".nxf-home"),
+        "NXF_OFFLINE": "true",
+    })
+    return subprocess.run(
+        [
+            _nextflow_executable(),
+            "run",
+            "workflow.nf",
+            "-params-file",
+            "nextflow_params.json",
+            "-c",
+            "nextflow.config",
+            "-work-dir",
+            str(directory / "work"),
+        ],
+        cwd=directory,
+        env=run_env,
+        text=True,
+        capture_output=True,
+        timeout=90,
+        check=False,
+    )
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_nf102_t21_and_nf104_t41_actual_nextflow_golden_path(tmp_path: Path) -> None:
+    result = _run_nextflow(_runtime_workflow(), tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("copy.txt"))
+    assert len(outputs) == 1
+    assert outputs[0].read_text(encoding="utf-8") == "hello from Sophios"
+
+
+# NF-103 — Python and CLI target selection.
+
+
+@pytest.mark.serial
+def test_nf103_t31_default_and_explicit_cwl_targets_match(real_linear_rose: RoseTree) -> None:
+    del real_linear_rose
+    touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl")
+    touch.inputs.filename = "empty.txt"
+    workflow = Workflow([touch], "wf")
+    assert workflow.compile() == workflow.compile(target="cwl")
+
+
+@pytest.mark.serial
+def test_nf103_t31_nextflow_target_uses_one_internal_compile(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sophios.api.python import _workflow_runtime as runtime
+
+    touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl")
+    touch.inputs.filename = "empty.txt"
+    workflow = Workflow([touch], "wf")
+    original = runtime.compile_workflow
+    calls = 0
+
+    def counted_compile(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "compile_workflow", counted_compile)
+    compiled = workflow.compile(target="nextflow")
+    assert isinstance(compiled, NextflowWorkflow)
+    assert calls == 1
+
+
+@pytest.mark.serial
+def test_nf103_t31_convenience_methods_generate_execution_files(tmp_path: Path) -> None:
+    touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl")
+    touch.inputs.filename = "empty.txt"
+    workflow = Workflow([touch], "wf")
+    assert isinstance(workflow.get_nextflow_workflow(), NextflowWorkflow)
+    assert [path.name for path in workflow.to_nf(tmp_path)] == [
+        "workflow.nf",
+        "nextflow.config",
+        "nextflow_params.json",
+    ]
+
+
+@pytest.mark.fast
+def test_nf103_t32_cli_target_defaults_and_rejects_cwl_run_modes() -> None:
+    assert cli.get_args("workflow.wic", ["--generate_cwl_workflow"]).target == "cwl"
+    assert cli.get_args(
+        "workflow.wic",
+        ["--generate_cwl_workflow", "--target", "nextflow"],
+    ).target == "nextflow"
