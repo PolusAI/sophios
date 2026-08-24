@@ -16,10 +16,12 @@ from pathlib import Path
 from typing import Any, get_args
 
 import pytest
+import yaml
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from sophios.lang import (
+    Code,
     Document,
     EdgeDef,
     EdgeRef,
@@ -32,6 +34,7 @@ from sophios.lang import (
     parse,
 )
 from sophios.lang.spans import SourceSpan
+from sophios.utils_yaml import wic_loader
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORPUS_DIRS = (REPO_ROOT / 'docs' / 'tutorials', REPO_ROOT / 'examples')
@@ -349,3 +352,81 @@ def test_python_api_emits_documents_this_parser_accepts() -> None:
     emitted = result.document.steps[0].input('filename')
     assert isinstance(emitted, InlineLiteral)
     assert emitted.value == 'empty.txt'
+
+# --------------------------------------------------------------------------
+# The parser is never more permissive than the loader (PR #382 review)
+# --------------------------------------------------------------------------
+#
+# The loader rejects unknown tags with ConstructorError; a syntax layer that
+# silently accepted them would specify a superset of the language. Both
+# escapes the review found are pinned, plus the agreement property.
+
+
+@pytest.mark.fast
+def test_unknown_tag_in_input_position_is_reported() -> None:
+    """`!foo bar` as an input value is a diagnostic, not UnresolvedName('bar')."""
+    result = parse('steps:\n- id: s\n  in:\n    a: !foo bar\n', 'x.wic')
+    assert any(d.code is Code.UNKNOWN_TAG for d in result.diagnostics)
+    assert not result.ok
+
+
+@pytest.mark.fast
+def test_unknown_tag_in_passthrough_is_reported() -> None:
+    """The tag is not silently dropped from passthrough content either."""
+    for source in ('top: !foo bar\n', 'top: !foo {a: 1}\n', 'top: !foo [1, 2]\n'):
+        result = parse(source, 'x.wic')
+        assert any(d.code is Code.UNKNOWN_TAG for d in result.diagnostics), source
+
+
+@pytest.mark.fast
+@given(st.text('abcdefghijklmnopqrstuvwxyz!&*i {}[]:#-', max_size=120))
+@FAST
+def test_parser_is_not_more_permissive_than_the_loader(text: str) -> None:
+    """Any document the parser accepts without diagnostics, the loader loads.
+
+    The reverse is allowed — the parser recovers where the loader raises — but
+    this direction is the specification's half of the bargain.
+    """
+    result = parse(text, 'agree.wic')
+    if result.ok and result.document is not None:
+        yaml.load(text, Loader=wic_loader())  # must not raise
+
+
+@pytest.mark.fast
+@given(st.sampled_from(['010', '0x1A', '2020-01-01', '.inf', '12:30', 'true', 'null', '3.14', 'plain']))
+def test_passthrough_scalars_resolve_exactly_as_the_loader(text: str) -> None:
+    """Scalar resolution is delegated to PyYAML, not re-implemented.
+
+    A hand-written table diverged on every one of these; delegation makes the
+    divergence structurally impossible.
+    """
+    result = parse(f'top:\n  k: {text}\n', 'x.wic')
+    assert result.document is not None
+    parsed = dict(result.document.passthrough)['top']['k']
+    assert parsed == yaml.safe_load(text)
+
+
+@pytest.mark.fast
+def test_collection_keys_are_reported_not_stringified() -> None:
+    """`? [a, b]` as a step key is a diagnostic, not a repr of node objects."""
+    result = parse('steps:\n  ? [a, b]\n  : {}\n', 'x.wic')
+    assert any(d.code is Code.EXPECTED_SCALAR for d in result.diagnostics)
+
+
+@pytest.mark.fast
+def test_untagged_collection_inputs_are_inline_literals() -> None:
+    """An untagged mapping in input position is `!ii` by definition (§4.1)."""
+    result = parse('steps:\n- id: s\n  in:\n    a: {some: mapping}\n', 'x.wic')
+    assert result.ok and result.document is not None
+    value = result.document.steps[0].inputs[0][1]
+    assert isinstance(value, InlineLiteral)
+    assert value.value == {'some': 'mapping'}
+
+
+@pytest.mark.fast
+def test_diagnostics_slices_are_diagnostics() -> None:
+    """Slicing honours the Sequence contract instead of degrading to list."""
+    result = parse('steps:\n- id: s\n  in:\n    a: !foo x\n    b: !bar y\n', 'x.wic')
+    from sophios.lang import Diagnostics
+    assert isinstance(result.diagnostics[0:1], Diagnostics)
+    assert len(result.diagnostics[0:1]) == 1

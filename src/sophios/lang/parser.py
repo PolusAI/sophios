@@ -49,16 +49,6 @@ INTERPRETED_STEP_KEYS: Final = frozenset({'scatter', 'scatterMethod', 'when', 'r
 #: `wic:` sidecar step keys have the surface form "(1, step_name)".
 _WIC_STEP_KEY: Final = re.compile(r'^\(\s*(\d+)\s*,\s*(.+?)\s*\)$')
 
-#: How YAML's resolved scalar tags map to Python values. Annotated explicitly
-#: because the converters are heterogeneous and would otherwise infer as
-#: `object`, which is not callable.
-_SCALAR_TAGS: Final[dict[str, Callable[[str], Any]]] = {
-    'tag:yaml.org,2002:null': lambda _: None,
-    'tag:yaml.org,2002:bool': lambda s: s.lower() in ('true', 'yes', 'on'),
-    'tag:yaml.org,2002:int': int,
-    'tag:yaml.org,2002:float': float,
-}
-
 
 @dataclass(frozen=True, slots=True)
 class ParseResult:
@@ -120,7 +110,7 @@ def _document(root: yaml.nodes.MappingNode, file: str, diags: Diagnostics) -> Do
     passthrough: list[tuple[str, OpaqueCwl]] = []
 
     for key_node, value_node in root.value:
-        key = _key_text(key_node)
+        key = _key_text(key_node, file, diags)
         match key:
             case 'steps':
                 steps, steps_as_mapping = _steps(value_node, file, diags)
@@ -146,7 +136,7 @@ def _steps(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[tuple[
     """
     match node:
         case yaml.nodes.MappingNode():
-            return tuple(_step(_key_text(k), v, file, diags) for k, v in node.value), True
+            return tuple(_step(_key_text(k, file, diags), v, file, diags) for k, v in node.value), True
         case yaml.nodes.SequenceNode():
             return tuple(_sequence_step(item, file, diags) for item in node.value), False
         case _:
@@ -174,17 +164,17 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
         diags.error(Code.EXPECTED_MAPPING, f'each step must be a mapping, found {_kind(node)}', span)
         return Step(id='', span=span)
 
-    id_node = next((v for k, v in node.value if _key_text(k) == 'id'), None)
+    id_node = next((v for k, v in node.value if _key_text(k, file, diags) == 'id'), None)
     if id_node is not None:
         step_id = _name_text(id_node)
         if not step_id:
             diags.error(Code.EMPTY_STEP_ID, 'id: must be a non-empty string', SourceSpan.of(file, id_node))
-        body = [(k, v) for k, v in node.value if _key_text(k) != 'id']
+        body = [(k, v) for k, v in node.value if _key_text(k, file, diags) != 'id']
         return _step_body(step_id, body, span, file, diags)
 
     if len(node.value) == 1:
         key_node, value_node = node.value[0]
-        return _step(_key_text(key_node), value_node, file, diags)
+        return _step(_key_text(key_node, file, diags), value_node, file, diags)
 
     diags.error(
         Code.MISSING_STEP_ID,
@@ -223,7 +213,7 @@ def _step_body(
     passthrough: list[tuple[str, OpaqueCwl]] = []
 
     for key_node, value_node in entries:
-        key = _key_text(key_node)
+        key = _key_text(key_node, file, diags)
         if key == 'in':
             inputs = _inputs(value_node, file, diags)
         elif key == 'out':
@@ -248,7 +238,7 @@ def _inputs(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[tuple
     if not isinstance(node, yaml.nodes.MappingNode):
         diags.error(Code.EXPECTED_MAPPING, f'in: must be a mapping, found {_kind(node)}', SourceSpan.of(file, node))
         return ()
-    return tuple((_key_text(k), _input_value(v, file, diags)) for k, v in node.value)
+    return tuple((_key_text(k, file, diags), _input_value(v, file, diags)) for k, v in node.value)
 
 
 def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputValue:
@@ -275,6 +265,13 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
     if desugared is not None:
         return desugared
 
+    if node.tag.startswith('!'):
+        # A tag the language does not own. The loader rejects this outright,
+        # and the specification must never be more permissive than the thing
+        # it specifies; the payload is kept, untagged, for recovery.
+        diags.error(Code.UNKNOWN_TAG,
+                    f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl', span)
+
     if isinstance(node, yaml.nodes.ScalarNode):
         return UnresolvedName(node.value, span)
     # A bare mapping or sequence cannot name a workflow input, so it is only
@@ -292,7 +289,7 @@ def _desugared_form(
     if not isinstance(node, yaml.nodes.MappingNode) or len(node.value) != 1:
         return None
     key_node, value_node = node.value[0]
-    build = _DESUGARED_FORMS.get(_key_text(key_node))
+    build = _DESUGARED_FORMS.get(_key_text(key_node, file, diags))
     if build is None:
         return None
     return build(value_node, file, diags, span)
@@ -337,7 +334,7 @@ def _output_binding(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Out
             key_node, value_node = node.value[0]
             edge = value_node.tag == TAG_ANCHOR
             return OutputBinding(
-                _key_text(key_node),
+                _key_text(key_node, file, diags),
                 EdgeDef(_name_text(value_node), SourceSpan.of(file, value_node)) if edge else None,
                 span,
             )
@@ -364,7 +361,7 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> WicSidecar
     entries: list[tuple[str, OpaqueCwl]] = []
 
     for key_node, value_node in node.value:
-        key = _key_text(key_node)
+        key = _key_text(key_node, file, diags)
         if key != 'steps':
             entries.append((key, _opaque(value_node, file, diags)))
             continue
@@ -376,11 +373,11 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> WicSidecar
             )
             continue
         for sub_key, sub_value in value_node.value:
-            parsed = _step_key(_key_text(sub_key))
+            parsed = _step_key(_key_text(sub_key, file, diags))
             if parsed is None:
                 diags.error(
                     Code.MALFORMED_WIC_STEP_KEY,
-                    f'wic: step key {_key_text(sub_key)!r} must have the form "(index, name)"',
+                    f'wic: step key {_key_text(sub_key, file, diags)!r} must have the form "(index, name)"',
                     SourceSpan.of(file, sub_key),
                 )
                 continue
@@ -428,30 +425,43 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> OpaqueCwl:
     that an edge reference buried in passthrough is not silently flattened to
     a plain string.
     """
+    if node.tag.startswith('!') and node.tag not in (TAG_ANCHOR, TAG_ALIAS, TAG_INLINE_INPUT, TAG_RAW_CWL):
+        # Passthrough is CWL, and CWL has no custom YAML tags: the loader
+        # rejects this text, so accepting it here would specify a superset of
+        # the language. Reported; the payload is materialised for recovery.
+        diags.error(Code.UNKNOWN_TAG,
+                    f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
+                    SourceSpan.of(file, node))
+
     match node:
         case yaml.nodes.ScalarNode():
             if node.tag in (TAG_ANCHOR, TAG_ALIAS, TAG_INLINE_INPUT, TAG_RAW_CWL):
                 return _input_value(node, file, diags)
-            return _tagged_scalar(node)
+            return _resolved_scalar(node)
         case yaml.nodes.SequenceNode():
             return [_opaque(item, file, diags) for item in node.value]
         case yaml.nodes.MappingNode():
-            return {_key_text(k): _opaque(v, file, diags) for k, v in node.value}
-        case _:
-            diags.error(Code.UNKNOWN_TAG, f'unsupported node {_kind(node)}', SourceSpan.of(file, node))
-            return None
+            return {_key_text(k, file, diags): _opaque(v, file, diags) for k, v in node.value}
+        case _:  # pragma: no cover — compose() emits only the three kinds above
+            return node.value
 
 
-def _tagged_scalar(node: yaml.nodes.ScalarNode) -> Any:
-    """Convert a resolved scalar node to its Python value."""
-    convert = _SCALAR_TAGS.get(node.tag)
-    if convert is None:
-        return node.value
+def _resolved_scalar(node: yaml.nodes.ScalarNode) -> Any:
+    """Convert a resolved scalar node to its Python value, exactly as the
+    loader would.
+
+    Delegated to PyYAML's own `SafeConstructor` rather than re-implemented:
+    a hand-written table diverged from the loader on octals, hex, timestamps,
+    `.inf`, and sexagesimals, which is precisely the "specification quietly
+    changes what existing documents mean" this module exists to prevent. A
+    fresh constructor per call — the class carries per-document state, and
+    this layer is shared across threads.
+    """
     try:
-        return convert(node.value)
-    except ValueError:
-        # The resolver claimed a type the text cannot actually produce; the raw
-        # text is the honest fallback.
+        return yaml.constructor.SafeConstructor().construct_object(node)
+    except yaml.constructor.ConstructorError:
+        # The resolver claimed a type the text cannot produce; the raw text
+        # is the honest fallback.
         return node.value
 
 
@@ -465,13 +475,17 @@ def _name_text(node: yaml.nodes.Node) -> str:
     return str(node.value) if isinstance(node, yaml.nodes.ScalarNode) else ''
 
 
-def _scalar(node: yaml.nodes.Node) -> Any:
-    """Return a scalar node's value, or None for any other node kind."""
-    return _tagged_scalar(node) if isinstance(node, yaml.nodes.ScalarNode) else None
+def _key_text(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> str:
+    """Return a mapping key as text.
 
-
-def _key_text(node: yaml.nodes.Node) -> str:
-    """Return a mapping key as text."""
+    YAML admits collection keys (`? [a, b]`); Sophios does not — every key in
+    the language is a name. A non-scalar key is reported and stringified for
+    recovery, rather than silently becoming the repr of a node list.
+    """
+    if not isinstance(node, yaml.nodes.ScalarNode):
+        diags.error(Code.EXPECTED_SCALAR,
+                    f'mapping keys must be scalars, found {_kind(node)}',
+                    SourceSpan.of(file, node))
     return str(node.value)
 
 

@@ -5,6 +5,7 @@ what to do with them and a malformed document can yield several errors in one
 pass instead of one per run. See design_docs/core-refactor-design.md, Spec 1.
 """
 from collections.abc import Iterable, Iterator, Sequence
+from typing import overload
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -74,7 +75,15 @@ class Diagnostics(Sequence[Diagnostic]):
         """Whether any recorded diagnostic is an error."""
         return any(d.severity is Severity.ERROR for d in self._items)
 
-    def __getitem__(self, index: int) -> Diagnostic:  # type: ignore[override]
+    @overload
+    def __getitem__(self, index: int) -> Diagnostic: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> 'Diagnostics': ...
+
+    def __getitem__(self, index: int | slice) -> "Diagnostic | Diagnostics":
+        if isinstance(index, slice):
+            return Diagnostics(self._items[index])
         return self._items[index]
 
     def __len__(self) -> int:
