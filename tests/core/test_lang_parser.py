@@ -283,8 +283,14 @@ def test_input_values_are_closed(source: str) -> None:
 @given(st.text(max_size=400))
 @FAST
 def test_diagnostic_spans_index_real_source(text: str) -> None:
-    """A diagnostic never points outside the document it describes."""
+    """A parse diagnostic always has a span, inside the document.
+
+    The `Diagnostic` type allows a spanless entry because compile-phase
+    failures may not know a position — but the *parser* always does, and this
+    is where that stronger guarantee is enforced.
+    """
     for diagnostic in parse(text, 'fuzz.wic').diagnostics:
+        assert diagnostic.span is not None, f'parse diagnostic without a span: {diagnostic}'
         assert diagnostic.span.file == 'fuzz.wic'
         assert diagnostic.span.start_line >= 1
         assert diagnostic.span.start_column >= 1
@@ -438,6 +444,7 @@ def test_repeated_input_is_reported_not_silently_resolved() -> None:
 
     assert [d.code for d in result.diagnostics] == [Code.DUPLICATE_KEY]
     assert "'f'" in result.diagnostics[0].message
+    assert result.diagnostics[0].span is not None
     assert result.diagnostics[0].span.start_line == 5
 
 

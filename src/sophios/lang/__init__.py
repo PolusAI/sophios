@@ -12,7 +12,7 @@ is a pointer to it, not a second copy that can drift.
 See design_docs/core-refactor-design.md, Spec 1.
 """
 from .cwl import CWL_VERSION, CWL_VERSIONS, CwlVersion
-from .diagnostics import Code, Diagnostic, Diagnostics, Severity
+from .diagnostics import Code, Diagnostic, Diagnostics, Severity, SophiosError
 from .nodes import (
     Document,
     EdgeDef,
@@ -53,6 +53,7 @@ __all__ = [
     'ParseResult',
     'RawCwlRef',
     'Severity',
+    'SophiosError',
     'SourceSpan',
     'Step',
     'StepKey',
