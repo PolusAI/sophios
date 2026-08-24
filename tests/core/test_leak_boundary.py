@@ -14,8 +14,8 @@ The keys the compiler owns are the documented exceptions. Their normative
 statement lives in the reference's §1 footnote — the single home — and each is
 enforced by a named test below rather than by a property: `requirements`,
 `inputs` and `outputs` are merged into, `$schemas` is append-only,
-`$namespaces` reserves the `edam` prefix, and `class` and `cwlVersion` are
-written.
+`$namespaces` reserves the `edam` and `sophios` prefixes, and `class` and
+`cwlVersion` are written.
 A property broad enough to cover them would have to be weak enough to say
 nothing, so the properties quantify over the keys that really are untouched
 and the exceptions are pinned one at a time.
@@ -146,7 +146,7 @@ def test_top_level_passthrough_is_byte_identical(freight: dict[str, Any]) -> Non
 @pytest.mark.skip_pypi_ci
 @pytest.mark.fast
 def test_user_namespaces_survive_except_edam() -> None:
-    """The one qualification: `$namespaces` keeps every user binding but `edam`.
+    """`$namespaces` keeps every user binding but the reserved `edam`.
 
     CE-05. The compiler merges `{'edam': the canonical URL}` over the user's
     mapping, so a user binding of the `edam` prefix specifically is replaced.
@@ -328,3 +328,26 @@ def test_residue_validates_as_cwl_v1_2(freight: dict[str, Any]) -> None:
         target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
         assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 0
     assert inlined['cwlVersion'] == CWL_VERSION
+
+
+# --------------------------------------------------------------------------
+# The --allow_raw_cwl escape hatch still works
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.fast
+def test_allow_raw_cwl_is_the_difference_between_report_and_compile() -> None:
+    """A bare unresolved name is reported without the flag and compiles
+    with it — the flag's one-line definition, observed at the boundary."""
+    from sophios.lang.diagnostics import Code, SophiosError
+
+    bare: Yaml = {'steps': [{'id': 'touch', 'in': {'filename': 'not_a_workflow_input'}}]}
+
+    with pytest.raises(SophiosError) as caught:
+        _compile(bare)
+    assert caught.value.diagnostics[0].code is Code.UNRESOLVED_INPUT
+    assert '!ii' in caught.value.diagnostics[0].message
+
+    permitted = compile_cwl(bare, 'raw_cwl', allow_raw_cwl=True)
+    assert permitted['class'] == 'Workflow'

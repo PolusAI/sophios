@@ -17,6 +17,7 @@ from .wic_types import (CompilerInfo, CompilerOptions, EnvData, ExplicitEdgeCall
                         ExplicitEdgeDefs, GraphData, GraphReps, GraphSettings, Namespaces,
                         NodeData, RoseTree, Tool, Tools, WorkflowInputs, WorkflowInputsFile,
                         WorkflowOutputs, Yaml, YamlTagPaths, YamlTree, StepId)
+from .lang import versions
 from .lang.cwl import CWL_VERSION
 from .lang.diagnostics import Code, SophiosError
 
@@ -282,6 +283,7 @@ def _prepare_compilation_state(yaml_tree_ast: YamlTree,
 
 
 def _finalize_compilation(*,
+                          lang_version: str,
                           wic: Yaml,
                           namespaces: Namespaces,
                           yaml_stem: str,
@@ -342,6 +344,13 @@ def _finalize_compilation(*,
 
     vars_workflow_output_internal = list(
         set(vars_workflow_output_internal))  # Get uniques
+    # Surface the resolved language version in the emitted artifact, as a
+    # declared extension field so the output remains valid CWL v1.2. Like the
+    # edam binding above, the `sophios` namespace prefix is reserved.
+    yaml_tree['$namespaces'] = {**yaml_tree.get('$namespaces', {}),
+                                versions.ANNOTATION_NAMESPACE: versions.ANNOTATION_NAMESPACE_URI}
+    yaml_tree[versions.ANNOTATION_KEY] = lang_version
+
     workflow_outputs = utils_cwl.get_workflow_outputs(graph_settings, namespaces, is_root, yaml_stem,
                                                       steps, outputs_workflow, vars_workflow_output_internal,
                                                       graph, tools_lst, step_node_name, tools)
@@ -384,6 +393,26 @@ def _finalize_compilation(*,
                        explicit_edge_defs_copy, explicit_edge_calls_copy)
     compiler_info = CompilerInfo(rose_tree, env_data)
     return compiler_info
+
+
+def _lang_version_pins(node: Any) -> tuple[str, ...]:
+    """Collect every `wic: lang_version:` tag reachable in a merged tree.
+
+    The merged AST inlines subworkflows, so walking the root tree sees every
+    file's tag and a conflict anywhere in the tree is caught at the root.
+    """
+    pins: list[str] = []
+    match node:
+        case {'wic': {'lang_version': str() as pin}, **_rest}:
+            pins.append(pin)
+    match node:
+        case dict():
+            for value in node.values():
+                pins.extend(_lang_version_pins(value))
+        case list():
+            for value in node:
+                pins.extend(_lang_version_pins(value))
+    return tuple(pins)
 
 
 def compile_workflow_once(yaml_tree_ast: YamlTree,
@@ -430,6 +459,14 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
         (in the Rose Tree) together with mutable cumulative environment\n
         information which needs to be passed through the recursion.
     """
+    lang_version = versions.resolve(compiler_options.get('lang_version'))
+    if is_root:
+        # Resolution happens once, from the whole merged tree; subworkflow
+        # compilations inherit the result below, so one compilation yields
+        # exactly one version tree-wide no matter how subtrees are tagged.
+        lang_version = versions.resolve(compiler_options.get('lang_version'),
+                                        _lang_version_pins(yaml_tree_ast.yml))
+
     setup = _prepare_compilation_state(yaml_tree_ast, namespaces, subgraphs, explicit_edge_defs,
                                        explicit_edge_calls, input_mapping, output_mapping, testing)
     # NOTE: graphdata and vars_workflow_output_internal are kept as local aliases (rather than
@@ -475,7 +512,8 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
             graphdata = GraphData(step_key)
             subgraph = GraphReps(subgraph_gv, subgraph_nx, graphdata)
 
-            sub_compiler_info = compile_workflow(sub_yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
+            sub_options: CompilerOptions = {**compiler_options, 'lang_version': lang_version}
+            sub_compiler_info = compile_workflow(sub_yaml_tree, sub_options, graph_settings, yaml_tag_paths,
                                                  namespaces +
                                                  [step_name_or_key], subgraphs +
                                                  [subgraph],
@@ -1051,6 +1089,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                 setup.steps[i]['when'] = f"$({when_clause})"
 
     return _finalize_compilation(
+        lang_version=lang_version,
         wic=setup.wic, namespaces=namespaces, yaml_stem=setup.yaml_stem, graph_settings=graph_settings,
         graph=setup.graph, sibling_subgraphs=setup.sibling_subgraphs, step_1_names=setup.step_1_names,
         steps_keys=setup.steps_keys, subkeys=setup.subkeys, yaml_tree=setup.yaml_tree,

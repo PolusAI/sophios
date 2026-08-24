@@ -907,6 +907,7 @@ class Workflow(_ProcessBase):
         self,
         *,
         tool_registry: Tools | None = None,
+        lang_version: str | None = None,
     ) -> CompiledWorkflow:
         """Compile this workflow into CWL and generated job inputs.
 
@@ -915,11 +916,15 @@ class Workflow(_ProcessBase):
 
         Args:
             tool_registry (Tools | None): Optional tool registry override.
+            lang_version (str | None): Pin the Sophios language version for
+                this compilation; None (the default) infers it. An explicit
+                setting beats any file tag. The resolved version is reported
+                on the result as ``CompiledWorkflow.lang_version``.
 
         Returns:
             CompiledWorkflow: Public compiled workflow boundary object.
         """
-        return _compiled_workflow(self, tool_registry=tool_registry)
+        return _compiled_workflow(self, tool_registry=tool_registry, lang_version=lang_version)
 
     def run(
         self,

@@ -383,7 +383,7 @@ def _wic_tag_schema(hypothesis: bool = False) -> Json:
 
     schema_props = {'graphviz': graphviz_schema, 'steps': steps, 'implementation': implementation,
                     'default_implementation': default_implementation,
-                    'version': str_nonempty, 'driver': driver,
+                    'version': str_nonempty, 'lang_version': str_nonempty, 'driver': driver,
                     'namespace': namespace, 'inlineable': inlineable}
     if not hypothesis:
         # {'additionalProperties': True} can cause problems with hypothesis.

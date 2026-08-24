@@ -11,6 +11,7 @@ import networkx as nx
 import yaml
 from jsonschema import Draft202012Validator
 
+from sophios.lang import versions
 from sophios.lang.diagnostics import SophiosError
 from sophios.utils_yaml import wic_loader
 from . import input_output as io
@@ -153,6 +154,10 @@ def _build_and_compile_workflow(yaml_path: str, yaml_stem: str, yaml_tree: YamlT
                 traceback.print_exception(type(e), value=e, tb=None, file=f)
             sys.exit(1)
         rose_tree = compiler_info.rose
+        # The resolved language version is reported on every compile, not
+        # only on failure — nobody should have to guess which language their
+        # file was read as.
+        print('Sophios lang_version:', rose_tree.data.compiled_cwl.get(versions.ANNOTATION_KEY))
     return rootgraph, rose_tree
 
 

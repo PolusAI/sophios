@@ -57,6 +57,9 @@ parser.add_argument('--quiet', default=False, action="store_true",
                     and it will capture all stdout/stderr into log files for each step.''')
 parser.add_argument('--cwl_runner', type=str, required=False, default='cwltool', choices=['cwltool', 'toil-cwl-runner'],
                     help='The CWL runner to use for running workflows locally.')
+parser.add_argument('--lang_version', type=str, default=None,
+                    help='Pin the Sophios language version for this compilation. '
+                    'Defaults to inferring the newest version that accepts the source.')
 parser.add_argument('--allow_raw_cwl', default=False, action="store_true",
                     help='Do not check whether the input to a workflow step refers to the workflow inputs: tag')
 parser.add_argument('--ignore_docker_install', default=False, action="store_true",
@@ -211,6 +214,7 @@ def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions
         'insert_steps_automatically': args.insert_steps_automatically,
         'inference_disable': args.inference_disable,
         'allow_raw_cwl': args.allow_raw_cwl,
+        'lang_version': args.lang_version,
     }
 
     # to be given to graph util functions

@@ -1,4 +1,4 @@
-from typing import Any, NamedTuple, TypeAlias, TypedDict
+from typing import Any, NamedTuple, NotRequired, TypeAlias, TypedDict
 
 import networkx as nx
 
@@ -150,6 +150,9 @@ class CompilerOptions(TypedDict):
     insert_steps_automatically: bool
     inference_disable: bool
     allow_raw_cwl: bool
+    #: The explicit language version, if the user set one; None means infer.
+    #: NotRequired so existing constructors of this dict stay valid.
+    lang_version: NotRequired[str | None]
 
 
 class GraphSettings(TypedDict):

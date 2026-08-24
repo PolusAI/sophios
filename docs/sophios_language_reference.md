@@ -34,13 +34,13 @@ yet wired into the compiler**, and are marked where they appear:
 
 | Construct | Specified | Accepted by `sophios.lang` | Usable in a compiled workflow |
 |---|---|---|---|
-| `!cwl` raw CWL reference (§4.1) | Yes | Yes | **Not yet** — CR-104 |
-| `lang_version` resolution (§7) | Yes | — | **Not yet** — CR-103 |
+| `!cwl` raw CWL reference (§4.1) | Yes | Yes | **Not yet** — Spec 3 migration |
 
 Everything else describes what Sophios does today. Writing `!cwl` in a `.wic`
-file will not work until CR-104 lands, because the loader the compiler uses does
-not yet know the tag. It is documented now because the specification is what
-the implementation is being built against, not a record written afterwards.
+file will not work until the compiler runs on the `sophios.lang` parser (the
+Spec 3 migration), because the loader it uses today does not know the tag. It
+is documented now because the specification is what the implementation is
+being built against, not a record written afterwards.
 
 ---
 
@@ -90,8 +90,11 @@ broad enough to cover them would have to be weak enough to say nothing:
   extended, not replaced, and not copied out byte-identically.
 - `$schemas` is **append-only**: your entries survive and the EDAM entry is
   added once.
-- `$namespaces` is **merged, with one reserved prefix**: every binding you
-  write survives except `edam`, which is replaced by the canonical one.
+- `$namespaces` is **merged, with two reserved prefixes**: every binding you
+  write survives except `edam` and `sophios`, which are replaced by the
+  canonical ones (see §7 for `sophios:lang_version`). Pinned by
+  `test_user_namespaces_survive_except_edam` and
+  `test_the_sophios_namespace_prefix_is_reserved`.
 
 Everything outside the compiler-owned row survives byte-identically, which is
 the statement the properties in that file quantify over.
@@ -389,11 +392,6 @@ without the right plugins installed. That is not a language error.
 
 ## 7. Versioning
 
-> **Not yet implemented.** This section specifies how versioning will behave;
-> `lang_version` is not read or reported by any code path today. Tracked as
-> CR-103. Until it lands, every file is compiled by the one implementation that
-> exists, and no tag has any effect.
-
 `lang_version` starts at **0.0.1**, defined against CWL v1.2. The Sophios
 version and its CWL substrate move together.
 
@@ -410,6 +408,10 @@ compiles — not merely the newest version available. That means:
 You need a tag only to pin a file for reproducibility, or where a construct is
 valid under two versions with different meanings.
 
-The version Sophios chose will always be reported — on the command line, on
-`CompiledWorkflow`, and as an annotation in the emitted CWL. You should never
-have to guess which language your file was read as.
+The version Sophios chose is always reported — on the command line, on
+`CompiledWorkflow.lang_version`, and as a `sophios:lang_version` annotation in
+the emitted CWL, namespaced so the output stays valid. It can be pinned per
+file (`wic: {lang_version: 0.0.1}`) or set for a whole compilation with
+`--lang_version` / `Workflow.compile(lang_version=...)`; the explicit setting
+beats any tag, and one compilation resolves to exactly one version tree-wide.
+You should never have to guess which language your file was read as.
