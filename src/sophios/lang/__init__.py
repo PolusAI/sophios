@@ -30,6 +30,7 @@ from .nodes import (
 from ..utils_yaml import Key, Tag
 from .parser import Forms, Grammar, ParseResult, parse
 from .render import render, to_json
+from .versions import KNOWN_VERSIONS, LANG_VERSION, resolve as resolve_lang_version
 from .schema import wic_schema
 from .spans import SourceSpan
 
@@ -37,6 +38,8 @@ __all__ = [
     'CWL_VERSION',
     'CWL_VERSIONS',
     'CwlVersion',
+    'KNOWN_VERSIONS',
+    'LANG_VERSION',
     'Code',
     'Diagnostic',
     'Diagnostics',
@@ -62,6 +65,7 @@ __all__ = [
     'WicSidecar',
     'parse',
     'render',
+    'resolve_lang_version',
     'to_json',
     'wic_schema',
 ]

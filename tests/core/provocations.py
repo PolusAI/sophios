@@ -114,3 +114,19 @@ COMPILED.update({
     Code.CONTAINER_ENGINE_UNAVAILABLE: _provoke_container_engine_unavailable,
     Code.MISSING_INPUT_FILE: _provoke_missing_input_file,
 })
+
+
+def _provoke_unknown_lang_version() -> None:
+    from sophios.lang import resolve_lang_version  # pylint: disable=import-outside-toplevel
+    resolve_lang_version('9.9.9')
+
+
+def _provoke_lang_version_conflict() -> None:
+    from sophios.lang import resolve_lang_version  # pylint: disable=import-outside-toplevel
+    resolve_lang_version(None, ('0.0.1', '0.0.2'), known=('0.0.1', '0.0.2'))
+
+
+COMPILED.update({
+    Code.UNKNOWN_LANG_VERSION: _provoke_unknown_lang_version,
+    Code.LANG_VERSION_CONFLICT: _provoke_lang_version_conflict,
+})
