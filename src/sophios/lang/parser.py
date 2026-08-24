@@ -14,7 +14,16 @@ from typing import Any, Final
 
 import yaml
 
-from ..utils_yaml import KEY_ALIAS, KEY_ANCHOR, KEY_INLINE_INPUT, TAG_ALIAS, TAG_ANCHOR, TAG_INLINE_INPUT
+from ..utils_yaml import (
+    KEY_ALIAS,
+    KEY_ANCHOR,
+    KEY_INLINE_INPUT,
+    KEY_RAW_CWL,
+    TAG_ALIAS,
+    TAG_ANCHOR,
+    TAG_INLINE_INPUT,
+    TAG_RAW_CWL,
+)
 from .diagnostics import Code, Diagnostics
 from .nodes import (
     Document,
@@ -31,15 +40,6 @@ from .nodes import (
     WicSidecar,
 )
 from .spans import SourceSpan
-
-#: `!cwl expr` — the per-value escape hatch. Additive: files that do not use it
-#: are unaffected, and it is the local form of the global --allow_raw_cwl flag.
-TAG_RAW_CWL: Final = '!cwl'
-
-#: The desugared key for `!cwl`, mirroring KEY_ANCHOR / KEY_ALIAS /
-#: KEY_INLINE_INPUT in utils_yaml. Every construct has both a tagged and a
-#: desugared form so the Python API can emit documents that reload unchanged.
-KEY_RAW_CWL: Final = 'wic_raw_cwl'
 
 #: CWL keys on a step that Sophios reads *and acts upon*. Everything else on a
 #: step is passthrough, by definition. Enumerating this set is what makes the
@@ -261,16 +261,16 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
     if build is not None:
         return build(node, file, diags, span)
 
-    desugared = _desugared_form(node, file, diags, span)
-    if desugared is not None:
-        return desugared
-
     if node.tag.startswith('!'):
         # A tag the language does not own. The loader rejects this outright,
         # and the specification must never be more permissive than the thing
         # it specifies; the payload is kept, untagged, for recovery.
         diags.error(Code.UNKNOWN_TAG,
                     f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl', span)
+
+    desugared = _desugared_form(node, file, diags, span)
+    if desugared is not None:
+        return desugared
 
     if isinstance(node, yaml.nodes.ScalarNode):
         return UnresolvedName(node.value, span)
@@ -332,12 +332,19 @@ def _output_binding(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Out
             return OutputBinding(node.value, None, span)
         case yaml.nodes.MappingNode() if len(node.value) == 1:
             key_node, value_node = node.value[0]
-            edge = value_node.tag == TAG_ANCHOR
-            return OutputBinding(
-                _key_text(key_node, file, diags),
-                EdgeDef(_name_text(value_node), SourceSpan.of(file, value_node)) if edge else None,
-                span,
-            )
+            name = _key_text(key_node, file, diags)
+            edge = _out_edge_def(value_node, file, diags)
+            if edge is None:
+                # The value was not an edge definition in either spelling.
+                # Report it rather than let it vanish: the AST promises to
+                # preserve what it was given, and a silent drop is the one
+                # thing a total parser must never do.
+                diags.error(
+                    Code.EXPECTED_SCALAR,
+                    f'out: entry {name!r} must bind an !& edge definition; its value is neither !& nor wic_anchor',
+                    SourceSpan.of(file, value_node),
+                )
+            return OutputBinding(name, edge, span)
         case _:
             diags.error(
                 Code.EXPECTED_SCALAR,
@@ -347,9 +354,41 @@ def _output_binding(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Out
             return OutputBinding('', None, span)
 
 
-def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> WicSidecar:
+def _child_sidecar_node(node: yaml.nodes.Node) -> yaml.nodes.Node:
+    """Unwrap the `wic:` key a nested sidecar step carries on the surface.
+
+    `wic: steps: (1, outer):` holds `{wic: {steps: ...}}`, not a bare sidecar
+    (see docs/advanced.md and reference §5). Without the unwrap, everything at
+    depth two or more sat in `entries` as opaque content and `(1, inner)` was
+    never normalised to a `StepKey` — falsifying the very docstring that says
+    nobody downstream should ever parse that string again.
+    """
+    if isinstance(node, yaml.nodes.MappingNode) and len(node.value) == 1:
+        key_node, value_node = node.value[0]
+        if getattr(key_node, 'value', None) == 'wic':
+            assert isinstance(value_node, yaml.nodes.Node)  # untyped tuple from PyYAML
+            return value_node
+    return node
+
+
+def _out_edge_def(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> EdgeDef | None:
+    """Recognise an edge definition in either spelling, or None."""
+    if node.tag == TAG_ANCHOR:
+        return EdgeDef(_name_text(node), SourceSpan.of(file, node))
+    if isinstance(node, yaml.nodes.MappingNode) and len(node.value) == 1:
+        key_node, value_node = node.value[0]
+        if _key_text(key_node, file, diags) == KEY_ANCHOR:
+            return EdgeDef(_name_text(value_node), SourceSpan.of(file, value_node))
+    return None
+
+
+def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
+             _path: frozenset[int] = frozenset()) -> WicSidecar:
     """Parse a `wic:` block, normalising its `"(1, name)"` step keys."""
     span = SourceSpan.of(file, node)
+    if id(node) in _path:
+        diags.error(Code.RECURSIVE_ALIAS, 'alias cycle: a wic: block contains itself', span)
+        return WicSidecar(span=span)
     if node.tag == 'tag:yaml.org,2002:null':
         # `wic:` with nothing under it is an empty sidecar, not an error.
         return WicSidecar(span=span)
@@ -373,15 +412,16 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> WicSidecar
             )
             continue
         for sub_key, sub_value in value_node.value:
-            parsed = _step_key(_key_text(sub_key, file, diags))
+            key_text = _key_text(sub_key, file, diags)
+            parsed = _step_key(key_text)
             if parsed is None:
                 diags.error(
                     Code.MALFORMED_WIC_STEP_KEY,
-                    f'wic: step key {_key_text(sub_key, file, diags)!r} must have the form "(index, name)"',
+                    f'wic: step key {key_text!r} must have the form "(index, name)"',
                     SourceSpan.of(file, sub_key),
                 )
                 continue
-            steps.append((parsed, _sidecar(sub_value, file, diags)))
+            steps.append((parsed, _sidecar(_child_sidecar_node(sub_value), file, diags, _path | {id(node)})))
 
     return WicSidecar(steps=tuple(steps), entries=tuple(entries), span=span)
 
@@ -418,13 +458,36 @@ def _literal(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Any:
         return node.value
 
 
-def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> OpaqueCwl:
+#: Passthrough nodes materialised per parse before the walk is cut off. YAML
+#: aliases make exponential expansion writable in ten lines ("billion laughs");
+#: a real workflow is nowhere near this, so the ceiling only stops attacks.
+_EXPANSION_BUDGET: Final = 100_000
+
+
+def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
+            _path: frozenset[int] = frozenset(), _spent: list[int] | None = None) -> OpaqueCwl:
     """Materialise a node Sophios does not interpret, preserving it verbatim.
 
     Custom wic tags are still recognised inside otherwise-opaque content so
     that an edge reference buried in passthrough is not silently flattened to
     a plain string.
     """
+    # Totality against adversarial aliases: a node already on the current
+    # path is a cycle (compose() resolves an alias to the same object), and a
+    # widening alias chain is cut off by the budget. Both are reported once.
+    spent = _spent if _spent is not None else [0]
+    if id(node) in _path:
+        diags.error(Code.RECURSIVE_ALIAS, 'alias cycle: a node contains itself', SourceSpan.of(file, node))
+        return None
+    spent[0] += 1
+    if spent[0] > _EXPANSION_BUDGET:
+        if spent[0] == _EXPANSION_BUDGET + 1:  # report once, not per node
+            diags.error(Code.RECURSIVE_ALIAS,
+                        f'alias expansion exceeds {_EXPANSION_BUDGET} nodes; refusing to materialise',
+                        SourceSpan.of(file, node))
+        return None
+    path = _path | {id(node)}
+
     if node.tag.startswith('!') and node.tag not in (TAG_ANCHOR, TAG_ALIAS, TAG_INLINE_INPUT, TAG_RAW_CWL):
         # Passthrough is CWL, and CWL has no custom YAML tags: the loader
         # rejects this text, so accepting it here would specify a superset of
@@ -439,9 +502,9 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> OpaqueCwl:
                 return _input_value(node, file, diags)
             return _resolved_scalar(node)
         case yaml.nodes.SequenceNode():
-            return [_opaque(item, file, diags) for item in node.value]
+            return [_opaque(item, file, diags, path, spent) for item in node.value]
         case yaml.nodes.MappingNode():
-            return {_key_text(k, file, diags): _opaque(v, file, diags) for k, v in node.value}
+            return {_key_text(k, file, diags): _opaque(v, file, diags, path, spent) for k, v in node.value}
         case _:  # pragma: no cover — compose() emits only the three kinds above
             return node.value
 

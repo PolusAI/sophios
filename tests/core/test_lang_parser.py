@@ -12,6 +12,7 @@ Properties covered:
 
 See design_docs/core-refactor-design.md, Spec 1.
 """
+import time
 from pathlib import Path
 from typing import Any, get_args
 
@@ -22,6 +23,8 @@ from hypothesis import strategies as st
 
 from sophios.lang import (
     Code,
+    Diagnostic,
+    Diagnostics,
     Document,
     EdgeDef,
     EdgeRef,
@@ -56,34 +59,85 @@ scalars = st.one_of(
 
 
 @st.composite
-def input_lines(draw: st.DrawFn) -> str:
-    """One `in:` binding, in any of the forms the language admits."""
+def input_lines(draw: st.DrawFn, indent: str = '      ') -> str:
+    """One `in:` binding, in any of the forms the language admits.
+
+    Both spellings of each construct are generated — the tagged form people
+    write and the desugared form tooling emits — so the properties quantify
+    over the language, not over the half of it the tests happened to spell.
+    """
     name = draw(identifiers)
-    form = draw(st.sampled_from(['ii', 'anchor', 'alias', 'cwl', 'bare']))
+    form = draw(st.sampled_from(['ii', 'anchor', 'alias', 'cwl', 'bare',
+                                 'ii_desugared', 'anchor_desugared', 'alias_desugared', 'cwl_desugared']))
     match form:
         case 'ii':
-            return f'      {name}: !ii {draw(scalars)}'
+            return f'{indent}{name}: !ii {draw(scalars)}'
         case 'anchor':
-            return f'      {name}: !& {draw(identifiers)}'
+            return f'{indent}{name}: !& {draw(identifiers)}'
         case 'alias':
-            return f'      {name}: !* {draw(identifiers)}'
+            return f'{indent}{name}: !* {draw(identifiers)}'
         case 'cwl':
-            return f'      {name}: !cwl {draw(identifiers)}/{draw(identifiers)}'
+            return f'{indent}{name}: !cwl {draw(identifiers)}/{draw(identifiers)}'
+        case 'ii_desugared':
+            return f'{indent}{name}: {{wic_inline_input: {draw(identifiers)}}}'
+        case 'anchor_desugared':
+            return f'{indent}{name}: {{wic_anchor: {draw(identifiers)}}}'
+        case 'alias_desugared':
+            return f'{indent}{name}: {{wic_alias: {draw(identifiers)}}}'
+        case 'cwl_desugared':
+            return f'{indent}{name}: {{wic_raw_cwl: {draw(identifiers)}/{draw(identifiers)}}}'
         case _:
-            return f'      {name}: {draw(identifiers)}'
+            return f'{indent}{name}: {draw(identifiers)}'
+
+
+@st.composite
+def _out_lines(draw: st.DrawFn, indent: str) -> list[str]:
+    """An `out:` block: bare names and `!&`-bound names, in both spellings."""
+    lines = [f'{indent}out:']
+    for _ in range(draw(st.integers(min_value=1, max_value=2))):
+        name = draw(identifiers)
+        match draw(st.sampled_from(['bare', 'edge', 'edge_desugared'])):
+            case 'bare':
+                lines.append(f'{indent}- {name}')
+            case 'edge':
+                lines.append(f'{indent}- {name}: !& {draw(identifiers)}')
+            case _:
+                lines.append(f'{indent}- {name}: {{wic_anchor: {draw(identifiers)}}}')
+    return lines
 
 
 @st.composite
 def documents(draw: st.DrawFn) -> str:
-    """A syntactically well-formed Sophios document, in mapping-form steps."""
+    """A syntactically well-formed Sophios document.
+
+    Generates both step surface forms (mapping and sequence-with-id), inputs
+    in every admitted spelling, `out:` blocks, and nested `wic: steps:`
+    sidecars. Review of this PR found the previous generator quantified over
+    mapping-form `in:`-only documents, leaving outputs, sequence steps, and
+    depth-2 sidecars structurally invisible to every property fed by it.
+    """
     lines = ['steps:']
-    for _ in range(draw(st.integers(min_value=1, max_value=4))):
-        lines.append(f'  {draw(identifiers)}:')
-        lines.append('    in:')
+    sequence_form = draw(st.booleans())
+    names = draw(st.lists(identifiers, min_size=1, max_size=4, unique=True))
+    for step in names:
+        if sequence_form:
+            lines.append(f'- id: {step}')
+            body_indent = '  '
+        else:
+            lines.append(f'  {step}:')
+            body_indent = '    '
+        lines.append(f'{body_indent}in:')
         for _ in range(draw(st.integers(min_value=1, max_value=3))):
-            lines.append(draw(input_lines()))
+            lines.append(draw(input_lines(indent=body_indent + '  ')))
+        if draw(st.booleans()):
+            lines.extend(draw(_out_lines(body_indent)))
     if draw(st.booleans()):
         lines += ['wic:', '  graphviz:', f'    label: {draw(identifiers)}']
+        if draw(st.booleans()):
+            # A nested sidecar: the (index, name) key wraps a wic: block.
+            lines += ['  steps:', f'    (1, {names[0]}):', '      wic:',
+                      '        steps:', f'          (1, {draw(identifiers)}):',
+                      f'            label: {draw(identifiers)}']
     return '\n'.join(lines) + '\n'
 
 
@@ -314,7 +368,9 @@ def test_malformed_yaml_reports_a_located_diagnostic() -> None:
     result = parse('steps:\n  - [unclosed\n', 'bad.wic')
     assert result.document is None
     assert len(result.diagnostics) == 1
-    assert result.diagnostics[0].span.start_line >= 1
+    first: Diagnostic = result.diagnostics[0]
+    # pylint: disable-next=no-member  # pylint picks the slice overload for [0]
+    assert first.span is not None and first.span.start_line >= 1
 
 
 @pytest.mark.fast
@@ -427,6 +483,113 @@ def test_untagged_collection_inputs_are_inline_literals() -> None:
 def test_diagnostics_slices_are_diagnostics() -> None:
     """Slicing honours the Sequence contract instead of degrading to list."""
     result = parse('steps:\n- id: s\n  in:\n    a: !foo x\n    b: !bar y\n', 'x.wic')
-    from sophios.lang import Diagnostics
     assert isinstance(result.diagnostics[0:1], Diagnostics)
     assert len(result.diagnostics[0:1]) == 1
+
+# --------------------------------------------------------------------------
+# Offline review round two (P1, P2, P3, P5, N1)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_sidecar_nesting_is_normalised_at_every_depth() -> None:
+    """P1: `(index, name)` keys are StepKeys at depth two, not opaque strings.
+
+    The child sidecar arrives wrapped in a `wic:` key on the surface; the
+    parser descends through it, or `StepKey`'s "nothing downstream should
+    ever parse that string again" is false at every depth past the first.
+    """
+    result = parse(
+        'wic:\n  steps:\n    (1, outer):\n      wic:\n        steps:\n'
+        '          (1, inner):\n            wic:\n              steps:\n'
+        '                (1, innermost):\n                  x: 1\n',
+        'nested.wic')
+    assert result.ok and result.document is not None and result.document.sidecar is not None
+
+    level1 = result.document.sidecar.steps[0]
+    assert (level1[0].index, level1[0].name) == (1, 'outer')
+    level2 = level1[1].steps[0]
+    assert (level2[0].index, level2[0].name) == (1, 'inner')
+    level3 = level2[1].steps[0]
+    assert (level3[0].index, level3[0].name) == (1, 'innermost')
+
+
+@pytest.mark.fast
+def test_the_loader_accepts_every_owned_tag() -> None:
+    """P2: `!cwl` is registered with the loader like its three siblings.
+
+    The agreement property below quantifies over this; the targeted case is
+    pinned so a regression names itself instead of surfacing as a fuzz flake.
+    """
+    loaded = yaml.load('a: !cwl step/out\n', Loader=wic_loader())
+    assert loaded == {'a': {'wic_raw_cwl': 'step/out'}}
+
+
+@pytest.mark.fast
+def test_a_tag_wrapping_a_desugared_form_is_reported() -> None:
+    """P2: `!foo {wic_anchor: x}` is an unknown tag, not a silent anchor.
+
+    The desugared probe used to run before the tag check, so input position
+    and passthrough disagreed with each other as well as with the loader.
+    """
+    result = parse('steps:\n- id: s\n  in:\n    a: !foo {wic_anchor: x}\n', 'x.wic')
+    assert any(d.code is Code.UNKNOWN_TAG for d in result.diagnostics)
+
+
+@pytest.mark.fast
+def test_p04_alias_cycles_are_reported_not_raised() -> None:
+    """P3: a self-containing alias is a diagnostic, not a RecursionError."""
+    for source in ('top: &a [*a]\n',
+                   'steps: &a\n- id: s\n  in:\n    x: *a\n',
+                   'wic: &w\n  steps: *w\n'):
+        result = parse(source, 'cycle.wic')  # must not raise
+        assert not result.ok, source
+
+
+@pytest.mark.fast
+def test_p04_alias_expansion_is_bounded() -> None:
+    """P3: a widening alias chain is cut off by budget, quickly, once."""
+    laughs = 'a0: &a0 [x, x, x, x, x, x, x, x, x]\n'
+    for i in range(1, 8):
+        refs = ', '.join([f'*a{i-1}'] * 9)
+        laughs += f'a{i}: &a{i} [{refs}]\n'
+
+    started = time.perf_counter()
+    result = parse(laughs, 'laughs.wic')  # must not raise or hang
+    assert time.perf_counter() - started < 5.0
+    assert not result.ok
+    assert any(d.code is Code.RECURSIVE_ALIAS for d in result.diagnostics)
+
+
+@pytest.mark.fast
+def test_out_values_are_never_silently_dropped() -> None:
+    """P5: a non-!& out value is reported; both edge spellings are honoured."""
+    dropped = parse('steps:\n- id: s\n  out:\n  - file: something\n', 'x.wic')
+    assert not dropped.ok
+    assert any('file' in d.message for d in dropped.diagnostics)
+
+    tagged = parse('steps:\n- id: s\n  out:\n  - file: !& e\n', 'x.wic')
+    desugared = parse('steps:\n- id: s\n  out:\n  - file: {wic_anchor: e}\n', 'x.wic')
+    for result in (tagged, desugared):
+        assert result.ok and result.document is not None
+        binding = result.document.steps[0].outputs[0]
+        assert binding.edge_def is not None and binding.edge_def.name == 'e'
+
+
+@pytest.mark.fast
+def test_every_problem_is_reported_exactly_once() -> None:
+    """N1: one problem, one diagnostic — never the same report twice.
+
+    Several parse paths legitimately visit the same node; the review measured
+    identical (code, span, message) pairs reported 2-3 times on every new
+    diagnostic path.
+    """
+    cases = ('steps:\n- id: s\n  in:\n    a: !foo [1]\n',
+             'steps:\n- id: s\n  in:\n    a: !foo {x: 1}\n',
+             'steps:\n- ? [a, b]\n  : {}\n',
+             'steps:\n  s:\n    in:\n      ? [a, b]\n      : x\n',
+             'wic:\n  steps:\n    nope:\n      x: 1\n')
+    for source in cases:
+        result = parse(source, 'once.wic')
+        reports = [(d.severity, d.code, d.message, d.span) for d in result.diagnostics]
+        assert len(reports) == len(set(reports)), f'duplicate diagnostics for {source!r}: {reports}'

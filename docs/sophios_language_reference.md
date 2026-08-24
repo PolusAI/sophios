@@ -168,6 +168,15 @@ A tag outside the four above (`!foo`) is an error, not a fifth-and-a-half
 form. The loader has always rejected such documents, and the syntax layer
 must never accept more than the language it specifies.
 
+An **untagged mapping or sequence** in input position is an inline literal —
+the same as writing `!ii` — because a collection cannot name a workflow input,
+so a literal is its only possible meaning. The tag is still the recommended
+spelling: it states the intent instead of leaving it to be inferred.
+
+A tag outside the four above (`!foo`) is an error, not a fifth-and-a-half
+form. The loader has always rejected such documents, and the syntax layer
+must never accept more than the language it specifies.
+
 ### 4.2 Interpreted CWL keys
 
 The complete set Sophios reads and acts upon:

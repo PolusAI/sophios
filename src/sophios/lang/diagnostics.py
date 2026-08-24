@@ -5,9 +5,9 @@ what to do with them and a malformed document can yield several errors in one
 pass instead of one per run. See design_docs/core-refactor-design.md, Spec 1.
 """
 from collections.abc import Iterable, Iterator, Sequence
-from typing import overload
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import overload
 
 from .spans import SourceSpan
 
@@ -35,6 +35,7 @@ class Code(StrEnum):
     EMPTY_STEP_ID = 'wic007'
     MALFORMED_WIC_STEP_KEY = 'wic008'
     UNKNOWN_TAG = 'wic009'
+    RECURSIVE_ALIAS = 'wic030'
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,11 +65,23 @@ class Diagnostics(Sequence[Diagnostic]):
 
     def error(self, code: Code, message: str, span: SourceSpan) -> None:
         """Record an error."""
-        self._items.append(Diagnostic(Severity.ERROR, code, message, span))
+        self._append(Diagnostic(Severity.ERROR, code, message, span))
 
     def warn(self, code: Code, message: str, span: SourceSpan) -> None:
         """Record a warning."""
-        self._items.append(Diagnostic(Severity.WARNING, code, message, span))
+        self._append(Diagnostic(Severity.WARNING, code, message, span))
+
+    def _append(self, diagnostic: Diagnostic) -> None:
+        """Append, dropping exact duplicates.
+
+        Several parse paths legitimately visit the same node — a key is read
+        once to find `id:` and again to build the body — and a diagnostic-
+        emitting helper called twice would otherwise report the same problem
+        twice at the same position. `Diagnostic` is frozen, so identity is
+        equality of all four fields; a repeat adds nothing a reader could use.
+        """
+        if diagnostic not in self._items:
+            self._items.append(diagnostic)
 
     @property
     def has_errors(self) -> bool:
@@ -81,7 +94,7 @@ class Diagnostics(Sequence[Diagnostic]):
     @overload
     def __getitem__(self, index: slice) -> 'Diagnostics': ...
 
-    def __getitem__(self, index: int | slice) -> "Diagnostic | Diagnostics":
+    def __getitem__(self, index: int | slice) -> 'Diagnostic | Diagnostics':
         if isinstance(index, slice):
             return Diagnostics(self._items[index])
         return self._items[index]
