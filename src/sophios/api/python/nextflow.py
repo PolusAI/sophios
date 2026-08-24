@@ -22,6 +22,17 @@ from sophios.nf_types import (
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
+from sophios.nf_reader import (
+    NextflowDocument,
+    NextflowPort,
+    NextflowProcess,
+    import_nextflow,
+    nextflow_to_cwl,
+    parse_nf_file,
+    parse_nf_text,
+    promote_nextflow_document,
+    render_nextflow_document,
+)
 
 
 __all__ = [
@@ -37,6 +48,15 @@ __all__ = [
     "NfTemplate",
     "NfWorkflowInputConnection",
     "NfWorkflowOutputConnection",
+    "NextflowDocument",
+    "NextflowPort",
+    "NextflowProcess",
+    "import_nextflow",
+    "nextflow_to_cwl",
+    "parse_nf_file",
+    "parse_nf_text",
+    "promote_nextflow_document",
+    "render_nextflow_document",
     "render_nextflow",
     "render_nextflow_config",
     "render_nextflow_params",

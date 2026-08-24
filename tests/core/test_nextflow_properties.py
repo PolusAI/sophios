@@ -9,6 +9,7 @@ import pytest
 
 from sophios.input_output_nf import _render_template, _shell_quote, render_nextflow
 from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
+from sophios.nf_reader import parse_nf_text, promote_nextflow_document
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
     NfCommand,
@@ -211,3 +212,35 @@ def test_linear_graph_accepts_exactly_until_a_cycle_is_added(size: int) -> None:
             [*connections, NfProcessConnection(f"P{size - 1}", "result", "P0", "source")],
             {},
         )
+
+
+@settings(max_examples=150, deadline=None)
+@given(
+    st.text(
+        alphabet=st.characters(
+            blacklist_categories=SURROGATE_CATEGORIES,
+            blacklist_characters="\x00\r\n{}",
+        ),
+        min_size=1,
+        max_size=80,
+    )
+)
+def test_unknown_process_syntax_is_never_silently_promoted(value: str) -> None:
+    source = f'''nextflow.enable.dsl=2
+process TASK {{
+    unsupportedDirective {json.dumps(value)}
+    script:
+    """
+    true
+    """
+}}
+workflow PIPELINE {{
+    main:
+    TASK()
+}}
+workflow {{ PIPELINE() }}
+'''
+    parsed = parse_nf_text(source)
+    assert any("unsupportedDirective" in region for region in parsed.opaque_regions)
+    with pytest.raises(ValueError, match="opaque regions"):
+        promote_nextflow_document(parsed)

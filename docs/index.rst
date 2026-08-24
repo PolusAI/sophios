@@ -59,6 +59,7 @@ understand, debug, and review.
    tool_builder_workflow.md
    compute_request_workflow.md
    ichnaea_compact_compute.md
+   nextflow.md
    python_api_reference.rst
 
 .. toctree::
