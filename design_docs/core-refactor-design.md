@@ -291,13 +291,14 @@ pair on the way in.
 ### 5.6 Conformance corpus
 
 `mm-workflows` and `image-workflows` are the integration and end-to-end corpus.
-They continue to run in CI against their live default branches: whatever `main`
-says, those are the tests.
+They run in CI against their live default branches: **whatever `main` says,
+those are the tests, for better or worse.**
 
-Grammar conformance is a different job. A specification validated against a
-moving branch is not fixed, so at specification time the conformance corpus is
-**pinned** to specific commits. The pin is a development-time artifact and does
-not affect the live E2E runs.
+Grammar conformance runs against the same live checkouts — CI provisions both
+repositories beside this one, and the corpus is discovered there, never copied
+in and never pinned. The workflows stay in their own repositories. If upstream
+moves and a file stops conforming, that is a signal to act on — fix the file
+or fix the grammar — not drift to be insulated from.
 
 We hold commit access to both corpora. Where a corpus `.wic` does not conform,
 the default is to **improve the file** — several are stale and worth updating —
