@@ -76,9 +76,8 @@ precedes Spec 3.
 
 - The Sophios DSL, in both surfaces. `lang_version` 0.0.1 is defined to accept
   what exists today, validated against `docs/tutorials/`, `examples/`, and the
-  `.wic` files in
-  `mm-workflows` and `image-workflows`. The version tag is optional, so no
-  existing file requires editing.
+  `.wic` files in `mm-workflows` and `image-workflows`. The version tag is
+  optional, so no existing file requires editing.
 - `Workflow`, `Step`, `CompiledWorkflow`, and the `tool_builder` classes.
 - The five types reachable by external callers: `Tools`, `StepId`, `Tool`,
   `Json`, `RawJson`.
@@ -240,7 +239,8 @@ editor support, so there is one source of truth.
 Sophios leaks three ways:
 
 1. **Sophios-owned syntax**, consumed and stripped before emitting CWL: `!&`, `!*`,
-   `!ii`, and the `wic:` sidecar.
+   `!ii`, `!cwl` (the tag is consumed; its expression is handed to CWL
+   unresolved), and the `wic:` sidecar.
 2. **Interpreted CWL**, read and acted upon: `scatter` and `when` inject
    `ScatterFeatureRequirement` / `InlineJavascriptRequirement`; an inline `run:`
    registers a tool.
