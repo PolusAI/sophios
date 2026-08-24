@@ -1,5 +1,6 @@
 import copy
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, NamedTuple, cast
@@ -18,6 +19,8 @@ from .wic_types import (CompilerInfo, CompilerOptions, EnvData, ExplicitEdgeCall
                         WorkflowOutputs, Yaml, YamlTagPaths, YamlTree, StepId)
 from .lang.cwl import CWL_VERSION
 from .lang.diagnostics import Code, SophiosError
+
+logger = logging.getLogger('sophios')
 
 # NOTE: This must be initialized in main.py and/or cwl_subinterpreter.py
 inference_rules: dict[str, str] = {}
@@ -202,7 +205,21 @@ def _prepare_compilation_state(yaml_tree_ast: YamlTree,
     # runs cromwell (cwltool and toil are the supported runners), and 1.2 is
     # what conditional workflows already rely on. A static scan bans version
     # literals outside the owner module (tests/core/test_cwl_version.py).
-    yaml_tree['cwlVersion'] = yaml_tree.get('cwlVersion', CWL_VERSION)
+    #
+    # The compiler wins, rather than defaulting to its version only when the
+    # document is silent. Sophios compiles for one substrate version and emits
+    # constructs from it — a document that declared v1.0 kept the declaration
+    # and still got `when:`, which is v1.2-only, so the output was invalid CWL
+    # and cwltool said so. Honouring the tag would mean generating for the
+    # version it names, which is a different compiler.
+    declared_version = yaml_tree.get('cwlVersion')
+    if declared_version is not None and declared_version != CWL_VERSION:
+        logger.warning(
+            'Ignoring cwlVersion: %s in %s.wic — Sophios compiles to %s, and the emitted '
+            'workflow may use features %s does not have. The output declares %s and is '
+            'valid against it, so nothing is lost; remove the tag to silence this.',
+            declared_version, yaml_stem, CWL_VERSION, declared_version, CWL_VERSION)
+    yaml_tree['cwlVersion'] = CWL_VERSION
     yaml_tree['class'] = 'Workflow'
     namespaces_value = yaml_tree.get('$namespaces', {})
     if namespaces_value is None:

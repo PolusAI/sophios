@@ -39,22 +39,15 @@ COMPILED: Final[dict[Code, Callable[[], object]]] = {}
 
 
 def _compile_minimal(yml: dict) -> None:
-    """Compile one in-memory workflow with the real tool registry."""
-    import graphviz  # pylint: disable=import-outside-toplevel
-    import networkx as nx  # pylint: disable=import-outside-toplevel
+    """Compile one in-memory workflow with the real tool registry.
 
-    import sophios.cli  # pylint: disable=import-outside-toplevel
-    import sophios.compiler  # pylint: disable=import-outside-toplevel
-    from sophios.wic_types import GraphData, GraphReps, StepId, YamlTree  # pylint: disable=import-outside-toplevel
+    Imported lazily, like everything else here: this module is imported by the
+    meta-test to enumerate codes, and pulling in the compiler and the tool
+    registry to do that would make a cheap import expensive.
+    """
+    from .compile_harness import compile_info  # pylint: disable=import-outside-toplevel
 
-    from .test_setup import tools_cwl  # pylint: disable=import-outside-toplevel
-
-    options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
-    graph = GraphReps(graphviz.Digraph(name='cluster_provoke'), nx.DiGraph(), GraphData('provoke'))
-    sophios.compiler.compile_workflow(YamlTree(StepId('provoke', 'global'), yml),
-                                      options, graph_settings, tag_paths,
-                                      [], [graph], {}, {}, {}, {},
-                                      tools_cwl, True, relative_run_path=True, testing=True)
+    compile_info(yml, 'provoke')
 
 
 def _provoke_unresolved_input() -> None:

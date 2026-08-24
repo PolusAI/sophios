@@ -58,11 +58,43 @@ point of this document:
 |---|---|---|
 | **Sophios-owned** | Consumes it; never appears in the output | `!ii`, `!&`, `!*`, `!cwl`, the `wic:` block |
 | **Interpreted CWL** | Reads it *and acts on it* | `scatter`, `scatterMethod`, `when`, inline `run` |
-| **Passthrough CWL** | Copies it out unchanged | `$namespaces`, `$schemas`, `requirements`, `hints`, everything else |
+| **Compiler-owned** | Writes or extends it at the workflow level¹ | `class`, `cwlVersion`, `inputs`, `outputs`, `requirements`, `$namespaces`, `$schemas` |
+| **Passthrough CWL** | Copies it out unchanged | `hints`, `label`, `doc`, everything else |
 
-The interpreted set is closed and listed in §4.3. **Anything not in it is
-passthrough, by definition.** That rule is what makes the leak a contract
-rather than a surprise.
+The interpreted set is closed and listed in §4.3. **Anything not interpreted
+and not compiler-owned is passthrough, by definition.** That rule is what makes
+the leak a contract rather than a surprise.
+
+¹ The compiler-owned row exists because "unchanged" has to mean unchanged.
+Each key in it is treated differently, and each is pinned by a named test in
+`tests/core/test_leak_boundary.py` rather than by a property — a property
+broad enough to cover them would have to be weak enough to say nothing:
+
+- `class` is **written by the compiler**: a workflow-level value you supply
+  does not survive.
+- `inputs` and `outputs` are **merged into**, with the compiler winning on a
+  collision: entries you write survive unless the compiler generates one of
+  the same name. `outputs` is additionally *read* — each entry's
+  `outputSource` feeds the compiler's output mapping — so a workflow-level
+  `outputs:` is interpreted, not merely tolerated.
+- `cwlVersion` is **written by the compiler**: it is always the one declared
+  substrate version, whatever the document says. Sophios generates constructs
+  from that version — a workflow that declared `v1.0` and used `when:` used to
+  keep the declaration and emit CWL that is invalid against it. Supplying the
+  tag is not an error; it is ignored, with a warning naming the version that
+  was used instead.
+- `requirements` is **merged into**: your entries survive, and Sophios adds
+  what the workflow needs — `ScatterFeatureRequirement` for a scattering step,
+  `InlineJavascriptRequirement` for `when` or `valueFrom`,
+  `SubworkflowFeatureRequirement` for a `.wic` step. The mapping you wrote is
+  extended, not replaced, and not copied out byte-identically.
+- `$schemas` is **append-only**: your entries survive and the EDAM entry is
+  added once.
+- `$namespaces` is **merged, with one reserved prefix**: every binding you
+  write survives except `edam`, which is replaced by the canonical one.
+
+Everything outside the compiler-owned row survives byte-identically, which is
+the statement the properties in that file quantify over.
 
 ---
 
