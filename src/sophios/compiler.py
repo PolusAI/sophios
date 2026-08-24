@@ -2,7 +2,6 @@ import copy
 import json
 import os
 from pathlib import Path
-import sys
 from typing import Any, NamedTuple, cast
 
 import graphviz
@@ -18,6 +17,7 @@ from .wic_types import (CompilerInfo, CompilerOptions, EnvData, ExplicitEdgeCall
                         NodeData, RoseTree, Tool, Tools, WorkflowInputs, WorkflowInputsFile,
                         WorkflowOutputs, Yaml, YamlTagPaths, YamlTree, StepId)
 from .lang.cwl import CWL_VERSION
+from .lang.diagnostics import Code, SophiosError
 
 # NOTE: This must be initialized in main.py and/or cwl_subinterpreter.py
 inference_rules: dict[str, str] = {}
@@ -881,11 +881,10 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
                     arg_var_is_input = hashable and arg_var in setup.yaml_tree.get('inputs', {})
                     if not compiler_options['allow_raw_cwl'] and not arg_var_is_input:
-                        print(
-                            f"Warning! Did you forget to use !ii before {arg_var} in {setup.yaml_stem}.wic?")
-                        print(
+                        raise SophiosError.error(
+                            Code.UNRESOLVED_INPUT,
+                            f"Warning! Did you forget to use !ii before {arg_var} in {setup.yaml_stem}.wic?",
                             'If you want to compile the workflow anyway, use --allow_raw_cwl')
-                        sys.exit(1)
 
                     if 'doc' in inputs_key_dict:
                         inputs_key_dict['doc'] += '\\n' + in_dict.get('doc', '')
@@ -1119,9 +1118,9 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
         if value is None:
             if type_includes_null(raw_type):
                 return None
-            raise ValueError(
-                f"Required input of type {raw_type} was not provided."
-            )
+            raise SophiosError.error(
+                Code.MISSING_REQUIRED_INPUT,
+                f"Required input of type {raw_type} was not provided.")
 
         # Normalize type (strip null / ?)
         cwl_type = strip_null_from_union(raw_type)

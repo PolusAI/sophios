@@ -5,6 +5,7 @@ import shutil
 import subprocess as sub
 from . import plugins
 from .wic_types import RoseTree, NodeData, Yaml
+from .lang.diagnostics import Code, SophiosError
 
 
 def verify_container_engine_config(container_engine: str, ignore_container_install: bool) -> None:
@@ -39,19 +40,21 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
         if not docker_ok and not ignore_container_install:
 
             if permission_denied in output:
-                print('Warning! docker appears to be installed, but not configured as a non-root user.')
-                print('See https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user')
-                print('TL;DR you probably just need to run the following command (and then restart your machine)')
-                print('sudo usermod -aG docker $USER')
-                sys.exit(1)
+                raise SophiosError.error(
+                    Code.CONTAINER_ENGINE_UNAVAILABLE,
+                    'Warning! docker appears to be installed, but not configured as a non-root user.',
+                    'See https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user',
+                    'TL;DR you probably just need to run the following command (and then restart your machine)',
+                    'sudo usermod -aG docker $USER')
 
-            print(f'Warning! The {container_cmd} command does not appear to be installed.')
-            print(f"""Most workflows require docker containers and
-                  will fail at runtime if {container_cmd} is not installed.""")
-            print('If you want to try running the workflow anyway, use --ignore_docker_install')
-            print("""Note that --ignore_docker_install does
+            raise SophiosError.error(
+                Code.CONTAINER_ENGINE_UNAVAILABLE,
+                f'Warning! The {container_cmd} command does not appear to be installed.',
+                f"""Most workflows require docker containers and
+                  will fail at runtime if {container_cmd} is not installed.""",
+                'If you want to try running the workflow anyway, use --ignore_docker_install',
+                """Note that --ignore_docker_install does
                   NOT change whether or not any step in your workflow uses docker""")
-            sys.exit(1)
 
         # If docker is installed, check for too many running processes. (on linux, macos)
         if container_cmd_exists and sys.platform != "win32":
@@ -62,13 +65,14 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
             max_processes = 1000
             too_many_processes = num_processes > max_processes
             if too_many_processes and not ignore_container_install:
-                print(f'Warning! There are {num_processes} running docker processes.')
-                print(f'More than {max_processes} may potentially cause intermittent hanging issues.')
-                print('It is recommended to terminate the processes using the command')
-                print('`sudo pkill com.docker && sudo pkill Docker`')
-                print('and then restart Docker.')
-                print('If you want to run the workflow anyway, use --ignore_docker_processes')
-                sys.exit(1)
+                raise SophiosError.error(
+                    Code.CONTAINER_ENGINE_UNAVAILABLE,
+                    f'Warning! There are {num_processes} running docker processes.',
+                    f'More than {max_processes} may potentially cause intermittent hanging issues.',
+                    'It is recommended to terminate the processes using the command',
+                    '`sudo pkill com.docker && sudo pkill Docker`',
+                    'and then restart Docker.',
+                    'If you want to run the workflow anyway, use --ignore_docker_processes')
     else:
         cmd = [container_cmd, '--version']
         output = ''
@@ -81,11 +85,12 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
         singularity_ok = container_cmd_exists
 
         if not singularity_ok and not ignore_container_install:
-            print(f'Warning! The {container_cmd} command does not appear to be installed.')
-            print('If you want to try running the workflow anyway, use --ignore_docker_install')
-            print('Note that --ignore_docker_install does NOT change whether or not')
-            print('any step in your workflow uses docker or any other containers')
-            sys.exit(1)
+            raise SophiosError.error(
+                Code.CONTAINER_ENGINE_UNAVAILABLE,
+                f'Warning! The {container_cmd} command does not appear to be installed.',
+                'If you want to try running the workflow anyway, use --ignore_docker_install',
+                'Note that --ignore_docker_install does NOT change whether or not',
+                'any step in your workflow uses docker or any other containers')
 
 
 def cwl_docker_extract(container_engine: str, pull_dir: str, cwl_path: str | Path) -> None:
@@ -174,8 +179,7 @@ def stage_input_files(yml_inputs: Yaml,
             case {"class": "File", "location": location, **_rest_val}:
                 src_path = root_yml_dir_abs / Path(location)
                 if not src_path.exists() and throw:
-                    print(f"Error! {src_path} does not exist!")
-                    sys.exit(1)
+                    raise SophiosError.error(Code.MISSING_INPUT_FILE, f"Error! {src_path} does not exist!")
 
                 relroot = Path(basepath) if use_subdirs_cwl else Path(".")
                 dst_path = relroot / Path(location)

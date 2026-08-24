@@ -11,6 +11,7 @@ import networkx as nx
 import yaml
 from jsonschema import Draft202012Validator
 
+from sophios.lang.diagnostics import SophiosError
 from sophios.utils_yaml import wic_loader
 from . import input_output as io
 from . import post_compile as pc
@@ -125,6 +126,19 @@ def _build_and_compile_workflow(yaml_path: str, yaml_stem: str, yaml_tree: YamlT
             compiler_info = compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
                                                       [], [subgraph], {}, {}, {}, {},
                                                       tools_cwl, True, relative_run_path=True, testing=False)
+        except SophiosError as e:
+            # The library reports; only this adapter is allowed to exit. The
+            # messages are the same ones the old exit sites printed — but the
+            # banner has to stay: this arm intercepts failures that used to
+            # reach the handler below, and a message naming neither the
+            # workflow nor the file is a worse error than the one it replaced.
+            # No traceback file, though: a reported failure is not a crash,
+            # and error_<stem>.txt exists to hide stack traces users cannot
+            # act on.
+            print('Failed to compile', yaml_path)
+            for diagnostic in e.diagnostics:
+                print(diagnostic.message)
+            sys.exit(1)
         except Exception as e:
             # Certain constraints are conditionally dependent on values and are
             # not easily encoded in the schema, so catch them here.
@@ -143,6 +157,16 @@ def _build_and_compile_workflow(yaml_path: str, yaml_stem: str, yaml_tree: YamlT
 
 
 def main() -> None:
+    """CLI entry point: run, and convert reported failures to exit codes."""
+    try:
+        _main()
+    except SophiosError as e:
+        for diagnostic in e.diagnostics:
+            print(diagnostic.message)
+        sys.exit(1)
+
+
+def _main() -> None:
     """See docs/userguide.md"""
     args, unknown_args = cli.parser.parse_known_args()
     plugins.logging_filters()

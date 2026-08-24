@@ -8,6 +8,7 @@ import pytest
 
 import sophios
 import sophios.ast
+from sophios.lang.diagnostics import Code, SophiosError
 import sophios.cli
 import sophios.plugins
 import sophios.utils
@@ -70,7 +71,34 @@ class TestFuzzyCompile(unittest.TestCase):
             sophios.compiler.compile_workflow(yaml_tree, compiler_options, graph_settings,
                                               yaml_tag_paths, [], [graph], {}, {}, {}, {},
                                               tools_cwl, True, relative_run_path=True, testing=True)
-        except BaseException as e:
+        except SophiosError as e:
+            # Structured failures are tolerated only for the codes that were
+            # tolerated before this change, and no others.
+            #
+            # `len(e.diagnostics) > 0` was the first attempt and it is a
+            # tautology: the constructor already refuses to build an empty
+            # error, so every compile-phase failure passed and the job stopped
+            # being a regression check at all. Matching on codes restores it,
+            # and is stricter than the message matching below — a new code, or
+            # one of these raised somewhere it should not be, fails the job.
+            #
+            # The set is exactly the former `sys.exit(1)` sites, which the
+            # handler below used to accept as `SystemExit(1)`. Deliberately
+            # absent: MISSING_REQUIRED_INPUT. That site raised a bare
+            # ValueError whose message is not in the list below, so it failed
+            # this job before and must keep failing it — giving a failure a
+            # code documents it, it does not bless it.
+            tolerated = {
+                Code.UNRESOLVED_INPUT,
+                Code.SUBWORKFLOW_INVALID,
+                Code.SCRIPT_ARGUMENT_MISMATCH,
+                Code.CONTAINER_ENGINE_UNAVAILABLE,
+                Code.MISSING_INPUT_FILE,
+            }
+            unexpected = [d for d in e.diagnostics if d.code not in tolerated]
+            if unexpected:
+                raise
+        except Exception as e:
             expected_messages = (
                 'Error! Multiple definitions of &',
                 'Error! Unbound literal variable ~',
@@ -94,12 +122,11 @@ class TestFuzzyCompile(unittest.TestCase):
             )
             # Certain constraints are conditionally dependent on values and are
             # not easily encoded in the schema, so catch them here.
-            # Moreover, although we check for the existence of input files in
-            # stage_input_files, we cannot encode file existence in json schema
-            # to check the python_script script: tag before compile time.
-            if isinstance(e, SystemExit) and e.code == 1:
-                pass
-            elif any(msg in str(e) for msg in expected_messages):
+            # The SystemExit arm is gone because the library no longer exits:
+            # what used to be a whitelisted process death is the SophiosError
+            # arm above. `except Exception` rather than BaseException
+            # for the same reason — a SystemExit now IS a test failure.
+            if any(msg in str(e) for msg in expected_messages):
                 pass
             else:
                 raise e

@@ -1,13 +1,13 @@
 import uuid
 import copy
 from pathlib import Path
-import sys
 import traceback
 
 from mergedeep import merge, Strategy
 from jsonschema import Draft202012Validator
 import yaml
 
+from sophios.lang.diagnostics import Code, SophiosError
 from sophios.utils_yaml import wic_loader
 from . import python_cwl_adapter, utils, utils_cwl
 from .wic_types import Yaml, Tools, YamlTree, YamlForest, StepId, Tool
@@ -49,14 +49,14 @@ def read_ast_from_disk(homedir: str,
         # jsonschema.ValidationError) should be reported gracefully to the
         # user via a traceback file rather than crashing with a raw stack trace.
         yaml_path = Path(step_id.stem)
-        print('Failed to validate', yaml_path)
-        print(
-            f'See validation_{yaml_path.stem}.txt for detailed technical information.')
         # Do not display a nasty stack trace to the user; hide it in a file.
         with open(f'validation_{yaml_path.stem}.txt', mode='w', encoding='utf-8') as f:
             # https://mypy.readthedocs.io/en/stable/common_issues.html#python-version-and-system-platform-checks
             traceback.print_exception(type(e), value=e, tb=None, file=f)
-        sys.exit(1)
+        raise SophiosError.error(
+            Code.SUBWORKFLOW_INVALID,
+            f'Failed to validate {yaml_path}',
+            f'See validation_{yaml_path.stem}.txt for detailed technical information.') from e
 
     wic = {'wic': yaml_tree.get('wic') or {}}
     if 'implementations' in wic['wic']:

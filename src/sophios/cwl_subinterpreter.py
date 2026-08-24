@@ -16,6 +16,7 @@ from . import ast, cli, compiler, inference, utils
 from .post_compile import stage_input_files
 from .plugins import get_tools_cwl, get_yml_paths, logging_filters
 from .schemas import wic_schema
+from .lang.diagnostics import SophiosError
 from .wic_types import GraphData, GraphReps, Json, StepId, Tools, YamlTree
 
 
@@ -262,10 +263,14 @@ def main() -> None:
             i += 1
     except KeyboardInterrupt:
         pass
-
-    failed = False  # Your analysis goes here
-    if failed:
-        print(f'{cwl_tool} failed!')
+    except SophiosError as e:
+        # This module is a console script too (`cwl_subinterpreter` in
+        # pyproject.toml), so it is an adapter, not library code: it owes the
+        # user the same clean report and exit code that `sophios` gives,
+        # rather than a raw traceback from a failure the library reported
+        # deliberately.
+        for diagnostic in e.diagnostics:
+            print(diagnostic.message)
         sys.exit(1)
 
 

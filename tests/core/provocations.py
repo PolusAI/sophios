@@ -36,3 +36,88 @@ PARSE: Final[dict[Code, str]] = {
 #: `SophiosError` carrying the code. Extended by the branches that add the
 #: codes; empty here because this branch declares no compile-phase codes.
 COMPILED: Final[dict[Code, Callable[[], object]]] = {}
+
+
+def _compile_minimal(yml: dict) -> None:
+    """Compile one in-memory workflow with the real tool registry."""
+    import graphviz  # pylint: disable=import-outside-toplevel
+    import networkx as nx  # pylint: disable=import-outside-toplevel
+
+    import sophios.cli  # pylint: disable=import-outside-toplevel
+    import sophios.compiler  # pylint: disable=import-outside-toplevel
+    from sophios.wic_types import GraphData, GraphReps, StepId, YamlTree  # pylint: disable=import-outside-toplevel
+
+    from .test_setup import tools_cwl  # pylint: disable=import-outside-toplevel
+
+    options, graph_settings, tag_paths = sophios.cli.get_dicts_for_compilation()
+    graph = GraphReps(graphviz.Digraph(name='cluster_provoke'), nx.DiGraph(), GraphData('provoke'))
+    sophios.compiler.compile_workflow(YamlTree(StepId('provoke', 'global'), yml),
+                                      options, graph_settings, tag_paths,
+                                      [], [graph], {}, {}, {}, {},
+                                      tools_cwl, True, relative_run_path=True, testing=True)
+
+
+def _provoke_unresolved_input() -> None:
+    _compile_minimal({'steps': [{'id': 'touch', 'in': {'filename': 'not_a_workflow_input'}}]})
+
+
+def _provoke_missing_required_input() -> None:
+    # CE-01's exact shape: a null !ii on a non-nullable input.
+    _compile_minimal({'steps': [{'id': 'touch', 'in': {'filename': {'wic_inline_input': None}}}]})
+
+
+def _provoke_subworkflow_invalid() -> None:
+    from typing import cast  # pylint: disable=import-outside-toplevel
+
+    import sophios.ast  # pylint: disable=import-outside-toplevel
+    from jsonschema import Draft202012Validator  # pylint: disable=import-outside-toplevel
+    from sophios.wic_types import StepId, YamlTree  # pylint: disable=import-outside-toplevel
+
+    class _RefusesEverything:  # pylint: disable=too-few-public-methods
+        def validate(self, _tree: object) -> None:
+            raise ValueError('provoked')
+
+    tree = YamlTree(StepId('provoke.wic', 'global'), {'steps': [{'id': 's'}]})
+    # cast: the raise path only needs .validate; a real validator that always
+    # refuses would drag schema construction into a provocation.
+    sophios.ast.read_ast_from_disk('.', tree, {}, {}, cast(Draft202012Validator, _RefusesEverything()), False)
+
+
+def _provoke_script_argument_mismatch() -> None:
+    from types import ModuleType  # pylint: disable=import-outside-toplevel
+
+    from sophios.python_cwl_adapter import check_args_match_inputs  # pylint: disable=import-outside-toplevel
+
+    module = ModuleType('provoked_script')
+    module.inputs = {'expected': int}  # type: ignore[attr-defined]
+    check_args_match_inputs(module, {'unexpected': 1}, check=True)
+
+
+def _provoke_container_engine_unavailable() -> None:
+    from unittest import mock  # pylint: disable=import-outside-toplevel
+
+    from sophios import post_compile  # pylint: disable=import-outside-toplevel
+
+    with mock.patch.object(post_compile.sub, 'run', side_effect=FileNotFoundError('docker')):
+        post_compile.verify_container_engine_config('docker', False)
+
+
+def _provoke_missing_input_file() -> None:
+    import tempfile  # pylint: disable=import-outside-toplevel
+    from pathlib import Path  # pylint: disable=import-outside-toplevel
+
+    from sophios import post_compile  # pylint: disable=import-outside-toplevel
+
+    with tempfile.TemporaryDirectory() as root:
+        post_compile.stage_input_files({'f': {'class': 'File', 'location': 'definitely_absent.txt'}},
+                                       Path(root), root, throw=True)
+
+
+COMPILED.update({
+    Code.UNRESOLVED_INPUT: _provoke_unresolved_input,
+    Code.MISSING_REQUIRED_INPUT: _provoke_missing_required_input,
+    Code.SUBWORKFLOW_INVALID: _provoke_subworkflow_invalid,
+    Code.SCRIPT_ARGUMENT_MISMATCH: _provoke_script_argument_mismatch,
+    Code.CONTAINER_ENGINE_UNAVAILABLE: _provoke_container_engine_unavailable,
+    Code.MISSING_INPUT_FILE: _provoke_missing_input_file,
+})
