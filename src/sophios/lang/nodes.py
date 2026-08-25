@@ -10,6 +10,7 @@ once per construct in a document and the dict-per-instance overhead is pure
 waste.
 """
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any, TypeAlias
 
 from .spans import SourceSpan
@@ -17,10 +18,19 @@ from .spans import SourceSpan
 
 @dataclass(frozen=True, slots=True)
 class InlineLiteral:
-    """`!ii value` — a literal, never an edge."""
+    """`!ii value` — a literal, never an edge.
 
-    value: Any
+    `text` is the literal's source spelling when it was parsed from tagged
+    YAML, and None when it was built from the desugared form or the Python
+    API. Rendering a parsed literal is transcription of `text`, never
+    re-serialisation of `value` — reconstruction is lossy by nature (the
+    tagged form has no spelling for the string '0'), and preserving the
+    surface is what makes the round-trip exact by construction.
+    """
+
+    value: 'OpaqueCwl'
     span: SourceSpan
+    text: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,9 +78,20 @@ class UnresolvedName:
 #: statements over it stay exhaustive.
 InputValue: TypeAlias = InlineLiteral | EdgeDef | EdgeRef | RawCwlRef | UnresolvedName
 
-#: CWL that Sophios does not interpret and passes through unchanged. Modelled
-#: as opaque on purpose: nothing downstream should reason about its interior.
-OpaqueCwl: TypeAlias = Any
+#: CWL that Sophios does not interpret and passes through unchanged — but no
+#: longer `Any`: a closed recursive union of exactly what YAML's safe schema
+#: can produce, plus the Sophios constructs the passthrough walk preserves.
+#: Closing the type is what lets the writer's match be exhaustiveness-checked
+#: (a construct nested in a collection becomes a type error, not a runtime
+#: RepresenterError) and what lets the test generator be *derived* from the
+#: type instead of hand-written beside it — so the space the properties
+#: quantify over and the space the type admits coincide by construction.
+#: `date`/`datetime` are members because YAML resolves timestamps; their JSON
+#: projection is ISO-8601 text (see `render.to_json`).
+OpaqueCwl: TypeAlias = (
+    None | bool | int | float | str | date | datetime
+    | list['OpaqueCwl'] | dict[str, 'OpaqueCwl'] | InputValue
+)
 
 
 @dataclass(frozen=True, slots=True)

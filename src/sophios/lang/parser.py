@@ -356,7 +356,7 @@ def _desugared_form(
 #: A table rather than a comparison chain: one lookup instead of four, and the
 #: two spellings of each construct stay side by side.
 _TAGGED_FORMS: Final[dict[str, Callable[[yaml.nodes.Node, str, Diagnostics, SourceSpan], InputValue]]] = {
-    TAG_INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_literal(n, f, d), s),
+    TAG_INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_literal(n, f, d), s, text=_literal_text(n)),
     TAG_ANCHOR: lambda n, f, d, s: EdgeDef(_name_text(n, f, d), s),
     TAG_ALIAS: lambda n, f, d, s: EdgeRef(_name_text(n, f, d), s),
     TAG_RAW_CWL: lambda n, f, d, s: RawCwlRef(_name_text(n, f, d), s),
@@ -516,6 +516,17 @@ def _step_key(text: str) -> StepKey | None:
 # --------------------------------------------------------------------------
 # Leaves
 # --------------------------------------------------------------------------
+
+
+def _literal_text(node: yaml.nodes.Node) -> str | None:
+    """The source spelling of a tagged scalar literal, or None for collections.
+
+    `value` is a pure function of this text (`yaml.safe_load`), so emitting the
+    text verbatim reproduces the value exactly — rendering becomes
+    transcription, and the lossy business of guessing a YAML spelling for a
+    Python value is reserved for literals that never had one (API-built).
+    """
+    return str(node.value) if isinstance(node, yaml.nodes.ScalarNode) else None
 
 
 def _literal(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Any:
