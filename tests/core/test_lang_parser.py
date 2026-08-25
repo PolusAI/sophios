@@ -39,6 +39,7 @@ from sophios.lang import (
 from sophios.lang.spans import SourceSpan
 from sophios.utils_yaml import wic_loader
 
+from . import provocations
 from .wic_corpus import CORPUS, corpus_id
 
 FAST = settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
@@ -762,31 +763,41 @@ def test_inline_literal_collections_wrap_exactly_once() -> None:
 # --------------------------------------------------------------------------
 
 
-#: One attack per code. A member missing here fails the meta-test below, so a
-#: diagnostic cannot be declared without the input that fires it — the dead
-#: UNKNOWN_TAG of the #382 cycle becomes structurally impossible.
-PROVOCATIONS: dict[Code, str] = {
-    Code.INVALID_YAML: 'steps:\n  - [unclosed\n',
-    Code.NOT_A_MAPPING: '- just\n- a list\n',
-    Code.EXPECTED_MAPPING: 'steps: 3\n',
-    Code.EXPECTED_SEQUENCE: 'steps:\n- id: s\n  out: 3\n',
-    Code.EXPECTED_SCALAR: 'steps:\n  ? [a, b]\n  : {}\n',
-    Code.MISSING_STEP_ID: 'steps:\n- {a: 1, b: 2}\n',
-    Code.EMPTY_STEP_ID: "steps:\n- id: ''\n",
-    Code.MALFORMED_WIC_STEP_KEY: 'wic:\n  steps:\n    nope:\n      x: 1\n',
-    Code.UNKNOWN_TAG: 'top: !foo bar\n',
-    Code.DUPLICATE_KEY: 'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
-    Code.RECURSIVE_ALIAS: 'top: &a [*a]\n',
-}
+@pytest.mark.fast
+def test_every_code_has_a_registered_provocation() -> None:
+    """Each declared Code appears in exactly one tier of the registry.
+
+    Adding a Code without its attack fails here, in the same commit."""
+    registered = set(provocations.PARSE) | set(provocations.COMPILED)
+    missing = set(Code) - registered
+    doubled = set(provocations.PARSE) & set(provocations.COMPILED)
+    assert not missing, f'codes with no registered provocation: {sorted(c.name for c in missing)}'
+    assert not doubled, f'codes registered in both tiers: {sorted(c.name for c in doubled)}'
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('code', list(Code), ids=lambda c: c.name)
-def test_every_code_is_provocable(code: Code) -> None:
-    """Each declared diagnostic has a registered input that fires it."""
-    assert code in PROVOCATIONS, f'{code.name} has no registered provocation — dead on arrival'
-    result = parse(PROVOCATIONS[code], 'provoke.wic')
+@pytest.mark.parametrize('code', sorted(provocations.PARSE), ids=lambda c: c.name)
+def test_parse_provocations_fire(code: Code) -> None:
+    """Every parse-tier provocation actually fires its code."""
+    result = parse(provocations.PARSE[code], 'provoke.wic')
     assert any(d.code is code for d in result.diagnostics), f'{code.name} did not fire'
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.parametrize('code', sorted(provocations.COMPILED), ids=lambda c: c.name)
+def test_compiled_provocations_fire(code: Code) -> None:
+    """Every compiled-tier provocation raises SophiosError carrying its code.
+
+    `SophiosError` is looked up dynamically: it arrives with the diagnostics
+    branch, and on branches before it the COMPILED tier is empty so this test
+    has no instances — the lookup keeps the file importable stack-wide.
+    """
+    from sophios.lang import diagnostics as diagnostics_module
+    sophios_error: type[Exception] = getattr(diagnostics_module, 'SophiosError', AssertionError)
+    with pytest.raises(sophios_error) as caught:
+        provocations.COMPILED[code]()
+    fired = getattr(caught.value, 'diagnostics', ())
+    assert any(d.code is code for d in fired), f'{code.name} did not fire'
 
 
 # --------------------------------------------------------------------------
