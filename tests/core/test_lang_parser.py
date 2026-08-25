@@ -59,7 +59,7 @@ scalars = st.one_of(
 
 
 @st.composite
-def input_lines(draw: st.DrawFn, indent: str = '      ') -> str:
+def input_lines(draw: st.DrawFn, indent: str = '      ') -> str:  # pylint: disable=too-many-return-statements
     """One `in:` binding, in any of the forms the language admits.
 
     Both spellings of each construct are generated — the tagged form people
@@ -593,3 +593,113 @@ def test_every_problem_is_reported_exactly_once() -> None:
         result = parse(source, 'once.wic')
         reports = [(d.severity, d.code, d.message, d.span) for d in result.diagnostics]
         assert len(reports) == len(set(reports)), f'duplicate diagnostics for {source!r}: {reports}'
+
+# --------------------------------------------------------------------------
+# Adversarial structure — the space the review proved the fuzzer never reached
+# --------------------------------------------------------------------------
+#
+# `st.text()` almost never forms valid YAML with aliases, so quantifying
+# totality over it left the entire anchor/alias class untested: cycles raised
+# RecursionError and widening chains exhausted memory while P04 stayed green.
+# These strategies generate *structured* YAML — anchors, aliases (including
+# self-referential ones), tags known and unknown, deep nesting — so the
+# property covers the inputs that actually break parsers.
+
+
+_tag_pool = st.sampled_from(['', '!ii ', '!& ', '!* ', '!cwl ', '!foo ', '!x '])
+
+
+@st.composite
+def adversarial_yaml(draw: st.DrawFn) -> str:
+    """Structured YAML text with anchors, aliases, tags, and real nesting."""
+    fragments = []
+    anchors: list[str] = []
+    for i in range(draw(st.integers(min_value=1, max_value=6))):
+        key = draw(identifiers)
+        shape = draw(st.sampled_from(['scalar', 'flow_list', 'flow_map', 'anchor', 'alias', 'self_ref', 'nested']))
+        tag = draw(_tag_pool)
+        match shape:
+            case 'scalar':
+                fragments.append(f'{key}: {tag}{draw(identifiers)}')
+            case 'flow_list':
+                items = ', '.join(draw(st.lists(identifiers, min_size=0, max_size=4)))
+                fragments.append(f'{key}: {tag}[{items}]')
+            case 'flow_map':
+                inner = draw(identifiers)
+                fragments.append(f'{key}: {tag}{{{inner}: {draw(identifiers)}}}')
+            case 'anchor':
+                anchors.append(f'a{i}')
+                fragments.append(f'{key}: &a{i} [{draw(identifiers)}]')
+            case 'alias' if anchors:
+                ref = draw(st.sampled_from(anchors))
+                repeats = ', '.join([f'*{ref}'] * draw(st.integers(min_value=1, max_value=6)))
+                anchors.append(f'a{i}')
+                fragments.append(f'{key}: &a{i} [{repeats}]')
+            case 'self_ref':
+                # A node that contains itself — legal YAML, lethal to naive walks.
+                fragments.append(f'{key}: &s{i} [x, *s{i}]')
+            case _:
+                depth = draw(st.integers(min_value=1, max_value=5))
+                nested = draw(identifiers)
+                for _ in range(depth):
+                    nested = f'{{n: {nested}}}'
+                fragments.append(f'{key}: {nested}')
+    return '\n'.join(fragments) + '\n'
+
+
+@pytest.mark.fast
+@given(adversarial_yaml())
+@FAST
+def test_p04_parsing_is_total_for_adversarial_structure(text: str) -> None:
+    """P04, the half the review proved missing: totality over real YAML
+    structure — aliases, cycles, unknown tags, nesting — not just over text.
+
+    Never raises, and never accepts silently what the loader rejects.
+    """
+    result = parse(text, 'adversarial.wic')  # must not raise
+    assert result.document is not None or len(result.diagnostics) > 0
+
+    if result.ok and result.document is not None:
+        yaml.load(text, Loader=wic_loader())  # agreement holds here too
+
+
+@pytest.mark.fast
+@given(_tag_pool, st.sampled_from(['scalar', 'flow_map']), st.data())
+@FAST
+def test_tag_decisions_agree_across_positions(tag: str, shape: str, data: st.DataObject) -> None:
+    """Input position and passthrough position make the same unknown-tag call.
+
+    The review found `!foo {wic_anchor: x}` reported in passthrough but
+    swallowed in input position — two paths, one language, two answers. This
+    pins the agreement for every tag and payload shape the generator makes.
+    """
+    payload = data.draw(identifiers) if shape == 'scalar' else f'{{{data.draw(identifiers)}: x}}'
+    value = f'{tag}{payload}'
+
+    in_position = parse(f'steps:\n- id: s\n  in:\n    a: {value}\n', 'pos.wic')
+    passthrough = parse(f'top: {value}\n', 'pos.wic')
+
+    reported_in = any(d.code is Code.UNKNOWN_TAG for d in in_position.diagnostics)
+    reported_through = any(d.code is Code.UNKNOWN_TAG for d in passthrough.diagnostics)
+    assert reported_in == reported_through, f'{value!r}: input={reported_in}, passthrough={reported_through}'
+
+
+@pytest.mark.fast
+def test_inline_literal_collections_wrap_exactly_once() -> None:
+    """`!ii {a: 1}` is one InlineLiteral around plain data, in both positions.
+
+    The passthrough walk wraps tagged collections and `_literal`'s caller
+    wraps too; without coordination the same node wrapped twice and the AST
+    carried InlineLiteral(InlineLiteral(...)).
+    """
+    in_position = parse('steps:\n- id: s\n  in:\n    a: !ii {k: v}\n', 'x.wic')
+    assert in_position.ok and in_position.document is not None
+    literal = in_position.document.steps[0].inputs[0][1]
+    assert isinstance(literal, InlineLiteral)
+    assert literal.value == {'k': 'v'}
+
+    passthrough = parse('top: !ii {k: v}\n', 'x.wic')
+    assert passthrough.ok and passthrough.document is not None
+    wrapped = dict(passthrough.document.passthrough)['top']
+    assert isinstance(wrapped, InlineLiteral)
+    assert wrapped.value == {'k': 'v'}

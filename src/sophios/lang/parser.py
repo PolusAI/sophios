@@ -166,7 +166,7 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
 
     id_node = next((v for k, v in node.value if _key_text(k, file, diags) == 'id'), None)
     if id_node is not None:
-        step_id = _name_text(id_node)
+        step_id = _name_text(id_node, file, diags)
         if not step_id:
             diags.error(Code.EMPTY_STEP_ID, 'id: must be a non-empty string', SourceSpan.of(file, id_node))
         body = [(k, v) for k, v in node.value if _key_text(k, file, diags) != 'id']
@@ -300,9 +300,9 @@ def _desugared_form(
 #: two spellings of each construct stay side by side.
 _TAGGED_FORMS: Final[dict[str, Callable[[yaml.nodes.Node, str, Diagnostics, SourceSpan], InputValue]]] = {
     TAG_INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_literal(n, f, d), s),
-    TAG_ANCHOR: lambda n, _f, _d, s: EdgeDef(_name_text(n), s),
-    TAG_ALIAS: lambda n, _f, _d, s: EdgeRef(_name_text(n), s),
-    TAG_RAW_CWL: lambda n, _f, _d, s: RawCwlRef(_name_text(n), s),
+    TAG_ANCHOR: lambda n, f, d, s: EdgeDef(_name_text(n, f, d), s),
+    TAG_ALIAS: lambda n, f, d, s: EdgeRef(_name_text(n, f, d), s),
+    TAG_RAW_CWL: lambda n, f, d, s: RawCwlRef(_name_text(n, f, d), s),
 }
 
 #: Desugared keys to the node they build. A table rather than a branch chain:
@@ -310,9 +310,9 @@ _TAGGED_FORMS: Final[dict[str, Callable[[yaml.nodes.Node, str, Diagnostics, Sour
 #: stay visibly paired.
 _DESUGARED_FORMS: Final[dict[str, Callable[[yaml.nodes.Node, str, Diagnostics, SourceSpan], InputValue]]] = {
     KEY_INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_opaque(n, f, d), s),
-    KEY_ANCHOR: lambda n, _f, _d, s: EdgeDef(_name_text(n), s),
-    KEY_ALIAS: lambda n, _f, _d, s: EdgeRef(_name_text(n), s),
-    KEY_RAW_CWL: lambda n, _f, _d, s: RawCwlRef(_name_text(n), s),
+    KEY_ANCHOR: lambda n, f, d, s: EdgeDef(_name_text(n, f, d), s),
+    KEY_ALIAS: lambda n, f, d, s: EdgeRef(_name_text(n, f, d), s),
+    KEY_RAW_CWL: lambda n, f, d, s: RawCwlRef(_name_text(n, f, d), s),
 }
 
 
@@ -374,11 +374,11 @@ def _child_sidecar_node(node: yaml.nodes.Node) -> yaml.nodes.Node:
 def _out_edge_def(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> EdgeDef | None:
     """Recognise an edge definition in either spelling, or None."""
     if node.tag == TAG_ANCHOR:
-        return EdgeDef(_name_text(node), SourceSpan.of(file, node))
+        return EdgeDef(_name_text(node, file, diags), SourceSpan.of(file, node))
     if isinstance(node, yaml.nodes.MappingNode) and len(node.value) == 1:
         key_node, value_node = node.value[0]
         if _key_text(key_node, file, diags) == KEY_ANCHOR:
-            return EdgeDef(_name_text(value_node), SourceSpan.of(file, value_node))
+            return EdgeDef(_name_text(value_node, file, diags), SourceSpan.of(file, value_node))
     return None
 
 
@@ -448,7 +448,7 @@ def _literal(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Any:
     quietly change what existing documents mean.
     """
     if not isinstance(node, yaml.nodes.ScalarNode):
-        return _opaque(node, file, diags)
+        return _opaque(node, file, diags, _wrap_self=False)
     if node.value == '':
         return ''
     try:
@@ -465,7 +465,8 @@ _EXPANSION_BUDGET: Final = 100_000
 
 
 def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
-            _path: frozenset[int] = frozenset(), _spent: list[int] | None = None) -> OpaqueCwl:
+            _path: frozenset[int] = frozenset(), _spent: list[int] | None = None,
+            _wrap_self: bool = True) -> OpaqueCwl:
     """Materialise a node Sophios does not interpret, preserving it verbatim.
 
     Custom wic tags are still recognised inside otherwise-opaque content so
@@ -496,17 +497,36 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
                     f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
                     SourceSpan.of(file, node))
 
+    if node.tag in (TAG_ANCHOR, TAG_ALIAS, TAG_RAW_CWL) or (
+            node.tag == TAG_INLINE_INPUT and isinstance(node, yaml.nodes.ScalarNode)):
+        # Name-carrying tags route through the construct builder whatever the
+        # node kind: `!& []` is a diagnostic — a name cannot be a collection,
+        # and the loader rejects the same text. Falling through would strip
+        # the tag silently. Scalar `!ii` routes the same way; collection `!ii`
+        # is handled below, on the materialised content, because its builder
+        # would call back into this walk on the very same node.
+        return _input_value(node, file, diags)
+
+    content: OpaqueCwl
     match node:
+        case yaml.nodes.ScalarNode() if node.tag == TAG_INLINE_INPUT:
+            content = None  # pragma: no cover — routed above; keeps match total
         case yaml.nodes.ScalarNode():
-            if node.tag in (TAG_ANCHOR, TAG_ALIAS, TAG_INLINE_INPUT, TAG_RAW_CWL):
-                return _input_value(node, file, diags)
-            return _resolved_scalar(node)
+            content = _resolved_scalar(node)
         case yaml.nodes.SequenceNode():
-            return [_opaque(item, file, diags, path, spent) for item in node.value]
+            content = [_opaque(item, file, diags, path, spent) for item in node.value]
         case yaml.nodes.MappingNode():
-            return {_key_text(k, file, diags): _opaque(v, file, diags, path, spent) for k, v in node.value}
+            content = {_key_text(k, file, diags): _opaque(v, file, diags, path, spent) for k, v in node.value}
         case _:  # pragma: no cover — compose() emits only the three kinds above
-            return node.value
+            content = node.value
+
+    if node.tag == TAG_INLINE_INPUT and _wrap_self:
+        # A collection literal: `!ii {a: 1}` in passthrough is the same
+        # construct as in input position, wrapped around its materialised
+        # content rather than re-dispatched into an infinite loop. `_literal`
+        # passes _wrap_self=False because its caller already wraps.
+        return InlineLiteral(content, SourceSpan.of(file, node))
+    return content
 
 
 def _resolved_scalar(node: yaml.nodes.ScalarNode) -> Any:
@@ -528,14 +548,21 @@ def _resolved_scalar(node: yaml.nodes.ScalarNode) -> Any:
         return node.value
 
 
-def _name_text(node: yaml.nodes.Node) -> str:
-    """Return a scalar node's literal text.
+def _name_text(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> str:
+    """Return a scalar node's literal text, reporting anything non-scalar.
 
     Edge names and CWL references are identifiers, so the raw text is what is
     meant — resolving `false` to a bool, or `01` to an int, would rename them.
-    This matches `anchor_constructor`, which uses `construct_scalar`.
+    This matches `anchor_constructor`, which uses `construct_scalar` — and,
+    like it, a collection is an error: `!& []` names nothing, and the loader
+    rejects the same text with a ConstructorError.
     """
-    return str(node.value) if isinstance(node, yaml.nodes.ScalarNode) else ''
+    if not isinstance(node, yaml.nodes.ScalarNode):
+        diags.error(Code.EXPECTED_SCALAR,
+                    f'an edge or reference name must be a scalar, found {_kind(node)}',
+                    SourceSpan.of(file, node))
+        return ''
+    return str(node.value)
 
 
 def _key_text(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> str:
