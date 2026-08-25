@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -29,6 +30,9 @@ from sophios.lang import (
     parse,
 )
 from sophios.lang.render import render
+from sophios.utils_yaml import wic_loader
+
+from .test_lang_parser import documents
 
 from .wic_corpus import CORPUS, corpus_id
 
@@ -108,27 +112,21 @@ literal_texts = st.sampled_from([
 
 
 @st.composite
-def documents(draw: st.DrawFn) -> str:
-    """A well-formed Sophios document exercising every input form."""
+def awkward_literal_documents(draw: st.DrawFn) -> str:
+    """Documents whose `!ii` payloads are the renderer's hard cases.
+
+    A narrow, deliberate complement to the shared `documents()` strategy: it
+    exists only to hammer quoting. The structural round-trip quantifies over
+    the full language via the parser suite's generator — a second, narrower
+    `documents()` here is exactly how outputs and nested sidecars once became
+    invisible to P02 (see the PR #382 review cycle).
+    """
     lines = ['steps:']
     for _ in range(draw(st.integers(min_value=1, max_value=3))):
         lines.append(f'- id: {draw(identifiers)}')
         lines.append('  in:')
-        # Unique: binding the same input twice is a diagnosed error, not a
-        # well-formed document (see wic010).
-        names = draw(st.lists(identifiers, min_size=1, max_size=3, unique=True))
-        for name in names:
-            match draw(st.sampled_from(['ii', 'anchor', 'alias', 'cwl', 'bare'])):
-                case 'ii':
-                    lines.append(f'    {name}: !ii {draw(literal_texts)}')
-                case 'anchor':
-                    lines.append(f'    {name}: !& {draw(identifiers)}')
-                case 'alias':
-                    lines.append(f'    {name}: !* {draw(identifiers)}')
-                case 'cwl':
-                    lines.append(f'    {name}: !cwl {draw(identifiers)}/{draw(identifiers)}')
-                case _:
-                    lines.append(f'    {name}: {draw(identifiers)}')
+        for name in draw(st.lists(identifiers, min_size=1, max_size=3, unique=True)):
+            lines.append(f'    {name}: !ii {draw(literal_texts)}')
     return '\n'.join(lines) + '\n'
 
 
@@ -138,22 +136,32 @@ def documents(draw: st.DrawFn) -> str:
 
 
 @pytest.mark.fast
-@given(documents())
+@given(st.one_of(documents(), awkward_literal_documents()))
 @FAST
 def test_p02_round_trip_preserves_structure(source: str) -> None:
-    """P02: parsing a rendered document reproduces the document."""
+    """P02: parsing a rendered document reproduces the document.
+
+    Quantified over the shared full-language generator (both step forms,
+    both spellings, outputs, nested sidecars) plus the quoting-hostile
+    literals — and the rendered text must also load through `wic_loader`,
+    since a renderer that emits what the loader rejects would be writing a
+    dialect (the differential-oracle lesson from the #382 cycle).
+    """
     first = parse(source, 'a.wic')
     assert first.ok and first.document is not None
 
-    second = parse(render(first.document), 'b.wic')
+    rendered = render(first.document)
+    second = parse(rendered, 'b.wic')
     assert second.ok, [str(d) for d in second.diagnostics]
     assert second.document is not None
 
     assert _shape(second.document) == _shape(first.document)
+    if rendered:
+        yaml.load(rendered, Loader=wic_loader())  # the loader agrees too
 
 
 @pytest.mark.fast
-@given(documents())
+@given(st.one_of(documents(), awkward_literal_documents()))
 @FAST
 def test_rendering_is_idempotent(source: str) -> None:
     """Rendering a round-tripped document produces identical text.

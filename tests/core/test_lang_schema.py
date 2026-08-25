@@ -28,7 +28,7 @@ from hypothesis import HealthCheck, given, settings
 from sophios.lang import DESUGARED_KEYS, INTERPRETED_STEP_KEYS, parse, to_json, wic_schema
 from sophios.lang.parser import WIC_STEP_KEY_PATTERN
 
-from .test_lang_render import documents
+from .test_lang_parser import documents
 from .wic_corpus import CORPUS, corpus_id
 
 FAST = settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
