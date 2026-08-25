@@ -46,7 +46,7 @@ from .nodes import (
     UnresolvedName,
     WicSidecar,
 )
-from .parser import KEY_RAW_CWL, TAG_RAW_CWL
+from .parser import KEY_RAW_CWL, SIDECAR_WRAPPER_KEY, TAG_RAW_CWL
 
 #: How one input value is spelled. The two implementations below are the
 #: tagged and desugared surface forms of the same construct.
@@ -131,7 +131,10 @@ class _Writer:
             body['steps'] = (
                 {step.id: self.step(step) for step in document.steps}
                 if document.steps_as_mapping
-                else [{'id': step.id, **self.step(step)} for step in document.steps]
+                # id first for readability, and re-assigned after the spread so a
+                # stray passthrough 'id' can never win — dict displays keep the
+                # first position but take the last value.
+                else [{'id': step.id, **self.step(step), 'id': step.id} for step in document.steps]  # pylint: disable=duplicate-key  # deliberate: first position, last value
             )
 
         for key, value in document.passthrough:
@@ -157,11 +160,20 @@ class _Writer:
         return {binding.name: self.spell(binding.edge_def)}
 
     def sidecar(self, sidecar: WicSidecar) -> Any:
-        """A `wic:` block, restoring its `(index, name)` step keys."""
+        """A `wic:` block, restoring its `(index, name)` step keys.
+
+        Children are re-wrapped in the same key the parser unwraps
+        (`SIDECAR_WRAPPER_KEY`): every downstream consumer reads through that
+        wrapper explicitly, so dropping it is a semantic edit, not a
+        simplification. An empty block renders `{}`, never `None` — consumers
+        defend against a *missing* key with `.get(k, {})`, and a key present
+        with `None` sails past that defence into an AttributeError.
+        """
         out: dict[str, Any] = {key: self.plain(value) for key, value in sidecar.entries}
         if sidecar.steps:
-            out['steps'] = {str(key): self.sidecar(child) for key, child in sidecar.steps}
-        return out or None
+            out['steps'] = {str(key): {SIDECAR_WRAPPER_KEY: self.sidecar(child)}
+                            for key, child in sidecar.steps}
+        return out
 
     def plain(self, value: OpaqueCwl) -> Any:
         """Passthrough content, re-spelling any wic value nested inside it."""

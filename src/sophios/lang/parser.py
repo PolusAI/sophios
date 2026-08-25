@@ -102,6 +102,30 @@ def parse(text: str, filename: str = '<string>') -> ParseResult:
 # --------------------------------------------------------------------------
 
 
+def _unique_entries(node: yaml.nodes.MappingNode, file: str, diags: Diagnostics,
+                    what: str) -> list[tuple[str, yaml.nodes.Node]]:
+    """Yield a mapping's entries with duplicate keys reported and dropped.
+
+    Applied at every mapping boundary the language owns. YAML leaves repeated
+    keys undefined; the loader silently keeps the last one, and a renderer's
+    dict silently keeps one of them too — so the only honest treatment is a
+    diagnostic at parse time. After this boundary, downstream code may rely on
+    uniqueness, which is what makes every writer comprehension total.
+    """
+    seen: set[str] = set()
+    kept: list[tuple[str, yaml.nodes.Node]] = []
+    for key_node, value_node in node.value:
+        key = _key_text(key_node, file, diags)
+        if key in seen:
+            diags.error(Code.DUPLICATE_KEY,
+                        f'{what} {key!r} is defined more than once',
+                        SourceSpan.of(file, key_node))
+            continue
+        seen.add(key)
+        kept.append((key, value_node))
+    return kept
+
+
 def _document(root: yaml.nodes.MappingNode, file: str, diags: Diagnostics) -> Document:
     """Build a Document from the root mapping node."""
     steps: tuple[Step, ...] = ()
@@ -109,8 +133,7 @@ def _document(root: yaml.nodes.MappingNode, file: str, diags: Diagnostics) -> Do
     sidecar: WicSidecar | None = None
     passthrough: list[tuple[str, OpaqueCwl]] = []
 
-    for key_node, value_node in root.value:
-        key = _key_text(key_node, file, diags)
+    for key, value_node in _unique_entries(root, file, diags, 'top-level key'):
         match key:
             case 'steps':
                 steps, steps_as_mapping = _steps(value_node, file, diags)
@@ -136,7 +159,8 @@ def _steps(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[tuple[
     """
     match node:
         case yaml.nodes.MappingNode():
-            return tuple(_step(_key_text(k, file, diags), v, file, diags) for k, v in node.value), True
+            entries = _unique_entries(node, file, diags, 'step')
+            return tuple(_step(name, v, file, diags) for name, v in entries), True
         case yaml.nodes.SequenceNode():
             return tuple(_sequence_step(item, file, diags) for item in node.value), False
         case _:
@@ -212,8 +236,23 @@ def _step_body(
     interpreted: list[tuple[str, OpaqueCwl]] = []
     passthrough: list[tuple[str, OpaqueCwl]] = []
 
+    seen: set[str] = set()
     for key_node, value_node in entries:
         key = _key_text(key_node, file, diags)
+        if key in seen:
+            diags.error(Code.DUPLICATE_KEY, f'step key {key!r} is defined more than once',
+                        SourceSpan.of(file, key_node))
+            continue
+        seen.add(key)
+        if key == 'id':
+            # The step's identity always arrives from elsewhere by the time
+            # this runs — the mapping key, the single name key, or an already
+            # extracted id: — so an id: here is a second, contradictory
+            # identity. Rendering would have to pick one silently; report it.
+            diags.error(Code.DUPLICATE_KEY,
+                        f'step {step_id!r} already has its identity; a second id: is contradictory',
+                        SourceSpan.of(file, key_node))
+            continue
         if key == 'in':
             inputs = _inputs(value_node, file, diags)
         elif key == 'out':
@@ -380,6 +419,14 @@ def _output_binding(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Out
             return OutputBinding('', None, span)
 
 
+#: The key a nested sidecar step wraps its child sidecar in, on the surface.
+#: One constant read by both the parser (unwrap) and the renderer (re-wrap),
+#: so the two cannot disagree about it — the PR #383 review found the parser
+#: unwrapping and the renderer never re-wrapping, invisible to the round-trip
+#: property precisely because the parser tolerates its own renderer's output.
+SIDECAR_WRAPPER_KEY: Final = 'wic'
+
+
 def _child_sidecar_node(node: yaml.nodes.Node) -> yaml.nodes.Node:
     """Unwrap the `wic:` key a nested sidecar step carries on the surface.
 
@@ -391,7 +438,7 @@ def _child_sidecar_node(node: yaml.nodes.Node) -> yaml.nodes.Node:
     """
     if isinstance(node, yaml.nodes.MappingNode) and len(node.value) == 1:
         key_node, value_node = node.value[0]
-        if getattr(key_node, 'value', None) == 'wic':
+        if getattr(key_node, 'value', None) == SIDECAR_WRAPPER_KEY:
             assert isinstance(value_node, yaml.nodes.Node)  # untyped tuple from PyYAML
             return value_node
     return node
@@ -425,8 +472,7 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
     steps: list[tuple[StepKey, WicSidecar]] = []
     entries: list[tuple[str, OpaqueCwl]] = []
 
-    for key_node, value_node in node.value:
-        key = _key_text(key_node, file, diags)
+    for key, value_node in _unique_entries(node, file, diags, 'wic: entry'):
         if key != 'steps':
             entries.append((key, _opaque(value_node, file, diags)))
             continue
@@ -437,8 +483,15 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
                 SourceSpan.of(file, value_node),
             )
             continue
+        seen_steps: set[str] = set()
         for sub_key, sub_value in value_node.value:
             key_text = _key_text(sub_key, file, diags)
+            if key_text in seen_steps:
+                diags.error(Code.DUPLICATE_KEY,
+                            f'wic: step key {key_text!r} is defined more than once',
+                            SourceSpan.of(file, sub_key))
+                continue
+            seen_steps.add(key_text)
             parsed = _step_key(key_text)
             if parsed is None:
                 diags.error(
