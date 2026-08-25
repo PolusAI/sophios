@@ -69,7 +69,7 @@ jobs:
 
       - name: Setup miniforge (linux, macos)
         if: runner.os != 'Windows'
-        uses: conda-incubator/setup-miniconda@v3.0.1
+        uses: conda-incubator/setup-miniconda@v4.0.1
         with:
           miniforge-variant: Miniforge3
           miniforge-version: 24.7.1-2

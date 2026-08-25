@@ -80,7 +80,7 @@ actions. When using third-party actions, it is the best to specify the SHA code
 or the tag of the commit you want to use, [preventing bad actors to alter behaviors
 of the actions and create security loopholes](https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-third-party-actions).
 
-Currently, we use the third-party action `tibdex/github-app-token@b62528385c34dbc9f38e5f4225ac829252d1ea92`, as demonstrated in [this
+Currently, we use the official action `actions/create-github-app-token@v3` (which replaced the archived `tibdex/github-app-token`), as demonstrated in [this
 example](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/making-authenticated-api-requests-with-a-github-app-in-a-github-actions-workflow)
 in GitHub docs.
 

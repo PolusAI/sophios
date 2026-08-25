@@ -127,7 +127,7 @@ jobs:
       # Completely moving away from pypy
       - name: Setup miniforge (linux, macos)
         if: runner.os != 'Windows'
-        uses: conda-incubator/setup-miniconda@v3.0.1
+        uses: conda-incubator/setup-miniconda@v4.0.1
         with:
           miniforge-variant: Miniforge3
           miniforge-version: 24.7.1-2
@@ -138,7 +138,7 @@ jobs:
 
       - name: Setup miniforge (windows)
         if: runner.os == 'Windows'
-        uses: conda-incubator/setup-miniconda@v3.0.1
+        uses: conda-incubator/setup-miniconda@v4.0.1
         with:
           miniforge-variant: Miniforge3
           miniforge-version: 24.7.1-2
@@ -275,10 +275,14 @@ jobs:
       - name: Generate a token
         if: always()
         id: generate_token
-        uses: tibdex/github-app-token@b62528385c34dbc9f38e5f4225ac829252d1ea92
+        uses: actions/create-github-app-token@v3
         with:
-          app_id: ${{ secrets.APP_ID }}
-          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          # tibdex minted a token for the whole app installation; the official
+          # action defaults to the current repository only. owner: restores
+          # installation scope, which cross-repo branch dispatch requires.
+          owner: ${{ github.repository_owner }}
 
       - name: Reply CI results to sender
         # In case of failure, we still need to return the failure status to the original repository.
