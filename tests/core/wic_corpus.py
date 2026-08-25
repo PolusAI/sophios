@@ -19,17 +19,43 @@ from sophios import input_output as io
 from sophios import plugins
 from sophios.cli import get_args
 
-_args = get_args()
-_config = io.get_config(Path(_args.config_file), Path(_args.config_file))
+#: In-repo fallback when no config exists: a pure read, so collecting the
+#: suite on a fresh machine provisions nothing (`pytest --collect-only` used
+#: to write ~/wic/global_config.json and copy adapters as a side effect —
+#: the #383 review's P8).
+_IN_REPO_DIRS: Final = (
+    Path(__file__).resolve().parents[2] / 'docs' / 'tutorials',
+    Path(__file__).resolve().parents[2] / 'examples',
+)
 
-#: Every reachable workflow, sorted for stable test ids. One namespace's stem
-#: shadows another's in `get_yml_paths` exactly as it does during compilation,
-#: so the corpus tests precisely the files Sophios itself would use.
-CORPUS: Final = tuple(sorted(
-    path
-    for namespace in plugins.get_yml_paths(_config).values()
-    for path in namespace.values()
-))
+
+def _discover() -> tuple[Path, ...]:
+    """Every reachable workflow, without side effects.
+
+    When a config exists, discovery is the compiler's own (`get_yml_paths`
+    reads `search_paths_wic`), so the corpus and the compiler cannot disagree.
+    When none exists — a fresh checkout — the in-repo directories are read
+    directly rather than provisioning the user's home to ask the config; CI
+    always provisions a config first and remains the arbiter of full coverage.
+    """
+    config_path = Path(get_args().config_file)
+    if config_path.exists():
+        config = io.get_config(config_path, config_path)  # read-only: the file exists
+        return tuple(sorted(
+            path
+            for namespace in plugins.get_yml_paths(config).values()
+            for path in namespace.values()
+        ))
+    return tuple(sorted(
+        path for directory in _IN_REPO_DIRS if directory.is_dir()
+        for path in directory.rglob('*.wic')
+    ))
+
+
+#: Sorted for stable test ids. One namespace's stem shadows another's in
+#: `get_yml_paths` exactly as it does during compilation, so the corpus tests
+#: precisely the files Sophios itself would use.
+CORPUS: Final = _discover()
 
 
 def corpus_id(path: Path) -> str:
