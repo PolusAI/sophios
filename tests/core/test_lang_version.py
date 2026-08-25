@@ -266,3 +266,46 @@ def test_the_cli_flag_reaches_the_compiler() -> None:
     # And a library caller asking for defaults gets no pin, as it should.
     defaults, _g, _t = sophios.cli.default_compilation_settings()
     assert defaults['lang_version'] is None
+
+
+@pytest.mark.fast
+def test_pin_collection_survives_recursive_trees() -> None:
+    """CE-07: the pins walk must not recurse forever on a cyclic tree.
+
+    The loader constructs self-referential structures from YAML aliases, so
+    the walk meets them through the real compile path. Found by applying the
+    parser's cycle-guard lesson as an audit lens across the stack — the same
+    defect class, recurring in code written after the lesson.
+    """
+    import yaml as _yaml
+
+    from sophios.compiler import _lang_version_pins
+    from sophios.utils_yaml import wic_loader
+
+    cyclic = _yaml.load('steps: &a\n- id: s\n  wic: {x: *a}\n', Loader=wic_loader())
+    assert _lang_version_pins(cyclic) == ()  # must not raise
+
+    pinned = _yaml.load('wic: {lang_version: 0.0.1}\nsteps: &a\n- id: s\n  wic: {x: *a}\n',
+                        Loader=wic_loader())
+    assert _lang_version_pins(pinned) == ('0.0.1',)  # acyclic regions still visited
+
+
+@pytest.mark.fast
+def test_a_mistyped_pin_is_reported_not_ignored() -> None:
+    """`lang_version: 1.0` is a YAML float, not a string. A walk that only
+    collected strings made it vanish — silently inferred over, when the
+    author plainly asked for something, and by the no-silent-selection rule
+    above, silence is the one wrong answer. Any value under the key is a pin
+    claim; a non-version is reported as unknown, naming what was written."""
+    import yaml as _yaml
+
+    from sophios.compiler import _lang_version_pins
+    from sophios.utils_yaml import wic_loader
+
+    mistyped = _yaml.load('wic: {lang_version: 1.0}\nsteps:\n- id: s\n', Loader=wic_loader())
+    assert _lang_version_pins(mistyped) == ('1.0',)
+
+    with pytest.raises(SophiosError) as caught:
+        resolve_lang_version(None, _lang_version_pins(mistyped))
+    assert caught.value.diagnostics[0].code is Code.UNKNOWN_LANG_VERSION
+    assert "'1.0'" in caught.value.diagnostics[0].message

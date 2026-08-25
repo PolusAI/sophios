@@ -395,23 +395,38 @@ def _finalize_compilation(*,
     return compiler_info
 
 
-def _lang_version_pins(node: Any) -> tuple[str, ...]:
+def _lang_version_pins(node: Any, _path: frozenset[int] = frozenset()) -> tuple[str, ...]:
     """Collect every `wic: lang_version:` tag reachable in a merged tree.
 
     The merged AST inlines subworkflows, so walking the root tree sees every
     file's tag and a conflict anywhere in the tree is caught at the root.
+
+    Guarded against cycles: the loader happily constructs self-referential
+    structures from YAML aliases, and an unguarded walk over one recurses
+    forever (CE-07 — the same defect class the parser's passthrough walk had).
+    A node already on the current path contributes nothing new, so the walk
+    simply stops there; every acyclic region is still visited in full.
     """
+    if id(node) in _path:
+        return ()
+    path = _path | {id(node)}
+
     pins: list[str] = []
     match node:
-        case {'wic': {'lang_version': str() as pin}, **_rest}:
-            pins.append(pin)
+        case {'wic': {'lang_version': pin}, **_rest}:
+            # Any value under the key is a pin claim. Collecting only strings
+            # would make `lang_version: 1.0` — a YAML float — vanish silently
+            # and be inferred over; the author asked for something, and the
+            # one wrong answer is silence. Non-strings become their text and
+            # are reported by `resolve` as unknown, naming what was written.
+            pins.append(pin if isinstance(pin, str) else str(pin))
     match node:
         case dict():
             for value in node.values():
-                pins.extend(_lang_version_pins(value))
+                pins.extend(_lang_version_pins(value, path))
         case list():
             for value in node:
-                pins.extend(_lang_version_pins(value))
+                pins.extend(_lang_version_pins(value, path))
     return tuple(pins)
 
 
@@ -459,13 +474,12 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
         (in the Rose Tree) together with mutable cumulative environment\n
         information which needs to be passed through the recursion.
     """
-    lang_version = versions.resolve(compiler_options.get('lang_version'))
-    if is_root:
-        # Resolution happens once, from the whole merged tree; subworkflow
-        # compilations inherit the result below, so one compilation yields
-        # exactly one version tree-wide no matter how subtrees are tagged.
-        lang_version = versions.resolve(compiler_options.get('lang_version'),
-                                        _lang_version_pins(yaml_tree_ast.yml))
+    # Resolution happens once, from the whole merged tree: the merged AST
+    # inlines subworkflows, so the root walk sees every file's pin, and
+    # subworkflow compilations inherit the result below — one compilation
+    # yields exactly one version tree-wide no matter how subtrees are tagged.
+    pins = _lang_version_pins(yaml_tree_ast.yml) if is_root else ()
+    lang_version = versions.resolve(compiler_options.get('lang_version'), pins)
 
     setup = _prepare_compilation_state(yaml_tree_ast, namespaces, subgraphs, explicit_edge_defs,
                                        explicit_edge_calls, input_mapping, output_mapping, testing)
