@@ -1,27 +1,35 @@
 """Write a Sophios AST back out, in either of the YAML surface's two spellings.
 
 Rendering is the inverse of parsing, and having both is what makes the syntax
-layer checkable: `parse(render(document))` must reproduce the document it
-started from, or one of the two is wrong about the language.
+layer checkable — the exactness of that claim is enforced by the P02 property
+in `tests/core/test_lang_render.py`, which is the claim's single home.
 
-The language reference (§6.1) says every wic construct has a *tagged* spelling
-and a *desugared* one, and that they mean the same thing. That claim is load
-bearing, so it is expressed here as one structural walk parameterised by which
-spelling to use, rather than as two walks that have to be kept in agreement:
+Design, after the PR #383 review:
+
+*Transcription over reconstruction.* A literal parsed from tagged YAML carries
+its source text, and rendering emits that text verbatim — `value` was computed
+from it, so the round-trip is exact by construction. Only literals that never
+had a spelling (API-built, desugared-form) are serialised, via PyYAML's own
+emitter, and where the tagged form structurally cannot express a value (the
+string '0': the composer strips quotes before `!ii` payloads are re-resolved)
+the desugared spelling is used instead of a lossy tag.
+
+*Totality over the closed union.* `OpaqueCwl` is a closed recursive type, and
+`plain` matches it exhaustively — a construct nested inside a collection is
+re-spelled, never handed raw to the dumper. Collections under `!ii` render
+tagged in every position, block-style, so a passthrough construct survives the
+round-trip as itself.
 
     render(document)   ->  text,  tagged spelling      (`!ii x`)
-    to_json(document)  ->  data,  desugared spelling   (`{wic_inline_input: x}`)
-
-`render` emits the tagged form because that is what the reference tells people
-to write. `to_json` produces the desugared form because that is the projection
-a JSON-shaped consumer sees — JSON has no notion of a YAML tag.
+    to_json(document)  ->  data,  desugared spelling, JSON-serialisable
 
 See docs/sophios_language_reference.md.
 """
+import math
 import re
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Final, TypeAlias
+from datetime import date, datetime
+from typing import Any, Final, Literal
 
 import yaml
 
@@ -48,10 +56,6 @@ from .nodes import (
 )
 from .parser import KEY_RAW_CWL, SIDECAR_WRAPPER_KEY, TAG_RAW_CWL
 
-#: How one input value is spelled. The two implementations below are the
-#: tagged and desugared surface forms of the same construct.
-Spelling: TypeAlias = Callable[[InputValue], Any]
-
 #: Every tag the tagged spelling emits.
 _WIC_TAGS: Final = frozenset({TAG_INLINE_INPUT, TAG_ANCHOR, TAG_ALIAS, TAG_RAW_CWL})
 
@@ -62,49 +66,10 @@ _PLAIN_SAFE: Final = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_./-]*\Z')
 
 @dataclass(frozen=True, slots=True)
 class _Tagged:
-    """A value carrying a wic tag, so the YAML dumper emits `!tag value`."""
+    """A value carrying a wic tag: `!tag payload`, scalar or collection."""
 
     tag: str
-    value: str
-
-
-# --------------------------------------------------------------------------
-# The two spellings
-# --------------------------------------------------------------------------
-
-
-def _tagged(value: InputValue) -> Any:
-    """Spell an input value with its YAML tag, as people write it."""
-    match value:
-        case InlineLiteral(value=literal) if _is_scalar(literal):
-            return _Tagged(TAG_INLINE_INPUT, _scalar_text(literal))
-        case InlineLiteral(value=literal):
-            # A tag cannot carry a collection on one line, so the single case
-            # the tagged spelling cannot express falls back to the other one.
-            return {KEY_INLINE_INPUT: literal}
-        case EdgeDef(name=name):
-            return _Tagged(TAG_ANCHOR, name)
-        case EdgeRef(name=name):
-            return _Tagged(TAG_ALIAS, name)
-        case RawCwlRef(expression=expression):
-            return _Tagged(TAG_RAW_CWL, expression)
-        case UnresolvedName(name=name):
-            return name
-
-
-def _desugared(value: InputValue) -> Any:
-    """Spell an input value as a single-key mapping, as tooling emits it."""
-    match value:
-        case InlineLiteral(value=literal):
-            return {KEY_INLINE_INPUT: literal}
-        case EdgeDef(name=name):
-            return {KEY_ANCHOR: name}
-        case EdgeRef(name=name):
-            return {KEY_ALIAS: name}
-        case RawCwlRef(expression=expression):
-            return {KEY_RAW_CWL: expression}
-        case UnresolvedName(name=name):
-            return name
+    value: Any
 
 
 # --------------------------------------------------------------------------
@@ -114,9 +79,14 @@ def _desugared(value: InputValue) -> Any:
 
 @dataclass(frozen=True, slots=True)
 class _Writer:
-    """Turns an AST into plain data, spelling input values one chosen way."""
+    """Turns an AST into plain data, in one of the two surface spellings.
 
-    spell: Spelling
+    `mode='tagged'` is what people write and what `render` emits;
+    `mode='json'` is the desugared, JSON-serialisable projection `to_json`
+    returns — dates become ISO-8601 text there, because JSON has no date.
+    """
+
+    mode: Literal['tagged', 'json']
 
     def document(self, document: Document) -> dict[str, Any]:
         """Key order follows the reference: `wic:`, then `steps:`, then the rest."""
@@ -134,7 +104,8 @@ class _Writer:
                 # id first for readability, and re-assigned after the spread so a
                 # stray passthrough 'id' can never win — dict displays keep the
                 # first position but take the last value.
-                else [{'id': step.id, **self.step(step), 'id': step.id} for step in document.steps]  # pylint: disable=duplicate-key  # deliberate: first position, last value
+                else [{'id': step.id, **self.step(step), 'id': step.id}  # pylint: disable=duplicate-key
+                      for step in document.steps]
             )
 
         for key, value in document.passthrough:
@@ -146,7 +117,7 @@ class _Writer:
         """One step's keys, minus its id."""
         out: dict[str, Any] = {}
         if step.inputs:
-            out['in'] = {name: self.spell(value) for name, value in step.inputs}
+            out['in'] = {name: self.input_value(value) for name, value in step.inputs}
         if step.outputs:
             out['out'] = [self.output(binding) for binding in step.outputs]
         for key, value in (*step.interpreted, *step.passthrough):
@@ -157,7 +128,7 @@ class _Writer:
         """One `out:` entry: a bare name, or a name bound to an edge."""
         if binding.edge_def is None:
             return binding.name
-        return {binding.name: self.spell(binding.edge_def)}
+        return {binding.name: self.input_value(binding.edge_def)}
 
     def sidecar(self, sidecar: WicSidecar) -> Any:
         """A `wic:` block, restoring its `(index, name)` step keys.
@@ -175,17 +146,93 @@ class _Writer:
                             for key, child in sidecar.steps}
         return out
 
+    def input_value(self, value: InputValue) -> Any:
+        """Spell one input construct in this writer's mode."""
+        match value:
+            case InlineLiteral():
+                return self._literal(value)
+            case EdgeDef(name=name):
+                return _Tagged(TAG_ANCHOR, name) if self.mode == 'tagged' else {KEY_ANCHOR: name}
+            case EdgeRef(name=name):
+                return _Tagged(TAG_ALIAS, name) if self.mode == 'tagged' else {KEY_ALIAS: name}
+            case RawCwlRef(expression=expression):
+                return _Tagged(TAG_RAW_CWL, expression) if self.mode == 'tagged' else {KEY_RAW_CWL: expression}
+            case UnresolvedName(name=name):
+                return name
+
+    def _literal(self, literal: InlineLiteral) -> Any:
+        """Spell an `!ii` literal.
+
+        Parsed literals are transcribed from their source text — exact by
+        construction, since the value was computed from that text. Literals
+        with no text are serialised: collections render tagged block-style
+        with their payload walked (so nested constructs are re-spelled, never
+        handed raw to the dumper), and scalars go through PyYAML's emitter
+        with a desugared fallback where the tagged form cannot express the
+        value at all.
+        """
+        if self.mode != 'tagged':
+            return {KEY_INLINE_INPUT: self.plain(literal.value)}
+
+        if literal.text is not None:
+            return _Tagged(TAG_INLINE_INPUT, literal.text)
+
+        if isinstance(literal.value, (list, dict)):
+            return _Tagged(TAG_INLINE_INPUT, self.plain(literal.value))
+
+        spelled = _spell_scalar(literal.value)
+        if spelled is not None:
+            return _Tagged(TAG_INLINE_INPUT, spelled)
+        # The tagged form has no spelling for this value (e.g. the string
+        # '0' — the composer strips quotes before the payload is re-resolved),
+        # so the desugared spelling carries it instead of a lossy tag.
+        return {KEY_INLINE_INPUT: self.plain(literal.value)}
+
     def plain(self, value: OpaqueCwl) -> Any:
-        """Passthrough content, re-spelling any wic value nested inside it."""
+        """Passthrough content, exhaustively over the closed `OpaqueCwl` union.
+
+        Every member is handled by name; there is no silent default in which a
+        forgotten node kind reaches the dumper as a live dataclass.
+        """
         match value:
             case InlineLiteral() | EdgeDef() | EdgeRef() | RawCwlRef() | UnresolvedName():
-                return self.spell(value)
+                return self.input_value(value)
             case dict():
                 return {k: self.plain(v) for k, v in value.items()}
             case list():
                 return [self.plain(v) for v in value]
-            case _:
+            case datetime() | date() if self.mode == 'json':
+                return value.isoformat()  # JSON has no date type
+            case None | bool() | int() | float() | str() | date() | datetime():
                 return value
+
+
+# --------------------------------------------------------------------------
+# Scalar spelling for literals that never had a source text
+# --------------------------------------------------------------------------
+
+
+def _spell_scalar(value: Any) -> str | None:
+    """A tagged spelling for `value`, or None when no faithful one exists.
+
+    PyYAML's own emitter chooses the text, so the spelling is always one its
+    own resolver accepts (`.inf`, `1.0e+300`, dates). Fidelity is then checked
+    against the parser's actual pipeline: a tagged payload has its quotes
+    resolved by the composer *before* `yaml.safe_load` re-types the content,
+    which is exactly why quoted spellings cannot protect a string like '0' —
+    if the simulated round-trip does not reproduce the value, there is no
+    tagged spelling, and the caller must desugar.
+    """
+    candidate = yaml.safe_dump(value, default_flow_style=True).partition('\n')[0].strip()
+    node = yaml.compose(candidate, Loader=yaml.SafeLoader)
+    if not isinstance(node, yaml.nodes.ScalarNode):
+        return None
+    reparsed = yaml.safe_load(node.value) if node.value != '' else ''
+    if isinstance(value, float) and isinstance(reparsed, float) and math.isnan(value) and math.isnan(reparsed):
+        return candidate
+    if reparsed == value and type(reparsed) is type(value):
+        return candidate
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -194,9 +241,16 @@ class _Writer:
 
 
 def _represent_tagged(dumper: yaml.SafeDumper, data: _Tagged) -> yaml.nodes.Node:
-    """Emit a `_Tagged` as `!tag value`."""
-    style = '' if _PLAIN_SAFE.match(data.value) else None
-    return dumper.represent_scalar(data.tag, data.value, style=style)
+    """Emit a `_Tagged` as `!tag payload`, whatever shape the payload has."""
+    match data.value:
+        case dict():
+            return dumper.represent_mapping(data.tag, data.value)
+        case list():
+            return dumper.represent_sequence(data.tag, data.value)
+        case _:
+            text = str(data.value)
+            style = '' if _PLAIN_SAFE.match(text) else None
+            return dumper.represent_scalar(data.tag, text, style=style)
 
 
 class _WicDumper(yaml.SafeDumper):
@@ -233,39 +287,17 @@ _WicDumper.add_representer(_Tagged, _represent_tagged)
 
 def render(document: Document) -> str:
     """Render a document to `.wic` source text, in the tagged spelling."""
-    body = _Writer(_tagged).document(document)
+    body = _Writer('tagged').document(document)
     if not body:
         return ''
     return yaml.dump(body, Dumper=_WicDumper, sort_keys=False, default_flow_style=False, width=10_000)
 
 
 def to_json(document: Document) -> dict[str, Any]:
-    """Project a document into plain JSON-shaped data, desugared.
+    """Project a document into JSON-serialisable data, desugared.
 
     This is what a consumer without YAML tags sees, and what the exported JSON
-    Schema describes.
+    Schema describes. `json.dumps` of the result always succeeds — that claim
+    is a property, not a comment (see `test_lang_schema.py`).
     """
-    return _Writer(_desugared).document(document)
-
-
-# --------------------------------------------------------------------------
-# Scalars
-# --------------------------------------------------------------------------
-
-
-def _is_scalar(value: Any) -> bool:
-    """Whether a value can be written as a tagged scalar."""
-    return value is None or isinstance(value, (str, int, float, bool))
-
-
-def _scalar_text(value: Any) -> str:
-    """Render a scalar as the text an `!ii` tag should carry.
-
-    A custom tag suppresses YAML's type resolution on the way back in, so the
-    text has to be one that `yaml.safe_load` maps to this same value.
-    """
-    if isinstance(value, bool):
-        return 'true' if value else 'false'
-    if value is None:
-        return 'null'
-    return str(value)
+    return _Writer('json').document(document)
