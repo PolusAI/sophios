@@ -32,8 +32,12 @@ from .parser import DESUGARED_KEYS, INTERPRETED_STEP_KEYS, WIC_STEP_KEY_PATTERN
 #: Draft this schema targets. 2020-12 is what current editors consume.
 DIALECT: Final = 'https://json-schema.org/draft/2020-12/schema'
 
-#: Stable identifier, so an editor can bind it to `*.wic` by URI.
-SCHEMA_ID: Final = 'https://raw.githubusercontent.com/PolusAI/sophios/master/wic.schema.json'
+#: Stable identifier. A URN, deliberately: the previous value was a
+#: raw.githubusercontent URL that nothing in the repository or CI ever
+#: publishes, so an editor following it got a 404 — a stable identifier that
+#: dereferences to nothing is a promise the repo does not keep. When a
+#: publishing step exists, this becomes its URL in the same commit.
+SCHEMA_ID: Final = 'urn:sophios:schema:lang'
 
 
 def wic_schema() -> dict[str, Any]:

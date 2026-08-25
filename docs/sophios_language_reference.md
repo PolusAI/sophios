@@ -192,10 +192,14 @@ A tag outside the four above (`!foo`) is an error, not a fifth-and-a-half
 form. The loader has always rejected such documents, and the syntax layer
 must never accept more than the language it specifies.
 
-### 4.2 Each input is bound once
+### 4.2 Every name is bound once
 
-An `in:` mapping may name a given input only once. Binding it twice is an
-error, not a last-one-wins:
+A mapping the language owns may bind each key only once — inputs in `in:`,
+step names in mapping-form `steps:`, `wic:` entries, `wic: steps:` keys, and
+top-level or step-level passthrough alike. A step body may also not carry an
+`id:` of its own when its identity already comes from a mapping key or a
+single name key: two identities for one step is a mistake worth reporting,
+not resolving. Binding twice is an error, not a last-one-wins:
 
 ```yaml
 in:
@@ -240,7 +244,9 @@ Step keys inside `wic: steps:` have the form `(index, name)` — the index is
 1-based and matches the step's position. Sophios parses these into a structured
 key; you should never have to parse that string yourself.
 
-A bare `wic:` with nothing under it is an empty block, not an error.
+A bare `wic:` with nothing under it is an empty block, not an error. Nested
+step entries keep their `wic:` wrapper through a render — every consumer reads
+through it — and an empty block renders as `{}`, never as a null.
 
 ---
 
@@ -271,10 +277,10 @@ desugared spelling.
 
 **`.wic` files** are the YAML surface as written. They are parsed by
 `sophios.lang.parse`, which accepts both spellings above, and written by
-`sophios.lang.render`, which emits the tagged one. The two are inverses:
-parsing a rendered document reproduces the document it came from, which is what
-lets a disagreement between this text and the parser show up as a test failure
-rather than as a surprise.
+`sophios.lang.render`, which emits the tagged one. The two are inverses —
+a claim that lives as the P02 property in `tests/core/test_lang_render.py`,
+its single home, so a disagreement between this text and the implementation
+shows up as a test failure rather than as three subtly different sentences.
 
 **The Python API** (`Workflow`, `Step`) is the second surface of the same
 language. `Workflow.write_wic()` and `.to_wic_yaml()` emit `.wic` documents,
@@ -297,6 +303,9 @@ example — see `tests/core/test_lang_parser.py`.
 from the parser's own tables — the construct keys, the interpreted step keys,
 the `wic:` step-key pattern — so a construct added to the parser appears in the
 schema without anyone editing a schema file. There is no hand-maintained copy.
+
+`to_json`'s output is always JSON-serialisable; YAML values with no JSON
+counterpart are projected — dates and datetimes become ISO-8601 strings.
 
 It is an **over-approximation**, for two reasons that come from the language
 itself rather than from any shortcut:
