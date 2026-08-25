@@ -18,6 +18,7 @@ this here rather than asserting a stronger equivalence that is not true.
 
 See design_docs/core-refactor-design.md, Spec 1.
 """
+import json
 from pathlib import Path
 from typing import Any
 
@@ -89,10 +90,18 @@ def test_schema_is_not_shared_between_callers() -> None:
 @given(documents())
 @FAST
 def test_p09_accepts_every_document_the_parser_accepts(source: str) -> None:
-    """P09: a parsed document's JSON projection validates."""
+    """P09: a parsed document's JSON projection validates — and IS JSON.
+
+    Both halves matter, and only together are they the claim: `jsonschema`
+    is duck-typed and will happily "validate" live Python objects that
+    `json.dumps` refuses, which is precisely how a broken `to_json` stayed
+    green under this property until review caught it.
+    """
     result = parse(source, 'gen.wic')
     assert result.document is not None
-    assert _accepts(to_json(result.document)), list(VALIDATOR.iter_errors(to_json(result.document)))
+    projection = to_json(result.document)
+    json.dumps(projection)  # serialisability is the claim, not an assumption
+    assert _accepts(projection), list(VALIDATOR.iter_errors(projection))
 
 
 @pytest.mark.fast

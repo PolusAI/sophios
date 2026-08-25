@@ -9,12 +9,13 @@ Properties covered:
 
 See design_docs/core-refactor-design.md, Spec 1.
 """
+import math
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from sophios.lang import (
@@ -86,6 +87,10 @@ def _shape(node: Any) -> Any:  # pylint: disable=too-many-return-statements
             return tuple((k, _shape(v)) for k, v in node.items())
         case list():
             return tuple(_shape(v) for v in node)
+        case float() if math.isnan(node):
+            # NaN != NaN would fail the comparison exactly when the round
+            # trip is correct; normalise to a sentinel before comparing.
+            return 'NaN'
         case _:
             return node
 
@@ -137,6 +142,18 @@ def awkward_literal_documents(draw: st.DrawFn) -> str:
 
 @pytest.mark.fast
 @given(st.one_of(documents(), awkward_literal_documents()))
+# The #383 review's counterexamples, pinned deterministically (Hypothesis's
+# failure database does not travel to CI). Duplicate-key cases are absent
+# because they are parse errors now, pinned on the parser's provocations.
+@example('steps:\n- t:\n    in:\n      f: !ii {a: !* e}\n')      # construct inside collection literal
+@example('steps:\n- t: {}\nmeta: !ii {a: 1}\n')                   # collection literal in passthrough
+@example("steps:\n- t:\n    in:\n      f: {wic_inline_input: '0'}\n")     # string that spells an int
+@example("steps:\n- t:\n    in:\n      f: {wic_inline_input: 'true'}\n")  # string that spells a bool
+@example('steps:\n- t:\n    in:\n      f: !ii 1.0e+300\n')       # exponent float
+@example('steps:\n- t:\n    in:\n      f: !ii .inf\n')           # YAML float special
+@example('steps:\n- t:\n    in:\n      f: !ii .nan\n')           # NaN, comparator-normalised
+@example('wic:\n  steps:\n    (1, o):\n      wic:\n        namespace: dna\n')  # nested wrapper
+@example('wic:\n  steps:\n    (1, o):\n      wic: {}\n')          # empty child sidecar: {} not null
 @FAST
 def test_p02_round_trip_preserves_structure(source: str) -> None:
     """P02: parsing a rendered document reproduces the document.
@@ -219,3 +236,28 @@ def test_empty_document_renders_empty() -> None:
     assert document is not None
     assert render(document) == ''
     assert parse(render(document), 'e.wic').ok
+
+
+@pytest.mark.fast
+def test_nested_sidecar_wrapper_survives_rendering() -> None:
+    """The renderer re-wraps what the parser unwraps — asymmetry test.
+
+    P02 is structurally blind here: the parser tolerates the missing wrapper
+    in the renderer's own output, so the round-trip holds even when rendering
+    is a semantic edit. Every downstream consumer reads through the wrapper
+    explicitly, which is why its loss changes what a workflow means.
+    """
+    source = 'wic:\n  steps:\n    (1, o):\n      wic:\n        namespace: dna\n'
+    document = parse(source, 'x.wic').document
+    assert document is not None
+    rendered = render(document)
+    assert rendered == source  # byte-exact, wrapper included
+
+
+@pytest.mark.fast
+def test_empty_sidecar_renders_as_mapping_not_null() -> None:
+    """`{}` — a present-None sails past every `.get(key, {})` downstream."""
+    document = parse('wic:\n  steps:\n    (1, o):\n      wic: {}\n', 'x.wic').document
+    assert document is not None
+    rendered = render(document)
+    assert 'null' not in rendered and '~' not in rendered

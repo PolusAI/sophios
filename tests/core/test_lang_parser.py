@@ -55,6 +55,40 @@ scalars = st.one_of(
     st.text('abcXYZ 0123', min_size=0, max_size=10),
 )
 
+#: Scalar payloads as YAML source text, spelled to include exactly what a
+#: [a-z_]-only alphabet can never produce: type-ambiguous quoted strings,
+#: exponent floats and specials, null, dates. The #383 review traced four of
+#: its findings to the old alphabet's blind spot; these are its complement.
+scalar_payload_texts = st.sampled_from([
+    'x', '0', '-3', '1.5', '1.0e+300', '.inf', '.nan',
+    'true', 'false', 'null', 'on', '2020-01-01',
+    "'0'", "'true'", "'null'", "'on'", "''", "'a b'",
+])
+
+#: Construct leaves that may appear nested inside an `!ii` payload.
+construct_payload_texts = st.sampled_from(['!* e', '!& d', '!cwl a/b', '{wic_anchor: n}'])
+
+#: Recursive payload text over the closed OpaqueCwl union: scalars, nested
+#: constructs, and flow collections of both. Derived from what the type
+#: admits, not from what the tests happened to imagine.
+_payload_collections = st.recursive(
+    st.one_of(scalar_payload_texts, construct_payload_texts),
+    lambda children: st.one_of(
+        st.lists(children, min_size=0, max_size=3).map(lambda xs: '[' + ', '.join(xs) + ']'),
+        st.lists(children, min_size=1, max_size=3).map(
+            lambda xs: '{' + ', '.join(f'k{i}: {x}' for i, x in enumerate(xs)) + '}'),
+    ),
+    max_leaves=6,
+).filter(lambda s: s.startswith(('[', '{')))
+
+#: Direct payload of a tagged `!ii`: a scalar or a collection — a construct
+#: leaf cannot be the whole payload, since two tags on one node is not YAML.
+opaque_payload_texts = st.one_of(scalar_payload_texts, _payload_collections)
+
+#: Desugared payloads can additionally carry a construct directly:
+#: `{wic_inline_input: !* e}` is well-formed, and the writer must respell it.
+desugared_payload_texts = st.one_of(opaque_payload_texts, construct_payload_texts)
+
 
 @st.composite
 def input_lines(draw: st.DrawFn, name: str | None = None, indent: str = '      ') -> str:  # pylint: disable=too-many-return-statements
@@ -69,7 +103,7 @@ def input_lines(draw: st.DrawFn, name: str | None = None, indent: str = '      '
                                  'ii_desugared', 'anchor_desugared', 'alias_desugared', 'cwl_desugared']))
     match form:
         case 'ii':
-            return f'{indent}{name}: !ii {draw(scalars)}'
+            return f'{indent}{name}: !ii {draw(opaque_payload_texts)}'
         case 'anchor':
             return f'{indent}{name}: !& {draw(identifiers)}'
         case 'alias':
@@ -77,7 +111,7 @@ def input_lines(draw: st.DrawFn, name: str | None = None, indent: str = '      '
         case 'cwl':
             return f'{indent}{name}: !cwl {draw(identifiers)}/{draw(identifiers)}'
         case 'ii_desugared':
-            return f'{indent}{name}: {{wic_inline_input: {draw(identifiers)}}}'
+            return f'{indent}{name}: {{wic_inline_input: {draw(desugared_payload_texts)}}}'
         case 'anchor_desugared':
             return f'{indent}{name}: {{wic_anchor: {draw(identifiers)}}}'
         case 'alias_desugared':
@@ -484,8 +518,9 @@ def test_passthrough_scalars_resolve_exactly_as_the_loader(text: str) -> None:
     """
     result = parse(f'top:\n  k: {text}\n', 'x.wic')
     assert result.document is not None
-    parsed = dict(result.document.passthrough)['top']['k']
-    assert parsed == yaml.safe_load(text)
+    top = dict(result.document.passthrough)['top']
+    assert isinstance(top, dict)  # narrows the closed OpaqueCwl union
+    assert top['k'] == yaml.safe_load(text)
 
 
 @pytest.mark.fast
@@ -721,3 +756,67 @@ def test_inline_literal_collections_wrap_exactly_once() -> None:
     wrapped = dict(passthrough.document.passthrough)['top']
     assert isinstance(wrapped, InlineLiteral)
     assert wrapped.value == {'k': 'v'}
+
+# --------------------------------------------------------------------------
+# Every diagnostic is provocable, mechanically (negative-testing rule 1)
+# --------------------------------------------------------------------------
+
+
+#: One attack per code. A member missing here fails the meta-test below, so a
+#: diagnostic cannot be declared without the input that fires it — the dead
+#: UNKNOWN_TAG of the #382 cycle becomes structurally impossible.
+PROVOCATIONS: dict[Code, str] = {
+    Code.INVALID_YAML: 'steps:\n  - [unclosed\n',
+    Code.NOT_A_MAPPING: '- just\n- a list\n',
+    Code.EXPECTED_MAPPING: 'steps: 3\n',
+    Code.EXPECTED_SEQUENCE: 'steps:\n- id: s\n  out: 3\n',
+    Code.EXPECTED_SCALAR: 'steps:\n  ? [a, b]\n  : {}\n',
+    Code.MISSING_STEP_ID: 'steps:\n- {a: 1, b: 2}\n',
+    Code.EMPTY_STEP_ID: "steps:\n- id: ''\n",
+    Code.MALFORMED_WIC_STEP_KEY: 'wic:\n  steps:\n    nope:\n      x: 1\n',
+    Code.UNKNOWN_TAG: 'top: !foo bar\n',
+    Code.DUPLICATE_KEY: 'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
+    Code.RECURSIVE_ALIAS: 'top: &a [*a]\n',
+}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('code', list(Code), ids=lambda c: c.name)
+def test_every_code_is_provocable(code: Code) -> None:
+    """Each declared diagnostic has a registered input that fires it."""
+    assert code in PROVOCATIONS, f'{code.name} has no registered provocation — dead on arrival'
+    result = parse(PROVOCATIONS[code], 'provoke.wic')
+    assert any(d.code is code for d in result.diagnostics), f'{code.name} did not fire'
+
+
+# --------------------------------------------------------------------------
+# The syntax layer stays standalone (the reviewer's method, made permanent)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_lang_layer_depends_only_on_stdlib_and_pyyaml() -> None:
+    """`sophios.lang` + `utils_yaml` import nothing beyond stdlib and yaml.
+
+    The #383 reviewer staged exactly these files into a bare venv with only
+    PyYAML and everything ran — which is what makes the layer reviewable in
+    isolation and, eventually, extractable for editor tooling. One stray
+    import would end that silently; this makes it a test failure instead.
+    """
+    import ast as python_ast
+    import sys
+
+    lang_dir = Path(__file__).resolve().parents[2] / 'src' / 'sophios' / 'lang'
+    files = sorted(lang_dir.glob('*.py')) + [lang_dir.parent / 'utils_yaml.py']
+    allowed = set(sys.stdlib_module_names) | {'yaml', 'sophios'}
+
+    for source_file in files:
+        tree = python_ast.parse(source_file.read_text(encoding='utf-8'))
+        for node in python_ast.walk(tree):
+            roots = []
+            if isinstance(node, python_ast.Import):
+                roots = [alias.name.split('.')[0] for alias in node.names]
+            elif isinstance(node, python_ast.ImportFrom) and node.level == 0 and node.module:
+                roots = [node.module.split('.')[0]]
+            for root in roots:
+                assert root in allowed, f'{source_file.name} imports {root!r} — the lang layer must stay standalone'

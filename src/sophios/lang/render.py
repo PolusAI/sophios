@@ -180,6 +180,11 @@ class _Writer:
         if isinstance(literal.value, (list, dict)):
             return _Tagged(TAG_INLINE_INPUT, self.plain(literal.value))
 
+        if isinstance(literal.value, (InlineLiteral, EdgeDef, EdgeRef, RawCwlRef, UnresolvedName)):
+            # A construct as the direct payload has no tagged spelling — two
+            # tags cannot share a node — so the desugared form carries it.
+            return {KEY_INLINE_INPUT: self.plain(literal.value)}
+
         spelled = _spell_scalar(literal.value)
         if spelled is not None:
             return _Tagged(TAG_INLINE_INPUT, spelled)
