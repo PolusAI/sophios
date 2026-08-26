@@ -1,0 +1,47 @@
+name: Nextflow Phase 1
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  nextflow-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NXF_ANSI_LOG: "false"
+      NXF_OFFLINE: "true"
+      NXF_VER: "26.04.2"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Sophios test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install '.[test]'
+
+      - name: Install pinned Nextflow
+        run: |
+          curl --fail --silent --show-error https://get.nextflow.io | bash
+          install -m 0755 nextflow "${RUNNER_TEMP}/nextflow"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: Verify pinned runtime
+        run: nextflow -version | grep 'version 26.04.2'
+
+      - name: Run Nextflow conformance tests
+        run: python -m pytest tests/test_nextflow_api.py -m nextflow -q
+
+      - name: Run the Python 3.12 compatibility suite
+        run: python -m pytest tests/test_nextflow_api.py -m 'not nextflow' -q
