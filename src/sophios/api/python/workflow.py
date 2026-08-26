@@ -5,12 +5,11 @@ import logging
 import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, ClassVar, Literal, overload
+from typing import Any, ClassVar, overload
 
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
 from sophios.inference import types_match
-from sophios.nf_types import NextflowWorkflow
 from sophios.wic_types import CompilerInfo, Tools
 
 from ._compiled import CompiledWorkflow
@@ -42,7 +41,6 @@ from ._workflow_runtime import (
     load_clt as _load_clt,
     lookup_parameter as _lookup_parameter,
     normalize_workflow_name as _normalize_workflow_name,
-    nextflow_workflow as _nextflow_workflow,
     populate_parameters as _populate_parameters,
     run_workflow as _run_workflow,
     silence_autodiscovery_logging as _silence_autodiscovery_logging,
@@ -50,7 +48,6 @@ from ._workflow_runtime import (
     workflow_document as _workflow_document,
     workflow_wic_yaml as _workflow_wic_yaml,
     write_workflow_wic as _write_workflow_wic,
-    write_nextflow_workflow as _write_nextflow_workflow,
 )
 
 
@@ -63,7 +60,6 @@ __all__ = [
     "CompiledWorkflow",
     "InvalidLinkError",
     "InvalidStepError",
-    "NextflowWorkflow",
     "Step",
     "Workflow",
 ]
@@ -907,64 +903,23 @@ class Workflow(_ProcessBase):
         """
         return _compile_workflow(self, write_to_disk=write_to_disk, tool_registry=tool_registry)
 
-    @overload
     def compile(
         self,
         *,
-        target: Literal["cwl"] = "cwl",
         tool_registry: Tools | None = None,
     ) -> CompiledWorkflow:
-        ...
-
-    @overload
-    def compile(
-        self,
-        *,
-        target: Literal["nextflow"],
-        tool_registry: Tools | None = None,
-    ) -> NextflowWorkflow:
-        ...
-
-    def compile(
-        self,
-        *,
-        target: Literal["cwl", "nextflow"] = "cwl",
-        tool_registry: Tools | None = None,
-    ) -> CompiledWorkflow | NextflowWorkflow:
-        """Compile this workflow to CWL or the supported Nextflow IR.
+        """Compile this workflow into CWL and generated job inputs.
 
         The old ``CompilerInfo`` result remains available only through the
         internal :meth:`_compile`.
 
         Args:
-            target (Literal["cwl", "nextflow"]): Compilation target.
             tool_registry (Tools | None): Optional tool registry override.
 
         Returns:
-            CompiledWorkflow | NextflowWorkflow: Target-specific compiled result.
+            CompiledWorkflow: Public compiled workflow boundary object.
         """
-        if target == "cwl":
-            return _compiled_workflow(self, tool_registry=tool_registry)
-        if target == "nextflow":
-            return _nextflow_workflow(self, tool_registry=tool_registry)
-        raise ValueError(f"unsupported compilation target {target!r}")
-
-    def get_nextflow_workflow(
-        self,
-        *,
-        tool_registry: Tools | None = None,
-    ) -> NextflowWorkflow:
-        """Compile this workflow to the validated Nextflow intermediate representation."""
-        return _nextflow_workflow(self, tool_registry=tool_registry)
-
-    def to_nf(
-        self,
-        outdir: str | Path,
-        *,
-        tool_registry: Tools | None = None,
-    ) -> tuple[Path, Path, Path]:
-        """Compile once and write ``workflow.nf``, config, and parameter files."""
-        return _write_nextflow_workflow(self, outdir, tool_registry=tool_registry)
+        return _compiled_workflow(self, tool_registry=tool_registry)
 
     def run(
         self,

@@ -13,11 +13,9 @@ import pytest
 
 from sophios import inference
 from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
-from sophios import cli
 from sophios.input_output_nf import (
     render_nextflow,
     write_nextflow_artifacts,
-    write_nextflow_files,
 )
 from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
 from sophios.nf_types import NfConnection, NfPort, NfProcess, NextflowWorkflow
@@ -613,58 +611,3 @@ def test_nf102_t21_and_nf104_t41_actual_nextflow_golden_path(tmp_path: Path) -> 
     outputs = list((tmp_path / "work").rglob("copy.txt"))
     assert len(outputs) == 1
     assert outputs[0].read_text(encoding="utf-8") == "hello from Sophios"
-
-
-# NF-103 — Python and CLI target selection.
-
-
-@pytest.mark.serial
-def test_nf103_t31_default_and_explicit_cwl_targets_match(real_linear_rose: RoseTree) -> None:
-    del real_linear_rose
-    touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl")
-    touch.inputs.filename = "empty.txt"
-    workflow = Workflow([touch], "wf")
-    assert workflow.compile() == workflow.compile(target="cwl")
-
-
-@pytest.mark.serial
-def test_nf103_t31_nextflow_target_uses_one_internal_compile(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sophios.api.python import _workflow_runtime as runtime
-
-    touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl")
-    touch.inputs.filename = "empty.txt"
-    workflow = Workflow([touch], "wf")
-    original = runtime.compile_workflow
-    calls = 0
-
-    def counted_compile(*args: Any, **kwargs: Any) -> Any:
-        nonlocal calls
-        calls += 1
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(runtime, "compile_workflow", counted_compile)
-    compiled = workflow.compile(target="nextflow")
-    assert isinstance(compiled, NextflowWorkflow)
-    assert calls == 1
-
-
-@pytest.mark.serial
-def test_nf103_t31_convenience_methods_generate_execution_files(tmp_path: Path) -> None:
-    touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl")
-    touch.inputs.filename = "empty.txt"
-    workflow = Workflow([touch], "wf")
-    assert isinstance(workflow.get_nextflow_workflow(), NextflowWorkflow)
-    assert [path.name for path in workflow.to_nf(tmp_path)] == [
-        "workflow.nf",
-        "nextflow.config",
-        "nextflow_params.json",
-    ]
-
-
-@pytest.mark.fast
-def test_nf103_t32_cli_target_defaults_and_rejects_cwl_run_modes() -> None:
-    assert cli.get_args("workflow.wic", ["--generate_cwl_workflow"]).target == "cwl"
-    assert cli.get_args(
-        "workflow.wic",
-        ["--generate_cwl_workflow", "--target", "nextflow"],
-    ).target == "nextflow"

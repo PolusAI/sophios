@@ -14,7 +14,7 @@ from importlib import import_module
 from types import ModuleType
 
 
-__all__ = ["nextflow", "tool_builder", "workflow"]
+__all__ = ["tool_builder", "workflow"]
 
 
 def __getattr__(name: str) -> ModuleType:
@@ -22,8 +22,8 @@ def __getattr__(name: str) -> ModuleType:
         return import_module(f".{name}", __name__)
     raise AttributeError(
         f"module {__name__!r} exposes concrete modules only; "
-        "import symbols from sophios.api.python.nextflow, "
-        "sophios.api.python.workflow, or sophios.api.python.tool_builder"
+        "import symbols from sophios.api.python.workflow or "
+        "sophios.api.python.tool_builder"
     )
 
 

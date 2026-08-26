@@ -19,10 +19,7 @@ from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
 from sophios import compiler, input_output, plugins, post_compile as pc, run_local as rl
-from sophios.input_output_nf import write_nextflow_files
 from sophios.input_output import dump_wic_yaml as _dump_yaml
-from sophios.nf_types import NextflowWorkflow
-from sophios.utils_nf import cwl_rosetree_to_nextflow
 from sophios.cli import get_dicts_for_compilation, get_known_and_unknown_args
 from sophios.runtime_inputs import normalize_rose_tree_cwl, normalize_rose_tree_job_inputs
 from sophios.utils import convert_args_dict_to_args_list, step_name_str
@@ -547,29 +544,6 @@ def compiled_workflow(
         tool_registry=tool_registry,
     )
     return compiled_workflow_from_compiler_info(workflow, compiler_info)
-
-
-def nextflow_workflow(
-    workflow: "Workflow",
-    *,
-    tool_registry: Tools | None = None,
-) -> NextflowWorkflow:
-    """Compile once through Sophios and convert the internal RoseTree to Nextflow IR."""
-    compiler_info = compile_workflow(workflow, tool_registry=tool_registry)
-    return cwl_rosetree_to_nextflow(compiler_info.rose)
-
-
-def write_nextflow_workflow(
-    workflow: "Workflow",
-    outdir: str | Path,
-    *,
-    tool_registry: Tools | None = None,
-) -> tuple[Path, Path, Path]:
-    """Compile a workflow once and write its three executable Nextflow files."""
-    return write_nextflow_files(
-        nextflow_workflow(workflow, tool_registry=tool_registry),
-        outdir,
-    )
 
 
 def effective_run_args(run_args_dict: dict[str, str] | None = None) -> dict[str, str]:
