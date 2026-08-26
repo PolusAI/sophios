@@ -88,6 +88,8 @@ group_run.add_argument('--run_local', default=False, action="store_true",
                        help='After generating the cwl file(s), run it on your local machine.')
 group_run.add_argument('--generate_cwl_workflow', required=False, default=False, action="store_true",
                        help='Compile the workflow without pulling the docker image')
+parser.add_argument('--target', choices=('cwl', 'nextflow'), default='cwl',
+                    help='Compilation artifact target. Defaults to cwl.')
 parser.add_argument('--cwl_inline_subworkflows', default=False, action="store_true",
                     help='Before generating the cwl file, inline all subworkflows.')
 parser.add_argument('--write_intermediate_wic', default=False, action="store_true",
@@ -132,6 +134,26 @@ parser.add_argument('--passthrough_flags', type=str, default='no', required=Fals
                     If set to 'no' (default) passthrough flags won't be sent to the cwl_runner backend.''')
 
 
+def validate_target_args(args: argparse.Namespace) -> None:
+    """Reject CWL-specific generation and run modes for the Nextflow target."""
+    if args.target != 'nextflow':
+        return
+    incompatible = [
+        flag
+        for flag, enabled in (
+            ('--generate_cwl_workflow', args.generate_cwl_workflow),
+            ('--run_local', args.run_local),
+            ('--generate_run_script', args.generate_run_script),
+        )
+        if enabled
+    ]
+    if incompatible:
+        parser.error(
+            f"--target nextflow cannot be combined with {', '.join(incompatible)}; "
+            "the target writes Nextflow artifacts directly"
+        )
+
+
 def get_args(yaml_path: str = '', suppliedargs: list[str] | None = None) -> argparse.Namespace:
     """This is used to get mock command line arguments, default + suppled args
 
@@ -142,6 +164,7 @@ def get_args(yaml_path: str = '', suppliedargs: list[str] | None = None) -> argp
     testargs = defaultargs + (suppliedargs or [])
     with patch.object(sys, 'argv', testargs):
         args = parser.parse_args()
+    validate_target_args(args)
     return args
 
 
@@ -158,6 +181,7 @@ def get_known_and_unknown_args(
     testargs = defaultargs + (suppliedargs or [])
     with patch.object(sys, 'argv', testargs):
         known_args, unknown_args = parser.parse_known_args()
+    validate_target_args(known_args)
     return known_args, unknown_args
 
 
