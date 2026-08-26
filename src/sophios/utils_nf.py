@@ -2,7 +2,6 @@
 
 from collections.abc import Mapping
 import copy
-import json
 from os import PathLike
 import re
 import shlex
@@ -108,6 +107,17 @@ def _translate_input_expressions(value: str) -> str:
     return _INPUT_EXPRESSION.sub(lambda match: f"${_identifier(match.group(1), context='input reference')}", value)
 
 
+def _translate_supported_input_expressions(value: str, *, context: str) -> str:
+    """Translate the closed Phase 1 expression subset and reject residual syntax."""
+    residual = _INPUT_EXPRESSION.sub("", value)
+    if "$" in residual:
+        raise ValueError(
+            f"{context} contains an unsupported CWL expression; Phase 1 supports only "
+            "$(inputs.<name>), optionally followed by .path or .basename"
+        )
+    return _translate_input_expressions(value)
+
+
 def _shell_literal(value: Any) -> str:
     match value:
         case bool() as boolean:
@@ -115,7 +125,7 @@ def _shell_literal(value: Any) -> str:
         case (int() | float()) as number:
             return str(number)
         case str() as text:
-            translated = _translate_input_expressions(text)
+            translated = _translate_supported_input_expressions(text, context="CWL command value")
             if "$" in translated or any(character.isspace() for character in translated):
                 return translated if "$" in translated else shlex.quote(translated)
             return shlex.quote(translated)
@@ -325,9 +335,14 @@ def _output_glob_directives(tool: Mapping[str, Any]) -> dict[str, str]:
             case None:
                 continue
             case str() as glob:
-                rendered_glob = glob
-            case list() as glob:
-                rendered_glob = json.dumps(glob, sort_keys=True)
+                rendered_glob = _translate_supported_input_expressions(
+                    glob,
+                    context=f"CWL output glob for {raw_name!r}",
+                )
+            case list():
+                raise ValueError(
+                    f"CWL output glob lists for {raw_name!r} are deferred beyond Nextflow Phase 1"
+                )
             case _:
                 raise ValueError(f"CWL output glob for {raw_name!r} must be a string or list")
         directives[f"_output_glob.{_identifier(raw_name, context='output name')}"] = rendered_glob
@@ -379,6 +394,181 @@ def _scatter_directives(step: Mapping[str, Any], tool: Mapping[str, Any]) -> dic
             }
         case _:
             raise ValueError("CWL scatterMethod must be a non-empty string")
+
+
+_SUPPORTED_REQUIREMENTS = frozenset({
+    "DockerRequirement",
+    "InlineJavascriptRequirement",
+    "ResourceRequirement",
+})
+_DEFERRED_REQUIREMENTS = {
+    "InitialWorkDirRequirement": "in-place staging is deferred to Phase 2",
+    "ShellCommandRequirement": "shell-mode command lowering is deferred to Phase 2",
+}
+
+
+def _requirement_names(section: Any) -> list[tuple[str, str]]:
+    """Return requirement names and stable path suffixes for capability analysis."""
+    match section:
+        case None:
+            return []
+        case Mapping() as requirements:
+            return [(str(name), str(name)) for name in requirements]
+        case list() as requirements:
+            names: list[tuple[str, str]] = []
+            for index, requirement in enumerate(requirements):
+                match requirement:
+                    case Mapping() if isinstance(requirement.get("class"), str):
+                        names.append((requirement["class"], str(index)))
+                    case _:
+                        continue
+            return names
+        case _:
+            return []
+
+
+def _tool_capability_findings(
+    step: Mapping[str, Any],
+    child: RoseTree,
+    *,
+    step_index: int,
+) -> list[str]:
+    """Collect unsupported executable semantics without lowering the tool."""
+    path = f"steps[{step_index}]"
+    findings: list[str] = []
+    if "when" in step:
+        findings.append(f"{path}.when: CWL step when conditions are not supported in Nextflow Phase 1")
+    if "scatter" in step:
+        findings.append(f"{path}.scatter: executable scatter is deferred to Phase 2")
+
+    match child:
+        case RoseTree(data=NodeData() as node_data, sub_trees=sub_trees):
+            pass
+        case _:
+            return findings
+    if sub_trees:
+        findings.append(f"{path}.run: nested workflows are deferred to Phase 2")
+    match node_data.compiled_cwl:
+        case Mapping() as tool:
+            pass
+        case _:
+            return findings
+
+    for section_name in ("requirements", "hints"):
+        for class_name, suffix in _requirement_names(tool.get(section_name)):
+            requirement_path = f"{path}.run.{section_name}.{suffix}"
+            if class_name in _DEFERRED_REQUIREMENTS:
+                findings.append(f"{requirement_path}: {_DEFERRED_REQUIREMENTS[class_name]}")
+            elif class_name not in _SUPPORTED_REQUIREMENTS:
+                findings.append(
+                    f"{requirement_path}: {class_name} is not supported by Nextflow Phase 1"
+                )
+
+    match tool.get("inputs", {}):
+        case Mapping() as inputs:
+            for raw_name, raw_definition in inputs.items():
+                if not isinstance(raw_definition, Mapping):
+                    continue
+                binding = raw_definition.get("inputBinding")
+                if not isinstance(binding, Mapping):
+                    continue
+                input_path = f"{path}.run.inputs.{raw_name}.inputBinding"
+                if binding.get("shellQuote") is False:
+                    findings.append(
+                        f"{input_path}.shellQuote: shellQuote false is deferred to Phase 2"
+                    )
+        case _:
+            pass
+
+    match tool.get("arguments", []):
+        case list() as arguments:
+            for argument_index, argument in enumerate(arguments):
+                if isinstance(argument, Mapping) and argument.get("shellQuote") is False:
+                    findings.append(
+                        f"{path}.run.arguments[{argument_index}].shellQuote: "
+                        "shellQuote false is deferred to Phase 2"
+                    )
+        case _:
+            pass
+
+    match tool.get("outputs", {}):
+        case Mapping() as outputs:
+            for raw_name, raw_definition in outputs.items():
+                if not isinstance(raw_definition, Mapping):
+                    continue
+                output_path = f"{path}.run.outputs.{raw_name}"
+                try:
+                    qualifier = cwl_type_to_nf_qualifier(raw_definition.get("type"))
+                except ValueError:
+                    qualifier = "unsupported"
+                if qualifier != "path":
+                    findings.append(
+                        f"{output_path}.type: primitive and non-path output capture is deferred to Phase 2"
+                    )
+                binding = raw_definition.get("outputBinding")
+                if not isinstance(binding, Mapping):
+                    continue
+                for field_name in ("loadContents", "outputEval"):
+                    if field_name in binding:
+                        findings.append(
+                            f"{output_path}.outputBinding.{field_name}: "
+                            f"{field_name} output capture is deferred to Phase 2"
+                        )
+        case _:
+            pass
+    return findings
+
+
+def _absent_optional_findings(
+    workflow: Mapping[str, Any],
+    node_data: NodeData,
+    steps: list[Mapping[str, Any]],
+    sub_trees: list[Any],
+) -> list[str]:
+    """Reject optional inputs whose compiled workflow value is absent."""
+    params = _workflow_params(workflow, node_data)
+    findings: list[str] = []
+    for step_index, (step, child) in enumerate(zip(steps, sub_trees, strict=True)):
+        match child:
+            case RoseTree(data=NodeData(compiled_cwl=Mapping() as tool)):
+                pass
+            case _:
+                continue
+        tool_inputs = tool.get("inputs", {})
+        step_inputs = step.get("in", {})
+        if not isinstance(tool_inputs, Mapping) or not isinstance(step_inputs, Mapping):
+            continue
+        for raw_name, raw_definition in tool_inputs.items():
+            if not isinstance(raw_definition, Mapping) or not _is_optional(raw_definition.get("type")):
+                continue
+            raw_source = step_inputs.get(raw_name)
+            if raw_source is None:
+                absent = "default" not in raw_definition
+            else:
+                try:
+                    sources = _source_values(
+                        raw_source,
+                        context=f"step input {step_index}.{raw_name}",
+                    )
+                except ValueError:
+                    continue
+                boundary_sources = [source for source in sources if "/" not in source]
+                absent = any(
+                    params.get(_identifier(source, context="workflow input source")) is None
+                    for source in boundary_sources
+                )
+            if absent:
+                findings.append(
+                    f"steps[{step_index}].run.inputs.{raw_name}: absent optional values are "
+                    "deferred to Phase 2"
+                )
+    return findings
+
+
+def _raise_capability_findings(findings: list[str]) -> None:
+    if findings:
+        details = "\n".join(f"- {finding}" for finding in findings)
+        raise ValueError(f"Nextflow Phase 1 capability analysis failed:\n{details}")
 
 
 def _process(step: Mapping[str, Any], child: RoseTree) -> NfProcess:
@@ -580,6 +770,13 @@ def cwl_rosetree_to_nextflow(rose_tree: RoseTree) -> NextflowWorkflow:
     """Convert a compiled flat CWL RoseTree without invoking inference again."""
     node_data, sub_trees, workflow = _compiled_workflow(rose_tree)
     steps = _workflow_steps(workflow, child_count=len(sub_trees))
+    findings = [
+        finding
+        for step_index, (step, child) in enumerate(zip(steps, sub_trees, strict=True))
+        for finding in _tool_capability_findings(step, child, step_index=step_index)
+    ]
+    findings.extend(_absent_optional_findings(workflow, node_data, steps, sub_trees))
+    _raise_capability_findings(findings)
     processes = [
         _process(step, child)
         for step, child in zip(steps, sub_trees, strict=True)

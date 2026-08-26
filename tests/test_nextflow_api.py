@@ -104,14 +104,65 @@ def _workflow(steps: list[Yaml], *, inputs: Yaml | None = None, outputs: Yaml | 
 
 
 @pytest.fixture(scope="module")
-def real_linear_rose() -> RoseTree:
-    """Compile a real three-process Python API workflow once for boundary tests."""
+def unsupported_real_linear_rose() -> RoseTree:
+    """Compile the reviewer's real shell/primitive-output workflow."""
     touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl")
     touch.inputs.filename = "empty.txt"
     append = Step(clt_path=REPO_ROOT / "cwl_adapters" / "append.cwl")
     append.inputs.str = "Hello"
     cat = Step(clt_path=REPO_ROOT / "cwl_adapters" / "cat.cwl")
     return Workflow([touch, append, cat], "wf")._compile().rose
+
+
+@pytest.fixture(scope="module")
+def real_supported_rose() -> RoseTree:
+    """Compile a wholly supported two-process workflow through the real API."""
+    touch = Step.from_cwl_document(
+        {
+            "id": "TOUCH",
+            "class": "CommandLineTool",
+            "cwlVersion": "v1.2",
+            "baseCommand": "touch",
+            "inputs": {
+                "filename": {
+                    "type": "string",
+                    "inputBinding": {"position": 1},
+                }
+            },
+            "outputs": {
+                "result": {
+                    "type": "File",
+                    "outputBinding": {"glob": "$(inputs.filename)"},
+                }
+            },
+        },
+        process_name="touch",
+    )
+    touch.inputs.filename = "message.txt"
+    copy_step = Step.from_cwl_document(
+        {
+            "id": "COPY",
+            "class": "CommandLineTool",
+            "cwlVersion": "v1.2",
+            "baseCommand": "cp",
+            "arguments": [{"position": 2, "valueFrom": "copy.txt"}],
+            "inputs": {
+                "source": {
+                    "type": "File",
+                    "inputBinding": {"position": 1},
+                }
+            },
+            "outputs": {
+                "result": {
+                    "type": "File",
+                    "outputBinding": {"glob": "copy.txt"},
+                }
+            },
+        },
+        process_name="copy",
+    )
+    copy_step.inputs.source = touch.outputs.result
+    return Workflow([touch, copy_step], "wf")._compile().rose
 
 
 # T1.1 — eight IR, validation, and hydration scenarios.
@@ -204,14 +255,28 @@ def test_nf101_t11_rejects_connection_to_unknown_process() -> None:
 
 
 @pytest.mark.fast
-def test_nf101_t12_real_rosetree_converts(real_linear_rose: RoseTree) -> None:
-    converted = cwl_rosetree_to_nextflow(real_linear_rose)
+def test_nf101_t12_real_supported_rosetree_converts(real_supported_rose: RoseTree) -> None:
+    converted = cwl_rosetree_to_nextflow(real_supported_rose)
     assert converted.name == "wf"
     assert [process.name for process in converted.processes] == [
         "wf__step__1__touch",
-        "wf__step__2__append",
-        "wf__step__3__cat",
+        "wf__step__2__copy",
     ]
+
+
+@pytest.mark.fast
+def test_nf101_t12_real_unsupported_rosetree_aggregates_capability_errors(
+    unsupported_real_linear_rose: RoseTree,
+) -> None:
+    with pytest.raises(ValueError) as error:
+        cwl_rosetree_to_nextflow(unsupported_real_linear_rose)
+    message = str(error.value)
+    assert "steps[1].run.requirements.ShellCommandRequirement" in message
+    assert "steps[1].run.requirements.InitialWorkDirRequirement" in message
+    assert "steps[1].run.inputs.file.inputBinding.shellQuote" in message
+    assert "steps[2].run.outputs.output.type" in message
+    assert "steps[2].run.outputs.output.outputBinding.loadContents" in message
+    assert "steps[2].run.outputs.output.outputBinding.outputEval" in message
 
 
 @pytest.mark.fast
@@ -247,10 +312,10 @@ def test_nf101_t12_rejects_nested_or_unsupported_workflow_constructs() -> None:
 
 
 @pytest.mark.fast
-def test_nf101_t12_conversion_does_not_mutate_rosetree(real_linear_rose: RoseTree) -> None:
-    before = copy.deepcopy(real_linear_rose.data.compiled_cwl)
-    cwl_rosetree_to_nextflow(real_linear_rose)
-    assert real_linear_rose.data.compiled_cwl == before
+def test_nf101_t12_conversion_does_not_mutate_rosetree(real_supported_rose: RoseTree) -> None:
+    before = copy.deepcopy(real_supported_rose.data.compiled_cwl)
+    cwl_rosetree_to_nextflow(real_supported_rose)
+    assert real_supported_rose.data.compiled_cwl == before
 
 
 # T1.3 — twelve type, command, container, and resource scenarios.
@@ -276,7 +341,7 @@ def test_nf101_t13_cwl_type_mapping(cwl_type: Any, qualifier: str) -> None:
 
 
 @pytest.mark.fast
-def test_nf101_t13_optional_input_maps_to_val_metadata() -> None:
+def test_nf101_t13_rejects_absent_optional_input_before_lowering() -> None:
     tool = _tool("OPTIONAL", inputs={"message": {"type": ["null", "string"]}})
     rose = _synthetic_rose(
         _workflow(
@@ -286,9 +351,8 @@ def test_nf101_t13_optional_input_maps_to_val_metadata() -> None:
         [tool],
         workflow_inputs={"message": None},
     )
-    process = cwl_rosetree_to_nextflow(rose).processes[0]
-    assert process.inputs[0].qualifier == "val"
-    assert process.directives["_optional_inputs"] == "message"
+    with pytest.raises(ValueError, match=r"steps\[0\].run.inputs.message.*absent optional"):
+        cwl_rosetree_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -330,6 +394,25 @@ def test_nf101_t13_composes_command_arguments_bindings_and_redirects() -> None:
 
 
 @pytest.mark.fast
+def test_nf101_t13_rejects_output_glob_outside_typed_input_subset() -> None:
+    tool = _tool(
+        "BAD_GLOB",
+        outputs={
+            "result": {
+                "type": "File",
+                "outputBinding": {"glob": "$(runtime.outdir)/result.txt"},
+            }
+        },
+    )
+    rose = _synthetic_rose(
+        _workflow([{"id": "BAD_GLOB", "in": {}, "out": ["result"], "run": "BAD_GLOB.cwl"}]),
+        [tool],
+    )
+    with pytest.raises(ValueError, match="unsupported CWL expression"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
 def test_nf101_t13_maps_docker_requirement() -> None:
     tool = _tool(
         "CONTAINER",
@@ -362,13 +445,12 @@ def test_nf101_t13_maps_cpu_and_memory_requirements() -> None:
 
 
 @pytest.mark.fast
-def test_nf101_t14_preserves_linear_dag(real_linear_rose: RoseTree) -> None:
-    workflow = cwl_rosetree_to_nextflow(real_linear_rose)
+def test_nf101_t14_preserves_linear_dag(real_supported_rose: RoseTree) -> None:
+    workflow = cwl_rosetree_to_nextflow(real_supported_rose)
     internal = [connection for connection in workflow.connections if connection.from_process is not None
                 and connection.to_process is not None]
     assert [(edge.from_process, edge.from_port, edge.to_process, edge.to_port) for edge in internal] == [
-        ("wf__step__1__touch", "file", "wf__step__2__append", "file"),
-        ("wf__step__2__append", "file", "wf__step__3__cat", "file"),
+        ("wf__step__1__touch", "result", "wf__step__2__copy", "source"),
     ]
 
 
@@ -392,33 +474,30 @@ def test_nf101_t14_preserves_fanout() -> None:
 
 
 @pytest.mark.fast
-def test_nf101_t14_preserves_workflow_input_connection(real_linear_rose: RoseTree) -> None:
-    connections = cwl_rosetree_to_nextflow(real_linear_rose).connections
+def test_nf101_t14_preserves_workflow_input_connection(real_supported_rose: RoseTree) -> None:
+    connections = cwl_rosetree_to_nextflow(real_supported_rose).connections
     assert NfConnection(None, "wf__step__1__touch___filename", "wf__step__1__touch", "filename") in connections
 
 
 @pytest.mark.fast
-def test_nf101_t14_preserves_workflow_output_connection(real_linear_rose: RoseTree) -> None:
-    connections = cwl_rosetree_to_nextflow(real_linear_rose).connections
+def test_nf101_t14_preserves_workflow_output_connection(real_supported_rose: RoseTree) -> None:
+    connections = cwl_rosetree_to_nextflow(real_supported_rose).connections
     assert NfConnection(
-        "wf__step__3__cat",
-        "output",
+        "wf__step__2__copy",
+        "result",
         None,
-        "wf__step__3__cat___output",
+        "wf__step__2__copy___result",
     ) in connections
 
 
 @pytest.mark.fast
-def test_nf101_t14_copies_workflow_params(real_linear_rose: RoseTree) -> None:
-    params = cwl_rosetree_to_nextflow(real_linear_rose).params
-    assert params == {
-        "wf__step__1__touch___filename": "empty.txt",
-        "wf__step__2__append___str": "Hello",
-    }
+def test_nf101_t14_copies_workflow_params(real_supported_rose: RoseTree) -> None:
+    params = cwl_rosetree_to_nextflow(real_supported_rose).params
+    assert params == {"wf__step__1__touch___filename": "message.txt"}
 
 
 @pytest.mark.fast
-def test_nf101_t14_scatter_is_metadata_only() -> None:
+def test_nf101_t14_rejects_executable_scatter_before_lowering() -> None:
     tool = _tool("SCATTER", inputs={"item": {"type": "string"}})
     step = {
         "id": "SCATTER",
@@ -433,22 +512,20 @@ def test_nf101_t14_scatter_is_metadata_only() -> None:
         [tool],
         workflow_inputs={"items": ["a", "b"]},
     )
-    process = cwl_rosetree_to_nextflow(rose).processes[0]
-    assert process.directives["_scatter"] == "true"
-    assert process.directives["_scatter_inputs"] == "item"
-    assert process.directives["_scatter_method"] == "dotproduct"
+    with pytest.raises(ValueError, match=r"steps\[0\].scatter.*Phase 2"):
+        cwl_rosetree_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_nf101_t14_forward_conversion_does_not_call_inference(
     monkeypatch: pytest.MonkeyPatch,
-    real_linear_rose: RoseTree,
+    real_supported_rose: RoseTree,
 ) -> None:
     def fail_if_called(*_args: Any, **_kwargs: Any) -> None:
         raise AssertionError("forward conversion must not invoke inference")
 
     monkeypatch.setattr(inference, "perform_edge_inference", fail_if_called)
-    cwl_rosetree_to_nextflow(real_linear_rose)
+    cwl_rosetree_to_nextflow(real_supported_rose)
 
 
 @pytest.mark.fast
@@ -520,6 +597,15 @@ def test_nf102_t21_renders_named_workflow_and_entry_wrapper() -> None:
 
 
 @pytest.mark.serial
+def test_nf102_t21_renders_real_compiled_source_with_typed_glob(
+    real_supported_rose: RoseTree,
+) -> None:
+    rendered = render_nextflow(cwl_rosetree_to_nextflow(real_supported_rose))
+    assert 'path "$filename", emit: result' in rendered
+    assert "wf__step__2__copy(wf__step__1__touch.out.result)" in rendered
+
+
+@pytest.mark.serial
 def test_nf102_t21_renders_supported_process_metadata() -> None:
     process = NfProcess(
         "TASK",
@@ -543,8 +629,20 @@ def test_nf102_t21_renders_supported_process_metadata() -> None:
 
 @pytest.mark.serial
 def test_nf102_t21_rejects_cyclic_or_multiply_connected_dags() -> None:
-    a = NfProcess("A", [NfPort("value", "val")], [NfPort("out", "val", "out")], "true")
-    b = NfProcess("B", [NfPort("value", "val")], [NfPort("out", "val", "out")], "true")
+    a = NfProcess(
+        "A",
+        [NfPort("value", "path")],
+        [NfPort("out", "path", "out")],
+        "touch a.txt",
+        directives={"_output_glob.out": "a.txt"},
+    )
+    b = NfProcess(
+        "B",
+        [NfPort("value", "path")],
+        [NfPort("out", "path", "out")],
+        "touch b.txt",
+        directives={"_output_glob.out": "b.txt"},
+    )
     cyclic = NextflowWorkflow(
         "WF",
         [a, b],
@@ -565,6 +663,25 @@ def test_nf102_t21_rejects_cyclic_or_multiply_connected_dags() -> None:
     )
     with pytest.raises(ValueError, match="one source"):
         render_nextflow(duplicate)
+
+
+@pytest.mark.serial
+def test_nf102_t21_rejects_invalid_private_ir_before_writing_artifacts(tmp_path: Path) -> None:
+    process = NfProcess(
+        "BAD_OUTPUT",
+        [],
+        [NfPort("result", "val", "result")],
+        "true",
+    )
+    workflow = NextflowWorkflow(
+        "WF",
+        [process],
+        [NfConnection("BAD_OUTPUT", "result", None, "result")],
+        {},
+    )
+    with pytest.raises(ValueError, match="unsupported qualifier"):
+        write_nextflow_artifacts(workflow, tmp_path)
+    assert list(tmp_path.iterdir()) == []
 
 
 def _nextflow_executable() -> str:
@@ -605,9 +722,12 @@ def _run_nextflow(workflow: NextflowWorkflow, directory: Path) -> subprocess.Com
 
 @pytest.mark.nextflow
 @pytest.mark.serial
-def test_nf102_t21_and_nf104_t41_actual_nextflow_golden_path(tmp_path: Path) -> None:
-    result = _run_nextflow(_runtime_workflow(), tmp_path)
+def test_nf102_t21_and_nf104_t41_actual_nextflow_golden_path(
+    tmp_path: Path,
+    real_supported_rose: RoseTree,
+) -> None:
+    result = _run_nextflow(cwl_rosetree_to_nextflow(real_supported_rose), tmp_path)
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "work").rglob("copy.txt"))
     assert len(outputs) == 1
-    assert outputs[0].read_text(encoding="utf-8") == "hello from Sophios"
+    assert outputs[0].read_text(encoding="utf-8") == ""

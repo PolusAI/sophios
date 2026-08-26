@@ -32,10 +32,12 @@ def _groovy_string(value: str) -> str:
 def _process_output(port: NfPort, process: NfProcess) -> str:
     emit = port.emit or port.name
     glob = process.directives.get(f"_output_glob.{port.name}")
-    if port.qualifier == "path":
-        target = _groovy_string(glob or port.name)
-    else:
-        target = port.name
+    if port.qualifier != "path":
+        raise ValueError(
+            f"invalid executable Nextflow workflow: process {process.name!r} output "
+            f"{port.name!r} uses unsupported qualifier {port.qualifier!r}"
+        )
+    target = _groovy_string(glob or port.name)
     return f"{port.qualifier} {target}, emit: {emit}"
 
 
@@ -48,7 +50,9 @@ def _render_process(process: NfProcess) -> str:
             rendered = value if name == "cpus" else _groovy_string(value)
             lines.append(f"    {name} {rendered}")
     if process.directives.get("_scatter") == "true":
-        lines.append("    // TODO: scatter is represented as metadata in Phase 1")
+        raise ValueError(
+            f"invalid executable Nextflow workflow: process {process.name!r} contains scatter metadata"
+        )
 
     if process.inputs:
         lines.extend(["", "    input:"])
@@ -176,9 +180,11 @@ def _parameter_expression(workflow: NextflowWorkflow, name: str) -> str:
         if isinstance(value, Mapping):
             return f"Channel.fromPath(params.{name}.path, checkIfExists: true)"
         return f"Channel.fromPath(params.{name}, checkIfExists: true)"
-    optional = name in process.directives.get("_optional_inputs", "").split(",")
+    optional = port.name in process.directives.get("_optional_inputs", "").split(",")
     if optional and value is None:
-        return "Channel.empty().ifEmpty(null)"
+        raise ValueError(
+            f"invalid executable Nextflow workflow: workflow input {name!r} is an absent optional value"
+        )
     return f"Channel.value(params.{name})"
 
 
@@ -223,7 +229,15 @@ def write_nextflow_artifacts(
     workflow: NextflowWorkflow,
     outdir: str | Path,
 ) -> tuple[Path, Path, Path, Path]:
-    """Write the JSON IR and all three executable Nextflow artifacts."""
-    json_path = write_nextflow_json(workflow, outdir)
-    script, config, params = write_nextflow_files(workflow, outdir)
-    return json_path, script, config, params
+    """Validate every representation before writing the four artifacts."""
+    serialized = f"{workflow.to_json()}\n"
+    script = render_nextflow(workflow)
+    config = render_nextflow_config(workflow)
+    params = render_nextflow_params(workflow)
+    output = Path(outdir)
+    return (
+        _write_text(output / NEXTFLOW_JSON, serialized),
+        _write_text(output / NEXTFLOW_SCRIPT, script),
+        _write_text(output / NEXTFLOW_CONFIG, config),
+        _write_text(output / NEXTFLOW_PARAMS, params),
+    )
