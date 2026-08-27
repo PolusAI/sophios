@@ -280,6 +280,60 @@ def test_nf101_t12_real_unsupported_rosetree_aggregates_capability_errors(
 
 
 @pytest.mark.fast
+def test_nf101_t12_rejects_every_unconsumed_tool_field_before_lowering() -> None:
+    tool = _tool(
+        "UNCONSUMED",
+        inputs={
+            "reference": {
+                "type": "File",
+                "secondaryFiles": [".fai"],
+                "format": "https://edamontology.org/format_1929",
+                "inputBinding": {
+                    "position": 1,
+                    "itemSeparator": ",",
+                    "loadContents": True,
+                },
+            }
+        },
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "result.txt"}}},
+        requirements={
+            "DockerRequirement": {
+                "dockerPull": "ubuntu:24.04",
+                "dockerOutputDirectory": "/output",
+            }
+        },
+        successCodes=[1],
+    )
+    rose = _synthetic_rose(
+        _workflow(
+            [
+                {
+                    "id": "UNCONSUMED",
+                    "in": {"reference": "reference"},
+                    "out": ["result"],
+                    "run": "UNCONSUMED.cwl",
+                }
+            ],
+            inputs={"reference": {"type": "File"}},
+            outputs={"result": {"type": "File", "outputSource": "UNCONSUMED/result"}},
+        ),
+        [tool],
+        workflow_inputs={"reference": {"class": "File", "path": "reference.fa"}},
+    )
+
+    with pytest.raises(ValueError) as error:
+        cwl_rosetree_to_nextflow(rose)
+
+    message = str(error.value)
+    assert "steps[0].run.successCodes" in message
+    assert "steps[0].run.inputs.reference.secondaryFiles" in message
+    assert "steps[0].run.inputs.reference.format" in message
+    assert "steps[0].run.inputs.reference.inputBinding.itemSeparator" in message
+    assert "steps[0].run.inputs.reference.inputBinding.loadContents" in message
+    assert "steps[0].run.requirements.DockerRequirement.dockerOutputDirectory" in message
+
+
+@pytest.mark.fast
 def test_nf101_t12_rejects_compiledworkflow_substitution() -> None:
     compiled = CompiledWorkflow("wf", _workflow([]), {})
     with pytest.raises(TypeError, match="RoseTree"):

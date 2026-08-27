@@ -406,6 +406,80 @@ _DEFERRED_REQUIREMENTS = {
     "ShellCommandRequirement": "shell-mode command lowering is deferred to Phase 2",
 }
 
+_TOOL_CONSUMED_FIELDS = frozenset({
+    "arguments",
+    "baseCommand",
+    "class",
+    "cwlVersion",
+    "hints",
+    "id",
+    "inputs",
+    "outputs",
+    "requirements",
+    "stderr",
+    "stdin",
+    "stdout",
+})
+_INPUT_CONSUMED_FIELDS = frozenset({"inputBinding", "type"})
+_INPUT_BINDING_CONSUMED_FIELDS = frozenset({
+    "position",
+    "prefix",
+    "separate",
+    "shellQuote",
+    "valueFrom",
+})
+_OUTPUT_CONSUMED_FIELDS = frozenset({"outputBinding", "type"})
+_OUTPUT_BINDING_CONSUMED_FIELDS = frozenset({"glob"})
+_OUTPUT_BINDING_DEFERRED_FIELDS = frozenset({"loadContents", "outputEval"})
+_ARGUMENT_CONSUMED_FIELDS = frozenset({
+    "position",
+    "prefix",
+    "separate",
+    "shellQuote",
+    "valueFrom",
+})
+_SUPPORTED_REQUIREMENT_FIELDS = {
+    "DockerRequirement": frozenset({"class", "dockerImageId", "dockerPull"}),
+    "InlineJavascriptRequirement": frozenset({"class"}),
+    "ResourceRequirement": frozenset({
+        "class",
+        "coresMax",
+        "coresMin",
+        "ramMax",
+        "ramMin",
+    }),
+}
+
+
+def _unconsumed_field_findings(
+    value: Mapping[str, Any],
+    *,
+    consumed: frozenset[str],
+    path: str,
+) -> list[str]:
+    """Reject source fields that the Phase 1 lowering does not consume."""
+    return [
+        f"{path}.{field_name}: {field_name} is not consumed by Nextflow Phase 1 lowering"
+        for field_name in sorted(set(value) - consumed)
+    ]
+
+
+def _requirement_definition(
+    section: Any,
+    *,
+    class_name: str,
+    suffix: str,
+) -> Mapping[str, Any] | None:
+    """Return a requirement payload for closed-world field analysis."""
+    match section:
+        case Mapping() as requirements:
+            definition = requirements.get(class_name)
+        case list() as requirements:
+            definition = requirements[int(suffix)]
+        case _:
+            return None
+    return definition if isinstance(definition, Mapping) else None
+
 
 def _requirement_names(section: Any) -> list[tuple[str, str]]:
     """Return requirement names and stable path suffixes for capability analysis."""
@@ -453,9 +527,30 @@ def _tool_capability_findings(
             pass
         case _:
             return findings
+    match tool.get("class"):
+        case "CommandLineTool":
+            pass
+        case "Workflow":
+            if not sub_trees:
+                findings.append(f"{path}.run: nested workflows are deferred to Phase 2")
+            return findings
+        case unsupported_class:
+            findings.append(
+                f"{path}.run.class: unsupported compiled step class {unsupported_class!r}"
+            )
+            return findings
+
+    findings.extend(
+        _unconsumed_field_findings(
+            tool,
+            consumed=_TOOL_CONSUMED_FIELDS,
+            path=f"{path}.run",
+        )
+    )
 
     for section_name in ("requirements", "hints"):
-        for class_name, suffix in _requirement_names(tool.get(section_name)):
+        section = tool.get(section_name)
+        for class_name, suffix in _requirement_names(section):
             requirement_path = f"{path}.run.{section_name}.{suffix}"
             if class_name in _DEFERRED_REQUIREMENTS:
                 findings.append(f"{requirement_path}: {_DEFERRED_REQUIREMENTS[class_name]}")
@@ -463,19 +558,46 @@ def _tool_capability_findings(
                 findings.append(
                     f"{requirement_path}: {class_name} is not supported by Nextflow Phase 1"
                 )
+            elif definition := _requirement_definition(
+                section,
+                class_name=class_name,
+                suffix=suffix,
+            ):
+                findings.extend(
+                    _unconsumed_field_findings(
+                        definition,
+                        consumed=_SUPPORTED_REQUIREMENT_FIELDS[class_name],
+                        path=requirement_path,
+                    )
+                )
 
     match tool.get("inputs", {}):
         case Mapping() as inputs:
             for raw_name, raw_definition in inputs.items():
                 if not isinstance(raw_definition, Mapping):
                     continue
+                input_path = f"{path}.run.inputs.{raw_name}"
+                findings.extend(
+                    _unconsumed_field_findings(
+                        raw_definition,
+                        consumed=_INPUT_CONSUMED_FIELDS,
+                        path=input_path,
+                    )
+                )
                 binding = raw_definition.get("inputBinding")
                 if not isinstance(binding, Mapping):
                     continue
-                input_path = f"{path}.run.inputs.{raw_name}.inputBinding"
+                input_binding_path = f"{input_path}.inputBinding"
+                findings.extend(
+                    _unconsumed_field_findings(
+                        binding,
+                        consumed=_INPUT_BINDING_CONSUMED_FIELDS,
+                        path=input_binding_path,
+                    )
+                )
                 if binding.get("shellQuote") is False:
                     findings.append(
-                        f"{input_path}.shellQuote: shellQuote false is deferred to Phase 2"
+                        f"{input_binding_path}.shellQuote: shellQuote false is deferred to Phase 2"
                     )
         case _:
             pass
@@ -483,9 +605,19 @@ def _tool_capability_findings(
     match tool.get("arguments", []):
         case list() as arguments:
             for argument_index, argument in enumerate(arguments):
-                if isinstance(argument, Mapping) and argument.get("shellQuote") is False:
+                if not isinstance(argument, Mapping):
+                    continue
+                argument_path = f"{path}.run.arguments[{argument_index}]"
+                findings.extend(
+                    _unconsumed_field_findings(
+                        argument,
+                        consumed=_ARGUMENT_CONSUMED_FIELDS,
+                        path=argument_path,
+                    )
+                )
+                if argument.get("shellQuote") is False:
                     findings.append(
-                        f"{path}.run.arguments[{argument_index}].shellQuote: "
+                        f"{argument_path}.shellQuote: "
                         "shellQuote false is deferred to Phase 2"
                     )
         case _:
@@ -497,6 +629,13 @@ def _tool_capability_findings(
                 if not isinstance(raw_definition, Mapping):
                     continue
                 output_path = f"{path}.run.outputs.{raw_name}"
+                findings.extend(
+                    _unconsumed_field_findings(
+                        raw_definition,
+                        consumed=_OUTPUT_CONSUMED_FIELDS,
+                        path=output_path,
+                    )
+                )
                 try:
                     qualifier = cwl_type_to_nf_qualifier(raw_definition.get("type"))
                 except ValueError:
@@ -508,10 +647,21 @@ def _tool_capability_findings(
                 binding = raw_definition.get("outputBinding")
                 if not isinstance(binding, Mapping):
                     continue
+                output_binding_path = f"{output_path}.outputBinding"
+                findings.extend(
+                    _unconsumed_field_findings(
+                        binding,
+                        consumed=(
+                            _OUTPUT_BINDING_CONSUMED_FIELDS
+                            | _OUTPUT_BINDING_DEFERRED_FIELDS
+                        ),
+                        path=output_binding_path,
+                    )
+                )
                 for field_name in ("loadContents", "outputEval"):
                     if field_name in binding:
                         findings.append(
-                            f"{output_path}.outputBinding.{field_name}: "
+                            f"{output_binding_path}.{field_name}: "
                             f"{field_name} output capture is deferred to Phase 2"
                         )
         case _:
