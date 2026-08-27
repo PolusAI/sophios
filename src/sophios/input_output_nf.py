@@ -5,13 +5,33 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .nf_types import NfConnection, NfPort, NfProcess, NextflowWorkflow
+from .nf_types import (
+    ExecutableNextflowWorkflow,
+    NF_SHELL_QUOTE_HELPER,
+    NfConnection,
+    NfInputReference,
+    NfLiteral,
+    NfPort,
+    NfProcess,
+    NfProcessConnection,
+    NfWorkflowInputConnection,
+    NfWorkflowOutputConnection,
+)
 
 
 NEXTFLOW_JSON = "nextflow_workflow.json"
 NEXTFLOW_SCRIPT = "workflow.nf"
 NEXTFLOW_CONFIG = "nextflow.config"
 NEXTFLOW_PARAMS = "nextflow_params.json"
+NF_SHELL_QUOTE_FUNCTION = f'''def {NF_SHELL_QUOTE_HELPER}(value) {{
+    return "'" + value.toString().replace("'", "'\\\"'\\\"'") + "'"
+}}'''
+
+
+def _require_executable(workflow: Any) -> ExecutableNextflowWorkflow:
+    if not isinstance(workflow, ExecutableNextflowWorkflow):
+        raise TypeError("Nextflow rendering requires ExecutableNextflowWorkflow")
+    return workflow
 
 
 def _write_text(path: Path, value: str) -> Path:
@@ -20,8 +40,9 @@ def _write_text(path: Path, value: str) -> Path:
     return path
 
 
-def write_nextflow_json(workflow: NextflowWorkflow, outdir: str | Path) -> Path:
+def write_nextflow_json(workflow: ExecutableNextflowWorkflow, outdir: str | Path) -> Path:
     """Write the stable JSON representation of a Nextflow workflow."""
+    _require_executable(workflow)
     return _write_text(Path(outdir) / NEXTFLOW_JSON, f"{workflow.to_json()}\n")
 
 
@@ -29,15 +50,62 @@ def _groovy_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def _groovy_literal(value: str) -> str:
+    escaped: list[str] = []
+    for character in value:
+        if character == "\\":
+            escaped.append("\\\\")
+        elif character == "'":
+            escaped.append("\\'")
+        elif ord(character) < 32 or ord(character) == 127:
+            escaped.append(f"\\u{ord(character):04x}")
+        else:
+            escaped.append(character)
+    return f"'{''.join(escaped)}'"
+
+
+def _template_expression(template: Any) -> str:
+    return " + ".join(
+        f"{segment.name}.toString()"
+        if isinstance(segment, NfInputReference)
+        else _groovy_literal(segment.value)
+        for segment in template.segments
+    )
+
+
+def _shell_quote(value: str) -> str:
+    """Return the POSIX shell word produced by the generated Groovy helper."""
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def _render_template(template: Any) -> str:
+    """Render one typed token through the generated shell-quoting function."""
+    return f"${{{NF_SHELL_QUOTE_HELPER}({_template_expression(template)})}}"
+
+
+def _render_glob(template: Any) -> str:
+    if all(isinstance(segment, NfLiteral) for segment in template.segments):
+        return _groovy_string("".join(segment.value for segment in template.segments))
+    rendered: list[str] = []
+    for segment in template.segments:
+        if isinstance(segment, NfInputReference):
+            rendered.append(f"${{{segment.name}}}")
+        else:
+            literal = segment.value.replace("\\", "\\\\").replace('"', '\\"')
+            rendered.append(literal.replace("$", "\\$").replace("`", "\\`"))
+    return f'"{"".join(rendered)}"'
+
+
 def _process_output(port: NfPort, process: NfProcess) -> str:
     emit = port.emit or port.name
-    glob = process.directives.get(f"_output_glob.{port.name}")
     if port.qualifier != "path":
         raise ValueError(
             f"invalid executable Nextflow workflow: process {process.name!r} output "
             f"{port.name!r} uses unsupported qualifier {port.qualifier!r}"
         )
-    target = _groovy_string(glob or port.name)
+    if port.glob is None:
+        raise ValueError(f"invalid executable output {process.name}.{port.name}: missing glob")
+    target = _render_glob(port.glob)
     return f"{port.qualifier} {target}, emit: {emit}"
 
 
@@ -45,14 +113,10 @@ def _render_process(process: NfProcess) -> str:
     lines = [f"process {process.name} {{"]
     if process.container is not None:
         lines.append(f"    container {_groovy_string(process.container)}")
-    for name in ("cpus", "memory"):
-        if value := process.directives.get(name):
-            rendered = value if name == "cpus" else _groovy_string(value)
-            lines.append(f"    {name} {rendered}")
-    if process.directives.get("_scatter") == "true":
-        raise ValueError(
-            f"invalid executable Nextflow workflow: process {process.name!r} contains scatter metadata"
-        )
+    if process.resources.cpus is not None:
+        lines.append(f"    cpus {process.resources.cpus:g}")
+    if process.resources.memory_mb is not None:
+        lines.append(f'    memory "{process.resources.memory_mb:g} MB"')
 
     if process.inputs:
         lines.extend(["", "    input:"])
@@ -61,49 +125,60 @@ def _render_process(process: NfProcess) -> str:
         lines.extend(["", "    output:"])
         lines.extend(f"    {_process_output(port, process)}" for port in process.outputs)
 
-    if '\"\"\"' in process.script:
-        raise ValueError(f"process {process.name!r} script contains an unsupported triple-quote delimiter")
+    command = " ".join(_render_template(token) for token in process.command.tokens)
+    for operator, stream in (("<", process.command.stdin), (">", process.command.stdout), ("2>", process.command.stderr)):
+        if stream is not None:
+            command += f" {operator} {_render_template(stream)}"
     lines.extend(["", "    script:", '    \"\"\"'])
-    lines.extend(f"    {line}" for line in process.script.splitlines())
+    lines.append(f"    {command}")
     lines.extend(['    \"\"\"', "}"])
     return "\n".join(lines)
 
 
-def _process_map(workflow: NextflowWorkflow) -> dict[str, NfProcess]:
+def _process_map(workflow: ExecutableNextflowWorkflow) -> dict[str, NfProcess]:
     return {process.name: process for process in workflow.processes}
 
 
-def _incoming_connections(workflow: NextflowWorkflow) -> dict[tuple[str, str], NfConnection]:
+def _incoming_connections(workflow: ExecutableNextflowWorkflow) -> dict[tuple[str, str], NfConnection]:
     incoming: dict[tuple[str, str], NfConnection] = {}
     for connection in workflow.connections:
-        if connection.to_process is None:
-            continue
-        key = (connection.to_process, connection.to_port)
+        match connection:
+            case NfWorkflowInputConnection(_, to_process, to_port) | NfProcessConnection(
+                _, _, to_process, to_port
+            ):
+                pass
+            case NfWorkflowOutputConnection():
+                continue
+        key = (to_process, to_port)
         if key in incoming:
             raise ValueError(
                 f"Nextflow Phase 1 supports one source per process input; "
-                f"{connection.to_process}.{connection.to_port} has more than one"
+                f"{to_process}.{to_port} has more than one"
             )
         incoming[key] = connection
     return incoming
 
 
 def _source_expression(connection: NfConnection, processes: Mapping[str, NfProcess]) -> str:
-    if connection.from_process is None:
-        return connection.from_port
-    process = processes[connection.from_process]
-    output = next(port for port in process.outputs if port.name == connection.from_port)
-    return f"{process.name}.out.{output.emit or output.name}"
+    match connection:
+        case NfWorkflowInputConnection(from_port, _, _):
+            return from_port
+        case NfProcessConnection(from_process, from_port, _, _) | NfWorkflowOutputConnection(
+            from_process, from_port, _
+        ):
+            process = processes[from_process]
+            output = next(port for port in process.outputs if port.name == from_port)
+            return f"{process.name}.out.{output.emit or output.name}"
 
 
-def _ordered_processes(workflow: NextflowWorkflow) -> list[NfProcess]:
+def _ordered_processes(workflow: ExecutableNextflowWorkflow) -> list[NfProcess]:
     """Return processes in stable topological order and reject cycles."""
     position = {process.name: index for index, process in enumerate(workflow.processes)}
     dependencies: dict[str, set[str]] = {
         process.name: set() for process in workflow.processes
     }
     for connection in workflow.connections:
-        if connection.from_process is not None and connection.to_process is not None:
+        if isinstance(connection, NfProcessConnection):
             dependencies[connection.to_process].add(connection.from_process)
 
     ordered: list[NfProcess] = []
@@ -121,15 +196,15 @@ def _ordered_processes(workflow: NextflowWorkflow) -> list[NfProcess]:
     return ordered
 
 
-def _workflow_input_names(workflow: NextflowWorkflow) -> list[str]:
+def _workflow_input_names(workflow: ExecutableNextflowWorkflow) -> list[str]:
     names: list[str] = []
     for connection in workflow.connections:
-        if connection.from_process is None and connection.from_port not in names:
+        if isinstance(connection, NfWorkflowInputConnection) and connection.from_port not in names:
             names.append(connection.from_port)
     return names
 
 
-def _render_named_workflow(workflow: NextflowWorkflow) -> str:
+def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
     processes = _process_map(workflow)
     incoming = _incoming_connections(workflow)
     workflow_inputs = _workflow_input_names(workflow)
@@ -144,14 +219,15 @@ def _render_named_workflow(workflow: NextflowWorkflow) -> str:
         for port in process.inputs:
             connection = incoming.get((process.name, port.name))
             if connection is None:
-                if port.name in process.directives.get("_optional_inputs", "").split(","):
-                    arguments.append("Channel.empty().ifEmpty(null)")
-                    continue
                 raise ValueError(f"process input {process.name}.{port.name} is not connected")
             arguments.append(_source_expression(connection, processes))
         lines.append(f"    {process.name}({', '.join(arguments)})")
 
-    workflow_outputs = [connection for connection in workflow.connections if connection.to_process is None]
+    workflow_outputs = [
+        connection
+        for connection in workflow.connections
+        if isinstance(connection, NfWorkflowOutputConnection)
+    ]
     if workflow_outputs:
         lines.append("    emit:")
         for connection in workflow_outputs:
@@ -162,35 +238,37 @@ def _render_named_workflow(workflow: NextflowWorkflow) -> str:
     return "\n".join(lines)
 
 
-def _workflow_input_port(workflow: NextflowWorkflow, name: str) -> tuple[NfProcess, NfPort]:
+def _workflow_input_port(
+    workflow: ExecutableNextflowWorkflow,
+    name: str,
+) -> tuple[NfProcess, NfPort]:
     processes = _process_map(workflow)
     for connection in workflow.connections:
-        if connection.from_process is None and connection.from_port == name and connection.to_process is not None:
+        if isinstance(connection, NfWorkflowInputConnection) and connection.from_port == name:
             process = processes[connection.to_process]
             return process, next(port for port in process.inputs if port.name == connection.to_port)
     raise ValueError(f"workflow input {name!r} is not connected")
 
 
-def _parameter_expression(workflow: NextflowWorkflow, name: str) -> str:
+def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> str:
     process, port = _workflow_input_port(workflow, name)
     value: Any = workflow.params.get(name)
     if port.qualifier == "path":
-        if isinstance(value, list):
+        if isinstance(value, (list, tuple)):
             return f"Channel.fromPath(params.{name}.collect {{ it.path ?: it }}, checkIfExists: true)"
         if isinstance(value, Mapping):
             return f"Channel.fromPath(params.{name}.path, checkIfExists: true)"
         return f"Channel.fromPath(params.{name}, checkIfExists: true)"
-    optional = port.name in process.directives.get("_optional_inputs", "").split(",")
-    if optional and value is None:
-        raise ValueError(
-            f"invalid executable Nextflow workflow: workflow input {name!r} is an absent optional value"
-        )
     return f"Channel.value(params.{name})"
 
 
-def render_nextflow(workflow: NextflowWorkflow) -> str:
+def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
     """Render a supported workflow as deterministic Nextflow DSL2 source."""
-    sections = ["nextflow.enable.dsl=2"]
+    _require_executable(workflow)
+    sections = [
+        "nextflow.enable.dsl=2",
+        NF_SHELL_QUOTE_FUNCTION,
+    ]
     sections.extend(_render_process(process) for process in workflow.processes)
     sections.append(_render_named_workflow(workflow))
     arguments = ",\n        ".join(
@@ -201,19 +279,27 @@ def render_nextflow(workflow: NextflowWorkflow) -> str:
     return "\n\n".join(sections) + "\n"
 
 
-def render_nextflow_config(workflow: NextflowWorkflow) -> str:
+def render_nextflow_config(workflow: ExecutableNextflowWorkflow) -> str:
     """Render the deterministic executor configuration."""
+    _require_executable(workflow)
     docker_enabled = any(process.container for process in workflow.processes)
     return f"docker.enabled = {str(docker_enabled).lower()}\n"
 
 
-def render_nextflow_params(workflow: NextflowWorkflow) -> str:
+def render_nextflow_params(workflow: ExecutableNextflowWorkflow) -> str:
     """Render workflow parameters as deterministic JSON."""
-    return json.dumps(workflow.params, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False) + "\n"
+    _require_executable(workflow)
+    return json.dumps(
+        workflow.to_dict()["params"],
+        indent=2,
+        sort_keys=True,
+        ensure_ascii=False,
+        allow_nan=False,
+    ) + "\n"
 
 
 def write_nextflow_files(
-    workflow: NextflowWorkflow,
+    workflow: ExecutableNextflowWorkflow,
     outdir: str | Path,
 ) -> tuple[Path, Path, Path]:
     """Write ``workflow.nf``, ``nextflow.config``, and the parameters file."""
@@ -226,7 +312,7 @@ def write_nextflow_files(
 
 
 def write_nextflow_artifacts(
-    workflow: NextflowWorkflow,
+    workflow: ExecutableNextflowWorkflow,
     outdir: str | Path,
 ) -> tuple[Path, Path, Path, Path]:
     """Validate every representation before writing the four artifacts."""

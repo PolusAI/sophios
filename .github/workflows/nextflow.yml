@@ -41,7 +41,7 @@ jobs:
         run: nextflow -version | grep 'version 26.04.2'
 
       - name: Run Nextflow conformance tests
-        run: python -m pytest tests/test_nextflow_api.py -m nextflow -q
+        run: python -m pytest tests/core/test_nextflow_api.py tests/core/test_nextflow_public_api.py -m nextflow -q
 
       - name: Run the Python 3.12 compatibility suite
-        run: python -m pytest tests/test_nextflow_api.py -m 'not nextflow' -q
+        run: python -m pytest tests/core/test_nextflow_api.py tests/core/test_nextflow_public_api.py tests/core/test_nextflow_properties.py -m 'not nextflow' -q

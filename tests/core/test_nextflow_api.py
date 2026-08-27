@@ -5,6 +5,7 @@
 import copy
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 from typing import Any, cast
@@ -18,12 +19,37 @@ from sophios.input_output_nf import (
     write_nextflow_artifacts,
 )
 from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
-from sophios.nf_types import NfConnection, NfPort, NfProcess, NextflowWorkflow
+from sophios.nf_types import (
+    ExecutableNextflowWorkflow,
+    NfCommand,
+    NfInputReference,
+    NfLiteral,
+    NfPort,
+    NfProcess,
+    NfProcessConnection,
+    NfResources,
+    NfTemplate,
+    NfWorkflowInputConnection,
+    NfWorkflowOutputConnection,
+)
 from sophios.utils_nf import cwl_rosetree_to_nextflow, cwl_type_to_nf_qualifier
 from sophios.wic_types import GraphReps, NodeData, RoseTree, Tool, Yaml
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _command(*tokens: str) -> NfCommand:
+    return NfCommand(tuple(NfTemplate((NfLiteral(token),)) for token in tokens))
+
+
+def _output(name: str, glob: str | None = None) -> NfPort:
+    return NfPort(
+        name,
+        "path",
+        name,
+        NfTemplate((NfLiteral(glob or name),)),
+    )
 
 
 def _node_data(
@@ -170,7 +196,7 @@ def real_supported_rose() -> RoseTree:
 
 @pytest.mark.fast
 def test_nf101_t11_port_dict_roundtrip() -> None:
-    port = NfPort(name="reads", qualifier="path", emit="staged")
+    port = _output("reads", "*.fq")
     assert NfPort.from_dict(port.to_dict()) == port
 
 
@@ -179,45 +205,92 @@ def test_nf101_t11_process_dict_roundtrip() -> None:
     process = NfProcess(
         name="ALIGN",
         inputs=[NfPort("reads", "path")],
-        outputs=[NfPort("bam", "path", "bam")],
-        script="align $reads",
+        outputs=[_output("bam", "result.bam")],
+        command=_command("align", "reads"),
         container="aligner:1",
-        directives={"cpus": "2", "memory": "1024 MB"},
+        resources=NfResources(2, 1024),
     )
     assert NfProcess.from_dict(process.to_dict()) == process
 
 
 @pytest.mark.fast
 def test_nf101_t11_workflow_dict_roundtrip() -> None:
-    workflow = NextflowWorkflow(
+    workflow = ExecutableNextflowWorkflow(
         name="wf",
-        processes=[NfProcess("ECHO", [], [NfPort("out", "path", "out")], "echo hi")],
-        connections=[NfConnection("ECHO", "out", None, "result")],
+        processes=[NfProcess("ECHO", [], [_output("out")], _command("echo", "hi"))],
+        connections=[NfWorkflowOutputConnection("ECHO", "out", "result")],
         params={"message": "hello"},
     )
-    assert NextflowWorkflow.from_dict(workflow.to_dict()) == workflow
+    assert ExecutableNextflowWorkflow.from_dict(workflow.to_dict()) == workflow
 
 
 @pytest.mark.fast
 def test_nf101_t11_json_roundtrip_is_deterministic() -> None:
-    workflow = NextflowWorkflow("wf", [], [], {"b": 2, "a": 1})
+    workflow = ExecutableNextflowWorkflow("wf", [], [], {"b": 2, "a": 1})
     serialized = workflow.to_json()
     assert serialized == workflow.to_json()
-    assert NextflowWorkflow.from_json(serialized) == workflow
+    assert ExecutableNextflowWorkflow.from_json(serialized) == workflow
 
 
 @pytest.mark.fast
-def test_nf101_t11_unparsed_content_survives_hydration() -> None:
-    workflow = NextflowWorkflow(
-        "wf",
-        [NfProcess("P", [], [], "true", directives={"_unparsed": "errorStrategy 'retry'"})],
-        [],
-        {},
-        directives={"_unparsed": "workflow.onComplete { ... }"},
+def test_nf101_t11_executable_schema_declares_version_and_kind() -> None:
+    workflow = ExecutableNextflowWorkflow("wf", [], [], {})
+    payload = workflow.to_dict()
+
+    assert payload["schema_version"] == 1
+    assert payload["representation_kind"] == "executable"
+
+    payload["schema_version"] = 2
+    with pytest.raises(ValueError, match="schema version"):
+        ExecutableNextflowWorkflow.from_dict(payload)
+
+    payload["schema_version"] = 1
+    payload["representation_kind"] = "structural"
+    with pytest.raises(ValueError, match="representation kind"):
+        ExecutableNextflowWorkflow.from_dict(payload)
+
+
+@pytest.mark.fast
+def test_nf101_t11_executable_values_are_deeply_immutable_and_hashable() -> None:
+    process = NfProcess(
+        "P",
+        [NfPort("message", "val")],
+        [_output("result", "result.txt")],
+        _command("touch", "result.txt"),
     )
-    hydrated = NextflowWorkflow.from_json(workflow.to_json())
-    assert hydrated.directives["_unparsed"] == "workflow.onComplete { ... }"
-    assert hydrated.processes[0].directives["_unparsed"] == "errorStrategy 'retry'"
+    workflow = ExecutableNextflowWorkflow(
+        "wf",
+        [process],
+        [
+            NfWorkflowInputConnection("message", "P", "message"),
+            NfWorkflowOutputConnection("P", "result", "result"),
+        ],
+        {"message": {"nested": ["hello"]}},
+    )
+
+    assert hash(process)
+    assert hash(workflow)
+    with pytest.raises(AttributeError):
+        cast(Any, process.inputs).append(NfPort("late", "val"))
+    with pytest.raises(AttributeError):
+        cast(Any, process.command.tokens).append(NfTemplate((NfLiteral("late"),)))
+    with pytest.raises(TypeError):
+        cast(Any, workflow.params)["message"] = "changed"
+
+    with pytest.raises(ValueError, match="keys must be strings"):
+        ExecutableNextflowWorkflow("wf", (), (), cast(Any, {1: "value"}))
+    with pytest.raises(ValueError, match="JSON-compatible"):
+        ExecutableNextflowWorkflow("wf", (), (), {"value": cast(Any, {1, 2})})
+
+
+@pytest.mark.fast
+def test_nf101_t11_executable_ir_has_no_opaque_or_magic_directive_fields() -> None:
+    payload = ExecutableNextflowWorkflow(
+        "wf", [NfProcess("P", [], [], _command("true"))], [], {}
+    ).to_dict()
+    payload["directives"] = {"_unparsed": "workflow.onComplete { ... }"}
+    with pytest.raises(ValueError, match="unknown fields"):
+        ExecutableNextflowWorkflow.from_dict(payload)
 
 
 @pytest.mark.fast
@@ -233,6 +306,8 @@ def test_nf101_t11_uses_nextflow_identifier_symbols() -> None:
 
     assert normalize_nextflow_identifier("9-café") == "_9_café"
     assert normalize_nextflow_identifier("if") == "_if"
+    with pytest.raises(ValueError, match="reserved Nextflow backend identifier"):
+        NfPort("__sophios_shell_quote_9f72e", "val")
 
     with pytest.raises(ValueError, match="qualifier"):
         NfPort("reads", "unsupported")
@@ -240,15 +315,55 @@ def test_nf101_t11_uses_nextflow_identifier_symbols() -> None:
 
 @pytest.mark.fast
 def test_nf101_t11_rejects_duplicate_process_names() -> None:
-    process = NfProcess("P", [], [], "true")
+    process = NfProcess("P", [], [], _command("true"))
     with pytest.raises(ValueError, match="duplicate process"):
-        NextflowWorkflow("wf", [process, process], [], {})
+        ExecutableNextflowWorkflow("wf", [process, process], [], {})
 
 
 @pytest.mark.fast
 def test_nf101_t11_rejects_connection_to_unknown_process() -> None:
     with pytest.raises(ValueError, match="unknown destination process"):
-        NextflowWorkflow("wf", [], [NfConnection(None, "message", "MISSING", "message")], {"message": "hi"})
+        ExecutableNextflowWorkflow(
+            "wf",
+            [],
+            [NfWorkflowInputConnection("message", "MISSING", "message")],
+            {"message": "hi"},
+        )
+
+
+@pytest.mark.fast
+def test_nf101_t11_rejects_nullable_boundary_and_duplicate_workflow_emits() -> None:
+    with pytest.raises((TypeError, ValueError)):
+        NfWorkflowInputConnection("message", cast(Any, None), "message")
+
+    first = NfProcess("A", [], [_output("out", "a.txt")], _command("touch", "a.txt"))
+    second = NfProcess("B", [], [_output("out", "b.txt")], _command("touch", "b.txt"))
+    with pytest.raises(ValueError, match="duplicate output emit"):
+        ExecutableNextflowWorkflow(
+            "wf",
+            [first, second],
+            [
+                NfWorkflowOutputConnection("A", "out", "result"),
+                NfWorkflowOutputConnection("B", "out", "result"),
+            ],
+            {},
+        )
+
+
+@pytest.mark.fast
+def test_nf101_t11_rejects_mixed_channel_semantics_for_one_parameter() -> None:
+    value_process = NfProcess("VALUE", [NfPort("shared", "val")], [], _command("true"))
+    path_process = NfProcess("PATH", [NfPort("shared", "path")], [], _command("true"))
+    with pytest.raises(ValueError, match="incompatible channel qualifiers"):
+        ExecutableNextflowWorkflow(
+            "wf",
+            [value_process, path_process],
+            [
+                NfWorkflowInputConnection("shared", "VALUE", "shared"),
+                NfWorkflowInputConnection("shared", "PATH", "shared"),
+            ],
+            {"shared": "input.txt"},
+        )
 
 
 # T1.2 — five real-boundary and rejection scenarios.
@@ -447,6 +562,120 @@ def test_nf101_t12_conversion_does_not_mutate_rosetree(real_supported_rose: Rose
     assert real_supported_rose.data.compiled_cwl == before
 
 
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    ("mutation", "diagnostic"),
+    [
+        (lambda workflow: workflow.update({"requirements": {}}), "workflow.requirements"),
+        (
+            lambda workflow: workflow["inputs"]["message"].update(
+                {"inputBinding": {"position": 1}}
+            ),
+            "workflow.inputs.message.inputBinding",
+        ),
+        (
+            lambda workflow: workflow["outputs"]["result"].update(
+                {"pickValue": "first_non_null"}
+            ),
+            "workflow.outputs.result.pickValue",
+        ),
+        (
+            lambda workflow: workflow["steps"][0].update({"requirements": {}}),
+            "steps[0].requirements",
+        ),
+        (
+            lambda workflow: workflow["steps"][0]["in"]["message"].update(
+                {"valueFrom": "changed"}
+            ),
+            "steps[0].in.message.valueFrom",
+        ),
+    ],
+)
+def test_nf101_t12_closed_world_analysis_covers_workflow_and_step_levels(
+    mutation: Any,
+    diagnostic: str,
+) -> None:
+    tool = _tool(
+        "WRITE",
+        inputs={"message": {"type": "string", "inputBinding": {"position": 1}}},
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "result.txt"}}},
+    )
+    workflow = _workflow(
+        [
+            {
+                "id": "WRITE",
+                "in": {"message": {"source": "message"}},
+                "out": ["result"],
+                "run": "WRITE.cwl",
+            }
+        ],
+        inputs={"message": {"type": "string"}},
+        outputs={"result": {"type": "File", "outputSource": "WRITE/result"}},
+    )
+    mutation(workflow)
+    rose = _synthetic_rose(workflow, [tool], workflow_inputs={"message": "hello"})
+    with pytest.raises(ValueError, match=re.escape(diagnostic)):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    ("workflow_inputs", "default", "diagnostic"),
+    [
+        ({}, None, "required workflow input value is missing"),
+        ({"message": None}, None, "explicit null input values"),
+        ({}, ["not", "scalar"], "JSON scalar defaults only"),
+    ],
+)
+def test_nf101_t12_boundary_missingness_is_not_conflated_with_defaults(
+    workflow_inputs: dict[str, Any],
+    default: Any,
+    diagnostic: str,
+) -> None:
+    definition: dict[str, Any] = {"type": "string"}
+    if default is not None:
+        definition["default"] = default
+    rose = _synthetic_rose(
+        _workflow([], inputs={"message": definition}),
+        [],
+        workflow_inputs=workflow_inputs,
+    )
+    with pytest.raises(ValueError, match=diagnostic):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_nf101_t12_rejects_undeclared_workflow_input_values() -> None:
+    rose = _synthetic_rose(_workflow([]), [], workflow_inputs={"extra": "value"})
+    with pytest.raises(ValueError, match="has no declared workflow input"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    ("cwl_type", "value"),
+    [
+        ("string", ["not", "a", "string"]),
+        ("int", True),
+        (
+            "File",
+            {"class": "File", "path": "reference.fa", "secondaryFiles": ["reference.fa.fai"]},
+        ),
+    ],
+)
+def test_nf101_t12_rejects_boundary_values_outside_supported_shape(
+    cwl_type: Any,
+    value: Any,
+) -> None:
+    rose = _synthetic_rose(
+        _workflow([], inputs={"value": {"type": cwl_type}}),
+        [],
+        workflow_inputs={"value": value},
+    )
+    with pytest.raises(ValueError, match="does not match its supported CWL type"):
+        cwl_rosetree_to_nextflow(rose)
+
+
 # T1.3 — twelve type, command, container, and resource scenarios.
 
 
@@ -460,13 +689,19 @@ def test_nf101_t12_conversion_does_not_mutate_rosetree(real_supported_rose: Rose
         ("int", "val"),
         ("float", "val"),
         ("boolean", "val"),
-        ("Any", "val"),
-        ({"type": "array", "items": "File"}, "path"),
+        ("File?", "path"),
     ],
-    ids=["file", "directory", "string", "int", "float", "boolean", "any", "file-array"],
+    ids=["file", "directory", "string", "int", "float", "boolean", "optional-file"],
 )
 def test_nf101_t13_cwl_type_mapping(cwl_type: Any, qualifier: str) -> None:
     assert cwl_type_to_nf_qualifier(cwl_type) == qualifier
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("cwl_type", ["Any", "File[]", {"type": "array", "items": "File"}])
+def test_nf101_t13_rejects_unbounded_and_collection_types(cwl_type: Any) -> None:
+    with pytest.raises(ValueError, match="unsupported CWL type"):
+        cwl_type_to_nf_qualifier(cwl_type)
 
 
 @pytest.mark.fast
@@ -516,10 +751,43 @@ def test_nf101_t13_composes_command_arguments_bindings_and_redirects() -> None:
         workflow_inputs={"message": "hello", "source": {"class": "File", "path": "input.txt"}},
     )
     process = cwl_rosetree_to_nextflow(rose).processes[0]
-    assert process.script == (
-        "python script.py --mode fast --message $message < $source > stdout.txt 2> stderr.txt"
+    rendered = render_nextflow(cwl_rosetree_to_nextflow(rose))
+    command_line = next(line for line in rendered.splitlines() if " < " in line)
+    assert command_line.count("__sophios_shell_quote_9f72e") == 9
+    for fragment in ("'python'", "'script.py'", "'--mode'", "'fast'", "'--message'"):
+        assert fragment in command_line
+    assert "message.toString()" in command_line
+    assert "< ${__sophios_shell_quote_9f72e(source.toString())}" in command_line
+    assert "> ${__sophios_shell_quote_9f72e('stdout.txt')}" in command_line
+    assert "2> ${__sophios_shell_quote_9f72e('stderr.txt')}" in command_line
+    assert process.outputs[0].glob == NfTemplate((NfLiteral("stdout.txt"),))
+
+
+@pytest.mark.fast
+def test_nf101_t13_applies_unwired_scalar_default_before_lowering() -> None:
+    tool = _tool(
+        "DEFAULT",
+        inputs={
+            "message": {
+                "type": "string",
+                "default": "hello default",
+                "inputBinding": {"position": 1},
+            }
+        },
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "result.txt"}}},
+        arguments=[{"position": 2, "valueFrom": "result.txt"}],
     )
-    assert process.directives["_output_glob.report"] == "stdout.txt"
+    rose = _synthetic_rose(
+        _workflow(
+            [{"id": "DEFAULT", "in": {}, "out": ["result"], "run": "DEFAULT.cwl"}],
+            outputs={"result": {"type": "File", "outputSource": "DEFAULT/result"}},
+        ),
+        [tool],
+    )
+    workflow = cwl_rosetree_to_nextflow(rose)
+    assert workflow.params == {"DEFAULT___message": "hello default"}
+    assert NfWorkflowInputConnection("DEFAULT___message", "DEFAULT", "message") in workflow.connections
+    assert "Channel.value(params.DEFAULT___message)" in render_nextflow(workflow)
 
 
 @pytest.mark.fast
@@ -558,16 +826,20 @@ def test_nf101_t13_maps_docker_requirement() -> None:
 def test_nf101_t13_maps_cpu_and_memory_requirements() -> None:
     tool = _tool(
         "RESOURCES",
-        requirements={"ResourceRequirement": {"coresMin": 2, "ramMin": 1024}},
+        requirements={
+            "ResourceRequirement": {
+                "coresMin": 1,
+                "coresMax": 2,
+                "ramMin": 512,
+                "ramMax": 1024,
+            }
+        },
     )
     rose = _synthetic_rose(
         _workflow([{"id": "RESOURCES", "in": {}, "out": [], "run": "RESOURCES.cwl"}]),
         [tool],
     )
-    assert cwl_rosetree_to_nextflow(rose).processes[0].directives == {
-        "cpus": "2",
-        "memory": "1024 MB",
-    }
+    assert cwl_rosetree_to_nextflow(rose).processes[0].resources == NfResources(2, 1024)
 
 
 # T1.4 — eight graph, interface, params, scatter, and inference scenarios.
@@ -576,8 +848,11 @@ def test_nf101_t13_maps_cpu_and_memory_requirements() -> None:
 @pytest.mark.fast
 def test_nf101_t14_preserves_linear_dag(real_supported_rose: RoseTree) -> None:
     workflow = cwl_rosetree_to_nextflow(real_supported_rose)
-    internal = [connection for connection in workflow.connections if connection.from_process is not None
-                and connection.to_process is not None]
+    internal = [
+        connection
+        for connection in workflow.connections
+        if isinstance(connection, NfProcessConnection)
+    ]
     assert [(edge.from_process, edge.from_port, edge.to_process, edge.to_port) for edge in internal] == [
         ("wf__step__1__touch", "result", "wf__step__2__copy", "source"),
     ]
@@ -585,7 +860,9 @@ def test_nf101_t14_preserves_linear_dag(real_supported_rose: RoseTree) -> None:
 
 @pytest.mark.fast
 def test_nf101_t14_preserves_fanout() -> None:
-    producer = _tool("A", outputs={"out": {"type": "File"}})
+    producer = _tool(
+        "A", outputs={"out": {"type": "File", "outputBinding": {"glob": "out.txt"}}}
+    )
     consumer_b = _tool("B", inputs={"value": {"type": "File"}})
     consumer_c = _tool("C", inputs={"value": {"type": "File"}})
     rose = _synthetic_rose(
@@ -599,22 +876,31 @@ def test_nf101_t14_preserves_fanout() -> None:
         [producer, consumer_b, consumer_c],
     )
     connections = cwl_rosetree_to_nextflow(rose).connections
-    assert len([edge for edge in connections if edge.from_process == "A" and edge.from_port == "out"]) == 2
+    assert len([
+        edge
+        for edge in connections
+        if isinstance(edge, NfProcessConnection)
+        and edge.from_process == "A"
+        and edge.from_port == "out"
+    ]) == 2
 
 
 @pytest.mark.fast
 def test_nf101_t14_preserves_workflow_input_connection(real_supported_rose: RoseTree) -> None:
     connections = cwl_rosetree_to_nextflow(real_supported_rose).connections
-    assert NfConnection(None, "wf__step__1__touch___filename", "wf__step__1__touch", "filename") in connections
+    assert NfWorkflowInputConnection(
+        "wf__step__1__touch___filename",
+        "wf__step__1__touch",
+        "filename",
+    ) in connections
 
 
 @pytest.mark.fast
 def test_nf101_t14_preserves_workflow_output_connection(real_supported_rose: RoseTree) -> None:
     connections = cwl_rosetree_to_nextflow(real_supported_rose).connections
-    assert NfConnection(
+    assert NfWorkflowOutputConnection(
         "wf__step__2__copy",
         "result",
-        None,
         "wf__step__2__copy___result",
     ) in connections
 
@@ -671,28 +957,30 @@ def test_nf101_t14_rejects_unknown_connection_source() -> None:
 # NF-102 — deterministic artifacts and core runtime semantics.
 
 
-def _runtime_workflow() -> NextflowWorkflow:
+def _runtime_workflow() -> ExecutableNextflowWorkflow:
     produce = NfProcess(
         "PRODUCE",
         [NfPort("message", "val")],
-        [NfPort("result", "path", "result")],
-        'printf \'%s\' "$message" > message.txt',
-        directives={"_output_glob.result": "message.txt"},
+        [_output("result", "message.txt")],
+        NfCommand((_command("printf").tokens[0], _command("%s").tokens[0], NfTemplate((NfInputReference("message"),)))),
     )
     copy_process = NfProcess(
         "COPY",
         [NfPort("source", "path")],
-        [NfPort("copy", "path", "copy")],
-        'cp "$source" copy.txt',
-        directives={"_output_glob.copy": "copy.txt"},
+        [_output("copy", "copy.txt")],
+        NfCommand((
+            NfTemplate((NfLiteral("cp"),)),
+            NfTemplate((NfInputReference("source"),)),
+            NfTemplate((NfLiteral("copy.txt"),)),
+        )),
     )
-    return NextflowWorkflow(
+    return ExecutableNextflowWorkflow(
         "PIPELINE",
         [produce, copy_process],
         [
-            NfConnection(None, "message", "PRODUCE", "message"),
-            NfConnection("PRODUCE", "result", "COPY", "source"),
-            NfConnection("COPY", "copy", None, "result"),
+            NfWorkflowInputConnection("message", "PRODUCE", "message"),
+            NfProcessConnection("PRODUCE", "result", "COPY", "source"),
+            NfWorkflowOutputConnection("COPY", "copy", "result"),
         ],
         {"message": "hello from Sophios"},
     )
@@ -715,6 +1003,12 @@ def test_nf102_t21_writes_four_deterministic_artifacts(tmp_path: Path) -> None:
     assert workflow.to_json() == before
 
 
+@pytest.mark.fast
+def test_nf102_t21_renderer_rejects_non_executable_representation() -> None:
+    with pytest.raises(TypeError, match="requires ExecutableNextflowWorkflow"):
+        render_nextflow(cast(Any, {"representation_kind": "structural"}))
+
+
 @pytest.mark.serial
 def test_nf102_t21_renders_named_workflow_and_entry_wrapper() -> None:
     rendered = render_nextflow(_runtime_workflow())
@@ -730,7 +1024,7 @@ def test_nf102_t21_renders_real_compiled_source_with_typed_glob(
     real_supported_rose: RoseTree,
 ) -> None:
     rendered = render_nextflow(cwl_rosetree_to_nextflow(real_supported_rose))
-    assert 'path "$filename", emit: result' in rendered
+    assert 'path "${filename}", emit: result' in rendered
     assert "wf__step__2__copy(wf__step__1__touch.out.result)" in rendered
 
 
@@ -739,15 +1033,15 @@ def test_nf102_t21_renders_supported_process_metadata() -> None:
     process = NfProcess(
         "TASK",
         [NfPort("source", "path")],
-        [NfPort("report", "path", "report")],
-        "touch report.txt",
+        [_output("report", "report.txt")],
+        _command("touch", "report.txt"),
         container="ubuntu:24.04",
-        directives={"cpus": "2", "memory": "1024 MB", "_output_glob.report": "report.txt"},
+        resources=NfResources(2, 1024),
     )
-    rendered = render_nextflow(NextflowWorkflow(
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
         "WF",
         [process],
-        [NfConnection(None, "source", "TASK", "source")],
+        [NfWorkflowInputConnection("source", "TASK", "source")],
         {"source": "input.txt"},
     ))
     assert 'container "ubuntu:24.04"' in rendered
@@ -761,55 +1055,42 @@ def test_nf102_t21_rejects_cyclic_or_multiply_connected_dags() -> None:
     a = NfProcess(
         "A",
         [NfPort("value", "path")],
-        [NfPort("out", "path", "out")],
-        "touch a.txt",
-        directives={"_output_glob.out": "a.txt"},
+        [_output("out", "a.txt")],
+        _command("touch", "a.txt"),
     )
     b = NfProcess(
         "B",
         [NfPort("value", "path")],
-        [NfPort("out", "path", "out")],
-        "touch b.txt",
-        directives={"_output_glob.out": "b.txt"},
-    )
-    cyclic = NextflowWorkflow(
-        "WF",
-        [a, b],
-        [NfConnection("A", "out", "B", "value"), NfConnection("B", "out", "A", "value")],
-        {},
+        [_output("out", "b.txt")],
+        _command("touch", "b.txt"),
     )
     with pytest.raises(ValueError, match="cycle"):
-        render_nextflow(cyclic)
+        ExecutableNextflowWorkflow(
+            "WF",
+            [a, b],
+            [
+                NfProcessConnection("A", "out", "B", "value"),
+                NfProcessConnection("B", "out", "A", "value"),
+            ],
+            {},
+        )
 
-    duplicate = NextflowWorkflow(
-        "WF",
-        [a, b],
-        [
-            NfConnection(None, "first", "A", "value"),
-            NfConnection(None, "second", "A", "value"),
-        ],
-        {"first": 1, "second": 2},
-    )
     with pytest.raises(ValueError, match="one source"):
-        render_nextflow(duplicate)
+        ExecutableNextflowWorkflow(
+            "WF",
+            [a, b],
+            [
+                NfWorkflowInputConnection("first", "A", "value"),
+                NfWorkflowInputConnection("second", "A", "value"),
+            ],
+            {"first": 1, "second": 2},
+        )
 
 
 @pytest.mark.serial
 def test_nf102_t21_rejects_invalid_private_ir_before_writing_artifacts(tmp_path: Path) -> None:
-    process = NfProcess(
-        "BAD_OUTPUT",
-        [],
-        [NfPort("result", "val", "result")],
-        "true",
-    )
-    workflow = NextflowWorkflow(
-        "WF",
-        [process],
-        [NfConnection("BAD_OUTPUT", "result", None, "result")],
-        {},
-    )
-    with pytest.raises(ValueError, match="unsupported qualifier"):
-        write_nextflow_artifacts(workflow, tmp_path)
+    with pytest.raises(ValueError, match="path qualifier and typed glob"):
+        NfProcess("BAD_OUTPUT", [], [NfPort("result", "val", "result")], _command("true"))
     assert list(tmp_path.iterdir()) == []
 
 
@@ -820,7 +1101,10 @@ def _nextflow_executable() -> str:
     return executable
 
 
-def _run_nextflow(workflow: NextflowWorkflow, directory: Path) -> subprocess.CompletedProcess[str]:
+def _run_nextflow(
+    workflow: ExecutableNextflowWorkflow,
+    directory: Path,
+) -> subprocess.CompletedProcess[str]:
     write_nextflow_artifacts(workflow, directory)
     run_env = dict(os.environ)
     run_env.update({
@@ -860,3 +1144,39 @@ def test_nf102_t21_and_nf104_t41_actual_nextflow_golden_path(
     outputs = list((tmp_path / "work").rglob("copy.txt"))
     assert len(outputs) == 1
     assert outputs[0].read_text(encoding="utf-8") == ""
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_nf102_t21_real_compiler_preserves_adversarial_argument(tmp_path: Path) -> None:
+    value = "price is $5; touch SHOULD_NOT_EXIST ' \" $(uname)\nsecond line"
+    write = Step.from_cwl_document(
+        {
+            "id": "WRITE",
+            "class": "CommandLineTool",
+            "cwlVersion": "v1.2",
+            "baseCommand": "printf",
+            "arguments": [{"position": 1, "valueFrom": "%s"}],
+            "inputs": {
+                "message": {
+                    "type": "string",
+                    "inputBinding": {"position": 2},
+                }
+            },
+            "stdout": "result.txt",
+            "outputs": {
+                "result": {
+                    "type": "File",
+                    "outputBinding": {"glob": "result.txt"},
+                }
+            },
+        },
+        process_name="write",
+    )
+    write.inputs.message = value
+    workflow = Workflow([write], "wf")._compile().rose
+    result = _run_nextflow(cwl_rosetree_to_nextflow(workflow), tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("result.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == [value]
+    assert not list(tmp_path.rglob("SHOULD_NOT_EXIST"))

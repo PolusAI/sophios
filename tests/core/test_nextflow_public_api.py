@@ -2,6 +2,7 @@
 
 # pylint: disable=missing-function-docstring,protected-access
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -14,7 +15,12 @@ from sophios import cli
 import sophios.main as sophios_main
 from sophios.api.python import _workflow_runtime as runtime
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.api.python.workflow import CompiledWorkflow, NextflowWorkflow, Step, Workflow
+from sophios.api.python.workflow import (
+    CompiledWorkflow,
+    ExecutableNextflowWorkflow,
+    Step,
+    Workflow,
+)
 
 
 def _supported_workflow() -> Workflow:
@@ -60,7 +66,7 @@ def test_nextflow_target_compiles_once(monkeypatch: pytest.MonkeyPatch) -> None:
 
     compiled = workflow.compile(target="nextflow")
 
-    assert isinstance(compiled, NextflowWorkflow)
+    assert isinstance(compiled, ExecutableNextflowWorkflow)
     assert calls == 1
 
 
@@ -82,6 +88,9 @@ def test_to_nextflow_is_the_single_four_artifact_writer(tmp_path: Path) -> None:
         "nextflow.config",
         "nextflow_params.json",
     ]
+    serialized = json.loads(paths[0].read_text(encoding="utf-8"))
+    assert serialized["schema_version"] == 1
+    assert serialized["representation_kind"] == "executable"
     assert not hasattr(Workflow, "get_nextflow_workflow")
     assert not hasattr(Workflow, "to_nf")
 
@@ -108,7 +117,7 @@ def test_nextflow_cli_conversion_error_is_concise_and_actionable(
     rose_tree = _supported_workflow()._compile().rose
     capsys.readouterr()
 
-    def reject_nested(_rose_tree: Any) -> NextflowWorkflow:
+    def reject_nested(_rose_tree: Any) -> ExecutableNextflowWorkflow:
         raise ValueError("nested workflows are deferred to Phase 2")
 
     monkeypatch.setattr(sophios_main, "cwl_rosetree_to_nextflow", reject_nested)

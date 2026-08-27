@@ -21,7 +21,7 @@ from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 from sophios import compiler, input_output, plugins, post_compile as pc, run_local as rl
 from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.input_output import dump_wic_yaml as _dump_yaml
-from sophios.nf_types import NextflowWorkflow
+from sophios.nf_types import ExecutableNextflowWorkflow
 from sophios.utils_nf import cwl_rosetree_to_nextflow
 from sophios.cli import get_dicts_for_compilation, get_known_and_unknown_args
 from sophios.runtime_inputs import normalize_rose_tree_cwl, normalize_rose_tree_job_inputs
@@ -553,7 +553,7 @@ def nextflow_workflow(
     workflow: "Workflow",
     *,
     tool_registry: Tools | None = None,
-) -> NextflowWorkflow:
+) -> ExecutableNextflowWorkflow:
     """Compile once through Sophios and convert the private semantic tree."""
     compiler_info = compile_workflow(workflow, tool_registry=tool_registry)
     return cwl_rosetree_to_nextflow(compiler_info.rose)

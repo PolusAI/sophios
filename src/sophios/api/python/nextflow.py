@@ -8,14 +8,35 @@ from sophios.input_output_nf import (
     write_nextflow_files,
     write_nextflow_json,
 )
-from sophios.nf_types import NfConnection, NfPort, NfProcess, NextflowWorkflow
+from sophios.nf_types import (
+    ExecutableNextflowWorkflow,
+    NfCommand,
+    NfConnection,
+    NfInputReference,
+    NfLiteral,
+    NfPort,
+    NfProcess,
+    NfProcessConnection,
+    NfResources,
+    NfTemplate,
+    NfWorkflowInputConnection,
+    NfWorkflowOutputConnection,
+)
 
 
 __all__ = [
+    "ExecutableNextflowWorkflow",
+    "NfCommand",
     "NfConnection",
+    "NfInputReference",
+    "NfLiteral",
     "NfPort",
     "NfProcess",
-    "NextflowWorkflow",
+    "NfProcessConnection",
+    "NfResources",
+    "NfTemplate",
+    "NfWorkflowInputConnection",
+    "NfWorkflowOutputConnection",
     "render_nextflow",
     "render_nextflow_config",
     "render_nextflow_params",

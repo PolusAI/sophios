@@ -10,7 +10,7 @@ from typing import Any, ClassVar, Literal, overload
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
 from sophios.inference import types_match
-from sophios.nf_types import NextflowWorkflow
+from sophios.nf_types import ExecutableNextflowWorkflow
 from sophios.wic_types import CompilerInfo, Tools
 
 from ._compiled import CompiledWorkflow
@@ -63,7 +63,7 @@ __all__ = [
     "CompiledWorkflow",
     "InvalidLinkError",
     "InvalidStepError",
-    "NextflowWorkflow",
+    "ExecutableNextflowWorkflow",
     "Step",
     "Workflow",
 ]
@@ -922,7 +922,7 @@ class Workflow(_ProcessBase):
         *,
         target: Literal["nextflow"],
         tool_registry: Tools | None = None,
-    ) -> NextflowWorkflow:
+    ) -> ExecutableNextflowWorkflow:
         ...
 
     def compile(
@@ -930,7 +930,7 @@ class Workflow(_ProcessBase):
         *,
         target: Literal["cwl", "nextflow"] = "cwl",
         tool_registry: Tools | None = None,
-    ) -> CompiledWorkflow | NextflowWorkflow:
+    ) -> CompiledWorkflow | ExecutableNextflowWorkflow:
         """Compile this workflow to the selected supported target.
 
         The old ``CompilerInfo`` result remains available only through the
@@ -941,7 +941,7 @@ class Workflow(_ProcessBase):
             tool_registry (Tools | None): Optional tool registry override.
 
         Returns:
-            CompiledWorkflow | NextflowWorkflow: Target-specific result.
+            CompiledWorkflow | ExecutableNextflowWorkflow: Target-specific result.
         """
         if target == "cwl":
             return _compiled_workflow(self, tool_registry=tool_registry)

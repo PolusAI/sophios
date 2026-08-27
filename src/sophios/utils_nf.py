@@ -4,11 +4,24 @@ from collections.abc import Mapping
 import copy
 from os import PathLike
 import re
-import shlex
 from typing import Any
 
 from .nf_symbols import normalize_nextflow_identifier
-from .nf_types import NfConnection, NfPort, NfProcess, NextflowWorkflow
+from .nf_types import (
+    ExecutableNextflowWorkflow,
+    NF_INTERNAL_IDENTIFIERS,
+    NfCommand,
+    NfConnection,
+    NfInputReference,
+    NfLiteral,
+    NfPort,
+    NfProcess,
+    NfProcessConnection,
+    NfResources,
+    NfTemplate,
+    NfWorkflowInputConnection,
+    NfWorkflowOutputConnection,
+)
 from .wic_types import NodeData, RoseTree
 
 
@@ -22,7 +35,10 @@ def _identifier(value: Any, *, context: str) -> str:
     local = value.rsplit("#", maxsplit=1)[-1]
     if not local:
         raise ValueError(f"{context} cannot be normalized to a Nextflow identifier")
-    return normalize_nextflow_identifier(local)
+    identifier = normalize_nextflow_identifier(local)
+    while identifier in NF_INTERNAL_IDENTIFIERS:
+        identifier = f"_{identifier}"
+    return identifier
 
 
 def _as_mapping(value: Any, *, error: str) -> Mapping[str, Any]:
@@ -66,15 +82,11 @@ def _required_type(cwl_type: Any) -> Any:
 
 def cwl_type_to_nf_qualifier(cwl_type: Any) -> str:
     """Map the documented Phase 1 CWL type subset to a Nextflow qualifier."""
-    if _is_optional(cwl_type):
-        return "val"
     match _required_type(cwl_type):
-        case "File" | "Directory" | "File[]":
+        case "File" | "Directory":
             return "path"
-        case "string" | "int" | "float" | "boolean" | "Any":
+        case "string" | "int" | "float" | "boolean":
             return "val"
-        case {"type": "array", "items": "File"}:
-            return "path"
         case _:
             raise ValueError(f"unsupported CWL type for Nextflow Phase 1: {cwl_type!r}")
 
@@ -91,6 +103,7 @@ def _ports(raw_ports: Any, *, outputs: bool) -> list[NfPort]:
                         name,
                         cwl_type_to_nf_qualifier(cwl_type),
                         emit=name if outputs else None,
+                        glob=_output_template(raw_name, raw_definition) if outputs else None,
                     )
                 )
             case _:
@@ -103,40 +116,40 @@ _INPUT_EXPRESSION = re.compile(
 )
 
 
-def _translate_input_expressions(value: str) -> str:
-    return _INPUT_EXPRESSION.sub(lambda match: f"${_identifier(match.group(1), context='input reference')}", value)
-
-
-def _translate_supported_input_expressions(value: str, *, context: str) -> str:
-    """Translate the closed Phase 1 expression subset and reject residual syntax."""
-    residual = _INPUT_EXPRESSION.sub("", value)
+def _template(value: Any, *, context: str) -> NfTemplate:
+    match value:
+        case bool() as boolean:
+            text = "true" if boolean else "false"
+        case (int() | float()) as number:
+            text = str(number)
+        case str() as text:
+            pass
+        case _:
+            raise ValueError(f"unsupported CWL command value {value!r}")
+    segments: list[NfLiteral | NfInputReference] = []
+    offset = 0
+    for match in _INPUT_EXPRESSION.finditer(text):
+        if match.start() > offset:
+            segments.append(NfLiteral(text[offset:match.start()]))
+        segments.append(NfInputReference(_identifier(match.group(1), context="input reference")))
+        offset = match.end()
+    if offset < len(text):
+        segments.append(NfLiteral(text[offset:]))
+    residual = _INPUT_EXPRESSION.sub("", text)
     if "$" in residual:
         raise ValueError(
             f"{context} contains an unsupported CWL expression; Phase 1 supports only "
             "$(inputs.<name>), optionally followed by .path or .basename"
         )
-    return _translate_input_expressions(value)
-
-
-def _shell_literal(value: Any) -> str:
-    match value:
-        case bool() as boolean:
-            return "true" if boolean else "false"
-        case (int() | float()) as number:
-            return str(number)
-        case str() as text:
-            translated = _translate_supported_input_expressions(text, context="CWL command value")
-            if "$" in translated or any(character.isspace() for character in translated):
-                return translated if "$" in translated else shlex.quote(translated)
-            return shlex.quote(translated)
-        case _:
-            raise ValueError(f"unsupported CWL command value {value!r}")
+    return NfTemplate(tuple(segments or [NfLiteral(text)]))
 
 
 def _position(value: Any, *, default: int) -> int:
     match value:
         case None:
             return default
+        case bool():
+            raise ValueError(f"unsupported non-integer CWL command position {value!r}")
         case int() as position:
             return position
         case str() as position:
@@ -148,31 +161,33 @@ def _position(value: Any, *, default: int) -> int:
             raise ValueError(f"unsupported CWL command position {value!r}")
 
 
-def _binding_token(prefix: Any, value: str, *, separate: Any = True) -> str:
+def _binding_tokens(prefix: Any, value: NfTemplate, *, separate: Any = True) -> tuple[NfTemplate, ...]:
     match prefix:
         case None:
-            return value
+            return (value,)
         case str() as text:
-            rendered_prefix = shlex.quote(text)
-            return f"{rendered_prefix} {value}" if separate is not False else f"{rendered_prefix}{value}"
+            prefix_template = _template(text, context="CWL command prefix")
+            if separate is not False:
+                return prefix_template, value
+            return (NfTemplate((*prefix_template.segments, *value.segments)),)
         case _:
             raise ValueError("CWL command prefix must be a string")
 
 
-def _argument_items(arguments: list[Any]) -> list[tuple[int, int, str]]:
-    items: list[tuple[int, int, str]] = []
+def _argument_items(arguments: list[Any]) -> list[tuple[tuple[int, int, int], tuple[NfTemplate, ...]]]:
+    items: list[tuple[tuple[int, int, int], tuple[NfTemplate, ...]]] = []
     for index, argument in enumerate(arguments):
         match argument:
             case {"valueFrom": value_from}:
-                value = _shell_literal(value_from)
-                token = _binding_token(argument.get("prefix"), value, separate=argument.get("separate", True))
-                item_position = _position(argument.get("position"), default=index)
+                value = _template(value_from, context="CWL argument valueFrom")
+                tokens = _binding_tokens(argument.get("prefix"), value, separate=argument.get("separate", True))
+                item_position = _position(argument.get("position"), default=0)
             case Mapping():
                 raise ValueError("mapped CWL arguments must contain valueFrom")
             case _:
-                token = _shell_literal(argument)
-                item_position = index
-        items.append((item_position, index, token))
+                tokens = (_template(argument, context="CWL argument"),)
+                item_position = 0
+        items.append(((item_position, 0, index), tokens))
     return items
 
 
@@ -180,9 +195,10 @@ def _input_binding_items(
     inputs: Mapping[str, Any],
     *,
     start: int,
-) -> list[tuple[int, int, str]]:
-    items: list[tuple[int, int, str]] = []
-    for index, (raw_name, definition) in enumerate(inputs.items(), start=start):
+) -> list[tuple[tuple[int, int, str], tuple[NfTemplate, ...]]]:
+    del start
+    items: list[tuple[tuple[int, int, str], tuple[NfTemplate, ...]]] = []
+    for raw_name, definition in inputs.items():
         input_definition = _as_mapping(definition, error=f"CWL input {raw_name!r} must be a mapping")
         match input_definition.get("inputBinding"):
             case None:
@@ -193,34 +209,33 @@ def _input_binding_items(
                 raise ValueError(f"CWL inputBinding for {raw_name!r} must be a mapping")
         name = _identifier(raw_name, context="input binding name")
         value_from = binding.get("valueFrom")
-        value = _shell_literal(value_from) if value_from is not None else f"${name}"
-        token = _binding_token(binding.get("prefix"), value, separate=binding.get("separate", True))
-        items.append((_position(binding.get("position"), default=index), index, token))
+        value = (
+            _template(value_from, context=f"CWL input {raw_name!r} valueFrom")
+            if value_from is not None else NfTemplate((NfInputReference(name),))
+        )
+        tokens = _binding_tokens(binding.get("prefix"), value, separate=binding.get("separate", True))
+        items.append(((_position(binding.get("position"), default=0), 1, str(raw_name)), tokens))
     return items
 
 
-def _command_items(tool: Mapping[str, Any]) -> list[tuple[int, int, str]]:
+def _command_items(tool: Mapping[str, Any]) -> tuple[NfTemplate, ...]:
     arguments = _as_list(tool.get("arguments", []), error="CommandLineTool arguments must be a list")
     inputs = _as_mapping(tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
-    return sorted(
-        [
-            *_argument_items(arguments),
-            *_input_binding_items(inputs, start=len(arguments)),
-        ]
-    )
+    ordered = sorted([*_argument_items(arguments), *_input_binding_items(inputs, start=0)])
+    return tuple(token for _key, tokens in ordered for token in tokens)
 
 
-def _script(tool: Mapping[str, Any]) -> str:
+def _command(tool: Mapping[str, Any]) -> NfCommand:
     base_command = tool.get("baseCommand")
-    tokens: list[str] = []
+    tokens: list[NfTemplate] = []
     match base_command:
         case str() as command if command:
-            tokens.append(shlex.quote(command))
+            tokens.append(_template(command, context="CWL baseCommand"))
         case list() as command:
             for token in command:
                 match token:
                     case str():
-                        tokens.append(shlex.quote(token))
+                        tokens.append(_template(token, context="CWL baseCommand"))
                     case _:
                         raise ValueError("CommandLineTool baseCommand must be a string or list of strings")
         case None:
@@ -228,18 +243,14 @@ def _script(tool: Mapping[str, Any]) -> str:
         case _:
             raise ValueError("CommandLineTool baseCommand must be a string or list of strings")
 
-    tokens.extend(token for _position_value, _sequence, token in _command_items(tool))
-    command = " ".join(tokens) or "true"
-    stdin = tool.get("stdin")
-    stdout = tool.get("stdout")
-    stderr = tool.get("stderr")
-    if stdin is not None:
-        command += f" < {_shell_literal(stdin)}"
-    if stdout is not None:
-        command += f" > {_shell_literal(stdout)}"
-    if stderr is not None:
-        command += f" 2> {_shell_literal(stderr)}"
-    return command
+    tokens.extend(_command_items(tool))
+    if not tokens:
+        tokens.append(_template("true", context="empty CWL command"))
+
+    def stream(name: str) -> NfTemplate | None:
+        return None if tool.get(name) is None else _template(tool[name], context=f"CWL {name}")
+
+    return NfCommand(tuple(tokens), stream("stdin"), stream("stdout"), stream("stderr"))
 
 
 def _requirement(tool: Mapping[str, Any], class_name: str) -> Mapping[str, Any] | None:
@@ -280,7 +291,7 @@ def _container(tool: Mapping[str, Any]) -> str | None:
 
 
 def _resource_value(resource: Mapping[str, Any], minimum: str, maximum: str) -> Any:
-    return resource.get(minimum, resource.get(maximum))
+    return resource.get(maximum, resource.get(minimum))
 
 
 def _render_resource(value: Any, *, name: str) -> str:
@@ -295,105 +306,39 @@ def _render_resource(value: Any, *, name: str) -> str:
             raise ValueError(f"{name} resource requirement must be numeric")
 
 
-def _resource_directives(tool: Mapping[str, Any]) -> dict[str, str]:
+def _resources(tool: Mapping[str, Any]) -> NfResources:
     resource = _requirement(tool, "ResourceRequirement")
     if resource is None:
-        return {}
-    directives: dict[str, str] = {}
-    if (cpus := _resource_value(resource, "coresMin", "coresMax")) is not None:
-        directives["cpus"] = _render_resource(cpus, name="CPU")
-    if (memory := _resource_value(resource, "ramMin", "ramMax")) is not None:
-        directives["memory"] = f"{_render_resource(memory, name='memory')} MB"
-    return directives
+        return NfResources()
+    cpus = _resource_value(resource, "coresMin", "coresMax")
+    memory = _resource_value(resource, "ramMin", "ramMax")
+    rendered_cpus = None if cpus is None else float(_render_resource(cpus, name="CPU"))
+    rendered_memory = None if memory is None else float(_render_resource(memory, name="memory"))
+    return NfResources(rendered_cpus, rendered_memory)
 
 
-def _optional_input_directive(tool: Mapping[str, Any]) -> str | None:
-    inputs = _as_mapping(tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
-    optional_inputs: list[str] = []
-    for name, definition in inputs.items():
-        match definition:
-            case Mapping() as input_definition if _is_optional(input_definition.get("type")):
-                optional_inputs.append(_identifier(name, context="optional input name"))
-            case _:
-                continue
-    return ",".join(optional_inputs) or None
-
-
-def _output_glob_directives(tool: Mapping[str, Any]) -> dict[str, str]:
-    outputs = _as_mapping(tool.get("outputs", {}), error="CommandLineTool outputs must be a mapping")
-    directives: dict[str, str] = {}
-    for raw_name, definition in outputs.items():
-        output_definition = _as_mapping(definition, error=f"CWL output {raw_name!r} must be a mapping")
-        match output_definition.get("outputBinding"):
-            case None:
-                continue
-            case Mapping() as binding:
-                pass
-            case _:
-                raise ValueError(f"CWL outputBinding for {raw_name!r} must be a mapping")
-        match binding.get("glob"):
-            case None:
-                continue
-            case str() as glob:
-                rendered_glob = _translate_supported_input_expressions(
-                    glob,
-                    context=f"CWL output glob for {raw_name!r}",
-                )
-            case list():
-                raise ValueError(
-                    f"CWL output glob lists for {raw_name!r} are deferred beyond Nextflow Phase 1"
-                )
-            case _:
-                raise ValueError(f"CWL output glob for {raw_name!r} must be a string or list")
-        directives[f"_output_glob.{_identifier(raw_name, context='output name')}"] = rendered_glob
-    return directives
-
-
-def _directives(tool: Mapping[str, Any]) -> dict[str, str]:
-    directives = _resource_directives(tool)
-    if optional_inputs := _optional_input_directive(tool):
-        directives["_optional_inputs"] = optional_inputs
-    directives.update(_output_glob_directives(tool))
-    return directives
-
-
-def _scatter_inputs(value: Any) -> list[str]:
-    match value:
+def _output_template(raw_name: Any, definition: Any) -> NfTemplate:
+    output_definition = _as_mapping(definition, error=f"CWL output {raw_name!r} must be a mapping")
+    match output_definition.get("outputBinding"):
         case None:
-            return []
-        case str() as scatter:
-            return [scatter]
-        case list() as scatter if scatter:
-            inputs: list[str] = []
-            for item in scatter:
-                match item:
-                    case str():
-                        inputs.append(item)
-                    case _:
-                        raise ValueError("CWL scatter must be a port name or non-empty list of port names")
-            return inputs
+            raise ValueError(f"CWL output {raw_name!r} must define outputBinding.glob")
+        case Mapping() as binding:
+            pass
         case _:
-            raise ValueError("CWL scatter must be a port name or non-empty list of port names")
-
-
-def _scatter_directives(step: Mapping[str, Any], tool: Mapping[str, Any]) -> dict[str, str]:
-    scatter_inputs = _scatter_inputs(step.get("scatter"))
-    if not scatter_inputs:
-        return {}
-    process_inputs = _as_mapping(tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
-    input_names = {_identifier(name, context="scatter process input") for name in process_inputs}
-    normalized_scatter = [_identifier(name, context="scatter input") for name in scatter_inputs]
-    if missing := set(normalized_scatter) - input_names:
-        raise ValueError(f"scatter references unknown process inputs: {', '.join(sorted(missing))}")
-    match step.get("scatterMethod", "dotproduct"):
-        case str() as scatter_method if scatter_method:
-            return {
-                "_scatter": "true",
-                "_scatter_inputs": ",".join(normalized_scatter),
-                "_scatter_method": scatter_method,
-            }
+            raise ValueError(f"CWL outputBinding for {raw_name!r} must be a mapping")
+    match binding.get("glob"):
+        case None:
+            raise ValueError(f"CWL output {raw_name!r} must define outputBinding.glob")
+        case str() as glob if glob:
+            return _template(glob, context=f"CWL output glob for {raw_name!r}")
+        case str():
+            raise ValueError(f"CWL output glob for {raw_name!r} cannot be empty")
+        case list():
+            raise ValueError(
+                f"CWL output glob lists for {raw_name!r} are deferred beyond Nextflow Phase 1"
+            )
         case _:
-            raise ValueError("CWL scatterMethod must be a non-empty string")
+            raise ValueError(f"CWL output glob for {raw_name!r} must be a string or list")
 
 
 _SUPPORTED_REQUIREMENTS = frozenset({
@@ -424,7 +369,7 @@ _TOOL_CONSUMED_FIELDS = frozenset({
     "stdout",
 }) | _INERT_DOCUMENTATION_FIELDS
 _INPUT_CONSUMED_FIELDS = (
-    frozenset({"inputBinding", "type"}) | _INERT_DOCUMENTATION_FIELDS
+    frozenset({"default", "inputBinding", "type"}) | _INERT_DOCUMENTATION_FIELDS
 )
 _INPUT_BINDING_CONSUMED_FIELDS = frozenset({
     "position",
@@ -456,6 +401,32 @@ _SUPPORTED_REQUIREMENT_FIELDS = {
         "ramMin",
     }),
 }
+_WORKFLOW_CONSUMED_FIELDS = frozenset({
+    "$namespaces",
+    "$schemas",
+    "class",
+    "cwlVersion",
+    "id",
+    "inputs",
+    "outputs",
+    "steps",
+}) | _INERT_DOCUMENTATION_FIELDS
+_WORKFLOW_INPUT_CONSUMED_FIELDS = (
+    frozenset({"default", "type"}) | _INERT_DOCUMENTATION_FIELDS
+)
+_WORKFLOW_OUTPUT_CONSUMED_FIELDS = (
+    frozenset({"outputSource", "type"}) | _INERT_DOCUMENTATION_FIELDS
+)
+_STEP_CONSUMED_FIELDS = frozenset({
+    "id",
+    "in",
+    "out",
+    "run",
+    "scatter",
+    "scatterMethod",
+    "when",
+}) | _INERT_DOCUMENTATION_FIELDS
+_STEP_INPUT_CONSUMED_FIELDS = frozenset({"source"})
 
 
 def _unconsumed_field_findings(
@@ -469,6 +440,29 @@ def _unconsumed_field_findings(
         f"{path}.{field_name}: {field_name} is not consumed by Nextflow Phase 1 lowering"
         for field_name in sorted(set(value) - consumed)
     ]
+
+
+def _phase1_value_matches(cwl_type: Any, value: Any) -> bool:
+    """Return whether a concrete boundary value has the supported runtime shape."""
+    match _required_type(cwl_type), value:
+        case "string", str():
+            return True
+        case "boolean", bool():
+            return True
+        case "int", int() if not isinstance(value, bool):
+            return True
+        case "float", (int() | float()) if not isinstance(value, bool):
+            return True
+        case ("File" | "Directory") as expected, (str() | PathLike()):
+            return True
+        case ("File" | "Directory") as expected, Mapping() as mapping:
+            return (
+                set(mapping) <= {"class", "path"}
+                and mapping.get("class", expected) == expected
+                and isinstance(mapping.get("path"), (str, PathLike))
+            )
+        case _:
+            return False
 
 
 def _requirement_definition(
@@ -577,7 +571,6 @@ def _tool_capability_findings(
                         path=requirement_path,
                     )
                 )
-
     match tool.get("inputs", {}):
         case Mapping() as inputs:
             for raw_name, raw_definition in inputs.items():
@@ -591,6 +584,19 @@ def _tool_capability_findings(
                         path=input_path,
                     )
                 )
+                if "default" in raw_definition and (
+                    raw_definition["default"] is None
+                    or isinstance(raw_definition["default"], (Mapping, list))
+                ):
+                    findings.append(
+                        f"{input_path}.default: Phase 1 supports JSON scalar defaults only"
+                    )
+                elif "default" in raw_definition and not _phase1_value_matches(
+                    raw_definition.get("type"), raw_definition["default"]
+                ):
+                    findings.append(
+                        f"{input_path}.default: value does not match its supported CWL type"
+                    )
                 binding = raw_definition.get("inputBinding")
                 if not isinstance(binding, Mapping):
                     continue
@@ -676,6 +682,112 @@ def _tool_capability_findings(
     return findings
 
 
+def _workflow_capability_findings(
+    workflow: Mapping[str, Any],
+    node_data: NodeData,
+    steps: list[Mapping[str, Any]],
+) -> list[str]:
+    """Apply closed-world analysis to workflow, step, and boundary values."""
+    findings = _unconsumed_field_findings(
+        workflow,
+        consumed=_WORKFLOW_CONSUMED_FIELDS,
+        path="workflow",
+    )
+    provided = _as_mapping(
+        node_data.workflow_inputs_file,
+        error="compiled workflow input values must be a mapping",
+    )
+    match workflow.get("inputs", {}):
+        case Mapping() as inputs:
+            declared_names = {str(name) for name in inputs}
+            for raw_name, definition in inputs.items():
+                input_path = f"workflow.inputs.{raw_name}"
+                if isinstance(definition, Mapping):
+                    findings.extend(
+                        _unconsumed_field_findings(
+                            definition,
+                            consumed=_WORKFLOW_INPUT_CONSUMED_FIELDS,
+                            path=input_path,
+                        )
+                    )
+                    has_default = "default" in definition
+                    default = definition.get("default")
+                    cwl_type = definition.get("type")
+                    if has_default and (
+                        default is None or isinstance(default, (Mapping, list))
+                    ):
+                        findings.append(
+                            f"{input_path}.default: Phase 1 supports JSON scalar defaults only"
+                        )
+                    elif has_default and not _phase1_value_matches(cwl_type, default):
+                        findings.append(
+                            f"{input_path}.default: value does not match its supported CWL type"
+                        )
+                else:
+                    has_default = False
+                    cwl_type = definition
+                if raw_name not in provided and not has_default and not _is_optional(cwl_type):
+                    findings.append(f"{input_path}: required workflow input value is missing")
+                if raw_name in provided and provided[raw_name] is None:
+                    findings.append(
+                        f"{input_path}: explicit null input values are deferred to Phase 2"
+                    )
+                elif raw_name in provided and not _phase1_value_matches(
+                    cwl_type, provided[raw_name]
+                ):
+                    findings.append(
+                        f"{input_path}: supplied value does not match its supported CWL type"
+                    )
+            for extra_name in sorted(set(map(str, provided)) - declared_names):
+                findings.append(
+                    f"workflow.input_values.{extra_name}: value has no declared workflow input"
+                )
+        case _:
+            pass
+
+    match workflow.get("outputs", {}):
+        case Mapping() as outputs:
+            for raw_name, definition in outputs.items():
+                if isinstance(definition, Mapping):
+                    findings.extend(
+                        _unconsumed_field_findings(
+                            definition,
+                            consumed=_WORKFLOW_OUTPUT_CONSUMED_FIELDS,
+                            path=f"workflow.outputs.{raw_name}",
+                        )
+                    )
+        case _:
+            pass
+
+    for step_index, step in enumerate(steps):
+        step_path = f"steps[{step_index}]"
+        findings.extend(
+            _unconsumed_field_findings(
+                step,
+                consumed=_STEP_CONSUMED_FIELDS,
+                path=step_path,
+            )
+        )
+        if "scatterMethod" in step and "scatter" not in step:
+            findings.append(
+                f"{step_path}.scatterMethod: scatterMethod without scatter is not executable"
+            )
+        match step.get("in", {}):
+            case Mapping() as step_inputs:
+                for raw_name, definition in step_inputs.items():
+                    if isinstance(definition, Mapping):
+                        findings.extend(
+                            _unconsumed_field_findings(
+                                definition,
+                                consumed=_STEP_INPUT_CONSUMED_FIELDS,
+                                path=f"{step_path}.in.{raw_name}",
+                            )
+                        )
+            case _:
+                pass
+    return findings
+
+
 def _absent_optional_findings(
     workflow: Mapping[str, Any],
     node_data: NodeData,
@@ -750,16 +862,13 @@ def _process(step: Mapping[str, Any], child: RoseTree) -> NfProcess:
             pass
         case unsupported_class:
             raise ValueError(f"unsupported compiled step class {unsupported_class!r}")
-    directives = _directives(tool)
-    directives.update(_scatter_directives(step, tool))
-
     return NfProcess(
         name=_identifier(step.get("id"), context="workflow step id"),
         inputs=_ports(tool.get("inputs", {}), outputs=False),
         outputs=_ports(tool.get("outputs", {}), outputs=True),
-        script=_script(tool),
+        command=_command(tool),
         container=_container(tool),
-        directives=directives,
+        resources=_resources(tool),
     )
 
 
@@ -828,7 +937,19 @@ def _step_connections(
             destination_port = _identifier(raw_port, context="process input destination")
             for source in _source_values(raw_source, context=f"step input {process.name}.{destination_port}"):
                 source_process, source_port = _source_endpoint(source, step_names)
-                connections.append(NfConnection(source_process, source_port, process.name, destination_port))
+                if source_process is None:
+                    connections.append(
+                        NfWorkflowInputConnection(source_port, process.name, destination_port)
+                    )
+                else:
+                    connections.append(
+                        NfProcessConnection(
+                            source_process,
+                            source_port,
+                            process.name,
+                            destination_port,
+                        )
+                    )
     return connections
 
 
@@ -848,7 +969,14 @@ def _workflow_output_connections(
                 destination_port = _identifier(raw_port, context="workflow output destination")
                 for source in _source_values(output_source, context=f"workflow output {destination_port}"):
                     source_process, source_port = _source_endpoint(source, step_names)
-                    connections.append(NfConnection(source_process, source_port, None, destination_port))
+                    if source_process is None:
+                        raise ValueError(
+                            f"workflow output {destination_port!r} directly forwards a workflow input; "
+                            "boundary passthrough is not executable in Nextflow Phase 1"
+                        )
+                    connections.append(
+                        NfWorkflowOutputConnection(source_process, source_port, destination_port)
+                    )
             case _:
                 raise ValueError(f"workflow output {raw_port!r} must define outputSource")
     return connections
@@ -864,6 +992,30 @@ def _connections(
         *_step_connections(steps, processes, step_names),
         *_workflow_output_connections(workflow, step_names),
     ]
+
+
+def _default_bindings(
+    steps: list[Mapping[str, Any]],
+    sub_trees: list[Any],
+    processes: list[NfProcess],
+) -> tuple[list[NfWorkflowInputConnection], dict[str, Any]]:
+    connections: list[NfWorkflowInputConnection] = []
+    params: dict[str, Any] = {}
+    for step, child, process in zip(steps, sub_trees, processes, strict=True):
+        bound = _as_mapping(step.get("in", {}), error="compiled step inputs must be a mapping")
+        match child:
+            case RoseTree(data=NodeData(compiled_cwl=Mapping() as tool)):
+                inputs = _as_mapping(tool.get("inputs", {}), error="tool inputs must be a mapping")
+            case _:
+                continue
+        for raw_name, definition in inputs.items():
+            if raw_name in bound or not isinstance(definition, Mapping) or "default" not in definition:
+                continue
+            port_name = _identifier(raw_name, context="defaulted process input")
+            param_name = _identifier(f"{process.name}___{port_name}", context="default parameter")
+            connections.append(NfWorkflowInputConnection(param_name, process.name, port_name))
+            params[param_name] = _json_value(definition["default"])
+    return connections, params
 
 
 def _json_value(value: Any) -> Any:
@@ -917,13 +1069,19 @@ def _workflow_params(workflow: Mapping[str, Any], node_data: NodeData) -> dict[s
         node_data.workflow_inputs_file,
         error="compiled workflow input values must be a mapping",
     )
-    return {
-        _identifier(name, context="workflow input name"): _json_value(provided_params.get(name))
-        for name in workflow_inputs
-    }
+    params: dict[str, Any] = {}
+    missing = object()
+    for name, definition in workflow_inputs.items():
+        value = provided_params.get(name, missing)
+        if value is missing and isinstance(definition, Mapping) and "default" in definition:
+            value = definition["default"]
+        elif value is missing:
+            value = None
+        params[_identifier(name, context="workflow input name")] = _json_value(value)
+    return params
 
 
-def cwl_rosetree_to_nextflow(rose_tree: RoseTree) -> NextflowWorkflow:
+def cwl_rosetree_to_nextflow(rose_tree: RoseTree) -> ExecutableNextflowWorkflow:
     """Convert a compiled flat CWL RoseTree without invoking inference again."""
     node_data, sub_trees, workflow = _compiled_workflow(rose_tree)
     steps = _workflow_steps(workflow, child_count=len(sub_trees))
@@ -932,15 +1090,19 @@ def cwl_rosetree_to_nextflow(rose_tree: RoseTree) -> NextflowWorkflow:
         for step_index, (step, child) in enumerate(zip(steps, sub_trees, strict=True))
         for finding in _tool_capability_findings(step, child, step_index=step_index)
     ]
+    findings.extend(_workflow_capability_findings(workflow, node_data, steps))
     findings.extend(_absent_optional_findings(workflow, node_data, steps, sub_trees))
     _raise_capability_findings(findings)
     processes = [
         _process(step, child)
         for step, child in zip(steps, sub_trees, strict=True)
     ]
-    return NextflowWorkflow(
+    default_connections, default_params = _default_bindings(steps, sub_trees, processes)
+    params = _workflow_params(workflow, node_data)
+    params.update(default_params)
+    return ExecutableNextflowWorkflow(
         name=_identifier(node_data.name, context="workflow name"),
         processes=processes,
-        connections=_connections(workflow, list(steps), processes),
-        params=_workflow_params(workflow, node_data),
+        connections=[*_connections(workflow, list(steps), processes), *default_connections],
+        params=params,
     )
