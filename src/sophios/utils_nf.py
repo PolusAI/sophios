@@ -406,7 +406,10 @@ _DEFERRED_REQUIREMENTS = {
     "ShellCommandRequirement": "shell-mode command lowering is deferred to Phase 2",
 }
 
+_INERT_DOCUMENTATION_FIELDS = frozenset({"doc", "label"})
 _TOOL_CONSUMED_FIELDS = frozenset({
+    "$namespaces",
+    "$schemas",
     "arguments",
     "baseCommand",
     "class",
@@ -419,8 +422,10 @@ _TOOL_CONSUMED_FIELDS = frozenset({
     "stderr",
     "stdin",
     "stdout",
-})
-_INPUT_CONSUMED_FIELDS = frozenset({"inputBinding", "type"})
+}) | _INERT_DOCUMENTATION_FIELDS
+_INPUT_CONSUMED_FIELDS = (
+    frozenset({"inputBinding", "type"}) | _INERT_DOCUMENTATION_FIELDS
+)
 _INPUT_BINDING_CONSUMED_FIELDS = frozenset({
     "position",
     "prefix",
@@ -428,7 +433,9 @@ _INPUT_BINDING_CONSUMED_FIELDS = frozenset({
     "shellQuote",
     "valueFrom",
 })
-_OUTPUT_CONSUMED_FIELDS = frozenset({"outputBinding", "type"})
+_OUTPUT_CONSUMED_FIELDS = (
+    frozenset({"outputBinding", "type"}) | _INERT_DOCUMENTATION_FIELDS
+)
 _OUTPUT_BINDING_CONSUMED_FIELDS = frozenset({"glob"})
 _OUTPUT_BINDING_DEFERRED_FIELDS = frozenset({"loadContents", "outputEval"})
 _ARGUMENT_CONSUMED_FIELDS = frozenset({

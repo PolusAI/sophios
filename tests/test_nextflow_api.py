@@ -334,6 +334,81 @@ def test_nf101_t12_rejects_every_unconsumed_tool_field_before_lowering() -> None
 
 
 @pytest.mark.fast
+def test_nf101_t12_ignores_inert_documentation_but_not_semantics() -> None:
+    baseline_tool = _tool(
+        "IDENTITY",
+        inputs={
+            "source": {
+                "type": "File",
+                "inputBinding": {"position": 1},
+            }
+        },
+        outputs={
+            "result": {
+                "type": "File",
+                "outputBinding": {"glob": "result.txt"},
+            }
+        },
+        arguments=[{"position": 2, "valueFrom": "result.txt"}],
+    )
+    documented_tool = copy.deepcopy(baseline_tool)
+    documented_tool.update({
+        "$namespaces": {"edam": "https://edamontology.org/"},
+        "$schemas": ["https://example.org/formats.rdf"],
+        "label": "Identity",
+        "doc": "Copies one file without changing executable semantics.",
+    })
+    documented_tool["inputs"]["source"].update({
+        "label": "Source",
+        "doc": "The file to copy.",
+    })
+    documented_tool["outputs"]["result"].update({
+        "label": "Result",
+        "doc": "The copied file.",
+    })
+
+    workflow = _workflow(
+        [{
+            "id": "IDENTITY",
+            "in": {"source": "source"},
+            "out": ["result"],
+            "run": "IDENTITY.cwl",
+        }],
+        inputs={"source": {"type": "File"}},
+        outputs={"result": {"type": "File", "outputSource": "IDENTITY/result"}},
+    )
+    workflow_inputs = {"source": {"class": "File", "path": "source.txt"}}
+    baseline = cwl_rosetree_to_nextflow(
+        _synthetic_rose(workflow, [baseline_tool], workflow_inputs=workflow_inputs)
+    )
+    documented = cwl_rosetree_to_nextflow(
+        _synthetic_rose(workflow, [documented_tool], workflow_inputs=workflow_inputs)
+    )
+
+    assert documented == baseline
+    assert render_nextflow(documented) == render_nextflow(baseline)
+
+    documented_tool["permanentFailCodes"] = [1]
+    with pytest.raises(ValueError) as error:
+        cwl_rosetree_to_nextflow(
+            _synthetic_rose(workflow, [documented_tool], workflow_inputs=workflow_inputs)
+        )
+    message = str(error.value)
+    assert "steps[0].run.permanentFailCodes" in message
+    for path in (
+        "steps[0].run.$namespaces",
+        "steps[0].run.$schemas",
+        "steps[0].run.label",
+        "steps[0].run.doc",
+        "steps[0].run.inputs.source.label",
+        "steps[0].run.inputs.source.doc",
+        "steps[0].run.outputs.result.label",
+        "steps[0].run.outputs.result.doc",
+    ):
+        assert path not in message
+
+
+@pytest.mark.fast
 def test_nf101_t12_rejects_compiledworkflow_substitution() -> None:
     compiled = CompiledWorkflow("wf", _workflow([]), {})
     with pytest.raises(TypeError, match="RoseTree"):
