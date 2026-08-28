@@ -7,7 +7,7 @@ from typing import Literal
 from hypothesis import given, settings, strategies as st
 import pytest
 
-from sophios.input_output_nf import _render_template, _shell_quote
+from sophios.input_output_nf import _render_template, _shell_quote, render_nextflow
 from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
@@ -18,8 +18,9 @@ from sophios.nf_types import (
     NfProcess,
     NfProcessConnection,
     NfTemplate,
+    NfWorkflowInputConnection,
 )
-from sophios.utils_nf import _command
+from sophios.utils_nf import _command, _normalized_identifiers
 
 
 SURROGATE_CATEGORIES: tuple[Literal["Cs"], ...] = ("Cs",)
@@ -50,6 +51,22 @@ def test_identifier_normalization_is_valid_and_idempotent(value: str) -> None:
     normalized = normalize_nextflow_identifier(value)
     assert is_nextflow_identifier(normalized)
     assert normalize_nextflow_identifier(normalized) == normalized
+
+
+@settings(max_examples=120, deadline=None)
+@given(
+    st.from_regex(r"[a-z][a-z0-9]{0,12}", fullmatch=True),
+    st.from_regex(r"[a-z][a-z0-9]{0,12}", fullmatch=True),
+)
+def test_identifier_normalization_collisions_are_never_last_wins(
+    prefix: str,
+    suffix: str,
+) -> None:
+    with pytest.raises(ValueError, match="normalize to"):
+        _normalized_identifiers(
+            (f"{prefix}-{suffix}", f"{prefix}_{suffix}"),
+            context="workflow input",
+        )
 
 
 @settings(max_examples=200, deadline=None)
@@ -83,6 +100,52 @@ def test_executable_json_roundtrip_is_canonical(params: dict[str, object]) -> No
     assert hydrated == workflow
     assert hydrated.to_json() == workflow.to_json()
     assert json.loads(workflow.to_json())["representation_kind"] == "executable"
+
+
+@settings(max_examples=120, deadline=None)
+@given(SAFE_TEXT)
+def test_path_parameter_script_does_not_depend_on_compiled_value_shape(path: str) -> None:
+    process = NfProcess(
+        "READ",
+        (NfPort("source", "path"),),
+        (),
+        NfCommand((NfTemplate((NfLiteral("true"),)),)),
+    )
+    connections = (NfWorkflowInputConnection("source", "READ", "source"),)
+    from_string = ExecutableNextflowWorkflow(
+        "wf",
+        (process,),
+        connections,
+        {"source": path},
+    )
+    from_mapping = ExecutableNextflowWorkflow(
+        "wf",
+        (process,),
+        connections,
+        {"source": {"class": "File", "path": path}},
+    )
+    assert render_nextflow(from_string) == render_nextflow(from_mapping)
+
+
+@settings(max_examples=60, deadline=None)
+@given(
+    st.lists(st.booleans(), min_size=2, max_size=10).filter(
+        lambda modes: any(modes) and not all(modes)
+    )
+)
+def test_mixed_container_policy_is_unrepresentable(modes: list[bool]) -> None:
+    processes = tuple(
+        NfProcess(
+            f"P{index}",
+            (),
+            (),
+            NfCommand((NfTemplate((NfLiteral("true"),)),)),
+            container="ubuntu:24.04" if containerized else None,
+        )
+        for index, containerized in enumerate(modes)
+    )
+    with pytest.raises(ValueError, match="mixed container execution"):
+        ExecutableNextflowWorkflow("wf", processes, (), {})
 
 
 @settings(max_examples=80, deadline=None)

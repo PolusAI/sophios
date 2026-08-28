@@ -102,10 +102,18 @@ def test_nextflow_cli_target_is_standalone_and_rejects_cwl_modes(
     assert cli.get_args("workflow.wic", ["--target", "nextflow"]).target == "nextflow"
     assert cli.get_args("workflow.wic").target == "cwl"
 
-    for flag in ("--generate_cwl_workflow", "--run_local", "--generate_run_script"):
+    incompatible = (
+        ("--generate_cwl_workflow",),
+        ("--run_local",),
+        ("--generate_run_script",),
+        ("--inputs_file", "inputs.yml"),
+    )
+    for supplied_args in incompatible:
         with pytest.raises(SystemExit, match="2"):
-            cli.get_args("workflow.wic", ["--target", "nextflow", flag])
+            cli.get_args("workflow.wic", ["--target", "nextflow", *supplied_args])
         assert "--target nextflow cannot be combined" in capsys.readouterr().err
+
+    assert cli.get_args("workflow.wic", ["--inputs_file", "inputs.yml"]).inputs_file == "inputs.yml"
 
 
 @pytest.mark.fast

@@ -514,6 +514,12 @@ class ExecutableNextflowWorkflow:
             raise TypeError("workflow connections must use a typed connection variant")
         object.__setattr__(self, "processes", processes)
         object.__setattr__(self, "connections", connections)
+        container_modes = {process.container is not None for process in processes}
+        if len(container_modes) > 1:
+            raise ValueError(
+                "mixed container execution is not supported; "
+                "every process must declare a container or no process may declare one"
+            )
         if not isinstance(self.params, Mapping):
             raise TypeError("workflow params must be a mapping")
         frozen_params = _freeze_json(self.params)
@@ -523,6 +529,11 @@ class ExecutableNextflowWorkflow:
             raise ValueError("workflow params must contain JSON-compatible values") from exc
         object.__setattr__(self, "params", frozen_params)
         self._validate_graph()
+
+    @property
+    def containers_enabled(self) -> bool:
+        """Return the validated workflow-wide container execution policy."""
+        return bool(self.processes) and self.processes[0].container is not None
 
     def _validate_graph(self) -> None:
         process_by_name = {process.name: process for process in self.processes}

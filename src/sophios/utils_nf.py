@@ -1,6 +1,6 @@
 """Convert compiled Sophios RoseTrees into the Nextflow intermediate representation."""
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 import copy
 from os import PathLike
 import re
@@ -39,6 +39,43 @@ def _identifier(value: Any, *, context: str) -> str:
     while identifier in NF_INTERNAL_IDENTIFIERS:
         identifier = f"_{identifier}"
     return identifier
+
+
+def _normalized_identifiers(values: Iterable[Any], *, context: str) -> dict[Any, str]:
+    """Normalize source identifiers and reject every many-to-one mapping."""
+    normalized_by_source: dict[Any, str] = {}
+    sources_by_normalized: dict[str, list[Any]] = {}
+    for source in values:
+        normalized = _identifier(source, context=f"{context} identifier")
+        normalized_by_source[source] = normalized
+        sources_by_normalized.setdefault(normalized, []).append(source)
+
+    collisions = [
+        (normalized, sorted(sources, key=str))
+        for normalized, sources in sources_by_normalized.items()
+        if len(sources) > 1
+    ]
+    if collisions:
+        details = "; ".join(
+            f"{', '.join(repr(source) for source in sources)} normalize to {normalized!r}"
+            for normalized, sources in sorted(collisions)
+        )
+        raise ValueError(f"{context} identifiers {details}")
+    return normalized_by_source
+
+
+def _identifier_normalization_findings(
+    values: Iterable[Any],
+    *,
+    context: str,
+    path: str,
+) -> list[str]:
+    """Return a capability finding when source names collapse during normalization."""
+    try:
+        _normalized_identifiers(values, context=context)
+    except ValueError as exc:
+        return [f"{path}: {exc}"]
+    return []
 
 
 def _as_mapping(value: Any, *, error: str) -> Mapping[str, Any]:
@@ -573,6 +610,13 @@ def _tool_capability_findings(
                 )
     match tool.get("inputs", {}):
         case Mapping() as inputs:
+            findings.extend(
+                _identifier_normalization_findings(
+                    inputs,
+                    context="tool input",
+                    path=f"{path}.run.inputs",
+                )
+            )
             for raw_name, raw_definition in inputs.items():
                 if not isinstance(raw_definition, Mapping):
                     continue
@@ -638,6 +682,13 @@ def _tool_capability_findings(
 
     match tool.get("outputs", {}):
         case Mapping() as outputs:
+            findings.extend(
+                _identifier_normalization_findings(
+                    outputs,
+                    context="tool output",
+                    path=f"{path}.run.outputs",
+                )
+            )
             for raw_name, raw_definition in outputs.items():
                 if not isinstance(raw_definition, Mapping):
                     continue
@@ -699,6 +750,13 @@ def _workflow_capability_findings(
     )
     match workflow.get("inputs", {}):
         case Mapping() as inputs:
+            findings.extend(
+                _identifier_normalization_findings(
+                    inputs,
+                    context="workflow input",
+                    path="workflow.inputs",
+                )
+            )
             declared_names = {str(name) for name in inputs}
             for raw_name, definition in inputs.items():
                 input_path = f"workflow.inputs.{raw_name}"
@@ -747,6 +805,13 @@ def _workflow_capability_findings(
 
     match workflow.get("outputs", {}):
         case Mapping() as outputs:
+            findings.extend(
+                _identifier_normalization_findings(
+                    outputs,
+                    context="workflow output",
+                    path="workflow.outputs",
+                )
+            )
             for raw_name, definition in outputs.items():
                 if isinstance(definition, Mapping):
                     findings.extend(
@@ -1070,6 +1135,7 @@ def _workflow_params(workflow: Mapping[str, Any], node_data: NodeData) -> dict[s
         error="compiled workflow input values must be a mapping",
     )
     params: dict[str, Any] = {}
+    normalized_names = _normalized_identifiers(workflow_inputs, context="workflow input")
     missing = object()
     for name, definition in workflow_inputs.items():
         value = provided_params.get(name, missing)
@@ -1077,8 +1143,33 @@ def _workflow_params(workflow: Mapping[str, Any], node_data: NodeData) -> dict[s
             value = definition["default"]
         elif value is missing:
             value = None
-        params[_identifier(name, context="workflow input name")] = _json_value(value)
+        params[normalized_names[name]] = _json_value(value)
     return params
+
+
+def _container_policy_findings(sub_trees: list[Any]) -> list[str]:
+    """Require one workflow-wide host or container execution policy."""
+    containerized: list[int] = []
+    host: list[int] = []
+    for step_index, child in enumerate(sub_trees):
+        match child:
+            case RoseTree(data=NodeData(compiled_cwl=Mapping() as tool)):
+                requirement_names = [
+                    class_name
+                    for section_name in ("requirements", "hints")
+                    for class_name, _suffix in _requirement_names(tool.get(section_name))
+                ]
+                target = containerized if "DockerRequirement" in requirement_names else host
+                target.append(step_index)
+            case _:
+                continue
+    if not containerized or not host:
+        return []
+    return [
+        "workflow.steps: mixed container execution is not supported; "
+        "DockerRequirement must be declared by every process or by none "
+        f"(containerized steps: {containerized}; host steps: {host})"
+    ]
 
 
 def cwl_rosetree_to_nextflow(rose_tree: RoseTree) -> ExecutableNextflowWorkflow:
@@ -1092,6 +1183,7 @@ def cwl_rosetree_to_nextflow(rose_tree: RoseTree) -> ExecutableNextflowWorkflow:
     ]
     findings.extend(_workflow_capability_findings(workflow, node_data, steps))
     findings.extend(_absent_optional_findings(workflow, node_data, steps, sub_trees))
+    findings.extend(_container_policy_findings(sub_trees))
     _raise_capability_findings(findings)
     processes = [
         _process(step, child)
@@ -1099,6 +1191,11 @@ def cwl_rosetree_to_nextflow(rose_tree: RoseTree) -> ExecutableNextflowWorkflow:
     ]
     default_connections, default_params = _default_bindings(steps, sub_trees, processes)
     params = _workflow_params(workflow, node_data)
+    if collisions := sorted(set(params) & set(default_params)):
+        raise ValueError(
+            "lowered workflow parameter names collide: "
+            f"{', '.join(collisions)}"
+        )
     params.update(default_params)
     return ExecutableNextflowWorkflow(
         name=_identifier(node_data.name, context="workflow name"),

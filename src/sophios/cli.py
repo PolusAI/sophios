@@ -144,6 +144,7 @@ def validate_target_args(args: argparse.Namespace) -> None:
             ('--generate_cwl_workflow', args.generate_cwl_workflow),
             ('--run_local', args.run_local),
             ('--generate_run_script', args.generate_run_script),
+            ('--inputs_file', bool(args.inputs_file)),
         )
         if enabled
     ]

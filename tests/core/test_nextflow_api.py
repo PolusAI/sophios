@@ -16,6 +16,7 @@ from sophios import inference
 from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
 from sophios.input_output_nf import (
     render_nextflow,
+    render_nextflow_config,
     write_nextflow_artifacts,
 )
 from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
@@ -652,6 +653,48 @@ def test_nf101_t12_rejects_undeclared_workflow_input_values() -> None:
 
 
 @pytest.mark.fast
+def test_nf101_t12_rejects_workflow_input_identifier_collisions() -> None:
+    rose = _synthetic_rose(
+        _workflow(
+            [],
+            inputs={
+                "out-dir": {"type": "string"},
+                "out_dir": {"type": "string"},
+            },
+        ),
+        [],
+        workflow_inputs={"out-dir": "first", "out_dir": "second"},
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"workflow input identifiers 'out-dir', 'out_dir'.*normalize to 'out_dir'",
+    ):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_nf101_t12_rejects_tool_port_identifier_collisions() -> None:
+    tool = _tool(
+        "COLLISION",
+        inputs={
+            "out-dir": {"type": "string", "default": "first"},
+            "out_dir": {"type": "string", "default": "second"},
+        },
+    )
+    rose = _synthetic_rose(
+        _workflow([
+            {"id": "COLLISION", "in": {}, "out": [], "run": "COLLISION.cwl"},
+        ]),
+        [tool],
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"tool input identifiers 'out-dir', 'out_dir'.*normalize to 'out_dir'",
+    ):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
 @pytest.mark.parametrize(
     ("cwl_type", "value"),
     [
@@ -791,6 +834,33 @@ def test_nf101_t13_applies_unwired_scalar_default_before_lowering() -> None:
 
 
 @pytest.mark.fast
+def test_nf101_t13_rejects_collisions_between_source_and_default_params() -> None:
+    tool = _tool(
+        "DEFAULT",
+        inputs={
+            "message": {
+                "type": "string",
+                "default": "tool default",
+                "inputBinding": {"position": 1},
+            }
+        },
+    )
+    rose = _synthetic_rose(
+        _workflow(
+            [{"id": "DEFAULT", "in": {}, "out": [], "run": "DEFAULT.cwl"}],
+            inputs={"DEFAULT___message": {"type": "string"}},
+        ),
+        [tool],
+        workflow_inputs={"DEFAULT___message": "workflow value"},
+    )
+    with pytest.raises(
+        ValueError,
+        match="lowered workflow parameter names collide: DEFAULT___message",
+    ):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
 def test_nf101_t13_rejects_output_glob_outside_typed_input_subset() -> None:
     tool = _tool(
         "BAD_GLOB",
@@ -820,6 +890,24 @@ def test_nf101_t13_maps_docker_requirement() -> None:
         [tool],
     )
     assert cwl_rosetree_to_nextflow(rose).processes[0].container == "ubuntu:24.04"
+
+
+@pytest.mark.fast
+def test_nf101_t13_rejects_mixed_container_execution_policy() -> None:
+    containerized = _tool(
+        "CONTAINERIZED",
+        requirements={"DockerRequirement": {"dockerPull": "ubuntu:24.04"}},
+    )
+    host = _tool("HOST")
+    rose = _synthetic_rose(
+        _workflow([
+            {"id": "CONTAINERIZED", "in": {}, "out": [], "run": "CONTAINERIZED.cwl"},
+            {"id": "HOST", "in": {}, "out": [], "run": "HOST.cwl"},
+        ]),
+        [containerized, host],
+    )
+    with pytest.raises(ValueError, match="mixed container execution is not supported"):
+        cwl_rosetree_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1051,6 +1139,62 @@ def test_nf102_t21_renders_supported_process_metadata() -> None:
 
 
 @pytest.mark.serial
+def test_nf102_t21_path_parameter_rendering_is_runtime_shape_independent() -> None:
+    process = NfProcess(
+        "READ",
+        [NfPort("source", "path")],
+        [],
+        _command("true"),
+    )
+    connections = [NfWorkflowInputConnection("source", "READ", "source")]
+    from_string = ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        connections,
+        {"source": "input.txt"},
+    )
+    from_mapping = ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        connections,
+        {"source": {"class": "File", "path": "input.txt"}},
+    )
+
+    rendered = render_nextflow(from_string)
+    assert rendered == render_nextflow(from_mapping)
+    assert (
+        "Channel.fromPath(params.source instanceof Map ? params.source.path : "
+        "params.source, checkIfExists: true)"
+    ) in rendered
+
+
+@pytest.mark.fast
+def test_nf102_t21_executable_ir_rejects_mixed_container_policy() -> None:
+    containerized = NfProcess("CONTAINERIZED", [], [], _command("true"), container="ubuntu:24.04")
+    host = NfProcess("HOST", [], [], _command("true"))
+    with pytest.raises(ValueError, match="mixed container execution is not supported"):
+        ExecutableNextflowWorkflow("WF", [containerized, host], [], {})
+
+
+@pytest.mark.fast
+def test_nf102_t21_config_uses_validated_workflow_container_policy() -> None:
+    host = ExecutableNextflowWorkflow(
+        "HOST_WF",
+        [NfProcess("HOST", [], [], _command("true"))],
+        [],
+        {},
+    )
+    containerized = ExecutableNextflowWorkflow(
+        "CONTAINER_WF",
+        [NfProcess("CONTAINER", [], [], _command("true"), container="ubuntu:24.04")],
+        [],
+        {},
+    )
+    assert render_nextflow_config(host) == "docker.enabled = false\n"
+    assert render_nextflow_config(containerized) == "docker.enabled = true\n"
+
+
+@pytest.mark.serial
 def test_nf102_t21_rejects_cyclic_or_multiply_connected_dags() -> None:
     a = NfProcess(
         "A",
@@ -1180,3 +1324,35 @@ def test_nf102_t21_real_compiler_preserves_adversarial_argument(tmp_path: Path) 
     outputs = list((tmp_path / "work").rglob("result.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == [value]
     assert not list(tmp_path.rglob("SHOULD_NOT_EXIST"))
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_nf102_t21_file_object_parameter_executes_with_runtime_shape_dispatch(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.txt"
+    source.write_text("runtime file object\n", encoding="utf-8")
+    copy_process = NfProcess(
+        "COPY",
+        [NfPort("source", "path")],
+        [_output("result", "result.txt")],
+        NfCommand((
+            NfTemplate((NfLiteral("cp"),)),
+            NfTemplate((NfInputReference("source"),)),
+            NfTemplate((NfLiteral("result.txt"),)),
+        )),
+    )
+    workflow = ExecutableNextflowWorkflow(
+        "WF",
+        [copy_process],
+        [NfWorkflowInputConnection("source", "COPY", "source")],
+        {"source": {"class": "File", "path": str(source)}},
+    )
+
+    result = _run_nextflow(workflow, tmp_path / "run")
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "run" / "work").rglob("result.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == [
+        "runtime file object\n"
+    ]

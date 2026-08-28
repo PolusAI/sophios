@@ -252,13 +252,11 @@ def _workflow_input_port(
 
 def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> str:
     process, port = _workflow_input_port(workflow, name)
-    value: Any = workflow.params.get(name)
     if port.qualifier == "path":
-        if isinstance(value, (list, tuple)):
-            return f"Channel.fromPath(params.{name}.collect {{ it.path ?: it }}, checkIfExists: true)"
-        if isinstance(value, Mapping):
-            return f"Channel.fromPath(params.{name}.path, checkIfExists: true)"
-        return f"Channel.fromPath(params.{name}, checkIfExists: true)"
+        return (
+            f"Channel.fromPath(params.{name} instanceof Map ? params.{name}.path : "
+            f"params.{name}, checkIfExists: true)"
+        )
     return f"Channel.value(params.{name})"
 
 
@@ -282,8 +280,7 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
 def render_nextflow_config(workflow: ExecutableNextflowWorkflow) -> str:
     """Render the deterministic executor configuration."""
     _require_executable(workflow)
-    docker_enabled = any(process.container for process in workflow.processes)
-    return f"docker.enabled = {str(docker_enabled).lower()}\n"
+    return f"docker.enabled = {str(workflow.containers_enabled).lower()}\n"
 
 
 def render_nextflow_params(workflow: ExecutableNextflowWorkflow) -> str:
