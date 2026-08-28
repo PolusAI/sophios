@@ -1,4 +1,4 @@
-name: Nextflow Phase 1
+name: Nextflow Backend
 
 on:
   push:
