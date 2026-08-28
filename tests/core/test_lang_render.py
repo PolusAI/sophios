@@ -1,11 +1,11 @@
-"""Properties of the Sophios renderer (CR-101, T1.3).
+"""Properties of the Sophios renderer.
 
 Rendering is the inverse of parsing. Having both is what makes the syntax layer
 checkable, because a round-trip either reproduces the document or proves one of
 the two wrong about the language.
 
 Properties covered:
-  P02  parse(render(ast)) == ast
+  parse(render(ast)) == ast
 
 See design_docs/core-refactor-design.md, Spec 1.
 """
@@ -124,7 +124,7 @@ def awkward_literal_documents(draw: st.DrawFn) -> str:
     exists only to hammer quoting. The structural round-trip quantifies over
     the full language via the parser suite's generator — a second, narrower
     `documents()` here is exactly how outputs and nested sidecars once became
-    invisible to P02 (see the PR #382 review cycle).
+    invisible to the round-trip property (see the PR #382 review cycle).
     """
     lines = ['steps:']
     for _ in range(draw(st.integers(min_value=1, max_value=3))):
@@ -155,8 +155,8 @@ def awkward_literal_documents(draw: st.DrawFn) -> str:
 @example('wic:\n  steps:\n    (1, o):\n      wic:\n        namespace: dna\n')  # nested wrapper
 @example('wic:\n  steps:\n    (1, o):\n      wic: {}\n')          # empty child sidecar: {} not null
 @FAST
-def test_p02_round_trip_preserves_structure(source: str) -> None:
-    """P02: parsing a rendered document reproduces the document.
+def test_round_trip_preserves_structure(source: str) -> None:
+    """Parsing a rendered document reproduces the document.
 
     Quantified over the shared full-language generator (both step forms,
     both spellings, outputs, nested sidecars) plus the quoting-hostile
@@ -242,7 +242,8 @@ def test_empty_document_renders_empty() -> None:
 def test_nested_sidecar_wrapper_survives_rendering() -> None:
     """The renderer re-wraps what the parser unwraps — asymmetry test.
 
-    P02 is structurally blind here: the parser tolerates the missing wrapper
+    The round-trip property is structurally blind here: the parser tolerates
+    the missing wrapper
     in the renderer's own output, so the round-trip holds even when rendering
     is a semantic edit. Every downstream consumer reads through the wrapper
     explicitly, which is why its loss changes what a workflow means.

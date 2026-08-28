@@ -1,10 +1,9 @@
-"""Properties of the exported JSON Schema (CR-101, T1.3).
+"""Properties of the exported JSON Schema.
 
-Properties covered:
-  P09  the exported schema accepts what the AST accepts, and rejects the
-       structural mistakes the parser reports
+The claim under test: the exported schema accepts what the AST accepts, and
+rejects the structural mistakes the parser reports.
 
-WHAT P09 CAN AND CANNOT CLAIM. The schema is a deliberate over-approximation,
+WHAT THE CLAIM CAN AND CANNOT SAY. The schema is a deliberate over-approximation,
 for two reasons that come from the language rather than from this test:
 
   * JSON has no YAML tags, so the schema describes the desugared projection.
@@ -82,15 +81,15 @@ def test_schema_is_not_shared_between_callers() -> None:
 
 
 # --------------------------------------------------------------------------
-# P09, forward: everything the parser accepts, the schema accepts
+# Forward: everything the parser accepts, the schema accepts
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.fast
 @given(documents())
 @FAST
-def test_p09_accepts_every_document_the_parser_accepts(source: str) -> None:
-    """P09: a parsed document's JSON projection validates — and IS JSON.
+def test_accepts_every_document_the_parser_accepts(source: str) -> None:
+    """A parsed document's JSON projection validates — and IS JSON.
 
     Both halves matter, and only together are they the claim: `jsonschema`
     is duck-typed and will happily "validate" live Python objects that
@@ -106,8 +105,8 @@ def test_p09_accepts_every_document_the_parser_accepts(source: str) -> None:
 
 @pytest.mark.fast
 @pytest.mark.parametrize('path', CORPUS, ids=corpus_id)
-def test_p09_accepts_the_whole_corpus(path: Path) -> None:
-    """P09: every real `.wic` in the repository validates against the schema."""
+def test_accepts_the_whole_corpus(path: Path) -> None:
+    """Every real `.wic` in the repository validates against the schema."""
     result = parse(path.read_text(encoding='utf-8'), str(path))
     assert result.document is not None
     data = to_json(result.document)
@@ -115,7 +114,7 @@ def test_p09_accepts_the_whole_corpus(path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# P09, reverse: the structural mistakes the parser reports, the schema rejects
+# Reverse: the structural mistakes the parser reports, the schema rejects
 # --------------------------------------------------------------------------
 #
 # Each case is a shape the parser emits a diagnostic for. Both halves are
@@ -135,8 +134,8 @@ STRUCTURAL_VIOLATIONS: list[tuple[str, str, Any]] = [
 
 @pytest.mark.fast
 @pytest.mark.parametrize('label,source,projection', STRUCTURAL_VIOLATIONS, ids=[c[0] for c in STRUCTURAL_VIOLATIONS])
-def test_p09_rejects_what_the_parser_reports(label: str, source: str, projection: Any) -> None:
-    """P09 reverse: parser and schema agree on the structural mistakes."""
+def test_rejects_what_the_parser_reports(label: str, source: str, projection: Any) -> None:
+    """Reverse direction: parser and schema agree on the structural mistakes."""
     assert not parse(source, 'bad.wic').ok, f'parser accepted {label!r}'
     assert not _accepts(projection), f'schema accepted {label!r}'
 

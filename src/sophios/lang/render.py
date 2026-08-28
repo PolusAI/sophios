@@ -1,8 +1,8 @@
 """Write a Sophios AST back out, in either of the YAML surface's two spellings.
 
 Rendering is the inverse of parsing, and having both is what makes the syntax
-layer checkable — the exactness of that claim is enforced by the P02 property
-in `tests/core/test_lang_render.py`, which is the claim's single home.
+layer checkable — the exactness of that claim is enforced by the round-trip
+property in `tests/core/test_lang_render.py`, which is the claim's single home.
 
 Design, after the PR #383 review:
 

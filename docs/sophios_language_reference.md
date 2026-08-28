@@ -159,7 +159,7 @@ A step input is exactly one of these. There is no sixth form.
 | Inline literal | `f: !ii empty.txt` | A literal value. Never an edge. |
 | Edge definition | `f: !& name` | Defines an explicit edge at this point |
 | Edge reference | `f: !* name` | Consumes an edge defined elsewhere |
-| Raw CWL reference | `f: !cwl step/out` | Opaque to Sophios; passed through unresolved. **Not yet usable — CR-104** |
+| Raw CWL reference | `f: !cwl step/out` | Opaque to Sophios; passed through unresolved. **Not yet usable — awaits the Spec 3 compiler migration** |
 | Unresolved name | `f: some_input` | Must resolve to a workflow input |
 
 An untagged bare string is an **unresolved name**. If it does not name a
@@ -278,7 +278,7 @@ desugared spelling.
 **`.wic` files** are the YAML surface as written. They are parsed by
 `sophios.lang.parse`, which accepts both spellings above, and written by
 `sophios.lang.render`, which emits the tagged one. The two are inverses —
-a claim that lives as the P02 property in `tests/core/test_lang_render.py`,
+a claim that lives as the round-trip property in `tests/core/test_lang_render.py`,
 its single home, so a disagreement between this text and the implementation
 shows up as a test failure rather than as three subtly different sentences.
 

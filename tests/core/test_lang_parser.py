@@ -1,14 +1,12 @@
-"""Properties of the Sophios syntax layer (CR-101).
+"""Properties of the Sophios syntax layer.
 
 Acceptance here is property-based. The unit tests at the end are sanity checks
 on wiring and obvious errors; they are not evidence that the parser is correct.
 
-Properties covered:
-  P03  every AST node carries a resolvable source span
-  P04  parsing never raises; it returns an AST or diagnostics
-  P05  InputValue is closed — no value escapes the five forms
-  P06  every diagnostic span indexes real source text
-  P07  every corpus document parses
+The claims under test, one property each: every AST node carries a resolvable
+source span; parsing never raises — it returns an AST or diagnostics;
+InputValue is closed, so no value escapes the five forms; every diagnostic
+span indexes real source text; and every corpus document parses.
 
 See design_docs/core-refactor-design.md, Spec 1.
 """
@@ -228,8 +226,8 @@ def _resolvable(span: SourceSpan, text: str) -> bool:
 @pytest.mark.fast
 @given(st.text(max_size=400))
 @FAST
-def test_p04_parsing_is_total_for_arbitrary_text(text: str) -> None:
-    """P04: parsing never raises, whatever it is handed."""
+def test_parsing_is_total_for_arbitrary_text(text: str) -> None:
+    """Parsing never raises, whatever it is handed."""
     result = parse(text, 'fuzz.wic')
     assert result.document is not None or len(result.diagnostics) > 0
 
@@ -237,8 +235,8 @@ def test_p04_parsing_is_total_for_arbitrary_text(text: str) -> None:
 @pytest.mark.fast
 @given(documents())
 @FAST
-def test_p04_well_formed_documents_parse(source: str) -> None:
-    """P04: a syntactically valid document yields a document and no errors."""
+def test_well_formed_documents_parse(source: str) -> None:
+    """A syntactically valid document yields a document and no errors."""
     result = parse(source, 'gen.wic')
     assert result.ok, [str(d) for d in result.diagnostics]
 
@@ -246,8 +244,8 @@ def test_p04_well_formed_documents_parse(source: str) -> None:
 @pytest.mark.fast
 @given(documents())
 @FAST
-def test_p03_every_node_carries_a_resolvable_span(source: str) -> None:
-    """P03: every span in the tree points at real source."""
+def test_every_node_carries_a_resolvable_span(source: str) -> None:
+    """Every span in the tree points at real source."""
     result = parse(source, 'gen.wic')
     assert result.document is not None
     spans = _spans(result.document)
@@ -259,8 +257,8 @@ def test_p03_every_node_carries_a_resolvable_span(source: str) -> None:
 @pytest.mark.fast
 @given(documents())
 @FAST
-def test_p05_input_values_are_closed(source: str) -> None:
-    """P05: every input value is one of the five declared forms."""
+def test_input_values_are_closed(source: str) -> None:
+    """Every input value is one of the five declared forms."""
     permitted = get_args(InputValue)
     result = parse(source, 'gen.wic')
     assert result.document is not None
@@ -272,8 +270,8 @@ def test_p05_input_values_are_closed(source: str) -> None:
 @pytest.mark.fast
 @given(st.text(max_size=400))
 @FAST
-def test_p06_diagnostic_spans_index_real_source(text: str) -> None:
-    """P06: a diagnostic never points outside the document it describes."""
+def test_diagnostic_spans_index_real_source(text: str) -> None:
+    """A diagnostic never points outside the document it describes."""
     for diagnostic in parse(text, 'fuzz.wic').diagnostics:
         assert diagnostic.span.file == 'fuzz.wic'
         assert diagnostic.span.start_line >= 1
@@ -283,8 +281,8 @@ def test_p06_diagnostic_spans_index_real_source(text: str) -> None:
 
 @pytest.mark.fast
 @pytest.mark.parametrize('path', CORPUS, ids=corpus_id)
-def test_p07_corpus_files_parse(path: Path) -> None:
-    """P07: every `.wic` in the repository corpus parses without error.
+def test_corpus_files_parse(path: Path) -> None:
+    """Every `.wic` in the repository corpus parses without error.
 
     This is what makes "the specification accepts what exists today"
     falsifiable rather than an aspiration.
@@ -296,7 +294,7 @@ def test_p07_corpus_files_parse(path: Path) -> None:
 
 @pytest.mark.fast
 def test_corpus_is_not_empty() -> None:
-    """Discovery must find workflows, or P07 passes vacuously.
+    """Discovery must find workflows, or the corpus property passes vacuously.
 
     The corpus is whatever `search_paths_wic` reaches — the same discovery the
     compiler uses, so there is nothing separate to keep complete. An empty
@@ -549,13 +547,13 @@ def test_diagnostics_slices_are_diagnostics() -> None:
     assert len(result.diagnostics[0:1]) == 1
 
 # --------------------------------------------------------------------------
-# Offline review round two (P1, P2, P3, P5, N1)
+# Pins from the second offline review round of #382
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.fast
 def test_sidecar_nesting_is_normalised_at_every_depth() -> None:
-    """P1: `(index, name)` keys are StepKeys at depth two, not opaque strings.
+    """`(index, name)` keys are StepKeys at depth two, not opaque strings.
 
     The child sidecar arrives wrapped in a `wic:` key on the surface; the
     parser descends through it, or `StepKey`'s "nothing downstream should
@@ -578,7 +576,7 @@ def test_sidecar_nesting_is_normalised_at_every_depth() -> None:
 
 @pytest.mark.fast
 def test_the_loader_accepts_every_owned_tag() -> None:
-    """P2: `!cwl` is registered with the loader like its three siblings.
+    """`!cwl` is registered with the loader like its three siblings.
 
     The agreement property below quantifies over this; the targeted case is
     pinned so a regression names itself instead of surfacing as a fuzz flake.
@@ -603,8 +601,8 @@ def test_alias_cycles_are_reported(source: str) -> None:
 
 
 @pytest.mark.fast
-def test_p04_alias_expansion_is_bounded() -> None:
-    """P3: a widening alias chain is cut off by budget, quickly, once."""
+def test_alias_expansion_is_bounded() -> None:
+    """A widening alias chain is cut off by budget, quickly, once."""
     laughs = 'a0: &a0 [x, x, x, x, x, x, x, x, x]\n'
     for i in range(1, 8):
         refs = ', '.join([f'*a{i-1}'] * 9)
@@ -619,7 +617,7 @@ def test_p04_alias_expansion_is_bounded() -> None:
 
 @pytest.mark.fast
 def test_out_values_are_never_silently_dropped() -> None:
-    """P5: a non-!& out value is reported; both edge spellings are honoured."""
+    """A non-!& out value is reported; both edge spellings are honoured."""
     dropped = parse('steps:\n- id: s\n  out:\n  - file: something\n', 'x.wic')
     assert not dropped.ok
     assert any('file' in d.message for d in dropped.diagnostics)
@@ -638,7 +636,8 @@ def test_out_values_are_never_silently_dropped() -> None:
 #
 # `st.text()` almost never forms valid YAML with aliases, so quantifying
 # totality over it left the entire anchor/alias class untested: cycles raised
-# RecursionError and widening chains exhausted memory while P04 stayed green.
+# RecursionError and widening chains exhausted memory while the totality
+# property stayed green.
 # These strategies generate *structured* YAML — anchors, aliases (including
 # self-referential ones), tags known and unknown, deep nesting — so the
 # property covers the inputs that actually break parsers.
@@ -698,8 +697,8 @@ def adversarial_yaml(draw: st.DrawFn) -> str:
 @example('a: !cwl b\n')                                   # the once-missing loader constructor
 @example('_: !ii {k: v}\n')                               # collection literal, single wrap
 @FAST
-def test_p04_parsing_is_total_for_adversarial_structure(text: str) -> None:
-    """P04, the half the review proved missing: totality over real YAML
+def test_parsing_is_total_for_adversarial_structure(text: str) -> None:
+    """The half of totality the review proved missing: totality over real YAML
     structure — aliases, cycles, unknown tags, nesting — not just over text.
 
     Never raises; never accepts silently what the loader rejects; and never
@@ -771,8 +770,8 @@ def test_every_code_has_a_registered_provocation() -> None:
     registered = set(provocations.PARSE) | set(provocations.COMPILED)
     missing = set(Code) - registered
     doubled = set(provocations.PARSE) & set(provocations.COMPILED)
-    assert not missing, f'codes with no registered provocation: {sorted(c.name for c in missing)}'
-    assert not doubled, f'codes registered in both tiers: {sorted(c.name for c in doubled)}'
+    assert not missing, f'codes with no registered provocation: {sorted(map(str, missing))}'
+    assert not doubled, f'codes registered in both tiers: {sorted(map(str, doubled))}'
 
 
 @pytest.mark.fast

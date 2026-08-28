@@ -6,8 +6,8 @@ installed. Name resolution and type checking are separate, environment-
 dependent concerns.
 
 `parse` and `render` are inverses. That claim lives in exactly one place —
-the P02 property in `tests/core/test_lang_render.py` — and this line is a
-pointer to it, not a second copy that can drift.
+the round-trip property in `tests/core/test_lang_render.py` — and this line
+is a pointer to it, not a second copy that can drift.
 
 See design_docs/core-refactor-design.md, Spec 1.
 """

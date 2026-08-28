@@ -1,4 +1,4 @@
-"""Core/contrib zone boundary (CR-001, property P01).
+"""Core/contrib zone boundary: core never imports contrib.
 
 The core compiler must never acquire a dependency on the peripheral surfaces.
 See design_docs/core-refactor-design.md, Spec 0:
@@ -130,7 +130,7 @@ def _reachable(start: str, graph: dict[str, set[str]]) -> set[str]:
 
 @pytest.mark.fast
 def test_core_never_imports_contrib() -> None:
-    """P01: no core module reaches a contrib module through any import path."""
+    """No core module reaches a contrib module through any import path."""
     graph = _import_graph()
     core = [m for m in graph if not _is_contrib(m)]
     assert core, 'no core modules discovered; the zone scan is broken'
