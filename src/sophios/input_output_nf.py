@@ -241,17 +241,17 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
 def _workflow_input_port(
     workflow: ExecutableNextflowWorkflow,
     name: str,
-) -> tuple[NfProcess, NfPort]:
+) -> NfPort:
     processes = _process_map(workflow)
     for connection in workflow.connections:
         if isinstance(connection, NfWorkflowInputConnection) and connection.from_port == name:
             process = processes[connection.to_process]
-            return process, next(port for port in process.inputs if port.name == connection.to_port)
+            return next(port for port in process.inputs if port.name == connection.to_port)
     raise ValueError(f"workflow input {name!r} is not connected")
 
 
 def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> str:
-    process, port = _workflow_input_port(workflow, name)
+    port = _workflow_input_port(workflow, name)
     if port.qualifier == "path":
         return (
             f"Channel.fromPath(params.{name} instanceof Map ? params.{name}.path : "

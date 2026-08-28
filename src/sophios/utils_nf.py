@@ -860,6 +860,18 @@ def _absent_optional_findings(
     sub_trees: list[Any],
 ) -> list[str]:
     """Reject optional inputs whose compiled workflow value is absent."""
+    workflow_inputs = _as_mapping(
+        workflow.get("inputs", {}),
+        error="compiled CWL Workflow inputs must be a mapping",
+    )
+    if _identifier_normalization_findings(
+        workflow_inputs,
+        context="workflow input",
+        path="workflow.inputs",
+    ):
+        # The capability pass already owns this diagnostic.  There is no
+        # unambiguous parameter lookup for the optional-input analysis.
+        return []
     params = _workflow_params(workflow, node_data)
     findings: list[str] = []
     for step_index, (step, child) in enumerate(zip(steps, sub_trees, strict=True)):

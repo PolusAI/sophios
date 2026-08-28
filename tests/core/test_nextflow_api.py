@@ -673,6 +673,38 @@ def test_nf101_t12_rejects_workflow_input_identifier_collisions() -> None:
 
 
 @pytest.mark.fast
+def test_nf101_t12_aggregates_workflow_input_collisions_with_other_findings() -> None:
+    tool = _tool("COLLISION")
+    rose = _synthetic_rose(
+        _workflow(
+            [
+                {
+                    "id": "COLLISION",
+                    "in": {},
+                    "out": [],
+                    "run": "COLLISION.cwl",
+                    "unknown_field": True,
+                }
+            ],
+            inputs={
+                "out-dir": {"type": "string"},
+                "out_dir": {"type": "string"},
+            },
+        ),
+        [tool],
+        workflow_inputs={"out-dir": "first", "out_dir": "second"},
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        cwl_rosetree_to_nextflow(rose)
+
+    diagnostic = str(exc_info.value)
+    assert diagnostic.startswith("Nextflow Phase 1 capability analysis failed:\n")
+    assert "workflow.inputs: workflow input identifiers" in diagnostic
+    assert "steps[0].unknown_field" in diagnostic
+
+
+@pytest.mark.fast
 def test_nf101_t12_rejects_tool_port_identifier_collisions() -> None:
     tool = _tool(
         "COLLISION",
