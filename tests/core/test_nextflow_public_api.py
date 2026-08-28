@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -20,6 +20,15 @@ from sophios.api.python.workflow import (
     ExecutableNextflowWorkflow,
     Step,
     Workflow,
+)
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FOUR_STEP_MESSAGES = (
+    "Sophios reaches Nextflow",
+    "spaces remain one argument",
+    "a literal costs $5",
+    "literal && text is not shell syntax",
 )
 
 
@@ -37,6 +46,32 @@ def _supported_workflow() -> Workflow:
     step.inputs.message = "hello from Sophios"
     workflow = Workflow([step], "nextflow_public")
     workflow.outputs.file = step.outputs.file
+    return workflow
+
+
+def _four_step_adapter_workflow() -> Workflow:
+    """Build a four-process Phase 1 workflow from checked-in adapters."""
+    adapters = REPO_ROOT / "cwl_adapters"
+    first = Step(clt_path=adapters / "echo.cwl", step_name="emit_single_1")
+    first.inputs.message = FOUR_STEP_MESSAGES[0]
+
+    second = Step(clt_path=adapters / "echo_3.cwl", step_name="emit_triplet_1")
+    second.inputs.message1 = "spaces remain"
+    second.inputs.message2 = "one"
+    second.inputs.message3 = "argument"
+
+    third = Step(clt_path=adapters / "echo.cwl", step_name="emit_single_2")
+    third.inputs.message = FOUR_STEP_MESSAGES[2]
+
+    fourth = Step(clt_path=adapters / "echo_3.cwl", step_name="emit_triplet_2")
+    fourth.inputs.message1 = "literal"
+    fourth.inputs.message2 = "&&"
+    fourth.inputs.message3 = "text is not shell syntax"
+
+    steps = [first, second, third, fourth]
+    workflow = Workflow(steps, "nextflow_four_step_acceptance")
+    for index, step in enumerate(steps, start=1):
+        setattr(workflow.outputs, f"message_{index}", step.outputs.stdout)
     return workflow
 
 
@@ -73,7 +108,7 @@ def test_nextflow_target_compiles_once(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.fast
 def test_unknown_python_target_is_rejected() -> None:
     with pytest.raises(ValueError, match="unsupported compilation target"):
-        _supported_workflow().compile(target="unknown")  # type: ignore[call-overload]
+        cast(Any, _supported_workflow()).compile(target="unknown")
 
 
 @pytest.mark.serial
@@ -201,3 +236,23 @@ def test_python_and_cli_generated_artifacts_execute(
         outputs = list((directory / "work").rglob("stdout.txt"))
         assert len(outputs) == 1
         assert outputs[0].read_text(encoding="utf-8").strip() == "hello from Sophios"
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_four_step_checked_in_adapter_workflow_executes_end_to_end(
+    tmp_path: Path,
+) -> None:
+    workflow = _four_step_adapter_workflow()
+
+    artifacts = workflow.to_nextflow(tmp_path)
+    serialized = json.loads(artifacts[0].read_text(encoding="utf-8"))
+    assert len(serialized["processes"]) == 4
+
+    result = _run_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = sorted(
+        output.read_text(encoding="utf-8").strip()
+        for output in (tmp_path / "work").rglob("stdout")
+    )
+    assert outputs == sorted(FOUR_STEP_MESSAGES)
