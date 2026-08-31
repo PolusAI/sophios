@@ -235,14 +235,30 @@ class NfCommand:
 class NfResources:
     """Typed supported process resources."""
 
-    cpus: int | float | None = None
+    cpus: int | None = None
     memory_mb: int | float | None = None
 
     def __post_init__(self) -> None:
-        for name in ("cpus", "memory_mb"):
-            value = getattr(self, name)
-            if isinstance(value, bool) or (value is not None and (not isinstance(value, (int, float)) or value <= 0)):
-                raise ValueError(f"{name} must be a positive number or None")
+        cpus = self.cpus
+        if (
+            isinstance(cpus, bool)
+            or (cpus is not None and not isinstance(cpus, int))
+            or (isinstance(cpus, int) and cpus <= 0)
+        ):
+            raise ValueError("cpus must be a positive integer or None")
+        memory = self.memory_mb
+        if (
+            isinstance(memory, bool)
+            or (
+                memory is not None
+                and (
+                    not isinstance(memory, (int, float))
+                    or memory <= 0
+                    or (isinstance(memory, float) and not math.isfinite(memory))
+                )
+            )
+        ):
+            raise ValueError("memory_mb must be a positive finite number or None")
 
     def to_dict(self) -> dict[str, Any]:
         return {"cpus": self.cpus, "memory_mb": self.memory_mb}
@@ -264,12 +280,20 @@ class NfPort:
     qualifier: str
     emit: str | None = None
     glob: NfTemplate | None = None
+    path_kind: str | None = None
 
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.name, field_name="port name")
         if self.qualifier not in self.ALLOWED_QUALIFIERS:
             allowed = ", ".join(sorted(self.ALLOWED_QUALIFIERS))
             raise ValueError(f"port qualifier must be one of {allowed}, got {self.qualifier!r}")
+        if self.qualifier == "path":
+            path_kind = self.path_kind or "file"
+            if path_kind not in {"file", "directory"}:
+                raise ValueError("path port kind must be 'file' or 'directory'")
+            object.__setattr__(self, "path_kind", path_kind)
+        elif self.path_kind is not None:
+            raise ValueError("only path ports may declare a path kind")
         if self.emit is not None:
             _validate_ir_identifier(self.emit, field_name="port emit")
         if self.glob is not None and not isinstance(self.glob, NfTemplate):
@@ -282,15 +306,26 @@ class NfPort:
             "qualifier": self.qualifier,
             "emit": self.emit,
             "glob": self.glob.to_dict() if self.glob else None,
+            "path_kind": self.path_kind,
         }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
         """Hydrate and validate a port from a mapping."""
         item = _mapping(value, type_name=cls.__name__)
-        _check_fields(item, type_name=cls.__name__, required={"name", "qualifier", "emit", "glob"})
+        _check_fields(
+            item,
+            type_name=cls.__name__,
+            required={"name", "qualifier", "emit", "glob", "path_kind"},
+        )
         glob = None if item["glob"] is None else NfTemplate.from_dict(item["glob"])
-        return cls(name=item["name"], qualifier=item["qualifier"], emit=item["emit"], glob=glob)
+        return cls(
+            name=item["name"],
+            qualifier=item["qualifier"],
+            emit=item["emit"],
+            glob=glob,
+            path_kind=item["path_kind"],
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -491,7 +526,7 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow."""
 
-    SCHEMA_VERSION: ClassVar[int] = 1
+    SCHEMA_VERSION: ClassVar[int] = 2
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
     name: str

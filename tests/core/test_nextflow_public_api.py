@@ -124,7 +124,7 @@ def test_to_nextflow_is_the_single_four_artifact_writer(tmp_path: Path) -> None:
         "nextflow_params.json",
     ]
     serialized = json.loads(paths[0].read_text(encoding="utf-8"))
-    assert serialized["schema_version"] == 1
+    assert serialized["schema_version"] == 2
     assert serialized["representation_kind"] == "executable"
     assert not hasattr(Workflow, "get_nextflow_workflow")
     assert not hasattr(Workflow, "to_nf")

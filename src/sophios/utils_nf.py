@@ -2,6 +2,7 @@
 
 from collections.abc import Iterable, Mapping
 import copy
+import math
 from os import PathLike
 import re
 from typing import Any
@@ -135,12 +136,18 @@ def _ports(raw_ports: Any, *, outputs: bool) -> list[NfPort]:
         match raw_definition:
             case {"type": cwl_type}:
                 name = _identifier(raw_name, context="port name")
+                required_type = _required_type(cwl_type)
+                path_kind = {
+                    "File": "file",
+                    "Directory": "directory",
+                }.get(required_type)
                 ports.append(
                     NfPort(
                         name,
                         cwl_type_to_nf_qualifier(cwl_type),
                         emit=name if outputs else None,
                         glob=_output_template(raw_name, raw_definition) if outputs else None,
+                        path_kind=path_kind,
                     )
                 )
             case _:
@@ -331,16 +338,25 @@ def _resource_value(resource: Mapping[str, Any], minimum: str, maximum: str) -> 
     return resource.get(maximum, resource.get(minimum))
 
 
-def _render_resource(value: Any, *, name: str) -> str:
+def _resource_number(value: Any, *, name: str) -> int | float:
     match value:
         case bool():
             raise ValueError(f"{name} resource requirement must be numeric")
-        case float() as number if number.is_integer():
-            return str(int(number))
-        case (int() | float()) as number:
-            return str(number)
+        case int() as number if number > 0:
+            return number
+        case float() as number if math.isfinite(number) and number > 0:
+            return number
         case _:
-            raise ValueError(f"{name} resource requirement must be numeric")
+            raise ValueError(f"{name} resource requirement must be a positive finite number")
+
+
+def _cpu_resource(value: Any) -> int:
+    number = _resource_number(value, name="CPU")
+    if isinstance(number, float):
+        if not number.is_integer():
+            raise ValueError("CPU resource requirement must be a whole number")
+        return int(number)
+    return number
 
 
 def _resources(tool: Mapping[str, Any]) -> NfResources:
@@ -349,9 +365,33 @@ def _resources(tool: Mapping[str, Any]) -> NfResources:
         return NfResources()
     cpus = _resource_value(resource, "coresMin", "coresMax")
     memory = _resource_value(resource, "ramMin", "ramMax")
-    rendered_cpus = None if cpus is None else float(_render_resource(cpus, name="CPU"))
-    rendered_memory = None if memory is None else float(_render_resource(memory, name="memory"))
+    rendered_cpus = None if cpus is None else _cpu_resource(cpus)
+    rendered_memory = None if memory is None else _resource_number(memory, name="memory")
     return NfResources(rendered_cpus, rendered_memory)
+
+
+def _resource_requirement_findings(
+    requirement: Mapping[str, Any],
+    *,
+    path: str,
+) -> list[str]:
+    """Validate every resource value consumed by the Phase 1 lowering."""
+    findings: list[str] = []
+    for field_name in ("coresMin", "coresMax"):
+        if field_name not in requirement:
+            continue
+        try:
+            _cpu_resource(requirement[field_name])
+        except ValueError as exc:
+            findings.append(f"{path}.{field_name}: {exc}")
+    for field_name in ("ramMin", "ramMax"):
+        if field_name not in requirement:
+            continue
+        try:
+            _resource_number(requirement[field_name], name="memory")
+        except ValueError as exc:
+            findings.append(f"{path}.{field_name}: {exc}")
+    return findings
 
 
 def _output_template(raw_name: Any, definition: Any) -> NfTemplate:
@@ -608,6 +648,13 @@ def _tool_capability_findings(
                         path=requirement_path,
                     )
                 )
+                if class_name == "ResourceRequirement":
+                    findings.extend(
+                        _resource_requirement_findings(
+                            definition,
+                            path=requirement_path,
+                        )
+                    )
     match tool.get("inputs", {}):
         case Mapping() as inputs:
             findings.extend(
@@ -655,6 +702,14 @@ def _tool_capability_findings(
                 if binding.get("shellQuote") is False:
                     findings.append(
                         f"{input_binding_path}.shellQuote: shellQuote false is deferred to Phase 2"
+                    )
+                if (
+                    _required_type(raw_definition.get("type")) == "boolean"
+                    and binding.get("valueFrom") is None
+                ):
+                    findings.append(
+                        f"{input_binding_path}: boolean inputBinding flag semantics are "
+                        "deferred to Phase 2"
                     )
         case _:
             pass

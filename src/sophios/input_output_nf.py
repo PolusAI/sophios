@@ -1,6 +1,7 @@
 """Deterministic serializers for the supported Nextflow DSL2 subset."""
 
 from collections.abc import Mapping
+from decimal import Decimal
 import json
 from pathlib import Path
 from typing import Any
@@ -46,10 +47,6 @@ def write_nextflow_json(workflow: ExecutableNextflowWorkflow, outdir: str | Path
     return _write_text(Path(outdir) / NEXTFLOW_JSON, f"{workflow.to_json()}\n")
 
 
-def _groovy_string(value: str) -> str:
-    return json.dumps(value, ensure_ascii=False)
-
-
 def _groovy_literal(value: str) -> str:
     escaped: list[str] = []
     for character in value:
@@ -62,6 +59,23 @@ def _groovy_literal(value: str) -> str:
         else:
             escaped.append(character)
     return f"'{''.join(escaped)}'"
+
+
+def _groovy_gstring_fragment(value: str) -> str:
+    """Escape literal data embedded beside typed GString references."""
+    escaped: list[str] = []
+    for character in value:
+        if character == "\\":
+            escaped.append("\\\\")
+        elif character == '"':
+            escaped.append('\\"')
+        elif character == "$":
+            escaped.append("\\$")
+        elif ord(character) < 32 or ord(character) == 127:
+            escaped.append(f"\\u{ord(character):04x}")
+        else:
+            escaped.append(character)
+    return "".join(escaped)
 
 
 def _template_expression(template: Any) -> str:
@@ -85,15 +99,21 @@ def _render_template(template: Any) -> str:
 
 def _render_glob(template: Any) -> str:
     if all(isinstance(segment, NfLiteral) for segment in template.segments):
-        return _groovy_string("".join(segment.value for segment in template.segments))
+        return _groovy_literal("".join(segment.value for segment in template.segments))
     rendered: list[str] = []
     for segment in template.segments:
         if isinstance(segment, NfInputReference):
             rendered.append(f"${{{segment.name}}}")
         else:
-            literal = segment.value.replace("\\", "\\\\").replace('"', '\\"')
-            rendered.append(literal.replace("$", "\\$").replace("`", "\\`"))
+            rendered.append(_groovy_gstring_fragment(segment.value))
     return f'"{"".join(rendered)}"'
+
+
+def _render_number(value: int | float) -> str:
+    """Render a validated JSON number without exponent notation."""
+    if isinstance(value, int):
+        return str(value)
+    return format(Decimal(str(value)), "f")
 
 
 def _process_output(port: NfPort, process: NfProcess) -> str:
@@ -112,11 +132,11 @@ def _process_output(port: NfPort, process: NfProcess) -> str:
 def _render_process(process: NfProcess) -> str:
     lines = [f"process {process.name} {{"]
     if process.container is not None:
-        lines.append(f"    container {_groovy_string(process.container)}")
+        lines.append(f"    container {_groovy_literal(process.container)}")
     if process.resources.cpus is not None:
-        lines.append(f"    cpus {process.resources.cpus:g}")
+        lines.append(f"    cpus {process.resources.cpus}")
     if process.resources.memory_mb is not None:
-        lines.append(f'    memory "{process.resources.memory_mb:g} MB"')
+        lines.append(f'    memory "{_render_number(process.resources.memory_mb)} MB"')
 
     if process.inputs:
         lines.extend(["", "    input:"])
@@ -253,9 +273,10 @@ def _workflow_input_port(
 def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> str:
     port = _workflow_input_port(workflow, name)
     if port.qualifier == "path":
+        path_type = "dir" if port.path_kind == "directory" else "file"
         return (
             f"Channel.fromPath(params.{name} instanceof Map ? params.{name}.path : "
-            f"params.{name}, checkIfExists: true)"
+            f"params.{name}, checkIfExists: true, type: '{path_type}', glob: false)"
         )
     return f"Channel.value(params.{name})"
 

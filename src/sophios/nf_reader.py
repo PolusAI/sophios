@@ -2,7 +2,9 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+from decimal import Decimal, InvalidOperation
 import json
+import math
 from pathlib import Path
 import re
 from types import MappingProxyType
@@ -27,6 +29,8 @@ _WORKFLOW = re.compile(r"^\s*workflow(?:\s+(\S+))?\s*\{\s*$")
 _PORT = re.compile(r"^(path|val|tuple|env|stdin)\s+(.+?)(?:,\s*emit:\s*(\S+))?$")
 _CALL = re.compile(r"^(\S+)\((.*)\)$")
 _PROCESS_OUTPUT = re.compile(r"^(\S+)\.out\.(\S+)$")
+_STATIC_CPUS = re.compile(r"[1-9][0-9]*")
+_STATIC_MEMORY_MB = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)? MB")
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,13 +116,51 @@ def _blocks(lines: list[str], opener: re.Pattern[str]) -> list[tuple[str | None,
 
 def _unquote(value: str) -> str:
     value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] == '"':
-        parsed = json.loads(value)
-        if isinstance(parsed, str):
-            return parsed
-    if len(value) >= 2 and value[0] == value[-1] == "'":
-        return value[1:-1].replace("\\'", "'")
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        quote = value[0]
+        content = value[1:-1]
+        unescaped: list[str] = []
+        index = 0
+        while index < len(content):
+            if content[index] != "\\" or index + 1 >= len(content):
+                unescaped.append(content[index])
+                index += 1
+                continue
+            escaped = content[index + 1]
+            if escaped in {"\\", quote} or (quote == '"' and escaped == "$"):
+                unescaped.append(escaped)
+                index += 2
+                continue
+            if escaped == "u" and re.fullmatch(
+                r"[0-9A-Fa-f]{4}", content[index + 2:index + 6]
+            ):
+                unescaped.append(chr(int(content[index + 2:index + 6], 16)))
+                index += 6
+                continue
+            unescaped.extend(("\\", escaped))
+            index += 2
+        return "".join(unescaped)
     return value
+
+
+def _static_cpu_value(value: str) -> int | None:
+    return int(value) if _STATIC_CPUS.fullmatch(value) else None
+
+
+def _static_memory_mb_value(value: str) -> int | float | None:
+    if _STATIC_MEMORY_MB.fullmatch(value) is None:
+        return None
+    raw_number = value.removesuffix(" MB")
+    try:
+        decimal = Decimal(raw_number)
+    except InvalidOperation:
+        return None
+    if decimal <= 0:
+        return None
+    if "." not in raw_number:
+        return int(decimal)
+    number = float(decimal)
+    return number if math.isfinite(number) else None
 
 
 def _parse_process(name: str, body: list[str]) -> tuple[NextflowProcess, tuple[str, ...]]:
@@ -167,9 +209,17 @@ def _parse_process(name: str, body: list[str]) -> tuple[NextflowProcess, tuple[s
         if stripped.startswith("container "):
             container = _unquote(stripped.removeprefix("container "))
         elif stripped.startswith("cpus "):
-            cpus = stripped.removeprefix("cpus ").strip()
+            candidate = stripped.removeprefix("cpus ").strip()
+            if _static_cpu_value(candidate) is None:
+                unparsed.append(stripped)
+            else:
+                cpus = candidate
         elif stripped.startswith("memory "):
-            memory = _unquote(stripped.removeprefix("memory "))
+            candidate = _unquote(stripped.removeprefix("memory "))
+            if _static_memory_mb_value(candidate) is None:
+                unparsed.append(stripped)
+            else:
+                memory = candidate
         elif stripped.startswith("// TODO: scatter"):
             unparsed.append(stripped)
         else:
@@ -367,7 +417,7 @@ def parse_nf_file(path: str | Path) -> NextflowDocument:
     executable = ExecutableNextflowWorkflow.from_json(ir_path.read_text(encoding="utf-8"))
     if render_nextflow(executable) != source_text:
         raise ValueError("generated Nextflow source does not match its executable IR artifact")
-    if dict(executable.params) != dict(params):
+    if executable.params != params:
         raise ValueError("generated Nextflow parameters do not match its executable IR artifact")
     return replace(document, verified_executable=executable)
 
@@ -391,7 +441,7 @@ def promote_nextflow_document(
             "cannot promote a NextflowDocument whose source does not match its "
             "validated executable IR artifact"
         )
-    if dict(document.verified_executable.params) != dict(document.params):
+    if document.verified_executable.params != document.params:
         raise ValueError(
             "cannot promote a NextflowDocument whose parameters do not match its "
             "validated executable IR artifact"
@@ -418,10 +468,14 @@ def nextflow_to_cwl(workflow: NextflowDocument) -> tuple[dict[str, Any], list[di
         if process.container is not None:
             requirements["DockerRequirement"] = {"dockerPull": process.container}
         resources: dict[str, Any] = {}
-        if cpus := process.cpus:
-            resources["coresMin"] = float(cpus) if "." in cpus else int(cpus)
-        if memory := process.memory:
-            resources["ramMin"] = float(memory.removesuffix(" MB"))
+        if process.cpus is not None:
+            cpus = _static_cpu_value(process.cpus)
+            if cpus is not None:
+                resources["coresMin"] = cpus
+        if process.memory is not None:
+            memory = _static_memory_mb_value(process.memory)
+            if memory is not None:
+                resources["ramMin"] = memory
         if resources:
             requirements["ResourceRequirement"] = resources
         outputs: dict[str, Any] = {}

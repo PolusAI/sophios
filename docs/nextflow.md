@@ -79,6 +79,8 @@ content, and invalid or stale IR fail closed.
 ## Phase 1 limits
 
 - Workflows must be flat and use `CommandLineTool`-equivalent processes.
+- Boolean `inputBinding` flag semantics and fractional CPU requirements reject
+  before lowering; they are not silently stringified or rounded.
 - Scatter is retained as opaque structure; executable scatter is deferred.
 - Nested workflows, arbitrary Groovy, channel operators, `when`, and `exec`
   blocks are not interpreted.

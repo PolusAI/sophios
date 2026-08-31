@@ -210,7 +210,7 @@ def real_supported_rose() -> RoseTree:
 
 @pytest.mark.fast
 def test_nf101_t11_port_dict_roundtrip() -> None:
-    port = _output("reads", "*.fq")
+    port = NfPort("reads", "path", path_kind="directory")
     assert NfPort.from_dict(port.to_dict()) == port
 
 
@@ -251,14 +251,14 @@ def test_nf101_t11_executable_schema_declares_version_and_kind() -> None:
     workflow = ExecutableNextflowWorkflow("wf", [], [], {})
     payload = workflow.to_dict()
 
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["representation_kind"] == "executable"
 
-    payload["schema_version"] = 2
+    payload["schema_version"] = 1
     with pytest.raises(ValueError, match="schema version"):
         ExecutableNextflowWorkflow.from_dict(payload)
 
-    payload["schema_version"] = 1
+    payload["schema_version"] = 2
     payload["representation_kind"] = "structural"
     with pytest.raises(ValueError, match="representation kind"):
         ExecutableNextflowWorkflow.from_dict(payload)
@@ -460,6 +460,33 @@ def test_nf101_t12_rejects_every_unconsumed_tool_field_before_lowering() -> None
     assert "steps[0].run.inputs.reference.inputBinding.itemSeparator" in message
     assert "steps[0].run.inputs.reference.inputBinding.loadContents" in message
     assert "steps[0].run.requirements.DockerRequirement.dockerOutputDirectory" in message
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("value", [False, True])
+def test_nf101_t12_rejects_unlowered_boolean_input_binding_semantics(
+    value: bool,
+) -> None:
+    tool = _tool(
+        "FLAGS",
+        inputs={
+            "verbose": {
+                "type": "boolean",
+                "inputBinding": {"position": 1, "prefix": "--verbose"},
+            }
+        },
+    )
+    rose = _synthetic_rose(
+        _workflow(
+            [{"id": "FLAGS", "in": {"verbose": "verbose"}, "out": [], "run": "FLAGS.cwl"}],
+            inputs={"verbose": "boolean"},
+        ),
+        [tool],
+        workflow_inputs={"verbose": value},
+    )
+
+    with pytest.raises(ValueError, match="boolean inputBinding flag semantics"):
+        cwl_rosetree_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -975,6 +1002,23 @@ def test_nf101_t13_maps_cpu_and_memory_requirements() -> None:
     assert cwl_rosetree_to_nextflow(rose).processes[0].resources == NfResources(2, 1024)
 
 
+@pytest.mark.fast
+def test_nf101_t13_rejects_fractional_cpu_requirements_before_lowering() -> None:
+    tool = _tool(
+        "RESOURCES",
+        requirements={"ResourceRequirement": {"coresMax": 2.5}},
+    )
+    rose = _synthetic_rose(
+        _workflow([{"id": "RESOURCES", "in": {}, "out": [], "run": "RESOURCES.cwl"}]),
+        [tool],
+    )
+
+    with pytest.raises(ValueError, match=r"coresMax.*whole number"):
+        cwl_rosetree_to_nextflow(rose)
+    with pytest.raises(ValueError, match="cpus must be a positive integer"):
+        NfResources(cpus=cast(Any, 2.5))
+
+
 # T1.4 — eight graph, interface, params, scatter, and inference scenarios.
 
 
@@ -1184,10 +1228,26 @@ def test_nf102_t21_renders_supported_process_metadata() -> None:
         [NfWorkflowInputConnection("source", "TASK", "source")],
         {"source": "input.txt"},
     ))
-    assert 'container "ubuntu:24.04"' in rendered
+    assert "container 'ubuntu:24.04'" in rendered
     assert "cpus 2" in rendered
     assert 'memory "1024 MB"' in rendered
-    assert 'path "report.txt", emit: report' in rendered
+    assert "path 'report.txt', emit: report" in rendered
+
+
+@pytest.mark.serial
+def test_nf102_t21_renders_resources_without_numeric_semantic_loss() -> None:
+    process = NfProcess(
+        "TASK",
+        [],
+        [_output("report", "report.txt")],
+        _command("touch", "report.txt"),
+        resources=NfResources(cpus=2, memory_mb=1234567),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow("WF", [process], [], {}))
+
+    assert "cpus 2" in rendered
+    assert 'memory "1234567 MB"' in rendered
+    assert "e+" not in rendered.lower()
 
 
 @pytest.mark.serial
@@ -1216,7 +1276,7 @@ def test_nf102_t21_path_parameter_rendering_is_runtime_shape_independent() -> No
     assert rendered == render_nextflow(from_mapping)
     assert (
         "Channel.fromPath(params.source instanceof Map ? params.source.path : "
-        "params.source, checkIfExists: true)"
+        "params.source, checkIfExists: true, type: 'file', glob: false)"
     ) in rendered
 
 
@@ -1305,17 +1365,23 @@ def _run_nextflow(
     return _execute_nextflow(directory)
 
 
-def _execute_nextflow(directory: Path, *, timeout: int = 90) -> subprocess.CompletedProcess[str]:
+def _execute_nextflow(
+    directory: Path,
+    *,
+    timeout: int = 90,
+    preview: bool = False,
+) -> subprocess.CompletedProcess[str]:
     run_env = dict(os.environ)
     run_env.update({
         "NXF_ANSI_LOG": "false",
         "NXF_HOME": str(directory / ".nxf-home"),
         "NXF_OFFLINE": "true",
     })
-    return subprocess.run(
+    command = [_nextflow_executable(), "run"]
+    if preview:
+        command.append("-preview")
+    command.extend(
         [
-            _nextflow_executable(),
-            "run",
             "workflow.nf",
             "-params-file",
             "nextflow_params.json",
@@ -1323,7 +1389,10 @@ def _execute_nextflow(directory: Path, *, timeout: int = 90) -> subprocess.Compl
             "nextflow.config",
             "-work-dir",
             str(directory / "work"),
-        ],
+        ]
+    )
+    return subprocess.run(
+        command,
         cwd=directory,
         env=run_env,
         text=True,
@@ -1402,6 +1471,30 @@ def test_nf102_t21_real_compiler_preserves_adversarial_argument(tmp_path: Path) 
 
 @pytest.mark.nextflow
 @pytest.mark.serial
+def test_nf102_t21_large_memory_directive_is_valid_nextflow_syntax(
+    tmp_path: Path,
+) -> None:
+    workflow = ExecutableNextflowWorkflow(
+        "WF",
+        [NfProcess(
+            "TASK",
+            [],
+            [],
+            _command("true"),
+            resources=NfResources(cpus=1, memory_mb=1_234_567),
+        )],
+        [],
+        {},
+    )
+    write_nextflow_artifacts(workflow, tmp_path)
+
+    result = _execute_nextflow(tmp_path, preview=True)
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
 def test_nf102_t21_file_object_parameter_executes_with_runtime_shape_dispatch(
     tmp_path: Path,
 ) -> None:
@@ -1435,12 +1528,12 @@ def test_nf102_t21_file_object_parameter_executes_with_runtime_shape_dispatch(
 @pytest.mark.nextflow
 @pytest.mark.serial
 def test_nf102_t21_directory_staging_and_command_quoting(tmp_path: Path) -> None:
-    source = tmp_path / "source_directory"
+    source = tmp_path / "source_directory[1]"
     source.mkdir()
     (source / "input.txt").write_text("value with spaces", encoding="utf-8")
     process = NfProcess(
         "READ_DIRECTORY",
-        [NfPort("source", "path")],
+        [NfPort("source", "path", path_kind="directory")],
         [_output("result", "result.txt")],
         NfCommand(
             (
@@ -1459,6 +1552,51 @@ def test_nf102_t21_directory_staging_and_command_quoting(tmp_path: Path) -> None
     assert result.returncode == 0, result.stderr
     outputs = list((tmp_path / "run" / "work").rglob("result.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == ["value with spaces"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_nf102_t21_literal_dollar_and_mixed_backtick_globs_execute(
+    tmp_path: Path,
+) -> None:
+    literal = NfProcess(
+        "LITERAL",
+        [],
+        [_output("result", "out$name.txt")],
+        _command("touch", "out$name.txt"),
+    )
+    mixed_glob = NfTemplate((
+        NfLiteral("`"),
+        NfInputReference("name"),
+        NfLiteral(".txt"),
+    ))
+    mixed = NfProcess(
+        "MIXED",
+        [NfPort("name", "val")],
+        [NfPort("result", "path", "result", mixed_glob)],
+        NfCommand((
+            NfTemplate((NfLiteral("touch"),)),
+            mixed_glob,
+        )),
+    )
+    workflow = ExecutableNextflowWorkflow(
+        "WF",
+        [literal, mixed],
+        [
+            NfWorkflowInputConnection("name", "MIXED", "name"),
+            NfWorkflowOutputConnection("LITERAL", "result", "literal"),
+            NfWorkflowOutputConnection("MIXED", "result", "mixed"),
+        ],
+        {"name": "report"},
+    )
+
+    rendered = render_nextflow(workflow)
+    assert "path 'out$name.txt', emit: result" in rendered
+    assert 'path "`${name}.txt", emit: result' in rendered
+    result = _run_nextflow(workflow, tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert len(list((tmp_path / "work").rglob("out$name.txt"))) == 1
+    assert len(list((tmp_path / "work").rglob("`report.txt"))) == 1
 
 
 @pytest.mark.nextflow
@@ -1805,6 +1943,17 @@ def test_nf105_t51_reader_rejects_tampered_source_or_parameters(tmp_path: Path) 
 
 
 @pytest.mark.fast
+def test_nf105_t51_array_params_preserve_generated_provenance(tmp_path: Path) -> None:
+    workflow = ExecutableNextflowWorkflow("PIPELINE", (), (), {"values": [1, 2, 3]})
+    write_nextflow_artifacts(workflow, tmp_path)
+
+    parsed = parse_nf_file(tmp_path / "workflow.nf")
+
+    assert parsed.verified_executable == workflow
+    assert promote_nextflow_document(parsed) == workflow
+
+
+@pytest.mark.fast
 def test_nf105_t51_reader_rejects_invalid_or_stale_ir_artifact(tmp_path: Path) -> None:
     write_nextflow_artifacts(_runtime_workflow(), tmp_path)
     ir_path = tmp_path / "nextflow_workflow.json"
@@ -1880,6 +2029,76 @@ def test_nf105_t51_reader_extracts_ports_container_and_resources() -> None:
     assert process.outputs == (
         NextflowPort("result", "path", "result", "result.txt"),
     )
+
+
+@pytest.mark.fast
+def test_nf105_t51_reader_decodes_generated_literal_glob_escapes() -> None:
+    target = "out$name`\\'s.txt"
+    workflow = ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [NfProcess("TASK", [], [_output("result", target)], _command("touch", target))],
+        [NfWorkflowOutputConnection("TASK", "result", "result")],
+        {},
+    )
+
+    parsed = parse_nf_text(render_nextflow(workflow))
+
+    assert parsed.processes[0].outputs[0].target == target
+
+    mixed = NfTemplate((
+        NfLiteral("$`"),
+        NfInputReference("name"),
+        NfLiteral(".txt"),
+    ))
+    mixed_workflow = ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [NfProcess(
+            "TASK",
+            [NfPort("name", "val")],
+            [NfPort("result", "path", "result", mixed)],
+            _command("true"),
+        )],
+        [
+            NfWorkflowInputConnection("name", "TASK", "name"),
+            NfWorkflowOutputConnection("TASK", "result", "result"),
+        ],
+        {"name": "report"},
+    )
+
+    mixed_parsed = parse_nf_text(render_nextflow(mixed_workflow))
+
+    assert mixed_parsed.processes[0].outputs[0].target == "$`${name}.txt"
+
+
+@pytest.mark.fast
+def test_nf105_t51_reader_retains_dynamic_or_unmapped_resources_as_opaque() -> None:
+    source = """nextflow.enable.dsl=2
+process TASK {
+    cpus params.threads
+    memory "4 GB"
+    output:
+    path 'result.txt', emit: result
+    script:
+    \"\"\"
+    touch result.txt
+    \"\"\"
+}
+workflow PIPELINE {
+    main:
+    TASK()
+    emit:
+    result = TASK.out.result
+}
+workflow { PIPELINE() }
+"""
+
+    parsed = parse_nf_text(source)
+    opaque = "\n".join(parsed.opaque_regions)
+    assert "cpus params.threads" in opaque
+    assert 'memory "4 GB"' in opaque
+    _workflow_cwl, tools = nextflow_to_cwl(parsed)
+    assert "ResourceRequirement" not in tools[0]["requirements"]
+    assert render_nextflow_document(parsed) == source
 
 
 @pytest.mark.fast

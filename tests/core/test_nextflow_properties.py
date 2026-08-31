@@ -1,13 +1,19 @@
 """Property-based adversarial tests for the executable Nextflow boundary."""
 
+from decimal import Decimal
 import json
 import shlex
-from typing import Literal
+from typing import Any, Literal, cast
 
 from hypothesis import given, settings, strategies as st
 import pytest
 
-from sophios.input_output_nf import _render_template, _shell_quote, render_nextflow
+from sophios.input_output_nf import (
+    _render_glob,
+    _render_template,
+    _shell_quote,
+    render_nextflow,
+)
 from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
 from sophios.nf_reader import parse_nf_text, promote_nextflow_document
 from sophios.nf_types import (
@@ -18,6 +24,7 @@ from sophios.nf_types import (
     NfPort,
     NfProcess,
     NfProcessConnection,
+    NfResources,
     NfTemplate,
     NfWorkflowInputConnection,
 )
@@ -94,6 +101,24 @@ def test_interpolated_template_remains_one_argument(prefix: str, suffix: str) ->
 
 
 @settings(max_examples=150, deadline=None)
+@given(SAFE_TEXT | st.just(""))
+def test_literal_globs_never_become_gstrings(value: str) -> None:
+    rendered = _render_glob(NfTemplate((NfLiteral(value),)))
+    assert rendered.startswith("'") and rendered.endswith("'")
+
+
+@settings(max_examples=150, deadline=None)
+@given(SAFE_TEXT | st.just(""))
+def test_interpolated_glob_literals_use_only_valid_gstring_escapes(value: str) -> None:
+    rendered = _render_glob(NfTemplate((
+        NfLiteral(f"`{value}"),
+        NfInputReference("name"),
+    )))
+    assert "\\`" not in rendered
+    assert "${name}" in rendered
+
+
+@settings(max_examples=150, deadline=None)
 @given(st.dictionaries(SAFE_TEXT, JSON_VALUES, max_size=8))
 def test_executable_json_roundtrip_is_canonical(params: dict[str, object]) -> None:
     workflow = ExecutableNextflowWorkflow("wf", (), (), params)
@@ -126,6 +151,67 @@ def test_path_parameter_script_does_not_depend_on_compiled_value_shape(path: str
         {"source": {"class": "File", "path": path}},
     )
     assert render_nextflow(from_string) == render_nextflow(from_mapping)
+    assert "type: 'file', glob: false" in render_nextflow(from_string)
+
+
+@settings(max_examples=100, deadline=None)
+@given(st.sampled_from(("file", "directory")))
+def test_path_kind_is_serialized_and_controls_exact_channel_staging(
+    path_kind: str,
+) -> None:
+    process = NfProcess(
+        "READ",
+        (NfPort("source", "path", path_kind=path_kind),),
+        (),
+        NfCommand((NfTemplate((NfLiteral("true"),)),)),
+    )
+    workflow = ExecutableNextflowWorkflow(
+        "wf",
+        (process,),
+        (NfWorkflowInputConnection("source", "READ", "source"),),
+        {"source": "input[1]"},
+    )
+    expected_type = "dir" if path_kind == "directory" else "file"
+
+    assert workflow.to_dict()["processes"][0]["inputs"][0]["path_kind"] == path_kind
+    assert f"type: '{expected_type}', glob: false" in render_nextflow(workflow)
+
+
+@settings(max_examples=100, deadline=None)
+@given(st.integers(min_value=1, max_value=1_000_000).map(lambda value: value + 0.5))
+def test_fractional_cpu_requests_are_unrepresentable(cpus: float) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        NfResources(cpus=cast(Any, cpus))
+
+
+@settings(max_examples=150, deadline=None)
+@given(
+    st.one_of(
+        st.integers(min_value=1, max_value=10**30),
+        st.floats(
+            min_value=0.000001,
+            max_value=10**15,
+            allow_nan=False,
+            allow_infinity=False,
+        ),
+    )
+)
+def test_memory_rendering_is_non_exponential_and_value_preserving(
+    memory_mb: int | float,
+) -> None:
+    process = NfProcess(
+        "TASK",
+        (),
+        (),
+        NfCommand((NfTemplate((NfLiteral("true"),)),)),
+        resources=NfResources(memory_mb=memory_mb),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow("wf", (process,), (), {}))
+    line = next(line.strip() for line in rendered.splitlines() if "memory " in line)
+    rendered_number = line.removeprefix('memory "').removesuffix(' MB"')
+
+    assert "e" not in rendered_number.lower()
+    assert Decimal(rendered_number) == Decimal(str(memory_mb))
 
 
 @settings(max_examples=60, deadline=None)
