@@ -329,12 +329,7 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
     if build is not None:
         return build(node, file, diags, span)
 
-    if node.tag.startswith('!'):
-        # A tag the language does not own. The loader rejects this outright,
-        # and the specification must never be more permissive than the thing
-        # it specifies; the payload is kept, untagged, for recovery.
-        diags.error(Code.UNKNOWN_TAG,
-                    f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl', span)
+    _reject_unknown_tag(node, file, diags, span)
 
     desugared = _desugared_form(node, file, diags, span)
     if desugared is not None:
@@ -596,13 +591,7 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
         return None
     path = _path | {id(node)}
 
-    if node.tag.startswith('!') and node.tag not in Tag.ALL:
-        # Passthrough is CWL, and CWL has no custom YAML tags: the loader
-        # rejects this text, so accepting it here would specify a superset of
-        # the language. Reported; the payload is materialised for recovery.
-        diags.error(Code.UNKNOWN_TAG,
-                    f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
-                    SourceSpan.of(file, node))
+    _reject_unknown_tag(node, file, diags)
 
     if node.tag in (Tag.ANCHOR, Tag.ALIAS, Tag.RAW_CWL) or (
             node.tag == Tag.INLINE_INPUT and isinstance(node, yaml.nodes.ScalarNode)):
@@ -678,12 +667,38 @@ def _key_text(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> str:
     YAML admits collection keys (`? [a, b]`); Sophios does not — every key in
     the language is a name. A non-scalar key is reported and stringified for
     recovery, rather than silently becoming the repr of a node list.
+
+    A key can also carry a tag, and this is the position that used to forget
+    it: `!: :` composed to a mapping whose key node was tagged, the tag was
+    dropped by the stringify below, and the parser accepted a document the
+    loader refuses — the one direction the language promises never to take.
     """
+    _reject_unknown_tag(node, file, diags)
     if not isinstance(node, yaml.nodes.ScalarNode):
         diags.error(Code.EXPECTED_SCALAR,
                     f'mapping keys must be scalars, found {_kind(node)}',
                     SourceSpan.of(file, node))
     return str(node.value)
+
+
+def _reject_unknown_tag(node: yaml.nodes.Node, file: str, diags: Diagnostics,
+                        span: SourceSpan | None = None) -> None:
+    """Report a tag the language does not own, wherever it appears.
+
+    One home for the rule, deliberately. It used to be written out at each
+    position that consumes a node — once for input values, once for the
+    passthrough walk — and a third position, mapping keys, simply never got a
+    copy. Restating a rule per position is how a position gets missed; now a
+    new one has a single obvious thing to call.
+
+    The rule itself: Sophios owns four tags, the loader rejects every other,
+    and the specification must never be more permissive than the thing it
+    specifies. The payload is kept, untagged, for recovery.
+    """
+    if node.tag.startswith('!') and node.tag not in Tag.ALL:
+        diags.error(Code.UNKNOWN_TAG,
+                    f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
+                    span if span is not None else SourceSpan.of(file, node))
 
 
 def _kind(node: yaml.nodes.Node) -> str:

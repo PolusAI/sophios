@@ -515,11 +515,19 @@ def test_unknown_tags_report_wic009(source: str) -> None:
 @pytest.mark.fast
 @given(st.text('abcdefghijklmnopqrstuvwxyz!&*i {}[]:#-', max_size=120))
 @FAST
+@example('!: :')      # unknown tag on a mapping *key* — the position that was missed
+@example('!foo x: y')  # the same, spelled legibly
 def test_parser_is_not_more_permissive_than_the_loader(text: str) -> None:
     """Any document the parser accepts without diagnostics, the loader loads.
 
     The reverse is allowed — the parser recovers where the loader raises — but
     this direction is the specification's half of the bargain.
+
+    The pinned cases are tags in key position. The property found `!: :` on
+    its own, months after the tag rule was written, because the alphabet only
+    rarely composes a tagged key — which is exactly why it is pinned now:
+    Hypothesis's failure database does not travel to CI, so a find that came
+    from one lucky seed would otherwise be re-discovered by luck or not at all.
     """
     result = parse(text, 'agree.wic')
     if result.ok and result.document is not None:
