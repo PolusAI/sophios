@@ -43,7 +43,7 @@ from sophios.lang.nodes import (
     surface_of,
 )
 
-from .test_lang_parser import documents
+from .strategies import documents
 from .wic_corpus import CORPUS, corpus_id
 
 FAST = settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
@@ -332,3 +332,28 @@ def test_an_empty_step_id_is_rejected_because_the_parser_reports_it() -> None:
     result = parse("steps:\n- id: ''\n", 'empty_id.wic')
     assert any(d.code is Code.EMPTY_STEP_ID for d in result.diagnostics)
     assert not _accepts({'steps': [{'id': ''}]})
+
+
+# --------------------------------------------------------------------------
+# The `wic:` vocabulary has one home
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_the_validator_admits_exactly_the_declared_sidecar_keys() -> None:
+    """`Grammar.SIDECAR_KEYS` and the validating schema name the same keys.
+
+    They are separate places by necessity — the language layer owns the
+    vocabulary, the validator owns each key's shape — and nothing linked them,
+    so `lang_version` reached the reference, the resolver and the compiler
+    while the validator still rejected it before compilation ever started.
+    """
+    from sophios.schemas.wic_schema import _wic_tag_schema
+
+    validated = set(_wic_tag_schema(hypothesis=False)['properties'])
+    declared = set(Grammar.SIDECAR_KEYS)
+
+    assert validated == declared, (
+        f'declared but not validated: {sorted(declared - validated)}; '
+        f'validated but not declared: {sorted(validated - declared)}'
+    )

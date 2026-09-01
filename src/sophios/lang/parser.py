@@ -49,6 +49,17 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     #: makes the leak boundary a specification rather than an accident.
     INTERPRETED_STEP_KEYS: Final = frozenset({'scatter', 'scatterMethod', 'when', 'run'})
 
+    #: Every key the `wic:` block admits. The block is Sophios-owned syntax
+    #: (§5), so the language layer names its vocabulary; the validator in
+    #: `schemas/wic_schema.py` supplies a shape per key and is checked against
+    #: this set. `lang_version` reached §7, the resolver and the compiler
+    #: without reaching that validator, and was rejected before compilation.
+    SIDECAR_KEYS: Final = frozenset({
+        'graphviz', 'steps', 'implementation', 'implementations',
+        'default_implementation', 'version', 'lang_version', 'driver',
+        'namespace', 'inlineable',
+    })
+
     #: `wic:` sidecar step keys have the surface form "(1, step_name)".
     WIC_STEP_KEY: Final = re.compile(r'^\(\s*(\d+)\s*,\s*(.+?)\s*\)$')
 

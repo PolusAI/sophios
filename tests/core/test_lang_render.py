@@ -33,7 +33,7 @@ from sophios.lang import (
 from sophios.lang.render import render
 from sophios.utils_yaml import wic_loader
 
-from .test_lang_parser import documents, scalar_payload_texts
+from .strategies import documents, scalar_payload_texts
 
 from .wic_corpus import CORPUS, corpus_id
 
