@@ -174,6 +174,8 @@ Every output has a concrete capture mechanism. Phase-specific support may includ
 
 Supported glob expressions are parsed into typed literal and input-reference components. Raw CWL expression strings cannot enter the executable model. `loadContents`, `outputEval`, arbitrary expressions, and other capture behavior are rejected until their lowering is approved.
 
+**Basename references (approved Phase 2 lowering).** `$(inputs.<name>.basename)` lowers to a typed basename segment valid in every template position: command tokens, stream targets, and output globs. The referenced input must be a path port, because the lowering relies on Nextflow staging an input under its original file name, which makes the staged path's name property exactly the CWL `basename`. Basename segments against value ports are unrepresentable in the executable model.
+
 ### Topology
 
 The executable graph validates endpoint existence, direction, multiplicity, acyclicity where required, unique emits, normalized-name collisions, and workflow-boundary consistency before rendering.
@@ -261,6 +263,7 @@ Phase 2 does not authorize arbitrary Groovy parsing.
 Approved Phase 2 lowerings to date:
 
 - Boolean `inputBinding` flags (§6, Commands).
+- `$(inputs.<name>.basename)` references (§6, Outputs and globs).
 
 ### Phase 3 — Native inference, advanced execution, and service delivery
 
