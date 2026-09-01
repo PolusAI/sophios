@@ -1,15 +1,21 @@
 import argparse
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 from . import __version__
 from .wic_types import CompilerOptions, GraphSettings, YamlTagPaths
 
 parser = argparse.ArgumentParser(prog='main', description='Convert a high-level yaml workflow file to CWL.')
 
-parser.add_argument('--yaml', type=str,
-                    required=(not ('--generate_config' in sys.argv or '--generate_schemas' in sys.argv)),
+# Not `required=`: whether `--yaml` is needed depends on whether one of the
+# generate modes was asked for, and argparse cannot express that. The old
+# spelling computed it at *import* time from the host process's `sys.argv`, so
+# importing sophios from a program whose own command line happened to carry
+# `--generate_config` silently made `--yaml` optional. That is the defect this
+# module was cleaned up to remove, in the one place a scan for writes to
+# `sys.argv` cannot see, because it is a read. `_main` enforces it instead,
+# where both generate flags are already parsed and known.
+parser.add_argument('--yaml', type=str, default='',
                     help='Yaml workflow file')
 group_gen = parser.add_mutually_exclusive_group()
 group_gen.add_argument('--generate_schemas', default=False, action="store_true",
@@ -132,17 +138,26 @@ parser.add_argument('--passthrough_flags', type=str, default='no', required=Fals
                     If set to 'no' (default) passthrough flags won't be sent to the cwl_runner backend.''')
 
 
+def _argv(yaml_path: str = '', suppliedargs: list[str] | None = None) -> list[str]:
+    """The argument list a synthesised parse should read.
+
+    Note there is no program name: `parse_args` takes the arguments *after*
+    argv[0]. Passing the list explicitly is the whole point — this module used
+    to build a full argv and install it over `sys.argv` with
+    `unittest.mock.patch` so that a no-argument `parse_args()` would read it.
+    That put a test idiom on the production path and mutated global process
+    state to compute a value, in a library other people embed.
+    """
+    return ['--yaml', yaml_path] + (suppliedargs or [])
+
+
 def get_args(yaml_path: str = '', suppliedargs: list[str] | None = None) -> argparse.Namespace:
     """This is used to get mock command line arguments, default + suppled args
 
     Returns:
         argparse.Namespace: The mocked command line arguments
     """
-    defaultargs = ['sophios', '--yaml', yaml_path]  # ignore --yaml
-    testargs = defaultargs + (suppliedargs or [])
-    with patch.object(sys, 'argv', testargs):
-        args = parser.parse_args()
-    return args
+    return parser.parse_args(_argv(yaml_path, suppliedargs))
 
 
 def get_known_and_unknown_args(
@@ -154,21 +169,40 @@ def get_known_and_unknown_args(
         tuple[argparse.Namespace, list[str]]: The mocked, recognized command line arguments,
             and the list of remaining unrecognized argument strings.
     """
-    defaultargs = ['sophios', '--yaml', yaml_path]  # ignore --yaml
-    testargs = defaultargs + (suppliedargs or [])
-    with patch.object(sys, 'argv', testargs):
-        known_args, unknown_args = parser.parse_known_args()
-    return known_args, unknown_args
+    return parser.parse_known_args(_argv(yaml_path, suppliedargs))
 
 
-def get_dicts_for_compilation() -> tuple[CompilerOptions, GraphSettings, YamlTagPaths]:
-    """This is used to get default command line arguments for compilation
-    as a tuple of three dictionaries
+def default_compilation_settings() -> tuple[CompilerOptions, GraphSettings, YamlTagPaths]:
+    """The settings a compilation runs with when nobody has chosen otherwise.
 
-    Returns:
-        tuple[CompilerOptions, GraphSettings, YamlTagPaths]: The mocked command line arguments
+    This is what a library caller wants — the Python API, the schema
+    generator, the subinterpreter — and it exists so that asking for defaults
+    is a thing you can *say*. Previously the only way to obtain them was to
+    fabricate a command line, so library code called a CLI helper and got its
+    configuration from an argv that no user had typed. Defaults still come
+    from one place, the parser's own `default=` values; only the fiction is
+    gone.
     """
-    args = get_args()
+    return get_dicts_for_compilation(get_args())
+
+
+def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions, GraphSettings, YamlTagPaths]:
+    """Split parsed command-line arguments into the three dicts compilation needs.
+
+    The adapter at the CLI boundary, and the only function here that takes an
+    `argparse.Namespace`. Arguments are parsed once, converted here, and
+    passed onward as plain settings — nothing downstream of `main` sees a
+    Namespace, and no library signature grows an `args` parameter.
+
+    `args` is required on purpose. It used to default to a fresh parse of a
+    synthesised argv, which meant a caller holding the user's real arguments
+    could forget to pass them and silently compile with defaults instead —
+    which is what `main` did, so `--lang_version`, `--allow_raw_cwl`,
+    `--inference_disable`, `--partial_failure_enable`,
+    `--insert_steps_automatically` and every graph setting were discarded on
+    the way to the compiler. Callers that genuinely want defaults now say so
+    with `default_compilation_settings()`.
+    """
     # core compiler options for transformation into CWL
     compiler_options: CompilerOptions = {
         'partial_failure_enable': args.partial_failure_enable,

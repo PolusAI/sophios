@@ -49,7 +49,7 @@ def _compile_minimal(yml: dict) -> None:
 
     from .test_setup import tools_cwl  # pylint: disable=import-outside-toplevel
 
-    options, graph_settings, tag_paths = sophios.cli.get_dicts_for_compilation()
+    options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
     graph = GraphReps(graphviz.Digraph(name='cluster_provoke'), nx.DiGraph(), GraphData('provoke'))
     sophios.compiler.compile_workflow(YamlTree(StepId('provoke', 'global'), yml),
                                       options, graph_settings, tag_paths,

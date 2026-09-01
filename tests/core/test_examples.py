@@ -210,7 +210,7 @@ def run_workflows(
         step_id = StepId(yaml_tree.step_id.stem + '_inline', yaml_tree.step_id.plugin_ns)
         yaml_tree = YamlTree(step_id, yaml_tree.yml)
 
-    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation()
+    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
 
     graph = get_graph_reps(str(yml_path))
     compiler_info = sophios.compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
@@ -290,7 +290,7 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path) -> None:
     graph = get_graph_reps(str(yml_path))
     is_root = True
 
-    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation()
+    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
 
     compiler_info = sophios.compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
                                                       [], [graph], {}, {}, {}, {}, tools_cwl,
@@ -389,7 +389,7 @@ def test_inline_subworkflows(yml_path_str: str, yml_path: Path) -> None:
     if namespaces_list == []:
         return
 
-    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation()
+    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
 
     graph = get_graph_reps(str(yml_path))
     compiler_info = sophios.compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths, [], [graph], {},

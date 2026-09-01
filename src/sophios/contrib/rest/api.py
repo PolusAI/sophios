@@ -84,7 +84,12 @@ async def compile_wf(request: Request) -> Json:
     graph = get_graph_reps(wkflw_name)
     yaml_tree: YamlTree = YamlTree(StepId(wkflw_name, plugin_ns), workflow_can)
 
-    compiler_options, graph_settings, yaml_tag_paths = get_dicts_for_compilation()
+    # From the arguments this endpoint actually built, not a fresh default
+    # parse. Nothing observable changes here — `wkflw_name` is a name, not a
+    # path, and the sole consumer takes `Path(...).parent.absolute()`, which
+    # is the cwd for both `''` and `'workflow_'`. It is still the right shape:
+    # re-deriving configuration that is already in hand is how the two drift.
+    compiler_options, graph_settings, yaml_tag_paths = get_dicts_for_compilation(args)
 
     # ========= COMPILE WORKFLOW ================
     compiler_info: CompilerInfo = compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths,

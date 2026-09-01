@@ -57,7 +57,7 @@ class TestFuzzyCompile(unittest.TestCase):
         graphdata = GraphData(str(yml_path))
         graph = GraphReps(graph_gv, graph_nx, graphdata)
 
-        compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation()
+        compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
 
         try:
             yaml_tree_raw = sophios.ast.read_ast_from_disk(args.homedir, y_t, yml_paths, tools_cwl, validator,

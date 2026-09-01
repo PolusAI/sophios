@@ -20,7 +20,7 @@ from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
 from sophios import compiler, input_output, plugins, post_compile as pc, run_local as rl
 from sophios.input_output import dump_wic_yaml as _dump_yaml
-from sophios.cli import get_dicts_for_compilation, get_known_and_unknown_args
+from sophios.cli import default_compilation_settings, get_known_and_unknown_args
 from sophios.runtime_inputs import normalize_rose_tree_cwl, normalize_rose_tree_job_inputs
 from sophios.utils import convert_args_dict_to_args_list, step_name_str
 from sophios.utils_graphs import get_graph_reps
@@ -466,7 +466,7 @@ def compile_workflow(
     )
     merged_tools = _merged_known_tools(workflow._flatten_steps(), tool_registry)
 
-    compiler_options, graph_settings, yaml_tag_paths = get_dicts_for_compilation()
+    compiler_options, graph_settings, yaml_tag_paths = default_compilation_settings()
     compiler_info = compiler.compile_workflow(
         yaml_tree,
         compiler_options,

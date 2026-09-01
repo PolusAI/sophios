@@ -17,7 +17,8 @@ from . import input_output as io
 from . import post_compile as pc
 from . import ast, cli, compiler, inference, inlineing, plugins, run_local, utils  # , utils_graphs
 from .schemas import wic_schema
-from .wic_types import GraphData, GraphReps, Json, RoseTree, StepId, Tools, Yaml, YamlTree
+from .wic_types import (CompilerOptions, GraphData, GraphReps, GraphSettings, Json, RoseTree,
+                        StepId, Tools, Yaml, YamlTagPaths, YamlTree)
 
 
 def _write_intermediate_wic(yaml_stem: str, suffix: str, yaml_doc: Yaml, *, enabled: bool) -> Path | None:
@@ -93,14 +94,15 @@ def _load_and_prepare_yaml_tree(args: argparse.Namespace, yml_paths: dict[str, d
 
 
 def _build_and_compile_workflow(yaml_path: str, yaml_stem: str, yaml_tree: YamlTree, tools_cwl: Tools,
-                                graph_dark_theme: bool) -> tuple[graphviz.Digraph, RoseTree]:
+                                compiler_options: CompilerOptions, graph_settings: GraphSettings,
+                                yaml_tag_paths: YamlTagPaths) -> tuple[graphviz.Digraph, RoseTree]:
     """Build the root GraphViz digraph and compile the workflow into a rose tree, exiting on compile failure."""
     rootgraph = graphviz.Digraph(name=yaml_path)
     # newrank='True' ranks nodes globally (rather than per-cluster), which is
     # required for GraphData.ranksame constraints to work across subgraphs/clusters.
     rootgraph.attr(newrank='True')
     rootgraph.attr(bgcolor="transparent")  # Useful for making slides
-    font_edge_color = 'black' if graph_dark_theme else 'white'
+    font_edge_color = 'black' if graph_settings['graph_dark_theme'] else 'white'
     rootgraph.attr(fontcolor=font_edge_color)
 
     # This can be used to visually 'inline' all subworkflows (but NOT the CWL).
@@ -119,8 +121,6 @@ def _build_and_compile_workflow(yaml_path: str, yaml_stem: str, yaml_tree: YamlT
         subgraph_nx = nx.DiGraph()
         graphdata = GraphData(yaml_path)
         subgraph = GraphReps(subgraph_gv, subgraph_nx, graphdata)
-
-        compiler_options, graph_settings, yaml_tag_paths = cli.get_dicts_for_compilation()
 
         try:
             compiler_info = compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
@@ -170,6 +170,13 @@ def _main() -> None:
     """See docs/userguide.md"""
     args, unknown_args = cli.parser.parse_known_args()
     plugins.logging_filters()
+
+    # `--yaml` is required unless one of the generate modes was asked for.
+    # Checked here rather than by argparse: the requirement is conditional on
+    # another flag, which argparse cannot express without reading `sys.argv`
+    # at import time — see the note in cli.py.
+    if not args.yaml and not (args.generate_config or args.generate_schemas):
+        cli.parser.error('the following arguments are required: --yaml')
 
     # User may specify a different homedir
     default_config_file = Path(args.homedir)/'wic'/'global_config.json'
@@ -231,8 +238,11 @@ def _main() -> None:
 
     yaml_path, yaml_stem, yaml_tree = _load_and_prepare_yaml_tree(args, yml_paths, tools_cwl, validator)
 
+    # The one conversion from parsed arguments to settings, at the boundary.
+    # Everything below this line takes values; no Namespace goes further.
+    compiler_options, graph_settings, yaml_tag_paths = cli.get_dicts_for_compilation(args)
     rootgraph, rose_tree = _build_and_compile_workflow(yaml_path, yaml_stem, yaml_tree, tools_cwl,
-                                                       args.graph_dark_theme)
+                                                       compiler_options, graph_settings, yaml_tag_paths)
 
     rose_tree = plugins.cwl_prepend_dockerFile_include_path_rosetree(rose_tree)
 

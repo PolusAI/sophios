@@ -12,7 +12,7 @@ import yaml
 
 import sophios
 from sophios import ast, compiler, utils_cwl
-from sophios.cli import get_dicts_for_compilation
+from sophios.cli import default_compilation_settings
 from sophios.utils_yaml import wic_loader
 from sophios.wic_types import GraphData, GraphReps, NodeData, StepId, Yaml, YamlTree
 from ..wic_types import Json, Tools
@@ -603,7 +603,7 @@ def compile_workflow_generate_schema(homedir: str,
     graph_nx = nx.DiGraph()
     graphdata = GraphData(str(yml_path))
     graph = GraphReps(graph_gv, graph_nx, graphdata)
-    compiler_options, graph_settings, yaml_tag_paths = get_dicts_for_compilation()
+    compiler_options, graph_settings, yaml_tag_paths = default_compilation_settings()
 
     compiler_info = compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths, [], [graph],
                                               {}, {}, {}, {}, tools_cwl, True, relative_run_path=True, testing=True)
