@@ -392,7 +392,8 @@ def test_inline_subworkflows(yml_path_str: str, yml_path: Path) -> None:
     compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
 
     graph = get_graph_reps(str(yml_path))
-    compiler_info = sophios.compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths, [], [graph], {},
+    compiler_info = sophios.compiler.compile_workflow(yaml_tree, compiler_options, graph_settings,
+                                                      yaml_tag_paths, [], [graph], {},
                                                       {}, {}, {}, tools_cwl, True, relative_run_path=True, testing=True)
     rose_tree = compiler_info.rose
     sub_node_data: NodeData = rose_tree.data
@@ -404,7 +405,8 @@ def test_inline_subworkflows(yml_path_str: str, yml_path: Path) -> None:
         inline_yaml_tree, _len_substeps = sophios.inlineing.inline_subworkflow(yaml_tree, namespaces)
 
         inline_graph = get_graph_reps(str(yml_path))
-        inline_compiler_info = sophios.compiler.compile_workflow(inline_yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
+        inline_compiler_info = sophios.compiler.compile_workflow(inline_yaml_tree, compiler_options,
+                                                                 graph_settings, yaml_tag_paths,
                                                                  [], [inline_graph], {}, {}, {}, {}, tools_cwl, True,
                                                                  relative_run_path=True, testing=True)
         inline_rose_tree = inline_compiler_info.rose

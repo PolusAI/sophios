@@ -316,7 +316,6 @@ def _wic_tag_schema(hypothesis: bool = False) -> Json:
     """The (recursive) schema of the wic: metadata annotation tag."""
     # NOTE: This schema needs to be recursive. Use dynamic anchors / references.
     # See https://json-schema.org/draft/2020-12/json-schema-core.html#dynamic-ref
-    # and https://stackoverflow.com/questions/69728686/explanation-of-dynamicref-dynamicanchor-in-json-schema-as-opposed-to-ref-and
 
     # TODO: restrict the str to the enum of all valid step keys
     pat_int_str = "\\([0-9]+, [A-Za-z0-9_\\.]+\\)"

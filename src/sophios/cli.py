@@ -133,7 +133,8 @@ parser.add_argument('--custom_net', type=str, required=False,
                     help='Passes --custom-net flag to cwltool.')
 parser.add_argument('--passthrough_flags', type=str, default='no', required=False,
                     help='''Indicates that the user is passing flags to the cwl_runner backend.
-                    No checks are done on the flags or values passed. User must verify that they are sending correct flags.
+                    No checks are done on the flags or values passed.
+                    User must verify that they are sending correct flags.
                     only two valid values of this flag 'yes' or 'no'.
                     If set to 'no' (default) passthrough flags won't be sent to the cwl_runner backend.''')
 

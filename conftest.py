@@ -12,7 +12,8 @@ CONTRIB_DIR = Path(__file__).resolve().parent / 'tests' / 'contrib'
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    parser.addoption('--cwl_runner', type=str, required=False, default='cwltool', choices=['cwltool', 'toil-cwl-runner'],
+    parser.addoption('--cwl_runner', type=str, required=False, default='cwltool',
+                     choices=['cwltool', 'toil-cwl-runner'],
                      help='The CWL runner to use for running workflows locally.')
 
 

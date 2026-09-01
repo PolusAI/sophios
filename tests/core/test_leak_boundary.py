@@ -48,10 +48,11 @@ CLAIMED_STEP_KEYS = frozenset({'id', 'in', 'out', 'wic'}) | Grammar.INTERPRETED_
 #: Top-level keys the *compiler* owns, which is a larger set than the syntax
 #: layer's. `_document` claims only `steps` and `wic`; `compile_workflow` also
 #: writes `class` and `cwlVersion`, merges into `inputs`, `outputs` and
-#: `requirements`, and reads `outputSource` out of the `outputs` you supply. These properties drive the compiler, so they must
-#: exclude what the compiler owns — the old filter named the parser's two and
-#: was saved from the rest only by the improbability of `st.text` spelling
-#: `class`, which is safety by luck rather than by statement.
+#: `requirements`, and reads `outputSource` out of the `outputs` you supply.
+#: These properties drive the compiler, so they must exclude what the compiler
+#: owns — the old filter named the parser's two and was saved from the rest
+#: only by the improbability of `st.text` spelling `class`, which is safety by
+#: luck rather than by statement.
 COMPILER_OWNED_TOP_KEYS = frozenset({
     'steps', 'wic', 'class', 'cwlVersion', 'inputs', 'outputs', 'requirements',
     '$namespaces', '$schemas',

@@ -16,7 +16,6 @@ RawJson: TypeAlias = str
 Yaml: TypeAlias = dict[str, Any]
 
 # In python there are unfortunately an enormous number of ways to represent the humble struct.
-# See https://stackoverflow.com/questions/53409117/what-are-the-main-differences-of-namedtuple-and-typeddict-in-python-mypy
 # I have chosen to use NamedTuple to emphasize the immutability aspect (see below).
 # See https://mypy.readthedocs.io/en/stable/kinds_of_types.html#named-tuples
 

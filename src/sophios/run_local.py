@@ -148,7 +148,6 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
     now = datetime.now()
     date_time = now.strftime("%Y_%m_%d_%H.%M.%S")
     runner_outdir = _runner_outdir(basepath, cwl_runner, date_time, outdir)
-    # See https://github.com/common-workflow-language/cwltool/blob/5a645dfd4b00e0a704b928cc0bae135b0591cc1a/cwltool/command_line_tool.py#L94
     # NOTE: Using --leave-outputs to disable --outdir
     # See https://github.com/dnanexus/dx-cwl/issues/20
     # --outdir has one or more bugs which will cause workflows to fail!!!

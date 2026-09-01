@@ -95,13 +95,14 @@ desugared_payload_texts = st.one_of(opaque_payload_texts, construct_payload_text
 
 
 @st.composite
-def input_lines(draw: st.DrawFn, name: str | None = None, indent: str = '      ') -> str:  # pylint: disable=too-many-return-statements
+def input_lines(draw: st.DrawFn, name: str | None = None, indent: str = '      ') -> str:
     """One `in:` binding, in any of the forms the language admits.
 
     Both spellings of each construct are generated — the tagged form people
     write and the desugared form tooling emits — so the properties quantify
     over the language, not over the half of it the tests happened to spell.
     """
+    # pylint: disable=too-many-return-statements  # one return per surface form
     name = draw(identifiers) if name is None else name
     form = draw(st.sampled_from(['ii', 'anchor', 'alias', 'cwl', 'bare',
                                  'ii_desugared', 'anchor_desugared', 'alias_desugared', 'cwl_desugared']))

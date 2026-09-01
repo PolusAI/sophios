@@ -182,7 +182,8 @@ def perform_edge_inference(inference_use_naming_conventions: bool,
         in_name_in_inputs_file_workflow (bool): Used to determine whether\n
         failure to find a match should be considered an error.
         arg_key_in_yaml_tree_inputs (bool): Determines whether at least one level of recursion has been performed.
-        insertions (list[StepId]): If exact inference fails, a list of possible steps to automatically insert is stored here.
+        insertions (list[StepId]): If exact inference fails, a list of possible
+            steps to automatically insert is stored here.
         wic_steps (Yaml): The metadata associated with the given workflow.
         testing: Used to disable some optional features which are unnecessary for testing.
 
