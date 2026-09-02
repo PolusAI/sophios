@@ -232,10 +232,6 @@ class WicSidecar:
     entries: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.PASSTHROUGH, default=())
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
 
-    def entry(self, name: str) -> OpaqueCwl | None:
-        """Return a non-`steps` sidecar entry by name."""
-        return next((v for k, v in self.entries if k == name), None)
-
 
 @dataclass(frozen=True, slots=True)
 class Document:
@@ -252,7 +248,3 @@ class Document:
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
     #: True when `steps:` was written as a mapping rather than a sequence.
     steps_as_mapping: bool = surface(Shape.INTERNAL, default=False)
-
-    def step(self, step_id: str) -> Step | None:
-        """Return the first step with the given id, or None."""
-        return next((s for s in self.steps if s.id == step_id), None)
