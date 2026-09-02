@@ -11,8 +11,9 @@ span indexes real source text; and every corpus document parses.
 See design_docs/core-refactor-design.md, Spec 1.
 """
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any, Final, NamedTuple, get_args
 
 import pytest
 import yaml
@@ -226,13 +227,92 @@ def _payload(value: InputValue) -> Any:
 # --------------------------------------------------------------------------
 
 
+# --------------------------------------------------------------------------
+# Accepted shapes, and reported ones
+# --------------------------------------------------------------------------
+#
+# Every row is the same three steps — parse, check the verdict, inspect one
+# thing — so only the source and the claim are worth reading. Each row is
+# still a named case in the test report.
+
+
+class Accepted(NamedTuple):
+    """Source the language admits, and what the document must then hold."""
+
+    claim: str
+    source: str
+    holds: Callable[[Document], bool]
+
+
+ACCEPTED: Final[tuple[Accepted, ...]] = (
+    Accepted('a bare name is an unresolved name',
+             'steps:\n  s:\n    in:\n      e: plain\n',
+             lambda d: isinstance(d.steps[0].input('e'), UnresolvedName)),
+    Accepted('an untagged mapping input is an inline literal (§4.1)',
+             'steps:\n- id: s\n  in:\n    a: {some: mapping}\n',
+             lambda d: isinstance(d.steps[0].inputs[0][1], InlineLiteral)
+             and d.steps[0].inputs[0][1].value == {'some': 'mapping'}),
+    Accepted('sidecar step keys are structured, not strings',
+             'wic:\n  steps:\n    (1, alpha):\n      wic:\n        graphviz: {}\n',
+             lambda d: d.sidecar is not None
+             and (d.sidecar.steps[0][0].index, d.sidecar.steps[0][0].name) == (1, 'alpha')),
+    Accepted('a bare wic: is an empty sidecar, not an error',
+             'wic:\nsteps:\n  s:\n    in:\n      a: !ii 1\n',
+             lambda d: d.sidecar is not None),
+    Accepted('a step with no body at all is well-formed',
+             'steps:\n  some_step.wic:\n',
+             lambda d: d.steps[0].id == 'some_step.wic' and d.steps[0].inputs == ()),
+    Accepted('uninterpreted top-level keys survive',
+             '$namespaces:\n  edam: http://example\nsteps:\n  s: {}\n',
+             lambda d: dict(d.passthrough)['$namespaces'] == {'edam': 'http://example'}),
+)
+
+
+class Reported(NamedTuple):
+    """Source the language diagnoses, and what it must say about it."""
+
+    claim: str
+    source: str
+    code: Code
+    message_contains: str = ''
+    #: Whether a document survives alongside the diagnostic. Recovery is the
+    #: norm; only unparsable YAML leaves nothing to return.
+    recovers: bool = True
+
+
+REPORTED: Final[tuple[Reported, ...]] = (
+    Reported('a collection step key is reported, not stringified',
+             'steps:\n  ? [a, b]\n  : {}\n', Code.EXPECTED_SCALAR,
+             message_contains='mapping keys must be scalars'),
+    Reported('an input bound twice names the input (§4.2)',
+             'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
+             Code.DUPLICATE_KEY, message_contains="'f'"),
+    Reported('malformed YAML is located, not raised',
+             'steps:\n  - [unclosed\n', Code.INVALID_YAML, recovers=False),
+)
+
+
 @pytest.mark.fast
-def test_a_bare_name_is_an_unresolved_name() -> None:
-    """The one input form with no tagged/desugared pair, so the equivalence
-    property above cannot reach it."""
-    document = parse('steps:\n  s:\n    in:\n      e: plain\n', 't.wic').document
-    assert document is not None
-    assert isinstance(document.steps[0].input('e'), UnresolvedName)
+@pytest.mark.parametrize('case', ACCEPTED, ids=[case.claim for case in ACCEPTED])
+def test_accepted_shapes(case: Accepted) -> None:
+    """Each admitted shape parses, and the AST carries what it should."""
+    result = parse(case.source, 'accepted.wic')
+    assert result.ok, [str(d) for d in result.diagnostics]
+    assert result.document is not None
+    assert case.holds(result.document), case.claim
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('case', REPORTED, ids=[case.claim for case in REPORTED])
+def test_reported_shapes(case: Reported) -> None:
+    """Each diagnosed shape reports its code, with a span, and recovers or not."""
+    result = parse(case.source, 'reported.wic')
+    matching = [d for d in result.diagnostics if d.code is case.code]
+    assert matching, f'{case.code} did not fire: {[str(d) for d in result.diagnostics]}'
+    assert all(d.span is not None for d in matching), 'diagnostic without a span'
+    if case.message_contains:
+        assert any(case.message_contains in d.message for d in matching)
+    assert (result.document is not None) is case.recovers
 
 
 @pytest.mark.fast
@@ -245,60 +325,6 @@ def test_sequence_and_mapping_steps_agree() -> None:
     from_map, from_seq = as_map.steps[0].inputs[0][1], as_seq.steps[0].inputs[0][1]
     assert isinstance(from_map, InlineLiteral) and isinstance(from_seq, InlineLiteral)
     assert from_map.value == from_seq.value
-
-
-@pytest.mark.fast
-def test_wic_step_keys_are_normalised() -> None:
-    """`"(1, name)"` sidecar keys become structured, not strings."""
-    doc = parse('wic:\n  steps:\n    (1, alpha):\n      wic:\n        graphviz: {}\n', 'w.wic').document
-    assert doc is not None and doc.sidecar is not None
-    key, _ = doc.sidecar.steps[0]
-    assert (key.index, key.name) == (1, 'alpha')
-
-
-@pytest.mark.fast
-def test_bare_wic_is_an_empty_sidecar_not_an_error() -> None:
-    """A `wic:` key with nothing under it is well-formed.
-
-    This is the shape that used to crash the CLI with a raw traceback.
-    """
-    result = parse('wic:\nsteps:\n  s:\n    in:\n      a: !ii 1\n', 'b.wic')
-    assert result.ok, [str(d) for d in result.diagnostics]
-    assert result.document is not None and result.document.sidecar is not None
-
-
-@pytest.mark.fast
-def test_malformed_yaml_reports_a_located_diagnostic() -> None:
-    """Broken YAML yields a diagnostic with a position, not an exception."""
-    result = parse('steps:\n  - [unclosed\n', 'bad.wic')
-    assert result.document is None
-    assert len(result.diagnostics) == 1
-    first: Diagnostic = result.diagnostics[0]
-    # pylint: disable-next=no-member  # pylint picks the slice overload for [0]
-    assert first.span is not None and first.span.start_line >= 1
-
-
-@pytest.mark.fast
-def test_repeated_input_is_reported_not_silently_resolved() -> None:
-    """An input bound twice is an error naming the input (§4.2).
-
-    YAML leaves repeated keys undefined, so keeping either binding would mean
-    choosing silently on the writer's behalf.
-    """
-    result = parse('steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n', 'dup.wic')
-
-    assert [d.code for d in result.diagnostics] == [Code.DUPLICATE_KEY]
-    assert "'f'" in result.diagnostics[0].message
-    assert result.diagnostics[0].span is not None
-    assert result.diagnostics[0].span.start_line == 5
-
-
-@pytest.mark.fast
-def test_passthrough_keys_are_retained() -> None:
-    """Top-level keys the language does not interpret survive parsing."""
-    doc = parse('$namespaces:\n  edam: http://example\nsteps:\n  s: {}\n', 'p.wic').document
-    assert doc is not None
-    assert dict(doc.passthrough)['$namespaces'] == {'edam': 'http://example'}
 
 
 @pytest.mark.fast
@@ -392,23 +418,6 @@ def test_passthrough_scalars_resolve_exactly_as_the_loader(text: str) -> None:
     top = dict(result.document.passthrough)['top']
     assert isinstance(top, dict)  # narrows the closed OpaqueCwl union
     assert top['k'] == yaml.safe_load(text)
-
-
-@pytest.mark.fast
-def test_collection_keys_are_reported_not_stringified() -> None:
-    """`? [a, b]` as a step key is a diagnostic, not a repr of node objects."""
-    result = parse('steps:\n  ? [a, b]\n  : {}\n', 'x.wic')
-    assert any(d.code is Code.EXPECTED_SCALAR for d in result.diagnostics)
-
-
-@pytest.mark.fast
-def test_untagged_collection_inputs_are_inline_literals() -> None:
-    """An untagged mapping in input position is `!ii` by definition (§4.1)."""
-    result = parse('steps:\n- id: s\n  in:\n    a: {some: mapping}\n', 'x.wic')
-    assert result.ok and result.document is not None
-    value = result.document.steps[0].inputs[0][1]
-    assert isinstance(value, InlineLiteral)
-    assert value.value == {'some': 'mapping'}
 
 
 @pytest.mark.fast
