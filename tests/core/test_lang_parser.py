@@ -22,7 +22,6 @@ from hypothesis import strategies as st
 
 from sophios.lang import (
     Code,
-    Diagnostic,
     Diagnostics,
     Document,
     EdgeDef,
@@ -609,7 +608,8 @@ def adversarial_yaml(draw: st.DrawFn) -> str:
 # built to catch) is an @example — same coverage, no separate test functions.
 @example('top: &a [*a]\n')                                # alias cycle
 @example('steps: &a\n- id: s\n  in:\n    x: *a\n')        # cycle via steps
-@example('wic: &w\n  steps: *w\n')                        # cycle via sidecar
+@example('wic: &w\n  steps: *w\n')                        # malformed key via alias, not a cycle
+@example('wic: &w\n  steps:\n    (1, a):\n      wic: *w\n')  # cycle via sidecar
 @example('_: !& []\n')                                    # CE-06: name tag on a collection
 @example('_: !foo bar\n')                                 # unknown tag, passthrough
 @example('a: !cwl b\n')                                   # the once-missing loader constructor
