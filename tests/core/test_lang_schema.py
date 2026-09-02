@@ -27,6 +27,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from sophios.lang import Code, Forms, Grammar, parse, to_json, wic_schema
+from sophios.schemas.wic_schema import _wic_tag_schema
 from sophios.lang.nodes import (
     Document,
     EdgeDef,
@@ -348,12 +349,18 @@ def test_the_validator_admits_exactly_the_declared_sidecar_keys() -> None:
     so `lang_version` reached the reference, the resolver and the compiler
     while the validator still rejected it before compilation ever started.
     """
-    from sophios.schemas.wic_schema import _wic_tag_schema
-
     validated = set(_wic_tag_schema(hypothesis=False)['properties'])
     declared = set(Grammar.SIDECAR_KEYS)
 
     assert validated == declared, (
         f'declared but not validated: {sorted(declared - validated)}; '
         f'validated but not declared: {sorted(validated - declared)}'
+    )
+
+    # The property suites validate against the hypothesis=True build, which
+    # drops `implementations`. Checking one mode lets a key added inside that
+    # guard keep this green while the two modes drift apart.
+    sampled = set(_wic_tag_schema(hypothesis=True)['properties'])
+    assert declared - sampled == {'implementations'}, (
+        f'the sampled schema drifted from the vocabulary: {sorted(declared - sampled)}'
     )

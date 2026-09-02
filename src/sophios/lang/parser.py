@@ -49,7 +49,7 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     #: makes the leak boundary a specification rather than an accident.
     INTERPRETED_STEP_KEYS: Final = frozenset({'scatter', 'scatterMethod', 'when', 'run'})
 
-    #: Every key the `wic:` block admits. The block is Sophios-owned syntax
+    #: Every key the `wic:` validator admits. The block is Sophios-owned syntax
     #: (§5), so the language layer names its vocabulary; the validator in
     #: `schemas/wic_schema.py` supplies a shape per key and is checked against
     #: this set. `lang_version` reached §7, the resolver and the compiler

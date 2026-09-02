@@ -281,6 +281,9 @@ class Reported(NamedTuple):
     claim: str
     source: str
     code: Code
+    #: The line the diagnostic must land on. Every row reports exactly one,
+    #: so the position is determinate and worth pinning.
+    line: int
     message_contains: str = ''
     #: Whether a document survives alongside the diagnostic. Recovery is the
     #: norm; only unparsable YAML leaves nothing to return.
@@ -289,31 +292,31 @@ class Reported(NamedTuple):
 
 REPORTED: Final[tuple[Reported, ...]] = (
     Reported('a collection step key is reported, not stringified',
-             'steps:\n  ? [a, b]\n  : {}\n', Code.EXPECTED_SCALAR,
+             'steps:\n  ? [a, b]\n  : {}\n', Code.EXPECTED_SCALAR, 2,
              message_contains='mapping keys must be scalars'),
     Reported('an input bound twice names the input (§4.2)',
              'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
-             Code.DUPLICATE_KEY, message_contains="'f'"),
+             Code.DUPLICATE_KEY, 5, message_contains="'f'"),
     Reported('a step that is not a mapping is reported',
-             'steps:\n  - 42\n', Code.EXPECTED_MAPPING,
+             'steps:\n  - 42\n', Code.EXPECTED_MAPPING, 2,
              message_contains='each step must be a mapping'),
     Reported('a step body key repeated names the key',
              'steps:\n- id: s\n  in: {a: !ii 1}\n  in: {b: !ii 2}\n',
-             Code.DUPLICATE_KEY, message_contains="step key 'in'"),
+             Code.DUPLICATE_KEY, 4, message_contains="step key 'in'"),
     Reported('a second id: inside a step body is contradictory, not a tiebreak',
              'steps:\n  s:\n    id: other\n',
-             Code.DUPLICATE_KEY, message_contains='already has its identity'),
+             Code.DUPLICATE_KEY, 3, message_contains='already has its identity'),
     Reported('an out: entry that is neither name nor single-key mapping',
-             'steps:\n  s:\n    out: [[a, b]]\n', Code.EXPECTED_SCALAR,
+             'steps:\n  s:\n    out: [[a, b]]\n', Code.EXPECTED_SCALAR, 3,
              message_contains='each out: entry must be'),
     Reported('a wic: block reached through its own alias',
              'wic: &w\n  steps:\n    (1, a):\n      wic: *w\n',
-             Code.RECURSIVE_ALIAS, message_contains='contains itself'),
+             Code.RECURSIVE_ALIAS, 1, message_contains='contains itself'),
     Reported('a repeated wic: step key names the key',
              'wic:\n  steps:\n    (1, a): {}\n    (1, a): {}\n',
-             Code.DUPLICATE_KEY, message_contains="wic: step key '(1, a)'"),
+             Code.DUPLICATE_KEY, 4, message_contains="wic: step key '(1, a)'"),
     Reported('malformed YAML is located, not raised',
-             'steps:\n  - [unclosed\n', Code.INVALID_YAML, recovers=False),
+             'steps:\n  - [unclosed\n', Code.INVALID_YAML, 3, recovers=False),
 )
 
 
@@ -330,11 +333,14 @@ def test_accepted_shapes(case: Accepted) -> None:
 @pytest.mark.fast
 @pytest.mark.parametrize('case', REPORTED, ids=[case.claim for case in REPORTED])
 def test_reported_shapes(case: Reported) -> None:
-    """Each diagnosed shape reports its code, with a span, and recovers or not."""
+    """Each diagnosed shape reports exactly one diagnostic, at its line."""
     result = parse(case.source, 'reported.wic')
+    assert len(result.diagnostics) == 1, [str(d) for d in result.diagnostics]
     matching = [d for d in result.diagnostics if d.code is case.code]
     assert matching, f'{case.code} did not fire: {[str(d) for d in result.diagnostics]}'
-    assert all(d.span is not None for d in matching), 'diagnostic without a span'
+    lines = [d.span.start_line for d in matching if d.span is not None]
+    assert len(lines) == len(matching), 'diagnostic without a span'
+    assert lines == [case.line], 'reported on the wrong line'
     if case.message_contains:
         assert any(case.message_contains in d.message for d in matching)
     assert (result.document is not None) is case.recovers
