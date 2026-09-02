@@ -152,7 +152,30 @@ class NfInputReference:
         return {"kind": "input", "name": self.name}
 
 
-NfTemplateSegment = NfLiteral | NfInputReference
+@dataclass(frozen=True, slots=True)
+class NfBasenameReference:
+    """Reference to the staged file name of one path input.
+
+    Nextflow stages an input under its original file name, so the staged
+    path's name is exactly the CWL ``basename``.
+    """
+
+    name: str
+
+    def __post_init__(self) -> None:
+        _validate_ir_identifier(self.name, field_name="template basename reference")
+
+    def to_dict(self) -> dict[str, str]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, str]: The segment as ``{"kind": "basename", "name": ...}``.
+        """
+        return {"kind": "basename", "name": self.name}
+
+
+NfTemplateSegment = NfLiteral | NfInputReference | NfBasenameReference
+NfReferenceSegment = NfInputReference | NfBasenameReference
 
 
 def _segment_from_dict(value: Mapping[str, Any]) -> NfTemplateSegment:
@@ -164,6 +187,9 @@ def _segment_from_dict(value: Mapping[str, Any]) -> NfTemplateSegment:
         case "input":
             _check_fields(item, type_name="NfInputReference", required={"kind", "name"})
             return NfInputReference(item["name"])
+        case "basename":
+            _check_fields(item, type_name="NfBasenameReference", required={"kind", "name"})
+            return NfBasenameReference(item["name"])
         case kind:
             raise ValueError(f"unsupported template segment kind {kind!r}")
 
@@ -177,7 +203,7 @@ class NfTemplate:
     def __post_init__(self) -> None:
         canonical: list[NfTemplateSegment] = []
         for segment in self.segments:
-            if not isinstance(segment, (NfLiteral, NfInputReference)):
+            if not isinstance(segment, (NfLiteral, NfInputReference, NfBasenameReference)):
                 raise TypeError("template segments must be typed literal or input references")
             if isinstance(segment, NfLiteral) and canonical and isinstance(canonical[-1], NfLiteral):
                 canonical[-1] = NfLiteral(canonical[-1].value + segment.value)
@@ -487,20 +513,26 @@ class NfProcess:
             *(template for template in (self.command.stdin, self.command.stdout, self.command.stderr) if template),
             *(port.glob for port in outputs if port.glob),
         ]
-        references = flag_names | {
-            segment.name
-            for template in templates
-            for segment in template.segments
-            if isinstance(segment, NfInputReference)
+        segments = [segment for template in templates for segment in template.segments]
+        basename_names = {
+            segment.name for segment in segments if isinstance(segment, NfBasenameReference)
+        }
+        references = flag_names | basename_names | {
+            segment.name for segment in segments if isinstance(segment, NfInputReference)
         }
         if unknown := references - input_names:
             raise ValueError(
                 f"process {self.name!r} templates reference unknown inputs: {', '.join(sorted(unknown))}"
             )
-        value_names = {port.name for port in inputs if port.qualifier == "val"}
-        if invalid := flag_names - value_names:
+        qualifiers = {port.name: port.qualifier for port in inputs}
+        if invalid := {name for name in flag_names if qualifiers[name] != "val"}:
             raise ValueError(
                 f"process {self.name!r} flag tokens must reference val inputs: "
+                f"{', '.join(sorted(invalid))}"
+            )
+        if invalid := {name for name in basename_names if qualifiers[name] != "path"}:
+            raise ValueError(
+                f"process {self.name!r} basename references must target path inputs: "
                 f"{', '.join(sorted(invalid))}"
             )
         match self.container:
@@ -743,13 +775,15 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow."""
 
-    SCHEMA_VERSION: ClassVar[int] = 3
+    SCHEMA_VERSION: ClassVar[int] = 4
     # Earlier versions whose value space is a strict subset of the current
     # model hydrate unchanged; serialization always writes SCHEMA_VERSION.
-    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3})
+    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4})
     # Each additive token or segment kind declares the version that
     # introduced it, so the subset property is enforced rather than assumed.
-    KIND_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType({"flag": 3})
+    KIND_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
+        {"flag": 3, "basename": 4}
+    )
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
     name: str

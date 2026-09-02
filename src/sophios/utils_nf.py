@@ -11,6 +11,7 @@ from .nf_symbols import normalize_nextflow_identifier
 from .nf_types import (
     ExecutableNextflowWorkflow,
     NF_INTERNAL_IDENTIFIERS,
+    NfBasenameReference,
     NfCommand,
     NfCommandToken,
     NfConnection,
@@ -22,6 +23,7 @@ from .nf_types import (
     NfProcessConnection,
     NfResources,
     NfTemplate,
+    NfTemplateSegment,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
@@ -169,9 +171,8 @@ def _ports(raw_ports: Any, *, outputs: bool) -> list[NfPort]:
 
 
 _INPUT_EXPRESSION = re.compile(
-    r"\$\(\s*inputs\.([A-Za-z_][A-Za-z0-9_]*)(?:\.path)?\s*\)"
+    r"\$\(\s*inputs\.([A-Za-z_][A-Za-z0-9_]*)(?:\.(path|basename))?\s*\)"
 )
-_BASENAME_EXPRESSION = re.compile(r"\$\(\s*inputs\.[A-Za-z_][A-Za-z0-9_]*\.basename\s*\)")
 
 
 def _template(value: Any, *, context: str) -> NfTemplate:
@@ -184,24 +185,23 @@ def _template(value: Any, *, context: str) -> NfTemplate:
             pass
         case _:
             raise ValueError(f"unsupported CWL command value {value!r}")
-    if _BASENAME_EXPRESSION.search(text):
-        raise ValueError(
-            f"{context} uses $(inputs.<name>.basename); basename lowering is deferred to Phase 2"
-        )
-    segments: list[NfLiteral | NfInputReference] = []
+    segments: list[NfTemplateSegment] = []
     offset = 0
     for match in _INPUT_EXPRESSION.finditer(text):
         if match.start() > offset:
             segments.append(NfLiteral(text[offset:match.start()]))
-        segments.append(NfInputReference(_identifier(match.group(1), context="input reference")))
+        name = _identifier(match.group(1), context="input reference")
+        segments.append(
+            NfBasenameReference(name) if match.group(2) == "basename" else NfInputReference(name)
+        )
         offset = match.end()
     if offset < len(text):
         segments.append(NfLiteral(text[offset:]))
     residual = _INPUT_EXPRESSION.sub("", text)
     if "$" in residual:
         raise ValueError(
-            f"{context} contains an unsupported CWL expression; Phase 1 supports only "
-            "$(inputs.<name>), optionally followed by .path"
+            f"{context} contains an unsupported CWL expression; the supported form is "
+            "$(inputs.<name>), optionally followed by .path or .basename"
         )
     return NfTemplate(tuple(segments or [NfLiteral(text)]))
 

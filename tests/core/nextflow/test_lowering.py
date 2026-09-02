@@ -10,6 +10,7 @@ import pytest
 from sophios import inference
 from sophios.input_output_nf import render_nextflow
 from sophios.nf_types import (
+    NfBasenameReference,
     NfFlag,
     NfInputReference,
     NfLiteral,
@@ -151,6 +152,40 @@ def test_flag_tokens_take_their_cwl_position_among_other_bindings() -> None:
     assert tokens[1] == NfTemplate((NfLiteral("--stable"),))
     assert tokens[2] == NfFlag("reverse", "-r")
     assert tokens[3] == NfTemplate((NfInputReference("source"),))
+
+
+@pytest.mark.fast
+def test_basename_lowers_to_a_typed_segment_in_every_template_position() -> None:
+    copy_tool = tool(
+        "COPY",
+        inputs={"source": {"type": "File", "inputBinding": {"position": 1}}},
+        outputs={
+            "result": {
+                "type": "File",
+                "outputBinding": {"glob": "$(inputs.source.basename).copy"},
+            }
+        },
+        arguments=[{"position": 2, "valueFrom": "$(inputs.source.basename).copy"}],
+        stdout="$(inputs.source.basename).log",
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("COPY", **{"in": {"source": "source"}, "out": ["result"]})],
+            inputs={"source": {"type": "File"}},
+            outputs={"result": {"type": "File", "outputSource": "COPY/result"}},
+        ),
+        [copy_tool],
+        workflow_inputs={"source": {"class": "File", "path": "lines.txt"}},
+    )
+
+    process = cwl_rosetree_to_nextflow(rose).processes[0]
+
+    expected = (NfBasenameReference("source"), NfLiteral(".copy"))
+    assert process.outputs[0].glob == NfTemplate(expected)
+    assert process.command.tokens[-1] == NfTemplate(expected)
+    assert process.command.stdout == NfTemplate(
+        (NfBasenameReference("source"), NfLiteral(".log"))
+    )
 
 
 @pytest.mark.fast

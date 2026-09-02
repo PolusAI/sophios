@@ -462,6 +462,44 @@ def test_boolean_flag_changes_observable_command_behavior(
 
 @pytest.mark.nextflow
 @pytest.mark.serial
+def test_basename_derived_output_name_executes(tmp_path: Path) -> None:
+    """R2.2: an output file name derived from a staged input's basename."""
+    write_tool = (
+        CommandLineTool(
+            "write_source",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="lines.txt")),
+        )
+        .base_command("echo")
+        .stdout("lines.txt")
+    )
+    write = Step(write_tool, step_name="write_source")
+    write.inputs.message = "basename derived"
+
+    copy_tool = (
+        CommandLineTool(
+            "copy_named_after_source",
+            Inputs(source=Input(cwl.file, position=1)),
+            Outputs(result=Output(cwl.file, glob="$(inputs.source.basename).copy")),
+        )
+        .base_command("cp")
+        .argument("$(inputs.source.basename).copy", position=2)
+    )
+    copy_step = Step(copy_tool, step_name="copy_named_after_source")
+    copy_step.inputs.source = write.outputs.result
+
+    workflow = Workflow([write, copy_step], "nextflow_basename")
+    workflow.outputs.copied = copy_step.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    copies = list((tmp_path / "work").rglob("lines.txt.copy"))
+    assert [path.read_text(encoding="utf-8") for path in copies] == ["basename derived\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
 def test_mixed_adapter_and_builder_workflow_executes_end_to_end(tmp_path: Path) -> None:
     """One workflow mixing an imported adapter with tool_builder steps runs end to end.
 

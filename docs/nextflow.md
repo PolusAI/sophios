@@ -84,6 +84,23 @@ exactly one argument and `false` contributes nothing. A boolean binding
 without a prefix contributes nothing for either value, matching CWL. Absent
 optional booleans still reject until option lowering is approved.
 
+## Basename references
+
+`$(inputs.<name>.basename)` is supported in command arguments, stream targets,
+and output globs, so a tool can name its outputs after a staged input:
+
+```yaml
+outputs:
+  result:
+    type: File
+    outputBinding:
+      glob: $(inputs.source.basename).copy
+```
+
+The reference must target a `File` or `Directory` input. Nextflow stages an
+input under its original file name, so the staged name is exactly the CWL
+`basename`.
+
 ## Current limits
 
 - Workflows must be flat and use `CommandLineTool`-equivalent processes.

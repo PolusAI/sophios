@@ -14,6 +14,7 @@ from sophios.input_output_nf import (
 )
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
+    NfBasenameReference,
     NfCommand,
     NfFlag,
     NfLiteral,
@@ -174,6 +175,26 @@ def test_flag_workflow_artifacts_are_byte_stable(tmp_path: Path) -> None:
 
     assert {path.name: path.read_bytes() for path in paths} == first
     assert render_nextflow(workflow) == render_nextflow(workflow)
+
+
+@pytest.mark.serial
+def test_renders_basename_segments_in_commands_and_globs() -> None:
+    basename = NfTemplate((NfBasenameReference("source"), NfLiteral(".copy")))
+    process = NfProcess(
+        "COPY",
+        [NfPort("source", "path")],
+        [NfPort("result", "path", "result", basename)],
+        NfCommand((NfTemplate((NfLiteral("cp"),)), basename)),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [NfWorkflowInputConnection("source", "COPY", "source")],
+        {"source": "lines.txt"},
+    ))
+
+    assert "source.name.toString() + '.copy'" in rendered
+    assert 'path "${source.name}.copy", emit: result' in rendered
 
 
 @pytest.mark.fast

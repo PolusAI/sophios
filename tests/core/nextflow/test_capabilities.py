@@ -512,27 +512,27 @@ def test_rejects_absent_optional_workflow_input_feeding_required_input() -> None
 
 
 @pytest.mark.fast
-def test_rejects_basename_input_expressions() -> None:
+def test_rejects_basename_against_a_value_input() -> None:
     basename = tool(
         "BASENAME",
-        inputs={"source": {"type": "File"}},
+        inputs={"label": {"type": "string"}},
         outputs={
             "result": {
                 "type": "File",
-                "outputBinding": {"glob": "$(inputs.source.basename).txt"},
+                "outputBinding": {"glob": "$(inputs.label.basename).txt"},
             }
         },
     )
     rose = synthetic_rose(
         workflow_doc(
-            [step("BASENAME", **{"in": {"source": "source"}, "out": ["result"]})],
-            inputs={"source": {"type": "File"}},
+            [step("BASENAME", **{"in": {"label": "label"}, "out": ["result"]})],
+            inputs={"label": {"type": "string"}},
             outputs={"result": {"type": "File", "outputSource": "BASENAME/result"}},
         ),
         [basename],
-        workflow_inputs={"source": {"class": "File", "path": "input.txt"}},
+        workflow_inputs={"label": "input"},
     )
-    with pytest.raises(ValueError, match="basename"):
+    with pytest.raises(ValueError, match="basename.*path"):
         cwl_rosetree_to_nextflow(rose)
 
 

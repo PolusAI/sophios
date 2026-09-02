@@ -10,6 +10,7 @@ import pytest
 from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
+    NfBasenameReference,
     NfCommand,
     NfCommandToken,
     NfFlag,
@@ -69,14 +70,14 @@ def test_executable_schema_declares_version_and_kind() -> None:
     workflow = ExecutableNextflowWorkflow("wf", [], [], {})
     payload = workflow.to_dict()
 
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == 4
     assert payload["representation_kind"] == "executable"
 
     payload["schema_version"] = 1
     with pytest.raises(ValueError, match="schema version"):
         ExecutableNextflowWorkflow.from_dict(payload)
 
-    payload["schema_version"] = 3
+    payload["schema_version"] = 4
     payload["representation_kind"] = "structural"
     with pytest.raises(ValueError, match="representation kind"):
         ExecutableNextflowWorkflow.from_dict(payload)
@@ -201,16 +202,41 @@ def test_flags_are_unrepresentable_outside_command_position() -> None:
 
 
 @pytest.mark.fast
+def test_basename_segment_survives_hydration() -> None:
+    process = NfProcess(
+        "COPY",
+        [NfPort("source", "path")],
+        [NfPort("result", "path", "result", NfTemplate((NfBasenameReference("source"),)))],
+        NfCommand((NfTemplate((NfLiteral("cp"),)), NfTemplate((NfBasenameReference("source"),)))),
+    )
+    assert NfProcess.from_dict(process.to_dict()) == process
+    assert NfBasenameReference("source").to_dict() == {
+        "kind": "basename",
+        "name": "source",
+    }
+
+
+@pytest.mark.fast
+def test_basename_segment_must_reference_a_path_input() -> None:
+    command = NfCommand((NfTemplate((NfLiteral("cp"),)), NfTemplate((NfBasenameReference("source"),))))
+    with pytest.raises(ValueError, match="unknown inputs"):
+        NfProcess("COPY", [], [], command)
+    with pytest.raises(ValueError, match="basename.*path"):
+        NfProcess("COPY", [NfPort("source", "val")], [], command)
+
+
+@pytest.mark.fast
 def test_hydration_accepts_earlier_subset_schema_versions() -> None:
     payload = ExecutableNextflowWorkflow(
         "wf", [NfProcess("P", [], [], command("true"))], [], {}
     ).to_dict()
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == 4
 
-    payload["schema_version"] = 2
-    assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 3
+    for earlier in (2, 3):
+        payload["schema_version"] = earlier
+        assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 4
 
-    for unsupported in (1, 4):
+    for unsupported in (1, 5):
         payload["schema_version"] = unsupported
         with pytest.raises(ValueError, match="schema version"):
             ExecutableNextflowWorkflow.from_dict(payload)

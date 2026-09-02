@@ -9,6 +9,7 @@ from typing import Any
 from .nf_types import (
     ExecutableNextflowWorkflow,
     NF_SHELL_QUOTE_HELPER,
+    NfBasenameReference,
     NfConnection,
     NfFlag,
     NfInputReference,
@@ -58,13 +59,18 @@ def _groovy_gstring_fragment(value: str) -> str:
     return value.translate(_GSTRING_FRAGMENT_TABLE)
 
 
+def _segment_expression(segment: Any) -> str:
+    match segment:
+        case NfInputReference():
+            return f"{segment.name}.toString()"
+        case NfBasenameReference():
+            return f"{segment.name}.name.toString()"
+        case _:
+            return _groovy_literal(segment.value)
+
+
 def _template_expression(template: Any) -> str:
-    return " + ".join(
-        f"{segment.name}.toString()"
-        if isinstance(segment, NfInputReference)
-        else _groovy_literal(segment.value)
-        for segment in template.segments
-    )
+    return " + ".join(_segment_expression(segment) for segment in template.segments)
 
 
 def _shell_quote(value: str) -> str:
@@ -90,10 +96,13 @@ def _render_glob(template: Any) -> str:
         return _groovy_literal("".join(segment.value for segment in template.segments))
     rendered: list[str] = []
     for segment in template.segments:
-        if isinstance(segment, NfInputReference):
-            rendered.append(f"${{{segment.name}}}")
-        else:
-            rendered.append(_groovy_gstring_fragment(segment.value))
+        match segment:
+            case NfInputReference():
+                rendered.append(f"${{{segment.name}}}")
+            case NfBasenameReference():
+                rendered.append(f"${{{segment.name}.name}}")
+            case _:
+                rendered.append(_groovy_gstring_fragment(segment.value))
     return f'"{"".join(rendered)}"'
 
 
