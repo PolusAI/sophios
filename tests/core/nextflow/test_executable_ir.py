@@ -226,6 +226,26 @@ def test_basename_segment_must_reference_a_path_input() -> None:
 
 
 @pytest.mark.fast
+def test_basename_port_rule_covers_stream_and_glob_positions() -> None:
+    """The design claims validity in every template position, so check them all."""
+    derived = NfTemplate((NfBasenameReference("source"),))
+    with pytest.raises(ValueError, match="basename.*path"):
+        NfProcess(
+            "COPY",
+            [NfPort("source", "val")],
+            [],
+            NfCommand((NfTemplate((NfLiteral("cp"),)),), stdout=derived),
+        )
+    with pytest.raises(ValueError, match="basename.*path"):
+        NfProcess(
+            "COPY",
+            [NfPort("source", "val")],
+            [NfPort("result", "path", "result", derived)],
+            NfCommand((NfTemplate((NfLiteral("cp"),)),)),
+        )
+
+
+@pytest.mark.fast
 def test_hydration_accepts_earlier_subset_schema_versions() -> None:
     payload = ExecutableNextflowWorkflow(
         "wf", [NfProcess("P", [], [], command("true"))], [], {}

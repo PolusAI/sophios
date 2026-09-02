@@ -27,9 +27,14 @@ from sophios.nf_reader import (
 )
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
+    NfBasenameReference,
+    NfCommand,
+    NfInputReference,
+    NfLiteral,
     NfPort,
     NfProcess,
     NfResources,
+    NfTemplate,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
@@ -60,6 +65,35 @@ def test_generated_source_roundtrips_through_reader(tmp_path: Path) -> None:
 def test_flag_artifacts_parse_and_promote(tmp_path: Path) -> None:
     """Promotion is byte-identity bound, so a new token shape must round-trip."""
     expected = flag_workflow()
+    write_nextflow_artifacts(expected, tmp_path)
+
+    parsed = parse_nf_file(tmp_path / "workflow.nf")
+
+    assert parsed.opaque_regions == ()
+    assert promote_nextflow_document(parsed) == expected
+
+
+@pytest.mark.fast
+def test_basename_artifacts_parse_and_promote(tmp_path: Path) -> None:
+    """A basename glob renders as a GString, so the reader must accept it back."""
+    derived = NfTemplate((NfBasenameReference("source"), NfLiteral(".copy")))
+    expected = ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [NfProcess(
+            "COPY",
+            [NfPort("source", "path")],
+            [NfPort("result", "path", "result", derived)],
+            NfCommand(
+                (NfTemplate((NfLiteral("cp"),)), NfTemplate((NfInputReference("source"),)), derived),
+                stdout=NfTemplate((NfBasenameReference("source"), NfLiteral(".log"))),
+            ),
+        )],
+        [
+            NfWorkflowInputConnection("source", "COPY", "source"),
+            NfWorkflowOutputConnection("COPY", "result", "copied"),
+        ],
+        {"source": "lines.txt"},
+    )
     write_nextflow_artifacts(expected, tmp_path)
 
     parsed = parse_nf_file(tmp_path / "workflow.nf")
