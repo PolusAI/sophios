@@ -500,16 +500,22 @@ def test_the_loader_accepts_every_owned_tag() -> None:
 @pytest.mark.fast
 @pytest.mark.parametrize('source', ['top: &a [*a]\n',
                                     'steps: &a\n- id: s\n  in:\n    x: *a\n',
-                                    'wic: &w\n  steps: *w\n'],
+                                    'wic: &w\n  steps:\n    (1, a):\n      wic: *w\n'],
                          ids=['passthrough', 'steps', 'sidecar'])
 def test_alias_cycles_are_reported(source: str) -> None:
     """The contract: a cycle is a diagnosed error, never a quiet success.
 
     Totality (no raise) is the adversarial property's job, with these shapes
     pinned on it as @example; this asserts the report the reference promises.
+
+    The sidecar shape has to actually recurse through `_sidecar` to test that
+    contract — a self-referential `steps:` value one level up hits an
+    unrelated malformed-key check first and never reaches the cycle guard.
     """
     result = parse(source, 'cycle.wic')
     assert not result.ok, source
+    assert any(d.code is Code.RECURSIVE_ALIAS for d in result.diagnostics), \
+        [d.code for d in result.diagnostics]
 
 
 @pytest.mark.fast
