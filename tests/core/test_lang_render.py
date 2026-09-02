@@ -11,7 +11,7 @@ See design_docs/core-refactor-design.md, Spec 1.
 """
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 import yaml
@@ -31,6 +31,7 @@ from sophios.lang import (
     parse,
 )
 from sophios.lang.render import render
+from sophios.lang.spans import SourceSpan
 from sophios.utils_yaml import wic_loader
 
 from .strategies import documents, scalar_payload_texts
@@ -222,6 +223,41 @@ def test_render_emits_the_tagged_spelling() -> None:
     text = render(document)
     assert '!ii' in text
     assert 'wic_inline_input' not in text
+
+
+#: A value, and whether the renderer can spell it as an `!ii` payload.
+#:
+#: These reach the renderer with no source text behind them, which is the
+#: state every document built through the Python API is in. A parsed literal
+#: remembers how it was written and is transcribed verbatim, so the
+#: round-trip properties — `@example('!ii .nan')` included — never reach the
+#: code that has to *choose* a spelling.
+SYNTHESIZED: Final[tuple[tuple[str, Any, bool], ...]] = (
+    ('a NaN is tagged; it is the one value not equal to itself', float('nan'), True),
+    ('an infinity is tagged', float('inf'), True),
+    ("the string '0' desugars; a tag would re-type it to an int", '0', False),
+    ('an ordinary string is tagged', 'plain', True),
+)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('claim,value,tagged', SYNTHESIZED, ids=[c for c, _, _ in SYNTHESIZED])
+def test_a_synthesized_literal_gets_a_spelling_that_survives(claim: str, value: Any, tagged: bool) -> None:
+    """The renderer picks a spelling, and reparsing it returns the value."""
+    span = SourceSpan('synth.wic', 1, 1, 1, 1)
+    document = Document(steps=(Step(id='s', inputs=(('a', InlineLiteral(value, span)),)),))
+    text = render(document)
+    assert ('!ii' in text) is tagged, f'{claim}: {text!r}'
+
+    result = parse(text, 'synth.wic')
+    assert result.ok, [str(d) for d in result.diagnostics]
+    assert result.document is not None
+    reparsed = result.document.steps[0].inputs[0][1]
+    assert isinstance(reparsed, InlineLiteral)
+    if isinstance(value, float) and math.isnan(value):
+        assert isinstance(reparsed.value, float) and math.isnan(reparsed.value), claim
+    else:
+        assert reparsed.value == value, claim
 
 
 @pytest.mark.fast
