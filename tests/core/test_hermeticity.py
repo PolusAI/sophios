@@ -200,9 +200,29 @@ ORACLE_FILES: tuple[str, ...] = (
 )
 
 
+#: The exact wording `_poisoned` (tests/core/_poison_plugins.py) raises.
+#: Asserted against verbatim below, not just a nonzero exit code: pytest
+#: returns nonzero for plenty of reasons that have nothing to do with the
+#: poison firing — an ImportError while loading `-p` among them, which is
+#: exactly the failure `_run_poisoned`'s explicit `PYTHONPATH` now prevents.
+POISON_MESSAGE = 'plugin discovery reached under the hermeticity run'
+
+
 def _run_poisoned(targets: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
-    """Run pytest over `targets` with discovery poisoned and no config to read."""
-    env = {**os.environ, 'HOME': str(Path(tempfile.mkdtemp()))}
+    """Run pytest over `targets` with discovery poisoned and no config to read.
+
+    `PYTHONPATH` is set explicitly to `src:tests` rather than inherited from
+    `os.environ`. `-p core._poison_plugins` is resolved at pytest's
+    `consider_preparse`, before collection would otherwise put `tests/` on
+    `sys.path` — so without `tests/` on `PYTHONPATH` up front, the plugin
+    itself fails to import (`ImportError: No module named 'core'`) and every
+    caller of this function fails for that reason instead of the one it
+    claims to test. Built explicitly, not merged with an inherited value: a
+    `PYTHONPATH` that happens to already include `tests/` in one shell is not
+    evidence this works in general.
+    """
+    python_path = f'{REPO_ROOT / "src"}:{REPO_ROOT / "tests"}'
+    env = {**os.environ, 'HOME': str(Path(tempfile.mkdtemp())), 'PYTHONPATH': python_path}
     return subprocess.run(
         [sys.executable, '-m', 'pytest', '-p', 'core._poison_plugins', '-q',
          '-m', 'not slow', *targets],
@@ -233,6 +253,15 @@ def test_the_oracle_suite_passes_with_plugin_discovery_disabled() -> None:
 def test_the_poison_fires_on_a_suite_that_needs_discovery() -> None:
     """The companion. `test_fuzzy_compile` samples an environment-dependent
     schema by design, so it must fail under the poison. If it passes, the
-    poison is not installed and the run above proved nothing."""
+    poison is not installed and the run above proved nothing.
+
+    Asserts `POISON_MESSAGE` appears in the output, not merely that the
+    subprocess exits nonzero: pytest exits nonzero for reasons unrelated to
+    the poison too (a bad `-p` import, "no tests ran"), and a bare `!= 0`
+    check is satisfied by any of them just as well as by the poison firing —
+    which is exactly how this test passed for the wrong reason before.
+    """
     result = _run_poisoned(('tests/core/test_fuzzy_compile.py',))
-    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert POISON_MESSAGE in output, output

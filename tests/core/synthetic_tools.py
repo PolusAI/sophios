@@ -148,6 +148,12 @@ def required_inputs_of(stem: str) -> tuple[str, ...]:
     asked the compiler which inputs are required, and then a property that
     checked the compiler honoured them, would be asking one implementation to
     grade itself.
+
+    Blind spot: for a falsy-but-present default (`{'type': 'int', 'default': 0}`),
+    this function's `is not None` treats it as present while the compiler's
+    `bool(in_tool[arg].get('default'))` treats `0` as absent, so the two
+    disagree there — no stub has such a default, so
+    `test_required_inputs_agree_with_the_compilers_own_rule` never exercises it.
     """
     required = []
     for name, spec in inputs_of(stem).items():
