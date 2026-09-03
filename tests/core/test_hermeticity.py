@@ -35,15 +35,16 @@ REPO_ROOT = TESTS_ROOT.parent
 #: silently, and the point of the scan is that adding a module to the oracle is
 #: a decision someone made on purpose.
 #:
-#: Reduced for Task 1 to the two modules this task delivers so the scan has
-#: something real to check right now. Tasks 2-6 each add their own module
-#: below as it lands, and Task 7's final step restores the full list:
-#:   'core.ast_strategies', 'core.equivalence', 'core.transformations',
+#: Reduced for Task 1 to the two modules that task delivered; Task 2 adds
+#: `core.ast_strategies` as its own module lands. Tasks 3-6 each add their own
+#: module below as it lands, and Task 7's final step restores the full list:
+#:   'core.equivalence', 'core.transformations',
 #:   'core.test_generators', 'core.test_equivalence', 'core.test_equivalences',
 #:   'core.test_canonical_emission', 'core.test_predicates', 'core.test_canonical_path'
 ORACLE_MODULES = (
     'core.synthetic_tools',
     'core.hermetic',
+    'core.ast_strategies',
 )
 
 #: Reaching any of these means the suite's meaning depends on the machine.
@@ -191,7 +192,7 @@ def test_the_hermetic_entry_point_actually_compiles() -> None:
 #: Tasks 2-6 each uncomment their own file below as it lands, and Task 7's
 #: restore leaves the full list active.
 ORACLE_FILES: tuple[str, ...] = (
-    # 'tests/core/test_generators.py',
+    'tests/core/test_generators.py',
     # 'tests/core/test_equivalence.py',
     # 'tests/core/test_equivalences.py',
     # 'tests/core/test_canonical_emission.py',
