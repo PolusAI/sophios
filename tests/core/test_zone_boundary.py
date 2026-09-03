@@ -68,34 +68,43 @@ def _resolve_relative(module: str, node: ast.ImportFrom, is_package: bool) -> st
     return '.'.join(parts)
 
 
-def _dynamic_target(node: ast.Call) -> str | None:
+def _dynamic_target(node: ast.Call, package: str = PACKAGE) -> str | None:
     """Return the target of `import_module("literal")`, if it is a literal.
 
     A computed target cannot be resolved statically; see the module docstring.
+
+    `package` defaults to `sophios` so every existing caller is unchanged; see
+    `_imports_of` for why it is parameterised.
     """
     name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, 'id', None)
     if name != 'import_module' or not node.args:
         return None
     first = node.args[0]
     if isinstance(first, ast.Constant) and isinstance(first.value, str):
-        return first.value if first.value.startswith(PACKAGE) else None
+        return first.value if first.value.startswith(package) else None
     return None
 
 
-def _imports_of(path: Path, module: str) -> set[str]:
-    """Return the in-package modules that `path` imports, absolute and relative."""
+def _imports_of(path: Path, module: str, package: str = PACKAGE) -> set[str]:
+    """Return the in-package modules that `path` imports, absolute and relative.
+
+    `package` defaults to `sophios` so every existing caller is unchanged. The
+    oracle's hermeticity scan (tests/core/test_hermeticity.py) walks modules
+    under `tests/` with the same rules, and a second copy of this walk is a
+    second thing to keep correct.
+    """
     tree = ast.parse(path.read_text(encoding='utf-8'))
     is_package = path.name == '__init__.py'
     found: set[str] = set()
     for node in ast.walk(tree):
         match node:
             case ast.Call():
-                target = _dynamic_target(node)
+                target = _dynamic_target(node, package)
                 if target is not None:
                     found.add(target)
             case ast.Import():
-                found.update(a.name for a in node.names if a.name.startswith(PACKAGE))
-            case ast.ImportFrom(level=0, module=str() as mod) if mod.startswith(PACKAGE):
+                found.update(a.name for a in node.names if a.name.startswith(package))
+            case ast.ImportFrom(level=0, module=str() as mod) if mod.startswith(package):
                 found.add(mod)
                 found.update(f'{mod}.{a.name}' for a in node.names)
             case ast.ImportFrom(level=int() as level) if level > 0:
