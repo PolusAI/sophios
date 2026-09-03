@@ -672,5 +672,6 @@ def get_validator(tools_cwl: Tools, yml_stems: list[str], schema_store: dict[str
     # try temporarily commenting this line out to generate the schema anyway.
     # Then, in any yml file, the very first line should show a "schema stack trace"
     Draft202012Validator.check_schema(schema)
-    validator = Draft202012Validator(schema, registry=registry)
+    validator = Draft202012Validator(schema, resolver=registry.resolver())
     return validator
+
