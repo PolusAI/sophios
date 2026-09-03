@@ -426,14 +426,53 @@ would disable every property depending on it.
 survive byte-identically; residue validates as CWL v1.2; every corpus file
 parses.
 
-**Compiler semantics:**
+**The equivalence relation.** Most compiler-semantic properties here, and every
+differential property in Spec 3, have one shape:
+
+    compile(f(W)) ≡ compile(W)
+
+for a rewrite `f` that must not change meaning. They differ only in `f` and in
+what `≡` may ignore. That relation is therefore a **deliverable of this spec,
+not an idiom repeated per property**: three strengths, ordered as a lattice,
+each naming exactly what it forgives and why.
+
+| Strength | Ignores | Legitimate because |
+|---|---|---|
+| `IDENTICAL` | nothing | — |
+| `UP_TO_EMBEDDING` | `run:` paths | `run:` encodes where a document sits relative to its parent |
+| `UP_TO_RENAMING` | namespaced names | a namespace encodes nesting depth, so regrouping renames every port and moves no edge |
+
+It reports *where* two compilations diverge rather than *that* they do, because
+Spec 3 runs it over thousands of inputs. `UP_TO_RENAMING` compares the multiset
+of tools as well as the graph: isomorphism alone accepts a graph whose every
+step was replaced by a different tool of the same arity.
+
+**Equivalences** — each a rewrite plus the strength it preserves:
 
 - **Partition independence** — compiling a workflow equals compiling any
   partitioning of it, modulo namespacing. Generated workflows *and* generated
-  partitionings.
-- **Determinism** — identical output across `PYTHONHASHSEED`. A live hazard
-  exists on the speculative-insertion path, where a `set` of strings is
-  converted to a list; corpus workflows never reach that line.
+  partitionings. Inlining is the same law in the other direction.
+- **Path agreement** — Python API → `write_wic` → compile equals Python API →
+  compile.
+- **Idempotence** — compiling one input twice agrees. Not trivial: the compiler
+  mutates a module global, the tool registry, and four structures threaded
+  through the recursion.
+
+Step order is deliberately *not* one of these. Inference scans backwards and
+takes the most recent match, so order is part of what a workflow means.
+
+**Single-compilation predicates** — claims about one run, needing no relation:
+
+- **Canonical emission** — no `set` iteration order reaches the output. Three
+  sites let it: two set the emitted `requirements` key order and a step's `out`
+  list order and need no flag, and the third is on the speculative-insertion
+  path, reachable only behind `--insert_steps_automatically` with two or more
+  whitelisted converter tools. Stated as canonical order rather than as
+  agreement across `PYTHONHASHSEED`: the seed is the symptom, sortedness is
+  checkable on every example without a second interpreter, and a total static
+  scan reaches the site no generator can. It is also a precondition for the
+  relation above — while emitted order came from a set, `IDENTICAL` was a
+  strength nothing could satisfy.
 - **Namespace injectivity** — distinct ports never collide after namespacing.
 - **Edge soundness** — every inferred edge connects type-compatible ports.
 - **Termination** — compilation reaches a fixed point or emits a diagnostic;
@@ -441,8 +480,7 @@ parses.
 - **Totality** — every failure is a diagnostic, never an unhandled exception.
 
 **Canonical path** (Python API → Compute): compiled output validates under
-`cwltool`; path agreement between `write_wic` → compile and direct compile;
-compute payloads conform to their schema.
+`cwltool`; compute payloads conform to their schema.
 
 Every counterexample found is pinned as a permanent regression. A bug found once
 must never be findable again by chance.
@@ -506,12 +544,17 @@ change against a working tree.
 
 **Equivalence is demonstrated, not argued.** Old and new pipelines run side by
 side and their outputs are compared on every generated input, expressed as a
-property: *new ≡ old for all generated workflows*. A divergence blocks the
-change; it is never triaged as acceptable without a recorded decision. The old
-path is retired only after equivalence holds across the full generator and every
-Spec 2 property passes against the new pipeline.
+property: *new ≡ old for all generated workflows*. `≡` is the relation defined
+in §6.2, imported rather than reinvented — each phase extraction states the
+strength it claims to preserve, and a phase that can only claim
+`UP_TO_RENAMING` has said something about itself worth reviewing. A divergence
+blocks the change; it is never triaged as acceptable without a recorded
+decision. The old path is retired only after equivalence holds across the full
+generator and every Spec 2 property passes against the new pipeline.
 
-This is why Spec 2 precedes Spec 3. The other order is a rewrite with no oracle.
+This is why Spec 2 precedes Spec 3. The other order is a rewrite with no oracle
+— and, before the relation existed, one where each phase would have arrived
+with its own private notion of what "the same" meant.
 
 ### 7.4 Performance
 
