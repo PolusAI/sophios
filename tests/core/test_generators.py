@@ -14,10 +14,10 @@ from collections import Counter
 import pytest
 from hypothesis import find, given, settings
 
-from sophios.lang import Document, parse
+from sophios.lang import Code, Document, SophiosError, parse
 
 from . import ast_strategies as strat
-from .hermetic import COVERAGE
+from .hermetic import COVERAGE, ORACLE, compile_hermetic_cwl
 
 
 @pytest.mark.fast
@@ -75,6 +75,31 @@ def test_every_ill_formed_document_earns_its_own_diagnostic(case: tuple[str, obj
     result = parse(source, 'hostile.wic')
     codes = [d.code for d in result.diagnostics]
     assert expected in codes, f'expected {expected}, got {codes}\n{source}'
+
+
+@pytest.mark.fast
+@given(strat.excluded_documents('edge_def_in_input'))
+@ORACLE
+def test_edge_def_in_input_still_earns_wic011(document: Document) -> None:
+    """`NOT_YET_COMPILABLE`'s expiry mechanism for CE-13, not just its docstring.
+
+    Every document with an `!& name` bound to a step input must still
+    provably fail with exactly the diagnostic the exclusion's reason names —
+    "some diagnostic fired" would be satisfied by the wrong one. The day
+    `compiler.py` grows a `wic_anchor` case for `in:`, this goes red for the
+    right reason (a document that now compiles, not one that fails
+    differently), and whoever is standing there removes `edge_def_in_input`
+    from `NOT_YET_COMPILABLE` instead of it quietly outliving the defect that
+    justified it. Asserts `strat._binds_edge_def_as_input` too, as a check on
+    the check: this test is worthless if `excluded_documents` ever stops
+    actually drawing from the construct it claims to.
+    """
+    assert strat._binds_edge_def_as_input(document)  # pylint: disable=protected-access
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic_cwl(strat.to_yml(document), 'excluded')
+    assert caught.value.diagnostics[0].code == Code.UNRESOLVED_INPUT, (
+        f"failed with {caught.value.diagnostics[0].code}, not wic011 — CE-13's reason no "
+        f'longer describes reality:\n{strat.render(document)}')
 
 
 @pytest.mark.slow

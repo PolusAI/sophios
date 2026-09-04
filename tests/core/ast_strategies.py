@@ -26,23 +26,43 @@ CANNOT GENERATE (declared, per the negative-testing rules): `!cwl` (RawCwlRef)
 does not know the tag; `python_script` steps — named with a uuid4, so nothing
 over them is deterministic.
 
-KNOWN NON-COMPILING CONSTRUCT: an `!& name` edge definition bound to a step
-*input* (the `edge_def` row of `CONSTRUCTS`, distinct from `output_edge`) is
-documented as one of the five input forms (language reference §4.1) but has no
-handler in `compile_workflow_once`'s `in:` match statement
-(`src/sophios/compiler.py`, ~line 780) — `wic_anchor` is only recognised in the
-`out:` loop (~line 729). Every step input bound this way therefore falls
-through to the bare-string case, is unhashable as a dict, and always raises
+CE-13 (specification/implementation divergence, confirmed): an `!& name` edge
+definition bound to a step *input* (the `edge_def` row of `CONSTRUCTS`,
+distinct from `output_edge`) is documented as one of the five input forms
+(language reference §4.1, with no not-yet-usable caveat like `!cwl`'s) but has
+no handler in `compile_workflow_once`'s `in:` match statement
+(`src/sophios/compiler.py:~780` — cases exist for `wic_alias` at 781 and
+`wic_inline_input` at 896, none for `wic_anchor`, which is recognised only in
+the `out:` walk at ~729). Every step input bound this way falls through to the
+bare-string case, is unhashable as a dict, and always raises
 `Code.UNRESOLVED_INPUT` (`wic011`), regardless of what `inputs:` declares.
 Confirmed by construct-correlated measurement (200 documents, derandomized):
 100% of `wic011` failures had an input-position `EdgeDef` and 0% of
-non-failing documents did. This module keeps generating it anyway —
+non-failing documents did. `documents()` keeps generating it anyway —
 `CONSTRUCTS` requires `edge_def` to appear (P26), and trimming the generator to
 dodge a compiler gap is exactly the narrowing the binding constraints forbid.
-Do not "fix" this residue by making `_step` stop producing it; the fix, if any,
-belongs in the compiler's `in:` handling or in the language reference, not here.
+`compilable_documents()` filters it out instead, via `NOT_YET_COMPILABLE`
+below, with a companion test that keeps the filter honest.
+
+PENDING FINDING (reported, not yet assigned a number): `!ii` places no
+constraint relating a literal's value to the CWL type of the input it binds —
+nothing in the grammar could, since that is a downstream compiler concern —
+so a document binding e.g. the bare string `'0x1f'` or `'_'` to an `int`- or
+`float`-typed input (`sink.n`, `scale.n`, `scale.factor` among the synthetic
+stems) is well-formed. `generate_yaml_inputs`'s `populate_scalar_val`
+(`src/sophios/compiler.py:1170` for `int`, `:1173` for `float`) calls
+`int(value)` / `float(value)` with no `try`/`except` and no `SophiosError`, so
+compilation crashes with a bare Python `ValueError` instead of a diagnostic —
+a totality violation (the claim plan Task 6's P33 makes), not a generator
+defect. Not excluded from `compilable_documents()`: unlike CE-13 it is not a
+single AST-shape predicate (it depends on which literal value landed on which
+typed argument), and the measured residual is small enough that the bulk of
+`compilable_documents()` still compiles (see the Task 2 report). `documents()`
+and `_step` are unchanged for this reason on purpose — narrowing `literals`
+to dodge it would be the same move CE-13 already forbids, just aimed at a
+different finding.
 """
-from typing import Final
+from typing import Callable, Final
 
 import yaml
 from hypothesis import strategies as st
@@ -277,6 +297,78 @@ def documents(draw: st.DrawFn) -> Document:
                     steps_as_mapping=as_mapping)
 
 
+def _binds_edge_def_as_input(document: Document) -> bool:
+    """CE-13: does any step bind `!& name` (an `EdgeDef`) to an *input*.
+
+    The one AST-shape predicate `NOT_YET_COMPILABLE['edge_def_in_input']`
+    names — kept as its own function, rather than inlined into a lambda,
+    so `excluded_documents` can filter *for* it (the exclusion's own
+    contract test) as well as `compilable_documents` filtering it *out*.
+    """
+    return any(isinstance(value, EdgeDef) for step in document.steps for _, value in step.inputs)
+
+
+#: Constructs the specification admits that the compiler does not accept
+#: today. Each entry names the construct, the finding it belongs to, and
+#: where the finding lives in `src/sophios/compiler.py`, so an exclusion
+#: cannot outlive the defect that justified it — `test_generators.py` has a
+#: companion asserting every one of these still genuinely fails to compile;
+#: the day a fix lands, that test goes red and whoever is standing there
+#: removes the entry instead of it living on as a permanent blind spot.
+#:
+#: `documents()` keeps producing all of these — `CONSTRUCTS` and the
+#: parse-level properties quantify over the whole language, and trimming the
+#: generator to dodge a compiler gap is the narrowing the binding constraints
+#: forbid. `compilable_documents()` is the subset with these filtered out,
+#: for properties (Tasks 3-7) that need their input to actually compile.
+NOT_YET_COMPILABLE: Final[dict[str, str]] = {
+    'edge_def_in_input': ('CE-13 — an `!& name` edge definition bound to a step input has no case in '
+                          "compile_workflow_once's `in:` match statement (compiler.py:~780; `wic_anchor` "
+                          'is only recognised in the `out:` walk at ~729), so it always raises '
+                          '`Code.UNRESOLVED_INPUT` (wic011) regardless of what `inputs:` declares.'),
+}
+
+#: One predicate per `NOT_YET_COMPILABLE` entry, keyed identically. Separate
+#: from `NOT_YET_COMPILABLE` itself (a plain name-to-reason mapping, so the
+#: reason reads as documentation and not as code) rather than folded into one
+#: dict of `(reason, predicate)` pairs; the assertion below is what keeps the
+#: two from drifting apart, the same discipline `Tag.ALL`/`Key.ALL` in
+#: `utils_yaml.py` uses for the analogous problem.
+_EXCLUSION_PREDICATES: Final[dict[str, Callable[[Document], bool]]] = {
+    'edge_def_in_input': _binds_edge_def_as_input,
+}
+assert NOT_YET_COMPILABLE.keys() == _EXCLUSION_PREDICATES.keys(), (
+    'NOT_YET_COMPILABLE and _EXCLUSION_PREDICATES must name exactly the same exclusions')
+
+
+def compilable_documents() -> SearchStrategy[Document]:
+    """`documents()`, minus the constructs `NOT_YET_COMPILABLE` names.
+
+    The strategy Tasks 3-7 need: partition independence and the other
+    compile-driving properties cannot compare two compilations of a document
+    that does not compile, so they quantify over this, not over `documents()`
+    itself. `CONSTRUCTS`/P26 and the parse-level properties still use
+    `documents()` — the whole language, unfiltered — so this function's
+    narrowing is not the narrowing the binding constraints forbid; it is the
+    generator drawing a line between "the language" and "what Tasks 3-7 can
+    use today", with that line named and tested rather than silent.
+    """
+    # pylint: disable=no-member  # see workflows()'s identical disable, below
+    return documents().filter(lambda d: not any(pred(d) for pred in _EXCLUSION_PREDICATES.values()))
+
+
+def excluded_documents(name: str) -> SearchStrategy[Document]:
+    """Documents that trip the named `NOT_YET_COMPILABLE` exclusion.
+
+    The other half of `compilable_documents()`'s filter — this module's own
+    non-vacuity check needs documents *matching* an exclusion's predicate to
+    prove the predicate's excuse is still true, the same way `hostile_documents`
+    needs documents outside the language to prove a diagnostic still fires.
+    """
+    # pylint: disable=no-member  # see workflows()'s identical disable, below
+    return documents().filter(_EXCLUSION_PREDICATES[name])
+
+
 def to_yml(document: Document) -> Yaml:
     """The compiler's input for a generated document.
 
@@ -313,10 +405,13 @@ def to_yml(document: Document) -> Yaml:
 
 
 def workflows() -> SearchStrategy[Yaml]:
-    """The strategy Tasks 3-6 quantify over."""
-    # pylint: disable=no-member  # `@st.composite` turns `documents()` into a
-    # SearchStrategy at runtime; pylint infers the un-decorated Document return.
-    return documents().map(to_yml)
+    """The strategy Tasks 3-7 quantify over: `compilable_documents()` mapped
+    through `to_yml`, not `documents()` itself. Those properties compile their
+    input (partition independence compares two compilations; it cannot do
+    that with a document that does not compile once), so this excludes
+    exactly what `compilable_documents()` excludes — see `NOT_YET_COMPILABLE`
+    for the current list and why each entry is there."""
+    return compilable_documents().map(to_yml)
 
 
 @st.composite
