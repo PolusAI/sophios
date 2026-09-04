@@ -178,11 +178,13 @@ REWRITES: Final[tuple[tuple[str, Any, Strength | None], ...]] = (
 def document_rewrites(draw: st.DrawFn) -> tuple[str, Yaml, Yaml, Strength | None]:
     """A compiled-shaped document and a rewrite of it, with the level it claims."""
     document = draw(compiled_documents())
-    # A one-step document has nothing left after `_rewrite_drop_a_step`, and an
-    # empty document is genuinely equivalent to nothing else interesting; drop
-    # the control rather than let it degenerate into `[] vs []`.
-    usable = [r for r in REWRITES if r[2] is not None or len(document['steps']) > 1]
-    name, rewrite, level = draw(st.sampled_from(usable))
+    # Every rewrite applies to every document, the control included. An earlier
+    # draft withheld the control from one-step documents on the grounds that
+    # dropping their only step degenerates into `[] vs []`; it does not — the
+    # workflow-level `inputs` and `outputs` the step produced are retained, and
+    # the graph goes from one node to none, so the pair is rejected for real
+    # reasons at all three strengths.
+    name, rewrite, level = draw(st.sampled_from(REWRITES))
     return name, document, rewrite(document), level
 
 
@@ -332,21 +334,98 @@ def test_the_dag_check_sees_the_same_tools_wired_up_differently() -> None:
 
 
 @pytest.mark.fast
-def test_the_dag_check_sees_an_edge_landing_on_a_different_input() -> None:
-    """The companion for `_dataflow`'s edge labels.
+def test_the_dag_check_sees_one_of_two_edges_replaced_by_an_outside_source() -> None:
+    """The companion for `_dataflow`'s edge labels, isolated from everything else.
 
-    `join` takes a `left` and a `right`; feeding one file to `left` is not the
-    workflow that feeds it to `right`. Same nodes, same tool stems, same single
-    edge between the same pair — the difference lives entirely in which input
-    the edge lands on, which is invisible to any check on the graph's shape.
-    Mutating `edge_match` to `True` left every other test in this file green.
+    `join` here binds both `left` and `right`, and both documents bind exactly
+    those two names, so the two `join` nodes have *identical* labels and
+    `node_match` cannot tell them apart; both graphs have the same two nodes
+    and the same single edge between them, so shape cannot either. The only
+    difference is that on the left `join.right` is fed by the `mk_file` step
+    and on the right it comes from outside — which lives entirely in the
+    edge's `(output port, input name)` set.
+
+    Written this way deliberately. The obvious fixture — `left` versus `right`
+    as the bound name — stopped isolating `edge_match` once step bodies became
+    part of the node label, because the bound names are in the body; mutating
+    `edge_match` to `True` then left the suite green. This one still fails.
     """
-    def _document(port: str) -> Yaml:
+    def _document(second: str) -> Yaml:
         return {'steps': [{'id': 'a__step__1__mk_file', 'out': ['file']},
                           {'id': 'a__step__2__join',
-                           'in': {port: {'source': 'a__step__1__mk_file/file'}}}]}
-    found = equivalent(_document('left'), _document('right'), Strength.UP_TO_RENAMING)
+                           'in': {'left': {'source': 'a__step__1__mk_file/file'},
+                                  'right': {'source': second}}}]}
+    found = equivalent(_document('a__step__1__mk_file/file'),
+                       _document('outside___right'), Strength.UP_TO_RENAMING)
     assert found is not None and found.path == '<dag>'
+
+
+#: Differences *inside* a step that carry meaning and that no renaming can
+#: produce. Every one of these returned None from `UP_TO_RENAMING` in the draft
+#: this file's review examined, because the relation looked only at `id` and at
+#: `in[].source` and forgave the rest of a step in silence. `_step_body` now
+#: compares a step's keys by exclusion, so this list is a regression guard
+#: rather than an enumeration — a key nobody thought of is compared too.
+MEANING_IN_A_STEP: Final[list[tuple[str, Yaml, Yaml]]] = [
+    ('an output port vanished from out', {'out': ['file', 'text']}, {'out': ['file']}),
+    ('a step became scattered', {'scatter': ['name']}, {}),
+    ('the scatter method changed',
+     {'scatter': ['a', 'b'], 'scatterMethod': 'dotproduct'},
+     {'scatter': ['a', 'b'], 'scatterMethod': 'flat_crossproduct'}),
+    ('a conditional flipped', {'when': '$(true)'}, {'when': '$(false)'}),
+    ('an input default changed',
+     {'in': {'name': {'source': 'wf___name', 'default': 1}}},
+     {'in': {'name': {'source': 'wf___name', 'default': 999}}}),
+    ('a binding moved to another input',
+     {'in': {'name': {'source': 'wf___name'}}},
+     {'in': {'other': {'source': 'wf___name'}}}),
+    ('a valueFrom appeared',
+     {'in': {'name': {'source': 'wf___name'}}},
+     {'in': {'name': {'source': 'wf___name', 'valueFrom': '$(self + 1)'}}}),
+]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('why, left_step, right_step', MEANING_IN_A_STEP,
+                         ids=[c[0] for c in MEANING_IN_A_STEP])
+def test_up_to_renaming_forgives_nothing_inside_a_step_but_names_and_paths(
+        why: str, left_step: Yaml, right_step: Yaml) -> None:
+    """The weakest strength still reads the whole step.
+
+    `UP_TO_RENAMING` forgives a step's `id`, its `run` and the `source` inside
+    each binding, and the module docstring says so and says why. Anything else
+    it forgave would be forgiveness with no stated reason — the thing that
+    module's own thesis is against — so each of these must be rejected.
+    """
+    def _document(extra: Yaml) -> Yaml:
+        return {'steps': [{'id': 'a__step__1__mk_file', 'run': 'a/mk_file.cwl', **extra}]}
+    found = equivalent(_document(left_step), _document(right_step), Strength.UP_TO_RENAMING)
+    assert found is not None, f'UP_TO_RENAMING forgave a step difference silently: {why}'
+
+
+@pytest.mark.fast
+def test_only_identical_compares_key_order() -> None:
+    """IDENTICAL is a claim about bytes; the weaker two are claims about a
+    workflow, and a YAML mapping is unordered by its own specification.
+
+    Task 5's subject is emitted key order — `requirements` built from a set,
+    eight hash seeds giving eight orders — so a relation that normalised order
+    away at every strength would make the regression that predicate exists to
+    catch invisible to it.
+    """
+    left: Yaml = {'class': 'Workflow', 'steps': []}
+    right: Yaml = {'steps': [], 'class': 'Workflow'}
+    found = equivalent(left, right, Strength.IDENTICAL)
+    assert found is not None and found.path == '<root> (key order)'
+    assert (found.left, found.right) == (['class', 'steps'], ['steps', 'class'])
+    assert equivalent(left, right, Strength.UP_TO_EMBEDDING) is None
+    assert equivalent(left, right, Strength.UP_TO_RENAMING) is None
+
+    nested_left: Yaml = {'steps': [{'id': 'a__step__1__mk', 'out': ['f'], 'run': 'r'}]}
+    nested_right: Yaml = {'steps': [{'id': 'a__step__1__mk', 'run': 'r', 'out': ['f']}]}
+    nested = equivalent(nested_left, nested_right, Strength.IDENTICAL)
+    assert nested is not None and nested.path == '.steps[0] (key order)'
+    assert equivalent(nested_left, nested_right, Strength.UP_TO_EMBEDDING) is None
 
 
 @pytest.mark.fast
@@ -363,6 +442,28 @@ def test_the_dag_check_sees_two_edges_dangling_at_different_places() -> None:
         return {'steps': [{'id': 'a__step__1__xform',
                            'in': {'file': {'source': f'a__step__7__{producer}/file'}}}]}
     found = equivalent(_document('mk_file'), _document('join'), Strength.UP_TO_RENAMING)
+    assert found is not None and found.path == '<dag>'
+
+
+@pytest.mark.fast
+def test_a_declared_step_is_not_the_same_as_one_only_referenced() -> None:
+    """The companion for `_dataflow`'s `('external', ...)` node marker.
+
+    Left declares `mk_file` and consumes its output. Right consumes the same
+    output from a step it never declares — a dangling reference, which is what
+    a migration that dropped a step from `steps:` while leaving its consumers
+    intact produces. Both graphs are two nodes and one edge, both tool stems
+    agree, and neither document has ports or requirements to compare, so
+    nothing but the marker separates them.
+
+    Found by mutation: relabelling absent producers as if they were declared
+    steps left every other test in this file green.
+    """
+    consumer: Yaml = {'id': 'a__step__2__xform',
+                      'in': {'file': {'source': 'a__step__1__mk_file/file'}}}
+    declared: Yaml = {'steps': [{'id': 'a__step__1__mk_file'}, consumer]}
+    dangling: Yaml = {'steps': [consumer]}
+    found = equivalent(declared, dangling, Strength.UP_TO_RENAMING)
     assert found is not None and found.path == '<dag>'
 
 
@@ -384,23 +485,31 @@ def test_the_array_forms_of_ports_and_requirements_are_read() -> None:
 
 @pytest.mark.fast
 def test_isomorphism_alone_would_not_be_enough() -> None:
-    """Why `_same_dag` compares tool stems as well as shape.
+    """Why the matcher is labelled rather than bare.
 
     `test_inline_subworkflows` (tests/core/test_examples.py:418) compares two
     compilations with a bare `DiGraphMatcher` and nothing else. These two
-    documents have the same shape — two nodes, one edge — and different tools
+    documents have the same shape — two nodes, one edge — and a different tool
     at every node, so a bare matcher calls them equivalent. That is precisely
     the kind of thing an IR migration could get wrong, which is why the
     relation Spec 3 imports must not be the one already in the tree.
+
+    Asserts the *verdict*, not the path string. An earlier version asserted
+    `'tool multiset' in found.path`, which is this project's recurring failure
+    written into the artifact everything imports: a separate stem-multiset
+    check had by then been subsumed by the labelled isomorphism, so the name of
+    the test claimed a discrimination the code no longer performed and only the
+    string kept it green. The check was deleted; this is what remains, and it
+    fails if `node_match` stops looking at the label.
     """
     left: Yaml = {'steps': [{'id': 'a__step__1__mk_file', 'out': ['file']},
                             {'id': 'a__step__2__xform',
                              'in': {'file': {'source': 'a__step__1__mk_file/file'}}}]}
-    right: Yaml = {'steps': [{'id': 'a__step__1__mk_text', 'out': ['text']},
+    right: Yaml = {'steps': [{'id': 'a__step__1__mk_text', 'out': ['file']},
                              {'id': 'a__step__2__join',
-                              'in': {'left': {'source': 'a__step__1__mk_text/text'}}}]}
+                              'in': {'file': {'source': 'a__step__1__mk_text/file'}}}]}
     found = equivalent(left, right, Strength.UP_TO_RENAMING)
-    assert found is not None and 'tool multiset' in found.path
+    assert found is not None and found.path == '<dag>'
 
 
 @pytest.mark.fast
