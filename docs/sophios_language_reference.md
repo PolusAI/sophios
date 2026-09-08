@@ -119,10 +119,11 @@ An empty document is well-formed and carries nothing.
 
 ## 3. Steps
 
-### 3.1 Three surface forms
+### 3.1 Two surface forms
 
-All three are long-standing, all remain supported, and **all produce the same
-result**. Use whichever reads better.
+Both are long-standing, both remain supported, and **both produce the same
+result**. Use whichever reads better. They are the two spellings CWL itself
+admits for `steps:`, and Sophios admits no others — see the note below.
 
 **Mapping, keyed by step name** — cannot repeat a step name:
 
@@ -143,21 +144,35 @@ steps:
   in: {str: !ii World}
 ```
 
-**Sequence of single-key mappings** — the key is the step name:
-
-```yaml
-steps:
-- touch:
-    in:
-      filename: !ii empty.txt
-```
-
 A step may have no body at all:
 
 ```yaml
 steps:
   some_subworkflow.wic:
 ```
+
+A **sequence of single-key mappings** is not a third form:
+
+```yaml
+steps:
+- touch:            # error (wic022): the step has no id
+    in:
+      filename: !ii empty.txt
+```
+
+This is not a narrowing Sophios chose; it is CWL's rule, inherited. CWL v1.2
+types `Workflow.steps` as an array of `WorkflowStep` and attaches
+`jsonldPredicate: {mapSubject: id}`, and Schema Salad applies that
+transformation only *"if the value of the field is a JSON object"*. When
+`steps:` is already an array, no key is lifted into `id`, so each item is a
+plain `WorkflowStep` — and a `WorkflowStep` has no field named `touch`.
+`cwltool` fails such a document with `unknown identifier`, having lost the
+step's identity exactly as Sophios does.
+
+An earlier revision of this document listed the form as supported. It has
+never worked: the step's name resolved to the empty string in every version of
+the compiler, so no workflow can have depended on it. Writing it now earns a
+diagnostic naming the two forms above instead of a failure further downstream.
 
 ### 3.2 Step keys
 

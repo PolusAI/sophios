@@ -315,6 +315,29 @@ pair on the way in.
 > The grammar fixes the surface; the AST normalises the warts so they stop
 > propagating.
 
+**Step surface forms follow CWL's, not a superset of them.** CWL v1.2 types
+`Workflow.steps` as an array of `WorkflowStep` with
+`jsonldPredicate: {mapSubject: id}`, and Schema Salad applies that
+transformation only when the field's value is an object. So CWL admits two
+spellings — an array whose items carry `id`, and a mapping keyed by step name
+— and Sophios's grammar admits exactly those.
+
+A third form, a *sequence of single-key mappings*, was listed in the reference
+and never worked: the key is not lifted into `id` when the container is
+already an array, so the step's name resolved to the empty string in every
+version of the compiler. `cwltool` fails the same document the same way, for
+the same reason. The form was removed from the language rather than
+implemented, and the parser reports it (`wic022`).
+
+Implementing it instead would have cost a real diagnostic. In list position a
+single-key mapping is ambiguous — `- in: {…}` is a forgotten step id, and
+synthesising `id` from the key would silently turn it into a step named `in`.
+The mapping form has no such ambiguity, because a mapping key can only be a
+step name. That asymmetry is why CWL draws the line where it does, and
+following it is what §1's "leaky abstraction over CWL" requires: a shorthand
+that accepts a shape the substrate rejects breaks at exactly the moment a user
+drops down into raw CWL.
+
 ### 5.6 Conformance corpus
 
 `mm-workflows` and `image-workflows` are the integration and end-to-end corpus.
