@@ -51,6 +51,7 @@ ORACLE_MODULES = (
     'core.ast_strategies',
     'core.equivalence',
     'core.test_equivalence',
+    'core.transformations',
     'core.test_generators',
 )
 
