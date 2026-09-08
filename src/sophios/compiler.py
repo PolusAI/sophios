@@ -120,7 +120,7 @@ def _arg_has_default_or_is_optional(arg: str, in_tool: dict[str, Any]) -> bool:
     canonical null-union representation. See canonicalize_type in utils_cwl.py.
     """
     arg_type = in_tool[arg]['type']
-    has_default = in_tool[arg].get('default')
+    has_default = 'default' in in_tool[arg]
     optional_suffix = isinstance(arg_type, str) and arg_type[-1] == '?'
     optional_union = isinstance(arg_type, list) and 'null' in arg_type
     return bool(has_default or optional_suffix or optional_union)
