@@ -88,7 +88,7 @@ _SPAN: Final = SourceSpan('<generated>', 1, 1, 1, 1)
 #: strategy stops producing is a failure instead of a silent narrowing.
 CONSTRUCTS: Final[tuple[str, ...]] = (
     'steps_mapping', 'steps_sequence',
-    'inline_literal', 'edge_def', 'edge_ref', 'unresolved_name',
+    'inline_literal', 'edge_ref', 'unresolved_name',
     'output_bare', 'output_edge',
     'interpreted_scatter', 'interpreted_when',
     'step_passthrough', 'top_passthrough',
@@ -122,8 +122,6 @@ def constructs_in(document: Document) -> frozenset[str]:
             match value:
                 case InlineLiteral():
                     found.add('inline_literal')
-                case EdgeDef():
-                    found.add('edge_def')
                 case EdgeRef():
                     found.add('edge_ref')
                 case _:
@@ -188,13 +186,10 @@ def _step(draw: st.DrawFn, defined_edges: list[str], referenced_inputs: set[str]
     chosen = draw(st.lists(st.sampled_from(names), unique=True, max_size=len(names))) if names else []
     bindings: list[tuple[str, InputValue]] = []
     for name in chosen:
-        forms = ['literal', 'def', 'unresolved'] + (['ref'] if defined_edges else [])
+        forms = ['literal', 'unresolved'] + (['ref'] if defined_edges else [])
         match draw(st.sampled_from(forms)):
             case 'literal':
                 bindings.append((name, InlineLiteral(draw(literals), _SPAN)))
-            case 'def':
-                edge = _fresh_edge(draw, defined_edges)
-                bindings.append((name, EdgeDef(edge, _SPAN)))
             case 'unresolved':
                 declared = draw(st.sampled_from(declared_inputs))
                 referenced_inputs.add(declared)
@@ -297,17 +292,6 @@ def documents(draw: st.DrawFn) -> Document:
                     steps_as_mapping=as_mapping)
 
 
-def _binds_edge_def_as_input(document: Document) -> bool:
-    """CE-13: does any step bind `!& name` (an `EdgeDef`) to an *input*.
-
-    The one AST-shape predicate `NOT_YET_COMPILABLE['edge_def_in_input']`
-    names — kept as its own function, rather than inlined into a lambda,
-    so `excluded_documents` can filter *for* it (the exclusion's own
-    contract test) as well as `compilable_documents` filtering it *out*.
-    """
-    return any(isinstance(value, EdgeDef) for step in document.steps for _, value in step.inputs)
-
-
 #: Constructs the specification admits that the compiler does not accept
 #: today. Each entry names the construct, the finding it belongs to, and
 #: where the finding lives in `src/sophios/compiler.py`, so an exclusion
@@ -321,12 +305,21 @@ def _binds_edge_def_as_input(document: Document) -> bool:
 #: generator to dodge a compiler gap is the narrowing the binding constraints
 #: forbid. `compilable_documents()` is the subset with these filtered out,
 #: for properties (Tasks 3-7) that need their input to actually compile.
-NOT_YET_COMPILABLE: Final[dict[str, str]] = {
-    'edge_def_in_input': ('CE-13 — an `!& name` edge definition bound to a step input has no case in '
-                          "compile_workflow_once's `in:` match statement (compiler.py:~780; `wic_anchor` "
-                          'is only recognised in the `out:` walk at ~729), so it always raises '
-                          '`Code.UNRESOLVED_INPUT` (wic011) regardless of what `inputs:` declares.'),
-}
+#: Constructs the specification admits and the compiler cannot accept yet,
+#: keyed by name with the reason each is excluded.
+#:
+#: Empty — and that is the mechanism working, not a gap. It held exactly one
+#: entry: CE-13's `!&` bound to a step input, which the compiler rejected with
+#: wic011 because its `in:` match had no `wic_anchor` case. `semrefac_7.1`
+#: settled that as a grammar defect instead of a compiler gap: `EdgeDef` left
+#: the `InputValue` union, so the construct is now a *type* error here rather
+#: than a document this generator can build and then filter out. mypy is what
+#: reported the expiry, at the line that used to build it.
+#:
+#: The machinery stays because the next pending construct is already named:
+#: `!cwl` is specified, parsed, and not compilable until the Spec 3 migration
+#: wires Parse into the pipeline.
+NOT_YET_COMPILABLE: Final[dict[str, str]] = {}
 
 #: One predicate per `NOT_YET_COMPILABLE` entry, keyed identically. Separate
 #: from `NOT_YET_COMPILABLE` itself (a plain name-to-reason mapping, so the
@@ -334,9 +327,7 @@ NOT_YET_COMPILABLE: Final[dict[str, str]] = {
 #: dict of `(reason, predicate)` pairs; the assertion below is what keeps the
 #: two from drifting apart, the same discipline `Tag.ALL`/`Key.ALL` in
 #: `utils_yaml.py` uses for the analogous problem.
-_EXCLUSION_PREDICATES: Final[dict[str, Callable[[Document], bool]]] = {
-    'edge_def_in_input': _binds_edge_def_as_input,
-}
+_EXCLUSION_PREDICATES: Final[dict[str, Callable[[Document], bool]]] = {}
 assert NOT_YET_COMPILABLE.keys() == _EXCLUSION_PREDICATES.keys(), (
     'NOT_YET_COMPILABLE and _EXCLUSION_PREDICATES must name exactly the same exclusions')
 
