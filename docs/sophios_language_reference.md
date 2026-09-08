@@ -217,15 +217,23 @@ the same as writing `!ii` — because a collection cannot name a workflow input,
 so a literal is its only possible meaning. The tag is still the recommended
 spelling: it states the intent instead of leaving it to be inferred.
 
-A tag outside the four above (`!foo`) is an error, not a fourth-and-a-half
-form. The loader has always rejected such documents, and the syntax layer
-must never accept more than the language it specifies.
+A tag outside the four above is an error, not a fourth-and-a-half form, but
+for two different reasons. An *unknown* tag (`!foo`) is `wic009`, and the
+loader has always rejected such documents too. `!&` is different: it is a
+known tag in the wrong position, so it is `wic019` (§4.1.1) and the loader
+does **not** reject it — `anchor_constructor` is registered unconditionally.
+The syntax layer is deliberately stricter than the loader here. It may never
+be more permissive; stricter is how a construct with no meaning stops being
+accepted.
 
 ### 4.1.1 `!&` is not an input form
 
 `!&` defines an edge, and an edge is defined where its value comes into being
-— on an **output** (§3.3). Writing it in input position is an error
-(`wic019`), not a fifth form:
+— on an **output** (§3.3). That is a rule about *position*, not about inputs:
+an edge definition anywhere other than an `out:` entry is `wic019`, whether it
+appears in an `in:` binding, inside an `!ii` payload, in the `wic:` block, or
+at the top level. Both spellings are treated alike, since §6.1 makes them
+equivalent.
 
 ```yaml
 in:

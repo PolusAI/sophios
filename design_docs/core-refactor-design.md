@@ -286,7 +286,9 @@ forms, in two files, with nothing linking them: the same shape as the
 `lang_version` validator gap. Recorded as CE-13, found by a generator derived
 from these types rather than from examples someone had seen work, and closed by
 narrowing the union so the position is a type error rather than a runtime
-fallthrough (`wic019`).
+fallthrough. The diagnostic (`wic019`) is positional rather than
+input-specific: an edge definition outside an `out:` entry is reported wherever
+it appears, in either spelling, since §6.1 makes the two equivalent.
 
 The general rule this sets: **a form the union admits and no consumer
 implements is a promise the language cannot keep.** Where a form is genuinely

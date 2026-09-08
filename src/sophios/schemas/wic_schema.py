@@ -466,14 +466,13 @@ def wic_main_schema(tools_cwl: Tools, yml_stems: list[str], schema_store: dict[s
     if not hypothesis:
         in_schema: Json = {}
         in_schema['type'] = 'object'
-        # An `in:` value may be any CWL, so the shape stays open — except for
-        # `wic_anchor`. `!&` defines an edge, and an edge is defined at its
-        # source, which is an `out:` entry (reference §4.1.1); the parser
-        # reports wic019 for it here. Leaving this open would make the
-        # validator the *permissive* side of the pair, accepting what the
-        # language rejects — the mirror of the gap where this schema rejected
-        # a `lang_version` tag the parser accepted.
-        in_schema['additionalProperties'] = {'not': {'required': ['wic_anchor']}}
+        # No `wic_anchor` exclusion here. The `in:` schema a workflow actually
+        # validates against is built by `_cwl_schema_inputs_props`, which
+        # composes each tool input from `str_nonempty | alias | ii` and has
+        # never admitted the anchor — `_cwl_schema_out_tag` is the only place
+        # that does (d3b08ee, "move wic_anchor !& to out: tag"). So the
+        # validator already agrees with §4.1.1, by an older route.
+        in_schema['additionalProperties'] = True
         in_schema['properties'] = {'script': str_nonempty}
 
         # See utils_yaml.py

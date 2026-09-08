@@ -28,10 +28,10 @@ scalar_payload_texts = st.sampled_from([
 ])
 
 #: Construct leaves that may appear nested inside an `!ii` payload.
-#: `!& d` and `{wic_anchor: n}` are absent: `OpaqueCwl` contains `InputValue`,
-#: which no longer admits `EdgeDef`, so an anchor nested in a literal payload
-#: is reported (wic019) exactly as one in input position is. An anchor is
-#: only meaningful on an `out:` entry, where nothing can be nested inside it.
+#: Neither spelling of an edge definition appears here. An edge is defined on
+#: an `out:` entry and nowhere else (reference §4.1.1), so `!& d` and
+#: `{wic_anchor: n}` both earn wic019 in a payload — `_out_lines` below
+#: generates both spellings in the one position they are legal.
 construct_payload_texts = st.sampled_from(['!* e', '!cwl a/b', '{wic_alias: n}'])
 
 #: Recursive payload text over the closed OpaqueCwl union: scalars, nested

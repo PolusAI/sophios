@@ -341,15 +341,17 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
     """
     span = SourceSpan.of(file, node)
 
-    edge = _out_edge_def(node, file, diags)
-    if edge is not None:
+    if _is_edge_def(node):
+        # Reported before the name is read, so a malformed name does not earn
+        # `wic005` advice on how to spell something the reader is then told
+        # they may not write here at all.
         diags.error(
-            Code.EDGE_DEF_IN_INPUT,
-            "'!&' defines an edge, and an edge is defined on an output, not an input (§4.1.1); "
-            "use '!*' here to consume an edge, or move '!&' to this step's out: list to define one",
+            Code.MISPLACED_EDGE_DEF,
+            "'!&' defines an edge, and an edge is defined where its value comes into being: "
+            "a step's out: entry (§4.1.1). Use '!*' to consume an edge",
             span,
         )
-        return UnresolvedName(edge.name, span)
+        return UnresolvedName('', span)
 
     build = Forms.TAGGED.get(node.tag)
     if build is not None:
@@ -366,6 +368,25 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
     # A bare mapping or sequence cannot name a workflow input, so it is only
     # meaningful as a literal.
     return InlineLiteral(_opaque(node, file, diags), span)
+
+
+def _is_edge_def(node: yaml.nodes.Node) -> bool:
+    """Whether `node` spells an edge definition, in either surface form.
+
+    Both spellings, because §6.1 makes them equivalent and a rule that caught
+    only the tagged one would let the desugared one through in exactly the
+    positions the tagged one is refused — two surfaces, one language, two
+    answers, which is the divergence CE-02 was about.
+
+    Position is not consulted: an edge definition is legal only in a step's
+    `out:` list, which `_out_edge_def` handles on its own path and never
+    reaches here.
+    """
+    if node.tag == Tag.ANCHOR:
+        return True
+    return (isinstance(node, yaml.nodes.MappingNode)
+            and len(node.value) == 1
+            and getattr(node.value[0][0], 'value', None) == Key.ANCHOR)
 
 
 def _desugared_form(
@@ -620,6 +641,13 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
     path = _path | {id(node)}
 
     _reject_unknown_tag(node, file, diags)
+
+    if _is_edge_def(node):
+        # Both spellings, in every position `_opaque` walks. Catching only the
+        # tagged one would let `{wic_anchor: n}` through exactly where `!& n`
+        # is refused, which is the two-surfaces-one-language divergence CE-02
+        # was about. `out:` never reaches here — `_out_edge_def` owns it.
+        return _input_value(node, file, diags)
 
     if node.tag in (Tag.ANCHOR, Tag.ALIAS, Tag.RAW_CWL) or (
             node.tag == Tag.INLINE_INPUT and isinstance(node, yaml.nodes.ScalarNode)):

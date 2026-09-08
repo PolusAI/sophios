@@ -311,13 +311,24 @@ class Reported(NamedTuple):
 REPORTED: Final[tuple[Reported, ...]] = (
     Reported('an edge definition in input position names the position (§4.1.1)',
              'steps:\n- id: s\n  in:\n    f: !& e\n',
-             Code.EDGE_DEF_IN_INPUT, 4, message_contains='out:'),
+             Code.MISPLACED_EDGE_DEF, 4, message_contains='out:'),
     Reported('the desugared spelling is reported the same way',
              'steps:\n- id: s\n  in:\n    f: {wic_anchor: e}\n',
-             Code.EDGE_DEF_IN_INPUT, 4, message_contains='out:'),
+             Code.MISPLACED_EDGE_DEF, 4, message_contains='out:'),
     Reported('an anchor nested in a literal payload is reported too',
              'steps:\n- id: s\n  in:\n    f: !ii {k: !& e}\n',
-             Code.EDGE_DEF_IN_INPUT, 4, message_contains='out:'),
+             Code.MISPLACED_EDGE_DEF, 4, message_contains='out:'),
+    Reported('the rule is positional: an anchor at the top level is reported',
+             'top: !& e\n', Code.MISPLACED_EDGE_DEF, 1, message_contains='out:'),
+    Reported('and inside the wic: block, which is not a step at all',
+             'wic:\n  graphviz:\n    label: !& e\n',
+             Code.MISPLACED_EDGE_DEF, 3, message_contains='out:'),
+    Reported('the desugared spelling is reported in the same positions (§6.1)',
+             'top: {wic_anchor: e}\n', Code.MISPLACED_EDGE_DEF, 1, message_contains='out:'),
+    Reported('a malformed name does not earn spelling advice for a construct '
+             'that may not appear here at all',
+             'steps:\n- id: s\n  in:\n    f: !& [a]\n',
+             Code.MISPLACED_EDGE_DEF, 4, message_contains='out:'),
     Reported('a collection step key is reported, not stringified',
              'steps:\n  ? [a, b]\n  : {}\n', Code.EXPECTED_SCALAR, 2,
              message_contains='mapping keys must be scalars'),
@@ -684,6 +695,42 @@ def test_tag_decisions_agree_across_positions(tag: str, shape: str, data: st.Dat
     reported_in = any(d.code is Code.UNKNOWN_TAG for d in in_position.diagnostics)
     reported_through = any(d.code is Code.UNKNOWN_TAG for d in passthrough.diagnostics)
     assert reported_in == reported_through, f'{value!r}: input={reported_in}, passthrough={reported_through}'
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('spelling', ['!& e', '{wic_anchor: e}'], ids=['tagged', 'desugared'])
+@pytest.mark.parametrize('position, source', [
+    ('input', 'steps:\n- id: s\n  in:\n    f: {value}\n'),
+    ('nested in a literal', 'steps:\n- id: s\n  in:\n    f: !ii {{k: {value}}}\n'),
+    ('step passthrough', 'steps:\n- id: s\n  label: {value}\n'),
+    ('top level', 'top: {value}\n'),
+    ('wic block', 'wic:\n  graphviz:\n    label: {value}\n'),
+])
+def test_an_edge_definition_is_refused_in_every_position_but_out(
+        spelling: str, position: str, source: str) -> None:
+    """One construct, one verdict, in both spellings and every position.
+
+    The narrower unknown-tag version above quantifies only over
+    `Code.UNKNOWN_TAG`, so it cannot see a `wic019` divergence — and there was
+    one: `_opaque` routed on the tag, so `{wic_anchor: e}` was plain data
+    exactly where `!& e` was refused.
+    """
+    result = parse(source.format(value=spelling), 'pos.wic')
+    assert any(d.code is Code.MISPLACED_EDGE_DEF for d in result.diagnostics), (
+        f'{spelling!r} in {position} was accepted')
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('spelling, source', [
+    ('tagged', 'steps:\n- id: s\n  out:\n  - f: !& e\n'),
+    ('desugared', 'steps:\n- id: s\n  out:\n  - f:\n      wic_anchor: e\n'),
+])
+def test_and_accepted_in_the_one_position_it_belongs(spelling: str, source: str) -> None:
+    """The other half: refusing everywhere would satisfy the test above."""
+    result = parse(source, 'pos.wic')
+    assert not list(result.diagnostics), f'{spelling} on out: was refused'
+    assert result.document is not None
+    assert result.document.steps[0].outputs[0].edge_def is not None
 
 
 @pytest.mark.fast
