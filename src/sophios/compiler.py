@@ -1258,7 +1258,7 @@ def insert_step_into_workflow(yaml_tree_orig: Yaml, stepid: StepId, tools: Tools
     """
     yaml_tree_mod = yaml_tree_orig
     steps_mod: list[Yaml] = yaml_tree_mod['steps']
-    steps_mod.insert(i, {stepid.stem: None})
+    steps_mod.insert(i, {'id': stepid.stem})
 
     # Add inference rules annotations (i.e. for insertions)
     tool = tools[stepid]
