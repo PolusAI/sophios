@@ -28,10 +28,15 @@ only what their own docstrings name.
   * `steps[].id` and `steps[].run`, whose values are namespaced or are paths.
     The id is what renaming renames; `run` is embedding, forgiven a strength
     lower down and so forgiven here too.
-  * `steps[].in[].source`, whose value names a producing step. Not dropped —
-    re-expressed as a labelled edge in `_dataflow`, which is the whole content
-    of "the DAG must match". The binding's *name* and everything else under it
-    (`default`, `valueFrom`, ...) is compared.
+  * `steps[].in[].source`, whose value names either a producing step or a
+    workflow-level input. Not dropped — re-expressed as a labelled edge in
+    `_dataflow`, which is the whole content of "the DAG must match". A source
+    naming a workflow-level input becomes an edge out of a node carrying that
+    input's *shape*, so rewiring a port onto a differently-typed input is a
+    divergence, while swapping two identically-shaped inputs is not — that
+    swap really is a renaming, a renaming being a bijection on names. The
+    binding's *name* and everything else under it (`default`, `valueFrom`,
+    ...) is compared.
   * the keys of `inputs` and `outputs` and any `outputSource`, which a
     hermetic compilation shows are namespaced (`oracle__step__1__mk___name`).
     Their count and their `type`/`format` are compared; their names are not.
@@ -188,6 +193,13 @@ def _first_difference(left: Any, right: Any, strength: Strength, path: str, *,
 #: names and are deliberately absent — see `_port_shapes`.
 _SHAPE_KEYS: Final[tuple[str, ...]] = ('type', 'format')
 
+#: Prefix distinguishing a workflow-level input's node in `_dataflow` from a
+#: step's. Emitted step ids are `{stem}__step__{i}__{key}` and emitted port
+#: names are `{step_id}___{port}`, so neither can contain a space or an angle
+#: bracket; without the prefix an input and a step sharing a name would silently
+#: become one node.
+_INPUT_NODE: Final = '<input> '
+
 
 def _stem(step_id: str) -> str:
     """The tool key inside a namespaced step id, or the id itself.
@@ -294,8 +306,21 @@ def _dataflow(document: Yaml) -> nx.DiGraph:
     discarded, a document whose edge went nowhere looks the same as one with
     no edge at all. Such a node is labelled `('external', stem)` so it can
     never match a step the document really declares.
+
+    A source that names no step at all — no `producer/port` split — is a
+    workflow-level input, and it too becomes a node rather than being dropped.
+    Dropping it made a whole class of rewiring invisible: the compiler emits
+    `in: {n: {source: oracle__step__2__sink___n}}` for every unbound argument,
+    so with those sources discarded a document feeding `sink.n` from the `int`
+    input and `mk_file.name` from the `string` one was UP_TO_RENAMING-equal to
+    the document that fed each from the other. The node carries the *shape*
+    the document declares for that input, never its name, which is what keeps
+    the forgiveness honest in both directions: differently-typed inputs cannot
+    be swapped silently, and swapping two identically-shaped ones stays
+    equivalent, because that swap is exactly what re-rooting a namespace does.
     """
     graph = nx.DiGraph()
+    shapes = _declared_shapes(document, 'inputs')
     steps = document.get('steps')
     steps = steps if isinstance(steps, list) else []
     declared = [s for s in steps if isinstance(s, dict) and 'id' in s]
@@ -306,10 +331,15 @@ def _dataflow(document: Yaml) -> nx.DiGraph:
         consumer = str(step['id'])
         for name, source in _bindings(step):
             producer, separator, port = source.partition('/')
-            if not separator or not port or not producer:
-                continue  # a workflow-level input, not an edge
-            if producer not in graph:
-                graph.add_node(producer, label=('external', _stem(producer)))
+            if separator and port and producer:
+                if producer not in graph:
+                    graph.add_node(producer, label=('external', _stem(producer)))
+            elif source:
+                producer, port = _INPUT_NODE + source, ''
+                if producer not in graph:
+                    graph.add_node(producer, label=('input', shapes.get(source)))
+            else:
+                continue  # `in: {name: ''}` names nothing; there is no edge
             if graph.has_edge(producer, consumer):
                 graph.edges[producer, consumer]['ports'].add((port, name))
             else:
@@ -331,11 +361,31 @@ def _port_shapes(document: Yaml, key: str) -> list[str]:
     """
     node = document.get(key)
     ports = list(node.values()) if isinstance(node, dict) else (node if isinstance(node, list) else [])
-    shapes = []
-    for port in ports:
-        shapes.append(repr({k: port[k] for k in _SHAPE_KEYS if k in port})
-                      if isinstance(port, dict) else repr(port))
-    return sorted(shapes)
+    return sorted(_shape(port) for port in ports)
+
+
+def _shape(port: Any) -> str:
+    """One port reduced to `_SHAPE_KEYS`: what it is, never what it is called."""
+    return (repr({k: port[k] for k in _SHAPE_KEYS if k in port})
+            if isinstance(port, dict) else repr(port))
+
+
+def _declared_shapes(document: Yaml, key: str) -> dict[str, str]:
+    """Every declared port under `key`, by name, mapped to its shape.
+
+    The name is the lookup key and never the compared value — `_dataflow` uses
+    this only to answer "what shape is the input this source names?", which is
+    the part of a workflow-level reference that survives a renaming. Both
+    surface forms, for the same reason `_port_shapes` reads both: the compiler
+    emits the mapping form, and CWL admits the array-of-records form.
+    """
+    node = document.get(key)
+    if isinstance(node, dict):
+        return {str(name): _shape(port) for name, port in node.items()}
+    if isinstance(node, list):
+        return {str(port['id']): _shape(port) for port in node
+                if isinstance(port, dict) and 'id' in port}
+    return {}
 
 
 def _requirement_names(document: Yaml) -> list[str]:

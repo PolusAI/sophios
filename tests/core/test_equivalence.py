@@ -55,6 +55,13 @@ MUST_DIFFER: Final[list[tuple[str, Yaml, Yaml]]] = [
     ('a requirement disappeared',
      {'steps': [], 'requirements': {'ScatterFeatureRequirement': {}}},
      {'steps': [], 'requirements': {}}),
+    # `format` is the only thing separating `mk_file` from `mk_text` in the
+    # synthetic registry, so a relation that compared `type` alone could not
+    # tell a workflow ending in one from a workflow ending in the other. Found
+    # by mutation: dropping `format` from `_SHAPE_KEYS` left this file green.
+    ('an output changed format',
+     {'steps': [], 'outputs': {'x': {'type': 'File', 'format': 'edam:format_2330'}}},
+     {'steps': [], 'outputs': {'x': {'type': 'File', 'format': 'edam:format_3752'}}}),
 ]
 
 
@@ -510,6 +517,75 @@ def test_isomorphism_alone_would_not_be_enough() -> None:
                               'in': {'file': {'source': 'a__step__1__mk_text/file'}}}]}
     found = equivalent(left, right, Strength.UP_TO_RENAMING)
     assert found is not None and found.path == '<dag>'
+
+
+@pytest.mark.fast
+def test_the_dag_check_sees_a_port_rewired_onto_a_different_workflow_input() -> None:
+    """The companion for `_dataflow`'s workflow-level input nodes.
+
+    Every argument a step does not receive from another step is emitted as
+    `in: {arg: {source: {step_id}___{arg}}}` against a declared workflow-level
+    input — the majority of the bindings in any compiled document. Those
+    sources name no producer, so an earlier draft skipped them entirely, and
+    with them skipped the two documents below were UP_TO_RENAMING-equal: both
+    declare a `File` input and a `string` input, both have one step and no
+    edges, and which port reads which was nowhere in the comparison.
+
+    Both directions, because the fix must not overshoot. Feeding `left` from
+    the `string` input instead of the `File` one is a divergence; feeding it
+    from the *other* `File` input is not, because relabelling two ports of the
+    same shape is precisely what re-rooting a namespace does.
+    """
+    def _document(left: str, right: str, second_type: str) -> Yaml:
+        return {'steps': [{'id': 'a__step__1__join',
+                           'in': {'left': {'source': left}, 'right': {'source': right}}}],
+                'inputs': {'a___p': {'type': 'File'}, 'a___q': {'type': second_type}},
+                'outputs': {}}
+
+    swapped = equivalent(_document('a___p', 'a___q', 'string'),
+                         _document('a___q', 'a___p', 'string'), Strength.UP_TO_RENAMING)
+    assert swapped is not None and swapped.path == '<dag>'
+
+    assert equivalent(_document('a___p', 'a___q', 'File'),
+                      _document('a___q', 'a___p', 'File'), Strength.UP_TO_RENAMING) is None
+
+
+@pytest.mark.fast
+def test_an_unparsable_producer_keeps_its_whole_name() -> None:
+    """The companion for `_stem`'s fallback.
+
+    `parse_step_name_str` raises on anything that is not
+    `{stem}__step__{i}__{key}`, and `_stem` then falls back to the whole
+    string. That fallback is the *stricter* choice, and the docstring says so —
+    two unparsable ids have to be equal rather than being lumped together as
+    one anonymous stem. Nothing pinned it: returning a constant instead left
+    the file green, and these two documents equivalent.
+    """
+    def _document(producer: str) -> Yaml:
+        return {'steps': [{'id': 'a__step__1__xform',
+                           'in': {'file': {'source': f'{producer}/file'}}}]}
+    found = equivalent(_document('handwritten_a'), _document('handwritten_b'),
+                       Strength.UP_TO_RENAMING)
+    assert found is not None and found.path == '<dag>'
+
+
+@pytest.mark.fast
+def test_up_to_embedding_forgives_run_and_nothing_else() -> None:
+    """`run` is the whole of what this strength ignores.
+
+    `_rewrite_run_paths` shows the forgiveness happens; this shows it stops
+    there. A normalisation widened by one key — deleting `label` alongside
+    `run`, say — is invisible to every other test in this file, and that is the
+    shape of change an IR migration makes when a key starts moving around.
+    """
+    def _document(run: str, label: str) -> Yaml:
+        return {'steps': [{'id': 'a__step__1__mk_file', 'run': run, 'label': label}]}
+
+    assert equivalent(_document('a__step__1__mk_file/mk_file.cwl', 'x'),
+                      _document('flat/mk_file.cwl', 'x'), Strength.UP_TO_EMBEDDING) is None
+    found = equivalent(_document('a/mk_file.cwl', 'x'), _document('a/mk_file.cwl', 'y'),
+                       Strength.UP_TO_EMBEDDING)
+    assert found is not None and found.path == '.steps[0].label'
 
 
 @pytest.mark.fast
