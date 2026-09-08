@@ -131,3 +131,16 @@ COMPILED.update({
     Code.UNKNOWN_LANG_VERSION: _provoke_unknown_lang_version,
     Code.LANG_VERSION_CONFLICT: _provoke_lang_version_conflict,
 })
+
+
+def _provoke_literal_type_mismatch() -> None:
+    # !ii places no constraint relating a literal to the declared CWL type of
+    # the input it binds, so an int-typed input can carry a literal that does
+    # not convert. generate_yaml_inputs is the site that discovers this.
+    from sophios.compiler import generate_yaml_inputs  # pylint: disable=import-outside-toplevel
+    generate_yaml_inputs({'n': {'type': 'int', 'value': '_'}})
+
+
+COMPILED.update({
+    Code.LITERAL_TYPE_MISMATCH: _provoke_literal_type_mismatch,
+})
