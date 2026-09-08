@@ -14,6 +14,7 @@ from sophios.input_output_nf import (
 )
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
+    NfArrayBinding,
     NfBasenameReference,
     NfCommand,
     NfFlag,
@@ -163,6 +164,76 @@ def test_renders_boolean_flag_as_a_conditional_argv_word() -> None:
     ))
 
     assert "${reverse ? __sophios_shell_quote_9f72e('-r') : ''}" in rendered
+
+
+@pytest.mark.serial
+def test_renders_array_binding_with_prefix_as_a_conditional_expression() -> None:
+    process = NfProcess(
+        "NAMES",
+        [NfPort("names", "val", is_array=True)],
+        [output_port("result", "out.txt")],
+        NfCommand(
+            (NfTemplate((NfLiteral("echo"),)), NfArrayBinding("names", "--name")),
+            stdout=NfTemplate((NfLiteral("out.txt"),)),
+        ),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [NfWorkflowInputConnection("names", "NAMES", "names")],
+        {"names": ["alice", "bob"]},
+    ))
+
+    assert (
+        "${names.isEmpty() ? '' : ([__sophios_shell_quote_9f72e('--name')] + "
+        "names.collect{ __sophios_shell_quote_9f72e(it.toString()) }).join(' ')}"
+    ) in rendered
+
+
+@pytest.mark.serial
+def test_renders_array_binding_without_a_prefix() -> None:
+    process = NfProcess(
+        "NAMES",
+        [NfPort("names", "val", is_array=True)],
+        [output_port("result", "out.txt")],
+        NfCommand(
+            (NfTemplate((NfLiteral("echo"),)), NfArrayBinding("names")),
+            stdout=NfTemplate((NfLiteral("out.txt"),)),
+        ),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [NfWorkflowInputConnection("names", "NAMES", "names")],
+        {"names": ["alice"]},
+    ))
+
+    assert (
+        "${names.isEmpty() ? '' : names.collect{ __sophios_shell_quote_9f72e(it.toString()) }"
+        ".join(' ')}"
+    ) in rendered
+
+
+@pytest.mark.serial
+def test_renders_array_of_path_channel_construction_with_staging_per_element() -> None:
+    process = NfProcess(
+        "CAT",
+        [NfPort("sources", "path", is_array=True)],
+        [],
+        NfCommand((NfTemplate((NfLiteral("cat"),)), NfArrayBinding("sources"))),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [NfWorkflowInputConnection("sources", "CAT", "sources")],
+        {"sources": ["a.txt", "b.txt"]},
+    ))
+
+    assert (
+        "Channel.value(params.sources.collect { entry -> file("
+        "entry instanceof Map ? entry.path : entry, "
+        "checkIfExists: true, type: 'file') })"
+    ) in rendered
 
 
 @pytest.mark.serial

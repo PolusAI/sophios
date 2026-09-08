@@ -11,6 +11,7 @@ from .nf_symbols import normalize_nextflow_identifier
 from .nf_types import (
     ExecutableNextflowWorkflow,
     NF_INTERNAL_IDENTIFIERS,
+    NfArrayBinding,
     NfBasenameReference,
     NfCommand,
     NfCommandToken,
@@ -135,7 +136,9 @@ def cwl_type_to_nf_qualifier(cwl_type: Any) -> str:
 
     Args:
         cwl_type (Any): A CWL type expression; optional forms (``"File?"``,
-            ``["null", ...]``) map like their required type.
+            ``["null", ...]``) map like their required type. Array types are
+            never accepted here; callers unwrap them with
+            :func:`_array_item_type` first.
 
     Raises:
         ValueError: If the type is outside the supported Phase 1 subset.
@@ -152,6 +155,34 @@ def cwl_type_to_nf_qualifier(cwl_type: Any) -> str:
             raise ValueError(f"unsupported CWL type for Nextflow Phase 1: {cwl_type!r}")
 
 
+def _is_array_type(cwl_type: Any) -> bool:
+    """Return whether a (non-optional-wrapped) CWL type is the array mapping form."""
+    return isinstance(cwl_type, Mapping) and cwl_type.get("type") == "array"
+
+
+def _array_item_type(items: Any) -> Any:
+    """Return the supported scalar item type for an array's ``items`` field.
+
+    Only a bare scalar type name, or a single-key ``{"type": <scalar>}``
+    mapping, is representable. Nested arrays and a per-item ``inputBinding``
+    are explicitly deferred rather than silently mishandled.
+    """
+    match items:
+        case "array":
+            raise ValueError("nested arrays are deferred beyond this lowering")
+        case Mapping() as mapping:
+            if mapping.get("type") == "array":
+                raise ValueError("nested arrays are deferred beyond this lowering")
+            if "inputBinding" in mapping:
+                raise ValueError("per-item array element bindings are deferred beyond this lowering")
+            extra = set(mapping) - {"type"}
+            if extra:
+                raise ValueError(f"unsupported array items fields: {', '.join(sorted(extra))}")
+            return mapping.get("type")
+        case _:
+            return items
+
+
 def _ports(raw_ports: Any, *, outputs: bool) -> list[NfPort]:
     port_definitions = _as_mapping(raw_ports, error="CommandLineTool ports must be a mapping")
     ports: list[NfPort] = []
@@ -160,17 +191,21 @@ def _ports(raw_ports: Any, *, outputs: bool) -> list[NfPort]:
             case {"type": cwl_type}:
                 name = _identifier(raw_name, context="port name")
                 required_type = _required_type(cwl_type)
+                is_array = not outputs and _is_array_type(required_type)
+                element_type = _array_item_type(required_type.get("items")) if is_array else cwl_type
+                qualifier = cwl_type_to_nf_qualifier(element_type)
                 path_kind = {
                     "File": "file",
                     "Directory": "directory",
-                }.get(required_type)
+                }.get(_required_type(element_type))
                 ports.append(
                     NfPort(
                         name,
-                        cwl_type_to_nf_qualifier(cwl_type),
+                        qualifier,
                         emit=name if outputs else None,
                         glob=_output_template(raw_name, raw_definition) if outputs else None,
                         path_kind=path_kind,
+                        is_array=is_array,
                     )
                 )
             case _:
@@ -285,6 +320,43 @@ def _boolean_flag_reference(raw_name: Any, name: str, value_from: Any) -> None:
             )
 
 
+def _array_binding(
+    raw_name: Any,
+    name: str,
+    required_type: Mapping[str, Any],
+    binding: Mapping[str, Any],
+) -> NfArrayBinding:
+    """Lower an array-typed inputBinding to its one supported shape.
+
+    No itemSeparator, no valueFrom, and separate is not false: the array's
+    optional prefix is contributed once and each element becomes its own
+    argv word, or nothing at all when the array is empty.
+    """
+    if binding.get("valueFrom") is not None:
+        raise ValueError(
+            f"CWL valueFrom on an array-typed inputBinding for {raw_name!r} is "
+            "deferred beyond this lowering"
+        )
+    if binding.get("itemSeparator") is not None:
+        raise ValueError(f"CWL itemSeparator for {raw_name!r} is deferred beyond this lowering")
+    if binding.get("separate") is False:
+        raise ValueError(
+            f"CWL separate: false on an array-typed inputBinding for {raw_name!r} "
+            "is deferred beyond this lowering"
+        )
+    # Validates the item type is a supported, non-nested, no-per-item-binding
+    # scalar; the qualifier itself is not needed here.
+    cwl_type_to_nf_qualifier(_array_item_type(required_type.get("items")))
+    match binding.get("prefix"):
+        case None:
+            prefix = None
+        case str() as prefix_text if prefix_text.strip():
+            prefix = prefix_text
+        case _:
+            raise ValueError(f"CWL command prefix for {raw_name!r} must be a non-empty string")
+    return NfArrayBinding(name, prefix)
+
+
 def _input_binding_items(
     inputs: Mapping[str, Any],
 ) -> list[tuple[tuple[int, int, str], tuple[NfCommandToken, ...]]]:
@@ -301,7 +373,13 @@ def _input_binding_items(
         name = _identifier(raw_name, context="input binding name")
         value_from = binding.get("valueFrom")
         position = _position(binding.get("position"), default=0)
-        if _required_type(input_definition.get("type")) == "boolean":
+        required_type = _required_type(input_definition.get("type"))
+        if _is_array_type(required_type):
+            items.append(
+                ((position, 1, str(raw_name)), (_array_binding(raw_name, name, required_type, binding),))
+            )
+            continue
+        if required_type == "boolean":
             # CWL boolean bindings contribute their prefix, or nothing at all
             # when the flag is false or no prefix is declared. A
             # self-referencing valueFrom reduces to the same value the
@@ -599,7 +677,16 @@ def _unconsumed_field_findings(
 
 def _phase1_value_matches(cwl_type: Any, value: Any) -> bool:
     """Return whether a concrete boundary value has the supported runtime shape."""
-    match _required_type(cwl_type), value:
+    required = _required_type(cwl_type)
+    if _is_array_type(required):
+        if not isinstance(value, list):
+            return False
+        try:
+            item_type = _array_item_type(required.get("items"))
+        except ValueError:
+            return False
+        return all(_phase1_value_matches(item_type, item) for item in value)
+    match required, value:
         case "string", str():
             return True
         case "boolean", bool():

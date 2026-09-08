@@ -12,7 +12,7 @@ from sophios.api.python.workflow import CompiledWorkflow
 from sophios.input_output_nf import render_nextflow
 from sophios.nf_types import NfFlag, NfLiteral, NfResources, NfTemplate
 from sophios.utils_nf import cwl_rosetree_to_nextflow
-from sophios.wic_types import RoseTree
+from sophios.wic_types import RoseTree, Yaml
 
 from .testkit import node_data, step, synthetic_rose, tool, workflow_doc
 
@@ -994,3 +994,124 @@ def test_a_command_of_only_flags_still_runs_a_program() -> None:
 
     assert tokens[0] == NfTemplate((NfLiteral("true"),))
     assert tokens[1] == NfFlag("verbose", "--verbose")
+
+
+def _array_tool(items: Any, **binding: Any) -> Yaml:
+    return tool(
+        "ARRAY",
+        inputs={
+            "values": {
+                "type": {"type": "array", "items": items},
+                "inputBinding": {"position": 1, **binding},
+            }
+        },
+    )
+
+
+def _array_rose(items: Any, value: Any, **binding: Any) -> RoseTree:
+    return synthetic_rose(
+        workflow_doc(
+            [step("ARRAY", **{"in": {"values": "values"}})],
+            inputs={"values": {"type": {"type": "array", "items": items}}},
+        ),
+        [_array_tool(items, **binding)],
+        workflow_inputs={"values": value},
+    )
+
+
+def _array_rose_from_producer(items: Any, **binding: Any) -> RoseTree:
+    """Wire the array-typed input from a producing step, bypassing boundary-value matching.
+
+    Isolates a type-shape rejection (an unsupported items schema) from the
+    separate, and less specific, boundary-value-shape rejection.
+    """
+    producer = tool("PRODUCER", outputs={"out": {"type": "File", "outputBinding": {"glob": "out.txt"}}})
+    return synthetic_rose(
+        workflow_doc([
+            step("PRODUCER", out=["out"]),
+            step("ARRAY", **{"in": {"values": "PRODUCER/out"}}),
+        ]),
+        [producer, _array_tool(items, **binding)],
+    )
+
+
+@pytest.mark.fast
+def test_rejects_nested_arrays() -> None:
+    rose = _array_rose_from_producer({"type": "array", "items": "string"})
+    with pytest.raises(ValueError, match="nested arrays are deferred"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_per_item_input_binding_on_array_items() -> None:
+    rose = _array_rose_from_producer({"type": "File", "inputBinding": {"prefix": "-I"}})
+    with pytest.raises(ValueError, match="per-item array element bindings are deferred"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_value_from_on_an_array_binding() -> None:
+    rose = _array_rose("string", ["a"], valueFrom="$(inputs.values)")
+    with pytest.raises(ValueError, match=r"valueFrom on an array-typed inputBinding.*deferred"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_item_separator_on_an_array_binding() -> None:
+    rose = _array_rose("string", ["a", "b"], itemSeparator=",")
+    with pytest.raises(ValueError, match=r"itemSeparator.*not consumed by Nextflow Phase 1"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_separate_false_on_an_array_binding() -> None:
+    rose = _array_rose("string", ["a", "b"], separate=False)
+    with pytest.raises(ValueError, match=r"separate: false on an array-typed inputBinding.*deferred"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_array_typed_outputs() -> None:
+    array_output = tool(
+        "MAKE",
+        outputs={
+            "results": {
+                "type": {"type": "array", "items": "File"},
+                "outputBinding": {"glob": "*.txt"},
+            }
+        },
+    )
+    rose = synthetic_rose(workflow_doc([step("MAKE", out=["results"])]), [array_output])
+    with pytest.raises(ValueError, match=r"results\.type: primitive and non-path output capture"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_absent_optional_array_input() -> None:
+    """Absence (no array at all) is out of scope for the array lowering; empty is not absence."""
+    optional_array = tool(
+        "ARRAY",
+        inputs={
+            "values": {
+                "type": ["null", {"type": "array", "items": "string"}],
+                "inputBinding": {"position": 1, "prefix": "--value"},
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("ARRAY", **{"in": {"values": "values"}})],
+            inputs={"values": {"type": ["null", {"type": "array", "items": "string"}]}},
+        ),
+        [optional_array],
+        workflow_inputs={"values": None},
+    )
+    with pytest.raises(ValueError, match=r"steps\[0\].run.inputs.values: absent optional"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_array_value_with_a_mismatched_item_type() -> None:
+    rose = _array_rose("string", ["a", 1])
+    with pytest.raises(ValueError, match="does not match its supported CWL type"):
+        cwl_rosetree_to_nextflow(rose)

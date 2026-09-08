@@ -10,6 +10,7 @@ import pytest
 from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
+    NfArrayBinding,
     NfBasenameReference,
     NfCommand,
     NfCommandToken,
@@ -70,14 +71,14 @@ def test_executable_schema_declares_version_and_kind() -> None:
     workflow = ExecutableNextflowWorkflow("wf", [], [], {})
     payload = workflow.to_dict()
 
-    assert payload["schema_version"] == 4
+    assert payload["schema_version"] == 5
     assert payload["representation_kind"] == "executable"
 
     payload["schema_version"] = 1
     with pytest.raises(ValueError, match="schema version"):
         ExecutableNextflowWorkflow.from_dict(payload)
 
-    payload["schema_version"] = 4
+    payload["schema_version"] = 5
     payload["representation_kind"] = "structural"
     with pytest.raises(ValueError, match="representation kind"):
         ExecutableNextflowWorkflow.from_dict(payload)
@@ -264,17 +265,150 @@ def test_basename_port_rule_covers_stream_and_glob_positions() -> None:
 
 
 @pytest.mark.fast
+def test_array_binding_survives_hydration() -> None:
+    process = NfProcess(
+        "NAMES",
+        [NfPort("names", "val", is_array=True)],
+        [],
+        NfCommand((NfTemplate((NfLiteral("echo"),)), NfArrayBinding("names", "--name"))),
+    )
+    assert NfProcess.from_dict(process.to_dict()) == process
+    assert process.command.tokens[1].to_dict() == {
+        "kind": "array",
+        "name": "names",
+        "prefix": "--name",
+    }
+    assert process.inputs[0].to_dict()["is_array"] is True
+
+
+@pytest.mark.fast
+def test_array_binding_prefix_may_be_none() -> None:
+    binding = NfArrayBinding("names")
+    assert binding.prefix is None
+    assert binding.to_dict() == {"kind": "array", "name": "names", "prefix": None}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("prefix", ["", "   "])
+def test_array_binding_rejects_a_blank_prefix(prefix: str) -> None:
+    with pytest.raises(ValueError, match="prefix"):
+        NfArrayBinding("names", prefix)
+
+
+@pytest.mark.fast
+def test_array_binding_must_reference_an_array_marked_input() -> None:
+    array_command = NfCommand(
+        (NfTemplate((NfLiteral("echo"),)), NfArrayBinding("names", "--name"))
+    )
+    with pytest.raises(ValueError, match="unknown inputs"):
+        NfProcess("NAMES", [], [], array_command)
+    with pytest.raises(ValueError, match="array bindings must reference array-marked inputs"):
+        NfProcess("NAMES", [NfPort("names", "val")], [], array_command)
+
+
+@pytest.mark.fast
+def test_array_binding_is_valid_against_path_or_val_ports() -> None:
+    """Unlike a flag, an array binding may target either qualifier."""
+    for qualifier in ("val", "path"):
+        process = NfProcess(
+            "NAMES",
+            [NfPort("names", qualifier, is_array=True)],
+            [],
+            NfCommand((NfTemplate((NfLiteral("echo"),)), NfArrayBinding("names"))),
+        )
+        assert process.inputs[0].is_array is True
+
+
+@pytest.mark.fast
+def test_array_typed_outputs_are_unrepresentable() -> None:
+    glob = NfTemplate((NfLiteral("result.txt"),))
+    with pytest.raises(ValueError, match="array-typed outputs are deferred"):
+        NfProcess(
+            "MAKE",
+            [],
+            [NfPort("result", "path", "result", glob, is_array=True)],
+            NfCommand((NfTemplate((NfLiteral("true"),)),)),
+        )
+
+
+@pytest.mark.fast
+def test_array_marker_participates_in_channel_qualifier_consistency() -> None:
+    """An array port and a scalar port must never share one workflow parameter."""
+    scalar_process = NfProcess("SCALAR", [NfPort("shared", "val")], [], command("true"))
+    array_process = NfProcess(
+        "ARRAY",
+        [NfPort("shared", "val", is_array=True)],
+        [],
+        NfCommand((NfTemplate((NfLiteral("true"),)), NfArrayBinding("shared"))),
+    )
+    with pytest.raises(ValueError, match="incompatible channel qualifiers"):
+        ExecutableNextflowWorkflow(
+            "wf",
+            [scalar_process, array_process],
+            [
+                NfWorkflowInputConnection("shared", "SCALAR", "shared"),
+                NfWorkflowInputConnection("shared", "ARRAY", "shared"),
+            ],
+            {"shared": ["a", "b"]},
+        )
+
+
+@pytest.mark.fast
+def test_hydration_rejects_an_array_kind_or_field_older_than_schema_version_5() -> None:
+    process = NfProcess(
+        "NAMES",
+        [NfPort("names", "val", is_array=True)],
+        [],
+        NfCommand((NfTemplate((NfLiteral("echo"),)), NfArrayBinding("names", "--name"))),
+    )
+    payload = ExecutableNextflowWorkflow(
+        "wf",
+        [process],
+        [NfWorkflowInputConnection("names", "NAMES", "names")],
+        {"names": ["a", "b"]},
+    ).to_dict()
+    assert ExecutableNextflowWorkflow.from_dict(payload).to_dict() == payload
+
+    payload["schema_version"] = 4
+    with pytest.raises(ValueError, match=r"'is_array'.*schema version 5.*schema version 4"):
+        ExecutableNextflowWorkflow.from_dict(payload)
+
+
+@pytest.mark.fast
+def test_hydration_rejects_an_array_kind_token_older_than_schema_version_5() -> None:
+    """A hand-crafted payload can carry the array kind without is_array; the kind gate still fires."""
+    process = NfProcess(
+        "NAMES",
+        [NfPort("names", "val")],
+        [],
+        command("echo"),
+    )
+    payload = ExecutableNextflowWorkflow(
+        "wf",
+        [process],
+        [NfWorkflowInputConnection("names", "NAMES", "names")],
+        {"names": "unused"},
+    ).to_dict()
+    payload["processes"][0]["command"]["tokens"].append(
+        {"kind": "array", "name": "names", "prefix": None}
+    )
+    payload["schema_version"] = 4
+    with pytest.raises(ValueError, match=r"'array'.*schema version 5.*schema version 4"):
+        ExecutableNextflowWorkflow.from_dict(payload)
+
+
+@pytest.mark.fast
 def test_hydration_accepts_earlier_subset_schema_versions() -> None:
     payload = ExecutableNextflowWorkflow(
         "wf", [NfProcess("P", [], [], command("true"))], [], {}
     ).to_dict()
-    assert payload["schema_version"] == 4
+    assert payload["schema_version"] == 5
 
-    for earlier in (2, 3):
+    for earlier in (2, 3, 4):
         payload["schema_version"] = earlier
-        assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 4
+        assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 5
 
-    for unsupported in (1, 5):
+    for unsupported in (1, 6):
         payload["schema_version"] = unsupported
         with pytest.raises(ValueError, match="schema version"):
             ExecutableNextflowWorkflow.from_dict(payload)

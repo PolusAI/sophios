@@ -9,6 +9,7 @@ from typing import Any
 from .nf_types import (
     ExecutableNextflowWorkflow,
     NF_SHELL_QUOTE_HELPER,
+    NfArrayBinding,
     NfBasenameReference,
     NfConnection,
     NfFlag,
@@ -83,11 +84,24 @@ def _render_template(template: Any) -> str:
     return f"${{{NF_SHELL_QUOTE_HELPER}({_template_expression(template)})}}"
 
 
+def _render_array_binding(token: NfArrayBinding) -> str:
+    """Render an array binding: nothing when empty, else prefix once plus each item."""
+    items_expression = f"{token.name}.collect{{ {NF_SHELL_QUOTE_HELPER}(it.toString()) }}"
+    if token.prefix is not None:
+        quoted_prefix = f"{NF_SHELL_QUOTE_HELPER}({_groovy_literal(token.prefix)})"
+        joined = f"([{quoted_prefix}] + {items_expression}).join(' ')"
+    else:
+        joined = f"{items_expression}.join(' ')"
+    return f"${{{token.name}.isEmpty() ? '' : {joined}}}"
+
+
 def _render_command_token(token: Any) -> str:
-    """Render one argv token; flags collapse to nothing when their input is false."""
+    """Render one argv token; flags and array bindings collapse away when falsy/empty."""
     if isinstance(token, NfFlag):
         quoted = f"{NF_SHELL_QUOTE_HELPER}({_groovy_literal(token.prefix)})"
         return f"${{{token.name} ? {quoted} : ''}}"
+    if isinstance(token, NfArrayBinding):
+        return _render_array_binding(token)
     return _render_template(token)
 
 
@@ -238,6 +252,15 @@ def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> st
     port = _workflow_input_port(workflow, name)
     if port.qualifier == "path":
         path_type = "dir" if port.path_kind == "directory" else "file"
+        if port.is_array:
+            # One Channel.value(...) element holding a Groovy list, so
+            # Nextflow stages every element for a single process call
+            # instead of fanning the channel out over several calls.
+            return (
+                f"Channel.value(params.{name}.collect {{ entry -> file("
+                f"entry instanceof Map ? entry.path : entry, "
+                f"checkIfExists: true, type: '{path_type}') }})"
+            )
         return (
             f"Channel.fromPath(params.{name} instanceof Map ? params.{name}.path : "
             f"params.{name}, checkIfExists: true, type: '{path_type}', glob: false)"

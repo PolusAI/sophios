@@ -10,10 +10,12 @@ import pytest
 from sophios import inference
 from sophios.input_output_nf import render_nextflow
 from sophios.nf_types import (
+    NfArrayBinding,
     NfBasenameReference,
     NfFlag,
     NfInputReference,
     NfLiteral,
+    NfPort,
     NfResources,
     NfTemplate,
     NfProcessConnection,
@@ -152,6 +154,107 @@ def test_flag_tokens_take_their_cwl_position_among_other_bindings() -> None:
     assert tokens[1] == NfTemplate((NfLiteral("--stable"),))
     assert tokens[2] == NfFlag("reverse", "-r")
     assert tokens[3] == NfTemplate((NfInputReference("source"),))
+
+
+@pytest.mark.fast
+def test_array_of_scalars_lowers_to_a_val_array_port_with_a_binding() -> None:
+    names_tool = tool(
+        "NAMES",
+        inputs={
+            "names": {
+                "type": {"type": "array", "items": "string"},
+                "inputBinding": {"position": 1, "prefix": "--name"},
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("NAMES", **{"in": {"names": "names"}})],
+            inputs={"names": {"type": {"type": "array", "items": "string"}}},
+        ),
+        [names_tool],
+        workflow_inputs={"names": ["alice", "bob"]},
+    )
+
+    process = cwl_rosetree_to_nextflow(rose).processes[0]
+
+    assert process.inputs[0] == NfPort("names", "val", is_array=True)
+    assert process.command.tokens[-1] == NfArrayBinding("names", "--name")
+
+
+@pytest.mark.fast
+def test_array_of_files_lowers_to_a_path_array_port() -> None:
+    cat_tool = tool(
+        "CAT",
+        inputs={
+            "sources": {
+                "type": {"type": "array", "items": "File"},
+                "inputBinding": {"position": 1},
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("CAT", **{"in": {"sources": "sources"}})],
+            inputs={"sources": {"type": {"type": "array", "items": "File"}}},
+        ),
+        [cat_tool],
+        workflow_inputs={
+            "sources": [
+                {"class": "File", "path": "a.txt"},
+                {"class": "File", "path": "b.txt"},
+            ]
+        },
+    )
+
+    process = cwl_rosetree_to_nextflow(rose).processes[0]
+
+    assert process.inputs[0] == NfPort("sources", "path", is_array=True)
+    assert process.command.tokens[-1] == NfArrayBinding("sources")
+
+
+@pytest.mark.fast
+def test_array_binding_without_a_prefix_lowers_correctly() -> None:
+    cat_tool = tool(
+        "CAT",
+        inputs={"sources": {"type": {"type": "array", "items": "string"}, "inputBinding": {}}},
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("CAT", **{"in": {"sources": "sources"}})],
+            inputs={"sources": {"type": {"type": "array", "items": "string"}}},
+        ),
+        [cat_tool],
+        workflow_inputs={"sources": ["a", "b"]},
+    )
+
+    process = cwl_rosetree_to_nextflow(rose).processes[0]
+
+    assert process.command.tokens[-1] == NfArrayBinding("sources", None)
+
+
+@pytest.mark.fast
+def test_empty_array_value_is_accepted_and_distinct_from_absent() -> None:
+    """A supplied [] is a present, valid, zero-length value, not absence."""
+    names_tool = tool(
+        "NAMES",
+        inputs={
+            "names": {
+                "type": {"type": "array", "items": "string"},
+                "inputBinding": {"position": 1, "prefix": "--name"},
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("NAMES", **{"in": {"names": "names"}})],
+            inputs={"names": {"type": {"type": "array", "items": "string"}}},
+        ),
+        [names_tool],
+        workflow_inputs={"names": []},
+    )
+
+    assert cwl_rosetree_to_nextflow(rose).params == {"names": []}
 
 
 @pytest.mark.fast

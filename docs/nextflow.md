@@ -129,6 +129,31 @@ pattern rather than matched literally, and the process fails to find the file
 it wrote. Rendering such a name literally is a separate change, because it
 alters emitted bytes and the generated-subset reader with them.
 
+## Array-typed inputs
+
+```yaml
+inputs:
+  names:
+    type:
+      type: array
+      items: string
+    inputBinding:
+      prefix: --name
+```
+
+An array input of `File`, `Directory`, `string`, `int`, `float`, or `boolean`
+items is supported. It carries the same qualifier its item type would carry
+alone (`path` for File/Directory, `val` for scalars); a `path` array stages
+every element for one process call rather than fanning the channel out. The
+one supported command-line binding shape (no `itemSeparator`) contributes its
+optional prefix once, followed by each element as its own argument, and
+contributes nothing at all when the array is empty. An empty array is a
+present, valid value — distinct from an absent optional value above.
+
+`itemSeparator`, `separate: false`, and `valueFrom` on an array binding are
+not supported, nor are the shorthand `File[]` type form, nested arrays, a
+per-item `inputBinding`, or array-typed outputs.
+
 ## Current limits
 
 - Workflows must be flat and use `CommandLineTool`-equivalent processes.

@@ -17,6 +17,8 @@ from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.nf_reader import parse_nf_file, promote_nextflow_document
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
+    NfArrayBinding,
+    NfCommand,
     NfPort,
     NfProcess,
     NfProcessConnection,
@@ -592,6 +594,69 @@ def test_absent_optional_unreferenced_value_does_not_hang_or_crash(tmp_path: Pat
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "work").rglob("out.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == ["still runs\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+@pytest.mark.parametrize(
+    ("names", "expected"),
+    [(["alice", "bob"], "--name alice bob\n"), ([], "\n")],
+    ids=["non-empty", "empty"],
+)
+def test_array_binding_renders_each_element_or_nothing_when_empty(
+    names: list[str],
+    expected: str,
+    tmp_path: Path,
+) -> None:
+    """R2.6: an array-typed flag contributes its prefix once plus each element, or nothing."""
+    echo_tool = (
+        CommandLineTool(
+            "echo_names",
+            Inputs(names=Input(cwl.array(cwl.string), position=1, flag="--name")),
+            Outputs(result=Output(cwl.file, glob="out.txt")),
+        )
+        .base_command("echo")
+        .stdout("out.txt")
+    )
+    echo_step = Step(echo_tool, step_name="echo_names")
+    echo_step.inputs.names = names
+
+    workflow = Workflow([echo_step], "nextflow_array_binding")
+    workflow.outputs.out = echo_step.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("out.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == [expected]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_array_of_files_stages_every_element_for_one_process_call(tmp_path: Path) -> None:
+    """R2.7: an array of File values stages every element for a single process invocation."""
+    source_a = tmp_path / "a.txt"
+    source_b = tmp_path / "b.txt"
+    source_a.write_text("alpha\n", encoding="utf-8")
+    source_b.write_text("beta\n", encoding="utf-8")
+    process = NfProcess(
+        "CAT_FILES",
+        [NfPort("sources", "path", is_array=True)],
+        [output_port("result", "combined.txt")],
+        NfCommand(
+            (template("cat"), NfArrayBinding("sources")),
+            stdout=template("combined.txt"),
+        ),
+    )
+    workflow = single_process_workflow(
+        process,
+        params={"sources": [str(source_a), str(source_b)]},
+        output_port_name="result",
+    )
+    result = run_nextflow(workflow, tmp_path / "run")
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "run" / "work").rglob("combined.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == ["alpha\nbeta\n"]
 
 
 @pytest.mark.nextflow

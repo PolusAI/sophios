@@ -113,6 +113,27 @@ def _check_fields(
         raise ValueError(f"{type_name} has unknown fields: {', '.join(sorted(unknown))}")
 
 
+def _check_fields_with_optional(
+    value: Mapping[str, Any],
+    *,
+    type_name: str,
+    required: set[str],
+    optional: set[str],
+) -> None:
+    """Like :func:`_check_fields`, but tolerates a declared set of optional keys.
+
+    Used for fields that earlier schema versions never wrote, so their
+    absence in an older payload is a valid, unambiguous default rather than
+    a hydration error.
+    """
+    missing = required - set(value)
+    unknown = set(value) - required - optional
+    if missing:
+        raise ValueError(f"{type_name} is missing required fields: {', '.join(sorted(missing))}")
+    if unknown:
+        raise ValueError(f"{type_name} has unknown fields: {', '.join(sorted(unknown))}")
+
+
 @dataclass(frozen=True, slots=True)
 class NfLiteral:
     """Literal data inside a command or path template."""
@@ -269,15 +290,49 @@ class NfFlag:
         return {"kind": "flag", "name": self.name, "prefix": self.prefix}
 
 
-NfCommandToken = NfTemplate | NfFlag
+@dataclass(frozen=True, slots=True)
+class NfArrayBinding:
+    """Command-line binding for a CWL array-typed input with no itemSeparator.
+
+    Renders nothing at all when the referenced array is empty. Otherwise
+    contributes the optional prefix once, then each element as its own
+    shell-quoted argv word, mirroring CWL's per-item array binding without
+    itemSeparator. Valid only in command token position, and only against
+    array-marked ports.
+    """
+
+    name: str
+    prefix: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_ir_identifier(self.name, field_name="array binding input reference")
+        if self.prefix is not None and (not isinstance(self.prefix, str) or not self.prefix.strip()):
+            raise ValueError("array binding prefix must be a non-empty string or None")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, Any]: The token as ``{"kind": "array", "name": ...,
+                "prefix": ...}``.
+        """
+        return {"kind": "array", "name": self.name, "prefix": self.prefix}
+
+
+NfCommandToken = NfTemplate | NfFlag | NfArrayBinding
 
 
 def _command_token_from_dict(value: Mapping[str, Any]) -> NfCommandToken:
     item = _mapping(value, type_name="NfCommandToken")
-    if item.get("kind") != "flag":
-        return NfTemplate.from_dict(item)
-    _check_fields(item, type_name="NfFlag", required={"kind", "name", "prefix"})
-    return NfFlag(item["name"], item["prefix"])
+    match item.get("kind"):
+        case "flag":
+            _check_fields(item, type_name="NfFlag", required={"kind", "name", "prefix"})
+            return NfFlag(item["name"], item["prefix"])
+        case "array":
+            _check_fields(item, type_name="NfArrayBinding", required={"kind", "name", "prefix"})
+            return NfArrayBinding(item["name"], item["prefix"])
+        case _:
+            return NfTemplate.from_dict(item)
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,7 +346,9 @@ class NfCommand:
 
     def __post_init__(self) -> None:
         tokens = tuple(self.tokens)
-        if not tokens or not all(isinstance(token, (NfTemplate, NfFlag)) for token in tokens):
+        if not tokens or not all(
+            isinstance(token, (NfTemplate, NfFlag, NfArrayBinding)) for token in tokens
+        ):
             raise ValueError("command must contain at least one typed token")
         object.__setattr__(self, "tokens", tokens)
         for name in ("stdin", "stdout", "stderr"):
@@ -410,6 +467,7 @@ class NfPort:
     emit: str | None = None
     glob: NfTemplate | None = None
     path_kind: str | None = None
+    is_array: bool = False
 
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.name, field_name="port name")
@@ -427,13 +485,15 @@ class NfPort:
             _validate_ir_identifier(self.emit, field_name="port emit")
         if self.glob is not None and not isinstance(self.glob, NfTemplate):
             raise TypeError("port glob must be an NfTemplate or None")
+        if not isinstance(self.is_array, bool):
+            raise TypeError("port is_array must be a bool")
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation.
 
         Returns:
-            dict[str, Any]: The port's name, qualifier, emit, glob, and
-                path kind.
+            dict[str, Any]: The port's name, qualifier, emit, glob, path
+                kind, and array marker.
         """
         return {
             "name": self.name,
@@ -441,11 +501,17 @@ class NfPort:
             "emit": self.emit,
             "glob": self.glob.to_dict() if self.glob else None,
             "path_kind": self.path_kind,
+            "is_array": self.is_array,
         }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
         """Hydrate and validate a port from a mapping.
+
+        ``is_array`` is optional on hydration: every schema version before
+        the array lowering never wrote it, and its absence there always
+        means False, so accepting a missing key keeps those payloads
+        hydrating unchanged.
 
         Args:
             value (Mapping[str, Any]): Serialized port produced by
@@ -459,10 +525,11 @@ class NfPort:
             Self: The validated port.
         """
         item = _mapping(value, type_name=cls.__name__)
-        _check_fields(
+        _check_fields_with_optional(
             item,
             type_name=cls.__name__,
             required={"name", "qualifier", "emit", "glob", "path_kind"},
+            optional={"is_array"},
         )
         glob = None if item["glob"] is None else NfTemplate.from_dict(item["glob"])
         return cls(
@@ -471,6 +538,7 @@ class NfPort:
             emit=item["emit"],
             glob=glob,
             path_kind=item["path_kind"],
+            is_array=bool(item.get("is_array", False)),
         )
 
 
@@ -504,10 +572,15 @@ class NfProcess:
             raise ValueError("process input ports cannot declare output metadata")
         if any(port.qualifier != "path" or port.glob is None for port in outputs):
             raise ValueError("executable process outputs require path qualifier and typed glob")
+        if any(port.is_array for port in outputs):
+            raise ValueError("array-typed outputs are deferred beyond this lowering")
         if not isinstance(self.command, NfCommand):
             raise TypeError("process command must be an NfCommand")
         input_names = {port.name for port in inputs}
         flag_names = {token.name for token in self.command.tokens if isinstance(token, NfFlag)}
+        array_binding_names = {
+            token.name for token in self.command.tokens if isinstance(token, NfArrayBinding)
+        }
         templates = [
             *(token for token in self.command.tokens if isinstance(token, NfTemplate)),
             *(template for template in (self.command.stdin, self.command.stdout, self.command.stderr) if template),
@@ -517,7 +590,7 @@ class NfProcess:
         basename_names = {
             segment.name for segment in segments if isinstance(segment, NfBasenameReference)
         }
-        references = flag_names | basename_names | {
+        references = flag_names | array_binding_names | basename_names | {
             segment.name for segment in segments if isinstance(segment, NfInputReference)
         }
         if unknown := references - input_names:
@@ -525,6 +598,7 @@ class NfProcess:
                 f"process {self.name!r} templates reference unknown inputs: {', '.join(sorted(unknown))}"
             )
         qualifiers = {port.name: port.qualifier for port in inputs}
+        is_array_by_name = {port.name: port.is_array for port in inputs}
         if invalid := {name for name in flag_names if qualifiers[name] != "val"}:
             raise ValueError(
                 f"process {self.name!r} flag tokens must reference val inputs: "
@@ -533,6 +607,11 @@ class NfProcess:
         if invalid := {name for name in basename_names if qualifiers[name] != "path"}:
             raise ValueError(
                 f"process {self.name!r} basename references must target path inputs: "
+                f"{', '.join(sorted(invalid))}"
+            )
+        if invalid := {name for name in array_binding_names if not is_array_by_name[name]}:
+            raise ValueError(
+                f"process {self.name!r} array bindings must reference array-marked inputs: "
                 f"{', '.join(sorted(invalid))}"
             )
         match self.container:
@@ -775,15 +854,19 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow."""
 
-    SCHEMA_VERSION: ClassVar[int] = 4
+    SCHEMA_VERSION: ClassVar[int] = 5
     # Earlier versions whose value space is a strict subset of the current
     # model hydrate unchanged; serialization always writes SCHEMA_VERSION.
-    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4})
+    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5})
     # Each additive token or segment kind declares the version that
     # introduced it, so the subset property is enforced rather than assumed.
     KIND_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
-        {"flag": 3, "basename": 4}
+        {"flag": 3, "basename": 4, "array": 5}
     )
+    # Version an additive non-kind-tagged field was introduced in, keyed by
+    # the field name it appears under. is_array predates a "kind" tag on
+    # NfPort, so it needs its own gate alongside KIND_SCHEMA_VERSIONS.
+    FIELD_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType({"is_array": 5})
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
     name: str
@@ -850,11 +933,12 @@ class ExecutableNextflowWorkflow:
                     if from_port not in self.params:
                         raise ValueError(f"connection references unknown workflow input {from_port!r}")
                     destination = self._destination_port(process_by_name, to_process, to_port)
-                    # path_kind selects the staging policy, so it is part of the
-                    # channel contract: connection order must never pick one.
+                    # path_kind and is_array select the staging/cardinality
+                    # policy, so both are part of the channel contract:
+                    # connection order must never pick one.
                     semantics = destination.qualifier + (
                         f"[{destination.path_kind}]" if destination.path_kind else ""
-                    )
+                    ) + ("[]" if destination.is_array else "")
                     previous = workflow_input_qualifiers.setdefault(from_port, semantics)
                     if previous != semantics:
                         raise ValueError(
@@ -995,7 +1079,7 @@ class ExecutableNextflowWorkflow:
 
     @classmethod
     def _reject_newer_kinds(cls, value: Any, *, declared: int) -> None:
-        """Reject a payload carrying a kind newer than its declared version."""
+        """Reject a payload carrying a kind or field newer than its declared version."""
         match value:
             case Mapping() as mapping:
                 introduced = cls.KIND_SCHEMA_VERSIONS.get(str(mapping.get("kind")))
@@ -1004,6 +1088,12 @@ class ExecutableNextflowWorkflow:
                         f"{mapping['kind']!r} requires executable Nextflow schema version "
                         f"{introduced}, but the payload declares schema version {declared}"
                     )
+                for field_name, field_introduced in cls.FIELD_SCHEMA_VERSIONS.items():
+                    if mapping.get(field_name) and declared < field_introduced:
+                        raise ValueError(
+                            f"{field_name!r} requires executable Nextflow schema version "
+                            f"{field_introduced}, but the payload declares schema version {declared}"
+                        )
                 for item in mapping.values():
                     cls._reject_newer_kinds(item, declared=declared)
             case list() as items:
