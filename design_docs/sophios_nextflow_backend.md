@@ -150,7 +150,7 @@ Subset acceptance is enforced, not documentary: each additive token or segment k
 
 CWL command construction is normalized before rendering. Ordering follows the pinned CWL version, including defaults and tie-breaking. Command parts remain typed as literal data or interpolation references; quoting is decided per token or segment, never by scanning a completed string for `$`.
 
-**Boolean flags (approved Phase 2 lowering).** A `boolean` input with an `inputBinding` and no `valueFrom` lowers to a typed conditional flag token that references the input by name and carries a non-empty prefix. At runtime, `true` renders the shell-quoted prefix as exactly one argv word and `false` renders nothing; a boolean binding without a prefix contributes nothing for either value. Flag tokens are valid only in command token position — never in globs or stream targets — and only against `val` ports. An optional boolean lowers the same way when a value is present; an absent optional value keeps rejecting under the option-lowering rule above.
+**Boolean flags (approved Phase 2 lowering).** A `boolean` input with an `inputBinding` and no `valueFrom` lowers to a typed conditional flag token that references the input by name and carries a non-empty prefix. At runtime, `true` renders the shell-quoted prefix as exactly one argv word and `false` renders nothing; a boolean binding without a prefix contributes nothing for either value. Flag tokens are valid only in command token position — never in globs or stream targets — and only against `val` ports. An optional boolean lowers the same way whether a value is present or absent: a flag token never dereferences its channel value, only tests it, so the absent-optional `val` lowering below covers this case directly and an absent optional boolean now renders identically to `false`.
 
 The rendered flag is a conditional over its channel value, so the lowering is sound only when that value is a JSON boolean at runtime. Capability analysis therefore requires every input consumed by a flag token to resolve to a boolean-typed source, whether that source is a workflow input or a producing process output port. Truthiness of a staged path or of a string such as `"false"` must never be allowed to decide a flag.
 
@@ -164,7 +164,7 @@ Shell operators exist only under an explicitly supported shell-mode lowering. `S
 
 File and Directory inputs lower to path semantics. Supported JSON scalar inputs lower to value semantics. Defaults are explicit model values. Missingness is distinct from JSON `null`.
 
-Optional absence is supported only after a terminating, observable Nextflow lowering is approved and runtime-proven. Until then, absent optional values are rejected rather than emitted as non-producing channels.
+**Absent-optional `val` inputs (approved Phase 2 lowering).** An absent optional value lowers to a genuine JSON `null` carried by a `Channel.value(...)` element — one element, never zero — so the channel always terminates and a receiving process can observe the exact value it received. This is sound only where nothing dereferences the value unconditionally: a `null` interpolated into a plain template segment (`.toString()` on a Groovy `null`) is a runtime fault, not a clean absence signal. The lowering is therefore scoped to `val`-qualifier inputs whose consuming tool port is either never referenced in that tool's command tokens, stream targets, or output globs, or referenced solely as the boolean-flag token it drives — both positions already treat their value as a condition rather than dereferencing it, so `null` renders safely as falsy. Every other reference position — a plain value interpolation anywhere in a command token, stream target, or glob — keeps rejecting an absent optional source, because a general presence-gated value binding (the value analogue of a flag) has no approved lowering yet. Absent-optional `path` (File/Directory) inputs also keep rejecting: `path`-qualifier channel construction always stages its value unconditionally, so a safe representation needs its own sentinel convention, deferred pending its own runtime proof. An absent-optional array input is likewise deferred; it is handled by the array lowering below, which treats emptiness (a present, zero-length array) and absence (no array at all) as distinct cases.
 
 Channel construction considers all consumers. Connection order never selects a qualifier or staging policy.
 
@@ -265,6 +265,7 @@ Approved Phase 2 lowerings to date:
 - Boolean `inputBinding` flags (§6, Commands).
 - `$(inputs.<name>.basename)` references (§6, Outputs and globs).
 - `valueFrom` self-reference on a boolean binding (§6, Commands).
+- Absent-optional `val` inputs unreferenced or flag-only in their consuming command (§6, Inputs and channels).
 
 ### Phase 3 — Native inference, advanced execution, and service delivery
 
