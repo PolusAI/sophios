@@ -154,7 +154,7 @@ CWL command construction is normalized before rendering. Ordering follows the pi
 
 The rendered flag is a conditional over its channel value, so the lowering is sound only when that value is a JSON boolean at runtime. Capability analysis therefore requires every input consumed by a flag token to resolve to a boolean-typed source, whether that source is a workflow input or a producing process output port. Truthiness of a staged path or of a string such as `"false"` must never be allowed to decide a flag.
 
-`valueFrom` on a boolean `inputBinding` is rejected. CWL evaluates `valueFrom` and then applies boolean flag semantics to the result, so a lowering would have to reproduce that ordering; until one is approved, the construct fails closed rather than emitting the prefix beside a rendered value.
+**`valueFrom` self-reference on a boolean binding (approved Phase 2 lowering).** CWL evaluates `valueFrom` and then applies boolean flag semantics to the result, so a lowering must reproduce that ordering. Without a JavaScript evaluator, the only `valueFrom` shape provably boolean at runtime is the supported template form's bare `$(inputs.<name>)` reference to the binding's own input — a redundant but legal restatement of the original value. That shape lowers to the identical flag token the no-`valueFrom` case produces, so it inherits the same runtime rendering and the same boolean-source requirement. Every other `valueFrom` shape on a boolean binding — literal text, a reference to a different input, a `.path`/`.basename` suffix, or any expression outside the supported template form — is rejected, because none of those are provably boolean without either a JavaScript evaluator or aliasing another channel's presence semantics onto this one.
 
 **Diagnostics and security for this lowering.** A rejected flag construct names the source path and the deferred capability, and independent findings aggregate like every other capability diagnostic. An empty prefix is a source error and is reported; an absent prefix is valid CWL and contributes nothing. The prefix is data, never syntax: it is emitted through the generated shell-quoting helper, so it reaches the process as exactly one argv word and cannot introduce shell operators, redirections, or command substitution.
 
@@ -264,6 +264,7 @@ Approved Phase 2 lowerings to date:
 
 - Boolean `inputBinding` flags (§6, Commands).
 - `$(inputs.<name>.basename)` references (§6, Outputs and globs).
+- `valueFrom` self-reference on a boolean binding (§6, Commands).
 
 ### Phase 3 — Native inference, advanced execution, and service delivery
 
