@@ -145,6 +145,12 @@ STRUCTURAL_VIOLATIONS: list[tuple[str, str, Any]] = [
     ('wic steps must be a mapping', 'wic:\n  steps: 3\n', {'wic': {'steps': 3}}),
     ('wic step keys have the form (index, name)',
      'wic:\n  steps:\n    nope:\n      x: 1\n', {'wic': {'steps': {'nope': {'x': 1}}}}),
+    ('a sequence step carries its name in an id: key',
+     'steps:\n- touch:\n    in:\n      f: x\n', {'steps': [{'touch': {'in': {'f': 'x'}}}]}),
+    ('a sequence step with a null body still needs an id:',
+     'steps:\n- touch:\n', {'steps': [{'touch': None}]}),
+    ('a sequence entry keyed by a step key is not an identity',
+     'steps:\n- in:\n    value: something\n', {'steps': [{'in': {'value': 'something'}}]}),
 ]
 
 

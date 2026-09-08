@@ -52,6 +52,7 @@ class Code(StrEnum):
     LANG_VERSION_CONFLICT = 'wic018'
     MISPLACED_EDGE_DEF = 'wic019'
     LITERAL_TYPE_MISMATCH = 'wic020'
+    STEP_WITHOUT_ID = 'wic021'
     RECURSIVE_ALIAS = 'wic030'
 
 

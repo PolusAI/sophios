@@ -152,13 +152,13 @@ def awkward_literal_documents(draw: st.DrawFn) -> str:
 # The #383 review's counterexamples, pinned deterministically (Hypothesis's
 # failure database does not travel to CI). Duplicate-key cases are absent
 # because they are parse errors now, pinned on the parser's provocations.
-@example('steps:\n- t:\n    in:\n      f: !ii {a: !* e}\n')      # construct inside collection literal
-@example('steps:\n- t: {}\nmeta: !ii {a: 1}\n')                   # collection literal in passthrough
-@example("steps:\n- t:\n    in:\n      f: {wic_inline_input: '0'}\n")     # string that spells an int
-@example("steps:\n- t:\n    in:\n      f: {wic_inline_input: 'true'}\n")  # string that spells a bool
-@example('steps:\n- t:\n    in:\n      f: !ii 1.0e+300\n')       # exponent float
-@example('steps:\n- t:\n    in:\n      f: !ii .inf\n')           # YAML float special
-@example('steps:\n- t:\n    in:\n      f: !ii .nan\n')           # NaN, comparator-normalised
+@example('steps:\n- id: t\n  in:\n    f: !ii {a: !* e}\n')      # construct inside collection literal
+@example('steps:\n- id: t\nmeta: !ii {a: 1}\n')                   # collection literal in passthrough
+@example("steps:\n- id: t\n  in:\n    f: {wic_inline_input: '0'}\n")     # string that spells an int
+@example("steps:\n- id: t\n  in:\n    f: {wic_inline_input: 'true'}\n")  # string that spells a bool
+@example('steps:\n- id: t\n  in:\n    f: !ii 1.0e+300\n')       # exponent float
+@example('steps:\n- id: t\n  in:\n    f: !ii .inf\n')           # YAML float special
+@example('steps:\n- id: t\n  in:\n    f: !ii .nan\n')           # NaN, comparator-normalised
 @example('wic:\n  steps:\n    (1, o):\n      wic:\n        namespace: dna\n')  # nested wrapper
 @example('wic:\n  steps:\n    (1, o):\n      wic: {}\n')          # empty child sidecar: {} not null
 @FAST

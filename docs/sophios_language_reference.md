@@ -155,7 +155,7 @@ A **sequence of single-key mappings** is not a third form:
 
 ```yaml
 steps:
-- touch:            # error (wic022): the step has no id
+- touch:            # error (wic021): the step has no id
     in:
       filename: !ii empty.txt
 ```
@@ -283,9 +283,8 @@ step's output, the `!&` belongs in its `out:` list.
 A mapping the language owns may bind each key only once — inputs in `in:`,
 step names in mapping-form `steps:`, `wic:` entries, `wic: steps:` keys, and
 top-level or step-level passthrough alike. A step body may also not carry an
-`id:` of its own when its identity already comes from a mapping key or a
-single name key: two identities for one step is a mistake worth reporting,
-not resolving. Binding twice is an error, not a last-one-wins:
+`id:` of its own when its identity already comes from a mapping key: two
+identities for one step is a mistake worth reporting, not resolving. Binding twice is an error, not a last-one-wins:
 
 ```yaml
 in:

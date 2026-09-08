@@ -189,8 +189,8 @@ def _sequence_step() -> dict[str, Any]:
     return {
         **body,
         'properties': {**body['properties'], 'id': {**identity, 'minLength': 1}},
-        'description': 'A step written in a sequence: either it carries id:, '
-                       'or it is a single-key mapping naming the step.',
+        'required': ['id'],
+        'description': 'A step written in a sequence, carrying its name in an id: key.',
     }
 
 

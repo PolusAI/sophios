@@ -309,6 +309,12 @@ class Reported(NamedTuple):
 
 
 REPORTED: Final[tuple[Reported, ...]] = (
+    Reported('a sequence step without an id: names both forms that exist (§3.1)',
+             'steps:\n- touch:\n    in: {f: !ii x}\n',
+             Code.STEP_WITHOUT_ID, 2, message_contains="- id: touch"),
+    Reported('and with no body either, which is the shape insertion used to write',
+             'steps:\n- sub.wic:\n', Code.STEP_WITHOUT_ID, 2,
+             message_contains='- id: sub.wic'),
     Reported('an edge definition in input position names the position (§4.1.1)',
              'steps:\n- id: s\n  in:\n    f: !& e\n',
              Code.MISPLACED_EDGE_DEF, 4, message_contains='out:'),
