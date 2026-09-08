@@ -256,6 +256,27 @@ def _argument_items(arguments: list[Any]) -> list[tuple[tuple[int, int, int], tu
     return items
 
 
+def _boolean_flag_reference(raw_name: Any, name: str, value_from: Any) -> None:
+    """Validate that a boolean binding's valueFrom is a bare self-reference.
+
+    CWL evaluates valueFrom and then applies boolean flag semantics to the
+    result. The only valueFrom shape provably boolean without a JS evaluator
+    is a bare $(inputs.<name>) reference restating the binding's own input,
+    so that is the sole supported form; it renders identically to the
+    no-valueFrom case.
+    """
+    template = _template(value_from, context=f"CWL input {raw_name!r} valueFrom")
+    match template.segments:
+        case (NfInputReference(name=reference),) if reference == name:
+            return
+        case _:
+            raise ValueError(
+                "valueFrom on a boolean inputBinding is supported only as "
+                f"$(inputs.{raw_name}), restating the input's own value; "
+                f"{value_from!r} does not have that shape"
+            )
+
+
 def _input_binding_items(
     inputs: Mapping[str, Any],
 ) -> list[tuple[tuple[int, int, str], tuple[NfCommandToken, ...]]]:
@@ -272,9 +293,13 @@ def _input_binding_items(
         name = _identifier(raw_name, context="input binding name")
         value_from = binding.get("valueFrom")
         position = _position(binding.get("position"), default=0)
-        if value_from is None and _required_type(input_definition.get("type")) == "boolean":
+        if _required_type(input_definition.get("type")) == "boolean":
             # CWL boolean bindings contribute their prefix, or nothing at all
-            # when the flag is false or no prefix is declared.
+            # when the flag is false or no prefix is declared. A
+            # self-referencing valueFrom reduces to the same value the
+            # binding already carries, so it renders identically.
+            if value_from is not None:
+                _boolean_flag_reference(raw_name, name, value_from)
             match binding.get("prefix"):
                 case None:
                     if not binding.get("separate", True):
@@ -864,11 +889,14 @@ def _tool_capability_findings(
                     _required_type(raw_definition.get("type")) == "boolean"
                     and binding.get("valueFrom") is not None
                 ):
-                    findings.append(
-                        f"{input_binding_path}.valueFrom: valueFrom on a boolean inputBinding is "
-                        "deferred to Phase 2; CWL applies boolean flag semantics to the "
-                        "valueFrom result, which has no approved lowering"
-                    )
+                    try:
+                        _boolean_flag_reference(
+                            raw_name,
+                            _identifier(raw_name, context="input binding name"),
+                            binding["valueFrom"],
+                        )
+                    except ValueError as exc:
+                        findings.append(f"{input_binding_path}.valueFrom: {exc}")
         case _:
             pass
 

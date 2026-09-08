@@ -120,8 +120,8 @@ def test_accepts_boolean_flag_bindings_for_both_values(value: bool) -> None:
 
 @pytest.mark.fast
 @pytest.mark.parametrize("value", [False, True])
-def test_rejects_value_from_on_a_boolean_binding(value: bool) -> None:
-    """CWL applies boolean semantics after valueFrom; Phase 2 has no such lowering."""
+def test_accepts_self_referencing_value_from_on_a_boolean_binding(value: bool) -> None:
+    """A bare $(inputs.<name>) valueFrom restating its own input lowers to the same flag."""
     flags = tool(
         "FLAGS",
         inputs={
@@ -144,7 +144,96 @@ def test_rejects_value_from_on_a_boolean_binding(value: bool) -> None:
         workflow_inputs={"verbose": value},
     )
 
-    with pytest.raises(ValueError, match=r"valueFrom.*boolean"):
+    converted = cwl_rosetree_to_nextflow(rose)
+    assert converted.params == {"verbose": value}
+    assert converted.processes[0].command.tokens[-1] == NfFlag("verbose", "--verbose")
+
+
+@pytest.mark.fast
+def test_rejects_value_from_aliasing_a_different_input_on_a_boolean_binding() -> None:
+    """Aliasing a different input's presence onto this flag has no approved lowering."""
+    flags = tool(
+        "FLAGS",
+        inputs={
+            "verbose": {
+                "type": "boolean",
+                "inputBinding": {
+                    "position": 1,
+                    "prefix": "--verbose",
+                    "valueFrom": "$(inputs.other)",
+                },
+            },
+            "other": {"type": "boolean"},
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("FLAGS", **{"in": {"verbose": "verbose", "other": "other"}})],
+            inputs={"verbose": {"type": "boolean"}, "other": {"type": "boolean"}},
+        ),
+        [flags],
+        workflow_inputs={"verbose": True, "other": False},
+    )
+
+    with pytest.raises(ValueError, match=r"valueFrom on a boolean inputBinding is supported only as"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_literal_value_from_on_a_boolean_binding() -> None:
+    """A literal string is not a provably-boolean valueFrom result."""
+    flags = tool(
+        "FLAGS",
+        inputs={
+            "verbose": {
+                "type": "boolean",
+                "inputBinding": {
+                    "position": 1,
+                    "prefix": "--verbose",
+                    "valueFrom": "true",
+                },
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("FLAGS", **{"in": {"verbose": "verbose"}})],
+            inputs={"verbose": {"type": "boolean"}},
+        ),
+        [flags],
+        workflow_inputs={"verbose": True},
+    )
+
+    with pytest.raises(ValueError, match=r"valueFrom on a boolean inputBinding is supported only as"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_basename_suffixed_value_from_on_a_boolean_binding() -> None:
+    """A .basename suffix is never boolean-shaped, even on a self-reference."""
+    flags = tool(
+        "FLAGS",
+        inputs={
+            "verbose": {
+                "type": "boolean",
+                "inputBinding": {
+                    "position": 1,
+                    "prefix": "--verbose",
+                    "valueFrom": "$(inputs.verbose.basename)",
+                },
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("FLAGS", **{"in": {"verbose": "verbose"}})],
+            inputs={"verbose": {"type": "boolean"}},
+        ),
+        [flags],
+        workflow_inputs={"verbose": True},
+    )
+
+    with pytest.raises(ValueError, match=r"valueFrom on a boolean inputBinding is supported only as"):
         cwl_rosetree_to_nextflow(rose)
 
 

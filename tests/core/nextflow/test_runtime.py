@@ -462,6 +462,62 @@ def test_boolean_flag_changes_observable_command_behavior(
 
 @pytest.mark.nextflow
 @pytest.mark.serial
+@pytest.mark.parametrize(
+    ("reverse", "expected"),
+    [(True, "beta\nalpha\n"), (False, "alpha\nbeta\n")],
+    ids=["reversed", "forward"],
+)
+def test_self_referencing_value_from_flag_changes_observable_command_behavior(
+    reverse: bool,
+    expected: str,
+    tmp_path: Path,
+) -> None:
+    """R2.3: a boolean valueFrom self-reference renders the same observable flag as no valueFrom."""
+    write_tool = (
+        CommandLineTool(
+            "write_lines",
+            Inputs(
+                first=Input(cwl.string, position=2),
+                second=Input(cwl.string, position=3),
+            ),
+            Outputs(result=Output(cwl.file, glob="lines.txt")),
+        )
+        .base_command("printf")
+        .argument("%s\\n%s\\n", position=1)
+        .stdout("lines.txt")
+    )
+    write = Step(write_tool, step_name="write_lines")
+    write.inputs.first = "alpha"
+    write.inputs.second = "beta"
+
+    sort_tool = (
+        CommandLineTool(
+            "sort_lines",
+            Inputs(
+                reverse=Input(cwl.boolean, position=1, flag="-r", value_from="$(inputs.reverse)"),
+                source=Input(cwl.file, position=2),
+            ),
+            Outputs(result=Output(cwl.file, glob="sorted.txt")),
+        )
+        .base_command("sort")
+        .stdout("sorted.txt")
+    )
+    sort_step = Step(sort_tool, step_name="sort_lines")
+    sort_step.inputs.reverse = reverse
+    sort_step.inputs.source = write.outputs.result
+
+    workflow = Workflow([write, sort_step], "nextflow_value_from_flag")
+    workflow.outputs.sorted = sort_step.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("sorted.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == [expected]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
 def test_basename_derived_output_name_executes(tmp_path: Path) -> None:
     """R2.2: an output file name derived from a staged input's basename."""
     write_tool = (

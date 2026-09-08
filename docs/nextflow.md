@@ -78,11 +78,16 @@ content, and invalid or stale IR fail closed.
 
 ## Boolean flags
 
-A `boolean` input with an `inputBinding` prefix and no
-`valueFrom` becomes a real command-line flag: `true` contributes the prefix as
-exactly one argument and `false` contributes nothing. A boolean binding
-without a prefix contributes nothing for either value, matching CWL. Absent
-optional booleans still reject until option lowering is approved.
+A `boolean` input with an `inputBinding` prefix becomes a real command-line
+flag: `true` contributes the prefix as exactly one argument and `false`
+contributes nothing. A boolean binding without a prefix contributes nothing
+for either value, matching CWL. Absent optional booleans still reject until
+option lowering is approved.
+
+A `valueFrom` on a boolean binding is supported only as a bare
+`$(inputs.<name>)` reference restating the binding's own input — a redundant
+but legal CWL form that lowers to the same flag. Any other `valueFrom` shape
+on a boolean binding is rejected.
 
 ## Basename references
 

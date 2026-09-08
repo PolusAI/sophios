@@ -189,6 +189,33 @@ def test_basename_lowers_to_a_typed_segment_in_every_template_position() -> None
 
 
 @pytest.mark.fast
+def test_self_referencing_value_from_lowers_identically_to_no_value_from() -> None:
+    """A $(inputs.<name>) valueFrom restating the input renders the exact same flag token."""
+    def build(value_from: Any) -> Any:
+        binding: dict[str, Any] = {"position": 1, "prefix": "-r"}
+        if value_from is not None:
+            binding["valueFrom"] = value_from
+        sort_tool = tool(
+            "SORT",
+            inputs={"reverse": {"type": "boolean", "inputBinding": binding}},
+        )
+        rose = synthetic_rose(
+            workflow_doc(
+                [step("SORT", **{"in": {"reverse": "reverse"}})],
+                inputs={"reverse": {"type": "boolean"}},
+            ),
+            [sort_tool],
+            workflow_inputs={"reverse": True},
+        )
+        return cwl_rosetree_to_nextflow(rose).processes[0].command
+
+    without_value_from = build(None)
+    with_value_from = build("$(inputs.reverse)")
+    assert without_value_from == with_value_from
+    assert with_value_from.tokens[1] == NfFlag("reverse", "-r")
+
+
+@pytest.mark.fast
 def test_boolean_binding_without_a_prefix_contributes_no_token() -> None:
     sort_tool = tool(
         "SORT",
