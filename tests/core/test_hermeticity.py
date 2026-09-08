@@ -36,17 +36,22 @@ REPO_ROOT = TESTS_ROOT.parent
 #: a decision someone made on purpose.
 #:
 #: Reduced for Task 1 to the two modules that task delivered; Task 2 adds
-#: `core.ast_strategies` and Task 3 `core.equivalence`/`core.test_equivalence`
-#: as their own modules land. Tasks 4-6 each add their own module below as it
-#: lands, and Task 7's final step restores the full list:
-#:   'core.transformations', 'core.test_generators', 'core.test_equivalences',
+#: `core.ast_strategies`/`core.test_generators` and Task 3
+#: `core.equivalence`/`core.test_equivalence` as their own modules land. Tasks
+#: 4-6 each add their own module below as it lands, and Task 7's final step
+#: restores the full list:
+#:   'core.transformations', 'core.test_equivalences',
 #:   'core.test_canonical_emission', 'core.test_predicates', 'core.test_canonical_path'
+#:
+#: Every entry of `ORACLE_FILES` must appear here —
+#: `test_the_static_scan_covers_every_file_the_poisoned_run_covers` is the link.
 ORACLE_MODULES = (
     'core.synthetic_tools',
     'core.hermetic',
     'core.ast_strategies',
     'core.equivalence',
     'core.test_equivalence',
+    'core.test_generators',
 )
 
 #: Reaching any of these means the suite's meaning depends on the machine.
@@ -230,6 +235,27 @@ def _run_poisoned(targets: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
         [sys.executable, '-m', 'pytest', '-p', 'core._poison_plugins', '-q',
          '-m', 'not slow', *targets],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False)
+
+
+@pytest.mark.fast
+def test_the_static_scan_covers_every_file_the_poisoned_run_covers() -> None:
+    """The two halves of P25 are two lists, and nothing linked them.
+
+    `ORACLE_MODULES` seeds the static scan; `ORACLE_FILES` is what the poisoned
+    subprocess runs. A test file in the second and not the first is covered only
+    at runtime, and only on the paths that run actually executes — which is the
+    weaker half by this module's own docstring. Nothing imports a test module,
+    so it is never reached transitively either.
+
+    Found by mutation: adding `import sophios.plugins` to
+    `tests/core/test_generators.py` — a file `ORACLE_FILES` names — left
+    `test_no_oracle_module_reaches_plugin_discovery` green.
+    """
+    named = {f'core.{Path(f).stem}' for f in ORACLE_FILES}
+    missing = sorted(named - set(ORACLE_MODULES))
+    assert not missing, (
+        'ORACLE_FILES runs these under the poison but ORACLE_MODULES does not scan '
+        f'them, so an import of the environment in one is invisible: {missing}')
 
 
 @pytest.mark.slow

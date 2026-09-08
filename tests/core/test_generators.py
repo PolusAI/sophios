@@ -12,12 +12,12 @@ adequacy is itself a property, checked at a bounded sample.
 from collections import Counter
 
 import pytest
-from hypothesis import find, given, settings
+from hypothesis import HealthCheck, find, given, settings
 
 from sophios.lang import Document, parse
 
 from . import ast_strategies as strat
-from .hermetic import COVERAGE
+from .hermetic import COVERAGE, compile_hermetic_cwl
 
 
 @pytest.mark.fast
@@ -66,6 +66,47 @@ def test_every_construct_appears_within_a_bounded_sample() -> None:
 
 
 @pytest.mark.fast
+def test_the_compilable_subset_still_reaches_every_construct_it_does_not_exclude() -> None:
+    """The companion `NOT_YET_COMPILABLE` claims, and did not have.
+
+    `compilable_documents()` is what Tasks 3-7 quantify over, and its filter is
+    the one place a construct can leave the oracle's reach without anything
+    going red — `documents()` keeps producing the whole language, so P26 stays
+    green no matter what the filter removes. Found by mutation: an exclusion
+    predicate of `lambda d: True` empties the strategy entirely and every test
+    in this file passed.
+
+    So the filter is held to the same standard as the generator. An exclusion
+    that costs a construct has to be argued for by whoever adds it, here, in
+    this test — that is the decision `NOT_YET_COMPILABLE` exists to make
+    visible, and a test that pre-authorised it by subtracting the exclusions
+    from the expected set would authorise the silent narrowing too.
+
+    `excluded_documents` is called for each entry as well: it is the only
+    caller that keeps `_EXCLUSION_PREDICATES` keyed identically to
+    `NOT_YET_COMPILABLE` at runtime rather than only at import.
+    """
+    seen: Counter[str] = Counter()
+
+    @COVERAGE
+    @given(strat.compilable_documents())
+    def _collect(document: Document) -> None:
+        seen.update(strat.constructs_in(document))
+
+    _collect()  # pylint: disable=no-value-for-parameter  # @given supplies `document`
+
+    for name in strat.NOT_YET_COMPILABLE:
+        assert strat.excluded_documents(name) is not None
+
+    missing = [c for c in strat.CONSTRUCTS if not seen[c]]
+    assert not missing, (
+        f'{missing} never appeared in 500 documents drawn from compilable_documents(), '
+        f'so every Task 3-7 property is silent about them. Active exclusions: '
+        f'{sorted(strat.NOT_YET_COMPILABLE)}.\nSeen: {dict(seen)}'
+    )
+
+
+@pytest.mark.fast
 @given(strat.hostile_documents())
 @COVERAGE
 def test_every_ill_formed_document_earns_its_own_diagnostic(case: tuple[str, object]) -> None:
@@ -75,6 +116,50 @@ def test_every_ill_formed_document_earns_its_own_diagnostic(case: tuple[str, obj
     result = parse(source, 'hostile.wic')
     codes = [d.code for d in result.diagnostics]
     assert expected in codes, f'expected {expected}, got {codes}\n{source}'
+
+
+@pytest.mark.slow
+def test_the_workflows_strategy_produces_documents_the_compiler_accepts() -> None:
+    """`workflows()` is what Tasks 3-7 quantify over, and nothing exercised it.
+
+    Every claim `documents()` and `compilable_documents()` make is about the
+    AST; `workflows()` is `to_yml` on top, and `to_yml` is the only part of
+    this generator that must satisfy the *compiler* rather than the grammar.
+    Its docstring says so in a warning — "Do not remove this call to 'simplify'
+    `to_yml`" — about the `desugar_into_canonical_normal_form` that mapping-form
+    documents need to survive `_compile_workflow`'s per-step loop. Nothing held
+    it: delete that call and every mapping-form document raises `KeyError: 0`,
+    with no test to notice.
+
+    Both surface forms are required to reach a successful compilation, which is
+    what pins the desugaring specifically. The overall bar is a bare majority,
+    not everything: the module docstring's pending finding — `!ii` puts no
+    constraint relating a literal to the CWL type it binds, so
+    `populate_scalar_val` raises a bare `ValueError` — is a real and declared
+    residual (measured at about one document in ten), and a threshold that
+    pretended otherwise would be a flaky test rather than a stricter one.
+    """
+    compiled: Counter[str] = Counter()
+
+    @settings(max_examples=50, suppress_health_check=list(HealthCheck), deadline=None)
+    @given(strat.compilable_documents())
+    def _collect(document: Document) -> None:
+        form = 'mapping' if document.steps_as_mapping else 'sequence'
+        compiled['drawn'] += 1
+        try:
+            compile_hermetic_cwl(strat.to_yml(document), 'oracle')
+        except ValueError:  # the declared `!ii` residual; see the docstring
+            return
+        compiled[form] += 1
+
+    _collect()  # pylint: disable=no-value-for-parameter  # @given supplies `document`
+
+    for form in ('mapping', 'sequence'):
+        assert compiled[form], (
+            f'no {form}-form document from workflows() compiled, so every Task 3-7 '
+            f'property is quantifying over the other form alone: {dict(compiled)}')
+    assert compiled['mapping'] + compiled['sequence'] > compiled['drawn'] // 2, (
+        f'fewer than half the documents workflows() produces compile: {dict(compiled)}')
 
 
 @pytest.mark.slow

@@ -14,13 +14,15 @@ anything real:
   - `xform` is File -> File: it chains, which makes step order matter.
   - `join` takes two Files: one step, two edges to infer.
   - `count` is File -> int and `scale` is int -> float: an edge that ignores
-    types shows up as a type mismatch rather than a coincidence.
+    types shows up as a type mismatch rather than a coincidence. `scale.factor`
+    also carries a default, so `args_required` (src/sophios/compiler.py:588) is
+    a proper subset of the inputs somewhere — `required_inputs_of` and
+    `test_the_registry_reaches_the_branches_it_claims_to` both depend on that
+    being true of some stem.
   - `poly` declares a union input type, reaching `types_match`'s list branches
     (src/sophios/inference.py:12-31), which single-typed tools never do.
   - `sink` has no outputs: the only tool that can end a workflow without
     contributing to `outputs:`.
-  - `passthru` has an optional input with a default, so `args_required`
-    (src/sophios/compiler.py:588) is a proper subset of the inputs somewhere.
 
 The documents are real CWL v1.2: `test_every_stub_is_valid_cwl` runs cwltool
 over each. They are never executed — `baseCommand` is `true` — so no container

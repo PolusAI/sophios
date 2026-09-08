@@ -26,23 +26,25 @@ CANNOT GENERATE (declared, per the negative-testing rules): `!cwl` (RawCwlRef)
 does not know the tag; `python_script` steps — named with a uuid4, so nothing
 over them is deterministic.
 
-CE-13 (specification/implementation divergence, confirmed): an `!& name` edge
-definition bound to a step *input* (the `edge_def` row of `CONSTRUCTS`,
-distinct from `output_edge`) is documented as one of the five input forms
-(language reference §4.1, with no not-yet-usable caveat like `!cwl`'s) but has
-no handler in `compile_workflow_once`'s `in:` match statement
-(`src/sophios/compiler.py:~780` — cases exist for `wic_alias` at 781 and
-`wic_inline_input` at 896, none for `wic_anchor`, which is recognised only in
-the `out:` walk at ~729). Every step input bound this way falls through to the
-bare-string case, is unhashable as a dict, and always raises
-`Code.UNRESOLVED_INPUT` (`wic011`), regardless of what `inputs:` declares.
-Confirmed by construct-correlated measurement (200 documents, derandomized):
-100% of `wic011` failures had an input-position `EdgeDef` and 0% of
-non-failing documents did. `documents()` keeps generating it anyway —
-`CONSTRUCTS` requires `edge_def` to appear (P26), and trimming the generator to
-dodge a compiler gap is exactly the narrowing the binding constraints forbid.
-`compilable_documents()` filters it out instead, via `NOT_YET_COMPILABLE`
-below, with a companion test that keeps the filter honest.
+CE-13 (specification/implementation divergence, settled — kept as the worked
+example of what `NOT_YET_COMPILABLE` is for): an `!& name` edge definition
+bound to a step *input* was documented as one of the five input forms (language
+reference §4.1, with no not-yet-usable caveat like `!cwl`'s) but had no handler
+in `compile_workflow_once`'s `in:` match statement (`src/sophios/compiler.py:
+~780` — cases exist for `wic_alias` at 781 and `wic_inline_input` at 896, none
+for `wic_anchor`, which is recognised only in the `out:` walk at ~729). Every
+step input bound that way fell through to the bare-string case, was unhashable
+as a dict, and always raised `Code.UNRESOLVED_INPUT` (`wic011`), regardless of
+what `inputs:` declared. Confirmed at the time by construct-correlated
+measurement (200 documents, derandomized): 100% of `wic011` failures had an
+input-position `EdgeDef` and 0% of non-failing documents did. `documents()`
+went on generating it and `compilable_documents()` filtered it out, rather than
+the generator being trimmed to dodge a compiler gap — that trimming is the
+narrowing the binding constraints forbid. `semrefac_7.1` then settled it as a
+grammar defect: `EdgeDef` left the `InputValue` union, so the construct is a
+*type* error here rather than a document to filter, the `edge_def` row left
+`CONSTRUCTS`, and `NOT_YET_COMPILABLE` is empty. See its comment below for what
+the machinery is still standing for.
 
 PENDING FINDING (reported, not yet assigned a number): `!ii` places no
 constraint relating a literal's value to the CWL type of the input it binds —
@@ -295,18 +297,24 @@ def documents(draw: st.DrawFn) -> Document:
 #: Constructs the specification admits that the compiler does not accept
 #: today. Each entry names the construct, the finding it belongs to, and
 #: where the finding lives in `src/sophios/compiler.py`, so an exclusion
-#: cannot outlive the defect that justified it — `test_generators.py` has a
-#: companion asserting every one of these still genuinely fails to compile;
-#: the day a fix lands, that test goes red and whoever is standing there
-#: removes the entry instead of it living on as a permanent blind spot.
+#: cannot outlive the defect that justified it.
+#:
+#: The companion is `test_the_compilable_subset_still_reaches_every_construct_
+#: it_does_not_exclude` in `test_generators.py`. It holds the *filter* to the
+#: standard P26 holds the generator to: a construct `compilable_documents()`
+#: stops reaching turns that test red, so an exclusion cannot quietly cost a
+#: construct. Deliberately not a per-entry "this still fails to compile" check
+#: — that shape is vacuous whenever the mapping is empty, which is exactly when
+#: a filter that silently excluded everything would go unnoticed. Found by
+#: mutation: an exclusion predicate of `lambda d: True` left the suite green.
 #:
 #: `documents()` keeps producing all of these — `CONSTRUCTS` and the
 #: parse-level properties quantify over the whole language, and trimming the
 #: generator to dodge a compiler gap is the narrowing the binding constraints
 #: forbid. `compilable_documents()` is the subset with these filtered out,
-#: for properties (Tasks 3-7) that need their input to actually compile.
-#: Constructs the specification admits and the compiler cannot accept yet,
-#: keyed by name with the reason each is excluded.
+#: for properties (Tasks 3-7) that need their input to actually compile. Keys
+#: name the exclusion, not a `CONSTRUCTS` row: the one entry this ever held was
+#: `edge_def_in_input`, an AST *shape* narrower than any single construct.
 #:
 #: Empty — and that is the mechanism working, not a gap. It held exactly one
 #: entry: CE-13's `!&` bound to a step input, which the compiler rejected with
