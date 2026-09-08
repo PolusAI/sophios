@@ -298,7 +298,8 @@ def test_accepts_a_boolean_source_wired_into_a_boolean_flag() -> None:
 
 
 @pytest.mark.fast
-def test_rejects_absent_optional_boolean_flag() -> None:
+def test_accepts_absent_optional_boolean_flag() -> None:
+    """A flag never dereferences its value, so absence renders identically to false."""
     flags = tool(
         "FLAGS",
         inputs={
@@ -317,8 +318,9 @@ def test_rejects_absent_optional_boolean_flag() -> None:
         workflow_inputs={"verbose": None},
     )
 
-    with pytest.raises(ValueError, match="absent optional"):
-        cwl_rosetree_to_nextflow(rose)
+    converted = cwl_rosetree_to_nextflow(rose)
+    assert converted.params == {"verbose": []}
+    assert converted.processes[0].command.tokens[-1] == NfFlag("verbose", "--verbose")
 
 
 @pytest.mark.fast
@@ -586,7 +588,8 @@ def test_rejects_boundary_values_outside_supported_shape(cwl_type: Any, value: A
 
 
 @pytest.mark.fast
-def test_rejects_absent_optional_input_before_lowering() -> None:
+def test_accepts_unreferenced_absent_optional_input() -> None:
+    """An optional val input with no inputBinding is never dereferenced, so absence is safe."""
     optional = tool("OPTIONAL", inputs={"message": {"type": ["null", "string"]}})
     rose = synthetic_rose(
         workflow_doc(
@@ -596,7 +599,70 @@ def test_rejects_absent_optional_input_before_lowering() -> None:
         [optional],
         workflow_inputs={"message": None},
     )
-    with pytest.raises(ValueError, match=r"steps\[0\].run.inputs.message.*absent optional"):
+    assert cwl_rosetree_to_nextflow(rose).params == {"message": []}
+
+
+@pytest.mark.fast
+def test_rejects_absent_optional_input_bound_directly_into_the_command() -> None:
+    """A general presence-gated value binding (the value analogue of a flag) is deferred."""
+    optional = tool(
+        "OPTIONAL",
+        inputs={
+            "message": {
+                "type": ["null", "string"],
+                "inputBinding": {"position": 1, "prefix": "--message"},
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("OPTIONAL", **{"in": {"message": "message"}})],
+            inputs={"message": {"type": ["null", "string"]}},
+        ),
+        [optional],
+        workflow_inputs={"message": None},
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"steps\[0\].run.inputs.message: absent optional values are supported only for "
+        "a val input that is unreferenced in its command or drives a boolean flag",
+    ):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_absent_optional_input_referenced_via_another_bindings_value_from() -> None:
+    """An optional input with no binding of its own but referenced elsewhere still rejects."""
+    aliased = tool(
+        "ALIASED",
+        inputs={"message": {"type": ["null", "string"]}},
+        arguments=[{"position": 1, "valueFrom": "$(inputs.message)"}],
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("ALIASED", **{"in": {"message": "message"}})],
+            inputs={"message": {"type": ["null", "string"]}},
+        ),
+        [aliased],
+        workflow_inputs={"message": None},
+    )
+    with pytest.raises(ValueError, match=r"steps\[0\].run.inputs.message: absent optional"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_absent_optional_path_input() -> None:
+    """path-qualifier channel construction always stages unconditionally; absence stays rejected."""
+    optional = tool("OPTIONAL", inputs={"reference": {"type": ["null", "File"]}})
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("OPTIONAL", **{"in": {"reference": "reference"}})],
+            inputs={"reference": {"type": ["null", "File"]}},
+        ),
+        [optional],
+        workflow_inputs={"reference": None},
+    )
+    with pytest.raises(ValueError, match=r"steps\[0\].run.inputs.reference: absent optional"):
         cwl_rosetree_to_nextflow(rose)
 
 

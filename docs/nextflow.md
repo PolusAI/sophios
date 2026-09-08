@@ -81,13 +81,25 @@ content, and invalid or stale IR fail closed.
 A `boolean` input with an `inputBinding` prefix becomes a real command-line
 flag: `true` contributes the prefix as exactly one argument and `false`
 contributes nothing. A boolean binding without a prefix contributes nothing
-for either value, matching CWL. Absent optional booleans still reject until
-option lowering is approved.
+for either value, matching CWL. An absent optional boolean now renders
+identically to `false`, since a flag never dereferences its value.
 
 A `valueFrom` on a boolean binding is supported only as a bare
 `$(inputs.<name>)` reference restating the binding's own input — a redundant
 but legal CWL form that lowers to the same flag. Any other `valueFrom` shape
 on a boolean binding is rejected.
+
+## Absent optional values
+
+An absent optional `val` input (string/int/float/boolean) lowers to a
+reserved `[]` sentinel parameter when its consuming tool input is never
+dereferenced in that tool's command, stream targets, or output globs, or is
+referenced solely as the boolean flag it drives. `[]` is used instead of
+`null` because `Channel.value(null)` never binds under the pinned Nextflow
+runtime and the run hangs; `[]` is Groovy-falsy like `null`, so flag
+rendering is unaffected. Any other reference position, and any absent
+optional `File`/`Directory` or array input, still rejects: those need their
+own sentinel or presence-gated binding, not yet approved.
 
 ## Basename references
 

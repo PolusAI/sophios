@@ -216,6 +216,25 @@ def test_self_referencing_value_from_lowers_identically_to_no_value_from() -> No
 
 
 @pytest.mark.fast
+def test_absent_optional_scalar_lowers_to_the_sentinel_parameter() -> None:
+    """An unreferenced optional val input carries the runtime-proven [] sentinel."""
+    passthrough = tool("PASSTHROUGH", inputs={"note": {"type": ["null", "string"]}})
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("PASSTHROUGH", **{"in": {"note": "note"}})],
+            inputs={"note": {"type": ["null", "string"]}},
+        ),
+        [passthrough],
+        workflow_inputs={"note": None},
+    )
+
+    workflow = cwl_rosetree_to_nextflow(rose)
+
+    assert workflow.params == {"note": []}
+    assert NfWorkflowInputConnection("note", "PASSTHROUGH", "note") in workflow.connections
+
+
+@pytest.mark.fast
 def test_boolean_binding_without_a_prefix_contributes_no_token() -> None:
     sort_tool = tool(
         "SORT",

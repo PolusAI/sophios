@@ -30,6 +30,14 @@ from .nf_types import (
 from .wic_types import NodeData, RoseTree
 
 
+# Runtime-proven representation of an absent optional val input. Channel.value(None)
+# never binds under the pinned Nextflow runtime (the consuming process never starts
+# and the run hangs), so a literal JSON null cannot be used. [] is Groovy-falsy like
+# null and false, and is unambiguous here because no supported scalar value is ever
+# legitimately an array.
+ABSENT_VAL_SENTINEL: list[Any] = []
+
+
 def _identifier(value: Any, *, context: str) -> str:
     """Normalize a CWL identifier into a stable Nextflow identifier."""
     match value:
@@ -1017,10 +1025,15 @@ def _workflow_capability_findings(
                     cwl_type = definition
                 if raw_name not in provided and not has_default and not _is_optional(cwl_type):
                     findings.append(f"{input_path}: required workflow input value is missing")
-                if raw_name in provided and provided[raw_name] is None:
+                if raw_name in provided and provided[raw_name] is None and not _is_optional(cwl_type):
                     findings.append(
-                        f"{input_path}: explicit null input values are deferred to Phase 2"
+                        f"{input_path}: explicit null input values are not valid for a required input"
                     )
+                elif raw_name in provided and provided[raw_name] is None:
+                    # An explicit null on an optional input is only safe for
+                    # specific consuming positions; _absent_optional_findings
+                    # analyzes each consuming step and port for that.
+                    pass
                 elif raw_name in provided and not _phase1_value_matches(
                     cwl_type, provided[raw_name]
                 ):
@@ -1084,13 +1097,58 @@ def _workflow_capability_findings(
     return findings
 
 
+def _template_reference_names(templates: Iterable[NfTemplate]) -> tuple[set[str], set[str]]:
+    """Return (plainly-referenced, basename-referenced) input names across templates."""
+    plain: set[str] = set()
+    basenamed: set[str] = set()
+    for template in templates:
+        for segment in template.segments:
+            if isinstance(segment, NfInputReference):
+                plain.add(segment.name)
+            elif isinstance(segment, NfBasenameReference):
+                basenamed.add(segment.name)
+    return plain, basenamed
+
+
+def _safe_absence_names(tool: Mapping[str, Any]) -> set[str] | None:
+    """Return the input names whose absence cannot affect command rendering.
+
+    A name is safe when it is never dereferenced: not referenced by any
+    command token, stream target, or output glob, or referenced solely as
+    the boolean-flag token it drives (a flag tests its value, never calls
+    ``.toString()`` on it). Returns None when the tool's command or outputs
+    cannot be analyzed — absence is then never treated as safe.
+    """
+    try:
+        command = _command(tool)
+        outputs = _ports(tool.get("outputs", {}), outputs=True)
+    except (ValueError, TypeError):
+        return None
+    flag_names = {token.name for token in command.tokens if isinstance(token, NfFlag)}
+    templates = [
+        *(token for token in command.tokens if isinstance(token, NfTemplate)),
+        *(stream for stream in (command.stdin, command.stdout, command.stderr) if stream),
+        *(port.glob for port in outputs if port.glob),
+    ]
+    plain, basenamed = _template_reference_names(templates)
+    unsafe = (plain - flag_names) | basenamed
+    try:
+        all_names = {
+            _identifier(raw_name, context="input reference")
+            for raw_name in _as_mapping(tool.get("inputs", {}), error="")
+        }
+    except ValueError:
+        return None
+    return all_names - unsafe
+
+
 def _absent_optional_findings(
     workflow: Mapping[str, Any],
     node_data: NodeData,
     steps: list[Mapping[str, Any]],
     sub_trees: list[Any],
 ) -> list[str]:
-    """Reject optional inputs whose compiled workflow value is absent."""
+    """Reject optional inputs whose compiled workflow value is absent and unsafe."""
     workflow_inputs = _as_mapping(
         workflow.get("inputs", {}),
         error="compiled CWL Workflow inputs must be a mapping",
@@ -1115,6 +1173,7 @@ def _absent_optional_findings(
         step_inputs = step.get("in", {})
         if not isinstance(tool_inputs, Mapping) or not isinstance(step_inputs, Mapping):
             continue
+        safe_names = _safe_absence_names(tool)
         for raw_name, raw_definition in tool_inputs.items():
             if not isinstance(raw_definition, Mapping):
                 continue
@@ -1140,13 +1199,23 @@ def _absent_optional_findings(
                     params.get(_identifier(source, context="workflow input source")) is None
                     for source in boundary_sources
                 )
-            if absent:
+            if not absent:
+                continue
+            if optional:
+                try:
+                    name = _identifier(raw_name, context="input reference")
+                    qualifier = cwl_type_to_nf_qualifier(raw_definition.get("type"))
+                except ValueError:
+                    name, qualifier = None, None
+                if safe_names is not None and qualifier == "val" and name in safe_names:
+                    continue
                 detail = (
-                    "absent optional values are deferred to Phase 2"
-                    if optional
-                    else "resolves to an absent required value"
+                    "absent optional values are supported only for a val input that is "
+                    "unreferenced in its command or drives a boolean flag"
                 )
-                findings.append(f"steps[{step_index}].run.inputs.{raw_name}: {detail}")
+            else:
+                detail = "resolves to an absent required value"
+            findings.append(f"steps[{step_index}].run.inputs.{raw_name}: {detail}")
     return findings
 
 
@@ -1413,6 +1482,13 @@ def _default_bindings(
     sub_trees: list[Any],
     processes: list[NfProcess],
 ) -> tuple[list[NfWorkflowInputConnection], dict[str, Any]]:
+    """Synthesize workflow-input connections for every unwired process input.
+
+    Covers two cases: a declared CWL default, and an unwired optional input
+    with no default. Capability analysis has already proven any remaining
+    unwired, no-default optional input is a safe absence, so this always
+    contributes a null value for those rather than re-deriving safety.
+    """
     connections: list[NfWorkflowInputConnection] = []
     params: dict[str, Any] = {}
     for step, child, process in zip(steps, sub_trees, processes, strict=True):
@@ -1423,12 +1499,22 @@ def _default_bindings(
             case _:
                 continue
         for raw_name, definition in inputs.items():
-            if raw_name in bound or not isinstance(definition, Mapping) or "default" not in definition:
+            if raw_name in bound or not isinstance(definition, Mapping):
+                continue
+            if "default" in definition:
+                value = _json_value(definition["default"])
+            elif _is_optional(definition.get("type")):
+                # Capability analysis has already proven this unwired,
+                # no-default optional input is a safe absence.
+                # _apply_absent_sentinel converts None to the runtime-proven
+                # [] representation once, at the end of the conversion.
+                value = None
+            else:
                 continue
             port_name = _identifier(raw_name, context="defaulted process input")
             param_name = _identifier(f"{process.name}___{port_name}", context="default parameter")
             connections.append(NfWorkflowInputConnection(param_name, process.name, port_name))
-            params[param_name] = _json_value(definition["default"])
+            params[param_name] = value
     return connections, params
 
 
@@ -1494,6 +1580,18 @@ def _workflow_params(workflow: Mapping[str, Any], node_data: NodeData) -> dict[s
             value = None
         params[normalized_names[name]] = _json_value(value)
     return params
+
+
+def _apply_absent_sentinel(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Replace every remaining null parameter with the runtime-proven [] sentinel.
+
+    Capability analysis (via _absent_optional_findings, which itself calls
+    _workflow_params and depends on None to detect absence) has already
+    proven any null still present here is a safe absent-optional val input.
+    This substitution happens only once, after that analysis, so it never
+    interferes with it.
+    """
+    return {name: (ABSENT_VAL_SENTINEL if value is None else value) for name, value in params.items()}
 
 
 def _container_policy_findings(sub_trees: list[Any]) -> list[str]:
@@ -1567,5 +1665,5 @@ def cwl_rosetree_to_nextflow(rose_tree: RoseTree) -> ExecutableNextflowWorkflow:
         name=_identifier(node_data.name, context="workflow name"),
         processes=processes,
         connections=[*_connections(workflow, list(steps), processes), *default_connections],
-        params=params,
+        params=_apply_absent_sentinel(params),
     )

@@ -518,6 +518,84 @@ def test_self_referencing_value_from_flag_changes_observable_command_behavior(
 
 @pytest.mark.nextflow
 @pytest.mark.serial
+def test_absent_optional_flag_renders_identically_to_false(tmp_path: Path) -> None:
+    """R2.4: an unwired optional boolean flag carries a real null and omits the flag."""
+    write_tool = (
+        CommandLineTool(
+            "write_lines",
+            Inputs(
+                first=Input(cwl.string, position=2),
+                second=Input(cwl.string, position=3),
+            ),
+            Outputs(result=Output(cwl.file, glob="lines.txt")),
+        )
+        .base_command("printf")
+        .argument("%s\\n%s\\n", position=1)
+        .stdout("lines.txt")
+    )
+    write = Step(write_tool, step_name="write_lines")
+    write.inputs.first = "alpha"
+    write.inputs.second = "beta"
+
+    sort_tool = (
+        CommandLineTool(
+            "sort_lines",
+            Inputs(
+                reverse=Input(cwl.optional(cwl.boolean), position=1, flag="-r"),
+                source=Input(cwl.file, position=2),
+            ),
+            Outputs(result=Output(cwl.file, glob="sorted.txt")),
+        )
+        .base_command("sort")
+        .stdout("sorted.txt")
+    )
+    sort_step = Step(sort_tool, step_name="sort_lines")
+    # reverse is deliberately left unset: an absent optional value.
+    sort_step.inputs.source = write.outputs.result
+
+    workflow = Workflow([write, sort_step], "nextflow_absent_optional_flag")
+    workflow.outputs.sorted = sort_step.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("sorted.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == ["alpha\nbeta\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_absent_optional_unreferenced_value_does_not_hang_or_crash(tmp_path: Path) -> None:
+    """R2.5: an absent optional value that is never referenced still terminates observably."""
+    tool_ = (
+        CommandLineTool(
+            "note_passthrough",
+            Inputs(
+                note=Input(cwl.optional(cwl.string)),
+                message=Input(cwl.string, position=1),
+            ),
+            Outputs(result=Output(cwl.file, glob="out.txt")),
+        )
+        .base_command("echo")
+        .stdout("out.txt")
+    )
+    step_ = Step(tool_, step_name="note_passthrough")
+    # note is deliberately left unset: an absent optional value that is never
+    # referenced anywhere in the command.
+    step_.inputs.message = "still runs"
+
+    workflow = Workflow([step_], "nextflow_absent_optional_unreferenced")
+    workflow.outputs.out = step_.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("out.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == ["still runs\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
 def test_basename_derived_output_name_executes(tmp_path: Path) -> None:
     """R2.2: an output file name derived from a staged input's basename."""
     write_tool = (
