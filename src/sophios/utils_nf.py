@@ -1,6 +1,6 @@
 """Convert compiled Sophios RoseTrees into the Nextflow intermediate representation."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 import copy
 import math
 from os import PathLike
@@ -932,7 +932,10 @@ _WORKFLOW_CONSUMED_FIELDS = frozenset({
 }) | _INERT_DOCUMENTATION_FIELDS
 # Workflow-level requirements that only declare a feature whose lowering is
 # decided per step, so they are consumed as inert no-ops.
-_SUPPORTED_WORKFLOW_REQUIREMENTS = frozenset({"ScatterFeatureRequirement"})
+_SUPPORTED_WORKFLOW_REQUIREMENTS = frozenset({
+    "ScatterFeatureRequirement",
+    "SubworkflowFeatureRequirement",
+})
 _WORKFLOW_INPUT_CONSUMED_FIELDS = (
     frozenset({"default", "type"}) | _INERT_DOCUMENTATION_FIELDS
 )
@@ -1185,8 +1188,6 @@ def _tool_capability_findings(
             pass
         case _:
             return findings
-    if sub_trees:
-        findings.append(f"{path}.run: nested workflows are deferred to Phase 2")
     match node_data.compiled_cwl:
         case Mapping() as tool:
             pass
@@ -1194,11 +1195,12 @@ def _tool_capability_findings(
             return findings
     match tool.get("class"):
         case "CommandLineTool":
-            pass
-        case "Workflow":
-            if not sub_trees:
-                findings.append(f"{path}.run: nested workflows are deferred to Phase 2")
-            return findings
+            # Inlining consumes every CWL Workflow child before this pass, so
+            # children here belong to a tool that cannot own them.
+            if sub_trees:
+                findings.append(
+                    f"{path}.run: a CommandLineTool step cannot carry nested children"
+                )
         case unsupported_class:
             findings.append(
                 f"{path}.run.class: unsupported compiled step class {unsupported_class!r}"
@@ -1502,7 +1504,11 @@ def _workflow_capability_findings(
     return findings
 
 
-def _workflow_requirement_findings(workflow: Mapping[str, Any]) -> list[str]:
+def _workflow_requirement_findings(
+    workflow: Mapping[str, Any],
+    *,
+    path: str = "workflow",
+) -> list[str]:
     """Apply closed-world analysis to workflow-level requirements."""
     section = workflow.get("requirements")
     match section:
@@ -1511,10 +1517,10 @@ def _workflow_requirement_findings(workflow: Mapping[str, Any]) -> list[str]:
         case Mapping() | list():
             pass
         case _:
-            return ["workflow.requirements: CWL Workflow requirements must be a mapping or list"]
+            return [f"{path}.requirements: CWL Workflow requirements must be a mapping or list"]
     findings: list[str] = []
     for class_name, suffix in _requirement_names(section):
-        requirement_path = f"workflow.requirements.{suffix}"
+        requirement_path = f"{path}.requirements.{suffix}"
         if class_name not in _SUPPORTED_WORKFLOW_REQUIREMENTS:
             findings.append(
                 f"{requirement_path}: {class_name} is not supported at the Nextflow workflow level"
@@ -1528,6 +1534,351 @@ def _workflow_requirement_findings(workflow: Mapping[str, Any]) -> list[str]:
                 )
             )
     return findings
+
+
+_SUBWORKFLOW_NAMESPACE = "___"
+
+
+def _local_name(raw_id: str) -> str:
+    """Return the identifier fragment a CWL id ends with."""
+    return raw_id.rsplit("#", maxsplit=1)[-1]
+
+
+def _map_sources(value: Any, transform: Callable[[str], str]) -> Any:
+    """Rewrite every source string in one step-input binding, preserving its shape.
+
+    An unrecognized binding shape is returned untouched so the closed-world
+    field analysis still sees and reports it.
+    """
+    match value:
+        case str() as source:
+            return transform(source)
+        case list() as sources:
+            return [transform(item) if isinstance(item, str) else item for item in sources]
+        case Mapping() as mapping if "source" in mapping:
+            return {**mapping, "source": _map_sources(mapping["source"], transform)}
+        case _:
+            return value
+
+
+def _subworkflow_document(child: Any) -> tuple[Mapping[str, Any], list[Any]] | None:
+    """Return a step child's subworkflow document and children, or None for a tool."""
+    match child:
+        case RoseTree(data=NodeData(compiled_cwl=Mapping() as document), sub_trees=sub_trees):
+            if document.get("class") == "Workflow":
+                return document, list(sub_trees)
+        case _:
+            pass
+    return None
+
+
+def _subworkflow_bindings(
+    step: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    *,
+    path: str,
+) -> tuple[dict[str, str], list[str]]:
+    """Bind every declared subworkflow input to exactly one outer source."""
+    findings: list[str] = []
+    bindings: dict[str, str] = {}
+    step_inputs = step.get("in", {})
+    if not isinstance(step_inputs, Mapping):
+        return bindings, [f"{path}.in: compiled step inputs must be a mapping"]
+    for raw_name, raw_source in step_inputs.items():
+        if raw_name not in inputs:
+            findings.append(
+                f"{path}.in.{raw_name}: the subworkflow declares no input named {raw_name!r}"
+            )
+            continue
+        try:
+            sources = _source_values(raw_source, context=f"{path}.in.{raw_name}")
+        except ValueError as exc:
+            findings.append(f"{path}.in.{raw_name}: {exc}")
+            continue
+        if len(sources) != 1:
+            findings.append(
+                f"{path}.in.{raw_name}: a subworkflow input must have exactly one source"
+            )
+            continue
+        bindings[str(raw_name)] = sources[0]
+    for raw_name in inputs:
+        if raw_name not in bindings and raw_name not in step_inputs:
+            findings.append(
+                f"{path}.run.inputs.{raw_name}: the step does not bind subworkflow input "
+                f"{raw_name!r}; a subworkflow input is never defaulted from outside"
+            )
+    return bindings, findings
+
+
+def _subworkflow_output_endpoints(
+    document: Mapping[str, Any],
+    inner_ids: set[str],
+    *,
+    namespace: str,
+    path: str,
+) -> tuple[dict[str, str], list[str]]:
+    """Resolve every declared subworkflow output to one inlined step endpoint."""
+    findings: list[str] = []
+    endpoints: dict[str, str] = {}
+    outputs = document.get("outputs", {})
+    if not isinstance(outputs, Mapping):
+        return endpoints, [f"{path}.run.outputs: compiled CWL Workflow outputs must be a mapping"]
+    for raw_name, definition in outputs.items():
+        output_path = f"{path}.run.outputs.{raw_name}"
+        match definition:
+            case {"outputSource": output_source}:
+                pass
+            case _:
+                findings.append(f"{output_path}: subworkflow output must define outputSource")
+                continue
+        try:
+            sources = _source_values(output_source, context=output_path)
+        except ValueError as exc:
+            findings.append(f"{output_path}: {exc}")
+            continue
+        if len(sources) != 1:
+            findings.append(
+                f"{output_path}: a subworkflow output must have exactly one outputSource"
+            )
+            continue
+        source = sources[0]
+        if "/" not in source:
+            findings.append(
+                f"{output_path}: subworkflow output {raw_name!r} forwards subworkflow input "
+                f"{source!r}; boundary passthrough is not executable"
+            )
+            continue
+        raw_process, raw_port = source.rsplit("/", maxsplit=1)
+        if _local_name(raw_process) not in inner_ids:
+            findings.append(
+                f"{output_path}: outputSource {source!r} names no step of the subworkflow"
+            )
+            continue
+        endpoints[str(raw_name)] = (
+            f"{namespace}{_SUBWORKFLOW_NAMESPACE}{_local_name(raw_process)}/{raw_port}"
+        )
+    return endpoints, findings
+
+
+def _inlined_step(
+    inner_step: Mapping[str, Any],
+    *,
+    namespace: str,
+    inner_ids: set[str],
+    bindings: Mapping[str, str],
+    declared_inputs: Iterable[str],
+    path: str,
+) -> tuple[dict[str, Any], list[str]]:
+    """Rewrite one subworkflow step into an equivalent outer-workflow step."""
+    findings: list[str] = []
+    inner_inputs = inner_step.get("in", {})
+
+    def resolve(source: str) -> str:
+        if "/" in source:
+            raw_process, raw_port = source.rsplit("/", maxsplit=1)
+            local = _local_name(raw_process)
+            if local in inner_ids:
+                return f"{namespace}{_SUBWORKFLOW_NAMESPACE}{local}/{raw_port}"
+            return source
+        return bindings.get(source, source)
+
+    if isinstance(inner_inputs, Mapping):
+        for raw_name, raw_source in inner_inputs.items():
+            try:
+                sources = _source_values(raw_source, context=f"{path}.in.{raw_name}")
+            except ValueError:
+                # Every unrecognized binding shape is reported by field analysis.
+                continue
+            for source in sources:
+                if "/" in source:
+                    if _local_name(source.rsplit("/", maxsplit=1)[0]) not in inner_ids:
+                        findings.append(
+                            f"{path}.in.{raw_name}: {source!r} names no step of the subworkflow"
+                        )
+                elif source not in bindings and source not in set(declared_inputs):
+                    # A declared but unbound input is reported once, by the
+                    # binding-totality check.
+                    findings.append(
+                        f"{path}.in.{raw_name}: {source!r} is not a subworkflow input"
+                    )
+    rewritten = dict(inner_step)
+    match inner_step.get("id"):
+        case str() as raw_id:
+            rewritten["id"] = f"{namespace}{_SUBWORKFLOW_NAMESPACE}{_local_name(raw_id)}"
+        case _:
+            findings.append(f"{path}.id: compiled workflow step id must be a string")
+    if isinstance(inner_inputs, Mapping):
+        rewritten["in"] = {
+            raw_name: _map_sources(raw_source, resolve)
+            for raw_name, raw_source in inner_inputs.items()
+        }
+    return rewritten, findings
+
+
+def _composition_findings_for_step(
+    step: Mapping[str, Any],
+    *,
+    path: str,
+) -> list[str]:
+    """Reject the outer-step fields a subworkflow step has no lowering for."""
+    findings = _unconsumed_field_findings(step, consumed=_STEP_CONSUMED_FIELDS, path=path)
+    if "when" in step:
+        findings.append(
+            f"{path}.when: CWL step when conditions are not supported in Nextflow Phase 1"
+        )
+    if "scatter" in step:
+        findings.append(
+            f"{path}.scatter: scatter on a nested workflow step is deferred beyond this "
+            "lowering; scattering an inlined sub-DAG is not the single-process shape "
+            "scatter supports"
+        )
+    elif "scatterMethod" in step:
+        findings.append(
+            f"{path}.scatterMethod: scatterMethod without scatter is not executable"
+        )
+    return findings
+
+
+def _flatten_subworkflows(
+    workflow: Mapping[str, Any],
+    steps: list[Mapping[str, Any]],
+    sub_trees: list[Any],
+) -> tuple[Mapping[str, Any], list[Mapping[str, Any]], list[Any], list[str]]:
+    """Inline every one-level subworkflow step into the outer workflow.
+
+    Returns the rewritten workflow document, steps, and children, plus every
+    composition finding. The rewritten values are meaningful only when no
+    finding is reported: the flat graph the remaining passes analyze cannot
+    be built while its composition is unsupported.
+    """
+    findings: list[str] = []
+    flat_steps: list[Mapping[str, Any]] = []
+    flat_children: list[Any] = []
+    substitutions: dict[str, str] = {}
+    for step_index, (step, child) in enumerate(zip(steps, sub_trees, strict=True)):
+        path = f"steps[{step_index}]"
+        nested = _subworkflow_document(child)
+        if nested is None:
+            flat_steps.append(step)
+            flat_children.append(child)
+            continue
+        document, inner_children = nested
+        findings.extend(_composition_findings_for_step(step, path=path))
+        findings.extend(
+            _unconsumed_field_findings(
+                document,
+                consumed=_WORKFLOW_CONSUMED_FIELDS,
+                path=f"{path}.run",
+            )
+        )
+        findings.extend(_workflow_requirement_findings(document, path=f"{path}.run"))
+        match step.get("id"):
+            case str() as raw_id:
+                namespace = _local_name(raw_id)
+            case _:
+                findings.append(f"{path}.id: compiled workflow step id must be a string")
+                continue
+        inputs = document.get("inputs", {})
+        if not isinstance(inputs, Mapping):
+            findings.append(f"{path}.run.inputs: compiled CWL Workflow inputs must be a mapping")
+            continue
+        bindings, binding_findings = _subworkflow_bindings(step, inputs, path=path)
+        findings.extend(binding_findings)
+        try:
+            inner_steps = _workflow_steps(document, child_count=len(inner_children))
+        except ValueError as exc:
+            findings.append(f"{path}.run.steps: {exc}")
+            continue
+        inner_ids = {
+            _local_name(inner_step["id"])
+            for inner_step in inner_steps
+            if isinstance(inner_step.get("id"), str)
+        }
+        endpoints, endpoint_findings = _subworkflow_output_endpoints(
+            document,
+            inner_ids,
+            namespace=namespace,
+            path=path,
+        )
+        findings.extend(endpoint_findings)
+        findings.extend(_exported_output_findings(step, endpoints, path=path))
+        for name, endpoint in endpoints.items():
+            for spelling in (raw_id, namespace):
+                substitutions[f"{spelling}/{name}"] = endpoint
+        for inner_index, (inner_step, inner_child) in enumerate(
+            zip(inner_steps, inner_children, strict=True)
+        ):
+            inner_path = f"{path}.run.steps[{inner_index}]"
+            if _subworkflow_document(inner_child) is not None:
+                findings.append(
+                    f"{inner_path}.run: nested workflows deeper than one level are "
+                    "deferred beyond this lowering"
+                )
+                continue
+            rewritten, inner_findings = _inlined_step(
+                inner_step,
+                namespace=namespace,
+                inner_ids=inner_ids,
+                bindings=bindings,
+                declared_inputs=inputs,
+                path=inner_path,
+            )
+            findings.extend(inner_findings)
+            flat_steps.append(rewritten)
+            flat_children.append(inner_child)
+    if not substitutions:
+        return workflow, flat_steps, flat_children, findings
+
+    def substitute(source: str) -> str:
+        return substitutions.get(source, source)
+
+    rewritten_steps: list[Mapping[str, Any]] = []
+    for step in flat_steps:
+        step_inputs = step.get("in")
+        if not isinstance(step_inputs, Mapping):
+            rewritten_steps.append(step)
+            continue
+        rewritten_steps.append({
+            **step,
+            "in": {
+                raw_name: _map_sources(raw_source, substitute)
+                for raw_name, raw_source in step_inputs.items()
+            },
+        })
+    rewritten_workflow = dict(workflow)
+    rewritten_workflow["steps"] = rewritten_steps
+    outputs = workflow.get("outputs")
+    if isinstance(outputs, Mapping):
+        rewritten_workflow["outputs"] = {
+            raw_name: (
+                {**definition, "outputSource": _map_sources(definition["outputSource"], substitute)}
+                if isinstance(definition, Mapping) and "outputSource" in definition
+                else definition
+            )
+            for raw_name, definition in outputs.items()
+        }
+    return rewritten_workflow, rewritten_steps, flat_children, findings
+
+
+def _exported_output_findings(
+    step: Mapping[str, Any],
+    endpoints: Mapping[str, str],
+    *,
+    path: str,
+) -> list[str]:
+    """Require every name in a subworkflow step's out to be a declared output."""
+    match step.get("out"):
+        case list() as exported:
+            pass
+        case None:
+            return []
+        case _:
+            return [f"{path}.out: compiled step out must be a list"]
+    return [
+        f"{path}.out: the subworkflow declares no output named {_local_name(name)!r}"
+        for name in exported
+        if isinstance(name, str) and _local_name(name) not in endpoints
+    ]
 
 
 _SCATTER_METHODS = frozenset({"dotproduct", "flat_crossproduct", "nested_crossproduct"})
@@ -2314,6 +2665,12 @@ def cwl_rosetree_to_nextflow(rose_tree: RoseTree) -> ExecutableNextflowWorkflow:
     """
     node_data, sub_trees, workflow = _compiled_workflow(rose_tree)
     steps = _workflow_steps(workflow, child_count=len(sub_trees))
+    # Composition is resolved first: every remaining pass analyzes the flat
+    # graph, which cannot be built while its composition is unsupported.
+    workflow, steps, sub_trees, composition_findings = _flatten_subworkflows(
+        workflow, steps, sub_trees
+    )
+    _raise_capability_findings(composition_findings)
     findings = [
         finding
         for step_index, (step, child) in enumerate(zip(steps, sub_trees, strict=True))

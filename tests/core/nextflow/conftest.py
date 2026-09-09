@@ -64,3 +64,35 @@ def real_scattered_rose() -> RoseTree:
     echo.inputs.item = ["alpha", "beta"]
     echo.scatter_on(echo.inputs.item)
     return Workflow([echo], "wf")._compile().rose
+
+
+@pytest.fixture(scope="session")
+def real_nested_rose() -> RoseTree:
+    """Compile a real one-level subworkflow whose input comes from an outer step."""
+    write_tool = (
+        CommandLineTool(
+            "write_message",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="message.txt")),
+        )
+        .base_command("echo")
+        .stdout("message.txt")
+    )
+    write = Step(write_tool, step_name="write")
+    write.inputs.message = "nested composition"
+
+    copy_tool = (
+        CommandLineTool(
+            "copy_file",
+            Inputs(source=Input(cwl.file, position=1)),
+            Outputs(result=Output(cwl.file, glob="copy.txt")),
+        )
+        .base_command("cp")
+        .argument("copy.txt", position=2)
+    )
+    inner_copy = Step(copy_tool, step_name="inner_copy")
+    child = Workflow([inner_copy], "child")
+    inner_copy.inputs.source = child.inputs.source
+    child.inputs.source = write.outputs.result
+
+    return Workflow([write, child], "root")._compile().rose

@@ -252,16 +252,49 @@ inputs must all come from workflow inputs — a process output would truncate
 the scatter to one task. Scattering over an array-typed port, over a
 non-array source, and scattering a nested workflow step are all rejected.
 
-Workflow-level `ScatterFeatureRequirement` is accepted as an inert
-declaration; every other workflow-level requirement is rejected by name.
+## Nested workflows
+
+A step whose workflow is itself a Sophios `Workflow` is supported one level
+deep:
+
+```python
+inner = Step(copy_tool, step_name="inner_copy")
+child = Workflow([inner], "child")
+inner.inputs.source = child.inputs.source
+child.inputs.source = write.outputs.result
+
+root = Workflow([write, child], "root")
+```
+
+The subworkflow is lowered by inlining: its steps become processes of the
+outer workflow, named by joining the outer step's identifier and the inner
+step's with `___`, so two instantiations of one subworkflow never collide.
+Each subworkflow input is replaced by whatever the outer step binds it to,
+and references to the outer step's outputs are rewritten to the inner
+endpoints the subworkflow's `outputSource` names. The generated artifacts are
+therefore flat; a nested DSL2 `workflow` block is not emitted.
+
+Every declared subworkflow input must be bound by the step, every name in the
+step's `out` must be a declared subworkflow output, and each subworkflow
+output must resolve to one of that subworkflow's own step outputs — a
+subworkflow output that just forwards one of its inputs is rejected, like any
+other boundary passthrough. Nesting deeper than one level and `scatter` on a
+subworkflow step are both rejected. A scattered step *inside* a subworkflow
+is not a special case: after inlining it follows the scatter rules above, so
+its source must be an array-typed input of the outer workflow.
+
+Workflow-level `ScatterFeatureRequirement` and
+`SubworkflowFeatureRequirement` are accepted as inert declarations, at the
+outer and subworkflow level alike; every other workflow-level requirement is
+rejected by name.
 
 ## Current limits
 
-- Workflows must be flat and use `CommandLineTool`-equivalent processes.
+- Processes must be `CommandLineTool`-equivalent.
 - Fractional CPU requirements reject before lowering; they are not silently
   rounded.
-- Nested workflows, arbitrary Groovy, channel operators beyond the one
-  supported adapter, `when`, and `exec` blocks are not interpreted.
+- Nesting deeper than one level, arbitrary Groovy, channel operators beyond
+  the one supported adapter, `when`, and `exec` blocks are not interpreted.
 - The generated scatter call is outside the reader's recognized subset, so a
   scattered workflow round-trips as loss-aware structure with an opaque
   region rather than being promoted back to executable IR.

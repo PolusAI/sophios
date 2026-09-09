@@ -671,3 +671,33 @@ def test_a_scattered_parameter_carries_the_whole_source_array(
     assert cwl_rosetree_to_nextflow(real_scattered_rose).params == {
         "wf__step__1__echo_item___item": ["alpha", "beta"]
     }
+
+
+@pytest.mark.fast
+def test_a_subworkflow_step_inlines_into_namespaced_processes(
+    real_nested_rose: RoseTree,
+) -> None:
+    workflow = cwl_rosetree_to_nextflow(real_nested_rose)
+    assert [process.name for process in workflow.processes] == [
+        "root__step__1__write",
+        "root__step__2__child_wic___child__step__1__inner_copy",
+    ]
+
+
+@pytest.mark.fast
+def test_subworkflow_io_binds_to_the_outer_step_endpoints(
+    real_nested_rose: RoseTree,
+) -> None:
+    """The inner step reads the outer producer, and the outer output reads the inner step."""
+    connections = cwl_rosetree_to_nextflow(real_nested_rose).connections
+    assert NfProcessConnection(
+        "root__step__1__write",
+        "result",
+        "root__step__2__child_wic___child__step__1__inner_copy",
+        "source",
+    ) in connections
+    assert NfWorkflowOutputConnection(
+        "root__step__2__child_wic___child__step__1__inner_copy",
+        "result",
+        "root__step__2__child_wic___child__step__1__inner_copy___result",
+    ) in connections

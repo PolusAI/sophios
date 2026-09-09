@@ -86,17 +86,33 @@ def node_data(
     )
 
 
+def subworkflow_child(document: Yaml, tools: list[Yaml]) -> RoseTree:
+    """Build one step child whose compiled run is a CWL Workflow."""
+    return RoseTree(
+        node_data(str(document.get("id", "child")), document),
+        [
+            RoseTree(node_data(str(tool.get("id", f"tool_{index}")), tool), [])
+            for index, tool in enumerate(tools)
+        ],
+    )
+
+
 def synthetic_rose(
     workflow_cwl: Yaml,
-    tools: list[Yaml],
+    tools: list[Yaml | RoseTree],
     *,
     workflow_inputs: Yaml | None = None,
     source_yml: Yaml | None = None,
 ) -> RoseTree:
-    """Construct a typed RoseTree without invoking compiler internals."""
+    """Construct a typed RoseTree without invoking compiler internals.
+
+    A child may be given as a compiled tool document or as an already-built
+    RoseTree, so a step whose run is a subworkflow can be expressed directly.
+    """
     children = [
-        RoseTree(node_data(str(tool.get("id", f"tool_{index}")), tool), [])
-        for index, tool in enumerate(tools)
+        child if isinstance(child, RoseTree)
+        else RoseTree(node_data(str(child.get("id", f"tool_{index}")), child), [])
+        for index, child in enumerate(tools)
     ]
     return RoseTree(
         node_data(

@@ -12,6 +12,7 @@ from sophios.api.python.workflow import CompiledWorkflow
 from sophios.input_output_nf import render_nextflow
 from sophios.nf_types import (
     NfFlag,
+    NfProcessConnection,
     NfLiteral,
     NfResources,
     NfShellLiteral,
@@ -22,7 +23,14 @@ from sophios.nf_types import (
 from sophios.utils_nf import cwl_rosetree_to_nextflow
 from sophios.wic_types import RoseTree, Yaml
 
-from .testkit import node_data, step, synthetic_rose, tool, workflow_doc
+from .testkit import (
+    node_data,
+    step,
+    subworkflow_child,
+    synthetic_rose,
+    tool,
+    workflow_doc,
+)
 
 _FINDINGS_HEADER = "Nextflow Phase 1 capability analysis failed:\n"
 
@@ -453,12 +461,7 @@ def test_requires_workflow_root() -> None:
 
 
 @pytest.mark.fast
-def test_rejects_nested_or_unsupported_workflow_constructs() -> None:
-    nested = workflow_doc([])
-    rose = synthetic_rose(workflow_doc([step("nested")]), [nested])
-    with pytest.raises(ValueError, match="nested workflows.*Phase 2"):
-        cwl_rosetree_to_nextflow(rose)
-
+def test_rejects_unsupported_workflow_constructs() -> None:
     conditional = synthetic_rose(
         workflow_doc([step("conditional", run="tool.cwl", when="$(true)")]),
         [tool("tool")],
@@ -1897,3 +1900,332 @@ def test_rejects_iwdr_collision_same_literal_name() -> None:
     )
     with pytest.raises(ValueError, match="staged under the same literal name"):
         cwl_rosetree_to_nextflow(rose)
+
+
+def _inner_tool(name: str = "INNER", **fields: Any) -> Yaml:
+    return tool(
+        name,
+        inputs={"source": {"type": "File", "inputBinding": {"position": 1}}},
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "copy.txt"}}},
+        **fields,
+    )
+
+
+def _child_document(
+    *,
+    steps: list[Yaml] | None = None,
+    inputs: Yaml | None = None,
+    outputs: Yaml | None = None,
+    **fields: Any,
+) -> Yaml:
+    document = workflow_doc(
+        steps if steps is not None
+        else [step("INNER", **{"in": {"source": "source"}, "out": ["result"]})],
+        inputs=inputs if inputs is not None else {"source": {"type": "File"}},
+        outputs=outputs if outputs is not None
+        else {"inner_result": {"type": "File", "outputSource": "INNER/result"}},
+    )
+    document["id"] = "child"
+    document.update(fields)
+    return document
+
+
+def _nested_rose(
+    *,
+    child: Yaml | None = None,
+    inner_tools: list[Yaml] | None = None,
+    step_fields: dict[str, Any] | None = None,
+    outputs: Yaml | None = None,
+) -> RoseTree:
+    fields: dict[str, Any] = {
+        "in": {"source": "reference"},
+        "out": ["inner_result"],
+        **(step_fields or {}),
+    }
+    return synthetic_rose(
+        workflow_doc(
+            [step("CHILD", **fields)],
+            inputs={"reference": {"type": "File"}},
+            outputs=outputs,
+        ),
+        [subworkflow_child(child or _child_document(), inner_tools or [_inner_tool()])],
+        workflow_inputs={"reference": "reference.txt"},
+    )
+
+
+@pytest.mark.fast
+def test_inlines_a_subworkflow_step_into_a_namespaced_process() -> None:
+    """One level of nesting lowers by inlining, with the outer step as the namespace."""
+    workflow = cwl_rosetree_to_nextflow(_nested_rose(
+        outputs={
+            "copied": {"type": "File", "outputSource": "CHILD/inner_result"},
+        },
+    ))
+
+    assert [process.name for process in workflow.processes] == ["CHILD___INNER"]
+    assert workflow.connections == (
+        NfWorkflowInputConnection("reference", "CHILD___INNER", "source"),
+        NfWorkflowOutputConnection("CHILD___INNER", "result", "copied"),
+    )
+
+
+@pytest.mark.fast
+def test_an_empty_subworkflow_inlines_to_no_processes() -> None:
+    rose = synthetic_rose(
+        workflow_doc([step("CHILD", **{"in": {}, "out": []})]),
+        [subworkflow_child(workflow_doc([]), [])],
+    )
+
+    assert cwl_rosetree_to_nextflow(rose).processes == ()
+
+
+@pytest.mark.fast
+def test_two_instantiations_of_one_subworkflow_do_not_collide() -> None:
+    """Namespacing by the outer step id is what keeps inner names unique."""
+    rose = synthetic_rose(
+        workflow_doc(
+            [
+                step("FIRST", **{"in": {"source": "reference"}, "out": ["inner_result"]}),
+                step("SECOND", **{"in": {"source": "reference"}, "out": ["inner_result"]}),
+            ],
+            inputs={"reference": {"type": "File"}},
+        ),
+        [
+            subworkflow_child(_child_document(), [_inner_tool()]),
+            subworkflow_child(_child_document(), [_inner_tool()]),
+        ],
+        workflow_inputs={"reference": "reference.txt"},
+    )
+
+    workflow = cwl_rosetree_to_nextflow(rose)
+
+    assert [process.name for process in workflow.processes] == [
+        "FIRST___INNER",
+        "SECOND___INNER",
+    ]
+
+
+@pytest.mark.fast
+def test_a_subworkflow_output_reaches_a_downstream_outer_step() -> None:
+    consumer = tool(
+        "CONSUMER",
+        inputs={"source": {"type": "File", "inputBinding": {"position": 1}}},
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [
+                step("CHILD", **{"in": {"source": "reference"}, "out": ["inner_result"]}),
+                step("CONSUMER", **{"in": {"source": "CHILD/inner_result"}, "out": ["result"]}),
+            ],
+            inputs={"reference": {"type": "File"}},
+        ),
+        [subworkflow_child(_child_document(), [_inner_tool()]), consumer],
+        workflow_inputs={"reference": "reference.txt"},
+    )
+
+    workflow = cwl_rosetree_to_nextflow(rose)
+
+    assert NfProcessConnection(
+        "CHILD___INNER", "result", "CONSUMER", "source"
+    ) in workflow.connections
+
+
+@pytest.mark.fast
+def test_rejects_nesting_deeper_than_one_level() -> None:
+    grandchild = subworkflow_child(_child_document(), [_inner_tool()])
+    child = RoseTree(
+        node_data("child", _child_document(
+            steps=[step("GRANDCHILD", **{"in": {"source": "source"}, "out": ["inner_result"]})],
+            outputs={"inner_result": {"type": "File", "outputSource": "GRANDCHILD/inner_result"}},
+        )),
+        [grandchild],
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("CHILD", **{"in": {"source": "reference"}, "out": ["inner_result"]})],
+            inputs={"reference": {"type": "File"}},
+        ),
+        [child],
+        workflow_inputs={"reference": "reference.txt"},
+    )
+
+    assert _findings(rose) == [
+        "steps[0].run.steps[0].run: nested workflows deeper than one level are deferred "
+        "beyond this lowering"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_scatter_on_a_subworkflow_step() -> None:
+    assert _findings(_nested_rose(step_fields={"scatter": ["source"]})) == [
+        "steps[0].scatter: scatter on a nested workflow step is deferred beyond this "
+        "lowering; scattering an inlined sub-DAG is not the single-process shape scatter "
+        "supports"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_when_on_a_subworkflow_step() -> None:
+    assert _findings(_nested_rose(step_fields={"when": "$(true)"})) == [
+        "steps[0].when: CWL step when conditions are not supported in Nextflow Phase 1"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_an_unbound_subworkflow_input() -> None:
+    assert _findings(_nested_rose(step_fields={"in": {}})) == [
+        "steps[0].run.inputs.source: the step does not bind subworkflow input 'source'; "
+        "a subworkflow input is never defaulted from outside"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_a_step_input_naming_no_subworkflow_input() -> None:
+    assert _findings(_nested_rose(
+        step_fields={"in": {"source": "reference", "extra": "reference"}},
+    )) == [
+        "steps[0].in.extra: the subworkflow declares no input named 'extra'"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_an_out_name_the_subworkflow_does_not_declare() -> None:
+    assert _findings(_nested_rose(step_fields={"out": ["inner_result", "missing"]})) == [
+        "steps[0].out: the subworkflow declares no output named 'missing'"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_a_subworkflow_output_forwarding_its_own_input() -> None:
+    child = _child_document(
+        outputs={"inner_result": {"type": "File", "outputSource": "source"}},
+    )
+
+    assert _findings(_nested_rose(child=child)) == [
+        "steps[0].run.outputs.inner_result: subworkflow output 'inner_result' forwards "
+        "subworkflow input 'source'; boundary passthrough is not executable",
+        "steps[0].out: the subworkflow declares no output named 'inner_result'",
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_a_subworkflow_output_naming_no_inner_step() -> None:
+    child = _child_document(
+        outputs={"inner_result": {"type": "File", "outputSource": "ABSENT/result"}},
+    )
+
+    assert _findings(_nested_rose(child=child)) == [
+        "steps[0].run.outputs.inner_result: outputSource 'ABSENT/result' names no step of "
+        "the subworkflow",
+        "steps[0].out: the subworkflow declares no output named 'inner_result'",
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_an_inner_step_source_that_is_neither_bound_nor_inner() -> None:
+    child = _child_document(
+        steps=[step("INNER", **{"in": {"source": "unbound"}, "out": ["result"]})],
+    )
+
+    assert _findings(_nested_rose(child=child)) == [
+        "steps[0].run.steps[0].in.source: 'unbound' is not a subworkflow input"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_an_inner_step_source_naming_no_inner_step() -> None:
+    child = _child_document(
+        steps=[step("INNER", **{"in": {"source": "ABSENT/result"}, "out": ["result"]})],
+    )
+
+    assert _findings(_nested_rose(child=child)) == [
+        "steps[0].run.steps[0].in.source: 'ABSENT/result' names no step of the subworkflow"
+    ]
+
+
+@pytest.mark.fast
+def test_accepts_an_inert_subworkflow_feature_requirement() -> None:
+    rose = _nested_rose(child=_child_document(requirements={"SubworkflowFeatureRequirement": {}}))
+    rose.data.compiled_cwl["requirements"] = {"SubworkflowFeatureRequirement": {}}
+
+    assert [process.name for process in cwl_rosetree_to_nextflow(rose).processes] == [
+        "CHILD___INNER"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_unsupported_subworkflow_level_requirements() -> None:
+    child = _child_document(requirements={"MultipleInputFeatureRequirement": {}})
+
+    assert _findings(_nested_rose(child=child)) == [
+        "steps[0].run.requirements.MultipleInputFeatureRequirement: "
+        "MultipleInputFeatureRequirement is not supported at the Nextflow workflow level"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_every_unconsumed_subworkflow_field() -> None:
+    child = _child_document(hints={"ResourceRequirement": {}})
+
+    assert _findings(_nested_rose(child=child)) == [
+        "steps[0].run.hints: hints is not consumed by Nextflow Phase 1 lowering"
+    ]
+
+
+@pytest.mark.fast
+def test_composition_findings_aggregate_across_nested_steps() -> None:
+    """Composition analysis reports every nested step before the flat graph is built."""
+    rose = synthetic_rose(
+        workflow_doc(
+            [
+                step("FIRST", **{"in": {}, "out": ["inner_result"]}),
+                step("SECOND", **{"in": {}, "out": ["inner_result"]}),
+            ],
+            inputs={"reference": {"type": "File"}},
+        ),
+        [
+            subworkflow_child(_child_document(), [_inner_tool()]),
+            subworkflow_child(_child_document(), [_inner_tool()]),
+        ],
+        workflow_inputs={"reference": "reference.txt"},
+    )
+
+    assert _findings(rose) == [
+        "steps[0].run.inputs.source: the step does not bind subworkflow input 'source'; "
+        "a subworkflow input is never defaulted from outside",
+        "steps[1].run.inputs.source: the step does not bind subworkflow input 'source'; "
+        "a subworkflow input is never defaulted from outside",
+    ]
+
+
+@pytest.mark.fast
+def test_a_scattered_step_inside_a_subworkflow_uses_the_outer_scatter_contract() -> None:
+    """After inlining, an inner scattered step is an ordinary scattered step."""
+    inner = tool(
+        "INNER",
+        inputs={"item": {"type": "string", "inputBinding": {"position": 1}}},
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+    )
+    child = _child_document(
+        steps=[step(
+            "INNER",
+            **{"in": {"item": "items"}, "out": ["result"], "scatter": ["item"]},
+        )],
+        inputs={"items": {"type": _STRING_ARRAY}},
+        outputs={"inner_result": {"type": "File", "outputSource": "INNER/result"}},
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("CHILD", **{"in": {"items": "values"}, "out": ["inner_result"]})],
+            inputs={"values": {"type": _STRING_ARRAY}},
+        ),
+        [subworkflow_child(child, [inner])],
+        workflow_inputs={"values": ["a", "b"]},
+    )
+
+    workflow = cwl_rosetree_to_nextflow(rose)
+
+    assert workflow.connections == (
+        NfWorkflowInputConnection("values", "CHILD___INNER", "item", "scatter"),
+    )

@@ -1049,3 +1049,42 @@ def test_scatter_over_files_stages_one_element_per_task(tmp_path: Path) -> None:
         for path in (tmp_path / "run" / "work").rglob("copy.txt")
     )
     assert copies == ["alpha\n", "beta\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_nested_workflow_executes_through_its_inlined_process(tmp_path: Path) -> None:
+    """R2.15: a one-level subworkflow runs the same tasks its inlined form declares."""
+    message = "nested composition"
+    write_tool = (
+        CommandLineTool(
+            "write_message",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="message.txt")),
+        )
+        .base_command("echo")
+        .stdout("message.txt")
+    )
+    write = Step(write_tool, step_name="write")
+    write.inputs.message = message
+
+    copy_tool = (
+        CommandLineTool(
+            "copy_file",
+            Inputs(source=Input(cwl.file, position=1)),
+            Outputs(result=Output(cwl.file, glob="copy.txt")),
+        )
+        .base_command("cp")
+        .argument("copy.txt", position=2)
+    )
+    inner_copy = Step(copy_tool, step_name="inner_copy")
+    child = Workflow([inner_copy], "child")
+    inner_copy.inputs.source = child.inputs.source
+    child.inputs.source = write.outputs.result
+
+    root = Workflow([write, child], "nextflow_nested")
+    root.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    copies = list((tmp_path / "work").rglob("copy.txt"))
+    assert [path.read_text(encoding="utf-8") for path in copies] == [f"{message}\n"]
