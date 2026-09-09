@@ -146,6 +146,18 @@ Subset acceptance is enforced, not documentary: each additive token or segment k
 
 ## 6. Semantic lowering contracts
 
+### Expressions
+
+**Expression handling is projection-only.** A CWL expression is representable in the executable model only when it is a *static projection*: a finite path into a known data structure, decided entirely at compile time from the CWL source text, where every step has a provably identical Nextflow counterpart. No expression is evaluated — at compile time or at runtime — and no expression text reaches the executable model or the generated pipeline. Any form requiring computation — arithmetic, string manipulation, comparison, conditional, operator, or function call — is not representable and fails closed. A projection whose Nextflow counterpart is *close but not exact* is not representable either: the divergence is never repaired by compensating logic, because that logic would itself be computation.
+
+The approved projections are `$(inputs.<name>)` and `$(inputs.<name>.basename)` in template positions (§6, Commands; §6, Outputs and globs) and the two `outputBinding` capture declarations in §6, Outputs and globs. Each is one closed literal shape recognized by exact match against frozen data in the compiler, never by a grammar that could be widened a case at a time, and widening the set is a `design:` revision. Recognizing a shape is not the same as understanding a language: the compiler matches admitted text and rejects everything else, and no code path inspects, transforms, or composes expression text.
+
+A lowering's own fixed rendered idiom is not the computation this rule forbids. The Groovy conditional a boolean flag renders to, the per-item join an array binding renders to, and the size and encoding preconditions the file-text capture renders to are each part of one mapping, chosen once at design time and identical for every workflow. What the rule forbids is deriving Groovy from CWL expression text, and repairing a mapping that does not already agree. A precondition that makes the generated pipeline fail exactly where CWL fails is the fatal-error half of a mapping, not a repair of one; a transform that massages a value into agreement *is* a repair, and disqualifies the projection outright.
+
+**JavaScript evaluation is ruled out, not deferred.** Sophios does not evaluate CWL JavaScript expressions in any form: not at compile time, not at runtime, not by transpiling JavaScript to Groovy, not by embedding a JavaScript engine, and not by shelling out to `node`. Nor does anything evaluate in the renderer, which §7 fixes as a pure transformation of the executable model. The reasons are structural rather than practical. Evaluation breaks §3's closed-world contract, because an evaluated expression's result space cannot be classified in advance. It breaks §5.2's and §7's prohibition on opaque strings, because the expression text would have to survive into the executable model in order to be evaluated later. It makes generated pipelines non-self-describing, because the emitted `.nf` would no longer say what it does. Shelling out to `node` adds a container runtime dependency, which §6, Resources and containers requires evidence for. And it is the same category §9 already refuses for arbitrary Groovy equivalence. This is recorded as a decision rather than a deferral so that it is not re-litigated as one: revisiting it requires a successor design document, in the same posture §9 takes toward remote Nextflow execution, not a `design:` revision to this file.
+
+Declaring `InlineJavascriptRequirement` is not itself the use of JavaScript, so a tool that declares it and then uses only approved forms stays legal — the same shape of decision as `ShellCommandRequirement` with no `shellQuote: false` binding, which changes nothing to render (§6, Commands). The requirement is a capability declaration; the violation is a non-admitted form. A later change must not "fix" this by rejecting the declaration.
+
 ### Commands
 
 CWL command construction is normalized before rendering. Ordering follows the pinned CWL version, including defaults and tie-breaking. Command parts remain typed as literal data or interpolation references; quoting is decided per token or segment, never by scanning a completed string for `$`.
@@ -186,7 +198,15 @@ Every other adaptation a topology might require is rejected with a named diagnos
 
 Every output has a concrete capture mechanism. Phase-specific support may include path globs and declared stdout/stderr file capture. Primitive outputs are not represented as bare variable names. A rendered glob remains a glob at run time: a name assembled from runtime data is still pattern-interpreted, so a staged name carrying a glob metacharacter does not match the file the process wrote. Rendering an assembled name literally is a distinct lowering, because it changes emitted bytes and the generated-subset reader with them.
 
-Supported glob expressions are parsed into typed literal and input-reference components. Raw CWL expression strings cannot enter the executable model. `loadContents`, `outputEval`, arbitrary expressions, and other capture behavior are rejected until their lowering is approved.
+Supported glob expressions are parsed into typed literal and input-reference components. Raw CWL expression strings cannot enter the executable model.
+
+Beyond the glob, `outputBinding` capture behavior falls into three statuses this section keeps distinct, because they are not the same kind of "no":
+
+- **Approved.** The two `outputEval` capture declarations below, each one exact literal text under a literal-glob restriction.
+- **Ruled out on the record.** Evaluating any other `outputEval` text, which would require the JavaScript evaluation §6, Expressions permanently refuses. These are not awaiting a lowering.
+- **Rejected with a known relaxation path.** An approved capture declaration paired with a wildcard or input-reference glob, whose gate is stated below as a specific proof obligation.
+
+`secondaryFiles`, `format`, record-typed outputs, array-typed outputs, and expression forms in a workflow output's `outputSource` remain rejected with no approved lowering.
 
 **Basename references (approved Phase 2 lowering).** `$(inputs.<name>.basename)` lowers to a typed basename segment valid in every template position: command tokens, stream targets, and output globs. The referenced input must be a path port, because the lowering relies on Nextflow staging an input under its original file name, which makes the staged path's name property exactly the CWL `basename`. Basename segments against value ports are unrepresentable in the executable model, and the same requirement is reported by path during capability analysis, so a source document naming a value input reports every offending position at once rather than failing later on a normalized identifier. In output-glob position the reference must derive a new name: a declaration matching only a staged input captures nothing.
 
