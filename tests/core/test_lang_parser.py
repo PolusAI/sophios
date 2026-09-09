@@ -35,7 +35,7 @@ from sophios.lang import (
     parse,
 )
 from sophios.lang.spans import SourceSpan
-from sophios.utils_yaml import wic_loader
+from sophios.utils_yaml import Key, wic_loader
 
 from . import provocations
 from .wic_corpus import CORPUS, corpus_id
@@ -686,15 +686,24 @@ def test_tag_decisions_agree_across_positions(tag: str, shape: str, data: st.Dat
     swallowed in input position — two paths, one language, two answers. This
     pins the agreement for every tag and payload shape the generator makes.
     """
-    payload = data.draw(identifiers) if shape == 'scalar' else f'{{{data.draw(identifiers)}: x}}'
+    # The mapping key is drawn from the construct keys as well as arbitrary
+    # identifiers. `identifiers` caps at eight characters and every desugared
+    # key is longer, so without this union the generator could not produce
+    # `!foo {wic_anchor: x}` — the one payload where the two positions once
+    # disagreed — and the property was green over a space missing its own
+    # motivating case.
+    key = data.draw(st.one_of(identifiers, st.sampled_from(sorted(Key.ALL))))
+    payload = data.draw(identifiers) if shape == 'scalar' else f'{{{key}: x}}'
     value = f'{tag}{payload}'
 
     in_position = parse(f'steps:\n- id: s\n  in:\n    a: {value}\n', 'pos.wic')
     passthrough = parse(f'top: {value}\n', 'pos.wic')
 
-    reported_in = any(d.code is Code.UNKNOWN_TAG for d in in_position.diagnostics)
-    reported_through = any(d.code is Code.UNKNOWN_TAG for d in passthrough.diagnostics)
-    assert reported_in == reported_through, f'{value!r}: input={reported_in}, passthrough={reported_through}'
+    codes_in = {d.code for d in in_position.diagnostics}
+    codes_through = {d.code for d in passthrough.diagnostics}
+    assert codes_in == codes_through, (
+        f'{value!r}: input={sorted(c.value for c in codes_in)}, '
+        f'passthrough={sorted(c.value for c in codes_through)}')
 
 
 @pytest.mark.fast
@@ -826,3 +835,53 @@ def test_lang_layer_depends_only_on_stdlib_and_pyyaml() -> None:
                 roots = [node.module.split('.')[0]]
             for root in roots:
                 assert root in allowed, f'{source_file.name} imports {root!r} — the lang layer must stay standalone'
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('source, expected', [
+    ('steps:\n- id: s\n  in:\n    f: !& e\n', 'e'),
+    ('steps:\n- id: s\n  in:\n    f: {wic_anchor: e}\n', 'e'),
+    ('top: !& x\n', 'x'),
+    ('steps:\n- id: s\n  in:\n    f: !& [a]\n', ''),
+], ids=['tagged', 'desugared', 'passthrough', 'collection has no name'])
+def test_a_misplaced_edge_definition_keeps_the_name_it_was_given(
+        source: str, expected: str) -> None:
+    """Recovery preserves the name, in both spellings and every position.
+
+    `_output_binding` states the rule this follows: the AST preserves what it
+    was given, and a silent drop is the one thing a total parser must never
+    do. Reporting the construct is not a licence to discard the name it
+    carried — a caller rendering the recovered AST would otherwise emit `''`
+    where the source said `e`. A collection genuinely has no name to keep, so
+    the empty string is honest there rather than invented.
+    """
+    result = parse(source, 'keep.wic')
+    assert result.document is not None
+    step = result.document.steps[0] if result.document.steps else None
+    value = step.inputs[0][1] if step else result.document.passthrough[0][1]
+    assert isinstance(value, UnresolvedName)
+    assert value.name == expected
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('payload, expected', [
+    ('{wic_anchor: x}', {Code.UNKNOWN_TAG, Code.MISPLACED_EDGE_DEF}),
+    ('{wic_alias: x}', {Code.UNKNOWN_TAG}),
+    ('bar', {Code.UNKNOWN_TAG}),
+], ids=['anchor payload', 'alias payload', 'scalar payload'])
+def test_an_unknown_tag_and_a_misplaced_anchor_are_both_reported_in_both_positions(
+        payload: str, expected: set) -> None:
+    """A node can be two things wrong at once, and both positions must say so.
+
+    `!foo {wic_anchor: x}` is an unknown tag *and* a misplaced edge
+    definition. `_input_value` used to return on the anchor before reaching
+    the tag check while `_opaque` checked the tag first, so input position
+    reported one code and passthrough reported two — the same construct, two
+    verdicts. The property above cannot be relied on alone to catch this:
+    until its payload keys were widened it could not spell `wic_anchor`.
+    """
+    in_position = parse(f'steps:\n- id: s\n  in:\n    a: !foo {payload}\n', 'both.wic')
+    passthrough = parse(f'top: !foo {payload}\n', 'both.wic')
+
+    assert {d.code for d in in_position.diagnostics} == expected
+    assert {d.code for d in passthrough.diagnostics} == expected

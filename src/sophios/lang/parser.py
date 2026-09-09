@@ -334,24 +334,35 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
     reload. An untagged scalar is an `UnresolvedName`, which resolution later
     binds to a workflow input or reports on.
 
-    `!&`/`wic_anchor` — in either spelling — is checked first and separately:
-    it is a known tag, just in the wrong position (§4.1.1), so it must be
-    diagnosed as `wic019` rather than mistaken for `wic009 UNKNOWN_TAG` or
-    silently accepted as an inline literal.
+    `!&`/`wic_anchor` — in either spelling — is checked separately: it is a
+    known tag, just in the wrong position (§4.1.1), so it must be diagnosed as
+    `wic019` rather than mistaken for `wic009 UNKNOWN_TAG` or silently
+    accepted as an inline literal.
     """
     span = SourceSpan.of(file, node)
 
+    # Tag check first, in the same order `_opaque` uses. A node can be both
+    # unknown-tagged and a misplaced anchor (`!foo {wic_anchor: x}`), and the
+    # two positions must reach the same verdict — checking the anchor first
+    # here would report `wic019` alone in input position while passthrough
+    # reported both, which is the two-surfaces-one-language divergence this
+    # rule exists to prevent.
+    _reject_unknown_tag(node, file, diags, span)
+
     if _is_edge_def(node):
-        # Reported before the name is read, so a malformed name does not earn
-        # `wic005` advice on how to spell something the reader is then told
-        # they may not write here at all.
+        # The diagnostic comes before the name is read, so a *malformed* name
+        # earns no `wic005` advice on spelling something the reader is then
+        # told they may not write here at all. A well-formed name is still
+        # kept: the AST preserves what it was given, and recovery that
+        # discards a name the source supplied is the silent drop a total
+        # parser must never make.
         diags.error(
             Code.MISPLACED_EDGE_DEF,
             "'!&' defines an edge, and an edge is defined where its value comes into being: "
             "a step's out: entry (§4.1.1). Use '!*' to consume an edge",
             span,
         )
-        return UnresolvedName('', span)
+        return UnresolvedName(_recovered_edge_name(node), span)
 
     build = Forms.TAGGED.get(node.tag)
     if build is not None:
@@ -368,6 +379,23 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
     # A bare mapping or sequence cannot name a workflow input, so it is only
     # meaningful as a literal.
     return InlineLiteral(_opaque(node, file, diags), span)
+
+
+def _recovered_edge_name(node: yaml.nodes.Node) -> str:
+    """The name a misplaced edge definition carried, for recovery.
+
+    Read without diagnosing: the construct is already reported, and a second
+    complaint about how its name is spelled helps nobody. A scalar carries its
+    text in either spelling; a collection has no name to keep, so the empty
+    string is the honest answer there rather than an invented one.
+    """
+    target = node
+    if isinstance(node, yaml.nodes.MappingNode) and len(node.value) == 1:
+        target = node.value[0][1]
+    if not isinstance(target, yaml.nodes.ScalarNode):
+        return ''
+    text: str = target.value
+    return text
 
 
 def _is_edge_def(node: yaml.nodes.Node) -> bool:
