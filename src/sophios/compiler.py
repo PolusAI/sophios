@@ -1065,7 +1065,13 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                 # inputs_workflow and vars_workflow_output_internal.
 
                 # Automatically insert steps
-                insertions = list(set(insertions))  # Remove duplicates
+                # sorted(), not list(): a plain `set` iterates in hash order,
+                # so which insertion `insertions[0]` picks below would depend
+                # on PYTHONHASHSEED. StepId is a (stem, plugin_ns) NamedTuple,
+                # which sorts lexicographically (a total order on strings), so
+                # sorted() is well defined here. See
+                # tests/core/test_canonical_emission.py.
+                insertions = sorted(set(insertions))  # Remove duplicates, in a stable order
                 if len(insertions) != 0 and compiler_options['insert_steps_automatically']:
                     insertion = insertions[0]
                     print('Automaticaly inserting step', insertion, i)

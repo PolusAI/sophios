@@ -146,7 +146,9 @@ def cwl_update_outputs_optional(cwl: Cwl, failure_code_range: list[int],
     codes_from_range = list(range(failure_code_range[0], failure_code_range[1]))
     assert failure_code_range[0] <= failure_code_range[1], \
         f"lower {failure_code_range[0]}  value can't be greater than higher {failure_code_range[1]} value"
-    cwl_mod['successCodes'] = list(set([0] + direct_failure_codes + codes_from_range))
+    # sorted, not list(): this list is written into emitted CWL under
+    # --partial_failure_enable, so a set's iteration order would reach the output.
+    cwl_mod['successCodes'] = sorted(set([0] + direct_failure_codes + codes_from_range))
     # Update outputs optional
     for out_val_dict in cwl_mod['outputs'].values():
         if isinstance(out_val_dict['type'], str) and out_val_dict['type'][-1] != '?':

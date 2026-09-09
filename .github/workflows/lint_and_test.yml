@@ -243,6 +243,19 @@ jobs:
         if: always()
         run: cd sophios/ && pytest tests/core/test_hermeticity.py tests/core/test_generators.py tests/core/test_equivalence.py tests/core/test_equivalences.py -m "not skip_pypi_ci"
 
+      # design_docs/core-refactor-design.md, Spec 2: canonical emission. Its own
+      # step, and deliberately with no -m filter: the two properties that carry
+      # the determinism claim end to end — the generated no-set-order property
+      # and the four-hash-seed subprocess regression — are marked slow and
+      # skip_pypi_ci, so every marker-filtered lane in this repository excludes
+      # them and the wheel lane's default collection excludes them too. Named
+      # here so they run somewhere. test_no_canonical_emission_test_is_uncollected
+      # fails if a future marker or rename silently drops them again.
+      - name: PyTest Spec 2 Canonical Emission
+        if: always()
+        timeout-minutes: 20
+        run: cd sophios/ && pytest tests/core/test_canonical_emission.py
+
       # design_docs/core-refactor-design.md, Spec 2: the fast contracts for the
       # weekly benchmark harness. Its own step because importing it imports
       # tests/core/wic_corpus.py, which reads the config and walks

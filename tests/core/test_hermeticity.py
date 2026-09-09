@@ -54,6 +54,7 @@ ORACLE_MODULES = (
     'core.transformations',
     'core.test_equivalences',
     'core.test_generators',
+    'core.test_canonical_emission',
 )
 
 #: Reaching any of these means the suite's meaning depends on the machine.
@@ -279,7 +280,7 @@ ORACLE_FILES: tuple[str, ...] = (
     'tests/core/test_generators.py',
     'tests/core/test_equivalence.py',
     'tests/core/test_equivalences.py',
-    # 'tests/core/test_canonical_emission.py',
+    'tests/core/test_canonical_emission.py',
     # 'tests/core/test_predicates.py',
     # 'tests/core/test_canonical_path.py',
 )
