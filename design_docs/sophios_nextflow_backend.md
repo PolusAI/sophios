@@ -104,7 +104,7 @@ The intended CLI surface is:
 sophios --yaml workflow.wic --target nextflow
 ```
 
-`--target nextflow` is sufficient by itself. CWL-specific run flags are rejected with structured diagnostics. Nested workflows rejected by the current phase point users to the supported flattening option when applicable.
+`--target nextflow` is sufficient by itself. CWL-specific run flags are rejected with structured diagnostics. Nested workflows too deeply composed for the current phase point users to the supported flattening option when applicable.
 
 Import is exposed from the concrete `sophios.api.python.nextflow` module when the reader/import phase lands. The removed generic API aggregator is not restored.
 
@@ -202,7 +202,17 @@ The scattered input's source must be exactly one array-typed workflow input whos
 
 **Empty collections.** Scattering over an empty array runs zero tasks. Runtime proof against the pinned Nextflow shows the derived queue channel terminates immediately, unscattered processes in the same workflow still run, the workflow output channel is simply empty, and the run exits successfully — no hang, unlike the `Channel.value(null)` representation ruled out above. An empty array is a present value here exactly as it is under the array-input lowering, and an absent-optional array-typed input stays rejected, so the absent-optional sentinel can never be mistaken for a zero-length scatter.
 
-**Workflow-level requirements.** `ScatterFeatureRequirement` declares only that a document uses a feature whose lowering this phase decides per step, so it is consumed as an inert no-op carrying no fields beyond `class`. Every other workflow-level requirement is rejected by name, and workflow-level `hints` remain unconsumed.
+**One level of nested workflows (approved Phase 2 lowering).** A step whose compiled `run` is itself a `Workflow` lowers by inlining, before any other analysis: the subworkflow's own steps become steps of the outer workflow, each declared subworkflow input is replaced by whatever the outer step binds it to, and every reference to the outer step's outputs is rewritten to the inner endpoint that subworkflow output's `outputSource` names. Emitting a nested DSL2 `workflow` block instead is deferred: every executable connection variant addresses a process endpoint, so a subworkflow call would introduce a new endpoint kind across the graph validator, the renderer, and the generated-subset reader at once, while inlining reaches the same observable execution — the same tasks, the same data flow, the same output files — with no new endpoint kind at all. Inlining is a lowering decision recorded in the executable graph before capability analysis runs, never a source-language decision in the renderer, and it is reported rather than silent: the emitted artifacts are flat by construction, so the composition structure lives in the source workflow and in the namespaced process names, not in the generated DSL2.
+
+Composition findings are resolved before the rest of capability analysis, because the flat graph every other pass analyzes cannot be built while its composition is unsupported. Composition findings still aggregate among themselves across every nested step.
+
+**Nested namespacing.** Each inlined step is named by joining the outer step's local identifier and the inner step's own with `___`, before normalization. Two instantiations of one subworkflow in the same parent therefore cannot collide, and the existing normalized-name collision validation applies to the namespaced names rather than to the inner ones.
+
+**Subworkflow I/O.** Every declared subworkflow input must be bound by the outer step's `in`, and every name in the outer step's `out` must be a declared subworkflow output; an unbound input or an undeclared output is rejected rather than defaulted. Each subworkflow output must carry exactly one `outputSource` resolving to one of that subworkflow's own step outputs: a subworkflow output that forwards one of its inputs is rejected, exactly as boundary passthrough is rejected at the outer boundary. An inner step's sources resolve either to another inner step's output or to a subworkflow input, which the outer binding replaces; anything else is rejected by name.
+
+**Depth and scatter.** Nesting deeper than one level is rejected with a named diagnostic: a second level buys nothing this phase needs, and its namespacing and binding proof would have to be re-established at every depth. `scatter` on a subworkflow step is also rejected: scattering an inlined sub-DAG is a fan-out over a set of processes, not the single-process shape the scatter lowering above approves. `scatter` on a step *inside* a subworkflow is not a separate lowering — after inlining such a step is indistinguishable from an outer scattered step, and the scatter contract above applies to it verbatim, including its requirement that the scattered source be an array-typed workflow input of the flattened workflow.
+
+**Workflow-level requirements.** `ScatterFeatureRequirement` and `SubworkflowFeatureRequirement` declare only that a document uses a feature whose lowering this phase decides per step, so each is consumed as an inert no-op carrying no fields beyond `class`. Every other workflow-level requirement is rejected by name, at the outer and the subworkflow level alike, and workflow-level `hints` remain unconsumed.
 
 ### Resources and containers
 
@@ -295,6 +305,7 @@ Approved Phase 2 lowerings to date:
 - `InitialWorkDirRequirement` self-staging under an input's own basename or an explicit literal rename (§6, Inputs and channels).
 - One queue fan-out channel adapter (§6, Inputs and channels).
 - Single-input executable scatter over an array-typed workflow input (§6, Topology).
+- One level of nested workflows, lowered by inlining (§6, Topology).
 
 ### Phase 3 — Native inference, advanced execution, and service delivery
 
