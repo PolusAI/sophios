@@ -1088,3 +1088,74 @@ def test_nested_workflow_executes_through_its_inlined_process(tmp_path: Path) ->
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     copies = list((tmp_path / "work").rglob("copy.txt"))
     assert [path.read_text(encoding="utf-8") for path in copies] == [f"{message}\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_one_scattered_parameter_feeds_two_processes_independently(tmp_path: Path) -> None:
+    """R2.16: adapting per consumption site avoids a consumed-once queue channel."""
+    first = NfProcess(
+        "FIRST",
+        [NfPort("item", "val")],
+        [output_port("result", "first.txt")],
+        command("printf", "%s", template(ref("item")), stdout="first.txt"),
+    )
+    second = NfProcess(
+        "SECOND",
+        [NfPort("item", "val")],
+        [output_port("result", "second.txt")],
+        command("printf", "%s", template(ref("item")), stdout="second.txt"),
+    )
+    workflow = ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [first, second],
+        [
+            NfWorkflowInputConnection("items", "FIRST", "item", "scatter"),
+            NfWorkflowInputConnection("items", "SECOND", "item", "scatter"),
+            NfWorkflowOutputConnection("FIRST", "result", "first"),
+            NfWorkflowOutputConnection("SECOND", "result", "second"),
+        ],
+        {"items": ["alpha", "beta"]},
+    )
+
+    result = run_nextflow(workflow, tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    work = tmp_path / "work"
+    for name in ("first.txt", "second.txt"):
+        assert sorted(path.read_text(encoding="utf-8") for path in work.rglob(name)) == [
+            "alpha",
+            "beta",
+        ]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_a_scattered_step_broadcasts_its_unscattered_inputs(tmp_path: Path) -> None:
+    """R2.17: a scattered step's other inputs stay value channels and reach every task."""
+    echo_tool = (
+        CommandLineTool(
+            "echo_pair",
+            Inputs(
+                item=Input(cwl.string, position=1),
+                note=Input(cwl.string, position=2),
+            ),
+            Outputs(result=Output(cwl.file, glob="out.txt")),
+        )
+        .base_command("echo")
+        .stdout("out.txt")
+    )
+    echo = Step(echo_tool, step_name="echo_pair")
+    echo.inputs.item = ["alpha", "beta"]
+    echo.inputs.note = "shared"
+    echo.scatter_on(echo.inputs.item)
+
+    workflow = Workflow([echo], "nextflow_scatter_broadcast")
+    workflow.outputs.pairs = echo.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = sorted(
+        path.read_text(encoding="utf-8") for path in (tmp_path / "work").rglob("out.txt")
+    )
+    assert outputs == ["alpha shared\n", "beta shared\n"]
