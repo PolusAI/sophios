@@ -101,6 +101,17 @@ The reference must target a `File` or `Directory` input. Nextflow stages an
 input under its original file name, so the staged name is exactly the CWL
 `basename`.
 
+The `.copy` suffix above is load-bearing: a basename glob must derive a **new**
+name. A Nextflow output declaration does not capture staged inputs, so a glob
+naming only the input itself compiles cleanly and then fails at run time with
+`Missing output file(s)`.
+
+Two further limits apply to a rendered glob. It stays a Nextflow glob pattern,
+so a staged name containing `*`, `?`, `[`, `{` or `}` is interpreted as a
+pattern rather than matched literally, and the process fails to find the file
+it wrote. Rendering such a name literally is a separate change, because it
+alters emitted bytes and the generated-subset reader with them.
+
 ## Current limits
 
 - Workflows must be flat and use `CommandLineTool`-equivalent processes.

@@ -6,7 +6,7 @@ from graphlib import CycleError, TopologicalSorter
 import json
 import math
 from types import MappingProxyType
-from typing import Any, ClassVar, Generic, Self, TypeVar
+from typing import Any, ClassVar, Generic, Self, TypeVar, get_args
 
 from .nf_symbols import validate_nextflow_identifier
 
@@ -175,7 +175,6 @@ class NfBasenameReference:
 
 
 NfTemplateSegment = NfLiteral | NfInputReference | NfBasenameReference
-NfReferenceSegment = NfInputReference | NfBasenameReference
 
 
 def _segment_from_dict(value: Mapping[str, Any]) -> NfTemplateSegment:
@@ -203,8 +202,9 @@ class NfTemplate:
     def __post_init__(self) -> None:
         canonical: list[NfTemplateSegment] = []
         for segment in self.segments:
-            if not isinstance(segment, (NfLiteral, NfInputReference, NfBasenameReference)):
-                raise TypeError("template segments must be typed literal or input references")
+            if not isinstance(segment, get_args(NfTemplateSegment)):
+                accepted = ", ".join(kind.__name__ for kind in get_args(NfTemplateSegment))
+                raise TypeError(f"template segments must be one of: {accepted}")
             if isinstance(segment, NfLiteral) and canonical and isinstance(canonical[-1], NfLiteral):
                 canonical[-1] = NfLiteral(canonical[-1].value + segment.value)
             elif not isinstance(segment, NfLiteral) or segment.value:

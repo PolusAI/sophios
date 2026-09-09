@@ -624,6 +624,129 @@ def _requirement_names(section: Any) -> list[tuple[str, str]]:
             return []
 
 
+def _basename_template_positions(
+    tool: Mapping[str, Any],
+    *,
+    path: str,
+) -> list[tuple[Any, str]]:
+    """Pair every templated tool value with the CWL path it was written at.
+
+    A basename reference is legal in any template position, so the
+    source-level requirement has to look everywhere one can appear rather
+    than only in output globs.
+    """
+    positions: list[tuple[Any, str]] = []
+    match tool.get("baseCommand"):
+        case str() as command:
+            positions.append((command, f"{path}.run.baseCommand"))
+        case list() as commands:
+            positions.extend(
+                (token, f"{path}.run.baseCommand[{index}]")
+                for index, token in enumerate(commands)
+            )
+        case _:
+            pass
+    match tool.get("arguments"):
+        case list() as arguments:
+            for index, argument in enumerate(arguments):
+                argument_path = f"{path}.run.arguments[{index}]"
+                match argument:
+                    case Mapping() as mapping if mapping.get("valueFrom") is not None:
+                        positions.append((mapping["valueFrom"], f"{argument_path}.valueFrom"))
+                    case Mapping():
+                        pass
+                    case _:
+                        positions.append((argument, argument_path))
+        case _:
+            pass
+    match tool.get("inputs"):
+        case Mapping() as inputs:
+            for raw_name, definition in inputs.items():
+                if not isinstance(definition, Mapping):
+                    continue
+                binding = definition.get("inputBinding")
+                if not isinstance(binding, Mapping):
+                    continue
+                binding_path = f"{path}.run.inputs.{raw_name}.inputBinding"
+                for field_name in ("prefix", "valueFrom"):
+                    if binding.get(field_name) is not None:
+                        positions.append((binding[field_name], f"{binding_path}.{field_name}"))
+        case _:
+            pass
+    for stream in ("stdin", "stdout", "stderr"):
+        if tool.get(stream) is not None:
+            positions.append((tool[stream], f"{path}.run.{stream}"))
+    match tool.get("outputs"):
+        case Mapping() as outputs:
+            for raw_name, definition in outputs.items():
+                if not isinstance(definition, Mapping):
+                    continue
+                binding = definition.get("outputBinding")
+                if not isinstance(binding, Mapping):
+                    continue
+                if binding.get("glob") is not None:
+                    positions.append(
+                        (
+                            binding["glob"],
+                            f"{path}.run.outputs.{raw_name}.outputBinding.glob",
+                        )
+                    )
+        case _:
+            pass
+    return positions
+
+
+def _basename_source_findings(tool: Mapping[str, Any], *, path: str) -> list[str]:
+    """Require a File or Directory source for every basename reference.
+
+    A basename reference renders the staged path's ``name`` property, which
+    equals the CWL ``basename`` only because Nextflow stages a path input
+    under its original file name; a val-qualified input is never staged, so
+    the reference has nothing to read. ``NfProcess`` rejects the same shape
+    as a model invariant, but that raise names normalized identifiers,
+    carries no source location, and stops at the first offender, so the
+    source-level requirement is reported here by CWL path and aggregates
+    with every other finding.
+    """
+    raw_inputs = tool.get("inputs", {})
+    if not isinstance(raw_inputs, Mapping):
+        return []
+    declared: dict[str, Any] = {}
+    for raw_name, definition in raw_inputs.items():
+        if not isinstance(definition, Mapping):
+            continue
+        try:
+            declared[_identifier(raw_name, context="tool input")] = definition.get("type")
+        except ValueError:
+            continue
+    findings: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for value, position in _basename_template_positions(tool, path=path):
+        try:
+            template = _template(value, context="basename source")
+        except ValueError:
+            # An unsupported expression form is reported by the pass that
+            # owns it; this one only judges the references it can read.
+            continue
+        for segment in template.segments:
+            if not isinstance(segment, NfBasenameReference):
+                continue
+            if segment.name not in declared or (position, segment.name) in seen:
+                continue
+            try:
+                qualifier = cwl_type_to_nf_qualifier(declared[segment.name])
+            except ValueError:
+                continue
+            if qualifier == "path":
+                continue
+            seen.add((position, segment.name))
+            findings.append(
+                f"{position}: $(inputs.{segment.name}.basename) requires a File or "
+                f"Directory input; {segment.name} lowers to a {qualifier} channel"
+            )
+    return findings
+
+
 def _tool_capability_findings(
     step: Mapping[str, Any],
     child: RoseTree,
@@ -670,6 +793,7 @@ def _tool_capability_findings(
             path=f"{path}.run",
         )
     )
+    findings.extend(_basename_source_findings(tool, path=path))
 
     for section_name in ("requirements", "hints"):
         section = tool.get(section_name)

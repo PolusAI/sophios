@@ -16,6 +16,21 @@ from sophios.wic_types import RoseTree
 
 from .testkit import node_data, step, synthetic_rose, tool, workflow_doc
 
+_FINDINGS_HEADER = "Nextflow Phase 1 capability analysis failed:\n"
+
+
+def _findings(error: BaseException) -> list[str]:
+    """Split an aggregated capability diagnostic into its individual findings.
+
+    Returning the list lets a test pin the closed shape -- how many findings
+    fired, their exact text, and the source path each is tagged with --
+    rather than only that some substring appeared somewhere.
+    """
+    diagnostic = str(error)
+    assert diagnostic.startswith(_FINDINGS_HEADER), diagnostic
+    body = diagnostic[len(_FINDINGS_HEADER):]
+    return [line.removeprefix("- ") for line in body.split("\n")]
+
 
 @pytest.mark.fast
 def test_real_unsupported_rosetree_aggregates_capability_errors(
@@ -532,8 +547,49 @@ def test_rejects_basename_against_a_value_input() -> None:
         [basename],
         workflow_inputs={"label": "input"},
     )
-    with pytest.raises(ValueError, match="basename.*path"):
+    with pytest.raises(ValueError) as excinfo:
         cwl_rosetree_to_nextflow(rose)
+    assert _findings(excinfo.value) == [
+        "steps[0].run.outputs.result.outputBinding.glob: $(inputs.label.basename) "
+        "requires a File or Directory input; label lowers to a val channel"
+    ]
+
+
+@pytest.mark.fast
+def test_reports_every_basename_against_a_value_input_by_path() -> None:
+    basename = tool(
+        "BASENAME",
+        inputs={"label": {"type": "string"}, "tag": {"type": "string"}},
+        outputs={
+            "result": {
+                "type": "File",
+                "outputBinding": {"glob": "$(inputs.label.basename).txt"},
+            }
+        },
+        stdout="$(inputs.tag.basename).log",
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [
+                step(
+                    "BASENAME",
+                    **{"in": {"label": "label", "tag": "tag"}, "out": ["result"]},
+                )
+            ],
+            inputs={"label": {"type": "string"}, "tag": {"type": "string"}},
+            outputs={"result": {"type": "File", "outputSource": "BASENAME/result"}},
+        ),
+        [basename],
+        workflow_inputs={"label": "input", "tag": "name"},
+    )
+    with pytest.raises(ValueError) as excinfo:
+        cwl_rosetree_to_nextflow(rose)
+    assert _findings(excinfo.value) == [
+        "steps[0].run.stdout: $(inputs.tag.basename) requires a File or Directory "
+        "input; tag lowers to a val channel",
+        "steps[0].run.outputs.result.outputBinding.glob: $(inputs.label.basename) "
+        "requires a File or Directory input; label lowers to a val channel",
+    ]
 
 
 @pytest.mark.fast

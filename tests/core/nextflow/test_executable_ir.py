@@ -197,8 +197,14 @@ def test_flag_must_reference_a_declared_value_input() -> None:
 
 @pytest.mark.fast
 def test_flags_are_unrepresentable_outside_command_position() -> None:
-    with pytest.raises(TypeError, match="typed literal or input references"):
+    with pytest.raises(TypeError) as excinfo:
         NfTemplate((cast(Any, NfFlag("reverse", "-r")),))
+    # The message is built from NfTemplateSegment, so every accepted kind is
+    # named without a second hand-maintained list beside the isinstance check.
+    message = str(excinfo.value)
+    assert message == (
+        "template segments must be one of: NfLiteral, NfInputReference, NfBasenameReference"
+    )
 
 
 @pytest.mark.fast
@@ -223,6 +229,18 @@ def test_basename_segment_must_reference_a_path_input() -> None:
         NfProcess("COPY", [], [], command)
     with pytest.raises(ValueError, match="basename.*path"):
         NfProcess("COPY", [NfPort("source", "val")], [], command)
+
+
+@pytest.mark.fast
+def test_basename_segment_accepts_both_path_kinds() -> None:
+    # The design claims File and Directory inputs alike; a directory port is
+    # staged under its own name too, so both path kinds carry a basename.
+    command = NfCommand((NfTemplate((NfLiteral("cp"),)), NfTemplate((NfBasenameReference("source"),))))
+    for path_kind in ("file", "directory"):
+        process = NfProcess(
+            "COPY", [NfPort("source", "path", path_kind=path_kind)], [], command
+        )
+        assert process.inputs[0].path_kind == path_kind
 
 
 @pytest.mark.fast

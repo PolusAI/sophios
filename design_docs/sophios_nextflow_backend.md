@@ -170,11 +170,11 @@ Channel construction considers all consumers. Connection order never selects a q
 
 ### Outputs and globs
 
-Every output has a concrete capture mechanism. Phase-specific support may include path globs and declared stdout/stderr file capture. Primitive outputs are not represented as bare variable names.
+Every output has a concrete capture mechanism. Phase-specific support may include path globs and declared stdout/stderr file capture. Primitive outputs are not represented as bare variable names. A rendered glob remains a glob at run time: a name assembled from runtime data is still pattern-interpreted, so a staged name carrying a glob metacharacter does not match the file the process wrote. Rendering an assembled name literally is a distinct lowering, because it changes emitted bytes and the generated-subset reader with them.
 
 Supported glob expressions are parsed into typed literal and input-reference components. Raw CWL expression strings cannot enter the executable model. `loadContents`, `outputEval`, arbitrary expressions, and other capture behavior are rejected until their lowering is approved.
 
-**Basename references (approved Phase 2 lowering).** `$(inputs.<name>.basename)` lowers to a typed basename segment valid in every template position: command tokens, stream targets, and output globs. The referenced input must be a path port, because the lowering relies on Nextflow staging an input under its original file name, which makes the staged path's name property exactly the CWL `basename`. Basename segments against value ports are unrepresentable in the executable model.
+**Basename references (approved Phase 2 lowering).** `$(inputs.<name>.basename)` lowers to a typed basename segment valid in every template position: command tokens, stream targets, and output globs. The referenced input must be a path port, because the lowering relies on Nextflow staging an input under its original file name, which makes the staged path's name property exactly the CWL `basename`. Basename segments against value ports are unrepresentable in the executable model, and the same requirement is reported by path during capability analysis, so a source document naming a value input reports every offending position at once rather than failing later on a normalized identifier. In output-glob position the reference must derive a new name: a declaration matching only a staged input captures nothing.
 
 ### Topology
 
