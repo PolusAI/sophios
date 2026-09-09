@@ -156,6 +156,21 @@ def cwl_type_to_nf_qualifier(cwl_type: Any) -> str:
             raise ValueError(f"unsupported CWL type for Nextflow Phase 1: {cwl_type!r}")
 
 
+_PATH_KINDS = {"File": "file", "Directory": "directory"}
+
+
+def _channel_shape(cwl_type: Any) -> str:
+    """Return the channel semantics one non-array CWL type lowers to.
+
+    The same qualifier/path-kind pair the executable graph compares when it
+    checks that every sink of one workflow parameter agrees, rendered for
+    diagnostics.
+    """
+    qualifier = cwl_type_to_nf_qualifier(cwl_type)
+    path_kind = _PATH_KINDS.get(_required_type(cwl_type))
+    return f"{qualifier}[{path_kind}]" if path_kind else qualifier
+
+
 def _is_array_type(cwl_type: Any) -> bool:
     """Return whether a (non-optional-wrapped) CWL type is the array mapping form."""
     return isinstance(cwl_type, Mapping) and cwl_type.get("type") == "array"
@@ -208,10 +223,7 @@ def _ports(
                 is_array = not outputs and _is_array_type(required_type)
                 element_type = _array_item_type(required_type) if is_array else cwl_type
                 qualifier = cwl_type_to_nf_qualifier(element_type)
-                path_kind = {
-                    "File": "file",
-                    "Directory": "directory",
-                }.get(_required_type(element_type))
+                path_kind = _PATH_KINDS.get(_required_type(element_type))
                 ports.append(
                     NfPort(
                         name,
@@ -915,8 +927,12 @@ _WORKFLOW_CONSUMED_FIELDS = frozenset({
     "id",
     "inputs",
     "outputs",
+    "requirements",
     "steps",
 }) | _INERT_DOCUMENTATION_FIELDS
+# Workflow-level requirements that only declare a feature whose lowering is
+# decided per step, so they are consumed as inert no-ops.
+_SUPPORTED_WORKFLOW_REQUIREMENTS = frozenset({"ScatterFeatureRequirement"})
 _WORKFLOW_INPUT_CONSUMED_FIELDS = (
     frozenset({"default", "type"}) | _INERT_DOCUMENTATION_FIELDS
 )
@@ -1163,8 +1179,6 @@ def _tool_capability_findings(
     findings: list[str] = []
     if "when" in step:
         findings.append(f"{path}.when: CWL step when conditions are not supported in Nextflow Phase 1")
-    if "scatter" in step:
-        findings.append(f"{path}.scatter: executable scatter is deferred to Phase 2")
 
     match child:
         case RoseTree(data=NodeData() as node_data, sub_trees=sub_trees):
@@ -1383,6 +1397,7 @@ def _workflow_capability_findings(
         consumed=_WORKFLOW_CONSUMED_FIELDS,
         path="workflow",
     )
+    findings.extend(_workflow_requirement_findings(workflow))
     provided = _as_mapping(
         node_data.workflow_inputs_file,
         error="compiled workflow input values must be a mapping",
@@ -1484,6 +1499,252 @@ def _workflow_capability_findings(
                         )
             case _:
                 pass
+    return findings
+
+
+def _workflow_requirement_findings(workflow: Mapping[str, Any]) -> list[str]:
+    """Apply closed-world analysis to workflow-level requirements."""
+    section = workflow.get("requirements")
+    match section:
+        case None:
+            return []
+        case Mapping() | list():
+            pass
+        case _:
+            return ["workflow.requirements: CWL Workflow requirements must be a mapping or list"]
+    findings: list[str] = []
+    for class_name, suffix in _requirement_names(section):
+        requirement_path = f"workflow.requirements.{suffix}"
+        if class_name not in _SUPPORTED_WORKFLOW_REQUIREMENTS:
+            findings.append(
+                f"{requirement_path}: {class_name} is not supported at the Nextflow workflow level"
+            )
+        elif definition := _requirement_definition(section, class_name=class_name, suffix=suffix):
+            findings.extend(
+                _unconsumed_field_findings(
+                    definition,
+                    consumed=frozenset({"class"}),
+                    path=requirement_path,
+                )
+            )
+    return findings
+
+
+_SCATTER_METHODS = frozenset({"dotproduct", "flat_crossproduct", "nested_crossproduct"})
+
+
+def _scatter_names(step: Mapping[str, Any]) -> list[str]:
+    """Return the raw input names one step scatters over.
+
+    Only the single-input forms are representable: a bare name, or a
+    one-element list. Multi-input scatter is the only shape where
+    scatterMethod is load-bearing, and it is deferred rather than guessed.
+    """
+    match step.get("scatter"):
+        case str() as name if name:
+            names = [name]
+        case list() as items if items and all(isinstance(item, str) and item for item in items):
+            names = list(items)
+        case _:
+            raise ValueError(
+                "scatter must name one input, as a string or a one-element list"
+            )
+    if len(names) > 1:
+        raise ValueError(
+            f"multi-input scatter over {len(names)} inputs is deferred beyond this lowering; "
+            "exactly one scattered input is supported"
+        )
+    return names
+
+
+def _step_indices_by_id(steps: list[Mapping[str, Any]]) -> dict[str, int]:
+    """Map every recognizable step identifier spelling to its step index."""
+    indices: dict[str, int] = {}
+    for index, step in enumerate(steps):
+        match step.get("id"):
+            case str() as raw_id:
+                for candidate in (raw_id, raw_id.rsplit("#", maxsplit=1)[-1]):
+                    indices[candidate] = index
+            case _:
+                continue
+    return indices
+
+
+def _scattered_names_by_index(steps: list[Mapping[str, Any]]) -> dict[int, set[str]]:
+    """Return the scattered raw input names of every representably scattered step."""
+    scattered: dict[int, set[str]] = {}
+    for index, step in enumerate(steps):
+        if "scatter" not in step:
+            continue
+        try:
+            scattered[index] = set(_scatter_names(step))
+        except ValueError:
+            continue
+    return scattered
+
+
+def _scattered_element_type(declared: Any) -> Any:
+    """Return the item type a scattered port receives from an array source."""
+    required = _required_type(declared)
+    if not _is_array_type(required):
+        return declared
+    try:
+        return _array_item_type(required.get("items"))
+    except ValueError:
+        return declared
+
+
+def _scatter_source_findings(
+    step_index: int,
+    raw_name: Any,
+    raw_source: Any,
+    definition: Mapping[str, Any],
+    source_types: Mapping[str, Any],
+) -> list[str]:
+    """Require an array-typed workflow-input source matching the scattered port."""
+    path = f"steps[{step_index}].in.{raw_name}"
+    try:
+        sources = _source_values(raw_source, context=f"step input {step_index}.{raw_name}")
+    except ValueError:
+        # Every unrecognized source shape is already reported by path.
+        return []
+    if len(sources) != 1:
+        return [f"{path}: a scattered input must have exactly one source"]
+    source = sources[0]
+    if "/" in source:
+        # A process-output source is reported once, by the cross-step pass.
+        return []
+    declared = source_types.get(source)
+    required = _required_type(declared)
+    if not _is_array_type(required):
+        return [
+            f"{path}: a scattered input must be sourced from an array-typed workflow "
+            f"input; {source!r} declares {declared!r}"
+        ]
+    try:
+        element = _channel_shape(_array_item_type(required.get("items")))
+        port = _channel_shape(definition.get("type"))
+    except ValueError:
+        # An unsupported item or port type is already reported by the type passes.
+        return []
+    if element != port:
+        return [
+            f"{path}: scattered source {source!r} carries {element!r} elements but the "
+            f"port takes {port!r}"
+        ]
+    return []
+
+
+def _scatter_findings(
+    workflow: Mapping[str, Any],
+    steps: list[Mapping[str, Any]],
+    sub_trees: list[Any],
+) -> list[str]:
+    """Validate every scattered step against the single-input scatter lowering."""
+    findings: list[str] = []
+    source_types = _source_types(workflow, steps, sub_trees)
+    for step_index, (step, child) in enumerate(zip(steps, sub_trees, strict=True)):
+        path = f"steps[{step_index}]"
+        if "scatter" not in step:
+            continue
+        try:
+            names = _scatter_names(step)
+        except ValueError as exc:
+            findings.append(f"{path}.scatter: {exc}")
+            continue
+        method = step.get("scatterMethod")
+        if method is not None and method not in _SCATTER_METHODS:
+            findings.append(
+                f"{path}.scatterMethod: unsupported CWL scatter method {method!r}"
+            )
+        match child:
+            case RoseTree(data=NodeData(compiled_cwl=Mapping() as tool)):
+                tool_inputs = tool.get("inputs", {})
+            case _:
+                continue
+        step_inputs = step.get("in", {})
+        if not isinstance(tool_inputs, Mapping) or not isinstance(step_inputs, Mapping):
+            continue
+        for raw_name in names:
+            definition = tool_inputs.get(raw_name)
+            if not isinstance(definition, Mapping):
+                findings.append(
+                    f"{path}.scatter: scattered input {raw_name!r} is not declared by the "
+                    "step's tool"
+                )
+                continue
+            if _is_array_type(_required_type(definition.get("type"))):
+                findings.append(
+                    f"{path}.scatter: scattered input {raw_name!r} is array-typed; "
+                    "scattering over an array of arrays is deferred beyond this lowering"
+                )
+                continue
+            if raw_name not in step_inputs:
+                findings.append(
+                    f"{path}.scatter: scattered input {raw_name!r} has no source; a "
+                    "scattered input must be wired to an array-typed workflow input"
+                )
+                continue
+            findings.extend(
+                _scatter_source_findings(
+                    step_index,
+                    raw_name,
+                    step_inputs[raw_name],
+                    definition,
+                    source_types,
+                )
+            )
+    findings.extend(_scatter_edge_findings(steps))
+    return findings
+
+
+def _scatter_edge_findings(steps: list[Mapping[str, Any]]) -> list[str]:
+    """Reject every process edge whose cardinality a scattered step changes.
+
+    A scattered step's output is a queue channel of one value per task, which
+    drives N downstream invocations where CWL gives the consumer one
+    invocation receiving an array; and a process output feeding a scattered
+    step is itself a queue channel, which would truncate the scatter to one
+    task instead of N.
+    """
+    findings: list[str] = []
+    indices = _step_indices_by_id(steps)
+    scattered = _scattered_names_by_index(steps)
+    if not scattered:
+        return findings
+    for step_index, step in enumerate(steps):
+        step_inputs = step.get("in", {})
+        if not isinstance(step_inputs, Mapping):
+            continue
+        for raw_name, raw_source in step_inputs.items():
+            try:
+                sources = _source_values(
+                    raw_source,
+                    context=f"step input {step_index}.{raw_name}",
+                )
+            except ValueError:
+                continue
+            for source in sources:
+                if "/" not in source:
+                    continue
+                raw_process = source.rsplit("/", maxsplit=1)[0]
+                producer = indices.get(
+                    raw_process,
+                    indices.get(raw_process.rsplit("#", maxsplit=1)[-1]),
+                )
+                if producer is not None and producer in scattered:
+                    findings.append(
+                        f"steps[{step_index}].in.{raw_name}: {source!r} is an output of "
+                        f"scattered step steps[{producer}]; a scattered step's outputs can "
+                        "only reach a workflow output, because gathering them back into one "
+                        "value is deferred beyond this lowering"
+                    )
+                elif step_index in scattered:
+                    findings.append(
+                        f"steps[{step_index}].in.{raw_name}: a scattered step's inputs must "
+                        f"come from workflow inputs; the process output {source!r} would "
+                        "truncate the scatter to one task"
+                    )
     return findings
 
 
@@ -1675,6 +1936,7 @@ def _flag_source_findings(
     path is always truthy and the strings ``"false"`` and ``"0"`` are too.
     """
     source_types = _source_types(workflow, steps, sub_trees)
+    scattered_by_index = _scattered_names_by_index(steps)
     findings: list[str] = []
     for step_index, (step, child) in enumerate(zip(steps, sub_trees, strict=True)):
         match child:
@@ -1686,6 +1948,7 @@ def _flag_source_findings(
         step_inputs = step.get("in", {})
         if not isinstance(tool_inputs, Mapping) or not isinstance(step_inputs, Mapping):
             continue
+        scattered = scattered_by_index.get(step_index, set())
         for raw_name, definition in tool_inputs.items():
             if not isinstance(definition, Mapping) or not _is_flag_binding(definition):
                 continue
@@ -1707,6 +1970,10 @@ def _flag_source_findings(
                 raise
             for source in sources:
                 declared = source_types.get(source, source_types.get(str(source)))
+                if raw_name in scattered:
+                    # A scattered port receives one element, so the array's
+                    # item type is what must be boolean.
+                    declared = _scattered_element_type(declared)
                 if declared is not None and _required_type(declared) == "boolean":
                     continue
                 findings.append(
@@ -1815,13 +2082,22 @@ def _step_connections(
                 pass
             case _:
                 raise ValueError(f"compiled step {process.name!r} inputs must be a mapping")
+        scattered = {
+            _identifier(raw_name, context="scattered input")
+            for raw_name in (_scatter_names(step) if "scatter" in step else [])
+        }
         for raw_port, raw_source in raw_inputs.items():
             destination_port = _identifier(raw_port, context="process input destination")
             for source in _source_values(raw_source, context=f"step input {process.name}.{destination_port}"):
                 source_process, source_port = _source_endpoint(source, step_names)
                 if source_process is None:
                     connections.append(
-                        NfWorkflowInputConnection(source_port, process.name, destination_port)
+                        NfWorkflowInputConnection(
+                            source_port,
+                            process.name,
+                            destination_port,
+                            "scatter" if destination_port in scattered else None,
+                        )
                     )
                 else:
                     connections.append(
@@ -2046,6 +2322,7 @@ def cwl_rosetree_to_nextflow(rose_tree: RoseTree) -> ExecutableNextflowWorkflow:
     findings.extend(_workflow_capability_findings(workflow, node_data, steps))
     findings.extend(_absent_optional_findings(workflow, node_data, steps, sub_trees))
     findings.extend(_flag_source_findings(workflow, steps, sub_trees))
+    findings.extend(_scatter_findings(workflow, steps, sub_trees))
     findings.extend(_container_policy_findings(sub_trees))
     _raise_capability_findings(findings)
     processes = [

@@ -404,3 +404,26 @@ def test_concrete_public_module_exports_importer() -> None:
     assert nextflow.NextflowDocument is NextflowDocument
     assert nextflow.promote_nextflow_document is promote_nextflow_document
     assert nextflow.render_nextflow_document is render_nextflow_document
+
+
+@pytest.mark.fast
+def test_a_scattered_call_is_retained_as_an_opaque_region() -> None:
+    """The adapter operator is outside the recognized subset, so it stays loss-aware."""
+    source = render_nextflow(ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [NfProcess(
+            "SCATTER",
+            [NfPort("item", "val")],
+            [NfPort("result", "path", "result", NfTemplate((NfLiteral("out.txt"),)))],
+            NfCommand((NfTemplate((NfLiteral("echo"),)), NfTemplate((NfInputReference("item"),)))),
+        )],
+        [NfWorkflowInputConnection("items", "SCATTER", "item", "scatter")],
+        {"items": ["a", "b"]},
+    ))
+
+    parsed = parse_nf_text(source)
+
+    assert parsed.connections == ()
+    assert "SCATTER(items.flatten())" in "\n".join(parsed.opaque_regions)
+    with pytest.raises(ValueError, match="opaque regions"):
+        promote_nextflow_document(parsed)

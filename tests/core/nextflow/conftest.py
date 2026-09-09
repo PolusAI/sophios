@@ -46,3 +46,21 @@ def real_supported_rose() -> RoseTree:
     copy_step = Step(copy_tool, step_name="copy")
     copy_step.inputs.source = touch.outputs.result
     return Workflow([touch, copy_step], "wf")._compile().rose
+
+
+@pytest.fixture(scope="session")
+def real_scattered_rose() -> RoseTree:
+    """Compile a real single-input scatter over an array-typed workflow input."""
+    echo_tool = (
+        CommandLineTool(
+            "echo_item",
+            Inputs(item=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="out.txt")),
+        )
+        .base_command("echo")
+        .stdout("out.txt")
+    )
+    echo = Step(echo_tool, step_name="echo_item")
+    echo.inputs.item = ["alpha", "beta"]
+    echo.scatter_on(echo.inputs.item)
+    return Workflow([echo], "wf")._compile().rose

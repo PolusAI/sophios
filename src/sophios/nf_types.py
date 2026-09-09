@@ -748,16 +748,30 @@ class NfProcess:
 
 @dataclass(frozen=True, slots=True)
 class NfWorkflowInputConnection:
-    """Connect one workflow parameter to one process input."""
+    """Connect one workflow parameter to one process input.
+
+    ``adapter`` names the one approved channel adaptation applied at the
+    consumption site. The approved set is closed: ``"scatter"`` fans a
+    list-carrying value channel out into one element per task. Every other
+    adaptation a topology might require is rejected before lowering.
+    """
+
+    ALLOWED_ADAPTERS: ClassVar[frozenset[str]] = frozenset({"scatter"})
 
     from_port: str
     to_process: str
     to_port: str
+    adapter: str | None = None
 
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.from_port, field_name="workflow input")
         _validate_ir_identifier(self.to_process, field_name="connection destination process")
         _validate_ir_identifier(self.to_port, field_name="connection destination port")
+        if self.adapter is not None and self.adapter not in self.ALLOWED_ADAPTERS:
+            allowed = ", ".join(sorted(self.ALLOWED_ADAPTERS))
+            raise ValueError(
+                f"channel adapter must be one of {allowed}, got {self.adapter!r}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation.
@@ -770,6 +784,7 @@ class NfWorkflowInputConnection:
             "from_port": self.from_port,
             "to_process": self.to_process,
             "to_port": self.to_port,
+            "adapter": self.adapter,
         }
 
 
@@ -895,12 +910,21 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
     item = _mapping(value, type_name="NfConnection")
     match item.get("kind"):
         case "workflow_input":
-            _check_fields(
+            # adapter is optional on hydration: every schema version before it
+            # was introduced never wrote it, and its absence there always
+            # means an unadapted connection.
+            _check_fields_with_optional(
                 item,
                 type_name="NfWorkflowInputConnection",
                 required={"kind", "from_port", "to_process", "to_port"},
+                optional={"adapter"},
             )
-            return NfWorkflowInputConnection(item["from_port"], item["to_process"], item["to_port"])
+            return NfWorkflowInputConnection(
+                item["from_port"],
+                item["to_process"],
+                item["to_port"],
+                item.get("adapter"),
+            )
         case "process":
             _check_fields(
                 item,
@@ -925,10 +949,10 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow."""
 
-    SCHEMA_VERSION: ClassVar[int] = 7
+    SCHEMA_VERSION: ClassVar[int] = 8
     # Earlier versions whose value space is a strict subset of the current
     # model hydrate unchanged; serialization always writes SCHEMA_VERSION.
-    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7})
+    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7, 8})
     # Each additive token or segment kind declares the version that
     # introduced it, so the subset property is enforced rather than assumed.
     KIND_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
@@ -936,10 +960,11 @@ class ExecutableNextflowWorkflow:
     )
     # Version an additive non-kind-tagged field was introduced in, keyed by
     # the field name it appears under. is_array and stage_as predate a
-    # "kind" tag on NfPort, so each needs its own gate alongside
+    # "kind" tag on NfPort, and adapter is additive on an existing
+    # connection kind, so each needs its own gate alongside
     # KIND_SCHEMA_VERSIONS.
     FIELD_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
-        {"is_array": 5, "stage_as": 7}
+        {"is_array": 5, "stage_as": 7, "adapter": 8}
     )
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
@@ -1004,16 +1029,23 @@ class ExecutableNextflowWorkflow:
 
         for connection in self.connections:
             match connection:
-                case NfWorkflowInputConnection(from_port, to_process, to_port):
+                case NfWorkflowInputConnection(from_port, to_process, to_port, adapter):
                     if from_port not in self.params:
                         raise ValueError(f"connection references unknown workflow input {from_port!r}")
                     destination = self._destination_port(process_by_name, to_process, to_port)
-                    # path_kind and is_array select the staging/cardinality
-                    # policy, so both are part of the channel contract:
-                    # connection order must never pick one.
+                    if adapter is not None and destination.is_array:
+                        raise ValueError(
+                            f"channel adapter {adapter!r} cannot target the array-marked port "
+                            f"{to_process}.{to_port}"
+                        )
+                    # path_kind, is_array, and the adapter each select part of
+                    # the staging/cardinality policy, so all three are part of
+                    # the channel contract: connection order must never pick one.
                     semantics = destination.qualifier + (
                         f"[{destination.path_kind}]" if destination.path_kind else ""
-                    ) + ("[]" if destination.is_array else "")
+                    ) + ("[]" if destination.is_array else "") + (
+                        f"|{adapter}" if adapter else ""
+                    )
                     previous = workflow_input_qualifiers.setdefault(from_port, semantics)
                     if previous != semantics:
                         raise ValueError(

@@ -400,3 +400,61 @@ def test_config_uses_validated_workflow_container_policy() -> None:
     )
     assert render_nextflow_config(host) == "docker.enabled = false\n"
     assert render_nextflow_config(containerized) == "docker.enabled = true\n"
+
+
+@pytest.mark.serial
+@pytest.mark.parametrize(
+    ("port", "construction"),
+    [
+        (
+            NfPort("item", "val"),
+            "Channel.value(params.items)",
+        ),
+        (
+            NfPort("item", "path"),
+            "Channel.value(params.items.collect { entry -> file("
+            "entry instanceof Map ? entry.path : entry, "
+            "checkIfExists: true, type: 'file') })",
+        ),
+    ],
+    ids=["val", "path"],
+)
+def test_renders_the_scatter_adapter_at_the_consumption_site(
+    port: NfPort,
+    construction: str,
+) -> None:
+    """The adapted parameter carries the whole list; each sink derives its own queue."""
+    process = NfProcess(
+        "SCATTER",
+        [port],
+        [output_port("result", "out.txt")],
+        command("echo", NfTemplate((NfLiteral("x"),))),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [NfWorkflowInputConnection("items", "SCATTER", "item", "scatter")],
+        {"items": ["a", "b"]},
+    ))
+
+    assert "    SCATTER(items.flatten())" in rendered
+    assert construction in rendered
+
+
+@pytest.mark.serial
+def test_renders_an_unadapted_workflow_input_without_an_operator() -> None:
+    process = NfProcess(
+        "TASK",
+        [NfPort("item", "val")],
+        [output_port("result", "out.txt")],
+        command("echo", NfTemplate((NfLiteral("x"),))),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [NfWorkflowInputConnection("items", "TASK", "item")],
+        {"items": "a"},
+    ))
+
+    assert "    TASK(items)" in rendered
+    assert ".flatten()" not in rendered

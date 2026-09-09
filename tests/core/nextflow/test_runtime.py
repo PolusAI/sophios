@@ -932,3 +932,120 @@ def test_docker_container_behavior(tmp_path: Path) -> None:
     workflow = single_process_workflow(process, params={}, output_port_name="result")
     result = run_nextflow(workflow, tmp_path)
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_scatter_runs_one_task_per_element(tmp_path: Path) -> None:
+    """R2.12: a single-input scatter over an array workflow input runs N tasks."""
+    items = ["alpha", "beta", "gamma"]
+    echo_tool = (
+        CommandLineTool(
+            "echo_item",
+            Inputs(item=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="out.txt")),
+        )
+        .base_command("echo")
+        .stdout("out.txt")
+    )
+    echo = Step(echo_tool, step_name="echo_item")
+    echo.inputs.item = items
+    echo.scatter_on(echo.inputs.item)
+
+    workflow = Workflow([echo], "nextflow_scatter")
+    workflow.outputs.scattered = echo.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = sorted(
+        path.read_text(encoding="utf-8") for path in (tmp_path / "work").rglob("out.txt")
+    )
+    assert outputs == [f"{item}\n" for item in items]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_scatter_over_an_empty_array_runs_zero_tasks_and_terminates(
+    tmp_path: Path,
+) -> None:
+    """R2.13: an empty scatter source yields no tasks, an empty emit, and no hang."""
+    echo_tool = (
+        CommandLineTool(
+            "echo_item",
+            Inputs(item=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="out.txt")),
+        )
+        .base_command("echo")
+        .stdout("out.txt")
+    )
+    echo = Step(echo_tool, step_name="echo_item")
+    echo.inputs.item = []
+    echo.scatter_on(echo.inputs.item)
+
+    unscattered_tool = (
+        CommandLineTool(
+            "write_marker",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="marker.txt")),
+        )
+        .base_command("echo")
+        .stdout("marker.txt")
+    )
+    marker = Step(unscattered_tool, step_name="write_marker")
+    marker.inputs.message = "the run still progresses"
+
+    workflow = Workflow([echo, marker], "nextflow_empty_scatter")
+    workflow.outputs.scattered = echo.outputs.result
+    workflow.outputs.marker = marker.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert list((tmp_path / "work").rglob("out.txt")) == []
+    markers = list((tmp_path / "work").rglob("marker.txt"))
+    assert [path.read_text(encoding="utf-8") for path in markers] == [
+        "the run still progresses\n"
+    ]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_scatter_over_files_stages_one_element_per_task(tmp_path: Path) -> None:
+    """R2.14: a File[] scatter source stages exactly one element into each task.
+
+    The elements are CWL File objects, so the construction has to dispatch on
+    each element's runtime shape rather than on the list's.
+    """
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_text("alpha\n", encoding="utf-8")
+    second.write_text("beta\n", encoding="utf-8")
+    process = NfProcess(
+        "READ_ONE",
+        [NfPort("source", "path")],
+        [output_port("result", "copy.txt")],
+        command("cp", template(ref("source")), "copy.txt"),
+    )
+    workflow = ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [process],
+        [
+            NfWorkflowInputConnection("sources", "READ_ONE", "source", "scatter"),
+            NfWorkflowOutputConnection("READ_ONE", "result", "copies"),
+        ],
+        {
+            "sources": [
+                {"class": "File", "path": str(first)},
+                {"class": "File", "path": str(second)},
+            ]
+        },
+    )
+
+    result = run_nextflow(workflow, tmp_path / "run")
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    copies = sorted(
+        path.read_text(encoding="utf-8")
+        for path in (tmp_path / "run" / "work").rglob("copy.txt")
+    )
+    assert copies == ["alpha\n", "beta\n"]

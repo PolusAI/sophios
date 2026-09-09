@@ -220,14 +220,51 @@ Directory input (inline content construction), an `entryname` that is any
 other expression, a listing entry naming a `val`-qualifier or array-typed
 input, and two inputs staged under the same literal name are all rejected.
 
+## Scatter
+
+A step that scatters over exactly one input runs once per element of an
+array-typed workflow input:
+
+```python
+echo = Step(echo_tool, step_name="echo_item")
+echo.inputs.item = ["alpha", "beta", "gamma"]
+echo.scatter_on(echo.inputs.item)
+```
+
+The scattered parameter is carried as one channel holding the whole list and
+adapted with Nextflow's `flatten` at each consumption site, so the process
+takes one element per task while the step's other inputs stay value channels
+and broadcast to every task. Scattering over an empty array runs zero tasks:
+the run still terminates and the workflow output is simply empty.
+
+Multi-input scatter is not supported, and neither is any `scatterMethod` that
+would decide how two scattered arrays combine. With exactly one scattered
+input all three CWL methods coincide, so `dotproduct`,
+`flat_crossproduct`, and `nested_crossproduct` are each accepted as inert
+restatements; any other value is rejected.
+
+A scattered step's outputs can only reach a workflow output, where a channel
+of N values is exactly the array-typed CWL output. Feeding them into another
+process is rejected: CWL gives that step one invocation receiving an array,
+while the channel would drive N invocations, and collecting them back into
+one value is not yet supported. For the same reason a scattered step's own
+inputs must all come from workflow inputs — a process output would truncate
+the scatter to one task. Scattering over an array-typed port, over a
+non-array source, and scattering a nested workflow step are all rejected.
+
+Workflow-level `ScatterFeatureRequirement` is accepted as an inert
+declaration; every other workflow-level requirement is rejected by name.
+
 ## Current limits
 
 - Workflows must be flat and use `CommandLineTool`-equivalent processes.
 - Fractional CPU requirements reject before lowering; they are not silently
   rounded.
-- Scatter is retained as opaque structure; executable scatter is deferred.
-- Nested workflows, arbitrary Groovy, channel operators, `when`, and `exec`
-  blocks are not interpreted.
+- Nested workflows, arbitrary Groovy, channel operators beyond the one
+  supported adapter, `when`, and `exec` blocks are not interpreted.
+- The generated scatter call is outside the reader's recognized subset, so a
+  scattered workflow round-trips as loss-aware structure with an opaque
+  region rather than being promoted back to executable IR.
 - Structurally imported scripts remain opaque. CWL/Sophios import preserves representable
   names, ports, resources, and topology but does not promise executable
   equivalence for arbitrary shell or Groovy semantics.

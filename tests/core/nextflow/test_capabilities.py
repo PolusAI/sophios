@@ -10,7 +10,15 @@ import pytest
 
 from sophios.api.python.workflow import CompiledWorkflow
 from sophios.input_output_nf import render_nextflow
-from sophios.nf_types import NfFlag, NfLiteral, NfResources, NfShellLiteral, NfTemplate
+from sophios.nf_types import (
+    NfFlag,
+    NfLiteral,
+    NfResources,
+    NfShellLiteral,
+    NfTemplate,
+    NfWorkflowInputConnection,
+    NfWorkflowOutputConnection,
+)
 from sophios.utils_nf import cwl_rosetree_to_nextflow
 from sophios.wic_types import RoseTree, Yaml
 
@@ -463,7 +471,12 @@ def test_rejects_nested_or_unsupported_workflow_constructs() -> None:
 @pytest.mark.parametrize(
     ("mutation", "diagnostic"),
     [
-        (lambda workflow: workflow.update({"requirements": {}}), "workflow.requirements"),
+        (
+            lambda workflow: workflow.update(
+                {"requirements": {"MultipleInputFeatureRequirement": {}}}
+            ),
+            "workflow.requirements.MultipleInputFeatureRequirement",
+        ),
         (
             lambda workflow: workflow["inputs"]["message"].update(
                 {"inputBinding": {"position": 1}}
@@ -833,23 +846,373 @@ def test_rejects_output_glob_outside_typed_input_subset() -> None:
         cwl_rosetree_to_nextflow(rose)
 
 
-@pytest.mark.fast
-def test_rejects_executable_scatter_before_lowering() -> None:
-    scatter = tool("SCATTER", inputs={"item": {"type": "string"}})
-    scattered_step = step(
+def _findings(rose: RoseTree) -> list[str]:
+    """Return the exact aggregated finding lines of one rejected conversion."""
+    with pytest.raises(ValueError) as error:
+        cwl_rosetree_to_nextflow(rose)
+    header, *lines = str(error.value).splitlines()
+    assert header == "Nextflow Phase 1 capability analysis failed:"
+    return [line.removeprefix("- ") for line in lines]
+
+
+_STRING_ARRAY = {"type": "array", "items": "string"}
+
+
+def _scattered_tool(port_type: Any = "string", **inputs: Any) -> Yaml:
+    return tool(
         "SCATTER",
-        **{"in": {"item": "items"}, "scatter": "item", "scatterMethod": "dotproduct"},
+        inputs={
+            "item": {"type": port_type, "inputBinding": {"position": 1}},
+            **inputs,
+        },
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+    )
+
+
+def _scatter_rose(
+    *,
+    port_type: Any = "string",
+    items: Any = "string",
+    source: Any = "items",
+    scatter: Any = ("item",),
+    value: Any = ("a", "b"),
+    **step_fields: Any,
+) -> RoseTree:
+    fields: dict[str, Any] = {
+        "in": {"item": source},
+        "out": ["result"],
+        "scatter": list(scatter) if isinstance(scatter, tuple) else scatter,
+        **step_fields,
+    }
+    return synthetic_rose(
+        workflow_doc(
+            [step("SCATTER", **fields)],
+            inputs={"items": {"type": {"type": "array", "items": items}}},
+        ),
+        [_scattered_tool(port_type)],
+        workflow_inputs={"items": list(value)},
+    )
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("method", ["dotproduct", "flat_crossproduct", "nested_crossproduct"])
+def test_rejects_multi_input_scatter_under_every_scatter_method(method: str) -> None:
+    """Multi-input scatter is the only shape where scatterMethod is load-bearing."""
+    scatter_tool = tool(
+        "SCATTER",
+        inputs={
+            "first": {"type": "string", "inputBinding": {"position": 1}},
+            "second": {"type": "string", "inputBinding": {"position": 2}},
+        },
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
     )
     rose = synthetic_rose(
         workflow_doc(
-            [scattered_step],
-            inputs={"items": {"type": {"type": "array", "items": "string"}}},
+            [step(
+                "SCATTER",
+                **{
+                    "in": {"first": "firsts", "second": "seconds"},
+                    "out": ["result"],
+                    "scatter": ["first", "second"],
+                    "scatterMethod": method,
+                },
+            )],
+            inputs={
+                "firsts": {"type": _STRING_ARRAY},
+                "seconds": {"type": _STRING_ARRAY},
+            },
         ),
-        [scatter],
+        [scatter_tool],
+        workflow_inputs={"firsts": ["a"], "seconds": ["b"]},
+    )
+
+    assert _findings(rose) == [
+        "steps[0].scatter: multi-input scatter over 2 inputs is deferred beyond this "
+        "lowering; exactly one scattered input is supported"
+    ]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("scatter", [[], {"item": True}, "", ["item", ""]], ids=[
+    "empty-list", "mapping", "empty-string", "empty-name",
+])
+def test_rejects_a_scatter_field_that_does_not_name_one_input(scatter: Any) -> None:
+    assert _findings(_scatter_rose(scatter=scatter)) == [
+        "steps[0].scatter: scatter must name one input, as a string or a one-element list"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_an_unsupported_scatter_method() -> None:
+    assert _findings(_scatter_rose(scatterMethod="product")) == [
+        "steps[0].scatterMethod: unsupported CWL scatter method 'product'"
+    ]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    "step_fields",
+    [
+        {},
+        {"scatterMethod": "dotproduct"},
+        {"scatterMethod": "flat_crossproduct"},
+        {"scatterMethod": "nested_crossproduct"},
+    ],
+    ids=["absent", "dotproduct", "flat_crossproduct", "nested_crossproduct"],
+)
+def test_accepts_an_inert_scatter_method_at_one_scattered_input(
+    step_fields: dict[str, Any],
+) -> None:
+    """All three methods coincide at one scattered input, so each is inert."""
+    workflow = cwl_rosetree_to_nextflow(_scatter_rose(**step_fields))
+
+    assert workflow.connections == (
+        NfWorkflowInputConnection("items", "SCATTER", "item", "scatter"),
+    )
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("scatter", ["item", ("item",)], ids=["string-form", "list-form"])
+def test_accepts_both_single_input_scatter_spellings(scatter: Any) -> None:
+    workflow = cwl_rosetree_to_nextflow(_scatter_rose(scatter=scatter))
+
+    assert workflow.connections == (
+        NfWorkflowInputConnection("items", "SCATTER", "item", "scatter"),
+    )
+
+
+@pytest.mark.fast
+def test_rejects_scatter_over_a_non_array_workflow_input() -> None:
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("SCATTER", **{"in": {"item": "items"}, "out": ["result"], "scatter": ["item"]})],
+            inputs={"items": {"type": "string"}},
+        ),
+        [_scattered_tool()],
+        workflow_inputs={"items": "a"},
+    )
+
+    assert _findings(rose) == [
+        "steps[0].in.item: a scattered input must be sourced from an array-typed "
+        "workflow input; 'items' declares 'string'"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_scatter_over_an_array_typed_port() -> None:
+    assert _findings(_scatter_rose(port_type=_STRING_ARRAY)) == [
+        "steps[0].scatter: scattered input 'item' is array-typed; scattering over an "
+        "array of arrays is deferred beyond this lowering"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_scatter_whose_element_type_mismatches_its_port() -> None:
+    assert _findings(_scatter_rose(port_type="File")) == [
+        "steps[0].in.item: scattered source 'items' carries 'val' elements but the port "
+        "takes 'path[file]'"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_scatter_naming_an_undeclared_input() -> None:
+    assert _findings(_scatter_rose(scatter=("missing",))) == [
+        "steps[0].scatter: scattered input 'missing' is not declared by the step's tool"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_an_unwired_scattered_input() -> None:
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("SCATTER", **{"out": ["result"], "scatter": ["item"]})],
+            inputs={"items": {"type": _STRING_ARRAY}},
+        ),
+        [_scattered_tool()],
+        workflow_inputs={"items": ["a"]},
+    )
+
+    assert _findings(rose) == [
+        "steps[0].scatter: scattered input 'item' has no source; a scattered input must "
+        "be wired to an array-typed workflow input"
+    ]
+
+
+def _producer() -> Yaml:
+    return tool(
+        "PRODUCER",
+        outputs={"out": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+    )
+
+
+@pytest.mark.fast
+def test_rejects_scatter_over_a_process_output() -> None:
+    """No process output can carry an array, so a queue source truncates the scatter."""
+    rose = synthetic_rose(
+        workflow_doc([
+            step("PRODUCER", out=["out"]),
+            step(
+                "SCATTER",
+                **{"in": {"item": "PRODUCER/out"}, "out": ["result"], "scatter": ["item"]},
+            ),
+        ]),
+        [_producer(), _scattered_tool("File")],
+    )
+
+    assert _findings(rose) == [
+        "steps[1].in.item: a scattered step's inputs must come from workflow inputs; the "
+        "process output 'PRODUCER/out' would truncate the scatter to one task"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_a_process_output_source_on_a_scattered_steps_other_input() -> None:
+    scatter_tool = _scattered_tool(
+        extra={"type": "File", "inputBinding": {"position": 2}},
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [
+                step("PRODUCER", out=["out"]),
+                step(
+                    "SCATTER",
+                    **{
+                        "in": {"item": "items", "extra": "PRODUCER/out"},
+                        "out": ["result"],
+                        "scatter": ["item"],
+                    },
+                ),
+            ],
+            inputs={"items": {"type": _STRING_ARRAY}},
+        ),
+        [_producer(), scatter_tool],
+        workflow_inputs={"items": ["a"]},
+    )
+
+    assert _findings(rose) == [
+        "steps[1].in.extra: a scattered step's inputs must come from workflow inputs; the "
+        "process output 'PRODUCER/out' would truncate the scatter to one task"
+    ]
+
+
+@pytest.mark.fast
+def test_rejects_a_downstream_process_consumer_of_a_scattered_step() -> None:
+    """A queue channel of N drives N downstream tasks where CWL gives one an array."""
+    consumer = tool(
+        "CONSUMER",
+        inputs={"source": {"type": "File", "inputBinding": {"position": 1}}},
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "copy.txt"}}},
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [
+                step(
+                    "SCATTER",
+                    **{"in": {"item": "items"}, "out": ["result"], "scatter": ["item"]},
+                ),
+                step("CONSUMER", **{"in": {"source": "SCATTER/result"}, "out": ["result"]}),
+            ],
+            inputs={"items": {"type": _STRING_ARRAY}},
+        ),
+        [_scattered_tool(), consumer],
+        workflow_inputs={"items": ["a"]},
+    )
+
+    assert _findings(rose) == [
+        "steps[1].in.source: 'SCATTER/result' is an output of scattered step steps[0]; a "
+        "scattered step's outputs can only reach a workflow output, because gathering "
+        "them back into one value is deferred beyond this lowering"
+    ]
+
+
+@pytest.mark.fast
+def test_accepts_a_workflow_output_of_a_scattered_step() -> None:
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("SCATTER", **{"in": {"item": "items"}, "out": ["result"], "scatter": ["item"]})],
+            inputs={"items": {"type": _STRING_ARRAY}},
+            outputs={
+                "each": {
+                    "type": {"type": "array", "items": "File"},
+                    "outputSource": "SCATTER/result",
+                }
+            },
+        ),
+        [_scattered_tool()],
         workflow_inputs={"items": ["a", "b"]},
     )
-    with pytest.raises(ValueError, match=r"steps\[0\].scatter.*Phase 2"):
-        cwl_rosetree_to_nextflow(rose)
+
+    workflow = cwl_rosetree_to_nextflow(rose)
+
+    assert NfWorkflowOutputConnection("SCATTER", "result", "each") in workflow.connections
+
+
+@pytest.mark.fast
+def test_accepts_a_scattered_boolean_flag_source() -> None:
+    """A scattered flag port receives one element, so the element type is what must be boolean."""
+    flags = tool(
+        "SCATTER",
+        inputs={"item": {"type": "boolean", "inputBinding": {"prefix": "--flag"}}},
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("SCATTER", **{"in": {"item": "items"}, "out": ["result"], "scatter": ["item"]})],
+            inputs={"items": {"type": {"type": "array", "items": "boolean"}}},
+        ),
+        [flags],
+        workflow_inputs={"items": [True, False]},
+    )
+
+    workflow = cwl_rosetree_to_nextflow(rose)
+
+    assert workflow.processes[0].command.tokens[-1] == NfFlag("item", "--flag")
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    "requirements",
+    [{"ScatterFeatureRequirement": {}}, [{"class": "ScatterFeatureRequirement"}]],
+    ids=["mapping", "list"],
+)
+def test_accepts_inert_workflow_level_scatter_requirement(requirements: Any) -> None:
+    rose = _scatter_rose()
+    rose.data.compiled_cwl["requirements"] = requirements
+
+    assert cwl_rosetree_to_nextflow(rose).connections == (
+        NfWorkflowInputConnection("items", "SCATTER", "item", "scatter"),
+    )
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    ("requirements", "diagnostic"),
+    [
+        (
+            {"ScatterFeatureRequirement": {"method": "dotproduct"}},
+            "workflow.requirements.ScatterFeatureRequirement.method: method is not "
+            "consumed by Nextflow Phase 1 lowering",
+        ),
+        (
+            {"StepInputExpressionRequirement": {}},
+            "workflow.requirements.StepInputExpressionRequirement: "
+            "StepInputExpressionRequirement is not supported at the Nextflow workflow level",
+        ),
+        (
+            "ScatterFeatureRequirement",
+            "workflow.requirements: CWL Workflow requirements must be a mapping or list",
+        ),
+    ],
+    ids=["unconsumed-field", "unsupported-class", "wrong-shape"],
+)
+def test_rejects_unsupported_workflow_level_requirements(
+    requirements: Any,
+    diagnostic: str,
+) -> None:
+    rose = _scatter_rose()
+    rose.data.compiled_cwl["requirements"] = requirements
+
+    assert _findings(rose) == [diagnostic]
 
 
 @pytest.mark.fast

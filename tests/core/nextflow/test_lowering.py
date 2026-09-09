@@ -640,3 +640,34 @@ def test_conversion_does_not_mutate_rosetree(real_supported_rose: RoseTree) -> N
     before = copy.deepcopy(real_supported_rose.data.compiled_cwl)
     cwl_rosetree_to_nextflow(real_supported_rose)
     assert real_supported_rose.data.compiled_cwl == before
+
+
+@pytest.mark.fast
+def test_scatter_lowers_to_an_adapted_workflow_input_connection(
+    real_scattered_rose: RoseTree,
+) -> None:
+    connections = cwl_rosetree_to_nextflow(real_scattered_rose).connections
+    assert connections[0] == NfWorkflowInputConnection(
+        "wf__step__1__echo_item___item",
+        "wf__step__1__echo_item",
+        "item",
+        "scatter",
+    )
+
+
+@pytest.mark.fast
+def test_a_scattered_port_stays_a_scalar_element_port(
+    real_scattered_rose: RoseTree,
+) -> None:
+    """The process receives one element per task, so its port is not array-marked."""
+    process = cwl_rosetree_to_nextflow(real_scattered_rose).processes[0]
+    assert process.inputs == (NfPort("item", "val"),)
+
+
+@pytest.mark.fast
+def test_a_scattered_parameter_carries_the_whole_source_array(
+    real_scattered_rose: RoseTree,
+) -> None:
+    assert cwl_rosetree_to_nextflow(real_scattered_rose).params == {
+        "wf__step__1__echo_item___item": ["alpha", "beta"]
+    }

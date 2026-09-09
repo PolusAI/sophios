@@ -226,10 +226,15 @@ def _incoming_connections(workflow: ExecutableNextflowWorkflow) -> dict[tuple[st
     }
 
 
+_ADAPTER_OPERATORS = {"scatter": ".flatten()"}
+
+
 def _source_expression(connection: NfConnection, processes: Mapping[str, NfProcess]) -> str:
     match connection:
-        case NfWorkflowInputConnection(from_port, _, _):
-            return from_port
+        case NfWorkflowInputConnection(from_port, _, _, adapter):
+            # The adapter is applied per consumption site, so each scattered
+            # sink derives its own queue channel from the shared parameter.
+            return from_port + (_ADAPTER_OPERATORS[adapter] if adapter else "")
         case NfProcessConnection(from_process, from_port, _, _) | NfWorkflowOutputConnection(
             from_process, from_port, _
         ):
@@ -290,23 +295,28 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
     return "\n".join(lines)
 
 
-def _workflow_input_port(
+def _workflow_input_sink(
     workflow: ExecutableNextflowWorkflow,
     name: str,
-) -> NfPort:
+) -> tuple[NfWorkflowInputConnection, NfPort]:
     processes = _process_map(workflow)
     for connection in workflow.connections:
         if isinstance(connection, NfWorkflowInputConnection) and connection.from_port == name:
             process = processes[connection.to_process]
-            return next(port for port in process.inputs if port.name == connection.to_port)
+            port = next(port for port in process.inputs if port.name == connection.to_port)
+            return connection, port
     raise ValueError(f"workflow input {name!r} is not connected")
 
 
 def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> str:
-    port = _workflow_input_port(workflow, name)
+    connection, port = _workflow_input_sink(workflow, name)
+    # A scatter-adapted parameter carries the whole source array; the graph
+    # validator keeps every sink of one parameter in agreement, so one sink
+    # decides the construction for all of them.
+    carries_list = port.is_array or connection.adapter == "scatter"
     if port.qualifier == "path":
         path_type = "dir" if port.path_kind == "directory" else "file"
-        if port.is_array:
+        if carries_list:
             # One Channel.value(...) element holding a Groovy list, so
             # Nextflow stages every element for a single process call
             # instead of fanning the channel out over several calls.
