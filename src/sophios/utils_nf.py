@@ -5,11 +5,13 @@ import copy
 import math
 from os import PathLike
 import re
+from types import MappingProxyType
 from typing import Any
 
 from .nf_symbols import normalize_nextflow_identifier
 from .nf_types import (
     ExecutableNextflowWorkflow,
+    GLOB_WILDCARDS,
     NF_INTERNAL_IDENTIFIERS,
     NfArrayBinding,
     NfBasenameReference,
@@ -233,6 +235,7 @@ def _ports(
                         path_kind=path_kind,
                         is_array=is_array,
                         stage_as=None if outputs or stage_as is None else stage_as.get(name),
+                        capture=_output_capture(raw_name, raw_definition) if outputs else None,
                     )
                 )
             case _:
@@ -858,6 +861,126 @@ def _output_template(raw_name: Any, definition: Any) -> NfTemplate:
             raise ValueError(f"CWL output glob for {raw_name!r} must be a string or list")
 
 
+# The complete set of CWL outputEval texts with an approved lowering, mapping
+# exact source text to the closed capture marker it declares. This table is the
+# single owner of the admitted forms: nothing else constructs a capture marker,
+# and recognition is a lookup, never an inspection of expression text. Adding a
+# form means adding a row here, which requires a design revision first.
+_ADMITTED_OUTPUT_EVAL: Mapping[str, str] = MappingProxyType({
+    "$(self[0])": "single",
+})
+# outputEval shapes refused by name rather than by a generic table miss, so the
+# diagnostic says why the shape is unattractive rather than merely absent.
+_PERMANENT_PROJECTION_REASON = (
+    "a produced file's directory under this backend is the Nextflow task work "
+    "directory, which Nextflow owns, may relocate, and may clean up; it is never the "
+    "directory the CWL author described, so this projection is refused rather than "
+    "deferred"
+)
+_NAMED_OUTPUT_EVAL_REJECTIONS: Mapping[str, str] = MappingProxyType({
+    "$(self[0].dirname)": _PERMANENT_PROJECTION_REASON,
+    "$(self[0].path)": _PERMANENT_PROJECTION_REASON,
+    "$(self[0].location)": (
+        "a CWL location is a URI whose scheme the executable model does not represent"
+    ),
+    "$(self[0].checksum)": "computing a checksum is computation, not a projection",
+    "$(self[0].secondaryFiles)": "secondary files have no approved lowering",
+    "$(self[0].format)": "output format annotations have no approved lowering",
+})
+_LOAD_CONTENTS_INPUT_REASON = (
+    "loadContents on an input is a separate lowering from the output capture form and "
+    "is not implemented: an input's contents would have to become a value channel read "
+    "at staging time"
+)
+
+
+def _output_capture(raw_name: Any, definition: Mapping[str, Any]) -> str | None:
+    """Return the closed capture marker one CWL ``outputBinding`` declares.
+
+    Recognition is a lookup against the frozen admitted table: exactly
+    matching text names its marker and every other text is rejected, so no
+    code inspects, transforms, or composes expression text. The paired glob
+    is tokenized by the ordinary template tokenizer and must reduce to one
+    literal, because a capture declaration projects the first glob match and
+    that is provable only where the match set has one member.
+
+    Args:
+        raw_name (Any): The CWL output name, for diagnostics.
+        definition (Mapping[str, Any]): The CWL output parameter definition.
+
+    Raises:
+        ValueError: If the binding declares any unadmitted capture shape.
+            Callers in capability analysis catch this and report it by path;
+            lowering lets it propagate.
+
+    Returns:
+        str | None: The capture marker, or None when the binding declares
+            no capture behavior at all.
+    """
+    binding = definition.get("outputBinding")
+    if not isinstance(binding, Mapping):
+        return None
+    raw_eval = binding.get("outputEval")
+    if raw_eval is None:
+        if "loadContents" in binding:
+            raise ValueError(
+                f"loadContents on output {raw_name!r} has no approved lowering without its "
+                "paired outputEval capture declaration"
+            )
+        return None
+    if not isinstance(raw_eval, str):
+        raise ValueError(f"outputEval for {raw_name!r} must be a string, got {raw_eval!r}")
+    text = raw_eval.strip()
+    if reason := _NAMED_OUTPUT_EVAL_REJECTIONS.get(text):
+        raise ValueError(f"outputEval {text!r} is not representable: {reason}")
+    capture = _ADMITTED_OUTPUT_EVAL.get(text)
+    if capture is None:
+        admitted = ", ".join(repr(shape) for shape in sorted(_ADMITTED_OUTPUT_EVAL))
+        raise ValueError(
+            f"unsupported outputEval {raw_eval!r}; the approved set is exactly "
+            f"{admitted}, recognized as capture declarations, and no other expression is "
+            "evaluated"
+        )
+    if "loadContents" in binding:
+        raise ValueError(
+            f"outputEval {text!r} declares output cardinality and is not paired with "
+            "loadContents"
+        )
+    try:
+        qualifier = cwl_type_to_nf_qualifier(definition.get("type"))
+    except ValueError:
+        qualifier = "unsupported"
+    if qualifier != "path":
+        raise ValueError(
+            f"outputEval {text!r} declares single-valued File or Directory capture; "
+            f"output {raw_name!r} declares {definition.get('type')!r}"
+        )
+    match binding.get("glob"):
+        case str() as glob if glob:
+            pass
+        case _:
+            raise ValueError(
+                f"outputEval {text!r} requires a single-literal outputBinding.glob"
+            )
+    segments = _template(glob, context=f"CWL output glob for {raw_name!r}").segments
+    match segments:
+        case [NfLiteral() as literal]:
+            pass
+        case _:
+            raise ValueError(
+                f"outputEval {text!r} requires a glob with no input reference; a "
+                "reference's runtime value cannot be shown wildcard-free at compile time"
+            )
+    if wildcards := sorted(GLOB_WILDCARDS.intersection(literal.value)):
+        found = ", ".join(repr(character) for character in wildcards)
+        raise ValueError(
+            f"outputEval {text!r} requires a glob with no wildcard character, but "
+            f"{literal.value!r} contains {found}; projecting the first match would make "
+            "CWL and Nextflow glob match ordering load-bearing, which is unproven"
+        )
+    return capture
+
+
 _SUPPORTED_REQUIREMENTS = frozenset({
     "DockerRequirement",
     "InitialWorkDirRequirement",
@@ -885,9 +1008,11 @@ _TOOL_CONSUMED_FIELDS = frozenset({
     "stdout",
 }) | _INERT_DOCUMENTATION_FIELDS
 _INPUT_CONSUMED_FIELDS = (
-    frozenset({"default", "inputBinding", "type"}) | _INERT_DOCUMENTATION_FIELDS
+    frozenset({"default", "inputBinding", "loadContents", "type"})
+    | _INERT_DOCUMENTATION_FIELDS
 )
 _INPUT_BINDING_CONSUMED_FIELDS = frozenset({
+    "loadContents",
     "position",
     "prefix",
     "separate",
@@ -897,8 +1022,9 @@ _INPUT_BINDING_CONSUMED_FIELDS = frozenset({
 _OUTPUT_CONSUMED_FIELDS = (
     frozenset({"outputBinding", "type"}) | _INERT_DOCUMENTATION_FIELDS
 )
-_OUTPUT_BINDING_CONSUMED_FIELDS = frozenset({"glob"})
-_OUTPUT_BINDING_DEFERRED_FIELDS = frozenset({"loadContents", "outputEval"})
+# loadContents and outputEval are analyzed by _output_capture rather than
+# reported by the generic unconsumed-field pass, so they are consumed here.
+_OUTPUT_BINDING_CONSUMED_FIELDS = frozenset({"glob", "loadContents", "outputEval"})
 _ARGUMENT_CONSUMED_FIELDS = frozenset({
     "position",
     "prefix",
@@ -1280,6 +1406,10 @@ def _tool_capability_findings(
                     )
                 )
                 findings.extend(_default_value_findings(raw_definition, path=input_path))
+                if "loadContents" in raw_definition:
+                    findings.append(
+                        f"{input_path}.loadContents: {_LOAD_CONTENTS_INPUT_REASON}"
+                    )
                 binding = raw_definition.get("inputBinding")
                 if not isinstance(binding, Mapping):
                     continue
@@ -1291,6 +1421,10 @@ def _tool_capability_findings(
                         path=input_binding_path,
                     )
                 )
+                if "loadContents" in binding:
+                    findings.append(
+                        f"{input_binding_path}.loadContents: {_LOAD_CONTENTS_INPUT_REASON}"
+                    )
                 if binding.get("shellQuote") is False:
                     try:
                         _shell_literal_value(raw_name, binding, shell_mode=shell_mode_active)
@@ -1370,19 +1504,14 @@ def _tool_capability_findings(
                 findings.extend(
                     _unconsumed_field_findings(
                         binding,
-                        consumed=(
-                            _OUTPUT_BINDING_CONSUMED_FIELDS
-                            | _OUTPUT_BINDING_DEFERRED_FIELDS
-                        ),
+                        consumed=_OUTPUT_BINDING_CONSUMED_FIELDS,
                         path=output_binding_path,
                     )
                 )
-                for field_name in ("loadContents", "outputEval"):
-                    if field_name in binding:
-                        findings.append(
-                            f"{output_binding_path}.{field_name}: "
-                            f"{field_name} output capture is deferred to Phase 2"
-                        )
+                try:
+                    _output_capture(raw_name, raw_definition)
+                except ValueError as exc:
+                    findings.append(f"{output_binding_path}: {exc}")
         case _:
             pass
     return findings

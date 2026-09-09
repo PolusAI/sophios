@@ -483,3 +483,29 @@ def test_renders_an_unadapted_workflow_input_without_an_operator() -> None:
 
     assert "    TASK(items)" in rendered
     assert ".flatten()" not in rendered
+
+
+@pytest.mark.fast
+def test_a_capture_marker_renders_as_a_single_valued_path_output() -> None:
+    """The author's cardinality declaration is stated, not silently dropped."""
+    glob = NfTemplate((NfLiteral("out.txt"),))
+    declared = NfProcess(
+        "DECLARED",
+        [],
+        [NfPort("result", "path", "result", glob, capture="single")],
+        command("touch", "out.txt"),
+    )
+    undeclared = NfProcess(
+        "UNDECLARED",
+        [],
+        [NfPort("result", "path", "result", glob)],
+        command("touch", "out.txt"),
+    )
+
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "wf", [declared, undeclared], [], {}
+    ))
+
+    assert "    path 'out.txt', arity: '1', emit: result\n" in rendered
+    assert "    path 'out.txt', emit: result\n" in rendered
+    assert rendered.count("arity: '1'") == 1

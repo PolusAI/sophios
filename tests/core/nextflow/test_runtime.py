@@ -1194,3 +1194,87 @@ def test_a_scattered_step_broadcasts_an_unscattered_file_input(tmp_path: Path) -
         "shared file\n",
         "shared file\n",
     ]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_a_cardinality_declaration_runs_and_emits_one_path(tmp_path: Path) -> None:
+    """R2.18: outputEval $(self[0]) over a literal glob emits a single path value."""
+    write_tool = (
+        CommandLineTool(
+            "write_one",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="out.txt", output_eval="$(self[0])")),
+        )
+        .base_command("echo")
+        .stdout("out.txt")
+    )
+    write = Step(write_tool, step_name="write_one")
+    write.inputs.message = "one match only"
+
+    workflow = Workflow([write], "nextflow_single_capture")
+    workflow.outputs.only = write.outputs.result
+
+    paths = workflow.to_nextflow(tmp_path)
+    assert "path 'out.txt', arity: '1', emit: result" in paths[1].read_text(encoding="utf-8")
+
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    produced = list((tmp_path / "work").rglob("out.txt"))
+    assert len(produced) == 1
+    assert produced[0].read_text(encoding="utf-8") == "one match only\n"
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_a_declared_single_output_that_never_appears_fails_the_run(tmp_path: Path) -> None:
+    """R2.19: zero matches is a failure in both runtimes, never an empty channel."""
+    silent_tool = (
+        CommandLineTool(
+            "write_nothing",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="out.txt", output_eval="$(self[0])")),
+        )
+        .base_command("true")
+    )
+    silent = Step(silent_tool, step_name="write_nothing")
+    silent.inputs.message = "nothing is written"
+
+    workflow = Workflow([silent], "nextflow_single_capture_missing")
+    workflow.outputs.only = silent.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+
+    assert result.returncode != 0
+    assert "out.txt" in result.stdout + result.stderr
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_a_cardinality_declaration_inside_a_scattered_step_runs_per_task(tmp_path: Path) -> None:
+    """R2.20: the marker is per task; scatter's cardinality stays per collection."""
+    echo_tool = (
+        CommandLineTool(
+            "echo_one",
+            Inputs(item=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="out.txt", output_eval="$(self[0])")),
+        )
+        .base_command("echo")
+        .stdout("out.txt")
+    )
+    echo = Step(echo_tool, step_name="echo_one")
+    echo.inputs.item = ["alpha", "beta"]
+    echo.scatter_on(echo.inputs.item)
+
+    workflow = Workflow([echo], "nextflow_scattered_single_capture")
+    workflow.outputs.each = echo.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = sorted(
+        path.read_text(encoding="utf-8") for path in (tmp_path / "work").rglob("out.txt")
+    )
+    assert outputs == ["alpha\n", "beta\n"]

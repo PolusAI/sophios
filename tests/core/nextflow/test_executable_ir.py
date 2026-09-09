@@ -73,14 +73,14 @@ def test_executable_schema_declares_version_and_kind() -> None:
     workflow = ExecutableNextflowWorkflow("wf", [], [], {})
     payload = workflow.to_dict()
 
-    assert payload["schema_version"] == 8
+    assert payload["schema_version"] == 9
     assert payload["representation_kind"] == "executable"
 
     payload["schema_version"] = 1
     with pytest.raises(ValueError, match="schema version"):
         ExecutableNextflowWorkflow.from_dict(payload)
 
-    payload["schema_version"] = 8
+    payload["schema_version"] = 9
     payload["representation_kind"] = "structural"
     with pytest.raises(ValueError, match="representation kind"):
         ExecutableNextflowWorkflow.from_dict(payload)
@@ -697,13 +697,13 @@ def test_hydration_accepts_earlier_subset_schema_versions() -> None:
     payload = ExecutableNextflowWorkflow(
         "wf", [NfProcess("P", [], [], command("true"))], [], {}
     ).to_dict()
-    assert payload["schema_version"] == 8
+    assert payload["schema_version"] == 9
 
-    for earlier in (2, 3, 4, 5, 6, 7):
+    for earlier in (2, 3, 4, 5, 6, 7, 8):
         payload["schema_version"] = earlier
-        assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 8
+        assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 9
 
-    for unsupported in (1, 9):
+    for unsupported in (1, 10):
         payload["schema_version"] = unsupported
         with pytest.raises(ValueError, match="schema version"):
             ExecutableNextflowWorkflow.from_dict(payload)
@@ -973,4 +973,90 @@ def test_hydration_rejects_an_adapter_field_older_than_schema_version_8() -> Non
 
     payload["schema_version"] = 7
     with pytest.raises(ValueError, match=r"'adapter'.*schema version 8.*schema version 7"):
+        ExecutableNextflowWorkflow.from_dict(payload)
+
+
+def _captured_workflow(capture: str = "single") -> ExecutableNextflowWorkflow:
+    glob = NfTemplate((NfLiteral("out.txt"),))
+    process = NfProcess(
+        "MAKE",
+        [NfPort("message", "val")],
+        [NfPort("result", "path", "result", glob, capture=capture)],
+        NfCommand((NfTemplate((NfLiteral("printf"),)),), stdout=glob),
+    )
+    return ExecutableNextflowWorkflow(
+        "wf",
+        [process],
+        [
+            NfWorkflowInputConnection("message", "MAKE", "message"),
+            NfWorkflowOutputConnection("MAKE", "result", "result"),
+        ],
+        {"message": "hi"},
+    )
+
+
+@pytest.mark.fast
+def test_a_capture_marker_survives_serialization_unchanged() -> None:
+    workflow = _captured_workflow()
+
+    assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow
+    assert workflow.processes[0].outputs[0].to_dict()["capture"] == "single"
+
+
+@pytest.mark.fast
+def test_the_port_capture_set_is_closed() -> None:
+    """A capture marker is closed data, so it can never hold expression text."""
+    assert NfPort.ALLOWED_CAPTURES == frozenset({"single"})
+    assert set(NfPort.CAPTURE_QUALIFIERS) == set(NfPort.ALLOWED_CAPTURES)
+
+    for rejected in ("$(self[0])", "single_path", "", "text"):
+        with pytest.raises(ValueError, match="port capture must be one of"):
+            NfPort("result", "path", "result", NfTemplate((NfLiteral("out.txt"),)), capture=rejected)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("glob", ["*.txt", "out?.txt", "out[0].txt", "*", "sub/*.txt"])
+def test_a_wildcard_glob_cannot_carry_a_capture_marker(glob: str) -> None:
+    """Projecting the first match is provable only when one match exists."""
+    with pytest.raises(ValueError, match="no wildcard character"):
+        NfPort("result", "path", "result", NfTemplate((NfLiteral(glob),)), capture="single")
+
+
+@pytest.mark.fast
+def test_a_reference_bearing_glob_cannot_carry_a_capture_marker() -> None:
+    """A reference's runtime value cannot be shown wildcard-free at compile time."""
+    for glob in (
+        NfTemplate((NfInputReference("name"),)),
+        NfTemplate((NfLiteral("out-"), NfInputReference("name"))),
+        NfTemplate((NfBasenameReference("source"), NfLiteral(".copy"))),
+    ):
+        with pytest.raises(ValueError, match="single-literal glob with no input reference"):
+            NfPort("result", "path", "result", glob, capture="single")
+
+
+@pytest.mark.fast
+def test_a_capture_marker_requires_a_glob_and_its_own_qualifier() -> None:
+    with pytest.raises(ValueError, match="single-literal glob with no input reference"):
+        NfPort("result", "path", "result", None, capture="single")
+    with pytest.raises(ValueError, match="capture 'single' requires a path port"):
+        NfPort("result", "val", "result", NfTemplate((NfLiteral("out.txt"),)), capture="single")
+
+
+@pytest.mark.fast
+def test_a_capture_marker_cannot_combine_with_an_array_or_stage_as_marker() -> None:
+    glob = NfTemplate((NfLiteral("out.txt"),))
+    with pytest.raises(ValueError, match="cannot combine with an array marker"):
+        NfPort("result", "path", "result", glob, is_array=True, capture="single")
+    with pytest.raises(ValueError, match="cannot combine with an array marker"):
+        NfPort("result", "path", "result", glob, stage_as="staged.txt", capture="single")
+
+
+@pytest.mark.fast
+def test_hydration_rejects_a_capture_field_older_than_schema_version_9() -> None:
+    payload = _captured_workflow().to_dict()
+
+    assert ExecutableNextflowWorkflow.from_dict(payload).to_dict() == payload
+
+    payload["schema_version"] = 8
+    with pytest.raises(ValueError, match=r"'capture'.*schema version 9.*schema version 8"):
         ExecutableNextflowWorkflow.from_dict(payload)

@@ -12,6 +12,7 @@ from sophios.api.python.workflow import CompiledWorkflow
 from sophios.input_output_nf import render_nextflow
 from sophios.nf_types import (
     NfFlag,
+    NfPort,
     NfProcessConnection,
     NfLiteral,
     NfResources,
@@ -20,7 +21,11 @@ from sophios.nf_types import (
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
-from sophios.utils_nf import cwl_rosetree_to_nextflow
+from sophios.utils_nf import (
+    _ADMITTED_OUTPUT_EVAL,
+    _NAMED_OUTPUT_EVAL_REJECTIONS,
+    cwl_rosetree_to_nextflow,
+)
 from sophios.wic_types import RoseTree, Yaml
 
 from .testkit import (
@@ -47,8 +52,10 @@ def test_real_unsupported_rosetree_aggregates_capability_errors(
     assert "steps[1].run.inputs.str.inputBinding.shellQuote" in message
     assert "steps[1].run.inputs.file.inputBinding.shellQuote" in message
     assert "steps[2].run.outputs.output.type" in message
-    assert "steps[2].run.outputs.output.outputBinding.loadContents" in message
-    assert "steps[2].run.outputs.output.outputBinding.outputEval" in message
+    # cat.cwl's string output pairs loadContents with $(self[0].contents),
+    # which the cardinality declaration alone does not admit, so its one
+    # capture finding now comes from the outputBinding as a whole.
+    assert "steps[2].run.outputs.output.outputBinding: unsupported outputEval" in message
 
 
 @pytest.mark.fast
@@ -2229,3 +2236,235 @@ def test_a_scattered_step_inside_a_subworkflow_uses_the_outer_scatter_contract()
     assert workflow.connections == (
         NfWorkflowInputConnection("values", "CHILD___INNER", "item", "scatter"),
     )
+
+
+def _capture_rose(
+    output: Yaml,
+    *,
+    output_type: str = "File",
+    tool_extra: Yaml | None = None,
+) -> RoseTree:
+    """One real-shaped step whose single output carries the given definition."""
+    step_tool = tool(
+        "make",
+        inputs={"message": {"type": "string", "inputBinding": {"position": 1}}},
+        outputs={"result": output},
+        **(tool_extra or {}),
+    )
+    document = workflow_doc(
+        [step("make", **{"in": {"message": "message"}, "out": ["result"]})],
+        inputs={"message": "string"},
+        outputs={"result": {"type": output_type, "outputSource": "make/result"}},
+    )
+    return synthetic_rose(document, [step_tool], workflow_inputs={"message": "hi"})
+
+
+def _capture_findings(rose: RoseTree) -> list[str]:
+    with pytest.raises(ValueError) as error:
+        cwl_rosetree_to_nextflow(rose)
+    return [
+        line.removeprefix("- ")
+        for line in str(error.value).splitlines()
+        if line.startswith("- ")
+    ]
+
+
+@pytest.mark.fast
+def test_the_admitted_output_eval_table_is_closed_in_both_directions() -> None:
+    """Widening the admitted set without a design revision must fail here."""
+    assert dict(_ADMITTED_OUTPUT_EVAL) == {"$(self[0])": "single"}
+    assert set(_ADMITTED_OUTPUT_EVAL.values()) <= NfPort.ALLOWED_CAPTURES
+    assert not set(_ADMITTED_OUTPUT_EVAL) & set(_NAMED_OUTPUT_EVAL_REJECTIONS)
+    assert set(_NAMED_OUTPUT_EVAL_REJECTIONS) == {
+        "$(self[0].checksum)",
+        "$(self[0].dirname)",
+        "$(self[0].format)",
+        "$(self[0].location)",
+        "$(self[0].path)",
+        "$(self[0].secondaryFiles)",
+    }
+
+
+@pytest.mark.fast
+def test_the_admitted_cardinality_declaration_lowers_to_a_capture_marker() -> None:
+    workflow = cwl_rosetree_to_nextflow(_capture_rose(
+        {"type": "File", "outputBinding": {"glob": "out.txt", "outputEval": "$(self[0])"}}
+    ))
+
+    port = workflow.processes[0].outputs[0]
+    assert (port.name, port.qualifier, port.capture) == ("result", "path", "single")
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("text", ["$(self[0])", " $(self[0])\n", "\t$(self[0]) "])
+def test_surrounding_whitespace_is_trimmed_but_internal_variation_is_not(text: str) -> None:
+    workflow = cwl_rosetree_to_nextflow(_capture_rose(
+        {"type": "File", "outputBinding": {"glob": "out.txt", "outputEval": text}}
+    ))
+
+    assert workflow.processes[0].outputs[0].capture == "single"
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("text", ["$( self[0] )", "$(self[ 0 ])", "$(self[0] )", "$(self [0])"])
+def test_internal_variation_of_the_admitted_literal_is_rejected(text: str) -> None:
+    findings = _capture_findings(_capture_rose(
+        {"type": "File", "outputBinding": {"glob": "out.txt", "outputEval": text}}
+    ))
+
+    assert findings == [
+        "steps[0].run.outputs.result.outputBinding: unsupported outputEval "
+        f"{text!r}; the approved set is exactly '$(self[0])', recognized as capture "
+        "declarations, and no other expression is evaluated"
+    ]
+
+
+_REJECTED_OUTPUT_EVAL_CORPUS = (
+    "$(self[0].size + 1)",
+    "$(self[0].basename.toUpperCase())",
+    "$(self.length)",
+    "$(self[1])",
+    "$(self[0] ? self[0] : null)",
+    "$(inputs.message)",
+    "${return self[0];}",
+    "${ return self[0].contents.trim(); }",
+    "$(self[0].contents.split('\\n'))",
+    "prefix-$(self[0])",
+    "$(self[0])$(self[0])",
+    "$(JSON.parse(self[0].contents))",
+    "$(parseInt(self[0].contents))",
+    "$(self[0].nameroot)",
+    "$(self[0].nameext)",
+)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("text", _REJECTED_OUTPUT_EVAL_CORPUS)
+def test_every_unadmitted_output_eval_shape_names_the_approved_set(text: str) -> None:
+    """No expression is evaluated, composed, or partially recognized."""
+    findings = _capture_findings(_capture_rose(
+        {"type": "File", "outputBinding": {"glob": "out.txt", "outputEval": text}}
+    ))
+
+    assert findings == [
+        "steps[0].run.outputs.result.outputBinding: unsupported outputEval "
+        f"{text!r}; the approved set is exactly '$(self[0])', recognized as capture "
+        "declarations, and no other expression is evaluated"
+    ]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        ("$(self[0].dirname)", "is the Nextflow task work directory"),
+        ("$(self[0].path)", "is the Nextflow task work directory"),
+        ("$(self[0].location)", "a CWL location is a URI"),
+        ("$(self[0].checksum)", "computing a checksum is computation"),
+        ("$(self[0].secondaryFiles)", "secondary files have no approved lowering"),
+        ("$(self[0].format)", "output format annotations have no approved lowering"),
+    ],
+)
+def test_each_named_projection_rejection_explains_itself(text: str, reason: str) -> None:
+    findings = _capture_findings(_capture_rose(
+        {"type": "File", "outputBinding": {"glob": "out.txt", "outputEval": text}}
+    ))
+
+    assert len(findings) == 1
+    assert findings[0].startswith(
+        f"steps[0].run.outputs.result.outputBinding: outputEval {text!r} is not representable: "
+    )
+    assert reason in findings[0]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("glob", ["*.txt", "out?.txt", "out[0-9].txt"])
+def test_a_wildcard_glob_beside_a_cardinality_declaration_is_rejected(glob: str) -> None:
+    findings = _capture_findings(_capture_rose(
+        {"type": "File", "outputBinding": {"glob": glob, "outputEval": "$(self[0])"}}
+    ))
+
+    assert len(findings) == 1
+    assert findings[0].startswith("steps[0].run.outputs.result.outputBinding: outputEval")
+    assert "requires a glob with no wildcard character" in findings[0]
+    assert "glob match ordering load-bearing, which is unproven" in findings[0]
+
+
+@pytest.mark.fast
+def test_an_input_reference_glob_beside_a_cardinality_declaration_is_rejected() -> None:
+    findings = _capture_findings(_capture_rose(
+        {"type": "File", "outputBinding": {"glob": "$(inputs.message)", "outputEval": "$(self[0])"}}
+    ))
+
+    assert findings == [
+        "steps[0].run.outputs.result.outputBinding: outputEval '$(self[0])' requires a glob "
+        "with no input reference; a reference's runtime value cannot be shown wildcard-free "
+        "at compile time"
+    ]
+
+
+@pytest.mark.fast
+def test_load_contents_without_its_paired_output_eval_is_rejected() -> None:
+    findings = _capture_findings(_capture_rose(
+        {"type": "File", "outputBinding": {"glob": "out.txt", "loadContents": True}}
+    ))
+
+    assert findings == [
+        "steps[0].run.outputs.result.outputBinding: loadContents on output 'result' has no "
+        "approved lowering without its paired outputEval capture declaration"
+    ]
+
+
+@pytest.mark.fast
+def test_the_cardinality_declaration_is_not_paired_with_load_contents() -> None:
+    findings = _capture_findings(_capture_rose({
+        "type": "File",
+        "outputBinding": {"glob": "out.txt", "loadContents": True, "outputEval": "$(self[0])"},
+    }))
+
+    assert findings == [
+        "steps[0].run.outputs.result.outputBinding: outputEval '$(self[0])' declares output "
+        "cardinality and is not paired with loadContents"
+    ]
+
+
+@pytest.mark.fast
+def test_load_contents_on_an_input_is_rejected_by_name_at_both_locations() -> None:
+    """The input-side lowering is separate and unimplemented, not smuggled in here."""
+    step_tool = tool(
+        "make",
+        inputs={
+            "parameter": {"type": "File", "loadContents": True},
+            "binding": {"type": "File", "inputBinding": {"position": 1, "loadContents": True}},
+        },
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+    )
+    document = workflow_doc(
+        [step("make", **{"in": {"parameter": "one", "binding": "two"}, "out": ["result"]})],
+        inputs={"one": "File", "two": "File"},
+        outputs={"result": {"type": "File", "outputSource": "make/result"}},
+    )
+    rose = synthetic_rose(document, [step_tool], workflow_inputs={"one": "a.txt", "two": "b.txt"})
+
+    findings = _capture_findings(rose)
+
+    assert sorted(finding.split(":")[0] for finding in findings) == [
+        "steps[0].run.inputs.binding.inputBinding.loadContents",
+        "steps[0].run.inputs.parameter.loadContents",
+    ]
+    assert all(
+        "an input's contents would have to become a value channel read at staging time"
+        in finding
+        for finding in findings
+    )
+
+
+@pytest.mark.fast
+def test_a_declared_but_unused_inline_javascript_requirement_stays_legal() -> None:
+    """The requirement is a declaration; the violation is a non-admitted form."""
+    workflow = cwl_rosetree_to_nextflow(_capture_rose(
+        {"type": "File", "outputBinding": {"glob": "out.txt", "outputEval": "$(self[0])"}},
+        tool_extra={"requirements": {"InlineJavascriptRequirement": {}}},
+    ))
+
+    assert workflow.processes[0].outputs[0].capture == "single"

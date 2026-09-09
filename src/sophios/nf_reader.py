@@ -30,8 +30,12 @@ _PROCESS = re.compile(r"^\s*process\s+(\S+)\s*\{\s*$")
 _WORKFLOW = re.compile(r"^\s*workflow(?:\s+(\S+))?\s*\{\s*$")
 _PORT = re.compile(
     # glob: false is derived from the glob template at render time, so it is
-    # consumed here rather than stored: re-rendering recomputes it.
-    r"^(path|val|tuple|env|stdin)\s+(.+?)(?:,\s*glob:\s*false)?(?:,\s*emit:\s*(\S+))?$"
+    # consumed here rather than stored: re-rendering recomputes it. The
+    # option order mirrors the renderer's.
+    r"^(?P<qualifier>path|val|tuple|env|stdin)\s+(?P<target>.+?)"
+    r"(?:,\s*glob:\s*false)?"
+    r"(?:,\s*arity:\s*'(?P<arity>1)')?"
+    r"(?:,\s*emit:\s*(?P<emit>\S+))?$"
 )
 _CALL = re.compile(r"^(\S+)\((.*)\)$")
 _PROCESS_OUTPUT = re.compile(r"^(\S+)\.out\.(\S+)$")
@@ -47,6 +51,7 @@ class NextflowPort:
     qualifier: str
     emit: str | None = None
     target: str | None = None
+    capture: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,19 +203,25 @@ def _parse_process(name: str, body: list[str]) -> tuple[NextflowProcess, tuple[s
             continue
         if section == "input":
             match = _PORT.match(stripped)
-            if match is None or match.group(3) is not None:
+            if match is None or match["emit"] is not None or match["arity"] is not None:
                 unparsed.append(stripped)
                 continue
-            inputs.append(NextflowPort(match.group(2), match.group(1)))
+            inputs.append(NextflowPort(match["target"], match["qualifier"]))
             continue
         if section == "output":
             match = _PORT.match(stripped)
             if match is None:
                 unparsed.append(stripped)
                 continue
-            qualifier, target, emit = match.groups()
+            target, emit = match["target"], match["emit"]
             port_name = emit or _unquote(target)
-            outputs.append(NextflowPort(port_name, qualifier, emit or port_name, _unquote(target)))
+            outputs.append(NextflowPort(
+                port_name,
+                match["qualifier"],
+                emit or port_name,
+                _unquote(target),
+                "single" if match["arity"] else None,
+            ))
             continue
         if stripped.startswith("container "):
             container = _unquote(stripped.removeprefix("container "))
@@ -559,7 +570,10 @@ def nextflow_to_cwl(workflow: NextflowDocument) -> tuple[dict[str, Any], list[di
         for port in process.outputs:
             output: dict[str, Any] = {"type": _cwl_type(port)}
             if port.target is not None:
-                output["outputBinding"] = {"glob": port.target}
+                binding: dict[str, Any] = {"glob": port.target}
+                if port.capture == "single":
+                    binding["outputEval"] = "$(self[0])"
+                output["outputBinding"] = binding
             outputs[port.name] = output
         tools.append({
             "id": process.name,

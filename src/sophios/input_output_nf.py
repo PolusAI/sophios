@@ -177,8 +177,14 @@ def _glob_names_one_file(template: Any) -> bool:
 def _process_output(port: NfPort) -> str:
     # NfProcess guarantees every output is a path port with a typed glob.
     assert port.glob is not None
+    # The two options are independent: one says how the name is matched, the
+    # other how many matches the author declared.
     literal = ", glob: false" if _glob_names_one_file(port.glob) else ""
-    return f"path {_render_glob(port.glob)}{literal}, emit: {port.emit or port.name}"
+    # A "single" capture marker is the CWL author's own cardinality
+    # declaration, so it is stated in the generated pipeline rather than
+    # dropped: arity: '1' emits one path value and fails on no match.
+    arity = ", arity: '1'" if port.capture == "single" else ""
+    return f"path {_render_glob(port.glob)}{literal}{arity}, emit: {port.emit or port.name}"
 
 
 def _process_input(port: NfPort) -> str:

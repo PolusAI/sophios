@@ -427,3 +427,66 @@ def test_a_scattered_call_is_retained_as_an_opaque_region() -> None:
     assert "SCATTER(items.flatten())" in "\n".join(parsed.opaque_regions)
     with pytest.raises(ValueError, match="opaque regions"):
         promote_nextflow_document(parsed)
+
+
+def _captured_workflow() -> ExecutableNextflowWorkflow:
+    glob = NfTemplate((NfLiteral("out.txt"),))
+    process = NfProcess(
+        "MAKE",
+        [NfPort("message", "val")],
+        [NfPort("result", "path", "result", glob, capture="single")],
+        NfCommand((NfTemplate((NfLiteral("printf"),)), template(ref("message"))), stdout=glob),
+    )
+    return ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [process],
+        [
+            NfWorkflowInputConnection("message", "MAKE", "message"),
+            NfWorkflowOutputConnection("MAKE", "result", "result"),
+        ],
+        {"message": "hi"},
+    )
+
+
+@pytest.mark.fast
+def test_capture_marker_artifacts_parse_and_promote(tmp_path: Path) -> None:
+    """A new output option must round-trip or promotion silently stops working."""
+    expected = _captured_workflow()
+    write_nextflow_artifacts(expected, tmp_path)
+
+    parsed = parse_nf_file(tmp_path / "workflow.nf")
+
+    assert parsed.opaque_regions == ()
+    assert promote_nextflow_document(parsed) == expected
+
+
+@pytest.mark.fast
+def test_the_reader_records_and_reconstructs_a_capture_marker() -> None:
+    document = parse_nf_text(render_nextflow(_captured_workflow()))
+
+    port = document.processes[0].outputs[0]
+    assert (port.name, port.qualifier, port.target, port.capture) == (
+        "result", "path", "out.txt", "single",
+    )
+
+    _workflow, tools = nextflow_to_cwl(document)
+    assert tools[0]["outputs"]["result"]["outputBinding"] == {
+        "glob": "out.txt",
+        "outputEval": "$(self[0])",
+    }
+
+
+@pytest.mark.fast
+def test_an_arity_option_on_an_input_port_is_not_recognized() -> None:
+    """arity is an output option here; on an input it stays unrecognized content.
+
+    An unrecognized input port leaves the process declaring no inputs, so the
+    call that supplies one fails the reader's arity check rather than parsing
+    into a port the generated subset never emits.
+    """
+    source = render_nextflow(_captured_workflow()).replace(
+        "    val message", "    val message, arity: '1'"
+    )
+
+    with pytest.raises(ValueError, match="MAKE supplies 1 inputs; the process declares 0"):
+        parse_nf_text(source)

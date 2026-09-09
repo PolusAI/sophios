@@ -487,12 +487,25 @@ class NfResources:
         return cls(item["cpus"], item["memory_mb"])
 
 
+GLOB_WILDCARDS = frozenset("*?[")
+
+
 @dataclass(frozen=True, slots=True)
 class NfPort:
-    """A typed Nextflow process port."""
+    """A typed Nextflow process port.
+
+    ``capture`` names the one approved output-capture declaration an
+    ``outputBinding`` may carry. The approved set is closed data: ``"single"``
+    declares that the port carries one value rather than a list. The field
+    holds a marker from that set and nothing else, so no CWL expression text
+    can be smuggled through it.
+    """
 
     # Phase 1 lowers only these qualifiers; the renderer is total over them.
     ALLOWED_QUALIFIERS: ClassVar[frozenset[str]] = frozenset({"path", "val"})
+    ALLOWED_CAPTURES: ClassVar[frozenset[str]] = frozenset({"single"})
+    # The qualifier each capture marker requires of the port declaring it.
+    CAPTURE_QUALIFIERS: ClassVar[Mapping[str, str]] = MappingProxyType({"single": "path"})
 
     name: str
     qualifier: str
@@ -501,6 +514,7 @@ class NfPort:
     path_kind: str | None = None
     is_array: bool = False
     stage_as: str | None = None
+    capture: str | None = None
 
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.name, field_name="port name")
@@ -531,13 +545,45 @@ class NfPort:
                 raise ValueError("stage_as must not contain a path separator or NUL byte")
             if "*" in self.stage_as or "?" in self.stage_as:
                 raise ValueError("stage_as must not contain a Nextflow wildcard ('*' or '?')")
+        if self.capture is not None:
+            if self.capture not in self.ALLOWED_CAPTURES:
+                allowed = ", ".join(sorted(self.ALLOWED_CAPTURES))
+                raise ValueError(
+                    f"port capture must be one of {allowed}, got {self.capture!r}"
+                )
+            required = self.CAPTURE_QUALIFIERS[self.capture]
+            if self.qualifier != required:
+                raise ValueError(
+                    f"capture {self.capture!r} requires a {required} port, "
+                    f"got {self.qualifier!r}"
+                )
+            if self.is_array or self.stage_as is not None:
+                raise ValueError(
+                    "a capture marker cannot combine with an array marker or a stage_as rename"
+                )
+            match self.glob:
+                case NfTemplate(segments=[NfLiteral() as literal]):
+                    pass
+                case _:
+                    # A capture declaration projects the first glob match, so it
+                    # is only provable where the match set has one member by
+                    # construction. A reference-bearing glob's runtime value
+                    # could carry a wildcard, so it is not decidable here.
+                    raise ValueError(
+                        "a capture marker requires a single-literal glob with no input reference"
+                    )
+            if wildcards := sorted(GLOB_WILDCARDS.intersection(literal.value)):
+                raise ValueError(
+                    "a capture marker requires a glob with no wildcard character; "
+                    f"found {', '.join(repr(character) for character in wildcards)}"
+                )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation.
 
         Returns:
             dict[str, Any]: The port's name, qualifier, emit, glob, path
-                kind, array marker, and staged-name override.
+                kind, array marker, staged-name override, and capture marker.
         """
         return {
             "name": self.name,
@@ -547,16 +593,17 @@ class NfPort:
             "path_kind": self.path_kind,
             "is_array": self.is_array,
             "stage_as": self.stage_as,
+            "capture": self.capture,
         }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
         """Hydrate and validate a port from a mapping.
 
-        ``is_array`` and ``stage_as`` are optional on hydration: every
-        schema version before each was introduced never wrote it, and its
-        absence there always means False/None, so accepting a missing key
-        keeps those payloads hydrating unchanged.
+        ``is_array``, ``stage_as``, and ``capture`` are optional on
+        hydration: every schema version before each was introduced never
+        wrote it, and its absence there always means False/None, so
+        accepting a missing key keeps those payloads hydrating unchanged.
 
         Args:
             value (Mapping[str, Any]): Serialized port produced by
@@ -574,7 +621,7 @@ class NfPort:
             item,
             type_name=cls.__name__,
             required={"name", "qualifier", "emit", "glob", "path_kind"},
-            optional={"is_array", "stage_as"},
+            optional={"is_array", "stage_as", "capture"},
         )
         glob = None if item["glob"] is None else NfTemplate.from_dict(item["glob"])
         return cls(
@@ -585,6 +632,7 @@ class NfPort:
             path_kind=item["path_kind"],
             is_array=bool(item.get("is_array", False)),
             stage_as=item.get("stage_as"),
+            capture=item.get("capture"),
         )
 
 
@@ -949,22 +997,22 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow."""
 
-    SCHEMA_VERSION: ClassVar[int] = 8
+    SCHEMA_VERSION: ClassVar[int] = 9
     # Earlier versions whose value space is a strict subset of the current
     # model hydrate unchanged; serialization always writes SCHEMA_VERSION.
-    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7, 8})
+    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7, 8, 9})
     # Each additive token or segment kind declares the version that
     # introduced it, so the subset property is enforced rather than assumed.
     KIND_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
         {"flag": 3, "basename": 4, "array": 5, "shell_literal": 6}
     )
     # Version an additive non-kind-tagged field was introduced in, keyed by
-    # the field name it appears under. is_array and stage_as predate a
-    # "kind" tag on NfPort, and adapter is additive on an existing
+    # the field name it appears under. is_array, stage_as, and capture
+    # predate a "kind" tag on NfPort, and adapter is additive on an existing
     # connection kind, so each needs its own gate alongside
     # KIND_SCHEMA_VERSIONS.
     FIELD_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
-        {"is_array": 5, "stage_as": 7, "adapter": 8}
+        {"is_array": 5, "stage_as": 7, "adapter": 8, "capture": 9}
     )
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 

@@ -288,6 +288,39 @@ Workflow-level `ScatterFeatureRequirement` and
 outer and subworkflow level alike; every other workflow-level requirement is
 rejected by name.
 
+## Output cardinality
+
+An `outputEval` of exactly `$(self[0])` is read as a cardinality declaration —
+the output carries one value rather than a list — and not as an expression:
+
+```yaml
+outputs:
+  result:
+    type: File
+    outputBinding:
+      glob: out.txt
+      outputEval: $(self[0])
+```
+
+It renders as `path 'out.txt', arity: '1'`, so the generated pipeline states
+the declaration instead of dropping it, emits a single path, and fails the
+task when nothing matches.
+
+The paired `glob` must be one literal with no `*`, `?`, or `[` and no
+`$(inputs...)` reference. `self[0]` is the first of the matched list, which is
+a projection only when there is exactly one match by construction; a wildcard
+would make CWL's and Nextflow's glob match *ordering* load-bearing, and a
+reference's runtime value cannot be shown wildcard-free before the run. Both
+are rejected with a diagnostic naming the reason.
+
+Every other `outputEval` text is rejected. `.dirname` and `.path` are
+rejected permanently rather than pending: a produced file's directory here is
+the Nextflow task work directory, which is never the directory the CWL author
+described, so a mapping would run and quietly mean something else. Evaluating
+CWL JavaScript in any form is ruled out by design, so a tool may declare
+`InlineJavascriptRequirement` and still be supported as long as it uses only
+approved forms.
+
 ## Current limits
 
 - Processes must be `CommandLineTool`-equivalent.
