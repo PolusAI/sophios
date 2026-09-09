@@ -194,6 +194,16 @@ Supported glob expressions are parsed into typed literal and input-reference com
 
 The executable graph validates endpoint existence, direction, multiplicity, acyclicity where required, unique emits, normalized-name collisions, and workflow-boundary consistency before rendering.
 
+**Single-input executable scatter (approved Phase 2 lowering, one supported shape).** A step whose `scatter` names exactly one input — the string form, or a one-element list — lowers to that input's port receiving a queue channel of the source array's elements through the one approved channel adapter above, so the process runs once per element while its remaining inputs stay value channels and broadcast to every task. Multi-input scatter is rejected, and with it every case where `scatterMethod` is load-bearing: `dotproduct`, `flat_crossproduct`, and `nested_crossproduct` all describe how two or more scattered arrays combine, which is the genuinely hard cardinality decision this phase defers rather than guesses. At exactly one scattered input all three coincide — one task per element, output nesting depth one — so a `scatterMethod` carrying one of those three values alongside a single-input `scatter` is consumed as an inert restatement instead of rejected; the compiler emits `scatterMethod: dotproduct` unconditionally, so rejecting the field outright would put executable scatter out of reach of the public Python and CLI surfaces and out of reach of the real-fixture runtime proof this document requires. Any other `scatterMethod` value is rejected by name.
+
+The scattered input's source must be exactly one array-typed workflow input whose item type carries the same qualifier and path kind as the scattered port itself. That is less a restriction than the only representable shape: array-typed tool outputs have no approved lowering, so no process output can carry an array to scatter over. Scattering over an array-marked port is rejected for the same reason nested arrays are.
+
+**Collection cardinality.** A scattered step's output port carries one value per task, not one value overall. Its only approved sink is a workflow output, where a queue channel of N elements is exactly the array-typed workflow output CWL declares for a scattered step. A process-to-process edge out of a scattered step is rejected with a named diagnostic: CWL gives the downstream step one invocation receiving an array, while a queue channel of N elements drives N downstream invocations, and closing that gap needs the gather adapter this phase defers. For the same reason a scattered step's own non-scattered inputs must come from workflow parameters — a process output is a queue channel, and pairing it with the scatter's queue channel would silently truncate the run to one task instead of N.
+
+**Empty collections.** Scattering over an empty array runs zero tasks. Runtime proof against the pinned Nextflow shows the derived queue channel terminates immediately, unscattered processes in the same workflow still run, the workflow output channel is simply empty, and the run exits successfully — no hang, unlike the `Channel.value(null)` representation ruled out above. An empty array is a present value here exactly as it is under the array-input lowering, and an absent-optional array-typed input stays rejected, so the absent-optional sentinel can never be mistaken for a zero-length scatter.
+
+**Workflow-level requirements.** `ScatterFeatureRequirement` declares only that a document uses a feature whose lowering this phase decides per step, so it is consumed as an inert no-op carrying no fields beyond `class`. Every other workflow-level requirement is rejected by name, and workflow-level `hints` remain unconsumed.
+
 ### Resources and containers
 
 Only explicitly mapped directives are executable. Unsupported requirements and hints are diagnosed rather than ignored. Text rendering is not runtime proof; CPU, memory, environment, and container claims require the evidence appropriate to the phase.
@@ -283,6 +293,8 @@ Approved Phase 2 lowerings to date:
 - Array-typed inputs of File/Directory/scalar items, with per-item command-line binding (§6, Commands; §6, Inputs and channels).
 - `ShellCommandRequirement` with a literal-only, prefix-free `shellQuote: false` binding (§6, Commands).
 - `InitialWorkDirRequirement` self-staging under an input's own basename or an explicit literal rename (§6, Inputs and channels).
+- One queue fan-out channel adapter (§6, Inputs and channels).
+- Single-input executable scatter over an array-typed workflow input (§6, Topology).
 
 ### Phase 3 — Native inference, advanced execution, and service delivery
 
