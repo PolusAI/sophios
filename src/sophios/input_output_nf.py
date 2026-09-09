@@ -127,10 +127,35 @@ def _render_number(value: int | float) -> str:
     return format(Decimal(str(value)), "f")
 
 
+_GLOB_METACHARACTERS = frozenset("*?[]{}")
+
+
+def _glob_names_one_file(template: Any) -> bool:
+    """True when an assembled output name is meant literally, not as a pattern.
+
+    Nextflow pattern-matches an output ``path`` name, so a name assembled
+    from runtime data is matched against whatever metacharacters that data
+    happens to carry: a staged ``a[1].txt`` yields the pattern ``a[1].txt``,
+    whose ``[1]`` is a character class that cannot match the file the
+    process wrote. The decision stays at compile time -- a template holding
+    a reference segment whose own literal parts carry no metacharacter names
+    exactly one file, so globbing is turned off. A metacharacter written
+    into a literal part is the author asking for a pattern and is left
+    alone, and an all-literal name keeps today's behavior unchanged.
+    """
+    if all(isinstance(segment, NfLiteral) for segment in template.segments):
+        return False
+    return not any(
+        isinstance(segment, NfLiteral) and _GLOB_METACHARACTERS & set(segment.value)
+        for segment in template.segments
+    )
+
+
 def _process_output(port: NfPort) -> str:
     # NfProcess guarantees every output is a path port with a typed glob.
     assert port.glob is not None
-    return f"path {_render_glob(port.glob)}, emit: {port.emit or port.name}"
+    literal = ", glob: false" if _glob_names_one_file(port.glob) else ""
+    return f"path {_render_glob(port.glob)}{literal}, emit: {port.emit or port.name}"
 
 
 def _render_process(process: NfProcess) -> str:

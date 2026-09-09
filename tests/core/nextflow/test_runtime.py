@@ -191,7 +191,9 @@ def test_literal_dollar_and_mixed_backtick_globs_execute(tmp_path: Path) -> None
 
     rendered = render_nextflow(workflow)
     assert "path 'out$name.txt', emit: result" in rendered
-    assert 'path "`${name}.txt", emit: result' in rendered
+    # The name is assembled from an input reference and its literal parts
+    # carry no glob metacharacter, so it is matched literally.
+    assert 'path "`${name}.txt", glob: false, emit: result' in rendered
     result = run_nextflow(workflow, tmp_path)
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     assert len(list((tmp_path / "work").rglob("out$name.txt"))) == 1

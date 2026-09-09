@@ -73,7 +73,7 @@ def test_renders_named_workflow_and_entry_wrapper() -> None:
 @pytest.mark.serial
 def test_renders_real_compiled_source_with_typed_glob(real_supported_rose: RoseTree) -> None:
     rendered = render_nextflow(cwl_rosetree_to_nextflow(real_supported_rose))
-    assert 'path "${filename}", emit: result' in rendered
+    assert 'path "${filename}", glob: false, emit: result' in rendered
     assert "wf__step__2__copy(wf__step__1__touch.out.result)" in rendered
 
 
@@ -265,7 +265,43 @@ def test_renders_basename_segments_in_commands_and_globs() -> None:
     ))
 
     assert "source.name.toString() + '.copy'" in rendered
-    assert 'path "${source.name}.copy", emit: result' in rendered
+    assert 'path "${source.name}.copy", glob: false, emit: result' in rendered
+
+
+@pytest.mark.fast
+def test_all_literal_output_name_keeps_globbing_on() -> None:
+    # An author-written name carries no runtime data, so its pattern meaning
+    # is whatever the author wrote; nothing here is assembled at run time.
+    glob = NfTemplate((NfLiteral("out*.txt"),))
+    process = NfProcess(
+        "RUN", [], [NfPort("result", "path", "result", glob)], command("true")
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow("WF", [process], [], {}))
+
+    # The exact declaration pins the absence of the option: with it, the
+    # rendered line would read ", glob: false, emit: result" instead.
+    assert "path 'out*.txt', emit: result" in rendered
+
+
+@pytest.mark.fast
+def test_assembled_name_with_an_author_written_metacharacter_keeps_globbing_on() -> None:
+    # The reference makes the name runtime-assembled, but the author put a
+    # metacharacter in their own literal part, so they asked for a pattern.
+    glob = NfTemplate((NfBasenameReference("source"), NfLiteral("*.txt")))
+    process = NfProcess(
+        "COPY",
+        [NfPort("source", "path")],
+        [NfPort("result", "path", "result", glob)],
+        command("true"),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [NfWorkflowInputConnection("source", "COPY", "source")],
+        {"source": "lines.txt"},
+    ))
+
+    assert 'path "${source.name}*.txt", emit: result' in rendered
 
 
 @pytest.mark.fast

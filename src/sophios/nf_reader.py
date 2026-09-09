@@ -28,7 +28,11 @@ if TYPE_CHECKING:
 
 _PROCESS = re.compile(r"^\s*process\s+(\S+)\s*\{\s*$")
 _WORKFLOW = re.compile(r"^\s*workflow(?:\s+(\S+))?\s*\{\s*$")
-_PORT = re.compile(r"^(path|val|tuple|env|stdin)\s+(.+?)(?:,\s*emit:\s*(\S+))?$")
+_PORT = re.compile(
+    # glob: false is derived from the glob template at render time, so it is
+    # consumed here rather than stored: re-rendering recomputes it.
+    r"^(path|val|tuple|env|stdin)\s+(.+?)(?:,\s*glob:\s*false)?(?:,\s*emit:\s*(\S+))?$"
+)
 _CALL = re.compile(r"^(\S+)\((.*)\)$")
 _PROCESS_OUTPUT = re.compile(r"^(\S+)\.out\.(\S+)$")
 _STATIC_CPUS = re.compile(r"[1-9][0-9]*")
