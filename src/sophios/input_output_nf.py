@@ -8,6 +8,8 @@ from typing import Any
 
 from .nf_types import (
     ExecutableNextflowWorkflow,
+    NF_LOAD_CONTENTS_HELPER,
+    NF_LOAD_CONTENTS_LIMIT,
     NF_SHELL_QUOTE_HELPER,
     NfArrayBinding,
     NfBasenameReference,
@@ -32,6 +34,24 @@ NEXTFLOW_CONFIG = "nextflow.config"
 NEXTFLOW_PARAMS = "nextflow_params.json"
 NF_SHELL_QUOTE_FUNCTION = f'''def {NF_SHELL_QUOTE_HELPER}(value) {{
     return "'" + value.toString().replace("'", "'\\\"'\\\"'") + "'"
+}}'''
+# CWL v1.2 loadContents semantics, verbatim: read the whole file, fail above
+# the byte limit, and decode UTF-8 strictly. CharsetDecoder.decode reports
+# malformed input instead of substituting U+FFFD, and getText-style reads
+# preserve a trailing newline where shell capture would strip it.
+NF_LOAD_CONTENTS_FUNCTION = f'''def {NF_LOAD_CONTENTS_HELPER}(path) {{
+    def bytes = path.readBytes()
+    if( bytes.length > {NF_LOAD_CONTENTS_LIMIT} )
+        throw new IllegalStateException("loadContents requires a UTF-8 text file of \
+{NF_LOAD_CONTENTS_LIMIT} bytes or less; '" + path.getName() + "' is " + bytes.length + " bytes")
+    try {{
+        return java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+            .decode(java.nio.ByteBuffer.wrap(bytes)).toString()
+    }}
+    catch( java.nio.charset.CharacterCodingException e ) {{
+        throw new IllegalStateException("loadContents requires a UTF-8 text file; '" \
++ path.getName() + "' is not valid UTF-8")
+    }}
 }}'''
 
 
@@ -174,17 +194,32 @@ def _glob_names_one_file(template: Any) -> bool:
     )
 
 
-def _process_output(port: NfPort) -> str:
-    # NfProcess guarantees every output is a path port with a typed glob.
+def _capture_literal(port: NfPort) -> str:
+    """Return the Groovy literal for a capture-marked port's literal glob."""
+    # NfPort admits a capture marker only beside a single-literal glob.
     assert port.glob is not None
+    segment = port.glob.segments[0]
+    assert isinstance(segment, NfLiteral)
+    return _groovy_literal(segment.value)
+
+
+def _process_output(port: NfPort) -> str:
+    # NfProcess guarantees every output has a typed glob, and the val
+    # qualifier only for a text capture.
+    assert port.glob is not None
+    emit = port.emit or port.name
+    if port.capture == "text":
+        read = f"{NF_LOAD_CONTENTS_HELPER}(task.workDir.resolve({_capture_literal(port)}))"
+        return f"val({read}), emit: {emit}"
     # The two options are independent: one says how the name is matched, the
-    # other how many matches the author declared.
+    # other how many matches the author declared. A text capture returns
+    # above, so neither reaches a val declaration.
     literal = ", glob: false" if _glob_names_one_file(port.glob) else ""
     # A "single" capture marker is the CWL author's own cardinality
     # declaration, so it is stated in the generated pipeline rather than
     # dropped: arity: '1' emits one path value and fails on no match.
     arity = ", arity: '1'" if port.capture == "single" else ""
-    return f"path {_render_glob(port.glob)}{literal}{arity}, emit: {port.emit or port.name}"
+    return f"path {_render_glob(port.glob)}{literal}{arity}, emit: {emit}"
 
 
 def _process_input(port: NfPort) -> str:
@@ -375,6 +410,15 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
         "nextflow.enable.dsl=2",
         NF_SHELL_QUOTE_FUNCTION,
     ]
+    # Emitted only where the capture is used, so artifacts for models that
+    # predate it stay byte-identical and existing artifact pairs keep
+    # promoting.
+    if any(
+        port.capture == "text"
+        for process in workflow.processes
+        for port in process.outputs
+    ):
+        sections.append(NF_LOAD_CONTENTS_FUNCTION)
     sections.extend(_render_process(process) for process in workflow.processes)
     sections.append(_render_named_workflow(workflow))
     arguments = ",\n        ".join(

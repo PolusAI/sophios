@@ -321,6 +321,42 @@ CWL JavaScript in any form is ruled out by design, so a tool may declare
 `InlineJavascriptRequirement` and still be supported as long as it uses only
 approved forms.
 
+## File-text capture
+
+`loadContents: true` paired with an `outputEval` of exactly
+`$(self[0].contents)`, on a `type: string` output, captures the globbed file's
+text as the output value:
+
+```yaml
+outputs:
+  output:
+    type: string
+    outputBinding:
+      glob: output
+      loadContents: true
+      outputEval: $(self[0].contents)
+```
+
+Both halves are required, and the same literal-glob restriction applies. The
+port becomes a `val` output over a generated helper that reads the whole file
+from the task work directory, so the pinned CWL v1.2 semantics hold exactly:
+
+- The file is read **entirely**, and a file larger than 65536 bytes fails the
+  task. CWL v1.2 replaced v1.0's "read up to the first 64 KiB" with a hard
+  limit, so nothing is ever silently truncated.
+- A **trailing newline is preserved verbatim**. Nextflow's `eval` output type
+  would strip it, so it is not used here.
+- The bytes are decoded as UTF-8 **strictly**: malformed input fails the task
+  instead of becoming U+FFFD.
+
+`type: int` and `type: float` are rejected: parsing text into a number is
+computation, not a projection. Declare `type: string` and parse downstream.
+
+A captured value's only supported sink is a workflow output. Feeding one into
+another process is rejected, because every process output before this one
+carried the `path` qualifier and the executable graph has no qualifier
+agreement check for process edges yet.
+
 ## Current limits
 
 - Processes must be `CommandLineTool`-equivalent.

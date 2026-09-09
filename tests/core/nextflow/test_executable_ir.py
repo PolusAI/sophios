@@ -1006,10 +1006,10 @@ def test_a_capture_marker_survives_serialization_unchanged() -> None:
 @pytest.mark.fast
 def test_the_port_capture_set_is_closed() -> None:
     """A capture marker is closed data, so it can never hold expression text."""
-    assert NfPort.ALLOWED_CAPTURES == frozenset({"single"})
+    assert NfPort.ALLOWED_CAPTURES == frozenset({"single", "text"})
     assert set(NfPort.CAPTURE_QUALIFIERS) == set(NfPort.ALLOWED_CAPTURES)
 
-    for rejected in ("$(self[0])", "single_path", "", "text"):
+    for rejected in ("$(self[0])", "$(self[0].contents)", "single_path", "contents", ""):
         with pytest.raises(ValueError, match="port capture must be one of"):
             NfPort("result", "path", "result", NfTemplate((NfLiteral("out.txt"),)), capture=rejected)
 
@@ -1060,3 +1060,68 @@ def test_hydration_rejects_a_capture_field_older_than_schema_version_9() -> None
     payload["schema_version"] = 8
     with pytest.raises(ValueError, match=r"'capture'.*schema version 9.*schema version 8"):
         ExecutableNextflowWorkflow.from_dict(payload)
+
+
+def _text_capture_process(name: str = "READ") -> NfProcess:
+    glob = NfTemplate((NfLiteral("out.txt"),))
+    return NfProcess(
+        name,
+        [NfPort("message", "val")],
+        [NfPort("text", "val", "text", glob, capture="text")],
+        NfCommand((NfTemplate((NfLiteral("printf"),)),), stdout=glob),
+    )
+
+
+@pytest.mark.fast
+def test_a_text_capture_output_is_the_one_val_qualified_output() -> None:
+    process = _text_capture_process()
+
+    assert process.outputs[0].qualifier == "val"
+    assert NfProcess.from_dict(process.to_dict()) == process
+
+    glob = NfTemplate((NfLiteral("out.txt"),))
+    with pytest.raises(ValueError, match="require path qualifier and typed glob"):
+        NfProcess("P", [], [NfPort("text", "val", "text", glob)], command("true"))
+    with pytest.raises(ValueError, match="capture 'text' requires a val port"):
+        NfPort("text", "path", "text", glob, capture="text")
+
+
+@pytest.mark.fast
+def test_a_captured_value_cannot_feed_a_process_input() -> None:
+    """The graph has no qualifier agreement check for process edges to lean on."""
+    producer = _text_capture_process("PRODUCE")
+    consumer = NfProcess(
+        "CONSUME",
+        [NfPort("text", "val")],
+        [output_port("result", "copy.txt")],
+        command("printf", "%s", NfTemplate((NfInputReference("text"),)), stdout="copy.txt"),
+    )
+
+    with pytest.raises(ValueError, match=r"PRODUCE.text captures file text"):
+        ExecutableNextflowWorkflow(
+            "wf",
+            [producer, consumer],
+            [
+                NfWorkflowInputConnection("message", "PRODUCE", "message"),
+                NfProcessConnection("PRODUCE", "text", "CONSUME", "text"),
+                NfWorkflowOutputConnection("CONSUME", "result", "result"),
+            ],
+            {"message": "hi"},
+        )
+
+
+@pytest.mark.fast
+def test_a_captured_value_reaches_a_workflow_output() -> None:
+    producer = _text_capture_process("PRODUCE")
+
+    workflow = ExecutableNextflowWorkflow(
+        "wf",
+        [producer],
+        [
+            NfWorkflowInputConnection("message", "PRODUCE", "message"),
+            NfWorkflowOutputConnection("PRODUCE", "text", "captured"),
+        ],
+        {"message": "hi"},
+    )
+
+    assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow

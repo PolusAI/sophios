@@ -490,3 +490,69 @@ def test_an_arity_option_on_an_input_port_is_not_recognized() -> None:
 
     with pytest.raises(ValueError, match="MAKE supplies 1 inputs; the process declares 0"):
         parse_nf_text(source)
+
+
+def _text_capture_workflow() -> ExecutableNextflowWorkflow:
+    glob = NfTemplate((NfLiteral("out.txt"),))
+    process = NfProcess(
+        "READ",
+        [NfPort("message", "val")],
+        [NfPort("text", "val", "text", glob, capture="text")],
+        NfCommand((NfTemplate((NfLiteral("printf"),)), template(ref("message"))), stdout=glob),
+    )
+    return ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [process],
+        [
+            NfWorkflowInputConnection("message", "READ", "message"),
+            NfWorkflowOutputConnection("READ", "text", "captured"),
+        ],
+        {"message": "hi"},
+    )
+
+
+@pytest.mark.fast
+def test_text_capture_artifacts_parse_and_promote(tmp_path: Path) -> None:
+    """A new output form and a new generated helper must both round-trip."""
+    expected = _text_capture_workflow()
+    write_nextflow_artifacts(expected, tmp_path)
+
+    parsed = parse_nf_file(tmp_path / "workflow.nf")
+
+    assert parsed.opaque_regions == ()
+    assert promote_nextflow_document(parsed) == expected
+
+
+@pytest.mark.fast
+def test_the_reader_records_and_reconstructs_a_text_capture() -> None:
+    document = parse_nf_text(render_nextflow(_text_capture_workflow()))
+
+    port = document.processes[0].outputs[0]
+    assert (port.name, port.qualifier, port.target, port.capture) == (
+        "text", "val", "out.txt", "text",
+    )
+
+    _workflow, tools = nextflow_to_cwl(document)
+    assert tools[0]["outputs"]["text"] == {
+        "type": "string",
+        "outputBinding": {
+            "glob": "out.txt",
+            "loadContents": True,
+            "outputEval": "$(self[0].contents)",
+        },
+    }
+
+
+@pytest.mark.fast
+def test_a_val_output_outside_the_generated_capture_form_is_not_recognized() -> None:
+    """Only the one emitted val-output shape is recognized, not val expressions.
+
+    An unrecognized output leaves the process declaring none, so the workflow
+    emit that names it fails the reader rather than being promoted.
+    """
+    source = render_nextflow(_text_capture_workflow()).replace(
+        "task.workDir.resolve('out.txt')", "file('out.txt')"
+    )
+
+    with pytest.raises(ValueError, match=r"unknown output READ\.out\.text"):
+        parse_nf_text(source)

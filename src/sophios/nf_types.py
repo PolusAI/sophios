@@ -13,7 +13,11 @@ from .nf_symbols import validate_nextflow_identifier
 
 _T = TypeVar("_T")
 NF_SHELL_QUOTE_HELPER = "__sophios_shell_quote_9f72e"
-NF_INTERNAL_IDENTIFIERS = frozenset({NF_SHELL_QUOTE_HELPER})
+NF_LOAD_CONTENTS_HELPER = "__sophios_load_contents_9f72e"
+NF_INTERNAL_IDENTIFIERS = frozenset({NF_SHELL_QUOTE_HELPER, NF_LOAD_CONTENTS_HELPER})
+# CWL v1.2 requires a loadContents file to be a UTF-8 text file of this many
+# bytes or fewer, read entirely, with a fatal error above the limit.
+NF_LOAD_CONTENTS_LIMIT = 64 * 1024
 
 
 def _validate_ir_identifier(value: object, *, field_name: str) -> str:
@@ -494,18 +498,21 @@ GLOB_WILDCARDS = frozenset("*?[")
 class NfPort:
     """A typed Nextflow process port.
 
-    ``capture`` names the one approved output-capture declaration an
+    ``capture`` names the approved output-capture declarations an
     ``outputBinding`` may carry. The approved set is closed data: ``"single"``
-    declares that the port carries one value rather than a list. The field
+    declares that the port carries one value rather than a list, and ``"text"``
+    declares that the port carries the globbed file's decoded text. The field
     holds a marker from that set and nothing else, so no CWL expression text
     can be smuggled through it.
     """
 
     # Phase 1 lowers only these qualifiers; the renderer is total over them.
     ALLOWED_QUALIFIERS: ClassVar[frozenset[str]] = frozenset({"path", "val"})
-    ALLOWED_CAPTURES: ClassVar[frozenset[str]] = frozenset({"single"})
+    ALLOWED_CAPTURES: ClassVar[frozenset[str]] = frozenset({"single", "text"})
     # The qualifier each capture marker requires of the port declaring it.
-    CAPTURE_QUALIFIERS: ClassVar[Mapping[str, str]] = MappingProxyType({"single": "path"})
+    CAPTURE_QUALIFIERS: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {"single": "path", "text": "val"}
+    )
 
     name: str
     qualifier: str
@@ -664,7 +671,13 @@ class NfProcess:
             raise ValueError(f"process {self.name!r} has duplicate output emit names")
         if any(port.emit is not None or port.glob is not None for port in inputs):
             raise ValueError("process input ports cannot declare output metadata")
-        if any(port.qualifier != "path" or port.glob is None for port in outputs):
+        # A text-capture output carries the globbed file's decoded text, so it
+        # is the one output kind with the val qualifier; NfPort pairs each
+        # capture marker with the qualifier it requires.
+        if any(
+            port.qualifier != ("val" if port.capture == "text" else "path") or port.glob is None
+            for port in outputs
+        ):
             raise ValueError("executable process outputs require path qualifier and typed glob")
         if any(port.is_array for port in outputs):
             raise ValueError("array-typed outputs are deferred beyond this lowering")
@@ -1121,6 +1134,16 @@ class ExecutableNextflowWorkflow:
                         raise ValueError(
                             f"connection {from_process}.{from_port} -> {to_process}.{to_port} "
                             "joins incompatible channel cardinalities"
+                        )
+                    if source.capture == "text":
+                        # The qualifier axis still has no general agreement
+                        # check for process edges, because every process
+                        # output carried the path qualifier until this one; a
+                        # captured value's only approved sink is a workflow
+                        # output.
+                        raise ValueError(
+                            f"process output {from_process}.{from_port} captures file text; "
+                            "its only approved sink is a workflow output"
                         )
                     self._record_incoming(incoming, to_process, to_port)
                     dependencies[to_process].add(from_process)

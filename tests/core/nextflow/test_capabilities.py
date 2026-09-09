@@ -24,11 +24,13 @@ from sophios.nf_types import (
 from sophios.utils_nf import (
     _ADMITTED_OUTPUT_EVAL,
     _NAMED_OUTPUT_EVAL_REJECTIONS,
+    _output_capture,
     cwl_rosetree_to_nextflow,
 )
 from sophios.wic_types import RoseTree, Yaml
 
 from .testkit import (
+    REPO_ROOT,
     node_data,
     step,
     subworkflow_child,
@@ -51,11 +53,11 @@ def test_real_unsupported_rosetree_aggregates_capability_errors(
     # bindings still do.
     assert "steps[1].run.inputs.str.inputBinding.shellQuote" in message
     assert "steps[1].run.inputs.file.inputBinding.shellQuote" in message
-    assert "steps[2].run.outputs.output.type" in message
-    # cat.cwl's string output pairs loadContents with $(self[0].contents),
-    # which the cardinality declaration alone does not admit, so its one
-    # capture finding now comes from the outputBinding as a whole.
-    assert "steps[2].run.outputs.output.outputBinding: unsupported outputEval" in message
+    # cat.cwl's string output is the approved file-text capture shape
+    # (loadContents: true, outputEval: $(self[0].contents), literal glob), so
+    # it no longer produces a finding at all; the mixed container policy does.
+    assert "steps[2].run.outputs.output" not in message
+    assert "workflow.steps: mixed container execution is not supported" in message
 
 
 @pytest.mark.fast
@@ -2238,6 +2240,15 @@ def test_a_scattered_step_inside_a_subworkflow_uses_the_outer_scatter_contract()
     )
 
 
+def _read_cwl_adapter(name: str) -> Yaml:
+    """Load one real repository CWL adapter document."""
+    import yaml
+
+    return cast(Yaml, yaml.safe_load(
+        (REPO_ROOT / "cwl_adapters" / name).read_text(encoding="utf-8")
+    ))
+
+
 def _capture_rose(
     output: Yaml,
     *,
@@ -2269,10 +2280,22 @@ def _capture_findings(rose: RoseTree) -> list[str]:
     ]
 
 
+def _unadmitted_finding(text: str) -> str:
+    """The one closed-set diagnostic every unadmitted outputEval text gets."""
+    return (
+        "steps[0].run.outputs.result.outputBinding: unsupported outputEval "
+        f"{text!r}; the approved set is exactly '$(self[0])', '$(self[0].contents)', "
+        "recognized as capture declarations, and no other expression is evaluated"
+    )
+
+
 @pytest.mark.fast
 def test_the_admitted_output_eval_table_is_closed_in_both_directions() -> None:
     """Widening the admitted set without a design revision must fail here."""
-    assert dict(_ADMITTED_OUTPUT_EVAL) == {"$(self[0])": "single"}
+    assert dict(_ADMITTED_OUTPUT_EVAL) == {
+        "$(self[0])": "single",
+        "$(self[0].contents)": "text",
+    }
     assert set(_ADMITTED_OUTPUT_EVAL.values()) <= NfPort.ALLOWED_CAPTURES
     assert not set(_ADMITTED_OUTPUT_EVAL) & set(_NAMED_OUTPUT_EVAL_REJECTIONS)
     assert set(_NAMED_OUTPUT_EVAL_REJECTIONS) == {
@@ -2312,11 +2335,7 @@ def test_internal_variation_of_the_admitted_literal_is_rejected(text: str) -> No
         {"type": "File", "outputBinding": {"glob": "out.txt", "outputEval": text}}
     ))
 
-    assert findings == [
-        "steps[0].run.outputs.result.outputBinding: unsupported outputEval "
-        f"{text!r}; the approved set is exactly '$(self[0])', recognized as capture "
-        "declarations, and no other expression is evaluated"
-    ]
+    assert findings == [_unadmitted_finding(text)]
 
 
 _REJECTED_OUTPUT_EVAL_CORPUS = (
@@ -2329,6 +2348,8 @@ _REJECTED_OUTPUT_EVAL_CORPUS = (
     "${return self[0];}",
     "${ return self[0].contents.trim(); }",
     "$(self[0].contents.split('\\n'))",
+    "$(self[0] .contents)",
+    "$(self[0].contents())",
     "prefix-$(self[0])",
     "$(self[0])$(self[0])",
     "$(JSON.parse(self[0].contents))",
@@ -2346,11 +2367,7 @@ def test_every_unadmitted_output_eval_shape_names_the_approved_set(text: str) ->
         {"type": "File", "outputBinding": {"glob": "out.txt", "outputEval": text}}
     ))
 
-    assert findings == [
-        "steps[0].run.outputs.result.outputBinding: unsupported outputEval "
-        f"{text!r}; the approved set is exactly '$(self[0])', recognized as capture "
-        "declarations, and no other expression is evaluated"
-    ]
+    assert findings == [_unadmitted_finding(text)]
 
 
 @pytest.mark.fast
@@ -2468,3 +2485,125 @@ def test_a_declared_but_unused_inline_javascript_requirement_stays_legal() -> No
     ))
 
     assert workflow.processes[0].outputs[0].capture == "single"
+
+
+_ADMITTED_TEXT_BINDING = {
+    "glob": "out.txt",
+    "loadContents": True,
+    "outputEval": "$(self[0].contents)",
+}
+
+
+@pytest.mark.fast
+def test_the_admitted_file_text_capture_lowers_to_a_value_port() -> None:
+    workflow = cwl_rosetree_to_nextflow(_capture_rose(
+        {"type": "string", "outputBinding": dict(_ADMITTED_TEXT_BINDING)},
+        output_type="string",
+    ))
+
+    port = workflow.processes[0].outputs[0]
+    assert (port.name, port.qualifier, port.capture) == ("result", "val", "text")
+
+
+@pytest.mark.fast
+def test_the_real_cat_adapter_output_is_the_admitted_file_text_capture() -> None:
+    """cwl_adapters/cat.cwl is exactly this shape; it must lower, not reject."""
+    document = _read_cwl_adapter("cat.cwl")
+
+    assert document["outputs"]["output"]["outputBinding"] == {
+        "glob": "output",
+        "loadContents": True,
+        "outputEval": "$(self[0].contents)",
+    }
+    assert _output_capture("output", document["outputs"]["output"]) == "text"
+
+
+@pytest.mark.fast
+def test_file_text_capture_requires_load_contents_true() -> None:
+    for load_contents in (None, False, "true"):
+        binding = dict(_ADMITTED_TEXT_BINDING)
+        if load_contents is None:
+            del binding["loadContents"]
+        else:
+            binding["loadContents"] = load_contents
+        findings = _capture_findings(_capture_rose(
+            {"type": "string", "outputBinding": binding}, output_type="string"
+        ))
+        assert findings == [
+            "steps[0].run.outputs.result.outputBinding: outputEval "
+            "'$(self[0].contents)' captures file text and requires loadContents: true "
+            "beside it"
+        ]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("declared", ["int", "float", "long", "double"])
+def test_a_numeric_file_text_capture_is_rejected_because_parsing_is_computation(
+    declared: str,
+) -> None:
+    findings = _capture_findings(_capture_rose(
+        {"type": declared, "outputBinding": dict(_ADMITTED_TEXT_BINDING)},
+        output_type=declared,
+    ))
+
+    assert len(findings) == 1
+    assert findings[0].startswith("steps[0].run.outputs.result.outputBinding: outputEval")
+    assert "parsing that text into a number is computation rather than a projection" in findings[0]
+    assert "Declare type: string and parse downstream" in findings[0]
+
+
+@pytest.mark.fast
+def test_file_text_capture_on_a_non_string_non_numeric_output_is_rejected() -> None:
+    findings = _capture_findings(_capture_rose(
+        {"type": "File", "outputBinding": dict(_ADMITTED_TEXT_BINDING)}
+    ))
+
+    assert findings == [
+        "steps[0].run.outputs.result.outputBinding: outputEval '$(self[0].contents)' "
+        "captures file text and is admitted only on a type: string output; output "
+        "'result' declares 'File'"
+    ]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("glob", ["*.txt", "out?.txt", "out[0-9].txt"])
+def test_a_wildcard_glob_beside_a_file_text_capture_is_rejected(glob: str) -> None:
+    findings = _capture_findings(_capture_rose(
+        {"type": "string", "outputBinding": {**_ADMITTED_TEXT_BINDING, "glob": glob}},
+        output_type="string",
+    ))
+
+    assert len(findings) == 1
+    assert "requires a glob with no wildcard character" in findings[0]
+
+
+@pytest.mark.fast
+def test_a_captured_value_cannot_feed_another_process() -> None:
+    """No qualifier agreement check exists for process edges, so this rejects."""
+    producer = tool(
+        "produce",
+        inputs={"message": {"type": "string", "inputBinding": {"position": 1}}},
+        outputs={"text": {"type": "string", "outputBinding": dict(_ADMITTED_TEXT_BINDING)}},
+    )
+    consumer = tool(
+        "consume",
+        inputs={"text": {"type": "string", "inputBinding": {"position": 1}}},
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "copy.txt"}}},
+    )
+    document = workflow_doc(
+        [
+            step("produce", **{"in": {"message": "message"}, "out": ["text"]}),
+            step("consume", **{"in": {"text": "produce/text"}, "out": ["result"]}),
+        ],
+        inputs={"message": "string"},
+        outputs={"result": {"type": "File", "outputSource": "consume/result"}},
+    )
+    rose = synthetic_rose(document, [producer, consumer], workflow_inputs={"message": "hi"})
+
+    findings = _capture_findings(rose)
+
+    assert findings == [
+        "steps[1].in.text: 'produce/text' captures file text; its only approved sink is "
+        "a workflow output, because the executable graph has no qualifier agreement "
+        "check for process edges"
+    ]

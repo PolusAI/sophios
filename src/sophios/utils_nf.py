@@ -868,7 +868,14 @@ def _output_template(raw_name: Any, definition: Any) -> NfTemplate:
 # form means adding a row here, which requires a design revision first.
 _ADMITTED_OUTPUT_EVAL: Mapping[str, str] = MappingProxyType({
     "$(self[0])": "single",
+    "$(self[0].contents)": "text",
 })
+# The capture markers whose admission requires loadContents: true beside them.
+_LOAD_CONTENTS_CAPTURES = frozenset({"text"})
+# The one CWL output type file-text capture is admitted on. Parsing text into a
+# number is computation, so int and float are refused rather than deferred.
+_TEXT_CAPTURE_TYPE = "string"
+_NUMERIC_TEXT_CAPTURE_TYPES = frozenset({"int", "float", "double", "long"})
 # outputEval shapes refused by name rather than by a generic table miss, so the
 # diagnostic says why the shape is unattractive rather than merely absent.
 _PERMANENT_PROJECTION_REASON = (
@@ -941,20 +948,39 @@ def _output_capture(raw_name: Any, definition: Mapping[str, Any]) -> str | None:
             f"{admitted}, recognized as capture declarations, and no other expression is "
             "evaluated"
         )
-    if "loadContents" in binding:
-        raise ValueError(
-            f"outputEval {text!r} declares output cardinality and is not paired with "
-            "loadContents"
-        )
-    try:
-        qualifier = cwl_type_to_nf_qualifier(definition.get("type"))
-    except ValueError:
-        qualifier = "unsupported"
-    if qualifier != "path":
-        raise ValueError(
-            f"outputEval {text!r} declares single-valued File or Directory capture; "
-            f"output {raw_name!r} declares {definition.get('type')!r}"
-        )
+    declared_type = definition.get("type")
+    if capture in _LOAD_CONTENTS_CAPTURES:
+        if binding.get("loadContents") is not True:
+            raise ValueError(
+                f"outputEval {text!r} captures file text and requires loadContents: true "
+                "beside it"
+            )
+        if _required_type(declared_type) in _NUMERIC_TEXT_CAPTURE_TYPES:
+            raise ValueError(
+                f"outputEval {text!r} captures file text, and parsing that text into a "
+                f"number is computation rather than a projection; output {raw_name!r} "
+                f"declares {declared_type!r}. Declare type: string and parse downstream"
+            )
+        if _required_type(declared_type) != _TEXT_CAPTURE_TYPE:
+            raise ValueError(
+                f"outputEval {text!r} captures file text and is admitted only on a "
+                f"type: string output; output {raw_name!r} declares {declared_type!r}"
+            )
+    else:
+        if "loadContents" in binding:
+            raise ValueError(
+                f"outputEval {text!r} declares output cardinality and is not paired with "
+                "loadContents"
+            )
+        try:
+            qualifier = cwl_type_to_nf_qualifier(declared_type)
+        except ValueError:
+            qualifier = "unsupported"
+        if qualifier != "path":
+            raise ValueError(
+                f"outputEval {text!r} declares single-valued File or Directory capture; "
+                f"output {raw_name!r} declares {declared_type!r}"
+            )
     match binding.get("glob"):
         case str() as glob if glob:
             pass
@@ -1025,6 +1051,9 @@ _OUTPUT_CONSUMED_FIELDS = (
 # loadContents and outputEval are analyzed by _output_capture rather than
 # reported by the generic unconsumed-field pass, so they are consumed here.
 _OUTPUT_BINDING_CONSUMED_FIELDS = frozenset({"glob", "loadContents", "outputEval"})
+# The outputBinding fields that declare capture behavior, as opposed to naming
+# the file to capture.
+_OUTPUT_CAPTURE_FIELDS = frozenset({"loadContents", "outputEval"})
 _ARGUMENT_CONSUMED_FIELDS = frozenset({
     "position",
     "prefix",
@@ -1489,15 +1518,22 @@ def _tool_capability_findings(
                         path=output_path,
                     )
                 )
+                binding = raw_definition.get("outputBinding")
+                # An outputBinding that declares capture behavior is diagnosed
+                # by _output_capture alone, which reports the type it requires;
+                # the generic type finding would only restate that less
+                # precisely.
+                declares_capture = isinstance(binding, Mapping) and bool(
+                    _OUTPUT_CAPTURE_FIELDS & set(binding)
+                )
                 try:
                     qualifier = cwl_type_to_nf_qualifier(raw_definition.get("type"))
                 except ValueError:
                     qualifier = "unsupported"
-                if qualifier != "path":
+                if qualifier != "path" and not declares_capture:
                     findings.append(
                         f"{output_path}.type: primitive and non-path output capture is deferred to Phase 2"
                     )
-                binding = raw_definition.get("outputBinding")
                 if not isinstance(binding, Mapping):
                     continue
                 output_binding_path = f"{output_path}.outputBinding"
@@ -2483,6 +2519,68 @@ def _flag_source_findings(
     return findings
 
 
+def _text_capture_endpoints(
+    steps: list[Mapping[str, Any]],
+    sub_trees: list[Any],
+) -> set[str]:
+    """Return every ``<step>/<port>`` source that captures file text."""
+    endpoints: set[str] = set()
+    for step, child in zip(steps, sub_trees, strict=True):
+        match step.get("id"), child:
+            case str() as raw_id, RoseTree(data=NodeData(compiled_cwl=Mapping() as tool)):
+                pass
+            case _:
+                continue
+        outputs = tool.get("outputs", {})
+        if not isinstance(outputs, Mapping):
+            continue
+        for raw_port, definition in outputs.items():
+            if not isinstance(definition, Mapping):
+                continue
+            try:
+                capture = _output_capture(raw_port, definition)
+            except ValueError:
+                continue
+            if capture != "text":
+                continue
+            for step_key in (raw_id, raw_id.rsplit("#", maxsplit=1)[-1]):
+                endpoints.add(f"{step_key}/{raw_port}")
+    return endpoints
+
+
+def _text_capture_sink_findings(
+    steps: list[Mapping[str, Any]],
+    sub_trees: list[Any],
+) -> list[str]:
+    """Restrict a captured value's sink to a workflow output.
+
+    Every process output before this lowering carried the ``path`` qualifier,
+    so the executable graph has no source-to-destination qualifier agreement
+    check for process edges to lean on.
+    """
+    endpoints = _text_capture_endpoints(steps, sub_trees)
+    if not endpoints:
+        return []
+    findings: list[str] = []
+    for step_index, step in enumerate(steps):
+        step_inputs = step.get("in", {})
+        if not isinstance(step_inputs, Mapping):
+            continue
+        for raw_name, raw_source in step_inputs.items():
+            try:
+                sources = _source_values(raw_source, context=f"steps[{step_index}].in.{raw_name}")
+            except ValueError:
+                continue
+            for source in sources:
+                if source in endpoints:
+                    findings.append(
+                        f"steps[{step_index}].in.{raw_name}: {source!r} captures file text; "
+                        "its only approved sink is a workflow output, because the executable "
+                        "graph has no qualifier agreement check for process edges"
+                    )
+    return findings
+
+
 def _raise_capability_findings(findings: list[str]) -> None:
     if findings:
         details = "\n".join(f"- {finding}" for finding in findings)
@@ -2829,6 +2927,7 @@ def cwl_rosetree_to_nextflow(rose_tree: RoseTree) -> ExecutableNextflowWorkflow:
     findings.extend(_absent_optional_findings(workflow, node_data, steps, sub_trees))
     findings.extend(_flag_source_findings(workflow, steps, sub_trees))
     findings.extend(_scatter_findings(workflow, steps, sub_trees))
+    findings.extend(_text_capture_sink_findings(steps, sub_trees))
     findings.extend(_container_policy_findings(sub_trees))
     _raise_capability_findings(findings)
     processes = [

@@ -1278,3 +1278,132 @@ def test_a_cardinality_declaration_inside_a_scattered_step_runs_per_task(tmp_pat
         path.read_text(encoding="utf-8") for path in (tmp_path / "work").rglob("out.txt")
     )
     assert outputs == ["alpha\n", "beta\n"]
+
+
+def _probe_captured_value(directory: Path, workflow_name: str) -> None:
+    """Print the captured value's UTF-8 bytes as hex from the generated pipeline.
+
+    A ``val`` output is a channel value, not a published file, so the only way
+    to observe what the capture actually produced is to view that channel. The
+    probe appends one view to the generated entry workflow and changes nothing
+    else, so the process, its output declaration, and the generated helper are
+    exactly the ones under test.
+    """
+    script = directory / "workflow.nf"
+    source = script.read_text(encoding="utf-8")
+    entry = f"workflow {{\n    {workflow_name}("
+    assert entry in source, source
+    probe = (
+        f"    {workflow_name}.out.captured.view "
+        '{ "CAPTURED=" + it.getBytes("UTF-8").encodeHex().toString() }\n}\n'
+    )
+    script.write_text(source[: source.rindex("}\n")] + probe, encoding="utf-8")
+
+
+def _run_text_capture(
+    tmp_path: Path,
+    script: str,
+    workflow_name: str,
+    *,
+    probe: bool = False,
+) -> "subprocess.CompletedProcess[str]":
+    """Compile and run a one-step pipeline whose python3 script writes out.txt."""
+    write_tool = (
+        CommandLineTool(
+            "capture_text",
+            Inputs(program=Input(cwl.string, position=1)),
+            Outputs(text=Output(
+                cwl.string,
+                glob="out.txt",
+                load_contents=True,
+                output_eval="$(self[0].contents)",
+            )),
+        )
+        .base_command("python3", "-c")
+    )
+    write = Step(write_tool, step_name="capture_text")
+    write.inputs.program = script
+
+    workflow = Workflow([write], workflow_name)
+    workflow.outputs.captured = write.outputs.text
+    workflow.to_nextflow(tmp_path)
+    if probe:
+        _probe_captured_value(tmp_path, workflow_name)
+    return execute_nextflow(tmp_path)
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_file_text_capture_preserves_a_trailing_newline(tmp_path: Path) -> None:
+    """R2.21: CWL keeps a trailing newline; shell-style capture would strip it."""
+    result = _run_text_capture(
+        tmp_path,
+        "open('out.txt','w').write('line\\n\\n')",
+        "nextflow_text_capture_newline",
+        probe=True,
+    )
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    # Both trailing newlines survive: b"line\n\n", not the b"line" that
+    # Nextflow's eval output type, or any stdout-style capture, would yield.
+    assert "CAPTURED=" + b"line\n\n".hex() in result.stdout
+    assert "eval" not in (tmp_path / "workflow.nf").read_text(encoding="utf-8")
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_file_text_capture_accepts_a_file_at_exactly_the_byte_limit(tmp_path: Path) -> None:
+    """R2.22: CWL v1.2 allows 65536 bytes; the limit is inclusive."""
+    result = _run_text_capture(
+        tmp_path,
+        "open('out.txt','w').write('a'*65536)",
+        "nextflow_text_capture_at_limit",
+        probe=True,
+    )
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "CAPTURED=" + (b"a" * 65536).hex() in result.stdout
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_file_text_capture_fails_one_byte_over_the_limit(tmp_path: Path) -> None:
+    """R2.23: CWL v1.2 raises a fatal error above 65536 bytes; it never truncates."""
+    result = _run_text_capture(
+        tmp_path,
+        "open('out.txt','w').write('a'*65537)",
+        "nextflow_text_capture_over_limit",
+    )
+
+    assert result.returncode != 0
+    assert "65536 bytes or less" in result.stdout + result.stderr
+    assert "65537 bytes" in result.stdout + result.stderr
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_file_text_capture_decodes_multibyte_utf8(tmp_path: Path) -> None:
+    """R2.24: multibyte characters survive the decode intact."""
+    result = _run_text_capture(
+        tmp_path,
+        "open('out.txt','w',encoding='utf-8').write('caf\\u00e9 \\u2713\\n')",
+        "nextflow_text_capture_multibyte",
+        probe=True,
+    )
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "CAPTURED=" + "café ✓\n".encode("utf-8").hex() in result.stdout
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_file_text_capture_fails_on_malformed_utf8(tmp_path: Path) -> None:
+    """R2.25: strict decoding, so bad bytes fail rather than becoming U+FFFD."""
+    result = _run_text_capture(
+        tmp_path,
+        "open('out.txt','wb').write(b'ok\\xff\\xfe')",
+        "nextflow_text_capture_bad_utf8",
+    )
+
+    assert result.returncode != 0
+    assert "is not valid UTF-8" in result.stdout + result.stderr

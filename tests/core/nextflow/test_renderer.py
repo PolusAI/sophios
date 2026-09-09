@@ -8,12 +8,15 @@ from typing import Any, cast
 import pytest
 
 from sophios.input_output_nf import (
+    NF_LOAD_CONTENTS_FUNCTION,
     render_nextflow,
     render_nextflow_config,
     write_nextflow_artifacts,
 )
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
+    NF_LOAD_CONTENTS_HELPER,
+    NF_LOAD_CONTENTS_LIMIT,
     NfArrayBinding,
     NfBasenameReference,
     NfCommand,
@@ -509,3 +512,35 @@ def test_a_capture_marker_renders_as_a_single_valued_path_output() -> None:
     assert "    path 'out.txt', arity: '1', emit: result\n" in rendered
     assert "    path 'out.txt', emit: result\n" in rendered
     assert rendered.count("arity: '1'") == 1
+
+
+def _text_capture_workflow() -> ExecutableNextflowWorkflow:
+    glob = NfTemplate((NfLiteral("out.txt"),))
+    process = NfProcess(
+        "READ",
+        [],
+        [NfPort("text", "val", "text", glob, capture="text")],
+        command("printf", "hello", stdout="out.txt"),
+    )
+    return ExecutableNextflowWorkflow("wf", [process], [], {})
+
+
+@pytest.mark.fast
+def test_a_text_capture_renders_as_a_value_output_over_the_generated_helper() -> None:
+    rendered = render_nextflow(_text_capture_workflow())
+
+    assert (
+        f"    val({NF_LOAD_CONTENTS_HELPER}"
+        "(task.workDir.resolve('out.txt'))), emit: text\n"
+    ) in rendered
+    assert NF_LOAD_CONTENTS_FUNCTION in rendered
+    # The mapping's own two halves: the byte limit and strict UTF-8 decoding.
+    assert f"bytes.length > {NF_LOAD_CONTENTS_LIMIT}" in rendered
+    assert "UTF_8.newDecoder()" in rendered
+
+
+@pytest.mark.fast
+def test_the_load_contents_helper_is_emitted_only_where_it_is_used() -> None:
+    """Artifacts for models that predate this capture must stay byte-identical."""
+    assert NF_LOAD_CONTENTS_HELPER not in render_nextflow(runtime_workflow())
+    assert NF_LOAD_CONTENTS_HELPER in render_nextflow(_text_capture_workflow())
