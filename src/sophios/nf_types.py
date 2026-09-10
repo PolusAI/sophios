@@ -1052,8 +1052,14 @@ class ExecutableNextflowWorkflow:
                             f"workflow input {from_port!r} feeds incompatible channel qualifiers "
                             f"{previous!r} and {semantics!r}"
                         )
+                    # An adapter exists to change cardinality between the
+                    # parameter and the port, so the value is judged against
+                    # what the adapter consumes rather than what the port
+                    # declares: scatter takes the whole array and feeds one
+                    # element per task.
+                    expects_array = destination.is_array or connection.adapter == "scatter"
                     param_destinations.setdefault(
-                        from_port, (destination.is_array, to_process, to_port)
+                        from_port, (expects_array, to_process, to_port)
                     )
                     self._record_incoming(incoming, to_process, to_port)
                 case NfProcessConnection(from_process, from_port, to_process, to_port):

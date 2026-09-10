@@ -880,11 +880,16 @@ def _adapted_workflow(
     adapter: str | None = "scatter",
     port: NfPort | None = None,
 ) -> ExecutableNextflowWorkflow:
+    # The param has to match what the edge consumes: the scatter adapter
+    # takes the whole array, while an unadapted edge into a scalar port
+    # takes one value.
+    destination = port or NfPort("item", "val")
+    array_valued = adapter == "scatter" or destination.is_array
     return ExecutableNextflowWorkflow(
         "wf",
-        [NfProcess("SCATTER", [port or NfPort("item", "val")], [], command("true"))],
+        [NfProcess("SCATTER", [destination], [], command("true"))],
         [NfWorkflowInputConnection("items", "SCATTER", "item", adapter)],
-        {"items": ["a", "b"]},
+        {"items": ["a", "b"] if array_valued else "a"},
     )
 
 
