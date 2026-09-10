@@ -98,16 +98,26 @@ def test_the_scan_discovers_the_modules_it_claims_to_cover() -> None:
     assert not missing, f'ORACLE_MODULES names modules that do not exist: {missing}'
 
 
-@pytest.mark.fast
-def test_no_oracle_module_reaches_plugin_discovery() -> None:
-    """P25, static half: no Spec 2 module imports the environment."""
-    graph = {**_test_import_graph(), **_import_graph()}
-    crossings = sorted(
+def _crossings(seeds: tuple[str, ...], graph: dict[str, set[str]]) -> list[tuple[str, str]]:
+    """Every `(module, forbidden target)` pair reachable from `seeds`.
+
+    The scan itself, extracted so the test that proves it fires runs the same
+    code the test that trusts it runs. Before this, the firing test asserted on
+    `FORBIDDEN` and an import set directly — `_reachable` was never called —
+    so it stayed green through mutations that broke the scan outright.
+    """
+    return sorted(
         (module, target)
-        for module in ORACLE_MODULES
+        for module in seeds
         for target in _reachable(module, graph) | graph.get(module, set())
         if target in FORBIDDEN
     )
+
+
+@pytest.mark.fast
+def test_no_oracle_module_reaches_plugin_discovery() -> None:
+    """P25, static half: no Spec 2 module imports the environment."""
+    crossings = _crossings(ORACLE_MODULES, {**_test_import_graph(), **_import_graph()})
     detail = '\n'.join(f'  {m} -> {t}' for m, t in crossings)
     assert not crossings, (
         'the oracle suite must not depend on plugin discovery.\n'
@@ -121,15 +131,25 @@ def test_no_oracle_module_reaches_plugin_discovery() -> None:
 def test_the_scan_fires_on_a_deliberate_crossing(tmp_path: Path) -> None:
     """A guard nobody has seen fire is a guard whose green means nothing.
 
-    Writes a module that imports the environment, points the graph at it, and
-    asserts the crossing is reported. Reverting the FORBIDDEN tuple to empty
-    fails this test.
+    Writes a module that imports the environment, makes a real oracle module
+    import it, and asserts `_crossings` — the scan the test above runs — names
+    the crossing. Transitively on purpose: the breach is one hop past the seed,
+    so this fails if `_reachable` stops traversing, if the crossings filter is
+    inverted, or if `FORBIDDEN` goes empty.
+
+    An earlier version read `_imports_of_test_module`'s result and intersected
+    it with `FORBIDDEN` by hand. Only the last of those three mutations turned
+    it red, in a module whose own sibling defect was found by mutation.
     """
     breach = tmp_path / 'core' / 'breach.py'
     breach.parent.mkdir()
     breach.write_text('import sophios.plugins\n', encoding='utf-8')
-    graph = {'core.breach': _imports_of_test_module(breach)}
-    assert any(t in FORBIDDEN for t in graph['core.breach'])
+
+    seed = 'core.hermetic'
+    graph = {**_test_import_graph(), **_import_graph(),
+             'core.breach': _imports_of_test_module(breach)}
+    graph[seed] = graph[seed] | {'core.breach'}
+    assert _crossings((seed,), graph) == [(seed, 'sophios.plugins')]
 
 
 @pytest.mark.skip_pypi_ci
@@ -228,8 +248,13 @@ def _run_poisoned(targets: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
     claims to test. Built explicitly, not merged with an inherited value: a
     `PYTHONPATH` that happens to already include `tests/` in one shell is not
     evidence this works in general.
+
+    Joined with `os.pathsep`, not `':'`. On Windows a hardcoded colon makes
+    `D:\\...\\src:D:\\...\\tests` one unparsable entry — `tests/` never
+    reaches `sys.path`, and both callers then fail on the very `ImportError`
+    the explicit `PYTHONPATH` exists to prevent.
     """
-    python_path = f'{REPO_ROOT / "src"}:{REPO_ROOT / "tests"}'
+    python_path = os.pathsep.join((str(REPO_ROOT / 'src'), str(REPO_ROOT / 'tests')))
     env = {**os.environ, 'HOME': str(Path(tempfile.mkdtemp())), 'PYTHONPATH': python_path}
     return subprocess.run(
         [sys.executable, '-m', 'pytest', '-p', 'core._poison_plugins', '-q',

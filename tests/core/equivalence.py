@@ -37,9 +37,18 @@ only what their own docstrings name.
     swap really is a renaming, a renaming being a bijection on names. The
     binding's *name* and everything else under it (`default`, `valueFrom`,
     ...) is compared.
-  * the keys of `inputs` and `outputs` and any `outputSource`, which a
-    hermetic compilation shows are namespaced (`oracle__step__1__mk___name`).
-    Their count and their `type`/`format` are compared; their names are not.
+  * the keys of `inputs` and `outputs`, which a hermetic compilation shows are
+    namespaced (`oracle__step__1__mk___name`). Their count and their
+    `type`/`format` are compared; their names are not.
+  * `outputs[].outputSource`, whose value names a producing step. A name, and
+    so forgiven — but not *dropped*, for exactly the reason `in[].source` is
+    not: each workflow output becomes a node in `_dataflow` carrying its
+    declared shape, with an edge from the step that feeds it. Rewiring an
+    output onto a differently-shaped producer is therefore a divergence, while
+    permuting two identically-shaped outputs stays equivalent, that permutation
+    being what a renaming is. Dropped instead, the pairing was invisible: a
+    sorted multiset of shapes cannot see a permutation of itself, so a
+    migration that rewired every output to the wrong producer compared equal.
   * every top-level key other than `steps`, `inputs`, `outputs`,
     `requirements` — `class`, `cwlVersion`, `$namespaces`, `$schemas`,
     document-level `label`/`doc`. Not inspected at this strength, because
@@ -50,6 +59,24 @@ only what their own docstrings name.
 A step key that is compared but should not be is a false divergence, which is
 loud; a step key that is forgiven but should not be is silent. The list above
 is deliberately the second kind, kept short and each entry given its reason.
+
+WILL NOT READ. This relation compares *compiled* documents, so it reads the
+surface forms the compiler emits — list-form `steps:` whose entries carry
+`id`, mapping-form `in:` — and raises `TypeError` on the others rather than
+coercing them. That applies to UP_TO_RENAMING, the strength that *interprets*
+a document's shape; the structural walk the two stronger strengths use
+compares whatever it is handed and forgives nothing, so it needs no such
+guard. CWL admits a mapping-form `steps:` and an array-form `in:`;
+Sophios emits neither, and an earlier draft turned each unhandled shape into
+"nothing here": a non-list `steps:` became `[]`, so two documents differing
+only in their steps produced two empty graphs and compared *equal*, and an
+array-form `in:` was forgiven by `_FORGIVEN_STEP_KEYS` and restored by
+neither reader, taking each binding's `default`, `valueFrom` and `linkMerge`
+with it. Ports and requirements are the opposite case and are read in both
+forms, because there the array form reduces to the same multiset with nothing
+lost. The asymmetry is the rule this module runs on: the one verdict a
+comparison oracle must never invent is "no difference", so a shape it cannot
+read has to be loud.
 """
 from dataclasses import dataclass
 from enum import IntEnum
@@ -193,12 +220,13 @@ def _first_difference(left: Any, right: Any, strength: Strength, path: str, *,
 #: names and are deliberately absent — see `_port_shapes`.
 _SHAPE_KEYS: Final[tuple[str, ...]] = ('type', 'format')
 
-#: Prefix distinguishing a workflow-level input's node in `_dataflow` from a
-#: step's. Emitted step ids are `{stem}__step__{i}__{key}` and emitted port
-#: names are `{step_id}___{port}`, so neither can contain a space or an angle
-#: bracket; without the prefix an input and a step sharing a name would silently
-#: become one node.
+#: Prefixes distinguishing a workflow-level port's node in `_dataflow` from a
+#: step's, and from each other. Emitted step ids are `{stem}__step__{i}__{key}`
+#: and emitted port names are `{step_id}___{port}`, so none of them can contain
+#: a space or an angle bracket; without the prefix a port and a step sharing a
+#: name would silently become one node.
 _INPUT_NODE: Final = '<input> '
+_OUTPUT_NODE: Final = '<output> '
 
 
 def _stem(step_id: str) -> str:
@@ -216,17 +244,65 @@ def _stem(step_id: str) -> str:
         return step_id
 
 
+def _steps_of(document: Yaml) -> list[Yaml]:
+    """The document's steps, in the one surface form the compiler emits.
+
+    A list, every entry a mapping carrying `id`. Anything else raises, per the
+    module docstring's WILL NOT READ: CWL admits `steps:` as a mapping keyed by
+    step name and Sophios never emits it, and coercing the unexpected shape to
+    `[]` — which an earlier draft did — made two documents differing *only* in
+    their steps into two empty graphs that compared equal.
+
+    A step without `id` raises for the same reason rather than being filtered
+    out. It has no node in the dataflow graph, so filtering made
+    `{'steps': [{'out': ['f']}]}` and `{'steps': []}` equivalent at
+    UP_TO_RENAMING — silently, and only ever reachable from a hand-written
+    fixture, which is precisely who needs to be told.
+    """
+    steps = document.get('steps', [])
+    if not isinstance(steps, list):
+        raise TypeError(
+            f'steps: is {type(steps).__name__}, not a list. This relation compares '
+            'compiled documents and the compiler emits list-form steps; a '
+            'mapping-form steps: has to be desugared before it reaches here.')
+    for step in steps:
+        if not isinstance(step, dict) or 'id' not in step:
+            raise TypeError(
+                f'a step with no id: {step!r}. Emitted CWL always carries one, and a '
+                'step without one has no node in the dataflow graph — so comparing '
+                'the document at all would forgive it in silence.')
+    return steps
+
+
+def _in_of(step: Yaml) -> Yaml:
+    """A step's `in:` mapping — the form the compiler emits, or nothing.
+
+    Array-form `in: [{id: n, source: s}]` raises rather than being read as an
+    absent `in:`, per the module docstring's WILL NOT READ. It was forgiven
+    twice over: `_FORGIVEN_STEP_KEYS` drops `in` unconditionally, and neither
+    this reader nor `_bindings` put a non-mapping back, so every binding's
+    `default`, `valueFrom` and `linkMerge` went uncompared along with its
+    source.
+    """
+    bindings = step.get('in')
+    if bindings is None:
+        return {}
+    if not isinstance(bindings, dict):
+        raise TypeError(
+            f"a step's in: is {type(bindings).__name__}, not a mapping. The compiler "
+            'emits the mapping form; the array form has to be desugared before it '
+            'reaches here, or it is forgiven in silence.')
+    return bindings
+
+
 def _bindings(step: Yaml) -> Iterator[tuple[str, str]]:
     """Every `(input name, source)` pair a step declares.
 
-    Both surface forms the compiler emits: `in: {name: 'src'}` and
+    Both binding forms the compiler emits: `in: {name: 'src'}` and
     `in: {name: {source: 'src'}}`, the latter with `source` possibly a list
     (CWL's multiple-inbound-links form).
     """
-    node = step.get('in')
-    if not isinstance(node, dict):
-        return
-    for name, value in node.items():
+    for name, value in _in_of(step).items():
         inner = value.get('source') if isinstance(value, dict) else value
         for source in (inner if isinstance(inner, list) else [inner]):
             if isinstance(source, str):
@@ -269,11 +345,12 @@ def _step_body(step: Yaml) -> Any:
     so that flipping `when` from `$(true)` to `$(false)` was equivalence.
     """
     body = {k: v for k, v in step.items() if k not in _FORGIVEN_STEP_KEYS}
-    bindings = step.get('in')
-    if isinstance(bindings, dict):
+    if 'in' in step:
+        # Only when the key is present, so a step with `in: {}` stays distinct
+        # from a step with no `in:` at all.
         body['in'] = {str(name): {k: v for k, v in value.items() if k != 'source'}
                       if isinstance(value, dict) else {}
-                      for name, value in bindings.items()}
+                      for name, value in _in_of(step).items()}
     return _canonical(body)
 
 
@@ -318,33 +395,104 @@ def _dataflow(document: Yaml) -> nx.DiGraph:
     the forgiveness honest in both directions: differently-typed inputs cannot
     be swapped silently, and swapping two identically-shaped ones stays
     equivalent, because that swap is exactly what re-rooting a namespace does.
+
+    A workflow-level *output* is the mirror image and gets the same treatment:
+    a node labelled with its declared shape and never its name, with an edge
+    out of the step its `outputSource` names. The argument above was standing
+    uncorrected on this side for a while, and the consequence was worse,
+    because for an output the name is the only thing tying a declared shape to
+    a producer: with `outputSource` dropped, `_port_shapes` reduced the outputs
+    to a *sorted multiset* that no permutation of the pairing can change, and
+    `_same_dag` never saw them at all. A document whose every output had been
+    rewired to the wrong producer was UP_TO_RENAMING-equal to the correct one.
+    An output with no `outputSource` gets no node: there is no edge to draw,
+    and its shape is compared by `_port_shapes` already.
     """
     graph = nx.DiGraph()
-    shapes = _declared_shapes(document, 'inputs')
-    steps = document.get('steps')
-    steps = steps if isinstance(steps, list) else []
-    declared = [s for s in steps if isinstance(s, dict) and 'id' in s]
+    input_shapes = _declared_shapes(document, 'inputs')
+    output_shapes = _declared_shapes(document, 'outputs')
+    declared = _steps_of(document)
     for step in declared:
         graph.add_node(str(step['id']),
                        label=('step', _stem(str(step['id'])), _step_body(step)))
     for step in declared:
         consumer = str(step['id'])
         for name, source in _bindings(step):
-            producer, separator, port = source.partition('/')
-            if separator and port and producer:
-                if producer not in graph:
-                    graph.add_node(producer, label=('external', _stem(producer)))
-            elif source:
-                producer, port = _INPUT_NODE + source, ''
-                if producer not in graph:
-                    graph.add_node(producer, label=('input', shapes.get(source)))
-            else:
-                continue  # `in: {name: ''}` names nothing; there is no edge
-            if graph.has_edge(producer, consumer):
-                graph.edges[producer, consumer]['ports'].add((port, name))
-            else:
-                graph.add_edge(producer, consumer, ports={(port, name)})
+            found = _producer_of(graph, source, input_shapes)
+            if found is not None:
+                _connect(graph, found, consumer, name)
+    for name, source in _output_sources(document):
+        found = _producer_of(graph, source, input_shapes)
+        if found is None:
+            continue
+        consumer = _OUTPUT_NODE + name
+        if consumer not in graph:
+            graph.add_node(consumer, label=('output', output_shapes.get(name)))
+        # A workflow output binds no name of its own, so the input half of the
+        # edge label is empty. What it does carry is the producing *port*,
+        # which is what separates two outputs fed by the same step.
+        _connect(graph, found, consumer, '')
     return graph
+
+
+def _producer_of(graph: nx.DiGraph, source: str,
+                 input_shapes: dict[str, str]) -> tuple[str, str] | None:
+    """The `(node, output port)` a `source:` reference comes out of.
+
+    Adds the node when the source names something that is not a declared step:
+    a step this document does not contain, or a workflow-level input. Shared by
+    the two callers in `_dataflow` — a step's bindings and a workflow output's
+    `outputSource` — because the reference is the same reference in both
+    positions, and the second having read it differently is what let the output
+    side keep a defect the input side had already fixed.
+
+    Returns None for a source that names nothing (`in: {name: ''}`), which has
+    no edge.
+    """
+    producer, separator, port = source.partition('/')
+    if separator and port and producer:
+        if producer not in graph:
+            graph.add_node(producer, label=('external', _stem(producer)))
+        return producer, port
+    if source:
+        node = _INPUT_NODE + source
+        if node not in graph:
+            graph.add_node(node, label=('input', input_shapes.get(source)))
+        return node, ''
+    return None
+
+
+def _connect(graph: nx.DiGraph, producer: tuple[str, str], consumer: str, name: str) -> None:
+    """Record one `(output port, input name)` pair on the producer's edge."""
+    node, port = producer
+    if graph.has_edge(node, consumer):
+        graph.edges[node, consumer]['ports'].add((port, name))
+    else:
+        graph.add_edge(node, consumer, ports={(port, name)})
+
+
+def _output_sources(document: Yaml) -> Iterator[tuple[str, str]]:
+    """Every `(workflow output name, source)` pair the document declares.
+
+    Both surface forms, for the same reason `_declared_shapes` reads both, and
+    `outputSource` possibly a list — CWL's multiple-inbound-links form, exactly
+    as a step binding's `source` can be.
+    """
+    node = document.get('outputs') or {}
+    if isinstance(node, dict):
+        ports = [(str(name), port) for name, port in node.items()]
+    elif isinstance(node, list):
+        ports = [(str(port['id']), port) for port in node
+                 if isinstance(port, dict) and 'id' in port]
+    else:
+        return
+    for name, port in ports:
+        if not isinstance(port, dict):
+            continue
+        inner = port.get('outputSource')
+        for source in (inner if isinstance(inner, list) else [inner]):
+            if isinstance(source, str) and source:
+                yield name, source
 
 
 def _port_shapes(document: Yaml, key: str) -> list[str]:
@@ -356,8 +504,12 @@ def _port_shapes(document: Yaml, key: str) -> list[str]:
     *not* stable under renaming. This is the correction to the brief's
     expectation that they would be. What renaming cannot change is how many
     ports there are (a renaming is a bijection on names) and what type each
-    one has, so that is what is compared. `outputSource` is excluded for the
-    same reason the key is: it is a name.
+    one has, so that is what is compared. `outputSource` is excluded here for
+    the same reason the key is — it is a name — and is not thereby forgiven:
+    `_dataflow` re-expresses it as an edge into a node carrying this port's
+    shape, which is what makes the multiset reduction below safe. Reduced
+    without that edge, a permutation of which producer feeds which output was
+    invisible, a sorted multiset being unable to see a permutation of itself.
     """
     node = document.get(key)
     ports = list(node.values()) if isinstance(node, dict) else (node if isinstance(node, list) else [])
@@ -423,6 +575,10 @@ def _same_dag(left: Yaml, right: Yaml) -> Divergence | None:
         names dropped. A hermetic compilation shows those keys are namespaced
         (`oracle__step__1__mk_file___name`), so comparing them by name would
         reject every renaming this strength exists to forgive.
+
+    Which producer feeds which workflow output is *not* one of those two: it is
+    an edge in the graph, for the reason `_dataflow` gives. Compared out here
+    as part of the port multiset it could not be seen at all.
     """
     for key in ('inputs', 'outputs'):
         left_ports, right_ports = _port_shapes(left, key), _port_shapes(right, key)

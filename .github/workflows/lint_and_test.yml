@@ -231,6 +231,18 @@ jobs:
         if: always()
         run: cd sophios/ && pytest tests/core/test_zone_boundary.py tests/core/test_entry_points.py
 
+      # design_docs/core-refactor-design.md, Spec 2: the oracle suite — the
+      # generators, the equivalence relation and P25's own hermeticity checks.
+      # Its own step for the reason Spec 0 has one: a red build is attributable
+      # to a zone without bisecting. It needs nothing this matrix lacks, which
+      # is the point of P25 — no plugins, no containers, no corpus.
+      #
+      # skip_pypi_ci excludes the per-stem `cwltool --validate` cases, for the
+      # reason the contrib step gives below.
+      - name: PyTest Spec 2 Oracle
+        if: always()
+        run: cd sophios/ && pytest tests/core/test_hermeticity.py tests/core/test_generators.py tests/core/test_equivalence.py -m "not skip_pypi_ci"
+
       # Contrib surfaces (ICT, Workflow Builder, REST) run in core CI, but as
       # their own step, so a red build is attributable to a zone without
       # bisecting. See design_docs/core-refactor-design.md, Spec 0.

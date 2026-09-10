@@ -171,11 +171,16 @@ declared_inputs: Final = ('wf_name', 'wf_count')
 
 
 @st.composite
-def _step(draw: st.DrawFn, defined_edges: list[str], referenced_inputs: set[str]) -> Step:
+def _step(draw: st.DrawFn, stem: str, defined_edges: list[str],
+          referenced_inputs: set[str]) -> Step:
     """One tool step: real stem, real input names, a subset of them bound.
 
     Leaving a required input unbound is deliberate and load-bearing — it is
     the only way an *inferred* edge exists, which is what P32 is about.
+
+    The stem is passed in rather than drawn here. `documents()` has to know
+    every stem before any step is built, because mapping form cannot repeat one
+    — see its docstring for what drawing them here cost.
 
     `defined_edges` and `referenced_inputs` are mutated rather than returned:
     an `!*` reference is only well-formed after some `!&` defined the name, and
@@ -183,7 +188,6 @@ def _step(draw: st.DrawFn, defined_edges: list[str], referenced_inputs: set[str]
     facts about the document being built and not about this step.
     """
     # pylint: disable=too-many-branches  # one branch per input/output construct
-    stem = draw(st.sampled_from(STEMS))
     names = sorted(inputs_of(stem))
     chosen = draw(st.lists(st.sampled_from(names), unique=True, max_size=len(names))) if names else []
     bindings: list[tuple[str, InputValue]] = []
@@ -237,27 +241,32 @@ def documents(draw: st.DrawFn) -> Document:
 
     Both step surface forms, because mapping form and sequence form were once
     two languages to a generator that only spelled one. Mapping form cannot
-    repeat a step name (reference §3.1), so its stems are drawn unique — that
-    is the language's constraint, not a convenience, and generating a document
-    the language forbids would make every property downstream quantify over
-    documents that fail before reaching the compiler.
+    repeat a step name (reference §3.1), so its stems are drawn **unique and up
+    front** — that is the language's constraint, not a convenience, and
+    generating a document the language forbids would make every property
+    downstream quantify over documents that fail before reaching the compiler.
+
+    Up front, and not by drawing a step and discarding it on a collision, which
+    is what an earlier draft did and which cost two things. A discarded step
+    had already appended its `!&` names to `defined_edges` — document-scoped by
+    design — and nothing un-appended them, so a later step could draw an `!*`
+    reference to an edge no surviving step defines. `compile_hermetic` passes
+    `testing=True`, and `compiler.py:784` raises for a dangling edge only when
+    `not testing`, so that document did not fail: the compiler added a CWL
+    input "for testing only" where the edge should have been, and the corrupted
+    document reached every Task 3-7 property — including the relation, whose
+    entire subject is which port is fed from where. The distribution suffered
+    too: a mapping-form document asking for four steps routinely got two, so
+    `count` did not mean what it said.
     """
     as_mapping = draw(st.booleans())
-    count = draw(st.integers(min_value=1, max_value=4))
+    stems = draw(st.lists(st.sampled_from(STEMS), min_size=1, max_size=4,
+                          unique=as_mapping))
     defined_edges: list[str] = []
     referenced_inputs: set[str] = set()
 
-    steps: list[Step] = []
-    used: set[str] = set()
-    for _ in range(count):
-        step = draw(_step(defined_edges, referenced_inputs))
-        if as_mapping:
-            # A repeated key is `wic010`, not a document. Skip rather than
-            # filter: filtering a composite this deep hits filter_too_much.
-            if step.id in used:
-                continue
-            used.add(step.id)
-        steps.append(step)
+    steps: list[Step] = [draw(_step(stem, defined_edges, referenced_inputs))
+                         for stem in stems]
 
     # A subworkflow step, drawn sometimes. Its id is what makes it one:
     # `get_subkeys` recognises a subworkflow by the `.wic` suffix and nothing
@@ -403,6 +412,23 @@ def to_yml(document: Document) -> Yaml:
     return loaded
 
 
+def workflows_with_documents() -> SearchStrategy[tuple[Document, Yaml]]:
+    """Each document beside the compiler input it renders to.
+
+    `workflows()` is this projected onto the second half, so there is one
+    composition here rather than two. It exists because the composition needs a
+    test and a strategy yielding only the `Yaml` cannot carry one: the test
+    that holds `to_yml` to the compiler — both surface forms reach a successful
+    compilation, which is what pins the `desugar_into_canonical_normal_form`
+    call `to_yml`'s docstring warns against removing — needs
+    `steps_as_mapping`, and only the `Document` has it. Rebuilding
+    `compilable_documents().map(to_yml)` inside that test instead is what left
+    `workflows()` with zero call sites while every message in it said
+    otherwise.
+    """
+    return compilable_documents().map(lambda document: (document, to_yml(document)))
+
+
 def workflows() -> SearchStrategy[Yaml]:
     """The strategy Tasks 3-7 quantify over: `compilable_documents()` mapped
     through `to_yml`, not `documents()` itself. Those properties compile their
@@ -410,7 +436,7 @@ def workflows() -> SearchStrategy[Yaml]:
     that with a document that does not compile once), so this excludes
     exactly what `compilable_documents()` excludes — see `NOT_YET_COMPILABLE`
     for the current list and why each entry is there."""
-    return compilable_documents().map(to_yml)
+    return workflows_with_documents().map(lambda pair: pair[1])
 
 
 @st.composite

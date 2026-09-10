@@ -62,6 +62,20 @@ MUST_DIFFER: Final[list[tuple[str, Yaml, Yaml]]] = [
     ('an output changed format',
      {'steps': [], 'outputs': {'x': {'type': 'File', 'format': 'edam:format_2330'}}},
      {'steps': [], 'outputs': {'x': {'type': 'File', 'format': 'edam:format_3752'}}}),
+    # The fixture whose absence let `outputSource` stay dropped after the same
+    # argument had already been accepted for `in[].source`. Nothing else here
+    # can see it: `_port_shapes` reduces the outputs to a *sorted* multiset,
+    # which no permutation of the pairing changes, and workflow outputs were
+    # not nodes, so the DAG check never saw them either.
+    ('two workflow outputs swapped producers',
+     {'steps': [{'id': 'a__step__1__mk_file', 'out': ['file']},
+                {'id': 'a__step__2__count', 'out': ['n']}],
+      'outputs': {'p': {'type': 'File', 'outputSource': 'a__step__1__mk_file/file'},
+                  'q': {'type': 'int', 'outputSource': 'a__step__2__count/n'}}},
+     {'steps': [{'id': 'a__step__1__mk_file', 'out': ['file']},
+                {'id': 'a__step__2__count', 'out': ['n']}],
+      'outputs': {'p': {'type': 'File', 'outputSource': 'a__step__2__count/n'},
+                  'q': {'type': 'int', 'outputSource': 'a__step__1__mk_file/file'}}}),
 ]
 
 
@@ -548,6 +562,79 @@ def test_the_dag_check_sees_a_port_rewired_onto_a_different_workflow_input() -> 
 
     assert equivalent(_document('a___p', 'a___q', 'File'),
                       _document('a___q', 'a___p', 'File'), Strength.UP_TO_RENAMING) is None
+
+
+@pytest.mark.fast
+def test_the_dag_check_sees_a_workflow_output_rewired_onto_a_different_producer() -> None:
+    """The companion for `_dataflow`'s workflow-level output nodes.
+
+    The mirror of the input-side test above, and written the same way because
+    the fix must not overshoot in the same direction: rewiring an output onto a
+    differently-shaped producer is a divergence, and permuting two outputs of
+    the *same* shape is not, that permutation being what a renaming is.
+
+    `MUST_DIFFER` carries the swap as well. This exists beside it to assert the
+    mechanism — that the pairing lives in the graph — rather than only the
+    verdict, and to pin the second direction, which no `MUST_DIFFER` row can
+    express.
+    """
+    def _document(first: str, second: str, second_type: str) -> Yaml:
+        return {'steps': [{'id': 'a__step__1__mk_file', 'out': ['file']},
+                          {'id': 'a__step__2__count', 'out': ['n']}],
+                'outputs': {'p': {'type': 'File', 'outputSource': first},
+                            'q': {'type': second_type, 'outputSource': second}}}
+
+    swapped = equivalent(_document('a__step__1__mk_file/file', 'a__step__2__count/n', 'int'),
+                         _document('a__step__2__count/n', 'a__step__1__mk_file/file', 'int'),
+                         Strength.UP_TO_RENAMING)
+    assert swapped is not None and swapped.path == '<dag>'
+
+    # Both outputs declared `File`, so the two producers are interchangeable
+    # and relabelling which one is called `p` is a renaming.
+    assert equivalent(_document('a__step__1__mk_file/file', 'a__step__2__count/n', 'File'),
+                      _document('a__step__2__count/n', 'a__step__1__mk_file/file', 'File'),
+                      Strength.UP_TO_RENAMING) is None
+
+
+@pytest.mark.fast
+def test_an_output_that_lost_its_producer_is_not_the_same_document() -> None:
+    """The companion for `_dataflow` giving an output no node without a source.
+
+    An output whose `outputSource` vanished — the shape of a lowering that
+    stopped wiring one up — keeps its declared shape, so `_port_shapes` cannot
+    see it go. The graph can: the node and its edge are simply absent.
+    """
+    def _document(**source: str) -> Yaml:
+        return {'steps': [{'id': 'a__step__1__mk_file', 'out': ['file']}],
+                'outputs': {'p': {'type': 'File', **source}}}
+    found = equivalent(_document(outputSource='a__step__1__mk_file/file'), _document(),
+                       Strength.UP_TO_RENAMING)
+    assert found is not None and found.path == '<dag>'
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('why, document', [
+    ('mapping-form steps', {'steps': {'s': {'run': 'r'}}}),
+    ('a step with no id', {'steps': [{'out': ['file']}]}),
+    ('array-form in', {'steps': [{'id': 'a__step__1__join',
+                                  'in': [{'id': 'left', 'source': 'x'}]}]}),
+], ids=['steps mapping', 'step without id', 'in array'])
+def test_a_shape_the_relation_cannot_read_is_loud(why: str, document: Yaml) -> None:
+    """The module's WILL NOT READ contract, asserted rather than described.
+
+    Each of these was previously read as "nothing here" — a non-list `steps:`
+    coerced to `[]`, a step without `id` filtered out, an array-form `in:`
+    forgiven by `_FORGIVEN_STEP_KEYS` and restored by neither reader — and so
+    each made a pair of *different* documents compare equal. Compared against
+    an empty document, which is the pair that was equal, so a coercion coming
+    back returns this test to red rather than merely to a different exception.
+    """
+    try:
+        equivalent(document, {'steps': []}, Strength.UP_TO_RENAMING)
+    except TypeError:
+        return
+    pytest.fail(f'{why}: read as a document with nothing in it, and so found equivalent '
+                'to an empty one. A shape this relation cannot read has to be loud.')
 
 
 @pytest.mark.fast

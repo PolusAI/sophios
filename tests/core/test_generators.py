@@ -13,8 +13,10 @@ from collections import Counter
 
 import pytest
 from hypothesis import HealthCheck, find, given, settings
+from hypothesis.strategies import SearchStrategy
 
-from sophios.lang import Document, parse
+from sophios.lang import Document, EdgeRef, Step, parse
+from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
 from .hermetic import COVERAGE, compile_hermetic_cwl
@@ -138,28 +140,147 @@ def test_the_workflows_strategy_produces_documents_the_compiler_accepts() -> Non
     `populate_scalar_val` raises a bare `ValueError` — is a real and declared
     residual (measured at about one document in ten), and a threshold that
     pretended otherwise would be a flaky test rather than a stricter one.
+
+    Drawn from `workflows_with_documents()`, which is the strategy `workflows()`
+    itself is a projection of, so the composition under test is the one that
+    ships. An earlier version rebuilt `compilable_documents().map(to_yml)` here
+    by hand — needing the `Document` for `steps_as_mapping` and having no way
+    to get it — which left `workflows()` with zero call sites in the tree while
+    this test's own messages claimed to be covering it. Replacing its body with
+    `st.none()` left the suite green.
     """
     compiled: Counter[str] = Counter()
 
     @settings(max_examples=50, suppress_health_check=list(HealthCheck), deadline=None)
-    @given(strat.compilable_documents())
-    def _collect(document: Document) -> None:
+    @given(strat.workflows_with_documents())
+    def _collect(case: tuple[Document, Yaml]) -> None:
+        document, yml = case
         form = 'mapping' if document.steps_as_mapping else 'sequence'
         compiled['drawn'] += 1
         try:
-            compile_hermetic_cwl(strat.to_yml(document), 'oracle')
+            compile_hermetic_cwl(yml, 'oracle')
         except ValueError:  # the declared `!ii` residual; see the docstring
             return
         compiled[form] += 1
 
-    _collect()  # pylint: disable=no-value-for-parameter  # @given supplies `document`
+    _collect()  # pylint: disable=no-value-for-parameter  # @given supplies `case`
 
     for form in ('mapping', 'sequence'):
         assert compiled[form], (
-            f'no {form}-form document from workflows() compiled, so every Task 3-7 '
-            f'property is quantifying over the other form alone: {dict(compiled)}')
+            f'no {form}-form document from workflows_with_documents() compiled, so every '
+            f'Task 3-7 property is quantifying over the other form alone: {dict(compiled)}')
     assert compiled['mapping'] + compiled['sequence'] > compiled['drawn'] // 2, (
-        f'fewer than half the documents workflows() produces compile: {dict(compiled)}')
+        f'fewer than half the documents workflows() is a projection of compile: '
+        f'{dict(compiled)}')
+
+
+@pytest.mark.fast
+def test_every_edge_a_document_references_is_defined_in_that_document() -> None:
+    """An `!*` with no `!&` is not a document, and the compiler will not say so.
+
+    `compile_hermetic` passes `testing=True`, and `compiler.py:784` raises for
+    a dangling edge only when `not testing`; under this suite it falls through
+    and adds a CWL input "for testing only" where the edge should have been. So
+    a leaked edge name does not produce a failure, it produces a *different
+    workflow* — one with one fewer internal edge and one more workflow input —
+    and every Task 3-7 property then quantifies over documents other than the
+    ones the generator believes it built.
+
+    That is what discarding a duplicate-stem step used to do: the discarded
+    step's `!&` names stayed in the document-scoped `defined_edges`, and a
+    later step could reference them. Nothing noticed, because the one test that
+    compiles generated documents attributes every `ValueError` to the declared
+    `!ii` residual — so the dangling-edge error of any non-`testing` caller
+    would have been swallowed there under the wrong name.
+
+    This is the *invariant*, not the detector. Measured against the discarding
+    generator, a leak that a later step then referenced landed in about one
+    document in five hundred (4 in 2000), so at this sample the check catches
+    that regression only about half the time. What catches it every time is
+    `test_no_step_the_generator_draws_is_discarded` below, which pins the fix
+    rather than its consequence. Both are here because either alone reads as
+    arbitrary: this one says what must never be true of a document, that one
+    says why the generator cannot produce it.
+    """
+    @COVERAGE
+    @given(strat.documents())
+    def _check(document: Document) -> None:
+        defined = {binding.edge_def.name for step in document.steps
+                   for binding in step.outputs if binding.edge_def is not None}
+        referenced = {value.name for step in document.steps
+                      for _, value in step.inputs if isinstance(value, EdgeRef)}
+        assert referenced <= defined, (
+            f'!* references an edge nothing in the document defines: '
+            f'{sorted(referenced - defined)}\n{strat.render(document)}')
+
+    _check()  # pylint: disable=no-value-for-parameter  # @given supplies `document`
+
+
+@pytest.mark.fast
+def test_no_step_the_generator_draws_is_discarded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every step drawn reaches the document, which is the whole of the fix.
+
+    Mapping form cannot repeat a step name, and the earlier draft satisfied
+    that by drawing a step and dropping it on a collision — keeping the edge
+    names it had already defined (the invariant above) and quietly costing the
+    sample its size, so a document asking for four steps often got two.
+    Drawing the stems unique up front removes the discard instead of repairing
+    after it.
+
+    Recorded at the drawing site rather than read off the document, because
+    every consequence of a discard is *rare* while the discard itself is
+    common: a mapping-form collision happens in a large fraction of documents,
+    but only a fifth of steps define an edge at all, so a leaked name that a
+    later step then referenced was measured at 4 documents in 2000, and a gap
+    in the edge numbering at 0 in 2000. A detector built on either would have
+    reported this generator healthy about as often as not. Nothing but the
+    difference between what was drawn and what survived sees it every time,
+    and only the drawing side knows the first half.
+    """
+    drawn: list[str] = []
+    real = strat._step  # pylint: disable=protected-access  # the drawing site is the subject
+
+    def _recording(stem: str, defined_edges: list[str],
+                   referenced_inputs: set[str]) -> SearchStrategy[Step]:
+        drawn.append(stem)
+        return real(stem, defined_edges, referenced_inputs)
+
+    monkeypatch.setattr(strat, '_step', _recording)
+
+    @COVERAGE
+    @given(strat.documents())
+    def _check(document: Document) -> None:
+        # The *tail* of `drawn`, not all of it: Hypothesis abandons a partly
+        # drawn example whenever a draw comes back unusable — the unique list
+        # of stems is one such draw — and those abandoned steps are recorded
+        # too, with no document to compare them against. The steps of the
+        # example that survived are the last ones drawn, and under this
+        # generator they are exactly as many as the document keeps.
+        kept = [step.id for step in document.steps if not step.id.endswith('.wic')]
+        assert drawn[-len(kept):] == kept, (
+            f'the generator drew {drawn[-len(kept) - 2:]} and the document kept {kept}. A '
+            f'discarded step takes its !& names with it and shrinks the sample silently')
+        drawn.clear()
+
+    _check()  # pylint: disable=no-value-for-parameter  # @given supplies `document`
+
+
+@pytest.mark.fast
+def test_workflows_is_the_pairs_second_half_and_nothing_else() -> None:
+    """The one step between `workflows()` and the test above.
+
+    That test draws `workflows_with_documents()`, so `workflows()` is a single
+    `map` away from anything covered — and a single `map` is exactly where
+    `st.none()` fits. A handful of draws closes it: the projection has to be
+    the compiler input, not the document and not nothing.
+    """
+    @settings(max_examples=5, suppress_health_check=list(HealthCheck), deadline=None)
+    @given(strat.workflows())
+    def _check(yml: Yaml) -> None:
+        assert isinstance(yml, dict), f'workflows() yielded {type(yml).__name__}'
+        assert yml.get('steps'), f'workflows() yielded a document with no steps: {yml}'
+
+    _check()  # pylint: disable=no-value-for-parameter  # @given supplies `yml`
 
 
 @pytest.mark.slow
