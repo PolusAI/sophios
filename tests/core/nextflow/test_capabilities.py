@@ -353,7 +353,8 @@ def test_rejects_absent_optional_flag_that_is_also_dereferenced() -> None:
         cwl_rosetree_to_nextflow(rose)
     assert _findings(excinfo.value) == [
         "steps[0].run.inputs.verbose: absent optional values are supported only for a "
-        "val input that is unreferenced in its command or drives a boolean flag"
+        "val input that is unreferenced in its command, or drives a boolean flag and "
+        "is referenced nowhere else"
     ]
 
 
@@ -659,7 +660,7 @@ def test_rejects_absent_optional_input_bound_directly_into_the_command() -> None
     with pytest.raises(
         ValueError,
         match=r"steps\[0\].run.inputs.message: absent optional values are supported only for "
-        "a val input that is unreferenced in its command or drives a boolean flag",
+        "a val input that is unreferenced in its command, or drives a boolean flag and is referenced nowhere else",
     ):
         cwl_rosetree_to_nextflow(rose)
 

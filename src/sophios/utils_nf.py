@@ -1309,7 +1309,8 @@ def _absent_optional_findings(
                     continue
                 detail = (
                     "absent optional values are supported only for a val input that is "
-                    "unreferenced in its command or drives a boolean flag"
+                    "unreferenced in its command, or drives a boolean flag and is "
+                    "referenced nowhere else"
                 )
             else:
                 detail = "resolves to an absent required value"

@@ -615,13 +615,18 @@ class NfProcess:
                 f"process {self.name!r} array bindings must reference array-marked inputs: "
                 f"{', '.join(sorted(invalid))}"
             )
-        # The converse direction: a plain reference calls .toString() on its
-        # channel value, so an array-marked port reached that way renders as
-        # a Groovy list literal instead of expanding per item.
-        if invalid := {name for name in plain_reference_names if is_array_by_name[name]}:
+        # The converse direction, for both reference kinds: each calls
+        # .toString() on its channel value -- a basename reference through a
+        # GPath spread -- so an array-marked port reached either way renders
+        # as a Groovy list literal instead of expanding per item.
+        if invalid := {
+            name
+            for name in plain_reference_names | basename_names
+            if is_array_by_name[name]
+        }:
             raise ValueError(
                 f"process {self.name!r} array-marked inputs require an array binding, "
-                f"not a plain reference: {', '.join(sorted(invalid))}"
+                f"not a plain or basename reference: {', '.join(sorted(invalid))}"
             )
         match self.container:
             case None:
@@ -933,6 +938,7 @@ class ExecutableNextflowWorkflow:
 
         incoming: set[tuple[str, str]] = set()
         workflow_input_qualifiers: dict[str, str] = {}
+        param_destinations: dict[str, tuple[bool, str, str]] = {}
         workflow_outputs: set[str] = set()
         dependencies: dict[str, set[str]] = {name: set() for name in process_by_name}
 
@@ -954,6 +960,9 @@ class ExecutableNextflowWorkflow:
                             f"workflow input {from_port!r} feeds incompatible channel qualifiers "
                             f"{previous!r} and {semantics!r}"
                         )
+                    param_destinations.setdefault(
+                        from_port, (destination.is_array, to_process, to_port)
+                    )
                     self._record_incoming(incoming, to_process, to_port)
                 case NfProcessConnection(from_process, from_port, to_process, to_port):
                     source = self._source_port(process_by_name, from_process, from_port)
@@ -974,6 +983,23 @@ class ExecutableNextflowWorkflow:
                     if to_port in workflow_outputs:
                         raise ValueError(f"workflow contains duplicate output emit name {to_port!r}")
                     workflow_outputs.add(to_port)
+
+        # Checked after the loop: a parameter feeding inconsistent shapes is
+        # reported as inconsistent above, so by here every destination agrees
+        # and the value itself is what remains to verify. This is the only
+        # edge type that can reach an array port today. An empty sequence is
+        # the absent-optional sentinel on a scalar port and a real empty
+        # array on an array port, so it is legal either way.
+        for from_port, (is_array, to_process, to_port) in param_destinations.items():
+            value = self.params[from_port]
+            # params is frozen, so a JSON array arrives as a tuple.
+            sequence = isinstance(value, (list, tuple))
+            if not (sequence and not value) and sequence != is_array:
+                raise ValueError(
+                    f"workflow input {from_port!r} delivers a "
+                    f"{'list' if sequence else 'scalar'} to {to_process}.{to_port}, "
+                    f"which expects {'an array' if is_array else 'a scalar'}"
+                )
 
         topological_order(dependencies, error="workflow connections contain a cycle")
         expected_inputs = {

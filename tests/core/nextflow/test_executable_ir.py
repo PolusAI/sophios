@@ -316,7 +316,7 @@ def test_array_marked_input_rejects_a_plain_reference() -> None:
     # The converse direction: a plain reference renders values.toString(), so
     # a two-item array would reach the command line as "[a, b]" rather than
     # expanding per item.
-    message = "array-marked inputs require an array binding, not a plain reference"
+    message = "array-marked inputs require an array binding, not a plain or basename reference"
     for template in (
         NfTemplate((NfLiteral("--joined="), NfInputReference("values"))),
         NfTemplate((NfInputReference("values"),)),
@@ -346,6 +346,77 @@ def test_array_marked_input_rejects_a_plain_reference() -> None:
             [NfPort("values", "val", is_array=True)],
             [NfPort("out", "path", "out", NfTemplate((NfInputReference("values"),)))],
             NfCommand((NfTemplate((NfLiteral("echo"),)),)),
+        )
+
+
+@pytest.mark.fast
+def test_array_marked_input_rejects_a_basename_reference() -> None:
+    # Same route as a plain reference: values.name.toString() is a GPath
+    # spread over the list, so a File[] read as a basename renders
+    # --tag=[a.txt, b.txt]. In glob position it also breaks the premise the
+    # literal-name rule rests on, since the rendered name is a list.
+    message = "array-marked inputs require an array binding, not a plain or basename reference"
+    with pytest.raises(ValueError, match=message):
+        NfProcess(
+            "TAG",
+            [NfPort("values", "path", is_array=True)],
+            [],
+            NfCommand((
+                NfTemplate((NfLiteral("echo"),)),
+                NfTemplate((NfLiteral("--tag="), NfBasenameReference("values"))),
+            )),
+        )
+    with pytest.raises(ValueError, match=message):
+        NfProcess(
+            "TAG",
+            [NfPort("values", "path", is_array=True)],
+            [NfPort(
+                "out", "path", "out",
+                NfTemplate((NfBasenameReference("values"), NfLiteral(".done"))),
+            )],
+            NfCommand((NfTemplate((NfLiteral("echo"),)),)),
+        )
+
+
+@pytest.mark.fast
+def test_workflow_input_value_must_match_destination_cardinality() -> None:
+    # The live path: a workflow input is the only edge that can reach an
+    # array port today. A scalar param there renders params.values.collect{},
+    # which in Groovy iterates a String's characters.
+    array_process = NfProcess(
+        "JOIN",
+        [NfPort("values", "val", is_array=True)],
+        [],
+        NfCommand((NfTemplate((NfLiteral("echo"),)), NfArrayBinding("values"))),
+    )
+    with pytest.raises(ValueError, match="delivers a scalar to JOIN.values, which expects an array"):
+        ExecutableNextflowWorkflow(
+            "WF",
+            [array_process],
+            [NfWorkflowInputConnection("values", "JOIN", "values")],
+            {"values": "abc"},
+        )
+    scalar_process = NfProcess("ONE", [NfPort("value", "val")], [], command("true"))
+    with pytest.raises(ValueError, match="delivers a list to ONE.value, which expects a scalar"):
+        ExecutableNextflowWorkflow(
+            "WF",
+            [scalar_process],
+            [NfWorkflowInputConnection("value", "ONE", "value")],
+            {"value": ["a", "b"]},
+        )
+    # An empty sequence stays legal on both sides: it is the absent-optional
+    # sentinel on a scalar port and a real empty array on an array port.
+    cases: tuple[tuple[NfProcess, dict[str, Any]], ...] = (
+        (array_process, {"values": []}),
+        (scalar_process, {"value": []}),
+    )
+    for process, params in cases:
+        port = process.inputs[0].name
+        ExecutableNextflowWorkflow(
+            "WF",
+            [process],
+            [NfWorkflowInputConnection(port, process.name, port)],
+            params,
         )
 
 

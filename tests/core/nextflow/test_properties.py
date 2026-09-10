@@ -117,7 +117,16 @@ def test_interpolated_glob_literals_use_only_valid_gstring_escapes(value: str) -
         NfLiteral(f"`{value}"),
         NfInputReference("name"),
     )))
-    assert "\\`" not in rendered
+    # Groovy has no \\` escape, so no backtick may be escaped. A bare
+    # substring check is not that property: the escaper doubles every
+    # backslash, so a literal backslash before a backtick also matches it
+    # while being correctly escaped. Count the run instead -- an even run
+    # leaves the backtick unescaped.
+    body = rendered[1:-1]
+    for index, char in enumerate(body):
+        if char == "`":
+            prefix = body[:index]
+            assert (len(prefix) - len(prefix.rstrip("\\"))) % 2 == 0
     assert "${name}" in rendered
 
 
