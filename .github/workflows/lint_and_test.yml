@@ -241,7 +241,7 @@ jobs:
       # reason the contrib step gives below.
       - name: PyTest Spec 2 Oracle
         if: always()
-        run: cd sophios/ && pytest tests/core/test_hermeticity.py tests/core/test_generators.py tests/core/test_equivalence.py -m "not skip_pypi_ci"
+        run: cd sophios/ && pytest tests/core/test_hermeticity.py tests/core/test_generators.py tests/core/test_equivalence.py tests/core/test_equivalences.py -m "not skip_pypi_ci"
 
       # Contrib surfaces (ICT, Workflow Builder, REST) run in core CI, but as
       # their own step, so a red build is attributable to a zone without

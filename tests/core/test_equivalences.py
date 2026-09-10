@@ -7,6 +7,7 @@ separate tests with their own idea of "the same workflow", which is how the
 two regression tests already in this tree ended up with two.
 """
 import copy
+from collections import Counter
 from typing import Any, Final
 
 import pytest
@@ -20,7 +21,7 @@ from . import ast_strategies as strat
 from .equivalence import Strength, equivalent
 from .hermetic import PARTITION, compile_hermetic, subworkflow_step
 from .synthetic_tools import STEMS, inputs_of
-from .transformations import TRANSFORMATIONS, Transformation, split, transformations
+from .transformations import TRANSFORMATIONS, Transformation, split, split_transformations
 
 #: The name both sides compile under. Identical on purpose: `identity` and
 #: `text_roundtrip` claim IDENTICAL, and `equivalent(..., Strength.IDENTICAL)`
@@ -195,16 +196,24 @@ def _hits_the_scalar_coercion_gap(document: Yaml) -> bool:
     return False
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.slow
+@pytest.mark.parametrize('constant', [*TRANSFORMATIONS, None],
+                         ids=[rewrite.name for rewrite in TRANSFORMATIONS] + ['split'])
 @given(st.data())
 @PARTITION
-def test_a_meaning_preserving_rewrite_preserves_meaning(data: st.DataObject) -> None:
+def test_a_meaning_preserving_rewrite_preserves_meaning(constant: Transformation | None,
+                                                        data: st.DataObject) -> None:
     """P28, P29, and every equivalence law in Spec 2, as one statement.
 
     Parameterised by transformation, so a failure names which rewrite broke
     rather than which file it was written in — and so adding a rewrite is one
     entry in a table instead of a new test module with a new idea of equality.
+
+    Parametrised, not drawn. Drawing the rewrite alongside the document made
+    the property's strength per rewrite a matter of Hypothesis's weighting:
+    `identity` took about half the fifty examples and the thinnest real rewrite
+    could reach zero (see `split_transformations`). Each kind now gets the
+    whole budget, and `split`'s partitioning is what is drawn inside it.
 
     CANNOT GENERATE (declared): rewrites that change step order, which this
     language's inference is not invariant under (see `transformations.py`'s
@@ -218,7 +227,7 @@ def test_a_meaning_preserving_rewrite_preserves_meaning(data: st.DataObject) -> 
     """
     yml = data.draw(strat.workflows().filter(
         lambda w: len(w['steps']) >= 2 and not _hits_the_scalar_coercion_gap(w)))
-    rewrite = data.draw(transformations())
+    rewrite = constant if constant is not None else data.draw(split_transformations())
     transformed = rewrite.apply(copy.deepcopy(yml))
 
     before = _compile_flat(yml)
@@ -231,6 +240,52 @@ def test_a_meaning_preserving_rewrite_preserves_meaning(data: st.DataObject) -> 
         f'{found}\n\n'
         f'--- before ---\n{yaml.safe_dump(yml, sort_keys=False)}\n'
         f'--- after ---\n{yaml.safe_dump(transformed, sort_keys=False)}')
+
+
+def _nesting_depth(document: Yaml) -> int:
+    """How many subworkflow layers a document goes down.
+
+    A step carrying a `subtree` is a subworkflow (`hermetic.subworkflow_step`
+    builds the shape `read_ast_from_disk` produces), so depth 2 means a
+    subworkflow that itself contains one — the shape P29 is about.
+    """
+    return max((1 + _nesting_depth(step['subtree']) for step in document.get('steps', [])
+                if isinstance(step, dict) and isinstance(step.get('subtree'), dict)),
+               default=0)
+
+
+@pytest.mark.fast
+def test_split_reaches_a_document_that_is_already_nested() -> None:
+    """P29's half of the property above, which nothing checked.
+
+    The module docstring calls P29 "`split` composed with itself", and nothing
+    composes anything: one rewrite is applied once. The nested case is reached
+    when `workflows()` happens to draw a document that already contains a
+    subworkflow step and `split` wraps it — true today, but a fact about
+    `ast_strategies.documents()` rather than about anything in this file. If
+    that generator's subworkflow branch narrowed, P29's coverage would go to
+    zero with every test here still green.
+
+    Which rewrite gets drawn is no longer a question — the property parametrises
+    over all five — so this measures the one thing left to chance: how often the
+    document underneath is deep enough for `split` to nest. Drawn exactly as the
+    property draws, filter included.
+    """
+    depths: Counter[int] = Counter()
+
+    @PARTITION
+    @given(st.data())
+    def _collect(data: st.DataObject) -> None:
+        yml = data.draw(strat.workflows().filter(
+            lambda w: len(w['steps']) >= 2 and not _hits_the_scalar_coercion_gap(w)))
+        rewrite = data.draw(split_transformations())
+        depths[_nesting_depth(rewrite.apply(copy.deepcopy(yml)))] += 1
+
+    _collect()  # pylint: disable=no-value-for-parameter  # @given supplies `data`
+
+    assert sum(count for depth, count in depths.items() if depth >= 2), (
+        'no drawn split reached a document that already contained a subworkflow, so P29 — '
+        f'nesting, not just partitioning — went untested. Depths drawn: {dict(depths)}')
 
 
 #: A document every constant transformation but `identity` must genuinely
@@ -248,7 +303,6 @@ _NOOP_GUARD_FIXTURE: Final[Yaml] = {
 }
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.fast
 @pytest.mark.parametrize('rewrite', TRANSFORMATIONS, ids=lambda t: t.name)
 def test_every_transformation_actually_transforms(rewrite: Transformation) -> None:
@@ -268,19 +322,29 @@ def test_every_transformation_actually_transforms(rewrite: Transformation) -> No
     could never tell them apart. What a no-op could fake there is skipping the
     round trip entirely and handing back the very object it was given, so
     that is what is checked: a fresh, value-equal object, not a different one.
+
+    `apply` is handed `yml` itself and the comparison is against a pristine
+    `expected`, which is the whole of what makes that check real. An earlier
+    version passed `apply` a fresh `copy.deepcopy(yml)` and then asserted
+    `result is not yml` — true for *every* implementation, `lambda w: w`
+    included, because the identity being compared was the copy's and not the
+    one `apply` received. Replacing `_text_roundtrip`'s body with
+    `return document` left this test green. Comparing against `expected`
+    rather than `yml` matters for the same reason on the other branch: a
+    rewrite that mutated in place would otherwise be compared against itself.
     """
     yml = copy.deepcopy(_NOOP_GUARD_FIXTURE)
     if rewrite.name == 'identity':
         pytest.skip('identity changes the input by definition; see the module docstring')
-    result = rewrite.apply(copy.deepcopy(yml))
+    expected = copy.deepcopy(yml)
+    result = rewrite.apply(yml)
     if rewrite.preserves is Strength.IDENTICAL:
         assert result is not yml, f'{rewrite.name} returned its input unchanged, doing no work'
-        assert result == yml, f'{rewrite.name} claims IDENTICAL but changed the value'
+        assert result == expected, f'{rewrite.name} claims IDENTICAL but changed the value'
     else:
-        assert result != yml, f'{rewrite.name} is a no-op'
+        assert result != expected, f'{rewrite.name} is a no-op'
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.fast
 def test_splitting_really_renames() -> None:
     """`split` claims only UP_TO_RENAMING. If it renamed nothing, that claim
@@ -305,7 +369,6 @@ def test_splitting_really_renames() -> None:
     assert found is None, found
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.fast
 def test_the_property_fails_for_a_rewrite_that_changes_meaning() -> None:
     """A deliberately dishonest transformation — one that drops a step while

@@ -18,15 +18,15 @@ language.
 The five, with their strengths, are `identity`, `text_roundtrip`, `split`,
 `inline_all` and `rename_workflow`. `split` needs a drawn argument (which
 steps go in which file), so it is built by a strategy rather than being a
-constant: `TRANSFORMATIONS` holds the other four, and `transformations()`
-unions them with a `split` built from `ast_strategies.partitionings`.
+constant: `TRANSFORMATIONS` holds the other four, and `split_transformations()`
+builds a `split` from `ast_strategies.partitionings`. The property parametrises
+over all five rather than drawing one, so each gets the whole budget.
 """
 import copy
 from dataclasses import dataclass
 from typing import Callable, Final
 
 import yaml
-from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
 from sophios.inlineing import get_inlineable_subworkflows, inline_subworkflow
@@ -236,8 +236,8 @@ def _cut_points(partitioning: tuple[tuple[int, ...], ...]) -> tuple[int, ...]:
     """The boundary before every group but the first, as plain indices.
 
     `partitionings(n)` is shaped for a document with exactly `n` steps, but
-    `transformations()` has no document in hand when it builds a `split` — it
-    hands out `Transformation`s, and only the property that calls `apply`
+    `split_transformations()` has no document in hand when it builds a `split`
+    — it hands out `Transformation`s, and only the property that calls `apply`
     knows how many steps the drawn workflow actually has. Reducing a
     partitioning to its boundary *positions* (rather than its groups) is what
     lets `split.apply` rebuild groups for whatever length it is actually
@@ -280,10 +280,22 @@ def split(cuts: tuple[tuple[int, ...], ...]) -> Transformation:
 _SPLIT_STEP_BOUND: Final = 5
 
 
-def transformations() -> SearchStrategy[Transformation]:
-    """Every transformation this module knows: the constant four, plus a
-    freshly drawn `split`."""
-    # pylint cannot see through @st.composite and reads partitionings() as
-    # returning its element type rather than a SearchStrategy.
-    return st.one_of(st.sampled_from(TRANSFORMATIONS),
-                     partitionings(_SPLIT_STEP_BOUND).map(split))  # pylint: disable=no-member
+def split_transformations() -> SearchStrategy[Transformation]:
+    """A freshly drawn `split`, the one transformation that is not a constant.
+
+    Replaces a `transformations()` strategy that drew all five, which the
+    property then had to hope was even. It was not: `st.one_of` weights its
+    branches by Hypothesis's heuristics and `st.sampled_from` favours its first
+    element, so at the property's own fifty examples `identity` took about half
+    the budget — the one rewrite whose subject is the compiler's idempotence
+    rather than any rewrite — while the thinnest real one came out at 1 example
+    in 50, and at none at all in about one run in five.
+
+    No amount of reordering fixes that, because the bias is the engine
+    preferring simpler choices, by design. So the property parametrises over
+    the five kinds instead and each gets the whole budget, which is both
+    stronger and one less thing to measure.
+    """
+    # pylint cannot see through `@st.composite` in `ast_strategies` and reads
+    # partitionings() as returning its element type rather than a strategy.
+    return partitionings(_SPLIT_STEP_BOUND).map(split)  # pylint: disable=no-member
