@@ -1940,7 +1940,7 @@ def _scattered_element_type(declared: Any) -> Any:
     if not _is_array_type(required):
         return declared
     try:
-        return _array_item_type(required.get("items"))
+        return _array_item_type(required)
     except ValueError:
         return declared
 
@@ -1973,7 +1973,7 @@ def _scatter_source_findings(
             f"input; {source!r} declares {declared!r}"
         ]
     try:
-        element = _channel_shape(_array_item_type(required.get("items")))
+        element = _channel_shape(_array_item_type(required))
         port = _channel_shape(definition.get("type"))
     except ValueError:
         # An unsupported item or port type is already reported by the type passes.

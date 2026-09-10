@@ -353,9 +353,7 @@ def test_rejects_absent_optional_flag_that_is_also_dereferenced() -> None:
         workflow_inputs={"verbose": None},
     )
 
-    with pytest.raises(ValueError) as excinfo:
-        cwl_rosetree_to_nextflow(rose)
-    assert _findings(excinfo.value) == [
+    assert _findings(rose) == [
         "steps[0].run.inputs.verbose: absent optional values are supported only for a "
         "val input whose absence leaves command rendering unchanged"
     ]
