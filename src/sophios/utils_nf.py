@@ -160,13 +160,21 @@ def _is_array_type(cwl_type: Any) -> bool:
     return isinstance(cwl_type, Mapping) and cwl_type.get("type") == "array"
 
 
-def _array_item_type(items: Any) -> Any:
-    """Return the supported scalar item type for an array's ``items`` field.
+def _array_item_type(array_type: Any) -> Any:
+    """Return the supported scalar item type for an array type mapping.
 
     Only a bare scalar type name, or a single-key ``{"type": <scalar>}``
     mapping, is representable. Nested arrays and a per-item ``inputBinding``
     are explicitly deferred rather than silently mishandled.
+
+    CWL spells a per-item binding two ways -- inside ``items``, and on the
+    array schema itself beside ``items`` -- and only the second is the
+    common form. Both are rejected here; accepting the array-level one
+    would silently drop the per-item prefix cwltool renders.
     """
+    if isinstance(array_type, Mapping) and "inputBinding" in array_type:
+        raise ValueError("per-item array element bindings are deferred beyond this lowering")
+    items = array_type.get("items") if isinstance(array_type, Mapping) else None
     match items:
         case "array":
             raise ValueError("nested arrays are deferred beyond this lowering")
@@ -192,7 +200,7 @@ def _ports(raw_ports: Any, *, outputs: bool) -> list[NfPort]:
                 name = _identifier(raw_name, context="port name")
                 required_type = _required_type(cwl_type)
                 is_array = not outputs and _is_array_type(required_type)
-                element_type = _array_item_type(required_type.get("items")) if is_array else cwl_type
+                element_type = _array_item_type(required_type) if is_array else cwl_type
                 qualifier = cwl_type_to_nf_qualifier(element_type)
                 path_kind = {
                     "File": "file",
@@ -346,7 +354,7 @@ def _array_binding(
         )
     # Validates the item type is a supported, non-nested, no-per-item-binding
     # scalar; the qualifier itself is not needed here.
-    cwl_type_to_nf_qualifier(_array_item_type(required_type.get("items")))
+    cwl_type_to_nf_qualifier(_array_item_type(required_type))
     match binding.get("prefix"):
         case None:
             prefix = None
@@ -682,7 +690,7 @@ def _phase1_value_matches(cwl_type: Any, value: Any) -> bool:
         if not isinstance(value, list):
             return False
         try:
-            item_type = _array_item_type(required.get("items"))
+            item_type = _array_item_type(required)
         except ValueError:
             return False
         return all(_phase1_value_matches(item_type, item) for item in value)
@@ -1211,14 +1219,17 @@ def _safe_absence_names(tool: Mapping[str, Any]) -> set[str] | None:
         outputs = _ports(tool.get("outputs", {}), outputs=True)
     except (ValueError, TypeError):
         return None
-    flag_names = {token.name for token in command.tokens if isinstance(token, NfFlag)}
     templates = [
         *(token for token in command.tokens if isinstance(token, NfTemplate)),
         *(stream for stream in (command.stdin, command.stdout, command.stderr) if stream),
         *(port.glob for port in outputs if port.glob),
     ]
     plain, basenamed = _template_reference_names(templates)
-    unsafe = (plain - flag_names) | basenamed
+    # Every template reference dereferences the value, so it is unsafe even
+    # when the same input also drives a flag: excusing it on the strength of
+    # the flag use would let the absence sentinel render into a command line.
+    # A flag-only boolean has no template reference and never enters `plain`.
+    unsafe = plain | basenamed
     try:
         all_names = {
             _identifier(raw_name, context="input reference")

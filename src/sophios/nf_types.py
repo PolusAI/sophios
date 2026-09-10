@@ -590,9 +590,10 @@ class NfProcess:
         basename_names = {
             segment.name for segment in segments if isinstance(segment, NfBasenameReference)
         }
-        references = flag_names | array_binding_names | basename_names | {
+        plain_reference_names = {
             segment.name for segment in segments if isinstance(segment, NfInputReference)
         }
+        references = flag_names | array_binding_names | basename_names | plain_reference_names
         if unknown := references - input_names:
             raise ValueError(
                 f"process {self.name!r} templates reference unknown inputs: {', '.join(sorted(unknown))}"
@@ -613,6 +614,14 @@ class NfProcess:
             raise ValueError(
                 f"process {self.name!r} array bindings must reference array-marked inputs: "
                 f"{', '.join(sorted(invalid))}"
+            )
+        # The converse direction: a plain reference calls .toString() on its
+        # channel value, so an array-marked port reached that way renders as
+        # a Groovy list literal instead of expanding per item.
+        if invalid := {name for name in plain_reference_names if is_array_by_name[name]}:
+            raise ValueError(
+                f"process {self.name!r} array-marked inputs require an array binding, "
+                f"not a plain reference: {', '.join(sorted(invalid))}"
             )
         match self.container:
             case None:
@@ -947,8 +956,17 @@ class ExecutableNextflowWorkflow:
                         )
                     self._record_incoming(incoming, to_process, to_port)
                 case NfProcessConnection(from_process, from_port, to_process, to_port):
-                    self._source_port(process_by_name, from_process, from_port)
-                    self._destination_port(process_by_name, to_process, to_port)
+                    source = self._source_port(process_by_name, from_process, from_port)
+                    destination = self._destination_port(process_by_name, to_process, to_port)
+                    # Cardinality is half the channel contract, so it is
+                    # checked on a process edge too: a scalar output driving
+                    # an array-marked port renders list operations against a
+                    # single value, failing inside Nextflow rather than here.
+                    if source.is_array != destination.is_array:
+                        raise ValueError(
+                            f"connection {from_process}.{from_port} -> {to_process}.{to_port} "
+                            "joins incompatible channel cardinalities"
+                        )
                     self._record_incoming(incoming, to_process, to_port)
                     dependencies[to_process].add(from_process)
                 case NfWorkflowOutputConnection(from_process, from_port, to_port):

@@ -15,6 +15,7 @@ from sophios.nf_types import (
     NfCommand,
     NfCommandToken,
     NfFlag,
+    NfInputReference,
     NfLiteral,
     NfPort,
     NfProcess,
@@ -185,6 +186,10 @@ def test_public_module_exports_flag_and_command_token() -> None:
     assert nextflow.NfCommandToken is NfCommandToken
     assert "NfFlag" in nextflow.__all__
     assert "NfCommandToken" in nextflow.__all__
+    # Every member of the command-token union is nameable through the public
+    # module, or a caller cannot construct or match what it gets back.
+    assert nextflow.NfArrayBinding is NfArrayBinding
+    assert "NfArrayBinding" in nextflow.__all__
 
 
 @pytest.mark.fast
@@ -304,6 +309,66 @@ def test_array_binding_must_reference_an_array_marked_input() -> None:
         NfProcess("NAMES", [], [], array_command)
     with pytest.raises(ValueError, match="array bindings must reference array-marked inputs"):
         NfProcess("NAMES", [NfPort("names", "val")], [], array_command)
+
+
+@pytest.mark.fast
+def test_array_marked_input_rejects_a_plain_reference() -> None:
+    # The converse direction: a plain reference renders values.toString(), so
+    # a two-item array would reach the command line as "[a, b]" rather than
+    # expanding per item.
+    message = "array-marked inputs require an array binding, not a plain reference"
+    for template in (
+        NfTemplate((NfLiteral("--joined="), NfInputReference("values"))),
+        NfTemplate((NfInputReference("values"),)),
+    ):
+        with pytest.raises(ValueError, match=message):
+            NfProcess(
+                "JOIN",
+                [NfPort("values", "val", is_array=True)],
+                [],
+                NfCommand((NfTemplate((NfLiteral("echo"),)), template)),
+            )
+    # Reachable through a stream target and an output glob too, since both
+    # take the same reference type.
+    with pytest.raises(ValueError, match=message):
+        NfProcess(
+            "JOIN",
+            [NfPort("values", "val", is_array=True)],
+            [],
+            NfCommand(
+                (NfTemplate((NfLiteral("echo"),)),),
+                stdout=NfTemplate((NfInputReference("values"),)),
+            ),
+        )
+    with pytest.raises(ValueError, match=message):
+        NfProcess(
+            "JOIN",
+            [NfPort("values", "val", is_array=True)],
+            [NfPort("out", "path", "out", NfTemplate((NfInputReference("values"),)))],
+            NfCommand((NfTemplate((NfLiteral("echo"),)),)),
+        )
+
+
+@pytest.mark.fast
+def test_process_connection_rejects_mismatched_cardinality() -> None:
+    # A scalar output driving an array-marked port compiled, then failed
+    # inside Nextflow with Path.isEmpty() rather than diagnosing here.
+    producer = NfProcess(
+        "PRODUCE", [], [output_port("out", "out.txt")], command("touch", "out.txt")
+    )
+    consumer = NfProcess(
+        "JOIN",
+        [NfPort("values", "path", is_array=True)],
+        [],
+        NfCommand((NfTemplate((NfLiteral("cat"),)), NfArrayBinding("values"))),
+    )
+    with pytest.raises(ValueError, match="incompatible channel cardinalities"):
+        ExecutableNextflowWorkflow(
+            "WF",
+            [producer, consumer],
+            [NfProcessConnection("PRODUCE", "out", "JOIN", "values")],
+            {},
+        )
 
 
 @pytest.mark.fast

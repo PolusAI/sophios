@@ -134,16 +134,26 @@ def _glob_names_one_file(template: Any) -> bool:
     """True when an assembled output name is meant literally, not as a pattern.
 
     Nextflow pattern-matches an output ``path`` name, so a name assembled
-    from runtime data is matched against whatever metacharacters that data
-    happens to carry: a staged ``a[1].txt`` yields the pattern ``a[1].txt``,
-    whose ``[1]`` is a character class that cannot match the file the
-    process wrote. The decision stays at compile time -- a template holding
-    a reference segment whose own literal parts carry no metacharacter names
-    exactly one file, so globbing is turned off. A metacharacter written
-    into a literal part is the author asking for a pattern and is left
-    alone, and an all-literal name keeps today's behavior unchanged.
+    from a staged file's own name is matched against whatever metacharacters
+    that name happens to carry: a staged ``a[1].txt`` yields the pattern
+    ``a[1].txt``, whose ``[1]`` is a character class that cannot match the
+    file the process wrote.
+
+    Only a basename reference makes the name literal by construction -- it
+    is some real file's name, never a pattern. A plain input reference
+    carries arbitrary data, and a glob *is* a legitimate thing to pass as
+    an input (``glob: $(inputs.pattern)`` with ``pattern="*.txt")``, so
+    turning globbing off there would break a pattern that is meant to
+    match. Which reference kind is present is decidable here, at compile
+    time, where the assembled value is not; so the rule keys on the kind.
+
+    A metacharacter written into a literal part is the author asking for a
+    pattern and is left alone, and an all-literal name is unchanged.
     """
-    if all(isinstance(segment, NfLiteral) for segment in template.segments):
+    references = [segment for segment in template.segments if not isinstance(segment, NfLiteral)]
+    if not references:
+        return False
+    if not all(isinstance(segment, NfBasenameReference) for segment in references):
         return False
     return not any(
         isinstance(segment, NfLiteral) and _GLOB_METACHARACTERS & set(segment.value)

@@ -8,6 +8,7 @@ from sophios.input_output_nf import (
 )
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
+    NfArrayBinding,
     NfBasenameReference,
     NfCommand,
     NfCommandToken,
@@ -38,6 +39,7 @@ from sophios.nf_reader import (
 
 __all__ = [
     "ExecutableNextflowWorkflow",
+    "NfArrayBinding",
     "NfBasenameReference",
     "NfCommand",
     "NfCommandToken",

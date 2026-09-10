@@ -324,6 +324,40 @@ def test_accepts_absent_optional_boolean_flag() -> None:
 
 
 @pytest.mark.fast
+def test_rejects_absent_optional_flag_that_is_also_dereferenced() -> None:
+    """A flag use does not excuse a template use of the same input.
+
+    The flag only tests its value, but the template dereferences it, so
+    absence would render the sentinel into the command line as `--label=[]`.
+    """
+    both = tool(
+        "BOTH",
+        inputs={
+            "verbose": {
+                "type": ["null", "boolean"],
+                "inputBinding": {"position": 1, "prefix": "--verbose"},
+            }
+        },
+        arguments=[{"position": 2, "valueFrom": "--label=$(inputs.verbose)"}],
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("BOTH", **{"in": {"verbose": "verbose"}})],
+            inputs={"verbose": {"type": ["null", "boolean"]}},
+        ),
+        [both],
+        workflow_inputs={"verbose": None},
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        cwl_rosetree_to_nextflow(rose)
+    assert _findings(excinfo.value) == [
+        "steps[0].run.inputs.verbose: absent optional values are supported only for a "
+        "val input that is unreferenced in its command or drives a boolean flag"
+    ]
+
+
+@pytest.mark.fast
 def test_ignores_inert_documentation_but_not_semantics() -> None:
     baseline_tool = tool(
         "IDENTITY",
@@ -1045,6 +1079,38 @@ def test_rejects_nested_arrays() -> None:
 @pytest.mark.fast
 def test_rejects_per_item_input_binding_on_array_items() -> None:
     rose = _array_rose_from_producer({"type": "File", "inputBinding": {"prefix": "-I"}})
+    with pytest.raises(ValueError, match="per-item array element bindings are deferred"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_per_item_input_binding_on_the_array_schema() -> None:
+    """CWL's common spelling puts the per-item binding beside items, not inside it.
+
+    Accepting this form rendered `-B a b`, silently dropping the per-item
+    prefix cwltool renders as `-B -A a -A b`.
+    """
+    array_tool = tool(
+        "ARRAY",
+        inputs={
+            "values": {
+                "type": {
+                    "type": "array",
+                    "items": "string",
+                    "inputBinding": {"prefix": "-A"},
+                },
+                "inputBinding": {"position": 1, "prefix": "-B"},
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("ARRAY", **{"in": {"values": "values"}})],
+            inputs={"values": {"type": {"type": "array", "items": "string"}}},
+        ),
+        [array_tool],
+        workflow_inputs={"values": ["a", "b"]},
+    )
     with pytest.raises(ValueError, match="per-item array element bindings are deferred"):
         cwl_rosetree_to_nextflow(rose)
 

@@ -18,6 +18,7 @@ from sophios.nf_types import (
     NfBasenameReference,
     NfCommand,
     NfFlag,
+    NfInputReference,
     NfLiteral,
     NfPort,
     NfProcess,
@@ -73,7 +74,7 @@ def test_renders_named_workflow_and_entry_wrapper() -> None:
 @pytest.mark.serial
 def test_renders_real_compiled_source_with_typed_glob(real_supported_rose: RoseTree) -> None:
     rendered = render_nextflow(cwl_rosetree_to_nextflow(real_supported_rose))
-    assert 'path "${filename}", glob: false, emit: result' in rendered
+    assert 'path "${filename}", emit: result' in rendered
     assert "wf__step__2__copy(wf__step__1__touch.out.result)" in rendered
 
 
@@ -302,6 +303,28 @@ def test_assembled_name_with_an_author_written_metacharacter_keeps_globbing_on()
     ))
 
     assert 'path "${source.name}*.txt", emit: result' in rendered
+
+
+@pytest.mark.fast
+def test_pattern_valued_input_glob_keeps_globbing_on() -> None:
+    # A plain input reference carries arbitrary data, and a glob is a
+    # legitimate thing to pass in: glob: $(inputs.pattern) with "*.txt" must
+    # still match. Only a basename reference is literal by construction.
+    glob = NfTemplate((NfInputReference("pattern"),))
+    process = NfProcess(
+        "MATCH",
+        [NfPort("pattern", "val")],
+        [NfPort("matched", "path", "matched", glob)],
+        command("true"),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [NfWorkflowInputConnection("pattern", "MATCH", "pattern")],
+        {"pattern": "*.txt"},
+    ))
+
+    assert 'path "${pattern}", emit: matched' in rendered
 
 
 @pytest.mark.fast
