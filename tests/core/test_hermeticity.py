@@ -183,6 +183,34 @@ def test_required_inputs_agree_with_the_compilers_own_rule(stem: str) -> None:
 
 
 @pytest.mark.fast
+def test_falsy_default_still_counts_as_a_default() -> None:
+    """`_arg_has_default_or_is_optional` must test presence, not truth.
+
+    `in_tool[arg].get('default')` used to be used directly as a boolean, so a
+    tool declaring `default: False` (or `0`, or `''`) was treated as having no
+    default at all — the input was silently promoted to a required,
+    caller-supplied workflow input, discarding the tool author's default.
+    Reproduces `mm-workflows/cwl_adapters/extract_pdbbind_refined.cwl`'s
+    `convert_Kd_dG` input; `control` is the ordinary truthy-default case that
+    must keep working alongside it.
+
+    Two assertions so the test fails whichever way the rule breaks: revert to
+    truthiness and the falsy one fails; break the ordinary case and the truthy
+    one fails.
+    """
+    from sophios.compiler import _arg_has_default_or_is_optional  # pylint: disable=import-outside-toplevel
+
+    in_tool = {
+        'convert_Kd_dG': {'type': 'boolean', 'default': False},
+        'control': {'type': 'boolean', 'default': True},
+    }
+    assert _arg_has_default_or_is_optional('convert_Kd_dG', in_tool), \
+        'a present-but-falsy default must still count as a default'
+    assert _arg_has_default_or_is_optional('control', in_tool), \
+        'a present, truthy default must still count as a default'
+
+
+@pytest.mark.fast
 def test_the_registry_reaches_the_branches_it_claims_to() -> None:
     """A registry that cannot reach a branch silently disables every property
     that depends on it — the generator-adequacy argument, applied to the tools."""
