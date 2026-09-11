@@ -63,15 +63,16 @@ move CE-13 already forbids, just aimed at a different finding. A property that
 needs a *successful* compile must skip these draws; see
 `test_equivalences._hits_the_scalar_coercion_gap`.
 """
-from typing import Any, Callable, Final
+from typing import Any, Callable, Final, cast
 
 import yaml
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
 from sophios import utils_cwl
-from sophios.lang import (Code, Document, EdgeDef, EdgeRef, InlineLiteral, InputValue, OpaqueCwl,
-                          OutputBinding, Step, StepKey, UnresolvedName, WicSidecar, render)
+from sophios.lang import (Code, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
+                          OpaqueCwl, OutputBinding, Step, StepKey, UnresolvedName, WicSidecar,
+                          render)
 from sophios.lang.spans import SourceSpan
 from sophios.utils_yaml import wic_loader
 from sophios.wic_types import Yaml
@@ -496,6 +497,51 @@ def workflows() -> SearchStrategy[Yaml]:
     return workflows_with_documents().map(lambda pair: pair[1])
 
 
+_SCATTERABLE_STRING_INPUTS: Final[tuple[tuple[str, str], ...]] = (
+    ('mk_file', 'name'), ('mk_text', 'name'), ('xform', 'name'), ('join', 'name'),
+)
+
+
+@st.composite
+def _scattering_step(draw: st.DrawFn) -> Step:
+    """One tool step forced to scatter over a correctly array-valued input."""
+    stem, name = draw(st.sampled_from(_SCATTERABLE_STRING_INPUTS))
+    literal = cast(OpaqueCwl, draw(st.lists(
+        st.text('abcxyz_.', min_size=1, max_size=8), min_size=1, max_size=3)))
+    return Step(id=stem, inputs=((name, InlineLiteral(literal, _SPAN)),),
+                interpreted=(('scatter', [name]),), span=_SPAN)
+
+
+@st.composite
+def freighted_documents(draw: st.DrawFn) -> tuple[Document, int]:
+    """A multi-step document with one scattering step designated for passthrough freight."""
+    defined_edges: list[tuple[str, Any]] = []
+    referenced_inputs: set[str] = set()
+    count = draw(st.integers(min_value=2, max_value=4))
+    scatter_at = draw(st.integers(min_value=0, max_value=count - 1))
+
+    steps: list[Step] = []
+    for index in range(count):
+        steps.append(draw(_scattering_step()) if index == scatter_at
+                     else draw(_step(draw(st.sampled_from(STEMS)),
+                                     defined_edges, referenced_inputs)))
+
+    passthrough: list[tuple[str, OpaqueCwl]] = []
+    if referenced_inputs:
+        types = dict(declared_inputs)
+        passthrough.append(('inputs', {name: {'type': types[name]}
+                                       for name in sorted(referenced_inputs)}))
+    return Document(steps=tuple(steps), passthrough=tuple(passthrough), span=_SPAN), scatter_at
+
+
+def to_yml_with_freight(document: Document, step_index: int, freight: dict[str, Any]) -> Yaml:
+    """Render ``document`` and add passthrough ``freight`` to its designated step."""
+    loaded = to_yml(document)
+    steps: list[Yaml] = loaded['steps']
+    steps[step_index] = {**steps[step_index], **freight}
+    return loaded
+
+
 @st.composite
 def partitionings(draw: st.DrawFn, steps: int) -> tuple[tuple[int, ...], ...]:
     """A contiguous grouping of `range(steps)`.
@@ -538,3 +584,21 @@ _HOSTILE: Final = (
 def hostile_documents() -> SearchStrategy[tuple[str, Code]]:
     """Documents outside the language, each with the code it must earn."""
     return st.sampled_from(_HOSTILE)
+
+
+#: Keys and JSON-shaped values the language does not claim and must preserve.
+CLAIMED_STEP_KEYS: Final = frozenset({'id', 'in', 'out', 'wic'}) | Grammar.INTERPRETED_STEP_KEYS
+
+passthrough_keys: Final = st.one_of(
+    st.text('abcdefghijklmnopqrstuvwxyz_', min_size=3, max_size=12),
+    st.sampled_from(['$namespaces', '$schemas', 'hints', 'label', 'doc', 'scatterMethod']),
+).filter(lambda key: key not in CLAIMED_STEP_KEYS)
+
+passthrough_values: Final = st.recursive(
+    st.one_of(st.integers(min_value=-100, max_value=100), st.booleans(),
+              st.text('abc xyz', max_size=8), st.none()),
+    lambda children: st.one_of(st.lists(children, max_size=3),
+                               st.dictionaries(st.text('abc', min_size=1, max_size=5),
+                                               children, max_size=3)),
+    max_leaves=8,
+)
