@@ -327,7 +327,7 @@ and never worked: the key is not lifted into `id` when the container is
 already an array, so the step's name resolved to the empty string in every
 version of the compiler. `cwltool` fails the same document the same way, for
 the same reason. The form was removed from the language rather than
-implemented, and the parser reports it (`wic022`).
+implemented, and the parser reports it (`wic021`).
 
 Implementing it instead would have cost a real diagnostic. In list position a
 single-key mapping is ambiguous — `- in: {…}` is a forgotten step id, and
