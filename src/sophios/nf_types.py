@@ -319,7 +319,36 @@ class NfArrayBinding:
         return {"kind": "array", "name": self.name, "prefix": self.prefix}
 
 
-NfCommandToken = NfTemplate | NfFlag | NfArrayBinding
+@dataclass(frozen=True, slots=True)
+class NfShellLiteral:
+    """Raw, unquoted shell text from an approved ``shellQuote: false`` binding.
+
+    Renders exactly as written, bypassing the generated shell-quoting
+    helper. Valid only in command token position, and only for a binding
+    whose text is entirely CWL-author literal: no input reference of any
+    kind ever reaches this token, so unquoting it never exposes runtime
+    data as shell syntax.
+    """
+
+    text: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.text, str):
+            raise TypeError("shell literal text must be a string")
+        if "\x00" in self.text:
+            raise ValueError("shell literal text cannot contain NUL bytes")
+
+    def to_dict(self) -> dict[str, str]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, str]: The token as ``{"kind": "shell_literal",
+                "text": ...}``.
+        """
+        return {"kind": "shell_literal", "text": self.text}
+
+
+NfCommandToken = NfTemplate | NfFlag | NfArrayBinding | NfShellLiteral
 
 
 def _command_token_from_dict(value: Mapping[str, Any]) -> NfCommandToken:
@@ -331,6 +360,9 @@ def _command_token_from_dict(value: Mapping[str, Any]) -> NfCommandToken:
         case "array":
             _check_fields(item, type_name="NfArrayBinding", required={"kind", "name", "prefix"})
             return NfArrayBinding(item["name"], item["prefix"])
+        case "shell_literal":
+            _check_fields(item, type_name="NfShellLiteral", required={"kind", "text"})
+            return NfShellLiteral(item["text"])
         case _:
             return NfTemplate.from_dict(item)
 
@@ -347,7 +379,7 @@ class NfCommand:
     def __post_init__(self) -> None:
         tokens = tuple(self.tokens)
         if not tokens or not all(
-            isinstance(token, (NfTemplate, NfFlag, NfArrayBinding)) for token in tokens
+            isinstance(token, (NfTemplate, NfFlag, NfArrayBinding, NfShellLiteral)) for token in tokens
         ):
             raise ValueError("command must contain at least one typed token")
         object.__setattr__(self, "tokens", tokens)
@@ -468,6 +500,7 @@ class NfPort:
     glob: NfTemplate | None = None
     path_kind: str | None = None
     is_array: bool = False
+    stage_as: str | None = None
 
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.name, field_name="port name")
@@ -487,13 +520,22 @@ class NfPort:
             raise TypeError("port glob must be an NfTemplate or None")
         if not isinstance(self.is_array, bool):
             raise TypeError("port is_array must be a bool")
+        if self.stage_as is not None:
+            if self.qualifier != "path":
+                raise ValueError("only path ports may declare a stage_as rename")
+            if self.is_array:
+                raise ValueError("array-marked ports cannot declare a stage_as rename")
+            if not isinstance(self.stage_as, str) or not self.stage_as.strip():
+                raise ValueError("stage_as must be a non-empty string or None")
+            if "/" in self.stage_as or "\x00" in self.stage_as:
+                raise ValueError("stage_as must not contain a path separator or NUL byte")
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation.
 
         Returns:
             dict[str, Any]: The port's name, qualifier, emit, glob, path
-                kind, and array marker.
+                kind, array marker, and staged-name override.
         """
         return {
             "name": self.name,
@@ -502,16 +544,17 @@ class NfPort:
             "glob": self.glob.to_dict() if self.glob else None,
             "path_kind": self.path_kind,
             "is_array": self.is_array,
+            "stage_as": self.stage_as,
         }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
         """Hydrate and validate a port from a mapping.
 
-        ``is_array`` is optional on hydration: every schema version before
-        the array lowering never wrote it, and its absence there always
-        means False, so accepting a missing key keeps those payloads
-        hydrating unchanged.
+        ``is_array`` and ``stage_as`` are optional on hydration: every
+        schema version before each was introduced never wrote it, and its
+        absence there always means False/None, so accepting a missing key
+        keeps those payloads hydrating unchanged.
 
         Args:
             value (Mapping[str, Any]): Serialized port produced by
@@ -529,7 +572,7 @@ class NfPort:
             item,
             type_name=cls.__name__,
             required={"name", "qualifier", "emit", "glob", "path_kind"},
-            optional={"is_array"},
+            optional={"is_array", "stage_as"},
         )
         glob = None if item["glob"] is None else NfTemplate.from_dict(item["glob"])
         return cls(
@@ -539,6 +582,7 @@ class NfPort:
             glob=glob,
             path_kind=item["path_kind"],
             is_array=bool(item.get("is_array", False)),
+            stage_as=item.get("stage_as"),
         )
 
 
@@ -627,6 +671,17 @@ class NfProcess:
             raise ValueError(
                 f"process {self.name!r} array-marked inputs may only be referenced by "
                 f"array bindings: {', '.join(sorted(invalid))}"
+            )
+        stage_as_names = {port.name for port in inputs if port.stage_as is not None}
+        if overlap := stage_as_names & references:
+            raise ValueError(
+                f"process {self.name!r} references a renamed IWDR input elsewhere in its "
+                f"command, stream targets, or output globs: {', '.join(sorted(overlap))}"
+            )
+        stage_as_values = [port.stage_as for port in inputs if port.stage_as is not None]
+        if len(stage_as_values) != len(set(stage_as_values)):
+            raise ValueError(
+                f"process {self.name!r} stages more than one input under the same literal name"
             )
         match self.container:
             case None:
@@ -868,19 +923,22 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow."""
 
-    SCHEMA_VERSION: ClassVar[int] = 5
+    SCHEMA_VERSION: ClassVar[int] = 7
     # Earlier versions whose value space is a strict subset of the current
     # model hydrate unchanged; serialization always writes SCHEMA_VERSION.
-    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5})
+    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7})
     # Each additive token or segment kind declares the version that
     # introduced it, so the subset property is enforced rather than assumed.
     KIND_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
-        {"flag": 3, "basename": 4, "array": 5}
+        {"flag": 3, "basename": 4, "array": 5, "shell_literal": 6}
     )
     # Version an additive non-kind-tagged field was introduced in, keyed by
-    # the field name it appears under. is_array predates a "kind" tag on
-    # NfPort, so it needs its own gate alongside KIND_SCHEMA_VERSIONS.
-    FIELD_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType({"is_array": 5})
+    # the field name it appears under. is_array and stage_as predate a
+    # "kind" tag on NfPort, so each needs its own gate alongside
+    # KIND_SCHEMA_VERSIONS.
+    FIELD_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
+        {"is_array": 5, "stage_as": 7}
+    )
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
     name: str

@@ -154,6 +154,72 @@ present, valid value — distinct from an absent optional value above.
 not supported, nor are the shorthand `File[]` type form, nested arrays, a
 per-item `inputBinding`, or array-typed outputs.
 
+## Shell mode
+
+`ShellCommandRequirement` alone changes nothing: every command token is
+already individually shell-quoted and joined into one line, matching CWL's
+own shell-mode quoting. `shellQuote: false` opts one binding out of quoting
+so it can carry real shell syntax — pipes, redirections, globs — and is
+supported only for a prefix-free binding whose `valueFrom` is a CWL-author
+literal with no input reference at all:
+
+```yaml
+requirements:
+  ShellCommandRequirement: {}
+arguments:
+- printf
+- "%s"
+- $(inputs.message)
+- valueFrom: ">>"
+  shellQuote: false
+- out.txt
+```
+
+`shellQuote: false` on a binding with no `valueFrom`, with a `prefix`, or
+whose `valueFrom` references any input — directly, or via a `.path`/
+`.basename` suffix — is rejected: unquoting a runtime-supplied value would
+let workflow input data or a chosen file name be interpreted as shell
+syntax, which is exactly the boundary this lowering must not cross.
+
+## Staging with InitialWorkDirRequirement
+
+Nextflow already stages every `File`/`Directory` input under its own
+original name, so a `listing` entry that only asks for that — the bare
+`$(inputs.<name>)` shorthand, or a `Dirent` whose `entryname` is absent or
+`$(inputs.<name>.basename)` — is a no-op and is accepted:
+
+```yaml
+requirements:
+  InitialWorkDirRequirement:
+    listing:
+    - $(inputs.source)
+```
+
+Staging under a different, literal name is supported too:
+
+```yaml
+requirements:
+  InitialWorkDirRequirement:
+    listing:
+    - entry: $(inputs.source)
+      entryname: renamed.txt
+arguments:
+- cat
+- renamed.txt
+```
+
+The renamed port stays bound to its own variable but stages under the
+literal name via Nextflow's `stageAs` option. A renamed input's own `.name`
+reports the staged name, not its original CWL basename, so the same input
+cannot also be referenced elsewhere in that tool's command, stream targets,
+or output globs — the command must address the staged file by the literal
+name directly, as above.
+
+`writable: true`, an `entry` that isn't a bare reference to one File or
+Directory input (inline content construction), an `entryname` that is any
+other expression, a listing entry naming a `val`-qualifier or array-typed
+input, and two inputs staged under the same literal name are all rejected.
+
 ## Current limits
 
 - Workflows must be flat and use `CommandLineTool`-equivalent processes.

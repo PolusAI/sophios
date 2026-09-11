@@ -89,6 +89,64 @@ def test_real_compiler_preserves_adversarial_argument(tmp_path: Path) -> None:
 
 @pytest.mark.nextflow
 @pytest.mark.serial
+def test_shell_command_requirement_with_no_shell_quote_false_behaves_identically(
+    tmp_path: Path,
+) -> None:
+    """R2.8: ShellCommandRequirement alone renders and executes exactly like today."""
+    value = "price is $5; touch SHOULD_NOT_EXIST ' \" $(uname)\nsecond line"
+    write_tool = (
+        CommandLineTool(
+            "write_message",
+            Inputs(message=Input(cwl.string, position=2)),
+            Outputs(result=Output(cwl.file, glob="result.txt")),
+        )
+        .base_command("printf")
+        .argument("%s", position=1)
+        .stdout("result.txt")
+        .shell_command()
+    )
+    write = Step(write_tool, step_name="write")
+    write.inputs.message = value
+    workflow = Workflow([write], "wf")._compile().rose
+    result = run_nextflow(cwl_rosetree_to_nextflow(workflow), tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("result.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == [value]
+    assert not list(tmp_path.rglob("SHOULD_NOT_EXIST"))
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_shell_quote_false_literal_enables_a_real_shell_redirect(tmp_path: Path) -> None:
+    """R2.9: an approved shellQuote:false literal reaches the shell as real redirect syntax."""
+    marker = "payload; not a separate command"
+    redirect_tool = (
+        CommandLineTool(
+            "shell_redirect",
+            Inputs(),
+            Outputs(result=Output(cwl.file, glob="redirected.txt")),
+        )
+        .base_command("printf")
+        .argument("%s", position=1)
+        .argument(marker, position=2)
+        .argument(">>", shell_quote=False, position=3)
+        .argument("redirected.txt", position=4)
+        .shell_command()
+    )
+    redirect_step = Step(redirect_tool, step_name="shell_redirect")
+
+    workflow = Workflow([redirect_step], "nextflow_shell_quote_false")
+    workflow.outputs.result = redirect_step.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("redirected.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == [marker]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
 def test_large_memory_directive_is_valid_nextflow_syntax(tmp_path: Path) -> None:
     workflow = ExecutableNextflowWorkflow(
         "WF",
@@ -696,6 +754,86 @@ def test_basename_derived_output_name_executes(tmp_path: Path) -> None:
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     copies = list((tmp_path / "work").rglob("lines.txt.copy"))
     assert [path.read_text(encoding="utf-8") for path in copies] == ["basename derived\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_iwdr_own_basename_listing_executes_unchanged(tmp_path: Path) -> None:
+    """R2.10: the bare $(inputs.<name>) IWDR shorthand is a no-op and still executes."""
+    write_tool = (
+        CommandLineTool(
+            "write_source",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="lines.txt")),
+        )
+        .base_command("echo")
+        .stdout("lines.txt")
+    )
+    write = Step(write_tool, step_name="write")
+    write.inputs.message = "own basename staging"
+
+    stage_tool = (
+        CommandLineTool(
+            "stage_own_basename",
+            Inputs(source=Input(cwl.file, position=1)),
+            Outputs(result=Output(cwl.file, glob="out.txt")),
+        )
+        .base_command("cat")
+        .stdout("out.txt")
+        .initial_workdir(["$(inputs.source)"])
+    )
+    stage_step = Step(stage_tool, step_name="stage_own_basename")
+    stage_step.inputs.source = write.outputs.result
+
+    workflow = Workflow([write, stage_step], "nextflow_iwdr_own_basename")
+    workflow.outputs.result = stage_step.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("out.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == ["own basename staging\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_iwdr_stage_as_rename_executes_and_reaches_the_command(tmp_path: Path) -> None:
+    """R2.11: an IWDR literal rename stages a file under a different name the command hard-codes."""
+    write_tool = (
+        CommandLineTool(
+            "write_source",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="original_name.txt")),
+        )
+        .base_command("echo")
+        .stdout("original_name.txt")
+    )
+    write = Step(write_tool, step_name="write")
+    write.inputs.message = "iwdr staged content"
+
+    stage_tool = CommandLineTool(
+        "stage_and_read",
+        Inputs(source=Input(cwl.file)),
+        Outputs(result=Output(cwl.file, glob="out.txt")),
+    )
+    stage_tool = (
+        stage_tool
+        .stage(stage_tool.inputs.source, entryname="renamed_by_iwdr.txt")
+        .base_command("cat")
+        .argument("renamed_by_iwdr.txt", position=1)
+        .stdout("out.txt")
+    )
+    stage_step = Step(stage_tool, step_name="stage_and_read")
+    stage_step.inputs.source = write.outputs.result
+
+    workflow = Workflow([write, stage_step], "nextflow_iwdr_rename")
+    workflow.outputs.result = stage_step.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("out.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == ["iwdr staged content\n"]
 
 
 @pytest.mark.nextflow

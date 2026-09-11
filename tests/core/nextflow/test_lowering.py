@@ -17,6 +17,7 @@ from sophios.nf_types import (
     NfLiteral,
     NfPort,
     NfResources,
+    NfShellLiteral,
     NfTemplate,
     NfProcessConnection,
     NfWorkflowInputConnection,
@@ -255,6 +256,126 @@ def test_empty_array_value_is_accepted_and_distinct_from_absent() -> None:
     )
 
     assert cwl_rosetree_to_nextflow(rose).params == {"names": []}
+
+
+@pytest.mark.fast
+def test_shell_quote_false_literal_lowers_to_a_raw_shell_literal_token() -> None:
+    redirect_tool = tool(
+        "REDIRECT",
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+        requirements={"ShellCommandRequirement": {}},
+        arguments=[
+            {"position": 1, "valueFrom": "hello"},
+            {"position": 2, "valueFrom": ">>", "shellQuote": False},
+            {"position": 3, "valueFrom": "out.txt"},
+        ],
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("REDIRECT", out=["result"])],
+            outputs={"result": {"type": "File", "outputSource": "REDIRECT/result"}},
+        ),
+        [redirect_tool],
+    )
+
+    tokens = cwl_rosetree_to_nextflow(rose).processes[0].command.tokens
+
+    assert tokens[0] == NfTemplate((NfLiteral("REDIRECT"),))
+    assert tokens[1] == NfTemplate((NfLiteral("hello"),))
+    assert tokens[2] == NfShellLiteral(">>")
+    assert tokens[3] == NfTemplate((NfLiteral("out.txt"),))
+
+
+@pytest.mark.fast
+def test_shell_quote_false_takes_precedence_over_boolean_flag_lowering() -> None:
+    """A literal valueFrom fully overrides type-specific binding, even on a boolean input."""
+    literal_tool = tool(
+        "LITERAL",
+        inputs={
+            "flag": {
+                "type": "boolean",
+                "inputBinding": {"position": 1, "valueFrom": "--literal", "shellQuote": False},
+            }
+        },
+        requirements={"ShellCommandRequirement": {}},
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("LITERAL", **{"in": {"flag": "flag"}})],
+            inputs={"flag": {"type": "boolean"}},
+        ),
+        [literal_tool],
+        workflow_inputs={"flag": True},
+    )
+
+    tokens = cwl_rosetree_to_nextflow(rose).processes[0].command.tokens
+
+    assert tokens[1] == NfShellLiteral("--literal")
+    assert not any(isinstance(token, NfFlag) for token in tokens)
+
+
+@pytest.mark.fast
+def test_command_of_only_shell_literals_still_runs_a_program() -> None:
+    """A shell-literal-only argv would render an empty script that silently exits zero."""
+    literal_tool = tool(
+        "LITERAL",
+        requirements={"ShellCommandRequirement": {}},
+        baseCommand=None,
+        arguments=[{"position": 1, "valueFrom": ">>", "shellQuote": False}],
+    )
+    rose = synthetic_rose(workflow_doc([step("LITERAL")]), [literal_tool])
+
+    tokens = cwl_rosetree_to_nextflow(rose).processes[0].command.tokens
+
+    assert tokens[0] == NfTemplate((NfLiteral("true"),))
+    assert tokens[1] == NfShellLiteral(">>")
+
+
+@pytest.mark.fast
+def test_iwdr_own_basename_listing_lowers_to_no_stage_as() -> None:
+    """The bare $(inputs.<name>) shorthand is a no-op: Nextflow already stages this way."""
+    stage_tool = tool(
+        "STAGE",
+        inputs={"source": {"type": "File", "inputBinding": {"position": 1}}},
+        requirements={"InitialWorkDirRequirement": {"listing": ["$(inputs.source)"]}},
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("STAGE", **{"in": {"source": "source"}})],
+            inputs={"source": {"type": "File"}},
+        ),
+        [stage_tool],
+        workflow_inputs={"source": {"class": "File", "path": "in.txt"}},
+    )
+
+    process = cwl_rosetree_to_nextflow(rose).processes[0]
+
+    assert process.inputs[0] == NfPort("source", "path")
+    assert process.inputs[0].stage_as is None
+
+
+@pytest.mark.fast
+def test_iwdr_literal_entryname_lowers_to_a_stage_as_port() -> None:
+    stage_tool = tool(
+        "STAGE",
+        inputs={"source": {"type": "File"}},
+        requirements={"InitialWorkDirRequirement": {"listing": [
+            {"entry": "$(inputs.source)", "entryname": "renamed.txt"},
+        ]}},
+        arguments=["cat", "renamed.txt"],
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("STAGE", **{"in": {"source": "source"}})],
+            inputs={"source": {"type": "File"}},
+        ),
+        [stage_tool],
+        workflow_inputs={"source": {"class": "File", "path": "in.txt"}},
+    )
+
+    process = cwl_rosetree_to_nextflow(rose).processes[0]
+
+    assert process.inputs[0] == NfPort("source", "path", stage_as="renamed.txt")
 
 
 @pytest.mark.fast
