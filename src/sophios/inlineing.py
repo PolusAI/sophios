@@ -61,6 +61,15 @@ def get_inlineable_subworkflows(yaml_tree_tuple: YamlTree,
 
             y_t = YamlTree(StepId(step_key, step_id.plugin_ns), sub_yml_tree)
             sub_namespaces = get_inlineable_subworkflows(y_t, tools, False, namespaces_init + [step_name_i])
+            # The WIC-level inliner does not redistribute an invocation's scatter
+            # onto the child steps.  Offering that invocation would therefore
+            # erase the scatter and change both the workflow and its endpoint
+            # declarations.  Descendants may still be inlineable inside the child.
+            parentargs = steps[i].get('parentargs', {})
+            if isinstance(parentargs, dict) and parentargs.get('scatter'):
+                child_namespace = namespaces_init + [step_name_i]
+                sub_namespaces = [namespace for namespace in sub_namespaces
+                                  if namespace != child_namespace]
             namespaces += sub_namespaces
 
     return namespaces

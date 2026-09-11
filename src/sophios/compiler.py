@@ -8,7 +8,6 @@ from typing import Any, NamedTuple, cast
 import graphviz
 from mergedeep import merge, Strategy
 import networkx as nx
-import yaml
 
 from . import input_output as io
 from . import inference, utils, utils_cwl, utils_graphs
@@ -18,6 +17,7 @@ from .wic_types import (CompilerInfo, CompilerOptions, EnvData, ExplicitEdgeCall
                         NodeData, RoseTree, Tool, Tools, WorkflowInputs, WorkflowInputsFile,
                         WorkflowOutputs, Yaml, YamlTagPaths, YamlTree, StepId)
 from .lang import versions
+from .lang.compatibility import TypeRelation, reference_relation
 from .lang.cwl import CWL_VERSION
 from .lang.diagnostics import Code, SophiosError
 
@@ -108,9 +108,15 @@ def compile_workflow(yaml_tree_ast: YamlTree,
             subgraphs[si].networkx.edges, subgraphs[si].networkx.nodes)
 
     if i == max_iters:
-        print(yaml.dump(node_data.yml))
-        raise RuntimeError(
-            f'Error! Maximum number of iterations ({max_iters}) reached in compile_workflow!')
+        # A diagnostic, not a RuntimeError with a workflow dumped to stdout.
+        # CR-104 converted the sys.exit sites; this one was never an exit, so
+        # its sweep did not reach it, and an embedder still had an exception
+        # with no code to catch on.
+        raise SophiosError.error(
+            Code.FIXED_POINT_NOT_REACHED,
+            f'Error! Maximum number of iterations ({max_iters}) reached in compile_workflow!',
+            'Speculative step insertion did not converge. Compile with '
+            '--insert_steps_automatically disabled, or name the intermediate steps explicitly.')
     return compiler_info
 
 
@@ -120,7 +126,7 @@ def _arg_has_default_or_is_optional(arg: str, in_tool: dict[str, Any]) -> bool:
     canonical null-union representation. See canonicalize_type in utils_cwl.py.
     """
     arg_type = in_tool[arg]['type']
-    has_default = in_tool[arg].get('default')
+    has_default = 'default' in in_tool[arg]
     optional_suffix = isinstance(arg_type, str) and arg_type[-1] == '?'
     optional_union = isinstance(arg_type, list) and 'null' in arg_type
     return bool(has_default or optional_suffix or optional_union)
@@ -492,6 +498,11 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
     graphdata = setup.graphdata
     vars_workflow_output_internal = setup.vars_workflow_output_internal
 
+    # Raw endpoint declarations for explicit edges defined in this document.
+    # Cross-scope definitions are deliberately absent: unavailable information
+    # is UNKNOWN, never grounds for rejecting a user's reference.
+    edge_types: dict[str, Any] = {}
+
     for i, step_key in enumerate(setup.steps_keys):
         step_name_i = utils.step_name_str(setup.yaml_stem, i, step_key)
         stem = Path(step_key).stem
@@ -733,6 +744,10 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                     if not setup.explicit_edge_defs_copy.get(edgedef):
                         # discard anchor / retain string key
                         setup.steps[i]['out'][j] = out_key
+                        source_type = tool_i.cwl['outputs'].get(out_key, {}).get('type')
+                        if setup.steps[i].get('scatter'):
+                            source_type = {'type': 'array', 'items': source_type}
+                        edge_types[edgedef] = source_type
                         setup.explicit_edge_defs_copy.update(
                             {edgedef: (namespaces + [step_name_or_key], out_key)})
                         # Add a 'dummy' value to explicit_edge_calls, because
@@ -780,6 +795,20 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
             match arg_val:
                 case {'wic_alias': _}:
                     arg_val = arg_val[Key.ALIAS]
+
+                    sink_type = in_dict.get('type')
+                    if arg_key in setup.steps[i].get('scatter', []):
+                        sink_type = {'type': 'array', 'items': sink_type}
+                    source_type = edge_types.get(arg_val)
+                    if reference_relation(source_type, sink_type, lang_version=lang_version) \
+                            is TypeRelation.DISJOINT:
+                        raise SophiosError.error(
+                            Code.INCOMPATIBLE_INPUT_REFERENCE,
+                            f"Edge '&{arg_val}' cannot feed '{arg_key}' of step "
+                            f"'{step_key}' in {setup.yaml_stem}.wic: source type "
+                            f'{source_type!r} is disjoint from sink type {sink_type!r}. '
+                            f"Bind '{arg_key}' to an edge whose declared type may overlap.")
+
                     if not setup.explicit_edge_defs_copy.get(arg_val):
                         if is_root and not testing:
                             # Even if is_root, we don't want to raise an Exception
@@ -955,6 +984,20 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                             f"Warning! Did you forget to use !ii before {arg_var} in {setup.yaml_stem}.wic?",
                             'If you want to compile the workflow anyway, use --allow_raw_cwl')
 
+                    sink_type = in_dict.get('type')
+                    if arg_key in setup.steps[i].get('scatter', []):
+                        sink_type = {'type': 'array', 'items': sink_type}
+                    source_type = inputs_key_dict.get('type')
+                    if reference_relation(source_type, sink_type, lang_version=lang_version) \
+                            is TypeRelation.DISJOINT:
+                        raise SophiosError.error(
+                            Code.INCOMPATIBLE_INPUT_REFERENCE,
+                            f"Input '{arg_var}' cannot feed '{arg_key}' of step "
+                            f"'{step_key}' in {setup.yaml_stem}.wic: source type "
+                            f'{source_type!r} is disjoint from sink type {sink_type!r}. '
+                            f"Declare '{arg_var}' with a type that may overlap, or bind "
+                            f"'{arg_key}' to a different source.")
+
                     if 'doc' in inputs_key_dict:
                         inputs_key_dict['doc'] += '\\n' + in_dict.get('doc', '')
                     else:
@@ -1058,7 +1101,13 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                 # inputs_workflow and vars_workflow_output_internal.
 
                 # Automatically insert steps
-                insertions = list(set(insertions))  # Remove duplicates
+                # sorted(), not list(): a plain `set` iterates in hash order,
+                # so which insertion `insertions[0]` picks below would depend
+                # on PYTHONHASHSEED. StepId is a (stem, plugin_ns) NamedTuple,
+                # which sorts lexicographically (a total order on strings), so
+                # sorted() is well defined here. See
+                # tests/core/test_canonical_emission.py.
+                insertions = sorted(set(insertions))  # Remove duplicates, in a stable order
                 if len(insertions) != 0 and compiler_options['insert_steps_automatically']:
                     insertion = insertions[0]
                     print('Automaticaly inserting step', insertion, i)
@@ -1155,7 +1204,7 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
             obj["format"] = fmt
         return obj
 
-    def populate_scalar_val(cwl_type: Any, value: Any, fmt: Any = None) -> Any:
+    def populate_scalar_val(cwl_type: Any, value: Any, key: str, fmt: Any = None) -> Any:
         match cwl_type:
             case "File":
                 return emit_file_or_dir("File", value, fmt)
@@ -1167,10 +1216,22 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
                 return str(value)
 
             case "int":
-                return int(value)
+                try:
+                    return int(value)
+                except ValueError as e:
+                    raise SophiosError.error(
+                        Code.LITERAL_TYPE_MISMATCH,
+                        f"Input {key!r} is declared type 'int' but its literal {value!r} "
+                        "does not convert to it.") from e
 
             case "float":
-                return float(value)
+                try:
+                    return float(value)
+                except ValueError as e:
+                    raise SophiosError.error(
+                        Code.LITERAL_TYPE_MISMATCH,
+                        f"Input {key!r} is declared type 'float' but its literal {value!r} "
+                        "does not convert to it.") from e
 
             case "boolean":
                 return bool(value)
@@ -1179,7 +1240,7 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
                 # Unknown or already structured type
                 return value
 
-    def populate_input_value(in_dict: dict[str, Any]) -> Any:
+    def populate_input_value(key: str, in_dict: dict[str, Any]) -> Any:
         raw_type = in_dict["type"]
         value = in_dict.get("value")
         fmt = in_dict.get("format")
@@ -1202,7 +1263,7 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
             # wrap scalar into list if necessary for lenient shape handling
             values = value if isinstance(value, list) else [value]
             return [
-                populate_scalar_val(item_type, v, fmt)
+                populate_scalar_val(item_type, v, key, fmt)
                 for v in values
             ]
 
@@ -1214,16 +1275,16 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
                     # wrap scalar into list if necessary for lenient shape handling
                     values = value if isinstance(value, list) else [value]
                     return [
-                        populate_scalar_val(item_type, v, fmt)
+                        populate_scalar_val(item_type, v, key, fmt)
                         for v in values
                     ]
 
         # ---------- Scalar case ----------
-        return populate_scalar_val(cwl_type, value, fmt)
+        return populate_scalar_val(cwl_type, value, key, fmt)
 
     yaml_inputs: WorkflowInputsFile = {}
     for key, in_dict in inputs_file_workflow.items():
-        val = populate_input_value(in_dict)
+        val = populate_input_value(key, in_dict)
         # Omit optional null fields only
         if val is None:
             continue
@@ -1246,7 +1307,7 @@ def insert_step_into_workflow(yaml_tree_orig: Yaml, stepid: StepId, tools: Tools
     """
     yaml_tree_mod = yaml_tree_orig
     steps_mod: list[Yaml] = yaml_tree_mod['steps']
-    steps_mod.insert(i, {stepid.stem: None})
+    steps_mod.insert(i, {'id': stepid.stem})
 
     # Add inference rules annotations (i.e. for insertions)
     tool = tools[stepid]

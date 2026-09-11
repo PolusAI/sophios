@@ -197,13 +197,17 @@ def _steps(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[tuple[
 def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step:
     """Parse one entry of a sequence-form `steps:`.
 
-    Two surface forms are in long-standing use and both remain supported:
+    A sequence entry carries its identity in an `id:` key:
 
-        - id: touch        # explicit id, body alongside it
+        - id: touch
           in: {...}
 
-        - touch:           # single-key mapping, the key is the id
-            in: {...}
+    A single-key mapping (`- touch:`) is **not** a second sequence form. CWL
+    types `Workflow.steps` as an array of `WorkflowStep` and lifts a key into
+    `id` only when the field's value is a mapping, so in a sequence the key is
+    never lifted and the step has no identity — `cwltool` reports `unknown
+    identifier` for the same document. Reported as `wic021` naming both forms
+    the language does have (reference §3.1).
     """
     span = SourceSpan.of(file, node)
     if not isinstance(node, yaml.nodes.MappingNode):
@@ -219,12 +223,21 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
         return _step_body(step_id, body, span, file, diags)
 
     if len(node.value) == 1:
-        key_node, value_node = node.value[0]
-        return _step(_key_text(key_node, file, diags), value_node, file, diags)
+        # Reported rather than accepted: see the docstring. The name is read so
+        # the message can quote it, which is what tells a reader whether they
+        # meant a step called that or forgot an `id:`.
+        name = _key_text(node.value[0][0], file, diags)
+        diags.error(
+            Code.STEP_WITHOUT_ID,
+            f"a step in a sequence carries its name in an id: key — write "
+            f"'- id: {name}', or key the whole steps: block by name instead (§3.1)",
+            span,
+        )
+        return Step(id='', span=span)
 
     diags.error(
         Code.MISSING_STEP_ID,
-        'a step in a sequence needs either an id: or a single name key',
+        'a step in a sequence needs an id:',
         span,
     )
     return Step(id='', span=span)

@@ -26,6 +26,7 @@ from typing import Final
 import pytest
 
 from sophios import post_compile
+from sophios.compiler import generate_yaml_inputs
 from sophios.lang.diagnostics import Code, Diagnostic, Severity, SophiosError
 from sophios.python_cwl_adapter import check_args_match_inputs
 
@@ -202,6 +203,27 @@ def test_missing_input_file_reports(tmp_path: Path) -> None:
 
     assert caught.value.diagnostics[0].code is Code.MISSING_INPUT_FILE
     assert 'does_not_exist.txt' in caught.value.diagnostics[0].message
+
+
+@pytest.mark.fast
+def test_literal_type_mismatch_reports() -> None:
+    """`generate_yaml_inputs` reports a literal that will not coerce to its
+    input's declared type instead of letting `int()`/`float()` raise a bare
+    `ValueError`. `!ii` places no constraint relating a literal to the
+    declared CWL type of the input it binds, so this is reachable from real
+    documents (e.g. `in: {n: !ii _}` against a tool declaring `n: int`).
+
+    The message must name all three of the input, the declared type, and the
+    offending literal, since the user's next move is to fix one of them.
+    """
+    with pytest.raises(SophiosError) as caught:
+        generate_yaml_inputs({'n': {'type': 'int', 'value': '_'}})
+
+    assert caught.value.diagnostics[0].code is Code.LITERAL_TYPE_MISMATCH
+    message = caught.value.diagnostics[0].message
+    assert 'n' in message
+    assert 'int' in message
+    assert '_' in message
 
 
 @pytest.mark.fast

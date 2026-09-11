@@ -10,6 +10,7 @@ disables every property depending on it and nothing else notices — so
 adequacy is itself a property, checked at a bounded sample.
 """
 from collections import Counter
+from typing import Any
 
 import pytest
 from hypothesis import HealthCheck, find, given, settings
@@ -240,7 +241,7 @@ def test_no_step_the_generator_draws_is_discarded(monkeypatch: pytest.MonkeyPatc
     drawn: list[str] = []
     real = strat._step  # pylint: disable=protected-access  # the drawing site is the subject
 
-    def _recording(stem: str, defined_edges: list[str],
+    def _recording(stem: str, defined_edges: list[tuple[str, Any]],
                    referenced_inputs: set[str]) -> SearchStrategy[Step]:
         drawn.append(stem)
         return real(stem, defined_edges, referenced_inputs)

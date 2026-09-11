@@ -23,7 +23,8 @@ from sophios import run_local
 from sophios import run_local_async
 from sophios import utils, utils_cwl
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.api.python.workflow import CompiledWorkflow, InvalidLinkError, InvalidStepError, Step, Workflow
+from sophios.api.python.workflow import (_python_api_types_match, CompiledWorkflow, InvalidLinkError,
+                                         InvalidStepError, Step, Workflow)
 from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest, ComputeSubmission
 from sophios.python_cwl_adapter import import_python_file
 from sophios.schemas import wic_schema
@@ -479,6 +480,20 @@ def test_incompatible_step_link_raises_invalid_link_error() -> None:
 
     with pytest.raises(InvalidLinkError, match="incompatible types"):
         append.inputs.str = touch.outputs.file
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('parameter_type, candidate_type, expected', [
+    ('string', 'File', False),
+    ('string', 'string', True),
+    ('string[]', 'Any', True),
+    ({'type': 'array', 'items': 'string'}, {'type': 'array', 'items': 'Any'}, True),
+    ('string', {'type': 'record', 'fields': []}, True),
+])
+def test_python_api_uses_the_conservative_language_judgment(
+        parameter_type: Any, candidate_type: Any, expected: bool) -> None:
+    """The eager API rejects proven disjointness and defers every unknown."""
+    assert _python_api_types_match(parameter_type, candidate_type) is expected
 
 
 @pytest.mark.fast
