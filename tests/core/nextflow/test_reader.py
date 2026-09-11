@@ -404,3 +404,155 @@ def test_concrete_public_module_exports_importer() -> None:
     assert nextflow.NextflowDocument is NextflowDocument
     assert nextflow.promote_nextflow_document is promote_nextflow_document
     assert nextflow.render_nextflow_document is render_nextflow_document
+
+
+@pytest.mark.fast
+def test_a_scattered_call_is_retained_as_an_opaque_region() -> None:
+    """The adapter operator is outside the recognized subset, so it stays loss-aware."""
+    source = render_nextflow(ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [NfProcess(
+            "SCATTER",
+            [NfPort("item", "val")],
+            [NfPort("result", "path", "result", NfTemplate((NfLiteral("out.txt"),)))],
+            NfCommand((NfTemplate((NfLiteral("echo"),)), NfTemplate((NfInputReference("item"),)))),
+        )],
+        [NfWorkflowInputConnection("items", "SCATTER", "item", "scatter")],
+        {"items": ["a", "b"]},
+    ))
+
+    parsed = parse_nf_text(source)
+
+    assert parsed.connections == ()
+    assert "SCATTER(items.flatten())" in "\n".join(parsed.opaque_regions)
+    with pytest.raises(ValueError, match="opaque regions"):
+        promote_nextflow_document(parsed)
+
+
+def _captured_workflow() -> ExecutableNextflowWorkflow:
+    glob = NfTemplate((NfLiteral("out.txt"),))
+    process = NfProcess(
+        "MAKE",
+        [NfPort("message", "val")],
+        [NfPort("result", "path", "result", glob, capture="single")],
+        NfCommand((NfTemplate((NfLiteral("printf"),)), template(ref("message"))), stdout=glob),
+    )
+    return ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [process],
+        [
+            NfWorkflowInputConnection("message", "MAKE", "message"),
+            NfWorkflowOutputConnection("MAKE", "result", "result"),
+        ],
+        {"message": "hi"},
+    )
+
+
+@pytest.mark.fast
+def test_capture_marker_artifacts_parse_and_promote(tmp_path: Path) -> None:
+    """A new output option must round-trip or promotion silently stops working."""
+    expected = _captured_workflow()
+    write_nextflow_artifacts(expected, tmp_path)
+
+    parsed = parse_nf_file(tmp_path / "workflow.nf")
+
+    assert parsed.opaque_regions == ()
+    assert promote_nextflow_document(parsed) == expected
+
+
+@pytest.mark.fast
+def test_the_reader_records_and_reconstructs_a_capture_marker() -> None:
+    document = parse_nf_text(render_nextflow(_captured_workflow()))
+
+    port = document.processes[0].outputs[0]
+    assert (port.name, port.qualifier, port.target, port.capture) == (
+        "result", "path", "out.txt", "single",
+    )
+
+    _workflow, tools = nextflow_to_cwl(document)
+    assert tools[0]["outputs"]["result"]["outputBinding"] == {
+        "glob": "out.txt",
+        "outputEval": "$(self[0])",
+    }
+
+
+@pytest.mark.fast
+def test_an_arity_option_on_an_input_port_is_not_recognized() -> None:
+    """arity is an output option here; on an input it stays unrecognized content.
+
+    An unrecognized input port leaves the process declaring no inputs, so the
+    call that supplies one fails the reader's arity check rather than parsing
+    into a port the generated subset never emits.
+    """
+    source = render_nextflow(_captured_workflow()).replace(
+        "    val message", "    val message, arity: '1'"
+    )
+
+    with pytest.raises(ValueError, match="MAKE supplies 1 inputs; the process declares 0"):
+        parse_nf_text(source)
+
+
+def _text_capture_workflow() -> ExecutableNextflowWorkflow:
+    glob = NfTemplate((NfLiteral("out.txt"),))
+    process = NfProcess(
+        "READ",
+        [NfPort("message", "val")],
+        [NfPort("text", "val", "text", glob, capture="text")],
+        NfCommand((NfTemplate((NfLiteral("printf"),)), template(ref("message"))), stdout=glob),
+    )
+    return ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [process],
+        [
+            NfWorkflowInputConnection("message", "READ", "message"),
+            NfWorkflowOutputConnection("READ", "text", "captured"),
+        ],
+        {"message": "hi"},
+    )
+
+
+@pytest.mark.fast
+def test_text_capture_artifacts_parse_and_promote(tmp_path: Path) -> None:
+    """A new output form and a new generated helper must both round-trip."""
+    expected = _text_capture_workflow()
+    write_nextflow_artifacts(expected, tmp_path)
+
+    parsed = parse_nf_file(tmp_path / "workflow.nf")
+
+    assert parsed.opaque_regions == ()
+    assert promote_nextflow_document(parsed) == expected
+
+
+@pytest.mark.fast
+def test_the_reader_records_and_reconstructs_a_text_capture() -> None:
+    document = parse_nf_text(render_nextflow(_text_capture_workflow()))
+
+    port = document.processes[0].outputs[0]
+    assert (port.name, port.qualifier, port.target, port.capture) == (
+        "text", "val", "out.txt", "text",
+    )
+
+    _workflow, tools = nextflow_to_cwl(document)
+    assert tools[0]["outputs"]["text"] == {
+        "type": "string",
+        "outputBinding": {
+            "glob": "out.txt",
+            "loadContents": True,
+            "outputEval": "$(self[0].contents)",
+        },
+    }
+
+
+@pytest.mark.fast
+def test_a_val_output_outside_the_generated_capture_form_is_not_recognized() -> None:
+    """Only the one emitted val-output shape is recognized, not val expressions.
+
+    An unrecognized output leaves the process declaring none, so the workflow
+    emit that names it fails the reader rather than being promoted.
+    """
+    source = render_nextflow(_text_capture_workflow()).replace(
+        "task.workDir.resolve('out.txt')", "file('out.txt')"
+    )
+
+    with pytest.raises(ValueError, match=r"unknown output READ\.out\.text"):
+        parse_nf_text(source)

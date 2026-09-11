@@ -20,7 +20,12 @@ from .nf_types import (
     process_dependencies,
     topological_order,
 )
-from .input_output_nf import NF_SHELL_QUOTE_FUNCTION, render_nextflow
+from .nf_types import NF_LOAD_CONTENTS_HELPER
+from .input_output_nf import (
+    NF_LOAD_CONTENTS_FUNCTION,
+    NF_SHELL_QUOTE_FUNCTION,
+    render_nextflow,
+)
 
 if TYPE_CHECKING:
     from .api.python.workflow import Workflow
@@ -30,8 +35,18 @@ _PROCESS = re.compile(r"^\s*process\s+(\S+)\s*\{\s*$")
 _WORKFLOW = re.compile(r"^\s*workflow(?:\s+(\S+))?\s*\{\s*$")
 _PORT = re.compile(
     # glob: false is derived from the glob template at render time, so it is
-    # consumed here rather than stored: re-rendering recomputes it.
-    r"^(path|val|tuple|env|stdin)\s+(.+?)(?:,\s*glob:\s*false)?(?:,\s*emit:\s*(\S+))?$"
+    # consumed here rather than stored: re-rendering recomputes it. The
+    # option order mirrors the renderer's.
+    r"^(?P<qualifier>path|val|tuple|env|stdin)\s+(?P<target>.+?)"
+    r"(?:,\s*glob:\s*false)?"
+    r"(?:,\s*arity:\s*'(?P<arity>1)')?"
+    r"(?:,\s*emit:\s*(?P<emit>\S+))?$"
+)
+# The one generated val-output form: file-text capture over the emitted helper.
+_TEXT_CAPTURE_OUTPUT = re.compile(
+    rf"^val\({re.escape(NF_LOAD_CONTENTS_HELPER)}"
+    r"\(task\.workDir\.resolve\((?P<target>'(?:[^'\\]|\\.)*')\)\)\)"
+    r"(?:,\s*emit:\s*(?P<emit>\S+))?$"
 )
 _CALL = re.compile(r"^(\S+)\((.*)\)$")
 _PROCESS_OUTPUT = re.compile(r"^(\S+)\.out\.(\S+)$")
@@ -47,6 +62,7 @@ class NextflowPort:
     qualifier: str
     emit: str | None = None
     target: str | None = None
+    capture: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,19 +214,32 @@ def _parse_process(name: str, body: list[str]) -> tuple[NextflowProcess, tuple[s
             continue
         if section == "input":
             match = _PORT.match(stripped)
-            if match is None or match.group(3) is not None:
+            if match is None or match["emit"] is not None or match["arity"] is not None:
                 unparsed.append(stripped)
                 continue
-            inputs.append(NextflowPort(match.group(2), match.group(1)))
+            inputs.append(NextflowPort(match["target"], match["qualifier"]))
             continue
         if section == "output":
+            if captured := _TEXT_CAPTURE_OUTPUT.match(stripped):
+                target, emit = captured["target"], captured["emit"]
+                port_name = emit or _unquote(target)
+                outputs.append(NextflowPort(
+                    port_name, "val", emit or port_name, _unquote(target), "text"
+                ))
+                continue
             match = _PORT.match(stripped)
             if match is None:
                 unparsed.append(stripped)
                 continue
-            qualifier, target, emit = match.groups()
+            target, emit = match["target"], match["emit"]
             port_name = emit or _unquote(target)
-            outputs.append(NextflowPort(port_name, qualifier, emit or port_name, _unquote(target)))
+            outputs.append(NextflowPort(
+                port_name,
+                match["qualifier"],
+                emit or port_name,
+                _unquote(target),
+                "single" if match["arity"] else None,
+            ))
             continue
         if stripped.startswith("container "):
             container = _unquote(stripped.removeprefix("container "))
@@ -392,10 +421,11 @@ def parse_nf_text(text: str, *, params: Mapping[str, Any] | None = None) -> Next
     covered: set[int] = set()
     for _name, block_start, block_end in [*process_blocks, *workflow_blocks]:
         covered.update(range(block_start, block_end + 1))
-    helper_lines = NF_SHELL_QUOTE_FUNCTION.splitlines()
-    for helper_start in range(len(lines) - len(helper_lines) + 1):
-        if lines[helper_start:helper_start + len(helper_lines)] == helper_lines:
-            covered.update(range(helper_start, helper_start + len(helper_lines)))
+    for helper in (NF_SHELL_QUOTE_FUNCTION, NF_LOAD_CONTENTS_FUNCTION):
+        helper_lines = helper.splitlines()
+        for helper_start in range(len(lines) - len(helper_lines) + 1):
+            if lines[helper_start:helper_start + len(helper_lines)] == helper_lines:
+                covered.update(range(helper_start, helper_start + len(helper_lines)))
     global_unparsed = [
         line.strip()
         for index, line in enumerate(lines)
@@ -557,9 +587,17 @@ def nextflow_to_cwl(workflow: NextflowDocument) -> tuple[dict[str, Any], list[di
             requirements["ResourceRequirement"] = resources
         outputs: dict[str, Any] = {}
         for port in process.outputs:
-            output: dict[str, Any] = {"type": _cwl_type(port)}
+            output: dict[str, Any] = {
+                "type": "string" if port.capture == "text" else _cwl_type(port)
+            }
             if port.target is not None:
-                output["outputBinding"] = {"glob": port.target}
+                binding: dict[str, Any] = {"glob": port.target}
+                if port.capture == "single":
+                    binding["outputEval"] = "$(self[0])"
+                elif port.capture == "text":
+                    binding["loadContents"] = True
+                    binding["outputEval"] = "$(self[0].contents)"
+                output["outputBinding"] = binding
             outputs[port.name] = output
         tools.append({
             "id": process.name,

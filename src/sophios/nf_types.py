@@ -13,7 +13,11 @@ from .nf_symbols import validate_nextflow_identifier
 
 _T = TypeVar("_T")
 NF_SHELL_QUOTE_HELPER = "__sophios_shell_quote_9f72e"
-NF_INTERNAL_IDENTIFIERS = frozenset({NF_SHELL_QUOTE_HELPER})
+NF_LOAD_CONTENTS_HELPER = "__sophios_load_contents_9f72e"
+NF_INTERNAL_IDENTIFIERS = frozenset({NF_SHELL_QUOTE_HELPER, NF_LOAD_CONTENTS_HELPER})
+# CWL v1.2 requires a loadContents file to be a UTF-8 text file of this many
+# bytes or fewer, read entirely, with a fatal error above the limit.
+NF_LOAD_CONTENTS_LIMIT = 64 * 1024
 
 
 def _validate_ir_identifier(value: object, *, field_name: str) -> str:
@@ -319,7 +323,36 @@ class NfArrayBinding:
         return {"kind": "array", "name": self.name, "prefix": self.prefix}
 
 
-NfCommandToken = NfTemplate | NfFlag | NfArrayBinding
+@dataclass(frozen=True, slots=True)
+class NfShellLiteral:
+    """Raw, unquoted shell text from an approved ``shellQuote: false`` binding.
+
+    Renders exactly as written, bypassing the generated shell-quoting
+    helper. Valid only in command token position, and only for a binding
+    whose text is entirely CWL-author literal: no input reference of any
+    kind ever reaches this token, so unquoting it never exposes runtime
+    data as shell syntax.
+    """
+
+    text: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.text, str):
+            raise TypeError("shell literal text must be a string")
+        if "\x00" in self.text:
+            raise ValueError("shell literal text cannot contain NUL bytes")
+
+    def to_dict(self) -> dict[str, str]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, str]: The token as ``{"kind": "shell_literal",
+                "text": ...}``.
+        """
+        return {"kind": "shell_literal", "text": self.text}
+
+
+NfCommandToken = NfTemplate | NfFlag | NfArrayBinding | NfShellLiteral
 
 
 def _command_token_from_dict(value: Mapping[str, Any]) -> NfCommandToken:
@@ -331,6 +364,9 @@ def _command_token_from_dict(value: Mapping[str, Any]) -> NfCommandToken:
         case "array":
             _check_fields(item, type_name="NfArrayBinding", required={"kind", "name", "prefix"})
             return NfArrayBinding(item["name"], item["prefix"])
+        case "shell_literal":
+            _check_fields(item, type_name="NfShellLiteral", required={"kind", "text"})
+            return NfShellLiteral(item["text"])
         case _:
             return NfTemplate.from_dict(item)
 
@@ -347,7 +383,7 @@ class NfCommand:
     def __post_init__(self) -> None:
         tokens = tuple(self.tokens)
         if not tokens or not all(
-            isinstance(token, (NfTemplate, NfFlag, NfArrayBinding)) for token in tokens
+            isinstance(token, (NfTemplate, NfFlag, NfArrayBinding, NfShellLiteral)) for token in tokens
         ):
             raise ValueError("command must contain at least one typed token")
         object.__setattr__(self, "tokens", tokens)
@@ -455,12 +491,28 @@ class NfResources:
         return cls(item["cpus"], item["memory_mb"])
 
 
+GLOB_WILDCARDS = frozenset("*?[")
+
+
 @dataclass(frozen=True, slots=True)
 class NfPort:
-    """A typed Nextflow process port."""
+    """A typed Nextflow process port.
+
+    ``capture`` names the approved output-capture declarations an
+    ``outputBinding`` may carry. The approved set is closed data: ``"single"``
+    declares that the port carries one value rather than a list, and ``"text"``
+    declares that the port carries the globbed file's decoded text. The field
+    holds a marker from that set and nothing else, so no CWL expression text
+    can be smuggled through it.
+    """
 
     # Phase 1 lowers only these qualifiers; the renderer is total over them.
     ALLOWED_QUALIFIERS: ClassVar[frozenset[str]] = frozenset({"path", "val"})
+    ALLOWED_CAPTURES: ClassVar[frozenset[str]] = frozenset({"single", "text"})
+    # The qualifier each capture marker requires of the port declaring it.
+    CAPTURE_QUALIFIERS: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {"single": "path", "text": "val"}
+    )
 
     name: str
     qualifier: str
@@ -468,6 +520,8 @@ class NfPort:
     glob: NfTemplate | None = None
     path_kind: str | None = None
     is_array: bool = False
+    stage_as: str | None = None
+    capture: str | None = None
 
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.name, field_name="port name")
@@ -487,13 +541,54 @@ class NfPort:
             raise TypeError("port glob must be an NfTemplate or None")
         if not isinstance(self.is_array, bool):
             raise TypeError("port is_array must be a bool")
+        if self.stage_as is not None:
+            if self.qualifier != "path":
+                raise ValueError("only path ports may declare a stage_as rename")
+            if self.is_array:
+                raise ValueError("array-marked ports cannot declare a stage_as rename")
+            if not isinstance(self.stage_as, str) or not self.stage_as.strip():
+                raise ValueError("stage_as must be a non-empty string or None")
+            if "/" in self.stage_as or "\x00" in self.stage_as:
+                raise ValueError("stage_as must not contain a path separator or NUL byte")
+        if self.capture is not None:
+            if self.capture not in self.ALLOWED_CAPTURES:
+                allowed = ", ".join(sorted(self.ALLOWED_CAPTURES))
+                raise ValueError(
+                    f"port capture must be one of {allowed}, got {self.capture!r}"
+                )
+            required = self.CAPTURE_QUALIFIERS[self.capture]
+            if self.qualifier != required:
+                raise ValueError(
+                    f"capture {self.capture!r} requires a {required} port, "
+                    f"got {self.qualifier!r}"
+                )
+            if self.is_array or self.stage_as is not None:
+                raise ValueError(
+                    "a capture marker cannot combine with an array marker or a stage_as rename"
+                )
+            match self.glob:
+                case NfTemplate(segments=[NfLiteral() as literal]):
+                    pass
+                case _:
+                    # A capture declaration projects the first glob match, so it
+                    # is only provable where the match set has one member by
+                    # construction. A reference-bearing glob's runtime value
+                    # could carry a wildcard, so it is not decidable here.
+                    raise ValueError(
+                        "a capture marker requires a single-literal glob with no input reference"
+                    )
+            if wildcards := sorted(GLOB_WILDCARDS.intersection(literal.value)):
+                raise ValueError(
+                    "a capture marker requires a glob with no wildcard character; "
+                    f"found {', '.join(repr(character) for character in wildcards)}"
+                )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation.
 
         Returns:
             dict[str, Any]: The port's name, qualifier, emit, glob, path
-                kind, and array marker.
+                kind, array marker, staged-name override, and capture marker.
         """
         return {
             "name": self.name,
@@ -502,16 +597,18 @@ class NfPort:
             "glob": self.glob.to_dict() if self.glob else None,
             "path_kind": self.path_kind,
             "is_array": self.is_array,
+            "stage_as": self.stage_as,
+            "capture": self.capture,
         }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
         """Hydrate and validate a port from a mapping.
 
-        ``is_array`` is optional on hydration: every schema version before
-        the array lowering never wrote it, and its absence there always
-        means False, so accepting a missing key keeps those payloads
-        hydrating unchanged.
+        ``is_array``, ``stage_as``, and ``capture`` are optional on
+        hydration: every schema version before each was introduced never
+        wrote it, and its absence there always means False/None, so
+        accepting a missing key keeps those payloads hydrating unchanged.
 
         Args:
             value (Mapping[str, Any]): Serialized port produced by
@@ -529,7 +626,7 @@ class NfPort:
             item,
             type_name=cls.__name__,
             required={"name", "qualifier", "emit", "glob", "path_kind"},
-            optional={"is_array"},
+            optional={"is_array", "stage_as", "capture"},
         )
         glob = None if item["glob"] is None else NfTemplate.from_dict(item["glob"])
         return cls(
@@ -539,6 +636,8 @@ class NfPort:
             glob=glob,
             path_kind=item["path_kind"],
             is_array=bool(item.get("is_array", False)),
+            stage_as=item.get("stage_as"),
+            capture=item.get("capture"),
         )
 
 
@@ -570,7 +669,13 @@ class NfProcess:
             raise ValueError(f"process {self.name!r} has duplicate output emit names")
         if any(port.emit is not None or port.glob is not None for port in inputs):
             raise ValueError("process input ports cannot declare output metadata")
-        if any(port.qualifier != "path" or port.glob is None for port in outputs):
+        # A text-capture output carries the globbed file's decoded text, so it
+        # is the one output kind with the val qualifier; NfPort pairs each
+        # capture marker with the qualifier it requires.
+        if any(
+            port.qualifier != ("val" if port.capture == "text" else "path") or port.glob is None
+            for port in outputs
+        ):
             raise ValueError("executable process outputs require path qualifier and typed glob")
         if any(port.is_array for port in outputs):
             raise ValueError("array-typed outputs are deferred beyond this lowering")
@@ -627,6 +732,17 @@ class NfProcess:
             raise ValueError(
                 f"process {self.name!r} array-marked inputs may only be referenced by "
                 f"array bindings: {', '.join(sorted(invalid))}"
+            )
+        stage_as_names = {port.name for port in inputs if port.stage_as is not None}
+        if overlap := stage_as_names & references:
+            raise ValueError(
+                f"process {self.name!r} references a renamed IWDR input elsewhere in its "
+                f"command, stream targets, or output globs: {', '.join(sorted(overlap))}"
+            )
+        stage_as_values = [port.stage_as for port in inputs if port.stage_as is not None]
+        if len(stage_as_values) != len(set(stage_as_values)):
+            raise ValueError(
+                f"process {self.name!r} stages more than one input under the same literal name"
             )
         match self.container:
             case None:
@@ -691,16 +807,30 @@ class NfProcess:
 
 @dataclass(frozen=True, slots=True)
 class NfWorkflowInputConnection:
-    """Connect one workflow parameter to one process input."""
+    """Connect one workflow parameter to one process input.
+
+    ``adapter`` names the one approved channel adaptation applied at the
+    consumption site. The approved set is closed: ``"scatter"`` fans a
+    list-carrying value channel out into one element per task. Every other
+    adaptation a topology might require is rejected before lowering.
+    """
+
+    ALLOWED_ADAPTERS: ClassVar[frozenset[str]] = frozenset({"scatter"})
 
     from_port: str
     to_process: str
     to_port: str
+    adapter: str | None = None
 
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.from_port, field_name="workflow input")
         _validate_ir_identifier(self.to_process, field_name="connection destination process")
         _validate_ir_identifier(self.to_port, field_name="connection destination port")
+        if self.adapter is not None and self.adapter not in self.ALLOWED_ADAPTERS:
+            allowed = ", ".join(sorted(self.ALLOWED_ADAPTERS))
+            raise ValueError(
+                f"channel adapter must be one of {allowed}, got {self.adapter!r}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation.
@@ -713,6 +843,7 @@ class NfWorkflowInputConnection:
             "from_port": self.from_port,
             "to_process": self.to_process,
             "to_port": self.to_port,
+            "adapter": self.adapter,
         }
 
 
@@ -838,12 +969,21 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
     item = _mapping(value, type_name="NfConnection")
     match item.get("kind"):
         case "workflow_input":
-            _check_fields(
+            # adapter is optional on hydration: every schema version before it
+            # was introduced never wrote it, and its absence there always
+            # means an unadapted connection.
+            _check_fields_with_optional(
                 item,
                 type_name="NfWorkflowInputConnection",
                 required={"kind", "from_port", "to_process", "to_port"},
+                optional={"adapter"},
             )
-            return NfWorkflowInputConnection(item["from_port"], item["to_process"], item["to_port"])
+            return NfWorkflowInputConnection(
+                item["from_port"],
+                item["to_process"],
+                item["to_port"],
+                item.get("adapter"),
+            )
         case "process":
             _check_fields(
                 item,
@@ -868,19 +1008,23 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow."""
 
-    SCHEMA_VERSION: ClassVar[int] = 5
+    SCHEMA_VERSION: ClassVar[int] = 9
     # Earlier versions whose value space is a strict subset of the current
     # model hydrate unchanged; serialization always writes SCHEMA_VERSION.
-    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5})
+    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7, 8, 9})
     # Each additive token or segment kind declares the version that
     # introduced it, so the subset property is enforced rather than assumed.
     KIND_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
-        {"flag": 3, "basename": 4, "array": 5}
+        {"flag": 3, "basename": 4, "array": 5, "shell_literal": 6}
     )
     # Version an additive non-kind-tagged field was introduced in, keyed by
-    # the field name it appears under. is_array predates a "kind" tag on
-    # NfPort, so it needs its own gate alongside KIND_SCHEMA_VERSIONS.
-    FIELD_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType({"is_array": 5})
+    # the field name it appears under. is_array, stage_as, and capture
+    # predate a "kind" tag on NfPort, and adapter is additive on an existing
+    # connection kind, so each needs its own gate alongside
+    # KIND_SCHEMA_VERSIONS.
+    FIELD_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
+        {"is_array": 5, "stage_as": 7, "adapter": 8, "capture": 9}
+    )
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
     name: str
@@ -944,24 +1088,37 @@ class ExecutableNextflowWorkflow:
 
         for connection in self.connections:
             match connection:
-                case NfWorkflowInputConnection(from_port, to_process, to_port):
+                case NfWorkflowInputConnection(from_port, to_process, to_port, adapter):
                     if from_port not in self.params:
                         raise ValueError(f"connection references unknown workflow input {from_port!r}")
                     destination = self._destination_port(process_by_name, to_process, to_port)
-                    # path_kind and is_array select the staging/cardinality
-                    # policy, so both are part of the channel contract:
-                    # connection order must never pick one.
+                    if adapter is not None and destination.is_array:
+                        raise ValueError(
+                            f"channel adapter {adapter!r} cannot target the array-marked port "
+                            f"{to_process}.{to_port}"
+                        )
+                    # path_kind, is_array, and the adapter each select part of
+                    # the staging/cardinality policy, so all three are part of
+                    # the channel contract: connection order must never pick one.
                     semantics = destination.qualifier + (
                         f"[{destination.path_kind}]" if destination.path_kind else ""
-                    ) + ("[]" if destination.is_array else "")
+                    ) + ("[]" if destination.is_array else "") + (
+                        f"|{adapter}" if adapter else ""
+                    )
                     previous = workflow_input_qualifiers.setdefault(from_port, semantics)
                     if previous != semantics:
                         raise ValueError(
                             f"workflow input {from_port!r} feeds incompatible channel qualifiers "
                             f"{previous!r} and {semantics!r}"
                         )
+                    # An adapter exists to change cardinality between the
+                    # parameter and the port, so the value is judged against
+                    # what the adapter consumes rather than what the port
+                    # declares: scatter takes the whole array and feeds one
+                    # element per task.
+                    expects_array = destination.is_array or connection.adapter == "scatter"
                     param_destinations.setdefault(
-                        from_port, (destination.is_array, to_process, to_port)
+                        from_port, (expects_array, to_process, to_port)
                     )
                     self._record_incoming(incoming, to_process, to_port)
                 case NfProcessConnection(from_process, from_port, to_process, to_port):
@@ -975,6 +1132,16 @@ class ExecutableNextflowWorkflow:
                         raise ValueError(
                             f"connection {from_process}.{from_port} -> {to_process}.{to_port} "
                             "joins incompatible channel cardinalities"
+                        )
+                    if source.capture == "text":
+                        # The qualifier axis still has no general agreement
+                        # check for process edges, because every process
+                        # output carried the path qualifier until this one; a
+                        # captured value's only approved sink is a workflow
+                        # output.
+                        raise ValueError(
+                            f"process output {from_process}.{from_port} captures file text; "
+                            "its only approved sink is a workflow output"
                         )
                     self._record_incoming(incoming, to_process, to_port)
                     dependencies[to_process].add(from_process)
