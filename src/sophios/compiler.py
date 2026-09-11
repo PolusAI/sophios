@@ -120,7 +120,7 @@ def _arg_has_default_or_is_optional(arg: str, in_tool: dict[str, Any]) -> bool:
     canonical null-union representation. See canonicalize_type in utils_cwl.py.
     """
     arg_type = in_tool[arg]['type']
-    has_default = in_tool[arg].get('default')
+    has_default = 'default' in in_tool[arg]
     optional_suffix = isinstance(arg_type, str) and arg_type[-1] == '?'
     optional_union = isinstance(arg_type, list) and 'null' in arg_type
     return bool(has_default or optional_suffix or optional_union)
@@ -1058,7 +1058,13 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                 # inputs_workflow and vars_workflow_output_internal.
 
                 # Automatically insert steps
-                insertions = list(set(insertions))  # Remove duplicates
+                # sorted(), not list(): a plain `set` iterates in hash order,
+                # so which insertion `insertions[0]` picks below would depend
+                # on PYTHONHASHSEED. StepId is a (stem, plugin_ns) NamedTuple,
+                # which sorts lexicographically (a total order on strings), so
+                # sorted() is well defined here. See
+                # tests/core/test_canonical_emission.py.
+                insertions = sorted(set(insertions))  # Remove duplicates, in a stable order
                 if len(insertions) != 0 and compiler_options['insert_steps_automatically']:
                     insertion = insertions[0]
                     print('Automaticaly inserting step', insertion, i)
@@ -1155,7 +1161,7 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
             obj["format"] = fmt
         return obj
 
-    def populate_scalar_val(cwl_type: Any, value: Any, fmt: Any = None) -> Any:
+    def populate_scalar_val(cwl_type: Any, value: Any, key: str, fmt: Any = None) -> Any:
         match cwl_type:
             case "File":
                 return emit_file_or_dir("File", value, fmt)
@@ -1167,10 +1173,22 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
                 return str(value)
 
             case "int":
-                return int(value)
+                try:
+                    return int(value)
+                except ValueError as e:
+                    raise SophiosError.error(
+                        Code.LITERAL_TYPE_MISMATCH,
+                        f"Input {key!r} is declared type 'int' but its literal {value!r} "
+                        "does not convert to it.") from e
 
             case "float":
-                return float(value)
+                try:
+                    return float(value)
+                except ValueError as e:
+                    raise SophiosError.error(
+                        Code.LITERAL_TYPE_MISMATCH,
+                        f"Input {key!r} is declared type 'float' but its literal {value!r} "
+                        "does not convert to it.") from e
 
             case "boolean":
                 return bool(value)
@@ -1179,7 +1197,7 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
                 # Unknown or already structured type
                 return value
 
-    def populate_input_value(in_dict: dict[str, Any]) -> Any:
+    def populate_input_value(key: str, in_dict: dict[str, Any]) -> Any:
         raw_type = in_dict["type"]
         value = in_dict.get("value")
         fmt = in_dict.get("format")
@@ -1202,7 +1220,7 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
             # wrap scalar into list if necessary for lenient shape handling
             values = value if isinstance(value, list) else [value]
             return [
-                populate_scalar_val(item_type, v, fmt)
+                populate_scalar_val(item_type, v, key, fmt)
                 for v in values
             ]
 
@@ -1214,16 +1232,16 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
                     # wrap scalar into list if necessary for lenient shape handling
                     values = value if isinstance(value, list) else [value]
                     return [
-                        populate_scalar_val(item_type, v, fmt)
+                        populate_scalar_val(item_type, v, key, fmt)
                         for v in values
                     ]
 
         # ---------- Scalar case ----------
-        return populate_scalar_val(cwl_type, value, fmt)
+        return populate_scalar_val(cwl_type, value, key, fmt)
 
     yaml_inputs: WorkflowInputsFile = {}
     for key, in_dict in inputs_file_workflow.items():
-        val = populate_input_value(in_dict)
+        val = populate_input_value(key, in_dict)
         # Omit optional null fields only
         if val is None:
             continue
@@ -1246,7 +1264,7 @@ def insert_step_into_workflow(yaml_tree_orig: Yaml, stepid: StepId, tools: Tools
     """
     yaml_tree_mod = yaml_tree_orig
     steps_mod: list[Yaml] = yaml_tree_mod['steps']
-    steps_mod.insert(i, {stepid.stem: None})
+    steps_mod.insert(i, {'id': stepid.stem})
 
     # Add inference rules annotations (i.e. for insertions)
     tool = tools[stepid]

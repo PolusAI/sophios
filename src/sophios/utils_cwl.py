@@ -89,7 +89,10 @@ def maybe_add_requirements(yaml_tree: Yaml, steps_keys: list[str],
 
     reqs = subwork + scatter + stepinp + jsreq
     if reqs:
-        reqsdict: dict[str, dict] = {r: {} for r in set(reqs)}
+        # sorted(), not list(): a plain `set` iterates in hash order, so the
+        # emitted `requirements:` key order would depend on PYTHONHASHSEED.
+        # See tests/core/test_canonical_emission.py.
+        reqsdict: dict[str, dict] = {r: {} for r in sorted(set(reqs))}
         # NOTE: A bare `requirements:` parses to None, so check the value, not the key.
         if isinstance(yaml_tree.get('requirements'), dict):
             yaml_tree['requirements'].update(reqsdict)
@@ -143,7 +146,10 @@ def add_yamldict_keyval_out(steps_i: Yaml, step_key: str, strs: list[str]) -> Ya
     if steps_i:
         if 'out' in steps_i:
             new_strs = require_string_out_keys(steps_i['out']) + strs
-            new_strs = list(set(new_strs))
+            # sorted(), not list(): a plain `set` iterates in hash order, so a
+            # step's emitted `out:` list order would depend on PYTHONHASHSEED.
+            # See tests/core/test_canonical_emission.py.
+            new_strs = sorted(set(new_strs))
             new_keyvals = {k: (new_strs if k == 'out' else v) for k, v in steps_i.items()}
         else:
             new_keyvals = {**steps_i, 'out': strs}

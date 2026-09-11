@@ -309,7 +309,8 @@ def perform_edge_inference(inference_use_naming_conventions: bool,
                     continue
 
                 in_tool = tool.cwl['inputs']
-                tool_in_formats = [arg_val['format'] for arg_key, arg_val in in_tool.items() if 'format' in arg_val]
+                tool_in_formats = [arg_val['format'] if isinstance(arg_val['format'], list) else [arg_val['format']]
+                                   for arg_key, arg_val in in_tool.items() if 'format' in arg_val]
                 tool_in_formats_flat = utils.flatten(tool_in_formats)
 
                 out_tool = tool.cwl['outputs']
