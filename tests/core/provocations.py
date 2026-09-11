@@ -161,3 +161,15 @@ def _never_converges() -> None:
 COMPILED.update({
     Code.FIXED_POINT_NOT_REACHED: _never_converges,
 })
+
+
+def _provoke_incompatible_input_reference() -> None:
+    """Bind a declared string workflow input to a File argument."""
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+    compile_hermetic({'inputs': {'wf_name': {'type': 'string'}},
+                      'steps': [{'id': 'count', 'in': {'file': 'wf_name'}}]}, 'provoke')
+
+
+COMPILED.update({
+    Code.INCOMPATIBLE_INPUT_REFERENCE: _provoke_incompatible_input_reference,
+})

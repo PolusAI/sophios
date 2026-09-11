@@ -30,6 +30,7 @@ from sophios.wic_types import CompilerInfo, RoseTree, Yaml
 
 from . import ast_strategies as strat
 from .hermetic import ORACLE, compile_hermetic, compile_hermetic_cwl
+from .reference_model import ReferenceExpectation, reference_expectation
 from .synthetic_tools import inputs_of, outputs_of
 
 # --------------------------------------------------------------------------
@@ -160,6 +161,20 @@ def _inferred_edges(compiled: Yaml) -> list[tuple[str, str, str]]:
     return edges
 
 
+def _workflow_input_edges(compiled: Yaml) -> list[tuple[str, str, str, bool]]:
+    """Return consuming tool/argument, workflow input, and scatter state."""
+    declared = compiled.get('inputs') or {}
+    edges = []
+    for step in compiled['steps']:
+        _, _, stem = parse_step_name_str(str(step['id']))
+        scatter = step.get('scatter') or []
+        for argument, value in (step.get('in') or {}).items():
+            source = value.get('source') if isinstance(value, dict) else value
+            if isinstance(source, str) and source in declared:
+                edges.append((stem, argument, source, argument in scatter))
+    return edges
+
+
 @pytest.mark.skip_pypi_ci
 @pytest.mark.fast
 def test_the_edge_recogniser_tells_the_three_emitted_shapes_apart() -> None:
@@ -177,6 +192,21 @@ def test_the_edge_recogniser_tells_the_three_emitted_shapes_apart() -> None:
     edges = _inferred_edges(compiled)
     assert edges, 'no inferred edge recognised; the soundness property would be vacuous'
     assert all(value.count('/') == 1 for _, _, value in edges)
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.fast
+def test_the_workflow_input_recogniser_is_not_vacuous() -> None:
+    """The recognizer selects workflow inputs and excludes step-to-step edges."""
+    compiled = compile_hermetic_cwl(
+        {'inputs': {'wf_name': {'type': 'string'}},
+         'steps': [{'id': 'mk_file', 'in': {'name': 'wf_name'}},
+                   {'id': 'xform', 'in': {'name': {'wic_inline_input': 'b.txt'}}}]},
+        'refs')
+    edges = _workflow_input_edges(compiled)
+    assert [(argument, source) for _, argument, source, _ in edges] == [
+        ('name', 'wf_name'), ('name', 'refs__step__2__xform___name')]
+    assert _inferred_edges(compiled), 'the fixture no longer carries the step edge to exclude'
 
 
 @pytest.mark.skip_pypi_ci
@@ -209,6 +239,29 @@ def test_every_inferred_edge_connects_compatible_ports(yml: Yaml) -> None:
         assert _compatible(in_type, out_type), (
             f'{stem}.{arg} ({in_type}) <- {producer_stem}.{out_key} ({out_type})\n'
             f'{strat.render_yml(yml) if hasattr(strat, "render_yml") else yml}')
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.slow
+@given(strat.workflows())
+@ORACLE
+def test_every_generated_workflow_input_reference_is_not_proven_disjoint(yml: Yaml) -> None:
+    """Generated references compile and agree with the independent model.
+
+    There is intentionally no catch-all exception arm.  A false rejection —
+    especially of ``Any`` — is a property failure, not a document to skip.
+    """
+    compiled = compile_hermetic_cwl(copy.deepcopy(yml), 'refs')
+    declared = compiled.get('inputs') or {}
+    for stem, argument, source, scattered in _workflow_input_edges(compiled):
+        if stem not in inputs_of.__globals__['STEMS'] or stem.endswith('.wic'):
+            continue
+        sink_type = inputs_of(stem)[argument]['type']
+        if scattered:
+            sink_type = {'type': 'array', 'items': sink_type}
+        source_type = declared[source].get('type')
+        assert reference_expectation(source_type, sink_type) is not ReferenceExpectation.DISJOINT, (
+            f'{stem}.{argument} ({sink_type}) <- {source} ({source_type})\n{yml}')
 
 
 # --------------------------------------------------------------------------

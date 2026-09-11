@@ -1,6 +1,7 @@
 import copy
 from pathlib import Path
 import re
+from typing import Any
 
 from mergedeep import merge, Strategy
 import yaml
@@ -13,6 +14,20 @@ from .wic_types import Namespaces, Yaml, Tools, YamlTree, StepId, NodeData, Rose
 # TODO: Check for inline-ing subworkflows more than once and, if there are not
 # any modifications from any parent dsl args, use yaml anchors and aliases.
 # That way, we should be able to serialize back to disk without duplication.
+
+
+def _scatter_of(step: Yaml, wic: Yaml, index: int, step_key: str) -> Any:
+    """A step's scatter, from the call site or from `wic: steps:` metadata.
+
+    `compile_workflow_once` merges the two with the metadata winning, but that
+    happens after inlining, so a reader here has to consult both. Returns the
+    scatter itself, which is falsy when absent.
+    """
+    parentargs = step.get('parentargs', {})
+    if isinstance(parentargs, dict) and parentargs.get('scatter'):
+        return parentargs['scatter']
+    metadata = (wic.get('steps') or {}).get(f'({index + 1}, {step_key})', {})
+    return metadata.get('scatter') if isinstance(metadata, dict) else None
 
 
 def get_inlineable_subworkflows(yaml_tree_tuple: YamlTree,
@@ -61,6 +76,20 @@ def get_inlineable_subworkflows(yaml_tree_tuple: YamlTree,
 
             y_t = YamlTree(StepId(step_key, step_id.plugin_ns), sub_yml_tree)
             sub_namespaces = get_inlineable_subworkflows(y_t, tools, False, namespaces_init + [step_name_i])
+            # The WIC-level inliner does not redistribute an invocation's scatter
+            # onto the child steps.  Offering that invocation would therefore
+            # erase the scatter and change both the workflow and its endpoint
+            # declarations.  Descendants may still be inlineable inside the child.
+            #
+            # Scatter reaches a step from two places, and this runs before they
+            # are merged: `parentargs` is the call site as written under
+            # `steps:`, while `wic: steps:` metadata is merged onto it later, in
+            # compile_workflow_once.  Reading only the first would offer a
+            # subworkflow whose scatter is spelled in the metadata.
+            if _scatter_of(steps[i], wic['wic'], i, step_key):
+                child_namespace = namespaces_init + [step_name_i]
+                sub_namespaces = [namespace for namespace in sub_namespaces
+                                  if namespace != child_namespace]
             namespaces += sub_namespaces
 
     return namespaces

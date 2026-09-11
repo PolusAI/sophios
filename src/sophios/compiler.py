@@ -17,6 +17,7 @@ from .wic_types import (CompilerInfo, CompilerOptions, EnvData, ExplicitEdgeCall
                         NodeData, RoseTree, Tool, Tools, WorkflowInputs, WorkflowInputsFile,
                         WorkflowOutputs, Yaml, YamlTagPaths, YamlTree, StepId)
 from .lang import versions
+from .lang.compatibility import TypeRelation, reference_relation
 from .lang.cwl import CWL_VERSION
 from .lang.diagnostics import Code, SophiosError
 
@@ -117,6 +118,46 @@ def compile_workflow(yaml_tree_ast: YamlTree,
             'Speculative step insertion did not converge. Compile with '
             '--insert_steps_automatically disabled, or name the intermediate steps explicitly.')
     return compiler_info
+
+
+def _scatter_keys(step: Yaml) -> list[str]:
+    """A step's `scatter` entries, always as a list.
+
+    CWL admits a bare string for a single scattered input. Membership on a
+    `str` is substring containment, so a bare `scatter: ab` would otherwise
+    answer True for an input named `a`.
+    """
+    scatter = step.get('scatter') or []
+    return [scatter] if isinstance(scatter, str) else list(scatter)
+
+
+def _scatter_output_rank(step: Yaml) -> int:
+    """Array layers a scatter adds to every output of the step it is on.
+
+    `nested_crossproduct` nests one level per scattered input; `dotproduct` and
+    `flat_crossproduct` both produce a single flat array however many inputs
+    they scatter over. CWL v1.2 §WorkflowStep.
+    """
+    keys = _scatter_keys(step)
+    if not keys:
+        return 0
+    return len(keys) if step.get('scatterMethod') == 'nested_crossproduct' else 1
+
+
+def _scatter_input_rank(step: Yaml, arg_key: str) -> int:
+    """Array layers a scatter adds to one of the step's own inputs.
+
+    An input may be listed more than once, and each occurrence scatters it
+    again, so this counts rather than testing membership.
+    """
+    return _scatter_keys(step).count(arg_key)
+
+
+def _lift_to_array(cwl_type: Any, layers: int) -> Any:
+    """`cwl_type` wrapped in `layers` array levels."""
+    for _ in range(layers):
+        cwl_type = {'type': 'array', 'items': cwl_type}
+    return cwl_type
 
 
 def _arg_has_default_or_is_optional(arg: str, in_tool: dict[str, Any]) -> bool:
@@ -504,6 +545,11 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
     graphdata = setup.graphdata
     vars_workflow_output_internal = setup.vars_workflow_output_internal
 
+    # Raw endpoint declarations for explicit edges defined in this document.
+    # Cross-scope definitions are deliberately absent: unavailable information
+    # is UNKNOWN, never grounds for rejecting a user's reference.
+    edge_types: dict[str, Any] = {}
+
     for i, step_key in enumerate(setup.steps_keys):
         step_name_i = utils.step_name_str(setup.yaml_stem, i, step_key)
         stem = Path(step_key).stem
@@ -745,6 +791,10 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                     if not setup.explicit_edge_defs_copy.get(edgedef):
                         # discard anchor / retain string key
                         setup.steps[i]['out'][j] = out_key
+                        source_type = tool_i.cwl['outputs'].get(out_key, {}).get('type')
+                        source_type = _lift_to_array(
+                            source_type, _scatter_output_rank(setup.steps[i]))
+                        edge_types[edgedef] = source_type
                         setup.explicit_edge_defs_copy.update(
                             {edgedef: (namespaces + [step_name_or_key], out_key)})
                         # Add a 'dummy' value to explicit_edge_calls, because
@@ -792,6 +842,19 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
             match arg_val:
                 case {'wic_alias': _}:
                     arg_val = arg_val[Key.ALIAS]
+
+                    sink_type = _lift_to_array(
+                        in_dict.get('type'), _scatter_input_rank(setup.steps[i], arg_key))
+                    source_type = edge_types.get(arg_val)
+                    if reference_relation(source_type, sink_type, lang_version=lang_version) \
+                            is TypeRelation.DISJOINT:
+                        raise SophiosError.error(
+                            Code.INCOMPATIBLE_INPUT_REFERENCE,
+                            f"Edge '&{arg_val}' cannot feed '{arg_key}' of step "
+                            f"'{step_key}' in {setup.yaml_stem}.wic: source type "
+                            f'{source_type!r} is disjoint from sink type {sink_type!r}. '
+                            f"Bind '{arg_key}' to an edge whose declared type may overlap.")
+
                     if not setup.explicit_edge_defs_copy.get(arg_val):
                         if is_root and not testing:
                             # Even if is_root, we don't want to raise an Exception
@@ -966,6 +1029,19 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                             Code.UNRESOLVED_INPUT,
                             f"Warning! Did you forget to use !ii before {arg_var} in {setup.yaml_stem}.wic?",
                             'If you want to compile the workflow anyway, use --allow_raw_cwl')
+
+                    sink_type = _lift_to_array(
+                        in_dict.get('type'), _scatter_input_rank(setup.steps[i], arg_key))
+                    source_type = inputs_key_dict.get('type')
+                    if reference_relation(source_type, sink_type, lang_version=lang_version) \
+                            is TypeRelation.DISJOINT:
+                        raise SophiosError.error(
+                            Code.INCOMPATIBLE_INPUT_REFERENCE,
+                            f"Input '{arg_var}' cannot feed '{arg_key}' of step "
+                            f"'{step_key}' in {setup.yaml_stem}.wic: source type "
+                            f'{source_type!r} is disjoint from sink type {sink_type!r}. '
+                            f"Declare '{arg_var}' with a type that may overlap, or bind "
+                            f"'{arg_key}' to a different source.")
 
                     if 'doc' in inputs_key_dict:
                         inputs_key_dict['doc'] += '\\n' + in_dict.get('doc', '')
