@@ -252,6 +252,26 @@ passthrough by definition, and the residue after stripping Sophios-owned syntax
 must be a valid CWL v1.2 document.** This yields two directly testable
 properties and keeps existing files working.
 
+"Passthrough" specifies ownership and preservation, not blindness. A field can
+remain byte-identical in the emitted document while an explicitly enumerated
+Sophios operation observes it without rewriting it. Linking and inference may
+read declared port `type` and `format` values to decide whether to connect two
+ports; no other semantic operation over passthrough data is implied. This is a
+second, orthogonal axis of the boundary: preservation says who may transform a
+field, while observation says which Sophios decisions may inspect it.
+
+For `lang_version` 0.0.1, reference checking over raw port declarations is
+conservative and version-owned. It has three outcomes: proven overlap, proven
+disjointness, and unknown. Sophios rejects only proven disjointness; `Any`,
+records, enums, named schema references, malformed declarations, and types
+unavailable across a scope boundary remain unknown and pass through to final
+CWL validation. Nullable, union, and array declarations — including shorthand
+spellings and scatter's effective array ports — are compared recursively.
+`cwltool` is a conformance oracle for this rule and for the final residue, not
+the production implementation or owner of Sophios semantics. A normalized
+`PortType` algebra remains Spec 3's responsibility; Spec 2 deliberately judges
+the raw declarations at the linking boundary.
+
 ### 5.5 The AST
 
 A step-input value is currently a singleton dict with a magic key, dispatched by
@@ -499,7 +519,11 @@ takes the most recent match, so order is part of what a workflow means.
   relation above — while emitted order came from a set, `IDENTICAL` was a
   strength nothing could satisfy.
 - **Namespace injectivity** — distinct ports never collide after namespacing.
-- **Edge soundness** — every inferred edge connects type-compatible ports.
+- **Edge soundness** — every inferred edge connects type-compatible ports, and
+  every Sophios-resolved reference (workflow input or explicit `!&` / `!*`
+  edge) is rejected when its effective endpoint types are proven disjoint.
+  Inference keeps its existing candidate-selection heuristic; reference
+  rejection has the higher burden of proof described in §5.4.
 - **Termination** — compilation reaches a fixed point or emits a diagnostic;
   `max_iters` is never silently exhausted.
 - **Totality** — every failure is a diagnostic, never an unhandled exception.
