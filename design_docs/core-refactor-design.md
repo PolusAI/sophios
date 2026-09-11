@@ -498,7 +498,13 @@ step was replaced by a different tool of the same arity.
   partitioning of it, modulo namespacing. Generated workflows *and* generated
   partitionings. Inlining is the same law in the other direction.
 - **Path agreement** — Python API → `write_wic` → compile equals Python API →
-  compile.
+  compile. A serialized workflow output uses the compiler's concrete step id,
+  because `compile_workflow_finish` consumes an explicit `outputSource`
+  verbatim and the corpus uses that spelling. Both direct compilation and
+  `write_wic()` therefore obtain output references from the same document
+  builder, whose default is the concrete form; no caller-specific flag may
+  silently select a second language. The property first shipped as
+  `xfail(strict=True)`, so the production correction had to turn it green.
 - **Idempotence** — compiling one input twice agrees. Not trivial: the compiler
   mutates a module global, the tool registry, and four structures threaded
   through the recursion.
