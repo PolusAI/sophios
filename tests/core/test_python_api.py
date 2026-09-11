@@ -23,7 +23,8 @@ from sophios import run_local
 from sophios import run_local_async
 from sophios import utils, utils_cwl
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.api.python.workflow import CompiledWorkflow, InvalidLinkError, InvalidStepError, Step, Workflow
+from sophios.api.python.workflow import (_python_api_types_match, CompiledWorkflow, InvalidLinkError,
+                                         InvalidStepError, Step, Workflow)
 from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest, ComputeSubmission
 from sophios.python_cwl_adapter import import_python_file
 from sophios.schemas import wic_schema
@@ -482,6 +483,20 @@ def test_incompatible_step_link_raises_invalid_link_error() -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize('parameter_type, candidate_type, expected', [
+    ('string', 'File', False),
+    ('string', 'string', True),
+    ('string[]', 'Any', True),
+    ({'type': 'array', 'items': 'string'}, {'type': 'array', 'items': 'Any'}, True),
+    ('string', {'type': 'record', 'fields': []}, True),
+])
+def test_python_api_uses_the_conservative_language_judgment(
+        parameter_type: Any, candidate_type: Any, expected: bool) -> None:
+    """The eager API rejects proven disjointness and defers every unknown."""
+    assert _python_api_types_match(parameter_type, candidate_type) is expected
+
+
+@pytest.mark.fast
 def test_explicit_links_must_point_to_prior_steps_in_workflow_list() -> None:
     touch = Step(clt_path=_adapter("touch"))
     touch.inputs.filename = "empty.txt"
@@ -638,7 +653,7 @@ def test_workflow_outputs_are_serialized_with_type_and_source() -> None:
     workflow_yaml = workflow.yaml
 
     assert workflow_yaml["outputs"] == {
-        "file": {"type": "File", "outputSource": "append/file"},
+        "file": {"type": "File", "outputSource": "wf__step__2__append/file"},
     }
 
 

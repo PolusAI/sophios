@@ -64,19 +64,21 @@ and `_step` are unchanged for this reason on purpose — narrowing `literals`
 to dodge it would be the same move CE-13 already forbids, just aimed at a
 different finding.
 """
-from typing import Callable, Final
+from typing import Any, Callable, Final, cast
 
 import yaml
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
 from sophios import utils_cwl
-from sophios.lang import (Code, Document, EdgeDef, EdgeRef, InlineLiteral, InputValue, OpaqueCwl,
-                          OutputBinding, Step, StepKey, UnresolvedName, WicSidecar, render)
+from sophios.lang import (Code, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
+                          OpaqueCwl, OutputBinding, Step, StepKey, UnresolvedName, WicSidecar,
+                          render)
 from sophios.lang.spans import SourceSpan
 from sophios.utils_yaml import wic_loader
 from sophios.wic_types import Yaml
 
+from .reference_model import may_reference
 from .synthetic_tools import STEMS, inputs_of, outputs_of, required_inputs_of
 
 #: A span the AST needs and the surface never shows. Generated nodes have no
@@ -139,10 +141,30 @@ literals: Final = st.one_of(
     st.booleans(),
     st.sampled_from(['0777', '1.50', 'yes', '0x1f', '00']),
 )
+
+_LITERALS_BY_TYPE: Final[dict[str, SearchStrategy[Any]]] = {
+    'string': st.text('abcxyz_.', min_size=1, max_size=8),
+    'int': st.integers(min_value=-4, max_value=4),
+    'float': st.floats(min_value=-4, max_value=4, allow_nan=False, allow_infinity=False),
+    'boolean': st.booleans(),
+    'File': st.text('abcxyz_.', min_size=1, max_size=8),
+}
+
+
+def _literal_for(declared: Any) -> SearchStrategy[Any]:
+    """Draw an ordinary well-typed literal while leaving hostile literals reachable elsewhere."""
+    members = declared if isinstance(declared, list) else [declared]
+    for member in members:
+        name = member[:-1] if isinstance(member, str) and member.endswith('?') else member
+        if isinstance(name, str) and name in _LITERALS_BY_TYPE:
+            return _LITERALS_BY_TYPE[name]
+    return literals
+
+
 edge_names: Final = st.text('abcdefgh', min_size=1, max_size=4)
 
 
-def _fresh_edge(draw: st.DrawFn, defined_edges: list[str]) -> str:
+def _fresh_edge(draw: st.DrawFn, defined_edges: list[tuple[str, Any]], carries: Any) -> str:
     """Draws a `!&` name not already defined in this document.
 
     `edge_names` is a small bounded alphabet, drawn independently at each
@@ -155,7 +177,7 @@ def _fresh_edge(draw: st.DrawFn, defined_edges: list[str]) -> str:
     from `defined_edges`.
     """
     name = f'{draw(edge_names)}{len(defined_edges)}'
-    defined_edges.append(name)
+    defined_edges.append((name, carries))
     return name
 
 
@@ -167,11 +189,24 @@ def _fresh_edge(draw: st.DrawFn, defined_edges: list[str]) -> str:
 #: step referenced. Without this the strategy could not produce an
 #: `UnresolvedName` at all, and the `unresolved_name` row of CONSTRUCTS would
 #: be a construct P26 demands and nothing supplies.
-declared_inputs: Final = ('wf_name', 'wf_count')
+declared_inputs: Final[tuple[tuple[str, Any], ...]] = (
+    ('wf_name', 'string'),
+    ('wf_count', 'int'),
+    ('wf_file', 'File'),
+    ('wf_factor', 'float'),
+    ('wf_any', 'Any'),
+)
+
+
+def _references_for(stem: str, name: str) -> tuple[str, ...]:
+    """Inputs the independent model does not prove disjoint from this argument."""
+    sink_type = inputs_of(stem)[name].get('type')
+    return tuple(input_name for input_name, source_type in declared_inputs
+                 if may_reference(source_type, sink_type))
 
 
 @st.composite
-def _step(draw: st.DrawFn, stem: str, defined_edges: list[str],
+def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
           referenced_inputs: set[str]) -> Step:
     """One tool step: real stem, real input names, a subset of them bound.
 
@@ -187,21 +222,39 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[str],
     a bare name is only well-formed once the document declares it, so both are
     facts about the document being built and not about this step.
     """
-    # pylint: disable=too-many-branches  # one branch per input/output construct
+    # pylint: disable=too-many-branches,too-many-locals  # one branch per input/output construct
     names = sorted(inputs_of(stem))
     chosen = draw(st.lists(st.sampled_from(names), unique=True, max_size=len(names))) if names else []
+
+    connectable = [
+        name for name in names
+        if any(may_reference(carries, inputs_of(stem)[name].get('type'))
+               for _, carries in defined_edges)
+    ]
+    forced: str | None = None
+    if bool(connectable) and draw(st.booleans()):
+        forced = draw(st.sampled_from(connectable))
+        chosen = chosen if forced in chosen else [*chosen, forced]
+
     bindings: list[tuple[str, InputValue]] = []
     for name in chosen:
-        forms = ['literal', 'unresolved'] + (['ref'] if defined_edges else [])
+        sink_type = inputs_of(stem)[name].get('type')
+        fits = [edge for edge, carries in defined_edges if may_reference(carries, sink_type)]
+        if name == forced:
+            bindings.append((name, EdgeRef(draw(st.sampled_from(fits)), _SPAN)))
+            continue
+
+        references = _references_for(stem, name)
+        forms = ['literal'] + (['unresolved'] if references else []) + (['ref'] if fits else [])
         match draw(st.sampled_from(forms)):
             case 'literal':
-                bindings.append((name, InlineLiteral(draw(literals), _SPAN)))
+                bindings.append((name, InlineLiteral(draw(_literal_for(sink_type)), _SPAN)))
             case 'unresolved':
-                declared = draw(st.sampled_from(declared_inputs))
+                declared = draw(st.sampled_from(references))
                 referenced_inputs.add(declared)
                 bindings.append((name, UnresolvedName(declared, _SPAN)))
             case _:
-                bindings.append((name, EdgeRef(draw(st.sampled_from(defined_edges)), _SPAN)))
+                bindings.append((name, EdgeRef(draw(st.sampled_from(fits)), _SPAN)))
 
     # `bool(...)` around the left operand, here and at every other `X and
     # draw(...)` site below: mypy's bidirectional inference otherwise uses the
@@ -209,23 +262,28 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[str],
     # `DrawFn.__call__` on the right, so `outputs_of(stem) and draw(booleans())`
     # is checked as if `draw` had to return `dict[str, Cwl]`. A `bool()` around
     # a value already used only for truthiness costs nothing at runtime.
+    interpreted: list[tuple[str, OpaqueCwl]] = []
+    scatterable = [name for name, value in bindings if isinstance(value, InlineLiteral)]
+    if bool(bindings) and draw(st.booleans()):
+        match draw(st.sampled_from(['scatter', 'when'] if scatterable else ['when'])):
+            case 'scatter':
+                interpreted.append(('scatter', [scatterable[0]]))
+            case _:
+                interpreted.append(('when', '$(true)'))
+
+    scatters = any(key == 'scatter' for key, _ in interpreted)
     outs: list[OutputBinding] = []
     if bool(outputs_of(stem)) and draw(st.booleans()):
         for out_name in draw(st.lists(st.sampled_from(sorted(outputs_of(stem))),
                                       unique=True, max_size=2)):
             if draw(st.booleans()):
-                edge = _fresh_edge(draw, defined_edges)
+                carries = outputs_of(stem)[out_name].get('type')
+                if scatters:
+                    carries = {'type': 'array', 'items': carries}
+                edge = _fresh_edge(draw, defined_edges, carries)
                 outs.append(OutputBinding(out_name, EdgeDef(edge, _SPAN), _SPAN))
             else:
                 outs.append(OutputBinding(out_name, None, _SPAN))
-
-    interpreted: list[tuple[str, OpaqueCwl]] = []
-    if bool(bindings) and draw(st.booleans()):
-        match draw(st.sampled_from(['scatter', 'when'])):
-            case 'scatter':
-                interpreted.append(('scatter', [bindings[0][0]]))
-            case _:
-                interpreted.append(('when', '$(true)'))
 
     passthrough: list[tuple[str, OpaqueCwl]] = []
     if draw(st.booleans()):
@@ -262,7 +320,7 @@ def documents(draw: st.DrawFn) -> Document:
     as_mapping = draw(st.booleans())
     stems = draw(st.lists(st.sampled_from(STEMS), min_size=1, max_size=4,
                           unique=as_mapping))
-    defined_edges: list[str] = []
+    defined_edges: list[tuple[str, Any]] = []
     referenced_inputs: set[str] = set()
 
     steps: list[Step] = [draw(_step(stem, defined_edges, referenced_inputs))
@@ -291,7 +349,8 @@ def documents(draw: st.DrawFn) -> Document:
         # top-level passthrough as far as the syntax layer is concerned — the
         # compiler reads it (compiler.py:878) but the language does not claim
         # it, which is why it lives here and not in a Document field.
-        passthrough.append(('inputs', {name: {'type': 'string'}
+        types = dict(declared_inputs)
+        passthrough.append(('inputs', {name: {'type': types[name]}
                                        for name in sorted(referenced_inputs)}))
     if draw(st.booleans()):
         key = draw(st.sampled_from(['label', 'doc', '$schemas']))
@@ -439,6 +498,51 @@ def workflows() -> SearchStrategy[Yaml]:
     return workflows_with_documents().map(lambda pair: pair[1])
 
 
+_SCATTERABLE_STRING_INPUTS: Final[tuple[tuple[str, str], ...]] = (
+    ('mk_file', 'name'), ('mk_text', 'name'), ('xform', 'name'), ('join', 'name'),
+)
+
+
+@st.composite
+def _scattering_step(draw: st.DrawFn) -> Step:
+    """One tool step forced to scatter over a correctly array-valued input."""
+    stem, name = draw(st.sampled_from(_SCATTERABLE_STRING_INPUTS))
+    literal = cast(OpaqueCwl, draw(st.lists(
+        st.text('abcxyz_.', min_size=1, max_size=8), min_size=1, max_size=3)))
+    return Step(id=stem, inputs=((name, InlineLiteral(literal, _SPAN)),),
+                interpreted=(('scatter', [name]),), span=_SPAN)
+
+
+@st.composite
+def freighted_documents(draw: st.DrawFn) -> tuple[Document, int]:
+    """A multi-step document with one scattering step designated for passthrough freight."""
+    defined_edges: list[tuple[str, Any]] = []
+    referenced_inputs: set[str] = set()
+    count = draw(st.integers(min_value=2, max_value=4))
+    scatter_at = draw(st.integers(min_value=0, max_value=count - 1))
+
+    steps: list[Step] = []
+    for index in range(count):
+        steps.append(draw(_scattering_step()) if index == scatter_at
+                     else draw(_step(draw(st.sampled_from(STEMS)),
+                                     defined_edges, referenced_inputs)))
+
+    passthrough: list[tuple[str, OpaqueCwl]] = []
+    if referenced_inputs:
+        types = dict(declared_inputs)
+        passthrough.append(('inputs', {name: {'type': types[name]}
+                                       for name in sorted(referenced_inputs)}))
+    return Document(steps=tuple(steps), passthrough=tuple(passthrough), span=_SPAN), scatter_at
+
+
+def to_yml_with_freight(document: Document, step_index: int, freight: dict[str, Any]) -> Yaml:
+    """Render ``document`` and add passthrough ``freight`` to its designated step."""
+    loaded = to_yml(document)
+    steps: list[Yaml] = loaded['steps']
+    steps[step_index] = {**steps[step_index], **freight}
+    return loaded
+
+
 @st.composite
 def partitionings(draw: st.DrawFn, steps: int) -> tuple[tuple[int, ...], ...]:
     """A contiguous grouping of `range(steps)`.
@@ -483,3 +587,21 @@ _HOSTILE: Final = (
 def hostile_documents() -> SearchStrategy[tuple[str, Code]]:
     """Documents outside the language, each with the code it must earn."""
     return st.sampled_from(_HOSTILE)
+
+
+#: Keys and JSON-shaped values the language does not claim and must preserve.
+CLAIMED_STEP_KEYS: Final = frozenset({'id', 'in', 'out', 'wic'}) | Grammar.INTERPRETED_STEP_KEYS
+
+passthrough_keys: Final = st.one_of(
+    st.text('abcdefghijklmnopqrstuvwxyz_', min_size=3, max_size=12),
+    st.sampled_from(['$namespaces', '$schemas', 'hints', 'label', 'doc', 'scatterMethod']),
+).filter(lambda key: key not in CLAIMED_STEP_KEYS)
+
+passthrough_values: Final = st.recursive(
+    st.one_of(st.integers(min_value=-100, max_value=100), st.booleans(),
+              st.text('abc xyz', max_size=8), st.none()),
+    lambda children: st.one_of(st.lists(children, max_size=3),
+                               st.dictionaries(st.text('abc', min_size=1, max_size=5),
+                                               children, max_size=3)),
+    max_leaves=8,
+)

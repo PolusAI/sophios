@@ -9,7 +9,8 @@ from typing import Any, ClassVar, overload
 
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
-from sophios.inference import types_match
+from sophios.lang.compatibility import TypeRelation, reference_relation
+from sophios.lang.versions import KNOWN_VERSIONS
 from sophios.wic_types import CompilerInfo, Tools
 
 from ._compiled import CompiledWorkflow
@@ -27,7 +28,6 @@ from ._ports import (
     WorkflowInputReference,
 )
 from ._utils import (
-    contains_any_type as _contains_any_type,
     infer_literal_parameter_type as _infer_literal_parameter_type,
     get_value_from_cfg as _get_value_from_cfg,
     load_yaml as _load_yaml,
@@ -75,14 +75,17 @@ def _tool_builder_source_name(value: Any) -> str | None:
 
 
 def _python_api_types_match(parameter_type: Any, candidate_type: Any) -> bool:
-    """Match CWL types for explicit Python API links.
+    """Whether an eager API binding is not disjoint in every known version.
 
-    CWL ``Any`` is intentionally permissive. Keeping this compatibility rule
-    local to explicit Python bindings avoids broadening YAML edge inference.
+    A ``Workflow`` object has no resolved language version yet.  Rejecting only
+    when every supported version proves disjoint keeps this convenience check
+    from pre-empting the authoritative, resolved-version compiler judgment.
     """
-    if _contains_any_type(parameter_type) or _contains_any_type(candidate_type):
-        return True
-    return types_match(parameter_type, candidate_type)
+    return not all(
+        reference_relation(candidate_type, parameter_type, lang_version=lang_version)
+        is TypeRelation.DISJOINT
+        for lang_version in KNOWN_VERSIONS
+    )
 
 
 def _parameter_namespace(

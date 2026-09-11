@@ -289,7 +289,7 @@ def workflow_document(
     *,
     inline_subtrees: bool,
     directory: Path | None = None,
-    concrete_step_ids: bool = False,
+    concrete_step_ids: bool = True,
 ) -> dict[str, Any]:
     """Render a workflow into its in-memory WIC YAML representation.
 
@@ -299,6 +299,8 @@ def workflow_document(
         directory (Path | None): Output directory for sibling `.wic` files.
         concrete_step_ids (bool): Whether workflow outputs should use the
             compiler's concrete step ids instead of the user-facing step names.
+            Defaults to the concrete form because the compiler consumes an
+            explicit workflow `outputSource` verbatim.
 
     Returns:
         dict[str, Any]: Serialized workflow document.

@@ -252,6 +252,26 @@ passthrough by definition, and the residue after stripping Sophios-owned syntax
 must be a valid CWL v1.2 document.** This yields two directly testable
 properties and keeps existing files working.
 
+"Passthrough" specifies ownership and preservation, not blindness. A field can
+remain byte-identical in the emitted document while an explicitly enumerated
+Sophios operation observes it without rewriting it. Linking and inference may
+read declared port `type` and `format` values to decide whether to connect two
+ports; no other semantic operation over passthrough data is implied. This is a
+second, orthogonal axis of the boundary: preservation says who may transform a
+field, while observation says which Sophios decisions may inspect it.
+
+For `lang_version` 0.0.1, reference checking over raw port declarations is
+conservative and version-owned. It has three outcomes: proven overlap, proven
+disjointness, and unknown. Sophios rejects only proven disjointness; `Any`,
+records, enums, named schema references, malformed declarations, and types
+unavailable across a scope boundary remain unknown and pass through to final
+CWL validation. Nullable, union, and array declarations — including shorthand
+spellings and scatter's effective array ports — are compared recursively.
+`cwltool` is a conformance oracle for this rule and for the final residue, not
+the production implementation or owner of Sophios semantics. A normalized
+`PortType` algebra remains Spec 3's responsibility; Spec 2 deliberately judges
+the raw declarations at the linking boundary.
+
 ### 5.5 The AST
 
 A step-input value is currently a singleton dict with a magic key, dispatched by
@@ -314,6 +334,29 @@ pair on the way in.
 
 > The grammar fixes the surface; the AST normalises the warts so they stop
 > propagating.
+
+**Step surface forms follow CWL's, not a superset of them.** CWL v1.2 types
+`Workflow.steps` as an array of `WorkflowStep` with
+`jsonldPredicate: {mapSubject: id}`, and Schema Salad applies that
+transformation only when the field's value is an object. So CWL admits two
+spellings — an array whose items carry `id`, and a mapping keyed by step name
+— and Sophios's grammar admits exactly those.
+
+A third form, a *sequence of single-key mappings*, was listed in the reference
+and never worked: the key is not lifted into `id` when the container is
+already an array, so the step's name resolved to the empty string in every
+version of the compiler. `cwltool` fails the same document the same way, for
+the same reason. The form was removed from the language rather than
+implemented, and the parser reports it (`wic021`).
+
+Implementing it instead would have cost a real diagnostic. In list position a
+single-key mapping is ambiguous — `- in: {…}` is a forgotten step id, and
+synthesising `id` from the key would silently turn it into a step named `in`.
+The mapping form has no such ambiguity, because a mapping key can only be a
+step name. That asymmetry is why CWL draws the line where it does, and
+following it is what §1's "leaky abstraction over CWL" requires: a shorthand
+that accepts a shape the substrate rejects breaks at exactly the moment a user
+drops down into raw CWL.
 
 ### 5.6 Conformance corpus
 
@@ -453,7 +496,13 @@ step was replaced by a different tool of the same arity.
   partitioning of it, modulo namespacing. Generated workflows *and* generated
   partitionings. Inlining is the same law in the other direction.
 - **Path agreement** — Python API → `write_wic` → compile equals Python API →
-  compile.
+  compile. A serialized workflow output uses the compiler's concrete step id,
+  because `compile_workflow_finish` consumes an explicit `outputSource`
+  verbatim and the corpus uses that spelling. Both direct compilation and
+  `write_wic()` therefore obtain output references from the same document
+  builder, whose default is the concrete form; no caller-specific flag may
+  silently select a second language. The property first shipped as
+  `xfail(strict=True)`, so the production correction had to turn it green.
 - **Idempotence** — compiling one input twice agrees. Not trivial: the compiler
   mutates a module global, the tool registry, and four structures threaded
   through the recursion.
@@ -474,7 +523,11 @@ takes the most recent match, so order is part of what a workflow means.
   relation above — while emitted order came from a set, `IDENTICAL` was a
   strength nothing could satisfy.
 - **Namespace injectivity** — distinct ports never collide after namespacing.
-- **Edge soundness** — every inferred edge connects type-compatible ports.
+- **Edge soundness** — every inferred edge connects type-compatible ports, and
+  every Sophios-resolved reference (workflow input or explicit `!&` / `!*`
+  edge) is rejected when its effective endpoint types are proven disjoint.
+  Inference keeps its existing candidate-selection heuristic; reference
+  rejection has the higher burden of proof described in §5.4.
 - **Termination** — compilation reaches a fixed point or emits a diagnostic;
   `max_iters` is never silently exhausted.
 - **Totality** — every failure is a diagnostic, never an unhandled exception.

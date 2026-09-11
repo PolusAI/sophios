@@ -31,38 +31,40 @@ from .test_zone_boundary import _import_graph, _imports_of, _reachable
 TESTS_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = TESTS_ROOT.parent
 
-#: Every module this Spec adds. Listed rather than globbed: a glob would grow
-#: silently, and the point of the scan is that adding a module to the oracle is
-#: a decision someone made on purpose.
-#:
-#: Reduced for Task 1 to the two modules that task delivered; Task 2 adds
-#: `core.ast_strategies`/`core.test_generators` and Task 3
-#: `core.equivalence`/`core.test_equivalence` as their own modules land. Tasks
-#: 4-6 each add their own module below as it lands, and Task 7's final step
-#: restores the full list:
-#:   'core.transformations', 'core.test_equivalences',
-#:   'core.test_canonical_emission', 'core.test_predicates', 'core.test_canonical_path'
-#:
-#: Every entry of `ORACLE_FILES` must appear here —
-#: `test_the_static_scan_covers_every_file_the_poisoned_run_covers` is the link.
+#: Every module in the Spec 2 oracle. Listed rather than globbed so adding a
+#: module to the trusted suite remains a reviewable decision. Every executable
+#: test file below must also appear here; the coverage test links the two lists.
 ORACLE_MODULES = (
     'core.synthetic_tools',
     'core.hermetic',
     'core.ast_strategies',
+    'core.reference_model',
     'core.equivalence',
     'core.test_equivalence',
     'core.transformations',
     'core.test_equivalences',
     'core.test_generators',
+    'core.test_canonical_emission',
+    'core.test_predicates',
+    'core.test_reference_compatibility',
+    'core.test_canonical_path',
 )
 
 #: Reaching any of these means the suite's meaning depends on the machine.
+#: Modules that run tool discovery **at import**, so reaching one at all —
+#: however indirectly — makes the suite's meaning depend on the machine.
 FORBIDDEN = (
-    'sophios.plugins',
     'core.test_setup',
     'core.compile_harness',
     'core.wic_corpus',
 )
+
+#: `sophios.plugins` is different: importing it performs no discovery, while
+#: calling its entry points does. A transitive production dependency is safe;
+#: a direct oracle import almost certainly intends to call it. The poisoned
+#: subprocess below proves dynamically that no indirect call occurs.
+#:
+FORBIDDEN_DIRECT = ('sophios.plugins',)
 
 
 def _imports_of_test_module(path: Path) -> set[str]:
@@ -113,6 +115,11 @@ def _crossings(seeds: tuple[str, ...], graph: dict[str, set[str]]) -> list[tuple
         for module in seeds
         for target in _reachable(module, graph) | graph.get(module, set())
         if target in FORBIDDEN
+    ) + sorted(
+        (module, target)
+        for module in seeds
+        for target in graph.get(module, set())
+        if target in FORBIDDEN_DIRECT
     )
 
 
@@ -133,25 +140,32 @@ def test_no_oracle_module_reaches_plugin_discovery() -> None:
 def test_the_scan_fires_on_a_deliberate_crossing(tmp_path: Path) -> None:
     """A guard nobody has seen fire is a guard whose green means nothing.
 
-    Writes a module that imports the environment, makes a real oracle module
-    import it, and asserts `_crossings` — the scan the test above runs — names
-    the crossing. Transitively on purpose: the breach is one hop past the seed,
-    so this fails if `_reachable` stops traversing, if the crossings filter is
-    inverted, or if `FORBIDDEN` goes empty.
+    Writes a module that imports the environment, points a real oracle module
+    at it, and asserts `_crossings` — the scan the test above runs — names both
+    crossings. Both halves of the rule are exercised, because they catch
+    different things and by different routes:
+
+      * `FORBIDDEN` transitively, so the breach sits one hop past the seed.
+        This fails if `_reachable` stops traversing, if the crossings filter is
+        inverted, or if the tuple goes empty.
+      * `FORBIDDEN_DIRECT` on the seed's own imports, since a transitive reach
+        to `sophios.plugins` is deliberately *not* a finding.
 
     An earlier version read `_imports_of_test_module`'s result and intersected
-    it with `FORBIDDEN` by hand. Only the last of those three mutations turned
-    it red, in a module whose own sibling defect was found by mutation.
+    it with the two tuples by hand — `_crossings` was never called, so it
+    stayed green through every mutation but the last, in a module whose own
+    sibling defect was found by mutation.
     """
     breach = tmp_path / 'core' / 'breach.py'
     breach.parent.mkdir()
-    breach.write_text('import sophios.plugins\n', encoding='utf-8')
+    breach.write_text('from . import test_setup\n', encoding='utf-8')
 
     seed = 'core.hermetic'
     graph = {**_test_import_graph(), **_import_graph(),
              'core.breach': _imports_of_test_module(breach)}
-    graph[seed] = graph[seed] | {'core.breach'}
-    assert _crossings((seed,), graph) == [(seed, 'sophios.plugins')]
+    graph[seed] = graph[seed] | {'core.breach', 'sophios.plugins'}
+    assert _crossings((seed,), graph) == [(seed, 'core.test_setup'),
+                                          (seed, 'sophios.plugins')]
 
 
 @pytest.mark.skip_pypi_ci
@@ -180,6 +194,34 @@ def test_required_inputs_agree_with_the_compilers_own_rule(stem: str) -> None:
     in_tool = inputs_of(stem)
     theirs = tuple(a for a in in_tool if not _arg_has_default_or_is_optional(a, in_tool))
     assert required_inputs_of(stem) == theirs
+
+
+@pytest.mark.fast
+def test_falsy_default_still_counts_as_a_default() -> None:
+    """`_arg_has_default_or_is_optional` must test presence, not truth.
+
+    `in_tool[arg].get('default')` used to be used directly as a boolean, so a
+    tool declaring `default: False` (or `0`, or `''`) was treated as having no
+    default at all — the input was silently promoted to a required,
+    caller-supplied workflow input, discarding the tool author's default.
+    Reproduces `mm-workflows/cwl_adapters/extract_pdbbind_refined.cwl`'s
+    `convert_Kd_dG` input; `control` is the ordinary truthy-default case that
+    must keep working alongside it.
+
+    Two assertions so the test fails whichever way the rule breaks: revert to
+    truthiness and the falsy one fails; break the ordinary case and the truthy
+    one fails.
+    """
+    from sophios.compiler import _arg_has_default_or_is_optional  # pylint: disable=import-outside-toplevel
+
+    in_tool = {
+        'convert_Kd_dG': {'type': 'boolean', 'default': False},
+        'control': {'type': 'boolean', 'default': True},
+    }
+    assert _arg_has_default_or_is_optional('convert_Kd_dG', in_tool), \
+        'a present-but-falsy default must still count as a default'
+    assert _arg_has_default_or_is_optional('control', in_tool), \
+        'a present, truthy default must still count as a default'
 
 
 @pytest.mark.fast
@@ -217,16 +259,16 @@ def test_the_hermetic_entry_point_actually_compiles() -> None:
 
 
 #: Test files whose passing constitutes "the oracle suite ran with plugin
-#: discovery disabled". Reduced for Task 1, which contributes none of them:
-#: Tasks 2-6 each uncomment their own file below as it lands, and Task 7's
-#: restore leaves the full list active.
+#: discovery disabled". The static-coverage test requires each one to have a
+#: matching `ORACLE_MODULES` entry.
 ORACLE_FILES: tuple[str, ...] = (
     'tests/core/test_generators.py',
     'tests/core/test_equivalence.py',
     'tests/core/test_equivalences.py',
-    # 'tests/core/test_canonical_emission.py',
-    # 'tests/core/test_predicates.py',
-    # 'tests/core/test_canonical_path.py',
+    'tests/core/test_canonical_emission.py',
+    'tests/core/test_predicates.py',
+    'tests/core/test_reference_compatibility.py',
+    'tests/core/test_canonical_path.py',
 )
 
 

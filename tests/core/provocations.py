@@ -31,6 +31,7 @@ PARSE: Final[dict[Code, str]] = {
     Code.DUPLICATE_KEY: 'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
     Code.RECURSIVE_ALIAS: 'top: &a [*a]\n',
     Code.MISPLACED_EDGE_DEF: 'top: !& e\n',
+    Code.STEP_WITHOUT_ID: 'steps:\n- touch:\n    in: {f: !ii x}\n',
 }
 
 #: Codes provoked through the compiler or its helpers. Callables raise
@@ -130,4 +131,46 @@ def _provoke_lang_version_conflict() -> None:
 COMPILED.update({
     Code.UNKNOWN_LANG_VERSION: _provoke_unknown_lang_version,
     Code.LANG_VERSION_CONFLICT: _provoke_lang_version_conflict,
+})
+
+
+def _provoke_literal_type_mismatch() -> None:
+    # !ii places no constraint relating a literal to the declared CWL type of
+    # the input it binds, so an int-typed input can carry a literal that does
+    # not convert. generate_yaml_inputs is the site that discovers this.
+    from sophios.compiler import generate_yaml_inputs  # pylint: disable=import-outside-toplevel
+    generate_yaml_inputs({'n': {'type': 'int', 'value': '_'}})
+
+
+COMPILED.update({
+    Code.LITERAL_TYPE_MISMATCH: _provoke_literal_type_mismatch,
+})
+
+
+def _never_converges() -> None:
+    """The fixed-point guard's provocation.
+
+    Imported lazily from the suite that owns the mechanism, matching how
+    `_compile_minimal` reaches `compile_harness` here. The direction matters:
+    `test_predicates` must not import this module, which reaches plugin
+    discovery through `compile_harness` and would break its hermeticity.
+    """
+    from .test_predicates import never_converges  # pylint: disable=import-outside-toplevel
+    never_converges()
+
+
+COMPILED.update({
+    Code.FIXED_POINT_NOT_REACHED: _never_converges,
+})
+
+
+def _provoke_incompatible_input_reference() -> None:
+    """Bind a declared string workflow input to a File argument."""
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+    compile_hermetic({'inputs': {'wf_name': {'type': 'string'}},
+                      'steps': [{'id': 'count', 'in': {'file': 'wf_name'}}]}, 'provoke')
+
+
+COMPILED.update({
+    Code.INCOMPATIBLE_INPUT_REFERENCE: _provoke_incompatible_input_reference,
 })

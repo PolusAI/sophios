@@ -36,14 +36,8 @@ from sophios.lang import Grammar, parse
 from sophios.lang.cwl import CWL_VERSION
 from sophios.wic_types import Yaml
 
+from .ast_strategies import passthrough_keys, passthrough_values
 from .compile_harness import COMPILED, FAST, compile_cwl, compile_info
-
-#: Step keys the language claims for itself, and therefore not passthrough.
-#: `wic:` is claimed at every level: §1 lists the block as Sophios-owned, and
-#: a step-level `wic:` is metadata about the step, not CWL bound for the
-#: output — so a property that generated it and then asserted it was
-#: passthrough would be asserting against the reference.
-CLAIMED_STEP_KEYS = frozenset({'id', 'in', 'out', 'wic'}) | Grammar.INTERPRETED_STEP_KEYS
 
 #: Top-level keys the *compiler* owns, which is a larger set than the syntax
 #: layer's. `_document` claims only `steps` and `wic`; `compile_workflow` also
@@ -76,32 +70,6 @@ def _step(cwl: Yaml) -> Yaml:
     """
     found: Yaml = cwl['steps'][0]
     return found
-
-
-# --------------------------------------------------------------------------
-# Strategies
-# --------------------------------------------------------------------------
-
-#: Keys that are definitely not claimed by the language. Filtered rather than
-#: constructed, so the claim set stays the authority.
-#:
-#: The sampled half matters: a lowercase-ascii alphabet cannot produce `$` or
-#: an uppercase letter, so `$namespaces`, `$schemas` and `scatterMethod` were
-#: unreachable by construction and no property here ever touched the keys the
-#: reference's footnote is about. Real CWL keys are drawn explicitly.
-passthrough_keys = st.one_of(
-    st.text('abcdefghijklmnopqrstuvwxyz_', min_size=3, max_size=12),
-    st.sampled_from(['$namespaces', '$schemas', 'hints', 'label', 'doc', 'scatterMethod']),
-).filter(lambda k: k not in CLAIMED_STEP_KEYS)
-
-#: JSON-shaped values, byte-comparable after a round trip.
-passthrough_values = st.recursive(
-    st.one_of(st.integers(min_value=-100, max_value=100), st.booleans(),
-              st.text('abc xyz', max_size=8), st.none()),
-    lambda children: st.one_of(st.lists(children, max_size=3),
-                               st.dictionaries(st.text('abc', min_size=1, max_size=5), children, max_size=3)),
-    max_leaves=8,
-)
 
 
 def _touch_workflow(extra_step_keys: dict[str, Any], extra_top_keys: dict[str, Any]) -> Yaml:
