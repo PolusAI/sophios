@@ -21,24 +21,11 @@ contract:
     beside its own passthrough is unreachable by that generator.
     `ast_strategies.freighted_documents` forces exactly that shape.
 
-CONFIRMED DIVERGENCE (P35). `test_the_two_front_ends_compile_to_the_same_cwl`
-fails, reliably, and is marked `xfail(strict=True)` rather than adjusted to
-avoid it: `Workflow.compile()` builds its in-memory document with
-`workflow_document(..., concrete_step_ids=True)`
-(`sophios/api/python/_workflow_runtime.py`), which pre-resolves a workflow
-output's `outputSource` to the compiler's own concrete step id
-(`oracle__step__3__join/file`) before compilation. `Workflow.write_wic()`
-calls the same function *without* that flag, so the `.wic` file it writes
-carries the bare, unresolved form (`join/file`) instead. The compiler never
-resolves this itself — `compile_workflow_finish`
-(`sophios/compiler.py:340-343`) takes a user-supplied `outputs:` mapping's
-`outputSource` verbatim, with the comment "Assume the user has manually added
-the correct namespaced CWL dependency" — so a `.wic` file `write_wic()` writes
-is, today, compiled with a broken output reference whenever a workflow output
-is declared. A `src/` fix (passing `concrete_step_ids=True` through
-`write_workflow_wic`/`workflow_wic_yaml` too) is out of scope here; strict
-`xfail` means the day that lands, this test XPASSes and fails loudly until
-the marker is removed.
+CE-16, closed. Direct compilation requested concrete workflow-output step ids,
+while `write_wic()` omitted the flag and serialized the user-facing step name.
+The compiler consumes explicit `outputSource` values verbatim, so the two paths
+disagreed. The shared document builder now defaults to the concrete spelling;
+the strict expected failure turned green and was removed.
 
 P25 covers this module both statically and under poisoned plugin discovery.
 The passthrough alphabets live in `ast_strategies`, their environment-free
@@ -185,18 +172,6 @@ def _path_specs(draw: st.DrawFn) -> _PathSpec:
     return _PathSpec(draw(_safe_text), draw(_safe_text), draw(_safe_text))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Confirmed divergence, not a harness bug: write_wic() omits the "
-        "concrete_step_ids=True that Workflow.compile() uses, so the .wic file "
-        "it writes carries an unresolved outputSource ('join/file') where the "
-        "direct path already has the compiler's own concrete id "
-        "('oracle__step__3__join/file'). The compiler itself never resolves a "
-        "user-supplied outputs: mapping's outputSource (compiler.py:340-343). "
-        "See this module's own docstring, 'CONFIRMED DIVERGENCE (P35)'."
-    ),
-)
 @pytest.mark.slow
 @given(_path_specs())
 @PARTITION
@@ -210,14 +185,6 @@ def test_the_two_front_ends_compile_to_the_same_cwl(spec: _PathSpec) -> None:
 
     Built twice from one drawn `spec` (see `_build_workflow`'s own docstring
     for why sharing one object would weaken the claim).
-
-    Currently `xfail(strict=True)`: this property found a real divergence on
-    its very first example. See the module docstring's own 'CONFIRMED
-    DIVERGENCE (P35)' section for the reproduction; kept `@given`-driven and
-    strict rather than reduced to one pinned example, so this stays exercised
-    and any partial fix that made even one drawn spec pass would flip it to
-    XPASS and demand attention, per this codebase's own "the day a fix lands,
-    whoever is standing there removes the entry" discipline.
 
     BLIND SPOTS: one fixed topology (two File sources into one `join`, one
     workflow output) rather than the full grammar `ast_strategies.documents()`

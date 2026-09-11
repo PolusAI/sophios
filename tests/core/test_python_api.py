@@ -653,7 +653,7 @@ def test_workflow_outputs_are_serialized_with_type_and_source() -> None:
     workflow_yaml = workflow.yaml
 
     assert workflow_yaml["outputs"] == {
-        "file": {"type": "File", "outputSource": "append/file"},
+        "file": {"type": "File", "outputSource": "wf__step__2__append/file"},
     }
 
 
