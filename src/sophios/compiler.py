@@ -8,7 +8,6 @@ from typing import Any, NamedTuple, cast
 import graphviz
 from mergedeep import merge, Strategy
 import networkx as nx
-import yaml
 
 from . import input_output as io
 from . import inference, utils, utils_cwl, utils_graphs
@@ -108,9 +107,15 @@ def compile_workflow(yaml_tree_ast: YamlTree,
             subgraphs[si].networkx.edges, subgraphs[si].networkx.nodes)
 
     if i == max_iters:
-        print(yaml.dump(node_data.yml))
-        raise RuntimeError(
-            f'Error! Maximum number of iterations ({max_iters}) reached in compile_workflow!')
+        # A diagnostic, not a RuntimeError with a workflow dumped to stdout.
+        # CR-104 converted the sys.exit sites; this one was never an exit, so
+        # its sweep did not reach it, and an embedder still had an exception
+        # with no code to catch on.
+        raise SophiosError.error(
+            Code.FIXED_POINT_NOT_REACHED,
+            f'Error! Maximum number of iterations ({max_iters}) reached in compile_workflow!',
+            'Speculative step insertion did not converge. Compile with '
+            '--insert_steps_automatically disabled, or name the intermediate steps explicitly.')
     return compiler_info
 
 

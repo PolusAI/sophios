@@ -144,3 +144,20 @@ def _provoke_literal_type_mismatch() -> None:
 COMPILED.update({
     Code.LITERAL_TYPE_MISMATCH: _provoke_literal_type_mismatch,
 })
+
+
+def _never_converges() -> None:
+    """The fixed-point guard's provocation.
+
+    Imported lazily from the suite that owns the mechanism, matching how
+    `_compile_minimal` reaches `compile_harness` here. The direction matters:
+    `test_predicates` must not import this module, which reaches plugin
+    discovery through `compile_harness` and would break its hermeticity.
+    """
+    from .test_predicates import never_converges  # pylint: disable=import-outside-toplevel
+    never_converges()
+
+
+COMPILED.update({
+    Code.FIXED_POINT_NOT_REACHED: _never_converges,
+})

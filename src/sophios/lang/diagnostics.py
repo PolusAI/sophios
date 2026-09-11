@@ -53,6 +53,7 @@ class Code(StrEnum):
     MISPLACED_EDGE_DEF = 'wic019'
     LITERAL_TYPE_MISMATCH = 'wic020'
     # wic021 is retired, not free: it was a second spelling of wic006.
+    FIXED_POINT_NOT_REACHED = 'wic022'
     RECURSIVE_ALIAS = 'wic030'
 
 
