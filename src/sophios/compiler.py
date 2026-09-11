@@ -120,6 +120,16 @@ def compile_workflow(yaml_tree_ast: YamlTree,
     return compiler_info
 
 
+def _as_text(value: Any) -> Any:
+    """CWL `doc` as text: a `string[]` joined, anything else unchanged.
+
+    CWL types `doc` as `string | string[]`. Only the list form needs handling —
+    `label` is string-only — and joining it here keeps a list out of any
+    f-string that would otherwise write its repr into a user's input block.
+    """
+    return '\n'.join(value) if isinstance(value, list) else value
+
+
 def _scatter_keys(step: Yaml) -> list[str]:
     """A step's `scatter` entries, always as a list.
 
@@ -1043,15 +1053,17 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                             f"Declare '{arg_var}' with a type that may overlap, or bind "
                             f"'{arg_key}' to a different source.")
 
-                    if 'doc' in inputs_key_dict:
-                        inputs_key_dict['doc'] += '\\n' + in_dict.get('doc', '')
-                    else:
-                        inputs_key_dict['doc'] = in_dict.get('doc', '')
-                    if 'label' in inputs_key_dict:
-                        inputs_key_dict['label'] += '\\n' + \
-                            in_dict.get('label', '')
-                    else:
-                        inputs_key_dict['label'] = in_dict.get('label', '')
+                    # Preserve the user's input block while carrying useful
+                    # documentation from the consuming argument. CWL types `doc`
+                    # as `string | string[]`, so either side may be a list; a
+                    # list interpolated into the join would write its repr into
+                    # the block this exists to preserve.
+                    for key in ('doc', 'label'):
+                        addition = _as_text(in_dict.get(key, ''))
+                        if not addition:
+                            continue
+                        existing = _as_text(inputs_key_dict.get(key, ''))
+                        inputs_key_dict[key] = f'{existing}\n{addition}' if existing else addition
 
                     if not hashable:
                         pass  # Unhashable values cannot be used as input_mapping keys.
