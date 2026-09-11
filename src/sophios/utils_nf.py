@@ -1,6 +1,6 @@
 """Convert compiled Sophios RoseTrees into the Nextflow intermediate representation."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 import copy
 import math
 from os import PathLike
@@ -23,6 +23,7 @@ from .nf_types import (
     NfProcess,
     NfProcessConnection,
     NfResources,
+    NfShellLiteral,
     NfTemplate,
     NfTemplateSegment,
     NfWorkflowInputConnection,
@@ -155,6 +156,21 @@ def cwl_type_to_nf_qualifier(cwl_type: Any) -> str:
             raise ValueError(f"unsupported CWL type for Nextflow Phase 1: {cwl_type!r}")
 
 
+_PATH_KINDS = {"File": "file", "Directory": "directory"}
+
+
+def _channel_shape(cwl_type: Any) -> str:
+    """Return the channel semantics one non-array CWL type lowers to.
+
+    The same qualifier/path-kind pair the executable graph compares when it
+    checks that every sink of one workflow parameter agrees, rendered for
+    diagnostics.
+    """
+    qualifier = cwl_type_to_nf_qualifier(cwl_type)
+    path_kind = _PATH_KINDS.get(_required_type(cwl_type))
+    return f"{qualifier}[{path_kind}]" if path_kind else qualifier
+
+
 def _is_array_type(cwl_type: Any) -> bool:
     """Return whether a (non-optional-wrapped) CWL type is the array mapping form."""
     return isinstance(cwl_type, Mapping) and cwl_type.get("type") == "array"
@@ -191,7 +207,12 @@ def _array_item_type(array_type: Any) -> Any:
             return items
 
 
-def _ports(raw_ports: Any, *, outputs: bool) -> list[NfPort]:
+def _ports(
+    raw_ports: Any,
+    *,
+    outputs: bool,
+    stage_as: Mapping[str, str] | None = None,
+) -> list[NfPort]:
     port_definitions = _as_mapping(raw_ports, error="CommandLineTool ports must be a mapping")
     ports: list[NfPort] = []
     for raw_name, raw_definition in port_definitions.items():
@@ -202,10 +223,7 @@ def _ports(raw_ports: Any, *, outputs: bool) -> list[NfPort]:
                 is_array = not outputs and _is_array_type(required_type)
                 element_type = _array_item_type(required_type) if is_array else cwl_type
                 qualifier = cwl_type_to_nf_qualifier(element_type)
-                path_kind = {
-                    "File": "file",
-                    "Directory": "directory",
-                }.get(_required_type(element_type))
+                path_kind = _PATH_KINDS.get(_required_type(element_type))
                 ports.append(
                     NfPort(
                         name,
@@ -214,6 +232,7 @@ def _ports(raw_ports: Any, *, outputs: bool) -> list[NfPort]:
                         glob=_output_template(raw_name, raw_definition) if outputs else None,
                         path_kind=path_kind,
                         is_array=is_array,
+                        stage_as=None if outputs or stage_as is None else stage_as.get(name),
                     )
                 )
             case _:
@@ -290,14 +309,69 @@ def _binding_tokens(prefix: Any, value: NfTemplate, *, separate: Any = True) -> 
             raise ValueError("CWL command prefix must be a string")
 
 
-def _argument_items(arguments: list[Any]) -> list[tuple[tuple[int, int, int], tuple[NfTemplate, ...]]]:
-    items: list[tuple[tuple[int, int, int], tuple[NfTemplate, ...]]] = []
+def _shell_literal_value(
+    raw_name: Any,
+    binding: Mapping[str, Any],
+    *,
+    shell_mode: bool,
+) -> NfShellLiteral:
+    """Lower one shellQuote:false binding to its one supported shape.
+
+    Approved only under ShellCommandRequirement, for a prefix-free binding
+    whose valueFrom is a CWL-author literal with no input reference: the
+    input's own runtime value must never be rendered unquoted, so a binding
+    with no valueFrom, a prefix, or an input-referencing valueFrom is
+    rejected here rather than silently losing its quoting.
+    """
+    if not shell_mode:
+        raise ValueError(
+            f"shellQuote false for {raw_name!r} requires ShellCommandRequirement "
+            "in requirements or hints"
+        )
+    if binding.get("prefix") is not None:
+        raise ValueError(
+            f"shellQuote false for {raw_name!r} does not support a prefix; "
+            "the raw literal must be the binding's whole value"
+        )
+    if binding.get("separate") is False:
+        raise ValueError("CWL separate cannot be specified without a prefix")
+    value_from = binding.get("valueFrom")
+    if value_from is None:
+        raise ValueError(
+            f"shellQuote false for {raw_name!r} has no valueFrom; a plain "
+            "input value is never rendered unquoted"
+        )
+    template = _template(value_from, context=f"CWL shellQuote false value for {raw_name!r}")
+    literal_parts: list[str] = []
+    for segment in template.segments:
+        if not isinstance(segment, NfLiteral):
+            raise ValueError(
+                f"shellQuote false for {raw_name!r} references an input; only a "
+                "CWL-author literal with no input reference may be rendered unquoted"
+            )
+        literal_parts.append(segment.value)
+    return NfShellLiteral("".join(literal_parts))
+
+
+def _argument_items(
+    arguments: list[Any],
+    *,
+    shell_mode: bool,
+) -> list[tuple[tuple[int, int, int], tuple[NfCommandToken, ...]]]:
+    items: list[tuple[tuple[int, int, int], tuple[NfCommandToken, ...]]] = []
     for index, argument in enumerate(arguments):
         match argument:
             case {"valueFrom": value_from}:
-                value = _template(value_from, context="CWL argument valueFrom")
-                tokens = _binding_tokens(argument.get("prefix"), value, separate=argument.get("separate", True))
                 item_position = _position(argument.get("position"), default=0)
+                if argument.get("shellQuote") is False:
+                    tokens: tuple[NfCommandToken, ...] = (
+                        _shell_literal_value(f"arguments[{index}]", argument, shell_mode=shell_mode),
+                    )
+                else:
+                    value = _template(value_from, context="CWL argument valueFrom")
+                    tokens = _binding_tokens(
+                        argument.get("prefix"), value, separate=argument.get("separate", True)
+                    )
             case Mapping():
                 raise ValueError("mapped CWL arguments must contain valueFrom")
             case _:
@@ -365,8 +439,199 @@ def _array_binding(
     return NfArrayBinding(name, prefix)
 
 
+_IWDR_DIRENT_FIELDS = frozenset({"class", "entry", "entryname", "writable"})
+_IWDR_ENTRY_PATTERN = re.compile(r"^\$\(\s*inputs\.([A-Za-z_][A-Za-z0-9_]*)\s*\)$")
+
+
+def _iwdr_entry_reference(value: Any) -> str:
+    """Return the raw input name referenced by a bare $(inputs.<name>) IWDR entry."""
+    if isinstance(value, str):
+        match = _IWDR_ENTRY_PATTERN.match(value.strip())
+        if match:
+            return match.group(1)
+    raise ValueError(
+        "must be a bare $(inputs.<name>) reference to one File/Directory input; "
+        "inline content construction is deferred"
+    )
+
+
+def _iwdr_entryname(value: Any, *, raw_name: str) -> str | None:
+    """Classify an IWDR entryname: None for a same-basename no-op, else a literal rename.
+
+    Absent, or the exact self-referencing $(inputs.<name>.basename), both
+    mean "stage under the input's own basename" -- already Nextflow's
+    default, so neither needs a stage_as override. A plain literal with no
+    reference is the one supported rename shape; any other reference has no
+    runtime-proven representation.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("entryname must be a string")
+    template = _template(value, context="IWDR entryname")
+    if template.segments == (NfBasenameReference(raw_name),):
+        return None
+    literal_parts: list[str] = []
+    for segment in template.segments:
+        if not isinstance(segment, NfLiteral):
+            raise ValueError(
+                "entryname is supported only as a literal string or the input's own "
+                f"$(inputs.{raw_name}.basename); a computed or differently-referencing "
+                "entryname is deferred"
+            )
+        literal_parts.append(segment.value)
+    literal = "".join(literal_parts)
+    if not literal.strip():
+        raise ValueError("entryname must be a non-empty string")
+    if "/" in literal:
+        raise ValueError("entryname must not contain a path separator")
+    return literal
+
+
+def _iwdr_listing_item(item: Any, *, tool_inputs: Mapping[str, Any]) -> tuple[str, str | None]:
+    """Validate one InitialWorkDirRequirement listing entry.
+
+    Returns (normalized_input_name, literal_rename_or_None). Approved
+    shapes: a bare $(inputs.<name>) string, or a Dirent {entry:
+    $(inputs.<name>), entryname: ..., writable: false} whose entryname is
+    absent, the input's own basename self-reference, or a literal with no
+    path separator.
+    """
+    match item:
+        case str() as bare:
+            raw_name = _iwdr_entry_reference(bare)
+            rename = None
+        case Mapping() as dirent:
+            extra = set(dirent) - _IWDR_DIRENT_FIELDS
+            if extra:
+                raise ValueError(f"has unsupported Dirent fields: {', '.join(sorted(extra))}")
+            if dirent.get("writable") is True:
+                raise ValueError("writable: true is deferred; copy-and-mutate staging is not supported")
+            raw_name = _iwdr_entry_reference(dirent.get("entry"))
+            rename = _iwdr_entryname(dirent.get("entryname"), raw_name=raw_name)
+        case _:
+            raise ValueError("must be a bare $(inputs.<name>) reference or a Dirent mapping")
+    definition = tool_inputs.get(raw_name)
+    if not isinstance(definition, Mapping):
+        raise ValueError(f"references undeclared input {raw_name!r}")
+    required = _required_type(definition.get("type"))
+    if _is_array_type(required):
+        raise ValueError(
+            f"references array-typed input {raw_name!r}; staging an array of files is deferred"
+        )
+    try:
+        qualifier = cwl_type_to_nf_qualifier(required)
+    except ValueError:
+        qualifier = "unsupported"
+    if qualifier != "path":
+        raise ValueError(
+            f"references non-path input {raw_name!r}; only File/Directory inputs can be staged"
+        )
+    return _identifier(raw_name, context="IWDR listing target"), rename
+
+
+def _iwdr_listing_findings(
+    tool: Mapping[str, Any],
+    requirement: Mapping[str, Any],
+    *,
+    path: str,
+) -> list[str]:
+    """Validate every InitialWorkDirRequirement listing entry independently."""
+    listing = requirement.get("listing")
+    if not isinstance(listing, list):
+        return [f"{path}.listing: InitialWorkDirRequirement listing must be a list"]
+    tool_inputs = tool.get("inputs", {})
+    if not isinstance(tool_inputs, Mapping):
+        return []
+    findings: list[str] = []
+    renamed_by: dict[str, set[str]] = {}
+    for index, item in enumerate(listing):
+        try:
+            name, rename = _iwdr_listing_item(item, tool_inputs=tool_inputs)
+        except ValueError as exc:
+            findings.append(f"{path}.listing[{index}]: {exc}")
+            continue
+        if rename is not None:
+            renamed_by.setdefault(rename, set()).add(name)
+    for rename, names in renamed_by.items():
+        if len(names) > 1:
+            findings.append(
+                f"{path}.listing: inputs {sorted(names)} are all staged under the same "
+                f"literal name {rename!r}"
+            )
+    return findings
+
+
+def _iwdr_stage_as(tool: Mapping[str, Any]) -> dict[str, str]:
+    """Return {input_name: literal_rename} for every approved IWDR rename entry.
+
+    Only rename entries are represented: a self-basename entry needs no
+    stage_as override, since Nextflow already stages a path input under its
+    own basename by default.
+    """
+    requirement = _requirement(tool, "InitialWorkDirRequirement")
+    if requirement is None:
+        return {}
+    listing = requirement.get("listing")
+    if not isinstance(listing, list):
+        raise ValueError("InitialWorkDirRequirement listing must be a list")
+    tool_inputs = _as_mapping(tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
+    stage_as: dict[str, str] = {}
+    by_rename: dict[str, set[str]] = {}
+    for item in listing:
+        name, rename = _iwdr_listing_item(item, tool_inputs=tool_inputs)
+        if rename is not None:
+            stage_as[name] = rename
+            by_rename.setdefault(rename, set()).add(name)
+    for rename, names in by_rename.items():
+        if len(names) > 1:
+            raise ValueError(
+                f"inputs {sorted(names)} are all staged under the same literal name {rename!r}"
+            )
+    return stage_as
+
+
+def _iwdr_rename_reference_findings(
+    tool: Mapping[str, Any],
+    renamed_names: set[str],
+    *,
+    path: str,
+) -> list[str]:
+    """Reject any other reference to an input IWDR stages under a different name.
+
+    A renamed port's own .name reports the staged name, not the original
+    CWL basename (runtime-proven), so resolving what a plain or basename
+    reference to it would mean is out of scope; the supported pattern is
+    for the command to hard-code the literal staged name directly.
+    """
+    if not renamed_names:
+        return []
+    try:
+        command = _command(tool)
+        outputs = _ports(tool.get("outputs", {}), outputs=True)
+    except (ValueError, TypeError):
+        return []
+    templates = [
+        *(token for token in command.tokens if isinstance(token, NfTemplate)),
+        *(stream for stream in (command.stdin, command.stdout, command.stderr) if stream),
+        *(port.glob for port in outputs if port.glob),
+    ]
+    plain, basenamed = _template_reference_names(templates)
+    referenced = (plain | basenamed) & renamed_names
+    if not referenced:
+        return []
+    return [
+        f"{path}.run.requirements.InitialWorkDirRequirement: input {name!r} is staged under "
+        "an explicit rename and cannot also be referenced elsewhere in the command, stream "
+        "targets, or output globs"
+        for name in sorted(referenced)
+    ]
+
+
 def _input_binding_items(
     inputs: Mapping[str, Any],
+    *,
+    shell_mode: bool,
 ) -> list[tuple[tuple[int, int, str], tuple[NfCommandToken, ...]]]:
     items: list[tuple[tuple[int, int, str], tuple[NfCommandToken, ...]]] = []
     for raw_name, definition in inputs.items():
@@ -382,6 +647,11 @@ def _input_binding_items(
         value_from = binding.get("valueFrom")
         position = _position(binding.get("position"), default=0)
         required_type = _required_type(input_definition.get("type"))
+        if binding.get("shellQuote") is False:
+            items.append(
+                ((position, 1, str(raw_name)), (_shell_literal_value(raw_name, binding, shell_mode=shell_mode),))
+            )
+            continue
         if _is_array_type(required_type):
             items.append(
                 ((position, 1, str(raw_name)), (_array_binding(raw_name, name, required_type, binding),))
@@ -416,7 +686,11 @@ def _input_binding_items(
 def _command_items(tool: Mapping[str, Any]) -> tuple[NfCommandToken, ...]:
     arguments = _as_list(tool.get("arguments", []), error="CommandLineTool arguments must be a list")
     inputs = _as_mapping(tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
-    ordered = sorted([*_argument_items(arguments), *_input_binding_items(inputs)])
+    shell_mode = _requirement(tool, "ShellCommandRequirement") is not None
+    ordered = sorted([
+        *_argument_items(arguments, shell_mode=shell_mode),
+        *_input_binding_items(inputs, shell_mode=shell_mode),
+    ])
     return tuple(token for _key, tokens in ordered for token in tokens)
 
 
@@ -572,13 +846,12 @@ def _output_template(raw_name: Any, definition: Any) -> NfTemplate:
 
 _SUPPORTED_REQUIREMENTS = frozenset({
     "DockerRequirement",
+    "InitialWorkDirRequirement",
     "InlineJavascriptRequirement",
     "ResourceRequirement",
+    "ShellCommandRequirement",
 })
-_DEFERRED_REQUIREMENTS = {
-    "InitialWorkDirRequirement": "in-place staging is deferred to Phase 2",
-    "ShellCommandRequirement": "shell-mode command lowering is deferred to Phase 2",
-}
+_DEFERRED_REQUIREMENTS: dict[str, str] = {}
 
 _INERT_DOCUMENTATION_FIELDS = frozenset({"doc", "label"})
 _TOOL_CONSUMED_FIELDS = frozenset({
@@ -621,6 +894,7 @@ _ARGUMENT_CONSUMED_FIELDS = frozenset({
 })
 _SUPPORTED_REQUIREMENT_FIELDS = {
     "DockerRequirement": frozenset({"class", "dockerImageId", "dockerPull"}),
+    "InitialWorkDirRequirement": frozenset({"class", "listing"}),
     "InlineJavascriptRequirement": frozenset({"class"}),
     "ResourceRequirement": frozenset({
         "class",
@@ -629,6 +903,7 @@ _SUPPORTED_REQUIREMENT_FIELDS = {
         "ramMax",
         "ramMin",
     }),
+    "ShellCommandRequirement": frozenset({"class"}),
 }
 _WORKFLOW_CONSUMED_FIELDS = frozenset({
     "$namespaces",
@@ -638,8 +913,15 @@ _WORKFLOW_CONSUMED_FIELDS = frozenset({
     "id",
     "inputs",
     "outputs",
+    "requirements",
     "steps",
 }) | _INERT_DOCUMENTATION_FIELDS
+# Workflow-level requirements that only declare a feature whose lowering is
+# decided per step, so they are consumed as inert no-ops.
+_SUPPORTED_WORKFLOW_REQUIREMENTS = frozenset({
+    "ScatterFeatureRequirement",
+    "SubworkflowFeatureRequirement",
+})
 _WORKFLOW_INPUT_CONSUMED_FIELDS = (
     frozenset({"default", "type"}) | _INERT_DOCUMENTATION_FIELDS
 )
@@ -886,16 +1168,12 @@ def _tool_capability_findings(
     findings: list[str] = []
     if "when" in step:
         findings.append(f"{path}.when: CWL step when conditions are not supported in Nextflow Phase 1")
-    if "scatter" in step:
-        findings.append(f"{path}.scatter: executable scatter is deferred to Phase 2")
 
     match child:
         case RoseTree(data=NodeData() as node_data, sub_trees=sub_trees):
             pass
         case _:
             return findings
-    if sub_trees:
-        findings.append(f"{path}.run: nested workflows are deferred to Phase 2")
     match node_data.compiled_cwl:
         case Mapping() as tool:
             pass
@@ -903,11 +1181,12 @@ def _tool_capability_findings(
             return findings
     match tool.get("class"):
         case "CommandLineTool":
-            pass
-        case "Workflow":
-            if not sub_trees:
-                findings.append(f"{path}.run: nested workflows are deferred to Phase 2")
-            return findings
+            # Inlining consumes every CWL Workflow child before this pass, so
+            # children here belong to a tool that cannot own them.
+            if sub_trees:
+                findings.append(
+                    f"{path}.run: a CommandLineTool step cannot carry nested children"
+                )
         case unsupported_class:
             findings.append(
                 f"{path}.run.class: unsupported compiled step class {unsupported_class!r}"
@@ -952,6 +1231,20 @@ def _tool_capability_findings(
                             path=requirement_path,
                         )
                     )
+                if class_name == "InitialWorkDirRequirement":
+                    findings.extend(
+                        _iwdr_listing_findings(
+                            tool,
+                            definition,
+                            path=requirement_path,
+                        )
+                    )
+    try:
+        renamed_names = set(_iwdr_stage_as(tool))
+    except ValueError:
+        renamed_names = set()
+    findings.extend(_iwdr_rename_reference_findings(tool, renamed_names, path=path))
+    shell_mode_active = _requirement(tool, "ShellCommandRequirement") is not None
     match tool.get("inputs", {}):
         case Mapping() as inputs:
             findings.extend(
@@ -985,12 +1278,14 @@ def _tool_capability_findings(
                     )
                 )
                 if binding.get("shellQuote") is False:
-                    findings.append(
-                        f"{input_binding_path}.shellQuote: shellQuote false is deferred to Phase 2"
-                    )
+                    try:
+                        _shell_literal_value(raw_name, binding, shell_mode=shell_mode_active)
+                    except ValueError as exc:
+                        findings.append(f"{input_binding_path}.shellQuote: {exc}")
                 if (
                     _required_type(raw_definition.get("type")) == "boolean"
                     and binding.get("valueFrom") is not None
+                    and binding.get("shellQuote") is not False
                 ):
                     try:
                         _boolean_flag_reference(
@@ -1017,10 +1312,12 @@ def _tool_capability_findings(
                     )
                 )
                 if argument.get("shellQuote") is False:
-                    findings.append(
-                        f"{argument_path}.shellQuote: "
-                        "shellQuote false is deferred to Phase 2"
-                    )
+                    try:
+                        _shell_literal_value(
+                            f"arguments[{argument_index}]", argument, shell_mode=shell_mode_active
+                        )
+                    except ValueError as exc:
+                        findings.append(f"{argument_path}.shellQuote: {exc}")
         case _:
             pass
 
@@ -1088,6 +1385,7 @@ def _workflow_capability_findings(
         consumed=_WORKFLOW_CONSUMED_FIELDS,
         path="workflow",
     )
+    findings.extend(_workflow_requirement_findings(workflow))
     provided = _as_mapping(
         node_data.workflow_inputs_file,
         error="compiled workflow input values must be a mapping",
@@ -1189,6 +1487,601 @@ def _workflow_capability_findings(
                         )
             case _:
                 pass
+    return findings
+
+
+def _workflow_requirement_findings(
+    workflow: Mapping[str, Any],
+    *,
+    path: str = "workflow",
+) -> list[str]:
+    """Apply closed-world analysis to workflow-level requirements."""
+    section = workflow.get("requirements")
+    match section:
+        case None:
+            return []
+        case Mapping() | list():
+            pass
+        case _:
+            return [f"{path}.requirements: CWL Workflow requirements must be a mapping or list"]
+    findings: list[str] = []
+    for class_name, suffix in _requirement_names(section):
+        requirement_path = f"{path}.requirements.{suffix}"
+        if class_name not in _SUPPORTED_WORKFLOW_REQUIREMENTS:
+            findings.append(
+                f"{requirement_path}: {class_name} is not supported at the Nextflow workflow level"
+            )
+        elif definition := _requirement_definition(section, class_name=class_name, suffix=suffix):
+            findings.extend(
+                _unconsumed_field_findings(
+                    definition,
+                    consumed=frozenset({"class"}),
+                    path=requirement_path,
+                )
+            )
+    return findings
+
+
+_SUBWORKFLOW_NAMESPACE = "___"
+
+
+def _local_name(raw_id: str) -> str:
+    """Return the identifier fragment a CWL id ends with."""
+    return raw_id.rsplit("#", maxsplit=1)[-1]
+
+
+def _map_sources(value: Any, transform: Callable[[str], str]) -> Any:
+    """Rewrite every source string in one step-input binding, preserving its shape.
+
+    An unrecognized binding shape is returned untouched so the closed-world
+    field analysis still sees and reports it.
+    """
+    match value:
+        case str() as source:
+            return transform(source)
+        case list() as sources:
+            return [transform(item) if isinstance(item, str) else item for item in sources]
+        case Mapping() as mapping if "source" in mapping:
+            return {**mapping, "source": _map_sources(mapping["source"], transform)}
+        case _:
+            return value
+
+
+def _subworkflow_document(child: Any) -> tuple[Mapping[str, Any], list[Any]] | None:
+    """Return a step child's subworkflow document and children, or None for a tool."""
+    match child:
+        case RoseTree(data=NodeData(compiled_cwl=Mapping() as document), sub_trees=sub_trees):
+            if document.get("class") == "Workflow":
+                return document, list(sub_trees)
+        case _:
+            pass
+    return None
+
+
+def _subworkflow_bindings(
+    step: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    *,
+    path: str,
+) -> tuple[dict[str, str], list[str]]:
+    """Bind every declared subworkflow input to exactly one outer source."""
+    findings: list[str] = []
+    bindings: dict[str, str] = {}
+    step_inputs = step.get("in", {})
+    if not isinstance(step_inputs, Mapping):
+        return bindings, [f"{path}.in: compiled step inputs must be a mapping"]
+    for raw_name, raw_source in step_inputs.items():
+        if raw_name not in inputs:
+            findings.append(
+                f"{path}.in.{raw_name}: the subworkflow declares no input named {raw_name!r}"
+            )
+            continue
+        try:
+            sources = _source_values(raw_source, context=f"{path}.in.{raw_name}")
+        except ValueError as exc:
+            findings.append(f"{path}.in.{raw_name}: {exc}")
+            continue
+        if len(sources) != 1:
+            findings.append(
+                f"{path}.in.{raw_name}: a subworkflow input must have exactly one source"
+            )
+            continue
+        bindings[str(raw_name)] = sources[0]
+    for raw_name in inputs:
+        if raw_name not in bindings and raw_name not in step_inputs:
+            findings.append(
+                f"{path}.run.inputs.{raw_name}: the step does not bind subworkflow input "
+                f"{raw_name!r}; a subworkflow input is never defaulted from outside"
+            )
+    return bindings, findings
+
+
+def _subworkflow_output_endpoints(
+    document: Mapping[str, Any],
+    inner_ids: set[str],
+    *,
+    namespace: str,
+    path: str,
+) -> tuple[dict[str, str], list[str]]:
+    """Resolve every declared subworkflow output to one inlined step endpoint."""
+    findings: list[str] = []
+    endpoints: dict[str, str] = {}
+    outputs = document.get("outputs", {})
+    if not isinstance(outputs, Mapping):
+        return endpoints, [f"{path}.run.outputs: compiled CWL Workflow outputs must be a mapping"]
+    for raw_name, definition in outputs.items():
+        output_path = f"{path}.run.outputs.{raw_name}"
+        match definition:
+            case {"outputSource": output_source}:
+                pass
+            case _:
+                findings.append(f"{output_path}: subworkflow output must define outputSource")
+                continue
+        try:
+            sources = _source_values(output_source, context=output_path)
+        except ValueError as exc:
+            findings.append(f"{output_path}: {exc}")
+            continue
+        if len(sources) != 1:
+            findings.append(
+                f"{output_path}: a subworkflow output must have exactly one outputSource"
+            )
+            continue
+        source = sources[0]
+        if "/" not in source:
+            findings.append(
+                f"{output_path}: subworkflow output {raw_name!r} forwards subworkflow input "
+                f"{source!r}; boundary passthrough is not executable"
+            )
+            continue
+        raw_process, raw_port = source.rsplit("/", maxsplit=1)
+        if _local_name(raw_process) not in inner_ids:
+            findings.append(
+                f"{output_path}: outputSource {source!r} names no step of the subworkflow"
+            )
+            continue
+        endpoints[str(raw_name)] = (
+            f"{namespace}{_SUBWORKFLOW_NAMESPACE}{_local_name(raw_process)}/{raw_port}"
+        )
+    return endpoints, findings
+
+
+def _inlined_step(
+    inner_step: Mapping[str, Any],
+    *,
+    namespace: str,
+    inner_ids: set[str],
+    bindings: Mapping[str, str],
+    declared_inputs: Iterable[str],
+    path: str,
+) -> tuple[dict[str, Any], list[str]]:
+    """Rewrite one subworkflow step into an equivalent outer-workflow step."""
+    findings: list[str] = []
+    inner_inputs = inner_step.get("in", {})
+
+    def resolve(source: str) -> str:
+        if "/" in source:
+            raw_process, raw_port = source.rsplit("/", maxsplit=1)
+            local = _local_name(raw_process)
+            if local in inner_ids:
+                return f"{namespace}{_SUBWORKFLOW_NAMESPACE}{local}/{raw_port}"
+            return source
+        return bindings.get(source, source)
+
+    if isinstance(inner_inputs, Mapping):
+        for raw_name, raw_source in inner_inputs.items():
+            try:
+                sources = _source_values(raw_source, context=f"{path}.in.{raw_name}")
+            except ValueError:
+                # Every unrecognized binding shape is reported by field analysis.
+                continue
+            for source in sources:
+                if "/" in source:
+                    if _local_name(source.rsplit("/", maxsplit=1)[0]) not in inner_ids:
+                        findings.append(
+                            f"{path}.in.{raw_name}: {source!r} names no step of the subworkflow"
+                        )
+                elif source not in bindings and source not in set(declared_inputs):
+                    # A declared but unbound input is reported once, by the
+                    # binding-totality check.
+                    findings.append(
+                        f"{path}.in.{raw_name}: {source!r} is not a subworkflow input"
+                    )
+    rewritten = dict(inner_step)
+    match inner_step.get("id"):
+        case str() as raw_id:
+            rewritten["id"] = f"{namespace}{_SUBWORKFLOW_NAMESPACE}{_local_name(raw_id)}"
+        case _:
+            findings.append(f"{path}.id: compiled workflow step id must be a string")
+    if isinstance(inner_inputs, Mapping):
+        rewritten["in"] = {
+            raw_name: _map_sources(raw_source, resolve)
+            for raw_name, raw_source in inner_inputs.items()
+        }
+    return rewritten, findings
+
+
+def _composition_findings_for_step(
+    step: Mapping[str, Any],
+    *,
+    path: str,
+) -> list[str]:
+    """Reject the outer-step fields a subworkflow step has no lowering for."""
+    findings = _unconsumed_field_findings(step, consumed=_STEP_CONSUMED_FIELDS, path=path)
+    if "when" in step:
+        findings.append(
+            f"{path}.when: CWL step when conditions are not supported in Nextflow Phase 1"
+        )
+    if "scatter" in step:
+        findings.append(
+            f"{path}.scatter: scatter on a nested workflow step is deferred beyond this "
+            "lowering; scattering an inlined sub-DAG is not the single-process shape "
+            "scatter supports"
+        )
+    elif "scatterMethod" in step:
+        findings.append(
+            f"{path}.scatterMethod: scatterMethod without scatter is not executable"
+        )
+    return findings
+
+
+def _flatten_subworkflows(
+    workflow: Mapping[str, Any],
+    steps: list[Mapping[str, Any]],
+    sub_trees: list[Any],
+) -> tuple[Mapping[str, Any], list[Mapping[str, Any]], list[Any], list[str]]:
+    """Inline every one-level subworkflow step into the outer workflow.
+
+    Returns the rewritten workflow document, steps, and children, plus every
+    composition finding. The rewritten values are meaningful only when no
+    finding is reported: the flat graph the remaining passes analyze cannot
+    be built while its composition is unsupported.
+    """
+    findings: list[str] = []
+    flat_steps: list[Mapping[str, Any]] = []
+    flat_children: list[Any] = []
+    substitutions: dict[str, str] = {}
+    for step_index, (step, child) in enumerate(zip(steps, sub_trees, strict=True)):
+        path = f"steps[{step_index}]"
+        nested = _subworkflow_document(child)
+        if nested is None:
+            flat_steps.append(step)
+            flat_children.append(child)
+            continue
+        document, inner_children = nested
+        findings.extend(_composition_findings_for_step(step, path=path))
+        findings.extend(
+            _unconsumed_field_findings(
+                document,
+                consumed=_WORKFLOW_CONSUMED_FIELDS,
+                path=f"{path}.run",
+            )
+        )
+        findings.extend(_workflow_requirement_findings(document, path=f"{path}.run"))
+        match step.get("id"):
+            case str() as raw_id:
+                namespace = _local_name(raw_id)
+            case _:
+                findings.append(f"{path}.id: compiled workflow step id must be a string")
+                continue
+        inputs = document.get("inputs", {})
+        if not isinstance(inputs, Mapping):
+            findings.append(f"{path}.run.inputs: compiled CWL Workflow inputs must be a mapping")
+            continue
+        bindings, binding_findings = _subworkflow_bindings(step, inputs, path=path)
+        findings.extend(binding_findings)
+        try:
+            inner_steps = _workflow_steps(document, child_count=len(inner_children))
+        except ValueError as exc:
+            findings.append(f"{path}.run.steps: {exc}")
+            continue
+        inner_ids = {
+            _local_name(inner_step["id"])
+            for inner_step in inner_steps
+            if isinstance(inner_step.get("id"), str)
+        }
+        endpoints, endpoint_findings = _subworkflow_output_endpoints(
+            document,
+            inner_ids,
+            namespace=namespace,
+            path=path,
+        )
+        findings.extend(endpoint_findings)
+        findings.extend(_exported_output_findings(step, endpoints, path=path))
+        for name, endpoint in endpoints.items():
+            for spelling in (raw_id, namespace):
+                substitutions[f"{spelling}/{name}"] = endpoint
+        for inner_index, (inner_step, inner_child) in enumerate(
+            zip(inner_steps, inner_children, strict=True)
+        ):
+            inner_path = f"{path}.run.steps[{inner_index}]"
+            if _subworkflow_document(inner_child) is not None:
+                findings.append(
+                    f"{inner_path}.run: nested workflows deeper than one level are "
+                    "deferred beyond this lowering"
+                )
+                continue
+            rewritten, inner_findings = _inlined_step(
+                inner_step,
+                namespace=namespace,
+                inner_ids=inner_ids,
+                bindings=bindings,
+                declared_inputs=inputs,
+                path=inner_path,
+            )
+            findings.extend(inner_findings)
+            flat_steps.append(rewritten)
+            flat_children.append(inner_child)
+    if not substitutions:
+        return workflow, flat_steps, flat_children, findings
+
+    def substitute(source: str) -> str:
+        return substitutions.get(source, source)
+
+    rewritten_steps: list[Mapping[str, Any]] = []
+    for step in flat_steps:
+        step_inputs = step.get("in")
+        if not isinstance(step_inputs, Mapping):
+            rewritten_steps.append(step)
+            continue
+        rewritten_steps.append({
+            **step,
+            "in": {
+                raw_name: _map_sources(raw_source, substitute)
+                for raw_name, raw_source in step_inputs.items()
+            },
+        })
+    rewritten_workflow = dict(workflow)
+    rewritten_workflow["steps"] = rewritten_steps
+    outputs = workflow.get("outputs")
+    if isinstance(outputs, Mapping):
+        rewritten_workflow["outputs"] = {
+            raw_name: (
+                {**definition, "outputSource": _map_sources(definition["outputSource"], substitute)}
+                if isinstance(definition, Mapping) and "outputSource" in definition
+                else definition
+            )
+            for raw_name, definition in outputs.items()
+        }
+    return rewritten_workflow, rewritten_steps, flat_children, findings
+
+
+def _exported_output_findings(
+    step: Mapping[str, Any],
+    endpoints: Mapping[str, str],
+    *,
+    path: str,
+) -> list[str]:
+    """Require every name in a subworkflow step's out to be a declared output."""
+    match step.get("out"):
+        case list() as exported:
+            pass
+        case None:
+            return []
+        case _:
+            return [f"{path}.out: compiled step out must be a list"]
+    return [
+        f"{path}.out: the subworkflow declares no output named {_local_name(name)!r}"
+        for name in exported
+        if isinstance(name, str) and _local_name(name) not in endpoints
+    ]
+
+
+_SCATTER_METHODS = frozenset({"dotproduct", "flat_crossproduct", "nested_crossproduct"})
+
+
+def _scatter_names(step: Mapping[str, Any]) -> list[str]:
+    """Return the raw input names one step scatters over.
+
+    Only the single-input forms are representable: a bare name, or a
+    one-element list. Multi-input scatter is the only shape where
+    scatterMethod is load-bearing, and it is deferred rather than guessed.
+    """
+    match step.get("scatter"):
+        case str() as name if name:
+            names = [name]
+        case list() as items if items and all(isinstance(item, str) and item for item in items):
+            names = list(items)
+        case _:
+            raise ValueError(
+                "scatter must name one input, as a string or a one-element list"
+            )
+    if len(names) > 1:
+        raise ValueError(
+            f"multi-input scatter over {len(names)} inputs is deferred beyond this lowering; "
+            "exactly one scattered input is supported"
+        )
+    return names
+
+
+def _step_indices_by_id(steps: list[Mapping[str, Any]]) -> dict[str, int]:
+    """Map every recognizable step identifier spelling to its step index."""
+    indices: dict[str, int] = {}
+    for index, step in enumerate(steps):
+        match step.get("id"):
+            case str() as raw_id:
+                for candidate in (raw_id, raw_id.rsplit("#", maxsplit=1)[-1]):
+                    indices[candidate] = index
+            case _:
+                continue
+    return indices
+
+
+def _scattered_names_by_index(steps: list[Mapping[str, Any]]) -> dict[int, set[str]]:
+    """Return the scattered raw input names of every representably scattered step."""
+    scattered: dict[int, set[str]] = {}
+    for index, step in enumerate(steps):
+        if "scatter" not in step:
+            continue
+        try:
+            scattered[index] = set(_scatter_names(step))
+        except ValueError:
+            continue
+    return scattered
+
+
+def _scattered_element_type(declared: Any) -> Any:
+    """Return the item type a scattered port receives from an array source."""
+    required = _required_type(declared)
+    if not _is_array_type(required):
+        return declared
+    try:
+        return _array_item_type(required)
+    except ValueError:
+        return declared
+
+
+def _scatter_source_findings(
+    step_index: int,
+    raw_name: Any,
+    raw_source: Any,
+    definition: Mapping[str, Any],
+    source_types: Mapping[str, Any],
+) -> list[str]:
+    """Require an array-typed workflow-input source matching the scattered port."""
+    path = f"steps[{step_index}].in.{raw_name}"
+    try:
+        sources = _source_values(raw_source, context=f"step input {step_index}.{raw_name}")
+    except ValueError:
+        # Every unrecognized source shape is already reported by path.
+        return []
+    if len(sources) != 1:
+        return [f"{path}: a scattered input must have exactly one source"]
+    source = sources[0]
+    if "/" in source:
+        # A process-output source is reported once, by the cross-step pass.
+        return []
+    declared = source_types.get(source)
+    required = _required_type(declared)
+    if not _is_array_type(required):
+        return [
+            f"{path}: a scattered input must be sourced from an array-typed workflow "
+            f"input; {source!r} declares {declared!r}"
+        ]
+    try:
+        element = _channel_shape(_array_item_type(required))
+        port = _channel_shape(definition.get("type"))
+    except ValueError:
+        # An unsupported item or port type is already reported by the type passes.
+        return []
+    if element != port:
+        return [
+            f"{path}: scattered source {source!r} carries {element!r} elements but the "
+            f"port takes {port!r}"
+        ]
+    return []
+
+
+def _scatter_findings(
+    workflow: Mapping[str, Any],
+    steps: list[Mapping[str, Any]],
+    sub_trees: list[Any],
+) -> list[str]:
+    """Validate every scattered step against the single-input scatter lowering."""
+    findings: list[str] = []
+    source_types = _source_types(workflow, steps, sub_trees)
+    for step_index, (step, child) in enumerate(zip(steps, sub_trees, strict=True)):
+        path = f"steps[{step_index}]"
+        if "scatter" not in step:
+            continue
+        try:
+            names = _scatter_names(step)
+        except ValueError as exc:
+            findings.append(f"{path}.scatter: {exc}")
+            continue
+        method = step.get("scatterMethod")
+        if method is not None and method not in _SCATTER_METHODS:
+            findings.append(
+                f"{path}.scatterMethod: unsupported CWL scatter method {method!r}"
+            )
+        match child:
+            case RoseTree(data=NodeData(compiled_cwl=Mapping() as tool)):
+                tool_inputs = tool.get("inputs", {})
+            case _:
+                continue
+        step_inputs = step.get("in", {})
+        if not isinstance(tool_inputs, Mapping) or not isinstance(step_inputs, Mapping):
+            continue
+        for raw_name in names:
+            definition = tool_inputs.get(raw_name)
+            if not isinstance(definition, Mapping):
+                findings.append(
+                    f"{path}.scatter: scattered input {raw_name!r} is not declared by the "
+                    "step's tool"
+                )
+                continue
+            if _is_array_type(_required_type(definition.get("type"))):
+                findings.append(
+                    f"{path}.scatter: scattered input {raw_name!r} is array-typed; "
+                    "scattering over an array of arrays is deferred beyond this lowering"
+                )
+                continue
+            if raw_name not in step_inputs:
+                findings.append(
+                    f"{path}.scatter: scattered input {raw_name!r} has no source; a "
+                    "scattered input must be wired to an array-typed workflow input"
+                )
+                continue
+            findings.extend(
+                _scatter_source_findings(
+                    step_index,
+                    raw_name,
+                    step_inputs[raw_name],
+                    definition,
+                    source_types,
+                )
+            )
+    findings.extend(_scatter_edge_findings(steps))
+    return findings
+
+
+def _scatter_edge_findings(steps: list[Mapping[str, Any]]) -> list[str]:
+    """Reject every process edge whose cardinality a scattered step changes.
+
+    A scattered step's output is a queue channel of one value per task, which
+    drives N downstream invocations where CWL gives the consumer one
+    invocation receiving an array; and a process output feeding a scattered
+    step is itself a queue channel, which would truncate the scatter to one
+    task instead of N.
+    """
+    findings: list[str] = []
+    indices = _step_indices_by_id(steps)
+    scattered = _scattered_names_by_index(steps)
+    if not scattered:
+        return findings
+    for step_index, step in enumerate(steps):
+        step_inputs = step.get("in", {})
+        if not isinstance(step_inputs, Mapping):
+            continue
+        for raw_name, raw_source in step_inputs.items():
+            try:
+                sources = _source_values(
+                    raw_source,
+                    context=f"step input {step_index}.{raw_name}",
+                )
+            except ValueError:
+                continue
+            for source in sources:
+                if "/" not in source:
+                    continue
+                raw_process = source.rsplit("/", maxsplit=1)[0]
+                producer = indices.get(
+                    raw_process,
+                    indices.get(raw_process.rsplit("#", maxsplit=1)[-1]),
+                )
+                if producer is not None and producer in scattered:
+                    findings.append(
+                        f"steps[{step_index}].in.{raw_name}: {source!r} is an output of "
+                        f"scattered step steps[{producer}]; a scattered step's outputs can "
+                        "only reach a workflow output, because gathering them back into one "
+                        "value is deferred beyond this lowering"
+                    )
+                elif step_index in scattered:
+                    findings.append(
+                        f"steps[{step_index}].in.{raw_name}: a scattered step's inputs must "
+                        f"come from workflow inputs; the process output {source!r} would "
+                        "truncate the scatter to one task"
+                    )
     return findings
 
 
@@ -1375,6 +2268,7 @@ def _flag_source_findings(
     path is always truthy and the strings ``"false"`` and ``"0"`` are too.
     """
     source_types = _source_types(workflow, steps, sub_trees)
+    scattered_by_index = _scattered_names_by_index(steps)
     findings: list[str] = []
     for step_index, (step, child) in enumerate(zip(steps, sub_trees, strict=True)):
         match child:
@@ -1386,6 +2280,7 @@ def _flag_source_findings(
         step_inputs = step.get("in", {})
         if not isinstance(tool_inputs, Mapping) or not isinstance(step_inputs, Mapping):
             continue
+        scattered = scattered_by_index.get(step_index, set())
         for raw_name, definition in tool_inputs.items():
             if not isinstance(definition, Mapping) or not _is_flag_binding(definition):
                 continue
@@ -1407,6 +2302,10 @@ def _flag_source_findings(
                 raise
             for source in sources:
                 declared = source_types.get(source, source_types.get(str(source)))
+                if raw_name in scattered:
+                    # A scattered port receives one element, so the array's
+                    # item type is what must be boolean.
+                    declared = _scattered_element_type(declared)
                 if declared is not None and _required_type(declared) == "boolean":
                     continue
                 findings.append(
@@ -1446,7 +2345,7 @@ def _process(step: Mapping[str, Any], child: RoseTree) -> NfProcess:
             raise ValueError(f"unsupported compiled step class {unsupported_class!r}")
     return NfProcess(
         name=_identifier(step.get("id"), context="workflow step id"),
-        inputs=_ports(tool.get("inputs", {}), outputs=False),
+        inputs=_ports(tool.get("inputs", {}), outputs=False, stage_as=_iwdr_stage_as(tool)),
         outputs=_ports(tool.get("outputs", {}), outputs=True),
         command=_command(tool),
         container=_container(tool),
@@ -1515,13 +2414,22 @@ def _step_connections(
                 pass
             case _:
                 raise ValueError(f"compiled step {process.name!r} inputs must be a mapping")
+        scattered = {
+            _identifier(raw_name, context="scattered input")
+            for raw_name in (_scatter_names(step) if "scatter" in step else [])
+        }
         for raw_port, raw_source in raw_inputs.items():
             destination_port = _identifier(raw_port, context="process input destination")
             for source in _source_values(raw_source, context=f"step input {process.name}.{destination_port}"):
                 source_process, source_port = _source_endpoint(source, step_names)
                 if source_process is None:
                     connections.append(
-                        NfWorkflowInputConnection(source_port, process.name, destination_port)
+                        NfWorkflowInputConnection(
+                            source_port,
+                            process.name,
+                            destination_port,
+                            "scatter" if destination_port in scattered else None,
+                        )
                     )
                 else:
                     connections.append(
@@ -1738,6 +2646,12 @@ def cwl_rosetree_to_nextflow(rose_tree: RoseTree) -> ExecutableNextflowWorkflow:
     """
     node_data, sub_trees, workflow = _compiled_workflow(rose_tree)
     steps = _workflow_steps(workflow, child_count=len(sub_trees))
+    # Composition is resolved first: every remaining pass analyzes the flat
+    # graph, which cannot be built while its composition is unsupported.
+    workflow, steps, sub_trees, composition_findings = _flatten_subworkflows(
+        workflow, steps, sub_trees
+    )
+    _raise_capability_findings(composition_findings)
     findings = [
         finding
         for step_index, (step, child) in enumerate(zip(steps, sub_trees, strict=True))
@@ -1746,6 +2660,7 @@ def cwl_rosetree_to_nextflow(rose_tree: RoseTree) -> ExecutableNextflowWorkflow:
     findings.extend(_workflow_capability_findings(workflow, node_data, steps))
     findings.extend(_absent_optional_findings(workflow, node_data, steps, sub_trees))
     findings.extend(_flag_source_findings(workflow, steps, sub_trees))
+    findings.extend(_scatter_findings(workflow, steps, sub_trees))
     findings.extend(_container_policy_findings(sub_trees))
     _raise_capability_findings(findings)
     processes = [

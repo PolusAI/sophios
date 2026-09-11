@@ -21,6 +21,7 @@ from sophios.nf_types import (
     NfProcess,
     NfProcessConnection,
     NfResources,
+    NfShellLiteral,
     NfTemplate,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
@@ -72,14 +73,14 @@ def test_executable_schema_declares_version_and_kind() -> None:
     workflow = ExecutableNextflowWorkflow("wf", [], [], {})
     payload = workflow.to_dict()
 
-    assert payload["schema_version"] == 5
+    assert payload["schema_version"] == 8
     assert payload["representation_kind"] == "executable"
 
     payload["schema_version"] = 1
     with pytest.raises(ValueError, match="schema version"):
         ExecutableNextflowWorkflow.from_dict(payload)
 
-    payload["schema_version"] = 5
+    payload["schema_version"] = 8
     payload["representation_kind"] = "structural"
     with pytest.raises(ValueError, match="representation kind"):
         ExecutableNextflowWorkflow.from_dict(payload)
@@ -507,6 +508,147 @@ def test_array_marker_participates_in_channel_qualifier_consistency() -> None:
 
 
 @pytest.mark.fast
+def test_shell_literal_token_survives_hydration() -> None:
+    process = NfProcess(
+        "REDIRECT",
+        [],
+        [],
+        NfCommand((NfTemplate((NfLiteral("true"),)), NfShellLiteral(">>"))),
+    )
+    assert NfProcess.from_dict(process.to_dict()) == process
+    assert process.command.tokens[1].to_dict() == {"kind": "shell_literal", "text": ">>"}
+
+
+@pytest.mark.fast
+def test_shell_literal_rejects_non_string_text() -> None:
+    with pytest.raises(TypeError, match="must be a string"):
+        NfShellLiteral(cast(Any, 3))
+    with pytest.raises(ValueError, match="NUL"):
+        NfShellLiteral("bad\x00text")
+
+
+@pytest.mark.fast
+def test_shell_literals_are_unrepresentable_outside_command_position() -> None:
+    with pytest.raises(TypeError, match="template segments must be one of"):
+        NfTemplate((cast(Any, NfShellLiteral(">>")),))
+
+
+@pytest.mark.fast
+def test_public_module_exports_shell_literal() -> None:
+    from sophios.api.python import nextflow
+
+    assert nextflow.NfShellLiteral is NfShellLiteral
+    assert "NfShellLiteral" in nextflow.__all__
+
+
+@pytest.mark.fast
+def test_hydration_rejects_a_shell_literal_kind_older_than_schema_version_6() -> None:
+    payload = ExecutableNextflowWorkflow(
+        "wf",
+        [NfProcess(
+            "REDIRECT",
+            [],
+            [],
+            NfCommand((NfTemplate((NfLiteral("true"),)), NfShellLiteral(">>"))),
+        )],
+        [],
+        {},
+    ).to_dict()
+
+    assert ExecutableNextflowWorkflow.from_dict(payload).to_dict() == payload
+
+    payload["schema_version"] = 5
+    with pytest.raises(ValueError, match=r"'shell_literal'.*schema version 6.*schema version 5"):
+        ExecutableNextflowWorkflow.from_dict(payload)
+
+
+@pytest.mark.fast
+def test_stage_as_port_survives_hydration() -> None:
+    port = NfPort("source", "path", stage_as="renamed.txt")
+    assert NfPort.from_dict(port.to_dict()) == port
+    assert port.to_dict()["stage_as"] == "renamed.txt"
+
+
+@pytest.mark.fast
+def test_stage_as_requires_a_path_qualifier() -> None:
+    with pytest.raises(ValueError, match="only path ports may declare a stage_as"):
+        NfPort("source", "val", stage_as="renamed.txt")
+
+
+@pytest.mark.fast
+def test_stage_as_rejects_array_marked_ports() -> None:
+    with pytest.raises(ValueError, match="array-marked ports cannot declare a stage_as"):
+        NfPort("source", "path", is_array=True, stage_as="renamed.txt")
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("stage_as", ["", "   ", "sub/dir.txt"])
+def test_stage_as_rejects_blank_or_separator_containing_names(stage_as: str) -> None:
+    with pytest.raises(ValueError, match="stage_as"):
+        NfPort("source", "path", stage_as=stage_as)
+
+
+@pytest.mark.fast
+def test_process_rejects_duplicate_stage_as_literal() -> None:
+    with pytest.raises(ValueError, match="same literal name"):
+        NfProcess(
+            "STAGE",
+            [
+                NfPort("a", "path", stage_as="same.txt"),
+                NfPort("b", "path", stage_as="same.txt"),
+            ],
+            [],
+            NfCommand((NfTemplate((NfLiteral("cat"),)), NfTemplate((NfLiteral("same.txt"),)))),
+        )
+
+
+@pytest.mark.fast
+def test_process_rejects_referencing_a_renamed_input_elsewhere_plainly() -> None:
+    with pytest.raises(ValueError, match="references a renamed IWDR input elsewhere"):
+        NfProcess(
+            "STAGE",
+            [NfPort("source", "path", stage_as="renamed.txt")],
+            [],
+            NfCommand((
+                NfTemplate((NfLiteral("cat"),)),
+                NfTemplate((NfInputReference("source"),)),
+            )),
+        )
+
+
+@pytest.mark.fast
+def test_process_rejects_referencing_a_renamed_input_elsewhere_via_basename() -> None:
+    with pytest.raises(ValueError, match="references a renamed IWDR input elsewhere"):
+        NfProcess(
+            "STAGE",
+            [NfPort("source", "path", stage_as="renamed.txt")],
+            [output_port("result", NfTemplate((NfBasenameReference("source"),)))],
+            NfCommand((NfTemplate((NfLiteral("cat"),)), NfTemplate((NfLiteral("renamed.txt"),)))),
+        )
+
+
+@pytest.mark.fast
+def test_hydration_rejects_a_stage_as_field_older_than_schema_version_7() -> None:
+    payload = ExecutableNextflowWorkflow(
+        "wf",
+        [NfProcess(
+            "STAGE",
+            [NfPort("source", "path", stage_as="renamed.txt")],
+            [],
+            NfCommand((NfTemplate((NfLiteral("cat"),)), NfTemplate((NfLiteral("renamed.txt"),)))),
+        )],
+        [NfWorkflowInputConnection("source", "STAGE", "source")],
+        {"source": "in.txt"},
+    ).to_dict()
+
+    assert ExecutableNextflowWorkflow.from_dict(payload).to_dict() == payload
+
+    payload["schema_version"] = 6
+    with pytest.raises(ValueError, match=r"'stage_as'.*schema version 7.*schema version 6"):
+        ExecutableNextflowWorkflow.from_dict(payload)
+
+
+@pytest.mark.fast
 def test_hydration_rejects_an_array_kind_or_field_older_than_schema_version_5() -> None:
     process = NfProcess(
         "NAMES",
@@ -555,13 +697,13 @@ def test_hydration_accepts_earlier_subset_schema_versions() -> None:
     payload = ExecutableNextflowWorkflow(
         "wf", [NfProcess("P", [], [], command("true"))], [], {}
     ).to_dict()
-    assert payload["schema_version"] == 5
+    assert payload["schema_version"] == 8
 
-    for earlier in (2, 3, 4):
+    for earlier in (2, 3, 4, 5, 6, 7):
         payload["schema_version"] = earlier
-        assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 5
+        assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 8
 
-    for unsupported in (1, 6):
+    for unsupported in (1, 9):
         payload["schema_version"] = unsupported
         with pytest.raises(ValueError, match="schema version"):
             ExecutableNextflowWorkflow.from_dict(payload)
@@ -713,3 +855,103 @@ def test_rejects_invalid_private_ir_before_writing_artifacts(tmp_path: Path) -> 
     with pytest.raises(ValueError, match="path qualifier and typed glob"):
         NfProcess("BAD_OUTPUT", [], [NfPort("result", "val", "result")], command("true"))
     assert list(tmp_path.iterdir()) == []
+
+
+def _adapted_workflow(
+    adapter: str | None = "scatter",
+    port: NfPort | None = None,
+) -> ExecutableNextflowWorkflow:
+    # The param has to match what the edge consumes: the scatter adapter
+    # takes the whole array, while an unadapted edge into a scalar port
+    # takes one value.
+    destination = port or NfPort("item", "val")
+    array_valued = adapter == "scatter" or destination.is_array
+    return ExecutableNextflowWorkflow(
+        "wf",
+        [NfProcess("SCATTER", [destination], [], command("true"))],
+        [NfWorkflowInputConnection("items", "SCATTER", "item", adapter)],
+        {"items": ["a", "b"] if array_valued else "a"},
+    )
+
+
+@pytest.mark.fast
+def test_channel_adapter_survives_hydration() -> None:
+    payload = _adapted_workflow().to_dict()
+    assert ExecutableNextflowWorkflow.from_dict(payload) == _adapted_workflow()
+    assert payload["connections"][0]["adapter"] == "scatter"
+
+
+@pytest.mark.fast
+def test_hydration_defaults_a_missing_adapter_to_none() -> None:
+    """Every version before 8 never wrote the key, so its absence is unadapted."""
+    payload = _adapted_workflow(adapter=None).to_dict()
+    del payload["connections"][0]["adapter"]
+    payload["schema_version"] = 7
+
+    hydrated = ExecutableNextflowWorkflow.from_dict(payload)
+
+    assert hydrated.connections == (
+        NfWorkflowInputConnection("items", "SCATTER", "item"),
+    )
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("adapter", ["gather", "flatten", "", "collect"])
+def test_rejects_an_adapter_outside_the_approved_set(adapter: str) -> None:
+    with pytest.raises(ValueError, match="channel adapter must be one of scatter"):
+        _adapted_workflow(adapter)
+
+
+@pytest.mark.fast
+def test_rejects_an_adapter_targeting_an_array_marked_port() -> None:
+    with pytest.raises(ValueError, match="cannot target the array-marked port SCATTER.item"):
+        _adapted_workflow(port=NfPort("item", "val", is_array=True))
+
+
+@pytest.mark.fast
+def test_rejects_one_parameter_adapted_at_only_some_sinks() -> None:
+    """The adapter is part of the channel contract, like path_kind and is_array."""
+    scattered = NfProcess("SCATTER", [NfPort("item", "val")], [], command("true"))
+    whole = NfProcess("WHOLE", [NfPort("item", "val")], [], command("true"))
+    with pytest.raises(ValueError, match="incompatible channel qualifiers"):
+        ExecutableNextflowWorkflow(
+            "wf",
+            [scattered, whole],
+            [
+                NfWorkflowInputConnection("items", "SCATTER", "item", "scatter"),
+                NfWorkflowInputConnection("items", "WHOLE", "item"),
+            ],
+            {"items": ["a", "b"]},
+        )
+
+
+@pytest.mark.fast
+def test_accepts_one_parameter_adapted_at_every_sink() -> None:
+    first = NfProcess("FIRST", [NfPort("item", "val")], [], command("true"))
+    second = NfProcess("SECOND", [NfPort("item", "val")], [], command("true"))
+
+    workflow = ExecutableNextflowWorkflow(
+        "wf",
+        [first, second],
+        [
+            NfWorkflowInputConnection("items", "FIRST", "item", "scatter"),
+            NfWorkflowInputConnection("items", "SECOND", "item", "scatter"),
+        ],
+        {"items": ["a", "b"]},
+    )
+
+    assert workflow.connections == (
+        NfWorkflowInputConnection("items", "FIRST", "item", "scatter"),
+        NfWorkflowInputConnection("items", "SECOND", "item", "scatter"),
+    )
+
+
+@pytest.mark.fast
+def test_hydration_rejects_an_adapter_field_older_than_schema_version_8() -> None:
+    payload = _adapted_workflow().to_dict()
+
+    assert ExecutableNextflowWorkflow.from_dict(payload).to_dict() == payload
+
+    payload["schema_version"] = 7
+    with pytest.raises(ValueError, match=r"'adapter'.*schema version 8.*schema version 7"):
+        ExecutableNextflowWorkflow.from_dict(payload)

@@ -17,6 +17,7 @@ from sophios.nf_types import (
     NfLiteral,
     NfPort,
     NfResources,
+    NfShellLiteral,
     NfTemplate,
     NfProcessConnection,
     NfWorkflowInputConnection,
@@ -255,6 +256,126 @@ def test_empty_array_value_is_accepted_and_distinct_from_absent() -> None:
     )
 
     assert cwl_rosetree_to_nextflow(rose).params == {"names": []}
+
+
+@pytest.mark.fast
+def test_shell_quote_false_literal_lowers_to_a_raw_shell_literal_token() -> None:
+    redirect_tool = tool(
+        "REDIRECT",
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+        requirements={"ShellCommandRequirement": {}},
+        arguments=[
+            {"position": 1, "valueFrom": "hello"},
+            {"position": 2, "valueFrom": ">>", "shellQuote": False},
+            {"position": 3, "valueFrom": "out.txt"},
+        ],
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("REDIRECT", out=["result"])],
+            outputs={"result": {"type": "File", "outputSource": "REDIRECT/result"}},
+        ),
+        [redirect_tool],
+    )
+
+    tokens = cwl_rosetree_to_nextflow(rose).processes[0].command.tokens
+
+    assert tokens[0] == NfTemplate((NfLiteral("REDIRECT"),))
+    assert tokens[1] == NfTemplate((NfLiteral("hello"),))
+    assert tokens[2] == NfShellLiteral(">>")
+    assert tokens[3] == NfTemplate((NfLiteral("out.txt"),))
+
+
+@pytest.mark.fast
+def test_shell_quote_false_takes_precedence_over_boolean_flag_lowering() -> None:
+    """A literal valueFrom fully overrides type-specific binding, even on a boolean input."""
+    literal_tool = tool(
+        "LITERAL",
+        inputs={
+            "flag": {
+                "type": "boolean",
+                "inputBinding": {"position": 1, "valueFrom": "--literal", "shellQuote": False},
+            }
+        },
+        requirements={"ShellCommandRequirement": {}},
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("LITERAL", **{"in": {"flag": "flag"}})],
+            inputs={"flag": {"type": "boolean"}},
+        ),
+        [literal_tool],
+        workflow_inputs={"flag": True},
+    )
+
+    tokens = cwl_rosetree_to_nextflow(rose).processes[0].command.tokens
+
+    assert tokens[1] == NfShellLiteral("--literal")
+    assert not any(isinstance(token, NfFlag) for token in tokens)
+
+
+@pytest.mark.fast
+def test_command_of_only_shell_literals_still_runs_a_program() -> None:
+    """A shell-literal-only argv would render an empty script that silently exits zero."""
+    literal_tool = tool(
+        "LITERAL",
+        requirements={"ShellCommandRequirement": {}},
+        baseCommand=None,
+        arguments=[{"position": 1, "valueFrom": ">>", "shellQuote": False}],
+    )
+    rose = synthetic_rose(workflow_doc([step("LITERAL")]), [literal_tool])
+
+    tokens = cwl_rosetree_to_nextflow(rose).processes[0].command.tokens
+
+    assert tokens[0] == NfTemplate((NfLiteral("true"),))
+    assert tokens[1] == NfShellLiteral(">>")
+
+
+@pytest.mark.fast
+def test_iwdr_own_basename_listing_lowers_to_no_stage_as() -> None:
+    """The bare $(inputs.<name>) shorthand is a no-op: Nextflow already stages this way."""
+    stage_tool = tool(
+        "STAGE",
+        inputs={"source": {"type": "File", "inputBinding": {"position": 1}}},
+        requirements={"InitialWorkDirRequirement": {"listing": ["$(inputs.source)"]}},
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("STAGE", **{"in": {"source": "source"}})],
+            inputs={"source": {"type": "File"}},
+        ),
+        [stage_tool],
+        workflow_inputs={"source": {"class": "File", "path": "in.txt"}},
+    )
+
+    process = cwl_rosetree_to_nextflow(rose).processes[0]
+
+    assert process.inputs[0] == NfPort("source", "path")
+    assert process.inputs[0].stage_as is None
+
+
+@pytest.mark.fast
+def test_iwdr_literal_entryname_lowers_to_a_stage_as_port() -> None:
+    stage_tool = tool(
+        "STAGE",
+        inputs={"source": {"type": "File"}},
+        requirements={"InitialWorkDirRequirement": {"listing": [
+            {"entry": "$(inputs.source)", "entryname": "renamed.txt"},
+        ]}},
+        arguments=["cat", "renamed.txt"],
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("STAGE", **{"in": {"source": "source"}})],
+            inputs={"source": {"type": "File"}},
+        ),
+        [stage_tool],
+        workflow_inputs={"source": {"class": "File", "path": "in.txt"}},
+    )
+
+    process = cwl_rosetree_to_nextflow(rose).processes[0]
+
+    assert process.inputs[0] == NfPort("source", "path", stage_as="renamed.txt")
 
 
 @pytest.mark.fast
@@ -520,3 +641,64 @@ def test_conversion_does_not_mutate_rosetree(real_supported_rose: RoseTree) -> N
     before = copy.deepcopy(real_supported_rose.data.compiled_cwl)
     cwl_rosetree_to_nextflow(real_supported_rose)
     assert real_supported_rose.data.compiled_cwl == before
+
+
+@pytest.mark.fast
+def test_scatter_lowers_to_an_adapted_workflow_input_connection(
+    real_scattered_rose: RoseTree,
+) -> None:
+    connections = cwl_rosetree_to_nextflow(real_scattered_rose).connections
+    assert connections[0] == NfWorkflowInputConnection(
+        "wf__step__1__echo_item___item",
+        "wf__step__1__echo_item",
+        "item",
+        "scatter",
+    )
+
+
+@pytest.mark.fast
+def test_a_scattered_port_stays_a_scalar_element_port(
+    real_scattered_rose: RoseTree,
+) -> None:
+    """The process receives one element per task, so its port is not array-marked."""
+    process = cwl_rosetree_to_nextflow(real_scattered_rose).processes[0]
+    assert process.inputs == (NfPort("item", "val"),)
+
+
+@pytest.mark.fast
+def test_a_scattered_parameter_carries_the_whole_source_array(
+    real_scattered_rose: RoseTree,
+) -> None:
+    assert cwl_rosetree_to_nextflow(real_scattered_rose).params == {
+        "wf__step__1__echo_item___item": ["alpha", "beta"]
+    }
+
+
+@pytest.mark.fast
+def test_a_subworkflow_step_inlines_into_namespaced_processes(
+    real_nested_rose: RoseTree,
+) -> None:
+    workflow = cwl_rosetree_to_nextflow(real_nested_rose)
+    assert [process.name for process in workflow.processes] == [
+        "root__step__1__write",
+        "root__step__2__child_wic___child__step__1__inner_copy",
+    ]
+
+
+@pytest.mark.fast
+def test_subworkflow_io_binds_to_the_outer_step_endpoints(
+    real_nested_rose: RoseTree,
+) -> None:
+    """The inner step reads the outer producer, and the outer output reads the inner step."""
+    connections = cwl_rosetree_to_nextflow(real_nested_rose).connections
+    assert NfProcessConnection(
+        "root__step__1__write",
+        "result",
+        "root__step__2__child_wic___child__step__1__inner_copy",
+        "source",
+    ) in connections
+    assert NfWorkflowOutputConnection(
+        "root__step__2__child_wic___child__step__1__inner_copy",
+        "result",
+        "root__step__2__child_wic___child__step__1__inner_copy___result",
+    ) in connections

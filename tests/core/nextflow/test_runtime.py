@@ -89,6 +89,64 @@ def test_real_compiler_preserves_adversarial_argument(tmp_path: Path) -> None:
 
 @pytest.mark.nextflow
 @pytest.mark.serial
+def test_shell_command_requirement_with_no_shell_quote_false_behaves_identically(
+    tmp_path: Path,
+) -> None:
+    """R2.8: ShellCommandRequirement alone renders and executes exactly like today."""
+    value = "price is $5; touch SHOULD_NOT_EXIST ' \" $(uname)\nsecond line"
+    write_tool = (
+        CommandLineTool(
+            "write_message",
+            Inputs(message=Input(cwl.string, position=2)),
+            Outputs(result=Output(cwl.file, glob="result.txt")),
+        )
+        .base_command("printf")
+        .argument("%s", position=1)
+        .stdout("result.txt")
+        .shell_command()
+    )
+    write = Step(write_tool, step_name="write")
+    write.inputs.message = value
+    workflow = Workflow([write], "wf")._compile().rose
+    result = run_nextflow(cwl_rosetree_to_nextflow(workflow), tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("result.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == [value]
+    assert not list(tmp_path.rglob("SHOULD_NOT_EXIST"))
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_shell_quote_false_literal_enables_a_real_shell_redirect(tmp_path: Path) -> None:
+    """R2.9: an approved shellQuote:false literal reaches the shell as real redirect syntax."""
+    marker = "payload; not a separate command"
+    redirect_tool = (
+        CommandLineTool(
+            "shell_redirect",
+            Inputs(),
+            Outputs(result=Output(cwl.file, glob="redirected.txt")),
+        )
+        .base_command("printf")
+        .argument("%s", position=1)
+        .argument(marker, position=2)
+        .argument(">>", shell_quote=False, position=3)
+        .argument("redirected.txt", position=4)
+        .shell_command()
+    )
+    redirect_step = Step(redirect_tool, step_name="shell_redirect")
+
+    workflow = Workflow([redirect_step], "nextflow_shell_quote_false")
+    workflow.outputs.result = redirect_step.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("redirected.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == [marker]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
 def test_large_memory_directive_is_valid_nextflow_syntax(tmp_path: Path) -> None:
     workflow = ExecutableNextflowWorkflow(
         "WF",
@@ -700,6 +758,86 @@ def test_basename_derived_output_name_executes(tmp_path: Path) -> None:
 
 @pytest.mark.nextflow
 @pytest.mark.serial
+def test_iwdr_own_basename_listing_executes_unchanged(tmp_path: Path) -> None:
+    """R2.10: the bare $(inputs.<name>) IWDR shorthand is a no-op and still executes."""
+    write_tool = (
+        CommandLineTool(
+            "write_source",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="lines.txt")),
+        )
+        .base_command("echo")
+        .stdout("lines.txt")
+    )
+    write = Step(write_tool, step_name="write")
+    write.inputs.message = "own basename staging"
+
+    stage_tool = (
+        CommandLineTool(
+            "stage_own_basename",
+            Inputs(source=Input(cwl.file, position=1)),
+            Outputs(result=Output(cwl.file, glob="out.txt")),
+        )
+        .base_command("cat")
+        .stdout("out.txt")
+        .initial_workdir(["$(inputs.source)"])
+    )
+    stage_step = Step(stage_tool, step_name="stage_own_basename")
+    stage_step.inputs.source = write.outputs.result
+
+    workflow = Workflow([write, stage_step], "nextflow_iwdr_own_basename")
+    workflow.outputs.result = stage_step.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("out.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == ["own basename staging\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_iwdr_stage_as_rename_executes_and_reaches_the_command(tmp_path: Path) -> None:
+    """R2.11: an IWDR literal rename stages a file under a different name the command hard-codes."""
+    write_tool = (
+        CommandLineTool(
+            "write_source",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="original_name.txt")),
+        )
+        .base_command("echo")
+        .stdout("original_name.txt")
+    )
+    write = Step(write_tool, step_name="write")
+    write.inputs.message = "iwdr staged content"
+
+    stage_tool = CommandLineTool(
+        "stage_and_read",
+        Inputs(source=Input(cwl.file)),
+        Outputs(result=Output(cwl.file, glob="out.txt")),
+    )
+    stage_tool = (
+        stage_tool
+        .stage(stage_tool.inputs.source, entryname="renamed_by_iwdr.txt")
+        .base_command("cat")
+        .argument("renamed_by_iwdr.txt", position=1)
+        .stdout("out.txt")
+    )
+    stage_step = Step(stage_tool, step_name="stage_and_read")
+    stage_step.inputs.source = write.outputs.result
+
+    workflow = Workflow([write, stage_step], "nextflow_iwdr_rename")
+    workflow.outputs.result = stage_step.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("out.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == ["iwdr staged content\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
 def test_mixed_adapter_and_builder_workflow_executes_end_to_end(tmp_path: Path) -> None:
     """One workflow mixing an imported adapter with tool_builder steps runs end to end.
 
@@ -794,3 +932,230 @@ def test_docker_container_behavior(tmp_path: Path) -> None:
     workflow = single_process_workflow(process, params={}, output_port_name="result")
     result = run_nextflow(workflow, tmp_path)
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_scatter_runs_one_task_per_element(tmp_path: Path) -> None:
+    """R2.12: a single-input scatter over an array workflow input runs N tasks."""
+    items = ["alpha", "beta", "gamma"]
+    echo_tool = (
+        CommandLineTool(
+            "echo_item",
+            Inputs(item=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="out.txt")),
+        )
+        .base_command("echo")
+        .stdout("out.txt")
+    )
+    echo = Step(echo_tool, step_name="echo_item")
+    echo.inputs.item = items
+    echo.scatter_on(echo.inputs.item)
+
+    workflow = Workflow([echo], "nextflow_scatter")
+    workflow.outputs.scattered = echo.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = sorted(
+        path.read_text(encoding="utf-8") for path in (tmp_path / "work").rglob("out.txt")
+    )
+    assert outputs == [f"{item}\n" for item in items]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_scatter_over_an_empty_array_runs_zero_tasks_and_terminates(
+    tmp_path: Path,
+) -> None:
+    """R2.13: an empty scatter source yields no tasks, an empty emit, and no hang."""
+    echo_tool = (
+        CommandLineTool(
+            "echo_item",
+            Inputs(item=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="out.txt")),
+        )
+        .base_command("echo")
+        .stdout("out.txt")
+    )
+    echo = Step(echo_tool, step_name="echo_item")
+    echo.inputs.item = []
+    echo.scatter_on(echo.inputs.item)
+
+    unscattered_tool = (
+        CommandLineTool(
+            "write_marker",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="marker.txt")),
+        )
+        .base_command("echo")
+        .stdout("marker.txt")
+    )
+    marker = Step(unscattered_tool, step_name="write_marker")
+    marker.inputs.message = "the run still progresses"
+
+    workflow = Workflow([echo, marker], "nextflow_empty_scatter")
+    workflow.outputs.scattered = echo.outputs.result
+    workflow.outputs.marker = marker.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert list((tmp_path / "work").rglob("out.txt")) == []
+    markers = list((tmp_path / "work").rglob("marker.txt"))
+    assert [path.read_text(encoding="utf-8") for path in markers] == [
+        "the run still progresses\n"
+    ]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_scatter_over_files_stages_one_element_per_task(tmp_path: Path) -> None:
+    """R2.14: a File[] scatter source stages exactly one element into each task.
+
+    The elements are CWL File objects, so the construction has to dispatch on
+    each element's runtime shape rather than on the list's.
+    """
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_text("alpha\n", encoding="utf-8")
+    second.write_text("beta\n", encoding="utf-8")
+    process = NfProcess(
+        "READ_ONE",
+        [NfPort("source", "path")],
+        [output_port("result", "copy.txt")],
+        command("cp", template(ref("source")), "copy.txt"),
+    )
+    workflow = ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [process],
+        [
+            NfWorkflowInputConnection("sources", "READ_ONE", "source", "scatter"),
+            NfWorkflowOutputConnection("READ_ONE", "result", "copies"),
+        ],
+        {
+            "sources": [
+                {"class": "File", "path": str(first)},
+                {"class": "File", "path": str(second)},
+            ]
+        },
+    )
+
+    result = run_nextflow(workflow, tmp_path / "run")
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    copies = sorted(
+        path.read_text(encoding="utf-8")
+        for path in (tmp_path / "run" / "work").rglob("copy.txt")
+    )
+    assert copies == ["alpha\n", "beta\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_nested_workflow_executes_through_its_inlined_process(tmp_path: Path) -> None:
+    """R2.15: a one-level subworkflow runs the same tasks its inlined form declares."""
+    message = "nested composition"
+    write_tool = (
+        CommandLineTool(
+            "write_message",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="message.txt")),
+        )
+        .base_command("echo")
+        .stdout("message.txt")
+    )
+    write = Step(write_tool, step_name="write")
+    write.inputs.message = message
+
+    copy_tool = (
+        CommandLineTool(
+            "copy_file",
+            Inputs(source=Input(cwl.file, position=1)),
+            Outputs(result=Output(cwl.file, glob="copy.txt")),
+        )
+        .base_command("cp")
+        .argument("copy.txt", position=2)
+    )
+    inner_copy = Step(copy_tool, step_name="inner_copy")
+    child = Workflow([inner_copy], "child")
+    inner_copy.inputs.source = child.inputs.source
+    child.inputs.source = write.outputs.result
+
+    root = Workflow([write, child], "nextflow_nested")
+    root.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    copies = list((tmp_path / "work").rglob("copy.txt"))
+    assert [path.read_text(encoding="utf-8") for path in copies] == [f"{message}\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_one_scattered_parameter_feeds_two_processes_independently(tmp_path: Path) -> None:
+    """R2.16: adapting per consumption site avoids a consumed-once queue channel."""
+    first = NfProcess(
+        "FIRST",
+        [NfPort("item", "val")],
+        [output_port("result", "first.txt")],
+        command("printf", "%s", template(ref("item")), stdout="first.txt"),
+    )
+    second = NfProcess(
+        "SECOND",
+        [NfPort("item", "val")],
+        [output_port("result", "second.txt")],
+        command("printf", "%s", template(ref("item")), stdout="second.txt"),
+    )
+    workflow = ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [first, second],
+        [
+            NfWorkflowInputConnection("items", "FIRST", "item", "scatter"),
+            NfWorkflowInputConnection("items", "SECOND", "item", "scatter"),
+            NfWorkflowOutputConnection("FIRST", "result", "first"),
+            NfWorkflowOutputConnection("SECOND", "result", "second"),
+        ],
+        {"items": ["alpha", "beta"]},
+    )
+
+    result = run_nextflow(workflow, tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    work = tmp_path / "work"
+    for name in ("first.txt", "second.txt"):
+        assert sorted(path.read_text(encoding="utf-8") for path in work.rglob(name)) == [
+            "alpha",
+            "beta",
+        ]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_a_scattered_step_broadcasts_its_unscattered_inputs(tmp_path: Path) -> None:
+    """R2.17: a scattered step's other inputs stay value channels and reach every task."""
+    echo_tool = (
+        CommandLineTool(
+            "echo_pair",
+            Inputs(
+                item=Input(cwl.string, position=1),
+                note=Input(cwl.string, position=2),
+            ),
+            Outputs(result=Output(cwl.file, glob="out.txt")),
+        )
+        .base_command("echo")
+        .stdout("out.txt")
+    )
+    echo = Step(echo_tool, step_name="echo_pair")
+    echo.inputs.item = ["alpha", "beta"]
+    echo.inputs.note = "shared"
+    echo.scatter_on(echo.inputs.item)
+
+    workflow = Workflow([echo], "nextflow_scatter_broadcast")
+    workflow.outputs.pairs = echo.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = sorted(
+        path.read_text(encoding="utf-8") for path in (tmp_path / "work").rglob("out.txt")
+    )
+    assert outputs == ["alpha shared\n", "beta shared\n"]

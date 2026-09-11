@@ -154,14 +154,150 @@ present, valid value — distinct from an absent optional value above.
 not supported, nor are the shorthand `File[]` type form, nested arrays, a
 per-item `inputBinding`, or array-typed outputs.
 
+## Shell mode
+
+`ShellCommandRequirement` alone changes nothing: every command token is
+already individually shell-quoted and joined into one line, matching CWL's
+own shell-mode quoting. `shellQuote: false` opts one binding out of quoting
+so it can carry real shell syntax — pipes, redirections, globs — and is
+supported only for a prefix-free binding whose `valueFrom` is a CWL-author
+literal with no input reference at all:
+
+```yaml
+requirements:
+  ShellCommandRequirement: {}
+arguments:
+- printf
+- "%s"
+- $(inputs.message)
+- valueFrom: ">>"
+  shellQuote: false
+- out.txt
+```
+
+`shellQuote: false` on a binding with no `valueFrom`, with a `prefix`, or
+whose `valueFrom` references any input — directly, or via a `.path`/
+`.basename` suffix — is rejected: unquoting a runtime-supplied value would
+let workflow input data or a chosen file name be interpreted as shell
+syntax, which is exactly the boundary this lowering must not cross.
+
+## Staging with InitialWorkDirRequirement
+
+Nextflow already stages every `File`/`Directory` input under its own
+original name, so a `listing` entry that only asks for that — the bare
+`$(inputs.<name>)` shorthand, or a `Dirent` whose `entryname` is absent or
+`$(inputs.<name>.basename)` — is a no-op and is accepted:
+
+```yaml
+requirements:
+  InitialWorkDirRequirement:
+    listing:
+    - $(inputs.source)
+```
+
+Staging under a different, literal name is supported too:
+
+```yaml
+requirements:
+  InitialWorkDirRequirement:
+    listing:
+    - entry: $(inputs.source)
+      entryname: renamed.txt
+arguments:
+- cat
+- renamed.txt
+```
+
+The renamed port stays bound to its own variable but stages under the
+literal name via Nextflow's `stageAs` option. A renamed input's own `.name`
+reports the staged name, not its original CWL basename, so the same input
+cannot also be referenced elsewhere in that tool's command, stream targets,
+or output globs — the command must address the staged file by the literal
+name directly, as above.
+
+`writable: true`, an `entry` that isn't a bare reference to one File or
+Directory input (inline content construction), an `entryname` that is any
+other expression, a listing entry naming a `val`-qualifier or array-typed
+input, and two inputs staged under the same literal name are all rejected.
+
+## Scatter
+
+A step that scatters over exactly one input runs once per element of an
+array-typed workflow input:
+
+```python
+echo = Step(echo_tool, step_name="echo_item")
+echo.inputs.item = ["alpha", "beta", "gamma"]
+echo.scatter_on(echo.inputs.item)
+```
+
+The scattered parameter is carried as one channel holding the whole list and
+adapted with Nextflow's `flatten` at each consumption site, so the process
+takes one element per task while the step's other inputs stay value channels
+and broadcast to every task. Scattering over an empty array runs zero tasks:
+the run still terminates and the workflow output is simply empty.
+
+Multi-input scatter is not supported, and neither is any `scatterMethod` that
+would decide how two scattered arrays combine. With exactly one scattered
+input all three CWL methods coincide, so `dotproduct`,
+`flat_crossproduct`, and `nested_crossproduct` are each accepted as inert
+restatements; any other value is rejected.
+
+A scattered step's outputs can only reach a workflow output, where a channel
+of N values is exactly the array-typed CWL output. Feeding them into another
+process is rejected: CWL gives that step one invocation receiving an array,
+while the channel would drive N invocations, and collecting them back into
+one value is not yet supported. For the same reason a scattered step's own
+inputs must all come from workflow inputs — a process output would truncate
+the scatter to one task. Scattering over an array-typed port, over a
+non-array source, and scattering a nested workflow step are all rejected.
+
+## Nested workflows
+
+A step whose workflow is itself a Sophios `Workflow` is supported one level
+deep:
+
+```python
+inner = Step(copy_tool, step_name="inner_copy")
+child = Workflow([inner], "child")
+inner.inputs.source = child.inputs.source
+child.inputs.source = write.outputs.result
+
+root = Workflow([write, child], "root")
+```
+
+The subworkflow is lowered by inlining: its steps become processes of the
+outer workflow, named by joining the outer step's identifier and the inner
+step's with `___`, so two instantiations of one subworkflow never collide.
+Each subworkflow input is replaced by whatever the outer step binds it to,
+and references to the outer step's outputs are rewritten to the inner
+endpoints the subworkflow's `outputSource` names. The generated artifacts are
+therefore flat; a nested DSL2 `workflow` block is not emitted.
+
+Every declared subworkflow input must be bound by the step, every name in the
+step's `out` must be a declared subworkflow output, and each subworkflow
+output must resolve to one of that subworkflow's own step outputs — a
+subworkflow output that just forwards one of its inputs is rejected, like any
+other boundary passthrough. Nesting deeper than one level and `scatter` on a
+subworkflow step are both rejected. A scattered step *inside* a subworkflow
+is not a special case: after inlining it follows the scatter rules above, so
+its source must be an array-typed input of the outer workflow.
+
+Workflow-level `ScatterFeatureRequirement` and
+`SubworkflowFeatureRequirement` are accepted as inert declarations, at the
+outer and subworkflow level alike; every other workflow-level requirement is
+rejected by name.
+
 ## Current limits
 
-- Workflows must be flat and use `CommandLineTool`-equivalent processes.
+- Processes must be `CommandLineTool`-equivalent.
 - Fractional CPU requirements reject before lowering; they are not silently
   rounded.
-- Scatter is retained as opaque structure; executable scatter is deferred.
-- Nested workflows, arbitrary Groovy, channel operators, `when`, and `exec`
-  blocks are not interpreted.
+- Nesting deeper than one level, arbitrary Groovy, channel operators beyond
+  the one supported adapter, `when`, and `exec` blocks are not interpreted.
+- The generated scatter call is outside the reader's recognized subset, so a
+  scattered workflow round-trips as loss-aware structure with an opaque
+  region rather than being promoted back to executable IR.
 - Structurally imported scripts remain opaque. CWL/Sophios import preserves representable
   names, ports, resources, and topology but does not promise executable
   equivalence for arbitrary shell or Groovy semantics.

@@ -23,6 +23,7 @@ from sophios.nf_types import (
     NfPort,
     NfProcess,
     NfResources,
+    NfShellLiteral,
     NfTemplate,
     NfWorkflowInputConnection,
 )
@@ -98,6 +99,27 @@ def test_renders_supported_process_metadata() -> None:
     assert "cpus 2" in rendered
     assert 'memory "1024 MB"' in rendered
     assert "path 'report.txt', emit: report" in rendered
+
+
+@pytest.mark.serial
+def test_renders_stage_as_rename_and_bare_input_declarations() -> None:
+    process = NfProcess(
+        "STAGE",
+        [NfPort("source", "path", stage_as="renamed.txt"), NfPort("other", "path")],
+        [output_port("report", "report.txt")],
+        NfCommand((NfTemplate((NfLiteral("cat"),)), NfTemplate((NfLiteral("renamed.txt"),)))),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [
+            NfWorkflowInputConnection("source", "STAGE", "source"),
+            NfWorkflowInputConnection("other", "STAGE", "other"),
+        ],
+        {"source": "input.txt", "other": "input2.txt"},
+    ))
+    assert "path source, stageAs: 'renamed.txt'" in rendered
+    assert "path other\n" in rendered
 
 
 @pytest.mark.serial
@@ -213,6 +235,41 @@ def test_renders_array_binding_without_a_prefix() -> None:
         "${names.isEmpty() ? '' : names.collect{ __sophios_shell_quote_9f72e(it.toString()) }"
         ".join(' ')}"
     ) in rendered
+
+
+@pytest.mark.serial
+def test_renders_shell_literal_as_raw_unquoted_text() -> None:
+    process = NfProcess(
+        "REDIRECT",
+        [],
+        [output_port("result", "out.txt")],
+        NfCommand((
+            NfTemplate((NfLiteral("printf"),)),
+            NfTemplate((NfLiteral("hi"),)),
+            NfShellLiteral(">>"),
+            NfTemplate((NfLiteral("out.txt"),)),
+        )),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow("WF", [process], [], {}))
+
+    command_line = next(line for line in rendered.splitlines() if "printf" in line)
+    assert " >> " in command_line
+    assert "__sophios_shell_quote_9f72e('>>')" not in command_line
+    assert command_line.count("__sophios_shell_quote_9f72e") == 3
+
+
+@pytest.mark.serial
+def test_renders_shell_literal_escapes_gstring_interpolation() -> None:
+    """The script block is a GString, so a literal $ must not trigger interpolation."""
+    process = NfProcess(
+        "REDIRECT",
+        [],
+        [output_port("result", "out.txt")],
+        NfCommand((NfTemplate((NfLiteral("true"),)), NfShellLiteral("$HOME >> out.txt"))),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow("WF", [process], [], {}))
+
+    assert r"\$HOME >> out.txt" in rendered
 
 
 @pytest.mark.serial
@@ -343,3 +400,61 @@ def test_config_uses_validated_workflow_container_policy() -> None:
     )
     assert render_nextflow_config(host) == "docker.enabled = false\n"
     assert render_nextflow_config(containerized) == "docker.enabled = true\n"
+
+
+@pytest.mark.serial
+@pytest.mark.parametrize(
+    ("port", "construction"),
+    [
+        (
+            NfPort("item", "val"),
+            "Channel.value(params.items)",
+        ),
+        (
+            NfPort("item", "path"),
+            "Channel.value(params.items.collect { entry -> file("
+            "entry instanceof Map ? entry.path : entry, "
+            "checkIfExists: true, type: 'file') })",
+        ),
+    ],
+    ids=["val", "path"],
+)
+def test_renders_the_scatter_adapter_at_the_consumption_site(
+    port: NfPort,
+    construction: str,
+) -> None:
+    """The adapted parameter carries the whole list; each sink derives its own queue."""
+    process = NfProcess(
+        "SCATTER",
+        [port],
+        [output_port("result", "out.txt")],
+        command("echo", NfTemplate((NfLiteral("x"),))),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [NfWorkflowInputConnection("items", "SCATTER", "item", "scatter")],
+        {"items": ["a", "b"]},
+    ))
+
+    assert "    SCATTER(items.flatten())" in rendered
+    assert construction in rendered
+
+
+@pytest.mark.serial
+def test_renders_an_unadapted_workflow_input_without_an_operator() -> None:
+    process = NfProcess(
+        "TASK",
+        [NfPort("item", "val")],
+        [output_port("result", "out.txt")],
+        command("echo", NfTemplate((NfLiteral("x"),))),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [NfWorkflowInputConnection("items", "TASK", "item")],
+        {"items": "a"},
+    ))
+
+    assert "    TASK(items)" in rendered
+    assert ".flatten()" not in rendered
