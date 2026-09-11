@@ -316,7 +316,7 @@ def test_array_marked_input_rejects_a_plain_reference() -> None:
     # The converse direction: a plain reference renders values.toString(), so
     # a two-item array would reach the command line as "[a, b]" rather than
     # expanding per item.
-    message = "array-marked inputs require an array binding, not a plain or basename reference"
+    message = "array-marked inputs may only be referenced by array bindings"
     for template in (
         NfTemplate((NfLiteral("--joined="), NfInputReference("values"))),
         NfTemplate((NfInputReference("values"),)),
@@ -355,7 +355,7 @@ def test_array_marked_input_rejects_a_basename_reference() -> None:
     # spread over the list, so a File[] read as a basename renders
     # --tag=[a.txt, b.txt]. In glob position it also breaks the premise the
     # literal-name rule rests on, since the rendered name is a list.
-    message = "array-marked inputs require an array binding, not a plain or basename reference"
+    message = "array-marked inputs may only be referenced by array bindings"
     with pytest.raises(ValueError, match=message):
         NfProcess(
             "TAG",
@@ -376,6 +376,23 @@ def test_array_marked_input_rejects_a_basename_reference() -> None:
             )],
             NfCommand((NfTemplate((NfLiteral("echo"),)),)),
         )
+
+
+@pytest.mark.fast
+def test_array_marked_input_rejects_a_flag_reference_during_hydration() -> None:
+    payload = NfProcess(
+        "FLAG",
+        [NfPort("verbose", "val")],
+        [],
+        NfCommand((NfTemplate((NfLiteral("echo"),)), NfFlag("verbose", "--verbose"))),
+    ).to_dict()
+    payload["inputs"][0]["is_array"] = True
+
+    with pytest.raises(
+        ValueError,
+        match="array-marked inputs may only be referenced by array bindings: verbose",
+    ):
+        NfProcess.from_dict(payload)
 
 
 @pytest.mark.fast

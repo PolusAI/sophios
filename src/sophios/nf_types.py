@@ -615,18 +615,18 @@ class NfProcess:
                 f"process {self.name!r} array bindings must reference array-marked inputs: "
                 f"{', '.join(sorted(invalid))}"
             )
-        # The converse direction, for both reference kinds: each calls
-        # .toString() on its channel value -- a basename reference through a
-        # GPath spread -- so an array-marked port reached either way renders
-        # as a Groovy list literal instead of expanding per item.
+        # The converse direction: every reference to an array-marked input
+        # must be an array binding. Plain and basename references render the
+        # collection as a Groovy list, while a flag lets list truthiness decide
+        # whether its prefix appears.
         if invalid := {
             name
-            for name in plain_reference_names | basename_names
+            for name in plain_reference_names | basename_names | flag_names
             if is_array_by_name[name]
         }:
             raise ValueError(
-                f"process {self.name!r} array-marked inputs require an array binding, "
-                f"not a plain or basename reference: {', '.join(sorted(invalid))}"
+                f"process {self.name!r} array-marked inputs may only be referenced by "
+                f"array bindings: {', '.join(sorted(invalid))}"
             )
         match self.container:
             case None:
