@@ -502,8 +502,9 @@ step was replaced by a different tool of the same arity.
   because `compile_workflow_finish` consumes an explicit `outputSource`
   verbatim and the corpus uses that spelling. Both direct compilation and
   `write_wic()` therefore obtain output references from the same document
-  builder, whose default is the concrete form; no caller-specific flag may
-  silently select a second language. The property first shipped as
+  builder, which knows only the concrete form; there is no caller-selectable
+  flag, because a second spelling would be a second language. The property
+  first shipped as
   `xfail(strict=True)`, so the production correction had to turn it green.
 - **Idempotence** — compiling one input twice agrees. Not trivial: the compiler
   mutates a module global, the tool registry, and four structures threaded
