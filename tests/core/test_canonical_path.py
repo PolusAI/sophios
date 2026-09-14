@@ -28,6 +28,13 @@ disagreed. The shared document builder always emits the concrete spelling —
 there is no flag and no default to select the other one; the strict expected
 failure turned green and was removed.
 
+Nothing here is `skip_pypi_ci`. No CI job names this file, so that marker is
+not "excluded from one lane" but "run nowhere": the only job reaching it is
+`build_wheel.yml`'s default collection, which is exactly `-m "not
+skip_pypi_ci"`. The `cwltool --validate` cases carry no marker for the reason
+the exclusion exists elsewhere — `cwltool` is a hard dependency, `--validate`
+is in-process, and neither case pulls or runs a container.
+
 P25 covers this module both statically and under poisoned plugin discovery.
 The passthrough alphabets live in `ast_strategies`, their environment-free
 owner, so importing them here does not pull in the corpus compile harness.
@@ -219,7 +226,6 @@ def test_the_two_front_ends_compile_to_the_same_cwl(spec: _PathSpec) -> None:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 def test_cwltool_validate_rejects_an_invalid_document() -> None:
     """Tautology guard for P36: `cwltool` must be able to say no, or a 0 from
@@ -235,7 +241,6 @@ def test_cwltool_validate_rejects_an_invalid_document() -> None:
         assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 1
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @given(strat.workflows())
 # Ten examples, not the suite's usual hundred: `workflows()`'s shape space is
@@ -312,7 +317,6 @@ def test_compute_request_builds_and_validates_every_compiled_workflow(yml: Yaml)
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @given(st.data())
 @ORACLE

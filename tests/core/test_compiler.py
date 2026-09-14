@@ -94,3 +94,30 @@ def test_a_documented_argument_still_documents_the_input_it_binds() -> None:
     }
     compiled = compile_hermetic_cwl(document, 'docs', tools=tools)
     assert compiled['inputs']['wf_name']['doc'] == 'the file name'
+
+
+@pytest.mark.fast
+def test_two_documentations_are_joined_by_one_real_newline() -> None:
+    """The join is the only branch that writes a separator, and the separator
+    is a newline character, not the two-character escape the previous spelling
+    emitted (`'\\\\n'` in single quotes is a backslash followed by an `n`).
+
+    Exact equality, not `in`: a doc that reads `mine\\\\nthe file name` in every
+    renderer that shows it is the defect, and `'the file name' in doc` holds
+    just as well for it.
+    """
+    from copy import deepcopy  # pylint: disable=import-outside-toplevel
+
+    from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS  # pylint: disable=import-outside-toplevel
+
+    tools = deepcopy(SYNTHETIC_TOOLS)
+    argument = tools[StepId('mk_text', SYNTHETIC_NS)].cwl['inputs']['name']
+    argument['doc'] = 'the file name'
+    argument['label'] = 'File name'
+    document: Yaml = {
+        'inputs': {'wf_name': {'type': 'string', 'doc': 'mine', 'label': 'keep me'}},
+        'steps': [{'id': 'mk_text', 'in': {'name': 'wf_name'}}],
+    }
+
+    assert compile_hermetic_cwl(document, 'docs', tools=tools)['inputs']['wf_name'] == {
+        'type': 'string', 'doc': 'mine\nthe file name', 'label': 'keep me\nFile name'}
