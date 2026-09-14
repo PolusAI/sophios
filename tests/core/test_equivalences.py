@@ -158,19 +158,17 @@ def _compile_flat(yml: Yaml) -> Yaml:
 
 
 def _hits_the_scalar_coercion_gap(document: Yaml) -> bool:
-    """Whether compiling `document` would hit `ast_strategies.py`'s own
-    documented PENDING FINDING, rather than this property's own claim.
+    """Whether compiling `document` would be refused for an ill-typed `!ii`
+    literal, rather than tell us anything about this property's own claim.
 
-    `populate_scalar_val` (src/sophios/compiler.py:1170,1173) calls
-    `int(value)`/`float(value)` on a `!ii` literal with no `try`/`except`, so a
-    literal that does not coerce to the bound argument's type crashes
-    compilation with a bare `ValueError` instead of a diagnostic.
-    `ast_strategies.py` documents this and deliberately does *not* filter it
-    out of `workflows()` (unlike CE-13, it is not a single AST-shape
-    predicate). Left unfiltered here, every draw that hits it would abort
-    *both* compiles this property needs before `equivalent()` is ever called —
-    smothering the property this task is actually responsible for under a
-    finding Task 2 already made and recorded. Excluded the same way
+    `populate_scalar_val` refuses a literal that does not coerce to the bound
+    argument's declared type, with a `LITERAL_TYPE_MISMATCH` diagnostic.
+    `ast_strategies.py` documents why such documents are still drawn — they
+    are well-formed, and unlike CE-13 this is not a single AST-shape predicate
+    — but a *refused* compilation is no basis for an equivalence. Left
+    unfiltered here, every draw that hits it would abort *both* compiles this
+    property needs before `equivalent()` is ever called, smothering the
+    property this task is actually responsible for. Excluded the same way
     `compilable_documents()` excludes CE-13: narrowly, by the exact predicate
     that names the gap, not by weakening what `workflows()` generates.
     """

@@ -46,23 +46,22 @@ grammar defect: `EdgeDef` left the `InputValue` union, so the construct is a
 `CONSTRUCTS`, and `NOT_YET_COMPILABLE` is empty. See its comment below for what
 the machinery is still standing for.
 
-PENDING FINDING (reported, not yet assigned a number): `!ii` places no
-constraint relating a literal's value to the CWL type of the input it binds —
-nothing in the grammar could, since that is a downstream compiler concern —
-so a document binding e.g. the bare string `'0x1f'` or `'_'` to an `int`- or
-`float`-typed input (`sink.n`, `scale.n`, `scale.factor` among the synthetic
-stems) is well-formed. `generate_yaml_inputs`'s `populate_scalar_val`
-(`src/sophios/compiler.py:1170` for `int`, `:1173` for `float`) calls
-`int(value)` / `float(value)` with no `try`/`except` and no `SophiosError`, so
-compilation crashes with a bare Python `ValueError` instead of a diagnostic —
-a totality violation (the claim plan Task 6's P33 makes), not a generator
-defect. Not excluded from `compilable_documents()`: unlike CE-13 it is not a
-single AST-shape predicate (it depends on which literal value landed on which
-typed argument), and the measured residual is small enough that the bulk of
-`compilable_documents()` still compiles (see the Task 2 report). `documents()`
-and `_step` are unchanged for this reason on purpose — narrowing `literals`
-to dodge it would be the same move CE-13 already forbids, just aimed at a
-different finding.
+WELL-FORMED IS NOT WELL-TYPED: `!ii` places no constraint relating a literal's
+value to the CWL type of the input it binds — nothing in the grammar could,
+since that is a downstream compiler concern — so a document binding e.g. the
+bare string `'0x1f'` or `'_'` to an `int`- or `float`-typed input (`sink.n`,
+`scale.n`, `scale.factor` among the synthetic stems) is well-formed and this
+generator draws it. `generate_yaml_inputs`'s `populate_scalar_val` refuses it
+with a `LITERAL_TYPE_MISMATCH` diagnostic, which is the compiler answering
+correctly, not a defect in either side. Not excluded from
+`compilable_documents()`: unlike CE-13 it is not a single AST-shape predicate
+(it depends on which literal value landed on which typed argument), and the
+measured rate is small enough that the bulk of `compilable_documents()` still
+compiles (see the Task 2 report). `documents()` and `_step` are unchanged for
+this reason on purpose — narrowing `literals` to dodge it would be the same
+move CE-13 already forbids, just aimed at a different finding. A property that
+needs a *successful* compile must skip these draws; see
+`test_equivalences._hits_the_scalar_coercion_gap`.
 """
 from typing import Callable, Final
 

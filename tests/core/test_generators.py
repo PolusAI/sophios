@@ -15,7 +15,7 @@ import pytest
 from hypothesis import HealthCheck, find, given, settings
 from hypothesis.strategies import SearchStrategy
 
-from sophios.lang import Document, EdgeRef, Step, parse
+from sophios.lang import Code, Document, EdgeRef, SophiosError, Step, parse
 from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
@@ -135,11 +135,13 @@ def test_the_workflows_strategy_produces_documents_the_compiler_accepts() -> Non
 
     Both surface forms are required to reach a successful compilation, which is
     what pins the desugaring specifically. The overall bar is a bare majority,
-    not everything: the module docstring's pending finding — `!ii` puts no
-    constraint relating a literal to the CWL type it binds, so
-    `populate_scalar_val` raises a bare `ValueError` — is a real and declared
-    residual (measured at about one document in ten), and a threshold that
-    pretended otherwise would be a flaky test rather than a stricter one.
+    not everything: `!ii` puts no constraint relating a literal to the CWL type
+    it binds, so about one drawn document in ten binds something like `'_'` to
+    an `int` and is refused with a `LITERAL_TYPE_MISMATCH` diagnostic. That is
+    the compiler correctly rejecting an ill-typed document, not a defect —
+    what the generator draws is well-formed, not well-typed — so those draws
+    are skipped rather than counted, and a threshold that pretended every draw
+    must compile would be a flaky test rather than a stricter one.
 
     Drawn from `workflows_with_documents()`, which is the strategy `workflows()`
     itself is a projection of, so the composition under test is the one that
@@ -159,7 +161,12 @@ def test_the_workflows_strategy_produces_documents_the_compiler_accepts() -> Non
         compiled['drawn'] += 1
         try:
             compile_hermetic_cwl(yml, 'oracle')
-        except ValueError:  # the declared `!ii` residual; see the docstring
+        except SophiosError as diagnosed:
+            # Only the ill-typed `!ii` literal the docstring describes. Every other
+            # diagnosis — a dangling edge, a missing required input — is a real
+            # failure of the generator's claim, so it must not be skipped here.
+            if any(d.code is not Code.LITERAL_TYPE_MISMATCH for d in diagnosed.diagnostics):
+                raise
             return
         compiled[form] += 1
 
@@ -189,8 +196,8 @@ def test_every_edge_a_document_references_is_defined_in_that_document() -> None:
     That is what discarding a duplicate-stem step used to do: the discarded
     step's `!&` names stayed in the document-scoped `defined_edges`, and a
     later step could reference them. Nothing noticed, because the one test that
-    compiles generated documents attributes every `ValueError` to the declared
-    `!ii` residual — so the dangling-edge error of any non-`testing` caller
+    compiles generated documents skips every `SophiosError` as an ill-typed
+    `!ii` literal — so the dangling-edge error of any non-`testing` caller
     would have been swallowed there under the wrong name.
 
     This is the *invariant*, not the detector. Measured against the discarding
