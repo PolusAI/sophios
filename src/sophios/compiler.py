@@ -118,9 +118,16 @@ def _arg_has_default_or_is_optional(arg: str, in_tool: dict[str, Any]) -> bool:
     """Returns True if the CommandLineTool input `arg` has a default value,\n
     or if its type permits null, using either the '?' syntactic sugar or the\n
     canonical null-union representation. See canonicalize_type in utils_cwl.py.
+
+    A default counts by presence, not by truth: `default: 0`, `default: false`
+    and `default: ''` are values the tool author chose. `default: null` is the
+    exception, being the one value that cannot satisfy a non-nullable input;
+    if the type does permit null, the optional arms below already say so.
+
+    This predicate also gates edge inference, via args_required.
     """
     arg_type = in_tool[arg]['type']
-    has_default = 'default' in in_tool[arg]
+    has_default = in_tool[arg].get('default') is not None
     optional_suffix = isinstance(arg_type, str) and arg_type[-1] == '?'
     optional_union = isinstance(arg_type, list) and 'null' in arg_type
     return bool(has_default or optional_suffix or optional_union)

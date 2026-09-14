@@ -22,7 +22,9 @@ anything real:
   - `poly` declares a union input type, reaching `types_match`'s list branches
     (src/sophios/inference.py:12-31), which single-typed tools never do.
   - `sink` has no outputs: the only tool that can end a workflow without
-    contributing to `outputs:`.
+    contributing to `outputs:`. Its `extras` carries `default: []`, the falsy
+    non-scalar default, so the mirror below and the compiler's own rule are
+    compared on a default whose truthiness and whose presence disagree.
 
 The documents are real CWL v1.2: `test_every_stub_is_valid_cwl` runs cwltool
 over each. They are never executed — `baseCommand` is `true` — so no container
@@ -108,7 +110,8 @@ _SPECS: Final[dict[str, Cwl]] = {
     ),
     'sink': _clt(
         {'file': {'type': 'File', 'inputBinding': {'position': 1}},
-         'n': {'type': 'int', 'inputBinding': {'position': 2}}},
+         'n': {'type': 'int', 'inputBinding': {'position': 2}},
+         'extras': {'type': 'File[]', 'default': [], 'inputBinding': {'position': 3}}},
         {},
     ),
 }
@@ -151,11 +154,12 @@ def required_inputs_of(stem: str) -> tuple[str, ...]:
     checked the compiler honoured them, would be asking one implementation to
     grade itself.
 
-    Blind spot: for a falsy-but-present default (`{'type': 'int', 'default': 0}`),
-    this function's `is not None` treats it as present while the compiler's
-    `bool(in_tool[arg].get('default'))` treats `0` as absent, so the two
-    disagree there — no stub has such a default, so
-    `test_required_inputs_agree_with_the_compilers_own_rule` never exercises it.
+    A default satisfies an input when it is present and not null: a falsy
+    value like `0`, `false`, `''` or `[]` is still a value the tool author
+    chose, while `null` is the one value that cannot satisfy a non-nullable
+    input. `sink.extras` is the `default: []` case, so
+    `test_required_inputs_agree_with_the_compilers_own_rule` exercises the
+    place where truthiness and presence give different answers.
     """
     required = []
     for name, spec in inputs_of(stem).items():

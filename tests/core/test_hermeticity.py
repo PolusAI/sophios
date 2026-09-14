@@ -203,11 +203,38 @@ def test_falsy_default_still_counts_as_a_default() -> None:
     in_tool = {
         'convert_Kd_dG': {'type': 'boolean', 'default': False},
         'control': {'type': 'boolean', 'default': True},
+        'extras': {'type': 'File[]', 'default': []},
     }
     assert _arg_has_default_or_is_optional('convert_Kd_dG', in_tool), \
         'a present-but-falsy default must still count as a default'
     assert _arg_has_default_or_is_optional('control', in_tool), \
         'a present, truthy default must still count as a default'
+    assert _arg_has_default_or_is_optional('extras', in_tool), \
+        'an empty-collection default must still count as a default'
+
+
+@pytest.mark.fast
+def test_a_null_default_does_not_satisfy_a_non_nullable_input() -> None:
+    """`default: null` carries the one value the input cannot take.
+
+    The predicate also gates edge inference — `args_required` is what the
+    compiler iterates to decide which inputs get an inferred edge at all — so
+    an input counted as satisfied is an input inference never sees. `null`
+    satisfies nothing a non-nullable type accepts, and where the type does
+    accept null the optional arms answer on their own; `nullable` is that
+    control, and must stay optional for the type's sake rather than the
+    default's.
+    """
+    from sophios.compiler import _arg_has_default_or_is_optional  # pylint: disable=import-outside-toplevel
+
+    in_tool = {
+        'required': {'type': 'File', 'default': None},
+        'nullable': {'type': ['null', 'File'], 'default': None},
+    }
+    assert not _arg_has_default_or_is_optional('required', in_tool), \
+        'a null default cannot satisfy a non-nullable input, so the input stays required'
+    assert _arg_has_default_or_is_optional('nullable', in_tool), \
+        'a null-permitting type is optional whatever its default'
 
 
 @pytest.mark.fast
