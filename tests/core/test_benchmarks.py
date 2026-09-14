@@ -62,12 +62,25 @@ def test_main_reports_corpus_and_whole_run_totals(
 @pytest.mark.fast
 def test_the_harness_reports_a_failing_case_without_failing_itself(
         monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    """A case error is a table result, never a benchmark gate."""
+    """A case error is a table result, never a benchmark gate.
+
+    Also pins the other half of the setup contract: with no corpus case the
+    plugin registry is never discovered, and the failing case still costs what
+    it cost, so the whole-run total stays honest.
+    """
     def explode() -> None:
         raise RuntimeError('deliberate')
 
+    def refuse_setup() -> object:
+        raise AssertionError('plugin discovery ran with no corpus case selected')
+
+    ticks: Iterator[float] = iter((0.0, 2.0))
+    monkeypatch.setattr(benchmarks, '_get_corpus_env', refuse_setup)
+    monkeypatch.setattr(benchmarks.time, 'perf_counter', lambda: next(ticks))
     monkeypatch.setattr(
         benchmarks, 'CASES',
         (Case('boom', 'proves the harness tolerates a failure', explode),))
     assert benchmarks.main() == 0
-    assert 'error: RuntimeError' in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert 'error: RuntimeError' in output
+    assert '| all cases (total) | 2.000 |' in output
