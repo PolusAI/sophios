@@ -154,12 +154,10 @@ def _speculative_insertion_registry() -> tuple[Yaml, Tools]:
     §6.2). Section 6.3 puts the path in benchmark coverage; §1 documents its
     `O(2^n)` complexity.
 
-    A tool's *input* format must be a single-element list, not a bare string:
-    `inference.perform_edge_inference` iterates `in_formats` directly, and
-    `utils.flatten` does the same to a whitelist candidate's input formats —
-    either given a bare string, the loop walks its characters instead of the
-    one format it names, and the whitelist search never fires. This is not
-    documented anywhere; it was found by trying the bare-string form first.
+    Formats may be written either way here: `inference.declared_formats`
+    normalises a bare string to a one-element list at every point of entry, so
+    the single-element lists below carry no constraint and are just what the
+    fixture happened to be written with.
     """
     plugin_ns = 'global'
     specs: dict[str, Cwl] = {}
@@ -246,11 +244,10 @@ CASES: Final[tuple[Case, ...]] = tuple(
          "converter insertion — the design's own phrase, 'two or more "
          "whitelisted converter tools', for what puts a compilation on this "
          "path. Section 6.3 puts it in benchmark coverage; §1 documents the "
-         "O(2^n) complexity. The corpus never reaches it. On "
-         "this branch it currently raises on the second fixed-point pass: "
-         "insert_step_into_workflow inserts a step with no 'id:' key, which "
-         "get_steps_keys requires — a real defect, recorded here rather than "
-         "fixed, since Spec 2 does not fix compiler defects it finds.",
+         "O(2^n) complexity. The corpus never reaches it. This case times "
+         "two real insertions and the fixed-point passes they force, so it is "
+         "the one number on this list that moves with the insertion search "
+         "rather than with per-step cost.",
          run=_run_speculative_insertion),
     Case('deep_nesting',
          "A workflow partitioned five levels deep with "
