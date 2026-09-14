@@ -9,23 +9,23 @@ docs/tutorials/multistep3.wic
 
 ```yaml
 steps:
-- touch:
-    in:
-      filename: !ii empty.txt
-- append_twice.wic:
-- cat:
+- id: touch
+  in:
+    filename: !ii empty.txt
+- id: append_twice.wic
+- id: cat
 ```
 
 docs/tutorials/append_twice.wic
 
 ```yaml
 steps:
-- append:
-    in:
-      str: !ii Hello
-- append:
-    in:
-      str: !ii World!
+- id: append
+  in:
+    str: !ii Hello
+- id: append
+  in:
+    str: !ii World!
 ```
 
 </td>

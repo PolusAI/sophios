@@ -20,7 +20,7 @@ Use this guide when you need:
 
 ```yaml
 steps:
-- echo:
+  echo:
     in:
       message: !ii Hello World
 ```
@@ -126,9 +126,9 @@ Use `!ii` when a value is known directly in the workflow file:
 
 ```yaml
 steps:
-- echo:
-    in:
-      message: !ii Hello World
+- id: echo
+  in:
+    message: !ii Hello World
 ```
 
 Sophios extracts inline values into the generated CWL job inputs document during
@@ -141,14 +141,14 @@ Use anchors when inference is not the right communication tool.
 
 ```yaml
 steps:
-- touch:
-    in:
-      filename: !ii empty.txt
-    out:
-    - file: !& created_file
-- cat:
-    in:
-      file: !* created_file
+- id: touch
+  in:
+    filename: !ii empty.txt
+  out:
+  - file: !& created_file
+- id: cat
+  in:
+    file: !* created_file
 ```
 
 The output anchor `!& created_file` is consumed later with `!* created_file`.
@@ -275,17 +275,17 @@ wic:
   implementations:
     implementation1:
       steps:
-      - implementation1.wic:
+      - id: implementation1.wic
     implementation2:
       steps:
-      - implementation2.wic:
+      - id: implementation2.wic
 ```
 
 Call-site override:
 
 ```yaml
 steps:
-- static_dispatch.wic:
+- id: static_dispatch.wic
 
 wic:
   steps:

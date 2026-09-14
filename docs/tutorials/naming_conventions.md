@@ -50,11 +50,11 @@ docs/tutorials/naming_conventions.wic
 
 ```yaml
 steps:
-- ambiguous:
-    in:
-      uniquename1: !ii string1
-      uniquename2: !ii string2
-- ambiguous:
+- id: ambiguous
+  in:
+    uniquename1: !ii string1
+    uniquename2: !ii string2
+- id: ambiguous
 ```
 </td>
 <td>
@@ -75,17 +75,17 @@ docs/tutorials/naming_conventions_explicit.wic
 
 ```yaml
 steps:
-- ambiguous:
-    in:
-      uniquename1: !ii string1
-      uniquename2: !ii string2
-    out:
-    - uniquename1: !& edge1
-    - uniquename2: !& edge2
-- ambiguous:
-    in:
-      uniquename1: !* edge1
-      uniquename2: !* edge2
+- id: ambiguous
+  in:
+    uniquename1: !ii string1
+    uniquename2: !ii string2
+  out:
+  - uniquename1: !& edge1
+  - uniquename2: !& edge2
+- id: ambiguous
+  in:
+    uniquename1: !* edge1
+    uniquename2: !* edge2
 ```
 </td>
 <td>
@@ -106,11 +106,11 @@ docs/tutorials/naming_conventions.wic
 
 ```yaml
 steps:
-- ambiguous:
-    in:
-      uniquename1: !ii string1
-      uniquename2: !ii string2
-- ambiguous:
+- id: ambiguous
+  in:
+    uniquename1: !ii string1
+    uniquename2: !ii string2
+- id: ambiguous
 ```
 </td>
 <td>

@@ -11,26 +11,26 @@ docs/tutorials/multistep1.wic
 
 ```yaml
 steps:
-- touch:
-    in:
-      filename: !ii empty.txt
-    out:
-    - file: !& file_touch
-- append:
-    in:
-      str: !ii Hello
-      file: !* file_touch
-    out:
-    - file: !& file_append_1
-- append:
-    in:
-      str: !ii World!
-      file: !* file_append_1
-    out:
-    - file: !& file_append_2
-- cat:
-    in:
-      file: !* file_append_2
+- id: touch
+  in:
+    filename: !ii empty.txt
+  out:
+  - file: !& file_touch
+- id: append
+  in:
+    str: !ii Hello
+    file: !* file_touch
+  out:
+  - file: !& file_append_1
+- id: append
+  in:
+    str: !ii World!
+    file: !* file_append_1
+  out:
+  - file: !& file_append_2
+- id: cat
+  in:
+    file: !* file_append_2
 ```
 
 </td>
@@ -60,16 +60,16 @@ docs/tutorials/multistep2.wic
 
 ```yaml
 steps:
-- touch:
-    in:
-      filename: !ii empty.txt
-- append:
-    in:
-      str: !ii Hello
-- append:
-    in:
-      str: !ii World!
-- cat:
+- id: touch
+  in:
+    filename: !ii empty.txt
+- id: append
+  in:
+    str: !ii Hello
+- id: append
+  in:
+    str: !ii World!
+- id: cat
 ```
 
 </td>
