@@ -10,8 +10,8 @@ from sophios.wic_types import StepId, Tool, Yaml
 def test_an_inserted_step_is_resolvable_by_id() -> None:
     """`insert_step_into_workflow` must write a step `get_steps_keys` can read back.
 
-    It used to insert `{stepid.stem: None}` - reference §3.1's third step
-    surface form, a single-key mapping whose key is the step name - but
+    It used to insert `{stepid.stem: None}` - a single-key mapping whose key is
+    the step name, a form the reference no longer admits (§3.1) - but
     `get_steps_keys` reads only `step_dict.get('id', '')`, so the inserted
     step's name came back as `''` and nothing downstream could resolve it.
     This is what made `--insert_steps_automatically` unusable: the step it
