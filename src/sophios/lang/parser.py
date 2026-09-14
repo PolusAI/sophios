@@ -208,6 +208,11 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
     never lifted and the step has no identity — `cwltool` reports `unknown
     identifier` for the same document. Reported as `wic021` naming both forms
     the language does have (reference §3.1).
+
+    The form did work, up to the May 2024 normal-form refactor (`9758e81`) that
+    made the compiler read `id:` and rewrote the tutorials accordingly. That
+    break is ratified rather than reverted, because the substrate does not
+    admit the form.
     """
     span = SourceSpan.of(file, node)
     if not isinstance(node, yaml.nodes.MappingNode):

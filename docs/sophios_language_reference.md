@@ -169,10 +169,14 @@ plain `WorkflowStep` — and a `WorkflowStep` has no field named `touch`.
 `cwltool` fails such a document with `unknown identifier`, having lost the
 step's identity exactly as Sophios does.
 
-An earlier revision of this document listed the form as supported. It has
-never worked: the step's name resolved to the empty string in every version of
-the compiler, so no workflow can have depended on it. Writing it now earns a
-diagnostic naming the two forms above instead of a failure further downstream.
+This document listed the form as supported, and it was: until the May 2024
+normal-form refactor (`9758e81`), which made the compiler read a step's name
+from `id:` and rewrote every tutorial out of it into the `id:` form, it was the only
+sequence form that worked. That break went unnoticed and is now ratified
+rather than reverted, for the reason above — the substrate does not admit the
+form, so a document using it breaks the moment it meets raw CWL. Writing it now
+earns a diagnostic naming the two forms above instead of a failure further
+downstream.
 
 ### 3.2 Step keys
 
