@@ -228,20 +228,32 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
         diags.error(Code.EXPECTED_MAPPING, f'each step must be a mapping, found {_kind(node)}', span)
         return Step(id='', span=span)
 
-    id_node = next((v for k, v in node.value if _key_text(k, file, diags) == 'id'), None)
-    if id_node is not None:
+    keyed = [(key_node, _key_text(key_node, file, diags), value_node) for key_node, value_node in node.value]
+    id_entries = [(key_node, value_node) for key_node, key, value_node in keyed if key == 'id']
+    if len(id_entries) > 1:
+        # Identity is the one key that must not be ambiguous. This reader keeps
+        # the first id: and an ordinary YAML load keeps the last, so a document
+        # with two would describe a different program depending on who read it.
+        # Reported, never resolved — the same treatment every language-owned
+        # mapping gets from _unique_entries.
+        for key_node, _ in id_entries[1:]:
+            diags.error(Code.DUPLICATE_KEY, "step key 'id' is defined more than once",
+                        SourceSpan.of(file, key_node))
+    if id_entries:
+        id_node = id_entries[0][1]
         step_id = _name_text(id_node, file, diags)
         if not step_id:
             diags.error(Code.EMPTY_STEP_ID, 'id: must be a non-empty string', SourceSpan.of(file, id_node))
-        body = [(k, v) for k, v in node.value if _key_text(k, file, diags) != 'id']
+        body = [(key_node, value_node) for key_node, key, value_node in keyed if key != 'id']
         return _step_body(step_id, body, span, file, diags)
 
-    if len(node.value) == 1:
+    if len(node.value) == 1 and isinstance(node.value[0][0], yaml.nodes.ScalarNode):
         # The same defect as below — a sequence step with no `id:` — so the same
-        # code. One key is the only case where a name can be quoted, so it earns
-        # the more specific text: both readings the key admits, likelier first.
-        key_node, body_node = node.value[0]
-        name = _key_text(key_node, file, diags)
+        # code. A single *scalar* key is the only case where a name can be quoted,
+        # so it earns the more specific text: both readings the key admits,
+        # likelier first. A collection key has already earned wic005 and its
+        # recovery text is a node repr, which is not a name to offer back.
+        _key_node, name, body_node = keyed[0]
         named = f"write '- id: {name}' if {name!r} is the step's name"
         forgotten = f"add the '- id:' line above if {name!r} is one of the step's own keys"
         first, second = (forgotten, named) if name in Grammar.STEP_KEYS else (named, forgotten)
@@ -259,7 +271,12 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
         # lose the wic003 the `id:` form gives it.
         if name in Grammar.STEP_KEYS:
             return _rejected_step('', list(node.value), span, file, diags)
-        return _rejected_step(name, _entries(body_node), span, file, diags)
+        # Under the named reading the key's value is the step's body, exactly as
+        # in the mapping form — so it is checked by the mapping form's own code.
+        # Anything else would report less here than `touch: …` reports for the
+        # same value, and the message recommends that spelling.
+        _step(name, body_node, file, diags)  # diagnostics only; the step is discarded
+        return Step(id='', span=span)
 
     diags.error(
         Code.MISSING_STEP_ID,
@@ -267,11 +284,6 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
         span,
     )
     return _rejected_step('', list(node.value), span, file, diags)
-
-
-def _entries(node: yaml.nodes.Node) -> list[tuple[yaml.nodes.Node, yaml.nodes.Node]]:
-    """The key/value pairs of a mapping, or none for anything else."""
-    return list(node.value) if isinstance(node, yaml.nodes.MappingNode) else []
 
 
 def _rejected_step(

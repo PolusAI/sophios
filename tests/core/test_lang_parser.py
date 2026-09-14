@@ -463,6 +463,68 @@ def test_a_forgotten_id_entry_is_walked_as_its_own_body(claim: str, source: str,
     assert Code.DUPLICATE_KEY not in rejected, f'{claim}: a legal key was read as a second step identity'
 
 
+#: A single-key entry whose key is *not* a step key is a step named by that key,
+#: so its value is the step's body — exactly what `touch: <value>` means in the
+#: mapping form. Each row pairs the rejected spelling with that mapping form,
+#: which the wic006 message itself recommends as the fix.
+NAMED_ENTRIES: Final = (
+    ('a sequence value', 'steps:\n- touch: [a, b]\n', 'steps:\n  touch: [a, b]\n'),
+    ('a scalar value', 'steps:\n- touch: 3\n', 'steps:\n  touch: 3\n'),
+    ('a null body', 'steps:\n- touch:\n', 'steps:\n  touch:\n'),
+    ('an unknown tag inside', 'steps:\n- touch:\n    in:\n      f: !bogus x\n',
+     'steps:\n  touch:\n    in:\n      f: !bogus x\n'),
+    ('a second identity', 'steps:\n- touch:\n    id: t\n', 'steps:\n  touch:\n    id: t\n'),
+)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('claim', 'source', 'reference'), NAMED_ENTRIES,
+                         ids=[c for c, _, _ in NAMED_ENTRIES])
+def test_a_named_entry_reports_what_the_mapping_form_reports(claim: str, source: str, reference: str) -> None:
+    """Taking the message's advice must not hand back a fresh error.
+
+    `_rejected_step` promises that fixing the step's form does not produce a
+    new round of diagnostics from contents that were there all along, and the
+    wic006 message recommends the mapping form by name. So the rejected
+    spelling owes exactly what that form reports, plus the wic006 its own form
+    earns — otherwise the user re-runs and is handed a wic003 the sequence
+    spelling never mentioned.
+    """
+    rejected = [d.code for d in parse(source, 'rejected.wic').diagnostics]
+    baseline = [d.code for d in parse(reference, 'mapping.wic').diagnostics]
+    assert rejected == [Code.MISSING_STEP_ID, *baseline], claim
+
+
+@pytest.mark.fast
+def test_a_collection_key_is_not_quoted_back_as_a_node_repr() -> None:
+    """Only a scalar key is a name the message can offer back.
+
+    `_key_text` stringifies a collection key so parsing can continue after
+    wic005; that recovery value is not a name, and quoting it puts a node repr
+    in front of the user three times. A non-scalar key falls through to the
+    plain message instead.
+    """
+    result = parse('steps:\n- ? [a]\n  : 1\n', 'collection_key.wic')
+    assert [d.code for d in result.diagnostics] == [Code.EXPECTED_SCALAR, Code.MISSING_STEP_ID]
+    assert 'ScalarNode' not in result.diagnostics[1].message
+    assert result.diagnostics[1].message == 'a step in a sequence needs an id:'
+
+
+@pytest.mark.fast
+def test_a_repeated_step_id_is_reported_rather_than_resolved() -> None:
+    """Two `id:` keys on one step describe two different programs.
+
+    This reader keeps the first and an ordinary YAML load keeps the last, so
+    resolving it either way hands the compiler a step the document does not
+    unambiguously name. Every other language-owned mapping reports a repeated
+    key; identity is the one that can least afford an exception.
+    """
+    result = parse('steps:\n- id: first\n  id: second\n', 'dup.wic')
+    assert not result.ok
+    assert [d.code for d in result.diagnostics] == [Code.DUPLICATE_KEY]
+    assert [d.span.start_line for d in result.diagnostics if d.span] == [3]
+
+
 @pytest.mark.fast
 def test_one_code_carries_both_step_without_id_messages() -> None:
     """A sequence step with no `id:` is one code, wic006, whatever else is on it.
