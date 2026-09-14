@@ -229,18 +229,19 @@ jobs:
       # needs containers; both are static checks over the repository.
       - name: PyTest Spec 0 Invariants
         if: always()
-        run: cd sophios/ && pytest tests/core/test_zone_boundary.py tests/core/test_entry_points.py
+        run: cd sophios/ && pytest tests/core/test_zone_boundary.py tests/core/test_entry_points.py tests/core/test_ci_coverage.py
 
       # The packaging lane runs `pytest -m "not skip_pypi_ci"`, so a test with
-      # that marker runs only where a step names its file. The predicates need
-      # the plugin registry, so they carry it; without this step they would be
-      # collected by nothing. Filtered to exactly the complement, since the
-      # unmarked tests in the same file are already covered by default
-      # collection.
+      # that marker runs only where a step names its file. This is that place,
+      # filtered to exactly the complement so nothing here is run twice: these
+      # files' unmarked tests are already covered by the packaging lane's
+      # default collection. tests/core/test_ci_coverage.py fails if a
+      # skip_pypi_ci test exists that no lane collects, which is how these came
+      # to light — 26 of them had never executed anywhere.
       - name: PyTest Environment-Dependent
         if: always()
         timeout-minutes: 20
-        run: cd sophios/ && pytest tests/core/test_predicates.py -m "skip_pypi_ci"
+        run: cd sophios/ && pytest tests/core/test_predicates.py tests/core/test_leak_boundary.py tests/core/test_lang_version.py tests/core/test_lang_parser.py tests/core/test_hermeticity.py -m "skip_pypi_ci"
 
       # design_docs/core-refactor-design.md, Spec 2: the oracle suite — the
       # generators, the equivalence relation and P25's own hermeticity checks.

@@ -208,6 +208,14 @@ jobs:
       if: always()
       run: cd sophios/ && pytest tests/core/test_examples.py -k test_run_workflows_on_push --workers "${PYTEST_WORKERS}" --cwl_runner cwltool # --cov
 
+    # test_run_partial_failures_pass is skip_pypi_ci, so the packaging lane
+    # excludes it, and every other invocation of this file selects a different
+    # -k — it ran nowhere. Its sibling test_run_partial_failures_fail_without_flag
+    # carries no marker and is already covered by default collection.
+    - name: PyTest Run Partial Failures
+      if: always()
+      run: cd sophios/ && pytest tests/core/test_examples.py -k test_run_partial_failures_pass --cwl_runner cwltool
+
     # NOTE: The steps below are for repository_dispatch only. For all other steps, please insert above
     # this comment.
 
