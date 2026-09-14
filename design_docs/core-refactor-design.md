@@ -323,11 +323,13 @@ spellings — an array whose items carry `id`, and a mapping keyed by step name
 — and Sophios's grammar admits exactly those.
 
 A third form, a *sequence of single-key mappings*, was listed in the reference
-and never worked: the key is not lifted into `id` when the container is
-already an array, so the step's name resolved to the empty string in every
-version of the compiler. `cwltool` fails the same document the same way, for
-the same reason. The form was removed from the language rather than
-implemented, and the parser reports it (`wic021`).
+and worked — until the May 2024 normal-form refactor (`9758e81`) made the
+compiler read a step's name from `id:` and rewrote every tutorial out of it,
+leaving the reference describing a form the compiler no longer read. That
+break is ratified rather than reverted: the key is not lifted into `id` when
+the container is already an array, so `cwltool` fails the same document the
+same way, for the same reason. The form was removed from the language rather
+than implemented, and the parser reports it (`wic021`).
 
 Implementing it instead would have cost a real diagnostic. In list position a
 single-key mapping is ambiguous — `- in: {…}` is a forgotten step id, and
