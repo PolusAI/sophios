@@ -31,6 +31,39 @@ def types_match(in_type: Any, out_type: Any) -> bool:
     return False
 
 
+def declared_formats(spec: Yaml) -> list[str]:
+    """Every `format` a CWL input or output declares, always as a list.
+
+    CWL permits either one format string or a list of them. Everything here
+    iterates the result or tests membership in it, and both of those answer
+    per-character for a bare string: `'edam:format_1234'` iterates as 'e',
+    'd', ... and contains `'format_123'` as a substring. Normalising at every
+    point of entry is what keeps those two readings from diverging again.
+    """
+    fmt = spec.get('format')
+    if fmt is None:
+        return []
+    return list(fmt) if isinstance(fmt, list) else [fmt]
+
+
+def _type_permits_format(cwl_type: Any) -> bool:
+    """Whether CWL allows a `format` on a parameter of this canonical type.
+
+    `format` is defined for File-valued parameters only. The distinction matters
+    when matching: a File that declares no format has an unknown format, whereas
+    a string that declares none simply could not have declared one.
+    """
+    match cwl_type:
+        case 'File':
+            return True
+        case {'type': 'array', 'items': items}:
+            return _type_permits_format(items)
+        case list():
+            return any(_type_permits_format(t) for t in cwl_type)
+        case _:
+            return False
+
+
 def _match_outputs_of_step(*, out_keys: list[str], out_tool: dict, step_j: Yaml, in_dict: dict,
                            in_formats: list, inference_rules: dict[str, str],
                            break_inference: bool) -> tuple[list[tuple[str, str]], list[tuple[str, str]], bool]:
@@ -61,10 +94,16 @@ def _match_outputs_of_step(*, out_keys: list[str], out_tool: dict, step_j: Yaml,
             out_dict['format'] = out_format
         attempted_matches.append((out_key, out_format))
         # Great! We found an 'exact' type and format match.
+        # A File output that declares no format has an unknown format, not a free one;
+        # an output of any other type declares none because CWL does not let it.
+        out_format_unconstrained = not out_format and not _type_permits_format(out_dict['type'])
         if types_match(in_dict['type'], out_dict['type']) and (  # First we have to match the types.
-                not in_formats or out_format == in_formats or out_format in in_formats):
+                not in_formats or out_format_unconstrained
+                or out_format == in_formats or out_format in in_formats):
             # Then, if we have an input format or formats, the output format has to match.
-            # Otherwise, formats are optional and we match only on type.
+            # Otherwise, formats are optional and we match only on type. The one exception
+            # is an output that cannot carry a format at all: requiring one there would make
+            # `format` on a string input unsatisfiable by construction.
             format_matches.append((out_key, out_format))
 
         # Apply 'break' rule after iteration, to allow matching
@@ -206,9 +245,8 @@ def perform_edge_inference(inference_use_naming_conventions: bool,
         # Promote scattered input types to arrays
         in_dict['type'] = {'type': 'array', 'items': in_dict['type']}
 
-    in_formats = []
-    if 'format' in in_tool[arg_key]:
-        in_formats = in_tool[arg_key]['format']
+    in_formats = declared_formats(in_tool[arg_key])
+    if in_formats:
         in_dict['format'] = in_formats
     format_matches_all = []
     attempted_matches_all = []
@@ -309,12 +347,10 @@ def perform_edge_inference(inference_use_naming_conventions: bool,
                     continue
 
                 in_tool = tool.cwl['inputs']
-                tool_in_formats = [arg_val['format'] if isinstance(arg_val['format'], list) else [arg_val['format']]
-                                   for arg_key, arg_val in in_tool.items() if 'format' in arg_val]
-                tool_in_formats_flat = utils.flatten(tool_in_formats)
+                tool_in_formats_flat = [fmt for arg_val in in_tool.values() for fmt in declared_formats(arg_val)]
 
                 out_tool = tool.cwl['outputs']
-                tool_out_formats = [out_val['format'] for out_key, out_val in out_tool.items() if 'format' in out_val]
+                tool_out_formats = [fmt for out_val in out_tool.values() for fmt in declared_formats(out_val)]
 
                 # NOTE: Ideally, the second condition should really check that
                 # ALL required inputs for the intermediate tool match with the
