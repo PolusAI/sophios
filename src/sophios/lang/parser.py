@@ -52,7 +52,7 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     #: Every key a step carries in its own right — the interpreted set plus the
     #: three `_step_body` splits out itself. Derived from the set above rather
     #: than restated, so the two cannot drift; a key here is one that cannot
-    #: also be a step's name in a sequence entry, which is how `wic021` tells a
+    #: also be a step's name in a sequence entry, which is how `wic006` tells a
     #: forgotten `id:` from a step that happens to be called `run`.
     STEP_KEYS: Final = frozenset({'id', 'in', 'out'}) | INTERPRETED_STEP_KEYS
 
@@ -213,8 +213,9 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
     types `Workflow.steps` as an array of `WorkflowStep` and lifts a key into
     `id` only when the field's value is a mapping, so in a sequence the key is
     never lifted and the step has no identity — `cwltool` reports `unknown
-    identifier` for the same document. Reported as `wic021` naming both forms
-    the language does have (reference §3.1).
+    identifier` for the same document. Reported as `wic006`, the one code for a
+    sequence step with no `id:`, with a message naming both forms the language
+    does have (reference §3.1).
 
     The form did work, up to the May 2024 normal-form refactor (`9758e81`) that
     made the compiler read `id:` and rewrote the tutorials accordingly. That
@@ -235,16 +236,16 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
         return _step_body(step_id, body, span, file, diags)
 
     if len(node.value) == 1:
-        # Reported rather than accepted: see the docstring. The key is read so
-        # the message can name both readings it admits — a step called that, or
-        # a step key under a forgotten `id:` — with the likelier one first.
+        # The same defect as below — a sequence step with no `id:` — so the same
+        # code. One key is the only case where a name can be quoted, so it earns
+        # the more specific text: both readings the key admits, likelier first.
         key_node, body_node = node.value[0]
         name = _key_text(key_node, file, diags)
         named = f"write '- id: {name}' if {name!r} is the step's name"
         forgotten = f"add the '- id:' line above if {name!r} is one of the step's own keys"
         first, second = (forgotten, named) if name in Grammar.STEP_KEYS else (named, forgotten)
         diags.error(
-            Code.STEP_WITHOUT_ID,
+            Code.MISSING_STEP_ID,
             f'a step in a sequence carries its name in an id: key — {first}; {second}. '
             f'Keying the whole steps: block by name is the other form (§3.1)',
             span,

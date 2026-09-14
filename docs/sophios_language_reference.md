@@ -155,7 +155,7 @@ A **sequence of single-key mappings** is not a third form:
 
 ```yaml
 steps:
-- touch:            # error (wic021): the step has no id
+- touch:            # error (wic006): the step has no id
     in:
       filename: !ii empty.txt
 ```

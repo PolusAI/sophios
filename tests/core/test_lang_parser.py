@@ -312,9 +312,9 @@ class Reported(NamedTuple):
 REPORTED: Final[tuple[Reported, ...]] = (
     Reported('a sequence step without an id: names both forms that exist (§3.1)',
              'steps:\n- touch:\n    in: {f: !ii x}\n',
-             Code.STEP_WITHOUT_ID, 2, message_contains="- id: touch"),
+             Code.MISSING_STEP_ID, 2, message_contains="- id: touch"),
     Reported('and with no body either, which is the shape insertion used to write',
-             'steps:\n- sub.wic:\n', Code.STEP_WITHOUT_ID, 2,
+             'steps:\n- sub.wic:\n', Code.MISSING_STEP_ID, 2,
              message_contains='- id: sub.wic'),
     Reported('an edge definition in input position names the position (§4.1.1)',
              'steps:\n- id: s\n  in:\n    f: !& e\n',
@@ -408,7 +408,7 @@ def test_sequence_and_mapping_steps_agree() -> None:
 #: identity. Every line number is the same in all three.
 _ID_FORM: Final = 'steps:\n- id: touch\n  in:\n    f: !bogus x\n    g: !& e\n'
 REJECTED_ENTRIES: Final = (
-    ('a single-key mapping', Code.STEP_WITHOUT_ID,
+    ('a single-key mapping', Code.MISSING_STEP_ID,
      'steps:\n- touch:\n    in:\n      f: !bogus x\n      g: !& e\n'),
     ('an entry with keys but no id:', Code.MISSING_STEP_ID,
      'steps:\n- name: touch\n  in:\n    f: !bogus x\n    g: !& e\n'),
@@ -464,11 +464,29 @@ def test_a_forgotten_id_entry_is_walked_as_its_own_body(claim: str, source: str,
 
 
 @pytest.mark.fast
+def test_one_code_carries_both_step_without_id_messages() -> None:
+    """A sequence step with no `id:` is one code, wic006, whatever else is on it.
+
+    Only the entry with a single key has a name to quote, so only that arm can
+    say more; the text is all that distinguishes the two, which is why both are
+    pinned whole here.
+    """
+    single = list(parse('steps:\n- touch:\n    in: {f: !ii x}\n', 'one.wic').diagnostics)
+    multi = list(parse('steps:\n- in: {f: !ii x}\n  out: [g]\n', 'many.wic').diagnostics)
+    assert [d.code for d in single] == [d.code for d in multi] == [Code.MISSING_STEP_ID]
+    assert single[0].message == (
+        "a step in a sequence carries its name in an id: key — write '- id: touch' if 'touch' "
+        "is the step's name; add the '- id:' line above if 'touch' is one of the step's own "
+        'keys. Keying the whole steps: block by name is the other form (§3.1)')
+    assert multi[0].message == 'a step in a sequence needs an id:'
+
+
+@pytest.mark.fast
 @pytest.mark.parametrize(('name', 'leads'), [('touch', "write '- id: touch'"), ('in', "add the '- id:' line")])
-def test_wic021_leads_with_the_likelier_reading(name: str, leads: str) -> None:
+def test_the_single_key_message_leads_with_the_likelier_reading(name: str, leads: str) -> None:
     """`- in:` is almost certainly a forgotten id:; `- touch:` almost certainly a name."""
     diagnostics = parse(f'steps:\n- {name}:\n    a: !ii 1\n', 'reading.wic').diagnostics
-    message = next(d.message for d in diagnostics if d.code is Code.STEP_WITHOUT_ID)
+    message = next(d.message for d in diagnostics if d.code is Code.MISSING_STEP_ID)
     assert message.startswith(f'a step in a sequence carries its name in an id: key — {leads}')
     assert f"write '- id: {name}'" in message and "add the '- id:' line" in message
 
@@ -477,7 +495,7 @@ def test_wic021_leads_with_the_likelier_reading(name: str, leads: str) -> None:
 def test_every_step_key_is_handled_rather_than_passed_through() -> None:
     """`Grammar.STEP_KEYS` is exactly the set `_step_body` acts on.
 
-    The two sides must agree for wic021's reading to be right: a key that falls
+    The two sides must agree for wic006's reading to be right: a key that falls
     through to passthrough is a step name, not a step key.
     """
     body = ''.join(f'  {key}: {{}}\n' for key in sorted(Grammar.STEP_KEYS - {'id'}))

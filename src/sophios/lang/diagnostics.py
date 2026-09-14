@@ -52,7 +52,7 @@ class Code(StrEnum):
     LANG_VERSION_CONFLICT = 'wic018'
     MISPLACED_EDGE_DEF = 'wic019'
     LITERAL_TYPE_MISMATCH = 'wic020'
-    STEP_WITHOUT_ID = 'wic021'
+    # wic021 is retired, not free: it was a second spelling of wic006.
     RECURSIVE_ALIAS = 'wic030'
 
 
