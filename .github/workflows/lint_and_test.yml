@@ -241,7 +241,16 @@ jobs:
       # reason the contrib step gives below.
       - name: PyTest Spec 2 Oracle
         if: always()
-        run: cd sophios/ && pytest tests/core/test_hermeticity.py tests/core/test_generators.py tests/core/test_equivalence.py tests/core/test_equivalences.py tests/core/test_benchmarks.py -m "not skip_pypi_ci"
+        run: cd sophios/ && pytest tests/core/test_hermeticity.py tests/core/test_generators.py tests/core/test_equivalence.py tests/core/test_equivalences.py -m "not skip_pypi_ci"
+
+      # design_docs/core-refactor-design.md, Spec 2: the fast contracts for the
+      # weekly benchmark harness. Its own step because importing it imports
+      # tests/core/wic_corpus.py, which reads the config and walks
+      # search_paths_wic — so a corpus or config problem reds this step and not
+      # the oracle's, which is hermetic by construction and says so.
+      - name: PyTest Benchmark Harness
+        if: always()
+        run: cd sophios/ && pytest tests/core/test_benchmarks.py
 
       # Contrib surfaces (ICT, Workflow Builder, REST) run in core CI, but as
       # their own step, so a red build is attributable to a zone without
