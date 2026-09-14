@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
+from ._errors import InvalidLinkError
 from ._utils import (contains_any_type,
                      is_array_type,
                      normalize_parameter_name,
@@ -51,20 +52,38 @@ class OutputSourceBinding:
     step_id: str | None
     source_name: str
 
-    def to_output_source(self, step_id_overrides: Mapping[str, str] | None = None) -> str:
+    def to_output_source(self, step_ids: Mapping[int, str], source_parameter: Any = None) -> str:
         """Render the CWL `outputSource` string for a workflow output.
 
+        Resolution goes through the source parameter's live owner rather than
+        `step_id`, which is a snapshot of a mutable display name: renaming a
+        step after binding an output leaves the snapshot stale while the object
+        graph stays valid, so a name lookup would fail on a workflow that is not
+        actually malformed. `step_id` is retained because it is what the user
+        wrote, and it names the step in the error below.
+
         Args:
-            step_id_overrides (Mapping[str, str] | None): Optional mapping from
-                user-facing step names to compiler-assigned concrete step ids.
+            step_ids (Mapping[int, str]): Every sibling step, by object
+                identity, mapped to its compiler-assigned concrete step id.
+            source_parameter (Any): The bound source parameter, whose
+                `parent_obj` is the owning step.
+
+        Raises:
+            InvalidLinkError: If the source is not one of the workflow's steps.
 
         Returns:
             str: The serialized CWL `outputSource` value.
         """
         if self.step_id is None:
             return self.source_name
-        resolved_step_id = step_id_overrides.get(self.step_id, self.step_id) if step_id_overrides else self.step_id
-        return f"{resolved_step_id}/{self.source_name}"
+        owner = getattr(source_parameter, "parent_obj", None)
+        concrete = step_ids.get(id(owner)) if owner is not None else None
+        if concrete is None:
+            raise InvalidLinkError(
+                f"workflow output source {self.step_id}/{self.source_name} is not one of this "
+                "workflow's steps; bind it to a step the workflow was constructed with"
+            )
+        return f"{concrete}/{self.source_name}"
 
 
 @dataclass(slots=True)
@@ -232,13 +251,13 @@ class OutputParameter(_ParameterBase):
     def to_workflow_output(
         self,
         *,
-        step_id_overrides: Mapping[str, str] | None = None,
+        step_ids: Mapping[int, str],
     ) -> dict[str, Any]:
         """Serialize this workflow output parameter to CWL.
 
         Args:
-            step_id_overrides (Mapping[str, str] | None): Optional mapping from
-                user-facing step names to compiler-assigned concrete step ids.
+            step_ids (Mapping[int, str]): Every sibling step, by object
+                identity, mapped to its compiler-assigned concrete step id.
 
         Raises:
             ValueError: If the output has no source or no resolved type.
@@ -253,7 +272,7 @@ class OutputParameter(_ParameterBase):
             raise ValueError(f"workflow output {self.name!r} has no resolved type")
         return {
             "type": cwl_type,
-            "outputSource": self._source.to_output_source(step_id_overrides),
+            "outputSource": self._source.to_output_source(step_ids, self._source_parameter),
         }
 
 

@@ -24,8 +24,9 @@ contract:
 CE-16, closed. Direct compilation requested concrete workflow-output step ids,
 while `write_wic()` omitted the flag and serialized the user-facing step name.
 The compiler consumes explicit `outputSource` values verbatim, so the two paths
-disagreed. The shared document builder now defaults to the concrete spelling;
-the strict expected failure turned green and was removed.
+disagreed. The shared document builder always emits the concrete spelling —
+there is no flag and no default to select the other one; the strict expected
+failure turned green and was removed.
 
 P25 covers this module both statically and under poisoned plugin discovery.
 The passthrough alphabets live in `ast_strategies`, their environment-free
@@ -351,3 +352,47 @@ def test_passthrough_survives_a_scatter_in_a_multi_step_workflow(data: st.DataOb
     step = compiled['steps'][index]
     for key, value in freight.items():
         assert step[key] == value, f'{key} was altered by compilation'
+
+
+@pytest.mark.fast
+def test_a_renamed_step_still_resolves_the_workflow_output_bound_to_it() -> None:
+    """`process_name` is a mutable public attribute, so a bound output may not
+    cache it.
+
+    Binding captured the source step's name at bind time and serialization
+    indexed the concrete-step mapping with that snapshot, so renaming a step
+    after binding raised a bare `KeyError` from inside serialization — on an
+    object graph that is still perfectly valid, since the output is bound to
+    the same child object it always was. Resolution goes through the source
+    parameter's live owner now.
+    """
+    workflow = _build_workflow(_PathSpec('a', 'b', 'c'))
+    before = workflow.yaml['outputs']['result']['outputSource']
+
+    renamed = next(step for step in workflow.steps if step.process_name == 'join')
+    renamed.process_name = 'after'
+    after = workflow.yaml['outputs']['result']['outputSource']
+
+    assert before.endswith('__join/file')
+    assert after.endswith('__after/file'), 'the output did not follow the step it is bound to'
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('stem', ['oracle', 'pipeline'])
+def test_a_written_document_spells_step_ids_for_the_name_it_is_saved_as(stem: str) -> None:
+    """The compiler takes the step-id prefix from the path it loads.
+
+    `write_wic` accepts any `*.wic` name, and an explicit `outputSource` is
+    consumed verbatim, so a document spelled from `process_name` but saved under
+    another name points its outputs at steps that do not exist. P35 cannot see
+    this: it always writes `f'{process_name}.wic'`, which is the one name for
+    which the two spellings agree.
+    """
+    workflow = _build_workflow(_PathSpec('a', 'b', 'c'))
+    with tempfile.TemporaryDirectory() as workdir:
+        path = workflow.write_wic(Path(workdir) / f'{stem}.wic')
+        document = yaml.load(path.read_text(encoding='utf-8'), Loader=wic_loader())
+
+    source = document['outputs']['result']['outputSource']
+    assert source.startswith(f'{stem}__step__'), source
+    assert source.endswith('__join/file'), source

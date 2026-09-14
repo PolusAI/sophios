@@ -289,18 +289,19 @@ def workflow_document(
     *,
     inline_subtrees: bool,
     directory: Path | None = None,
-    concrete_step_ids: bool = True,
+    document_stem: str | None = None,
 ) -> dict[str, Any]:
     """Render a workflow into its in-memory WIC YAML representation.
+
+    A workflow output's `outputSource` is always written in the compiler's
+    concrete step-id spelling, because `compile_workflow_finish` consumes an
+    explicit `outputSource` verbatim. There is no flag: a second spelling
+    would be a second language, selectable per caller.
 
     Args:
         workflow (Workflow): Workflow to serialize.
         inline_subtrees (bool): Whether nested workflows should be embedded inline.
         directory (Path | None): Output directory for sibling `.wic` files.
-        concrete_step_ids (bool): Whether workflow outputs should use the
-            compiler's concrete step ids instead of the user-facing step names.
-            Defaults to the concrete form because the compiler consumes an
-            explicit workflow `outputSource` verbatim.
 
     Returns:
         dict[str, Any]: Serialized workflow document.
@@ -316,23 +317,25 @@ def workflow_document(
             )
         workflow_inputs[parameter.name] = {"type": cwl_type}
 
-    compiled_step_ids = (
-        {
-            step.process_name: step_name_str(
-                workflow.process_name,
-                index,
-                f"{step.process_name}.wic" if isinstance(step, Workflow) else step.process_name,
-            )
-            for index, step in enumerate(workflow.steps)
-        }
-        if concrete_step_ids
-        else None
-    )
+    # The compiler takes the step-id prefix from the *path it loads*, not from
+    # process_name, so a document saved under another name must be spelled for
+    # that name or its outputSource points at steps that do not exist.
+    stem = document_stem if document_stem is not None else workflow.process_name
+    # Keyed by object identity, not by process_name: a step renamed after an
+    # output was bound to it still is the step the output names.
+    compiled_step_ids = {
+        id(step): step_name_str(
+            stem,
+            index,
+            f"{step.process_name}.wic" if isinstance(step, Workflow) else step.process_name,
+        )
+        for index, step in enumerate(workflow.steps)
+    }
 
     workflow_outputs: dict[str, dict[str, Any]] = {}
     for output_parameter in workflow._outputs:
         workflow_outputs[output_parameter.name] = output_parameter.to_workflow_output(
-            step_id_overrides=compiled_step_ids
+            step_ids=compiled_step_ids
         )
 
     steps_yaml = [
@@ -362,6 +365,12 @@ def _wic_output_path(workflow: "Workflow", path: str | Path | None) -> Path:
 
 def workflow_wic_yaml(workflow: "Workflow", *, inline_subworkflows: bool = True) -> str:
     """Render a workflow as `.wic` YAML text.
+
+    The text compiles correctly only when saved as `<process_name>.wic`. The
+    compiler derives step ids from the name of the file it loads, and an
+    explicit `outputSource` is consumed verbatim, so a document saved under
+    another name names steps that do not exist. There is no destination here to
+    spell them for; `write_workflow_wic` takes one and does.
 
     Args:
         workflow (Workflow): Workflow to serialize.
@@ -409,6 +418,7 @@ def write_workflow_wic(
         workflow,
         inline_subtrees=inline_subworkflows,
         directory=output_path.parent if not inline_subworkflows else None,
+        document_stem=output_path.stem,
     )
     output_path.write_text(
         _dump_yaml(document),
@@ -469,7 +479,7 @@ def compile_workflow(
     graph = get_graph_reps(workflow.process_name)
     yaml_tree = YamlTree(
         StepId(workflow.process_name, "global"),
-        workflow_document(workflow, inline_subtrees=True, concrete_step_ids=True),
+        workflow_document(workflow, inline_subtrees=True),
     )
     merged_tools = _merged_known_tools(workflow._flatten_steps(), tool_registry)
 
