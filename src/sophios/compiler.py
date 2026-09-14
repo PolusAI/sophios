@@ -1176,7 +1176,7 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
             case "int":
                 try:
                     return int(value)
-                except ValueError as e:
+                except (ValueError, TypeError) as e:
                     raise SophiosError.error(
                         Code.LITERAL_TYPE_MISMATCH,
                         f"Input {key!r} is declared type 'int' but its literal {value!r} "
@@ -1185,7 +1185,7 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
             case "float":
                 try:
                     return float(value)
-                except ValueError as e:
+                except (ValueError, TypeError) as e:
                     raise SophiosError.error(
                         Code.LITERAL_TYPE_MISMATCH,
                         f"Input {key!r} is declared type 'float' but its literal {value!r} "

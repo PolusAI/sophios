@@ -227,6 +227,28 @@ def test_literal_type_mismatch_reports() -> None:
 
 
 @pytest.mark.fast
+def test_literal_type_mismatch_reports_a_null_array_element() -> None:
+    """A null inside an array literal is diagnosed, not raised as a bare
+    `TypeError`.
+
+    `populate_input_value`'s null guard inspects only the top-level value, so
+    `[1, null]` against an `int[]` passes it and reaches `populate_scalar_val`
+    one element down, where `int(None)` is a `TypeError` rather than the
+    `ValueError` a non-numeric string gives. Both are the same user error and
+    get the same diagnostic.
+    """
+    with pytest.raises(SophiosError) as caught:
+        generate_yaml_inputs({'xs': {'type': {'type': 'array', 'items': 'int'}, 'value': [1, None]}})
+
+    assert len(caught.value.diagnostics) == 1
+    assert caught.value.diagnostics[0].code is Code.LITERAL_TYPE_MISMATCH
+    message = caught.value.diagnostics[0].message
+    assert 'xs' in message
+    assert 'int' in message
+    assert 'None' in message
+
+
+@pytest.mark.fast
 def test_missing_container_engine_reports(monkeypatch: pytest.MonkeyPatch) -> None:
     """The docker check reports the same installation advice it printed."""
     def command_not_found(*_args: object, **_kwargs: object) -> object:
