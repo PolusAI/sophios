@@ -49,11 +49,12 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     #: makes the leak boundary a specification rather than an accident.
     INTERPRETED_STEP_KEYS: Final = frozenset({'scatter', 'scatterMethod', 'when', 'run'})
 
-    #: Every key a step carries in its own right — the interpreted set plus the
-    #: three `_step_body` splits out itself. Derived from the set above rather
-    #: than restated, so the two cannot drift; a key here is one that cannot
-    #: also be a step's name in a sequence entry, which is how `wic006` tells a
-    #: forgotten `id:` from a step that happens to be called `run`.
+    #: Every key a step carries in its own right — the interpreted set, shared
+    #: rather than restated, plus the three `_step_body` branches on by name.
+    #: Those three are spelled twice, here and there, so a test walks a step
+    #: body and pins this set against the keys the walk actually consumes. A
+    #: key here is one that cannot also be a step's name in a sequence entry,
+    #: which is how `wic006` tells a forgotten `id:` from a step called `run`.
     STEP_KEYS: Final = frozenset({'id', 'in', 'out'}) | INTERPRETED_STEP_KEYS
 
     #: Every key the `wic:` validator admits. The block is Sophios-owned syntax

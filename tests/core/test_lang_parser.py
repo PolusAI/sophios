@@ -491,17 +491,28 @@ def test_the_single_key_message_leads_with_the_likelier_reading(name: str, leads
     assert f"write '- id: {name}'" in message and "add the '- id:' line" in message
 
 
+#: Keys offered to a step body: every one `Grammar.STEP_KEYS` claims, plus
+#: three it must not claim. Written out rather than read off `STEP_KEYS`,
+#: because a probe derived from the set under test moves with it and a member
+#: could then be dropped from both sides unnoticed.
+_PROBE_KEYS: Final = ('id', 'in', 'out', 'run', 'scatter', 'scatterMethod', 'when', 'doc', 'label', 'touch')
+
+
 @pytest.mark.fast
-def test_every_step_key_is_handled_rather_than_passed_through() -> None:
+def test_step_keys_is_exactly_the_set_step_body_acts_on() -> None:
     """`Grammar.STEP_KEYS` is exactly the set `_step_body` acts on.
 
     The two sides must agree for wic006's reading to be right: a key that falls
-    through to passthrough is a step name, not a step key.
+    through to passthrough is a step name, not a step key. `_step_body` names
+    `id`, `in` and `out` itself, so those three are spelled in two places and
+    this is what stops them drifting.
     """
-    body = ''.join(f'  {key}: {{}}\n' for key in sorted(Grammar.STEP_KEYS - {'id'}))
+    body = ''.join(f'  {key}: {{}}\n' for key in _PROBE_KEYS if key != 'id')
     document = parse(f'steps:\n- id: s\n{body}', 'keys.wic').document
     assert document is not None
-    assert document.steps[0].passthrough == ()
+    passed_through = {key for key, _ in document.steps[0].passthrough}
+    assert passed_through == {'doc', 'label', 'touch'}
+    assert set(_PROBE_KEYS) - passed_through == set(Grammar.STEP_KEYS)
 
 
 @pytest.mark.fast

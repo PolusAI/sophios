@@ -464,10 +464,8 @@ _HOSTILE: Final = (
     ('steps:\n  s:\n    in:\n      f: !ii a\n      f: !ii b\n', Code.DUPLICATE_KEY),
     ('steps:\n- id: s\n  in:\n    f: !foo bar\n', Code.UNKNOWN_TAG),
     ('steps:\n- id: ""\n', Code.EMPTY_STEP_ID),
-    # A single-key sequence step takes its key as the id (reference §3.1: the
-    # `- touch: {...}` shorthand); a step with no `id:` and no `out:` either
-    # earns MISSING_STEP_ID only once it has more than one key, so nothing
-    # picks it as the name.
+    # A sequence step carries its name in `id:` (reference §3.1), so an entry
+    # without one earns MISSING_STEP_ID whatever else it has — here, nothing.
     ('steps:\n- {}\n', Code.MISSING_STEP_ID),
     ('steps:\n- id: s\n  out: {a: b}\n', Code.EXPECTED_SEQUENCE),
     ('steps: 3\n', Code.EXPECTED_MAPPING),
