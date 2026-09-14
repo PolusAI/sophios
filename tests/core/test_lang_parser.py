@@ -26,6 +26,7 @@ from sophios.lang import (
     Document,
     EdgeDef,
     EdgeRef,
+    Grammar,
     InlineLiteral,
     InputValue,
     RawCwlRef,
@@ -432,6 +433,57 @@ def test_the_id_form_reports_exactly_the_same_body_problems() -> None:
     """The `id:` form is the baseline the two rejected shapes are held to."""
     reported = [(d.code, d.span.start_line if d.span else None) for d in parse(_ID_FORM, 'id_form.wic').diagnostics]
     assert reported == [(Code.UNKNOWN_TAG, 4), (Code.MISPLACED_EDGE_DEF, 5)]
+
+
+#: A single-key entry whose key is one of a step's own keys is a forgotten
+#: `- id:` line, so the entry itself is the body rather than the key's value.
+#: Each row pairs that spelling with the `id:` form holding the same content.
+FORGOTTEN_ID_ENTRIES: Final = (
+    ('a non-mapping in:', 'steps:\n- in: [a, b]\n', 'steps:\n- id: s\n  in: [a, b]\n'),
+    ('a non-sequence out:', 'steps:\n- out: {a: 1}\n', 'steps:\n- id: s\n  out: {a: 1}\n'),
+    ('an input legitimately named id', 'steps:\n- in: {id: !ii 1}\n', 'steps:\n- id: s\n  in: {id: !ii 1}\n'),
+)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('claim', 'source', 'reference'), FORGOTTEN_ID_ENTRIES,
+                         ids=[c for c, _, _ in FORGOTTEN_ID_ENTRIES])
+def test_a_forgotten_id_entry_is_walked_as_its_own_body(claim: str, source: str, reference: str) -> None:
+    """Walking the key's value instead would read a body as a mapping of step keys.
+
+    Two things go wrong that way and both are invisible to a fixture whose key
+    is a step *name*: the body's own shape errors are lost, and an input named
+    `id` is reported as a contradictory second identity for the step. The
+    `id:` form holding the same content is the baseline; the rejected spelling
+    owes exactly its diagnostics plus the wic006 its form earns.
+    """
+    rejected = [d.code for d in parse(source, 'rejected.wic').diagnostics]
+    baseline = [d.code for d in parse(reference, 'id_form.wic').diagnostics]
+    assert rejected == [Code.MISSING_STEP_ID, *baseline], claim
+    assert Code.DUPLICATE_KEY not in rejected, f'{claim}: a legal key was read as a second step identity'
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('name', 'leads'), [('touch', "write '- id: touch'"), ('in', "add the '- id:' line")])
+def test_wic021_leads_with_the_likelier_reading(name: str, leads: str) -> None:
+    """`- in:` is almost certainly a forgotten id:; `- touch:` almost certainly a name."""
+    diagnostics = parse(f'steps:\n- {name}:\n    a: !ii 1\n', 'reading.wic').diagnostics
+    message = next(d.message for d in diagnostics if d.code is Code.STEP_WITHOUT_ID)
+    assert message.startswith(f'a step in a sequence carries its name in an id: key — {leads}')
+    assert f"write '- id: {name}'" in message and "add the '- id:' line" in message
+
+
+@pytest.mark.fast
+def test_every_step_key_is_handled_rather_than_passed_through() -> None:
+    """`Grammar.STEP_KEYS` is exactly the set `_step_body` acts on.
+
+    The two sides must agree for wic021's reading to be right: a key that falls
+    through to passthrough is a step name, not a step key.
+    """
+    body = ''.join(f'  {key}: {{}}\n' for key in sorted(Grammar.STEP_KEYS - {'id'}))
+    document = parse(f'steps:\n- id: s\n{body}', 'keys.wic').document
+    assert document is not None
+    assert document.steps[0].passthrough == ()
 
 
 @pytest.mark.fast

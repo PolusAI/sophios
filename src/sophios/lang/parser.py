@@ -49,6 +49,13 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     #: makes the leak boundary a specification rather than an accident.
     INTERPRETED_STEP_KEYS: Final = frozenset({'scatter', 'scatterMethod', 'when', 'run'})
 
+    #: Every key a step carries in its own right — the interpreted set plus the
+    #: three `_step_body` splits out itself. Derived from the set above rather
+    #: than restated, so the two cannot drift; a key here is one that cannot
+    #: also be a step's name in a sequence entry, which is how `wic021` tells a
+    #: forgotten `id:` from a step that happens to be called `run`.
+    STEP_KEYS: Final = frozenset({'id', 'in', 'out'}) | INTERPRETED_STEP_KEYS
+
     #: Every key the `wic:` validator admits. The block is Sophios-owned syntax
     #: (§5), so the language layer names its vocabulary; the validator in
     #: `schemas/wic_schema.py` supplies a shape per key and is checked against
@@ -228,24 +235,36 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
         return _step_body(step_id, body, span, file, diags)
 
     if len(node.value) == 1:
-        # Reported rather than accepted: see the docstring. The name is read so
-        # the message can quote it, which is what tells a reader whether they
-        # meant a step called that or forgot an `id:`.
-        name = _key_text(node.value[0][0], file, diags)
+        # Reported rather than accepted: see the docstring. The key is read so
+        # the message can name both readings it admits — a step called that, or
+        # a step key under a forgotten `id:` — with the likelier one first.
+        key_node, body_node = node.value[0]
+        name = _key_text(key_node, file, diags)
+        named = f"write '- id: {name}' if {name!r} is the step's name"
+        forgotten = f"add the '- id:' line above if {name!r} is one of the step's own keys"
+        first, second = (forgotten, named) if name in Grammar.STEP_KEYS else (named, forgotten)
         diags.error(
             Code.STEP_WITHOUT_ID,
-            f"a step in a sequence carries its name in an id: key — write "
-            f"'- id: {name}', or key the whole steps: block by name instead (§3.1)",
+            f'a step in a sequence carries its name in an id: key — {first}; {second}. '
+            f'Keying the whole steps: block by name is the other form (§3.1)',
             span,
         )
-        return _rejected_step(_entries(node.value[0][1]), span, file, diags)
+        # The reading decided above also decides which node holds the body. Under
+        # the forgotten-`id:` reading the entry *is* the body — `in:` is the step's
+        # own `in:` — so walking the key's value instead would read that mapping's
+        # keys as step keys: `- in: {id: x}` would report a contradictory second
+        # identity for an input legitimately named `id`, and `- in: [a, b]` would
+        # lose the wic003 the `id:` form gives it.
+        if name in Grammar.STEP_KEYS:
+            return _rejected_step('', list(node.value), span, file, diags)
+        return _rejected_step(name, _entries(body_node), span, file, diags)
 
     diags.error(
         Code.MISSING_STEP_ID,
         'a step in a sequence needs an id:',
         span,
     )
-    return _rejected_step(list(node.value), span, file, diags)
+    return _rejected_step('', list(node.value), span, file, diags)
 
 
 def _entries(node: yaml.nodes.Node) -> list[tuple[yaml.nodes.Node, yaml.nodes.Node]]:
@@ -254,6 +273,7 @@ def _entries(node: yaml.nodes.Node) -> list[tuple[yaml.nodes.Node, yaml.nodes.No
 
 
 def _rejected_step(
+    step_id: str,
     entries: list[tuple[yaml.nodes.Node, yaml.nodes.Node]],
     span: SourceSpan,
     file: str,
@@ -265,8 +285,12 @@ def _rejected_step(
     body is walked anyway, so that one pass reports everything it can see and
     fixing the step's form does not hand back a fresh round of errors from the
     contents that were there all along.
+
+    `step_id` names the step only for the messages the walk produces; a caller
+    with no name to offer passes `''`. The returned `Step` carries no id either
+    way, since nothing downstream may use one this document failed to give.
     """
-    _step_body('', entries, span, file, diags)
+    _step_body(step_id, entries, span, file, diags)
     return Step(id='', span=span)
 
 
