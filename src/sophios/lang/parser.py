@@ -238,13 +238,35 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
             f"'- id: {name}', or key the whole steps: block by name instead (§3.1)",
             span,
         )
-        return Step(id='', span=span)
+        return _rejected_step(_entries(node.value[0][1]), span, file, diags)
 
     diags.error(
         Code.MISSING_STEP_ID,
         'a step in a sequence needs an id:',
         span,
     )
+    return _rejected_step(list(node.value), span, file, diags)
+
+
+def _entries(node: yaml.nodes.Node) -> list[tuple[yaml.nodes.Node, yaml.nodes.Node]]:
+    """The key/value pairs of a mapping, or none for anything else."""
+    return list(node.value) if isinstance(node, yaml.nodes.MappingNode) else []
+
+
+def _rejected_step(
+    entries: list[tuple[yaml.nodes.Node, yaml.nodes.Node]],
+    span: SourceSpan,
+    file: str,
+    diags: Diagnostics,
+) -> Step:
+    """Report on the body of a sequence entry that has no usable identity.
+
+    The step itself is discarded — the document is already failing — but its
+    body is walked anyway, so that one pass reports everything it can see and
+    fixing the step's form does not hand back a fresh round of errors from the
+    contents that were there all along.
+    """
+    _step_body('', entries, span, file, diags)
     return Step(id='', span=span)
 
 

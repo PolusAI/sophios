@@ -402,6 +402,38 @@ def test_sequence_and_mapping_steps_agree() -> None:
     assert from_map.value == from_seq.value
 
 
+#: One step body carrying two independent mistakes, written in the `id:` form
+#: and in each of the two sequence shapes the parser rejects for want of an
+#: identity. Every line number is the same in all three.
+_ID_FORM: Final = 'steps:\n- id: touch\n  in:\n    f: !bogus x\n    g: !& e\n'
+REJECTED_ENTRIES: Final = (
+    ('a single-key mapping', Code.STEP_WITHOUT_ID,
+     'steps:\n- touch:\n    in:\n      f: !bogus x\n      g: !& e\n'),
+    ('an entry with keys but no id:', Code.MISSING_STEP_ID,
+     'steps:\n- name: touch\n  in:\n    f: !bogus x\n    g: !& e\n'),
+)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('claim', 'code', 'source'), REJECTED_ENTRIES, ids=[c for c, _, _ in REJECTED_ENTRIES])
+def test_a_rejected_step_entry_still_reports_its_body(claim: str, code: Code, source: str) -> None:
+    """A step with no identity is still walked, so one pass sees everything.
+
+    Both rejected shapes must report the same body problems the `id:` form
+    does; otherwise fixing the entry's form hands back a fresh round of errors
+    from contents that were there all along.
+    """
+    reported = [(d.code, d.span.start_line if d.span else None) for d in parse(source, 'rejected.wic').diagnostics]
+    assert reported == [(code, 2), (Code.UNKNOWN_TAG, 4), (Code.MISPLACED_EDGE_DEF, 5)], claim
+
+
+@pytest.mark.fast
+def test_the_id_form_reports_exactly_the_same_body_problems() -> None:
+    """The `id:` form is the baseline the two rejected shapes are held to."""
+    reported = [(d.code, d.span.start_line if d.span else None) for d in parse(_ID_FORM, 'id_form.wic').diagnostics]
+    assert reported == [(Code.UNKNOWN_TAG, 4), (Code.MISPLACED_EDGE_DEF, 5)]
+
+
 @pytest.mark.fast
 def test_python_api_emits_documents_this_parser_accepts() -> None:
     """The Python API is the second surface of the same language.
