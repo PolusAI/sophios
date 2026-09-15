@@ -96,16 +96,19 @@ def _paths_of(tokens: list[str]) -> list[str]:
     tokens shaped like paths are considered, and one that does not resolve
     raises rather than being dropped. Dropping the last of them leaves no paths
     at all, which reads as the whole rootdir again: the same silent pass, by a
-    different route. A node id keeps only its file part.
+    different route.
+
+    A node id is kept whole. Only its file part has to exist on disk, but the
+    test it names is what the run collects, and `_path_reaches` needs both to
+    say so.
     """
     paths: list[str] = []
     for token in tokens:
         if token.startswith('-') or not ('/' in token or '.py' in token):
             continue
-        path = token.split('::', 1)[0]
-        if not (REPO_ROOT / path).exists():
+        if not (REPO_ROOT / token.split('::', 1)[0]).exists():
             raise ValueError(f'pytest invocation names a path that does not exist: {token!r}')
-        paths.append(path)
+        paths.append(token)
     return paths
 
 
@@ -204,16 +207,27 @@ def _marked_tests(path: Path) -> dict[str, frozenset[str]]:
     return marked
 
 
-def _path_reaches(files: list[str], relative: str) -> bool:
-    """Whether an invocation naming `files` collects `relative`.
+def _path_reaches(files: list[str], relative: str, test: str) -> bool:
+    """Whether an invocation naming `files` collects `test` in `relative`.
 
     An invocation naming no path collects the whole rootdir. A directory
-    argument reaches everything beneath it, so this is a prefix check rather
-    than equality.
+    argument reaches everything beneath it, so the file match is a prefix check
+    rather than equality.
+
+    A node id reaches only the test it names. Crediting its whole file would
+    count every sibling as covered by a run that does not collect them — the
+    same over-wide answer a dropped path gives, one argument narrower.
     """
     if not files:
         return True
-    return any(relative == f or relative.startswith(f.rstrip('/') + '/') for f in files)
+    for argument in files:
+        path, _, node = argument.partition('::')
+        if not (relative == path or relative.startswith(path.rstrip('/') + '/')):
+            continue
+        # `file.py::TestClass::test_x[param]` selects `test_x`.
+        if not node or node.rsplit('::', 1)[-1].partition('[')[0] == test:
+            return True
+    return False
 
 
 def _test_files() -> list[Path]:
@@ -248,7 +262,7 @@ def test_no_marked_test_is_collected_by_nothing() -> None:
             if not blocking:
                 continue  # the packaging lane's default collection reaches it
             admitted = any(
-                _path_reaches(files, relative)   # no path named means the whole rootdir
+                _path_reaches(files, relative, test)   # no path named means the whole rootdir
                 and _keyword_admits(keyword, test)
                 and not (_excluded_markers(marker) & blocking)
                 for files, marker, keyword in main_runs
@@ -263,22 +277,31 @@ def test_no_marked_test_is_collected_by_nothing() -> None:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(('files', 'relative', 'reached'), [
-    ([], 'tests/core/test_x.py', True),                                  # no path: the rootdir
-    (['tests/contrib'], 'tests/contrib/test_x.py', True),                # a directory reaches beneath it
-    (['tests/contrib'], 'tests/core/test_x.py', False),                  # but only beneath it
-    (['tests/core/test_x.py'], 'tests/core/test_x.py', True),
+@pytest.mark.parametrize(('files', 'relative', 'test', 'reached'), [
+    ([], 'tests/core/test_x.py', 'test_a', True),                        # no path: the rootdir
+    (['tests/contrib'], 'tests/contrib/test_x.py', 'test_a', True),      # a directory reaches beneath it
+    (['tests/contrib'], 'tests/core/test_x.py', 'test_a', False),        # but only beneath it
+    (['tests/core/test_x.py'], 'tests/core/test_x.py', 'test_a', True),
+    # A node id names one test; its siblings in the same file are not collected.
+    (['tests/core/test_x.py::test_a'], 'tests/core/test_x.py', 'test_a', True),
+    (['tests/core/test_x.py::test_a'], 'tests/core/test_x.py', 'test_b', False),
+    (['tests/core/test_x.py::Klass::test_a'], 'tests/core/test_x.py', 'test_a', True),
+    (['tests/core/test_x.py::test_a[1-2]'], 'tests/core/test_x.py', 'test_a', True),
+    # One argument narrowing does not shrink another that reaches the file whole.
+    (['tests/core/test_x.py::test_a', 'tests/core/test_x.py'], 'tests/core/test_x.py', 'test_b', True),
 ])
-def test_a_directory_argument_reaches_only_what_is_under_it(
-        files: list[str], relative: str, reached: bool) -> None:
-    """A directory is a path, not the absence of one.
+def test_an_argument_reaches_only_what_it_names(
+        files: list[str], relative: str, test: str, reached: bool) -> None:
+    """A directory is a path, not the absence of one; a node id is one test, not a file.
 
     Reading only `.py` tokens made `pytest tests/contrib` look like an
     invocation that named no path, which this file treats as the whole rootdir.
     One such run would then mark every marked test under `tests/core` as
-    covered — the single failure this file exists to catch.
+    covered — the single failure this file exists to catch. A node id credited
+    to its whole file is that same failure one argument narrower: the run
+    collects one test and every marked sibling reads as covered.
     """
-    assert _path_reaches(files, relative) is reached
+    assert _path_reaches(files, relative, test) is reached
 
 
 @pytest.mark.fast
@@ -314,10 +337,12 @@ def test_a_path_that_does_not_resolve_raises_rather_than_vanishing() -> None:
 
     That is the same silent pass `_excluded_markers` refuses for an unreadable
     `-m`, reached by a different route: a renamed file or a node id would be
-    quietly discarded and the run would then appear to cover everything.
+    quietly discarded and the run would then appear to cover everything. A node
+    id is kept whole rather than trimmed to its file, which is what lets
+    `_path_reaches` hold it to the one test it names.
     """
     assert _paths_of(['tests/core/test_ci_coverage.py']) == ['tests/core/test_ci_coverage.py']
     assert _paths_of(['--cwl_runner', 'cwltool']) == []          # a flag's value is not a path
-    assert _paths_of(['tests/core/test_ci_coverage.py::test_x']) == ['tests/core/test_ci_coverage.py']
+    assert _paths_of(['tests/core/test_ci_coverage.py::test_x']) == ['tests/core/test_ci_coverage.py::test_x']
     with pytest.raises(ValueError, match='does not exist'):
         _paths_of(['tests/core/no_such_file.py'])
