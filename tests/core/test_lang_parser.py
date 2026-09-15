@@ -547,8 +547,11 @@ def test_diagnostics_come_back_in_reading_order(claim: str, source: str) -> None
     carry both has to say so — including the non-mapping root, which returns
     before the structural pass runs at all.
     """
-    positions = [(d.span.start_line, d.span.start_column) for d in parse(source, 'order.wic').diagnostics]
-    assert len(positions) > 1, claim
+    diagnostics = list(parse(source, 'order.wic').diagnostics)
+    positions = [(d.span.start_line, d.span.start_column) for d in diagnostics if d.span]
+    # Every parse diagnostic carries a span, which is what lets `_in_reading_order`
+    # sort by position at all; asserting the count pins that alongside the order.
+    assert len(positions) == len(diagnostics) > 1, claim
     assert positions == sorted(positions), claim
 
 
