@@ -55,6 +55,7 @@ class Code(StrEnum):
     # wic021 is retired, not free: it was a second spelling of wic006.
     FIXED_POINT_NOT_REACHED = 'wic022'
     INCOMPATIBLE_INPUT_REFERENCE = 'wic023'
+    RESERVED_KEY = 'wic024'
     RECURSIVE_ALIAS = 'wic030'
 
 

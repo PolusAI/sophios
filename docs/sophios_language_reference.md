@@ -358,9 +358,31 @@ and a **desugared** form, and they are equivalent:
 The desugared form exists for a specific reason: a YAML constructor that
 re-emitted its own tag would fire again when the document is reloaded, so the
 loader would not be idempotent. Machine-generated documents therefore use the
-desugared spelling.
+desugared spelling — the Python API emits it, and skips the sugar entirely.
 
-**Write the tagged form.** The desugared form is what tooling emits.
+**Both spellings are written by hand.** Every layer Sophios exposes is meant to
+be one a person can read and edit, and that includes the document a tool just
+emitted. Neither spelling is a lesser citizen.
+
+#### `wic_` in construct position
+
+Where an input value is expected, a **single-key mapping whose key begins
+`wic_`** is read as one of the constructs above. If it is not one of them, it is
+`wic024`.
+
+This exists because the two spellings were equally *accepted* and unequally
+*safe*. A tag is a closed namespace, so `!iii` is `wic009` at once. A desugared
+key shares its namespace with passthrough CWL, which is open by definition
+(§1), so `wic_inline_inpt` was indistinguishable from a key the compiler should
+carry through untouched: the construct silently vanished and the typo rode into
+the emitted document. Since both spellings are authorable, that is a
+hand-written mistake as much as a generated one.
+
+**Only construct position is claimed.** A *name* may carry the prefix — an input
+port called `wic_` or `wic_port` is legal, because names are the user's to
+choose. So is any passthrough key: `wic`, `wicked` and `my_wic_key` are ordinary
+CWL and pass through untouched. The rule reaches exactly the place a construct
+could have been meant, and no further.
 
 ### 6.2 What each surface must do
 

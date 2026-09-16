@@ -98,11 +98,37 @@ class ParseResult:
         return self.document is not None and not self.diagnostics.has_errors
 
 
-def _report_unknown_tags(root: yaml.nodes.Node, file: str, diags: Diagnostics) -> None:
-    """Report every tag the language does not own, wherever it appears.
+def _every_node(root: yaml.nodes.Node) -> list[yaml.nodes.Node]:
+    """Every distinct node in the composed graph, once.
 
-    One walk over the composed graph rather than a call at each position that
-    consumes a node. The per-position form is what this replaces, and each pass
+    One traversal that the per-node rules share, rather than a walk per rule.
+    Aliases make the composed document a graph rather than a tree, so nodes are
+    tracked by identity; this stays linear in distinct nodes and a recursive
+    alias cannot make it loop.
+    """
+    seen: set[int] = set()
+    order: list[yaml.nodes.Node] = []
+    stack: list[yaml.nodes.Node] = [root]
+    while stack:
+        node = stack.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        order.append(node)
+        if isinstance(node, yaml.nodes.SequenceNode):
+            stack.extend(node.value)
+        elif isinstance(node, yaml.nodes.MappingNode):
+            for key_node, value_node in node.value:
+                stack.append(key_node)
+                stack.append(value_node)
+    return order
+
+
+def _report_unknown_tag(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> None:
+    """Report a tag the language does not own, wherever it appears.
+
+    A rule applied to every node rather than called at each position that
+    consumes one. The per-position form is what this replaces, and each pass
     over it found positions the previous one had missed — the rule had one home,
     but every position still had to remember to call it, and a position added
     later starts uncovered by default.
@@ -110,28 +136,11 @@ def _report_unknown_tags(root: yaml.nodes.Node, file: str, diags: Diagnostics) -
     Sophios owns four tags and the loader rejects every other, so the
     specification must never be more permissive than the thing it specifies.
     The payload is kept, untagged, for recovery.
-
-    Aliases make the composed document a graph rather than a tree, so nodes are
-    tracked by identity; the walk stays linear in distinct nodes and a recursive
-    alias cannot make it loop.
     """
-    seen: set[int] = set()
-    stack: list[yaml.nodes.Node] = [root]
-    while stack:
-        node = stack.pop()
-        if id(node) in seen:
-            continue
-        seen.add(id(node))
-        if node.tag.startswith('!') and node.tag not in Tag.ALL:
-            diags.error(Code.UNKNOWN_TAG,
-                        f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
-                        SourceSpan.of(file, node))
-        if isinstance(node, yaml.nodes.SequenceNode):
-            stack.extend(node.value)
-        elif isinstance(node, yaml.nodes.MappingNode):
-            for key_node, value_node in node.value:
-                stack.append(key_node)
-                stack.append(value_node)
+    if node.tag.startswith('!') and node.tag not in Tag.ALL:
+        diags.error(Code.UNKNOWN_TAG,
+                    f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
+                    SourceSpan.of(file, node))
 
 
 def _in_reading_order(diags: Diagnostics) -> Diagnostics:
@@ -164,7 +173,8 @@ def parse(text: str, filename: str = '<string>') -> ParseResult:
     if root is None:  # An empty document is well-formed and carries nothing.
         return ParseResult(Document(span=whole), diagnostics)
 
-    _report_unknown_tags(root, filename, diagnostics)
+    for node in _every_node(root):
+        _report_unknown_tag(node, filename, diagnostics)
 
     if not isinstance(root, yaml.nodes.MappingNode):
         diagnostics.error(
@@ -551,10 +561,45 @@ def _desugared_form(
     if not isinstance(node, yaml.nodes.MappingNode) or len(node.value) != 1:
         return None
     key_node, value_node = node.value[0]
-    build = Forms.DESUGARED.get(_key_text(key_node, file, diags))
+    key = _key_text(key_node, file, diags)
+    build = Forms.DESUGARED.get(key)
     if build is None:
+        _report_misspelled_construct(key, key_node, file, diags)
         return None
     return build(value_node, file, diags, span)
+
+
+#: `wic_` in *construct* position is Sophios-owned. Not in name position: an
+#: input port or a step may be called anything, and reserving the prefix there
+#: would narrow the language well past the defect this closes.
+CONSTRUCT_PREFIX: Final = 'wic_'
+
+
+def _report_misspelled_construct(key: str, key_node: yaml.nodes.Node,
+                                 file: str, diags: Diagnostics) -> None:
+    """Report a single-key mapping that reaches for a construct and misses.
+
+    The two spellings were equally *accepted* and unequally *safe*. A tag is a
+    closed namespace, so `!iii` is `wic009` at once. A desugared key shares its
+    namespace with passthrough CWL, which is open by definition (§1), so
+    `wic_inline_inpt` was indistinguishable from a key the compiler should carry
+    through untouched: the construct vanished and the typo rode into the emitted
+    document. Both spellings are hand-written, so that is a human mistake as
+    much as a generated one.
+
+    Only construct position is claimed, and only here, where the desugared
+    spellings already have their one home. A whole-graph rule was tried first
+    and reserved the prefix in *name* position too — `in: {wic_: !* x}`, a port
+    someone may legitimately call `wic_`, which the generators found at once.
+    Passthrough stays open: `wic`, `wicked` and `my_wic_key` are ordinary CWL.
+    """
+    if not key.startswith(CONSTRUCT_PREFIX):
+        return
+    diags.error(
+        Code.RESERVED_KEY,
+        f"{key!r} is not a Sophios construct, and a single-key mapping beginning 'wic_' is read as "
+        f'one. The constructs are: {", ".join(sorted(Key.ALL))}',
+        SourceSpan.of(file, key_node))
 
 
 #: One builder: a YAML node and its context in, one input node out.

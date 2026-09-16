@@ -555,6 +555,69 @@ def test_diagnostics_come_back_in_reading_order(claim: str, source: str) -> None
     assert positions == sorted(positions), claim
 
 
+#: A single-key mapping in input position that reaches for a construct and
+#: misses. The tagged spelling catches these for free — `!iii` is `wic009`
+#: because tags are a closed namespace — and the desugared spelling could not,
+#: because it shares a namespace with passthrough CWL.
+MISSPELLED_CONSTRUCTS: Final = (
+    ('inline literal', 'steps:\n- id: s\n  in: {f: {wic_inline_inpt: 1}}\n'),
+    ('edge reference', 'steps:\n- id: s\n  in: {f: {wic_alis: e}}\n'),
+    ('raw CWL reference', 'steps:\n- id: s\n  in: {f: {wic_raw_cwll: e}}\n'),
+    ('the bare prefix', 'steps:\n- id: s\n  in: {f: {wic_: 1}}\n'),
+)
+
+#: Keys that carry the prefix somewhere it names nothing. Each must survive:
+#: the rule claims construct position only, and passthrough is open (§1).
+UNCLAIMED_BY_THE_PREFIX: Final = (
+    ('an input port called wic_', 'steps:\n  s:\n    in:\n      wic_: !* e\n'),
+    ('a port whose name has the prefix', 'steps:\n- id: s\n  in: {wic_port: {wic_inline_input: 1}}\n'),
+    ('a passthrough key', 'steps:\n- id: s\n  hints: {wic_hint: 1}\n'),
+    ('a key merely containing wic', 'steps:\n- id: s\n  hints: {wicked: 1}\n'),
+    ('the sidecar block itself', 'wic:\n  graphviz: {}\nsteps: []\n'),
+)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('claim', 'source'), MISSPELLED_CONSTRUCTS,
+                         ids=[c for c, _ in MISSPELLED_CONSTRUCTS])
+def test_a_misspelled_desugared_construct_is_reported(claim: str, source: str) -> None:
+    """A single-key mapping beginning `wic_` is read as a construct attempt.
+
+    Without this the two spellings are equally *accepted* and unequally *safe*:
+    `!iii` is `wic009` at once, while `wic_inline_inpt` was a mapping like any
+    other, so the construct vanished and the typo rode into the emitted
+    document. Both spellings are authorable, so it is a hand-written mistake as
+    much as a generated one.
+    """
+    result = parse(source, 'misspelled.wic')
+    assert not result.ok, claim
+    assert Code.RESERVED_KEY in [d.code for d in result.diagnostics], claim
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('claim', 'source'), UNCLAIMED_BY_THE_PREFIX,
+                         ids=[c for c, _ in UNCLAIMED_BY_THE_PREFIX])
+def test_the_prefix_is_claimed_in_construct_position_only(claim: str, source: str) -> None:
+    """A name may carry the prefix; only a construct attempt may not.
+
+    The first version of this rule walked every mapping key and reserved the
+    prefix everywhere, which made `in: {wic_: !* e}` — a port someone may
+    legitimately call `wic_` — an error. The generators found it immediately.
+    Reserving a prefix in *name* position narrows the language well past the
+    defect being closed, and passthrough must stay open (§1).
+    """
+    result = parse(source, 'unclaimed.wic')
+    assert Code.RESERVED_KEY not in [d.code for d in result.diagnostics], claim
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('spelling', sorted(Key.ALL))
+def test_the_desugared_spellings_are_not_reported_against_themselves(spelling: str) -> None:
+    """The rule names a prefix, so the constructs it exists for must pass it."""
+    result = parse(f'steps:\n- id: s\n  in:\n    f:\n      {spelling}: e\n', 'spelled.wic')
+    assert Code.RESERVED_KEY not in [d.code for d in result.diagnostics], spelling
+
+
 @pytest.mark.fast
 def test_a_collection_key_is_not_quoted_back_as_a_node_repr() -> None:
     """Only a scalar key is a name the message can offer back.

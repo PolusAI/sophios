@@ -31,6 +31,7 @@ PARSE: Final[dict[Code, str]] = {
     Code.DUPLICATE_KEY: 'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
     Code.RECURSIVE_ALIAS: 'top: &a [*a]\n',
     Code.MISPLACED_EDGE_DEF: 'top: !& e\n',
+    Code.RESERVED_KEY: 'steps:\n- id: s\n  in:\n    f:\n      wic_inline_inpt: 1\n',
 }
 
 #: Codes provoked through the compiler or its helpers. Callables raise
