@@ -30,14 +30,14 @@ manufactured document is in the desugared spelling, which §6.1 says the parser
 accepts equally. That is what makes dumping one and parsing it a fair test
 rather than a round-trip through a lossy form.
 
-**REMAINING BLIND SPOT, from that same fact.** The desugared spelling has no
-tags, so the unknown-tag rule cannot fire here. Input position is now closed:
-a single-key mapping such as `{'wic_not_a_thing': 1}` is reported as a
-misspelled construct. Outside construct position, however, `wic_`-prefixed keys
-remain passthrough by design, because §1 says that vocabulary is open. What this
-test catches is structure: a step in the removed single-key form, a step with
-no `id`, a malformed `wic:` sidecar, and a misspelled desugared construct in
-input position. It does not reserve the prefix in passthrough data.
+**Construct coverage.** The desugared spelling has no tags, but each construct
+position is closed explicitly. In input position, a single-key mapping such as
+`{'wic_not_a_thing': 1}` is reported as a misspelled construct, while a
+correctly spelled `wic_anchor` is reported as misplaced. In `out:`, a mapping
+value must be `!&` or `wic_anchor`; every other shape is reported. Manufactured
+inline-input and anchoring mistakes therefore cannot pass silently. A
+`wic_`-prefixed key elsewhere remains ordinary passthrough by design, because
+§1 says that vocabulary is open; it is not interpreted as a construct attempt.
 """
 import ast as pyast
 import importlib
