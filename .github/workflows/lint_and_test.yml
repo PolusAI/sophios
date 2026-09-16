@@ -268,6 +268,15 @@ jobs:
         timeout-minutes: 20
         run: cd sophios/ && pytest tests/core/test_canonical_emission.py
 
+      # The Python API surfaces that used to be example scripts nothing executed:
+      # `search_paths_wic` reaches the corpus repositories and docs/tutorials,
+      # and docs/tutorials holds no .py files, so the "Generate Sophios Python
+      # API Workflows" step above never touched examples/. Compile-only — no
+      # container, no runner, no network — and about a second in total.
+      - name: PyTest Example Surfaces
+        if: always()
+        run: cd sophios/ && pytest tests/core/test_example_scripts.py
+
       # design_docs/core-refactor-design.md, Spec 2: the fast contracts for the
       # weekly benchmark harness. Its own step because importing it imports
       # tests/core/wic_corpus.py, which reads the config and walks

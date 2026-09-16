@@ -46,11 +46,11 @@
     {
       "id": "multistep1_toJson_pyapi_py__step__2__append",
       "in": {
-        "file": {
-          "source": "multistep1_toJson_pyapi_py__step__1__touch/file"
-        },
         "str": {
           "source": "multistep1_toJson_pyapi_py__step__2__append___str"
+        },
+        "file": {
+          "source": "multistep1_toJson_pyapi_py__step__1__touch/file"
         }
       },
       "out": [
@@ -141,7 +141,8 @@
   "cwlVersion": "v1.2",
   "class": "Workflow",
   "$namespaces": {
-    "edam": "https://edamontology.org/"
+    "edam": "https://edamontology.org/",
+    "sophios": "https://github.com/PolusAI/sophios#"
   },
   "$schemas": [
     "https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl"
@@ -167,5 +168,6 @@
       "type": "string",
       "outputSource": "multistep1_toJson_pyapi_py__step__3__cat/output"
     }
-  }
+  },
+  "sophios:lang_version": "0.0.1"
 }

@@ -467,14 +467,17 @@ generated CWL. Scatter changes the shape of values. Conditionals can make
 outputs nullable. Both affect downstream type compatibility and runtime
 behavior.
 
-The current lightweight `when_pyapi.py` example runs locally, but CWL correctly
-warns that outputs from conditional steps may be `null`. That warning is
-expected: conditional execution changes the output type contract.
+A conditional step compiles, but CWL correctly warns that its outputs may be
+`null`. That warning is expected: conditional execution changes the output type
+contract.
 
-The lightweight `scatter_pyapi.py` example uses a CWL `Any` output because the
-array-producing tool is intentionally generic. Sophios treats `Any` as
-permissive for explicit Python bindings while keeping compiler edge inference
-conservative.
+Scattering over a generically typed tool yields a CWL `Any` output. Sophios
+treats `Any` as permissive for explicit Python bindings while keeping compiler
+edge inference conservative.
+
+Both surfaces are pinned by `tests/core/test_example_scripts.py`, which
+compiles them and asserts the emitted `when`, `scatter` and `scatterMethod`
+keys.
 
 ## Generated Files
 
@@ -520,16 +523,17 @@ The following examples are intended to be quick to read and quick to run:
 
 - `examples/scripts/helloworld_pyapi.py`: minimal Python workflow.
 - `examples/scripts/multistep1_pyapi.py`: step-to-step file flow.
-- `examples/scripts/multistep1_toJson_pyapi.py`: in-memory compiled workflow JSON.
 - `examples/scripts/multistep_runner_pyapi.py`: local runner selection for a multistep workflow.
 - `examples/scripts/reusable_interface_pyapi.py`: reusable workflow interface example.
-- `examples/scripts/scatter_pyapi.py`: scatter over array-valued bindings.
-- `examples/scripts/when_pyapi.py`: conditional execution.
 - `examples/scripts/tool_builder_workflow.py`: generated CLTs composed in memory.
 - `examples/scripts/compute_request_workflow.py`: Python workflow to validated compute request.
 
 The Ichnaea and SAM3 walkthroughs are larger, production-oriented examples with
 heavier runtime assumptions.
+
+Conditional execution, single-input scatter and the compiled-JSON comparison
+were example scripts that nothing ran; they are now
+`tests/core/test_example_scripts.py`, which compiles each one on every change.
 
 ## Next Steps
 
