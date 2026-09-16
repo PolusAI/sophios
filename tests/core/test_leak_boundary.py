@@ -271,6 +271,7 @@ cwl_passthrough = st.fixed_dictionaries(
 )
 
 
+@pytest.mark.needs_cwltool
 @pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 # Ten examples, not the shared hundred: `cwl_passthrough` varies only in which

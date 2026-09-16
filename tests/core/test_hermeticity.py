@@ -168,6 +168,7 @@ def test_the_scan_fires_on_a_deliberate_crossing(tmp_path: Path) -> None:
                                           (seed, 'sophios.plugins')]
 
 
+@pytest.mark.needs_cwltool
 @pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @pytest.mark.parametrize('stem', STEMS)

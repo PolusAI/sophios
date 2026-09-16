@@ -165,6 +165,7 @@ def test_the_python_api_surfaces_the_version() -> None:
     assert compiled.cwl_workflow[ANNOTATION_KEY] == LANG_VERSION
 
 
+@pytest.mark.needs_cwltool
 @pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 def test_annotation_is_declared_and_the_cwl_stays_valid() -> None:

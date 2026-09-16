@@ -226,6 +226,7 @@ def test_the_two_front_ends_compile_to_the_same_cwl(spec: _PathSpec) -> None:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.needs_cwltool
 @pytest.mark.slow
 def test_cwltool_validate_rejects_an_invalid_document() -> None:
     """Tautology guard for P36: `cwltool` must be able to say no, or a 0 from
@@ -241,6 +242,7 @@ def test_cwltool_validate_rejects_an_invalid_document() -> None:
         assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 1
 
 
+@pytest.mark.needs_cwltool
 @pytest.mark.slow
 @given(strat.workflows())
 # Ten examples, not the suite's usual hundred: `workflows()`'s shape space is

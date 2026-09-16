@@ -235,6 +235,28 @@ def _test_files() -> list[Path]:
     return sorted((REPO_ROOT / 'tests').rglob('test_*.py'))
 
 
+def _tests_importing(module: str, path: Path) -> set[str]:
+    """Every `test_*` function in `path` whose own body imports `module`.
+
+    The imports this looks for are deliberately function-local — cwltool is
+    expensive to import, so these tests pay for it only when they run. That
+    also means a module-level scan would not find them.
+    """
+    source = path.read_text(encoding='utf-8')
+    if f'import {module}' not in source:
+        return set()
+    tree = ast.parse(source, str(path))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name.startswith('test_')):
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Import) and any(a.name.split('.')[0] == module for a in inner.names):
+                found.add(node.name)
+    return found
+
+
 @pytest.mark.fast
 def test_the_census_sees_the_repo() -> None:
     """Zero files, or a packaging lane that excludes nothing, is a green test
@@ -346,3 +368,29 @@ def test_a_path_that_does_not_resolve_raises_rather_than_vanishing() -> None:
     assert _paths_of(['tests/core/test_ci_coverage.py::test_x']) == ['tests/core/test_ci_coverage.py::test_x']
     with pytest.raises(ValueError, match='does not exist'):
         _paths_of(['tests/core/no_such_file.py'])
+
+
+@pytest.mark.fast
+def test_every_cwltool_test_declares_that_it_needs_cwltool() -> None:
+    """A test that calls cwltool must say so, because cwltool is POSIX-only.
+
+    `import cwltool.main` pulls in spython, which imports `pwd` at module
+    scope. On Windows that is a `ModuleNotFoundError`, so such a test fails
+    wherever a lane names it on that matrix leg — which is how ten of them
+    reddened `lint_and_test` the first time a step collected them.
+
+    `conftest.py` skips `needs_cwltool` off POSIX. That only works for tests
+    that carry the marker, so the marker is what this pins: the platform fact
+    has one home, and forgetting to point at it is a failure here rather than
+    on one leg of a matrix.
+    """
+    undeclared = [
+        f'{path.relative_to(REPO_ROOT).as_posix()}::{test}'
+        for path in _test_files()
+        for test in sorted(_tests_importing('cwltool', path))
+        if 'needs_cwltool' not in _marked_tests(path).get(test, frozenset())
+    ]
+    assert not undeclared, (
+        'these tests import cwltool but do not carry @pytest.mark.needs_cwltool, so nothing '
+        'skips them where cwltool cannot be imported:\n  ' + '\n  '.join(undeclared)
+    )
