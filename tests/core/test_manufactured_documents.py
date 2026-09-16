@@ -128,7 +128,7 @@ UNREACHED: Final[dict[str, str]] = {
 }
 
 
-def _qualified(tree: pyast.Module, node: pyast.AST, parents: dict[pyast.AST, pyast.AST]) -> str:
+def _qualified(node: pyast.AST, parents: dict[pyast.AST, pyast.AST]) -> str:
     """The dotted name of the function or class enclosing `node`."""
     names: list[str] = []
     current = parents.get(node)
@@ -173,7 +173,7 @@ def _scan_for_sites() -> dict[str, list[int]]:
             else:
                 continue
             if hit:
-                key = f'{path.relative_to(SOURCE).as_posix()}::{_qualified(tree, node, parents)}'
+                key = f'{path.relative_to(SOURCE).as_posix()}::{_qualified(node, parents)}'
                 found.setdefault(key, []).append(node.lineno)
     return found
 
