@@ -86,8 +86,48 @@ def test_the_scan_can_actually_fail() -> None:
     assert _patches_argv(ast.parse("import sys\nsys.argv = ['x']"))
 
 
+def _argparse_aliases(tree: ast.AST) -> set[str]:
+    """Every spelling that means `argparse.Namespace` in this module.
+
+    Resolved from the imports rather than assumed, because the name alone does
+    not identify the type: sophios has `Namespaces` for workflow namespaces and
+    `sophios.ir.Namespace` for a step's place in the nesting, and neither is a
+    CLI type. Matching a bare name would flag those and would still miss an
+    `as` alias.
+
+    Args:
+        tree (ast.AST): The parsed module.
+
+    Returns:
+        set[str]: Annotation spellings that denote an `argparse.Namespace`.
+    """
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        match node:
+            case ast.Import(names=names):
+                for alias in names:
+                    if alias.name == 'argparse':
+                        aliases.add(f'{alias.asname or "argparse"}.Namespace')
+            case ast.ImportFrom(module='argparse', names=names):
+                for alias in names:
+                    if alias.name == 'Namespace':
+                        aliases.add(alias.asname or 'Namespace')
+    return aliases
+
+
 def _namespace_parameters(tree: ast.AST) -> list[tuple[int, str]]:
-    """Functions that accept an `argparse.Namespace`, by line and name."""
+    """Functions that accept an `argparse.Namespace`, by line and name.
+
+    Args:
+        tree (ast.AST): The parsed module.
+
+    Returns:
+        list[tuple[int, str]]: Line and name of each offending function.
+    """
+    aliases = _argparse_aliases(tree)
+    if not aliases:
+        return []
+    pattern = '|'.join(re.escape(name) for name in sorted(aliases))
     found: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -95,9 +135,7 @@ def _namespace_parameters(tree: ast.AST) -> list[tuple[int, str]]:
         arguments = node.args
         for argument in (*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs):
             annotation = ast.unparse(argument.annotation) if argument.annotation else ''
-            # Word-bounded: sophios has its own `Namespaces` type for workflow
-            # namespaces, and a substring test flags every compiler function.
-            if re.search(r'\bNamespace\b', annotation):
+            if re.search(rf'(?<![\w.])({pattern})\b', annotation):
                 found.append((node.lineno, node.name))
     return found
 
@@ -155,9 +193,21 @@ def test_the_compile_helper_takes_settings_not_arguments() -> None:
 
 @pytest.mark.fast
 def test_the_namespace_scan_can_actually_fail() -> None:
-    """The signature scan sees both spellings it claims to."""
-    assert _namespace_parameters(ast.parse('def f(args: argparse.Namespace) -> None: ...'))
-    assert _namespace_parameters(ast.parse('def f(*, args: Namespace | None = None) -> None: ...'))
+    """The signature scan sees every spelling it claims to, and only those.
+
+    The negative cases are the point. Matching a bare `Namespace` flags
+    sophios' own type of that name and reports a CLI leak in a module that
+    imports no CLI; matching one fixed spelling misses an `as` alias. Both
+    have been true of this scan.
+    """
+    assert _namespace_parameters(ast.parse(
+        'import argparse\ndef f(args: argparse.Namespace) -> None: ...'))
+    assert _namespace_parameters(ast.parse(
+        'from argparse import Namespace\ndef f(*, args: Namespace | None = None) -> None: ...'))
+    assert _namespace_parameters(ast.parse(
+        'from argparse import Namespace as Ns\ndef f(args: Ns) -> None: ...'))
+    assert not _namespace_parameters(ast.parse(
+        'from sophios.ir import Namespace\ndef f(ns: Namespace) -> None: ...'))
     assert not _namespace_parameters(ast.parse('def f(options: CompilerOptions) -> None: ...'))
 
 
