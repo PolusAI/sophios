@@ -2153,6 +2153,27 @@ def test_rejects_every_unconsumed_subworkflow_field() -> None:
 
 
 @pytest.mark.fast
+def test_rejects_unconsumed_subworkflow_port_fields() -> None:
+    child = _child_document(
+        inputs={"source": {"type": "File", "secondaryFiles": [".fai"]}},
+        outputs={
+            "inner_result": {
+                "type": "File",
+                "outputSource": "INNER/result",
+                "pickValue": "first_non_null",
+            }
+        },
+    )
+
+    assert _findings(_nested_rose(child=child)) == [
+        "steps[0].run.inputs.source.secondaryFiles: secondaryFiles is not consumed by "
+        "Nextflow Phase 1 lowering",
+        "steps[0].run.outputs.inner_result.pickValue: pickValue is not consumed by "
+        "Nextflow Phase 1 lowering",
+    ]
+
+
+@pytest.mark.fast
 def test_composition_findings_aggregate_across_nested_steps() -> None:
     """Composition analysis reports every nested step before the flat graph is built."""
     rose = synthetic_rose(

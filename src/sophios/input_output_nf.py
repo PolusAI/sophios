@@ -310,6 +310,18 @@ def _workflow_input_sink(
 
 def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> str:
     connection, port = _workflow_input_sink(workflow, name)
+    scattered_processes = {
+        candidate.to_process
+        for candidate in workflow.connections
+        if isinstance(candidate, NfWorkflowInputConnection)
+        and candidate.adapter == "scatter"
+    }
+    feeds_scattered_process = any(
+        isinstance(candidate, NfWorkflowInputConnection)
+        and candidate.from_port == name
+        and candidate.to_process in scattered_processes
+        for candidate in workflow.connections
+    )
     # A scatter-adapted parameter carries the whole source array; the graph
     # validator keeps every sink of one parameter in agreement, so one sink
     # decides the construction for all of them.
@@ -324,6 +336,13 @@ def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> st
                 f"Channel.value(params.{name}.collect {{ entry -> file("
                 f"entry instanceof Map ? entry.path : entry, "
                 f"checkIfExists: true, type: '{path_type}') }})"
+            )
+        if feeds_scattered_process:
+            # A one-element queue pairs with only the first scatter task. A
+            # value channel broadcasts the same staged path to every task.
+            return (
+                f"Channel.value(file(params.{name} instanceof Map ? params.{name}.path : "
+                f"params.{name}, checkIfExists: true, type: '{path_type}'))"
             )
         return (
             f"Channel.fromPath(params.{name} instanceof Map ? params.{name}.path : "

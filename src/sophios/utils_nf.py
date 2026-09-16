@@ -1782,6 +1782,26 @@ def _flatten_subworkflows(
         if not isinstance(inputs, Mapping):
             findings.append(f"{path}.run.inputs: compiled CWL Workflow inputs must be a mapping")
             continue
+        for raw_name, definition in inputs.items():
+            if isinstance(definition, Mapping):
+                findings.extend(
+                    _unconsumed_field_findings(
+                        definition,
+                        consumed=_WORKFLOW_INPUT_CONSUMED_FIELDS,
+                        path=f"{path}.run.inputs.{raw_name}",
+                    )
+                )
+        outputs = document.get("outputs", {})
+        if isinstance(outputs, Mapping):
+            for raw_name, definition in outputs.items():
+                if isinstance(definition, Mapping):
+                    findings.extend(
+                        _unconsumed_field_findings(
+                            definition,
+                            consumed=_WORKFLOW_OUTPUT_CONSUMED_FIELDS,
+                            path=f"{path}.run.outputs.{raw_name}",
+                        )
+                    )
         bindings, binding_findings = _subworkflow_bindings(step, inputs, path=path)
         findings.extend(binding_findings)
         try:

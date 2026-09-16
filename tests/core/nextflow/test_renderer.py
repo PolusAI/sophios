@@ -169,6 +169,31 @@ def test_path_parameter_rendering_is_runtime_shape_independent() -> None:
 
 
 @pytest.mark.serial
+def test_scalar_path_parameter_broadcasts_to_every_scatter_task() -> None:
+    process = NfProcess(
+        "READ",
+        [NfPort("item", "val"), NfPort("source", "path")],
+        [],
+        command("true"),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [
+            NfWorkflowInputConnection("items", "READ", "item", "scatter"),
+            NfWorkflowInputConnection("source", "READ", "source"),
+        ],
+        {"items": ["a", "b"], "source": "input.txt"},
+    ))
+
+    assert (
+        "Channel.value(file(params.source instanceof Map ? params.source.path : "
+        "params.source, checkIfExists: true, type: 'file'))"
+    ) in rendered
+    assert "Channel.fromPath(params.source" not in rendered
+
+
+@pytest.mark.serial
 def test_renders_boolean_flag_as_a_conditional_argv_word() -> None:
     process = NfProcess(
         "SORT",

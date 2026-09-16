@@ -1159,3 +1159,38 @@ def test_a_scattered_step_broadcasts_its_unscattered_inputs(tmp_path: Path) -> N
         path.read_text(encoding="utf-8") for path in (tmp_path / "work").rglob("out.txt")
     )
     assert outputs == ["alpha shared\n", "beta shared\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_a_scattered_step_broadcasts_an_unscattered_file_input(tmp_path: Path) -> None:
+    """R2.17 File variant: one staged path value reaches every scatter task."""
+    reference = tmp_path / "reference.txt"
+    reference.write_text("shared file\n", encoding="utf-8")
+    process = NfProcess(
+        "COPY",
+        [NfPort("item", "val"), NfPort("reference", "path")],
+        [output_port("result", "copy.txt")],
+        command("cp", template(ref("reference")), "copy.txt"),
+    )
+    workflow = ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [process],
+        [
+            NfWorkflowInputConnection("items", "COPY", "item", "scatter"),
+            NfWorkflowInputConnection("reference", "COPY", "reference"),
+            NfWorkflowOutputConnection("COPY", "result", "copies"),
+        ],
+        {
+            "items": ["alpha", "beta"],
+            "reference": {"class": "File", "path": str(reference)},
+        },
+    )
+
+    result = run_nextflow(workflow, tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    copies = list((tmp_path / "work").rglob("copy.txt"))
+    assert [path.read_text(encoding="utf-8") for path in copies] == [
+        "shared file\n",
+        "shared file\n",
+    ]
