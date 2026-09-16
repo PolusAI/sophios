@@ -20,6 +20,7 @@ NO_CWLTOOL = sys.platform == 'win32'
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register the `--cwl_runner` choice on the pytest command line."""
     parser.addoption('--cwl_runner', type=str, required=False, default='cwltool',
                      choices=['cwltool', 'toil-cwl-runner'],
                      help='The CWL runner to use for running workflows locally.')
@@ -27,6 +28,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 @pytest.fixture
 def cwl_runner(request: pytest.FixtureRequest) -> Any:
+    """The CWL runner the suite was invoked with."""
     return request.config.getoption("--cwl_runner")
 
 

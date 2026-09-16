@@ -113,7 +113,7 @@ jobs:
         # script that generated has already put its files on disk. Only the
         # manifest is skipped, and this job never reads it.
         continue-on-error: true
-        run: cd sophios/ && pytest tests/core/test_python_api.py -k test_compile_python_workflows
+        run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k test_compile_python_workflows
 
       - name: Prove the job stays green (dispatch-only)
         if: inputs.prove_non_gating == 'true'

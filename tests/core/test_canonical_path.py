@@ -268,7 +268,7 @@ def test_compute_request_builds_and_validates_every_compiled_workflow(yml: Yaml)
     `CompiledWorkflow`, for everything this oracle compiles.
 
     Constructor keyword names and dumped-payload key names come from
-    `test_python_api.test_compute_request_accepts_compiled_python_workflow`,
+    `test_python_api_workflow.test_compute_request_accepts_compiled_python_workflow`,
     not from invention here. No network: `to_mapping()`/`to_json()` build and
     validate entirely locally, against the checked-in schema
     (`ComputeRequest`'s own `_validate_compute_request`, which raises

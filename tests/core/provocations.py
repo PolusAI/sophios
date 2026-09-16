@@ -70,6 +70,7 @@ def _provoke_subworkflow_invalid() -> None:
 
     class _RefusesEverything:  # pylint: disable=too-few-public-methods
         def validate(self, _tree: object) -> None:
+            """Accept any tree: this stands in for a validator the caller must supply."""
             raise ValueError('provoked')
 
     tree = YamlTree(StepId('provoke.wic', 'global'), {'steps': [{'id': 's'}]})

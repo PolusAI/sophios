@@ -2,6 +2,7 @@ from sophios.runtime_inputs import normalize_job_inputs
 
 
 def test_normalize_job_inputs_uses_concrete_file_format() -> None:
+    """A concrete `format` on the tool reaches the normalized job inputs."""
     job_inputs = {
         "ligand": {
             "class": "File",
@@ -31,6 +32,7 @@ def test_normalize_job_inputs_uses_concrete_file_format() -> None:
 
 
 def test_normalize_job_inputs_uses_edam_pdbqt_format() -> None:
+    """An EDAM format is resolved to its full IRI rather than left as a prefix."""
     job_inputs = {
         "ligand": {
             "class": "File",
@@ -48,6 +50,10 @@ def test_normalize_job_inputs_uses_edam_pdbqt_format() -> None:
 
 
 def test_normalize_job_inputs_removes_unresolved_format_list() -> None:
+    """A `format` that is still a list of candidates is dropped, not guessed at.
+
+    A runner treats `format` as a claim; emitting an unresolved one would
+    assert something the compiler could not determine."""
     job_inputs = {
         "ligand": {
             "class": "File",

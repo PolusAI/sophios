@@ -25,12 +25,24 @@ from sophios.api.python.workflow import Step
 
 @pytest.mark.fast
 def test_old_tool_builder_module_name_is_not_available() -> None:
+    """The pre-rename module path is gone, not aliased.
+
+    An alias left behind keeps client code working and keeps two names for one
+    thing in circulation; the import must fail so the rename is visible.
+    """
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("sophios.api.python." + "cwl" + "_builder")
 
 
 @pytest.mark.fast
 def test_tool_builder_does_not_export_duplicate_aliases() -> None:
+    """Each construct has one public name.
+
+    These five were second spellings of things `cwl.array`, `cwl.enum`,
+    `cwl.record`, `Field` and `Step` already express. Checked against `__all__`
+    as well as the module, since a name absent from one and present in the
+    other is still importable.
+    """
     for removed_name in (
         "array_type",
         "enum_type",
@@ -43,6 +55,13 @@ def test_tool_builder_does_not_export_duplicate_aliases() -> None:
 
 
 def _rich_tool() -> CommandLineTool:
+    """A tool exercising every builder method that reaches the document.
+
+    Returns:
+        CommandLineTool: A tool whose emitted CWL carries each requirement,
+            hint and binding the surface can produce, so one assertion block
+            covers the whole serialization surface.
+    """
     mode_type = cwl.enum("fast", "accurate", name="Mode")
     settings_type = cwl.record(
         Fields(
@@ -86,6 +105,11 @@ def _rich_tool() -> CommandLineTool:
 
 @pytest.mark.fast
 def test_tool_builder_requires_structural_core() -> None:
+    """Inputs and outputs are positional, not optional.
+
+    A tool without them serializes to a document CWL rejects, so the failure
+    belongs at construction rather than at validation.
+    """
     constructor = cast(Any, CommandLineTool)
     with pytest.raises(TypeError):
         constructor("missing-inputs")
@@ -93,6 +117,12 @@ def test_tool_builder_requires_structural_core() -> None:
 
 @pytest.mark.fast
 def test_command_line_tool_constructor_hides_internal_fields() -> None:
+    """The constructor signature is the public surface, and nothing else.
+
+    Asserted on the signature rather than on behaviour: an internal field
+    accepted positionally becomes part of the API the moment someone passes it.
+    `cwl_version` is keyword-only so it cannot be given by position.
+    """
     signature = inspect.signature(CommandLineTool)
 
     assert list(signature.parameters) == ["name", "inputs", "outputs", "cwl_version"]
@@ -101,6 +131,11 @@ def test_command_line_tool_constructor_hides_internal_fields() -> None:
 
 @pytest.mark.fast
 def test_tool_builder_names_are_python_identifiers() -> None:
+    """A port name must be usable as an attribute.
+
+    Ports are reached as `inputs.reads`, so a name like `input-file` would
+    build a tool nobody can reference. Rejected where it is written.
+    """
     with pytest.raises(ValueError, match="valid Python identifier"):
         Inputs(**{"input-file": Input(cwl.file)})
 
@@ -110,6 +145,12 @@ def test_tool_builder_names_are_python_identifiers() -> None:
 
 @pytest.mark.fast
 def test_tool_builder_names_reject_namespace_collisions() -> None:
+    """A port may not shadow the container's own API.
+
+    `Inputs` and friends are mappings with methods, so a port called `items` or
+    `to_dict` would make `inputs.items` ambiguous. Leading underscores are
+    reserved for the same reason.
+    """
     with pytest.raises(ValueError, match="reserved"):
         Inputs(items=Input(cwl.file))
 
@@ -125,6 +166,11 @@ def test_tool_builder_names_reject_namespace_collisions() -> None:
 
 @pytest.mark.fast
 def test_structured_port_references_do_not_accept_raw_strings() -> None:
+    """A port reference is the port object, never its name as text.
+
+    A string cannot be checked against the tool it came from, so a typo would
+    survive to the emitted document and fail at runtime. The type is the check.
+    """
     with pytest.raises(TypeError, match="named Input/Output object"):
         Output(cwl.file, from_input="output")
 
@@ -139,6 +185,11 @@ def test_structured_port_references_do_not_accept_raw_strings() -> None:
 
 @pytest.mark.fast
 def test_tool_builder_covers_common_clt_surface() -> None:
+    """Every builder method reaches the emitted document.
+
+    One tool, one assertion block: a method that silently dropped its argument
+    would otherwise pass every test that never inspects the document.
+    """
     tool = _rich_tool().to_cwl_document()
 
     assert tool["$namespaces"] == {"edam": "https://edamontology.org/"}
@@ -174,6 +225,11 @@ def test_tool_builder_covers_common_clt_surface() -> None:
 
 @pytest.mark.fast
 def test_tool_builder_accepts_raw_extensions() -> None:
+    """Unmodelled CWL can be injected, and says so when it is.
+
+    `extra` is the escape hatch for vendor keys the builder does not model. It
+    warns because content that bypasses the builder also bypasses its checks.
+    """
     tool = CommandLineTool(
         "custom-tool",
         Inputs(message=Input(cwl.string)),
@@ -193,6 +249,12 @@ def test_tool_builder_accepts_raw_extensions() -> None:
 
 @pytest.mark.fast
 def test_tool_builder_rejects_reserved_or_salad_raw_keys() -> None:
+    """The escape hatch may not overwrite the document or the loader.
+
+    Raw injection of `inputs` would silently discard what the builder computed,
+    and a SALAD assembly key like `$import` changes how the document is loaded
+    rather than what it says.
+    """
     tool = CommandLineTool(
         "custom-tool",
         Inputs(message=Input(cwl.string)),
@@ -208,6 +270,12 @@ def test_tool_builder_rejects_reserved_or_salad_raw_keys() -> None:
 
 @pytest.mark.fast
 def test_tool_builder_high_level_helpers_hide_cwl_plumbing() -> None:
+    """The helpers produce the CWL a hand-written tool would.
+
+    `edam`, `gpu`, `stage` and `resources` each stand for a block of requirement
+    plumbing; this pins what each expands to, including that `stage` preserves
+    call order and its `writable` flag per entry.
+    """
     inputs = Inputs(
         input=Input(cwl.directory, position=1).label("Input Zarr dataset").doc("Path to input zarr dataset"),
         output=Input(cwl.directory, position=2).label("Output segmentation Zarr").doc(
@@ -266,6 +334,7 @@ def test_tool_builder_high_level_helpers_hide_cwl_plumbing() -> None:
 
 @pytest.mark.fast
 def test_tool_builder_write_cwl_round_trips_yaml(tmp_path: Path) -> None:
+    """What is written to disk loads back as what was built."""
     tool = _rich_tool()
     output_path = tmp_path / "aligner.cwl"
 
@@ -277,6 +346,7 @@ def test_tool_builder_write_cwl_round_trips_yaml(tmp_path: Path) -> None:
 
 @pytest.mark.fast
 def test_tool_builder_validate_uses_cwltool_stack(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Validation goes through cwltool, in-process and with no subprocess."""
     class FakeRuntimeContext:
         def __init__(self, kwargs: dict[str, object]) -> None:
             self.kwargs = kwargs
@@ -286,6 +356,7 @@ def test_tool_builder_validate_uses_cwltool_stack(monkeypatch: pytest.MonkeyPatc
             self.calls: list[tuple[str, object]] = []
 
         def fetch_document(self, path: str, loading_context: str) -> tuple[str, dict[str, str], str]:
+            """Stand in for cwltool's document fetch, returning a fixed document."""
             self.calls.append(("fetch_document", (Path(path).suffix, loading_context)))
             return loading_context, {"class": "CommandLineTool"}, "file:///aligner.cwl"
 
@@ -296,6 +367,7 @@ def test_tool_builder_validate_uses_cwltool_stack(monkeypatch: pytest.MonkeyPatc
             uri: str,
             preprocess_only: bool = False,
         ) -> tuple[str, str]:
+            """Stand in for cwltool's resolve-and-validate step."""
             self.calls.append(("resolve_and_validate_document", preprocess_only))
             assert loading_context == "prepared-context"
             assert workflowobj == {"class": "CommandLineTool"}
@@ -303,6 +375,7 @@ def test_tool_builder_validate_uses_cwltool_stack(monkeypatch: pytest.MonkeyPatc
             return "validated-context", "file:///validated-aligner.cwl"
 
         def make_tool(self, uri: str, loading_context: str) -> dict[str, str]:
+            """Stand in for cwltool's tool construction."""
             self.calls.append(("make_tool", uri))
             assert loading_context == "validated-context"
             return {"uri": uri, "loading_context": loading_context}
@@ -348,6 +421,11 @@ def test_tool_builder_validate_uses_cwltool_stack(monkeypatch: pytest.MonkeyPatc
 
 @pytest.mark.fast
 def test_tool_builder_converts_to_in_memory_step() -> None:
+    """A built tool becomes a workflow step without a file on disk.
+
+    The bridge is what lets a tool be defined and used in one script, so the
+    step must carry the tool itself rather than a path to it.
+    """
     tool = CommandLineTool(
         "echo_tool",
         Inputs(message=Input(cwl.string, position=1)),

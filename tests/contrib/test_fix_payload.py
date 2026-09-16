@@ -8,7 +8,7 @@ from sophios.contrib.converter import update_payload_missing_inputs_outputs
 
 @pytest.mark.fast
 def test_fix_multi_node_payload() -> None:
-
+    """Missing inputs and outputs are filled in to match the recorded payload."""
     path = pathlib.Path(__file__).parent.resolve()
 
     with open(

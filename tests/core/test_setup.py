@@ -161,6 +161,7 @@ wic_strategy = wic_strategy.filter(wic_yaml_filter_top_level_types)
 
 
 def test_version_resolution_warns_when_package_metadata_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An uninstalled package warns rather than resolving to a wrong version."""
     def missing_version(distribution_name: str) -> str:
         raise PackageNotFoundError(distribution_name)
 

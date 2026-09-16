@@ -125,7 +125,7 @@ def test_two_in_memory_tools_chain_and_keep_their_output_binding() -> None:
 
     No tool is validated: `CommandLineTool.validate()` loads the CWL v1.2 schema
     through cwltool, which is seconds of CI and POSIX-only, and
-    `test_tool_builder.py` already owns that claim.
+    `test_python_api_tool_builder.py` already owns that claim.
     """
     example = REPO_ROOT / 'examples' / 'scripts' / 'tool_builder_workflow.py'
     assert example.is_file(), f'{example} is linked from docs/tool_builder_workflow.md'

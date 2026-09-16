@@ -8,7 +8,7 @@ from sophios.contrib.converter import ict_to_clt
 
 @pytest.mark.fast
 def test_ict_to_clt_label_to_vector_conversion() -> None:
-
+    """`ict_to_clt` reproduces the recorded CLT for the label-to-vector spec."""
     path = pathlib.Path(__file__).parent.resolve()
 
     with open(
@@ -28,7 +28,7 @@ def test_ict_to_clt_label_to_vector_conversion() -> None:
 
 @pytest.mark.fast
 def test_ict_to_clt_ome_conversion() -> None:
-
+    """`ict_to_clt` reproduces the recorded CLT for the OME conversion spec."""
     path = pathlib.Path(__file__).parent.resolve()
 
     with open(
@@ -48,7 +48,7 @@ def test_ict_to_clt_ome_conversion() -> None:
 
 @pytest.mark.fast
 def test_ict_to_clt_czi_extract_conversion() -> None:
-
+    """`ict_to_clt` reproduces the recorded CLT for the CZI extract spec."""
     path = pathlib.Path(__file__).parent.resolve()
 
     with open(path / "data/ict_data/czi_extract/czi_extract_ict.json", "r") as file:

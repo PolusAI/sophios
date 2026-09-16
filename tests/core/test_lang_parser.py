@@ -715,7 +715,7 @@ def test_python_api_emits_documents_this_parser_accepts() -> None:
     from sophios.api.python.workflow import Step as ApiStep
     from sophios.api.python.workflow import Workflow
 
-    from .test_python_api import _adapter
+    from .test_python_api_workflow import _adapter
 
     touch = ApiStep(clt_path=_adapter('touch'))
     touch.inputs.filename = 'empty.txt'
@@ -1004,8 +1004,13 @@ def test_tag_decisions_agree_across_positions(tag: str, shape: str, data: st.Dat
     in_position = parse(f'steps:\n- id: s\n  in:\n    a: {value}\n', 'pos.wic')
     passthrough = parse(f'top: {value}\n', 'pos.wic')
 
-    codes_in = {d.code for d in in_position.diagnostics}
-    codes_through = {d.code for d in passthrough.diagnostics}
+    # `wic024` is deliberately asymmetric and so is not compared: a single-key
+    # mapping beginning `wic_` is a construct attempt where a construct may
+    # appear, and an ordinary CWL key where one may not. Passthrough is open by
+    # definition, so reporting it there would reject documents the language
+    # promises to carry through untouched.
+    codes_in = {d.code for d in in_position.diagnostics} - {Code.RESERVED_KEY}
+    codes_through = {d.code for d in passthrough.diagnostics} - {Code.RESERVED_KEY}
     assert codes_in == codes_through, (
         f'{value!r}: input={sorted(c.value for c in codes_in)}, '
         f'passthrough={sorted(c.value for c in codes_through)}')
