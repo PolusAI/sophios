@@ -1,67 +1,15 @@
-"""Strategies over the Spec 1 AST, and their compilable projection.
+"""Strategies over the language AST, and their compilable projection.
 
-Documents are built as `sophios.lang.nodes` values and then *rendered* to
-source, rather than assembled as dicts. Three reasons, in order of weight:
+Documents are built as `sophios.lang.nodes` values and rendered to source, so
+the space the properties quantify over is the space the types admit rather than
+the space a dict builder imagined. Hypothesis shrinks the AST, so a
+counterexample arrives as a minimal document instead of a minimal string.
 
-  1. The space the properties quantify over is then the space the types admit,
-     by construction, rather than the space a hand-written dict builder
-     happened to imagine. CE-09 was found the first time a generator was
-     derived from a type instead of written beside one.
-  2. Hypothesis shrinks the AST, so a counterexample arrives as a minimal
-     document rather than a minimal string (P27).
-  3. `render` is the writer under test in Spec 1, so every compile-driving
-     property is also, incidentally, a second consumer of it.
-
-The projection goes through the compiler's own loader — `render` then
-`yaml.load(..., Loader=wic_loader())` — and not through some third path, so a
-disagreement between the two front ends is a test failure rather than a
-difference the suite is blind to (CE-02).
-
-Step ids name stems in `synthetic_tools`, and input bindings name that tool's
-real inputs, so a generated document is a workflow the compiler can actually
-resolve rather than a document that fails before reaching anything interesting.
-
-CANNOT GENERATE (declared, per the negative-testing rules): `!cwl` (RawCwlRef)
-— specified but not compilable until the Spec 3 migration, since `wic_loader`
-does not know the tag; `python_script` steps — named with a uuid4, so nothing
-over them is deterministic.
-
-CE-13 (specification/implementation divergence, settled — kept as the worked
-example of what `NOT_YET_COMPILABLE` is for): an `!& name` edge definition
-bound to a step *input* was documented as one of the five input forms (language
-reference §4.1, with no not-yet-usable caveat like `!cwl`'s) but had no handler
-in `compile_workflow_once`'s `in:` match statement (`src/sophios/compiler.py:
-~780` — cases exist for `wic_alias` at 781 and `wic_inline_input` at 896, none
-for `wic_anchor`, which is recognised only in the `out:` walk at ~729). Every
-step input bound that way fell through to the bare-string case, was unhashable
-as a dict, and always raised `Code.UNRESOLVED_INPUT` (`wic011`), regardless of
-what `inputs:` declared. Confirmed at the time by construct-correlated
-measurement (200 documents, derandomized): 100% of `wic011` failures had an
-input-position `EdgeDef` and 0% of non-failing documents did. `documents()`
-went on generating it and `compilable_documents()` filtered it out, rather than
-the generator being trimmed to dodge a compiler gap — that trimming is the
-narrowing the binding constraints forbid. `semrefac_7.1` then settled it as a
-grammar defect: `EdgeDef` left the `InputValue` union, so the construct is a
-*type* error here rather than a document to filter, the `edge_def` row left
-`CONSTRUCTS`, and `NOT_YET_COMPILABLE` is empty. See its comment below for what
-the machinery is still standing for.
-
-WELL-FORMED IS NOT WELL-TYPED: `!ii` places no constraint relating a literal's
-value to the CWL type of the input it binds — nothing in the grammar could,
-since that is a downstream compiler concern — so a document binding e.g. the
-bare string `'0x1f'` or `'_'` to an `int`- or `float`-typed input (`sink.n`,
-`scale.n`, `scale.factor` among the synthetic stems) is well-formed and this
-generator draws it. `generate_yaml_inputs`'s `populate_scalar_val` refuses it
-with a `LITERAL_TYPE_MISMATCH` diagnostic, which is the compiler answering
-correctly, not a defect in either side. Not excluded from
-`compilable_documents()`: unlike CE-13 it is not a single AST-shape predicate
-(it depends on which literal value landed on which typed argument), and the
-measured rate is small enough that the bulk of `compilable_documents()` still
-compiles (see the Task 2 report). `documents()` and `_step` are unchanged for
-this reason on purpose — narrowing `literals` to dodge it would be the same
-move CE-13 already forbids, just aimed at a different finding. A property that
-needs a *successful* compile must skip these draws; see
-`test_equivalences._hits_the_scalar_coercion_gap`.
+The projection runs `render` then `yaml.load(..., Loader=wic_loader())` — the
+compiler's own loader, not a third path — so the two front ends disagreeing is
+a failure rather than a blind spot. Step ids name `synthetic_tools` stems and
+bindings name that tool's real inputs, so what is drawn is a workflow the
+compiler can resolve.
 """
 from typing import Any, Callable, Final, cast
 
@@ -82,10 +30,10 @@ from .synthetic_tools import STEMS, inputs_of, outputs_of, required_inputs_of
 
 #: A span the AST needs and the surface never shows. Generated nodes have no
 #: source, so they all carry the same one; nothing downstream reads it, and a
-#: property about spans belongs to Spec 1 where real positions exist.
+#: property about spans belongs to the parser, where real positions exist.
 _SPAN: Final = SourceSpan('<generated>', 1, 1, 1, 1)
 
-#: The construct kinds P26 enumerates. Derived from the reference's tables
+#: The construct kinds the coverage property enumerates. Derived from the reference's tables
 #: (§3.1 surface forms, §3.3 outputs, §4.1 input forms, §4.3 interpreted keys,
 #: §5 the sidecar) rather than from the strategy below, so a construct the
 #: strategy stops producing is a failure instead of a silent narrowing.
@@ -101,7 +49,7 @@ CONSTRUCTS: Final[tuple[str, ...]] = (
 
 
 def constructs_in(document: Document) -> frozenset[str]:
-    """Which construct kinds a document contains. One place, so P26 and the
+    """Which construct kinds a document contains. One place, so the coverage property and the
     strategy cannot drift apart on what a construct is."""
     # pylint: disable=too-many-branches  # one branch per construct kind, by design
     found = {'steps_mapping' if document.steps_as_mapping else 'steps_sequence'}
@@ -187,7 +135,7 @@ def _fresh_edge(draw: st.DrawFn, defined_edges: list[tuple[str, Any]], carries: 
 #: reference are drawn from one list, and `documents()` declares whatever any
 #: step referenced. Without this the strategy could not produce an
 #: `UnresolvedName` at all, and the `unresolved_name` row of CONSTRUCTS would
-#: be a construct P26 demands and nothing supplies.
+#: be a construct the coverage property demands and nothing supplies.
 declared_inputs: Final[tuple[tuple[str, Any], ...]] = (
     ('wf_name', 'string'),
     ('wf_count', 'int'),
@@ -210,7 +158,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
     """One tool step: real stem, real input names, a subset of them bound.
 
     Leaving a required input unbound is deliberate and load-bearing — it is
-    the only way an *inferred* edge exists, which is what P32 is about.
+    the only way an *inferred* edge exists, which is what edge type-compatibility is about.
 
     The stem is passed in rather than drawn here. `documents()` has to know
     every stem before any step is built, because mapping form cannot repeat one
@@ -294,7 +242,17 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
 
 @st.composite
 def documents(draw: st.DrawFn) -> Document:
-    """A well-formed, compilable Sophios document.
+    """A well-formed Sophios document, over the whole language.
+
+    CANNOT GENERATE (declared): `!cwl`, which `wic_loader` does not know until
+    the IR migration; `python_script` steps, whose tool name is a uuid4 and so
+    is never deterministic.
+
+    Well-formed is not well-typed. `!ii` places no constraint relating a
+    literal to the CWL type of the input it binds — nothing in the grammar
+    could, since that is a downstream concern — so a document binding `'_'` to
+    an `int`-typed input is drawn here and the compiler refuses it with
+    `wic020`. That is the compiler answering correctly, not a defect.
 
     Both step surface forms, because mapping form and sequence form were once
     two languages to a generator that only spelled one. Mapping form cannot
@@ -368,7 +326,7 @@ def documents(draw: st.DrawFn) -> Document:
 #:
 #: The companion is `test_the_compilable_subset_still_reaches_every_construct_
 #: it_does_not_exclude` in `test_generators.py`. It holds the *filter* to the
-#: standard P26 holds the generator to: a construct `compilable_documents()`
+#: standard construct coverage holds the generator to: a construct `compilable_documents()`
 #: stops reaching turns that test red, so an exclusion cannot quietly cost a
 #: construct. Deliberately not a per-entry "this still fails to compile" check
 #: — that shape is vacuous whenever the mapping is empty, which is exactly when
@@ -383,17 +341,14 @@ def documents(draw: st.DrawFn) -> Document:
 #: name the exclusion, not a `CONSTRUCTS` row: the one entry this ever held was
 #: `edge_def_in_input`, an AST *shape* narrower than any single construct.
 #:
-#: Empty — and that is the mechanism working, not a gap. It held exactly one
-#: entry: CE-13's `!&` bound to a step input, which the compiler rejected with
-#: wic011 because its `in:` match had no `wic_anchor` case. `semrefac_7.1`
-#: settled that as a grammar defect instead of a compiler gap: `EdgeDef` left
-#: the `InputValue` union, so the construct is now a *type* error here rather
-#: than a document this generator can build and then filter out. mypy is what
-#: reported the expiry, at the line that used to build it.
+#: Empty — and that is the mechanism working, not a gap. Its one entry was an
+#: `!&` edge definition bound to a step *input*; that is now a type error,
+#: because `EdgeDef` is not a member of the `InputValue` union, so the
+#: construct cannot be built here to be filtered out.
 #:
 #: The machinery stays because the next pending construct is already named:
-#: `!cwl` is specified, parsed, and not compilable until the Spec 3 migration
-#: wires Parse into the pipeline.
+#: `!cwl` is specified and parsed, and is not compilable until the front end is
+#: wired into the pipeline.
 NOT_YET_COMPILABLE: Final[dict[str, str]] = {}
 
 #: One predicate per `NOT_YET_COMPILABLE` entry, keyed identically. Separate
@@ -410,10 +365,19 @@ assert NOT_YET_COMPILABLE.keys() == _EXCLUSION_PREDICATES.keys(), (
 def compilable_documents() -> SearchStrategy[Document]:
     """`documents()`, minus the constructs `NOT_YET_COMPILABLE` names.
 
+    A property comparing two compilations cannot use a document that does not
+    compile, so the compile-driving properties quantify over this. The
+    parse-level ones keep `documents()` — the whole language, unfiltered.
+
+    The ill-typed draws above are *not* excluded: an exclusion here is a single
+    AST-shape predicate, and whether a literal fits its argument depends on
+    which value met which input. A property needing a successful compile skips
+    those draws instead; see `_hits_the_scalar_coercion_gap`.
+
     The strategy Tasks 3-7 need: partition independence and the other
     compile-driving properties cannot compare two compilations of a document
     that does not compile, so they quantify over this, not over `documents()`
-    itself. `CONSTRUCTS`/P26 and the parse-level properties still use
+    itself. `CONSTRUCTS` and the parse-level properties still use
     `documents()` — the whole language, unfiltered — so this function's
     narrowing is not the narrowing the binding constraints forbid; it is the
     generator drawing a line between "the language" and "what Tasks 3-7 can

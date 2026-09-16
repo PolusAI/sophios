@@ -1,43 +1,21 @@
-"""T2.6: the canonical path.
+"""The canonical path: two front ends, real CWL, a submittable payload.
 
-Four claims, each delivering one piece of the design doc's compatibility
-contract:
+Four claims about the compatibility contract the two front ends advertise:
 
-  * **P35, path agreement.** A workflow built through the Python API and
-    compiled directly must equal the same workflow written with `write_wic`
-    and compiled from the file. "Two front ends under one name" is the shape
-    a past counterexample had — a `.wic` document and a Python-API-built
-    workflow that describe the same DAG must reach the same compiled CWL, or
-    the compatibility contract the two front ends advertise is false.
-  * **P36, CWL validity.** Compiled output validates under `cwltool`, checked
-    in-process and at ten examples rather than the suite's usual hundred —
-    see `test_compiled_output_validates_as_cwl`'s own docstring for why.
-  * **P36a, compute-payload conformance.** `ComputeRequest` builds and
-    validates its own payload from a `CompiledWorkflow`, for everything this
-    oracle compiles. No network: build and validate, never submit.
-  * **Passthrough fidelity, re-quantified.** `test_leak_boundary.py`'s
-    passthrough properties quantify over one-step workflows carrying one key,
-    so `maybe_add_requirements` never fires there and a step that scatters
-    beside its own passthrough is unreachable by that generator.
-    `ast_strategies.freighted_documents` forces exactly that shape.
+  * **Path agreement.** A workflow built through the Python API and compiled
+    directly must equal the same workflow written with `write_wic` and
+    compiled from the file. Two spellings of one DAG, one compiled result.
+  * **CWL validity.** Compiled output validates under `cwltool`, in-process.
+  * **Compute-payload conformance.** `ComputeRequest` builds and validates its
+    own payload. No network: build and validate, never submit.
+  * **Passthrough fidelity over workflows the narrower generators miss** — a
+    step that scatters beside its own passthrough, which one-step documents
+    cannot express.
 
-CE-16, closed. Direct compilation requested concrete workflow-output step ids,
-while `write_wic()` omitted the flag and serialized the user-facing step name.
-The compiler consumes explicit `outputSource` values verbatim, so the two paths
-disagreed. The shared document builder always emits the concrete spelling —
-there is no flag and no default to select the other one; the strict expected
-failure turned green and was removed.
-
-Nothing here is `skip_pypi_ci`. No CI job names this file, so that marker is
-not "excluded from one lane" but "run nowhere": the only job reaching it is
-`build_wheel.yml`'s default collection, which is exactly `-m "not
-skip_pypi_ci"`. The `cwltool --validate` cases carry no marker for the reason
-the exclusion exists elsewhere — `cwltool` is a hard dependency, `--validate`
-is in-process, and neither case pulls or runs a container.
-
-P25 covers this module both statically and under poisoned plugin discovery.
-The passthrough alphabets live in `ast_strategies`, their environment-free
-owner, so importing them here does not pull in the corpus compile harness.
+Nothing here is `skip_pypi_ci`, and no job names this file, so that marker
+would mean "runs nowhere" rather than "excluded from one lane". The
+`cwltool --validate` cases carry none: `cwltool` is a hard dependency,
+`--validate` is in-process, and no case pulls or runs a container.
 """
 import json
 import tempfile
@@ -68,7 +46,7 @@ from .hermetic import ORACLE, PARTITION, compile_hermetic, compile_hermetic_cwl
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 
 # --------------------------------------------------------------------------
-# P35: path agreement
+# Path agreement
 # --------------------------------------------------------------------------
 
 
@@ -142,7 +120,7 @@ def _compile_from_document(document: Yaml, name: str) -> CompilerInfo:
 
 @pytest.mark.fast
 def test_the_written_wic_file_is_a_real_independent_document() -> None:
-    """Tautology guard for P35.
+    """Tautology guard for path agreement.
 
     "A test whose assertion is guaranteed true by something other than the
     thing it names is not a test": without this, the path-agreement property
@@ -184,7 +162,7 @@ def _path_specs(draw: st.DrawFn) -> _PathSpec:
 @given(_path_specs())
 @PARTITION
 def test_the_two_front_ends_compile_to_the_same_cwl(spec: _PathSpec) -> None:
-    """P35: path agreement.
+    """Path agreement.
 
     `f` is "write the workflow to a `.wic` file and read it back"; the claim
     is that compiling directly and compiling `f(workflow)` are the same
@@ -222,14 +200,14 @@ def test_the_two_front_ends_compile_to_the_same_cwl(spec: _PathSpec) -> None:
 
 
 # --------------------------------------------------------------------------
-# P36: CWL validity
+# CWL validity
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.needs_cwltool
 @pytest.mark.slow
 def test_cwltool_validate_rejects_an_invalid_document() -> None:
-    """Tautology guard for P36: `cwltool` must be able to say no, or a 0 from
+    """Tautology guard: `cwltool` must be able to say no, or a 0 from
     `test_compiled_output_validates_as_cwl` proves nothing."""
     import cwltool.main  # pylint: disable=import-outside-toplevel  # expensive; slow lane only
 
@@ -253,7 +231,7 @@ def test_cwltool_validate_rejects_an_invalid_document() -> None:
 # budget set at design time from measurement, not a weakened count.
 @settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 def test_compiled_output_validates_as_cwl(yml: Yaml) -> None:
-    """P36: `cwltool` agrees every compiled workflow this oracle produces is
+    """`cwltool` agrees every compiled workflow this oracle produces is
     valid CWL v1.2.
 
     Checked in-process (`cwltool.main.main(['--validate', '--quiet', path])`),
@@ -278,7 +256,7 @@ def test_compiled_output_validates_as_cwl(yml: Yaml) -> None:
 
 
 # --------------------------------------------------------------------------
-# P36a: compute-payload conformance
+# Compute-payload conformance
 # --------------------------------------------------------------------------
 
 
@@ -286,7 +264,7 @@ def test_compiled_output_validates_as_cwl(yml: Yaml) -> None:
 @given(strat.workflows())
 @ORACLE
 def test_compute_request_builds_and_validates_every_compiled_workflow(yml: Yaml) -> None:
-    """P36a: `ComputeRequest` builds and validates its own payload from a
+    """`ComputeRequest` builds and validates its own payload from a
     `CompiledWorkflow`, for everything this oracle compiles.
 
     Constructor keyword names and dumped-payload key names come from
@@ -390,7 +368,7 @@ def test_a_written_document_spells_step_ids_for_the_name_it_is_saved_as(stem: st
 
     `write_wic` accepts any `*.wic` name, and an explicit `outputSource` is
     consumed verbatim, so a document spelled from `process_name` but saved under
-    another name points its outputs at steps that do not exist. P35 cannot see
+    another name points its outputs at steps that do not exist. Path agreement cannot see
     this: it always writes `f'{process_name}.wic'`, which is the one name for
     which the two spellings agree.
     """
