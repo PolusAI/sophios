@@ -1,34 +1,13 @@
 """Tools with known signatures, owned by the suite.
 
-`get_tools_cwl` globs `search_paths_cwl` (src/sophios/plugins.py:90-126), so the
-tools a property sees depend on which plugin repositories a machine has checked
-out. That cannot be an oracle. These eight stems are the whole vocabulary the suite
-generates from, so a counterexample reproduces from this repository alone.
+`get_tools_cwl` globs `search_paths_cwl`, so the tools a property sees depend
+on which plugin repositories a machine has checked out. That cannot be an
+oracle. These eight stems are the whole vocabulary, so a counterexample
+reproduces from this repository alone.
 
-The signatures are chosen to reach the compiler's branches, not to model
-anything real:
-
-  - `mk_file` and `mk_text` are sources — no File input, one File output each,
-    with different `format`s, so inference has a choice to make and a wrong
-    choice is observable.
-  - `xform` is File -> File: it chains, which makes step order matter.
-  - `join` takes two Files: one step, two edges to infer.
-  - `count` is File -> int and `scale` is int -> float: an edge that ignores
-    types shows up as a type mismatch rather than a coincidence. `scale.factor`
-    also carries a default, so `args_required` (src/sophios/compiler.py:588) is
-    a proper subset of the inputs somewhere — `required_inputs_of` and
-    `test_the_registry_reaches_the_branches_it_claims_to` both depend on that
-    being true of some stem.
-  - `poly` declares a union input type, reaching `types_match`'s list branches
-    (src/sophios/inference.py:12-31), which single-typed tools never do.
-  - `sink` has no outputs: the only tool that can end a workflow without
-    contributing to `outputs:`. Its `extras` carries `default: []`, the falsy
-    non-scalar default, so the mirror below and the compiler's own rule are
-    compared on a default whose truthiness and whose presence disagree.
-
-The documents are real CWL v1.2: `test_every_stub_is_valid_cwl` runs cwltool
-over each. They are never executed — `baseCommand` is `true` — so no container
-is pulled and no property in this Spec needs one.
+The signatures are chosen to reach the compiler's branches rather than to model
+anything real; `_SPECS` below gives each stem's reason. They are real CWL v1.2
+and never executed — `baseCommand` is `true` — so nothing pulls a container.
 """
 from typing import Final
 

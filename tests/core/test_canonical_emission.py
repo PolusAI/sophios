@@ -1,55 +1,15 @@
 """Canonical emission: no `set` iteration order reaches the compiled CWL.
 
-Replaces "output identical across
-`PYTHONHASHSEED`" — expensive, and vacuous under a normalising equivalence —
-with a claim that is cheaper, broader, and reaches code no generator can.
+`set` iteration is hash-seeded, and three sites in the compile path once let
+that order out: `maybe_add_requirements` set the emitted `requirements:` key
+order (eight seeds, eight orders), `add_yamldict_keyval_out` set a step's
+`out:` list order (six seeds, three orders), and the speculative-insertion list
+in the compiler does the same behind a default-off flag.
 
-Measured: `set` iteration is hash-seeded, and
-three sites in the compile path let that order reach the emitted CWL. Two need
-no flag — any workflow with a subworkflow, a scattered step, `when`, or
-`valueFrom` takes this path by default:
-
-  * `utils_cwl.py` (`maybe_add_requirements`) — `{r: {} for r in set(reqs)}`
-    sets the emitted `requirements:` key order. Eight `PYTHONHASHSEED` values
-    produced eight different orders.
-  * `utils_cwl.py` (`add_yamldict_keyval_out`) — `list(set(new_strs))` sets a
-    step's `out:` list order. Six seeds produced three different orders.
-
-The third needs `--insert_steps_automatically` (default off, nothing in-repo
-enables it) *and* two or more tools named `insert_steps_automatically_*`, of
-which exactly two exist anywhere (both in `mm-workflows`, both format
-converters):
-
-  * `compiler.py` (`compile_workflow_once`) — `list(set(insertions))`, the
-    site the design names. No hermetic generator reaches it without
-    deliberately naming synthetic tools to match the whitelist.
-
-All three were found by reading the source, in about two seconds. A property
-that varied `PYTHONHASHSEED` instead would have found two of the three and
-cost 36 seconds of CI. Worse: under a *normalising* equivalence relation
-(`.equivalence.Strength.UP_TO_RENAMING`/`UP_TO_EMBEDDING`), `requirements` key
-order is exactly the kind of thing that gets normalised away, so a
-seed-varying property would have been vacuously true.
-`.equivalence.Strength.IDENTICAL` is the one strength that compares key
-order — deliberately, see its docstring — and before this fix nothing could
-satisfy it twice in a row for the same input.
-
-So the claim is restated as three deliverables:
-
-  1. `test_no_set_iteration_order_reaches_the_output` — a property, over
-     generated workflows, that every collection in the emitted CWL that came
-     from a `set` is in canonical (sorted) order. Stated as sortedness, not as
-     agreement across interpreters: the hash seed is the symptom, and
-     sortedness is checkable per example, at 0.1s, without a second process.
-  2. `test_no_set_reaches_an_ordered_structure` — a total static scan: outside
-     an explicit allowlist, a `set` may not be iterated into an ordered
-     structure anywhere in `src/sophios`. This is what reaches
-     `compiler.py`'s `insertions`, which the property above cannot.
-  3. `test_one_workflow_compiles_identically_under_four_hash_seeds` — one
-     hand-built workflow, compiled in four fresh interpreters: the literal
-     claim the property register used to make, kept as a separate example
-     because the property above deliberately does not assert it end-to-end
-     (see its own CANNOT DETECT paragraph).
+Stated as sortedness rather than as agreement across interpreters: the hash
+seed is the symptom, and sortedness is checkable per example at 0.1s without a
+second process. `Strength.IDENTICAL` is the one strength that compares key
+order, and nothing could satisfy it twice for one input until this held.
 """
 import ast
 import json

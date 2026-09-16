@@ -1,24 +1,19 @@
 """Write a Sophios AST back out, in either of the YAML surface's two spellings.
 
 Rendering is the inverse of parsing, and having both is what makes the syntax
-layer checkable — the exactness of that claim is enforced by the round-trip
-property in `tests/core/test_lang_render.py`, which is the claim's single home.
-
-Design:
+layer checkable; the round-trip property in `tests/core/test_lang_render.py` is
+that claim's single home.
 
 *Transcription over reconstruction.* A literal parsed from tagged YAML carries
-its source text, and rendering emits that text verbatim — `value` was computed
-from it, so the round-trip is exact by construction. Only literals that never
-had a spelling (API-built, desugared-form) are serialised, via PyYAML's own
-emitter, and where the tagged form structurally cannot express a value (the
-string '0': the composer strips quotes before `!ii` payloads are re-resolved)
-the desugared spelling is used instead of a lossy tag.
+its source text and is emitted verbatim, so the round-trip is exact by
+construction. Only literals that never had a spelling are serialised, and where
+the tagged form structurally cannot express a value — the string `'0'`, whose
+quotes the composer strips before `!ii` payloads are re-resolved — the
+desugared spelling is used rather than a lossy tag.
 
-*Totality over the closed union.* `OpaqueCwl` is a closed recursive type, and
-`plain` matches it exhaustively — a construct nested inside a collection is
-re-spelled, never handed raw to the dumper. Collections under `!ii` render
-tagged in every position, block-style, so a passthrough construct survives the
-round-trip as itself.
+*Totality over the closed union.* `OpaqueCwl` is closed and matched
+exhaustively, so a construct nested in a collection is re-spelled rather than
+handed raw to the dumper.
 
     render(document)   ->  text,  tagged spelling      (`!ii x`)
     to_json(document)  ->  data,  desugared spelling, JSON-serialisable

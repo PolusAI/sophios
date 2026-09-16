@@ -1,82 +1,15 @@
 """What it means for two compilations to mean the same thing.
 
-Three strengths, because there is no single honest answer. Each names exactly
-what it is allowed to ignore, and why ignoring it is legitimate rather than
-convenient — a normalisation without a reason is a place for a real difference
-to hide.
+Three strengths, because there is no single honest answer. Each names what it
+may ignore and why that is legitimate rather than convenient — a normalisation
+without a reason is a place for a real difference to hide.
 
     IDENTICAL          nothing is ignored.
     UP_TO_EMBEDDING    `run:` paths are ignored.
     UP_TO_RENAMING     namespaced names are ignored; the DAG must match.
 
-The order is a lattice: IDENTICAL implies UP_TO_EMBEDDING implies
-UP_TO_RENAMING, and `test_the_lattice_holds` asserts it, so a caller can always
-ask for the strongest relation a transformation is claimed to preserve and know
-the weaker ones follow.
-
-Returns a `Divergence`, not a bool. A migration runs this over thousands of inputs
-during the IR migration; "not equivalent" is not an actionable report, and a
-harness that could only say False would push every investigation back onto a
-human reading two 500-line documents.
-
-CANNOT DETECT (declared, per the negative-testing rules). Everything below is
-a thing UP_TO_RENAMING forgives; nothing else in a step is forgiven, because
-`_step_body` compares a step's keys by *exclusion* — a key this module has
-never heard of is compared, not ignored. IDENTICAL and UP_TO_EMBEDDING forgive
-only what their own docstrings name.
-
-  * `steps[].id` and `steps[].run`, whose values are namespaced or are paths.
-    The id is what renaming renames; `run` is embedding, forgiven a strength
-    lower down and so forgiven here too.
-  * `steps[].in[].source`, whose value names either a producing step or a
-    workflow-level input. Not dropped — re-expressed as a labelled edge in
-    `_dataflow`, which is the whole content of "the DAG must match". A source
-    naming a workflow-level input becomes an edge out of a node carrying that
-    input's *shape*, so rewiring a port onto a differently-typed input is a
-    divergence, while swapping two identically-shaped inputs is not — that
-    swap really is a renaming, a renaming being a bijection on names. The
-    binding's *name* and everything else under it (`default`, `valueFrom`,
-    ...) is compared.
-  * the keys of `inputs` and `outputs`, which a hermetic compilation shows are
-    namespaced (`oracle__step__1__mk___name`). Their count and their
-    `type`/`format` are compared; their names are not.
-  * `outputs[].outputSource`, whose value names a producing step. A name, and
-    so forgiven — but not *dropped*, for exactly the reason `in[].source` is
-    not: each workflow output becomes a node in `_dataflow` carrying its
-    declared shape, with an edge from the step that feeds it. Rewiring an
-    output onto a differently-shaped producer is therefore a divergence, while
-    permuting two identically-shaped outputs stays equivalent, that permutation
-    being what a renaming is. Dropped instead, the pairing was invisible: a
-    sorted multiset of shapes cannot see a permutation of itself, so a
-    migration that rewired every output to the wrong producer compared equal.
-  * every top-level key other than `steps`, `inputs`, `outputs`,
-    `requirements` — `class`, `cwlVersion`, `$namespaces`, `$schemas`,
-    document-level `label`/`doc`. Not inspected at this strength, because
-    nothing yet says which parts of them a renaming may touch. Ask for
-    UP_TO_EMBEDDING when the claim is about the whole document.
-  * mapping key *order*, below IDENTICAL. See `Strength.IDENTICAL`.
-
-A step key that is compared but should not be is a false divergence, which is
-loud; a step key that is forgiven but should not be is silent. The list above
-is deliberately the second kind, kept short and each entry given its reason.
-
-WILL NOT READ. This relation compares *compiled* documents, so it reads the
-surface forms the compiler emits — list-form `steps:` whose entries carry
-`id`, mapping-form `in:` — and raises `TypeError` on the others rather than
-coercing them. That applies to UP_TO_RENAMING, the strength that *interprets*
-a document's shape; the structural walk the two stronger strengths use
-compares whatever it is handed and forgives nothing, so it needs no such
-guard. CWL admits a mapping-form `steps:` and an array-form `in:`;
-Sophios emits neither, and an earlier draft turned each unhandled shape into
-"nothing here": a non-list `steps:` became `[]`, so two documents differing
-only in their steps produced two empty graphs and compared *equal*, and an
-array-form `in:` was forgiven by `_FORGIVEN_STEP_KEYS` and restored by
-neither reader, taking each binding's `default`, `valueFrom` and `linkMerge`
-with it. Ports and requirements are the opposite case and are read in both
-forms, because there the array form reduces to the same multiset with nothing
-lost. The asymmetry is the rule this module runs on: the one verdict a
-comparison oracle must never invent is "no difference", so a shape it cannot
-read has to be loud.
+A lattice, asserted by `test_the_lattice_holds`. What each strength forgives is
+declared on `equivalent`.
 """
 from dataclasses import dataclass
 from enum import IntEnum
@@ -144,7 +77,34 @@ class Divergence:
 def equivalent(left: Yaml, right: Yaml, strength: Strength) -> Divergence | None:
     """Whether two compiled workflows agree at the given strength.
 
-    Returns None when they agree, and the first divergence otherwise.
+    Returns None when they agree, and the first divergence otherwise — never a
+    bare bool. "Not equivalent" is not an actionable report when a migration
+    runs this over thousands of inputs.
+
+    CANNOT DETECT (declared). Everything here is forgiven by UP_TO_RENAMING and
+    nothing else in a step is, because `_step_body` compares a step's keys by
+    *exclusion*: a key this module has never heard of is compared, not ignored.
+    The stronger strengths forgive only what their own docstrings name.
+
+      * `steps[].id` and `steps[].run` — a namespaced name and a path.
+      * `steps[].in[].source` and `outputs[].outputSource`, which name a
+        producing step or a workflow input. Forgiven as names, but not
+        dropped: `_dataflow` re-expresses each as a labelled edge carrying the
+        endpoint's declared shape, so rewiring a port onto a differently-typed
+        one diverges while permuting two identically-typed ones does not —
+        a renaming being a bijection on names. Dropped instead, the pairing is
+        invisible, and a sorted multiset of shapes cannot see a permutation of
+        itself.
+      * the keys of `inputs` and `outputs`, which a hermetic compilation
+        namespaces. Their count and their `type`/`format` are compared.
+      * every top-level key but `steps`, `inputs`, `outputs`, `requirements`.
+        Nothing yet says which parts of them a renaming may touch; ask for
+        UP_TO_EMBEDDING when the claim is about the whole document.
+      * mapping key *order*, below IDENTICAL.
+
+    A key compared that should not be is a false divergence, which is loud; a
+    key forgiven that should not be is silent. This list is the second kind,
+    kept short with a reason each.
 
     Takes no graphs. An earlier draft let a caller supply the compiler's own
     `NodeData.graph.networkx` pair in place of the graph derived here, and
@@ -245,7 +205,16 @@ def _stem(step_id: str) -> str:
 
 
 def _steps_of(document: Yaml) -> list[Yaml]:
-    """The document's steps, in the one surface form the compiler emits.
+    """WILL NOT READ what the compiler does not emit.
+
+    Raises `TypeError` on a mapping-form `steps:` rather than coercing it. CWL
+    admits that form and Sophios emits neither it nor an array-form `in:`;
+    treating an unhandled shape as "nothing here" made a non-list `steps:`
+    become `[]`, so two documents differing only in their steps produced two
+    empty graphs and compared *equal*. The one verdict a comparison oracle must
+    never invent is "no difference", so a shape it cannot read has to be loud.
+
+    The document's steps, in the one surface form the compiler emits.
 
     A list, every entry a mapping carrying `id`. Anything else raises, per the
     module docstring's WILL NOT READ: CWL admits `steps:` as a mapping keyed by

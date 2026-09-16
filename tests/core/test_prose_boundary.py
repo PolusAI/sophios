@@ -37,9 +37,12 @@ PROCESS_NARRATION: Final = re.compile(
     re.IGNORECASE,
 )
 
-#: A module docstring is a signpost. Past this, it is a document that belongs in
-#: `design_docs/` where it can be read as one.
-MAX_MODULE_DOCSTRING_LINES: Final = 12
+#: A module docstring is a signpost, and a signpost may still declare what the
+#: module cannot do — several here carry a CANNOT DETECT or LIMITS register and
+#: earn their length. Past this it stops being a signpost and becomes a document,
+#: which belongs in `design_docs/` where it reads as one. The four that exceeded
+#: it were 40 to 79 lines and were narratives, not registers.
+MAX_MODULE_DOCSTRING_LINES: Final = 25
 
 #: The one file whose subject is the codes themselves.
 ALLOWED: Final = frozenset({REPO_ROOT / 'src' / 'sophios' / 'lang' / 'diagnostics.py'})

@@ -1,16 +1,13 @@
 """Where the package lives, and how the static scans read it.
 
-Eight test modules scan `src/sophios` for something the type checker cannot
-see — a version literal, a `sys.exit`, a set iteration reaching the output, a
-contrib import. Each had spelled the same three things for itself: the repo
-root, the file list, and the guard that fails when the list comes back empty.
-Thirteen copies of `Path(__file__).resolve().parents[2]` is not a shared rule,
-it is thirteen chances to drift.
+Eight test modules scan `src/sophios` for what the type checker cannot see — a
+version literal, a `sys.exit`, a set iteration reaching the output, a contrib
+import — and each had spelled the repo root, the file list and the empty-list
+guard for itself.
 
-Imports `ast` and `pathlib` only. That is a constraint, not an accident:
-`test_canonical_emission` and `test_hermeticity` are oracle modules, and the
-hermeticity check walks their transitive imports. Anything reaching `test_setup`,
-`compile_harness` or `wic_corpus` from here would make the oracle
+Imports `ast` and `pathlib` only, which is a constraint: two consumers are
+oracle modules whose transitive imports are walked, so anything reaching
+`test_setup`, `compile_harness` or `wic_corpus` from here would make the oracle
 environment-dependent through the back door.
 """
 import ast

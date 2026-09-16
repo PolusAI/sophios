@@ -1,28 +1,20 @@
 """Export a JSON Schema for Sophios, generated from the AST.
 
-The AST is the source of truth. Every key in the exported schema comes from a
-field's `Surface` declaration in `nodes.py`, and every construct comes from the
-parser's dispatch tables — nothing here restates the shape of a document, so
-nothing here can disagree with the parser about it. Add a field to `Step` and
-either the schema moves or generation fails; there is no third outcome where
-the schema quietly describes last month's language.
+The AST is the source of truth: every key comes from a field's `Surface`
+declaration in `nodes.py` and every construct from the parser's dispatch
+tables, so nothing here restates the shape of a document and nothing here can
+disagree with the parser about it. Add a field to `Step` and either the schema
+moves or generation fails.
 
-**What the schema can and cannot say.** Two limits are structural, not
-oversights, and both follow from the language's own design:
-
-*JSON has no YAML tags.* A validator sees a document after loading, so `!ii x`
-is invisible to it. The schema therefore describes the **desugared** projection
-(§6.1) — the shape `to_json` produces and the shape a YAML language server sees
-once Sophios tags are resolved.
-
-*Passthrough is open by definition.* The reference (§1) says anything outside
-the interpreted set is copied through untouched, so the schema cannot close any
-object that may carry passthrough CWL. That openness is declared in the AST as
+Two limits are structural rather than oversights. JSON has no YAML tags, so the
+schema describes the **desugared** projection (§6.1) — what a validator sees
+after loading. And passthrough is open by definition (§1), so the schema cannot
+close any object that may carry it; that openness is declared in the AST as
 `Shape.PASSTHROUGH`, not decided here.
 
 The result is a deliberate over-approximation: everything the parser accepts
-validates, and the structural mistakes the parser reports are rejected. It is
-an editor aid, not a second implementation of the language.
+validates, and the structural mistakes the parser reports are rejected. An
+editor aid, not a second implementation of the language.
 
 See docs/sophios_language_reference.md.
 """

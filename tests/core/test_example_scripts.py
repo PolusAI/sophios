@@ -1,22 +1,15 @@
 """What the shipped Python API workflows compile *to*, not merely that they compile.
 
 `examples/workflows/` is a `search_paths_wic` entry, so every script in it is
-discovered, imported and compiled by `test_compile_python_workflows` and then
-schema-validated by `test_validate_generated_python_workflows` — the same two
-steps that carry `image-workflows/workflows/bbbc.py`. That mechanism asserts
-one thing: no exception escaped.
+discovered, compiled and schema-validated by the same two steps that carry the
+image-workflows corpus. That mechanism asserts one thing: no exception escaped.
 
 It cannot see whether a `when` expression reached the emitted CWL, or which
 `scatterMethod` was chosen. Those are the claims here, made against the same
-files the mechanism runs, imported rather than copied — one workflow, two
-claims about it.
+files the mechanism runs — one workflow, two claims about it.
 
-Until this existed, `examples/scripts/` was in no search path at all, so CI
-type-checked and linted those files and never executed one. A script could stop
-compiling with every lane green.
-
-Compiled, never executed. Whether a runner can execute the result is
-`run_workflows.yml`'s question.
+Compiled, never executed; whether a runner can execute the result belongs to
+the workflow-running lane.
 """
 import json
 from pathlib import Path
