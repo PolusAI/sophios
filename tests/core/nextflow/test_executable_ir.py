@@ -582,7 +582,7 @@ def test_stage_as_rejects_array_marked_ports() -> None:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("stage_as", ["", "   ", "sub/dir.txt"])
+@pytest.mark.parametrize("stage_as", ["", "   ", "sub/dir.txt", "reads*.fq", "sample?.txt"])
 def test_stage_as_rejects_blank_or_separator_containing_names(stage_as: str) -> None:
     with pytest.raises(ValueError, match="stage_as"):
         NfPort("source", "path", stage_as=stage_as)
@@ -707,6 +707,25 @@ def test_hydration_accepts_earlier_subset_schema_versions() -> None:
         payload["schema_version"] = unsupported
         with pytest.raises(ValueError, match="schema version"):
             ExecutableNextflowWorkflow.from_dict(payload)
+
+
+@pytest.mark.fast
+def test_hydration_treats_parameter_keys_as_opaque_user_data() -> None:
+    payload = ExecutableNextflowWorkflow("wf", [], [], {}).to_dict()
+    payload["schema_version"] = 2
+    payload["params"] = {
+        "kind": "shell_literal",
+        "nested": {
+            "is_array": True,
+            "stage_as": "renamed.txt",
+            "adapter": "scatter",
+            "capture": "single",
+        },
+    }
+
+    hydrated = ExecutableNextflowWorkflow.from_dict(payload)
+
+    assert hydrated.to_dict()["params"] == payload["params"]
 
 
 @pytest.mark.fast

@@ -473,6 +473,8 @@ def _iwdr_entryname(value: Any, *, raw_name: str) -> str | None:
         raise ValueError("entryname must be a non-empty string")
     if "/" in literal:
         raise ValueError("entryname must not contain a path separator")
+    if "*" in literal or "?" in literal:
+        raise ValueError("entryname must not contain a Nextflow stageAs wildcard ('*' or '?')")
     return literal
 
 
@@ -533,12 +535,20 @@ def _iwdr_listing_findings(
         return []
     findings: list[str] = []
     renamed_by: dict[str, set[str]] = {}
+    listed_at: dict[str, int] = {}
     for index, item in enumerate(listing):
         try:
             name, rename = _iwdr_listing_item(item, tool_inputs=tool_inputs)
         except ValueError as exc:
             findings.append(f"{path}.listing[{index}]: {exc}")
             continue
+        if name in listed_at:
+            findings.append(
+                f"{path}.listing[{index}]: input {name!r} appears more than once "
+                f"(first listed at {path}.listing[{listed_at[name]}])"
+            )
+            continue
+        listed_at[name] = index
         if rename is not None:
             renamed_by.setdefault(rename, set()).add(name)
     for rename, names in renamed_by.items():
@@ -566,8 +576,12 @@ def _iwdr_stage_as(tool: Mapping[str, Any]) -> dict[str, str]:
     tool_inputs = _as_mapping(tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
     stage_as: dict[str, str] = {}
     by_rename: dict[str, set[str]] = {}
+    listed_names: set[str] = set()
     for item in listing:
         name, rename = _iwdr_listing_item(item, tool_inputs=tool_inputs)
+        if name in listed_names:
+            raise ValueError(f"input {name!r} appears more than once in the IWDR listing")
+        listed_names.add(name)
         if rename is not None:
             stage_as[name] = rename
             by_rename.setdefault(rename, set()).add(name)
@@ -701,7 +715,7 @@ def _command(tool: Mapping[str, Any]) -> NfCommand:
             raise ValueError("CommandLineTool baseCommand must be a string or list of strings")
 
     tokens.extend(_command_items(tool))
-    if not any(isinstance(token, NfTemplate) for token in tokens):
+    if not any(isinstance(token, (NfTemplate, NfShellLiteral)) for token in tokens):
         # A command made only of conditional flags has nothing to execute.
         tokens.insert(0, _template("true", context="empty CWL command"))
 
@@ -1489,11 +1503,12 @@ def _template_reference_names(templates: Iterable[NfTemplate]) -> tuple[set[str]
 def _safe_absence_names(tool: Mapping[str, Any]) -> set[str] | None:
     """Return the input names whose absence cannot affect command rendering.
 
-    A name is safe when it is never dereferenced: not referenced by any
-    command token, stream target, or output glob, or referenced solely as
-    the boolean-flag token it drives (a flag tests its value, never calls
-    ``.toString()`` on it). Returns None when the tool's command or outputs
-    cannot be analyzed — absence is then never treated as safe.
+    A name is safe when its absence leaves rendering unchanged: it is not
+    referenced by any command token, stream target, or output glob, it does
+    not own a shell-literal binding that CWL would omit, or it is referenced
+    solely as the boolean-flag token it drives (a flag tests its value, never
+    calls ``.toString()`` on it). Returns None when the tool's command or
+    outputs cannot be analyzed — absence is then never treated as safe.
     """
     try:
         command = _command(tool)
@@ -1510,14 +1525,19 @@ def _safe_absence_names(tool: Mapping[str, Any]) -> set[str] | None:
     # when the same input also drives a flag: excusing it on the strength of
     # the flag use would let the absence sentinel render into a command line.
     # A flag-only boolean has no template reference and never enters `plain`.
-    unsafe = plain | basenamed
     try:
-        all_names = {
+        inputs = _as_mapping(tool.get("inputs", {}), error="")
+        all_names = {_identifier(raw_name, context="input reference") for raw_name in inputs}
+        shell_literal_names = {
             _identifier(raw_name, context="input reference")
-            for raw_name in _as_mapping(tool.get("inputs", {}), error="")
+            for raw_name, definition in inputs.items()
+            if isinstance(definition, Mapping)
+            and isinstance(definition.get("inputBinding"), Mapping)
+            and definition["inputBinding"].get("shellQuote") is False
         }
     except ValueError:
         return None
+    unsafe = plain | basenamed | shell_literal_names
     return all_names - unsafe
 
 
@@ -1589,9 +1609,8 @@ def _absent_optional_findings(
                 if safe_names is not None and qualifier == "val" and name in safe_names:
                     continue
                 detail = (
-                    "absent optional values are supported only for a val input that is "
-                    "unreferenced in its command, or drives a boolean flag and is "
-                    "referenced nowhere else"
+                    "absent optional values are supported only for a val input "
+                    "whose absence leaves command rendering unchanged"
                 )
             else:
                 detail = "resolves to an absent required value"

@@ -316,19 +316,18 @@ def test_shell_quote_false_takes_precedence_over_boolean_flag_lowering() -> None
 
 @pytest.mark.fast
 def test_command_of_only_shell_literals_still_runs_a_program() -> None:
-    """A shell-literal-only argv would render an empty script that silently exits zero."""
+    """A shell literal is itself executable command text, not an empty command."""
     literal_tool = tool(
         "LITERAL",
         requirements={"ShellCommandRequirement": {}},
         baseCommand=None,
-        arguments=[{"position": 1, "valueFrom": ">>", "shellQuote": False}],
+        arguments=[{"position": 1, "valueFrom": "printf ok", "shellQuote": False}],
     )
     rose = synthetic_rose(workflow_doc([step("LITERAL")]), [literal_tool])
 
     tokens = cwl_rosetree_to_nextflow(rose).processes[0].command.tokens
 
-    assert tokens[0] == NfTemplate((NfLiteral("true"),))
-    assert tokens[1] == NfShellLiteral(">>")
+    assert tokens == (NfShellLiteral("printf ok"),)
 
 
 @pytest.mark.fast

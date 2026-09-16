@@ -529,6 +529,8 @@ class NfPort:
                 raise ValueError("stage_as must be a non-empty string or None")
             if "/" in self.stage_as or "\x00" in self.stage_as:
                 raise ValueError("stage_as must not contain a path separator or NUL byte")
+            if "*" in self.stage_as or "?" in self.stage_as:
+                raise ValueError("stage_as must not contain a Nextflow wildcard ('*' or '?')")
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation.
@@ -1161,7 +1163,8 @@ class ExecutableNextflowWorkflow:
             raise ValueError(
                 f"unsupported executable Nextflow schema version {item['schema_version']!r}"
             )
-        cls._reject_newer_kinds(item, declared=item["schema_version"])
+        for executable_subtree in (item["processes"], item["connections"]):
+            cls._reject_newer_kinds(executable_subtree, declared=item["schema_version"])
         if item["representation_kind"] != cls.REPRESENTATION_KIND:
             raise ValueError(
                 f"unsupported Nextflow representation kind {item['representation_kind']!r}"

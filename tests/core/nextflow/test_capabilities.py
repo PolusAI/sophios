@@ -356,8 +356,7 @@ def test_rejects_absent_optional_flag_that_is_also_dereferenced() -> None:
         cwl_rosetree_to_nextflow(rose)
     assert _findings(excinfo.value) == [
         "steps[0].run.inputs.verbose: absent optional values are supported only for a "
-        "val input that is unreferenced in its command, or drives a boolean flag and "
-        "is referenced nowhere else"
+        "val input whose absence leaves command rendering unchanged"
     ]
 
 
@@ -663,7 +662,40 @@ def test_rejects_absent_optional_input_bound_directly_into_the_command() -> None
     with pytest.raises(
         ValueError,
         match=r"steps\[0\].run.inputs.message: absent optional values are supported only for "
-        "a val input that is unreferenced in its command, or drives a boolean flag and is referenced nowhere else",
+        "a val input whose absence leaves command rendering unchanged",
+    ):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_absent_optional_input_whose_binding_emits_a_shell_literal() -> None:
+    """CWL omits the entire binding when its optional source is absent."""
+    optional = tool(
+        "OPTIONAL",
+        inputs={
+            "message": {
+                "type": ["null", "string"],
+                "inputBinding": {
+                    "position": 1,
+                    "valueFrom": "printf optional",
+                    "shellQuote": False,
+                },
+            }
+        },
+        requirements={"ShellCommandRequirement": {}},
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("OPTIONAL", **{"in": {"message": "message"}})],
+            inputs={"message": {"type": ["null", "string"]}},
+        ),
+        [optional],
+        workflow_inputs={"message": None},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"steps\[0\].run.inputs.message: absent optional values are supported only for ",
     ):
         cwl_rosetree_to_nextflow(rose)
 
@@ -1385,6 +1417,14 @@ def test_rejects_iwdr_entryname_with_path_separator() -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize("entryname", ["reads*.fq", "sample?.txt"])
+def test_rejects_iwdr_entryname_with_nextflow_stage_as_wildcard(entryname: str) -> None:
+    rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": entryname}])
+    with pytest.raises(ValueError, match="stageAs wildcard"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
 def test_rejects_iwdr_undeclared_input() -> None:
     rose = _iwdr_rose(["$(inputs.nope)"])
     with pytest.raises(ValueError, match="undeclared input"):
@@ -1444,6 +1484,26 @@ def test_rejects_iwdr_renamed_input_referenced_elsewhere() -> None:
         arguments=["cat", "$(inputs.source)"],
     )
     with pytest.raises(ValueError, match="staged under an explicit rename"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    "listing",
+    [
+        [
+            {"entry": "$(inputs.source)", "entryname": "one.txt"},
+            {"entry": "$(inputs.source)", "entryname": "two.txt"},
+        ],
+        [
+            "$(inputs.source)",
+            {"entry": "$(inputs.source)", "entryname": "renamed.txt"},
+        ],
+    ],
+)
+def test_rejects_iwdr_listing_that_repeats_an_input(listing: list[object]) -> None:
+    rose = _iwdr_rose(listing)
+    with pytest.raises(ValueError, match="input 'source' appears more than once"):
         cwl_rosetree_to_nextflow(rose)
 
 
