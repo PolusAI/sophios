@@ -1,7 +1,7 @@
-"""P24c: every rewrite `transformations` names preserves the meaning it claims.
+"""Every rewrite `transformations` names preserves the meaning it claims.
 
 One property, parameterised over `Transformation`, rather than a bespoke test
-per rewrite. P28 (partition independence) and P29 (its nested case) are named
+per rewrite. Partition independence and its nested case are named
 instances of it — `split` at one level and `split` composed with itself — not
 separate tests with their own idea of "the same workflow", which is how the
 two regression tests already in this tree ended up with two.
@@ -164,12 +164,12 @@ def _hits_the_scalar_coercion_gap(document: Yaml) -> bool:
     `populate_scalar_val` refuses a literal that does not coerce to the bound
     argument's declared type, with a `LITERAL_TYPE_MISMATCH` diagnostic.
     `ast_strategies.py` documents why such documents are still drawn — they
-    are well-formed, and unlike CE-13 this is not a single AST-shape predicate
+    are well-formed, and this is not a single AST-shape predicate
     — but a *refused* compilation is no basis for an equivalence. Left
     unfiltered here, every draw that hits it would abort *both* compiles this
     property needs before `equivalent()` is ever called, smothering the
     property this task is actually responsible for. Excluded the same way
-    `compilable_documents()` excludes CE-13: narrowly, by the exact predicate
+    `compilable_documents()` excludes an edge definition in input position: narrowly, by the exact predicate
     that names the gap, not by weakening what `workflows()` generates.
     """
     for step in document.get('steps', []):
@@ -201,7 +201,7 @@ def _hits_the_scalar_coercion_gap(document: Yaml) -> bool:
 @PARTITION
 def test_a_meaning_preserving_rewrite_preserves_meaning(constant: Transformation | None,
                                                         data: st.DataObject) -> None:
-    """P28, P29, and every equivalence law in Spec 2, as one statement.
+    """Partition independence, its nested case, and every equivalence law, as one statement.
 
     Parameterised by transformation, so a failure names which rewrite broke
     rather than which file it was written in — and so adding a rewrite is one
@@ -245,7 +245,7 @@ def _nesting_depth(document: Yaml) -> int:
 
     A step carrying a `subtree` is a subworkflow (`hermetic.subworkflow_step`
     builds the shape `read_ast_from_disk` produces), so depth 2 means a
-    subworkflow that itself contains one — the shape P29 is about.
+    subworkflow that itself contains one — the shape the nested case is about.
     """
     return max((1 + _nesting_depth(step['subtree']) for step in document.get('steps', [])
                 if isinstance(step, dict) and isinstance(step.get('subtree'), dict)),
@@ -254,14 +254,14 @@ def _nesting_depth(document: Yaml) -> int:
 
 @pytest.mark.fast
 def test_split_reaches_a_document_that_is_already_nested() -> None:
-    """P29's half of the property above, which nothing checked.
+    """The nested half of the property above, which nothing checked.
 
-    The module docstring calls P29 "`split` composed with itself", and nothing
+    The nested case is `split` composed with itself, and nothing
     composes anything: one rewrite is applied once. The nested case is reached
     when `workflows()` happens to draw a document that already contains a
     subworkflow step and `split` wraps it — true today, but a fact about
     `ast_strategies.documents()` rather than about anything in this file. If
-    that generator's subworkflow branch narrowed, P29's coverage would go to
+    that generator's subworkflow branch narrowed, the nested case's coverage would go to
     zero with every test here still green.
 
     Which rewrite gets drawn is no longer a question — the property parametrises
@@ -346,7 +346,7 @@ def test_every_transformation_actually_transforms(rewrite: Transformation) -> No
 @pytest.mark.fast
 def test_splitting_really_renames() -> None:
     """`split` claims only UP_TO_RENAMING. If it renamed nothing, that claim
-    would be free and P28 would assert nothing beyond IDENTICAL.
+    would be free and partition independence would assert nothing beyond IDENTICAL.
 
     Compiles both sides and checks both halves of the claim directly: IDENTICAL
     must *not* hold (there is really something for a renaming to forgive) and

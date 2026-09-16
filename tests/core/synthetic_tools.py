@@ -2,7 +2,7 @@
 
 `get_tools_cwl` globs `search_paths_cwl` (src/sophios/plugins.py:90-126), so the
 tools a property sees depend on which plugin repositories a machine has checked
-out. That cannot be an oracle. These eight stems are the whole vocabulary Spec 2
+out. That cannot be an oracle. These eight stems are the whole vocabulary the suite
 generates from, so a counterexample reproduces from this repository alone.
 
 The signatures are chosen to reach the compiler's branches, not to model
@@ -119,7 +119,7 @@ _SPECS: Final[dict[str, Cwl]] = {
 #: Desugared exactly as `get_tools_cwl` desugars real adapters
 #: (src/sophios/plugins.py:117), so the compiler sees the same shape either way.
 #: `run_path` names a file that does not exist: nothing reads it — the emitted
-#: `run:` is a string, and P36 inlines the documents with `cwl_inline_runtag`.
+#: `run:` is a string, and the validity property inlines the documents with `cwl_inline_runtag`.
 SYNTHETIC_TOOLS: Final[Tools] = {
     StepId(stem, SYNTHETIC_NS): Tool(f'/synthetic/{stem}.cwl',
                                      desugar_into_canonical_normal_form(dict(cwl)))

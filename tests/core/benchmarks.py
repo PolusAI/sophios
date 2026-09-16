@@ -2,7 +2,7 @@
 
 Not a property suite and not hermetic: the corpus half is the point — a trend
 over the workflows people actually compile. It imports `wic_corpus` on purpose
-and is excluded from P25's module list for that reason.
+and is excluded from the oracle's module list for that reason.
 
 There are no thresholds and no assertions. `main` returns 0 whatever the
 numbers say. A benchmark that can fail a build is a gate, and the design is

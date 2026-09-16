@@ -464,7 +464,7 @@ def _lang_version_pins(node: Any, _path: frozenset[int] = frozenset()) -> tuple[
 
     Guarded against cycles: the loader happily constructs self-referential
     structures from YAML aliases, and an unguarded walk over one recurses
-    forever (CE-07 — the same defect class the parser's passthrough walk had).
+    forever — the same defect class the parser's passthrough walk had.
     A node already on the current path contributes nothing new, so the walk
     simply stops there; every acyclic region is still visited in full.
     """

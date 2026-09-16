@@ -14,7 +14,7 @@ UP_TO_RENAMING, and `test_the_lattice_holds` asserts it, so a caller can always
 ask for the strongest relation a transformation is claimed to preserve and know
 the weaker ones follow.
 
-Returns a `Divergence`, not a bool. Spec 3 runs this over thousands of inputs
+Returns a `Divergence`, not a bool. A migration runs this over thousands of inputs
 during the IR migration; "not equivalent" is not an actionable report, and a
 harness that could only say False would push every investigation back onto a
 human reading two 500-line documents.
@@ -153,7 +153,7 @@ def equivalent(left: Yaml, right: Yaml, strength: Strength) -> Divergence | None
     carrying no tool label, so they can only be matched with a bare
     `DiGraphMatcher` — the exact weak check this module exists to replace,
     blind to a graph whose every step was swapped for a different tool of the
-    same arity; and the report told Spec 3 to use them, which would have
+    same arity; and the report told a consumer to use them, which would have
     routed every downstream consumer onto the unverified path. If a
     restructuring rewrite (inlining, partitioning) later needs supplied
     graphs, they come back labelled and tested, as a deliberate change.

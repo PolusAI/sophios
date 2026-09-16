@@ -110,7 +110,7 @@ def test_accepts_every_document_the_parser_accepts(source: str) -> None:
     Both halves matter, and only together are they the claim: `jsonschema`
     is duck-typed and will happily "validate" live Python objects that
     `json.dumps` refuses, which is precisely how a broken `to_json` stayed
-    green under this property until review caught it.
+    green under this property.
     """
     result = parse(source, 'gen.wic')
     assert result.document is not None

@@ -1,8 +1,9 @@
 """Source describes the code, not the process that produced it.
 
 A reader has the source; they do not have the trackers, the pull requests, or
-the review history. An in-code "P30" or "CE-11" is an opaque token to them, and
-"an earlier version asserted" is a story about work they did not do.
+the review history. A register id in a comment names a row they cannot open,
+and a sentence about how a defect came to light is a story about work they did
+not do.
 
 The facts those sentences carry are worth keeping. Their framing is not: state
 the constraint, not its discovery.
@@ -16,8 +17,10 @@ import pytest
 
 from .source_scan import REPO_ROOT, package_files, parsed
 
-#: Tracker identifiers. `wic0NN` is deliberately absent: a diagnostic code is
-#: public contract, matchable by a caller and documented in the reference.
+#: Tracker identifiers. Two deliberate absences: `wic0NN`, because a diagnostic
+#: code is public contract, matchable by a caller and documented; and a spec
+#: number cited alongside `design_docs/`, because that names a section of a
+#: document the reader has. A bare spec number names nothing they can open.
 TRACKER_TOKENS: Final = re.compile(
     r'\bP\d{2}[a-c]?\b'      # property register ids
     r'|\bCE-\d+\b'           # counterexample register ids
@@ -40,6 +43,20 @@ MAX_MODULE_DOCSTRING_LINES: Final = 12
 
 #: The one file whose subject is the codes themselves.
 ALLOWED: Final = frozenset({REPO_ROOT / 'src' / 'sophios' / 'lang' / 'diagnostics.py'})
+
+
+def names_a_tracker_row(text: str) -> bool:
+    """Whether a line of prose cites something the reader cannot open.
+
+    Args:
+        text (str): One line of docstring or comment.
+
+    Returns:
+        bool: True for a register, task, spec or pull-request id. A spec number
+            beside a `design_docs/` path is a section of a document in this
+            repository, so it is a reference and not bookkeeping.
+    """
+    return 'design_docs/' not in text and TRACKER_TOKENS.search(text) is not None
 
 
 def _prose(path: Path) -> list[tuple[int, str]]:
@@ -95,7 +112,7 @@ def test_no_tracker_identifier_reaches_the_source() -> None:
         f'{path.relative_to(REPO_ROOT)}:{line} {match.group(0)!r}'
         for path in _scanned()
         for line, text in _prose(path)
-        if (match := TRACKER_TOKENS.search(text))
+        if names_a_tracker_row(text) and (match := TRACKER_TOKENS.search(text))
     ]
     assert not found, (
         'tracker identifiers in source:\n  ' + '\n  '.join(found)
@@ -141,7 +158,7 @@ def test_no_module_docstring_is_a_document() -> None:
     ('a property id', '# P30 says emission is canonical', TRACKER_TOKENS),
     ('a counterexample id', '# see CE-11 for the shrunk case', TRACKER_TOKENS),
     ('a task id', '# delivered by T2.4', TRACKER_TOKENS),
-    ('a spec number', '# Spec 2 owns this', TRACKER_TOKENS),
+    ('a bare spec number', '# Spec 2 owns this', TRACKER_TOKENS),
     ('a pull request', '# fixed in #412', TRACKER_TOKENS),
     ('review narration', '# review found this blind spot', PROCESS_NARRATION),
     ('an earlier draft', '# an earlier version used a set', PROCESS_NARRATION),
@@ -164,7 +181,8 @@ def test_the_patterns_catch_what_they_claim_to(claim: str, text: str, pattern: r
     '# the CWL v1.2 substrate declares this',
     '# see docs/dev/algorithms.md for namespacing',
     '# P is the port, not a property',
+    '# See design_docs/core-refactor-design.md, Spec 1.',
 ])
 def test_the_patterns_leave_real_prose_alone(text: str) -> None:
     """Diagnostic codes, versions and paths are content, not bookkeeping."""
-    assert not TRACKER_TOKENS.search(text) and not PROCESS_NARRATION.search(text), text
+    assert not names_a_tracker_row(text) and not PROCESS_NARRATION.search(text), text

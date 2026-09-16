@@ -191,7 +191,7 @@ def test_the_sophios_namespace_prefix_is_reserved() -> None:
     """A user binding of the `sophios` prefix is replaced by the canonical
     one, exactly like `edam` (reference §1, footnote): the annotation's
     meaning cannot be redirected by rebinding its namespace. Every other
-    binding survives. Pinned as the actual behaviour, the CE-05 pattern."""
+    binding survives. Pinned as the actual behaviour."""
     compiled = _compile({'$namespaces': {'sophios': 'https://not-sophios/', 'mine': 'https://mine/'},
                          **TOUCH})
     assert compiled['$namespaces']['sophios'] == ANNOTATION_NAMESPACE_URI
@@ -271,7 +271,7 @@ def test_the_cli_flag_reaches_the_compiler() -> None:
 
 @pytest.mark.fast
 def test_pin_collection_survives_recursive_trees() -> None:
-    """CE-07: the pins walk must not recurse forever on a cyclic tree.
+    """The pins walk must not recurse forever on a cyclic tree.
 
     The loader constructs self-referential structures from YAML aliases, so
     the walk meets them through the real compile path. Found by applying the

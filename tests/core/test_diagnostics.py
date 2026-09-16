@@ -43,7 +43,7 @@ def _console_script_modules() -> frozenset[Path]:
     precisely to turn a failure into an exit code. Deriving it means a new
     console script is exempt the day it is declared, and — the direction that
     actually bites — a module that stops being an entry point loses the
-    exemption automatically. Review found `cwl_subinterpreter` had been an
+    exemption automatically: `cwl_subinterpreter` had been an
     entry point all along with no handler at all.
     """
     with open(REPO_ROOT / 'pyproject.toml', 'rb') as handle:

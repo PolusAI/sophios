@@ -2,7 +2,7 @@
 
 This module answers one deliberately narrow question: may Sophios reject a
 user-authored reference before handing the emitted document to CWL?  It does
-not normalize declarations into the typed IR reserved for Spec 3, and it does
+not normalize declarations into the typed IR that replaces it later, and it does
 not replace the legacy edge-inference heuristic.
 """
 

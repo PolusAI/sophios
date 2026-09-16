@@ -8,8 +8,8 @@ Thirteen copies of `Path(__file__).resolve().parents[2]` is not a shared rule,
 it is thirteen chances to drift.
 
 Imports `ast` and `pathlib` only. That is a constraint, not an accident:
-`test_canonical_emission` and `test_hermeticity` are Spec 2 oracle modules, and
-P25 walks their transitive imports. Anything reaching `test_setup`,
+`test_canonical_emission` and `test_hermeticity` are oracle modules, and the
+hermeticity check walks their transitive imports. Anything reaching `test_setup`,
 `compile_harness` or `wic_corpus` from here would make the oracle
 environment-dependent through the back door.
 """

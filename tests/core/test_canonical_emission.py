@@ -1,10 +1,10 @@
 """Canonical emission: no `set` iteration order reaches the compiled CWL.
 
-Delivers T2.4's first half, replacing "output identical across
+Replaces "output identical across
 `PYTHONHASHSEED`" — expensive, and vacuous under a normalising equivalence —
 with a claim that is cheaper, broader, and reaches code no generator can.
 
-CE-11 (confirmed, measured at `b00d044`). `set` iteration is hash-seeded, and
+Measured: `set` iteration is hash-seeded, and
 three sites in the compile path let that order reach the emitted CWL. Two need
 no flag — any workflow with a subworkflow, a scattered step, `when`, or
 `valueFrom` takes this path by default:
@@ -228,7 +228,7 @@ def _site_of(line: int, spans: list[tuple[int, int, str]]) -> str:
 def _set_iteration_violations(tree: ast.AST) -> list[tuple[int, str]]:
     """Every place a `set(...)` call is iterated into an ordered structure.
 
-    Total rule, not a shape catalogue — the lesson from #384's review round
+    Total rule, not a shape catalogue
     three, where a scan that enumerated the shapes it knew about missed the
     two the PR had just fixed (a `.get()`/`.setdefault()` default, and a
     keyword-only parameter default — neither is an assignment node). Applied
@@ -388,7 +388,7 @@ def test_the_allowlist_still_matches_a_real_violation() -> None:
 @pytest.mark.fast
 def test_the_scan_can_actually_fail() -> None:
     """Every banned shape the scan claims to cover, fed in directly — not just
-    the shapes visible at module level, per the #384 lesson above."""
+    the shapes visible at module level, per the rule above."""
     shapes = [
         'xs = list(set(reqs))',
         'xs = tuple(set(reqs))',
@@ -525,7 +525,7 @@ def test_one_workflow_compiles_identically_under_four_hash_seeds() -> None:
     key-order difference, which is precisely what this regression exists to
     catch (`test_only_identical_compares_key_order` in test_equivalence.py).
 
-    The workflow is hand-built to reach two of the three CE-11 sites: a
+    The workflow is hand-built to reach two of the three known sites: a
     subworkflow, a scattered step, and a `valueFrom` give four distinct
     requirements, and a three-output tool gives a multi-entry `out:`. See
     `_FOUR_SEED_WORKFLOW`'s docstring for why the third (`insertions`) is not

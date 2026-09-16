@@ -1,6 +1,6 @@
 """Claims about a single compilation.
 
-These are the Spec 2 properties that are *not* equivalences. An equivalence
+These are the properties that are *not* equivalences. An equivalence
 compares two compilations and needs a relation to say what may differ between
 them; a predicate examines one compilation and needs none. Grouping them by
 that fact rather than by which register row they came from is the point — a
@@ -218,7 +218,7 @@ def test_every_inferred_edge_connects_compatible_ports(yml: Yaml) -> None:
 
     BLIND SPOTS: deferred inferences, whose edge is made in a parent scope
     these single-root compilations never have; `!cwl` references, which do not
-    compile until the Spec 3 migration; and `format` compatibility, which
+    compile until the front end is wired in; and `format` compatibility, which
     `types_match` does not consider and `_match_outputs_of_step` handles on a
     separate axis. Edges into or out of a subworkflow step are skipped: the
     port's declared type lives in the subtree rather than in the registry. A

@@ -1,6 +1,6 @@
-"""P25: the oracle suite is hermetic.
+"""The oracle suite is hermetic.
 
-Spec 2's properties are statements about the compiler. A property whose inputs
+These properties are statements about the compiler. A property whose inputs
 come from `get_tools_cwl` is a statement about the compiler *and* about which
 plugin repositories the machine has checked out, and when it fails the two
 cannot be told apart. See design_docs/core-refactor-design.md §6.1.
@@ -31,7 +31,7 @@ from .test_zone_boundary import _import_graph, _imports_of, _reachable
 TESTS_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = TESTS_ROOT.parent
 
-#: Every module in the Spec 2 oracle. Listed rather than globbed so adding a
+#: Every module in the oracle. Listed rather than globbed so adding a
 #: module to the trusted suite remains a reviewable decision. Every executable
 #: test file below must also appear here; the coverage test links the two lists.
 ORACLE_MODULES = (
@@ -96,7 +96,7 @@ def _test_import_graph() -> dict[str, set[str]]:
 
 @pytest.mark.fast
 def test_the_scan_discovers_the_modules_it_claims_to_cover() -> None:
-    """Without this, a typo'd module name makes P25 pass by covering nothing."""
+    """Without this, a typo'd module name makes the check pass by covering nothing."""
     graph = _test_import_graph()
     missing = [m for m in ORACLE_MODULES if m not in graph]
     assert not missing, f'ORACLE_MODULES names modules that do not exist: {missing}'
@@ -125,7 +125,7 @@ def _crossings(seeds: tuple[str, ...], graph: dict[str, set[str]]) -> list[tuple
 
 @pytest.mark.fast
 def test_no_oracle_module_reaches_plugin_discovery() -> None:
-    """P25, static half: no Spec 2 module imports the environment."""
+    """Static half: no oracle module imports the environment."""
     crossings = _crossings(ORACLE_MODULES, {**_test_import_graph(), **_import_graph()})
     detail = '\n'.join(f'  {m} -> {t}' for m, t in crossings)
     assert not crossings, (
@@ -151,10 +151,10 @@ def test_the_scan_fires_on_a_deliberate_crossing(tmp_path: Path) -> None:
       * `FORBIDDEN_DIRECT` on the seed's own imports, since a transitive reach
         to `sophios.plugins` is deliberately *not* a finding.
 
-    An earlier version read `_imports_of_test_module`'s result and intersected
+    Reading `_imports_of_test_module`'s result and intersecting
     it with the two tuples by hand — `_crossings` was never called, so it
     stayed green through every mutation but the last, in a module whose own
-    sibling defect was found by mutation.
+    sibling defect is the same shape.
     """
     breach = tmp_path / 'core' / 'breach.py'
     breach.parent.mkdir()
@@ -173,7 +173,7 @@ def test_the_scan_fires_on_a_deliberate_crossing(tmp_path: Path) -> None:
 @pytest.mark.slow
 @pytest.mark.parametrize('stem', STEMS)
 def test_every_stub_is_valid_cwl(stem: str) -> None:
-    """A registry that is not valid CWL makes P36 a statement about our stubs.
+    """A registry that is not valid CWL makes the validity property a statement about our stubs.
 
     Run once per stem rather than inside a property: validity does not vary
     with the workflow, and cwltool costs about a second a call.
@@ -336,7 +336,7 @@ def _run_poisoned(targets: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
 
 @pytest.mark.fast
 def test_the_static_scan_covers_every_file_the_poisoned_run_covers() -> None:
-    """The two halves of P25 are two lists, and nothing linked them.
+    """The two halves of this check are two lists, and nothing linked them.
 
     `ORACLE_MODULES` seeds the static scan; `ORACLE_FILES` is what the poisoned
     subprocess runs. A test file in the second and not the first is covered only
@@ -344,7 +344,7 @@ def test_the_static_scan_covers_every_file_the_poisoned_run_covers() -> None:
     weaker half by this module's own docstring. Nothing imports a test module,
     so it is never reached transitively either.
 
-    Found by mutation: adding `import sophios.plugins` to
+    Adding `import sophios.plugins` to
     `tests/core/test_generators.py` — a file `ORACLE_FILES` names — left
     `test_no_oracle_module_reaches_plugin_discovery` green.
     """
@@ -358,7 +358,7 @@ def test_the_static_scan_covers_every_file_the_poisoned_run_covers() -> None:
 @pytest.mark.slow
 @pytest.mark.serial
 def test_the_oracle_suite_passes_with_plugin_discovery_disabled() -> None:
-    """P25, runtime half. `HOME` is redirected too: `get_config` writes
+    """Runtime half. `HOME` is redirected too: `get_config` writes
     ~/wic/global_config.json when it is missing, so a suite that reads the
     config is not merely environment-dependent, it provisions the environment.
 

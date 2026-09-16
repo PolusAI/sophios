@@ -730,12 +730,12 @@ def test_python_api_emits_documents_this_parser_accepts() -> None:
     assert emitted.value == 'empty.txt'
 
 # --------------------------------------------------------------------------
-# The parser is never more permissive than the loader (PR #382 review)
+# The parser is never more permissive than the loader
 # --------------------------------------------------------------------------
 #
 # The loader rejects unknown tags with ConstructorError; a syntax layer that
 # silently accepted them would specify a superset of the language. Both
-# escapes the review found are pinned, plus the agreement property.
+# escapes found so far are pinned, plus the agreement property.
 
 
 @pytest.mark.fast
@@ -805,7 +805,7 @@ def test_diagnostics_slices_are_diagnostics() -> None:
     assert len(result.diagnostics[0:1]) == 1
 
 # --------------------------------------------------------------------------
-# Pins from the second offline review round of #382
+# Pinned escapes
 # --------------------------------------------------------------------------
 
 
@@ -987,7 +987,7 @@ def test_parsing_is_total_for_adversarial_structure(text: str) -> None:
 def test_tag_decisions_agree_across_positions(tag: str, shape: str, data: st.DataObject) -> None:
     """Input position and passthrough position make the same unknown-tag call.
 
-    The review found `!foo {wic_anchor: x}` reported in passthrough but
+    `!foo {wic_anchor: x}` was reported in passthrough but
     swallowed in input position — two paths, one language, two answers. This
     pins the agreement for every tag and payload shape the generator makes.
     """
@@ -1118,7 +1118,7 @@ def test_compiled_provocations_fire(code: Code) -> None:
 def test_lang_layer_depends_only_on_stdlib_and_pyyaml() -> None:
     """`sophios.lang` + `utils_yaml` import nothing beyond stdlib and yaml.
 
-    The #383 reviewer staged exactly these files into a bare venv with only
+    Staging exactly these files into a bare venv with only
     PyYAML and everything ran — which is what makes the layer reviewable in
     isolation and, eventually, extractable for editor tooling. One stray
     import would end that silently; this makes it a test failure instead.

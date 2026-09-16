@@ -131,7 +131,7 @@ def awkward_literal_documents(draw: st.DrawFn) -> str:
     exists only to hammer quoting. The structural round-trip quantifies over
     the full language via the parser suite's generator — a second, narrower
     `documents()` here is exactly how outputs and nested sidecars once became
-    invisible to the round-trip property (see the PR #382 review cycle).
+    invisible to the round-trip property.
     """
     lines = ['steps:']
     for _ in range(draw(st.integers(min_value=1, max_value=3))):
@@ -149,7 +149,7 @@ def awkward_literal_documents(draw: st.DrawFn) -> str:
 
 @pytest.mark.fast
 @given(st.one_of(documents(), awkward_literal_documents()))
-# The #383 review's counterexamples, pinned deterministically (Hypothesis's
+# Counterexamples, pinned deterministically (Hypothesis's
 # failure database does not travel to CI). Duplicate-key cases are absent
 # because they are parse errors now, pinned on the parser's provocations.
 @example('steps:\n- id: t\n  in:\n    f: !ii {a: !* e}\n')      # construct inside collection literal
@@ -169,7 +169,7 @@ def test_round_trip_preserves_structure(source: str) -> None:
     both spellings, outputs, nested sidecars) plus the quoting-hostile
     literals — and the rendered text must also load through `wic_loader`,
     since a renderer that emits what the loader rejects would be writing a
-    dialect (the differential-oracle lesson from the #382 cycle).
+    dialect — a differential oracle, not self-consistency.
     """
     first = parse(source, 'a.wic')
     assert first.ok and first.document is not None

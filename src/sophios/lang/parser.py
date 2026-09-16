@@ -77,7 +77,7 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
 
     # NOTE: no SCALAR_TAGS table here. Scalar resolution is delegated to
     # PyYAML's SafeConstructor (see _resolved_scalar) — a hand-written table
-    # diverged from the loader, which review caught.
+    # diverged from the loader.
 
 
 @dataclass(frozen=True, slots=True)
@@ -538,7 +538,7 @@ def _is_edge_def(node: yaml.nodes.Node) -> bool:
     Both spellings, because §6.1 makes them equivalent and a rule that caught
     only the tagged one would let the desugared one through in exactly the
     positions the tagged one is refused — two surfaces, one language, two
-    answers, which is the divergence CE-02 was about.
+    answers, which is the divergence this rule exists to prevent.
 
     Position is not consulted: an edge definition is legal only in a step's
     `out:` list, which `_out_edge_def` handles on its own path and never
@@ -612,7 +612,7 @@ class Forms:  # pylint: disable=too-few-public-methods  # a namespace, not a typ
 
     Kept side by side and in one namespace because the language's claim is that
     the two spellings are equivalent (§6.1). Splitting them into separate
-    module globals is how they drift apart — which is exactly the defect CE-02
+    module globals is how they drift apart — which is exactly the defect this
     recorded. Both tables are read-only views.
     """
 
@@ -679,7 +679,7 @@ def _output_binding(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Out
 
 #: The key a nested sidecar step wraps its child sidecar in, on the surface.
 #: One constant read by both the parser (unwrap) and the renderer (re-wrap),
-#: so the two cannot disagree about it — the PR #383 review found the parser
+#: so the two cannot disagree about it — separate tables let the parser
 #: unwrapping and the renderer never re-wrapping, invisible to the round-trip
 #: property precisely because the parser tolerates its own renderer's output.
 SIDECAR_WRAPPER_KEY: Final = 'wic'
@@ -840,7 +840,7 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
     if _is_edge_def(node):
         # Both spellings, in every position `_opaque` walks. Catching only the
         # tagged one would let `{wic_anchor: n}` through exactly where `!& n`
-        # is refused, which is the two-surfaces-one-language divergence CE-02
+        # is refused, which is the two-surfaces-one-language divergence this
         # was about. `out:` never reaches here — `_out_edge_def` owns it.
         return _input_value(node, file, diags)
 

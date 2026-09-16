@@ -4,7 +4,7 @@ Rendering is the inverse of parsing, and having both is what makes the syntax
 layer checkable — the exactness of that claim is enforced by the round-trip
 property in `tests/core/test_lang_render.py`, which is the claim's single home.
 
-Design, after the PR #383 review:
+Design:
 
 *Transcription over reconstruction.* A literal parsed from tagged YAML carries
 its source text, and rendering emits that text verbatim — `value` was computed

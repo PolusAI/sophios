@@ -1,8 +1,8 @@
-"""Compilation with no environment: the Spec 2 entry point.
+"""Compilation with no environment.
 
-`tests/core/compile_harness.py` is the same idea for Spec 1, but it imports
-`tools_cwl` from `test_setup`, which runs plugin discovery at import. Spec 2
-cannot use it (P25), so this module is its hermetic sibling: the same fourteen-
+`tests/core/compile_harness.py` is the same idea, but it imports `tools_cwl`
+from `test_setup`, which runs plugin discovery at import. The hermeticity
+property forbids that here, so this module is its sibling: the same fourteen-
 argument call, against `SYNTHETIC_TOOLS`.
 
 The two are deliberately separate files rather than one file with a `tools=`
@@ -65,7 +65,7 @@ def subworkflow_step(stem: str, subtree: Yaml) -> Yaml:
     compilation) and `parentargs` (applied after) — src/sophios/ast.py:119-125 —
     and `compile_workflow_once` reads both unconditionally
     (src/sophios/compiler.py:492, :512). Building the shape here is what lets a
-    partitioned workflow exist without a file on disk, which is what makes P28
+    partitioned workflow exist without a file on disk, which is what makes partition independence
     hermetic.
     """
     assert stem.endswith('.wic'), 'get_subkeys recognises a subworkflow by suffix only'

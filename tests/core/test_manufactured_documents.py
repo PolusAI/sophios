@@ -1,43 +1,16 @@
 """Every document the compiler manufactures is one the language accepts.
 
-The corpus is not the interesting input. P07 already says every reachable
-`.wic` parses, so documents a *user* wrote are covered. What nothing checked is
-the documents the compiler *makes*: the Python API's output, the inliner's
-intermediates, the tree after `wic:` metadata is merged onto a step, the
-documents `rerun_cwltool` builds. Those never pass through `sophios.lang`, so
-the grammar has never had an opinion about them.
+The corpus is not the interesting input: documents a *user* wrote already have
+a parse property. What nothing checked is the documents the compiler *makes* —
+the Python API's output, the inliner's intermediates, the tree after `wic:`
+metadata is merged onto a step, the documents `rerun_cwltool` builds. Those
+never pass through `sophios.lang`, so the grammar has never had an opinion
+about them, and three defects in a row lived exactly there: step ids spelled
+from the wrong stem, a producer still emitting a step form the grammar had
+removed, and scatter readable from two places with no owner.
 
-It is a class that keeps producing defects. `workflow_document` spelled step
-ids from the wrong stem (#412). `cwl_subinterpreter` was still emitting a step
-form the grammar had removed (#415) — a producer that outlived its own syntax.
-Scatter was readable from two places with no owner (#407). Each one is the same
-shape: the compiler manufactures something no one holds to the language.
-
-§6 of the language reference states the adherence claim, and today it is
-checked only for documents on disk. This quantifies it over manufactured ones.
-
-**How the claim is made exhaustive.** `MANUFACTURING_SITES` pins every function
-in `src/sophios` that builds or rewrites a document-shaped object, classified by
-what it makes. A static scan fails when a site appears that is not listed, so
-the inventory cannot silently fall behind the code. Every site classified
-`DOCUMENT` is instrumented, and anything document-shaped passing through it is
-parsed. Sites no driver reaches are *reported*, not ignored — an unreached site
-is a gap in the evidence, and a gap that names itself is worth more than a
-number that hides one.
-
-The tags desugar on load — `!& e` becomes `{'wic_anchor': 'e'}` — so a
-manufactured document is in the desugared spelling, which §6.1 says the parser
-accepts equally. That is what makes dumping one and parsing it a fair test
-rather than a round-trip through a lossy form.
-
-**Construct coverage.** The desugared spelling has no tags, but each construct
-position is closed explicitly. In input position, a single-key mapping such as
-`{'wic_not_a_thing': 1}` is reported as a misspelled construct, while a
-correctly spelled `wic_anchor` is reported as misplaced. In `out:`, a mapping
-value must be `!&` or `wic_anchor`; every other shape is reported. Manufactured
-inline-input and anchoring mistakes therefore cannot pass silently. A
-`wic_`-prefixed key elsewhere remains ordinary passthrough by design, because
-§1 says that vocabulary is open; it is not interpreted as a construct attempt.
+`MANUFACTURING_SITES` pins every site; a static scan fails when an unlisted one
+appears. Sites no driver reaches are named in `UNREACHED` rather than ignored.
 """
 import ast as pyast
 import importlib
@@ -317,7 +290,7 @@ def _drive_everything() -> None:
 
     Two doors, because they manufacture different things: `compile_workflow`
     for the in-memory path, and the Python API, whose `workflow_document` is
-    the site that spelled step ids from the wrong stem in #412.
+    the site that spelled step ids from the wrong stem.
     """
     for document in _DRIVERS:
         compile_hermetic_cwl(document, 'manufactured', insert_steps_automatically=True)

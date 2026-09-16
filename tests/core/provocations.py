@@ -1,6 +1,6 @@
 """One attack per diagnostic code — the registry behind the provocation rule.
 
-A diagnostic that cannot be provoked is dead on arrival (the #382 cycle's
+A diagnostic that cannot be provoked is dead on arrival (the parser's
 UNKNOWN_TAG sat unreachable for days), so every `Code` member must appear in
 exactly one tier here, and the meta-test in `test_lang_parser.py` fails the
 build for any member that does not.
@@ -57,7 +57,7 @@ def _provoke_unresolved_input() -> None:
 
 
 def _provoke_missing_required_input() -> None:
-    # CE-01's exact shape: a null !ii on a non-nullable input.
+    # A null !ii on a non-nullable input.
     _compile_minimal({'steps': [{'id': 'touch', 'in': {'filename': {'wic_inline_input': None}}}]})
 
 

@@ -2,14 +2,14 @@
 
 `equivalent` is the definition of "these two compilations mean the same
 thing". Everything downstream — partition independence here, differential
-equivalence in Spec 3 — is this relation with a different transformation in
+equivalence across a pipeline migration — is this relation with a different transformation in
 front of it, so a bug here is silent everywhere at once.
 
 That is why this file leads with discrimination rather than with agreement.
 A relation that returns None unconditionally satisfies reflexivity and the
 lattice law and makes every property that depends on it green and worthless;
 only a case built so that a too-permissive relation is *observably* wrong can
-see that. Same reasoning as the round-trip lesson from #383: inverse pairs and
+see that. Inverse pairs and
 reflexive laws test agreement, not correctness.
 
 The same reasoning applies a second time, to the lattice property itself. The
@@ -37,7 +37,7 @@ from .synthetic_tools import STEMS, inputs_of, outputs_of
 
 #: Pairs no strength may call equivalent, with the reason each matters.
 #: A relation that accepts any of these is broken in a way that would make
-#: Spec 3's differential harness report zero divergences on a rewrite that
+#: a differential harness report zero divergences on a rewrite that
 #: changed behaviour.
 MUST_DIFFER: Final[list[tuple[str, Yaml, Yaml]]] = [
     ('a step is missing',
@@ -238,7 +238,7 @@ def test_every_rewrite_is_actually_drawn() -> None:
     Both quantify over `document_rewrites()`, and both are *weaker* in
     proportion to how many rewrites the strategy stops producing — a
     `sampled_from` that only ever yielded `identity` would leave them asserting
-    reflexivity and nothing else, silently. Same argument as P26 for the
+    reflexivity and nothing else, silently. Same argument as construct coverage for the
     document generator, at the same bounded sample.
     """
     seen: set[str] = set()
@@ -285,7 +285,7 @@ def test_the_relation_is_reflexive() -> None:
 
 @pytest.mark.fast
 def test_a_divergence_names_where_it_found_the_difference() -> None:
-    """Spec 3 runs this over thousands of inputs. A report that says only
+    """A pipeline migration runs this over thousands of inputs. A report that says only
     "not equivalent" moves the work to a human with two long documents."""
     left: Yaml = {'steps': [{'id': 'a__step__1__mk', 'in': {'f': 'left'}}]}
     right: Yaml = {'steps': [{'id': 'a__step__1__mk', 'in': {'f': 'right'}}]}
@@ -477,7 +477,7 @@ def test_a_declared_step_is_not_the_same_as_one_only_referenced() -> None:
     agree, and neither document has ports or requirements to compare, so
     nothing but the marker separates them.
 
-    Found by mutation: relabelling absent producers as if they were declared
+    Relabelling absent producers as if they were declared
     steps left every other test in this file green.
     """
     consumer: Yaml = {'id': 'a__step__2__xform',
@@ -492,7 +492,7 @@ def test_a_declared_step_is_not_the_same_as_one_only_referenced() -> None:
 def test_the_array_forms_of_ports_and_requirements_are_read() -> None:
     """CWL admits `requirements` as a list of `{class: ...}` and ports as an
     array of records; the Sophios compiler emits neither today, so without
-    this those branches would be code no test reaches — and a Spec 3 pipeline
+    this those branches would be code no test reaches — and a migrated pipeline
     that started emitting them would silently compare `repr` of a whole list
     against `repr` of another, i.e. would still be "working"."""
     listed: Yaml = {'steps': [], 'requirements': [{'class': 'ScatterFeatureRequirement'}],
@@ -513,9 +513,9 @@ def test_isomorphism_alone_would_not_be_enough() -> None:
     documents have the same shape — two nodes, one edge — and a different tool
     at every node, so a bare matcher calls them equivalent. That is precisely
     the kind of thing an IR migration could get wrong, which is why the
-    relation Spec 3 imports must not be the one already in the tree.
+    relation a migration imports must not be the one already in the tree.
 
-    Asserts the *verdict*, not the path string. An earlier version asserted
+    Asserts the *verdict*, not the path string. Asserting
     `'tool multiset' in found.path`, which is this project's recurring failure
     written into the artifact everything imports: a separate stem-multiset
     check had by then been subsumed by the labelled isomorphism, so the name of
@@ -677,7 +677,7 @@ def test_up_to_embedding_forgives_run_and_nothing_else() -> None:
 
 @pytest.mark.fast
 def test_a_divergence_is_frozen() -> None:
-    """A report Spec 3 collects into a list must not be editable afterwards."""
+    """A report collected into a list must not be editable afterwards."""
     found = Divergence(Strength.IDENTICAL, '.x', 1, 2)
     with pytest.raises((AttributeError, TypeError)):
         found.path = '.y'  # type: ignore[misc]

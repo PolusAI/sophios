@@ -1,6 +1,6 @@
-"""P26 and P27: the generator is adequate, and its failures are usable.
+"""The generator is adequate, and its failures are usable.
 
-A property is only as strong as its generator. Spec 1's review cycle traced
+A property is only as strong as its generator. Repeated defects traced
 every High-severity finding to a blind spot: totality quantified over
 `st.text()`, which essentially never forms valid YAML with an alias; a
 document generator that produced only mapping-form `in:`-only documents made
@@ -25,7 +25,7 @@ from .hermetic import COVERAGE, compile_hermetic_cwl
 
 @pytest.mark.fast
 def test_every_construct_appears_within_a_bounded_sample() -> None:
-    """P26: 500 documents reach every construct kind the language has.
+    """500 documents reach every construct kind the language has.
 
     Stated over one drawn batch rather than as a per-example property, because
     the claim is about the *sample*, not about any document: no single document
@@ -48,7 +48,7 @@ def test_every_construct_appears_within_a_bounded_sample() -> None:
     execution to be internally diverse.
 
     CANNOT GENERATE (declared, per the negative-testing rules): `!cwl`
-    (RawCwlRef) — specified but not compilable until Spec 3, so a compilable
+    (RawCwlRef) — specified but not compilable until the front end is wired in, so a compilable
     generator must exclude it; `python_script` steps — named with a uuid4, so
     nothing over them is deterministic; multi-document YAML streams; merge keys.
     """
@@ -72,12 +72,12 @@ def test_every_construct_appears_within_a_bounded_sample() -> None:
 def test_the_compilable_subset_still_reaches_every_construct_it_does_not_exclude() -> None:
     """The companion `NOT_YET_COMPILABLE` claims, and did not have.
 
-    `compilable_documents()` is what Tasks 3-7 quantify over, and its filter is
-    the one place a construct can leave the oracle's reach without anything
-    going red — `documents()` keeps producing the whole language, so P26 stays
-    green no matter what the filter removes. Found by mutation: an exclusion
-    predicate of `lambda d: True` empties the strategy entirely and every test
-    in this file passed.
+    `compilable_documents()` is what the compile-driving properties quantify
+    over, and its filter is the one place a construct can leave the oracle's
+    reach without anything going red — `documents()` keeps producing the whole
+    language, so coverage stays green no matter what the filter removes. An
+    exclusion predicate of `lambda d: True` empties the strategy entirely, and
+    every test in this file still passes.
 
     So the filter is held to the same standard as the generator. An exclusion
     that costs a construct has to be argued for by whoever adds it, here, in
@@ -146,7 +146,7 @@ def test_the_workflows_strategy_produces_documents_the_compiler_accepts() -> Non
 
     Drawn from `workflows_with_documents()`, which is the strategy `workflows()`
     itself is a projection of, so the composition under test is the one that
-    ships. An earlier version rebuilt `compilable_documents().map(to_yml)` here
+    ships. Rebuilding `compilable_documents().map(to_yml)` here
     by hand — needing the `Document` for `steps_as_mapping` and having no way
     to get it — which left `workflows()` with zero call sites in the tree while
     this test's own messages claimed to be covering it. Replacing its body with
@@ -293,7 +293,7 @@ def test_workflows_is_the_pairs_second_half_and_nothing_else() -> None:
 
 @pytest.mark.slow
 def test_an_injected_fault_shrinks_to_a_small_workflow() -> None:
-    """P27: a failure arrives as something a person can read.
+    """A failure arrives as something a person can read.
 
     Runs a nested Hypothesis search for a document that trips a deliberately
     planted fault, and asserts the reported minimal case is under the bound.

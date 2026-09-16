@@ -117,7 +117,7 @@ def test_top_level_passthrough_is_byte_identical(freight: dict[str, Any]) -> Non
 def test_user_namespaces_survive_except_edam() -> None:
     """`$namespaces` keeps every user binding but the reserved `edam`.
 
-    CE-05. The compiler merges `{'edam': the canonical URL}` over the user's
+    The compiler merges `{'edam': the canonical URL}` over the user's
     mapping, so a user binding of the `edam` prefix specifically is replaced.
     Pinned as the actual behaviour; if merging ever becomes pure passthrough,
     this test should fail and be inverted deliberately, not silently.

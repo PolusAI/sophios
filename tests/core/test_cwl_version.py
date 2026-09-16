@@ -39,8 +39,8 @@ def _python_files() -> list[Path]:
 def _version_literals(tree: ast.AST) -> list[tuple[int, str]]:
     """Every string constant that IS a CWL version, wherever it sits.
 
-    Deliberately not a catalogue of binding shapes. An earlier version of this
-    scan enumerated the assignments it knew about, and review found it blind
+    Deliberately not a catalogue of binding shapes. A scan that enumerates the
+    assignments it knows about is blind
     to exactly the shapes this change had fixed in production: a literal as a
     `.get()`/`.setdefault()` default rides in a positional argument, and a
     keyword-only parameter default lives in `arguments.kw_defaults` — neither

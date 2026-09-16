@@ -1,6 +1,6 @@
 """Behavioural coverage for `sophios.plugins` transforms that reach emitted CWL.
 
-`sophios.plugins` is FORBIDDEN to the Spec 2 oracle (`test_hermeticity.py`),
+`sophios.plugins` is FORBIDDEN to the oracle (`test_hermeticity.py`),
 because importing it reads the config and walks the adapter search paths. That
 makes the oracle unable to check the plugin transforms directly, so the ones
 whose output lands in an emitted document are covered here instead.
