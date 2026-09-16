@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from typing import Any, NamedTuple, NotRequired, TypeAlias, TypedDict
 
 import networkx as nx
@@ -32,7 +33,7 @@ class StepId(NamedTuple):
 
 Tools: TypeAlias = dict[StepId, Tool]
 
-# NOTE: Please read the Namespacing section of docs/devguide.md !!!
+# NOTE: Please read the Namespacing section of docs/dev/devguide.md !!!
 Namespace: TypeAlias = str
 Namespaces: TypeAlias = list[Namespace]
 
@@ -46,22 +47,16 @@ ExplicitEdgeCalls: TypeAlias = dict[str, ExplicitEdgeDef]
 DiGraph: TypeAlias = Any  # graphviz.DiGraph
 
 
-class GraphData():
-    # pylint:disable=too-few-public-methods
-    def __init__(self,
-                 name: str,  # TODO: Should this be StepId?
-                 nodes: list[tuple[str, dict]] | None = None,
-                 edges: list[tuple[str, str, dict]] | None = None,
-                 subgraphs: list[Any] | None = None,
-                 ranksame: list[str] | None = None) -> None:
-        # NOTE: Use None as the sentinel default (instead of a mutable list literal)
-        # so each instance gets its own fresh list; a literal [] default would be
-        # shared (and mutated!) across every instance that doesn't pass an argument.
-        self.name = name
-        self.nodes = [] if nodes is None else nodes
-        self.edges = [] if edges is None else edges
-        self.subgraphs = [] if subgraphs is None else subgraphs
-        self.ranksame = [] if ranksame is None else ranksame
+@dataclass(slots=True)
+class GraphData:
+    # `default_factory` gives each instance its own list; a bare `[]` default
+    # would be shared and mutated across every instance. Not `frozen=True`:
+    # the compiler rebinds these fields in place while building a graph.
+    name: str  # TODO: Should this be StepId?
+    nodes: list[tuple[str, dict]] = field(default_factory=list)
+    edges: list[tuple[str, str, dict]] = field(default_factory=list)
+    subgraphs: list[Any] = field(default_factory=list)
+    ranksame: list[str] = field(default_factory=list)
 
 
 # This groups together the classes which represent our graph.

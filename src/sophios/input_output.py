@@ -190,10 +190,8 @@ def read_config_from_disk(config_file: Path, abspath: bool = True) -> Json:
     Returns:
         Json: The config json object with absolute filepaths
     """
-    config: Json = {}
     # config_file can contain absolute or relative paths
-    with open(config_file, 'r', encoding='utf-8') as f:
-        config = json.load(f)
+    config: Json = json.loads(config_file.read_text(encoding='utf-8'))
     conf_tags = ['search_paths_cwl', 'search_paths_wic']
     for tag in conf_tags:
         if abspath:

@@ -357,7 +357,7 @@ def perform_edge_inference(inference_use_naming_conventions: bool,
                 # an element of out_formats. Since we cannot easily do that here,
                 # we need to tentatively insert tool into the AST and re-compile.
                 # However, that can easily fail (i.e. if there is one transitive
-                # match). See docs/algorithms.md for more details.
+                # match). See docs/dev/algorithms.md for more details.
                 if in_format in tool_out_formats and out_format in tool_in_formats_flat:
                     # We may have found an insertion.
                     insertions.append(step_id)

@@ -130,7 +130,7 @@ def test_the_workflows_strategy_produces_documents_the_compiler_accepts() -> Non
     this generator that must satisfy the *compiler* rather than the grammar.
     Its docstring says so in a warning — "Do not remove this call to 'simplify'
     `to_yml`" — about the `desugar_into_canonical_normal_form` that mapping-form
-    documents need to survive `_compile_workflow`'s per-step loop. Nothing held
+    documents need to survive `compile_workflow_once`'s per-step loop. Nothing held
     it: delete that call and every mapping-form document raises `KeyError: 0`,
     with no test to notice.
 

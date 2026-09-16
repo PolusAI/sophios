@@ -101,15 +101,15 @@ def maybe_add_requirements(yaml_tree: Yaml, steps_keys: list[str],
 
 
 def add_yamldict_keyval_in(steps_i: Yaml, step_key: str, keyval: Yaml) -> Yaml:
-    """Convenience function used to (mutably) merge two Yaml dicts.
+    """Convenience function used to (mutably) add output keys to a step.
 
     Args:
         steps_i (Yaml): A partially-completed Yaml dict representing a step in a CWL workflow
         step_key (str): The name of the step in a CWL workflow
-        keyval (Yaml): A Yaml dict with additional details to be merged into the first Yaml dict
+        strs (list[str]): The output keys to be added to the step's out: list
 
     Returns:
-        Yaml: The first Yaml dict with the second Yaml dict merged into it.
+        Yaml: The step with the given output keys merged into its out: list.
     """
     # Compiler and inference call sites pass a single step dictionary here.
     # If that step dict is temporarily empty, preserve the single-step shape by
@@ -220,9 +220,7 @@ def get_workflow_outputs(graph_settings: GraphSettings,
                 case2 = (tool_i['class'] == 'CommandLineTool') and (
                     not out_var in vars_workflow_output_internal)
                 if case1 or case2:
-                    graph_gv = graph.graphviz
-                    graph_nx = graph.networkx
-                    graphdata = graph.graphdata
+                    graph_gv, graph_nx, graphdata = graph
                     attrs = {'label': out_key_no_namespace, 'shape': 'box',
                              'style': 'rounded, filled', 'fillcolor': 'lightyellow'}
                     graph_gv.node(namespaced_output_name, **attrs)

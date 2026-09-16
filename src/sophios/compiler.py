@@ -330,9 +330,7 @@ def _prepare_compilation_state(yaml_tree_ast: YamlTree,
     rose_tree_list: list[RoseTree] = []
 
     graph = subgraphs[-1]  # Get the current graph
-    graph_gv = graph.graphviz
-    graph_nx = graph.networkx
-    graphdata = graph.graphdata
+    graph_gv, graph_nx, graphdata = graph
 
     tools_lst: list[Tool] = []
 
@@ -507,7 +505,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                           is_root: bool,
                           relative_run_path: bool,
                           testing: bool) -> CompilerInfo:
-    """STOP: Have you read the Developer's Guide?? docs/devguide.md\n
+    """STOP: Have you read the Developer's Guide?? docs/dev/devguide.md\n
     Recursively compiles yml workflow definition ASTs to CWL file contents
 
     Args:

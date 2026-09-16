@@ -294,7 +294,7 @@ def workflow_document(
     """Render a workflow into its in-memory WIC YAML representation.
 
     A workflow output's `outputSource` is always written in the compiler's
-    concrete step-id spelling, because `compile_workflow_finish` consumes an
+    concrete step-id spelling, because `compile_workflow_once` consumes an
     explicit `outputSource` verbatim. There is no flag: a second spelling
     would be a second language, selectable per caller.
 

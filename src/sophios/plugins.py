@@ -76,12 +76,11 @@ def validate_cwl(cwl_path_str: str) -> None:
 
 
 def get_tools_cwl(config: Json, validate_plugins: bool = False, quiet: bool = False) -> Tools:
-    """Uses glob() to find all of the CWL CommandLineTool definition files within any subdirectory of cwl_dir
+    """Uses glob() to find all of the CWL CommandLineTool definition files within the configured search paths
 
     Args:
-        config_file (Json): The user specified (or default generated) config json object
-        cwl_dirs_file (Path): The subdirectories in which to search for CWL CommandLineTools
-        validate_plugins (bool, optional): Performs validation on all CWL CommandLiineTools. Defaults to False.
+        config (Json): The user specified (or default generated) config json object
+        validate_plugins (bool, optional): Performs validation on all CWL CommandLineTools. Defaults to False.
         quiet (bool, optional): Determines whether it captures stdout or stderr. Defaults to False.
 
     Returns:

@@ -40,9 +40,7 @@ def add_graph_edge(graph_settings: GraphSettings, graph: GraphReps,
         color = 'black' if graph_settings['graph_dark_theme'] else 'white'
     edge_node1 = _collapsed_node_name(nss1, graph_settings['graph_inline_depth'])
     edge_node2 = _collapsed_node_name(nss2, graph_settings['graph_inline_depth'])
-    graph_gv = graph.graphviz
-    graph_nx = graph.networkx
-    graphdata = graph.graphdata
+    graph_gv, graph_nx, graphdata = graph
     edge_exists = graph_nx.has_edge(edge_node1, edge_node2)
 
     # A workflow can connect several ports between the same pair of steps. At
