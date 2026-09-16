@@ -19,6 +19,11 @@ cwl_locations = [
 
 wic_locations = [
     "sophios/docs/tutorials",
+    # Python API workflows that ship with sophios, discovered and compiled the
+    # same way image-workflows/workflows/bbbc.py is. Only scripts meeting that
+    # contract belong here: the glob is recursive and indiscriminate, and every
+    # .py it finds is imported and has its workflow() called.
+    "sophios/examples/workflows",
     "image-workflows/workflows",
     "mm-workflows/examples"
 ]
