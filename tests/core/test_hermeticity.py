@@ -269,8 +269,8 @@ def test_the_registry_reaches_the_branches_it_claims_to() -> None:
 def test_the_hermetic_entry_point_actually_compiles() -> None:
     """A harness that only imports cleanly is not a harness that works.
 
-    `compile_hermetic_cwl` is produced here for Tasks 2-8 to build every
-    property on; nothing in this task's own steps calls it. This is that
+    `compile_hermetic_cwl` is produced here for the property suites to build
+    on; nothing in this module calls it. This is that
     harness's companion: two independent source steps, no explicit edges, so
     the only thing under test is whether the fourteen-argument call against
     `SYNTHETIC_TOOLS` actually reaches the compiler and comes back with CWL.
@@ -362,10 +362,10 @@ def test_the_oracle_suite_passes_with_plugin_discovery_disabled() -> None:
     ~/wic/global_config.json when it is missing, so a suite that reads the
     config is not merely environment-dependent, it provisions the environment.
 
-    ORACLE_FILES is empty until Task 2 lands its first file: there is nothing
+    ORACLE_FILES is empty until the first oracle file lands: there is nothing
     to run poisoned yet, and passing an empty target list to pytest would
     collect the whole repository instead of proving anything about the oracle
-    suite. Skipped rather than passed vacuously; Task 2 onward makes this
+    suite. Skipped rather than passed vacuously; the first entry makes this
     assert something real.
     """
     if not ORACLE_FILES:

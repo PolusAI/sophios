@@ -163,14 +163,13 @@ def _hits_the_scalar_coercion_gap(document: Yaml) -> bool:
 
     `populate_scalar_val` refuses a literal that does not coerce to the bound
     argument's declared type, with a `LITERAL_TYPE_MISMATCH` diagnostic.
-    `ast_strategies.py` documents why such documents are still drawn — they
-    are well-formed, and this is not a single AST-shape predicate
-    — but a *refused* compilation is no basis for an equivalence. Left
-    unfiltered here, every draw that hits it would abort *both* compiles this
-    property needs before `equivalent()` is ever called, smothering the
-    property this task is actually responsible for. Excluded the same way
-    `compilable_documents()` excludes an edge definition in input position: narrowly, by the exact predicate
-    that names the gap, not by weakening what `workflows()` generates.
+    `ast_strategies.py` documents why such documents are still drawn — they are
+    well-formed, and this is not a single AST-shape predicate — but a *refused*
+    compilation is no basis for an equivalence. Left unfiltered here, every draw
+    that hits it would abort *both* compiles this property needs before
+    `equivalent()` is ever called, smothering the property itself. Excluded
+    narrowly, by the exact predicate that names the gap, not by weakening what
+    `workflows()` generates.
     """
     for step in document.get('steps', []):
         if not isinstance(step, dict):
@@ -282,8 +281,8 @@ def test_split_reaches_a_document_that_is_already_nested() -> None:
     _collect()  # pylint: disable=no-value-for-parameter  # @given supplies `data`
 
     assert sum(count for depth, count in depths.items() if depth >= 2), (
-        'no drawn split reached a document that already contained a subworkflow, so P29 — '
-        f'nesting, not just partitioning — went untested. Depths drawn: {dict(depths)}')
+        'no drawn split reached a document that already contained a subworkflow, so '
+        f'nesting, rather than partitioning alone, went untested. Depths drawn: {dict(depths)}')
 
 
 #: A document every constant transformation but `identity` must genuinely

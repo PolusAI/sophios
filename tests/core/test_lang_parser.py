@@ -957,7 +957,7 @@ def adversarial_yaml(draw: st.DrawFn) -> str:
 @example('steps: &a\n- id: s\n  in:\n    x: *a\n')        # cycle via steps
 @example('wic: &w\n  steps: *w\n')                        # malformed key via alias, not a cycle
 @example('wic: &w\n  steps:\n    (1, a):\n      wic: *w\n')  # cycle via sidecar
-@example('_: !& []\n')                                    # CE-06: name tag on a collection
+@example('_: !& []\n')                                    # name tag on a collection
 @example('_: !foo bar\n')                                 # unknown tag, passthrough
 @example('a: !cwl b\n')                                   # the once-missing loader constructor
 @example('_: !ii {k: v}\n')                               # collection literal, single wrap

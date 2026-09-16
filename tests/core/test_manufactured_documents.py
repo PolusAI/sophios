@@ -39,9 +39,9 @@ DOCUMENT_KEYS: Final = frozenset({'steps', 'wic'})
 #: What each site builds. Only `DOCUMENT` is a `.wic` document the language owns.
 DOCUMENT: Final = 'DOCUMENT'
 SCHEMA: Final = 'SCHEMA'          # JSON Schema, a description of documents
-RENDERER: Final = 'RENDERER'      # sophios.lang's own writer; pinned by P02/P09
+RENDERER: Final = 'RENDERER'      # sophios.lang's own writer, pinned separately
 TOOL: Final = 'TOOL'              # a CWL tool, which has `steps` only incidentally
-CONTRIB: Final = 'CONTRIB'        # outside the core zone (Spec 0)
+CONTRIB: Final = 'CONTRIB'        # outside the core zone
 
 #: Every place in `src/sophios` that builds or rewrites a document-shaped object,
 #: found by the scan below and classified by hand. Adding a site to the code

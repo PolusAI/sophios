@@ -47,8 +47,8 @@ class Strength(IntEnum):
     #: a set, two compilations of one input could differ here and IDENTICAL
     #: would have been unusable.
     #:
-    #: Order is compared *only* here, and that asymmetry is the point. Task 5's
-    #: whole subject is emitted key order — `requirements` built from a set,
+    #: Order is compared *only* here, and that asymmetry is the point. Emitted
+    #: key order is the whole subject of canonical emission — `requirements` built from a set,
     #: eight hash seeds giving eight orders — so a relation that normalised
     #: order away would make an emission-order regression invisible to the
     #: predicate written to catch it. Below IDENTICAL order is forgiven,
@@ -106,9 +106,9 @@ def equivalent(left: Yaml, right: Yaml, strength: Strength) -> Divergence | None
     key forgiven that should not be is silent. This list is the second kind,
     kept short with a reason each.
 
-    Takes no graphs. An earlier draft let a caller supply the compiler's own
-    `NodeData.graph.networkx` pair in place of the graph derived here, and
-    that was strictly worse in three ways: nothing in the suite passed them,
+    Takes no graphs. Letting a caller supply the compiler's own
+    `NodeData.graph.networkx` pair in place of the graph derived here would be
+    strictly worse in three ways: nothing in the suite passes them,
     so the branch was untested; the compiler's nodes are namespaced strings
     carrying no tool label, so they can only be matched with a bare
     `DiGraphMatcher` — the exact weak check this module exists to replace,
@@ -141,8 +141,8 @@ def _first_difference(left: Any, right: Any, strength: Strength, path: str, *,
 
     `ordered` decides whether two mappings with the same entries in a different
     sequence are the same mapping. Only IDENTICAL passes True — see that
-    member's docstring for why the asymmetry is legitimate and why Task 5
-    needs it.
+    member's docstring for why the asymmetry is legitimate and why canonical
+    emission needs it.
     """
     # pylint: disable=too-many-return-statements  # one per node kind and per
     # way that kind can disagree; collapsing them costs the path, which is the
@@ -205,22 +205,19 @@ def _stem(step_id: str) -> str:
 
 
 def _steps_of(document: Yaml) -> list[Yaml]:
-    """WILL NOT READ what the compiler does not emit.
+    """The document's steps, in the one surface form the compiler emits.
 
-    Raises `TypeError` on a mapping-form `steps:` rather than coercing it. CWL
-    admits that form and Sophios emits neither it nor an array-form `in:`;
-    treating an unhandled shape as "nothing here" made a non-list `steps:`
-    become `[]`, so two documents differing only in their steps produced two
-    empty graphs and compared *equal*. The one verdict a comparison oracle must
-    never invent is "no difference", so a shape it cannot read has to be loud.
-
-    The document's steps, in the one surface form the compiler emits.
-
-    A list, every entry a mapping carrying `id`. Anything else raises, per the
-    module docstring's WILL NOT READ: CWL admits `steps:` as a mapping keyed by
-    step name and Sophios never emits it, and coercing the unexpected shape to
-    `[]` — which an earlier draft did — made two documents differing *only* in
-    their steps into two empty graphs that compared equal.
+    WILL NOT READ what the compiler does not emit. Read by `_dataflow`, whose
+    labelled graph is the part of a document UP_TO_RENAMING compares, so a shape
+    misread here is a difference that strength was meant to catch and does not.
+    A list, every entry a mapping carrying `id`; anything else raises rather
+    than being coerced. CWL admits
+    `steps:` as a mapping keyed by step name and Sophios emits neither it nor an
+    array-form `in:`, and treating an unhandled shape as "nothing here" turns a
+    non-list `steps:` into `[]`, so two documents differing *only* in their
+    steps become two empty graphs that compare equal. The one verdict a
+    comparison oracle must never invent is "no difference", so a shape it cannot
+    read has to be loud.
 
     A step without `id` raises for the same reason rather than being filtered
     out. It has no node in the dataflow graph, so filtering made
@@ -247,7 +244,7 @@ def _in_of(step: Yaml) -> Yaml:
     """A step's `in:` mapping — the form the compiler emits, or nothing.
 
     Array-form `in: [{id: n, source: s}]` raises rather than being read as an
-    absent `in:`, per the module docstring's WILL NOT READ. It was forgiven
+    absent `in:`, for the reason `_steps_of` gives. It is otherwise forgiven
     twice over: `_FORGIVEN_STEP_KEYS` drops `in` unconditionally, and neither
     this reader nor `_bindings` put a non-mapping back, so every binding's
     `default`, `valueFrom` and `linkMerge` went uncompared along with its
@@ -310,8 +307,8 @@ def _step_body(step: Yaml) -> Any:
 
     Covers `out`, `scatter`, `scatterMethod`, `when`, `label`, `doc`, a
     binding's `default` and `valueFrom` — all of which are name-stable and
-    meaning-carrying, and all of which an earlier draft compared not at all,
-    so that flipping `when` from `$(true)` to `$(false)` was equivalence.
+    meaning-carrying, and none of which the forgiven set covers. Compared
+    nowhere, flipping `when` from `$(true)` to `$(false)` would be equivalence.
     """
     body = {k: v for k, v in step.items() if k not in _FORGIVEN_STEP_KEYS}
     if 'in' in step:

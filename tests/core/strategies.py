@@ -15,7 +15,7 @@ identifiers = st.text('abcdefghijklmnopqrstuvwxyz_', min_size=1, max_size=8)
 #: Scalar payloads as YAML source text, spelled to include exactly what a
 #: [a-z_]-only alphabet can never produce: type-ambiguous quoted strings,
 #: exponent floats and specials, null, dates. Four round-trip defects traced to
-#: its findings to the old alphabet's blind spot; these are its complement.
+#: the old alphabet's blind spot; this list is its complement.
 scalar_payload_texts = st.sampled_from([
     'x', '0', '-3', '1.5', '1.0e+300', '.inf', '.nan',
     'true', 'false', 'null', 'on', '2020-01-01',

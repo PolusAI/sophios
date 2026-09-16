@@ -612,8 +612,8 @@ class Forms:  # pylint: disable=too-few-public-methods  # a namespace, not a typ
 
     Kept side by side and in one namespace because the language's claim is that
     the two spellings are equivalent (§6.1). Splitting them into separate
-    module globals is how they drift apart — which is exactly the defect this
-    recorded. Both tables are read-only views.
+    module globals is how the two tables drift apart. Both tables are read-only
+    views.
     """
 
     #: Tagged spellings — what people write. `!&` (`Tag.ANCHOR`) is
@@ -840,8 +840,8 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
     if _is_edge_def(node):
         # Both spellings, in every position `_opaque` walks. Catching only the
         # tagged one would let `{wic_anchor: n}` through exactly where `!& n`
-        # is refused, which is the two-surfaces-one-language divergence this
-        # was about. `out:` never reaches here — `_out_edge_def` owns it.
+        # is refused: one language, two surfaces, diverging.
+        # `out:` never reaches here — `_out_edge_def` owns it.
         return _input_value(node, file, diags)
 
     if node.tag in (Tag.ANCHOR, Tag.ALIAS, Tag.RAW_CWL) or (

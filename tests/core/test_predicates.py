@@ -72,7 +72,7 @@ def test_distinct_ports_never_collide_after_namespacing(yml: Yaml) -> None:
     which supplies stems containing both separators directly. Subworkflow
     steps are skipped: their ports come from the subtree, so reconstructing
     them independently would mean recursing through it, and the relative
-    namespacing that governs them is what plan Task 4's `split` rewrite
+    namespacing that governs them is what the `split` rewrite
     already quantifies over. A workflow the compiler *diagnoses* is skipped
     rather than failed: this claim is about the ports a successful compilation
     produces, and a rejected document has none.

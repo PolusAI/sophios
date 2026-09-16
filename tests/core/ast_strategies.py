@@ -262,14 +262,14 @@ def documents(draw: st.DrawFn) -> Document:
     downstream quantify over documents that fail before reaching the compiler.
 
     Up front, and not by drawing a step and discarding it on a collision, which
-    is what an earlier draft did and which cost two things. A discarded step
-    had already appended its `!&` names to `defined_edges` — document-scoped by
-    design — and nothing un-appended them, so a later step could draw an `!*`
+    costs two things. A discarded step would already have appended its `!&`
+    names to `defined_edges` — document-scoped by design — and nothing
+    un-appends them, so a later step could draw an `!*`
     reference to an edge no surviving step defines. `compile_hermetic` passes
     `testing=True`, and `compiler.py:784` raises for a dangling edge only when
     `not testing`, so that document did not fail: the compiler added a CWL
     input "for testing only" where the edge should have been, and the corrupted
-    document reached every Task 3-7 property — including the relation, whose
+    document reached every compile-driving property — including the relation, whose
     entire subject is which port is fed from where. The distribution suffered
     too: a mapping-form document asking for four steps routinely got two, so
     `count` did not mean what it said.
@@ -337,7 +337,7 @@ def documents(draw: st.DrawFn) -> Document:
 #: parse-level properties quantify over the whole language, and trimming the
 #: generator to dodge a compiler gap is the narrowing the binding constraints
 #: forbid. `compilable_documents()` is the subset with these filtered out,
-#: for properties (Tasks 3-7) that need their input to actually compile. Keys
+#: for properties that need their input to actually compile. Keys
 #: name the exclusion, not a `CONSTRUCTS` row: the one entry this ever held was
 #: `edge_def_in_input`, an AST *shape* narrower than any single construct.
 #:
@@ -374,14 +374,14 @@ def compilable_documents() -> SearchStrategy[Document]:
     which value met which input. A property needing a successful compile skips
     those draws instead; see `_hits_the_scalar_coercion_gap`.
 
-    The strategy Tasks 3-7 need: partition independence and the other
+    The strategy the compile-driving properties need: partition independence and the other
     compile-driving properties cannot compare two compilations of a document
     that does not compile, so they quantify over this, not over `documents()`
     itself. `CONSTRUCTS` and the parse-level properties still use
     `documents()` — the whole language, unfiltered — so this function's
     narrowing is not the narrowing the binding constraints forbid; it is the
-    generator drawing a line between "the language" and "what Tasks 3-7 can
-    use today", with that line named and tested rather than silent.
+    generator drawing a line between "the language" and "what those properties
+    can use today", with that line named and tested rather than silent.
     """
     # pylint: disable=no-member  # see workflows()'s identical disable, below
     return documents().filter(lambda d: not any(pred(d) for pred in _EXCLUSION_PREDICATES.values()))
@@ -452,7 +452,7 @@ def workflows_with_documents() -> SearchStrategy[tuple[Document, Yaml]]:
 
 
 def workflows() -> SearchStrategy[Yaml]:
-    """The strategy Tasks 3-7 quantify over: `compilable_documents()` mapped
+    """The strategy the compile-driving properties quantify over: `compilable_documents()` mapped
     through `to_yml`, not `documents()` itself. Those properties compile their
     input (partition independence compares two compilations; it cannot do
     that with a document that does not compile once), so this excludes

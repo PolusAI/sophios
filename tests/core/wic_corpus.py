@@ -20,9 +20,9 @@ from sophios import plugins
 from sophios.cli import get_args
 
 #: In-repo fallback when no config exists: a pure read, so collecting the
-#: suite on a fresh machine provisions nothing (`pytest --collect-only` used
-#: to write ~/wic/global_config.json and copy adapters as a side effect,
-#: which a round-trip property found).
+#: suite on a fresh machine provisions nothing. Reading the user's config
+#: instead writes ~/wic/global_config.json and copies adapters, which makes
+#: `pytest --collect-only` provision the environment it is meant to inspect.
 _IN_REPO_DIRS: Final = (
     Path(__file__).resolve().parents[2] / 'docs' / 'tutorials',
     Path(__file__).resolve().parents[2] / 'examples',

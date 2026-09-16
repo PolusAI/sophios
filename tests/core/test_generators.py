@@ -77,7 +77,7 @@ def test_the_compilable_subset_still_reaches_every_construct_it_does_not_exclude
     reach without anything going red — `documents()` keeps producing the whole
     language, so coverage stays green no matter what the filter removes. An
     exclusion predicate of `lambda d: True` empties the strategy entirely, and
-    every test in this file still passes.
+    without the check below every test in this file would still pass.
 
     So the filter is held to the same standard as the generator. An exclusion
     that costs a construct has to be argued for by whoever adds it, here, in
@@ -104,7 +104,7 @@ def test_the_compilable_subset_still_reaches_every_construct_it_does_not_exclude
     missing = [c for c in strat.CONSTRUCTS if not seen[c]]
     assert not missing, (
         f'{missing} never appeared in 500 documents drawn from compilable_documents(), '
-        f'so every Task 3-7 property is silent about them. Active exclusions: '
+        f'so every compile-driving property is silent about them. Active exclusions: '
         f'{sorted(strat.NOT_YET_COMPILABLE)}.\nSeen: {dict(seen)}'
     )
 
@@ -123,7 +123,7 @@ def test_every_ill_formed_document_earns_its_own_diagnostic(case: tuple[str, obj
 
 @pytest.mark.slow
 def test_the_workflows_strategy_produces_documents_the_compiler_accepts() -> None:
-    """`workflows()` is what Tasks 3-7 quantify over, and nothing exercised it.
+    """`workflows()` is what the compile-driving properties quantify over.
 
     Every claim `documents()` and `compilable_documents()` make is about the
     AST; `workflows()` is `to_yml` on top, and `to_yml` is the only part of
@@ -176,7 +176,7 @@ def test_the_workflows_strategy_produces_documents_the_compiler_accepts() -> Non
     for form in ('mapping', 'sequence'):
         assert compiled[form], (
             f'no {form}-form document from workflows_with_documents() compiled, so every '
-            f'Task 3-7 property is quantifying over the other form alone: {dict(compiled)}')
+            f'compile-driving property is quantifying over the other form alone: {dict(compiled)}')
     assert compiled['mapping'] + compiled['sequence'] > compiled['drawn'] // 2, (
         f'fewer than half the documents workflows() is a projection of compile: '
         f'{dict(compiled)}')
@@ -191,8 +191,8 @@ def test_every_edge_a_document_references_is_defined_in_that_document() -> None:
     and adds a CWL input "for testing only" where the edge should have been. So
     a leaked edge name does not produce a failure, it produces a *different
     workflow* — one with one fewer internal edge and one more workflow input —
-    and every Task 3-7 property then quantifies over documents other than the
-    ones the generator believes it built.
+    and every compile-driving property then quantifies over documents other
+    than the ones the generator believes it built.
 
     That is what discarding a duplicate-stem step used to do: the discarded
     step's `!&` names stayed in the document-scoped `defined_edges`, and a

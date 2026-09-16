@@ -4,7 +4,7 @@
 that order out: `maybe_add_requirements` set the emitted `requirements:` key
 order (eight seeds, eight orders), `add_yamldict_keyval_out` set a step's
 `out:` list order (six seeds, three orders), and the speculative-insertion list
-in the compiler does the same behind a default-off flag.
+in the compiler is deduplicated through one behind a default-off flag.
 
 Stated as sortedness rather than as agreement across interpreters: the hash
 seed is the symptom, and sortedness is checkable per example at 0.1s without a
@@ -188,12 +188,11 @@ def _site_of(line: int, spans: list[tuple[int, int, str]]) -> str:
 def _set_iteration_violations(tree: ast.AST) -> list[tuple[int, str]]:
     """Every place a `set(...)` call is iterated into an ordered structure.
 
-    Total rule, not a shape catalogue
-    three, where a scan that enumerated the shapes it knew about missed the
-    two the PR had just fixed (a `.get()`/`.setdefault()` default, and a
-    keyword-only parameter default — neither is an assignment node). Applied
-    here the same way `test_cwl_version.py`'s literal scan applies it: walk
-    every node with `ast.walk` and match the offending node's own shape,
+    A total rule, not a catalogue of shapes. A scan that enumerates the shapes
+    it knows about misses the ones it does not — a `.get()`/`.setdefault()`
+    default and a keyword-only parameter default are neither of them assignment
+    nodes. Applied here the same way `test_cwl_version.py`'s literal scan
+    applies it: walk every node with `ast.walk` and match the offending node's own shape,
     never the shape of whatever statement happens to contain it, so a
     `list(set(x))` inside a `return`, a dict value, or a function argument is
     caught exactly like one inside a plain assignment.
@@ -238,7 +237,7 @@ def _set_iteration_sites(tree: ast.AST) -> list[tuple[str, str]]:
     return [(_site_of(line, spans), shape) for line, shape in _set_iteration_violations(tree)]
 
 
-#: Pre-existing set-into-ordered-structure calls outside Task 5's three named
+#: Pre-existing set-into-ordered-structure calls outside the three named
 #: sites (`utils_cwl.py`'s two and `compiler.py`'s one, all fixed above).
 #: Pinned to a (function, shape) site rather than a whole file, so a new
 #: violation elsewhere is caught rather than silently covered, and a repeat of

@@ -429,7 +429,7 @@ def test_only_identical_compares_key_order() -> None:
     """IDENTICAL is a claim about bytes; the weaker two are claims about a
     workflow, and a YAML mapping is unordered by its own specification.
 
-    Task 5's subject is emitted key order — `requirements` built from a set,
+    Emitted key order is the subject here — `requirements` built from a set,
     eight hash seeds giving eight orders — so a relation that normalised order
     away at every strength would make the regression that predicate exists to
     catch invisible to it.
@@ -516,7 +516,7 @@ def test_isomorphism_alone_would_not_be_enough() -> None:
     relation a migration imports must not be the one already in the tree.
 
     Asserts the *verdict*, not the path string. Asserting
-    `'tool multiset' in found.path`, which is this project's recurring failure
+    `'tool multiset' in found.path` would be this project's recurring failure
     written into the artifact everything imports: a separate stem-multiset
     check had by then been subsumed by the labelled isomorphism, so the name of
     the test claimed a discrimination the code no longer performed and only the
@@ -540,8 +540,8 @@ def test_the_dag_check_sees_a_port_rewired_onto_a_different_workflow_input() -> 
     Every argument a step does not receive from another step is emitted as
     `in: {arg: {source: {step_id}___{arg}}}` against a declared workflow-level
     input — the majority of the bindings in any compiled document. Those
-    sources name no producer, so an earlier draft skipped them entirely, and
-    with them skipped the two documents below were UP_TO_RENAMING-equal: both
+    Those sources name no producer, and skipping them on that ground makes the
+    two documents below UP_TO_RENAMING-equal: both
     declare a `File` input and a `string` input, both have one step and no
     edges, and which port reads which was nowhere in the comparison.
 
