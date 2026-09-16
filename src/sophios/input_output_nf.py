@@ -214,7 +214,11 @@ def _process_output(port: NfPort) -> str:
     # The two options are independent: one says how the name is matched, the
     # other how many matches the author declared. A text capture returns
     # above, so neither reaches a val declaration.
-    literal = ", glob: false" if _glob_names_one_file(port.glob) else ""
+    literal = (
+        ", glob: false"
+        if port.capture == "single" or _glob_names_one_file(port.glob)
+        else ""
+    )
     # A "single" capture marker is the CWL author's own cardinality
     # declaration, so it is stated in the generated pipeline rather than
     # dropped: arity: '1' emits one path value and fails on no match.

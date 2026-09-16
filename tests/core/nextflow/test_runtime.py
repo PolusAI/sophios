@@ -1199,15 +1199,16 @@ def test_a_scattered_step_broadcasts_an_unscattered_file_input(tmp_path: Path) -
 @pytest.mark.nextflow
 @pytest.mark.serial
 def test_a_cardinality_declaration_runs_and_emits_one_path(tmp_path: Path) -> None:
-    """R2.18: outputEval $(self[0]) over a literal glob emits a single path value."""
+    """R2.18: a Nextflow metacharacter stays literal in a single capture."""
+    literal_name = "out{1,2}.txt"
     write_tool = (
         CommandLineTool(
             "write_one",
             Inputs(message=Input(cwl.string, position=1)),
-            Outputs(result=Output(cwl.file, glob="out.txt", output_eval="$(self[0])")),
+            Outputs(result=Output(cwl.file, glob=literal_name, output_eval="$(self[0])")),
         )
         .base_command("echo")
-        .stdout("out.txt")
+        .stdout(literal_name)
     )
     write = Step(write_tool, step_name="write_one")
     write.inputs.message = "one match only"
@@ -1216,11 +1217,14 @@ def test_a_cardinality_declaration_runs_and_emits_one_path(tmp_path: Path) -> No
     workflow.outputs.only = write.outputs.result
 
     paths = workflow.to_nextflow(tmp_path)
-    assert "path 'out.txt', arity: '1', emit: result" in paths[1].read_text(encoding="utf-8")
+    assert (
+        "path 'out{1,2}.txt', glob: false, arity: '1', emit: result"
+        in paths[1].read_text(encoding="utf-8")
+    )
 
     result = execute_nextflow(tmp_path)
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    produced = list((tmp_path / "work").rglob("out.txt"))
+    produced = list((tmp_path / "work").rglob(literal_name))
     assert len(produced) == 1
     assert produced[0].read_text(encoding="utf-8") == "one match only\n"
 

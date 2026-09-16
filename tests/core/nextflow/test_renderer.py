@@ -509,9 +509,25 @@ def test_a_capture_marker_renders_as_a_single_valued_path_output() -> None:
         "wf", [declared, undeclared], [], {}
     ))
 
-    assert "    path 'out.txt', arity: '1', emit: result\n" in rendered
+    assert "    path 'out.txt', glob: false, arity: '1', emit: result\n" in rendered
     assert "    path 'out.txt', emit: result\n" in rendered
     assert rendered.count("arity: '1'") == 1
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("glob", ["out{1,2}.txt", r"out\literal.txt"])
+def test_a_capture_marker_disables_nextflow_only_glob_metacharacters(glob: str) -> None:
+    process = NfProcess(
+        "CAPTURE",
+        [],
+        [NfPort("result", "path", "result", NfTemplate((NfLiteral(glob),)), capture="single")],
+        command("true"),
+    )
+
+    rendered = render_nextflow(ExecutableNextflowWorkflow("wf", [process], [], {}))
+    output_line = next(line for line in rendered.splitlines() if "arity: '1'" in line)
+
+    assert "glob: false, arity: '1'" in output_line
 
 
 def _text_capture_workflow() -> ExecutableNextflowWorkflow:
