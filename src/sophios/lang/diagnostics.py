@@ -56,6 +56,8 @@ class Code(StrEnum):
     FIXED_POINT_NOT_REACHED = 'wic022'
     INCOMPATIBLE_INPUT_REFERENCE = 'wic023'
     RESERVED_KEY = 'wic024'
+    UNDEFINED_EDGE = 'wic025'
+    DUPLICATE_EDGE_DEF = 'wic026'
     RECURSIVE_ALIAS = 'wic030'
 
 

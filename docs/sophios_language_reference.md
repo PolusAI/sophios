@@ -245,6 +245,52 @@ The syntax layer is deliberately stricter than the loader here. It may never
 be more permissive; stricter is how a construct with no meaning stops being
 accepted.
 
+### 4.1.2 An edge reference names a definition
+
+`!* name` names an edge that `!& name` defines. Within one compilation — a root
+document and the subworkflows it includes — that definition must exist, and
+must be the only one:
+
+- a reference with no definition is `wic025`;
+- a name defined twice is `wic026`, because an edge name identifies one
+  producer and a second definition leaves no way to say which output is meant.
+
+A definition that nothing references is **not** an error. That is how a
+workflow names an artifact it produces for a consumer outside itself.
+
+The rule is per *compilation*, not per file. A document included as a
+subworkflow may reference an edge its includer defines, which is why the check
+runs at the root and not at every level.
+
+#### A document needing a value from outside declares it
+
+`!*` is not the way to ask for something the compilation does not produce. A
+document that expects a value from whoever includes it declares a parameter in
+`inputs:` and references it **by bare name**:
+
+```yaml
+inputs:
+  sdf_path:
+    type: File
+    format: [edam:format_3814]
+
+steps:
+  convert:
+    in:
+      input_path: sdf_path          # a declared parameter, bound by the includer
+    out:
+    - output_mol2_path: !& ligand.mol2
+  minimize:
+    in:
+      input_mol2_path: !* ligand.mol2   # an edge, defined above
+```
+
+The two spellings answer different questions. A bare name asks the *includer*
+(or the user, when the document is compiled alone) for a value; `!*` asks the
+*compilation* for an edge. A document's `inputs:` block is therefore its
+interface, and saying what it expects is what distinguishes a workflow that is
+complete from one that is meant to be included.
+
 ### 4.1.1 `!&` is not an input form
 
 `!&` defines an edge, and an edge is defined where its value comes into being

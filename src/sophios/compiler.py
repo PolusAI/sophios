@@ -809,8 +809,11 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                         setup.explicit_edge_calls_copy.update(
                             {edgedef: (namespaces + [step_name_or_key], out_key)})
                     else:
-                        raise ValueError(
-                            f"Error! Multiple definitions of &{edgedef}!")
+                        raise SophiosError.error(
+                            Code.DUPLICATE_EDGE_DEF,
+                            f"'&{edgedef}' is defined more than once. An edge name identifies "
+                            f'one producer within a compilation, so a second definition leaves '
+                            f'no way to say which output a reference means.')
 
         # NOTE: sub_args_provided are handled within the args_required loop below
         for arg_key in args_provided:
@@ -869,8 +872,11 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                             # recompile all subworkflows as if they were root. That
                             # will cause this code path to be taken but it is not
                             # actually an error. Add a CWL input for testing only.
-                            raise ValueError(
-                                f"Error! No definition found for !&{arg_val}!")
+                            raise SophiosError.error(
+                                Code.UNDEFINED_EDGE,
+                                f"'!* {arg_val}' names an edge nothing defines. Define it with "
+                                f"'!& {arg_val}' on the producing step's out:, or declare it in "
+                                f"this document's inputs: and bind it by name.")
                         setup.inputs_workflow.update({in_name: in_dict})
                         setup.steps[i]['in'][arg_key] = {'source': in_name}
                         # Add a 'dummy' value to explicit_edge_calls anyway, because

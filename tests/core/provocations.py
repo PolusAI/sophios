@@ -40,6 +40,43 @@ PARSE: Final[dict[Code, str]] = {
 COMPILED: Final[dict[Code, Callable[[], object]]] = {}
 
 
+def _compile_as_root(yml: dict) -> None:
+    """Compile as a real root would: `testing=False`.
+
+    `compile_harness` and `hermetic` both pass `testing=True`, which is what
+    lets `test_cwl_embedding_independence` recompile every subworkflow as if it
+    were root. That branch absorbs an undefined edge into a workflow input, so
+    the production path these two codes live on is reachable no other way.
+    """
+    import sophios.cli  # pylint: disable=import-outside-toplevel
+    import sophios.compiler  # pylint: disable=import-outside-toplevel
+    from sophios.utils_graphs import get_graph_reps  # pylint: disable=import-outside-toplevel
+    from sophios.wic_types import StepId, YamlTree  # pylint: disable=import-outside-toplevel
+
+    from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS  # pylint: disable=import-outside-toplevel
+
+    options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
+    sophios.compiler.compile_workflow(
+        YamlTree(StepId('provoke', SYNTHETIC_NS), yml), options, graph_settings, tag_paths,
+        [], [get_graph_reps('provoke')], {}, {}, {}, {}, SYNTHETIC_TOOLS,
+        True, relative_run_path=True, testing=False)
+
+
+def _provoke_undefined_edge() -> None:
+    _compile_as_root({'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}},
+        {'id': 'sink', 'in': {'file': {'wic_alias': 'nothing_defines_this'}}}]})
+
+
+def _provoke_duplicate_edge_def() -> None:
+    _compile_as_root({'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}},
+         'out': [{'file': {'wic_anchor': 'twice'}}]},
+        {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'b'}},
+         'out': [{'file': {'wic_anchor': 'twice'}}]},
+        {'id': 'sink', 'in': {'file': {'wic_alias': 'twice'}}}]})
+
+
 def _compile_minimal(yml: dict) -> None:
     """Compile one in-memory workflow with the real tool registry.
 
@@ -174,4 +211,10 @@ def _provoke_incompatible_input_reference() -> None:
 
 COMPILED.update({
     Code.INCOMPATIBLE_INPUT_REFERENCE: _provoke_incompatible_input_reference,
+})
+
+
+COMPILED.update({
+    Code.UNDEFINED_EDGE: _provoke_undefined_edge,
+    Code.DUPLICATE_EDGE_DEF: _provoke_duplicate_edge_def,
 })
