@@ -10,22 +10,22 @@ with open(config_file, 'r', encoding='utf-8') as f:
 
 conf_tags = ['search_paths_cwl', 'search_paths_wic']
 
-cwl_locations = [            
-                "image-workflows/cwl_adapters",
-                "biobb_adapters/biobb_adapters",
-                "mm-workflows/cwl_adapters",
-                "sophios/cwl_adapters"
-                ]
+cwl_locations = [
+    "image-workflows/cwl_adapters",
+    "biobb_adapters/biobb_adapters",
+    "mm-workflows/cwl_adapters",
+    "sophios/cwl_adapters"
+]
 
 wic_locations = [
-                "sophios/docs/tutorials",
-                "image-workflows/workflows",
-                "mm-workflows/examples"
-                ]
+    "sophios/docs/tutorials",
+    "image-workflows/workflows",
+    "mm-workflows/examples"
+]
 
 gpu_cwl_locations = [
-                    "mm-workflows/gpu"
-                    ]
+    "mm-workflows/gpu"
+]
 
 
 updated_cwl_locations = []

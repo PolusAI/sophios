@@ -370,6 +370,53 @@ def test_a_path_that_does_not_resolve_raises_rather_than_vanishing() -> None:
         _paths_of(['tests/core/no_such_file.py'])
 
 
+#: Every test that does not run on the Windows leg, and the evidence that
+#: excluding it takes nothing away: each one ran *nowhere* until a lane step
+#: named its file, so none has ever executed on Windows. Measured on the
+#: `Lint And Test` Windows job, where the step that names them selects 45 tests
+#: — 35 pass and these 10 fail on `import pwd`.
+#:
+#: `test_canonical_path.py`'s two are reached only by `build_wheel.yml`, which
+#: is `runs-on: ubuntu-latest`, so they have no Windows run to lose either.
+#:
+#: The list is the claim. Growing it is a deliberate edit here, not a marker
+#: added in passing, because every entry is Windows coverage given up.
+WINDOWS_EXCLUDED: Final = frozenset({
+    'tests/core/test_canonical_path.py::test_compiled_output_validates_as_cwl',
+    'tests/core/test_canonical_path.py::test_cwltool_validate_rejects_an_invalid_document',
+    'tests/core/test_hermeticity.py::test_every_stub_is_valid_cwl',
+    'tests/core/test_lang_version.py::test_annotation_is_declared_and_the_cwl_stays_valid',
+    'tests/core/test_leak_boundary.py::test_residue_validates_as_cwl_v1_2',
+})
+
+
+@pytest.mark.fast
+def test_no_test_leaves_the_windows_leg_without_being_listed() -> None:
+    """The set of tests skipped off POSIX is exactly the recorded one.
+
+    `needs_cwltool` is what `conftest.py` skips on Windows, so marking a test
+    with it removes that test from one leg of the matrix. That is a cost, and
+    the point of pinning the inventory is that paying it has to be deliberate:
+    a marker added in passing fails here, and so does one removed.
+
+    The membership was not derived by reading imports. It is the failure list
+    from the Windows job, checked back against which lane collected each test
+    before — all five ran nowhere at all until a step named their files.
+    """
+    marked = {
+        f'{path.relative_to(REPO_ROOT).as_posix()}::{test}'
+        for path in _test_files()
+        for test, markers in _marked_tests(path).items()
+        if 'needs_cwltool' in markers
+    }
+    assert marked == WINDOWS_EXCLUDED, (
+        'the set of tests excluded from the Windows leg has changed.\n'
+        f'  newly excluded: {sorted(marked - WINDOWS_EXCLUDED) or "none"}\n'
+        f'  no longer excluded: {sorted(WINDOWS_EXCLUDED - marked) or "none"}\n'
+        'Update WINDOWS_EXCLUDED if that is intended, and say what the test now costs.'
+    )
+
+
 @pytest.mark.fast
 def test_every_cwltool_test_declares_that_it_needs_cwltool() -> None:
     """A test that calls cwltool must say so, because cwltool is POSIX-only.

@@ -1,19 +1,22 @@
-"""Python API surfaces that used to live as example scripts nothing ran.
+"""What the shipped Python API workflows compile *to*, not merely that they compile.
 
-`examples/scripts/` was documentation that happened to be executable: CI
-type-checked, linted and formatted it and never executed one file.
-`test_compile_python_workflows` discovers through `search_paths_wic`, which
-reaches the corpus repositories and `docs/tutorials` — and `docs/tutorials`
-holds no `.py` files at all. So an example could stop compiling and every lane
-that touched it would stay green.
+`examples/workflows/` is a `search_paths_wic` entry, so every script in it is
+discovered, imported and compiled by `test_compile_python_workflows` and then
+schema-validated by `test_validate_generated_python_workflows` — the same two
+steps that carry `image-workflows/workflows/bbbc.py`. That mechanism asserts
+one thing: no exception escaped.
 
-Three of them were carrying claims no test made, so the claims moved here and
-the scripts are gone. `tool_builder_workflow.py` stays where it is: it has a
-walkthrough page of its own that links it and tells a reader to run it, and it
-is imported below rather than copied, so there is still exactly one of it.
+It cannot see whether a `when` expression reached the emitted CWL, or which
+`scatterMethod` was chosen. Those are the claims here, made against the same
+files the mechanism runs, imported rather than copied — one workflow, two
+claims about it.
 
-Compiled, never executed. These assert the shape of the emitted CWL; whether a
-runner can execute it is `run_workflows.yml`'s question.
+Until this existed, `examples/scripts/` was in no search path at all, so CI
+type-checked and linted those files and never executed one. A script could stop
+compiling with every lane green.
+
+Compiled, never executed. Whether a runner can execute the result is
+`run_workflows.yml`'s question.
 """
 import json
 from pathlib import Path
@@ -27,6 +30,23 @@ from sophios.python_cwl_adapter import import_python_file
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ADAPTERS = REPO_ROOT / 'cwl_adapters'
 HERE = Path(__file__).resolve().parent
+WORKFLOWS = REPO_ROOT / 'examples' / 'workflows'
+
+
+def _discovered(stem: str) -> Any:
+    """Import a shipped Python workflow the way discovery does.
+
+    `examples/workflows/` is a `search_paths_wic` entry, so
+    `test_compile_python_workflows` already imports each script there and calls
+    its `workflow()` — the same path `image-workflows/workflows/bbbc.py` takes.
+    That proves the script compiles and nothing more, because it asserts only
+    that no exception escaped. These tests import the same file and assert what
+    the compiled document actually says, so there is one copy of each workflow
+    and two claims about it.
+    """
+    path = WORKFLOWS / f'{stem}.py'
+    assert path.is_file(), f'{path} is a discovered Python workflow and must exist'
+    return import_python_file(stem, path.resolve())
 
 
 def _steps(compiled: Any) -> dict[str, dict[str, Any]]:
@@ -44,14 +64,7 @@ def test_a_conditional_step_carries_its_when_expression() -> None:
     conditional step into an unconditional one, which is a silent change of
     meaning rather than an error.
     """
-    to_string = Step(clt_path=ADAPTERS / 'toString.cwl')
-    to_string.inputs.input = 27
-
-    echo = Step(clt_path=ADAPTERS / 'echo.cwl')
-    echo.inputs.message = to_string.outputs.output
-    echo.when = '$(inputs.message < "27")'
-
-    steps = _steps(Workflow([to_string, echo], 'when_pyapi_py').compile())
+    steps = _steps(_discovered('when_pyapi').workflow().compile())
 
     assert steps['echo'].get('when') == '$(inputs.message < "27")'
     assert 'when' not in steps['toString'], 'only the step that declared it may carry when'
@@ -66,15 +79,7 @@ def test_scattering_one_input_defaults_to_dotproduct() -> None:
     array, and losing the key entirely would run the step once on the whole
     array instead.
     """
-    array_ind = Step(clt_path=ADAPTERS / 'array_indices.cwl')
-    array_ind.inputs.input_array = ['hello world', 'not', 'what world?']
-    array_ind.inputs.input_indices = [0, 1]
-
-    echo = Step(clt_path=ADAPTERS / 'echo.cwl')
-    echo.inputs.message = array_ind.outputs.output_array
-    echo.scatter_on(echo.inputs.message)
-
-    steps = _steps(Workflow([array_ind, echo], 'scatter_pyapi_py').compile())
+    steps = _steps(_discovered('scatter_single_pyapi').workflow().compile())
 
     assert steps['echo'].get('scatter') == ['message']
     assert steps['echo'].get('scatterMethod') == 'dotproduct'

@@ -527,13 +527,17 @@ The following examples are intended to be quick to read and quick to run:
 - `examples/scripts/reusable_interface_pyapi.py`: reusable workflow interface example.
 - `examples/scripts/tool_builder_workflow.py`: generated CLTs composed in memory.
 - `examples/scripts/compute_request_workflow.py`: Python workflow to validated compute request.
+- `examples/workflows/when_pyapi.py`: conditional execution.
+- `examples/workflows/scatter_pyapi.py`: scatter over two array-valued bindings.
+- `examples/workflows/scatter_single_pyapi.py`: scatter over one.
 
 The Ichnaea and SAM3 walkthroughs are larger, production-oriented examples with
 heavier runtime assumptions.
 
-Conditional execution, single-input scatter and the compiled-JSON comparison
-were example scripts that nothing ran; they are now
-`tests/core/test_example_scripts.py`, which compiles each one on every change.
+`examples/workflows/` holds Python API workflows that CI discovers and compiles
+the same way it does the image-workflows corpus — a script there defines
+`workflow()` and keeps `.run()` behind `__main__`. What each one compiles *to*
+is asserted in `tests/core/test_example_scripts.py`.
 
 ## Next Steps
 

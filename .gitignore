@@ -25,3 +25,8 @@ validation_*.txt
 .env
 node_modules/
 run.sh
+
+# test_compile_python_workflows writes the compiled .wic and a config_ci.json
+# beside each discovered Python workflow.
+examples/workflows/*.wic
+examples/workflows/config_ci.json
