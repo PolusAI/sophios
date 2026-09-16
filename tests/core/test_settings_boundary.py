@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any, Final
 
 import pytest
+
+from .source_scan import REPO_ROOT, SRC, not_vacuous, package_files
 import yaml
 
 import sophios.cli
@@ -32,19 +34,12 @@ import sophios.compiler
 import sophios.main
 from sophios.wic_types import CompilerOptions, GraphSettings, YamlTagPaths
 
-REPO_ROOT: Final = Path(__file__).resolve().parents[2]
-SRC: Final = REPO_ROOT / 'src' / 'sophios'
 
 #: The one module that may hold an `argparse.Namespace`: it makes them.
 PARSER_MODULE: Final = SRC / 'cli.py'
 
 #: The CLI entry point, which parses and immediately converts.
 CLI_ADAPTER: Final = SRC / 'main.py'
-
-
-def _python_files() -> list[Path]:
-    """Every Python file in the package."""
-    return sorted(SRC.rglob('*.py'))
 
 
 @pytest.mark.fast
@@ -57,7 +52,7 @@ def test_the_scans_are_pointed_at_something() -> None:
     would pass without reading a line. Proving the matcher works is not the
     same as proving it was aimed at anything.
     """
-    assert _python_files(), 'no package modules discovered; the scan is broken'
+    not_vacuous(package_files(), 'package modules')
 
 
 def _patches_argv(tree: ast.AST) -> list[int]:
@@ -73,7 +68,7 @@ def _patches_argv(tree: ast.AST) -> list[int]:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('path', _python_files(), ids=lambda p: str(p.relative_to(SRC)))
+@pytest.mark.parametrize('path', package_files(), ids=lambda p: str(p.relative_to(SRC)))
 def test_no_module_synthesises_a_command_line(path: Path) -> None:
     """Configuration is never obtained by faking argv."""
     lines = _patches_argv(ast.parse(path.read_text(encoding='utf-8'), str(path)))
@@ -108,7 +103,7 @@ def _namespace_parameters(tree: ast.AST) -> list[tuple[int, str]]:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('path', _python_files(), ids=lambda p: str(p.relative_to(SRC)))
+@pytest.mark.parametrize('path', package_files(), ids=lambda p: str(p.relative_to(SRC)))
 def test_no_library_function_accepts_a_namespace(path: Path) -> None:
     """A `Namespace` is a CLI type, so only the CLI passes one.
 

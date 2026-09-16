@@ -26,6 +26,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from functools import partial
+
 import pytest
 import yaml
 from hypothesis import HealthCheck, given, settings
@@ -53,9 +55,8 @@ COMPILER_OWNED_TOP_KEYS = frozenset({
 })
 
 
-def _compile(yml: Yaml) -> Yaml:
-    """Compile one in-memory workflow and return the emitted CWL."""
-    return compile_cwl(yml, 'leak')
+#: `compile_cwl` under this file's name, so every call site reads the same.
+_compile = partial(compile_cwl, name='leak')
 
 
 def _step(cwl: Yaml) -> Yaml:

@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+
+from .source_scan import REPO_ROOT, SRC, package_files
 import yaml
 from jsonschema import Draft202012Validator
 
@@ -24,8 +26,6 @@ from sophios.lang.cwl import CWL_VERSION, CWL_VERSIONS, CwlVersion
 from sophios.python_cwl_adapter import generate_CWL_CommandLineTool
 from sophios.schemas.wic_schema import wic_main_schema
 
-REPO_ROOT: Final = Path(__file__).resolve().parents[2]
-SRC: Final = REPO_ROOT / 'src' / 'sophios'
 
 #: The one module allowed to contain version literals: it defines them.
 OWNER: Final = SRC / 'lang' / 'cwl.py'
@@ -33,7 +33,7 @@ OWNER: Final = SRC / 'lang' / 'cwl.py'
 
 def _python_files() -> list[Path]:
     """Every Python file in the package except the module that owns the values."""
-    return sorted(path for path in SRC.rglob('*.py') if path != OWNER)
+    return package_files(exclude=OWNER)
 
 
 def _version_literals(tree: ast.AST) -> list[tuple[int, str]]:

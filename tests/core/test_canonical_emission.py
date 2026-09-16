@@ -71,13 +71,12 @@ from sophios.utils_graphs import get_graph_reps
 from sophios.wic_types import Cwl, StepId, Tool, Tools, Yaml, YamlTree
 
 from . import ast_strategies as strat
+from .source_scan import REPO_ROOT, SRC, not_vacuous, package_files
 from .equivalence import Strength, equivalent
 from .hermetic import ORACLE, compile_hermetic_cwl, subworkflow_step
 from .synthetic_tools import STEMS, SYNTHETIC_NS, SYNTHETIC_TOOLS, outputs_of
 from .test_equivalences import _hits_the_scalar_coercion_gap
 
-REPO_ROOT: Final = Path(__file__).resolve().parents[2]
-SRC: Final = REPO_ROOT / 'src' / 'sophios'
 
 #: A tool this suite owns, not one of `synthetic_tools.STEMS`: reaching the
 #: `out:`-order site with more than one element needs a step with two or more
@@ -308,15 +307,10 @@ ALLOWED_SET_ITERATIONS: Final[dict[Path, frozenset[tuple[str, str]]]] = {
 }
 
 
-def _python_files() -> list[Path]:
-    """Every Python file under `src/sophios`."""
-    return sorted(SRC.rglob('*.py'))
-
-
 @pytest.mark.fast
 def test_the_scan_sees_the_repo() -> None:
     """Zero parametrized cases is a green test that enforces nothing."""
-    assert _python_files(), 'no files found under src/sophios; the scan is vacuous'
+    not_vacuous(package_files(), 'files under src/sophios')
 
 
 #: The two properties that carry the determinism claim end to end, as opposed to
@@ -353,7 +347,7 @@ def test_no_canonical_emission_test_is_uncollected() -> None:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('path', _python_files(), ids=lambda p: str(p.relative_to(SRC)))
+@pytest.mark.parametrize('path', package_files(), ids=lambda p: str(p.relative_to(SRC)))
 def test_no_set_reaches_an_ordered_structure(path: Path) -> None:
     """Outside `ALLOWED_SET_ITERATIONS`, no set may reach an ordered structure.
 
