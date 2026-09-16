@@ -268,6 +268,14 @@ jobs:
         timeout-minutes: 20
         run: cd sophios/ && pytest tests/core/test_canonical_emission.py
 
+      # Spec 3 prerequisite: the front end's opinion of the documents the
+      # compiler manufactures. Its own step because a red build here means the
+      # compiler emitted something the language refuses — a different fact from
+      # a property failing, and one worth reading without bisecting. ~3s.
+      - name: PyTest Manufactured Documents
+        if: always()
+        run: cd sophios/ && pytest tests/core/test_manufactured_documents.py
+
       # The Python API surfaces that used to be example scripts nothing executed:
       # `search_paths_wic` reaches the corpus repositories and docs/tutorials,
       # and docs/tutorials holds no .py files, so the "Generate Sophios Python
