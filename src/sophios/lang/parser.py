@@ -481,9 +481,9 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
     """
     span = SourceSpan.of(file, node)
 
-    # `_report_unknown_tags` covers the whole graph before this runs, so
-    # `!foo {wic_anchor: x}` earns `wic009` here as it does in every other
-    # position, whatever order this function checks in.
+    # `_every_node` and `_report_unknown_tag` cover the whole graph before this
+    # runs, so `!foo {wic_anchor: x}` earns `wic009` here as it does in every
+    # other position, whatever order this function checks in.
 
     if _is_edge_def(node):
         # The diagnostic comes before the name is read, so a *malformed* name
@@ -598,7 +598,7 @@ def _report_misspelled_construct(key: str, key_node: yaml.nodes.Node,
     diags.error(
         Code.RESERVED_KEY,
         f"{key!r} is not a Sophios construct, and a single-key mapping beginning 'wic_' is read as "
-        f'one. The constructs are: {", ".join(sorted(Key.ALL))}',
+        f'one. The constructs are: {", ".join(sorted(Forms.DESUGARED_KEYS))}',
         SourceSpan.of(file, key_node))
 
 

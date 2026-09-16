@@ -30,15 +30,14 @@ manufactured document is in the desugared spelling, which §6.1 says the parser
 accepts equally. That is what makes dumping one and parsing it a fair test
 rather than a round-trip through a lossy form.
 
-**BLIND SPOT, from that same fact.** The desugared spelling has no tags, so the
-unknown-tag rule cannot fire here. A manufactured `{'wic_not_a_thing': 1}` is
-indistinguishable from passthrough CWL, which §1 says is open by definition, and
-the parser accepts it — verified by mutation, which this test does not catch.
-What it does catch is structure: a step in the removed single-key form, a step
-with no `id`, a malformed `wic:` sidecar. Those are the defects this class has
-actually produced. A misspelled desugared key would need the vocabulary check
-`Grammar.SIDECAR_KEYS` already owns for `wic:`, extended to input position, and
-that is a language change rather than a test.
+**REMAINING BLIND SPOT, from that same fact.** The desugared spelling has no
+tags, so the unknown-tag rule cannot fire here. Input position is now closed:
+a single-key mapping such as `{'wic_not_a_thing': 1}` is reported as a
+misspelled construct. Outside construct position, however, `wic_`-prefixed keys
+remain passthrough by design, because §1 says that vocabulary is open. What this
+test catches is structure: a step in the removed single-key form, a step with
+no `id`, a malformed `wic:` sidecar, and a misspelled desugared construct in
+input position. It does not reserve the prefix in passthrough data.
 """
 import ast as pyast
 import importlib
@@ -336,14 +335,14 @@ def _drive_everything() -> None:
     workflow = Workflow([touch, append], 'manufactured_py')
     workflow.outputs.result = append.outputs.file
     workflow.compile()
-    # Both spellings: inlined subtrees are passthrough to the parser, so the
-    # uninlined form is what puts a subworkflow step body in front of it.
+    # Exercise the direct Python API serialization entry point as well as its
+    # compile path.
     workflow.to_wic_yaml()
 
 
 #: Documents chosen to drive the manufacturing sites rather than to be
-#: interesting themselves: a linear chain, a scattered step, an explicit edge,
-#: and a subworkflow — the shapes that make the compiler build new documents.
+#: interesting themselves: a linear chain, an explicit edge, and a `wic:`
+#: sidecar — the shapes these drivers put in front of the manufacturing sites.
 _DRIVERS: Final[list[dict[str, Any]]] = [
     {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}},
                {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'y'}}}]},
@@ -355,7 +354,6 @@ _DRIVERS: Final[list[dict[str, Any]]] = [
 ]
 
 
-@pytest.mark.fast
 @pytest.mark.slow
 @given(strat.workflows())
 @ORACLE
