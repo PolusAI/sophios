@@ -391,7 +391,7 @@ def test_a_path_that_does_not_resolve_raises_rather_than_vanishing() -> None:
     `_path_reaches` hold it to the one test it names.
     """
     assert _paths_of(['tests/core/test_ci_coverage.py']) == ['tests/core/test_ci_coverage.py']
-    assert _paths_of(['--cwl_runner', 'cwltool']) == []          # a flag's value is not a path
+    assert not _paths_of(['--cwl_runner', 'cwltool'])          # a flag's value is not a path
     assert _paths_of(['tests/core/test_ci_coverage.py::test_x']) == ['tests/core/test_ci_coverage.py::test_x']
     with pytest.raises(ValueError, match='does not exist'):
         _paths_of(['tests/core/no_such_file.py'])

@@ -37,7 +37,7 @@ for _yml_namespaces in search_paths_wic_tag:
     for yml_dir in yml_dirs:
         config_ci_json = Path(yml_dir) / 'config_ci.json'
         if config_ci_json.exists():
-            with open(config_ci_json) as f:
+            with open(config_ci_json, encoding='utf-8') as f:
                 contents = f.read().splitlines()
                 # Strip out comments. (Comments are not allowed in JSON)
                 contents = [line for line in contents if not line.strip().startswith('//')]

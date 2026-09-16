@@ -31,9 +31,24 @@ _TXT: Final = 'edam:format_2330'
 _CSV: Final = 'edam:format_3752'
 
 
-def _clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl], *, javascript: bool = False) -> Cwl:
-    """One stub CommandLineTool. `true` succeeds and produces nothing, which is
-    all a compile-only registry needs."""
+def clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl], *,
+        javascript: bool = False, canonical: bool = False) -> Cwl:
+    """One stub CommandLineTool.
+
+    `true` succeeds and produces nothing, which is all a compile-only registry
+    needs. Four modules had each grown their own copy of this shape.
+
+    Args:
+        inputs (dict[str, Cwl]): The tool's declared inputs.
+        outputs (dict[str, Cwl]): The tool's declared outputs.
+        javascript (bool): Add `InlineJavascriptRequirement`.
+        canonical (bool): Return canonical normal form, which the inference
+            and explicit-edge paths read. The compiler applies this itself
+            on the real path, so a caller bypassing the loader asks for it.
+
+    Returns:
+        Cwl: The tool document.
+    """
     tool: Cwl = {
         'cwlVersion': CWL_VERSION,
         'class': 'CommandLineTool',
@@ -44,50 +59,50 @@ def _clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl], *, javascript: bool = 
     }
     if javascript:
         tool['requirements'] = {'InlineJavascriptRequirement': {}}
-    return tool
+    return desugar_into_canonical_normal_form(tool) if canonical else tool
 
 
 _SPECS: Final[dict[str, Cwl]] = {
-    'mk_file': _clt(
+    'mk_file': clt(
         {'name': {'type': 'string', 'inputBinding': {'position': 1}}},
         {'file': {'type': 'File', 'format': _TXT,
                   'outputBinding': {'glob': '$(inputs.name)'}}},
     ),
-    'mk_text': _clt(
+    'mk_text': clt(
         {'name': {'type': 'string', 'inputBinding': {'position': 1}}},
         {'text': {'type': 'File', 'format': _CSV,
                   'outputBinding': {'glob': '$(inputs.name)'}}},
     ),
-    'xform': _clt(
+    'xform': clt(
         {'file': {'type': 'File', 'inputBinding': {'position': 1}},
          'name': {'type': 'string', 'inputBinding': {'position': 2}}},
         {'file': {'type': 'File', 'format': _TXT,
                   'outputBinding': {'glob': '$(inputs.name)'}}},
     ),
-    'join': _clt(
+    'join': clt(
         {'left': {'type': 'File', 'inputBinding': {'position': 1}},
          'right': {'type': 'File', 'inputBinding': {'position': 2}},
          'name': {'type': 'string', 'inputBinding': {'position': 3}}},
         {'file': {'type': 'File', 'format': _TXT,
                   'outputBinding': {'glob': '$(inputs.name)'}}},
     ),
-    'count': _clt(
+    'count': clt(
         {'file': {'type': 'File', 'inputBinding': {'position': 1}}},
         {'n': {'type': 'int', 'outputBinding': {'outputEval': '$(1)'}}},
         javascript=True,
     ),
-    'scale': _clt(
+    'scale': clt(
         {'n': {'type': 'int', 'inputBinding': {'position': 1}},
          'factor': {'type': 'float', 'default': 1.0, 'inputBinding': {'position': 2}}},
         {'scaled': {'type': 'float', 'outputBinding': {'outputEval': '$(1.0)'}}},
         javascript=True,
     ),
-    'poly': _clt(
+    'poly': clt(
         {'value': {'type': ['int', 'string'], 'inputBinding': {'position': 1}}},
         {'value': {'type': 'string', 'outputBinding': {'outputEval': '$("x")'}}},
         javascript=True,
     ),
-    'sink': _clt(
+    'sink': clt(
         {'file': {'type': 'File', 'inputBinding': {'position': 1}},
          'n': {'type': 'int', 'inputBinding': {'position': 2}},
          'extras': {'type': 'File[]', 'default': [], 'inputBinding': {'position': 3}}},

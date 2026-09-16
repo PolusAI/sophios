@@ -9,6 +9,8 @@ which means different things on a File output and on one that cannot carry one.
 """
 from typing import Final
 
+from functools import partial
+
 import pytest
 
 import sophios.cli
@@ -17,20 +19,15 @@ from sophios.lang.cwl import CWL_VERSION
 from sophios.utils import step_name_str
 from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_graphs import get_graph_reps
+from .synthetic_tools import clt
 from sophios.wic_types import Cwl, StepId, Tool, Tools, Yaml
 
 _NS: Final = 'global'
 
 
-def _clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl]) -> Cwl:
-    """A minimal CommandLineTool stub: `true` succeeds and produces nothing."""
-    return desugar_into_canonical_normal_form({
-        'cwlVersion': CWL_VERSION,
-        'class': 'CommandLineTool',
-        'baseCommand': 'true',
-        'inputs': inputs,
-        'outputs': outputs,
-    })
+#: `clt` in canonical normal form — the shape the inference and
+#: explicit-edge paths read.
+_clt = partial(clt, canonical=True)
 
 
 @pytest.mark.fast

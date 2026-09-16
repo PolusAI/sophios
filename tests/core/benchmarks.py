@@ -31,7 +31,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.hermetic import compile_hermetic, subworkflow_step
-from core.synthetic_tools import SYNTHETIC_TOOLS
+from core.synthetic_tools import clt, SYNTHETIC_TOOLS
 from core.wic_corpus import CORPUS, corpus_id
 
 import sophios.ast
@@ -40,7 +40,6 @@ import sophios.compiler
 import sophios.input_output as io
 import sophios.plugins
 from sophios.lang import parse
-from sophios.lang.cwl import CWL_VERSION
 from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_graphs import get_graph_reps
 from sophios.utils_yaml import wic_loader
@@ -125,16 +124,8 @@ def _compile_corpus_file(path: Path) -> None:
 # --------------------------------------------------------------------------
 # Case 2: speculative insertion.
 
-def _clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl]) -> Cwl:
-    """A minimal CommandLineTool stub: `true` succeeds and produces nothing,
-    which is all a compile-only registry needs."""
-    return {
-        'cwlVersion': CWL_VERSION,
-        'class': 'CommandLineTool',
-        'baseCommand': 'true',
-        'inputs': inputs,
-        'outputs': outputs,
-    }
+#: The shared stub builder, under this module's local name.
+_clt = clt
 
 
 def _speculative_insertion_registry() -> tuple[Yaml, Tools]:

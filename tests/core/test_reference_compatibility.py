@@ -5,20 +5,22 @@ import copy
 from pathlib import Path
 from typing import Any, Final
 
+from functools import partial
+
 import pytest
 import yaml
 from hypothesis import given
 from hypothesis import strategies as st
 
 from sophios.lang.compatibility import TypeRelation, reference_relation
-from sophios.lang.cwl import CWL_VERSION
 from sophios.lang.diagnostics import Code, SophiosError
 from sophios.lang.versions import KNOWN_VERSIONS
 from sophios.api.python.workflow import _python_api_types_match
 from sophios.inlineing import get_inlineable_subworkflows
 from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_yaml import wic_loader
-from sophios.wic_types import Cwl, StepId, Tool, Tools, Yaml, YamlTree
+from .synthetic_tools import clt
+from sophios.wic_types import StepId, Tool, Tools, Yaml, YamlTree
 
 from .hermetic import ORACLE, compile_hermetic
 from .reference_model import ReferenceExpectation, reference_expectation
@@ -230,15 +232,9 @@ def test_workflow_input_references_follow_the_independent_outcome(
         compile_hermetic(document, 'reference')
 
 
-def _clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl]) -> Cwl:
-    """Build a minimal synthetic tool for explicit-edge integration cases."""
-    return desugar_into_canonical_normal_form({
-        'cwlVersion': CWL_VERSION,
-        'class': 'CommandLineTool',
-        'baseCommand': 'true',
-        'inputs': inputs,
-        'outputs': outputs,
-    })
+#: `clt` in canonical normal form — the shape the inference and
+#: explicit-edge paths read.
+_clt = partial(clt, canonical=True)
 
 
 def _edge_tools(source_type: Any, sink_type: Any) -> Tools:
