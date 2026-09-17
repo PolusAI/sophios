@@ -137,28 +137,46 @@ def _excluded_markers(expression: str | None) -> frozenset[str]:
     return frozenset(excluded)
 
 
-def _keyword_admits(expression: str | None, test: str) -> bool:
-    """Whether a `-k` expression selects `test`.
+def _keyword_admits(expression: str | None, relative: str, test: str) -> bool:
+    """Whether a `-k` expression selects `test` in `relative`.
 
-    Read the same way `_excluded_markers` reads `-m`: the shapes this repository
-    writes — a bare name and `not <name>`, joined by `and` — and a refusal for
-    anything else. Treating an unparsed expression as a plain substring makes a
-    boolean one match nothing, which reports a test that does run as an orphan.
+    Matched against the module's file name as well as the test's own, because
+    that is what pytest matches: a `-k` clause is compared to the item's name
+    and to each of its parents'. A rule that saw only the function name would
+    model the flag differently from the tool it describes, and the difference
+    is not academic -- a file named after what it covers satisfies a `-k` naming
+    that subject for every test inside it, and renaming the file silently
+    deselects the ones whose own names do not repeat it.
+
+    Read otherwise the same way `_excluded_markers` reads `-m`: the shapes this
+    repository writes -- a bare name and `not <name>`, joined by `and` -- and a
+    refusal for anything else. Treating an unparsed expression as a plain
+    substring makes a boolean one match nothing, which reports a test that does
+    run as an orphan.
+
+    Args:
+        expression (str | None): The `-k` expression, or None for no filter.
+        relative (str): The test module's repository-relative path.
+        test (str): The test function's name.
+
+    Returns:
+        bool: Whether pytest would collect it.
     """
     if expression is None:
         return True
+    names = (test, Path(relative).name)
     for clause in re.split(r'\band\b', expression):
         clause = clause.strip()
         if not clause:
             continue
         negated = re.fullmatch(r'not\s+([A-Za-z_][A-Za-z0-9_]*)', clause)
         if negated:
-            if negated.group(1) in test:
+            if any(negated.group(1) in name for name in names):
                 return False
             continue
         if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', clause):
             raise ValueError(f'unreadable pytest -k expression: {expression!r}')
-        if clause not in test:
+        if not any(clause in name for name in names):
             return False
     return True
 
@@ -285,7 +303,7 @@ def test_no_marked_test_is_collected_by_nothing() -> None:
                 continue  # the packaging lane's default collection reaches it
             admitted = any(
                 _path_reaches(files, relative, test)   # no path named means the whole rootdir
-                and _keyword_admits(keyword, test)
+                and _keyword_admits(keyword, relative, test)
                 and not (_excluded_markers(marker) & blocking)
                 for files, marker, keyword in main_runs
             )
@@ -327,21 +345,28 @@ def test_an_argument_reaches_only_what_it_names(
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(('expression', 'test', 'admitted'), [
-    (None, 'test_anything', True),
-    ('test_fuzzy_compile', 'test_fuzzy_compile', True),
-    ('test_fuzzy_compile', 'test_other', False),
-    ('not test_a and not test_b', 'test_c', True),
-    ('not test_a and not test_b', 'test_a', False),
+@pytest.mark.parametrize(('expression', 'relative', 'test', 'admitted'), [
+    (None, 'tests/core/test_x.py', 'test_anything', True),
+    ('test_fuzzy_compile', 'tests/core/test_x.py', 'test_fuzzy_compile', True),
+    ('test_fuzzy_compile', 'tests/core/test_x.py', 'test_other', False),
+    ('not test_a and not test_b', 'tests/core/test_x.py', 'test_c', True),
+    ('not test_a and not test_b', 'tests/core/test_x.py', 'test_a', False),
+    # The module's name counts, exactly as it does for pytest: every test in
+    # `test_tool_builder.py` satisfies `-k test_tool_builder` whatever its own
+    # name, and renaming the file takes that away from the ones that do not
+    # repeat the subject themselves.
+    ('test_tool_builder', 'tests/core/test_tool_builder.py', 'test_old_name_is_gone', True),
+    ('test_tool_builder', 'tests/core/test_python_api_tool_builder.py', 'test_old_name_is_gone', False),
+    ('not test_tool_builder', 'tests/core/test_tool_builder.py', 'test_old_name_is_gone', False),
 ])
 def test_a_k_expression_is_read_not_matched_as_a_substring(
-        expression: str | None, test: str, admitted: bool) -> None:
+        expression: str | None, relative: str, test: str, admitted: bool) -> None:
     """`-k` gets the same treatment as `-m`: read the shapes written here, refuse the rest.
 
     Matching a whole expression as a plain substring makes a boolean one match
     nothing, which reports a test that does run as collected by no lane.
     """
-    assert _keyword_admits(expression, test) is admitted
+    assert _keyword_admits(expression, relative, test) is admitted
 
 
 @pytest.mark.fast
@@ -350,7 +375,7 @@ def test_an_unreadable_k_expression_raises_rather_than_guessing() -> None:
     expression this cannot read has an unknown effect, and guessing either way
     is a silent wrong answer."""
     with pytest.raises(ValueError, match='unreadable pytest -k expression'):
-        _keyword_admits('test_a or test_b', 'test_a')
+        _keyword_admits('test_a or test_b', 'tests/core/test_x.py', 'test_a')
 
 
 @pytest.mark.fast

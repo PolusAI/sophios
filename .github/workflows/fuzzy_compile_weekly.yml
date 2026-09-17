@@ -112,7 +112,7 @@ jobs:
 
       - name: PyTest Tool Builder
         if: always()
-        run: cd sophios/ && pytest tests/core/test_python_api_tool_builder.py -k test_tool_builder
+        run: cd sophios/ && pytest tests/core/test_python_api_tool_builder.py
 
 # Since a randomly chosen subschema is used every time, repeat 10X for more coverage.
 

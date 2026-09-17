@@ -179,7 +179,7 @@ jobs:
 
     - name: PyTest Tool Builder
       if: always()
-      run: cd sophios/ && pytest tests/core/test_python_api_tool_builder.py -k test_tool_builder
+      run: cd sophios/ && pytest tests/core/test_python_api_tool_builder.py
 
     - name: PyTest Python API
       if: always()
