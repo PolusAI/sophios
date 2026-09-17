@@ -56,8 +56,9 @@ def compile_production(yml: Yaml, name: str = 'binding', *,
     The one harness that does. `compile_hermetic` passes `testing=True`, which
     is what lets `test_cwl_embedding_independence` recompile each subworkflow
     as though it were root -- and that same branch absorbs an undefined edge
-    into a workflow input, so the production diagnostics are unreachable
-    through it.
+    into a workflow input, so `wic025` is unreachable through it. Other
+    diagnostics may be reachable through either harness; use this one when the
+    behavior under test specifically belongs to production compilation.
     """
     compiler_options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
     return sophios.compiler.compile_workflow(

@@ -35,12 +35,14 @@ yet wired into the compiler**, and are marked where they appear:
 | Construct | Specified | Accepted by `sophios.lang` | Usable in a compiled workflow |
 |---|---|---|---|
 | `!cwl` raw CWL reference (§4.1) | Yes | Yes | **Not yet** — Spec 3 migration |
+| Undefined edge detection (`wic025`, §4.1.2) | Yes | Yes | **Partial** — root document only; nested references await Spec 3 Link |
 
-Everything else describes what Sophios does today. Writing `!cwl` in a `.wic`
-file will not work until the compiler runs on the `sophios.lang` parser (the
-Spec 3 migration), because the loader it uses today does not know the tag. It
-is documented now because the specification is what the implementation is
-being built against, not a record written afterwards.
+Everything else describes what Sophios does today. The remaining limitation on
+`wic025` is described in §4.1.2. Writing `!cwl` in a `.wic` file will not work
+until the compiler runs on the `sophios.lang` parser (the Spec 3 migration),
+because the loader it uses today does not know the tag. It is documented now
+because the specification is what the implementation is being built against,
+not a record written afterwards.
 
 ---
 

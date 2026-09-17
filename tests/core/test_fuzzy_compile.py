@@ -1,11 +1,10 @@
 from pathlib import Path
+from typing import Final
 import unittest
 
 import graphviz
 from hypothesis import given, settings, HealthCheck
 import networkx as nx
-from typing import Final
-
 import pytest
 
 import sophios
