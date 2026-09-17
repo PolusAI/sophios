@@ -1,31 +1,36 @@
 """Build a `WorkflowGraph` from a parsed document.
 
 Total in the sense `parse` is: every document either lowers or produces
-diagnostics, and nothing here raises.
+diagnostics, and nothing here raises -- including on a document the parser
+recovered rather than accepted, which is exactly when a caller is least able to
+handle an exception.
 
 READS THE AST AND NOTHING ELSE -- no registry, no filesystem, no config.
 Resolving a step's tool against the environment is `Resolve`'s job, so a port's
 type is what the document declared and inference has not run.
 """
 from dataclasses import dataclass
-from typing import Final
 
 from ..lang.diagnostics import Code, Diagnostics
 from ..lang.nodes import Document, EdgeRef, InputValue, Step
 from .types import (
+    Binding,
     DeferredObligation,
+    Direction,
     Edge,
     Namespace,
     Port,
     PortId,
     PortType,
+    Resolution,
+    StepId,
     StepNode,
     WorkflowGraph,
 )
 
 #: A port whose type the document does not declare. Not invented here: a guess
 #: would be indistinguishable from a declaration by the time anything read it.
-UNDECLARED: Final = PortType(declared=None)
+UNDECLARED = PortType(declared=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,45 +46,15 @@ class Lowered:
         return self.graph is not None and not self.diagnostics.has_errors
 
 
-def _input_ports(namespace: Namespace, step: Step) -> tuple[Port, ...]:
-    """One port per bound input, in written order."""
-    return tuple(
-        Port(PortId(namespace, step.id, name), UNDECLARED, span=step.span)
-        for name, _ in step.inputs
-    )
-
-
-def _output_ports(namespace: Namespace, step: Step) -> tuple[Port, ...]:
-    """One port per `out:` entry, in written order."""
-    return tuple(
-        Port(PortId(namespace, step.id, binding.name), UNDECLARED, span=binding.span)
-        for binding in step.outputs
-    )
-
-
-def _edge_definitions(namespace: Namespace, steps: tuple[Step, ...]) -> dict[str, PortId]:
-    """Which port each explicit edge name is defined by.
-
-    A name defined twice keeps the first: the compiler already reports the
-    repeat as `wic026` before lowering is reached.
-    """
-    defined: dict[str, PortId] = {}
-    for step in steps:
-        for binding in step.outputs:
-            if binding.edge_def is not None:
-                defined.setdefault(binding.edge_def.name,
-                                   PortId(namespace, step.id, binding.name))
-    return defined
-
-
 def lower(document: Document, namespace: Namespace | None = None) -> Lowered:
     """Lower a parsed document to a graph.
 
-    An input bound with `!*` becomes an edge when the name is defined in this
-    document, and a `DeferredObligation` when it is not — which is what a
-    subworkflow's reference to a parent's edge is. Deciding between the two is
-    the whole of what lowering knows about binding; discharging an obligation
-    belongs to `Link`, which can see the enclosing graph.
+    An input bound with `!*` becomes an edge when the name was defined *earlier*
+    in this document, and a `DeferredObligation` when it was never defined here
+    -- which is what a subworkflow's reference to a parent's edge is. A name
+    defined only *later* is neither: the compiler refuses it and the language
+    reference requires the definition first, so it is reported rather than
+    quietly resolved.
 
     Args:
         document (Document): The parsed document.
@@ -91,62 +66,95 @@ def lower(document: Document, namespace: Namespace | None = None) -> Lowered:
     """
     diagnostics = Diagnostics()
     here = namespace if namespace is not None else Namespace()
-    _report_repeated_steps(document, diagnostics)
-    if diagnostics.has_errors:
+
+    identities = _step_identities(document, here, diagnostics)
+    if identities is None:
         return Lowered(None, diagnostics)
-    defined = _edge_definitions(here, document.steps)
 
+    defined_anywhere = _edge_definitions(identities, document, diagnostics)
+    defined_so_far: dict[str, PortId] = {}
     nodes: list[StepNode] = []
-    edges: list[Edge] = []
-    obligations: list[DeferredObligation] = []
 
-    for step in document.steps:
-        inputs = _input_ports(here, step)
-        nodes.append(StepNode(
-            namespace=here,
-            name=step.id,
-            inputs=inputs,
-            outputs=_output_ports(here, step),
-            interpreted=step.interpreted,
-            passthrough=step.passthrough,
-            span=step.span,
-        ))
-        for (name, value), port in zip(step.inputs, inputs, strict=True):
-            _bind(value, port, defined, edges, obligations)
+    for step_id, step in zip(identities, document.steps, strict=True):
+        inputs = tuple(Port(PortId(step_id, Direction.INPUT, name), UNDECLARED, span=step.span)
+                       for name, _ in step.inputs)
+        outputs = tuple(Port(PortId(step_id, Direction.OUTPUT, b.name), UNDECLARED, span=b.span)
+                        for b in step.outputs)
+        bindings = tuple(
+            Binding(port.id, value,
+                    _resolve(value, port, defined_so_far, defined_anywhere, diagnostics))
+            for (_, value), port in zip(step.inputs, inputs, strict=True))
+        nodes.append(StepNode(step_id, inputs, outputs, bindings,
+                              step.interpreted, step.passthrough, step.span))
+        for binding in step.outputs:
+            if binding.edge_def is not None:
+                defined_so_far.setdefault(binding.edge_def.name,
+                                          PortId(step_id, Direction.OUTPUT, binding.name))
 
     return Lowered(WorkflowGraph(
         namespace=here,
         steps=tuple(nodes),
-        edges=tuple(edges),
-        obligations=tuple(obligations),
-        explicit_edge_defs=dict(defined),
+        explicit_edge_defs=tuple(defined_anywhere.items()),
         passthrough=document.passthrough,
     ), diagnostics)
 
 
-def _report_repeated_steps(document: Document, diagnostics: Diagnostics) -> None:
-    """Report a step name used twice, at the second step rather than the graph.
+def _step_identities(document: Document, here: Namespace,
+                     diagnostics: Diagnostics) -> tuple[StepId, ...] | None:
+    """One occurrence identity per step, or None when a step cannot have one.
 
-    `WorkflowGraph` refuses a repeat at construction, but by then the only thing
-    to point at is the whole graph.
+    A repeated `id` is not an error: sequence-form `steps:` exists so that a
+    tool can be invoked twice, and `docs/tutorials/append_twice.wic` does. What
+    cannot be lowered is a step the parser recovered without a name, which is
+    reported rather than raised.
     """
-    seen: set[str] = set()
-    for step in document.steps:
-        if step.id in seen and step.span is not None:
-            diagnostics.error(
-                Code.DUPLICATE_KEY,
-                f"step id '{step.id}' is used more than once; a step name identifies one step",
-                step.span)
-        seen.add(step.id)
+    identities: list[StepId] = []
+    for index, step in enumerate(document.steps, start=1):
+        if not step.id:
+            if step.span is not None:
+                diagnostics.error(Code.MISSING_STEP_ID,
+                                  'a step needs an id before it can be lowered', step.span)
+            return None
+        identities.append(StepId(here, index, step.id))
+    return tuple(identities)
 
 
-def _bind(value: InputValue, port: Port, defined: dict[str, PortId],
-          edges: list[Edge], obligations: list[DeferredObligation]) -> None:
-    """Record what satisfies one bound input."""
+def _edge_definitions(identities: tuple[StepId, ...], document: Document,
+                      diagnostics: Diagnostics) -> dict[str, PortId]:
+    """Which port defines each explicit edge name, reporting any defined twice.
+
+    Every definition is visited before any is dropped, so a repeat is a
+    diagnostic rather than a silently discarded second entry that no later phase
+    could report.
+    """
+    defined: dict[str, PortId] = {}
+    for step_id, step in zip(identities, document.steps, strict=True):
+        for binding in step.outputs:
+            if binding.edge_def is None:
+                continue
+            name = binding.edge_def.name
+            if name in defined:
+                diagnostics.error(
+                    Code.DUPLICATE_EDGE_DEF,
+                    f"'&{name}' is defined more than once. An edge name identifies one producer.",
+                    binding.edge_def.span)
+                continue
+            defined[name] = PortId(step_id, Direction.OUTPUT, binding.name)
+    return defined
+
+
+def _resolve(value: InputValue, port: Port, defined_so_far: dict[str, PortId],
+             defined_anywhere: dict[str, PortId], diagnostics: Diagnostics) -> Resolution:
+    """Where one bound input gets its value from, if it needs a producer."""
     if not isinstance(value, EdgeRef):
-        return
-    source = defined.get(value.name)
-    if source is None:
-        obligations.append(DeferredObligation(port.id, value.name, port.type, span=value.span))
-    else:
-        edges.append(Edge(source, port.id, span=value.span))
+        return None
+    source = defined_so_far.get(value.name)
+    if source is not None:
+        return Edge(source, port.id, span=value.span)
+    if value.name in defined_anywhere:
+        diagnostics.error(
+            Code.UNDEFINED_EDGE,
+            f"'!* {value.name}' is referenced before '!& {value.name}' defines it.",
+            value.span)
+        return None
+    return DeferredObligation(port.id, value.name, port.type, span=value.span)

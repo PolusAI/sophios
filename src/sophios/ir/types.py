@@ -4,38 +4,50 @@ Each names something the compiler already manipulates and spells as a string or
 threads through a call stack, so the checker can verify what it means rather
 than only what it computes.
 
-Frozen and slotted, as `sophios.lang.nodes` is. Invariants live in
-`__post_init__`, so no caller can skip them.
+Frozen and slotted, as `sophios.lang.nodes` is, and holding no mutable
+container: an invariant checked in `__post_init__` is worth having only if it
+cannot be invalidated afterwards.
 """
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Final, TypeAlias
 
-from ..lang.nodes import OpaqueCwl
+from ..lang.nodes import InputValue, OpaqueCwl
 from ..lang.spans import SourceSpan
 
 #: How namespaces are joined when a port identity is flattened for emission.
-#: The compiler splits on this to recover the parts, so a namespace containing
-#: it would be unrecoverable.
+#: Structured identities are carried through the phases and joined only here,
+#: so this is the one place the legacy spelling exists.
 NAMESPACE_SEPARATOR: Final = '___'
+
+
+class Direction(StrEnum):
+    """Which side of a step a port is on.
+
+    Part of a port's identity because CWL puts inputs and outputs in separate
+    namespaces: a tool may declare `file` on both, and an identity without this
+    makes the two compare equal and an edge between them look like a self-loop.
+    """
+
+    INPUT = 'input'
+    OUTPUT = 'output'
 
 
 @dataclass(frozen=True, slots=True)
 class Namespace:
     """Where a step sits in the nesting of subworkflows: a path, outermost
     first. The compiler spells it joined and splits it back; holding the parts
-    gives the splitting one home and makes a namespace that cannot round-trip
-    unbuildable."""
+    gives the splitting one home."""
 
     parts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        """Reject a part that would not survive being joined and split."""
+        """Reject an empty part. A part containing the separator is *allowed*:
+        a workflow may legitimately be named that way, and refusing it here
+        would narrow the language to suit the emitted spelling."""
         for part in self.parts:
             if not part:
                 raise ValueError('a namespace part cannot be empty')
-            if NAMESPACE_SEPARATOR in part:
-                raise ValueError(
-                    f'a namespace part cannot contain {NAMESPACE_SEPARATOR!r}: {part!r}')
 
     def child(self, name: str) -> 'Namespace':
         """This namespace with `name` appended.
@@ -58,21 +70,37 @@ class Namespace:
 
 
 @dataclass(frozen=True, slots=True)
-class PortId:
-    """A port's identity: which step, and which port on it.
+class StepId:
+    """One *occurrence* of a step, which is not the same as the tool it runs.
 
-    Distinct from a step's identity on purpose -- the compiler holds both as
-    `str`, so nothing stops one being passed where the other is meant.
+    `docs/tutorials/append_twice.wic` invokes `append` twice, and sequence-form
+    `steps:` exists so that it can. `name` is the authored id and repeats with
+    the tool; `index` is the occurrence, and the pair is the identity -- which
+    is what the compiler already means by `{stem}__step__{i}__{key}`.
     """
 
     namespace: Namespace
-    step: str
+    index: int
+    name: str
+
+    def __post_init__(self) -> None:
+        """Reject an occurrence that names nothing or sits nowhere."""
+        if not self.name:
+            raise ValueError('a step must be named')
+        if self.index < 1:
+            raise ValueError(f'a step occurrence is 1-based, not {self.index}')
+
+
+@dataclass(frozen=True, slots=True)
+class PortId:
+    """A port's identity: which step occurrence, which side, and which port."""
+
+    step: StepId
+    direction: Direction
     port: str
 
     def __post_init__(self) -> None:
-        """Reject an identity that names nothing."""
-        if not self.step:
-            raise ValueError('a port must belong to a named step')
+        """Reject a port with no name."""
         if not self.port:
             raise ValueError('a port must have a name')
 
@@ -108,38 +136,6 @@ class Port:
 
 
 @dataclass(frozen=True, slots=True)
-class StepNode:
-    """A step, with the tool it runs and the ports it exposes.
-
-    `interpreted` holds the CWL keys Sophios acts upon and `passthrough` the
-    rest -- the split the AST already makes, carried forward, not redrawn.
-    """
-
-    namespace: Namespace
-    name: str
-    inputs: tuple[Port, ...] = ()
-    outputs: tuple[Port, ...] = ()
-    interpreted: tuple[tuple[str, OpaqueCwl], ...] = ()
-    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
-    span: SourceSpan | None = None
-
-    def __post_init__(self) -> None:
-        """Reject a step whose ports do not belong to it.
-
-        `Edge` cannot see this: by the time it holds a port, the port is only
-        an identity, so a port carrying another step's name would build an edge
-        into a node that does not exist.
-        """
-        if not self.name:
-            raise ValueError('a step must be named')
-        for port in self.inputs + self.outputs:
-            if port.id.step != self.name:
-                raise ValueError(
-                    f'port {port.id.port!r} names step {port.id.step!r} '
-                    f'but belongs to {self.name!r}')
-
-
-@dataclass(frozen=True, slots=True)
 class Edge:
     """A value flowing from one port to another.
 
@@ -152,9 +148,13 @@ class Edge:
     span: SourceSpan | None = None
 
     def __post_init__(self) -> None:
-        """Reject an edge from a port to itself."""
+        """Reject an edge that does not run from an output to an input."""
         if self.source == self.sink:
             raise ValueError(f'an edge cannot join a port to itself: {self.source}')
+        if self.source.direction is not Direction.OUTPUT:
+            raise ValueError(f'an edge must leave an output, not {self.source.direction}')
+        if self.sink.direction is not Direction.INPUT:
+            raise ValueError(f'an edge must arrive at an input, not {self.sink.direction}')
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,19 +176,82 @@ class DeferredObligation:
         """Reject an obligation with nothing to satisfy."""
         if not self.name:
             raise ValueError('a deferred obligation must name what it awaits')
+        if self.sink.direction is not Direction.INPUT:
+            raise ValueError('only an input can await a value')
 
 
-#: The four mappings the compiler threads through its recursion, which §7.1
-#: makes fields of the graph "because that is what they always were".
-EdgeDefinitions: TypeAlias = dict[str, PortId]
-EdgeCalls: TypeAlias = dict[str, PortId]
-InputMapping: TypeAlias = dict[str, tuple[PortId, ...]]
-OutputMapping: TypeAlias = dict[str, PortId]
+#: What a binding resolved to, or None when the value needs no producer -- a
+#: literal, a workflow parameter, a raw CWL reference. `Binding.value` says
+#: which of those it is; this says where it comes from.
+Resolution: TypeAlias = Edge | DeferredObligation | None
 
 
 @dataclass(frozen=True, slots=True)
-class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
-    """A whole workflow: its steps, the edges between them, and what it owes.
+class Binding:
+    """One authored input binding, and what it resolved to.
+
+    Every `in:` entry becomes one of these, whatever was written. Keeping only
+    the edges would make two documents differing solely in a literal lower to
+    the same graph, so `Emit` would have to read the AST again to tell them
+    apart -- and a graph that cannot reproduce its own document is not the
+    document's meaning.
+    """
+
+    sink: PortId
+    value: InputValue
+    resolution: Resolution = None
+
+    def __post_init__(self) -> None:
+        """Reject a resolution attached to the wrong port."""
+        if self.resolution is not None and self.resolution.sink != self.sink:
+            raise ValueError(f'binding for {self.sink} resolved against {self.resolution.sink}')
+
+
+@dataclass(frozen=True, slots=True)
+class StepNode:
+    """A step occurrence, with the ports it exposes and what its inputs bind to.
+
+    `interpreted` holds the CWL keys Sophios acts upon and `passthrough` the
+    rest -- the split the AST already makes, carried forward, not redrawn.
+    """
+
+    id: StepId
+    inputs: tuple[Port, ...] = ()
+    outputs: tuple[Port, ...] = ()
+    bindings: tuple[Binding, ...] = ()
+    interpreted: tuple[tuple[str, OpaqueCwl], ...] = ()
+    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
+    span: SourceSpan | None = None
+
+    def __post_init__(self) -> None:
+        """Reject ports or bindings that belong to another step.
+
+        `Edge` cannot see this: by the time it holds a port, the port is only an
+        identity, so a port carrying another occurrence's id would build an edge
+        into a node that does not exist.
+        """
+        for port in self.inputs:
+            if port.id.step != self.id or port.id.direction is not Direction.INPUT:
+                raise ValueError(f'{port.id} is not an input of {self.id}')
+        for port in self.outputs:
+            if port.id.step != self.id or port.id.direction is not Direction.OUTPUT:
+                raise ValueError(f'{port.id} is not an output of {self.id}')
+        declared = {port.id for port in self.inputs}
+        for binding in self.bindings:
+            if binding.sink not in declared:
+                raise ValueError(f'{binding.sink} is bound but not declared by {self.id}')
+
+
+#: The four mappings the compiler threads through its recursion, as pairs
+#: rather than dicts: a frozen graph holding a mutable mapping can have its
+#: invariants invalidated after the constructor has checked them.
+PortMapping: TypeAlias = tuple[tuple[str, PortId], ...]
+InputMapping: TypeAlias = tuple[tuple[str, tuple[PortId, ...]], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowGraph:
+    """A whole workflow: its steps, what their inputs bind to, and what it owes.
 
     The four mappings are fields, not arguments. Threaded through a call stack
     they are state every function must be handed and can quietly disagree about.
@@ -196,41 +259,66 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
 
     namespace: Namespace
     steps: tuple[StepNode, ...] = ()
-    edges: tuple[Edge, ...] = ()
-    obligations: tuple[DeferredObligation, ...] = ()
-    explicit_edge_defs: EdgeDefinitions = field(default_factory=dict)
-    explicit_edge_calls: EdgeCalls = field(default_factory=dict)
-    input_mapping: InputMapping = field(default_factory=dict)
-    output_mapping: OutputMapping = field(default_factory=dict)
+    explicit_edge_defs: PortMapping = ()
+    explicit_edge_calls: PortMapping = ()
+    input_mapping: InputMapping = ()
+    output_mapping: PortMapping = ()
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
+    span: SourceSpan | None = None
 
     def __post_init__(self) -> None:
-        """Reject a graph whose edges do not connect ports that exist.
+        """Reject a graph naming a port no step declares, anywhere.
 
-        What makes a malformed graph unbuildable rather than merely detectable:
-        an edge naming a port no step declares would otherwise reach emission
-        as a dangling `source:`, which CWL accepts and a runner then fails on.
+        Checked over every reference the graph holds -- edges, obligations and
+        all four mappings -- rather than over the edges alone. An identity that
+        resolves to nothing is the same defect wherever it is stored, and it
+        reaches emission as a dangling `source:`, which CWL accepts and a runner
+        then fails on.
         """
-        names = [step.name for step in self.steps]
-        if len(names) != len(set(names)):
-            repeated = sorted({n for n in names if names.count(n) > 1})
-            raise ValueError(f'a step name identifies one step: {repeated}')
+        occurrences = [step.id for step in self.steps]
+        if len(occurrences) != len(set(occurrences)):
+            raise ValueError('a step occurrence appears twice')
 
         known = {port.id for step in self.steps for port in step.inputs + step.outputs}
-        for edge in self.edges:
-            for role, port_id in (('source', edge.source), ('sink', edge.sink)):
-                if port_id not in known:
-                    raise ValueError(
-                        f'edge {role} names a port no step declares: '
-                        f'{port_id.step}/{port_id.port}')
+        for where, port_id in self._references():
+            if port_id not in known:
+                raise ValueError(f'{where} names a port no step declares: {port_id}')
+
+    def _references(self) -> tuple[tuple[str, PortId], ...]:
+        """Every port identity this graph holds, with where it came from."""
+        found: list[tuple[str, PortId]] = []
+        for step in self.steps:
+            for binding in step.bindings:
+                found.append(('a binding', binding.sink))
+                if isinstance(binding.resolution, Edge):
+                    found.append(('an edge source', binding.resolution.source))
+                elif isinstance(binding.resolution, DeferredObligation):
+                    found.append(('an obligation', binding.resolution.sink))
+        for name, port_id in (*self.explicit_edge_defs, *self.explicit_edge_calls, *self.output_mapping):
+            found.append((f'mapping {name!r}', port_id))
+        for name, port_ids in self.input_mapping:
+            found.extend((f'input mapping {name!r}', port_id) for port_id in port_ids)
+        return tuple(found)
+
+    @property
+    def edges(self) -> tuple[Edge, ...]:
+        """Every resolved edge, derived from the bindings that produced them."""
+        return tuple(b.resolution for s in self.steps for b in s.bindings
+                     if isinstance(b.resolution, Edge))
+
+    @property
+    def obligations(self) -> tuple[DeferredObligation, ...]:
+        """Every binding this document cannot satisfy on its own."""
+        return tuple(b.resolution for s in self.steps for b in s.bindings
+                     if isinstance(b.resolution, DeferredObligation))
 
     def step(self, name: str) -> StepNode | None:
-        """The step called `name`, or None.
+        """The first occurrence called `name`, or None.
 
         Args:
-            name (str): The step's name within this graph's namespace.
+            name (str): The step's authored id, which may repeat.
 
         Returns:
-            StepNode | None: The step, if this graph has one by that name.
+            StepNode | None: The first occurrence, if this graph has one.
         """
-        return next((s for s in self.steps if s.name == name), None)
+        return next((s for s in self.steps if s.id.name == name), None)

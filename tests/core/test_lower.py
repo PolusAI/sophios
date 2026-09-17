@@ -1,8 +1,8 @@
 """Lowering a parsed document to a graph.
 
 Five claims: lowering is total, a malformed graph cannot be constructed, every
-edge connects ports that exist, passthrough is never read, and the result does
-not depend on iteration order.
+reference the graph holds names a port that exists, passthrough is never read,
+and the result does not depend on iteration order.
 
 Nothing here compiles -- lowering reads the AST alone, so these need no tool
 registry, filesystem or config.
@@ -12,27 +12,36 @@ from typing import Any
 
 import pytest
 from hypothesis import given
+from hypothesis import strategies as st
 
 from sophios.ir import (
+    Binding,
+    DeferredObligation,
+    Direction,
     Edge,
     Namespace,
     Port,
     PortId,
     PortType,
+    StepId,
     StepNode,
     WorkflowGraph,
 )
 from sophios.ir.lower import lower
-from sophios.lang.nodes import Document
+from sophios.lang.nodes import Document, InlineLiteral
+from sophios.lang.parser import parse
+from sophios.lang.spans import SourceSpan
 
 from . import ast_strategies as strat
 from .hermetic import COVERAGE, ORACLE
 from .source_scan import REPO_ROOT, parsed
 
 
-def _ports_of(graph: WorkflowGraph) -> set[PortId]:
-    """Every port identity the graph's steps declare."""
-    return {p.id for step in graph.steps for p in step.inputs + step.outputs}
+def _lower(source: str) -> Any:
+    """Parse and lower one document, for the example-based claims below."""
+    document = parse(source, 'probe.wic').document
+    assert document is not None
+    return lower(document)
 
 
 @pytest.mark.fast
@@ -42,99 +51,137 @@ def test_every_parseable_document_lowers_or_diagnoses(document: Document) -> Non
     """Lowering is total, in the sense `parse` is: what it cannot represent
     comes back as a diagnostic, never as an exception."""
     result = lower(document)
-    assert result.graph is not None or len(result.diagnostics) > 0
-    if result.graph is None:
-        assert result.diagnostics.has_errors
+    assert result.graph is not None or result.diagnostics.has_errors
 
 
 @pytest.mark.fast
 @given(strat.documents())
 @COVERAGE
-def test_every_edge_connects_ports_that_exist(document: Document) -> None:
-    """An edge names ports the graph declares, at both ends.
+def test_a_well_formed_document_actually_lowers(document: Document) -> None:
+    """Totality alone is satisfied by rejecting everything.
 
-    Unchecked, such an edge reaches emission as a dangling `source:`, which CWL
-    accepts and a runner then fails on.
+    `documents()` draws only well-formed documents, so every one of them must
+    produce a graph. Without this, an implementation returning diagnostics for
+    all input passes the claim above.
+    """
+    result = lower(document)
+    assert result.graph is not None, [d.code.value for d in result.diagnostics]
+    assert len(result.graph.steps) == len(document.steps)
+
+
+@pytest.mark.fast
+@given(strat.documents())
+@COVERAGE
+def test_every_reference_the_graph_holds_names_a_port_that_exists(document: Document) -> None:
+    """Edges, obligations and all four mappings, not the edges alone.
+
+    An identity resolving to nothing is the same defect wherever it is stored,
+    and it reaches emission as a dangling `source:` -- which CWL accepts and a
+    runner then fails on.
     """
     result = lower(document)
     if result.graph is None:
         return
-    known = _ports_of(result.graph)
-    for edge in result.graph.edges:
-        assert edge.source in known and edge.sink in known
+    known = {p.id for s in result.graph.steps for p in s.inputs + s.outputs}
+    for where, port_id in result.graph._references():  # pylint: disable=protected-access
+        assert port_id in known, f'{where} names {port_id}'
 
 
 @pytest.mark.fast
 @given(strat.documents())
 @ORACLE
 def test_lowering_is_deterministic(document: Document) -> None:
-    """The same document lowers to the same graph, twice.
+    """The same document lowers to the same graph, twice, in full.
 
-    Two lowerings rather than two interpreters: what could vary is set or dict
-    iteration, which varies within one process as readily as across two.
+    The whole graph, not a few fields: comparing only steps and edges leaves
+    the mappings free to vary with set iteration, which is the thing being
+    ruled out.
     """
     first, second = lower(document), lower(document)
-    assert (first.graph is None) == (second.graph is None)
-    if first.graph is not None and second.graph is not None:
-        assert first.graph.steps == second.graph.steps
-        assert first.graph.edges == second.graph.edges
-        assert first.graph.obligations == second.graph.obligations
+    assert first.graph == second.graph
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('build', [
-    pytest.param(lambda p, q: Edge(p.id, p.id),
-                 id='an edge from a port to itself'),
-    pytest.param(lambda p, q: StepNode(Namespace(), 'elsewhere', inputs=(q,)),
-                 id='a step whose port names another step'),
-    pytest.param(lambda p, q: Namespace(('a___b',)),
-                 id='a namespace part that cannot be split back out'),
-    pytest.param(lambda p, q: PortType(declared='File', array_depth=-1),
-                 id='a negative array depth'),
-    pytest.param(lambda p, q: PortId(Namespace(), '', 'f'),
-                 id='a port belonging to no step'),
-    pytest.param(lambda p, q: WorkflowGraph(
-        Namespace(('wf',)),
-        steps=(StepNode(Namespace(('wf',)), 'mk', outputs=(p,)),),
-        edges=(Edge(p.id, q.id),)),
-        id='a graph whose edge names a port no step declares'),
-    pytest.param(lambda p, q: WorkflowGraph(
-        Namespace(('wf',)),
-        steps=(StepNode(Namespace(('wf',)), 'mk'),
-               StepNode(Namespace(('wf',)), 'mk'))),
-        id='a graph with the same step name twice'),
-])
-def test_a_malformed_graph_cannot_be_constructed(build: Any) -> None:
-    """The invariants live in `__post_init__`, so nothing can skip them:
-    construction is the one moment every caller passes through."""
-    ns = Namespace(('wf',))
-    producer = Port(PortId(ns, 'mk', 'file'), PortType('File'))
-    consumer = Port(PortId(ns, 'use', 'f'), PortType('File'))
-    with pytest.raises(ValueError):
-        build(producer, consumer)
+@given(strat.documents())
+@COVERAGE
+def test_lowering_keeps_every_authored_binding(document: Document) -> None:
+    """Nothing written in `in:` is dropped.
+
+    Keeping only the edges makes two documents differing solely in a literal
+    lower to the same graph, so `Emit` would have to read the AST again.
+    """
+    result = lower(document)
+    if result.graph is None:
+        return
+    authored = [v for step in document.steps for _, v in step.inputs]
+    carried = [b.value for step in result.graph.steps for b in step.bindings]
+    assert carried == authored
 
 
 @pytest.mark.fast
-def test_a_repeated_step_name_is_reported_at_the_step() -> None:
-    """Two steps of one name is a diagnostic, not a refused construction, so
-    the report carries the second step's position rather than the graph's."""
-    from sophios.lang.parser import parse  # pylint: disable=import-outside-toplevel
+def test_an_input_and_an_output_of_one_name_are_different_ports() -> None:
+    """CWL puts a step's inputs and outputs in separate namespaces.
 
-    document = parse('steps:\n- id: s\n  in: {}\n- id: s\n  in: {}\n', 'repeat.wic').document
+    A tool declaring `file` on both is ordinary -- the synthetic registry has
+    them. Without direction in the identity the two compare equal, an edge
+    between them looks like a self-loop, and a set of port ids silently loses
+    one of every such pair.
+    """
+    step = StepId(Namespace(), 1, 's')
+    assert PortId(step, Direction.INPUT, 'file') != PortId(step, Direction.OUTPUT, 'file')
+    assert len({PortId(step, Direction.INPUT, 'file'),
+                PortId(step, Direction.OUTPUT, 'file')}) == 2
+
+
+@pytest.mark.fast
+def test_a_step_may_be_invoked_twice() -> None:
+    """`append` twice is the language, not a mistake.
+
+    Sequence-form `steps:` exists so a tool can be invoked more than once, and
+    a shipped tutorial does it. An IR keyed on the authored id rejects a real
+    document; the occurrence index is what the compiler already means by
+    `{stem}__step__{i}__{key}`.
+    """
+    document = parse((REPO_ROOT / 'docs' / 'tutorials' / 'append_twice.wic')
+                     .read_text(encoding='utf-8'), 'append_twice.wic').document
     assert document is not None
     result = lower(document)
-    assert result.graph is None and result.diagnostics.has_errors
+    assert result.graph is not None, [d.code.value for d in result.diagnostics]
+    assert [(s.id.index, s.id.name) for s in result.graph.steps] == [(1, 'append'), (2, 'append')]
+
+
+@pytest.mark.fast
+def test_a_reference_before_its_definition_is_reported() -> None:
+    """`!* e` above its `!& e` is `wic025`, as the reference and compiler say.
+
+    Resolving it by pre-scanning every definition would make Lower accept a
+    document the compiler refuses, and silently change an ordering rule.
+    """
+    result = _lower('steps:\n- id: use\n  in:\n    f: !* e\n- id: mk\n  out:\n  - file: !& e\n')
+    assert [d.code.value for d in result.diagnostics] == ['wic025']
+
+
+@pytest.mark.fast
+def test_a_name_defined_twice_is_reported() -> None:
+    """Keeping the first definition and dropping the second leaves nothing to
+    report it with, here or in any later phase."""
+    result = _lower('steps:\n- id: a\n  out:\n  - f: !& e\n- id: b\n  out:\n  - f: !& e\n')
+    assert [d.code.value for d in result.diagnostics] == ['wic026']
+
+
+@pytest.mark.fast
+def test_a_step_with_no_id_is_reported_not_raised() -> None:
+    """The parser recovers such a document, which is exactly when a caller is
+    least able to handle an exception."""
+    result = _lower('steps:\n- id: ""\n  in: {}\n')
+    assert result.graph is None and [d.code.value for d in result.diagnostics] == ['wic006']
 
 
 @pytest.mark.fast
 def test_a_reference_to_an_undefined_edge_becomes_an_obligation() -> None:
     """What a subworkflow owes its includer has a name and a type, which is
     what lets `Link` say whether every one was discharged."""
-    from sophios.lang.parser import parse  # pylint: disable=import-outside-toplevel
-
-    document = parse('steps:\n- id: s\n  in:\n    f: !* from_parent\n', 'owes.wic').document
-    assert document is not None
-    graph = lower(document).graph
+    graph = _lower('steps:\n- id: s\n  in:\n    f: !* from_parent\n').graph
     assert graph is not None
     assert [o.name for o in graph.obligations] == ['from_parent']
     assert graph.edges == ()
@@ -143,27 +190,80 @@ def test_a_reference_to_an_undefined_edge_becomes_an_obligation() -> None:
 @pytest.mark.fast
 def test_a_reference_to_a_defined_edge_becomes_an_edge() -> None:
     """The same reference, when this document produces what it names."""
-    from sophios.lang.parser import parse  # pylint: disable=import-outside-toplevel
-
-    document = parse(
-        'steps:\n- id: mk\n  out:\n  - file: !& e\n- id: use\n  in:\n    f: !* e\n',
-        'binds.wic').document
-    assert document is not None
-    graph = lower(document).graph
+    graph = _lower('steps:\n- id: mk\n  out:\n  - file: !& e\n- id: use\n  in:\n    f: !* e\n').graph
     assert graph is not None
-    assert graph.obligations == ()
-    assert len(graph.edges) == 1
-    assert graph.edges[0].source.step == 'mk' and graph.edges[0].sink.step == 'use'
+    assert graph.obligations == () and len(graph.edges) == 1
+    assert graph.edges[0].source.step.name == 'mk' and graph.edges[0].sink.step.name == 'use'
+
+
+_SPAN = SourceSpan('probe.wic', 1, 1, 1, 1)
+
+
+@st.composite
+def _hostile_graphs(draw: st.DrawFn) -> Any:
+    """A construction that violates one invariant, drawn rather than listed."""
+    ns = Namespace(tuple(draw(st.lists(st.text('ab', min_size=1, max_size=2), max_size=2))))
+    one = StepId(ns, draw(st.integers(1, 4)), draw(st.text('xy', min_size=1, max_size=2)))
+    two = StepId(ns, one.index + draw(st.integers(1, 3)), one.name)
+    name = draw(st.text('pq', min_size=1, max_size=2))
+    out = PortId(one, Direction.OUTPUT, name)
+    inp = PortId(one, Direction.INPUT, name)
+    elsewhere = PortId(two, Direction.INPUT, name)
+    port = Port(inp, PortType(None))
+    return draw(st.sampled_from([
+        lambda: Edge(inp, inp),                                   # a port to itself
+        lambda: Edge(inp, PortId(two, Direction.INPUT, name)),    # input to input
+        lambda: Edge(out, PortId(two, Direction.OUTPUT, name)),   # output to output
+        lambda: DeferredObligation(out, name, PortType(None)),    # an output awaiting a value
+        lambda: StepNode(one, inputs=(Port(elsewhere, PortType(None)),)),
+        lambda: StepNode(one, outputs=(port,)),                   # an input listed as an output
+        lambda: StepNode(one, bindings=(Binding(inp, InlineLiteral(1, _SPAN)),)),
+        lambda: StepId(ns, 0, name),                              # a zero-based occurrence
+        lambda: StepId(ns, 1, ''),                                # an unnamed occurrence
+        lambda: PortId(one, Direction.INPUT, ''),                 # an unnamed port
+        lambda: PortType(declared='File', array_depth=-1),
+        lambda: Namespace(('',)),
+        lambda: WorkflowGraph(ns, steps=(StepNode(one), StepNode(one))),
+        lambda: WorkflowGraph(ns, output_mapping=((name, out),)),
+        lambda: WorkflowGraph(ns, input_mapping=((name, (inp,)),)),
+        lambda: WorkflowGraph(ns, explicit_edge_defs=((name, out),)),
+    ]))
+
+
+@pytest.mark.fast
+@given(_hostile_graphs())
+@COVERAGE
+def test_a_malformed_graph_cannot_be_constructed(build: Any) -> None:
+    """The invariants live in `__post_init__`, so nothing can skip them.
+
+    Drawn rather than listed: a fixed table only ever proves the cases someone
+    thought of, and every gap this file has had was a case nobody listed.
+    """
+    with pytest.raises(ValueError):
+        build()
+
+
+@pytest.mark.fast
+def test_the_graph_owns_no_mutable_container() -> None:
+    """A frozen graph holding a dict can have its invariants invalidated after
+    the constructor checked them, which makes checking them theatre."""
+    graph = _lower('steps:\n- id: s\n  in:\n    f: !ii 1\n').graph
+    assert graph is not None
+    for name in ('steps', 'explicit_edge_defs', 'explicit_edge_calls',
+                 'input_mapping', 'output_mapping', 'passthrough'):
+        assert isinstance(getattr(graph, name), tuple), name
 
 
 @pytest.mark.fast
 def test_nothing_in_the_ir_reads_an_opaque_payload() -> None:
     """`OpaqueCwl` is carried, never inspected.
 
-    Static rather than by example: an attribute access or subscript on a
-    passthrough value is invisible to any test that only lowers documents.
+    CANNOT DETECT: a payload bound to a local and read through that, or reached
+    by iteration, comparison or pattern matching. A static scan sees the direct
+    read, which is the shape a phase reaches for first; the boundary is held by
+    the type, and this stops the type being quietly bypassed.
     """
-    carriers = {'passthrough', 'interpreted', 'declared'}
+    carriers = {'passthrough', 'interpreted', 'declared', 'value'}
     offenders: list[str] = []
     for path in sorted((REPO_ROOT / 'src' / 'sophios' / 'ir').rglob('*.py')):
         for node in pyast.walk(parsed(path)):

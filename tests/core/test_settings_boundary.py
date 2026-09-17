@@ -118,7 +118,9 @@ def _namespace_parameters(tree: ast.AST) -> list[tuple[int, str]]:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         arguments = node.args
-        for argument in (*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs):
+        accepted = (*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs,
+                    arguments.vararg, arguments.kwarg)
+        for argument in (a for a in accepted if a is not None):
             annotation = ast.unparse(argument.annotation) if argument.annotation else ''
             if re.search(rf'(?<![\w.])({pattern})\b', annotation):
                 found.append((node.lineno, node.name))
@@ -193,6 +195,10 @@ def test_the_namespace_scan_can_actually_fail() -> None:
         'from argparse import Namespace as Ns\ndef f(args: Ns) -> None: ...'))
     assert not _namespace_parameters(ast.parse(
         'from sophios.ir import Namespace\ndef f(ns: Namespace) -> None: ...'))
+    assert _namespace_parameters(ast.parse(
+        'import argparse\ndef f(*args: argparse.Namespace) -> None: ...'))
+    assert _namespace_parameters(ast.parse(
+        'from argparse import Namespace as Ns\ndef f(**kw: Ns) -> None: ...'))
     assert not _namespace_parameters(ast.parse('def f(options: CompilerOptions) -> None: ...'))
 
 

@@ -5,23 +5,29 @@ writes CWL: lowering is in `lower`, and the phases that consume a graph are
 their own modules.
 """
 from .types import (
+    Binding,
     DeferredObligation,
+    Direction,
     Edge,
     Namespace,
     Port,
     PortId,
     PortType,
+    StepId,
     StepNode,
     WorkflowGraph,
 )
 
 __all__ = [
+    'Binding',
     'DeferredObligation',
+    'Direction',
     'Edge',
     'Namespace',
     'Port',
     'PortId',
     'PortType',
+    'StepId',
     'StepNode',
     'WorkflowGraph',
 ]
