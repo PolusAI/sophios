@@ -1,12 +1,10 @@
 """The generator is adequate, and its failures are usable.
 
-A property is only as strong as its generator. Repeated defects traced
-every High-severity finding to a blind spot: totality quantified over
-`st.text()`, which essentially never forms valid YAML with an alias; a
-document generator that produced only mapping-form `in:`-only documents made
-outputs, sequence steps and nested sidecars structurally invisible to every
-property it fed. A generator that silently stops producing a construct
-disables every property depending on it and nothing else notices — so
+A property is only as strong as its generator, and a generator that stops
+producing a construct disables every property depending on it with nothing
+else noticing. `st.text()` essentially never forms valid YAML with an alias;
+a document generator drawing only mapping-form `in:`-only documents makes
+outputs, sequence steps and nested sidecars structurally invisible. So
 adequacy is itself a property, checked at a bounded sample.
 """
 import re
@@ -126,24 +124,17 @@ def test_every_ill_formed_document_earns_its_own_diagnostic(case: tuple[str, obj
 def test_the_workflows_strategy_produces_documents_the_compiler_accepts() -> None:
     """`workflows()` is what the compile-driving properties quantify over.
 
-    Every claim `documents()` and `compilable_documents()` make is about the
-    AST; `workflows()` is `to_yml` on top, and `to_yml` is the only part of
-    this generator that must satisfy the *compiler* rather than the grammar.
-    Its docstring says so in a warning — "Do not remove this call to 'simplify'
-    `to_yml`" — about the `desugar_into_canonical_normal_form` that mapping-form
-    documents need to survive `compile_workflow_once`'s per-step loop. Nothing held
-    it: delete that call and every mapping-form document raises `KeyError: 0`,
-    with no test to notice.
+    `to_yml` is the only part of this generator that must satisfy the *compiler*
+    rather than the grammar. Delete its `desugar_into_canonical_normal_form`
+    call and every mapping-form document raises `KeyError: 0` in
+    `compile_workflow_once`'s per-step loop -- which is why both surface forms
+    must reach a successful compilation.
 
-    Both surface forms are required to reach a successful compilation, which is
-    what pins the desugaring specifically. The overall bar is a bare majority,
-    not everything: `!ii` puts no constraint relating a literal to the CWL type
-    it binds, so about one drawn document in ten binds something like `'_'` to
-    an `int` and is refused with a `LITERAL_TYPE_MISMATCH` diagnostic. That is
-    the compiler correctly rejecting an ill-typed document, not a defect —
-    what the generator draws is well-formed, not well-typed — so those draws
-    are skipped rather than counted, and a threshold that pretended every draw
-    must compile would be a flaky test rather than a stricter one.
+    The bar is a bare majority, not everything: `!ii` constrains no literal to
+    the CWL type it binds, so roughly one draw in ten binds `'_'` to an `int`
+    and is refused as `LITERAL_TYPE_MISMATCH`. The generator draws well-formed
+    documents, not well-typed ones, so those are skipped; a threshold demanding
+    every draw compile would be flaky rather than stricter.
 
     Drawn from `workflows_with_documents()`, the strategy `workflows()` is a
     projection of, so the composition under test is the one that ships.
