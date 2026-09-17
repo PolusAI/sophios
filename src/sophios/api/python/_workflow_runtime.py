@@ -68,19 +68,8 @@ def _parameter_name(parameter_id: Any) -> str:
 
 
 def coerce_path(value: str | Path | None, *, field_name: str, allow_none: bool = False) -> Path | None:
-    """Normalize string-like path input to `Path`.
-
-    Args:
-        value (str | Path | None): Incoming path-like value.
-        field_name (str): User-facing parameter name for error messages.
-        allow_none (bool): Whether `None` should be accepted.
-
-    Raises:
-        TypeError: If the value is neither a `Path`, `str`, nor allowed `None`.
-
-    Returns:
-        Path | None: The normalized path or `None`.
-    """
+    """Normalize string-like path input to `Path`. `field_name` names the
+    parameter in the `TypeError` the last branch raises."""
     match value:
         case Path() as path:
             return path
@@ -114,20 +103,8 @@ def lookup_parameter(
     owner_name: str,
     kind: str,
 ) -> ParameterT:
-    """Return a parameter from a named parameter store.
-
-    Args:
-        parameters (ParameterStore[ParameterT]): Store holding the available parameters.
-        name (str): Requested parameter name.
-        owner_name (str): Human-readable process name for error messages.
-        kind (str): Parameter kind, such as `"input"` or `"output"`.
-
-    Raises:
-        AttributeError: If the parameter does not exist.
-
-    Returns:
-        ParameterT: The requested parameter object.
-    """
+    """Return a parameter from a named parameter store. `owner_name` and
+    `kind` appear only in the `AttributeError` raised when it is absent."""
     try:
         return parameters.get(name)
     except KeyError as exc:
