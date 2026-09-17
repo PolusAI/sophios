@@ -141,26 +141,13 @@ def _keyword_admits(expression: str | None, relative: str, test: str) -> bool:
     """Whether a `-k` expression selects `test` in `relative`.
 
     Matched against the module's file name as well as the test's own, because
-    that is what pytest matches: a `-k` clause is compared to the item's name
-    and to each of its parents'. A rule that saw only the function name would
-    model the flag differently from the tool it describes, and the difference
-    is not academic -- a file named after what it covers satisfies a `-k` naming
-    that subject for every test inside it, and renaming the file silently
-    deselects the ones whose own names do not repeat it.
+    that is what pytest matches: a clause is compared to the item's name and to
+    each of its parents'. So a file named after what it covers satisfies a `-k`
+    naming that subject for every test inside it.
 
-    Read otherwise the same way `_excluded_markers` reads `-m`: the shapes this
-    repository writes -- a bare name and `not <name>`, joined by `and` -- and a
-    refusal for anything else. Treating an unparsed expression as a plain
-    substring makes a boolean one match nothing, which reports a test that does
-    run as an orphan.
-
-    Args:
-        expression (str | None): The `-k` expression, or None for no filter.
-        relative (str): The test module's repository-relative path.
-        test (str): The test function's name.
-
-    Returns:
-        bool: Whether pytest would collect it.
+    Unreadable expressions raise rather than matching as a substring, which
+    would make a boolean one match nothing and report a running test as an
+    orphan.
     """
     if expression is None:
         return True

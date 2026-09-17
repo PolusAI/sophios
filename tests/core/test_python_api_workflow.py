@@ -105,14 +105,8 @@ def _iter_python_workflow_paths(global_config: Json) -> list[tuple[str, Path]]:
 
 @contextmanager
 def _step_registry_injected(tool_registry: Tools) -> Iterator[None]:
-    """Inject a default tool registry into imported Python workflow scripts.
-
-    Args:
-        tool_registry (Tools): Registry of known CWL tools used for path fallback.
-
-    Yields:
-        Iterator[None]: Context where imported scripts see the patched ``Step``.
-    """
+    """Inject a default tool registry into imported Python workflow scripts,
+    so they see the patched ``Step``."""
     from sophios.api.python import workflow  # pylint: disable=C0415:import-outside-toplevel
 
     step_class = workflow.Step

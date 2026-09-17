@@ -55,13 +55,8 @@ def test_tool_builder_does_not_export_duplicate_aliases() -> None:
 
 
 def _rich_tool() -> CommandLineTool:
-    """A tool exercising every builder method that reaches the document.
-
-    Returns:
-        CommandLineTool: A tool whose emitted CWL carries each requirement,
-            hint and binding the surface can produce, so one assertion block
-            covers the whole serialization surface.
-    """
+    """A tool exercising every builder method that reaches the document, so
+    one assertion block covers the whole serialization surface."""
     mode_type = cwl.enum("fast", "accurate", name="Mode")
     settings_type = cwl.record(
         Fields(
