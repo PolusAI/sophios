@@ -42,7 +42,8 @@ CITED_TOKENS: Final = re.compile('|'.join(TRACKER_IDS))
 #: decides whether a sentence narrates, so a green run means these phrasings
 #: are absent and nothing more.
 #:
-#: Case-insensitive except `this PR`, where `this property` is not narration.
+#: Case-insensitive except `[Tt]his PR`, which must stay cased: an insensitive
+#: `this pr` also matches `this property`, which is not narration.
 #: Applied to logical blocks rather than physical lines, because a phrase wraps:
 #: "Found by / mutation" spans two comment lines and matches neither.
 PROCESS_NARRATION: Final = re.compile(
@@ -50,7 +51,7 @@ PROCESS_NARRATION: Final = re.compile(
     r'|review\w*\b[^.]{0,25}?\b(?:found|caught|added|proved|showed|method)'
     r'|found by mutation|\bround (?:\d+|one|two|three|four|five)\b'
     r'|as it stood before|semrefac|this pull request)'
-    r'|this PR\b'
+    r'|[Tt]his PR\b'
 )
 
 #: Exempt: this file alone, which cannot state the rule without spelling an
@@ -197,6 +198,7 @@ def test_no_known_narration_phrasing_reaches_the_source() -> None:
     ('a spelled-out round', '# settled in round three of the rewrite', PROCESS_NARRATION),
     ('review with words between', '# review of the corpus found the gap', PROCESS_NARRATION),
     ('a pull request by pronoun', '# this PR fixes the generator', PROCESS_NARRATION),
+    ('the same, sentence-initial', '# This PR fixes the generator', PROCESS_NARRATION),
 ])
 def test_the_patterns_catch_what_they_claim_to(claim: str, text: str, pattern: re.Pattern[str]) -> None:
     """Each rule is shown firing, so a green run means it was checked.
