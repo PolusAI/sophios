@@ -34,6 +34,10 @@ import sophios.compiler
 import sophios.main
 from sophios.wic_types import CompilerOptions, GraphSettings, YamlTagPaths
 
+#: A static scan over the repository, not a claim about a compilation.
+#: Collected by run_workflows_weekly.yml and by no lane that blocks a pull
+#: request -- these guard the codebase's shape, which changes slowly.
+pytestmark = pytest.mark.sanity
 
 #: The one module that may hold an `argparse.Namespace`: it makes them.
 PARSER_MODULE: Final = SRC / 'cli.py'

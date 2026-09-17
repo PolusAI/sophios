@@ -223,6 +223,7 @@ markers = [
     "skip_pypi_ci: tests intentionally excluded from PyPI package-build CI",
     "contrib: exercises a peripheral surface (ICT, Workflow Builder, REST) rather than the core compiler; run core only with 'pytest -m \"not contrib\"'",
     "needs_cwltool: calls cwltool in-process; skipped off POSIX, see conftest.py",
+    "sanity: a static scan over the repository rather than a claim about a compilation; runs in the weekly lane, see run_workflows_weekly.yml",
 ]
 addopts = ""
 

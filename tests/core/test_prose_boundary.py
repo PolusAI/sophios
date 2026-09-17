@@ -14,6 +14,11 @@ import pytest
 
 from .source_scan import REPO_ROOT, package_files, parsed
 
+#: A static scan over the repository, not a claim about a compilation.
+#: Collected by run_workflows_weekly.yml and by no lane that blocks a pull
+#: request -- these guard the codebase's shape, which changes slowly.
+pytestmark = pytest.mark.sanity
+
 #: Tracker identifiers, abbreviated and spelled out both: a task is cited as
 #: `T2.4` and as "Task 5".
 #: NOT MATCHED: `wic0NN`, which is public contract -- matchable by a caller.

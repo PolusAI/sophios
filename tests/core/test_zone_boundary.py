@@ -29,6 +29,11 @@ from typing import Final
 
 import pytest
 
+#: A static scan over the repository, not a claim about a compilation.
+#: Collected by run_workflows_weekly.yml and by no lane that blocks a pull
+#: request -- these guard the codebase's shape, which changes slowly.
+pytestmark = pytest.mark.sanity
+
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
 SRC_ROOT = REPO_ROOT / 'src'

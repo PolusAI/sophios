@@ -40,7 +40,7 @@ jobs:
       - name: Test with pytest
         run: |
           python -m pytest -k test_cwl_docker_extract
-          python -m pytest -m "not skip_pypi_ci" -vv
+          python -m pytest -m "not skip_pypi_ci and not sanity" -vv
 
       - name: Build sophios
         run: |

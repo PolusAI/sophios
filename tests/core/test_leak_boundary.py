@@ -41,6 +41,11 @@ from sophios.wic_types import Yaml
 from .ast_strategies import passthrough_keys, passthrough_values
 from .compile_harness import COMPILED, FAST, compile_cwl, compile_info
 
+#: A static scan over the repository, not a claim about a compilation.
+#: Collected by run_workflows_weekly.yml and by no lane that blocks a pull
+#: request -- these guard the codebase's shape, which changes slowly.
+pytestmark = pytest.mark.sanity
+
 #: Top-level keys the *compiler* owns, which is a larger set than the syntax
 #: layer's. `_document` claims only `steps` and `wic`; `compile_workflow` also
 #: writes `class` and `cwlVersion`, merges into `inputs`, `outputs` and
