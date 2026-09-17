@@ -163,4 +163,4 @@ jobs:
     - name: PyTest Codebase Sanity
       if: always()
       timeout-minutes: 20
-      run: cd sophios/ && pytest tests/core/test_zone_boundary.py tests/core/test_prose_boundary.py tests/core/test_settings_boundary.py tests/core/test_leak_boundary.py
+      run: cd sophios/ && pytest tests/core/test_zone_boundary.py tests/core/test_settings_boundary.py tests/core/test_leak_boundary.py

@@ -87,6 +87,26 @@ repos:
     rev: v0.10.0.1
     hooks:
     -   id: shellcheck
+- repo: local
+  hooks:
+  - id: tracker-identifiers
+    name: tracker identifiers stay offline
+    # A reader has the source and not the trackers, so `P30` or `CE-11` names a
+    # row they cannot open. State the claim instead.
+    #
+    # Deliberately only the identifiers, which are a closed set of shapes. The
+    # companion rule about narration ("an earlier draft...", "found in review")
+    # was a phrase blacklist presented as a boundary: no regex decides whether a
+    # sentence narrates, so it missed phrasings in four consecutive reviews while
+    # reporting a clean tree. Review catches that; a pattern does not.
+    #
+    # `wic0NN` is absent on purpose -- a diagnostic code is public contract. A
+    # spec number is allowed beside a `design_docs/` path, where it names a
+    # section the reader can open.
+    language: pygrep
+    types: [python]
+    entry: '(?:\bP\d{1,2}[a-c]?\b|\bCE-\d+\b|\bCR-\d+\b|\bT\d\.\d+\b|\bTasks? \d+\b|(?<![\w/])\#\d{3,}\b)|^(?!.*design_docs/).*\bSpec \d\b'
+
 - repo: https://github.com/codespell-project/codespell
   rev: v2.2.6
   hooks:
