@@ -48,7 +48,7 @@ CITED_TOKENS: Final = re.compile('|'.join(TRACKER_IDS))
 PROCESS_NARRATION: Final = re.compile(
     r'(?i:(?:an|the) earlier (?:version|draft)|the first draft'
     r'|review\w*\b[^.]{0,25}?\b(?:found|caught|added|proved|showed|method)'
-    r'|found by mutation|round (?:\d+|one|two|three|four|five)\b'
+    r'|found by mutation|\bround (?:\d+|one|two|three|four|five)\b'
     r'|as it stood before|semrefac|this pull request)'
     r'|this PR\b'
 )
@@ -215,6 +215,8 @@ def test_the_patterns_catch_what_they_claim_to(claim: str, text: str, pattern: r
     '# P is the port, not a property',
     '# this property quantifies over documents',
     '# the review lane runs on every push',
+    '# the comment wraps around 2 lines',
+    '# a workaround one reviewer suggested',
     '# See design_docs/core-refactor-design.md, Spec 1.',
 ])
 def test_the_patterns_leave_real_prose_alone(text: str) -> None:
