@@ -2,25 +2,25 @@
 
 import ast
 import copy
+from functools import partial
 from pathlib import Path
 from typing import Any, Final
-
-from functools import partial
 
 import pytest
 import yaml
 from hypothesis import given
 from hypothesis import strategies as st
 
+from sophios.api.python.workflow import _python_api_types_match
+from sophios.inlineing import get_inlineable_subworkflows
 from sophios.lang.compatibility import TypeRelation, reference_relation
 from sophios.lang.diagnostics import Code, SophiosError
 from sophios.lang.versions import KNOWN_VERSIONS
-from sophios.api.python.workflow import _python_api_types_match
-from sophios.inlineing import get_inlineable_subworkflows
 from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_yaml import wic_loader
-from .synthetic_tools import clt
 from sophios.wic_types import StepId, Tool, Tools, Yaml, YamlTree
+
+from .synthetic_tools import clt
 
 from .hermetic import ORACLE, compile_hermetic
 from .reference_model import ReferenceExpectation, reference_expectation

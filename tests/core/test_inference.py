@@ -7,20 +7,18 @@ do that for the shapes `format` matching has to keep apart: a bare string,
 which both iterates and tests membership per-character, and an absent format,
 which means different things on a File output and on one that cannot carry one.
 """
-from typing import Final
-
 from functools import partial
+from typing import Final
 
 import pytest
 
 import sophios.cli
 from sophios import inference
-from sophios.lang.cwl import CWL_VERSION
 from sophios.utils import step_name_str
-from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_graphs import get_graph_reps
+from sophios.wic_types import StepId, Tool, Tools, Yaml
+
 from .synthetic_tools import clt
-from sophios.wic_types import Cwl, StepId, Tool, Tools, Yaml
 
 _NS: Final = 'global'
 
