@@ -1,27 +1,23 @@
-"""Every test this repository ships is collected by some configured lane.
+"""Every test in the repository is collected by some configured lane.
 
-A test nothing runs is the cheapest defect to ship and the hardest to see: it
-is green by construction, it inflates the collected count, and nothing about a
-marker says out loud that no job selects it. That has shipped here three times
-— the benchmark harness contracts, `test_canonical_path.py`, and both
-determinism properties in `test_canonical_emission.py` — each time because a
-marker was applied by habit while no workflow step named the file.
+A test that no lane names is a test that never runs, and nothing else notices:
+the suite is green, the file is present, and the claim it makes is unchecked.
 
-The packaging lane (`build_wheel.yml`) collects by default and is deliberately
-lean, so it already reaches every unmarked test. What it cannot reach is
-anything carrying a marker its own `-m` expression excludes. Those tests run
-only where a step names their file, which makes exactly one invariant worth
-enforcing:
-
-    a test carrying a marker the packaging lane excludes must be named by a
-    step in a main lane whose own `-m` expression admits it.
-
-The excluded set is read out of `build_wheel.yml` rather than restated here, so
-this check follows the packaging lane instead of drifting from it.
+**Selection is not modelled here.** Each invocation's own arguments are handed
+to `pytest --collect-only`, and the node ids it reports are the answer. A model
+of `-k` and `-m` is a second implementation of something this repository
+already ships, and it has to agree with the first -- which twice it did not. It
+matched a test's name but not its module's, so renaming a file silently dropped
+three tests from three lanes; and it ignored markers and case, so `-k "not
+FAST"` read as selecting every `@pytest.mark.fast` test where pytest deselects
+all of them. Asking pytest cannot disagree with pytest.
 """
 import ast
 import re
 import shlex
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final
 
@@ -30,149 +26,109 @@ import yaml
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 WORKFLOWS: Final = REPO_ROOT / '.github' / 'workflows'
-PACKAGING_LANE: Final = WORKFLOWS / 'build_wheel.yml'
+
+#: Arguments that change what pytest *reports* rather than what it selects.
+#: Dropped before collecting: `-vv` overrides the `-q` this parses output with,
+#: and `--workers`/`--cwl_runner` need plugins a collection does not.
+#:
+#: This is the whole of what is assumed about pytest's command line. Everything
+#: deciding which tests run -- paths, node ids, `-k`, `-m` -- passes through
+#: untouched and is answered by pytest itself.
+REPORTING_ONLY: Final = frozenset({
+    '-v', '-vv', '-vvv', '--verbose', '-q', '--quiet', '-s', '--no-header', '-ra', '-x',
+})
+
+#: Reporting arguments that take a value, so the value is dropped with them.
+REPORTING_WITH_VALUE: Final = frozenset({'--workers', '--cwl_runner', '-n', '--parallel'})
 
 
-def _coverage_lanes() -> list[Path]:
-    """Every configured workflow except the packaging lane.
-
-    Derived rather than listed: a new workflow is a new lane the moment it
-    exists, and a hand-maintained list would be one more pair of things that
-    must agree with nothing checking that they do. A weekly lane counts — a
-    test that runs weekly is not a test that runs nowhere — though it is the
-    weaker place for anything guarding a claim made on every change.
-    """
-    return sorted(p for p in WORKFLOWS.glob('*.yml') if p != PACKAGING_LANE)
-
-
-def _flag(tokens: list[str], name: str) -> str | None:
-    """The value following `name` in `tokens`, or None if it is absent or last."""
-    if name not in tokens:
-        return None
-    index = tokens.index(name) + 1
-    return tokens[index] if index < len(tokens) else None
+def _selection_argv(argv: list[str]) -> list[str]:
+    """`argv` with the arguments that do not decide selection removed."""
+    kept: list[str] = []
+    skip = False
+    for token in argv:
+        if skip:
+            skip = False
+        elif token in REPORTING_WITH_VALUE:
+            skip = True
+        elif token not in REPORTING_ONLY and not token.startswith('--cov'):
+            kept.append(token)
+    return kept
 
 
-def _pytest_runs(workflow: Path) -> list[tuple[list[str], str | None, str | None]]:
-    """Every `pytest` invocation in a workflow, as (named test files, -m, -k).
-
-    An invocation naming no file collects from the rootdir, so it reaches every
-    test module rather than none — `pytest -k test_fuzzy_compile` is a real
-    lane for that test even though it names no path.
-    """
-    if not workflow.exists():
-        return []
-    document = yaml.safe_load(workflow.read_text(encoding='utf-8')) or {}
-    runs: list[tuple[list[str], str | None, str | None]] = []
-    for job in (document.get('jobs') or {}).values():
-        for step in job.get('steps') or []:
-            script = step.get('run')
-            if not script or 'pytest' not in script:
-                continue
-            for line in script.splitlines():
-                if 'pytest' not in line:
+def _invocations(workflow: Path) -> list[list[str]]:
+    """Every `pytest` invocation in one workflow, as the arguments after it."""
+    found: list[list[str]] = []
+    script = yaml.safe_load(workflow.read_text(encoding='utf-8'))
+    for job in (script.get('jobs') or {}).values():
+        for step in (job.get('steps') or []):
+            for line in (step.get('run') or '').splitlines():
+                if not re.search(r'\bpytest\b', line):
                     continue
                 tokens = shlex.split(line, comments=True)
-                # `python -m pytest -m "not skip_pypi_ci"` carries two `-m`: the
-                # first selects the module to run, the second is pytest's marker
-                # filter. Only the one after the `pytest` token is the filter.
-                start = next((i for i, t in enumerate(tokens) if t == 'pytest' or t.endswith('/pytest')), -1)
-                if start < 0:
-                    continue
-                after = tokens[start + 1:]
-                files = _paths_of(after)
-                runs.append((files, _flag(after, '-m'), _flag(after, '-k')))
-    return runs
+                if 'pytest' in tokens:
+                    found.append(_selection_argv(tokens[tokens.index('pytest') + 1:]))
+    return found
 
 
-def _paths_of(tokens: list[str]) -> list[str]:
-    """The path arguments of a pytest invocation.
+def _collect(argv: list[str]) -> set[str]:
+    """The tests pytest selects for `argv`, as `path::name` without parameters.
 
-    A directory argument is a path too: reading only `.py` tokens made
-    `pytest tests/contrib` look like an invocation that named none, which this
-    file treats as the whole rootdir.
-
-    A bare word may instead be a flag's value — `--cwl_runner cwltool` — so only
-    tokens shaped like paths are considered, and one that does not resolve
-    raises rather than being dropped. Dropping the last of them leaves no paths
-    at all, which reads as the whole rootdir again: the same silent pass, by a
-    different route.
-
-    A node id is kept whole. Only its file part has to exist on disk, but the
-    test it names is what the run collects, and `_path_reaches` needs both to
-    say so.
+    Raises:
+        AssertionError: If pytest cannot collect the invocation at all, which
+            is what a lane naming a file that no longer exists looks like.
     """
-    paths: list[str] = []
-    for token in tokens:
-        if token.startswith('-') or not ('/' in token or '.py' in token):
-            continue
-        if not (REPO_ROOT / token.split('::', 1)[0]).exists():
-            raise ValueError(f'pytest invocation names a path that does not exist: {token!r}')
-        paths.append(token)
-    return paths
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '--collect-only', '-q', '--no-header',
+         '-p', 'no:randomly', '-p', 'no:cacheprovider', *argv],
+        capture_output=True, text=True, cwd=REPO_ROOT, check=False)
+    assert result.returncode in (0, 5), (
+        f'pytest could not collect `pytest {" ".join(argv)}`:\n{result.stdout[-2000:]}')
+    return {line.split('[')[0] for line in result.stdout.splitlines() if '::' in line}
 
 
-def _excluded_markers(expression: str | None) -> frozenset[str]:
-    """The markers `expression` refuses.
+def _covered() -> set[str]:
+    """Every test any configured invocation collects."""
+    argvs = sorted({tuple(argv) for lane in sorted(WORKFLOWS.glob('*.yml'))
+                    for argv in _invocations(lane)})
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return set().union(*pool.map(lambda a: _collect(list(a)), argvs))
 
-    Only the shapes this repository actually writes are understood — a bare
-    marker, `not <marker>`, and those joined by `and`. Anything else raises
-    rather than returning an empty set: a filter this cannot read is a filter
-    whose effect is unknown, and answering "excludes nothing" would turn that
-    into a silent pass.
+
+@pytest.mark.fast
+def test_the_census_sees_the_repo() -> None:
+    """Zero invocations is a green census that checks nothing."""
+    found = [a for lane in WORKFLOWS.glob('*.yml') for a in _invocations(lane)]
+    assert len(found) > 20, f'only {len(found)} pytest invocations found; the census is aimed wrong'
+
+
+@pytest.mark.fast
+def test_collection_is_pytests_answer_and_not_ours() -> None:
+    """The helper really asks pytest, and pytest really narrows.
+
+    If `_collect` returned everything whatever its arguments, the census below
+    would pass no matter which lanes existed.
     """
-    if expression is None:
-        return frozenset()
-    excluded: set[str] = set()
-    for clause in re.split(r'\band\b', expression):
-        clause = clause.strip()
-        if not clause:
-            continue
-        negated = re.fullmatch(r'not\s+([A-Za-z_][A-Za-z0-9_]*)', clause)
-        if negated:
-            excluded.add(negated.group(1))
-            continue
-        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', clause):
-            raise ValueError(f'unreadable pytest marker expression: {expression!r}')
-    return frozenset(excluded)
+    everything = _collect([])
+    one_file = _collect(['tests/core/test_ci_coverage.py'])
+    assert one_file and one_file < everything
+    assert all(node.startswith('tests/core/test_ci_coverage.py::') for node in one_file)
+    assert not _collect(['tests/core/test_ci_coverage.py', '-k', 'no_such_test_name_exists'])
 
 
-def _keyword_admits(expression: str | None, relative: str, test: str,
-                    markers: frozenset[str] = frozenset()) -> bool:
-    """Whether a `-k` expression selects `test` in `relative`.
+@pytest.mark.slow
+def test_no_test_is_collected_by_nothing() -> None:
+    """Every test the repository defines is selected by some lane.
 
-    Matched the way pytest matches: case-insensitively, against the item's own
-    name, its parents' names -- the module file among them -- and its keywords,
-    which include every marker on it. Each of those has been a false green
-    here. A file named after what it covers satisfies a `-k` naming that subject
-    for every test inside it; and `-k "not FAST"` deselects every
-    `@pytest.mark.fast` test, which a model reading only names admits.
-
-    DOES NOT MODEL: class names, keywords a plugin adds, or `-k` matching on
-    function attributes. Nothing in this repository writes those, and a `-k`
-    that needed them would be read here as selecting more than pytest does.
-
-    Unreadable expressions raise rather than matching as a substring, which
-    would make a boolean one match nothing and report a running test as an
-    orphan.
+    Slow because it asks pytest once per distinct invocation -- about thirty
+    collections, in parallel. That is the price of the answer being pytest's
+    rather than a model's, and a model is what this file used to be.
     """
-    if expression is None:
-        return True
-    names = tuple(n.lower() for n in (test, Path(relative).name, *markers))
-    for clause in re.split(r'\band\b', expression):
-        clause = clause.strip()
-        if not clause:
-            continue
-        negated = re.fullmatch(r'not\s+([A-Za-z_][A-Za-z0-9_]*)', clause)
-        if negated:
-            if any(negated.group(1).lower() in name for name in names):
-                return False
-            continue
-        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', clause):
-            raise ValueError(f'unreadable pytest -k expression: {expression!r}')
-        if not any(clause.lower() in name for name in names):
-            return False
-    return True
+    orphans = sorted(_collect([]) - _covered())
+    assert not orphans, (
+        'these tests are collected by no configured lane, so they never run:\n  '
+        + '\n  '.join(orphans)
+        + '\n\nName their file in a lane step, or delete them.')
 
 
 def _marked_tests(path: Path) -> dict[str, frozenset[str]]:
@@ -219,29 +175,6 @@ def _marked_tests(path: Path) -> dict[str, frozenset[str]]:
     return marked
 
 
-def _path_reaches(files: list[str], relative: str, test: str) -> bool:
-    """Whether an invocation naming `files` collects `test` in `relative`.
-
-    An invocation naming no path collects the whole rootdir. A directory
-    argument reaches everything beneath it, so the file match is a prefix check
-    rather than equality.
-
-    A node id reaches only the test it names. Crediting its whole file would
-    count every sibling as covered by a run that does not collect them — the
-    same over-wide answer a dropped path gives, one argument narrower.
-    """
-    if not files:
-        return True
-    for argument in files:
-        path, _, node = argument.partition('::')
-        if not (relative == path or relative.startswith(path.rstrip('/') + '/')):
-            continue
-        # `file.py::TestClass::test_x[param]` selects `test_x`.
-        if not node or node.rsplit('::', 1)[-1].partition('[')[0] == test:
-            return True
-    return False
-
-
 def _test_files() -> list[Path]:
     """Every test module in the repository."""
     return sorted((REPO_ROOT / 'tests').rglob('test_*.py'))
@@ -267,134 +200,6 @@ def _tests_importing(module: str, path: Path) -> set[str]:
             if isinstance(inner, ast.Import) and any(a.name.split('.')[0] == module for a in inner.names):
                 found.add(node.name)
     return found
-
-
-@pytest.mark.fast
-def test_the_census_sees_the_repo() -> None:
-    """Zero files, or a packaging lane that excludes nothing, is a green test
-    that enforces nothing."""
-    assert _test_files(), 'no test modules found; the census is vacuous'
-    assert _pytest_runs(PACKAGING_LANE), f'no pytest invocation found in {PACKAGING_LANE.name}'
-    assert any(_excluded_markers(m) for _, m, _k in _pytest_runs(PACKAGING_LANE)), (
-        f'{PACKAGING_LANE.name} excludes no markers, so this census has nothing to check; '
-        'if that is deliberate, this file should go rather than pass vacuously'
-    )
-
-
-@pytest.mark.fast
-def test_no_marked_test_is_collected_by_nothing() -> None:
-    """A test the packaging lane excludes must be named by a main lane that admits it."""
-    packaging_excludes: frozenset[str] = frozenset().union(
-        *(_excluded_markers(m) for _, m, _k in _pytest_runs(PACKAGING_LANE)))
-    main_runs = [run for lane in _coverage_lanes() for run in _pytest_runs(lane)]
-
-    orphans: list[str] = []
-    for path in _test_files():
-        relative = path.relative_to(REPO_ROOT).as_posix()
-        for test, markers in _marked_tests(path).items():
-            blocking = markers & packaging_excludes
-            if not blocking:
-                continue  # the packaging lane's default collection reaches it
-            admitted = any(
-                _path_reaches(files, relative, test)   # no path named means the whole rootdir
-                and _keyword_admits(keyword, relative, test, markers)
-                and not (_excluded_markers(marker) & blocking)
-                for files, marker, keyword in main_runs
-            )
-            if not admitted:
-                orphans.append(f'{relative}::{test} (marked {", ".join(sorted(blocking))})')
-
-    assert not orphans, (
-        'these tests are collected by no configured lane — the packaging lane excludes their '
-        'marker and no main-lane step names their file:\n  ' + '\n  '.join(orphans)
-    )
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('files', 'relative', 'test', 'reached'), [
-    ([], 'tests/core/test_x.py', 'test_a', True),                        # no path: the rootdir
-    (['tests/contrib'], 'tests/contrib/test_x.py', 'test_a', True),      # a directory reaches beneath it
-    (['tests/contrib'], 'tests/core/test_x.py', 'test_a', False),        # but only beneath it
-    (['tests/core/test_x.py'], 'tests/core/test_x.py', 'test_a', True),
-    # A node id names one test; its siblings in the same file are not collected.
-    (['tests/core/test_x.py::test_a'], 'tests/core/test_x.py', 'test_a', True),
-    (['tests/core/test_x.py::test_a'], 'tests/core/test_x.py', 'test_b', False),
-    (['tests/core/test_x.py::Klass::test_a'], 'tests/core/test_x.py', 'test_a', True),
-    (['tests/core/test_x.py::test_a[1-2]'], 'tests/core/test_x.py', 'test_a', True),
-    # One argument narrowing does not shrink another that reaches the file whole.
-    (['tests/core/test_x.py::test_a', 'tests/core/test_x.py'], 'tests/core/test_x.py', 'test_b', True),
-])
-def test_an_argument_reaches_only_what_it_names(
-        files: list[str], relative: str, test: str, reached: bool) -> None:
-    """A directory is a path, not the absence of one; a node id is one test, not a file.
-
-    Reading only `.py` tokens made `pytest tests/contrib` look like an
-    invocation that named no path, which this file treats as the whole rootdir.
-    One such run would then mark every marked test under `tests/core` as
-    covered — the single failure this file exists to catch. A node id credited
-    to its whole file is that same failure one argument narrower: the run
-    collects one test and every marked sibling reads as covered.
-    """
-    assert _path_reaches(files, relative, test) is reached
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('expression', 'relative', 'test', 'markers', 'admitted'), [
-    (None, 'tests/core/test_x.py', 'test_anything', frozenset(), True),
-    ('test_fuzzy_compile', 'tests/core/test_x.py', 'test_fuzzy_compile', frozenset(), True),
-    ('test_fuzzy_compile', 'tests/core/test_x.py', 'test_other', frozenset(), False),
-    ('not test_a and not test_b', 'tests/core/test_x.py', 'test_c', frozenset(), True),
-    ('not test_a and not test_b', 'tests/core/test_x.py', 'test_a', frozenset(), False),
-    # The module's name counts, exactly as it does for pytest: every test in
-    # `test_tool_builder.py` satisfies `-k test_tool_builder` whatever its own
-    # name, and renaming the file takes that away from the ones that do not
-    # repeat the subject themselves.
-    ('test_tool_builder', 'tests/core/test_tool_builder.py', 'test_old_name_is_gone', frozenset(), True),
-    ('test_tool_builder', 'tests/core/test_python_api_tool_builder.py', 'test_old_name_is_gone',
-     frozenset(), False),
-    ('not test_tool_builder', 'tests/core/test_tool_builder.py', 'test_old_name_is_gone', frozenset(), False),
-    # Markers are keywords, and the match is case-insensitive: `-k "not FAST"`
-    # deselects every `@pytest.mark.fast` test.
-    ('not FAST', 'tests/core/test_x.py', 'test_anything', frozenset({'fast'}), False),
-    ('fast', 'tests/core/test_x.py', 'test_anything', frozenset({'fast'}), True),
-    ('slow', 'tests/core/test_x.py', 'test_anything', frozenset({'fast'}), False),
-    ('TEST_FUZZY_COMPILE', 'tests/core/test_x.py', 'test_fuzzy_compile', frozenset(), True),
-])
-def test_a_k_expression_is_read_not_matched_as_a_substring(
-        expression: str | None, relative: str, test: str,
-        markers: frozenset[str], admitted: bool) -> None:
-    """`-k` gets the same treatment as `-m`: read the shapes written here, refuse the rest.
-
-    Matching a whole expression as a plain substring makes a boolean one match
-    nothing, which reports a test that does run as collected by no lane.
-    """
-    assert _keyword_admits(expression, relative, test, markers) is admitted
-
-
-@pytest.mark.fast
-def test_an_unreadable_k_expression_raises_rather_than_guessing() -> None:
-    """The same refusal `_excluded_markers` makes, for the same reason: an
-    expression this cannot read has an unknown effect, and guessing either way
-    is a silent wrong answer."""
-    with pytest.raises(ValueError, match='unreadable pytest -k expression'):
-        _keyword_admits('test_a or test_b', 'tests/core/test_x.py', 'test_a')
-
-
-@pytest.mark.fast
-def test_a_path_that_does_not_resolve_raises_rather_than_vanishing() -> None:
-    """Dropping the last path argument leaves none, which reads as the rootdir.
-
-    That is the same silent pass `_excluded_markers` refuses for an unreadable
-    `-m`, reached by a different route: a renamed file or a node id would be
-    quietly discarded and the run would then appear to cover everything. A node
-    id is kept whole rather than trimmed to its file, which is what lets
-    `_path_reaches` hold it to the one test it names.
-    """
-    assert _paths_of(['tests/core/test_ci_coverage.py']) == ['tests/core/test_ci_coverage.py']
-    assert not _paths_of(['--cwl_runner', 'cwltool'])          # a flag's value is not a path
-    assert _paths_of(['tests/core/test_ci_coverage.py::test_x']) == ['tests/core/test_ci_coverage.py::test_x']
-    with pytest.raises(ValueError, match='does not exist'):
-        _paths_of(['tests/core/no_such_file.py'])
 
 
 #: Every test that does not run on the Windows leg, and the evidence that
