@@ -1,14 +1,12 @@
 """An edge reference names a definition, and a name is defined once.
 
-Both claims were already enforced, as bare `ValueError`s raised from library
-code. The design says the library reports and only the CLI adapter exits, so a
-caller could not match on them, suppress them, or tell them apart from a bug.
+Both were enforced already, as bare `ValueError`s a caller could not match on,
+suppress, or tell from a bug. They carry codes now.
 
-These run with `testing=False`, which is what a real root compilation does.
-Every other harness in the suite passes `testing=True` — that is what lets
-`test_cwl_embedding_independence` recompile each subworkflow as if it were
-root — and that branch absorbs an undefined edge into a workflow input. The
-production path is reachable no other way, and until these tests it had none.
+MUST RUN WITH `testing=False`. Every other harness passes `testing=True` -- it
+is what lets `test_cwl_embedding_independence` recompile each subworkflow as
+though it were root -- and that branch absorbs an undefined edge into a
+workflow input. The production path is reachable no other way.
 """
 from typing import Any, Final
 
@@ -27,15 +25,7 @@ _SOURCE: Final = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}
 
 
 def _compile(yml: Yaml, *, is_root: bool = True) -> Any:
-    """Compile one workflow the way a root compilation does.
-
-    Args:
-        yml (Yaml): The document to compile.
-        is_root (bool): Whether this is the top of the compilation.
-
-    Returns:
-        Any: The compiler's own result, which these tests do not inspect.
-    """
+    """Compile one workflow the way a root compilation does."""
     options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
     return sophios.compiler.compile_workflow(
         YamlTree(StepId('binding', SYNTHETIC_NS), yml), options, graph_settings, tag_paths,
