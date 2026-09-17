@@ -2,10 +2,12 @@
 
 A property is only as strong as its generator, and a generator that stops
 producing a construct disables every property depending on it with nothing
-else noticing. `st.text()` essentially never forms valid YAML with an alias;
-a document generator drawing only mapping-form `in:`-only documents makes
-outputs, sequence steps and nested sidecars structurally invisible. So
-adequacy is itself a property, checked at a bounded sample.
+else noticing. Unconstrained `st.text()` essentially never forms valid YAML
+with an alias, which is why every strategy here draws from a named alphabet --
+`edge_names` is `st.text('abcdefgh', ...)` rather than bare text. A document
+generator drawing only mapping-form `in:`-only documents makes outputs,
+sequence steps and nested sidecars structurally invisible. So adequacy is
+itself a property, checked at a bounded sample.
 """
 import re
 from collections import Counter

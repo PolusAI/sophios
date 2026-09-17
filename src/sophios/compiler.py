@@ -229,9 +229,11 @@ def _prepare_compilation_state(yaml_tree_ast: YamlTree,
                                testing: bool) -> _WorkflowSetup:
     """Normalizes the yml AST and initializes the mutable state used by compile_workflow_once's per-step loop.
 
-    Raises:
-        ValueError: If the yml AST is malformed (e.g. missing steps).
-        TypeError: If a top-level tag has the wrong type (e.g. $namespaces/$schemas)
+    Escapes as `ValueError` on a malformed AST (missing `steps`) and as
+    `TypeError` on a top-level tag of the wrong type (`$namespaces`,
+    `$schemas`). Stated in prose rather than a field block: this is private, so
+    Sphinx renders nothing for it, and the field block was the last one left
+    after the pass that removed the other eleven.
     """
     # NOTE: Use deepcopy so that when we delete wic: we don't modify any call sites
     (step_id, yaml_tree) = copy.deepcopy(yaml_tree_ast)
