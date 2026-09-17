@@ -5,15 +5,7 @@ from .wic_types import (GraphData, GraphReps, GraphSettings, Namespaces)
 
 
 def _collapsed_node_name(nss: Namespaces, graph_inline_depth: int) -> str:
-    """Collapse a namespace path down to the node name used at the given inline depth.
-
-    Args:
-        nss (Namespaces): The namespaces associated with a node
-        graph_inline_depth (int): The depth below which details are hidden
-
-    Returns:
-        str: The (possibly truncated) node name
-    """
+    """Collapse a namespace path down to the node name used at the given inline depth."""
     return '___'.join(nss[:(1 + graph_inline_depth)])
 
 
@@ -106,10 +98,6 @@ def _add_ranksame(graph: GraphReps, names: list[str]) -> None:
     """Align the given node names on the same graphviz rank, if there is more than one.
 
     See https://stackoverflow.com/questions/6824431/placing-clusters-on-the-same-rank-in-graphviz
-
-    Args:
-        graph (GraphReps): A tuple of a GraphViz DiGraph and a networkx DiGraph
-        names (list[str]): The node names to align on the same rank
     """
     if len(names) > 1:
         nodes_same_rank = '\t{rank=same; ' + '; '.join(names) + '}\n'

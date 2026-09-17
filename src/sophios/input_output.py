@@ -72,12 +72,6 @@ def _write_to_disk(rose_tree: RoseTree, path: Path, relative_run_path: bool, inp
     guaranteed to have all inputs. In other words, subworkflows will all have
     valid CWL files, but may not be executable due to 'missing' inputs.
     Additional inputs can be explicitly passed in in this case.
-
-    Args:
-        rose_tree (RoseTree): The data associated with compiled subworkflows
-        path (Path): The directory in which to write the files
-        relative_run_path (bool): Controls whether to use subdirectories or just one directory.
-        inputs (Yaml): Optional additional inputs
     """
     inputs = {} if inputs is None else inputs
     node_data: NodeData = rose_tree.data

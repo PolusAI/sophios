@@ -31,18 +31,7 @@ def _command_line_tool_to_step(
     config: dict[str, Any] | None = None,
     tool_registry: Tools | None = None,
 ) -> "Step":
-    """Convert a built CLT into a workflow `Step` without touching disk.
-
-    Args:
-        tool (_CommandLineToolLike): Built CLT-like object with `name` and `to_cwl_document()`.
-        step_name (str | None): Optional workflow step name override.
-        run_path (str | Path | None): Optional virtual `.cwl` path for compiler bookkeeping.
-        config (dict[str, Any] | None): Optional input values to pre-bind on the step.
-        tool_registry (Tools | None): Optional tool registry retained on the step.
-
-    Returns:
-        Step: An in-memory workflow step backed by the built CLT.
-    """
+    """Convert a built CLT into a workflow `Step` without touching disk."""
     from .workflow import Step  # pylint: disable=C0415:import-outside-toplevel
 
     resolved_name = step_name or tool.name

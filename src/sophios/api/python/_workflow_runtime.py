@@ -428,14 +428,7 @@ def write_workflow_wic(
 
 
 def _extract_tools_paths_nonportable(steps: list["Step"]) -> Tools:
-    """Extract concrete tool definitions from instantiated steps.
-
-    Args:
-        steps (list[Step]): Steps whose backing CWL tools should be collected.
-
-    Returns:
-        Tools: A registry keyed by `StepId` that preserves local, non-portable paths.
-    """
+    """Extract concrete tool definitions from instantiated steps."""
     return {StepId(step.process_name, "global"): Tool(str(step.clt_path), step.yaml) for step in steps}
 
 
