@@ -1004,16 +1004,16 @@ def test_tag_decisions_agree_across_positions(tag: str, shape: str, data: st.Dat
     in_position = parse(f'steps:\n- id: s\n  in:\n    a: {value}\n', 'pos.wic')
     passthrough = parse(f'top: {value}\n', 'pos.wic')
 
-    # `wic024` is deliberately asymmetric and so is not compared: a single-key
-    # mapping beginning `wic_` is a construct attempt where a construct may
-    # appear, and an ordinary CWL key where one may not. Passthrough is open by
-    # definition, so reporting it there would reject documents the language
-    # promises to carry through untouched.
-    codes_in = {d.code for d in in_position.diagnostics} - {Code.RESERVED_KEY}
-    codes_through = {d.code for d in passthrough.diagnostics} - {Code.RESERVED_KEY}
-    assert codes_in == codes_through, (
-        f'{value!r}: input={sorted(c.value for c in codes_in)}, '
-        f'passthrough={sorted(c.value for c in codes_through)}')
+    # Only the unknown-tag verdict, which is what this property is about.
+    # Subtracting the codes that legitimately differ by position instead --
+    # `wic024` is one, since a single-key `wic_` mapping is a construct attempt
+    # where a construct may appear and ordinary CWL where one may not -- makes
+    # every future position-specific diagnostic another exemption here.
+    unknown_in = any(d.code is Code.UNKNOWN_TAG for d in in_position.diagnostics)
+    unknown_through = any(d.code is Code.UNKNOWN_TAG for d in passthrough.diagnostics)
+    assert unknown_in == unknown_through, (
+        f'{value!r}: input reported unknown-tag={unknown_in}, '
+        f'passthrough={unknown_through}')
 
 
 @pytest.mark.fast

@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 import asyncio
+import dataclasses
 import importlib
 import json
 import os
@@ -128,11 +129,13 @@ def _write_manifest(workflow_paths: list[Path]) -> None:
 
 
 @pytest.mark.fast
-def test_explicit_step_ports_match_legacy_yaml() -> None:
-    """Binding a port explicitly produces what the YAML spelling produces.
+def test_explicit_ports_and_attribute_sugar_produce_one_document() -> None:
+    """`step.inputs.x` and the bare `step.x` sugar are the same binding.
 
-    The two front ends advertise one language; a difference here would make
-    that false at the first step."""
+    Both spellings are the Python API's -- this compares them to each other,
+    not to the YAML front end. The sugar resolves through `__getattr__`, so it
+    is the spelling that can silently diverge.
+    """
     touch_legacy = Step(clt_path=_adapter("touch"))
     touch_legacy.filename = "empty.txt"
     append_legacy = Step(clt_path=_adapter("append"))
@@ -415,20 +418,24 @@ def test_compute_request_submit_requires_workflow_id() -> None:
 
 @pytest.mark.fast
 def test_workflow_compile_boundary_hides_compiler_info() -> None:
-    """`compile()` hands back a `CompiledWorkflow`, not the compiler's own state.
+    """`compile()` hands back a `CompiledWorkflow` and nothing of the compiler.
 
-    `CompilerInfo` is reachable deliberately, for callers that need it; it is
-    simply not what the boundary returns."""
+    Stated as the absence, because the design lists `_compile()` and
+    `CompilerInfo` under what it does *not* guarantee -- the typed IR replaces
+    `RoseTree` -- so a test reaching past the boundary to assert their shape
+    would pin the thing the refactor is free to change.
+    """
     emit_step = Step(_emit_text_tool(), step_name="emit_text")
     emit_step.inputs.message = "hello"
     workflow = Workflow([emit_step], "compile_boundary_demo")
 
     compiled = workflow.compile()
-    compiler_info = workflow._compile()  # pylint: disable=protected-access
 
     assert isinstance(compiled, CompiledWorkflow)
     assert compiled.cwl_workflow["class"] == "Workflow"
-    assert hasattr(compiler_info, "rose")
+    exposed = {field.name for field in dataclasses.fields(compiled)}
+    assert exposed == {'name', 'cwl_workflow', 'cwl_job_inputs', 'lang_version'}, exposed
+    assert not any(hasattr(compiled, leaked) for leaked in ('rose', 'compiler_info', 'node_data'))
 
 
 @pytest.mark.fast
@@ -572,8 +579,12 @@ def test_explicit_links_must_point_to_workflow_children() -> None:
 
 
 @pytest.mark.fast
-def test_explicit_python_api_bindings_accept_cwl_any() -> None:
-    """Scattering over two ports records both, with the method chosen."""
+def test_scattering_over_two_ports_records_both_and_the_method() -> None:
+    """`scatter_on` records every port it is given, and the method beside them.
+
+    Named for what it asserts. `echo_3`'s ports are `string`, so nothing here
+    exercises a CWL `Any`.
+    """
     array_indices = Step(clt_path=_adapter("array_indices"))
     array_indices.inputs.input_array = ["hello world", "not", "what world?"]
     array_indices.inputs.input_indices = [0, 2]
@@ -791,18 +802,18 @@ def test_top_level_python_api_exposes_concrete_modules_only() -> None:
 
 
 @pytest.mark.fast
-def test_workflow_requires_steps_in_constructor() -> None:
-    """The mutating API is gone: a workflow is built from its steps, once.
+def test_the_mutating_workflow_api_is_gone() -> None:
+    """A workflow is built from its steps, once; nothing appends to it after.
 
-    Asserted on `__dict__` rather than on behaviour, since an inherited or
-    dynamically added method would still be callable."""
-    assert "append" not in Workflow.__dict__
-    assert "get_cwl_workflow" not in Workflow.__dict__
-    assert "write_ast_to_disk" not in Workflow.__dict__
-    assert "flatten_steps" not in Workflow.__dict__
-    assert "flatten_subworkflows" not in Workflow.__dict__
-    assert "get_inp_attr" not in Workflow.__dict__
-    assert "get_inp_attr" not in Step.__dict__
+    Asserted with `hasattr`, not `__dict__`: `__dict__` sees only what this
+    class defines, so a method reached through a base class would satisfy it
+    while still being callable. `Workflow.__getattr__` makes the distinction
+    load-bearing rather than theoretical.
+    """
+    for gone in ("append", "get_cwl_workflow", "write_ast_to_disk",
+                 "flatten_steps", "flatten_subworkflows", "get_inp_attr"):
+        assert not hasattr(Workflow, gone), gone
+    assert not hasattr(Step, "get_inp_attr")
 
 
 @pytest.mark.fast

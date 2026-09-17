@@ -137,13 +137,20 @@ def _excluded_markers(expression: str | None) -> frozenset[str]:
     return frozenset(excluded)
 
 
-def _keyword_admits(expression: str | None, relative: str, test: str) -> bool:
+def _keyword_admits(expression: str | None, relative: str, test: str,
+                    markers: frozenset[str] = frozenset()) -> bool:
     """Whether a `-k` expression selects `test` in `relative`.
 
-    Matched against the module's file name as well as the test's own, because
-    that is what pytest matches: a clause is compared to the item's name and to
-    each of its parents'. So a file named after what it covers satisfies a `-k`
-    naming that subject for every test inside it.
+    Matched the way pytest matches: case-insensitively, against the item's own
+    name, its parents' names -- the module file among them -- and its keywords,
+    which include every marker on it. Each of those has been a false green
+    here. A file named after what it covers satisfies a `-k` naming that subject
+    for every test inside it; and `-k "not FAST"` deselects every
+    `@pytest.mark.fast` test, which a model reading only names admits.
+
+    DOES NOT MODEL: class names, keywords a plugin adds, or `-k` matching on
+    function attributes. Nothing in this repository writes those, and a `-k`
+    that needed them would be read here as selecting more than pytest does.
 
     Unreadable expressions raise rather than matching as a substring, which
     would make a boolean one match nothing and report a running test as an
@@ -151,19 +158,19 @@ def _keyword_admits(expression: str | None, relative: str, test: str) -> bool:
     """
     if expression is None:
         return True
-    names = (test, Path(relative).name)
+    names = tuple(n.lower() for n in (test, Path(relative).name, *markers))
     for clause in re.split(r'\band\b', expression):
         clause = clause.strip()
         if not clause:
             continue
         negated = re.fullmatch(r'not\s+([A-Za-z_][A-Za-z0-9_]*)', clause)
         if negated:
-            if any(negated.group(1) in name for name in names):
+            if any(negated.group(1).lower() in name for name in names):
                 return False
             continue
         if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', clause):
             raise ValueError(f'unreadable pytest -k expression: {expression!r}')
-        if not any(clause in name for name in names):
+        if not any(clause.lower() in name for name in names):
             return False
     return True
 
@@ -290,7 +297,7 @@ def test_no_marked_test_is_collected_by_nothing() -> None:
                 continue  # the packaging lane's default collection reaches it
             admitted = any(
                 _path_reaches(files, relative, test)   # no path named means the whole rootdir
-                and _keyword_admits(keyword, relative, test)
+                and _keyword_admits(keyword, relative, test, markers)
                 and not (_excluded_markers(marker) & blocking)
                 for files, marker, keyword in main_runs
             )
@@ -332,28 +339,36 @@ def test_an_argument_reaches_only_what_it_names(
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(('expression', 'relative', 'test', 'admitted'), [
-    (None, 'tests/core/test_x.py', 'test_anything', True),
-    ('test_fuzzy_compile', 'tests/core/test_x.py', 'test_fuzzy_compile', True),
-    ('test_fuzzy_compile', 'tests/core/test_x.py', 'test_other', False),
-    ('not test_a and not test_b', 'tests/core/test_x.py', 'test_c', True),
-    ('not test_a and not test_b', 'tests/core/test_x.py', 'test_a', False),
+@pytest.mark.parametrize(('expression', 'relative', 'test', 'markers', 'admitted'), [
+    (None, 'tests/core/test_x.py', 'test_anything', frozenset(), True),
+    ('test_fuzzy_compile', 'tests/core/test_x.py', 'test_fuzzy_compile', frozenset(), True),
+    ('test_fuzzy_compile', 'tests/core/test_x.py', 'test_other', frozenset(), False),
+    ('not test_a and not test_b', 'tests/core/test_x.py', 'test_c', frozenset(), True),
+    ('not test_a and not test_b', 'tests/core/test_x.py', 'test_a', frozenset(), False),
     # The module's name counts, exactly as it does for pytest: every test in
     # `test_tool_builder.py` satisfies `-k test_tool_builder` whatever its own
     # name, and renaming the file takes that away from the ones that do not
     # repeat the subject themselves.
-    ('test_tool_builder', 'tests/core/test_tool_builder.py', 'test_old_name_is_gone', True),
-    ('test_tool_builder', 'tests/core/test_python_api_tool_builder.py', 'test_old_name_is_gone', False),
-    ('not test_tool_builder', 'tests/core/test_tool_builder.py', 'test_old_name_is_gone', False),
+    ('test_tool_builder', 'tests/core/test_tool_builder.py', 'test_old_name_is_gone', frozenset(), True),
+    ('test_tool_builder', 'tests/core/test_python_api_tool_builder.py', 'test_old_name_is_gone',
+     frozenset(), False),
+    ('not test_tool_builder', 'tests/core/test_tool_builder.py', 'test_old_name_is_gone', frozenset(), False),
+    # Markers are keywords, and the match is case-insensitive: `-k "not FAST"`
+    # deselects every `@pytest.mark.fast` test.
+    ('not FAST', 'tests/core/test_x.py', 'test_anything', frozenset({'fast'}), False),
+    ('fast', 'tests/core/test_x.py', 'test_anything', frozenset({'fast'}), True),
+    ('slow', 'tests/core/test_x.py', 'test_anything', frozenset({'fast'}), False),
+    ('TEST_FUZZY_COMPILE', 'tests/core/test_x.py', 'test_fuzzy_compile', frozenset(), True),
 ])
 def test_a_k_expression_is_read_not_matched_as_a_substring(
-        expression: str | None, relative: str, test: str, admitted: bool) -> None:
+        expression: str | None, relative: str, test: str,
+        markers: frozenset[str], admitted: bool) -> None:
     """`-k` gets the same treatment as `-m`: read the shapes written here, refuse the rest.
 
     Matching a whole expression as a plain substring makes a boolean one match
     nothing, which reports a test that does run as collected by no lane.
     """
-    assert _keyword_admits(expression, relative, test) is admitted
+    assert _keyword_admits(expression, relative, test, markers) is admitted
 
 
 @pytest.mark.fast
