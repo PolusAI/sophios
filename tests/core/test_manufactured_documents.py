@@ -199,7 +199,29 @@ def _instrument(monkeypatch: pytest.MonkeyPatch, site: str,
 
 
 def _parses(document: dict[str, Any]) -> tuple[bool, list[str]]:
-    """Whether `sophios.lang` accepts this document, and what it said if not."""
+    """Whether `sophios.lang` accepts this document, and what it said if not.
+
+    Dumping and re-parsing is a fair test rather than a round-trip through a
+    lossy form, because the tags desugar on load -- `!& e` becomes
+    `{'wic_anchor': 'e'}` -- so a manufactured document is already in the
+    desugared spelling, which the language reference (§6.1) says the parser
+    accepts equally.
+
+    The desugared spelling carries no tags, but every construct position is
+    closed, so a manufactured mistake cannot pass silently. In input position a
+    single-key mapping such as `{'wic_not_a_thing': 1}` is reported as a
+    misspelled construct and a correctly spelled `wic_anchor` as a misplaced
+    one; in `out:`, a mapping value must be an edge definition and every other
+    shape is reported. A `wic_`-prefixed key anywhere else stays ordinary
+    passthrough by design -- §1 makes that vocabulary open -- and is not read
+    as a failed construct.
+
+    Args:
+        document (dict[str, Any]): The manufactured document.
+
+    Returns:
+        tuple[bool, list[str]]: Whether it parsed, and the diagnostics if not.
+    """
     text = yaml.dump(document, sort_keys=False, line_break='\n', indent=2, Dumper=NoAliasDumper)
     result = parse(text, 'manufactured.wic')
     return result.ok, [f'{d.code} at {d.span.start_line}:{d.span.start_column}'

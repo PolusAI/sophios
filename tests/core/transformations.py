@@ -222,8 +222,8 @@ TRANSFORMATIONS: Final[tuple[Transformation, ...]] = (
         name='inline_all', preserves=Strength.UP_TO_RENAMING, apply=_inline_all,
         rationale=(
             "The inverse of split, via sophios.inlineing. Included because it is the direction the "
-            "existing corpus test takes, and because a split/inline pair that agreed only with each "
-            "other would be an inverse-pair blind spot (#383's P4 lesson).")),
+            "existing corpus test takes, and because a split/inline pair checked only against each "
+            "other agrees whenever both are wrong the same way.")),
     Transformation(
         name='rename_workflow', preserves=Strength.UP_TO_RENAMING, apply=_rename_workflow,
         rationale=(

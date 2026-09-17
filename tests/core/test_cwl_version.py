@@ -89,8 +89,9 @@ def test_the_scan_can_actually_fail() -> None:
         "cwl_version = 'v1.0'",
         "d = dict(cwlVersion='v1.0')",
         "emit(cwl_version='v1.0')",
-        # The three shapes review round three proved the old shape-list
-        # scan missed — all in real production code at the time:
+        # Three shapes a shape-list scan misses, all of which occurred in
+        # production code: neither of the first two is an assignment node, and
+        # the third is a parameter default.
         "d['cwlVersion'] = d.get('cwlVersion', 'v1.0')",
         "d.setdefault('cwlVersion', 'v1.0')",
         "def f(*, cwl_version: str = 'v1.0'): pass",
@@ -177,10 +178,10 @@ def test_the_real_schema_rejects_unrunnable_versions(museum: str) -> None:
     check for the same reason.
 
     This validates against `wic_main_schema` itself, not against this file's
-    own imports: review round three found the previous spelling asserted
-    membership in the tuple it had just imported — a tautology that left the
-    schema's `enum` (the production change) with zero coverage, so reverting
-    it to any-non-empty-string passed everything. That revert now fails here.
+    own imports. Asserting membership in the tuple this file has just imported
+    is a tautology: it leaves the schema's `enum` — the production change —
+    with no coverage at all, so reverting that to any-non-empty-string would
+    pass. Validating against the schema is what makes such a revert fail.
     """
     errors = list(_schema_validator().iter_errors({'cwlVersion': museum}))
     assert errors, f'the shipped schema accepted cwlVersion: {museum!r}'

@@ -118,9 +118,10 @@ def documents(draw: st.DrawFn) -> str:
 
     Generates both step surface forms (mapping and sequence-with-id), inputs
     in every admitted spelling, `out:` blocks, and nested `wic: steps:`
-    sidecars. Review of this PR found the previous generator quantified over
-    mapping-form `in:`-only documents, leaving outputs, sequence steps, and
-    depth-2 sidecars structurally invisible to every property fed by it.
+    sidecars. Every one of those is load-bearing: a generator drawing only
+    mapping-form `in:`-only documents leaves outputs, sequence steps and
+    depth-2 sidecars structurally invisible to every property fed by it, which
+    no property downstream can report because none of them ever sees one.
     """
     lines = ['steps:']
     sequence_form = draw(st.booleans())

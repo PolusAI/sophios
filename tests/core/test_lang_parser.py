@@ -895,7 +895,7 @@ def test_out_values_are_never_silently_dropped() -> None:
 
 
 # --------------------------------------------------------------------------
-# Adversarial structure — the space the review proved the fuzzer never reached
+# Adversarial structure — the space `st.text()` alone never reaches
 # --------------------------------------------------------------------------
 #
 # `st.text()` almost never forms valid YAML with aliases, so quantifying
@@ -963,8 +963,8 @@ def adversarial_yaml(draw: st.DrawFn) -> str:
 @example('_: !ii {k: v}\n')                               # collection literal, single wrap
 @FAST
 def test_parsing_is_total_for_adversarial_structure(text: str) -> None:
-    """The half of totality the review proved missing: totality over real YAML
-    structure — aliases, cycles, unknown tags, nesting — not just over text.
+    """The other half of totality: over real YAML structure — aliases, cycles,
+    unknown tags, nesting — and not over text alone.
 
     Never raises; never accepts silently what the loader rejects; and never
     reports the same problem twice — several parse paths legitimately visit

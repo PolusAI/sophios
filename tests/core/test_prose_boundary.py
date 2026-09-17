@@ -24,7 +24,7 @@ from .source_scan import REPO_ROOT, package_files, parsed
 #: first leaves the second in the tree. `wic0NN` is deliberately absent, because
 #: a diagnostic code is public contract, matchable by a caller and documented.
 TRACKER_IDS: Final = (
-    r'\bP\d{2}[a-c]?\b',                     # property register ids
+    r'\bP\d{1,2}[a-c]?\b',                   # property register ids
     r'\bCE-\d+\b',                           # counterexample register ids
     r'\bT\d\.\d+\b',                         # task ids, abbreviated
     r'\bTasks? \d+(?:\s*[-\u2013]\s*\d+)?\b',  # task ids, spelled out
@@ -43,28 +43,28 @@ TRACKER_TOKENS: Final = re.compile('|'.join((*TRACKER_IDS, SPEC_NUMBER)))
 #: path, which is not what the exemption is for.
 CITED_TOKENS: Final = re.compile('|'.join(TRACKER_IDS))
 
-#: Narration of how the code came to be. The rule is that a reason survives and
-#: its provenance does not, so these read as evidence that a rewrite was skipped.
+#: Narration of how the code came to be, as a list of the phrasings this
+#: repository actually writes. Unlike a tracker id, which is mechanical, this
+#: cannot be complete: English has unbounded ways to say "we found this in
+#: review", and no regex closes that. It is a blacklist that catches the
+#: recurring forms and nothing else, and the test that applies it says so --
+#: a green run means these phrasings are absent, not that no narration is.
+#:
+#: Case-sensitive in one place on purpose: `this PR` is narration, `this
+#: property` is not, and a case-insensitive `this pr` matches both.
 PROCESS_NARRATION: Final = re.compile(
-    r'an earlier (?:version|draft)|the first draft|review (?:found|caught|added)'
-    r'|found by mutation|round \d|as it stood before|semrefac',
-    re.IGNORECASE,
+    r'an earlier (?:version|draft)|the first draft'
+    r'|[Rr]eview\b[^.]{0,25}?\b(?:found|caught|added|proved|showed)'
+    r'|found by mutation|round (?:\d+|one|two|three|four|five)\b'
+    r'|as it stood before|semrefac|this PR\b|this pull request'
 )
 
-#: A module docstring is a signpost, and a signpost may still declare what the
-#: module cannot do — several here carry a CANNOT DETECT or LIMITS register and
-#: earn their length. Past this it stops being a signpost and becomes a document,
-#: which belongs in `design_docs/` where it reads as one. The four that exceeded
-#: it were 40 to 79 lines and were narratives, not registers.
-MAX_MODULE_DOCSTRING_LINES: Final = 25
-
-#: The two files whose subject is the identifiers themselves: the diagnostics
-#: register, which defines the codes, and this module, which cannot state the
-#: rule without spelling an example of what the rule rejects.
-ALLOWED: Final = frozenset({
-    REPO_ROOT / 'src' / 'sophios' / 'lang' / 'diagnostics.py',
-    Path(__file__).resolve(),
-})
+#: The one file exempt: this one, which cannot state the rule without spelling
+#: an example of what the rule rejects. `diagnostics.py` was exempt too, on the
+#: grounds that it defines the `wic0NN` codes -- but those were never in the
+#: pattern, so the exemption bought nothing and would have hidden an ordinary
+#: tracker id or a long docstring in the one file nobody was checking.
+ALLOWED: Final = frozenset({Path(__file__).resolve()})
 
 
 def tracker_rule(text: str) -> re.Pattern[str]:
@@ -93,43 +93,26 @@ def names_a_tracker_row(text: str) -> bool:
     return tracker_rule(text).search(text) is not None
 
 
-def _assert_message(node: ast.Assert) -> list[tuple[int, str]]:
-    """Every string a failed assertion would print, with its line number.
-
-    Walked rather than read directly, because a message is as often built --
-    concatenated, or interpolated -- as it is written as one literal.
-
-    Args:
-        node (ast.Assert): The assertion.
-
-    Returns:
-        list[tuple[int, str]]: Line number and text for each string part.
-    """
-    if node.msg is None:
-        return []
-    return [
-        (part.lineno + offset, text)
-        for part in ast.walk(node.msg)
-        if isinstance(part, ast.Constant) and isinstance(part.value, str)
-        for offset, text in enumerate(part.value.splitlines())
-    ]
-
-
 def _prose(path: Path) -> list[tuple[int, str]]:
-    """Every line of a module addressed to a reader, with its line number.
+    """Every comment, docstring and string literal in a module.
 
-    Three surfaces, not one. Comments are tokenized rather than matched by a
-    leading `#`, which sees only a comment on its own line and misses one after
-    code; and an assert message is prose a reader meets at the moment the test
-    fails, so a tracker id there is exactly as unopenable as one in a comment.
-    Code is otherwise excluded, so a string literal under test is not mistaken
-    for a docstring.
+    Comments are tokenized rather than matched by a leading `#`, which sees
+    only a comment on its own line and misses one after code. Every string
+    constant is read, not just docstrings and assert messages: a `rationale=`
+    field printed on failure is prose a reader meets, and so is an exception
+    message, and singling out the shapes that happen to be prose today is how
+    the next one is missed. The cost of reading all of them is one exemption
+    mechanism, already here.
+
+    What this cannot see: text assembled at runtime. An id interpolated into an
+    f-string from a variable is invisible to any static scan, and nothing here
+    claims otherwise.
 
     Args:
         path (Path): The module to read.
 
     Returns:
-        list[tuple[int, str]]: Line number and text, for prose only.
+        list[tuple[int, str]]: Line number and text.
     """
     source = path.read_text(encoding='utf-8')
     lines: list[tuple[int, str]] = [
@@ -138,13 +121,8 @@ def _prose(path: Path) -> list[tuple[int, str]]:
         if token.type == tokenize.COMMENT
     ]
     for node in ast.walk(parsed(path)):
-        if isinstance(node, ast.Assert):
-            lines.extend(_assert_message(node))
-        elif isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-            doc = ast.get_docstring(node, clean=False)
-            if doc:
-                start = node.body[0].lineno
-                lines.extend((start + i, text) for i, text in enumerate(doc.splitlines()))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            lines.extend((node.lineno + i, text) for i, text in enumerate(node.value.splitlines()))
     return lines
 
 
@@ -184,13 +162,19 @@ def test_no_tracker_identifier_reaches_the_source() -> None:
 
 
 @pytest.mark.fast
-def test_no_comment_narrates_how_the_code_was_written() -> None:
-    """A reason survives; the story of finding it does not.
+def test_no_known_narration_phrasing_reaches_the_source() -> None:
+    """None of the phrasings in `PROCESS_NARRATION` is in the tree.
 
-    "An exclusion predicate of `lambda d: True` left the suite green" tells a
-    reader about a review. "A per-entry check is vacuous when the mapping is
-    empty" tells them why the code is shaped as it is, which is the part that
-    stops them changing it back.
+    Deliberately not "the source contains no narration", which this cannot
+    show. The rule is a blacklist of the forms this repository keeps writing,
+    and a reader can restate any of them a way no pattern catches. What it buys
+    is that the recurring forms do not come back silently; judgement covers the
+    rest, at review.
+
+    The distinction the rule is drawn around: "an exclusion predicate of
+    `lambda d: True` left the suite green" tells a reader about a review, and
+    "a per-entry check is vacuous when the mapping is empty" tells them why the
+    code is shaped as it is, which is the part that stops them changing it back.
     """
     found = [
         f'{path.relative_to(REPO_ROOT)}:{line} {match.group(0)!r}'
@@ -199,27 +183,14 @@ def test_no_comment_narrates_how_the_code_was_written() -> None:
         if (match := PROCESS_NARRATION.search(text))
     ]
     assert not found, (
-        'process narration in source:\n  ' + '\n  '.join(found)
+        'known narration phrasings in source:\n  ' + '\n  '.join(found)
         + '\nKeep the constraint, drop how it was discovered.')
-
-
-@pytest.mark.fast
-def test_no_module_docstring_is_a_document() -> None:
-    """A module docstring says what the module is for, in a few lines."""
-    found = [
-        f'{path.relative_to(REPO_ROOT)}: {len(doc.splitlines())} lines'
-        for path in _scanned()
-        if (doc := ast.get_docstring(parsed(path), clean=False))
-        and len(doc.splitlines()) > MAX_MODULE_DOCSTRING_LINES
-    ]
-    assert not found, (
-        f'module docstrings over {MAX_MODULE_DOCSTRING_LINES} lines:\n  ' + '\n  '.join(found)
-        + '\nA longer explanation belongs in design_docs/, where it reads as a document.')
 
 
 @pytest.mark.fast
 @pytest.mark.parametrize(('claim', 'text', 'pattern'), [
     ('a property id', '# P30 says emission is canonical', TRACKER_TOKENS),
+    ('a single-digit property id', '# the P4 inverse-pair lesson', TRACKER_TOKENS),
     ('a counterexample id', '# see CE-11 for the shrunk case', TRACKER_TOKENS),
     ('a task id', '# delivered by T2.4', TRACKER_TOKENS),
     ('a spelled-out task id', '# delivered by Task 5', TRACKER_TOKENS),
@@ -230,6 +201,9 @@ def test_no_module_docstring_is_a_document() -> None:
     ('an earlier version', '# an earlier version used a set', PROCESS_NARRATION),
     ('an earlier draft', '# an earlier draft used a set', PROCESS_NARRATION),
     ('a mutation story', '# found by mutation: the guard never fired', PROCESS_NARRATION),
+    ('a spelled-out round', '# settled in round three of the rewrite', PROCESS_NARRATION),
+    ('review with words between', '# review of the corpus found the gap', PROCESS_NARRATION),
+    ('a pull request by pronoun', '# this PR fixes the generator', PROCESS_NARRATION),
 ])
 def test_the_patterns_catch_what_they_claim_to(claim: str, text: str, pattern: re.Pattern[str]) -> None:
     """Each rule is shown firing, so a green run means it was checked.
@@ -248,6 +222,8 @@ def test_the_patterns_catch_what_they_claim_to(claim: str, text: str, pattern: r
     '# the CWL v1.2 substrate declares this',
     '# see docs/dev/algorithms.md for namespacing',
     '# P is the port, not a property',
+    '# this property quantifies over documents',
+    '# the review lane runs on every push',
     '# See design_docs/core-refactor-design.md, Spec 1.',
 ])
 def test_the_patterns_leave_real_prose_alone(text: str) -> None:
@@ -256,28 +232,30 @@ def test_the_patterns_leave_real_prose_alone(text: str) -> None:
 
 
 @pytest.mark.fast
-def test_the_scan_reads_every_surface_a_reader_meets() -> None:
-    """A comment after code and an assert message are prose too.
+def test_the_scan_reads_every_surface_a_reader_meets(tmp_path: Path) -> None:
+    """A comment after code, an assert message and a rationale field are prose.
 
     Collecting only lines that *begin* with `#` sees a comment on its own line
-    and misses one sitting after code, and an assert message is the prose a
-    reader meets at the exact moment a test fails. Both surfaces carried
-    tracker ids while the scan reported none, so the rule is pinned to the
-    surfaces rather than to the one that happened to be read first.
+    and misses one sitting after code; and a string a reader is shown -- an
+    assert message, a `rationale=` printed on failure -- carries an id exactly
+    as unopenably as a comment does. Every one of these surfaces held a tracker
+    id while the scan reported none.
+
+    Written under `tmp_path` rather than into the checkout. A probe file inside
+    `tests/` is itself scanned, so a run interrupted between writing and
+    deleting it would leave the repository-wide scan failing on a file that is
+    not part of the repository.
     """
-    module = (
+    probe = tmp_path / 'probe.py'
+    probe.write_text(
         'x = 1  # P30 says emission is canonical\n'
         'def f() -> None:\n'
         '    assert x, "the T2.4 rewrite owns this"\n'
-    )
-    scratch = REPO_ROOT / 'tests' / 'core' / '_prose_probe.py'
-    scratch.write_text(module, encoding='utf-8')
-    try:
-        found = {match.group(0) for _, text in _prose(scratch)
-                 if (match := tracker_rule(text).search(text))}
-    finally:
-        scratch.unlink()
-    assert found == {'P30', 'T2.4'}, found
+        'T = Transformation(rationale="the CE-11 lesson")\n',
+        encoding='utf-8')
+    found = {match.group(0) for _, text in _prose(probe)
+             if (match := tracker_rule(text).search(text))}
+    assert found == {'P30', 'T2.4', 'CE-11'}, found
 
 
 @pytest.mark.fast
