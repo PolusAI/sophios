@@ -26,25 +26,44 @@ from sophios.wic_types import Cwl, StepId, Tool, Tools
 #: `'synthetic'` fails with "Error! Neither mk_file nor  found!".
 SYNTHETIC_NS: Final = 'global'
 
-_EDAM: Final = {'edam': 'https://edamontology.org/'}
+#: The URI each format prefix this suite uses expands to. `clt` declares only
+#: the prefixes a tool's own formats mention, so a builder shared by every
+#: module does not stamp `edam` onto tools that never reference it.
+_NAMESPACE_URIS: Final = {'edam': 'https://edamontology.org/'}
 _TXT: Final = 'edam:format_2330'
 _CSV: Final = 'edam:format_3752'
 
 
+def _declared_prefixes(ports: dict[str, Cwl]) -> set[str]:
+    """Every `prefix:` a port's `format` names."""
+    found: set[str] = set()
+    for port in ports.values():
+        formats = port.get('format', []) if isinstance(port, dict) else []
+        for entry in ([formats] if isinstance(formats, str) else formats):
+            if isinstance(entry, str) and ':' in entry:
+                found.add(entry.split(':', 1)[0])
+    return found & set(_NAMESPACE_URIS)
+
+
 def clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl], *,
         javascript: bool = False, canonical: bool = False) -> Cwl:
-    """One stub CommandLineTool.
+    """One stub CommandLineTool. `true` succeeds and produces nothing, which is
+    all a compile-only registry needs.
 
-    `true` succeeds and produces nothing, which is all a compile-only registry
-    needs. Four modules had each grown their own copy of this shape.
+    `$namespaces` carries the prefixes this tool's own formats use, and is
+    absent when none do. Emitting a fixed `edam` instead would put it on every
+    tool in every module sharing this builder, several of which never mention a
+    format -- a difference that is invisible today, because the compiler adds
+    the namespace itself and format matching does not read it, and is exactly
+    the kind of silent fixture drift a shared builder is supposed to end.
 
     Args:
         inputs (dict[str, Cwl]): The tool's declared inputs.
         outputs (dict[str, Cwl]): The tool's declared outputs.
         javascript (bool): Add `InlineJavascriptRequirement`.
-        canonical (bool): Return canonical normal form, which the inference
-            and explicit-edge paths read. The compiler applies this itself
-            on the real path, so a caller bypassing the loader asks for it.
+        canonical (bool): Return canonical normal form, which the inference and
+            explicit-edge paths read. `plugins.py` applies it when it loads a
+            tool, so only a caller building one directly has to ask.
 
     Returns:
         Cwl: The tool document.
@@ -53,10 +72,12 @@ def clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl], *,
         'cwlVersion': CWL_VERSION,
         'class': 'CommandLineTool',
         'baseCommand': 'true',
-        '$namespaces': dict(_EDAM),
         'inputs': inputs,
         'outputs': outputs,
     }
+    prefixes = _declared_prefixes(inputs) | _declared_prefixes(outputs)
+    if prefixes:
+        tool['$namespaces'] = {prefix: _NAMESPACE_URIS[prefix] for prefix in sorted(prefixes)}
     if javascript:
         tool['requirements'] = {'InlineJavascriptRequirement': {}}
     return desugar_into_canonical_normal_form(tool) if canonical else tool

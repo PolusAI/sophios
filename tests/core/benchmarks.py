@@ -124,9 +124,6 @@ def _compile_corpus_file(path: Path) -> None:
 # --------------------------------------------------------------------------
 # Case 2: speculative insertion.
 
-#: The shared stub builder, under this module's local name.
-_clt = clt
-
 
 def _speculative_insertion_registry() -> tuple[Yaml, Tools]:
     """Two branches, each needing exactly one whitelisted-format-converter
@@ -145,11 +142,11 @@ def _speculative_insertion_registry() -> tuple[Yaml, Tools]:
     steps: list[Yaml] = []
     for k in (1, 2):
         src_fmt, dst_fmt = f'edam:format_src{k}', f'edam:format_dst{k}'
-        specs[f'mk_{k}'] = _clt(
+        specs[f'mk_{k}'] = clt(
             {}, {'file': {'type': 'File', 'format': src_fmt, 'outputBinding': {'glob': f'src{k}.txt'}}})
-        specs[f'use_{k}'] = _clt(
+        specs[f'use_{k}'] = clt(
             {'file': {'type': 'File', 'format': [dst_fmt], 'inputBinding': {'position': 1}}}, {})
-        specs[f'insert_steps_automatically_conv_{k}'] = _clt(
+        specs[f'insert_steps_automatically_conv_{k}'] = clt(
             {'file': {'type': 'File', 'format': [src_fmt], 'inputBinding': {'position': 1}}},
             {'file': {'type': 'File', 'format': dst_fmt, 'outputBinding': {'glob': f'dst{k}.txt'}}})
         steps.append({'id': f'mk_{k}', 'in': {}})

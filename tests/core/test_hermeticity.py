@@ -18,14 +18,16 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
 
 from sophios.lang.cwl import CWL_VERSION
+from sophios.utils_cwl import desugar_into_canonical_normal_form
 
 from .hermetic import compile_hermetic_cwl
-from .synthetic_tools import STEMS, _cwl, inputs_of, outputs_of, required_inputs_of
+from .synthetic_tools import STEMS, _cwl, clt, inputs_of, outputs_of, required_inputs_of
 from .test_zone_boundary import _import_graph, _imports_of, _reachable
 
 TESTS_ROOT = Path(__file__).resolve().parents[1]
@@ -391,3 +393,48 @@ def test_the_poison_fires_on_a_suite_that_needs_discovery() -> None:
     output = result.stdout + result.stderr
     assert result.returncode != 0, output
     assert POISON_MESSAGE in output, output
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('claim', 'built', 'expected'), [
+    ('a tool declaring no format carries no namespaces',
+     lambda: clt({'x': {'type': 'File'}}, {}), None),
+    ('a string format declares its prefix',
+     lambda: clt({}, {'f': {'type': 'File', 'format': 'edam:format_2330'}}),
+     {'edam': 'https://edamontology.org/'}),
+    ('a list format declares its prefix',
+     lambda: clt({}, {'f': {'type': 'File', 'format': ['edam:format_3752']}}),
+     {'edam': 'https://edamontology.org/'}),
+    ('an unprefixed format declares nothing',
+     lambda: clt({}, {'f': {'type': 'File', 'format': 'plain'}}), None),
+])
+def test_the_stub_builder_declares_only_the_prefixes_it_uses(
+        claim: str, built: Any, expected: dict[str, str] | None) -> None:
+    """`$namespaces` follows the tool's own formats, not a fixed set.
+
+    Four modules shared four builders and only one emitted `edam`; folding them
+    into one has to pick a behaviour, and picking "always" would have put the
+    namespace on tools that never mention a format. Invisible at run time --
+    the compiler adds it anyway and format matching does not read it -- which
+    is why it needs a test rather than a reader noticing.
+    """
+    assert built().get('$namespaces') == expected, claim
+
+
+@pytest.mark.fast
+def test_the_stub_builder_shapes_are_distinct() -> None:
+    """Raw, canonical and JavaScript are three different documents.
+
+    `canonical=True` is a no-op for a dict-form `inputs:`, so a caller passing
+    it gets the same document back; the difference appears for the list form
+    the loader produces, which is what `plugins.py` desugars.
+    """
+    ports = {'f': {'type': 'File', 'inputBinding': {'position': 1}}}
+    raw = clt(ports, {})
+    canonical = clt(ports, {}, canonical=True)
+    javascript = clt(ports, {}, javascript=True)
+
+    assert 'requirements' not in raw
+    assert javascript['requirements'] == {'InlineJavascriptRequirement': {}}
+    assert canonical['inputs'] == raw['inputs'], 'dict-form inputs are already canonical'
+    assert desugar_into_canonical_normal_form(dict(raw)) == canonical
