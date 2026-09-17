@@ -307,9 +307,8 @@ def never_converges() -> None:
 def test_exhausting_max_iters_is_a_diagnostic_not_a_crash() -> None:
     """The fixed-point guard reports; it does not explode.
 
-    CR-104 converted the `sys.exit` sites and did not reach this one, because
-    it was never an exit. An embedder catching `SophiosError` still saw a bare
-    `RuntimeError` escape.
+    This site was never a `sys.exit`, so a sweep over those does not reach it,
+    and an embedder catching `SophiosError` sees a bare `RuntimeError` escape.
     """
     with pytest.raises(SophiosError) as caught:
         never_converges()

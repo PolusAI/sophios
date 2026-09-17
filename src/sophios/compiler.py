@@ -108,10 +108,9 @@ def compile_workflow(yaml_tree_ast: YamlTree,
             subgraphs[si].networkx.edges, subgraphs[si].networkx.nodes)
 
     if i == max_iters:
-        # A diagnostic, not a RuntimeError with a workflow dumped to stdout.
-        # CR-104 converted the sys.exit sites; this one was never an exit, so
-        # its sweep did not reach it, and an embedder still had an exception
-        # with no code to catch on.
+        # A diagnostic, not a RuntimeError with a workflow dumped to stdout:
+        # an embedder needs a code to catch on. This site was never a
+        # `sys.exit`, so a sweep over those does not reach it.
         raise SophiosError.error(
             Code.FIXED_POINT_NOT_REACHED,
             f'Error! Maximum number of iterations ({max_iters}) reached in compile_workflow!',

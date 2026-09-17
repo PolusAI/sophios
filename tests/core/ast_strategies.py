@@ -37,6 +37,15 @@ _SPAN: Final = SourceSpan('<generated>', 1, 1, 1, 1)
 #: (§3.1 surface forms, §3.3 outputs, §4.1 input forms, §4.3 interpreted keys,
 #: §5 the sidecar) rather than from the strategy below, so a construct the
 #: strategy stops producing is a failure instead of a silent narrowing.
+#: Construct kinds the generator cannot draw, each with the reason. The design
+#: requires every AST construct kind to appear within a bounded sample, so a kind
+#: that cannot be drawn is a declared gap rather than a silent one --
+#: `test_the_construct_inventory_accounts_for_every_input_kind` fails if a member
+#: of the `InputValue` union appears in neither this nor `CONSTRUCTS`.
+NOT_GENERATED: Final[dict[str, str]] = {
+    'raw_cwl_ref': '`wic_loader` does not resolve `!cwl` until the IR migration',
+}
+
 CONSTRUCTS: Final[tuple[str, ...]] = (
     'steps_mapping', 'steps_sequence',
     'inline_literal', 'edge_ref', 'unresolved_name',
@@ -242,11 +251,13 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
 
 @st.composite
 def documents(draw: st.DrawFn) -> Document:
-    """A well-formed Sophios document, over the whole language.
+    """A well-formed Sophios document, over every construct in `CONSTRUCTS`.
 
-    CANNOT GENERATE (declared): `!cwl`, which `wic_loader` does not know until
-    the IR migration; `python_script` steps, whose tool name is a uuid4 and so
-    is never deterministic.
+    CANNOT GENERATE (declared, and checked): the kinds in `NOT_GENERATED` --
+    `!cwl`, which `wic_loader` does not resolve until the IR migration. Also
+    `python_script` steps, whose tool name is a uuid4 and so is never
+    deterministic; that is a step shape rather than an input kind, so no
+    inventory check covers it.
 
     Well-formed is not well-typed. `!ii` places no constraint relating a
     literal to the CWL type of the input it binds — nothing in the grammar
@@ -330,8 +341,8 @@ def documents(draw: st.DrawFn) -> Document:
 #: stops reaching turns that test red, so an exclusion cannot quietly cost a
 #: construct. Deliberately not a per-entry "this still fails to compile" check
 #: — that shape is vacuous whenever the mapping is empty, which is exactly when
-#: a filter that silently excluded everything would go unnoticed. Found by
-#: mutation: an exclusion predicate of `lambda d: True` left the suite green.
+#: a filter that silently excluded everything would go unnoticed: an exclusion
+#: predicate of `lambda d: True` leaves the suite green under it.
 #:
 #: `documents()` keeps producing all of these — `CONSTRUCTS` and the
 #: parse-level properties quantify over the whole language, and trimming the

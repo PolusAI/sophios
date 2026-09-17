@@ -1110,7 +1110,7 @@ def test_compiled_provocations_fire(code: Code) -> None:
 
 
 # --------------------------------------------------------------------------
-# The syntax layer stays standalone (the reviewer's method, made permanent)
+# The syntax layer stays standalone
 # --------------------------------------------------------------------------
 
 

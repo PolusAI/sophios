@@ -56,9 +56,9 @@ MUST_DIFFER: Final[list[tuple[str, Yaml, Yaml]]] = [
      {'steps': [], 'requirements': {'ScatterFeatureRequirement': {}}},
      {'steps': [], 'requirements': {}}),
     # `format` is the only thing separating `mk_file` from `mk_text` in the
-    # synthetic registry, so a relation that compared `type` alone could not
-    # tell a workflow ending in one from a workflow ending in the other. Found
-    # by mutation: dropping `format` from `_SHAPE_KEYS` left this file green.
+    # synthetic registry, so a relation comparing `type` alone cannot tell a
+    # workflow ending in one from a workflow ending in the other. Drop `format`
+    # from `_SHAPE_KEYS` and this file stays green.
     ('an output changed format',
      {'steps': [], 'outputs': {'x': {'type': 'File', 'format': 'edam:format_2330'}}},
      {'steps': [], 'outputs': {'x': {'type': 'File', 'format': 'edam:format_3752'}}}),
@@ -199,12 +199,12 @@ REWRITES: Final[tuple[tuple[str, Any, Strength | None], ...]] = (
 def document_rewrites(draw: st.DrawFn) -> tuple[str, Yaml, Yaml, Strength | None]:
     """A compiled-shaped document and a rewrite of it, with the level it claims."""
     document = draw(compiled_documents())
-    # Every rewrite applies to every document, the control included. An earlier
-    # draft withheld the control from one-step documents on the grounds that
-    # dropping their only step degenerates into `[] vs []`; it does not — the
-    # workflow-level `inputs` and `outputs` the step produced are retained, and
-    # the graph goes from one node to none, so the pair is rejected for real
-    # reasons at all three strengths.
+    # Every rewrite applies to every document, the control included. Withholding
+    # the control from one-step documents looks right -- dropping their only step
+    # seems to degenerate into `[] vs []` -- and is not: the workflow-level
+    # `inputs` and `outputs` the step produced are retained, and the graph goes
+    # from one node to none, so the pair is rejected for real reasons at all
+    # three strengths.
     name, rewrite, level = draw(st.sampled_from(REWRITES))
     return name, document, rewrite(document), level
 
@@ -539,11 +539,11 @@ def test_the_dag_check_sees_a_port_rewired_onto_a_different_workflow_input() -> 
 
     Every argument a step does not receive from another step is emitted as
     `in: {arg: {source: {step_id}___{arg}}}` against a declared workflow-level
-    input — the majority of the bindings in any compiled document. Those
-    Those sources name no producer, and skipping them on that ground makes the
-    two documents below UP_TO_RENAMING-equal: both
-    declare a `File` input and a `string` input, both have one step and no
-    edges, and which port reads which was nowhere in the comparison.
+    input -- the majority of the bindings in any compiled document. Those
+    sources name no producer, and skipping them on that ground makes the two
+    documents below UP_TO_RENAMING-equal: both declare a `File` input and a
+    `string` input, both have one step and no edges, and which port reads which
+    is nowhere in the comparison.
 
     Both directions, because the fix must not overshoot. Feeding `left` from
     the `string` input instead of the `File` one is a divergence; feeding it

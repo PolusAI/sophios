@@ -678,10 +678,10 @@ def _output_binding(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Out
 
 
 #: The key a nested sidecar step wraps its child sidecar in, on the surface.
-#: One constant read by both the parser (unwrap) and the renderer (re-wrap),
-#: so the two cannot disagree about it — separate tables let the parser
-#: unwrapping and the renderer never re-wrapping, invisible to the round-trip
-#: property precisely because the parser tolerates its own renderer's output.
+#: One constant read by both the parser (unwrap) and the renderer (re-wrap), so
+#: the two cannot disagree about it. Separate tables allow the parser to unwrap
+#: a key the renderer never re-wraps, which the round-trip property cannot see
+#: precisely because the parser tolerates its own renderer's output.
 SIDECAR_WRAPPER_KEY: Final = 'wic'
 
 

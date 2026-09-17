@@ -20,6 +20,7 @@ from .source_scan import REPO_ROOT, package_files, parsed
 TRACKER_IDS: Final = (
     r'\bP\d{1,2}[a-c]?\b',                   # property register ids
     r'\bCE-\d+\b',                           # counterexample register ids
+    r'\bCR-\d+\b',                           # change-request register ids
     r'\bT\d\.\d+\b',                         # task ids, abbreviated
     r'\bTasks? \d+(?:\s*[-\u2013]\s*\d+)?\b',  # task ids, spelled out
     r'(?<![\w/])#\d{3,}\b',                  # pull request numbers
@@ -40,12 +41,16 @@ CITED_TOKENS: Final = re.compile('|'.join(TRACKER_IDS))
 #: Narration of how the code came to be. A blacklist, not a boundary: no regex
 #: decides whether a sentence narrates, so a green run means these phrasings
 #: are absent and nothing more.
-#: Case-sensitive at `this PR`, because `this property` is not narration.
+#:
+#: Case-insensitive except `this PR`, where `this property` is not narration.
+#: Applied to logical blocks rather than physical lines, because a phrase wraps:
+#: "Found by / mutation" spans two comment lines and matches neither.
 PROCESS_NARRATION: Final = re.compile(
-    r'an earlier (?:version|draft)|the first draft'
-    r'|[Rr]eview\b[^.]{0,25}?\b(?:found|caught|added|proved|showed)'
+    r'(?i:(?:an|the) earlier (?:version|draft)|the first draft'
+    r'|review\w*\b[^.]{0,25}?\b(?:found|caught|added|proved|showed|method)'
     r'|found by mutation|round (?:\d+|one|two|three|four|five)\b'
-    r'|as it stood before|semrefac|this PR\b|this pull request'
+    r'|as it stood before|semrefac|this pull request)'
+    r'|this PR\b'
 )
 
 #: Exempt: this file alone, which cannot state the rule without spelling an
@@ -80,6 +85,51 @@ def _prose(path: Path) -> list[tuple[int, str]]:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             lines.extend((node.lineno + i, text) for i, text in enumerate(node.value.splitlines()))
     return lines
+
+
+def _blocks(path: Path) -> list[tuple[int, str]]:
+    """The same prose as `_prose`, joined into logical blocks.
+
+    A run of consecutive comment lines is one block and a docstring is one
+    block, with newlines flattened to spaces. A phrase that wraps -- "Found by /
+    mutation" -- appears in no single physical line and so matches nothing that
+    reads them one at a time.
+
+    Kept separate from `_prose` rather than replacing it: the `design_docs/`
+    exemption is a property of one line, and joining a block would let a path on
+    one line excuse an id on another.
+    """
+    blocks: list[tuple[int, str]] = []
+    run: list[str] = []
+    start = 0
+    for line, text in sorted(_prose(path)):
+        stripped = text.lstrip()
+        if stripped.startswith('#'):
+            if not run:
+                start = line
+            elif line != start + len(run):
+                blocks.append((start, ' '.join(run)))
+                run, start = [], line
+            run.append(stripped.lstrip('#:').strip())
+            continue
+        if run:
+            blocks.append((start, ' '.join(run)))
+            run = []
+        blocks.append((line, ' '.join(text.split())))
+    if run:
+        blocks.append((start, ' '.join(run)))
+    return blocks
+
+
+def narration_in(path: Path) -> list[tuple[int, str]]:
+    """Every narration hit in one module, over the surface the rule reads.
+
+    Named so the repository scan and the tests that prove it fires go through
+    one function. Reached separately, a probe can keep passing while the scan
+    it stands for is quietly narrowed back to physical lines.
+    """
+    return [(line, match.group(0)) for line, text in _blocks(path)
+            if (match := PROCESS_NARRATION.search(text))]
 
 
 def _scanned() -> list[Path]:
@@ -117,10 +167,9 @@ def test_no_known_narration_phrasing_reaches_the_source() -> None:
     any of these a way no pattern catches. Judgement covers the rest, at review.
     """
     found = [
-        f'{path.relative_to(REPO_ROOT)}:{line} {match.group(0)!r}'
+        f'{path.relative_to(REPO_ROOT)}:{line} {phrase!r}'
         for path in _scanned()
-        for line, text in _prose(path)
-        if (match := PROCESS_NARRATION.search(text))
+        for line, phrase in narration_in(path)
     ]
     assert not found, (
         'known narration phrasings in source:\n  ' + '\n  '.join(found)
@@ -132,6 +181,7 @@ def test_no_known_narration_phrasing_reaches_the_source() -> None:
     ('a property id', '# P30 says emission is canonical', TRACKER_TOKENS),
     ('a single-digit property id', '# the P4 inverse-pair lesson', TRACKER_TOKENS),
     ('a counterexample id', '# see CE-11 for the shrunk case', TRACKER_TOKENS),
+    ('a change-request id', '# CR-104 swept the exit sites', TRACKER_TOKENS),
     ('a task id', '# delivered by T2.4', TRACKER_TOKENS),
     ('a spelled-out task id', '# delivered by Task 5', TRACKER_TOKENS),
     ('a spelled-out task range', '# Tasks 3-7 quantify over this', TRACKER_TOKENS),
@@ -140,6 +190,9 @@ def test_no_known_narration_phrasing_reaches_the_source() -> None:
     ('review narration', '# review found this blind spot', PROCESS_NARRATION),
     ('an earlier version', '# an earlier version used a set', PROCESS_NARRATION),
     ('an earlier draft', '# an earlier draft used a set', PROCESS_NARRATION),
+    ('the earlier draft', '# the earlier draft used a set', PROCESS_NARRATION),
+    ('narration capitalised', '# Found by mutation: the guard never fired', PROCESS_NARRATION),
+    ("a reviewer's method", "# the reviewer's method, made permanent", PROCESS_NARRATION),
     ('a mutation story', '# found by mutation: the guard never fired', PROCESS_NARRATION),
     ('a spelled-out round', '# settled in round three of the rewrite', PROCESS_NARRATION),
     ('review with words between', '# review of the corpus found the gap', PROCESS_NARRATION),
@@ -196,3 +249,33 @@ def test_a_design_docs_citation_excuses_only_the_spec_number() -> None:
     assert not names_a_tracker_row(cited)
     assert names_a_tracker_row(f'{cited} P30 covers it')
     assert names_a_tracker_row(f'{cited} delivered by Task 5')
+
+
+@pytest.mark.fast
+def test_a_phrase_that_wraps_is_still_one_phrase(tmp_path: Path) -> None:
+    """Consecutive comment lines are one block.
+
+    A comment wraps at the margin, so "Found by mutation" is written across two
+    lines and appears in neither. Reading physical lines lets any phrasing
+    escape by being long enough, which is not a property worth having.
+    """
+    probe = tmp_path / 'wrapped.py'
+    probe.write_text(
+        '#: a per-entry check is vacuous when the mapping is empty. Found by\n'
+        '#: mutation: an exclusion predicate of `lambda d: True` left it green.\n'
+        'x = 1\n',
+        encoding='utf-8')
+    assert not any(PROCESS_NARRATION.search(text) for _, text in _prose(probe))
+    assert narration_in(probe), 'the surface the scan reads missed a wrapped phrase'
+
+
+@pytest.mark.fast
+def test_blocks_do_not_run_together_across_a_gap(tmp_path: Path) -> None:
+    """Two comment runs separated by code are two blocks.
+
+    Joining everything would let a phrase match across unrelated comments, which
+    is the `design_docs/` mistake in the other direction.
+    """
+    probe = tmp_path / 'gapped.py'
+    probe.write_text('# found by\nx = 1\n# mutation\n', encoding='utf-8')
+    assert not narration_in(probe)

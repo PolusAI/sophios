@@ -9,6 +9,7 @@ property it fed. A generator that silently stops producing a construct
 disables every property depending on it and nothing else notices — so
 adequacy is itself a property, checked at a bounded sample.
 """
+import re
 from collections import Counter
 from typing import Any
 
@@ -25,7 +26,7 @@ from .hermetic import COVERAGE, compile_hermetic_cwl
 
 @pytest.mark.fast
 def test_every_construct_appears_within_a_bounded_sample() -> None:
-    """500 documents reach every construct kind the language has.
+    """500 documents reach every construct kind in `CONSTRUCTS`.
 
     Stated over one drawn batch rather than as a per-example property, because
     the claim is about the *sample*, not about any document: no single document
@@ -144,13 +145,11 @@ def test_the_workflows_strategy_produces_documents_the_compiler_accepts() -> Non
     are skipped rather than counted, and a threshold that pretended every draw
     must compile would be a flaky test rather than a stricter one.
 
-    Drawn from `workflows_with_documents()`, which is the strategy `workflows()`
-    itself is a projection of, so the composition under test is the one that
-    ships. Rebuilding `compilable_documents().map(to_yml)` here
-    by hand — needing the `Document` for `steps_as_mapping` and having no way
-    to get it — which left `workflows()` with zero call sites in the tree while
-    this test's own messages claimed to be covering it. Replacing its body with
-    `st.none()` left the suite green.
+    Drawn from `workflows_with_documents()`, the strategy `workflows()` is a
+    projection of, so the composition under test is the one that ships.
+    Rebuilding `compilable_documents().map(to_yml)` here by hand leaves
+    `workflows()` with no call site at all -- replace its body with `st.none()`
+    and the suite stays green.
     """
     compiled: Counter[str] = Counter()
 
@@ -228,12 +227,11 @@ def test_every_edge_a_document_references_is_defined_in_that_document() -> None:
 def test_no_step_the_generator_draws_is_discarded(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every step drawn reaches the document, which is the whole of the fix.
 
-    Mapping form cannot repeat a step name, and the earlier draft satisfied
-    that by drawing a step and dropping it on a collision — keeping the edge
-    names it had already defined (the invariant above) and quietly costing the
-    sample its size, so a document asking for four steps often got two.
-    Drawing the stems unique up front removes the discard instead of repairing
-    after it.
+    Mapping form cannot repeat a step name. Satisfying that by drawing a step
+    and dropping it on a collision keeps the edge names it had already defined
+    (the invariant above) and quietly costs the sample its size, so a document
+    asking for four steps often gets two. Drawing the stems unique up front
+    removes the discard instead of repairing after it.
 
     Recorded at the drawing site rather than read off the document, because
     every consequence of a discard is *rare* while the discard itself is
@@ -313,3 +311,30 @@ def test_an_injected_fault_shrinks_to_a_small_workflow() -> None:
     assert len(rendered.splitlines()) <= 12, (
         f'shrunk case is {len(rendered.splitlines())} lines; a counterexample '
         f'this size will not be read:\n{rendered}')
+
+
+@pytest.mark.fast
+def test_the_construct_inventory_accounts_for_every_input_kind() -> None:
+    """Every member of the `InputValue` union is drawn, or declared undrawable.
+
+    The coverage test above quantifies over `CONSTRUCTS`, so a kind missing from
+    that tuple is invisible to it -- the inventory would shrink and the sample
+    would still be "complete". Deriving the kinds from the union instead means
+    adding an AST node fails here until someone either generates it or writes
+    down why they cannot.
+    """
+    import typing  # pylint: disable=import-outside-toplevel
+
+    from sophios.lang.nodes import InputValue  # pylint: disable=import-outside-toplevel
+
+    def snake(name: str) -> str:
+        return re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
+
+    kinds = {snake(member.__name__) for member in typing.get_args(InputValue)}
+    accounted = set(strat.CONSTRUCTS) | set(strat.NOT_GENERATED)
+    missing = kinds - accounted
+    assert not missing, (
+        f'{sorted(missing)} are `InputValue` members that the generator neither draws nor '
+        f'declares undrawable. Add the kind to CONSTRUCTS, or to NOT_GENERATED with a reason.')
+    assert not (set(strat.NOT_GENERATED) & set(strat.CONSTRUCTS)), (
+        'a kind cannot be both drawn and declared undrawable')
