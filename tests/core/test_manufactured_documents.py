@@ -215,12 +215,6 @@ def _parses(document: dict[str, Any]) -> tuple[bool, list[str]]:
     shape is reported. A `wic_`-prefixed key anywhere else stays ordinary
     passthrough by design -- §1 makes that vocabulary open -- and is not read
     as a failed construct.
-
-    Args:
-        document (dict[str, Any]): The manufactured document.
-
-    Returns:
-        tuple[bool, list[str]]: Whether it parsed, and the diagnostics if not.
     """
     text = yaml.dump(document, sort_keys=False, line_break='\n', indent=2, Dumper=NoAliasDumper)
     result = parse(text, 'manufactured.wic')
