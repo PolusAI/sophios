@@ -68,7 +68,7 @@ def lower(document: Document, namespace: Namespace | None = None) -> Lowered:
     here = namespace if namespace is not None else Namespace()
 
     identities = _step_identities(document, here, diagnostics)
-    if identities is None:
+    if identities is None or not _every_name_is_present(document, diagnostics):
         return Lowered(None, diagnostics)
 
     defined_anywhere = _edge_definitions(identities, document, diagnostics)
@@ -111,12 +111,48 @@ def _step_identities(document: Document, here: Namespace,
     identities: list[StepId] = []
     for index, step in enumerate(document.steps, start=1):
         if not step.id:
-            if step.span is not None:
-                diagnostics.error(Code.MISSING_STEP_ID,
-                                  'a step needs an id before it can be lowered', step.span)
+            diagnostics.error(Code.EMPTY_STEP_ID,
+                              'a step needs an id before it can be lowered', step.span)
             return None
         identities.append(StepId(here, index, step.id))
     return tuple(identities)
+
+
+def _every_name_is_present(document: Document, diagnostics: Diagnostics) -> bool:
+    """Report every position where the document left a name empty.
+
+    The types refuse an unnamed port or obligation, and refusing is right --
+    but the refusal is a `ValueError`, and `parse` accepts `in: {"": ...}`.
+    Checking here is what keeps lowering total: the same reason `_step_identities`
+    reports an unnamed step rather than letting `StepId` raise.
+
+    All of them report one code. They are one mistake in four positions, and a
+    reader who wrote nothing where a name goes is not helped by being told which
+    of the four the checker noticed first.
+    """
+    found = False
+    for step in document.steps:
+        for name, value in step.inputs:
+            if not name:
+                diagnostics.error(Code.EMPTY_NAME,
+                                  f"step '{step.id}' binds an input with no name", step.span)
+                found = True
+            if isinstance(value, EdgeRef) and not value.name:
+                diagnostics.error(Code.EMPTY_NAME,
+                                  f"'!*' on '{step.id}.{name}' names no edge", value.span)
+                found = True
+        for binding in step.outputs:
+            if not binding.name:
+                diagnostics.error(Code.EMPTY_NAME,
+                                  f"step '{step.id}' declares an out: entry with no name",
+                                  binding.span)
+                found = True
+            if binding.edge_def is not None and not binding.edge_def.name:
+                diagnostics.error(Code.EMPTY_NAME,
+                                  f"'!&' on '{step.id}.{binding.name}' defines no edge",
+                                  binding.edge_def.span)
+                found = True
+    return not found
 
 
 def _edge_definitions(identities: tuple[StepId, ...], document: Document,

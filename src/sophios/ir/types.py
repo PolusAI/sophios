@@ -5,8 +5,10 @@ threads through a call stack, so the checker can verify what it means rather
 than only what it computes.
 
 Frozen and slotted, as `sophios.lang.nodes` is, and holding no mutable
-container: an invariant checked in `__post_init__` is worth having only if it
-cannot be invalidated afterwards.
+container that any invariant depends on: a check in `__post_init__` is worth
+having only if it cannot be invalidated afterwards. An `OpaqueCwl` payload may
+still be a `list` or a `dict` -- nothing reads one, which is the point of the
+type, so nothing can be invalidated through it.
 """
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -278,6 +280,11 @@ class WorkflowGraph:
         occurrences = [step.id for step in self.steps]
         if len(occurrences) != len(set(occurrences)):
             raise ValueError('a step occurrence appears twice')
+        for step in self.steps:
+            if step.id.namespace != self.namespace:
+                raise ValueError(
+                    f'{step.id} sits in {step.id.namespace.parts}, not this graph\'s '
+                    f'{self.namespace.parts}')
 
         known = {port.id for step in self.steps for port in step.inputs + step.outputs}
         for where, port_id in self._references():

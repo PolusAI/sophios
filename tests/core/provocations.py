@@ -196,7 +196,24 @@ COMPILED.update({
 })
 
 
+def _provoke_empty_name() -> None:
+    """A name the document leaves empty, which `parse` accepts and lowering cannot represent.
+
+    Raises:
+        SophiosError: Always, carrying `wic027`.
+    """
+    from sophios.ir.lower import lower  # pylint: disable=import-outside-toplevel
+    from sophios.lang.diagnostics import SophiosError  # pylint: disable=import-outside-toplevel
+    from sophios.lang.parser import parse  # pylint: disable=import-outside-toplevel
+
+    document = parse('steps:\n- id: s\n  in:\n    "": !* e\n', 'provoke.wic').document
+    assert document is not None
+    diagnostics = lower(document).diagnostics
+    raise SophiosError(tuple(diagnostics))
+
+
 COMPILED.update({
     Code.UNDEFINED_EDGE: _provoke_undefined_edge,
     Code.DUPLICATE_EDGE_DEF: _provoke_duplicate_edge_def,
+    Code.EMPTY_NAME: _provoke_empty_name,
 })

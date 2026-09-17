@@ -28,7 +28,7 @@ from sophios.ir import (
     WorkflowGraph,
 )
 from sophios.ir.lower import lower
-from sophios.lang.nodes import Document, InlineLiteral
+from sophios.lang.nodes import Document, InlineLiteral, Step
 from sophios.lang.parser import parse
 from sophios.lang.spans import SourceSpan
 
@@ -151,6 +151,64 @@ def test_a_step_may_be_invoked_twice() -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize(('where', 'source'), [
+    ('an input', 'steps:\n- id: s\n  in:\n    "": !* e\n'),
+    ('an out: entry', 'steps:\n- id: s\n  out:\n  - "": f\n'),
+    ('an edge definition', 'steps:\n- id: s\n  out:\n  - f: !& ""\n'),
+    ('an edge reference', 'steps:\n- id: s\n  in:\n    f: !* ""\n'),
+])
+def test_a_name_the_document_left_empty_is_reported(where: str, source: str) -> None:
+    """`parse` accepts these; the types refuse them. Lowering has to bridge that.
+
+    Refusing an unnamed port is right, but the refusal is a `ValueError`, and
+    every one of these is a document the parser hands back. Reported here, the
+    caller gets a diagnostic rather than a traceback -- the same treatment an
+    unnamed step already had.
+
+    Out of reach of `documents()`, which draws names from the synthetic
+    registry and so never draws an empty one. That is the right generator for
+    a workflow the compiler can resolve, so these stay examples.
+    """
+    result = _lower(source)
+    assert result.graph is None, where
+    assert [d.code.value for d in result.diagnostics] == ['wic027'], where
+
+
+@pytest.mark.fast
+def test_both_edge_positions_treat_an_empty_name_the_same() -> None:
+    """`!& ""` and `!* ""` agree.
+
+    They did not: the reference raised while the definition was accepted and
+    put `''` into the edge table as a live producer name, where it would match
+    any later `!* ""` that managed not to raise first.
+    """
+    definition = _lower('steps:\n- id: s\n  out:\n  - f: !& ""\n')
+    reference = _lower('steps:\n- id: s\n  in:\n    f: !* ""\n')
+    assert (definition.graph is None) == (reference.graph is None)
+    assert {d.code for d in definition.diagnostics} == {d.code for d in reference.diagnostics}
+
+
+@pytest.mark.fast
+def test_a_document_the_parser_recovered_never_raises() -> None:
+    """Totality over what `parse` returns, not over what it accepts.
+
+    A recovered document is exactly when a caller is least able to handle an
+    exception, and a result carrying neither a graph nor a diagnostic is worse
+    than the exception it replaced -- `ok` is False and nothing says why.
+    """
+    for source in ('steps:\n- id: ""\n  in: {}\n', 'steps:\n- \n', 'steps:\n- id:\n'):
+        document = parse(source, 'recovered.wic').document
+        if document is None:
+            continue
+        result = lower(document)
+        assert result.graph is not None or len(result.diagnostics) > 0, source
+
+    # A step the parser never built, so it carries no span at all.
+    handmade = lower(Document(steps=(Step(id=''),)))
+    assert handmade.graph is None and len(handmade.diagnostics) > 0
+
+
+@pytest.mark.fast
 def test_a_reference_before_its_definition_is_reported() -> None:
     """`!* e` above its `!& e` is `wic025`, as the reference and compiler say.
 
@@ -172,9 +230,13 @@ def test_a_name_defined_twice_is_reported() -> None:
 @pytest.mark.fast
 def test_a_step_with_no_id_is_reported_not_raised() -> None:
     """The parser recovers such a document, which is exactly when a caller is
-    least able to handle an exception."""
+    least able to handle an exception.
+
+    `wic007` rather than `wic006`, matching what the parser already reports for
+    the same document: the id is present and empty, not missing.
+    """
     result = _lower('steps:\n- id: ""\n  in: {}\n')
-    assert result.graph is None and [d.code.value for d in result.diagnostics] == ['wic006']
+    assert result.graph is None and [d.code.value for d in result.diagnostics] == ['wic007']
 
 
 @pytest.mark.fast
@@ -227,6 +289,7 @@ def _hostile_graphs(draw: st.DrawFn) -> Any:
         lambda: WorkflowGraph(ns, output_mapping=((name, out),)),
         lambda: WorkflowGraph(ns, input_mapping=((name, (inp,)),)),
         lambda: WorkflowGraph(ns, explicit_edge_defs=((name, out),)),
+        lambda: WorkflowGraph(Namespace(('elsewhere',)), steps=(StepNode(one),)),
     ]))
 
 

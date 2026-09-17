@@ -58,6 +58,10 @@ class Code(StrEnum):
     RESERVED_KEY = 'wic024'
     UNDEFINED_EDGE = 'wic025'
     DUPLICATE_EDGE_DEF = 'wic026'
+    #: A name the document left empty, in a position that identifies something:
+    #: an input, an `out:` entry, or an edge. One code across the positions
+    #: because it is one mistake -- the reader wrote nothing where a name goes.
+    EMPTY_NAME = 'wic027'
     RECURSIVE_ALIAS = 'wic030'
 
 
@@ -93,8 +97,13 @@ class Diagnostics(Sequence[Diagnostic]):
     def __init__(self, items: Iterable[Diagnostic] = ()) -> None:
         self._items: list[Diagnostic] = list(items)
 
-    def error(self, code: Code, message: str, span: SourceSpan) -> None:
-        """Record an error."""
+    def error(self, code: Code, message: str, span: SourceSpan | None = None) -> None:
+        """Record an error.
+
+        `span` is optional because a phase after parsing can be handed a node
+        the parser never built -- a document assembled in memory -- and a
+        diagnostic with no position is still better than an exception.
+        """
         self._append(Diagnostic(Severity.ERROR, code, message, span))
 
     def _append(self, diagnostic: Diagnostic) -> None:
