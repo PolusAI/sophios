@@ -4,6 +4,8 @@ import unittest
 import graphviz
 from hypothesis import given, settings, HealthCheck
 import networkx as nx
+from typing import Final
+
 import pytest
 
 import sophios
@@ -15,6 +17,22 @@ import sophios.utils
 from sophios.wic_types import GraphData, GraphReps, Yaml, YamlTree, StepId
 
 from .test_setup import tools_cwl, yml_paths, validator, wic_strategy
+
+
+#: Structured failures the fuzz job accepts. Exactly the former `sys.exit(1)`
+#: sites, which the message arm used to accept as `SystemExit(1)`.
+TOLERATED_CODES: Final[frozenset[Code]] = frozenset({
+    Code.UNRESOLVED_INPUT,
+    Code.SUBWORKFLOW_INVALID,
+    Code.SCRIPT_ARGUMENT_MISMATCH,
+    Code.CONTAINER_ENGINE_UNAVAILABLE,
+    Code.MISSING_INPUT_FILE,
+    # `wic026` was `ValueError: Error! Multiple definitions of &`,
+    # which the message arm below used to accept. Giving it a code
+    # moved it to this arm; leaving it out of this set turned a
+    # tolerated draw into a job failure.
+    Code.DUPLICATE_EDGE_DEF,
+})
 
 
 @pytest.mark.skip_pypi_ci
@@ -88,19 +106,12 @@ class TestFuzzyCompile(unittest.TestCase):
             # ValueError whose message is not in the list below, so it failed
             # this job before and must keep failing it — giving a failure a
             # code documents it, it does not bless it.
-            tolerated = {
-                Code.UNRESOLVED_INPUT,
-                Code.SUBWORKFLOW_INVALID,
-                Code.SCRIPT_ARGUMENT_MISMATCH,
-                Code.CONTAINER_ENGINE_UNAVAILABLE,
-                Code.MISSING_INPUT_FILE,
-            }
+            tolerated = TOLERATED_CODES
             unexpected = [d for d in e.diagnostics if d.code not in tolerated]
             if unexpected:
                 raise
         except Exception as e:
             expected_messages = (
-                'Error! Multiple definitions of &',
                 'Error! Unbound literal variable ~',
                 'Error! Cannot load python_script',
                 'Error! Cannot self-reference the same step!',
@@ -135,3 +146,27 @@ class TestFuzzyCompile(unittest.TestCase):
 if __name__ == '__main__':
     sophios.plugins.logging_filters()
     unittest.main()
+
+
+@pytest.mark.fast
+def test_the_tolerated_set_covers_what_the_message_arm_used_to() -> None:
+    """A message that became a code has to move between the two arms.
+
+    `wic026` was `ValueError: Error! Multiple definitions of &`, which the
+    generic arm accepted by message. Giving it a code moved it to the
+    structured arm, where leaving it out turned a draw the job had always
+    tolerated into a failure -- and left the message entry unreachable, so
+    nothing pointed at the gap.
+    """
+    from .hermetic import compile_production  # pylint: disable=import-outside-toplevel
+
+    source = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}
+    duplicate = {'steps': [
+        {**source, 'out': [{'file': {'wic_anchor': 'twice'}}]},
+        {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'b'}},
+         'out': [{'file': {'wic_anchor': 'twice'}}]}]}
+
+    with pytest.raises(SophiosError) as caught:
+        compile_production(duplicate)
+    escaping = [d.code for d in caught.value.diagnostics if d.code not in TOLERATED_CODES]
+    assert not escaping, f'{[c.value for c in escaping]} would fail the fuzz job'

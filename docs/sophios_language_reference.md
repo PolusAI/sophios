@@ -245,52 +245,6 @@ The syntax layer is deliberately stricter than the loader here. It may never
 be more permissive; stricter is how a construct with no meaning stops being
 accepted.
 
-### 4.1.2 An edge reference names a definition
-
-`!* name` names an edge that `!& name` defines. Within one compilation — a root
-document and the subworkflows it includes — that definition must exist, and
-must be the only one:
-
-- a reference with no definition is `wic025`;
-- a name defined twice is `wic026`, because an edge name identifies one
-  producer and a second definition leaves no way to say which output is meant.
-
-A definition that nothing references is **not** an error. That is how a
-workflow names an artifact it produces for a consumer outside itself.
-
-The rule is per *compilation*, not per file. A document included as a
-subworkflow may reference an edge its includer defines, which is why the check
-runs at the root and not at every level.
-
-#### A document needing a value from outside declares it
-
-`!*` is not the way to ask for something the compilation does not produce. A
-document that expects a value from whoever includes it declares a parameter in
-`inputs:` and references it **by bare name**:
-
-```yaml
-inputs:
-  sdf_path:
-    type: File
-    format: [edam:format_3814]
-
-steps:
-  convert:
-    in:
-      input_path: sdf_path          # a declared parameter, bound by the includer
-    out:
-    - output_mol2_path: !& ligand.mol2
-  minimize:
-    in:
-      input_mol2_path: !* ligand.mol2   # an edge, defined above
-```
-
-The two spellings answer different questions. A bare name asks the *includer*
-(or the user, when the document is compiled alone) for a value; `!*` asks the
-*compilation* for an edge. A document's `inputs:` block is therefore its
-interface, and saying what it expects is what distinguishes a workflow that is
-complete from one that is meant to be included.
-
 ### 4.1.1 `!&` is not an input form
 
 `!&` defines an edge, and an edge is defined where its value comes into being
@@ -327,6 +281,66 @@ guess at intent much later.
 
 If you meant to *consume* an edge, you want `!*`. If you meant to name this
 step's output, the `!&` belongs in its `out:` list.
+
+### 4.1.2 An edge reference names a definition
+
+`!* name` names an edge that `!& name` defines. The definition must appear
+**before** the reference, in the document itself or in an enclosing one that
+has already been compiled past the definition, and there must be only one:
+
+- a reference with no definition is `wic025`;
+- a name defined twice is `wic026`, because an edge name identifies one
+  producer and a second definition leaves no way to say which output is meant.
+
+A definition that nothing references is **not** an error. That is how a
+workflow names an artifact it produces for a consumer outside itself.
+
+Order is part of the rule. A reference is resolved against the definitions
+seen so far, so `!* e` written above the `!& e` that defines it is `wic025`
+even though the definition is in the same document.
+
+A document included as a subworkflow may reference an edge its includer has
+already defined; the includer's definitions are in scope when the child is
+compiled.
+
+**Not yet enforced.** A reference that *no* enclosing document defines is
+reported only when it appears in the root document itself. One inside an
+included subworkflow is turned into an input of that subworkflow, and its edge
+name is not carried up, so the root has nothing left to check: the compilation
+succeeds and the reference surfaces as a generated workflow input that nothing
+produces. Closing this means carrying the unresolved name up and checking the
+aggregate once at the root, which is what the typed IR's deferred-obligation
+discharge does. Until then, treat `wic025` as covering the root document and
+not the whole compilation.
+
+#### A document needing a value from outside declares it
+
+`!*` is not the way to ask for something the compilation does not produce. A
+document that expects a value from whoever includes it declares a parameter in
+`inputs:` and references it **by bare name**:
+
+```yaml
+inputs:
+  sdf_path:
+    type: File
+    format: [edam:format_3814]
+
+steps:
+  convert:
+    in:
+      input_path: sdf_path          # a declared parameter, bound by the includer
+    out:
+    - output_mol2_path: !& ligand.mol2
+  minimize:
+    in:
+      input_mol2_path: !* ligand.mol2   # an edge, defined above
+```
+
+The two spellings answer different questions. A bare name asks the *includer*
+(or the user, when the document is compiled alone) for a value; `!*` asks the
+*compilation* for an edge. A document's `inputs:` block is therefore its
+interface, and saying what it expects is what distinguishes a workflow that is
+complete from one that is meant to be included.
 
 ### 4.2 Every name is bound once
 

@@ -48,6 +48,26 @@ def compile_hermetic(yml: Yaml, name: str = 'oracle', *,
         is_root, relative_run_path=True, testing=True)
 
 
+def compile_production(yml: Yaml, name: str = 'binding', *,
+                       tools: Tools | None = None,
+                       is_root: bool = True) -> CompilerInfo:
+    """Compile as a real root compilation does: `testing=False`.
+
+    The one harness that does. `compile_hermetic` passes `testing=True`, which
+    is what lets `test_cwl_embedding_independence` recompile each subworkflow
+    as though it were root -- and that same branch absorbs an undefined edge
+    into a workflow input, so the production diagnostics are unreachable
+    through it.
+    """
+    compiler_options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
+    return sophios.compiler.compile_workflow(
+        YamlTree(StepId(name, SYNTHETIC_NS), yml),
+        compiler_options, graph_settings, tag_paths,
+        [], [get_graph_reps(name)], {}, {}, {}, {},
+        SYNTHETIC_TOOLS if tools is None else tools,
+        is_root, relative_run_path=True, testing=False)
+
+
 def compile_hermetic_cwl(yml: Yaml, name: str = 'oracle', *,
                          tools: Tools | None = None,
                          insert_steps_automatically: bool = False) -> Yaml:

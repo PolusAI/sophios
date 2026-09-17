@@ -3,34 +3,20 @@
 Both were enforced already, as bare `ValueError`s a caller could not match on,
 suppress, or tell from a bug. They carry codes now.
 
-MUST RUN WITH `testing=False`. Every other harness passes `testing=True` -- it
-is what lets `test_cwl_embedding_independence` recompile each subworkflow as
-though it were root -- and that branch absorbs an undefined edge into a
-workflow input. The production path is reachable no other way.
+Everything here compiles through `compile_production`, which is `testing=False`.
+`compile_hermetic` passes `testing=True`, and that branch absorbs an undefined
+edge into a workflow input, so these diagnostics are unreachable through it.
 """
-from typing import Any, Final
+from typing import Final
 
 import pytest
 
-import sophios.cli
-import sophios.compiler
 from sophios.lang.diagnostics import Code, SophiosError
-from sophios.utils_graphs import get_graph_reps
-from sophios.wic_types import StepId, Yaml, YamlTree
 
-from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
+from .hermetic import compile_production, subworkflow_step
 
 #: A step that produces a File, optionally naming it as an edge.
 _SOURCE: Final = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}
-
-
-def _compile(yml: Yaml, *, is_root: bool = True) -> Any:
-    """Compile one workflow the way a root compilation does."""
-    options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
-    return sophios.compiler.compile_workflow(
-        YamlTree(StepId('binding', SYNTHETIC_NS), yml), options, graph_settings, tag_paths,
-        [], [get_graph_reps('binding')], {}, {}, {}, {}, SYNTHETIC_TOOLS,
-        is_root, relative_run_path=True, testing=False)
 
 
 def _codes(excinfo: pytest.ExceptionInfo[SophiosError]) -> list[str]:
@@ -41,7 +27,7 @@ def _codes(excinfo: pytest.ExceptionInfo[SophiosError]) -> list[str]:
 @pytest.mark.fast
 def test_a_reference_to_a_defined_edge_compiles() -> None:
     """The ordinary case, so the tests below are about the exception and not the rule."""
-    _compile({'steps': [
+    compile_production({'steps': [
         {**_SOURCE, 'out': [{'file': {'wic_anchor': 'produced'}}]},
         {'id': 'sink', 'in': {'file': {'wic_alias': 'produced'}}}]})
 
@@ -50,7 +36,7 @@ def test_a_reference_to_a_defined_edge_compiles() -> None:
 def test_a_reference_with_no_definition_is_reported() -> None:
     """`wic025`, rather than a `ValueError` a caller cannot match on."""
     with pytest.raises(SophiosError) as excinfo:
-        _compile({'steps': [_SOURCE, {'id': 'sink', 'in': {'file': {'wic_alias': 'absent'}}}]})
+        compile_production({'steps': [_SOURCE, {'id': 'sink', 'in': {'file': {'wic_alias': 'absent'}}}]})
     assert Code.UNDEFINED_EDGE.value in _codes(excinfo)
     assert 'absent' in str(excinfo.value.diagnostics[0].message)
 
@@ -60,7 +46,7 @@ def test_a_name_defined_twice_is_reported() -> None:
     """`wic026`. An edge name identifies one producer, so a second definition
     leaves no way to say which output a reference means."""
     with pytest.raises(SophiosError) as excinfo:
-        _compile({'steps': [
+        compile_production({'steps': [
             {**_SOURCE, 'out': [{'file': {'wic_anchor': 'twice'}}]},
             {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'b'}},
              'out': [{'file': {'wic_anchor': 'twice'}}]},
@@ -77,16 +63,63 @@ def test_a_definition_nothing_consumes_is_not_reported() -> None:
     "definitions and references must pair up", which is the natural next
     tightening and would reject all fifteen.
     """
-    _compile({'steps': [{**_SOURCE, 'out': [{'file': {'wic_anchor': 'exported'}}]}]})
+    compile_production({'steps': [{**_SOURCE, 'out': [{'file': {'wic_anchor': 'exported'}}]}]})
 
 
 @pytest.mark.fast
-def test_a_subworkflow_may_reference_what_its_parent_defines() -> None:
-    """Below the root, an undefined edge is the includer's to satisfy.
+def test_a_child_reference_binds_to_the_parents_definition() -> None:
+    """A real root, a real child: the edge crosses the boundary.
 
-    Thirty-three corpus documents reference a name defined in another file, so
-    reporting away from the root would reject a supported arrangement rather
-    than a mistake.
+    Compiling the child alone with `is_root=False` proves only that deferral is
+    allowed. It says nothing about the obligation being discharged, which is
+    the half that matters, so this builds the parent.
     """
-    _compile({'steps': [_SOURCE, {'id': 'sink', 'in': {'file': {'wic_alias': 'from_parent'}}}]},
-             is_root=False)
+    child = {'steps': [{'id': 'sink', 'in': {'file': {'wic_alias': 'shared'}}}]}
+    info = compile_production({'steps': [
+        {**_SOURCE, 'out': [{'file': {'wic_anchor': 'shared'}}]},
+        subworkflow_step('child.wic', child)]}, 'root')
+
+    bindings = info.rose.data.compiled_cwl['steps'][1]['in']
+    source = bindings['child__step__1__sink___file']['source']
+    assert source == 'root__step__1__mk_file/file', (
+        f'the child bound to {source!r} rather than the parent output that defines it')
+
+
+@pytest.mark.fast
+def test_a_reference_must_follow_its_definition() -> None:
+    """`!&` comes before `!*`, and the compilation is ordered, not a set.
+
+    The definition exists in this document either way, so "it must exist" does
+    not decide this case. Reversing the two steps is `wic025`.
+    """
+    defined_first = [{**_SOURCE, 'out': [{'file': {'wic_anchor': 'e'}}]},
+                     {'id': 'sink', 'in': {'file': {'wic_alias': 'e'}}}]
+    compile_production({'steps': defined_first})
+
+    with pytest.raises(SophiosError) as excinfo:
+        compile_production({'steps': list(reversed(defined_first))})
+    assert Code.UNDEFINED_EDGE.value in _codes(excinfo)
+
+
+@pytest.mark.fast
+def test_an_obligation_no_includer_discharges_is_not_reported() -> None:
+    """The hole the diagnostic does not close, pinned so it is visible.
+
+    `wic025` is raised by the root *invocation*, not over the compilation. A
+    child's unresolved reference is absorbed into a workflow input one level
+    down and its name is lost, so the root has nothing left to check: the
+    document compiles and the obligation surfaces as a generated root input
+    that nothing produces.
+
+    Closing it means carrying the unresolved name up and checking the aggregate
+    once at the root, which is what deferred-obligation discharge does in the
+    typed IR. Doing it inside the per-step loop would be a third special case
+    in the path that phase replaces. This test flips when that lands.
+    """
+    child = {'steps': [_SOURCE, {'id': 'sink', 'in': {'file': {'wic_alias': 'absent'}}}]}
+    info = compile_production({'steps': [subworkflow_step('child.wic', child)]}, 'root')
+
+    generated = info.rose.data.compiled_cwl['inputs']
+    assert any(name.endswith('sink___file') for name in generated), (
+        'the unresolved reference no longer reaches the root as an input; if it is '
+        'reported now, this test has served its purpose and should become that assertion')

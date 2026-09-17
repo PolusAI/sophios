@@ -125,8 +125,7 @@ def _fresh_edge(draw: st.DrawFn, defined_edges: list[tuple[str, Any]], carries: 
 
     `edge_names` is a small bounded alphabet, drawn independently at each
     definition site; two steps landing on the same string would both try to
-    `!&` it, and the compiler treats that as `ValueError: Multiple definitions
-    of &name!`, not a workflow. Suffixing with how many edges the document has
+    `!&` it, which the compiler reports as `wic026`, not a workflow. Suffixing with how many edges the document has
     already defined makes every name unique — `defined_edges` is document-
     scoped (passed into every `_step` call for the document being built) —
     without touching what `edge_names` itself produces or how `EdgeRef` draws
