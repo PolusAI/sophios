@@ -1020,11 +1020,6 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                     # to requiring the !ii inline input custom yaml tag, it is very
                     # likely that this code path is simply due to a missing !ii tag.
 
-                    # TODO: check this first comment
-                    # Subworkflows which use workflow inputs: variables cannot
-                    # (yet) be inlined. Somehow, if they are not marked with
-                    # inlineable: False, test_inline_subworkflows can still pass.
-                    # This Exception will (correctly) cause such inlineing tests to fail.
                     hashable = False
                     inputs_key_dict = {}
                     try:

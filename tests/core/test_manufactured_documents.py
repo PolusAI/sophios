@@ -61,7 +61,6 @@ MANUFACTURING_SITES: Final[dict[str, str]] = {
     'sophios/cwl_subinterpreter.py::rerun_cwltool': DOCUMENT,
     'sophios/inlineing.py::get_inlineable_subworkflows': DOCUMENT,
     'sophios/inlineing.py::inline_subworkflow': DOCUMENT,
-    'sophios/inlineing.py::inline_subworkflow_cwl': DOCUMENT,
     'sophios/inlineing.py::inline_subworkflow_wic_tag': DOCUMENT,
     'sophios/main.py::_load_and_prepare_yaml_tree': DOCUMENT,
     'sophios/utils.py::extract_implementation': DOCUMENT,
@@ -87,7 +86,6 @@ UNREACHED: Final[dict[str, str]] = {
     'sophios/ast.py::python_script_generate_cwl': 'only reached by a `python_script` step',
     'sophios/cwl_subinterpreter.py::rerun_cwltool': 'shells out to a CWL runner; its documents are '
     'pinned directly by test_compiler.py',
-    'sophios/inlineing.py::inline_subworkflow_cwl': 'reached only through the CLI inlining flags',
     'sophios/inlineing.py::inline_subworkflow_wic_tag': 'reached only through the CLI inlining flags',
     'sophios/inlineing.py::inline_subworkflow': 'the inliner runs between loading and compiling, on '
                                                 'the CLI path these drivers do not take',

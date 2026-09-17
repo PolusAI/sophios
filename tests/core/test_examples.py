@@ -200,7 +200,8 @@ def run_workflows(
     if args.cwl_inline_subworkflows:
         while True:
             # Inlineing changes the namespaces, so we have to get new namespaces after each inlineing operation.
-            namespaces_list = sophios.inlineing.get_inlineable_subworkflows(yaml_tree, tools_cwl, False, [])
+            namespaces_list = sophios.inlineing.get_inlineable_subworkflows(
+                yaml_tree, implementation=False, namespaces_init=[])
             if namespaces_list == []:
                 break
 
@@ -385,7 +386,7 @@ def test_inline_subworkflows(yml_path_str: str, yml_path: Path) -> None:
     yaml_tree = sophios.ast.python_script_generate_cwl(yaml_tree, root_yml_dir_abs, tools_cwl)
 
     namespaces_list = sophios.inlineing.get_inlineable_subworkflows(
-        yaml_tree, tools_cwl, 'implementation' in wic_tag, [])
+        yaml_tree, implementation='implementation' in wic_tag, namespaces_init=[])
     if namespaces_list == []:
         return
 

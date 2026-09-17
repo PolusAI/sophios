@@ -440,7 +440,7 @@ def to_yml(document: Document) -> Yaml:
         if isinstance(step, dict) and str(step.get('id', '')).endswith('.wic'):
             step['subtree'] = {'steps': [{'id': 'mk_file',
                                           'in': {'name': {'wic_inline_input': 'sub.txt'}}}]}
-            step['parentargs'] = {'id': step['id']}
+            step['parentargs'] = {}
     return loaded
 
 

@@ -24,6 +24,7 @@ over all five rather than drawing one, so each gets the whole budget.
 """
 import copy
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Final
 
 import yaml
@@ -36,7 +37,7 @@ from sophios.wic_types import Namespaces, StepId, Yaml, YamlTree
 from .ast_strategies import partitionings
 from .equivalence import Strength
 from .hermetic import subworkflow_step
-from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
+from .synthetic_tools import SYNTHETIC_NS
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,7 +108,8 @@ def _inline_all(document: Yaml) -> Yaml:
     """
     tree = YamlTree(StepId('workflow', SYNTHETIC_NS), copy.deepcopy(document))
     for _ in range(_MAX_INLINE_PASSES):
-        found: list[Namespaces] = get_inlineable_subworkflows(tree, SYNTHETIC_TOOLS, False, [])
+        found: list[Namespaces] = get_inlineable_subworkflows(
+            tree, implementation=False, namespaces_init=[])
         if not found:
             return tree.yml
         tree, _len_substeps = inline_subworkflow(tree, found[0])
@@ -128,7 +130,26 @@ def _declared_input_references(document: Yaml, steps: list[Yaml]) -> set[str]:
     return referenced
 
 
-def _subtree_for(document: Yaml, steps: list[Yaml]) -> Yaml:
+def _rewrite_workflow_input_references(steps: list[Yaml], formals: dict[str, str]) -> None:
+    """Rename bare workflow-input references in the new child scope.
+
+    This is deliberately test-side code rather than a call into the production
+    inliner: the split generator must be capable of exposing a broken inverse.
+    """
+    for step in steps:
+        candidates = [step.get('in')]
+        parentargs = step.get('parentargs')
+        if isinstance(parentargs, dict):
+            candidates.append(parentargs.get('in'))
+        for inputs in candidates:
+            if not isinstance(inputs, dict):
+                continue
+            for name, value in inputs.items():
+                if isinstance(value, str) and value in formals:
+                    inputs[name] = formals[value]
+
+
+def _subtree_for(document: Yaml, steps: list[Yaml], formals: dict[str, str]) -> Yaml:
     """A subworkflow body carrying `steps`, plus whatever declared top-level
     `inputs:` those steps themselves reference by bare name.
 
@@ -141,10 +162,11 @@ def _subtree_for(document: Yaml, steps: list[Yaml]) -> Yaml:
     reference resolvable too.
     """
     declared = document.get('inputs') or {}
-    referenced = _declared_input_references(document, steps)
+    _rewrite_workflow_input_references(steps, formals)
     subtree: Yaml = {'steps': steps}
-    if referenced:
-        subtree['inputs'] = {name: copy.deepcopy(declared[name]) for name in referenced}
+    if formals:
+        subtree['inputs'] = {formal: copy.deepcopy(declared[actual])
+                             for actual, formal in formals.items()}
     return subtree
 
 
@@ -181,10 +203,11 @@ def _wrap_steps(document: Yaml, groups: list[list[Yaml]], stems: list[str]) -> Y
     outer = {key: value for key, value in document.items() if key != 'steps'}
     new_steps = []
     for stem, steps in zip(stems, groups):
-        wrapper = subworkflow_step(stem, _subtree_for(document, steps))
         referenced = _declared_input_references(document, steps)
+        formals = {actual: f'{Path(stem).stem}_input_{actual}' for actual in sorted(referenced)}
+        wrapper = subworkflow_step(stem, _subtree_for(document, steps, formals))
         if referenced:
-            wrapper['parentargs']['in'] = {name: name for name in referenced}
+            wrapper['parentargs']['in'] = {formal: actual for actual, formal in formals.items()}
         new_steps.append(wrapper)
     outer['steps'] = new_steps
     return outer

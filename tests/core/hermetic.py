@@ -90,4 +90,4 @@ def subworkflow_step(stem: str, subtree: Yaml) -> Yaml:
     hermetic.
     """
     assert stem.endswith('.wic'), 'get_subkeys recognises a subworkflow by suffix only'
-    return {'id': stem, 'subtree': subtree, 'parentargs': {'id': stem}}
+    return {'id': stem, 'subtree': subtree, 'parentargs': {}}

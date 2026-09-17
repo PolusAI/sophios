@@ -97,7 +97,8 @@ def test_every_language_version_owns_a_judgment() -> None:
 def _subworkflow_tree(parentargs: Yaml, wic: Yaml | None = None) -> YamlTree:
     """A root workflow with one subworkflow call, as the AST reader leaves it."""
     tree: Yaml = {'steps': [{'id': 'child.wic',
-                             'subtree': {'steps': [{'id': 'sink'}]},
+                             'subtree': {'inputs': {'x': {'type': 'string'}},
+                                         'steps': [{'id': 'sink', 'in': {'value': 'x'}}]},
                              'parentargs': parentargs}]}
     if wic is not None:
         tree['wic'] = wic
@@ -106,11 +107,11 @@ def _subworkflow_tree(parentargs: Yaml, wic: Yaml | None = None) -> YamlTree:
 
 @pytest.mark.fast
 @pytest.mark.parametrize(('claim', 'parentargs', 'wic', 'offered'), [
-    ('scatter at the call site', {'scatter': ['sink___value']}, None, False),
-    ('scatter in wic: steps: metadata', {},
+    ('scatter at the call site', {'in': {'x': 'actual'}, 'scatter': ['sink___value']}, None, False),
+    ('scatter in wic: steps: metadata', {'in': {'x': 'actual'}},
      {'steps': {'(1, child.wic)': {'scatter': ['sink___value']}}}, False),
     ('metadata without scatter', {}, {'steps': {'(1, child.wic)': {'in': {'x': 1}}}}, True),
-    ('no scatter anywhere', {}, None, True),
+    ('no scatter anywhere', {'in': {'x': 'actual'}}, None, True),
 ])
 def test_a_scattered_subworkflow_is_not_offered_to_the_ast_inliner(
         claim: str, parentargs: Yaml, wic: Yaml | None, offered: bool) -> None:
@@ -122,7 +123,8 @@ def test_a_scattered_subworkflow_is_not_offered_to_the_ast_inliner(
     is later. Reading only the first offers a subworkflow whose scatter is
     spelled in the metadata, and inlining it erases that scatter.
     """
-    result = get_inlineable_subworkflows(_subworkflow_tree(parentargs, wic), {}, False, [])
+    result = get_inlineable_subworkflows(
+        _subworkflow_tree(parentargs, wic), implementation=False, namespaces_init=[])
     assert bool(result) is offered, claim
 
 

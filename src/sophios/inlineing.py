@@ -1,13 +1,12 @@
 import copy
+from dataclasses import dataclass
 from pathlib import Path
-import re
 from typing import Any
 
 from mergedeep import merge, Strategy
-import yaml
 
 from . import utils
-from .wic_types import Namespaces, Yaml, Tools, YamlTree, StepId, NodeData, RoseTree
+from .wic_types import Namespaces, Yaml, YamlTree, StepId
 
 # NOTE: AST = Abstract Syntax Tree
 
@@ -16,29 +15,231 @@ from .wic_types import Namespaces, Yaml, Tools, YamlTree, StepId, NodeData, Rose
 # That way, we should be able to serialize back to disk without duplication.
 
 
-def _scatter_of(step: Yaml, wic: Yaml, index: int, step_key: str) -> Any:
-    """A step's scatter, from the call site or from `wic: steps:` metadata.
+def _call_arguments(step: Yaml, wic: Yaml, index: int, step_key: str) -> Yaml | None:
+    """The effective arguments on one subworkflow invocation.
 
-    `compile_workflow_once` merges the two with the metadata winning, but that
-    happens after inlining, so a reader here has to consult both. Returns the
-    scatter itself, which is falsy when absent.
+    `compile_workflow_once` merges the authored call with `wic: steps:`
+    overrides after compiling the child. Inlining runs earlier, so it must make
+    the same merge before deciding whether removing the call boundary is safe.
     """
     parentargs = step.get('parentargs', {})
-    if isinstance(parentargs, dict) and parentargs.get('scatter'):
-        return parentargs['scatter']
-    metadata = (wic.get('steps') or {}).get(f'({index + 1}, {step_key})', {})
-    return metadata.get('scatter') if isinstance(metadata, dict) else None
+    metadata_steps = wic.get('steps') or {}
+    if not isinstance(parentargs, dict) or not isinstance(metadata_steps, dict):
+        return None
+    metadata = metadata_steps.get(f'({index + 1}, {step_key})', {})
+    if not isinstance(metadata, dict):
+        return None
+    metadata = copy.deepcopy(metadata)
+    metadata.pop('wic', None)
+    merged: Yaml = merge(copy.deepcopy(parentargs), metadata,
+                         strategy=Strategy.TYPESAFE_REPLACE)
+    return merged
+
+
+def _replace_input_references(inputs: Any, bindings: Yaml) -> None:
+    """Replace exact bare formal references in one input mapping.
+
+    The language has four input forms. Only a bare string is a workflow-input
+    reference; aliases, literals, and raw CWL are mappings and must remain
+    opaque. Looking through those mappings would turn data into syntax.
+    """
+    if not isinstance(inputs, dict):
+        return
+    for name, value in inputs.items():
+        if isinstance(value, str) and value in bindings:
+            inputs[name] = copy.deepcopy(bindings[value])
+
+
+def _step_metadata(subtree: Yaml, index: int, step_key: str) -> Yaml | None:
+    """Return mutable `wic: steps:` metadata for an immediate child step."""
+    wic = subtree.get('wic', {})
+    steps = wic.get('steps', {}) if isinstance(wic, dict) else {}
+    metadata = steps.get(f'({index + 1}, {step_key})') if isinstance(steps, dict) else None
+    return metadata if isinstance(metadata, dict) else None
+
+
+def _bind_inputs(subtree: Yaml, bindings: Yaml) -> None:
+    """Discharge a complete interface without crossing a nested formal scope."""
+    for index, step in enumerate(subtree['steps']):
+        step_key = utils.require_step_id(step)
+        _replace_input_references(step.get('in'), bindings)
+        parentargs = step.get('parentargs')
+        if isinstance(parentargs, dict):
+            _replace_input_references(parentargs.get('in'), bindings)
+        metadata = _step_metadata(subtree, index, step_key)
+        if metadata is not None:
+            _replace_input_references(metadata.get('in'), bindings)
+        if 'subtree' not in step or not isinstance(parentargs, dict):
+            continue
+
+        # The compiler supplies an omitted nested-workflow argument as the
+        # same-named bare reference. Materialize that implicit capture before
+        # removing this scope, or a renamed outer actual cannot reach it.
+        nested_inputs = step['subtree'].get('inputs', {})
+        wic = subtree.get('wic', {})
+        nested_call = _call_arguments(step, wic if isinstance(wic, dict) else {}, index, step_key)
+        effective_inputs = nested_call.get('in', {}) if isinstance(nested_call, dict) else {}
+        if not isinstance(nested_inputs, dict) or not isinstance(effective_inputs, dict):
+            continue
+        implicit = {name: copy.deepcopy(bindings[name])
+                    for name in nested_inputs
+                    if name in bindings and name not in effective_inputs}
+        if implicit:
+            parent_inputs = parentargs.setdefault('in', {})
+            if isinstance(parent_inputs, dict):
+                parent_inputs.update(implicit)
+
+
+def _output_target(subtree: Yaml, workflow_stem: str, output_name: str) -> tuple[int, str] | None:
+    """Resolve one declared workflow output to an immediate child output."""
+    outputs = subtree.get('outputs', {})
+    output = outputs.get(output_name) if isinstance(outputs, dict) else None
+    source = output.get('outputSource') if isinstance(output, dict) else None
+    if not isinstance(source, str) or source.count('/') != 1:
+        return None
+    producer, port = source.split('/')
+    try:
+        stem, index, step_key = utils.parse_step_name_str(producer)
+    except ValueError:
+        return None
+    steps = subtree.get('steps')
+    if stem != workflow_stem or not isinstance(steps, list) or not 0 <= index < len(steps):
+        return None
+    if utils.require_step_id(steps[index]) != step_key or not port:
+        return None
+    return index, port
+
+
+def _anchor_is_compatible(outputs: Any, port: str, anchor: str) -> bool:
+    """Whether one edge definition can occupy an immediate step output."""
+    if not isinstance(outputs, list):
+        return False
+    matches = [value for value in outputs
+               if value == port or (isinstance(value, dict) and list(value) == [port])]
+    if len(matches) > 1:
+        return False
+    if not matches:
+        return True
+    return bool(matches[0] == port or matches[0] == {port: {'wic_anchor': anchor}})
+
+
+def _step_outputs(subtree: Yaml, index: int) -> Any:
+    """Read the output list that will govern one immediate child step."""
+    step = subtree['steps'][index]
+    if 'subtree' not in step:
+        return step.get('out', [])
+    step_key = utils.require_step_id(step)
+    metadata = _step_metadata(subtree, index, step_key)
+    parentargs = step.get('parentargs')
+    if not isinstance(parentargs, dict):
+        return None
+    return metadata.get('out') if metadata is not None and 'out' in metadata else parentargs.get('out', [])
+
+
+@dataclass(frozen=True, slots=True)
+class _OutputMove:
+    """One wrapper edge definition and its proven destination."""
+
+    index: int
+    port: str
+    anchor: str
+
+
+@dataclass(frozen=True, slots=True)
+class _InlinePlan:
+    """Everything needed to remove one workflow-call boundary."""
+
+    bindings: Yaml
+    output_moves: tuple[_OutputMove, ...]
+
+
+def _output_moves(subtree: Yaml, workflow_stem: str, outputs: Any) -> tuple[_OutputMove, ...] | None:
+    """Plan wrapper edge-definition moves without mutating the candidate."""
+    if outputs is None:
+        return ()
+    if not isinstance(outputs, list):
+        return None
+    moves: list[_OutputMove] = []
+    planned: dict[tuple[int, str], str] = {}
+    for output in outputs:
+        if isinstance(output, str):
+            continue
+        if not isinstance(output, dict) or len(output) != 1:
+            return None
+        output_name, definition = next(iter(output.items()))
+        anchor = definition.get('wic_anchor') if isinstance(definition, dict) else None
+        if not isinstance(output_name, str) or not isinstance(anchor, str) or not anchor:
+            return None
+        target = _output_target(subtree, workflow_stem, output_name)
+        if target is None:
+            return None
+        index, port = target
+        if not _anchor_is_compatible(_step_outputs(subtree, index), port, anchor):
+            return None
+        prior = planned.get(target)
+        if prior is not None:
+            if prior != anchor:
+                return None
+            continue
+        planned[target] = anchor
+        moves.append(_OutputMove(index, port, anchor))
+    return tuple(moves)
+
+
+def _add_output_anchor(subtree: Yaml, move: _OutputMove) -> None:
+    """Apply one output move already validated by `_output_moves`."""
+    step = subtree['steps'][move.index]
+    if 'subtree' not in step:
+        outputs = step.setdefault('out', [])
+    else:
+        step_key = utils.require_step_id(step)
+        metadata = _step_metadata(subtree, move.index, step_key)
+        parentargs = step.get('parentargs')
+        assert isinstance(parentargs, dict)
+        destination = metadata if metadata is not None and 'out' in metadata else parentargs
+        outputs = destination.setdefault('out', [])
+    matches = [index for index, value in enumerate(outputs)
+               if value == move.port or (isinstance(value, dict) and list(value) == [move.port])]
+    anchored = {move.port: {'wic_anchor': move.anchor}}
+    if not matches:
+        outputs.append(anchored)
+    elif outputs[matches[0]] == move.port:
+        outputs[matches[0]] = anchored
+
+
+def _inline_plan(subtree: Yaml, workflow_stem: str, call: Yaml | None) -> _InlinePlan | None:
+    """Prove that one complete call boundary can be removed."""
+    declared = subtree.get('inputs', {})
+    if not isinstance(declared, dict) or call is None or set(call) - {'in', 'out'}:
+        return None
+    bindings = call.get('in', {})
+    if not isinstance(bindings, dict) or set(bindings) != set(declared):
+        return None
+    moves = _output_moves(subtree, workflow_stem, call.get('out'))
+    return _InlinePlan(bindings, moves) if moves is not None else None
+
+
+def _inline_body(subtree: Yaml, plan: _InlinePlan) -> Yaml:
+    """Build the body described by a validated inline plan.
+
+    Discovery and execution share `_inline_plan`, so the inliner cannot
+    advertise a boundary that the rewrite later interprets differently.
+    """
+    body = copy.deepcopy(subtree)
+    _bind_inputs(body, plan.bindings)
+    for move in plan.output_moves:
+        _add_output_anchor(body, move)
+    body.pop('inputs', None)
+    return body
 
 
 def get_inlineable_subworkflows(yaml_tree_tuple: YamlTree,
-                                tools: Tools,
                                 implementation: bool = False,
                                 namespaces_init: Namespaces | None = None) -> list[Namespaces]:
     """Traverses a yml AST and finds all subworkflows which can be inlined into their parent workflow.
 
     Args:
         yaml_tree_tuple (YamlTree): A tuple of name and yml AST
-        tools (Tools): The CWL CommandLineTool definitions found using get_tools_cwl()
         implementation (bool): True if the immediate parent workflow is a implementation.
         namespaces_init (Namespaces): The initial subworkflow to start the traversal ([] == root)
 
@@ -56,7 +257,8 @@ def get_inlineable_subworkflows(yaml_tree_tuple: YamlTree,
         # Use yaml_name (instead of back_name) and do not append to namespace_init.
         sub_namespaces_list = []
         for stepid, back in wic['wic']['implementations'].items():
-            sub_namespaces = get_inlineable_subworkflows(YamlTree(stepid, back), tools, True, namespaces_init)
+            sub_namespaces = get_inlineable_subworkflows(
+                YamlTree(stepid, back), implementation=True, namespaces_init=namespaces_init)
             sub_namespaces_list.append(sub_namespaces)
         return utils.flatten(sub_namespaces_list)
 
@@ -64,7 +266,8 @@ def get_inlineable_subworkflows(yaml_tree_tuple: YamlTree,
     steps_keys = utils.get_steps_keys(steps)
     subkeys = utils.get_subkeys(steps_keys)
 
-    # All subworkflows are inlineable, except scattered subworkflows.
+    # A child's own opt-out is independent of whether its call boundary can be
+    # discharged safely; `_inline_plan` proves the latter below.
     inlineable = wic['wic'].get('inlineable', True)
     namespaces = [namespaces_init] if inlineable and namespaces_init != [] and not implementation else []
 
@@ -75,18 +278,10 @@ def get_inlineable_subworkflows(yaml_tree_tuple: YamlTree,
             sub_yml_tree = steps[i]['subtree']
 
             y_t = YamlTree(StepId(step_key, step_id.plugin_ns), sub_yml_tree)
-            sub_namespaces = get_inlineable_subworkflows(y_t, tools, False, namespaces_init + [step_name_i])
-            # The WIC-level inliner does not redistribute an invocation's scatter
-            # onto the child steps.  Offering that invocation would therefore
-            # erase the scatter and change both the workflow and its endpoint
-            # declarations.  Descendants may still be inlineable inside the child.
-            #
-            # Scatter reaches a step from two places, and this runs before they
-            # are merged: `parentargs` is the call site as written under
-            # `steps:`, while `wic: steps:` metadata is merged onto it later, in
-            # compile_workflow_once.  Reading only the first would offer a
-            # subworkflow whose scatter is spelled in the metadata.
-            if _scatter_of(steps[i], wic['wic'], i, step_key):
+            sub_namespaces = get_inlineable_subworkflows(
+                y_t, implementation=False, namespaces_init=namespaces_init + [step_name_i])
+            call = _call_arguments(steps[i], wic['wic'], i, step_key)
+            if _inline_plan(sub_yml_tree, Path(step_key).stem, call) is None:
                 child_namespace = namespaces_init + [step_name_i]
                 sub_namespaces = [namespace for namespace in sub_namespaces
                                   if namespace != child_namespace]
@@ -141,14 +336,16 @@ def inline_subworkflow(yaml_tree_tuple: YamlTree, namespaces: Namespaces) -> tup
 
     (yaml_stem, i, step_key) = utils.parse_step_name_str(namespaces[0])
     sub_yml_tree = steps[i]['subtree']
-    sub_parentargs = steps[i]['parentargs']
+    call = _call_arguments(steps[i], wic['wic'], i, step_key)
+    plan = _inline_plan(sub_yml_tree, Path(step_key).stem, call)
 
     len_substeps = 0
     if len(namespaces) == 1:
+        if plan is None:
+            raise ValueError(f'{step_key} has invocation semantics the source inliner cannot preserve')
         steps_inits = steps[:i]  # Exclude step i
         steps_tails = steps[i+1:]  # Exclude step i
-        # ~ syntax, specifically apply sub_parentargs to all inputs: call sites in sub_yml_tree
-        sub_yml_tree = apply_args(sub_yml_tree, sub_parentargs)
+        sub_yml_tree = _inline_body(sub_yml_tree, plan)
         # Inline sub-steps.
         sub_steps: list[Yaml] = sub_yml_tree['steps']
         yaml_tree['steps'] = steps_inits + sub_steps + steps_tails
@@ -180,58 +377,12 @@ def inline_subworkflow(yaml_tree_tuple: YamlTree, namespaces: Namespaces) -> tup
         # inlineing after merging should not affect CWL args.
         # Re-indexing could be tricky w.r.t. overloading.
         # TODO: maintain inference boundaries (once feature is added)
-        # NOTE: Since parentargs are applied after compiling a subworkflow,
-        # and since inlineing removes the subworkflow, parentargs does not
-        # appear to be inlineing invariant! However, using ~ syntax helps.
-        steps[i] = {'id': step_key, 'subtree': sub_yml_tree, 'parentargs': sub_parentargs}
+        steps[i] = {'id': step_key, 'subtree': sub_yml_tree,
+                    'parentargs': steps[i]['parentargs']}
 
     yaml_tree['wic'] = inline_subworkflow_wic_tag(wic, namespaces, len_substeps)
 
     return YamlTree(step_id, yaml_tree), len_substeps
-
-
-def apply_args(sub_yml_tree: Yaml, sub_parentargs: Yaml) -> Yaml:
-    """Applies (~ syntax) parent workflow arguments to their call sites in a subworkflow. Mutates sub_yml_tree."""
-    # Do we need to deepcopy? We are already deepcopy'ing at the only call site,
-    # so looks like no.
-    inputs_workflow = sub_yml_tree.get('inputs', {})
-    if 'inputs' in sub_yml_tree:
-        del sub_yml_tree['inputs']
-
-    steps = sub_yml_tree['steps']
-    steps_keys = utils.get_steps_keys(steps)
-
-    for argkey in inputs_workflow:
-        # Ordinarily edge inference works across subworkflow boundaries (i.e. is inlineing invariant),
-        # but with ~ syntax in the subworkflow and no explicit arguments in the parent workflow,
-        # we cannot blindly inline the subworkflow and remove the ~'s in the subworkflow.
-        # TODO: Consider adding wic metadata tags to cause inference to skip past the beginning of the subworkflow.
-        if argkey not in sub_parentargs.get('in', {}):
-            print(f'Warning! Inlineing {argkey} with explicit inputs: in the subworkflow' +
-                  'but edge inference in the parent workflow is not supported.')
-
-    for argkey, argval in sub_parentargs.get('in', {}).items():
-        # If we are attempting to apply a parameter given in the parent workflow,
-        # that parameter had better exist in the subworkflow!
-        if argkey not in inputs_workflow:
-            raise ValueError(f'Error while inlineing {argkey}\n{yaml.dump(sub_yml_tree)}\n{yaml.dump(sub_parentargs)}')
-
-        for i, _step_key in enumerate(steps_keys):
-            # NOTE: We should probably be using
-            # sub_keys = utils.get_subkeys(steps_keys, tools)
-            # to check whether or not `step_key in sub_keys` and thus
-            # whether or not to use ['parentargs']
-            in_step = steps[i].get('in', {})  # CommandLineTools should have ['in'] (if any)
-            if not in_step:
-                # Subworkflows should have ['parentargs']['in'] (if any)
-                in_step = steps[i].get('parentargs', {}).get('in', {})
-
-            for inputkey, inputval in in_step.items():
-                if inputval == '~' + argkey:
-                    # overwrite ~ syntax / apply argval
-                    in_step[inputkey] = argval
-
-    return sub_yml_tree
 
 
 def inline_subworkflow_wic_tag(wic_tag: Yaml, namespaces: Namespaces, len_substeps: int) -> Yaml:
@@ -290,165 +441,3 @@ def inline_subworkflow_wic_tag(wic_tag: Yaml, namespaces: Namespaces, len_subste
                                            strategy=Strategy.TYPESAFE_REPLACE)
 
     return tag_wic
-
-
-def move_slash_last(source_new: str) -> str:
-    """Move / to the last ___ position\n
-       (Moving to the last position works because we are inlineing recursively.)
-
-    Args:
-        source_new (str): A string representing a CWL dependency, i.e. containing /
-
-    Returns:
-        str: source_new with / moved to the last ___ position
-    """
-    if '/' in source_new:
-        source_new = source_new.replace('/', '___')
-        source_split = source_new.split('___')
-        source_new = '___'.join(source_split[:-1]) + '/' + source_split[-1]
-        return source_new
-
-    return source_new
-
-
-def inline_subworkflow_cwl(rose_tree: RoseTree) -> RoseTree:
-    """Inlines all compiled CWL subworkflows into the root workflow.
-
-    Args:
-        rose_tree (RoseTree): The data associated with compiled subworkflows
-
-    Returns:
-        RoseTree: The updated root workflow with all compiled CWL subworkflows recursively inlined.
-    """
-    # NOTE: This code is a little bit nasty, and I absolutely do not guarantee that it won't break in the future.
-    if rose_tree.sub_trees == []:
-        return rose_tree
-
-    sub_trees = [inline_subworkflow_cwl(t) for t in rose_tree.sub_trees]
-
-    node_data: NodeData = rose_tree.data
-    cwl_tree = copy.deepcopy(node_data.compiled_cwl)
-
-    steps = cwl_tree['steps']
-    steps_keys = list(steps.keys())
-    # NOTE: Only use the last namespace since we are recursively inlineing.
-    subkeysdict = {t.data.namespaces[-1]: copy.deepcopy(t.data.compiled_cwl)
-                   for t in sub_trees}  # NOT rose_tree.sub_trees
-    steps_new = {}
-
-    count = 0
-    for i, step_key in enumerate(steps_keys):
-        if step_key in list(subkeysdict.keys()):
-            count += 1  # Check that we inline all subworkflows
-            inputs = steps[i]['in']
-            scattervars = steps[i].get('scatter', [])
-
-            sub_cwl_tree = subkeysdict[step_key]
-            sub_steps = sub_cwl_tree['steps']
-            sub_steps_new = {}
-            for substepkey, substepval in sub_steps.items():
-                substep_inputs = substepval['in']
-                substep_inputs_new: Yaml = {}
-                for subinputkey, subinputval in substep_inputs.items():
-                    source = None
-                    # By default, copy the inputs and prepend namespace
-                    if isinstance(subinputval, str):
-                        source = move_slash_last(subinputval)
-                        substep_inputs_new[subinputkey] = step_key + '___' + subinputval
-
-                    elif isinstance(subinputval, dict):
-                        source = subinputval['source']
-                        source_new = move_slash_last(subinputval['source'])
-                        subinputval['source'] = step_key + '___' + source_new
-                        substep_inputs_new[subinputkey] = subinputval
-
-                    if source in inputs:
-                        # Replace the formal parameter in the subworkflow with
-                        # the actual parameter in the parent workflow.
-                        newval = inputs[source]
-
-                        if isinstance(newval, str):
-                            source_new = move_slash_last(newval)
-                            # NOTE: Do not namespace; already namespaced in parent workflow.
-                            newval = source_new  # step_key + '___' + source_new
-
-                        elif isinstance(newval, dict) and 'source' in newval:
-                            source_new = move_slash_last(newval['source'])
-                            # NOTE: Do not namespace; already namespaced in parent workflow.
-                            newval['source'] = source_new  # step_key + '___' + source_new
-
-                        substep_inputs_new[subinputkey] = newval  # Overwrite
-                        # Copy any input variables referenced, i.e.
-                        # initial scatter and/or slice for step 1
-                        m = re.match(r'.*\[inputs\.(.*)\].*', str(newval))
-                        if m:
-                            inputvarname = m.groups()[0]
-                            if inputvarname:
-                                substep_inputs_new[inputvarname] = inputs[inputvarname]
-                                if inputvarname in scattervars:
-                                    if 'scatter' in substepval:
-                                        substepval['scatter'] += [inputvarname]
-                                    else:
-                                        substepval['scatter'] = [inputvarname]
-
-                    # Distribute scatter unconditionally across ALL subworkflow dependencies
-                    # i.e. https://en.wikipedia.org/wiki/Distributive_property
-                    # NOTE: This code assumes the user has manually performed loop-invariant code
-                    # motion (https://en.wikipedia.org/wiki/Loop-invariant_code_motion) on the yml.
-                    # In other words, it assumes that the user has separated / extracted all
-                    # non-scattered steps from all steps that should be scattered, i.e. 1 receptor
-                    # vs N ligands. Otherwise, we need to transitively follow the edges until we can
-                    # determine the cardinality. It may be possible to avoid the transitive search by
-                    # bootstrapping in-order, but for now let's require the user to manually modify their yml.
-                    if scattervars:
-                        if ((isinstance(subinputval, str) and '/' in subinputval) or
-                                (isinstance(subinputval, dict) and '/' in subinputval['source'])):
-                            substepval.setdefault('scatter', [])
-                            if subinputkey not in substepval['scatter']:
-                                substepval['scatter'].append(subinputkey)
-                            substepval['scatterMethod'] = 'dotproduct'
-
-                # Overwrite inputs
-                substepval['in'] = substep_inputs_new
-
-                # Modify run tag
-                runstr = substepval['run']
-                if runstr.startswith('../'):
-                    substepval['run'] = runstr[len('../'):]
-                # TODO: Consider general case of prepending namespace / directory
-
-                # prepend namespace to step names
-                namespaced = step_key + '___' + substepkey
-                sub_steps_new[namespaced] = substepval
-
-            sub_cwl_tree['steps'] = sub_steps_new
-
-            # Insert the steps from the subworkflow
-            steps_new.update(sub_steps_new)
-        else:
-            # Otherwise, just copy the step
-            steps_new[i] = steps[i]
-
-    if count != len(subkeysdict):
-        print('Error! Not all subworkflows inlined!')
-
-    cwl_tree['steps'] = steps_new
-
-    # Finally, for all outputs in the parent workflow
-    outputs = cwl_tree['outputs']
-    outputs_new = {}
-    for outkey, outval in outputs.items():
-        if 'output_all' in outkey:
-            continue  # Skip for now.
-
-        outval['outputSource'] = move_slash_last(outval['outputSource'])
-        outputs_new[outkey] = outval
-
-    cwl_tree['outputs'] = outputs_new
-
-    data = NodeData(node_data.namespaces, node_data.name, node_data.yml, cwl_tree,  # NOTE: Only updating cwl_tree
-                    node_data.tool, node_data.workflow_inputs_file, node_data.explicit_edge_defs,
-                    node_data.explicit_edge_calls, node_data.graph,
-                    node_data.inputs_workflow, node_data.step_name_1)
-
-    return RoseTree(data, [])

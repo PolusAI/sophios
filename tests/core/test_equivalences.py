@@ -53,15 +53,7 @@ def _flatten(rose: RoseTree) -> Yaml:
     """The compiled document with every subworkflow step inlined, so a split
     and an unsplit compilation of the same steps can be compared directly.
 
-    `sophios.inlineing.inline_subworkflow_cwl` already does this job — for a
-    `steps:` represented as a dict keyed by step id. `compile_workflow` emits
-    `steps:` as a *list* (`type(compiled_cwl['steps']) is list`, checked
-    directly against this oracle's own output), so that function's
-    `list(steps.keys())` raises `AttributeError` on exactly the shape this
-    task's compiler produces, and nothing in the tree calls it. That is a
-    finding about `src/sophios/inlineing.py`, not something this task's own
-    files can work around by patching — `src/` is out of scope here — so this
-    is a from-scratch replacement, scoped to what `equivalent()` at
+    This is an independent test oracle, scoped to what `equivalent()` at
     UP_TO_RENAMING actually forgives: it needs the DAG's topology and every
     step's body right, and it does not need `run:` paths, `steps[].id`, or
     workflow-level port *names* right at all, because those are exactly what
@@ -364,6 +356,27 @@ def test_splitting_really_renames() -> None:
         'split produced a byte-identical compilation; UP_TO_RENAMING would be a vacuous claim')
     found = equivalent(before, after, Strength.UP_TO_RENAMING)
     assert found is None, found
+
+
+@pytest.mark.fast
+def test_split_uses_distinct_formal_and_actual_input_names() -> None:
+    """The split/inline oracle must exercise parameter substitution.
+
+    Identity bindings let an inliner delete the child interface without doing
+    any substitution and still pass every partition-independence property.
+    """
+    yml: Yaml = {
+        'inputs': {'actual': {'type': 'string'}},
+        'steps': [{'id': 'mk_file', 'in': {'name': 'actual'}}],
+    }
+    transformed = split(((0,),)).apply(copy.deepcopy(yml))
+    wrapper = transformed['steps'][0]
+    formal_to_actual = wrapper['parentargs']['in']
+
+    assert formal_to_actual
+    assert all(formal != actual for formal, actual in formal_to_actual.items())
+    formal = next(iter(formal_to_actual))
+    assert wrapper['subtree']['steps'][0]['in']['name'] == formal
 
 
 @pytest.mark.fast

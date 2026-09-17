@@ -74,7 +74,8 @@ def _load_and_prepare_yaml_tree(args: argparse.Namespace, yml_paths: dict[str, d
     if args.cwl_inline_subworkflows:
         while True:
             # Inlineing changes the namespaces, so we have to get new namespaces after each inlineing operation.
-            namespaces_list = inlineing.get_inlineable_subworkflows(yaml_tree, tools_cwl, False, [])
+            namespaces_list = inlineing.get_inlineable_subworkflows(
+                yaml_tree, implementation=False, namespaces_init=[])
             if namespaces_list == []:
                 break
 
