@@ -4,8 +4,8 @@ Five claims: lowering is total, a malformed graph cannot be constructed, every
 edge connects ports that exist, passthrough is never read, and the result does
 not depend on iteration order.
 
-Nothing here compiles. Lowering reads the AST and nothing else, so these run
-against generated documents without a tool registry, a filesystem or a config.
+Nothing here compiles -- lowering reads the AST alone, so these need no tool
+registry, filesystem or config.
 """
 import ast as pyast
 from typing import Any
@@ -39,12 +39,8 @@ def _ports_of(graph: WorkflowGraph) -> set[PortId]:
 @given(strat.documents())
 @COVERAGE
 def test_every_parseable_document_lowers_or_diagnoses(document: Document) -> None:
-    """Lowering is total, in the sense `parse` is.
-
-    A caller always receives a result. Anything lowering cannot represent comes
-    back as a diagnostic, never as an exception, so a document that defeats it
-    is a report rather than a traceback.
-    """
+    """Lowering is total, in the sense `parse` is: what it cannot represent
+    comes back as a diagnostic, never as an exception."""
     result = lower(document)
     assert result.graph is not None or len(result.diagnostics) > 0
     if result.graph is None:
@@ -57,10 +53,8 @@ def test_every_parseable_document_lowers_or_diagnoses(document: Document) -> Non
 def test_every_edge_connects_ports_that_exist(document: Document) -> None:
     """An edge names ports the graph declares, at both ends.
 
-    An edge to a port no step declares survives to emission as a dangling
-    `source:`, which CWL accepts and a runner then fails on. The graph refuses
-    to be built that way, so this quantifies over the refusal holding for
-    everything the generator draws.
+    Unchecked, such an edge reaches emission as a dangling `source:`, which CWL
+    accepts and a runner then fails on.
     """
     result = lower(document)
     if result.graph is None:
@@ -76,9 +70,8 @@ def test_every_edge_connects_ports_that_exist(document: Document) -> None:
 def test_lowering_is_deterministic(document: Document) -> None:
     """The same document lowers to the same graph, twice.
 
-    Stated as equality of two lowerings rather than as agreement across
-    interpreters: what could vary is iteration over a set or a dict, and that
-    varies within one process as readily as across two.
+    Two lowerings rather than two interpreters: what could vary is set or dict
+    iteration, which varies within one process as readily as across two.
     """
     first, second = lower(document), lower(document)
     assert (first.graph is None) == (second.graph is None)
@@ -112,11 +105,8 @@ def test_lowering_is_deterministic(document: Document) -> None:
         id='a graph with the same step name twice'),
 ])
 def test_a_malformed_graph_cannot_be_constructed(build: Any) -> None:
-    """The invariants live in `__post_init__`, so nothing can skip them.
-
-    A checker a caller must remember to run is a checker that is eventually not
-    run. Construction is the one moment every caller passes through.
-    """
+    """The invariants live in `__post_init__`, so nothing can skip them:
+    construction is the one moment every caller passes through."""
     ns = Namespace(('wf',))
     producer = Port(PortId(ns, 'mk', 'file'), PortType('File'))
     consumer = Port(PortId(ns, 'use', 'f'), PortType('File'))
@@ -126,12 +116,8 @@ def test_a_malformed_graph_cannot_be_constructed(build: Any) -> None:
 
 @pytest.mark.fast
 def test_a_repeated_step_name_is_reported_at_the_step() -> None:
-    """Two steps of one name is a diagnostic, not a refused construction.
-
-    `WorkflowGraph` would refuse it, but by then the only thing to point at is
-    the graph. Locating it during lowering means the report carries the second
-    step's position.
-    """
+    """Two steps of one name is a diagnostic, not a refused construction, so
+    the report carries the second step's position rather than the graph's."""
     from sophios.lang.parser import parse  # pylint: disable=import-outside-toplevel
 
     document = parse('steps:\n- id: s\n  in: {}\n- id: s\n  in: {}\n', 'repeat.wic').document
@@ -142,12 +128,8 @@ def test_a_repeated_step_name_is_reported_at_the_step() -> None:
 
 @pytest.mark.fast
 def test_a_reference_to_an_undefined_edge_becomes_an_obligation() -> None:
-    """What a subworkflow owes its includer has a name and a type.
-
-    The compiler carries this as an intermediate input created on the way down
-    and satisfied as the recursion unwinds. Naming it is what lets `Link` say
-    whether every one was discharged.
-    """
+    """What a subworkflow owes its includer has a name and a type, which is
+    what lets `Link` say whether every one was discharged."""
     from sophios.lang.parser import parse  # pylint: disable=import-outside-toplevel
 
     document = parse('steps:\n- id: s\n  in:\n    f: !* from_parent\n', 'owes.wic').document
@@ -178,10 +160,8 @@ def test_a_reference_to_a_defined_edge_becomes_an_edge() -> None:
 def test_nothing_in_the_ir_reads_an_opaque_payload() -> None:
     """`OpaqueCwl` is carried, never inspected.
 
-    The leak boundary is meant to be a type the compiler cannot reason past, so
-    this is checked statically over the package rather than by example: an
-    attribute access or a subscript on a passthrough value would be invisible
-    to any test that only lowers documents.
+    Static rather than by example: an attribute access or subscript on a
+    passthrough value is invisible to any test that only lowers documents.
     """
     carriers = {'passthrough', 'interpreted', 'declared'}
     offenders: list[str] = []

@@ -89,17 +89,9 @@ def test_the_scan_can_actually_fail() -> None:
 def _argparse_aliases(tree: ast.AST) -> set[str]:
     """Every spelling that means `argparse.Namespace` in this module.
 
-    Resolved from the imports rather than assumed, because the name alone does
-    not identify the type: sophios has `Namespaces` for workflow namespaces and
-    `sophios.ir.Namespace` for a step's place in the nesting, and neither is a
-    CLI type. Matching a bare name would flag those and would still miss an
-    `as` alias.
-
-    Args:
-        tree (ast.AST): The parsed module.
-
-    Returns:
-        set[str]: Annotation spellings that denote an `argparse.Namespace`.
+    Resolved from the imports, because the name alone does not identify the
+    type: sophios has `Namespaces` and `sophios.ir.Namespace`, and neither is a
+    CLI type. A bare-name match flags both and still misses an `as` alias.
     """
     aliases: set[str] = set()
     for node in ast.walk(tree):
@@ -116,14 +108,7 @@ def _argparse_aliases(tree: ast.AST) -> set[str]:
 
 
 def _namespace_parameters(tree: ast.AST) -> list[tuple[int, str]]:
-    """Functions that accept an `argparse.Namespace`, by line and name.
-
-    Args:
-        tree (ast.AST): The parsed module.
-
-    Returns:
-        list[tuple[int, str]]: Line and name of each offending function.
-    """
+    """Functions that accept an `argparse.Namespace`, by line and name."""
     aliases = _argparse_aliases(tree)
     if not aliases:
         return []

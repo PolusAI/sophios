@@ -1,12 +1,11 @@
 """Build a `WorkflowGraph` from a parsed document.
 
 Total in the sense `parse` is: every document either lowers or produces
-diagnostics, and nothing here raises. A caller receives a result carrying
-whatever was built plus whatever went wrong.
+diagnostics, and nothing here raises.
 
-Lowering reads the AST and nothing else — no registry, no filesystem, no
-config. Resolving a step's tool against the environment is `Resolve`'s job, so
-a port's type is what the document declared and inference has not run.
+READS THE AST AND NOTHING ELSE -- no registry, no filesystem, no config.
+Resolving a step's tool against the environment is `Resolve`'s job, so a port's
+type is what the document declared and inference has not run.
 """
 from dataclasses import dataclass
 from typing import Final
@@ -24,9 +23,8 @@ from .types import (
     WorkflowGraph,
 )
 
-#: A port whose type the document does not declare. Lowering does not invent
-#: one: `Resolve` reads the tool, and a type guessed here would be indistinguish-
-#: able from a declared one by the time anything checked it.
+#: A port whose type the document does not declare. Not invented here: a guess
+#: would be indistinguishable from a declaration by the time anything read it.
 UNDECLARED: Final = PortType(declared=None)
 
 
@@ -44,15 +42,7 @@ class Lowered:
 
 
 def _input_ports(namespace: Namespace, step: Step) -> tuple[Port, ...]:
-    """Every input the step binds, as a port.
-
-    Args:
-        namespace (Namespace): Where the step sits.
-        step (Step): The parsed step.
-
-    Returns:
-        tuple[Port, ...]: One port per bound input, in written order.
-    """
+    """One port per bound input, in written order."""
     return tuple(
         Port(PortId(namespace, step.id, name), UNDECLARED, span=step.span)
         for name, _ in step.inputs
@@ -60,15 +50,7 @@ def _input_ports(namespace: Namespace, step: Step) -> tuple[Port, ...]:
 
 
 def _output_ports(namespace: Namespace, step: Step) -> tuple[Port, ...]:
-    """Every output the step declares, as a port.
-
-    Args:
-        namespace (Namespace): Where the step sits.
-        step (Step): The parsed step.
-
-    Returns:
-        tuple[Port, ...]: One port per `out:` entry, in written order.
-    """
+    """One port per `out:` entry, in written order."""
     return tuple(
         Port(PortId(namespace, step.id, binding.name), UNDECLARED, span=binding.span)
         for binding in step.outputs
@@ -78,15 +60,8 @@ def _output_ports(namespace: Namespace, step: Step) -> tuple[Port, ...]:
 def _edge_definitions(namespace: Namespace, steps: tuple[Step, ...]) -> dict[str, PortId]:
     """Which port each explicit edge name is defined by.
 
-    A name defined twice keeps the first; the compiler reports the repeat as
-    `wic026` before lowering is reached, so this does not report it again.
-
-    Args:
-        namespace (Namespace): Where these steps sit.
-        steps (tuple[Step, ...]): The document's steps.
-
-    Returns:
-        dict[str, PortId]: Edge name to the port that produces it.
+    A name defined twice keeps the first: the compiler already reports the
+    repeat as `wic026` before lowering is reached.
     """
     defined: dict[str, PortId] = {}
     for step in steps:
@@ -152,14 +127,8 @@ def lower(document: Document, namespace: Namespace | None = None) -> Lowered:
 def _report_repeated_steps(document: Document, diagnostics: Diagnostics) -> None:
     """Report a step name used twice, at the second step rather than the graph.
 
-    `WorkflowGraph` refuses a repeated name at construction, but by then the
-    only thing to point at is the whole graph. Locating it here means the
-    diagnostic carries the position of the step that repeats, and lowering
-    never reaches a construction it cannot complete.
-
-    Args:
-        document (Document): The document being lowered.
-        diagnostics (Diagnostics): Where to record what was found.
+    `WorkflowGraph` refuses a repeat at construction, but by then the only thing
+    to point at is the whole graph.
     """
     seen: set[str] = set()
     for step in document.steps:
@@ -173,16 +142,7 @@ def _report_repeated_steps(document: Document, diagnostics: Diagnostics) -> None
 
 def _bind(value: InputValue, port: Port, defined: dict[str, PortId],
           edges: list[Edge], obligations: list[DeferredObligation]) -> None:
-    """Record what satisfies one bound input.
-
-    Args:
-        value (InputValue): What the document bound to it.
-        port (Port): The input port being bound.
-        defined (dict[str, PortId]): Edge names this document defines.
-        edges (list[Edge]): Accumulator for edges within this document.
-        obligations (list[DeferredObligation]): Accumulator for references an
-            enclosing graph must satisfy.
-    """
+    """Record what satisfies one bound input."""
     if not isinstance(value, EdgeRef):
         return
     source = defined.get(value.name)

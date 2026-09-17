@@ -1,14 +1,11 @@
 """The types a compiled workflow is made of.
 
-Each names something the compiler already manipulates and currently spells as a
-string or threads through a call stack: a namespace, a port's identity, a
-step's place in a graph, an edge, and a reference whose producer is not in this
-document. Giving them types is what lets the checker verify what the compiler
-means rather than only what it computes.
+Each names something the compiler already manipulates and spells as a string or
+threads through a call stack, so the checker can verify what it means rather
+than only what it computes.
 
-Frozen and slotted throughout, matching `sophios.lang.nodes`. Construction
-validates: an invariant enforced in `__post_init__` cannot be skipped by a
-caller who forgot to run a checker.
+Frozen and slotted, as `sophios.lang.nodes` is. Invariants live in
+`__post_init__`, so no caller can skip them.
 """
 from dataclasses import dataclass, field
 from typing import Final, TypeAlias
@@ -24,22 +21,15 @@ NAMESPACE_SEPARATOR: Final = '___'
 
 @dataclass(frozen=True, slots=True)
 class Namespace:
-    """Where a step sits in the nesting of subworkflows.
-
-    A path, outermost first. The compiler spells this as a joined string and
-    splits it back apart when it needs the parts; holding the parts means the
-    splitting has one home and a namespace that cannot round-trip cannot be
-    built.
-    """
+    """Where a step sits in the nesting of subworkflows: a path, outermost
+    first. The compiler spells it joined and splits it back; holding the parts
+    gives the splitting one home and makes a namespace that cannot round-trip
+    unbuildable."""
 
     parts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        """Reject a part that would not survive being joined and split.
-
-        Raises:
-            ValueError: If a part is empty or contains the separator.
-        """
+        """Reject a part that would not survive being joined and split."""
         for part in self.parts:
             if not part:
                 raise ValueError('a namespace part cannot be empty')
@@ -71,9 +61,8 @@ class Namespace:
 class PortId:
     """A port's identity: which step, and which port on it.
 
-    A distinct type from a step's identity on purpose. The compiler holds both
-    as `str`, so nothing stops one being passed where the other is meant; the
-    checker can stop it once they are different types.
+    Distinct from a step's identity on purpose -- the compiler holds both as
+    `str`, so nothing stops one being passed where the other is meant.
     """
 
     namespace: Namespace
@@ -81,11 +70,7 @@ class PortId:
     port: str
 
     def __post_init__(self) -> None:
-        """Reject an identity that names nothing.
-
-        Raises:
-            ValueError: If the step or port name is empty.
-        """
+        """Reject an identity that names nothing."""
         if not self.step:
             raise ValueError('a port must belong to a named step')
         if not self.port:
@@ -96,12 +81,10 @@ class PortId:
 class PortType:
     """What a port carries, in the algebra the compiler reasons within.
 
-    The declared CWL type is kept verbatim in `declared`, because passthrough
-    is open and the compiler must emit what it was given. The fields beside it
-    are the part Sophios interprets: whether the value may be absent, how many
-    array levels wrap it, and which alternatives a union admits. A type the
-    compiler does not interpret has `declared` and nothing else — the leak
-    boundary, expressed as a type rather than as a convention.
+    `declared` keeps the CWL verbatim, because passthrough is open and whatever
+    was given must be emitted. The fields beside it are the part Sophios
+    interprets. A type it does not interpret has `declared` and nothing else --
+    the leak boundary as a type rather than a convention.
     """
 
     declared: OpaqueCwl
@@ -110,11 +93,7 @@ class PortType:
     union: tuple['PortType', ...] = ()
 
     def __post_init__(self) -> None:
-        """Reject a depth that cannot describe a real type.
-
-        Raises:
-            ValueError: If `array_depth` is negative.
-        """
+        """Reject a depth that cannot describe a real type."""
         if self.array_depth < 0:
             raise ValueError('array_depth counts wrappers and cannot be negative')
 
@@ -132,9 +111,8 @@ class Port:
 class StepNode:
     """A step, with the tool it runs and the ports it exposes.
 
-    `interpreted` holds the CWL keys Sophios acts upon and `passthrough`
-    everything else, matching the split the AST already makes — the boundary is
-    the same one, carried forward rather than redrawn.
+    `interpreted` holds the CWL keys Sophios acts upon and `passthrough` the
+    rest -- the split the AST already makes, carried forward, not redrawn.
     """
 
     namespace: Namespace
@@ -148,12 +126,9 @@ class StepNode:
     def __post_init__(self) -> None:
         """Reject a step whose ports do not belong to it.
 
-        A port carrying another step's identity would produce an edge into a
-        node that does not exist, which is the failure `Edge`'s own check
-        cannot see because by then the port is only an identity.
-
-        Raises:
-            ValueError: If the step is unnamed, or a port names another step.
+        `Edge` cannot see this: by the time it holds a port, the port is only
+        an identity, so a port carrying another step's name would build an edge
+        into a node that does not exist.
         """
         if not self.name:
             raise ValueError('a step must be named')
@@ -168,9 +143,8 @@ class StepNode:
 class Edge:
     """A value flowing from one port to another.
 
-    An edge is between *ports*, not between steps: two edges into the same step
-    are different bindings, and collapsing them to a step pair would lose which
-    input each satisfies.
+    Between *ports*, not steps: two edges into one step are different bindings,
+    and a step pair would lose which input each satisfies.
     """
 
     source: PortId
@@ -178,11 +152,7 @@ class Edge:
     span: SourceSpan | None = None
 
     def __post_init__(self) -> None:
-        """Reject an edge from a port to itself.
-
-        Raises:
-            ValueError: If source and sink are the same port.
-        """
+        """Reject an edge from a port to itself."""
         if self.source == self.sink:
             raise ValueError(f'an edge cannot join a port to itself: {self.source}')
 
@@ -191,11 +161,10 @@ class Edge:
 class DeferredObligation:
     """An input whose producer is not in this document.
 
-    A subworkflow may bind an input to something a parent supplies. The
-    compiler carries that as an intermediate input created on the way down and
-    satisfied as the recursion unwinds; naming it means the state has a type
-    rather than a convention, and `Link` can say whether every one was
-    discharged.
+    A subworkflow may bind an input to something a parent supplies. The compiler
+    carries that as an intermediate input made on the way down and satisfied as
+    the recursion unwinds (docs/dev/algorithms.md); naming it lets `Link` say
+    whether every one was discharged.
     """
 
     sink: PortId
@@ -204,11 +173,7 @@ class DeferredObligation:
     span: SourceSpan | None = None
 
     def __post_init__(self) -> None:
-        """Reject an obligation with nothing to satisfy.
-
-        Raises:
-            ValueError: If the awaited name is empty.
-        """
+        """Reject an obligation with nothing to satisfy."""
         if not self.name:
             raise ValueError('a deferred obligation must name what it awaits')
 
@@ -225,9 +190,8 @@ OutputMapping: TypeAlias = dict[str, PortId]
 class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     """A whole workflow: its steps, the edges between them, and what it owes.
 
-    The four mappings are fields rather than arguments. Threaded through a call
-    stack they were state every function had to be handed and could quietly
-    disagree about; here they belong to the graph they describe.
+    The four mappings are fields, not arguments. Threaded through a call stack
+    they are state every function must be handed and can quietly disagree about.
     """
 
     namespace: Namespace
@@ -243,13 +207,9 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     def __post_init__(self) -> None:
         """Reject a graph whose edges do not connect ports that exist.
 
-        This is the invariant that makes a malformed graph unbuildable rather
-        than merely detectable: an edge naming a port no step declares would
-        otherwise survive to emission and become a dangling `source:`.
-
-        Raises:
-            ValueError: If a step name repeats, or an edge names a port that
-                no step in this graph declares.
+        What makes a malformed graph unbuildable rather than merely detectable:
+        an edge naming a port no step declares would otherwise reach emission
+        as a dangling `source:`, which CWL accepts and a runner then fails on.
         """
         names = [step.name for step in self.steps]
         if len(names) != len(set(names)):
