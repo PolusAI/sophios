@@ -48,10 +48,9 @@ def test_every_construct_appears_within_a_bounded_sample() -> None:
     claim about the sample, not any example, while never asking a single
     execution to be internally diverse.
 
-    CANNOT GENERATE (declared, per the negative-testing rules): `!cwl`
-    (RawCwlRef) — specified but not compilable until the front end is wired in, so a compilable
-    generator must exclude it; `python_script` steps — named with a uuid4, so
-    nothing over them is deterministic; multi-document YAML streams; merge keys.
+    CANNOT GENERATE (declared, per the negative-testing rules):
+    `python_script` steps, whose module definition belongs to the registry;
+    multi-document YAML streams; merge keys.
     """
     seen: Counter[str] = Counter()
 

@@ -101,6 +101,10 @@ class NodeData(NamedTuple):
     graph: GraphReps
     inputs_workflow: WorkflowInputs
     step_name_1: str
+    # Typed-IR migration: the immutable semantic graph from which compiled_cwl
+    # was emitted.  Optional only for leaf CommandLineTool artifacts, which do
+    # not represent workflows.
+    emission_graph: Any = None
 
 
 class EnvData(NamedTuple):

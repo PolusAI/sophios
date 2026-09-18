@@ -1,4 +1,5 @@
 import json
+# pylint: disable=redefined-outer-name
 import subprocess as sub
 from pathlib import Path
 import signal
@@ -25,7 +26,11 @@ from sophios.post_compile import verify_container_engine_config
 from sophios.wic_types import NodeData, StepId, Yaml, YamlTree, Json
 from sophios.utils_graphs import get_graph_reps
 
-from .test_setup import tools_cwl, yml_paths, validator, yml_paths_tuples
+from .test_setup import CorpusRegistry, corpus_registry, workflow_paths  # pylint: disable=unused-import
+
+yml_paths = workflow_paths()
+yml_paths_tuples = [(name, path) for paths in yml_paths.values()
+                    for name, path in paths.items()]
 
 # Look in each directory of search_paths_wic tag in global_config.json
 # for separate config_ci.json files and combine them.
@@ -112,75 +117,88 @@ def is_isomorphic_with_timeout(g_m: isomorphism.GraphMatcher, yml_path_str: str)
 
 @pytest.mark.slow
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_blacklist_on_push)
-def test_run_workflows_on_push(yml_path_str: str, yml_path: Path, cwl_runner: str) -> None:
+def test_run_workflows_on_push(yml_path_str: str, yml_path: Path, cwl_runner: str,
+                               corpus_registry: CorpusRegistry) -> None:
     """Runs all of the workflows auto-discovered from the various
        directories in 'search_paths_wic', excluding all workflows which have been
        blacklisted in the various config_ci.json files and excluding the weekly
        workflows."""
     args = get_args(str(yml_path))
-    run_workflows(yml_path_str, yml_path, cwl_runner, args)
+    run_workflows(yml_path_str, yml_path, cwl_runner, args, corpus_registry)
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_blacklist_on_push)
-def test_run_inlined_workflows_on_push(yml_path_str: str, yml_path: Path, cwl_runner: str) -> None:
+def test_run_inlined_workflows_on_push(yml_path_str: str, yml_path: Path, cwl_runner: str,
+                                       corpus_registry: CorpusRegistry) -> None:
     """Inlines and runs all of the workflows auto-discovered from the various
        directories in 'search_paths_wic', excluding all workflows which have been
        blacklisted in the various config_ci.json files and excluding the weekly
        workflows."""
     args = get_args(str(yml_path), ['--cwl_inline_subworkflows'])
-    run_workflows(yml_path_str, yml_path, cwl_runner, args)
+    run_workflows(yml_path_str, yml_path, cwl_runner, args, corpus_registry)
 
 
 # partial failure tests
 @pytest.mark.skip_pypi_ci
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_partial_failure)
-def test_run_partial_failures_pass(yml_path_str: str, yml_path: Path, cwl_runner: str) -> None:
+def test_run_partial_failures_pass(yml_path_str: str, yml_path: Path, cwl_runner: str,
+                                   corpus_registry: CorpusRegistry) -> None:
     """Run workflows allowing partial failures. yml files of workflows which are known to have failure steps"""
     args = get_args(str(yml_path), ['--partial_failure_enable'])
-    run_workflows(yml_path_str, yml_path, cwl_runner, args)
+    run_workflows(yml_path_str, yml_path, cwl_runner, args, corpus_registry)
 
 
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_partial_failure)
-def test_run_partial_failures_fail_without_flag(yml_path_str: str, yml_path: Path, cwl_runner: str) -> None:
+def test_run_partial_failures_fail_without_flag(yml_path_str: str, yml_path: Path, cwl_runner: str,
+                                                corpus_registry: CorpusRegistry) -> None:
     """Run workflows with known failures but without partial failure cli flag. It is expected to fail"""
     args = get_args(str(yml_path), [])
-    run_workflows(yml_path_str, yml_path, cwl_runner, args, expect_success=False)
+    run_workflows(yml_path_str, yml_path, cwl_runner, args, corpus_registry,
+                  expect_success=False)
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_weekly)
-def test_run_workflows_weekly(yml_path_str: str, yml_path: Path, cwl_runner: str) -> None:
+def test_run_workflows_weekly(yml_path_str: str, yml_path: Path, cwl_runner: str,
+                              corpus_registry: CorpusRegistry) -> None:
     """Runs all of the run_weekly workflows whitelisted in the various config_ci.json files."""
     args = get_args(str(yml_path))
-    run_workflows(yml_path_str, yml_path, cwl_runner, args)
+    run_workflows(yml_path_str, yml_path, cwl_runner, args, corpus_registry)
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_weekly)
-def test_run_inlined_workflows_weekly(yml_path_str: str, yml_path: Path, cwl_runner: str) -> None:
+def test_run_inlined_workflows_weekly(yml_path_str: str, yml_path: Path, cwl_runner: str,
+                                      corpus_registry: CorpusRegistry) -> None:
     """Inlines and runs all of the run_weekly workflows whitelisted in the various config_ci.json files."""
     args = get_args(str(yml_path), ['--cwl_inline_subworkflows'])
-    run_workflows(yml_path_str, yml_path, cwl_runner, args)
+    run_workflows(yml_path_str, yml_path, cwl_runner, args, corpus_registry)
 
 
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_blacklist_on_push)
-def test_cwl_docker_extract(yml_path_str: str, yml_path: Path) -> None:
+def test_cwl_docker_extract(yml_path_str: str, yml_path: Path,
+                            corpus_registry: CorpusRegistry) -> None:
     """ Uses cwl-docker-extract to recursively `docker pull`"""
     args = get_args(str(yml_path))
-    run_workflows(yml_path_str, yml_path, 'cwltool', args, docker_pull_only=True)
+    run_workflows(yml_path_str, yml_path, 'cwltool', args, corpus_registry,
+                  docker_pull_only=True)
 
 
+# pylint: disable-next=too-many-arguments,too-many-locals
 def run_workflows(
     yml_path_str: str,
     yml_path: Path,
     cwl_runner: str,
     args: argparse.Namespace,
+    registry: CorpusRegistry,
     *,
     docker_pull_only: bool = False,
     expect_success: bool = True,
 ) -> None:
     """Runs all of the given workflows."""
+    tools_cwl = registry.tools
+    validator = registry.validator
 
     # First compile the workflow.
     # Load the high-level yaml workflow file.
@@ -258,13 +276,16 @@ def run_workflows(
 @pytest.mark.fast
 @pytest.mark.serial
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_large)
-def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path) -> None:
+def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
+                                    corpus_registry: CorpusRegistry) -> None:
     """Tests that compiling a subworkflow is independent of how it is embedded
     into a parent workflow. Specifically, this compiles the root workflow and
     re-compiles every subworkflow (individually) as if it were a root workflow,
     then checks that the CWL for each subworkflow remains identical and checks
     that the embedded subworkflow DAGs and the re-compiled DAGs are isomorphic.
     """
+    tools_cwl = corpus_registry.tools
+    validator = corpus_registry.validator
     args = get_args(str(yml_path))
 
     # Load the high-level yaml workflow file.
@@ -365,11 +386,14 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path) -> None:
 
 @pytest.mark.serial
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_large)
-def test_inline_subworkflows(yml_path_str: str, yml_path: Path) -> None:
+def test_inline_subworkflows(yml_path_str: str, yml_path: Path,
+                             corpus_registry: CorpusRegistry) -> None:
     """Tests that compiling a workflow is independent of how subworkflows are inlined.
     Specifically, this inlines every subworkflow (individually) and checks that
     the original DAG and the inlined DAGs are isomorphic.
     """
+    tools_cwl = corpus_registry.tools
+    validator = corpus_registry.validator
     args = get_args(str(yml_path))
     # Load the high-level yaml workflow file.
     with open(yml_path, mode='r', encoding='utf-8') as y:

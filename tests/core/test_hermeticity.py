@@ -379,9 +379,11 @@ def test_the_oracle_suite_passes_with_plugin_discovery_disabled() -> None:
 @pytest.mark.slow
 @pytest.mark.serial
 def test_the_poison_fires_on_a_suite_that_needs_discovery() -> None:
-    """The companion. `test_fuzzy_compile` samples an environment-dependent
-    schema by design, so it must fail under the poison. If it passes, the
-    poison is not installed and the run above proved nothing.
+    """The companion probe deliberately calls plugin discovery.
+
+    Corpus fixtures no longer discover plugins during collection, so a
+    purpose-built, non-default-collected probe is the stable way to prove the
+    poison is installed. If it passes, the run above proved nothing.
 
     Asserts `POISON_MESSAGE` appears in the output, not merely that the
     subprocess exits nonzero: pytest exits nonzero for reasons unrelated to
@@ -389,7 +391,7 @@ def test_the_poison_fires_on_a_suite_that_needs_discovery() -> None:
     check is satisfied by any of them just as well as by the poison firing —
     which is exactly how this test passed for the wrong reason before.
     """
-    result = _run_poisoned(('tests/core/test_fuzzy_compile.py',))
+    result = _run_poisoned(('tests/core/discovery_probe.py',))
     output = result.stdout + result.stderr
     assert result.returncode != 0, output
     assert POISON_MESSAGE in output, output
