@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import overload
 
-from .error_codes import SophiosErrorCode
+from . import error_codes as _error_codes
 from .spans import SourceSpan
 
 
@@ -37,7 +37,7 @@ class Diagnostic:
     """
 
     severity: Severity
-    code: SophiosErrorCode
+    code: _error_codes.SophiosErrorCode
     message: str
     span: SourceSpan | None = None
 
@@ -58,7 +58,8 @@ class Diagnostics(Sequence[Diagnostic]):
     def __init__(self, items: Iterable[Diagnostic] = ()) -> None:
         self._items: list[Diagnostic] = list(items)
 
-    def error(self, code: SophiosErrorCode, message: str, span: SourceSpan | None = None) -> None:
+    def error(self, code: _error_codes.SophiosErrorCode,
+              message: str, span: SourceSpan | None = None) -> None:
         """Record an error.
 
         `span` is optional because a phase after parsing can be handed a node
@@ -125,7 +126,7 @@ class SophiosError(Exception):
         self.diagnostics: Diagnostics = items
 
     @classmethod
-    def error(cls, code: SophiosErrorCode, *messages: str) -> 'SophiosError':
+    def error(cls, code: _error_codes.SophiosErrorCode, *messages: str) -> 'SophiosError':
         """Build from one error, spelled as one or more message lines.
 
         Multiple lines become multiple diagnostics under the same code, so the

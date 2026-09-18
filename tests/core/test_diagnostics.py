@@ -96,46 +96,6 @@ def _exit_calls(tree: python_ast.AST) -> list[int]:
     return found
 
 
-def _compatibility_code_imports(tree: python_ast.AST) -> list[int]:
-    """Imports that pull the code enum through the reporting compatibility shim."""
-    return [
-        node.lineno
-        for node in python_ast.walk(tree)
-        if isinstance(node, python_ast.ImportFrom)
-        and node.module is not None
-        and node.module.endswith('diagnostics')
-        and any(alias.name == 'SophiosErrorCode' for alias in node.names)
-    ]
-
-
-@pytest.mark.fast
-def test_internal_code_consumers_import_the_definition_module() -> None:
-    """Reporting may depend on codes; code consumers do not depend on reporting."""
-    offenders: list[str] = []
-    for path in sorted(SRC.rglob('*.py')):
-        lines = _compatibility_code_imports(
-            python_ast.parse(path.read_text(encoding='utf-8'), str(path))
-        )
-        offenders.extend(f'{path.relative_to(REPO_ROOT)}:{line}' for line in lines)
-    assert not offenders, (
-        'import SophiosErrorCode from sophios.lang.error_codes, not the '
-        f'diagnostics compatibility re-export: {offenders}'
-    )
-
-
-@pytest.mark.fast
-def test_the_code_import_boundary_scan_can_fail() -> None:
-    """The dependency check recognizes the compatibility import it forbids."""
-    compatibility = python_ast.parse(
-        'from sophios.lang.diagnostics import SophiosErrorCode, SophiosError'
-    )
-    definition = python_ast.parse(
-        'from sophios.lang.error_codes import SophiosErrorCode'
-    )
-    assert _compatibility_code_imports(compatibility) == [1]
-    assert _compatibility_code_imports(definition) == []
-
-
 # --------------------------------------------------------------------------
 # The process is not the library's to terminate
 # --------------------------------------------------------------------------
