@@ -1014,6 +1014,12 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
                             utils_graphs.add_graph_edge(
                                 graph_settings, graph_init, nss_def, nss_call, label, color='blue')
+                case {'wic_raw_cwl': expression}:
+                    # A local, explicit escape hatch.  Unlike a bare string it
+                    # does not ask Sophios to resolve or validate the CWL
+                    # reference, and unlike --allow_raw_cwl it does not weaken
+                    # every other binding in the compilation.
+                    setup.steps[i]['in'][arg_key] = expression
                 case {'wic_inline_input': _}:
                     arg_val = arg_val[Key.INLINE_INPUT]
 

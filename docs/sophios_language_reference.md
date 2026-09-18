@@ -29,20 +29,16 @@ they are; they are not evidence that the language is called wic.
 
 ## Implementation status
 
-This document specifies the language. Two parts of it are **specified but not
-yet wired into the compiler**, and are marked where they appear:
+This document specifies the language. One part is **not yet fully wired into
+the compiler**, and is marked where it appears:
 
 | Construct | Specified | Accepted by `sophios.lang` | Usable in a compiled workflow |
 |---|---|---|---|
-| `!cwl` raw CWL reference (§4.1) | Yes | Yes | **Not yet** — Spec 3 migration |
+| `!cwl` raw CWL reference (§4.1) | Yes | Yes | Yes |
 | Undefined edge detection (`wic025`, §4.1.2) | Yes | Yes | **Partial** — root document only; nested references await Spec 3 Link |
 
 Everything else describes what Sophios does today. The remaining limitation on
-`wic025` is described in §4.1.2. Writing `!cwl` in a `.wic` file will not work
-until the compiler runs on the `sophios.lang` parser (the Spec 3 migration),
-because the loader it uses today does not know the tag. It is documented now
-because the specification is what the implementation is being built against,
-not a record written afterwards.
+`wic025` is described in §4.1.2.
 
 ---
 
@@ -218,7 +214,7 @@ A step input is exactly one of these. There is no fifth form.
 |---|---|---|
 | Inline literal | `f: !ii empty.txt` | A literal value. Never an edge. |
 | Edge reference | `f: !* name` | Consumes an edge defined elsewhere |
-| Raw CWL reference | `f: !cwl step/out` | Opaque to Sophios; passed through unresolved. **Not yet usable — awaits the Spec 3 compiler migration** |
+| Raw CWL reference | `f: !cwl step/out` | Opaque to Sophios; passed through unresolved. |
 | Unresolved name | `f: some_input` | Must resolve to a workflow input |
 
 An untagged bare string is an **unresolved name**. If it does not name a

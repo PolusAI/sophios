@@ -19,7 +19,7 @@ import sophios.cli
 import sophios.compiler
 from sophios.wic_types import CompilerInfo, GraphData, GraphReps, StepId, Yaml, YamlTree
 
-from .test_setup import tools_cwl
+from .test_setup import load_test_registry
 
 #: Shared Hypothesis budgets. Compiled properties are an order of magnitude
 #: slower than parse-only ones, so they get their own, smaller, count.
@@ -44,11 +44,12 @@ def compile_info(yml: Yaml, name: str = 'harness', *,
     if allow_raw_cwl is not None:
         compiler_options['allow_raw_cwl'] = allow_raw_cwl
     graph = GraphReps(graphviz.Digraph(name=f'cluster_{name}'), nx.DiGraph(), GraphData(name))
+    tools = load_test_registry().tools
     return sophios.compiler.compile_workflow(
         YamlTree(StepId(name, 'global'), yml),
         compiler_options, graph_settings, tag_paths,
         [], [graph], {}, {}, {}, {},
-        tools_cwl, True, relative_run_path=True, testing=True)
+        tools, True, relative_run_path=True, testing=True)
 
 
 def compile_cwl(yml: Yaml, name: str = 'harness', *,

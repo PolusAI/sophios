@@ -14,9 +14,7 @@ from .ir import (
     JobBinding,
     Namespace,
     Port,
-    PortDeclaration,
     PortId,
-    PortType,
     ProcessRun,
     StepEmission,
     StepId as IrStepId,
@@ -24,6 +22,7 @@ from .ir import (
     WorkflowGraph,
     WorkflowPort,
 )
+from .ir.declarations import port_declaration
 from .lang import versions
 from .wic_types import Tool, WorkflowInputsFile, Yaml
 
@@ -140,7 +139,7 @@ def _step_node(namespace: Namespace, index: int, step: Yaml, tool: Tool,
 
 
 def _process_port(step: IrStepId, direction: Direction, name: str, raw: Any) -> Port:
-    declaration = _port_declaration(raw, outputs=False)
+    declaration = port_declaration(raw)
     return Port(PortId(step, direction, str(name)), declaration.type, declaration)
 
 
@@ -149,26 +148,8 @@ def _workflow_ports(raw_ports: Any, *, outputs: bool) -> tuple[WorkflowPort, ...
         raise TypeError('legacy finalization requires mapping-form workflow ports')
     ports: list[WorkflowPort] = []
     for name, raw in raw_ports.items():
-        declaration = _port_declaration(raw, outputs=outputs)
+        declaration = port_declaration(raw, output=outputs)
         has_source = isinstance(raw, dict) and 'outputSource' in raw
         source = deepcopy(raw.get('outputSource')) if has_source else None
         ports.append(WorkflowPort(str(name), declaration, source, has_source))
     return tuple(ports)
-
-
-def _port_declaration(raw: Any, *, outputs: bool) -> PortDeclaration:
-    if not isinstance(raw, dict):
-        return PortDeclaration(PortType(deepcopy(raw)), shorthand=True)
-    reserved = {'type', 'format', 'default'}
-    if outputs:
-        reserved.add('outputSource')
-    return PortDeclaration(
-        type=PortType(deepcopy(raw.get('type'))),
-        format=deepcopy(raw.get('format')),
-        has_format='format' in raw,
-        default=deepcopy(raw.get('default')),
-        has_default='default' in raw,
-        passthrough=tuple((key, deepcopy(value)) for key, value in raw.items()
-                          if key not in reserved),
-        field_order=tuple(raw),
-    )
