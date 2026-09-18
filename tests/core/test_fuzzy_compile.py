@@ -9,7 +9,7 @@ import pytest
 
 import sophios
 import sophios.ast
-from sophios.lang.diagnostics import Code, SophiosError
+from sophios.lang.diagnostics import SophiosErrorCode, SophiosError
 import sophios.cli
 import sophios.plugins
 import sophios.utils
@@ -20,17 +20,17 @@ from .test_setup import tools_cwl, yml_paths, validator, wic_strategy
 
 #: Structured failures the fuzz job accepts. Exactly the former `sys.exit(1)`
 #: sites, which the message arm used to accept as `SystemExit(1)`.
-TOLERATED_CODES: Final[frozenset[Code]] = frozenset({
-    Code.UNRESOLVED_INPUT,
-    Code.SUBWORKFLOW_INVALID,
-    Code.SCRIPT_ARGUMENT_MISMATCH,
-    Code.CONTAINER_ENGINE_UNAVAILABLE,
-    Code.MISSING_INPUT_FILE,
+TOLERATED_CODES: Final[frozenset[SophiosErrorCode]] = frozenset({
+    SophiosErrorCode.UNRESOLVED_INPUT,
+    SophiosErrorCode.SUBWORKFLOW_INVALID,
+    SophiosErrorCode.SCRIPT_ARGUMENT_MISMATCH,
+    SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
+    SophiosErrorCode.MISSING_INPUT_FILE,
     # `wic026` was `ValueError: Error! Multiple definitions of &`,
     # which the message arm below used to accept. Giving it a code
     # moved it to this arm; leaving it out of this set turned a
     # tolerated draw into a job failure.
-    Code.DUPLICATE_EDGE_DEF,
+    SophiosErrorCode.DUPLICATE_EDGE_DEF,
 })
 
 

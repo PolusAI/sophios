@@ -19,7 +19,7 @@ from hypothesis import strategies as st
 
 import sophios.post_compile
 from sophios.lang import KNOWN_VERSIONS, LANG_VERSION, resolve_lang_version
-from sophios.lang.diagnostics import Code, SophiosError
+from sophios.lang.diagnostics import SophiosErrorCode, SophiosError
 from sophios.lang.versions import ANNOTATION_KEY, ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
 from sophios.wic_types import StepId, Yaml, YamlTree
 
@@ -79,7 +79,7 @@ def test_unknown_versions_are_reported_not_coerced() -> None:
     for request, pins in (('9.9.9', ()), (None, ('9.9.9',))):
         with pytest.raises(SophiosError) as caught:
             resolve_lang_version(request, pins)
-        assert caught.value.diagnostics[0].code is Code.UNKNOWN_LANG_VERSION
+        assert caught.value.diagnostics[0].code is SophiosErrorCode.UNKNOWN_LANG_VERSION
         assert LANG_VERSION in caught.value.diagnostics[0].message
 
 
@@ -110,7 +110,7 @@ def test_one_version_or_a_conflict_report(known: tuple[str, ...], data: st.DataO
     else:
         with pytest.raises(SophiosError) as caught:
             resolve_lang_version(None, pins, known=known)
-        assert caught.value.diagnostics[0].code is Code.LANG_VERSION_CONFLICT
+        assert caught.value.diagnostics[0].code is SophiosErrorCode.LANG_VERSION_CONFLICT
 
 
 @pytest.mark.skip_pypi_ci
@@ -126,7 +126,7 @@ def test_conflicting_pins_across_a_tree_are_caught_at_the_root() -> None:
     }
     with pytest.raises(SophiosError) as caught:
         _compile(tree)
-    assert caught.value.diagnostics[0].code is Code.UNKNOWN_LANG_VERSION
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.UNKNOWN_LANG_VERSION
 
 
 # --------------------------------------------------------------------------
@@ -308,5 +308,5 @@ def test_a_mistyped_pin_is_reported_not_ignored() -> None:
 
     with pytest.raises(SophiosError) as caught:
         resolve_lang_version(None, _lang_version_pins(mistyped))
-    assert caught.value.diagnostics[0].code is Code.UNKNOWN_LANG_VERSION
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.UNKNOWN_LANG_VERSION
     assert "'1.0'" in caught.value.diagnostics[0].message

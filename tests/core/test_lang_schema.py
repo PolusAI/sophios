@@ -26,7 +26,7 @@ import jsonschema
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from sophios.lang import Code, Forms, Grammar, parse, to_json, wic_schema
+from sophios.lang import SophiosErrorCode, Forms, Grammar, parse, to_json, wic_schema
 from sophios.schemas.wic_schema import _wic_tag_schema
 from sophios.lang.nodes import (
     Document,
@@ -337,7 +337,7 @@ def test_an_empty_step_id_is_rejected_because_the_parser_reports_it() -> None:
     """The other direction, for the field that does carry the rule: an empty
     step id is `wic007`, so the schema must not accept it either."""
     result = parse("steps:\n- id: ''\n", 'empty_id.wic')
-    assert any(d.code is Code.EMPTY_STEP_ID for d in result.diagnostics)
+    assert any(d.code is SophiosErrorCode.EMPTY_STEP_ID for d in result.diagnostics)
     assert not _accepts({'steps': [{'id': ''}]})
 
 

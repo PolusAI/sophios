@@ -17,7 +17,7 @@ import pytest
 from hypothesis import HealthCheck, find, given, settings
 from hypothesis.strategies import SearchStrategy
 
-from sophios.lang import Code, Document, EdgeRef, SophiosError, Step, parse
+from sophios.lang import SophiosErrorCode, Document, EdgeRef, SophiosError, Step, parse
 from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
@@ -158,7 +158,7 @@ def test_the_workflows_strategy_produces_documents_the_compiler_accepts() -> Non
             # Only the ill-typed `!ii` literal the docstring describes. Every other
             # diagnosis — a dangling edge, a missing required input — is a real
             # failure of the generator's claim, so it must not be skipped here.
-            if any(d.code is not Code.LITERAL_TYPE_MISMATCH for d in diagnosed.diagnostics):
+            if any(d.code is not SophiosErrorCode.LITERAL_TYPE_MISMATCH for d in diagnosed.diagnostics):
                 raise
             return
         compiled[form] += 1

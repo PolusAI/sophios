@@ -12,7 +12,7 @@ when nobody will want to discover the resolver was a stub.
 """
 from typing import Final
 
-from .diagnostics import Code, SophiosError
+from .diagnostics import SophiosErrorCode, SophiosError
 
 #: Every version that has ever existed, oldest first. Append-only.
 KNOWN_VERSIONS: Final[tuple[str, ...]] = ('0.0.1',)
@@ -45,7 +45,7 @@ def resolve(requested: str | None = None,
     if requested is not None:
         if requested not in known:
             raise SophiosError.error(
-                Code.UNKNOWN_LANG_VERSION,
+                SophiosErrorCode.UNKNOWN_LANG_VERSION,
                 f'Unknown lang_version {requested!r}. Known versions: {", ".join(known)}')
         return requested
 
@@ -53,11 +53,11 @@ def resolve(requested: str | None = None,
     if distinct is None:
         bad = sorted(set(pins) - set(known))
         raise SophiosError.error(
-            Code.UNKNOWN_LANG_VERSION,
+            SophiosErrorCode.UNKNOWN_LANG_VERSION,
             f'Unknown lang_version tag(s) {", ".join(map(repr, bad))}. Known versions: {", ".join(known)}')
     if len(distinct) > 1:
         raise SophiosError.error(
-            Code.LANG_VERSION_CONFLICT,
+            SophiosErrorCode.LANG_VERSION_CONFLICT,
             f'One compilation resolves to one version, but the tree pins {", ".join(distinct)}.',
             'Remove the conflicting lang_version tags, or set one explicitly to override them all.')
     if distinct:

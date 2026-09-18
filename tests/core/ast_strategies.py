@@ -18,7 +18,7 @@ from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
 from sophios import utils_cwl
-from sophios.lang import (Code, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
+from sophios.lang import (SophiosErrorCode, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
                           OpaqueCwl, OutputBinding, Step, StepKey, UnresolvedName, WicSidecar,
                           render)
 from sophios.lang.spans import SourceSpan
@@ -539,23 +539,23 @@ def partitionings(draw: st.DrawFn, steps: int) -> tuple[tuple[int, ...], ...]:
 #: generator whose every output produces `wic001` would look green while saying
 #: nothing about the eleven other codes.
 _HOSTILE: Final = (
-    ('steps:\n  s:\n    in:\n      f: !ii a\n      f: !ii b\n', Code.DUPLICATE_KEY),
-    ('steps:\n- id: s\n  in:\n    f: !foo bar\n', Code.UNKNOWN_TAG),
-    ('steps:\n- id: ""\n', Code.EMPTY_STEP_ID),
+    ('steps:\n  s:\n    in:\n      f: !ii a\n      f: !ii b\n', SophiosErrorCode.DUPLICATE_KEY),
+    ('steps:\n- id: s\n  in:\n    f: !foo bar\n', SophiosErrorCode.UNKNOWN_TAG),
+    ('steps:\n- id: ""\n', SophiosErrorCode.EMPTY_STEP_ID),
     # A sequence step carries its name in `id:` (reference §3.1), so an entry
     # without one earns MISSING_STEP_ID whatever else it has — here, nothing.
-    ('steps:\n- {}\n', Code.MISSING_STEP_ID),
-    ('steps:\n- id: s\n  out: {a: b}\n', Code.EXPECTED_SEQUENCE),
-    ('steps: 3\n', Code.EXPECTED_MAPPING),
+    ('steps:\n- {}\n', SophiosErrorCode.MISSING_STEP_ID),
+    ('steps:\n- id: s\n  out: {a: b}\n', SophiosErrorCode.EXPECTED_SEQUENCE),
+    ('steps: 3\n', SophiosErrorCode.EXPECTED_MAPPING),
     # A step's own `wic:` key is passthrough, not a sidecar (`_step_body` has
     # no case for it) — the malformed key must live in the document-level
     # `wic: steps:` mapping, which is the only place that string is parsed.
-    ('wic:\n  steps:\n    "not a key": {}\n', Code.MALFORMED_WIC_STEP_KEY),
-    ('steps: &a\n- id: s\n  wic: {x: *a}\n', Code.RECURSIVE_ALIAS),
+    ('wic:\n  steps:\n    "not a key": {}\n', SophiosErrorCode.MALFORMED_WIC_STEP_KEY),
+    ('steps: &a\n- id: s\n  wic: {x: *a}\n', SophiosErrorCode.RECURSIVE_ALIAS),
 )
 
 
-def hostile_documents() -> SearchStrategy[tuple[str, Code]]:
+def hostile_documents() -> SearchStrategy[tuple[str, SophiosErrorCode]]:
     """Documents outside the language, each with the code it must earn."""
     return st.sampled_from(_HOSTILE)
 

@@ -5,7 +5,7 @@ import shutil
 import subprocess as sub
 from . import plugins
 from .wic_types import RoseTree, NodeData, Yaml
-from .lang.diagnostics import Code, SophiosError
+from .lang.diagnostics import SophiosErrorCode, SophiosError
 
 
 def verify_container_engine_config(container_engine: str, ignore_container_install: bool) -> None:
@@ -41,14 +41,14 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
 
             if permission_denied in output:
                 raise SophiosError.error(
-                    Code.CONTAINER_ENGINE_UNAVAILABLE,
+                    SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
                     'Warning! docker appears to be installed, but not configured as a non-root user.',
                     'See https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user',
                     'TL;DR you probably just need to run the following command (and then restart your machine)',
                     'sudo usermod -aG docker $USER')
 
             raise SophiosError.error(
-                Code.CONTAINER_ENGINE_UNAVAILABLE,
+                SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
                 f'Warning! The {container_cmd} command does not appear to be installed.',
                 f"""Most workflows require docker containers and
                   will fail at runtime if {container_cmd} is not installed.""",
@@ -66,7 +66,7 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
             too_many_processes = num_processes > max_processes
             if too_many_processes and not ignore_container_install:
                 raise SophiosError.error(
-                    Code.CONTAINER_ENGINE_UNAVAILABLE,
+                    SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
                     f'Warning! There are {num_processes} running docker processes.',
                     f'More than {max_processes} may potentially cause intermittent hanging issues.',
                     'It is recommended to terminate the processes using the command',
@@ -86,7 +86,7 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
 
         if not singularity_ok and not ignore_container_install:
             raise SophiosError.error(
-                Code.CONTAINER_ENGINE_UNAVAILABLE,
+                SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
                 f'Warning! The {container_cmd} command does not appear to be installed.',
                 'If you want to try running the workflow anyway, use --ignore_docker_install',
                 'Note that --ignore_docker_install does NOT change whether or not',
@@ -179,7 +179,7 @@ def stage_input_files(yml_inputs: Yaml,
             case {"class": "File", "location": location, **_rest_val}:
                 src_path = root_yml_dir_abs / Path(location)
                 if not src_path.exists() and throw:
-                    raise SophiosError.error(Code.MISSING_INPUT_FILE, f"Error! {src_path} does not exist!")
+                    raise SophiosError.error(SophiosErrorCode.MISSING_INPUT_FILE, f"Error! {src_path} does not exist!")
 
                 relroot = Path(basepath) if use_subdirs_cwl else Path(".")
                 dst_path = relroot / Path(location)

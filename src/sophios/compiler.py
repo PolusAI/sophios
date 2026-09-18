@@ -19,7 +19,7 @@ from .wic_types import (CompilerInfo, CompilerOptions, EnvData, ExplicitEdgeCall
 from .lang import versions
 from .lang.compatibility import TypeRelation, reference_relation
 from .lang.cwl import CWL_VERSION
-from .lang.diagnostics import Code, SophiosError
+from .lang.diagnostics import SophiosErrorCode, SophiosError
 
 logger = logging.getLogger('sophios')
 
@@ -112,7 +112,7 @@ def compile_workflow(yaml_tree_ast: YamlTree,
         # an embedder needs a code to catch on. This site was never a
         # `sys.exit`, so a sweep over those does not reach it.
         raise SophiosError.error(
-            Code.FIXED_POINT_NOT_REACHED,
+            SophiosErrorCode.FIXED_POINT_NOT_REACHED,
             f'Error! Maximum number of iterations ({max_iters}) reached in compile_workflow!',
             'Speculative step insertion did not converge. Compile with '
             '--insert_steps_automatically disabled, or name the intermediate steps explicitly.')
@@ -810,7 +810,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                             {edgedef: (namespaces + [step_name_or_key], out_key)})
                     else:
                         raise SophiosError.error(
-                            Code.DUPLICATE_EDGE_DEF,
+                            SophiosErrorCode.DUPLICATE_EDGE_DEF,
                             f"'&{edgedef}' is defined more than once. An edge name identifies "
                             f'one producer within a compilation, so a second definition leaves '
                             f'no way to say which output a reference means.')
@@ -859,7 +859,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                     if reference_relation(source_type, sink_type, lang_version=lang_version) \
                             is TypeRelation.DISJOINT:
                         raise SophiosError.error(
-                            Code.INCOMPATIBLE_INPUT_REFERENCE,
+                            SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
                             f"Edge '&{arg_val}' cannot feed '{arg_key}' of step "
                             f"'{step_key}' in {setup.yaml_stem}.wic: source type "
                             f'{source_type!r} is disjoint from sink type {sink_type!r}. '
@@ -873,7 +873,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                             # will cause this code path to be taken but it is not
                             # actually an error. Add a CWL input for testing only.
                             raise SophiosError.error(
-                                Code.UNDEFINED_EDGE,
+                                SophiosErrorCode.UNDEFINED_EDGE,
                                 f"'!* {arg_val}' names an edge nothing defines. Define it with "
                                 f"'!& {arg_val}' on the producing step's out:, or declare it in "
                                 f"this document's inputs: and bind it by name.")
@@ -1034,7 +1034,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                     arg_var_is_input = hashable and arg_var in setup.yaml_tree.get('inputs', {})
                     if not compiler_options['allow_raw_cwl'] and not arg_var_is_input:
                         raise SophiosError.error(
-                            Code.UNRESOLVED_INPUT,
+                            SophiosErrorCode.UNRESOLVED_INPUT,
                             f"Warning! Did you forget to use !ii before {arg_var} in {setup.yaml_stem}.wic?",
                             'If you want to compile the workflow anyway, use --allow_raw_cwl')
 
@@ -1044,7 +1044,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                     if reference_relation(source_type, sink_type, lang_version=lang_version) \
                             is TypeRelation.DISJOINT:
                         raise SophiosError.error(
-                            Code.INCOMPATIBLE_INPUT_REFERENCE,
+                            SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
                             f"Input '{arg_var}' cannot feed '{arg_key}' of step "
                             f"'{step_key}' in {setup.yaml_stem}.wic: source type "
                             f'{source_type!r} is disjoint from sink type {sink_type!r}. '
@@ -1275,7 +1275,7 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
                     return int(value)
                 except (ValueError, TypeError) as e:
                     raise SophiosError.error(
-                        Code.LITERAL_TYPE_MISMATCH,
+                        SophiosErrorCode.LITERAL_TYPE_MISMATCH,
                         f"Input {key!r} is declared type 'int' but its literal {value!r} "
                         "does not convert to it.") from e
 
@@ -1284,7 +1284,7 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
                     return float(value)
                 except (ValueError, TypeError) as e:
                     raise SophiosError.error(
-                        Code.LITERAL_TYPE_MISMATCH,
+                        SophiosErrorCode.LITERAL_TYPE_MISMATCH,
                         f"Input {key!r} is declared type 'float' but its literal {value!r} "
                         "does not convert to it.") from e
 
@@ -1305,7 +1305,7 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
             if type_includes_null(raw_type):
                 return None
             raise SophiosError.error(
-                Code.MISSING_REQUIRED_INPUT,
+                SophiosErrorCode.MISSING_REQUIRED_INPUT,
                 f"Required input of type {raw_type} was not provided.")
 
         # Normalize type (strip null / ?)

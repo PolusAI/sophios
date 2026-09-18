@@ -14,7 +14,7 @@ from hypothesis import strategies as st
 from sophios.api.python.workflow import _python_api_types_match
 from sophios.inlineing import get_inlineable_subworkflows
 from sophios.lang.compatibility import TypeRelation, reference_relation
-from sophios.lang.diagnostics import Code, SophiosError
+from sophios.lang.diagnostics import SophiosErrorCode, SophiosError
 from sophios.lang.versions import KNOWN_VERSIONS
 from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_yaml import wic_loader
@@ -229,7 +229,7 @@ def test_workflow_input_references_follow_the_independent_outcome(
         with pytest.raises(SophiosError) as caught:
             compile_hermetic(document, 'reference')
         assert [diagnostic.code for diagnostic in caught.value.diagnostics] == [
-            Code.INCOMPATIBLE_INPUT_REFERENCE]
+            SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE]
     else:
         compile_hermetic(document, 'reference')
 
@@ -318,7 +318,7 @@ def test_explicit_edges_follow_the_same_judgment(
         with pytest.raises(SophiosError) as caught:
             compile_hermetic({'steps': [source, sink]}, 'edges',
                              tools=_edge_tools(source_type, sink_type))
-        assert caught.value.diagnostics[0].code is Code.INCOMPATIBLE_INPUT_REFERENCE
+        assert caught.value.diagnostics[0].code is SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE
     else:
         compile_hermetic({'steps': [source, sink]}, 'edges',
                          tools=_edge_tools(source_type, sink_type))

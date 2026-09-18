@@ -24,7 +24,7 @@ import pytest
 from hypothesis import given
 
 import sophios.compiler
-from sophios.lang.diagnostics import Code, SophiosError
+from sophios.lang.diagnostics import SophiosErrorCode, SophiosError
 from sophios.utils import parse_step_name_str, step_name_str
 from sophios.wic_types import CompilerInfo, RoseTree, Yaml
 
@@ -312,7 +312,7 @@ def test_exhausting_max_iters_is_a_diagnostic_not_a_crash() -> None:
     """
     with pytest.raises(SophiosError) as caught:
         never_converges()
-    assert caught.value.diagnostics[0].code is Code.FIXED_POINT_NOT_REACHED
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.FIXED_POINT_NOT_REACHED
 
 
 @pytest.mark.skip_pypi_ci

@@ -11,7 +11,7 @@ type is what the document declared and inference has not run.
 """
 from dataclasses import dataclass
 
-from ..lang.diagnostics import Code, Diagnostics
+from ..lang.diagnostics import SophiosErrorCode, Diagnostics
 from ..lang.nodes import Document, EdgeRef, InputValue, Step
 from .types import (
     Binding,
@@ -111,7 +111,7 @@ def _step_identities(document: Document, here: Namespace,
     identities: list[StepId] = []
     for index, step in enumerate(document.steps, start=1):
         if not step.id:
-            diagnostics.error(Code.EMPTY_STEP_ID,
+            diagnostics.error(SophiosErrorCode.EMPTY_STEP_ID,
                               'a step needs an id before it can be lowered', step.span)
             return None
         identities.append(StepId(here, index, step.id))
@@ -134,21 +134,21 @@ def _every_name_is_present(document: Document, diagnostics: Diagnostics) -> bool
     for step in document.steps:
         for name, value in step.inputs:
             if not name:
-                diagnostics.error(Code.EMPTY_NAME,
+                diagnostics.error(SophiosErrorCode.EMPTY_NAME,
                                   f"step '{step.id}' binds an input with no name", step.span)
                 found = True
             if isinstance(value, EdgeRef) and not value.name:
-                diagnostics.error(Code.EMPTY_NAME,
+                diagnostics.error(SophiosErrorCode.EMPTY_NAME,
                                   f"'!*' on '{step.id}.{name}' names no edge", value.span)
                 found = True
         for binding in step.outputs:
             if not binding.name:
-                diagnostics.error(Code.EMPTY_NAME,
+                diagnostics.error(SophiosErrorCode.EMPTY_NAME,
                                   f"step '{step.id}' declares an out: entry with no name",
                                   binding.span)
                 found = True
             if binding.edge_def is not None and not binding.edge_def.name:
-                diagnostics.error(Code.EMPTY_NAME,
+                diagnostics.error(SophiosErrorCode.EMPTY_NAME,
                                   f"'!&' on '{step.id}.{binding.name}' defines no edge",
                                   binding.edge_def.span)
                 found = True
@@ -171,7 +171,7 @@ def _edge_definitions(identities: tuple[StepId, ...], document: Document,
             name = binding.edge_def.name
             if name in defined:
                 diagnostics.error(
-                    Code.DUPLICATE_EDGE_DEF,
+                    SophiosErrorCode.DUPLICATE_EDGE_DEF,
                     f"'&{name}' is defined more than once. An edge name identifies one producer.",
                     binding.edge_def.span)
                 continue
@@ -189,7 +189,7 @@ def _resolve(value: InputValue, port: Port, defined_so_far: dict[str, PortId],
         return Edge(source, port.id, span=value.span)
     if value.name in defined_anywhere:
         diagnostics.error(
-            Code.UNDEFINED_EDGE,
+            SophiosErrorCode.UNDEFINED_EDGE,
             f"'!* {value.name}' is referenced before '!& {value.name}' defines it.",
             value.span)
         return None

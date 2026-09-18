@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import overload
 
+from .error_codes import SophiosErrorCode
 from .spans import SourceSpan
 
 
@@ -25,46 +26,6 @@ class Severity(StrEnum):
     ERROR = 'error'
 
 
-class Code(StrEnum):
-    """Stable identifiers for diagnostics.
-
-    Codes are part of the contract: they can be matched on, suppressed, and
-    documented, whereas message wording is free to improve.
-    """
-
-    INVALID_YAML = 'wic001'
-    NOT_A_MAPPING = 'wic002'
-    EXPECTED_MAPPING = 'wic003'
-    EXPECTED_SEQUENCE = 'wic004'
-    EXPECTED_SCALAR = 'wic005'
-    MISSING_STEP_ID = 'wic006'
-    EMPTY_STEP_ID = 'wic007'
-    MALFORMED_WIC_STEP_KEY = 'wic008'
-    UNKNOWN_TAG = 'wic009'
-    DUPLICATE_KEY = 'wic010'
-    UNRESOLVED_INPUT = 'wic011'
-    MISSING_REQUIRED_INPUT = 'wic012'
-    SUBWORKFLOW_INVALID = 'wic013'
-    SCRIPT_ARGUMENT_MISMATCH = 'wic014'
-    CONTAINER_ENGINE_UNAVAILABLE = 'wic015'
-    MISSING_INPUT_FILE = 'wic016'
-    UNKNOWN_LANG_VERSION = 'wic017'
-    LANG_VERSION_CONFLICT = 'wic018'
-    MISPLACED_EDGE_DEF = 'wic019'
-    LITERAL_TYPE_MISMATCH = 'wic020'
-    # wic021 is retired, not free: it was a second spelling of wic006.
-    FIXED_POINT_NOT_REACHED = 'wic022'
-    INCOMPATIBLE_INPUT_REFERENCE = 'wic023'
-    RESERVED_KEY = 'wic024'
-    UNDEFINED_EDGE = 'wic025'
-    DUPLICATE_EDGE_DEF = 'wic026'
-    #: A name the document left empty, in a position that identifies something:
-    #: an input, an `out:` entry, or an edge. One code across the positions
-    #: because it is one mistake -- the reader wrote nothing where a name goes.
-    EMPTY_NAME = 'wic027'
-    RECURSIVE_ALIAS = 'wic030'
-
-
 @dataclass(frozen=True, slots=True)
 class Diagnostic:
     """A single problem, located in source when a location is known.
@@ -76,7 +37,7 @@ class Diagnostic:
     """
 
     severity: Severity
-    code: Code
+    code: SophiosErrorCode
     message: str
     span: SourceSpan | None = None
 
@@ -97,7 +58,7 @@ class Diagnostics(Sequence[Diagnostic]):
     def __init__(self, items: Iterable[Diagnostic] = ()) -> None:
         self._items: list[Diagnostic] = list(items)
 
-    def error(self, code: Code, message: str, span: SourceSpan | None = None) -> None:
+    def error(self, code: SophiosErrorCode, message: str, span: SourceSpan | None = None) -> None:
         """Record an error.
 
         `span` is optional because a phase after parsing can be handed a node
@@ -164,7 +125,7 @@ class SophiosError(Exception):
         self.diagnostics: Diagnostics = items
 
     @classmethod
-    def error(cls, code: Code, *messages: str) -> 'SophiosError':
+    def error(cls, code: SophiosErrorCode, *messages: str) -> 'SophiosError':
         """Build from one error, spelled as one or more message lines.
 
         Multiple lines become multiple diagnostics under the same code, so the

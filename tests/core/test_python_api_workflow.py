@@ -24,8 +24,10 @@ from sophios import run_local
 from sophios import run_local_async
 from sophios import utils, utils_cwl
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.api.python.workflow import (_python_api_types_match, CompiledWorkflow, InvalidLinkError,
-                                         InvalidStepError, Step, Workflow)
+from sophios.api.python.workflow import (_python_api_types_match, ApiError, CompiledWorkflow,
+                                         InvalidCLTError, InvalidInputValueError, InvalidLinkError,
+                                         InvalidStepError, SophiosError, SophiosErrorCode, Step,
+                                         Workflow)
 from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest, ComputeSubmission
 from sophios.python_cwl_adapter import import_python_file
 from sophios.schemas import wic_schema
@@ -1198,3 +1200,41 @@ def test_validate_generated_python_workflows() -> None:
     if validation_errors:
         pytest.fail("Generated workflow validation failed:\n" +
                     "\n".join(validation_errors))
+
+
+@pytest.mark.fast
+def test_every_api_failure_is_catchable_as_one_type() -> None:
+    """A caller writes one `except` and reads `.diagnostics`, whatever failed.
+
+    The Python API used to raise two unrelated vocabularies: four bare
+    `Exception` subclasses of its own, and `SophiosError` escaping from the
+    compiler underneath. Neither was importable from anywhere a user of
+    `Workflow.compile()` would look, which is what issue 111 is about -- the
+    CLI has caught and reported this since it existed.
+    """
+    external = Step(clt_path=_adapter("touch"))
+    external.inputs.filename = "empty.txt"
+    append = Step(clt_path=_adapter("append"))
+    append.inputs.file = external.outputs.file
+    append.inputs.str = "Hello"
+
+    with pytest.raises(SophiosError) as caught:
+        Workflow([append], "wf").compile()
+
+    assert isinstance(caught.value, InvalidStepError)
+    assert [d.code for d in caught.value.diagnostics] == [SophiosErrorCode.INVALID_STEP]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('error', [
+    InvalidInputValueError, InvalidStepError, InvalidLinkError, InvalidCLTError])
+def test_an_api_failure_carries_an_api_code_not_a_language_one(error: type[ApiError]) -> None:
+    """`api0NN`, because the document is not what is wrong -- the call is.
+
+    A `wic0NN` here would send a reader to a section of the language reference
+    that does not describe their problem. `is_language` is the distinction, so
+    a caller can route on it rather than on the string prefix.
+    """
+    raised = error('something the API could not do')
+    code = raised.diagnostics[0].code
+    assert code.value.startswith('api') and not code.is_language

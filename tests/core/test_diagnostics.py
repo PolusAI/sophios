@@ -27,7 +27,7 @@ import pytest
 
 from sophios import post_compile
 from sophios.compiler import generate_yaml_inputs
-from sophios.lang.diagnostics import Code, Diagnostic, Severity, SophiosError
+from sophios.lang.diagnostics import SophiosErrorCode, Diagnostic, Severity, SophiosError
 from sophios.python_cwl_adapter import check_args_match_inputs
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
@@ -162,7 +162,7 @@ def test_an_error_with_no_diagnostics_is_unrepresentable() -> None:
 def test_str_carries_every_message() -> None:
     """What an embedder logs by default includes each diagnostic, so catching
     without inspecting `.diagnostics` still loses nothing."""
-    error = SophiosError.error(Code.UNRESOLVED_INPUT, 'first', 'second')
+    error = SophiosError.error(SophiosErrorCode.UNRESOLVED_INPUT, 'first', 'second')
     assert 'first' in str(error) and 'second' in str(error)
     assert len(error.diagnostics) == 2
 
@@ -171,7 +171,7 @@ def test_str_carries_every_message() -> None:
 def test_spanless_diagnostics_print_without_a_location() -> None:
     """Compile-phase failures may not know a line; the string form must not
     invent one."""
-    diagnostic = Diagnostic(Severity.ERROR, Code.MISSING_INPUT_FILE, 'gone.txt missing')
+    diagnostic = Diagnostic(Severity.ERROR, SophiosErrorCode.MISSING_INPUT_FILE, 'gone.txt missing')
     assert str(diagnostic) == 'error [wic016] gone.txt missing'
 
 
@@ -190,7 +190,7 @@ def test_script_argument_mismatch_reports(tmp_path: Path) -> None:
     messages = [d.message for d in caught.value.diagnostics]
     assert any('unexpected_arg' in m for m in messages)
     assert any('expected_arg' in m for m in messages)
-    assert all(d.code is Code.SCRIPT_ARGUMENT_MISMATCH for d in caught.value.diagnostics)
+    assert all(d.code is SophiosErrorCode.SCRIPT_ARGUMENT_MISMATCH for d in caught.value.diagnostics)
 
 
 @pytest.mark.fast
@@ -201,7 +201,7 @@ def test_missing_input_file_reports(tmp_path: Path) -> None:
     with pytest.raises(SophiosError) as caught:
         post_compile.stage_input_files(inputs, tmp_path, str(tmp_path / 'out'), throw=True)
 
-    assert caught.value.diagnostics[0].code is Code.MISSING_INPUT_FILE
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.MISSING_INPUT_FILE
     assert 'does_not_exist.txt' in caught.value.diagnostics[0].message
 
 
@@ -219,7 +219,7 @@ def test_literal_type_mismatch_reports() -> None:
     with pytest.raises(SophiosError) as caught:
         generate_yaml_inputs({'n': {'type': 'int', 'value': '_'}})
 
-    assert caught.value.diagnostics[0].code is Code.LITERAL_TYPE_MISMATCH
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
     message = caught.value.diagnostics[0].message
     assert 'n' in message
     assert 'int' in message
@@ -241,7 +241,7 @@ def test_literal_type_mismatch_reports_a_null_array_element() -> None:
         generate_yaml_inputs({'xs': {'type': {'type': 'array', 'items': 'int'}, 'value': [1, None]}})
 
     assert len(caught.value.diagnostics) == 1
-    assert caught.value.diagnostics[0].code is Code.LITERAL_TYPE_MISMATCH
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
     message = caught.value.diagnostics[0].message
     assert 'xs' in message
     assert 'int' in message
@@ -259,7 +259,7 @@ def test_missing_container_engine_reports(monkeypatch: pytest.MonkeyPatch) -> No
     with pytest.raises(SophiosError) as caught:
         post_compile.verify_container_engine_config('docker', False)
 
-    assert caught.value.diagnostics[0].code is Code.CONTAINER_ENGINE_UNAVAILABLE
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE
     assert any('--ignore_docker_install' in d.message for d in caught.value.diagnostics)
 
 
@@ -286,7 +286,7 @@ def test_cli_converts_a_report_to_exit_1(monkeypatch: pytest.MonkeyPatch,
     from sophios import main as cli
 
     def reports(*_args: object, **_kwargs: object) -> None:
-        raise SophiosError.error(Code.UNRESOLVED_INPUT,
+        raise SophiosError.error(SophiosErrorCode.UNRESOLVED_INPUT,
                                  'Warning! Did you forget to use !ii before x in demo.wic?',
                                  'If you want to compile the workflow anyway, use --allow_raw_cwl')
 

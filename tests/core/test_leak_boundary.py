@@ -310,13 +310,13 @@ def test_residue_validates_as_cwl_v1_2(freight: dict[str, Any]) -> None:
 def test_allow_raw_cwl_is_the_difference_between_report_and_compile() -> None:
     """A bare unresolved name is reported without the flag and compiles
     with it — the flag's one-line definition, observed at the boundary."""
-    from sophios.lang.diagnostics import Code, SophiosError
+    from sophios.lang.diagnostics import SophiosErrorCode, SophiosError
 
     bare: Yaml = {'steps': [{'id': 'touch', 'in': {'filename': 'not_a_workflow_input'}}]}
 
     with pytest.raises(SophiosError) as caught:
         _compile(bare)
-    assert caught.value.diagnostics[0].code is Code.UNRESOLVED_INPUT
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.UNRESOLVED_INPUT
     assert '!ii' in caught.value.diagnostics[0].message
 
     permitted = compile_cwl(bare, 'raw_cwl', allow_raw_cwl=True)

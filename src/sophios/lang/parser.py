@@ -16,7 +16,7 @@ from typing import Any, Final, Mapping, TypeAlias, final
 import yaml
 
 from ..utils_yaml import Key, Tag
-from .diagnostics import Code, Diagnostics
+from .diagnostics import SophiosErrorCode, Diagnostics
 from .nodes import (
     Document,
     EdgeDef,
@@ -138,7 +138,7 @@ def _report_unknown_tag(node: yaml.nodes.Node, file: str, diags: Diagnostics) ->
     The payload is kept, untagged, for recovery.
     """
     if node.tag.startswith('!') and node.tag not in Tag.ALL:
-        diags.error(Code.UNKNOWN_TAG,
+        diags.error(SophiosErrorCode.UNKNOWN_TAG,
                     f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
                     SourceSpan.of(file, node))
 
@@ -167,7 +167,8 @@ def parse(text: str, filename: str = '<string>') -> ParseResult:
     try:
         root = yaml.compose(text, Loader=yaml.SafeLoader)
     except yaml.YAMLError as exc:
-        diagnostics.error(Code.INVALID_YAML, _yaml_error_message(exc), _yaml_error_span(filename, exc, whole))
+        diagnostics.error(SophiosErrorCode.INVALID_YAML, _yaml_error_message(exc),
+                          _yaml_error_span(filename, exc, whole))
         return ParseResult(None, diagnostics)
 
     if root is None:  # An empty document is well-formed and carries nothing.
@@ -178,7 +179,7 @@ def parse(text: str, filename: str = '<string>') -> ParseResult:
 
     if not isinstance(root, yaml.nodes.MappingNode):
         diagnostics.error(
-            Code.NOT_A_MAPPING,
+            SophiosErrorCode.NOT_A_MAPPING,
             f'a Sophios document must be a mapping, found {_kind(root)}',
             SourceSpan.of(filename, root),
         )
@@ -208,7 +209,7 @@ def _unique_entries(node: yaml.nodes.MappingNode, file: str, diags: Diagnostics,
     for key_node, value_node in node.value:
         key = _key_text(key_node, file, diags)
         if key in seen:
-            diags.error(Code.DUPLICATE_KEY,
+            diags.error(SophiosErrorCode.DUPLICATE_KEY,
                         f'{what} {key!r} is defined more than once',
                         SourceSpan.of(file, key_node))
             continue
@@ -256,7 +257,7 @@ def _steps(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[tuple[
             return tuple(_sequence_step(item, file, diags) for item in node.value), False
         case _:
             diags.error(
-                Code.EXPECTED_MAPPING,
+                SophiosErrorCode.EXPECTED_MAPPING,
                 f'steps: must be a mapping or a sequence, found {_kind(node)}',
                 SourceSpan.of(file, node),
             )
@@ -286,7 +287,7 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
     """
     span = SourceSpan.of(file, node)
     if not isinstance(node, yaml.nodes.MappingNode):
-        diags.error(Code.EXPECTED_MAPPING, f'each step must be a mapping, found {_kind(node)}', span)
+        diags.error(SophiosErrorCode.EXPECTED_MAPPING, f'each step must be a mapping, found {_kind(node)}', span)
         return Step(id='', span=span)
 
     keyed = [(key_node, _key_text(key_node, file, diags), value_node) for key_node, value_node in node.value]
@@ -298,13 +299,13 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
         # Reported, never resolved — the same treatment every language-owned
         # mapping gets from _unique_entries.
         for key_node, _ in id_entries[1:]:
-            diags.error(Code.DUPLICATE_KEY, "step key 'id' is defined more than once",
+            diags.error(SophiosErrorCode.DUPLICATE_KEY, "step key 'id' is defined more than once",
                         SourceSpan.of(file, key_node))
     if id_entries:
         id_node = id_entries[0][1]
         step_id = _name_text(id_node, file, diags)
         if not step_id:
-            diags.error(Code.EMPTY_STEP_ID, 'id: must be a non-empty string', SourceSpan.of(file, id_node))
+            diags.error(SophiosErrorCode.EMPTY_STEP_ID, 'id: must be a non-empty string', SourceSpan.of(file, id_node))
         body = [(key_node, value_node) for key_node, key, value_node in keyed if key != 'id']
         return _step_body(step_id, body, span, file, diags)
 
@@ -319,7 +320,7 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
         forgotten = f"add the '- id:' line above if {name!r} is one of the step's own keys"
         first, second = (forgotten, named) if name in Grammar.STEP_KEYS else (named, forgotten)
         diags.error(
-            Code.MISSING_STEP_ID,
+            SophiosErrorCode.MISSING_STEP_ID,
             f'a step in a sequence carries its name in an id: key — {first}; {second}. '
             f'Keying the whole steps: block by name is the other form (§3.1)',
             span,
@@ -340,7 +341,7 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
         return Step(id='', span=span)
 
     diags.error(
-        Code.MISSING_STEP_ID,
+        SophiosErrorCode.MISSING_STEP_ID,
         'a step in a sequence needs an id:',
         span,
     )
@@ -379,7 +380,7 @@ def _step(step_id: str, node: yaml.nodes.Node, file: str, diags: Diagnostics) ->
     if node.tag == 'tag:yaml.org,2002:null':
         return Step(id=step_id, span=span)
     if not isinstance(node, yaml.nodes.MappingNode):
-        diags.error(Code.EXPECTED_MAPPING, f'step {step_id!r} must be a mapping, found {_kind(node)}', span)
+        diags.error(SophiosErrorCode.EXPECTED_MAPPING, f'step {step_id!r} must be a mapping, found {_kind(node)}', span)
         return Step(id=step_id, span=span)
     return _step_body(step_id, list(node.value), span, file, diags)
 
@@ -401,7 +402,7 @@ def _step_body(
     for key_node, value_node in entries:
         key = _key_text(key_node, file, diags)
         if key in seen:
-            diags.error(Code.DUPLICATE_KEY, f'step key {key!r} is defined more than once',
+            diags.error(SophiosErrorCode.DUPLICATE_KEY, f'step key {key!r} is defined more than once',
                         SourceSpan.of(file, key_node))
             continue
         seen.add(key)
@@ -411,7 +412,7 @@ def _step_body(
             # quoted in a rejected entry's own diagnostic — so an id: here is a
             # second, contradictory identity. Rendering would have to pick one
             # silently; report it.
-            diags.error(Code.DUPLICATE_KEY,
+            diags.error(SophiosErrorCode.DUPLICATE_KEY,
                         f'step {step_id!r} already has its identity; a second id: is contradictory',
                         SourceSpan.of(file, key_node))
             continue
@@ -441,7 +442,8 @@ def _inputs(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[tuple
     input twice is ambiguous, and picking either one would hide a mistake.
     """
     if not isinstance(node, yaml.nodes.MappingNode):
-        diags.error(Code.EXPECTED_MAPPING, f'in: must be a mapping, found {_kind(node)}', SourceSpan.of(file, node))
+        diags.error(SophiosErrorCode.EXPECTED_MAPPING, f'in: must be a mapping, found {_kind(node)}',
+                    SourceSpan.of(file, node))
         return ()
 
     seen: set[str] = set()
@@ -450,7 +452,7 @@ def _inputs(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[tuple
         name = _key_text(key_node, file, diags)
         if name in seen:
             diags.error(
-                Code.DUPLICATE_KEY,
+                SophiosErrorCode.DUPLICATE_KEY,
                 f'input {name!r} is bound more than once',
                 SourceSpan.of(file, key_node),
             )
@@ -493,7 +495,7 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
         # discards a name the source supplied is the silent drop a total
         # parser must never make.
         diags.error(
-            Code.MISPLACED_EDGE_DEF,
+            SophiosErrorCode.MISPLACED_EDGE_DEF,
             "'!&' defines an edge, and an edge is defined where its value comes into being: "
             "a step's out: entry (§4.1.1). Use '!*' to consume an edge",
             span,
@@ -596,7 +598,7 @@ def _report_misspelled_construct(key: str, key_node: yaml.nodes.Node,
     if not key.startswith(CONSTRUCT_PREFIX):
         return
     diags.error(
-        Code.RESERVED_KEY,
+        SophiosErrorCode.RESERVED_KEY,
         f"{key!r} is not a Sophios construct, and a single-key mapping beginning 'wic_' is read as "
         f'one. The constructs are: {", ".join(sorted(Forms.DESUGARED_KEYS))}',
         SourceSpan.of(file, key_node))
@@ -642,7 +644,8 @@ class Forms:  # pylint: disable=too-few-public-methods  # a namespace, not a typ
 def _outputs(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[OutputBinding, ...]:
     """Parse a step's `out:` sequence."""
     if not isinstance(node, yaml.nodes.SequenceNode):
-        diags.error(Code.EXPECTED_SEQUENCE, f'out: must be a sequence, found {_kind(node)}', SourceSpan.of(file, node))
+        diags.error(SophiosErrorCode.EXPECTED_SEQUENCE, f'out: must be a sequence, found {_kind(node)}',
+                    SourceSpan.of(file, node))
         return ()
     return tuple(_output_binding(item, file, diags) for item in node.value)
 
@@ -663,14 +666,14 @@ def _output_binding(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Out
                 # preserve what it was given, and a silent drop is the one
                 # thing a total parser must never do.
                 diags.error(
-                    Code.EXPECTED_SCALAR,
+                    SophiosErrorCode.EXPECTED_SCALAR,
                     f'out: entry {name!r} must bind an !& edge definition; its value is neither !& nor wic_anchor',
                     SourceSpan.of(file, value_node),
                 )
             return OutputBinding(name, edge, span)
         case _:
             diags.error(
-                Code.EXPECTED_SCALAR,
+                SophiosErrorCode.EXPECTED_SCALAR,
                 'each out: entry must be a name or a single-key mapping',
                 span,
             )
@@ -718,13 +721,13 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
     """Parse a `wic:` block, normalising its `"(1, name)"` step keys."""
     span = SourceSpan.of(file, node)
     if id(node) in _path:
-        diags.error(Code.RECURSIVE_ALIAS, 'alias cycle: a wic: block contains itself', span)
+        diags.error(SophiosErrorCode.RECURSIVE_ALIAS, 'alias cycle: a wic: block contains itself', span)
         return WicSidecar(span=span)
     if node.tag == 'tag:yaml.org,2002:null':
         # `wic:` with nothing under it is an empty sidecar, not an error.
         return WicSidecar(span=span)
     if not isinstance(node, yaml.nodes.MappingNode):
-        diags.error(Code.EXPECTED_MAPPING, f'wic: must be a mapping, found {_kind(node)}', span)
+        diags.error(SophiosErrorCode.EXPECTED_MAPPING, f'wic: must be a mapping, found {_kind(node)}', span)
         return WicSidecar(span=span)
 
     steps: list[tuple[StepKey, WicSidecar]] = []
@@ -736,7 +739,7 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
             continue
         if not isinstance(value_node, yaml.nodes.MappingNode):
             diags.error(
-                Code.EXPECTED_MAPPING,
+                SophiosErrorCode.EXPECTED_MAPPING,
                 f'wic: steps: must be a mapping, found {_kind(value_node)}',
                 SourceSpan.of(file, value_node),
             )
@@ -745,7 +748,7 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
         for sub_key, sub_value in value_node.value:
             key_text = _key_text(sub_key, file, diags)
             if key_text in seen_steps:
-                diags.error(Code.DUPLICATE_KEY,
+                diags.error(SophiosErrorCode.DUPLICATE_KEY,
                             f'wic: step key {key_text!r} is defined more than once',
                             SourceSpan.of(file, sub_key))
                 continue
@@ -753,7 +756,7 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
             parsed = _step_key(key_text)
             if parsed is None:
                 diags.error(
-                    Code.MALFORMED_WIC_STEP_KEY,
+                    SophiosErrorCode.MALFORMED_WIC_STEP_KEY,
                     f'wic: step key {key_text!r} must have the form "(index, name)"',
                     SourceSpan.of(file, sub_key),
                 )
@@ -826,12 +829,12 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
     # widening alias chain is cut off by the budget. Both are reported once.
     spent = _spent if _spent is not None else [0]
     if id(node) in _path:
-        diags.error(Code.RECURSIVE_ALIAS, 'alias cycle: a node contains itself', SourceSpan.of(file, node))
+        diags.error(SophiosErrorCode.RECURSIVE_ALIAS, 'alias cycle: a node contains itself', SourceSpan.of(file, node))
         return None
     spent[0] += 1
     if spent[0] > _EXPANSION_BUDGET:
         if spent[0] == _EXPANSION_BUDGET + 1:  # report once, not per node
-            diags.error(Code.RECURSIVE_ALIAS,
+            diags.error(SophiosErrorCode.RECURSIVE_ALIAS,
                         f'alias expansion exceeds {_EXPANSION_BUDGET} nodes; refusing to materialise',
                         SourceSpan.of(file, node))
         return None
@@ -910,7 +913,7 @@ def _name_text(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> str:
     rejects the same text with a ConstructorError.
     """
     if not isinstance(node, yaml.nodes.ScalarNode):
-        diags.error(Code.EXPECTED_SCALAR,
+        diags.error(SophiosErrorCode.EXPECTED_SCALAR,
                     f'an edge or reference name must be a scalar, found {_kind(node)}',
                     SourceSpan.of(file, node))
         return ''
@@ -930,7 +933,7 @@ def _key_text(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> str:
     loader refuses — the one direction the language promises never to take.
     """
     if not isinstance(node, yaml.nodes.ScalarNode):
-        diags.error(Code.EXPECTED_SCALAR,
+        diags.error(SophiosErrorCode.EXPECTED_SCALAR,
                     f'mapping keys must be scalars, found {_kind(node)}',
                     SourceSpan.of(file, node))
     return str(node.value)

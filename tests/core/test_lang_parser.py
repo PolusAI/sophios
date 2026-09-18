@@ -21,7 +21,7 @@ from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from sophios.lang import (
-    Code,
+    SophiosErrorCode,
     Diagnostics,
     Document,
     EdgeDef,
@@ -299,7 +299,7 @@ class Reported(NamedTuple):
 
     claim: str
     source: str
-    code: Code
+    code: SophiosErrorCode
     #: The line the diagnostic must land on. Every row reports exactly one,
     #: so the position is determinate and worth pinning.
     line: int
@@ -312,56 +312,56 @@ class Reported(NamedTuple):
 REPORTED: Final[tuple[Reported, ...]] = (
     Reported('a sequence step without an id: names both forms that exist (§3.1)',
              'steps:\n- touch:\n    in: {f: !ii x}\n',
-             Code.MISSING_STEP_ID, 2, message_contains="- id: touch"),
+             SophiosErrorCode.MISSING_STEP_ID, 2, message_contains="- id: touch"),
     Reported('and with no body either, which is the shape insertion used to write',
-             'steps:\n- sub.wic:\n', Code.MISSING_STEP_ID, 2,
+             'steps:\n- sub.wic:\n', SophiosErrorCode.MISSING_STEP_ID, 2,
              message_contains='- id: sub.wic'),
     Reported('an edge definition in input position names the position (§4.1.1)',
              'steps:\n- id: s\n  in:\n    f: !& e\n',
-             Code.MISPLACED_EDGE_DEF, 4, message_contains='out:'),
+             SophiosErrorCode.MISPLACED_EDGE_DEF, 4, message_contains='out:'),
     Reported('the desugared spelling is reported the same way',
              'steps:\n- id: s\n  in:\n    f: {wic_anchor: e}\n',
-             Code.MISPLACED_EDGE_DEF, 4, message_contains='out:'),
+             SophiosErrorCode.MISPLACED_EDGE_DEF, 4, message_contains='out:'),
     Reported('an anchor nested in a literal payload is reported too',
              'steps:\n- id: s\n  in:\n    f: !ii {k: !& e}\n',
-             Code.MISPLACED_EDGE_DEF, 4, message_contains='out:'),
+             SophiosErrorCode.MISPLACED_EDGE_DEF, 4, message_contains='out:'),
     Reported('the rule is positional: an anchor at the top level is reported',
-             'top: !& e\n', Code.MISPLACED_EDGE_DEF, 1, message_contains='out:'),
+             'top: !& e\n', SophiosErrorCode.MISPLACED_EDGE_DEF, 1, message_contains='out:'),
     Reported('and inside the wic: block, which is not a step at all',
              'wic:\n  graphviz:\n    label: !& e\n',
-             Code.MISPLACED_EDGE_DEF, 3, message_contains='out:'),
+             SophiosErrorCode.MISPLACED_EDGE_DEF, 3, message_contains='out:'),
     Reported('the desugared spelling is reported in the same positions (§6.1)',
-             'top: {wic_anchor: e}\n', Code.MISPLACED_EDGE_DEF, 1, message_contains='out:'),
+             'top: {wic_anchor: e}\n', SophiosErrorCode.MISPLACED_EDGE_DEF, 1, message_contains='out:'),
     Reported('a malformed name does not earn spelling advice for a construct '
              'that may not appear here at all',
              'steps:\n- id: s\n  in:\n    f: !& [a]\n',
-             Code.MISPLACED_EDGE_DEF, 4, message_contains='out:'),
+             SophiosErrorCode.MISPLACED_EDGE_DEF, 4, message_contains='out:'),
     Reported('a collection step key is reported, not stringified',
-             'steps:\n  ? [a, b]\n  : {}\n', Code.EXPECTED_SCALAR, 2,
+             'steps:\n  ? [a, b]\n  : {}\n', SophiosErrorCode.EXPECTED_SCALAR, 2,
              message_contains='mapping keys must be scalars'),
     Reported('an input bound twice names the input (§4.2)',
              'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
-             Code.DUPLICATE_KEY, 5, message_contains="'f'"),
+             SophiosErrorCode.DUPLICATE_KEY, 5, message_contains="'f'"),
     Reported('a step that is not a mapping is reported',
-             'steps:\n  - 42\n', Code.EXPECTED_MAPPING, 2,
+             'steps:\n  - 42\n', SophiosErrorCode.EXPECTED_MAPPING, 2,
              message_contains='each step must be a mapping'),
     Reported('a step body key repeated names the key',
              'steps:\n- id: s\n  in: {a: !ii 1}\n  in: {b: !ii 2}\n',
-             Code.DUPLICATE_KEY, 4, message_contains="step key 'in'"),
+             SophiosErrorCode.DUPLICATE_KEY, 4, message_contains="step key 'in'"),
     Reported('a second id: inside a step body is contradictory, not a tiebreak',
              'steps:\n  s:\n    id: other\n',
-             Code.DUPLICATE_KEY, 3, message_contains='already has its identity'),
+             SophiosErrorCode.DUPLICATE_KEY, 3, message_contains='already has its identity'),
     Reported('an out: entry that is neither name nor single-key mapping',
-             'steps:\n  s:\n    out: [[a, b]]\n', Code.EXPECTED_SCALAR, 3,
+             'steps:\n  s:\n    out: [[a, b]]\n', SophiosErrorCode.EXPECTED_SCALAR, 3,
              message_contains='each out: entry must be'),
     Reported('a wic: block reached through its own alias',
              'wic: &w\n  steps:\n    (1, a):\n      wic: *w\n',
-             Code.RECURSIVE_ALIAS, 1, message_contains='contains itself'),
+             SophiosErrorCode.RECURSIVE_ALIAS, 1, message_contains='contains itself'),
     Reported('a repeated wic: step key names the key',
              'wic:\n  steps:\n    (1, a): {}\n    (1, a): {}\n',
-             Code.DUPLICATE_KEY, 4, message_contains="wic: step key '(1, a)'"),
+             SophiosErrorCode.DUPLICATE_KEY, 4, message_contains="wic: step key '(1, a)'"),
     Reported('malformed YAML is located, not raised',
-             'steps:\n  - [unclosed\n', Code.INVALID_YAML, 3, recovers=False),
+             'steps:\n  - [unclosed\n', SophiosErrorCode.INVALID_YAML, 3, recovers=False),
 )
 
 
@@ -408,16 +408,16 @@ def test_sequence_and_mapping_steps_agree() -> None:
 #: identity. Every line number is the same in all three.
 _ID_FORM: Final = 'steps:\n- id: touch\n  in:\n    f: !bogus x\n    g: !& e\n'
 REJECTED_ENTRIES: Final = (
-    ('a single-key mapping', Code.MISSING_STEP_ID,
+    ('a single-key mapping', SophiosErrorCode.MISSING_STEP_ID,
      'steps:\n- touch:\n    in:\n      f: !bogus x\n      g: !& e\n'),
-    ('an entry with keys but no id:', Code.MISSING_STEP_ID,
+    ('an entry with keys but no id:', SophiosErrorCode.MISSING_STEP_ID,
      'steps:\n- name: touch\n  in:\n    f: !bogus x\n    g: !& e\n'),
 )
 
 
 @pytest.mark.fast
 @pytest.mark.parametrize(('claim', 'code', 'source'), REJECTED_ENTRIES, ids=[c for c, _, _ in REJECTED_ENTRIES])
-def test_a_rejected_step_entry_still_reports_its_body(claim: str, code: Code, source: str) -> None:
+def test_a_rejected_step_entry_still_reports_its_body(claim: str, code: SophiosErrorCode, source: str) -> None:
     """A step with no identity is still walked, so one pass sees everything.
 
     Both rejected shapes must report the same body problems the `id:` form
@@ -425,14 +425,14 @@ def test_a_rejected_step_entry_still_reports_its_body(claim: str, code: Code, so
     from contents that were there all along.
     """
     reported = [(d.code, d.span.start_line if d.span else None) for d in parse(source, 'rejected.wic').diagnostics]
-    assert reported == [(code, 2), (Code.UNKNOWN_TAG, 4), (Code.MISPLACED_EDGE_DEF, 5)], claim
+    assert reported == [(code, 2), (SophiosErrorCode.UNKNOWN_TAG, 4), (SophiosErrorCode.MISPLACED_EDGE_DEF, 5)], claim
 
 
 @pytest.mark.fast
 def test_the_id_form_reports_exactly_the_same_body_problems() -> None:
     """The `id:` form is the baseline the two rejected shapes are held to."""
     reported = [(d.code, d.span.start_line if d.span else None) for d in parse(_ID_FORM, 'id_form.wic').diagnostics]
-    assert reported == [(Code.UNKNOWN_TAG, 4), (Code.MISPLACED_EDGE_DEF, 5)]
+    assert reported == [(SophiosErrorCode.UNKNOWN_TAG, 4), (SophiosErrorCode.MISPLACED_EDGE_DEF, 5)]
 
 
 #: A single-key entry whose key is one of a step's own keys is a forgotten
@@ -459,8 +459,8 @@ def test_a_forgotten_id_entry_is_walked_as_its_own_body(claim: str, source: str,
     """
     rejected = [d.code for d in parse(source, 'rejected.wic').diagnostics]
     baseline = [d.code for d in parse(reference, 'id_form.wic').diagnostics]
-    assert rejected == [Code.MISSING_STEP_ID, *baseline], claim
-    assert Code.DUPLICATE_KEY not in rejected, f'{claim}: a legal key was read as a second step identity'
+    assert rejected == [SophiosErrorCode.MISSING_STEP_ID, *baseline], claim
+    assert SophiosErrorCode.DUPLICATE_KEY not in rejected, f'{claim}: a legal key was read as a second step identity'
 
 
 #: A single-key entry whose key is *not* a step key is a step named by that key,
@@ -492,7 +492,7 @@ def test_a_named_entry_reports_what_the_mapping_form_reports(claim: str, source:
     """
     rejected = [d.code for d in parse(source, 'rejected.wic').diagnostics]
     baseline = [d.code for d in parse(reference, 'mapping.wic').diagnostics]
-    assert rejected == [Code.MISSING_STEP_ID, *baseline], claim
+    assert rejected == [SophiosErrorCode.MISSING_STEP_ID, *baseline], claim
 
 
 #: A tag on a node that makes up the document's *structure*, rather than on a
@@ -528,7 +528,7 @@ def test_an_unknown_tag_on_a_structural_node_is_reported(claim: str, source: str
     """
     result = parse(source, 'tagged.wic')
     assert not result.ok, claim
-    assert Code.UNKNOWN_TAG in [d.code for d in result.diagnostics], claim
+    assert SophiosErrorCode.UNKNOWN_TAG in [d.code for d in result.diagnostics], claim
     with pytest.raises(yaml.YAMLError):
         yaml.load(source, Loader=wic_loader())
 
@@ -591,7 +591,7 @@ def test_a_misspelled_desugared_construct_is_reported(claim: str, source: str) -
     """
     result = parse(source, 'misspelled.wic')
     assert not result.ok, claim
-    assert Code.RESERVED_KEY in [d.code for d in result.diagnostics], claim
+    assert SophiosErrorCode.RESERVED_KEY in [d.code for d in result.diagnostics], claim
 
 
 @pytest.mark.fast
@@ -607,7 +607,7 @@ def test_the_prefix_is_claimed_in_construct_position_only(claim: str, source: st
     defect being closed, and passthrough must stay open (§1).
     """
     result = parse(source, 'unclaimed.wic')
-    assert Code.RESERVED_KEY not in [d.code for d in result.diagnostics], claim
+    assert SophiosErrorCode.RESERVED_KEY not in [d.code for d in result.diagnostics], claim
 
 
 @pytest.mark.fast
@@ -615,7 +615,7 @@ def test_the_prefix_is_claimed_in_construct_position_only(claim: str, source: st
 def test_the_desugared_spellings_are_not_reported_against_themselves(spelling: str) -> None:
     """The rule names a prefix, so the constructs it exists for must pass it."""
     result = parse(f'steps:\n- id: s\n  in:\n    f:\n      {spelling}: e\n', 'spelled.wic')
-    assert Code.RESERVED_KEY not in [d.code for d in result.diagnostics], spelling
+    assert SophiosErrorCode.RESERVED_KEY not in [d.code for d in result.diagnostics], spelling
 
 
 @pytest.mark.fast
@@ -629,7 +629,7 @@ def test_a_collection_key_is_not_quoted_back_as_a_node_repr() -> None:
     """
     result = parse('steps:\n- ? [a]\n  : 1\n', 'collection_key.wic')
     # Position order: the step's own span opens before the key's.
-    assert [d.code for d in result.diagnostics] == [Code.MISSING_STEP_ID, Code.EXPECTED_SCALAR]
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.MISSING_STEP_ID, SophiosErrorCode.EXPECTED_SCALAR]
     assert 'ScalarNode' not in result.diagnostics[0].message
     assert result.diagnostics[0].message == 'a step in a sequence needs an id:'
 
@@ -645,7 +645,7 @@ def test_a_repeated_step_id_is_reported_rather_than_resolved() -> None:
     """
     result = parse('steps:\n- id: first\n  id: second\n', 'dup.wic')
     assert not result.ok
-    assert [d.code for d in result.diagnostics] == [Code.DUPLICATE_KEY]
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.DUPLICATE_KEY]
     assert [d.span.start_line for d in result.diagnostics if d.span] == [3]
 
 
@@ -659,7 +659,7 @@ def test_one_code_carries_both_step_without_id_messages() -> None:
     """
     single = list(parse('steps:\n- touch:\n    in: {f: !ii x}\n', 'one.wic').diagnostics)
     multi = list(parse('steps:\n- in: {f: !ii x}\n  out: [g]\n', 'many.wic').diagnostics)
-    assert [d.code for d in single] == [d.code for d in multi] == [Code.MISSING_STEP_ID]
+    assert [d.code for d in single] == [d.code for d in multi] == [SophiosErrorCode.MISSING_STEP_ID]
     assert single[0].message == (
         "a step in a sequence carries its name in an id: key — write '- id: touch' if 'touch' "
         "is the step's name; add the '- id:' line above if 'touch' is one of the step's own "
@@ -672,7 +672,7 @@ def test_one_code_carries_both_step_without_id_messages() -> None:
 def test_the_single_key_message_leads_with_the_likelier_reading(name: str, leads: str) -> None:
     """`- in:` is almost certainly a forgotten id:; `- touch:` almost certainly a name."""
     diagnostics = parse(f'steps:\n- {name}:\n    a: !ii 1\n', 'reading.wic').diagnostics
-    message = next(d.message for d in diagnostics if d.code is Code.MISSING_STEP_ID)
+    message = next(d.message for d in diagnostics if d.code is SophiosErrorCode.MISSING_STEP_ID)
     assert message.startswith(f'a step in a sequence carries its name in an id: key — {leads}')
     assert f"write '- id: {name}'" in message and "add the '- id:' line" in message
 
@@ -756,7 +756,7 @@ def test_unknown_tags_report_wic009(source: str) -> None:
     determinism); this asserts only the stable code the reference documents.
     """
     result = parse(source, 'x.wic')
-    assert any(d.code is Code.UNKNOWN_TAG for d in result.diagnostics), source
+    assert any(d.code is SophiosErrorCode.UNKNOWN_TAG for d in result.diagnostics), source
     assert not result.ok
 
 
@@ -860,7 +860,7 @@ def test_alias_cycles_are_reported(source: str) -> None:
     """
     result = parse(source, 'cycle.wic')
     assert not result.ok, source
-    assert any(d.code is Code.RECURSIVE_ALIAS for d in result.diagnostics), \
+    assert any(d.code is SophiosErrorCode.RECURSIVE_ALIAS for d in result.diagnostics), \
         [d.code for d in result.diagnostics]
 
 
@@ -876,7 +876,7 @@ def test_alias_expansion_is_bounded() -> None:
     result = parse(laughs, 'laughs.wic')  # must not raise or hang
     assert time.perf_counter() - started < 5.0
     assert not result.ok
-    assert any(d.code is Code.RECURSIVE_ALIAS for d in result.diagnostics)
+    assert any(d.code is SophiosErrorCode.RECURSIVE_ALIAS for d in result.diagnostics)
 
 
 @pytest.mark.fast
@@ -1009,8 +1009,8 @@ def test_tag_decisions_agree_across_positions(tag: str, shape: str, data: st.Dat
     # `wic024` is one, since a single-key `wic_` mapping is a construct attempt
     # where a construct may appear and ordinary CWL where one may not -- makes
     # every future position-specific diagnostic another exemption here.
-    unknown_in = any(d.code is Code.UNKNOWN_TAG for d in in_position.diagnostics)
-    unknown_through = any(d.code is Code.UNKNOWN_TAG for d in passthrough.diagnostics)
+    unknown_in = any(d.code is SophiosErrorCode.UNKNOWN_TAG for d in in_position.diagnostics)
+    unknown_through = any(d.code is SophiosErrorCode.UNKNOWN_TAG for d in passthrough.diagnostics)
     assert unknown_in == unknown_through, (
         f'{value!r}: input reported unknown-tag={unknown_in}, '
         f'passthrough={unknown_through}')
@@ -1030,12 +1030,12 @@ def test_an_edge_definition_is_refused_in_every_position_but_out(
     """One construct, one verdict, in both spellings and every position.
 
     The narrower unknown-tag version above quantifies only over
-    `Code.UNKNOWN_TAG`, so it cannot see a `wic019` divergence — and there was
+    `SophiosErrorCode.UNKNOWN_TAG`, so it cannot see a `wic019` divergence — and there was
     one: `_opaque` routed on the tag, so `{wic_anchor: e}` was plain data
     exactly where `!& e` was refused.
     """
     result = parse(source.format(value=spelling), 'pos.wic')
-    assert any(d.code is Code.MISPLACED_EDGE_DEF for d in result.diagnostics), (
+    assert any(d.code is SophiosErrorCode.MISPLACED_EDGE_DEF for d in result.diagnostics), (
         f'{spelling!r} in {position} was accepted')
 
 
@@ -1079,11 +1079,11 @@ def test_inline_literal_collections_wrap_exactly_once() -> None:
 
 @pytest.mark.fast
 def test_every_code_has_a_registered_provocation() -> None:
-    """Each declared Code appears in exactly one tier of the registry.
+    """Each declared SophiosErrorCode appears in exactly one tier of the registry.
 
-    Adding a Code without its attack fails here, in the same commit."""
+    Adding a SophiosErrorCode without its attack fails here, in the same commit."""
     registered = set(provocations.PARSE) | set(provocations.COMPILED)
-    missing = set(Code) - registered
+    missing = set(SophiosErrorCode) - registered
     doubled = set(provocations.PARSE) & set(provocations.COMPILED)
     assert not missing, f'codes with no registered provocation: {sorted(map(str, missing))}'
     assert not doubled, f'codes registered in both tiers: {sorted(map(str, doubled))}'
@@ -1091,7 +1091,7 @@ def test_every_code_has_a_registered_provocation() -> None:
 
 @pytest.mark.fast
 @pytest.mark.parametrize('code', sorted(provocations.PARSE), ids=lambda c: c.name)
-def test_parse_provocations_fire(code: Code) -> None:
+def test_parse_provocations_fire(code: SophiosErrorCode) -> None:
     """Every parse-tier provocation actually fires its code."""
     result = parse(provocations.PARSE[code], 'provoke.wic')
     assert any(d.code is code for d in result.diagnostics), f'{code.name} did not fire'
@@ -1099,7 +1099,7 @@ def test_parse_provocations_fire(code: Code) -> None:
 
 @pytest.mark.skip_pypi_ci
 @pytest.mark.parametrize('code', sorted(provocations.COMPILED), ids=lambda c: c.name)
-def test_compiled_provocations_fire(code: Code) -> None:
+def test_compiled_provocations_fire(code: SophiosErrorCode) -> None:
     """Every compiled-tier provocation raises SophiosError carrying its code.
 
     `SophiosError` is looked up dynamically: it arrives with the diagnostics
@@ -1175,9 +1175,9 @@ def test_a_misplaced_edge_definition_keeps_the_name_it_was_given(
 
 @pytest.mark.fast
 @pytest.mark.parametrize('payload, expected', [
-    ('{wic_anchor: x}', {Code.UNKNOWN_TAG, Code.MISPLACED_EDGE_DEF}),
-    ('{wic_alias: x}', {Code.UNKNOWN_TAG}),
-    ('bar', {Code.UNKNOWN_TAG}),
+    ('{wic_anchor: x}', {SophiosErrorCode.UNKNOWN_TAG, SophiosErrorCode.MISPLACED_EDGE_DEF}),
+    ('{wic_alias: x}', {SophiosErrorCode.UNKNOWN_TAG}),
+    ('bar', {SophiosErrorCode.UNKNOWN_TAG}),
 ], ids=['anchor payload', 'alias payload', 'scalar payload'])
 def test_an_unknown_tag_and_a_misplaced_anchor_are_both_reported_in_both_positions(
         payload: str, expected: set) -> None:

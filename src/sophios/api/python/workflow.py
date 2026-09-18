@@ -10,11 +10,16 @@ from typing import Any, ClassVar, overload
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
 from sophios.lang.compatibility import TypeRelation, reference_relation
+from sophios.lang.diagnostics import SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.versions import KNOWN_VERSIONS
 from sophios.wic_types import CompilerInfo, Tools
 
 from ._compiled import CompiledWorkflow
 from ._errors import (
+    ApiError,
+    InvalidCLTError,
+    InvalidInputValueError,
     InvalidLinkError,
     InvalidStepError,
 )
@@ -56,10 +61,19 @@ _silence_autodiscovery_logging()
 
 
 StrPath = str | Path
+#: Re-exported so a caller can `except SophiosError` without importing
+#: `sophios.lang.diagnostics`. Everything this module raises is one of these,
+#: and `.diagnostics` carries the codes -- `wic0NN` when the document is wrong,
+#: `api0NN` when the call is.
 __all__ = [
+    "ApiError",
     "CompiledWorkflow",
+    "InvalidCLTError",
+    "InvalidInputValueError",
     "InvalidLinkError",
     "InvalidStepError",
+    "SophiosError",
+    "SophiosErrorCode",
     "Step",
     "Workflow",
 ]

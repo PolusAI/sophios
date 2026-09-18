@@ -5,7 +5,7 @@ import sys
 from types import ModuleType
 from typing import Any
 from .lang.cwl import CWL_VERSION
-from .lang.diagnostics import Code, SophiosError
+from .lang.diagnostics import SophiosErrorCode, SophiosError
 
 DRIVER_SCRIPT = '/python_cwl_driver.py'
 TYPES_SCRIPT = '/workflow_types.py'
@@ -95,7 +95,7 @@ def check_args_match_inputs(module_: ModuleType, args: dict[str, Any], check: bo
         problems += [f'Error! Python argument {arg} not in wic arguments {args}'
                      for arg in module_.inputs if arg not in args]
     if problems:
-        raise SophiosError.error(Code.SCRIPT_ARGUMENT_MISMATCH, *problems)
+        raise SophiosError.error(SophiosErrorCode.SCRIPT_ARGUMENT_MISMATCH, *problems)
 
 
 def generate_CWL_CommandLineTool(module_inputs: dict[str, Any], module_outputs: dict[str, Any],

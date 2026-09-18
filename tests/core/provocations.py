@@ -1,7 +1,7 @@
 """One attack per diagnostic code — the registry behind the provocation rule.
 
 A diagnostic that cannot be provoked is dead on arrival (the parser's
-UNKNOWN_TAG sat unreachable for days), so every `Code` member must appear in
+UNKNOWN_TAG sat unreachable for days), so every `SophiosErrorCode` member must appear in
 exactly one tier here, and the meta-test in `test_lang_parser.py` fails the
 build for any member that does not.
 
@@ -9,35 +9,35 @@ Two tiers, because the codes have two habitats. PARSE codes fire through
 `parse()` alone and their provocations are source strings. COMPILED codes fire
 through the compiler or its helpers; their provocations are zero-arg callables
 that must raise `SophiosError` carrying the code, importing what they need
-lazily so this module stays cheap to import. A branch that adds a `Code`
+lazily so this module stays cheap to import. A branch that adds a `SophiosErrorCode`
 extends this registry in the same commit, or the meta-test says so.
 """
 from collections.abc import Callable
 from typing import Final
 
-from sophios.lang.diagnostics import Code
+from sophios.lang.diagnostics import SophiosErrorCode
 
 #: Codes provoked through `parse()` alone: source text in, diagnostic out.
-PARSE: Final[dict[Code, str]] = {
-    Code.INVALID_YAML: 'steps:\n  - [unclosed\n',
-    Code.NOT_A_MAPPING: '- just\n- a list\n',
-    Code.EXPECTED_MAPPING: 'steps: 3\n',
-    Code.EXPECTED_SEQUENCE: 'steps:\n- id: s\n  out: 3\n',
-    Code.EXPECTED_SCALAR: 'steps:\n  ? [a, b]\n  : {}\n',
-    Code.MISSING_STEP_ID: 'steps:\n- {a: 1, b: 2}\n',
-    Code.EMPTY_STEP_ID: "steps:\n- id: ''\n",
-    Code.MALFORMED_WIC_STEP_KEY: 'wic:\n  steps:\n    nope:\n      x: 1\n',
-    Code.UNKNOWN_TAG: 'top: !foo bar\n',
-    Code.DUPLICATE_KEY: 'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
-    Code.RECURSIVE_ALIAS: 'top: &a [*a]\n',
-    Code.MISPLACED_EDGE_DEF: 'top: !& e\n',
-    Code.RESERVED_KEY: 'steps:\n- id: s\n  in:\n    f:\n      wic_inline_inpt: 1\n',
+PARSE: Final[dict[SophiosErrorCode, str]] = {
+    SophiosErrorCode.INVALID_YAML: 'steps:\n  - [unclosed\n',
+    SophiosErrorCode.NOT_A_MAPPING: '- just\n- a list\n',
+    SophiosErrorCode.EXPECTED_MAPPING: 'steps: 3\n',
+    SophiosErrorCode.EXPECTED_SEQUENCE: 'steps:\n- id: s\n  out: 3\n',
+    SophiosErrorCode.EXPECTED_SCALAR: 'steps:\n  ? [a, b]\n  : {}\n',
+    SophiosErrorCode.MISSING_STEP_ID: 'steps:\n- {a: 1, b: 2}\n',
+    SophiosErrorCode.EMPTY_STEP_ID: "steps:\n- id: ''\n",
+    SophiosErrorCode.MALFORMED_WIC_STEP_KEY: 'wic:\n  steps:\n    nope:\n      x: 1\n',
+    SophiosErrorCode.UNKNOWN_TAG: 'top: !foo bar\n',
+    SophiosErrorCode.DUPLICATE_KEY: 'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
+    SophiosErrorCode.RECURSIVE_ALIAS: 'top: &a [*a]\n',
+    SophiosErrorCode.MISPLACED_EDGE_DEF: 'top: !& e\n',
+    SophiosErrorCode.RESERVED_KEY: 'steps:\n- id: s\n  in:\n    f:\n      wic_inline_inpt: 1\n',
 }
 
 #: Codes provoked through the compiler or its helpers. Callables raise
 #: `SophiosError` carrying the code. Extended by the branches that add the
 #: codes; empty here because this branch declares no compile-phase codes.
-COMPILED: Final[dict[Code, Callable[[], object]]] = {}
+COMPILED: Final[dict[SophiosErrorCode, Callable[[], object]]] = {}
 
 
 def _provoke_undefined_edge() -> None:
@@ -129,12 +129,12 @@ def _provoke_missing_input_file() -> None:
 
 
 COMPILED.update({
-    Code.UNRESOLVED_INPUT: _provoke_unresolved_input,
-    Code.MISSING_REQUIRED_INPUT: _provoke_missing_required_input,
-    Code.SUBWORKFLOW_INVALID: _provoke_subworkflow_invalid,
-    Code.SCRIPT_ARGUMENT_MISMATCH: _provoke_script_argument_mismatch,
-    Code.CONTAINER_ENGINE_UNAVAILABLE: _provoke_container_engine_unavailable,
-    Code.MISSING_INPUT_FILE: _provoke_missing_input_file,
+    SophiosErrorCode.UNRESOLVED_INPUT: _provoke_unresolved_input,
+    SophiosErrorCode.MISSING_REQUIRED_INPUT: _provoke_missing_required_input,
+    SophiosErrorCode.SUBWORKFLOW_INVALID: _provoke_subworkflow_invalid,
+    SophiosErrorCode.SCRIPT_ARGUMENT_MISMATCH: _provoke_script_argument_mismatch,
+    SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE: _provoke_container_engine_unavailable,
+    SophiosErrorCode.MISSING_INPUT_FILE: _provoke_missing_input_file,
 })
 
 
@@ -149,8 +149,8 @@ def _provoke_lang_version_conflict() -> None:
 
 
 COMPILED.update({
-    Code.UNKNOWN_LANG_VERSION: _provoke_unknown_lang_version,
-    Code.LANG_VERSION_CONFLICT: _provoke_lang_version_conflict,
+    SophiosErrorCode.UNKNOWN_LANG_VERSION: _provoke_unknown_lang_version,
+    SophiosErrorCode.LANG_VERSION_CONFLICT: _provoke_lang_version_conflict,
 })
 
 
@@ -163,7 +163,7 @@ def _provoke_literal_type_mismatch() -> None:
 
 
 COMPILED.update({
-    Code.LITERAL_TYPE_MISMATCH: _provoke_literal_type_mismatch,
+    SophiosErrorCode.LITERAL_TYPE_MISMATCH: _provoke_literal_type_mismatch,
 })
 
 
@@ -180,7 +180,7 @@ def _never_converges() -> None:
 
 
 COMPILED.update({
-    Code.FIXED_POINT_NOT_REACHED: _never_converges,
+    SophiosErrorCode.FIXED_POINT_NOT_REACHED: _never_converges,
 })
 
 
@@ -192,7 +192,7 @@ def _provoke_incompatible_input_reference() -> None:
 
 
 COMPILED.update({
-    Code.INCOMPATIBLE_INPUT_REFERENCE: _provoke_incompatible_input_reference,
+    SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE: _provoke_incompatible_input_reference,
 })
 
 
@@ -212,8 +212,42 @@ def _provoke_empty_name() -> None:
     raise SophiosError(tuple(diagnostics))
 
 
+def _provoke_invalid_input_value() -> None:
+    """A value bound to a step input the input cannot take."""
+    from sophios.api.python.workflow import InvalidInputValueError  # pylint: disable=import-outside-toplevel
+
+    raise InvalidInputValueError('a value the input cannot take')
+
+
+def _provoke_invalid_step() -> None:
+    """An output bound to a step the workflow does not own."""
+    from sophios.api.python.workflow import (  # pylint: disable=import-outside-toplevel
+        InvalidStepError,
+    )
+
+    raise InvalidStepError('step is not a child of this workflow')
+
+
+def _provoke_invalid_link() -> None:
+    """A workflow output whose source is not one of its steps."""
+    from sophios.api.python.workflow import InvalidLinkError  # pylint: disable=import-outside-toplevel
+
+    raise InvalidLinkError('source is not one of the workflow steps')
+
+
+def _provoke_invalid_tool() -> None:
+    """A CWL tool that cannot be loaded."""
+    from sophios.api.python.workflow import InvalidCLTError  # pylint: disable=import-outside-toplevel
+
+    raise InvalidCLTError('invalid cwl file: no_such_tool.cwl')
+
+
 COMPILED.update({
-    Code.UNDEFINED_EDGE: _provoke_undefined_edge,
-    Code.DUPLICATE_EDGE_DEF: _provoke_duplicate_edge_def,
-    Code.EMPTY_NAME: _provoke_empty_name,
+    SophiosErrorCode.INVALID_INPUT_VALUE: _provoke_invalid_input_value,
+    SophiosErrorCode.INVALID_STEP: _provoke_invalid_step,
+    SophiosErrorCode.INVALID_LINK: _provoke_invalid_link,
+    SophiosErrorCode.INVALID_TOOL: _provoke_invalid_tool,
+    SophiosErrorCode.UNDEFINED_EDGE: _provoke_undefined_edge,
+    SophiosErrorCode.DUPLICATE_EDGE_DEF: _provoke_duplicate_edge_def,
+    SophiosErrorCode.EMPTY_NAME: _provoke_empty_name,
 })

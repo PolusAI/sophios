@@ -11,7 +11,7 @@ from typing import Final
 
 import pytest
 
-from sophios.lang.diagnostics import Code, SophiosError
+from sophios.lang.diagnostics import SophiosErrorCode, SophiosError
 
 from .hermetic import compile_production, subworkflow_step
 
@@ -37,7 +37,7 @@ def test_a_reference_with_no_definition_is_reported() -> None:
     """`wic025`, rather than a `ValueError` a caller cannot match on."""
     with pytest.raises(SophiosError) as excinfo:
         compile_production({'steps': [_SOURCE, {'id': 'sink', 'in': {'file': {'wic_alias': 'absent'}}}]})
-    assert Code.UNDEFINED_EDGE.value in _codes(excinfo)
+    assert SophiosErrorCode.UNDEFINED_EDGE.value in _codes(excinfo)
     assert 'absent' in str(excinfo.value.diagnostics[0].message)
 
 
@@ -51,7 +51,7 @@ def test_a_name_defined_twice_is_reported() -> None:
             {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'b'}},
              'out': [{'file': {'wic_anchor': 'twice'}}]},
             {'id': 'sink', 'in': {'file': {'wic_alias': 'twice'}}}]})
-    assert Code.DUPLICATE_EDGE_DEF.value in _codes(excinfo)
+    assert SophiosErrorCode.DUPLICATE_EDGE_DEF.value in _codes(excinfo)
 
 
 @pytest.mark.fast
@@ -98,7 +98,7 @@ def test_a_reference_must_follow_its_definition() -> None:
 
     with pytest.raises(SophiosError) as excinfo:
         compile_production({'steps': list(reversed(defined_first))})
-    assert Code.UNDEFINED_EDGE.value in _codes(excinfo)
+    assert SophiosErrorCode.UNDEFINED_EDGE.value in _codes(excinfo)
 
 
 @pytest.mark.fast
