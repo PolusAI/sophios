@@ -134,6 +134,12 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
     input_mapping = list(graph.input_mapping)
     steps = list(graph.steps)
     bound = {binding.sink for step in steps for binding in step.bindings}
+    bound.update(
+        port.id
+        for step in steps if step.emission is not None
+        for port in step.inputs
+        if port.id.port in dict(step.emission.inputs)
+    )
     bound.update(edge.sink for edge in graph.composition_edges)
     bound.update(edge.sink for edge in inferred_edges)
 

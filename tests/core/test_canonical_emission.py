@@ -237,33 +237,9 @@ def _set_iteration_sites(tree: ast.AST) -> list[tuple[str, str]]:
     return [(_site_of(line, spans), shape) for line, shape in _set_iteration_violations(tree)]
 
 
-#: Pre-existing set-into-ordered-structure calls outside the three named
-#: sites (`utils_cwl.py`'s two and `compiler.py`'s one, all fixed above).
-#: Pinned to a (function, shape) site rather than a whole file, so a new
-#: violation elsewhere is caught rather than silently covered, and a repeat of
-#: an excused shape in the same function is caught by the count — see
-#: `test_the_allowlist_still_matches_a_real_violation`.
-#:
-#: One entry, and it earns the exemption by not reaching the output:
-#:
-#:   * `_finalize_compilation`'s `vars_workflow_output_internal = list(\n
-#:     set(vars_workflow_output_internal))` is a `grep`-shaped scan's blind
-#:     spot in the flesh: the call is real but split across two lines, so
-#:     `grep -n 'list(set('` (used to survey this file before the AST scan
-#:     existed) missed it. Every other use of this variable is membership
-#:     testing (`x in vars_workflow_output_internal`), never an emitted
-#:     order, but the scan does not know that and is not asked to.
-#:
-#: `plugins.cwl_update_outputs_optional`'s `successCodes` was excused here on
-#: the grounds that it is reachable only through `sophios.plugins`, which the
-#: oracle may not import. Being unreachable *from the oracle* is not the same
-#: as being unreachable from the output: under `--partial_failure_enable`,
-#: `main` applies `cwl_update_outputs_optional_rosetree` to the compiled tree
-#: and the result is written to disk, so the set's order reached emitted CWL.
-#: It is sorted at the site now rather than exempted here.
-ALLOWED_SET_ITERATIONS: Final[dict[Path, frozenset[tuple[str, str]]]] = {
-    SRC / 'compiler.py': frozenset({('_finalize_compilation', 'list(set(...))')}),
-}
+#: Every historical exception has been removed with the legacy compiler loop.
+#: Keep the map so a future, narrow exemption remains reviewable at one seam.
+ALLOWED_SET_ITERATIONS: Final[dict[Path, frozenset[tuple[str, str]]]] = {}
 
 
 @pytest.mark.fast
@@ -430,12 +406,12 @@ def _compile_four_seed_workflow() -> Yaml:
     compiler_options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
     compiler_options['allow_raw_cwl'] = True
     graph = get_graph_reps('canon')
-    info = sophios.compiler.compile_workflow(
+    info = sophios.compiler.compile_document(
         YamlTree(StepId('canon', SYNTHETIC_NS), _FOUR_SEED_WORKFLOW),
         compiler_options, graph_settings, tag_paths,
-        [], [graph], {}, {}, {}, {},
-        _TOOLS_WITH_MULTI, True, relative_run_path=True, testing=True)
-    compiled: Yaml = info.rose.data.compiled_cwl
+        _TOOLS_WITH_MULTI, relative_run_path=True, testing=True,
+        graph_target=graph)
+    compiled: Yaml = info.artifact.cwl
     return compiled
 
 

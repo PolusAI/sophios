@@ -1,11 +1,10 @@
-import copy
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any
 
 import yaml
 
-from .wic_types import (Namespaces, RoseTree, StepId,
+from .wic_types import (Namespaces, StepId,
                         Json, Yaml, YamlForest, YamlTree)
 
 
@@ -155,50 +154,6 @@ def get_subkeys(steps_keys: list[str]) -> list[str]:
     return [key for key in steps_keys if key and key.endswith('.wic')]
 
 
-def extract_implementation(yaml_tree: Yaml, wic: Yaml, yaml_path: Path) -> tuple[str, Yaml]:
-    """Chooses a specific implementation for a given CWL workflow step.
-
-    The implementations should be thought of as either 'exactly' identical, or at
-    least the same high-level protocol but implemented with a different algorithm.
-
-    Args:
-        yaml_tree (Yaml): A Yaml AST dict with sub-dicts for each implementation.
-        yaml_path (Path): The filepath of yaml_tree, only used for error reporting.
-
-    Raises:
-        ValueError: If the steps: and/or implementation: tags are not present.
-
-    Returns:
-        tuple[str, Yaml]: The Yaml AST dict of the chosen implementation.
-    """
-    yaml_tree_copy = copy.deepcopy(yaml_tree)
-    implementation = ''
-    if 'implementations' in wic:
-        if 'default_implementation' in wic:
-            implementation = wic['default_implementation']
-        if 'implementation' in wic:
-            implementation = wic['implementation']
-        if implementation == '':
-            raise ValueError(f'Error! No implementation in {yaml_path}!')
-
-        plugin_ns = wic.get('namespace', 'global')
-        stepid = StepId(implementation, plugin_ns)
-        if stepid not in wic['implementations']:
-            print(yaml.dump(yaml_tree))
-            print(yaml.dump(wic))
-            print(wic['implementations'])
-            raise ValueError(
-                f'Error! No steps for implementation {stepid} in {yaml_path}!')
-        steps = wic['implementations'][stepid]['steps']
-        yaml_tree_copy.update({'steps': steps})
-    elif 'steps' in yaml_tree_copy:
-        pass
-    else:
-        raise ValueError(
-            f'Error! No implementations and/or steps in {yaml_path}!')
-    return (implementation, yaml_tree_copy)
-
-
 def flatten(lists: list[list[Any]]) -> list[Any]:
     """Concatenates a list of lists into a single list.
 
@@ -209,19 +164,6 @@ def flatten(lists: list[list[Any]]) -> list[Any]:
         list[Any]: A single list
     """
     return [x for lst in lists for x in lst]
-
-
-def flatten_rose_tree(rose_tree: RoseTree) -> list[Any]:
-    """Flattens the data contained in the Rose Tree into a List
-
-    Args:
-        rose_tree (RoseTree): A Rose Tree
-
-    Returns:
-        list[Any]: The list of data associated with each node in the RoseTree
-    """
-    sub_rose_trees = [flatten_rose_tree(r) for r in rose_tree.sub_trees]
-    return [rose_tree.data] + flatten(sub_rose_trees)
 
 
 def pretty_print_forest(forest: YamlForest) -> None:
@@ -274,8 +216,7 @@ def flatten_forest(forest: YamlForest) -> list[YamlForest]:
 
     forests = [f[1] for f in forest.sub_forests]
     sub_forests = [flatten_forest(f) for f in forests]
-    # Use depth first search flattening to match flatten_rose_tree()
-    # bfs = forests + flatten(sub_forests)
+    # Use depth-first traversal to preserve authored order.
     dfs_lists = [[f] + fs for f, fs in zip(forests, sub_forests)]
     dfs = flatten(dfs_lists)
     return dfs

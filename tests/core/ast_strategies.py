@@ -421,7 +421,7 @@ def to_yml(document: Document) -> Yaml:
     this oracle cannot run — it reads the disk. That function's first line is
     `utils_cwl.desugar_into_canonical_normal_form`, which is why this function
     calls it too: mapping-form `steps:` reaches the compiler as a dict, and
-    `compile_workflow_once`'s per-step loop (`setup.steps[i].get('run', '')`)
+    the compiler's step lowering (`step.interpreted.get('run')`)
     indexes it as a list, so a mapping-form document that skipped this call
     raised `KeyError: 0` before reaching anything interesting. Do not remove
     this call to "simplify" `to_yml` — a mapping-form document depends on it to

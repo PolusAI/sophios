@@ -26,7 +26,8 @@ from typing import Final
 import pytest
 
 from sophios import post_compile
-from sophios.compiler import generate_yaml_inputs
+from sophios.ir.complete import coerce_job_value
+from sophios.ir.declarations import port_declaration
 from sophios.lang.diagnostics import Diagnostic, Severity, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.python_cwl_adapter import check_args_match_inputs
@@ -208,7 +209,7 @@ def test_missing_input_file_reports(tmp_path: Path) -> None:
 
 @pytest.mark.fast
 def test_literal_type_mismatch_reports() -> None:
-    """`generate_yaml_inputs` reports a literal that will not coerce to its
+    """The typed job boundary reports a literal that will not coerce to its
     input's declared type instead of letting `int()`/`float()` raise a bare
     `ValueError`. `!ii` places no constraint relating a literal to the
     declared CWL type of the input it binds, so this is reachable from real
@@ -218,7 +219,7 @@ def test_literal_type_mismatch_reports() -> None:
     offending literal, since the user's next move is to fix one of them.
     """
     with pytest.raises(SophiosError) as caught:
-        generate_yaml_inputs({'n': {'type': 'int', 'value': '_'}})
+        coerce_job_value('n', port_declaration({'type': 'int'}), '_')
 
     assert caught.value.diagnostics[0].code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
     message = caught.value.diagnostics[0].message
@@ -239,7 +240,9 @@ def test_literal_type_mismatch_reports_a_null_array_element() -> None:
     get the same diagnostic.
     """
     with pytest.raises(SophiosError) as caught:
-        generate_yaml_inputs({'xs': {'type': {'type': 'array', 'items': 'int'}, 'value': [1, None]}})
+        coerce_job_value(
+            'xs', port_declaration({'type': {'type': 'array', 'items': 'int'}}),
+            [1, None])
 
     assert len(caught.value.diagnostics) == 1
     assert caught.value.diagnostics[0].code is SophiosErrorCode.LITERAL_TYPE_MISMATCH

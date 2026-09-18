@@ -1,25 +1,25 @@
-"""Shared assertions for old/new compiler differential properties."""
-from sophios.wic_types import CompilerInfo, NodeData, RoseTree, Yaml
+"""Shared assertions for compiler differential properties."""
+from sophios.ir.artifacts import CompilationArtifact, CompilationResult
+from sophios.wic_types import Yaml
 
 from .equivalence import Strength, equivalent
 
 
-def compiled_documents(info: CompilerInfo) -> tuple[Yaml, ...]:
+def compiled_documents(info: CompilationResult) -> tuple[Yaml, ...]:
     """Every workflow artifact in a compilation, root first."""
     found: list[Yaml] = []
 
-    def visit(rose: RoseTree) -> None:
-        data: NodeData = rose.data
-        if data.compiled_cwl.get('class') == 'Workflow':
-            found.append(data.compiled_cwl)
-        for child in rose.sub_trees:
+    def visit(artifact: CompilationArtifact) -> None:
+        if artifact.cwl.get('class') == 'Workflow':
+            found.append(artifact.cwl)
+        for child in artifact.children:
             visit(child)
 
-    visit(info.rose)
+    visit(info.artifact)
     return tuple(found)
 
 
-def assert_compilations_equivalent(left: CompilerInfo, right: CompilerInfo,
+def assert_compilations_equivalent(left: CompilationResult, right: CompilationResult,
                                    strength: Strength) -> None:
     """Assert the same artifact tree and the requested semantic strength."""
     left_docs, right_docs = compiled_documents(left), compiled_documents(right)

@@ -36,11 +36,11 @@ from .resolve import (
     generated_process_id,
     resolve,
 )
-from .pipeline import (FrontEndResult, front_end, legacy_after_infer,
-                       legacy_after_link, legacy_after_lower)
+from .pipeline import FrontEndResult, front_end
 from .link import Linked, link
 from .infer import (Inferred, InferencePolicy, Insertion, InsertionCatalog,
                     infer)
+from .artifacts import CompilationArtifact, CompilationResult
 
 __all__ = [
     'Binding',
@@ -74,14 +74,13 @@ __all__ = [
     'resolve',
     'FrontEndResult',
     'front_end',
-    'legacy_after_lower',
-    'legacy_after_link',
     'Linked',
     'link',
-    'legacy_after_infer',
     'Inferred',
     'InferencePolicy',
     'Insertion',
     'InsertionCatalog',
     'infer',
+    'CompilationArtifact',
+    'CompilationResult',
 ]

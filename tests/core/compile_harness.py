@@ -1,15 +1,7 @@
 """One way to compile an in-memory workflow in tests.
 
-`compile_workflow` takes fourteen positional arguments, so every test that
-drives the real compiler had grown its own copy of the call: two in the leak
-boundary suite, one in the provocation registry, and — before this module —
-two more arriving with the language-version suite. Five spellings of one call
-is five places to edit when the signature moves, and four of them would be
-found by the compiler failing rather than by anyone noticing.
-
-The split below is the only distinction the call sites actually needed: some
-want the whole `CompilerInfo` (to reach `rose` for post-compilation), most
-want just the emitted CWL.
+The split below is the only distinction call sites need: some want the typed
+result and most want only emitted CWL.
 """
 import graphviz
 import networkx as nx
@@ -17,7 +9,8 @@ from hypothesis import HealthCheck, settings
 
 import sophios.cli
 import sophios.compiler
-from sophios.wic_types import CompilerInfo, GraphData, GraphReps, StepId, Yaml, YamlTree
+from sophios.ir.artifacts import CompilationResult
+from sophios.wic_types import GraphData, GraphReps, StepId, Yaml, YamlTree
 
 from .test_setup import load_test_registry
 
@@ -32,7 +25,7 @@ TOUCH: Yaml = {'steps': [{'id': 'touch', 'in': {'filename': {'wic_inline_input':
 
 def compile_info(yml: Yaml, name: str = 'harness', *,
                  lang_version: str | None = None,
-                 allow_raw_cwl: bool | None = None) -> CompilerInfo:
+                 allow_raw_cwl: bool | None = None) -> CompilationResult:
     """Compile one in-memory workflow and return the whole compiler result.
 
     The two overrides are named rather than taken as `**options` so that a
@@ -45,11 +38,10 @@ def compile_info(yml: Yaml, name: str = 'harness', *,
         compiler_options['allow_raw_cwl'] = allow_raw_cwl
     graph = GraphReps(graphviz.Digraph(name=f'cluster_{name}'), nx.DiGraph(), GraphData(name))
     tools = load_test_registry().tools
-    return sophios.compiler.compile_workflow(
+    return sophios.compiler.compile_document(
         YamlTree(StepId(name, 'global'), yml),
-        compiler_options, graph_settings, tag_paths,
-        [], [graph], {}, {}, {}, {},
-        tools, True, relative_run_path=True, testing=True)
+        compiler_options, graph_settings, tag_paths, tools,
+        relative_run_path=True, testing=True, graph_target=graph)
 
 
 def compile_cwl(yml: Yaml, name: str = 'harness', *,
@@ -57,5 +49,5 @@ def compile_cwl(yml: Yaml, name: str = 'harness', *,
                 allow_raw_cwl: bool | None = None) -> Yaml:
     """Compile one in-memory workflow and return the emitted CWL."""
     info = compile_info(yml, name, lang_version=lang_version, allow_raw_cwl=allow_raw_cwl)
-    compiled: Yaml = info.rose.data.compiled_cwl
+    compiled: Yaml = info.artifact.cwl
     return compiled

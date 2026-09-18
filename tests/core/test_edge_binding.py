@@ -80,7 +80,7 @@ def test_a_child_reference_binds_to_the_parents_definition() -> None:
         {**_SOURCE, 'out': [{'file': {'wic_anchor': 'shared'}}]},
         subworkflow_step('child.wic', child)]}, 'root')
 
-    bindings = info.rose.data.compiled_cwl['steps'][1]['in']
+    bindings = info.artifact.cwl['steps'][1]['in']
     source = bindings['child__step__1__sink___file']['source']
     assert source == 'root__step__1__mk_file/file', (
         f'the child bound to {source!r} rather than the parent output that defines it')
@@ -103,24 +103,9 @@ def test_a_reference_must_follow_its_definition() -> None:
 
 
 @pytest.mark.fast
-def test_an_obligation_no_includer_discharges_is_not_reported() -> None:
-    """The hole the diagnostic does not close, pinned so it is visible.
-
-    `wic025` is raised by the root *invocation*, not over the compilation. A
-    child's unresolved reference is absorbed into a workflow input one level
-    down and its name is lost, so the root has nothing left to check: the
-    document compiles and the obligation surfaces as a generated root input
-    that nothing produces.
-
-    Closing it means carrying the unresolved name up and checking the aggregate
-    once at the root, which is what deferred-obligation discharge does in the
-    typed IR. Doing it inside the per-step loop would be a third special case
-    in the path that phase replaces. This test flips when that lands.
-    """
+def test_an_obligation_no_includer_discharges_is_reported() -> None:
+    """The root rejects a nested obligation no enclosing scope discharges."""
     child = {'steps': [_SOURCE, {'id': 'sink', 'in': {'file': {'wic_alias': 'absent'}}}]}
-    info = compile_production({'steps': [subworkflow_step('child.wic', child)]}, 'root')
-
-    generated = info.rose.data.compiled_cwl['inputs']
-    assert any(name.endswith('sink___file') for name in generated), (
-        'the unresolved reference no longer reaches the root as an input; if it is '
-        'reported now, this test has served its purpose and should become that assertion')
+    with pytest.raises(SophiosError) as caught:
+        compile_production({'steps': [subworkflow_step('child.wic', child)]}, 'root')
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.UNDEFINED_EDGE

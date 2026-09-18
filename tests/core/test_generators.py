@@ -128,7 +128,7 @@ def test_the_workflows_strategy_produces_documents_the_compiler_accepts() -> Non
     `to_yml` is the only part of this generator that must satisfy the *compiler*
     rather than the grammar. Delete its `desugar_into_canonical_normal_form`
     call and every mapping-form document raises `KeyError: 0` in
-    `compile_workflow_once`'s per-step loop -- which is why both surface forms
+    the compiler's per-step lowering -- which is why both surface forms
     must reach a successful compilation.
 
     The bar is a bare majority, not everything: `!ii` constrains no literal to

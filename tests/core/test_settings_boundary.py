@@ -159,7 +159,7 @@ def test_no_library_function_accepts_a_namespace(path: Path) -> None:
 
 @pytest.mark.fast
 def test_the_compile_helper_takes_settings_not_arguments() -> None:
-    """`_build_and_compile_workflow` is handed settings, never a Namespace.
+    """`_compile_loaded_document` is handed settings, never a Namespace.
 
     Pinned by name because the module-wide rule above cannot catch it: this
     function lives in `main.py`, where holding parsed arguments is legitimate.
@@ -173,10 +173,10 @@ def test_the_compile_helper_takes_settings_not_arguments() -> None:
 
     import sophios.main
 
-    signature = inspect.signature(sophios.main._build_and_compile_workflow)
+    signature = inspect.signature(sophios.main._compile_loaded_document)
     annotations = [str(parameter.annotation) for parameter in signature.parameters.values()]
     assert not any(re.search(r'\bNamespace\b', annotation) for annotation in annotations), \
-        f'_build_and_compile_workflow takes a Namespace: {annotations}'
+        f'_compile_loaded_document takes a Namespace: {annotations}'
     assert 'compiler_options' in signature.parameters
     assert 'graph_settings' in signature.parameters
 
@@ -282,7 +282,7 @@ def _settings_from_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Calla
                     yaml_tag_paths: Any, *_args: Any, **_kwargs: Any) -> None:
             raise _Delivered((compiler_options, graph_settings, yaml_tag_paths))
 
-        monkeypatch.setattr(sophios.compiler, 'compile_workflow', capture)
+        monkeypatch.setattr(sophios.compiler, 'compile_document', capture)
         monkeypatch.setattr(sys, 'argv', ['sophios', '--yaml', str(workflow), *flags])
         try:
             sophios.main._main()

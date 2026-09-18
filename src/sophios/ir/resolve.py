@@ -23,7 +23,7 @@ from ..lang import (
 )
 from ..lang.diagnostics import Diagnostic, Diagnostics
 from ..lang.nodes import InputValue, OpaqueCwl, Step
-from ..wic_types import Tool, Tools
+from ..wic_types import Cwl, Tools
 from .declarations import port_declaration
 from .types import PortDeclaration
 
@@ -42,7 +42,7 @@ class ToolDefinition:
 
     key: RegistryKey
     run_path: str
-    cwl: OpaqueCwl
+    cwl: Cwl
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,13 +82,6 @@ class RegistrySnapshot:
     def workflow(self, key: RegistryKey) -> WorkflowSource | None:
         """Look up workflow source content without touching a path."""
         return next((workflow for workflow in self.workflows if workflow.key == key), None)
-
-    def legacy_tools(self) -> Tools:
-        """Project fresh legacy ``Tools`` for the temporary post-Lower bridge."""
-        from ..wic_types import StepId  # pylint: disable=import-outside-toplevel
-        return {StepId(tool.key.name, tool.key.namespace):
-                Tool(tool.run_path, deepcopy(tool.cwl))  # type: ignore[arg-type]
-                for tool in self.tools}
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,8 +176,18 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
     name = generated_process_id(step) if generated else authored_name
     key = RegistryKey(namespace, name)
 
-    workflow = registry.workflow(key)
-    if workflow is None and step.id.endswith('.wic'):
+    # A tool and a workflow may intentionally share a stem.  The authored
+    # ``.wic`` spelling selects the workflow; an ordinary step selects the
+    # tool when one exists and falls back to a workflow only when it does not.
+    # Looking up workflows first makes an attached ``fail.wic`` recursively
+    # resolve the ``fail`` tool inside itself as the workflow again.
+    explicit_workflow = step.id.endswith('.wic') \
+        or (isinstance(run, str) and run.endswith('.wic'))
+    tool = registry.tool(key)
+    if tool is None and run is not None and isinstance(run, str):
+        tool = registry.tool(RegistryKey(namespace, _stem(run)))
+    workflow = registry.workflow(key) if explicit_workflow or tool is None else None
+    if workflow is None and explicit_workflow:
         workflow = registry.workflow(RegistryKey(namespace, _stem(step.id)))
     if workflow is not None:
         workflow_key = workflow.key
@@ -204,9 +207,6 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
         return ResolvedProcess(workflow_key, f'{workflow_key.name}.cwl', inputs, outputs,
                                {'class': 'Workflow'}, child)
 
-    tool = registry.tool(key)
-    if tool is None and run is not None and isinstance(run, str):
-        tool = registry.tool(RegistryKey(namespace, _stem(run)))
     if tool is None:
         diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
                           f'process {namespace}/{name} is absent from the supplied registry',

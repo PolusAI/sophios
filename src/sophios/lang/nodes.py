@@ -210,6 +210,8 @@ class Step:
     interpreted: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.INTERPRETED, default=())
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.PASSTHROUGH, default=())
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
+    #: Source key order, retained for deterministic canonical emission.
+    field_order: tuple[str, ...] = surface(Shape.INTERNAL, default=('id',))
 
     def input(self, name: str) -> InputValue | None:
         """Return the value bound to `name`, or None if unbound."""
@@ -260,3 +262,5 @@ class Document:
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
     #: True when `steps:` was written as a mapping rather than a sequence.
     steps_as_mapping: bool = surface(Shape.INTERNAL, default=False)
+    #: Source key order, retained for deterministic canonical emission.
+    field_order: tuple[str, ...] = surface(Shape.INTERNAL, default=())

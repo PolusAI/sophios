@@ -1,4 +1,5 @@
 import copy
+from dataclasses import replace
 import logging
 import glob
 import os
@@ -15,7 +16,8 @@ import docker
 
 
 from . import utils_cwl
-from .wic_types import Cwl, NodeData, RoseTree, StepId, Tool, Tools, Json
+from .wic_types import Cwl, StepId, Tool, Tools, Json
+from .ir.artifacts import CompilationArtifact
 
 
 # Filter out the "... previously defined" id uniqueness validation warnings
@@ -225,31 +227,17 @@ def remove_entrypoints_podman() -> None:
         remove_entrypoints(client, BuildMixin())
 
 
-def cwl_update_outputs_optional_rosetree(rose_tree: RoseTree,
-                                         failure_code_range: list[int],
-                                         direct_failure_codes: list[int]) -> RoseTree:
-    """Updates outputs optional for every CWL CommandLineTool
-
-    Args:
-        rose_tree (RoseTree): The RoseTree returned from compile_workflow(...).rose_tree
-        failure_code_range: A range of (u, l) allowed failure codes range
-        direct_failure_codes: A list of allowed failure codes
-
-    Returns:
-        RoseTree: rose_tree with output optional updates to every CWL CommandLineTool
-    """
-    n_d: NodeData = rose_tree.data
-    if n_d.compiled_cwl['class'] == 'CommandLineTool':
-        outputs_optional_cwl = cwl_update_outputs_optional(n_d.compiled_cwl, failure_code_range, direct_failure_codes)
-    else:
-        outputs_optional_cwl = n_d.compiled_cwl
-
-    sub_trees_path = [cwl_update_outputs_optional_rosetree(sub_rose_tree, failure_code_range, direct_failure_codes) for
-                      sub_rose_tree in rose_tree.sub_trees]
-    node_data_path = NodeData(n_d.namespaces, n_d.name, n_d.yml, outputs_optional_cwl, n_d.tool,
-                              n_d.workflow_inputs_file, n_d.explicit_edge_defs, n_d.explicit_edge_calls,
-                              n_d.graph, n_d.inputs_workflow, n_d.step_name_1)
-    return RoseTree(node_data_path, sub_trees_path)
+def cwl_update_outputs_optional_artifact(
+        artifact: CompilationArtifact,
+        failure_code_range: list[int],
+        direct_failure_codes: list[int]) -> CompilationArtifact:
+    """Apply partial-failure output rewriting to graph-derived artifacts."""
+    cwl = cwl_update_outputs_optional(
+        artifact.cwl, failure_code_range, direct_failure_codes) \
+        if artifact.cwl.get('class') == 'CommandLineTool' else artifact.cwl
+    children = tuple(cwl_update_outputs_optional_artifact(
+        child, failure_code_range, direct_failure_codes) for child in artifact.children)
+    return replace(artifact, cwl=cwl, children=children)
 
 
 def dockerPull_append_noentrypoint(cwl: Cwl) -> Cwl:
@@ -277,25 +265,15 @@ def dockerPull_append_noentrypoint(cwl: Cwl) -> Cwl:
     return cwl
 
 
-def dockerPull_append_noentrypoint_rosetree(rose_tree: RoseTree) -> RoseTree:
-    """Appends -noentrypoint to the dockerPull version tag for every CWL CommandLineTool
-
-    Args:
-        rose_tree (RoseTree): The RoseTree returned from compile_workflow(...).rose_tree
-
-    Returns:
-        RoseTree: rose_tree with -noentrypoint appended to the dockerPull version tag for every CWL CommandLineTool
-    """
-    n_d: NodeData = rose_tree.data
-    # NOTE: Since only class: CommandLineTool should have dockerPull tags,
-    # this should be the identity function on class: Workflow.
-    compiled_cwl_noent = dockerPull_append_noentrypoint(n_d.compiled_cwl)
-
-    sub_trees_noent = [dockerPull_append_noentrypoint_rosetree(sub_rose_tree) for sub_rose_tree in rose_tree.sub_trees]
-    node_data_noent = NodeData(n_d.namespaces, n_d.name, n_d.yml, compiled_cwl_noent,
-                               n_d.tool, n_d.workflow_inputs_file, n_d.explicit_edge_defs,
-                               n_d.explicit_edge_calls, n_d.graph, n_d.inputs_workflow, n_d.step_name_1)
-    return RoseTree(node_data_noent, sub_trees_noent)
+def dockerPull_append_noentrypoint_artifact(
+        artifact: CompilationArtifact) -> CompilationArtifact:
+    """Append the no-entrypoint tag throughout an artifact tree."""
+    return replace(
+        artifact,
+        cwl=dockerPull_append_noentrypoint(artifact.cwl),
+        children=tuple(dockerPull_append_noentrypoint_artifact(child)
+                       for child in artifact.children),
+    )
 
 
 def cwl_prepend_dockerFile_include_path(cwl: Cwl, cwl_path: str) -> Cwl:
@@ -317,27 +295,15 @@ def cwl_prepend_dockerFile_include_path(cwl: Cwl, cwl_path: str) -> Cwl:
     return cwl_mod
 
 
-def cwl_prepend_dockerFile_include_path_rosetree(rose_tree: RoseTree) -> RoseTree:
-    """Prepends (original) cwl_path to the dockerFile $include path to every CWL CommandLineTool
-
-    Args:
-        rose_tree (RoseTree): The RoseTree returned from compile_workflow(...).rose_tree
-
-    Returns:
-        RoseTree: rose_tree with (original) cwl_path to the dockerFile to the dockerFile $include path
-        to every CWL CommandLineTool
-    """
-    n_d: NodeData = rose_tree.data
-    # NOTE: Since only class: CommandLineTool should have dockerPull tags,
-    # this should be the identity function on class: Workflow.
-    prepended_cwl = cwl_prepend_dockerFile_include_path(n_d.compiled_cwl, n_d.tool.run_path)
-
-    sub_trees_path = [cwl_prepend_dockerFile_include_path_rosetree(sub_rose_tree) for
-                      sub_rose_tree in rose_tree.sub_trees]
-    node_data_path = NodeData(n_d.namespaces, n_d.name, n_d.yml, prepended_cwl, n_d.tool, n_d.workflow_inputs_file,
-                              n_d.explicit_edge_defs, n_d.explicit_edge_calls, n_d.graph, n_d.inputs_workflow,
-                              n_d.step_name_1)
-    return RoseTree(node_data_path, sub_trees_path)
+def cwl_prepend_dockerFile_include_path_artifact(
+        artifact: CompilationArtifact) -> CompilationArtifact:
+    """Resolve Dockerfile includes throughout an artifact tree."""
+    return replace(
+        artifact,
+        cwl=cwl_prepend_dockerFile_include_path(artifact.cwl, artifact.run_path),
+        children=tuple(cwl_prepend_dockerFile_include_path_artifact(child)
+                       for child in artifact.children),
+    )
 
 
 def get_workflow_paths(config: Json, extension: str) -> dict[str, dict[str, Path]]:

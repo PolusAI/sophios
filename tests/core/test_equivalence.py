@@ -508,8 +508,8 @@ def test_the_array_forms_of_ports_and_requirements_are_read() -> None:
 def test_isomorphism_alone_would_not_be_enough() -> None:
     """Why the matcher is labelled rather than bare.
 
-    `test_inline_subworkflows` (tests/core/test_examples.py:418) compares two
-    compilations with a bare `DiGraphMatcher` and nothing else. These two
+    The retired source-inlining regression compared two compilations with a
+    bare `DiGraphMatcher` and nothing else. These two
     documents have the same shape — two nodes, one edge — and a different tool
     at every node, so a bare matcher calls them equivalent. That is precisely
     the kind of thing an IR migration could get wrong, which is why the

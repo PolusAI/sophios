@@ -1,11 +1,11 @@
-"""Lowering a parsed document to a graph.
+"""Lowering a resolved document to a graph.
 
 Five claims: lowering is total, a malformed graph cannot be constructed, every
 reference the graph holds names a port that exists, passthrough is never read,
 and the result does not depend on iteration order.
 
-Nothing here compiles -- lowering reads the AST alone, so these need no tool
-registry, filesystem or config.
+The test-side resolver constructs fully typed phase input without calling the
+production resolver, so these need no registry, filesystem, or config.
 """
 import ast as pyast
 from typing import Any
@@ -23,11 +23,17 @@ from sophios.ir import (
     Port,
     PortId,
     PortType,
+    RegistryKey,
+    ResolvedDocument,
+    ResolvedPort,
+    ResolvedProcess,
+    ResolvedStep,
     StepId,
     StepNode,
     WorkflowGraph,
 )
 from sophios.ir.lower import lower
+from sophios.ir.declarations import port_declaration
 from sophios.lang.nodes import Document, InlineLiteral, Step
 from sophios.lang.parser import parse
 from sophios.lang.spans import SourceSpan
@@ -37,11 +43,30 @@ from .hermetic import COVERAGE, ORACLE
 from .source_scan import REPO_ROOT, parsed
 
 
+def _resolved(document: Document) -> ResolvedDocument:
+    """Build Lower's typed input independently of production Resolve."""
+    declaration = port_declaration(None)
+    steps = tuple(
+        ResolvedStep(
+            step,
+            ResolvedProcess(
+                RegistryKey('test', step.id),
+                f'{step.id}.cwl',
+                tuple(ResolvedPort(name, declaration) for name, _ in step.inputs),
+                tuple(ResolvedPort(binding.name, declaration) for binding in step.outputs),
+                {'class': 'CommandLineTool'},
+            ),
+        )
+        for step in document.steps
+    )
+    return ResolvedDocument('probe', document, steps, '0.0.1')
+
+
 def _lower(source: str) -> Any:
     """Parse and lower one document, for the example-based claims below."""
     document = parse(source, 'probe.wic').document
     assert document is not None
-    return lower(document)
+    return lower(_resolved(document))
 
 
 @pytest.mark.fast
@@ -50,7 +75,7 @@ def _lower(source: str) -> Any:
 def test_every_parseable_document_lowers_or_diagnoses(document: Document) -> None:
     """Lowering is total, in the sense `parse` is: what it cannot represent
     comes back as a diagnostic, never as an exception."""
-    result = lower(document)
+    result = lower(_resolved(document))
     assert result.graph is not None or result.diagnostics.has_errors
 
 
@@ -64,7 +89,7 @@ def test_a_well_formed_document_actually_lowers(document: Document) -> None:
     produce a graph. Without this, an implementation returning diagnostics for
     all input passes the claim above.
     """
-    result = lower(document)
+    result = lower(_resolved(document))
     assert result.graph is not None, [d.code.value for d in result.diagnostics]
     assert len(result.graph.steps) == len(document.steps)
 
@@ -79,7 +104,7 @@ def test_every_reference_the_graph_holds_names_a_port_that_exists(document: Docu
     and it reaches emission as a dangling `source:` -- which CWL accepts and a
     runner then fails on.
     """
-    result = lower(document)
+    result = lower(_resolved(document))
     if result.graph is None:
         return
     known = {p.id for s in result.graph.steps for p in s.inputs + s.outputs}
@@ -97,7 +122,8 @@ def test_lowering_is_deterministic(document: Document) -> None:
     the mappings free to vary with set iteration, which is the thing being
     ruled out.
     """
-    first, second = lower(document), lower(document)
+    resolved = _resolved(document)
+    first, second = lower(resolved), lower(resolved)
     assert first.graph == second.graph
 
 
@@ -110,7 +136,7 @@ def test_lowering_keeps_every_authored_binding(document: Document) -> None:
     Keeping only the edges makes two documents differing solely in a literal
     lower to the same graph, so `Emit` would have to read the AST again.
     """
-    result = lower(document)
+    result = lower(_resolved(document))
     if result.graph is None:
         return
     authored = [v for step in document.steps for _, v in step.inputs]
@@ -145,7 +171,7 @@ def test_a_step_may_be_invoked_twice() -> None:
     document = parse((REPO_ROOT / 'docs' / 'tutorials' / 'append_twice.wic')
                      .read_text(encoding='utf-8'), 'append_twice.wic').document
     assert document is not None
-    result = lower(document)
+    result = lower(_resolved(document))
     assert result.graph is not None, [d.code.value for d in result.diagnostics]
     assert [(s.id.index, s.id.name) for s in result.graph.steps] == [(1, 'append'), (2, 'append')]
 
@@ -200,11 +226,12 @@ def test_a_document_the_parser_recovered_never_raises() -> None:
         document = parse(source, 'recovered.wic').document
         if document is None:
             continue
-        result = lower(document)
+        result = lower(_resolved(document))
         assert result.graph is not None or len(result.diagnostics) > 0, source
 
     # A step the parser never built, so it carries no span at all.
-    handmade = lower(Document(steps=(Step(id=''),)))
+    handmade_document = Document(steps=(Step(id=''),))
+    handmade = lower(_resolved(handmade_document))
     assert handmade.graph is None and len(handmade.diagnostics) > 0
 
 

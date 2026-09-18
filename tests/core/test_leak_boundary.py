@@ -288,7 +288,7 @@ def test_residue_validates_as_cwl_v1_2(freight: dict[str, Any]) -> None:
     import cwltool.main  # pylint: disable=import-outside-toplevel  # expensive; slow lane only
 
     info = compile_info(_touch_workflow(freight, {}), 'leak')
-    inlined = sophios.post_compile.cwl_inline_runtag(info.rose).data.compiled_cwl
+    inlined = sophios.post_compile.inline_artifact_runs(info.artifact).cwl
 
     # A throwaway file, not a repo artifact: it exists only to hand cwltool a
     # path. `tmp_path` would be the obvious choice, but it is function-scoped

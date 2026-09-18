@@ -134,7 +134,7 @@ _SPECS: Final[dict[str, Cwl]] = {
 #: Desugared exactly as `get_tools_cwl` desugars real adapters
 #: (src/sophios/plugins.py:117), so the compiler sees the same shape either way.
 #: `run_path` names a file that does not exist: nothing reads it — the emitted
-#: `run:` is a string, and the validity property inlines the documents with `cwl_inline_runtag`.
+#: `run:` is a string, and the validity property embeds emitted child artifacts.
 SYNTHETIC_TOOLS: Final[Tools] = {
     StepId(stem, SYNTHETIC_NS): Tool(f'/synthetic/{stem}.cwl',
                                      desugar_into_canonical_normal_form(dict(cwl)))
@@ -163,7 +163,6 @@ def outputs_of(stem: str) -> dict[str, Cwl]:
 def required_inputs_of(stem: str) -> tuple[str, ...]:
     """Inputs the compiler will demand a value or an inferred edge for.
 
-    Mirrors `_arg_has_default_or_is_optional` (src/sophios/compiler.py:117-126).
     Deliberately a second implementation rather than an import: a generator that
     asked the compiler which inputs are required, and then a property that
     checked the compiler honoured them, would be asking one implementation to

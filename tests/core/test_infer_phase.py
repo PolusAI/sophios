@@ -2,8 +2,9 @@
 
 The candidate model below is intentionally local to the test suite.  It does
 not import the production phase or either production type predicate.  The
-differential then carries the stronger claim: after typed Infer has made every
-candidate decision, the legacy compiler emits byte-identical artifacts.
+live-path check proves that the compiler retains the typed phase's decisions.
+Exact spelling is not the compatibility promise; the completed pipeline is
+judged at ``UP_TO_EMBEDDING``.
 
 BLIND SPOTS: the generated workflows never put a tool after a workflow call,
 and their registry has no converter processes. Workflow-call candidates,
@@ -22,7 +23,6 @@ from sophios.ir import (
     RegistrySnapshot,
     front_end,
     infer,
-    legacy_after_infer,
     link,
 )
 from sophios.ir.types import Port, PortDeclaration, PortId, StepNode, WorkflowGraph
@@ -50,15 +50,14 @@ def _typed(workflow: Yaml, tools: Tools = SYNTHETIC_TOOLS):  # type: ignore[no-u
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows().filter(_scalar_literals_fit))
 @ORACLE
-def test_infer_is_identical_to_the_legacy_candidate_search(workflow: Yaml) -> None:
-    """Typed inference changes neither artifacts nor their byte order."""
-    typed, linked, _ = _typed(copy.deepcopy(workflow))
+def test_the_live_compiler_retains_typed_inference(workflow: Yaml) -> None:
+    """The default path carries typed inference decisions into its final graph."""
+    _, linked, _ = _typed(copy.deepcopy(workflow))
     inferred = infer(linked)
     assert inferred.graph is not None, list(inferred.diagnostics)
-    bridged = legacy_after_infer(typed.resolved.document, inferred.graph)
-    old = compile_hermetic(copy.deepcopy(workflow))
-    new = compile_hermetic(bridged)
-    assert_compilations_equivalent(old, new, Strength.IDENTICAL)
+    live = compile_hermetic(copy.deepcopy(workflow)).graph
+    expected = {(edge.source, edge.sink) for edge in inferred.graph.inferred_edges}
+    assert expected <= {(edge.source, edge.sink) for edge in live.inferred_edges}
 
 
 @pytest.mark.skip_pypi_ci
@@ -189,7 +188,7 @@ def test_scatter_lifts_both_sides_of_candidate_selection() -> None:
 
 @pytest.mark.fast
 def test_converter_insertion_reaches_the_same_fixed_point() -> None:
-    """Two speculative insertions agree exactly with legacy recompilation."""
+    """Two speculative insertions agree with the live typed compiler."""
     workflow, tools = _insertion_registry()
     typed, linked, registry = _typed(workflow, tools)
     result = infer(linked, InferencePolicy(insert_steps_automatically=True),
@@ -197,11 +196,9 @@ def test_converter_insertion_reaches_the_same_fixed_point() -> None:
     assert result.graph is not None, list(result.diagnostics)
     assert result.iterations == 3
     assert sum(step.synthesized for step in result.graph.steps) == 2
-    bridged = legacy_after_infer(typed.resolved.document, result.graph)
-    old = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
-                           insert_steps_automatically=True)
-    new = compile_hermetic(bridged, tools=copy.deepcopy(tools))
-    assert_compilations_equivalent(old, new, Strength.IDENTICAL)
+    live = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
+                            insert_steps_automatically=True).graph
+    assert sum(step.synthesized for step in live.steps) == 2
 
 
 @pytest.mark.fast
@@ -278,11 +275,66 @@ def test_iteration_exhaustion_is_exactly_wic022() -> None:
 
 @pytest.mark.fast
 def test_inference_policy_is_not_process_global() -> None:
-    """Two policies coexist; neither compiler module exposes writable policy state."""
+    """Two policies coexist; the compiler exposes no writable policy state."""
     from sophios import compiler  # pylint: disable=import-outside-toplevel
-    from sophios import inference as legacy  # pylint: disable=import-outside-toplevel
     assert not hasattr(compiler, 'inference_rules')
-    assert not hasattr(legacy, 'renaming_conventions')
+
+
+@pytest.mark.fast
+def test_format_substrings_do_not_match() -> None:
+    """A format name that is merely a substring is not a candidate."""
+    tools = {
+        LegacyStepId('producer', SYNTHETIC_NS): Tool(
+            '/synthetic/producer.cwl',
+            clt({}, {'file': {'type': 'File', 'format': 'edam:format_123'}},
+                canonical=True)),
+        LegacyStepId('consumer', SYNTHETIC_NS): Tool(
+            '/synthetic/consumer.cwl',
+            clt({'file': {'type': 'File', 'format': 'edam:format_1234'}}, {},
+                canonical=True)),
+    }
+    _, linked, _ = _typed({'steps': [{'id': 'producer'}, {'id': 'consumer'}]}, tools)
+    result = infer(linked)
+    assert result.graph is not None
+    assert not result.graph.inferred_edges
+
+
+@pytest.mark.fast
+def test_non_file_output_without_format_can_satisfy_formatted_input() -> None:
+    """A non-File cannot declare a format, so omission is unconstrained."""
+    tools = {
+        LegacyStepId('producer', SYNTHETIC_NS): Tool(
+            '/synthetic/producer.cwl', clt({}, {'value': {'type': 'string'}},
+                                           canonical=True)),
+        LegacyStepId('consumer', SYNTHETIC_NS): Tool(
+            '/synthetic/consumer.cwl',
+            clt({'value': {'type': 'string', 'format': 'someformat'}}, {},
+                canonical=True)),
+    }
+    _, linked, _ = _typed({'steps': [{'id': 'producer'}, {'id': 'consumer'}]}, tools)
+    result = infer(linked)
+    assert result.graph is not None
+    assert len(result.graph.inferred_edges) == 1
+
+
+@pytest.mark.fast
+def test_unknown_file_format_does_not_outrank_an_exact_match() -> None:
+    """A formatless File is unknown, not a wildcard over exact formats."""
+    fmt = 'edam:format_3816'
+    tools = {
+        LegacyStepId('producer', SYNTHETIC_NS): Tool(
+            '/synthetic/producer.cwl', clt({}, {
+                'matching': {'type': 'File', 'format': fmt},
+                'unknown': {'type': 'File'},
+            }, canonical=True)),
+        LegacyStepId('consumer', SYNTHETIC_NS): Tool(
+            '/synthetic/consumer.cwl',
+            clt({'file': {'type': 'File', 'format': [fmt]}}, {}, canonical=True)),
+    }
+    _, linked, _ = _typed({'steps': [{'id': 'producer'}, {'id': 'consumer'}]}, tools)
+    result = infer(linked)
+    assert result.graph is not None
+    assert result.graph.inferred_edges[0].source.port == 'matching'
 
 
 def _model_candidate(steps: tuple[StepNode, ...], position: int,

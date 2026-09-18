@@ -195,17 +195,20 @@ def test_every_stub_is_valid_cwl(stem: str) -> None:
 @pytest.mark.fast
 @pytest.mark.parametrize('stem', STEMS)
 def test_required_inputs_agree_with_the_compilers_own_rule(stem: str) -> None:
-    """The second implementation and the compiler's must not have drifted."""
-    from sophios.compiler import _arg_has_default_or_is_optional  # pylint: disable=import-outside-toplevel
+    """The independent model and typed declarations must not drift."""
+    from sophios.ir.declarations import port_declaration  # pylint: disable=import-outside-toplevel
 
     in_tool = inputs_of(stem)
-    theirs = tuple(a for a in in_tool if not _arg_has_default_or_is_optional(a, in_tool))
+    declarations = {name: port_declaration(raw) for name, raw in in_tool.items()}
+    theirs = tuple(name for name, declaration in declarations.items()
+                   if not ((declaration.has_default and declaration.default is not None)
+                           or declaration.type.optional))
     assert required_inputs_of(stem) == theirs
 
 
 @pytest.mark.fast
 def test_falsy_default_still_counts_as_a_default() -> None:
-    """`_arg_has_default_or_is_optional` must test presence, not truth.
+    """Typed declarations preserve the presence of falsy defaults.
 
     `in_tool[arg].get('default')` used to be used directly as a boolean, so a
     tool declaring `default: False` (or `0`, or `''`) was treated as having no
@@ -219,18 +222,19 @@ def test_falsy_default_still_counts_as_a_default() -> None:
     truthiness and the falsy one fails; break the ordinary case and the truthy
     one fails.
     """
-    from sophios.compiler import _arg_has_default_or_is_optional  # pylint: disable=import-outside-toplevel
+    from sophios.ir.declarations import port_declaration  # pylint: disable=import-outside-toplevel
 
     in_tool = {
         'convert_Kd_dG': {'type': 'boolean', 'default': False},
         'control': {'type': 'boolean', 'default': True},
         'extras': {'type': 'File[]', 'default': []},
     }
-    assert _arg_has_default_or_is_optional('convert_Kd_dG', in_tool), \
+    declarations = {name: port_declaration(raw) for name, raw in in_tool.items()}
+    assert declarations['convert_Kd_dG'].has_default, \
         'a present-but-falsy default must still count as a default'
-    assert _arg_has_default_or_is_optional('control', in_tool), \
+    assert declarations['control'].has_default, \
         'a present, truthy default must still count as a default'
-    assert _arg_has_default_or_is_optional('extras', in_tool), \
+    assert declarations['extras'].has_default, \
         'an empty-collection default must still count as a default'
 
 
@@ -246,15 +250,19 @@ def test_a_null_default_does_not_satisfy_a_non_nullable_input() -> None:
     control, and must stay optional for the type's sake rather than the
     default's.
     """
-    from sophios.compiler import _arg_has_default_or_is_optional  # pylint: disable=import-outside-toplevel
+    from sophios.ir.declarations import port_declaration  # pylint: disable=import-outside-toplevel
 
     in_tool = {
         'required': {'type': 'File', 'default': None},
         'nullable': {'type': ['null', 'File'], 'default': None},
     }
-    assert not _arg_has_default_or_is_optional('required', in_tool), \
+    declarations = {name: port_declaration(raw) for name, raw in in_tool.items()}
+    required = declarations['required']
+    nullable = declarations['nullable']
+    assert not ((required.has_default and required.default is not None)
+                or required.type.optional), \
         'a null default cannot satisfy a non-nullable input, so the input stays required'
-    assert _arg_has_default_or_is_optional('nullable', in_tool), \
+    assert nullable.type.optional, \
         'a null-permitting type is optional whatever its default'
 
 

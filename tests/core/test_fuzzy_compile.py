@@ -96,9 +96,10 @@ class TestFuzzyCompile(unittest.TestCase):
             yaml_tree = sophios.ast.python_script_generate_cwl(
                 yaml_tree, root_yml_dir_abs, tools_cwl)
 
-            sophios.compiler.compile_workflow(yaml_tree, compiler_options, graph_settings,
-                                              yaml_tag_paths, [], [graph], {}, {}, {}, {},
-                                              tools_cwl, True, relative_run_path=True, testing=True)
+            sophios.compiler.compile_document(
+                yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
+                tools_cwl, relative_run_path=True, testing=True,
+                graph_target=graph)
         except SophiosError as e:
             # Structured failures are tolerated only for the codes that were
             # tolerated before this change, and no others.

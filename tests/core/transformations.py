@@ -15,12 +15,12 @@ workflow, not an accident of how it was written. A "reorder independent steps"
 transformation would be a property asserting something false about this
 language.
 
-The five, with their strengths, are `identity`, `text_roundtrip`, `split`,
-`inline_all` and `rename_workflow`. `split` needs a drawn argument (which
+The four, with their strengths, are `identity`, `text_roundtrip`, `split`,
+and `rename_workflow`. `split` needs a drawn argument (which
 steps go in which file), so it is built by a strategy rather than being a
-constant: `TRANSFORMATIONS` holds the other four, and `split_transformations()`
+constant: `TRANSFORMATIONS` holds the other three, and `split_transformations()`
 builds a `split` from `ast_strategies.partitionings`. The property parametrises
-over all five rather than drawing one, so each gets the whole budget.
+over all four rather than drawing one, so each gets the whole budget.
 """
 import copy
 from dataclasses import dataclass
@@ -30,14 +30,12 @@ from typing import Callable, Final
 import yaml
 from hypothesis.strategies import SearchStrategy
 
-from sophios.inlineing import get_inlineable_subworkflows, inline_subworkflow
 from sophios.utils_yaml import wic_loader
-from sophios.wic_types import Namespaces, StepId, Yaml, YamlTree
+from sophios.wic_types import Yaml
 
 from .ast_strategies import partitionings
 from .equivalence import Strength
 from .hermetic import subworkflow_step
-from .synthetic_tools import SYNTHETIC_NS
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,33 +85,6 @@ def _text_roundtrip(document: Yaml) -> Yaml:
     dumped = yaml.safe_dump(document, sort_keys=False)
     loaded: Yaml = yaml.load(dumped, Loader=wic_loader())
     return loaded
-
-
-#: How many times `_inline_all` will inline a subworkflow before giving up.
-#: Every call strictly reduces the number of `.wic` steps remaining (a
-#: subworkflow, once inlined, cannot reappear), and `workflows()` never
-#: generates more than one, so this is generous headroom, not a tuned budget —
-#: it exists so a defect in `get_inlineable_subworkflows`/`inline_subworkflow`
-#: that stopped making progress would raise here instead of hanging the suite.
-_MAX_INLINE_PASSES: Final = 20
-
-
-def _inline_all(document: Yaml) -> Yaml:
-    """Inline every subworkflow this document contains, via `sophios.inlineing`.
-
-    Repeats rather than inlining once: `get_inlineable_subworkflows` can name
-    more than one namespace, and inlining one shifts the indices of whatever
-    is left, so the list is recomputed after each inline instead of consumed
-    in one pass.
-    """
-    tree = YamlTree(StepId('workflow', SYNTHETIC_NS), copy.deepcopy(document))
-    for _ in range(_MAX_INLINE_PASSES):
-        found: list[Namespaces] = get_inlineable_subworkflows(
-            tree, implementation=False, namespaces_init=[])
-        if not found:
-            return tree.yml
-        tree, _len_substeps = inline_subworkflow(tree, found[0])
-    raise AssertionError(f'_inline_all did not converge in {_MAX_INLINE_PASSES} passes')
 
 
 def _declared_input_references(document: Yaml, steps: list[Yaml]) -> set[str]:
@@ -177,7 +148,7 @@ def _wrap_steps(document: Yaml, groups: list[list[Yaml]], stems: list[str]) -> Y
 
     Each wrapper is wired to whichever of `document`'s own declared `inputs:`
     its own group references, via `parentargs['in']` rather than a plain
-    `in:` key on the step dict: `compile_workflow_once` builds a subworkflow
+    `in:` key on the step dict: compilation builds a subworkflow
     step's final `in:` by merging `parentargs` over any `wic:`-supplied
     overrides (src/sophios/compiler.py:560-567), discarding whatever the step
     dict already had — checked directly, an `in:` set any other way is simply
@@ -241,12 +212,6 @@ TRANSFORMATIONS: Final[tuple[Transformation, ...]] = (
         rationale=(
             'yaml.safe_dump then load through wic_loader. Serialising a workflow and reading it '
             'back is what every user does between writing a file and compiling it.')),
-    Transformation(
-        name='inline_all', preserves=Strength.UP_TO_RENAMING, apply=_inline_all,
-        rationale=(
-            "The inverse of split, via sophios.inlineing. Included because it is the direction the "
-            "existing corpus test takes, and because a split/inline pair checked only against each "
-            "other agrees whenever both are wrong the same way.")),
     Transformation(
         name='rename_workflow', preserves=Strength.UP_TO_RENAMING, apply=_rename_workflow,
         rationale=(

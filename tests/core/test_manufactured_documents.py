@@ -2,8 +2,8 @@
 
 The corpus is not the interesting input: documents a *user* wrote already have
 a parse property. What nothing checked is the documents the compiler *makes* —
-the Python API's output, the inliner's intermediates, the tree after `wic:`
-metadata is merged onto a step, the documents `rerun_cwltool` builds. Those
+the Python API's output, the tree after `wic:` metadata is merged onto a step,
+and the documents `rerun_cwltool` builds. Those
 never pass through `sophios.lang`, so the grammar has never had an opinion
 about them, and three defects in a row lived exactly there: step ids spelled
 from the wrong stem, a producer still emitting a step form the grammar had
@@ -55,22 +55,12 @@ MANUFACTURING_SITES: Final[dict[str, str]] = {
     'sophios/ast.py::merge_yml_trees': DOCUMENT,
     'sophios/ast.py::python_script_generate_cwl': DOCUMENT,
     'sophios/ast.py::read_ast_from_disk': DOCUMENT,
-    'sophios/compiler.py::_prepare_compilation_state': DOCUMENT,
-    'sophios/compiler.py::compile_workflow_once': DOCUMENT,
-    'sophios/compiler.py::insert_step_into_workflow': DOCUMENT,
+    'sophios/compiler.py::_detach_sources': DOCUMENT,
     'sophios/cwl_subinterpreter.py::rerun_cwltool': DOCUMENT,
-    'sophios/inlineing.py::get_inlineable_subworkflows': DOCUMENT,
-    'sophios/inlineing.py::inline_subworkflow': DOCUMENT,
-    'sophios/inlineing.py::inline_subworkflow_wic_tag': DOCUMENT,
-    'sophios/ir/pipeline.py::legacy_after_lower': DOCUMENT,
-    'sophios/ir/pipeline.py::legacy_after_link': DOCUMENT,
-    'sophios/ir/pipeline.py::legacy_after_infer': DOCUMENT,
     'sophios/main.py::_load_and_prepare_yaml_tree': DOCUMENT,
-    'sophios/utils.py::extract_implementation': DOCUMENT,
     'sophios/utils.py::flatten_forest': DOCUMENT,
     # Not documents.
     'sophios/ir/emit.py::emit': CWL,
-    'sophios/legacy_graph.py::legacy_emit': CWL,
     'sophios/lang/render.py::_Writer.document': RENDERER,
     'sophios/lang/render.py::_Writer.sidecar': RENDERER,
     'sophios/lang/schema.py::_defs': SCHEMA,
@@ -91,21 +81,8 @@ UNREACHED: Final[dict[str, str]] = {
     'sophios/ast.py::python_script_generate_cwl': 'only reached by a `python_script` step',
     'sophios/cwl_subinterpreter.py::rerun_cwltool': 'shells out to a CWL runner; its documents are '
     'pinned directly by test_compiler.py',
-    'sophios/inlineing.py::inline_subworkflow_wic_tag': 'reached only through the CLI inlining flags',
-    'sophios/inlineing.py::inline_subworkflow': 'the inliner runs between loading and compiling, on '
-                                                'the CLI path these drivers do not take',
-    'sophios/inlineing.py::get_inlineable_subworkflows': 'same path as inline_subworkflow',
     'sophios/ast.py::_tree_to_forest': 'reached by the CLI post-compile path, not by compile_workflow',
     'sophios/utils.py::flatten_forest': 'same post-compile path as _tree_to_forest',
-    'sophios/compiler.py::insert_step_into_workflow': 'speculative insertion fires only when the tool '
-    'registry offers an insertable step, and the '
-    'synthetic registry offers none',
-    'sophios/ir/pipeline.py::legacy_after_lower': 'temporary differential bridge exercised by the '
-    'typed Resolve property, not these legacy drivers',
-    'sophios/ir/pipeline.py::legacy_after_link': 'temporary differential bridge exercised by the '
-    'typed Link property, not these legacy drivers',
-    'sophios/ir/pipeline.py::legacy_after_infer': 'temporary differential bridge exercised by the '
-    'typed Infer property, not these legacy drivers',
 }
 
 
@@ -129,10 +106,9 @@ def _scan_for_sites() -> dict[str, list[int]]:
     is invisible here, which is why the classification above is by hand and why
     this scan is a floor rather than a proof.
 
-    Known to be below the floor, from reading the call graph: helper
-    indirection (`inference.perform_edge_inference` reaches a step's `in:`
-    through two more calls into `utils_cwl`), `maybe_add_requirements`, which
-    writes a key none of these markers name, and every `mergedeep.merge` whose
+    Known to be below the floor, from reading the call graph:
+    `maybe_add_requirements`, which writes a key none of these markers name,
+    and every `mergedeep.merge` whose
     result set is decided at runtime. Those manufacture *into* documents the
     instrumented sites already hand over, so the parse claim still covers them
     — what this scan cannot promise is that a brand-new site built that way

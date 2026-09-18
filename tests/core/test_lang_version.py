@@ -175,7 +175,7 @@ def test_annotation_is_declared_and_the_cwl_stays_valid() -> None:
     import cwltool.main  # pylint: disable=import-outside-toplevel  # expensive; slow lane only
 
     info = compile_info(TOUCH, 'lang_version')
-    inlined = sophios.post_compile.cwl_inline_runtag(info.rose).data.compiled_cwl
+    inlined = sophios.post_compile.inline_artifact_runs(info.artifact).cwl
 
     assert inlined[ANNOTATION_KEY] == LANG_VERSION
     assert inlined['$namespaces'][ANNOTATION_NAMESPACE] == ANNOTATION_NAMESPACE_URI

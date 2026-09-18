@@ -422,10 +422,9 @@ def test_compute_request_submit_requires_workflow_id() -> None:
 def test_workflow_compile_boundary_hides_compiler_info() -> None:
     """`compile()` hands back a `CompiledWorkflow` and nothing of the compiler.
 
-    Stated as the absence, because the design lists `_compile()` and
-    `CompilerInfo` under what it does *not* guarantee -- the typed IR replaces
-    `RoseTree` -- so a test reaching past the boundary to assert their shape
-    would pin the thing the refactor is free to change.
+    The typed compiler's internal result and artifact tree are not part of the
+    public Python API.  This test pins the supported boundary, not retired
+    implementation shapes.
     """
     emit_step = Step(_emit_text_tool(), step_name="emit_text")
     emit_step.inputs.message = "hello"

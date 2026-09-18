@@ -13,7 +13,7 @@ from copy import deepcopy
 from typing import Any
 
 from ..lang import versions
-from ..wic_types import Cwl, WorkflowInputsFile
+from ..wic_types import Cwl
 from .types import StepEmission, WorkflowGraph, WorkflowPort
 
 
@@ -46,7 +46,7 @@ def emit(graph: WorkflowGraph) -> Cwl:
     return {name: known[name] for name in graph.field_order if name in known}
 
 
-def emit_job_inputs(graph: WorkflowGraph) -> WorkflowInputsFile:
+def emit_job_inputs(graph: WorkflowGraph) -> Cwl:
     """Project the concrete job input document carried by ``graph``."""
     return {binding.name: deepcopy(binding.value) for binding in graph.job_bindings}
 

@@ -1,8 +1,10 @@
 """Canonical CWL emission from the workflow graph.
 
-The legacy finalizer is an oracle, never an input to Emit.  Generated
-differentials demand byte-identical documents; separate graph-only tests make
-that comparison non-vacuous and pin the phase boundary.
+Emit is an exact projection of one graph, so its local determinism checks are
+byte-sensitive. That is deliberately narrower than the compiler migration's
+end-to-end compatibility contract, which is behavioral equivalence at
+``UP_TO_EMBEDDING``. Separate graph-only tests make the projection claim
+non-vacuous and pin the phase boundary.
 
 BLIND SPOTS: generated workflows inherit ``ast_strategies.workflows``'s
 declared exclusions.  Validation does not execute CWL.  The static boundary
@@ -46,7 +48,6 @@ from sophios.lang.versions import ANNOTATION_KEY, ANNOTATION_NAMESPACE, ANNOTATI
 from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
-from .differential import assert_compilations_equivalent
 from .equivalence import Strength, equivalent
 from .hermetic import ORACLE, compile_hermetic
 from .source_scan import REPO_ROOT
@@ -55,11 +56,10 @@ from .source_scan import REPO_ROOT
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows())
 @ORACLE
-def test_emit_is_identical_to_the_legacy_finalizer(workflow: Yaml) -> None:
-    """The new terminal projection changes no byte of any workflow artifact."""
-    old = compile_hermetic(copy.deepcopy(workflow), legacy_emission=True)
-    new = compile_hermetic(copy.deepcopy(workflow))
-    assert_compilations_equivalent(old, new, Strength.IDENTICAL)
+def test_the_live_compiler_emits_only_from_its_graph(workflow: Yaml) -> None:
+    """The public compiler's artifact is exactly its final graph projection."""
+    result = compile_hermetic(copy.deepcopy(workflow))
+    assert result.artifact.cwl == emit(result.graph)
 
 
 @pytest.mark.fast
@@ -89,10 +89,10 @@ def test_differential_oracle_detects_a_changed_document() -> None:
     """A same-arm comparison or a disabled equivalence relation cannot pass."""
     workflow = {'steps': [{'id': 'mk_file',
                            'in': {'name': {'wic_inline_input': 'x'}}}]}
-    old = compile_hermetic(copy.deepcopy(workflow), legacy_emission=True)
-    changed = copy.deepcopy(old.rose.data.compiled_cwl)
+    result = compile_hermetic(copy.deepcopy(workflow))
+    changed = copy.deepcopy(result.artifact.cwl)
     changed['class'] = 'CommandLineTool'
-    assert equivalent(old.rose.data.compiled_cwl, changed, Strength.IDENTICAL) is not None
+    assert equivalent(result.artifact.cwl, changed, Strength.IDENTICAL) is not None
 
 
 @pytest.mark.skip_pypi_ci
@@ -101,7 +101,7 @@ def test_differential_oracle_detects_a_changed_document() -> None:
 def test_one_graph_emits_identically(workflow: Yaml) -> None:
     """A graph, not its mutable source dictionaries, determines every byte."""
     source = copy.deepcopy(workflow)
-    graph = compile_hermetic(source).rose.data.emission_graph
+    graph = compile_hermetic(source).graph
     first = emit(graph)
     source.clear()
     second = emit(graph)
@@ -109,8 +109,8 @@ def test_one_graph_emits_identically(workflow: Yaml) -> None:
 
 
 @pytest.mark.fast
-def test_a_hand_built_graph_emits_without_the_legacy_bridge() -> None:
-    """The differential cannot be green merely because the bridge did all work."""
+def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
+    """The graph projection cannot be green only through compiler construction."""
     namespace = Namespace()
     step_id = StepId(namespace, 1, 'write')
     input_id = PortId(step_id, Direction.INPUT, 'message')
@@ -156,7 +156,7 @@ def test_hash_seed_does_not_change_emit() -> None:
 import json
 from tests.core.hermetic import compile_hermetic
 w = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]}
-print(json.dumps(compile_hermetic(w).rose.data.compiled_cwl, separators=(',', ':')))
+print(json.dumps(compile_hermetic(w).artifact.cwl, separators=(',', ':')))
 """
     env = {**os.environ, 'PYTHONPATH': os.pathsep.join((str(REPO_ROOT / 'src'), str(REPO_ROOT)))}
     results = []
@@ -178,7 +178,7 @@ def test_emit_validates_as_cwl_v1_2(workflow: Yaml) -> None:
     import cwltool.main  # pylint: disable=import-outside-toplevel
 
     info = compile_hermetic(workflow)
-    inlined = sophios.post_compile.cwl_inline_runtag(info.rose).data.compiled_cwl
+    inlined = sophios.post_compile.inline_artifact_runs(info.artifact).cwl
     with tempfile.TemporaryDirectory() as workdir:
         target = Path(workdir) / 'workflow.cwl'
         target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
@@ -238,7 +238,7 @@ def test_boundary_guard_detects_a_planted_dependency() -> None:
 @settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 def test_emit_needs_no_state_beyond_the_graph(workflow: Yaml) -> None:
     """A graph remains sufficient after compiler policy and source are destroyed."""
-    graph = compile_hermetic(copy.deepcopy(workflow)).rose.data.emission_graph
+    graph = compile_hermetic(copy.deepcopy(workflow)).graph
     expected = emit(graph)
     from sophios import compiler  # pylint: disable=import-outside-toplevel
     assert not hasattr(compiler, 'inference_rules')

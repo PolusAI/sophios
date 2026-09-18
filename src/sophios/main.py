@@ -11,14 +11,15 @@ import networkx as nx
 import yaml
 from jsonschema import Draft202012Validator
 
-from sophios.lang import versions
 from sophios.lang.diagnostics import SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
+from sophios.ir.artifacts import CompilationResult
 from sophios.utils_yaml import wic_loader
 from . import input_output as io
 from . import post_compile as pc
-from . import ast, cli, compiler, inlineing, plugins, run_local, utils  # , utils_graphs
+from . import ast, cli, compiler, plugins, run_local, utils  # , utils_graphs
 from .schemas import wic_schema
-from .wic_types import (CompilerOptions, GraphData, GraphReps, GraphSettings, Json, RoseTree,
+from .wic_types import (CompilerOptions, GraphData, GraphReps, GraphSettings, Json,
                         StepId, Tools, Yaml, YamlTagPaths, YamlTree)
 
 
@@ -34,7 +35,7 @@ def _write_intermediate_wic(yaml_stem: str, suffix: str, yaml_doc: Yaml, *, enab
 
 def _load_and_prepare_yaml_tree(args: argparse.Namespace, yml_paths: dict[str, dict[str, Path]],
                                 tools_cwl: Tools, validator: Draft202012Validator) -> tuple[str, str, YamlTree]:
-    """Load the root workflow yaml, run ast merge / python-script generation, and optionally inline subworkflows."""
+    """Load the root workflow yaml and run AST merge / Python generation."""
     yaml_path = args.yaml
     yaml_stem = Path(args.yaml).stem
 
@@ -71,34 +72,13 @@ def _load_and_prepare_yaml_tree(args: argparse.Namespace, yml_paths: dict[str, d
         enabled=args.write_intermediate_wic,
     )
 
-    if args.cwl_inline_subworkflows:
-        while True:
-            # Inlineing changes the namespaces, so we have to get new namespaces after each inlineing operation.
-            namespaces_list = inlineing.get_inlineable_subworkflows(
-                yaml_tree, implementation=False, namespaces_init=[])
-            if namespaces_list == []:
-                break
-
-            yaml_tree, _len_substeps = inlineing.inline_subworkflow(yaml_tree, namespaces_list[0])
-
-        # Append _inline here instead of in io.write_to_disk()
-        step_id = StepId(yaml_tree.step_id.stem + '_inline', yaml_tree.step_id.plugin_ns)
-        yaml_tree = YamlTree(step_id, yaml_tree.yml)
-
-        _write_intermediate_wic(
-            Path(yaml_path).stem,
-            'tree_merged_inlined',
-            yaml_tree.yml,
-            enabled=args.write_intermediate_wic,
-        )
-
     return yaml_path, yaml_stem, yaml_tree
 
 
-def _build_and_compile_workflow(yaml_path: str, yaml_stem: str, yaml_tree: YamlTree, tools_cwl: Tools,
-                                compiler_options: CompilerOptions, graph_settings: GraphSettings,
-                                yaml_tag_paths: YamlTagPaths) -> tuple[graphviz.Digraph, RoseTree]:
-    """Build the root GraphViz digraph and compile the workflow into a rose tree, exiting on compile failure."""
+def _compile_loaded_document(yaml_path: str, yaml_stem: str, yaml_tree: YamlTree, tools_cwl: Tools,
+                             compiler_options: CompilerOptions, graph_settings: GraphSettings,
+                             yaml_tag_paths: YamlTagPaths) -> tuple[graphviz.Digraph, CompilationResult]:
+    """Build the root graph view and compile to a graph-derived result."""
     rootgraph = graphviz.Digraph(name=yaml_path)
     # newrank='True' ranks nodes globally (rather than per-cluster), which is
     # required for GraphData.ranksame constraints to work across subgraphs/clusters.
@@ -125,9 +105,9 @@ def _build_and_compile_workflow(yaml_path: str, yaml_stem: str, yaml_tree: YamlT
         subgraph = GraphReps(subgraph_gv, subgraph_nx, graphdata)
 
         try:
-            compiler_info = compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
-                                                      [], [subgraph], {}, {}, {}, {},
-                                                      tools_cwl, True, relative_run_path=True, testing=False)
+            result = compiler.compile_document(
+                yaml_tree, compiler_options, graph_settings, yaml_tag_paths, tools_cwl,
+                relative_run_path=True, testing=False, graph_target=subgraph)
         except SophiosError as e:
             # The library reports; only this adapter is allowed to exit. The
             # messages are the same ones the old exit sites printed — but the
@@ -154,12 +134,11 @@ def _build_and_compile_workflow(yaml_path: str, yaml_stem: str, yaml_tree: YamlT
                 # https://mypy.readthedocs.io/en/stable/common_issues.html#python-version-and-system-platform-checks
                 traceback.print_exception(type(e), value=e, tb=None, file=f)
             sys.exit(1)
-        rose_tree = compiler_info.rose
         # The resolved language version is reported on every compile, not
         # only on failure — nobody should have to guess which language their
         # file was read as.
-        print('Sophios lang_version:', rose_tree.data.compiled_cwl.get(versions.ANNOTATION_KEY))
-    return rootgraph, rose_tree
+        print('Sophios lang_version:', result.lang_version)
+    return rootgraph, result
 
 
 def main() -> None:
@@ -218,10 +197,20 @@ def _main() -> None:
                             for yml_path_str, yml_path in yml_paths_dict.items()]
 
         for yml_path_str, yml_path in yml_paths_tuples:
-            schema = wic_schema.compile_workflow_generate_schema(args.homedir, yml_path_str, yml_path,
-                                                                 tools_cwl, yml_paths, validator,
-                                                                 args.ignore_validation_errors,
-                                                                 args.write_intermediate_wic)
+            try:
+                schema = wic_schema.compile_workflow_generate_schema(
+                    args.homedir, yml_path_str, yml_path, tools_cwl, yml_paths,
+                    validator, args.ignore_validation_errors,
+                    args.write_intermediate_wic)
+            except SophiosError as exc:
+                if exc.diagnostics and all(
+                        item.code is SophiosErrorCode.UNDEFINED_EDGE
+                        for item in exc.diagnostics):
+                    # A fragment whose explicit edge comes from an includer has
+                    # no standalone schema. Its permissive placeholder remains;
+                    # the composed root is still compiled and checked below.
+                    continue
+                raise
             # overwrite placeholders in schema_store. See comment in get_validator()
             schema_store[schema['$id']] = schema
 
@@ -244,17 +233,23 @@ def _main() -> None:
     compiler_options, graph_settings, yaml_tag_paths = cli.get_dicts_for_compilation(args)
     compiler_options['inference_rules'] = global_config.get('inference_rules', {})
     compiler_options['renaming_conventions'] = global_config.get('renaming_conventions', [])
-    rootgraph, rose_tree = _build_and_compile_workflow(yaml_path, yaml_stem, yaml_tree, tools_cwl,
-                                                       compiler_options, graph_settings, yaml_tag_paths)
+    rootgraph, compilation = _compile_loaded_document(
+        yaml_path, yaml_stem, yaml_tree, tools_cwl,
+        compiler_options, graph_settings, yaml_tag_paths)
+    artifact = compilation.artifact
 
-    rose_tree = plugins.cwl_prepend_dockerFile_include_path_rosetree(rose_tree)
+    artifact = plugins.cwl_prepend_dockerFile_include_path_artifact(artifact)
 
     if args.partial_failure_enable:
-        rose_tree = plugins.cwl_update_outputs_optional_rosetree(
-            rose_tree, args.partial_failure_success_codes_range, args.partial_failure_success_codes)
+        artifact = plugins.cwl_update_outputs_optional_artifact(
+            artifact, args.partial_failure_success_codes_range,
+            args.partial_failure_success_codes)
 
-    if args.cwl_inline_runtag:
-        rose_tree = pc.cwl_inline_runtag(rose_tree)
+    # Source flattening used to reimplement workflow-call semantics before the
+    # compiler could judge them. Both public flags now embed the already-linked
+    # child graph, so Link remains the sole owner of call bindings and outputs.
+    if args.cwl_inline_runtag or args.cwl_inline_subworkflows:
+        artifact = pc.inline_artifact_runs(artifact)
 
     if args.graphviz:
         if shutil.which('dot'):
@@ -281,13 +276,13 @@ def _main() -> None:
         # Only now we need to write the final cwl for docker-extract
         # and then for actually running using a cwl_runner
         basepath = 'autogenerated'
-        io.write_to_disk(rose_tree, Path(basepath), True, args.inputs_file)
+        io.write_artifacts_to_disk(artifact, Path(basepath), True, args.inputs_file)
         # extract the container images
         pc.cwl_docker_extract(args.container_engine, args.pull_dir, Path(basepath) / f'{yaml_stem}.cwl')
         if args.docker_remove_entrypoints:
-            rose_tree = pc.remove_entrypoints(args.container_engine, rose_tree)
+            artifact = pc.remove_artifact_entrypoints(args.container_engine, artifact)
         # stage input files for run
-        pc.stage_input_files(rose_tree.data.workflow_inputs_file, Path(args.yaml).parent.absolute(), basepath)
+        pc.stage_input_files(artifact.job_inputs, Path(args.yaml).parent.absolute(), basepath)
         # No need to re-write to disk as nothing of the cwl or yaml_inputs has changed!
         # if there are no unknown_args then unkown_args will be an empty list []
         # so no need for a separate check of a particular flag!
@@ -300,10 +295,10 @@ def _main() -> None:
         run_args_dict['outdir'] = args.outdir
         run_args_dict['generate_run_script'] = 'yes' if args.generate_run_script else 'no'
         run_local.run_local(run_args_dict, False,
-                            workflow_name=rose_tree.data.name, passthrough_args=unknown_args, basepath=basepath)
+                            workflow_name=artifact.name, passthrough_args=unknown_args, basepath=basepath)
 
     elif args.generate_cwl_workflow:
-        io.write_to_disk(rose_tree, Path('autogenerated/'), True, args.inputs_file)
+        io.write_artifacts_to_disk(artifact, Path('autogenerated/'), True, args.inputs_file)
     else:
         print('Please specify either --generate_cwl_workflow (compile) or --run_local (run)')
         sys.exit(1)

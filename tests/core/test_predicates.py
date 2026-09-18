@@ -18,16 +18,15 @@ See design_docs/core-refactor-design.md §6.2.
 """
 import copy
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 from hypothesis import given
 
-import sophios.compiler
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.utils import parse_step_name_str, step_name_str
-from sophios.wic_types import CompilerInfo, RoseTree, Yaml
+from sophios.ir import InferencePolicy, Namespace, WorkflowGraph, infer
+from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
 from .hermetic import ORACLE, compile_hermetic, compile_hermetic_cwl
@@ -126,7 +125,7 @@ def test_injectivity_survives_a_workflow_name_containing_the_separators(stem: st
 def _compatible(in_type: Any, out_type: Any) -> bool:
     """Whether a CWL input type accepts a CWL output type.
 
-    A second implementation of the rule `inference.types_match` states, written
+    A second implementation of the rule `ir.infer.types_match` states, written
     from the CWL semantics rather than transcribed from it. Calling the
     compiler's own predicate to grade the compiler's own choice would prove the
     two agree, which they would by construction; the point is that a bug in
@@ -271,36 +270,10 @@ def test_every_generated_workflow_input_reference_is_not_proven_disjoint(yml: Ya
 
 
 def never_converges() -> None:
-    """Drive the fixed-point loop to exhaustion, through the real guard.
-
-    `compile_workflow_once` is wrapped so the AST it reports always differs
-    from the one it was given. `ast_modified` is then true on every pass, the
-    loop runs its full count, and the guard fires in place, reached the way it
-    is reached in production.
-
-    A workflow contrived to insert steps forever would be slower, would depend
-    on inference choices this test has no opinion about, and would exercise
-    exactly the same two lines. Patching `max_iters` itself would be testing a
-    number rather than the guard.
-
-    Module-level so `provocations.py` can import it lazily: that module reaches
-    `compile_harness` and therefore plugin discovery, so the dependency runs
-    that way and never the reverse.
-    """
-    real = sophios.compiler.compile_workflow_once
-    tick = 0
-
-    def always_modified(yaml_tree_ast: Any, *args: Any, **kwargs: Any) -> CompilerInfo:
-        nonlocal tick
-        tick += 1
-        info: CompilerInfo = real(yaml_tree_ast, *args, **kwargs)
-        moved = info.rose.data._replace(yml={**info.rose.data.yml, '_tick': tick})
-        return info._replace(rose=RoseTree(moved, info.rose.sub_trees))
-
-    with patch.object(sophios.compiler, 'compile_workflow_once', always_modified):
-        compile_hermetic_cwl(
-            {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a.txt'}}}]},
-            'diverge')
+    """Drive the typed Infer fixed-point guard to its explicit limit."""
+    result = infer(WorkflowGraph(Namespace()), InferencePolicy(iteration_limit=0))
+    if result.graph is None:
+        raise SophiosError(result.diagnostics)
 
 
 @pytest.mark.skip_pypi_ci

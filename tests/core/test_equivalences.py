@@ -15,7 +15,8 @@ import yaml
 from hypothesis import given
 from hypothesis import strategies as st
 
-from sophios.wic_types import NodeData, RoseTree, Yaml
+from sophios.ir.artifacts import CompilationArtifact
+from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
 from .equivalence import Strength, equivalent
@@ -49,7 +50,7 @@ def _set_source(bindings: Yaml, name: str, source: str) -> None:
         bindings[name] = source
 
 
-def _flatten(rose: RoseTree) -> Yaml:
+def _flatten(artifact: CompilationArtifact) -> Yaml:
     """The compiled document with every subworkflow step inlined, so a split
     and an unsplit compilation of the same steps can be compared directly.
 
@@ -66,10 +67,9 @@ def _flatten(rose: RoseTree) -> Yaml:
     so the id is not what marks a step as needing to be inlined here; its own
     compiled class is.
     """
-    node_data: NodeData = rose.data
-    document: Yaml = copy.deepcopy(node_data.compiled_cwl)
+    document: Yaml = copy.deepcopy(artifact.cwl)
     steps: list[Yaml] = document.get('steps', [])
-    sub_trees: list[RoseTree] = rose.sub_trees
+    children = artifact.children
     flat_steps: list[Yaml] = []
     #: `{wrapper_id}/{wrapper_out_port} -> real producer's own source string`,
     #: for every subworkflow step this pass inlines away.
@@ -84,13 +84,12 @@ def _flatten(rose: RoseTree) -> Yaml:
     inherited_requirements: dict[str, Yaml] = {}
     inlined_any = False
 
-    for step, sub in zip(steps, sub_trees):
-        sub_data: NodeData = sub.data
-        if sub_data.compiled_cwl.get('class') != 'Workflow':
+    for step, child in zip(steps, children):
+        if child.cwl.get('class') != 'Workflow':
             flat_steps.append(step)
             continue
         inlined_any = True
-        inner = _flatten(sub)
+        inner = _flatten(child)
         inner_requirements = inner.get('requirements')
         if isinstance(inner_requirements, dict):
             inherited_requirements.update(inner_requirements)
@@ -146,7 +145,7 @@ def _flatten(rose: RoseTree) -> Yaml:
 def _compile_flat(yml: Yaml) -> Yaml:
     """Compile hermetically under the shared name and flatten the result."""
     info = compile_hermetic(yml, _COMPILE_NAME)
-    return _flatten(info.rose)
+    return _flatten(info.artifact)
 
 
 def _hits_the_scalar_coercion_gap(document: Yaml) -> bool:
@@ -256,7 +255,7 @@ def test_split_reaches_a_document_that_is_already_nested() -> None:
     zero with every test here still green.
 
     Which rewrite gets drawn is no longer a question — the property parametrises
-    over all five — so this measures the one thing left to chance: how often the
+    over all four — so this measures the one thing left to chance: how often the
     document underneath is deep enough for `split` to nest. Drawn exactly as the
     property draws, filter included.
     """
@@ -278,10 +277,8 @@ def test_split_reaches_a_document_that_is_already_nested() -> None:
 
 
 #: A document every constant transformation but `identity` must genuinely
-#: change: a plain step plus an existing subworkflow, so `inline_all` has
-#: something to inline (a document with no subworkflow gives it nothing to
-#: do) and `rename_workflow`/`split`-style wrapping has more than one step to
-#: gather.
+#: change: a plain step plus an existing subworkflow, so
+#: `rename_workflow`/`split`-style wrapping has more than one step to gather.
 _NOOP_GUARD_FIXTURE: Final[Yaml] = {
     'steps': [
         {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a.txt'}}},

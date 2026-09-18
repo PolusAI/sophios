@@ -407,7 +407,7 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
         known = {port.id for step in self.steps for port in step.inputs + step.outputs}
         recursive_known = self.port_ids
         for where, port_id in self._references():
-            allowed = recursive_known if where == 'an edge source' else known
+            allowed = recursive_known if where in {'an edge source', 'an output mapping'} else known
             if port_id not in allowed:
                 raise ValueError(f'{where} names a port no step declares: {port_id}')
         for edge in self.composition_edges:
@@ -433,8 +433,10 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
                     found.append(('an edge source', binding.resolution.source))
                 elif isinstance(binding.resolution, DeferredObligation):
                     found.append(('an obligation', binding.resolution.sink))
-        for name, port_id in (*self.explicit_edge_defs, *self.explicit_edge_calls, *self.output_mapping):
+        for name, port_id in (*self.explicit_edge_defs, *self.explicit_edge_calls):
             found.append((f'mapping {name!r}', port_id))
+        for _name, port_id in self.output_mapping:
+            found.append(('an output mapping', port_id))
         for name, port_ids in self.input_mapping:
             found.extend((f'input mapping {name!r}', port_id) for port_id in port_ids)
         return tuple(found)

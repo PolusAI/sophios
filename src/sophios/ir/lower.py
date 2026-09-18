@@ -30,7 +30,6 @@ from .types import (
     ProcessRun,
     Port,
     PortId,
-    PortType,
     Resolution,
     StepEmission,
     StepId,
@@ -38,10 +37,6 @@ from .types import (
     WorkflowPort,
     WorkflowGraph,
 )
-
-#: A port whose type the document does not declare. Not invented here: a guess
-#: would be indistinguishable from a declaration by the time anything read it.
-UNDECLARED = PortType(declared=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,9 +52,9 @@ class Lowered:
         return self.graph is not None and not self.diagnostics.has_errors
 
 
-def lower(document: Document | ResolvedDocument,
+def lower(document: ResolvedDocument,
           namespace: Namespace | None = None) -> Lowered:
-    """Lower a parsed document to a graph.
+    """Lower a resolved document to a graph.
 
     An input bound with `!*` becomes an edge when the name was defined *earlier*
     in this document, and a `DeferredObligation` when it was never defined here
@@ -69,53 +64,14 @@ def lower(document: Document | ResolvedDocument,
     quietly resolved.
 
     Args:
-        document (Document): The parsed document.
+        document (ResolvedDocument): The resolved document.
         namespace (Namespace | None): Where this document sits. The root's
             namespace is empty.
 
     Returns:
         Lowered: The graph, and any diagnostics raised on the way.
     """
-    if isinstance(document, ResolvedDocument):
-        return _lower_resolved(document, namespace)
-    return _lower_document(document, namespace)
-
-
-def _lower_document(document: Document, namespace: Namespace | None = None) -> Lowered:
-    """Compatibility lowering for syntax-only callers from the foundation PR."""
-    diagnostics = Diagnostics()
-    here = namespace if namespace is not None else Namespace()
-
-    identities = _step_identities(document, here, diagnostics)
-    if identities is None or not _every_name_is_present(document, diagnostics):
-        return Lowered(None, diagnostics)
-
-    defined_anywhere = _edge_definitions(identities, document, diagnostics)
-    defined_so_far: dict[str, PortId] = {}
-    nodes: list[StepNode] = []
-
-    for step_id, step in zip(identities, document.steps, strict=True):
-        inputs = tuple(Port(PortId(step_id, Direction.INPUT, name), UNDECLARED, span=step.span)
-                       for name, _ in step.inputs)
-        outputs = tuple(Port(PortId(step_id, Direction.OUTPUT, b.name), UNDECLARED, span=b.span)
-                        for b in step.outputs)
-        bindings = tuple(
-            Binding(port.id, value,
-                    _resolve(value, port, defined_so_far, defined_anywhere, diagnostics))
-            for (_, value), port in zip(step.inputs, inputs, strict=True))
-        nodes.append(StepNode(step_id, inputs, outputs, bindings,
-                              step.interpreted, step.passthrough, step.span))
-        for binding in step.outputs:
-            if binding.edge_def is not None:
-                defined_so_far.setdefault(binding.edge_def.name,
-                                          PortId(step_id, Direction.OUTPUT, binding.name))
-
-    return Lowered(WorkflowGraph(
-        namespace=here,
-        steps=tuple(nodes),
-        explicit_edge_defs=tuple(defined_anywhere.items()),
-        passthrough=document.passthrough,
-    ), diagnostics)
+    return _lower_resolved(document, namespace)
 
 
 # pylint: disable-next=too-many-locals
@@ -124,9 +80,8 @@ def _lower_resolved(document: ResolvedDocument,
     """Lower a fully resolved document without consulting its registry again."""
     diagnostics = Diagnostics()
     here = namespace if namespace is not None else Namespace()
-    identities = tuple(StepId(here, index, step.source.id)
-                       for index, step in enumerate(document.steps, start=1))
-    if not _every_name_is_present(document.source, diagnostics):
+    identities = _step_identities(document.source, here, diagnostics)
+    if identities is None or not _every_name_is_present(document.source, diagnostics):
         return Lowered(None, diagnostics)
     defined_anywhere = _edge_definitions(
         identities, Document(steps=tuple(step.source for step in document.steps)), diagnostics)
@@ -178,10 +133,13 @@ def _lower_resolved(document: ResolvedDocument,
     opaque = tuple((key, value) for key, value in document.source.passthrough
                    if key not in {'inputs', 'outputs', '$namespaces', '$schemas',
                                   'requirements', 'cwlVersion', 'class', ANNOTATION_KEY})
-    field_order: tuple[str, ...] = (
-        'steps', 'cwlVersion', 'class', '$namespaces', '$schemas',
-        'inputs', ANNOTATION_KEY, 'outputs')
-    if requirements:
+    field_order_list = [key for key in document.source.field_order if key != 'wic']
+    for key in ('cwlVersion', 'class', '$namespaces', '$schemas', 'inputs',
+                ANNOTATION_KEY, 'outputs'):
+        if key not in field_order_list:
+            field_order_list.append(key)
+    field_order: tuple[str, ...] = tuple(field_order_list)
+    if requirements and 'requirements' not in field_order:
         field_order += ('requirements',)
     known_ports = {port.id for node in nodes for port in node.inputs + node.outputs}
     graph = WorkflowGraph(
@@ -246,14 +204,13 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
                      for name, value in source.inputs if name in by_input)
     interpreted = dict(source.interpreted)
     emitted_id = f'{workflow_name}__step__{identity.index}__{source.id}'
-    field_order = ['id']
-    if source.inputs:
-        field_order.append('in')
-    for key, _ in source.interpreted:
-        if key != 'run':
+    field_order = list(source.field_order)
+    if 'id' in field_order:
+        field_order.remove('id')
+    field_order.insert(0, 'id')
+    for key in ('run', 'in', 'out'):
+        if key not in field_order:
             field_order.append(key)
-    field_order.extend(('run', 'out'))
-    field_order.extend(key for key, _ in source.passthrough if key not in field_order)
     emission = StepEmission(
         id=emitted_id,
         inputs=tuple((name, _input_surface(value)) for name, value in source.inputs),

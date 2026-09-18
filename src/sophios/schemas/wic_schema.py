@@ -14,7 +14,7 @@ import sophios
 from sophios import ast, compiler, utils_cwl
 from sophios.cli import default_compilation_settings
 from sophios.utils_yaml import wic_loader
-from sophios.wic_types import GraphData, GraphReps, NodeData, StepId, Yaml, YamlTree
+from sophios.wic_types import GraphData, GraphReps, StepId, Yaml, YamlTree
 from ..wic_types import Json, Tools
 from ..lang.cwl import CWL_VERSIONS
 
@@ -610,12 +610,10 @@ def compile_workflow_generate_schema(homedir: str,
     graph = GraphReps(graph_gv, graph_nx, graphdata)
     compiler_options, graph_settings, yaml_tag_paths = default_compilation_settings()
 
-    compiler_info = compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths, [], [graph],
-                                              {}, {}, {}, {}, tools_cwl, True, relative_run_path=True, testing=True)
-    rose_tree = compiler_info.rose
-    sub_node_data: NodeData = rose_tree.data
-
-    schema = _cwl_schema(step_id.stem, sub_node_data.compiled_cwl, 'workflows')
+    result = compiler.compile_document(
+        yaml_tree, compiler_options, graph_settings, yaml_tag_paths, tools_cwl,
+        relative_run_path=True, testing=True, graph_target=graph)
+    schema = _cwl_schema(step_id.stem, result.artifact.cwl, 'workflows')
 
     return schema
 

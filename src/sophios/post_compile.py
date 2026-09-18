@@ -1,10 +1,12 @@
 from pathlib import Path
 import sys
 import copy
+from dataclasses import replace
 import shutil
 import subprocess as sub
 from . import plugins
-from .wic_types import RoseTree, NodeData, Yaml
+from .wic_types import Yaml
+from .ir.artifacts import CompilationArtifact
 from .lang.diagnostics import SophiosError
 from .lang.error_codes import SophiosErrorCode
 
@@ -116,44 +118,30 @@ def cwl_docker_extract(container_engine: str, pull_dir: str, cwl_path: str | Pat
     sub.run(cmd, check=True)
 
 
-def cwl_inline_runtag(rose_tree: RoseTree) -> RoseTree:
-    """Transforms the compiled CWL within the rose_tree with inline cwl of steps in the runtag
-    Args:
-        rose_tree (RoseTree): The data associated with compiled subworkflows
-    Returns:
-        RoseTree: The updated rose_tree with inline cwl in runtag
-    """
-    rose_tree_mod = copy.deepcopy(rose_tree)
-    node_data: NodeData = rose_tree_mod.data
-    cwl_tree = node_data.compiled_cwl
-
-    if cwl_tree.get('class', '') == 'Workflow':
-        for sub_rose_tree in rose_tree_mod.sub_trees:
-            # Inline descendants before embedding this child into the parent run tag.
-            sub_rose_tree = cwl_inline_runtag(sub_rose_tree)
-            sub_node_data: NodeData = sub_rose_tree.data
-            sub_step_name = sub_node_data.namespaces[-1]
-            step_to_update = next(
-                item for item in cwl_tree['steps'] if item.get('id') == sub_step_name)
-            step_to_update['run'] = sub_node_data.compiled_cwl
-            # merge the steps/clt namespaces to global namespaces
-            # as the run tag can't have namespaces and schemas
-            cwl_tree['$namespaces'] = cwl_tree.get('$namespaces', {}) | step_to_update['run'].get(
+def inline_artifact_runs(artifact: CompilationArtifact) -> CompilationArtifact:
+    """Embed every emitted child in its parent's ``run`` field."""
+    children = tuple(inline_artifact_runs(child) for child in artifact.children)
+    cwl = copy.deepcopy(artifact.cwl)
+    if cwl.get('class') == 'Workflow':
+        for child in children:
+            step_id = child.namespace[-1]
+            step = next(item for item in cwl['steps'] if item.get('id') == step_id)
+            step['run'] = copy.deepcopy(child.cwl)
+            cwl['$namespaces'] = cwl.get('$namespaces', {}) | step['run'].get(
                 '$namespaces', {})
-            # and then get rid of $namespaces and $schemas in the run tag
-            step_to_update['run'].pop('$namespaces', None)
-            step_to_update['run'].pop('$schemas', None)
-    return rose_tree_mod
+            step['run'].pop('$namespaces', None)
+            step['run'].pop('$schemas', None)
+    return replace(artifact, cwl=cwl, children=children)
 
 
-def remove_entrypoints(container_engine: str, rose_tree: RoseTree) -> RoseTree:
-    """Remove entry points"""
-    # Requires root, so guard behind CLI option
+def remove_artifact_entrypoints(container_engine: str,
+                                artifact: CompilationArtifact) -> CompilationArtifact:
+    """Build no-entrypoint images and rewrite the immutable artifact tree."""
     if container_engine == 'docker':
         plugins.remove_entrypoints_docker()
     elif container_engine == 'podman':
         plugins.remove_entrypoints_podman()
-    return plugins.dockerPull_append_noentrypoint_rosetree(rose_tree)
+    return plugins.dockerPull_append_noentrypoint_artifact(artifact)
 
 
 def stage_input_files(yml_inputs: Yaml,

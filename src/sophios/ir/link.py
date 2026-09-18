@@ -1,14 +1,17 @@
 """Pure composition and reference linking over workflow graphs."""
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Any
 
 from ..lang import SophiosErrorCode
 from ..lang.compatibility import TypeRelation, reference_relation
 from ..lang.diagnostics import Diagnostics
+from .declarations import port_declaration
 from .types import (
     Edge,
     Namespace,
     Port,
+    WorkflowPort,
     PortId,
     StepId,
     StepNode,
@@ -82,6 +85,7 @@ def link(graph: WorkflowGraph) -> Linked:
         edges.append(edge)
     unique_edges = tuple(dict.fromkeys(edges))
     linked = _place_edges(attached, unique_edges, tuple(discharged))
+    linked = _expose_cross_scope_inputs(linked, unique_edges)
     linked = _redirect_output_mappings(linked)
     return Linked(linked if not diagnostics.has_errors else None, diagnostics)
 
@@ -236,15 +240,66 @@ def _relation(graph: WorkflowGraph, edge: Edge) -> TypeRelation:
 
 def _effective_type(graph: WorkflowGraph, port: PortId, *, producing: bool) -> Any:
     raw = _raw_type(graph, port)
-    step = _step(graph, port.step)
-    if step is None or step.emission is None:
+    path = _step_path(graph, port.step)
+    if not path:
         return raw
-    scatter = step.emission.scatter
-    scattered = ((isinstance(scatter, str) and scatter == port.port)
-                 or (isinstance(scatter, list) and port.port in scatter))
-    if (producing and scatter) or (not producing and scattered):
-        return {'type': 'array', 'items': raw}
+    if producing:
+        layers = sum(_output_scatter_rank(step) for _owner, step in path)
+    else:
+        actual = path[-1][1]
+        layers = _scatter_keys(actual).count(port.port)
+        for index, (_owner, wrapper) in enumerate(path[:-1]):
+            child = path[index + 1][0]
+            layers += _scatter_keys(wrapper).count(_boundary_name(child, port))
+    for _ in range(layers):
+        raw = {'type': 'array', 'items': raw}
     return raw
+
+
+def _scatter_keys(step: StepNode) -> tuple[str, ...]:
+    if step.emission is None:
+        return ()
+    scatter = step.emission.scatter
+    if isinstance(scatter, str):
+        return (scatter,)
+    if isinstance(scatter, list):
+        return tuple(item for item in scatter if isinstance(item, str))
+    return ()
+
+
+def _output_scatter_rank(step: StepNode) -> int:
+    keys = _scatter_keys(step)
+    if not keys:
+        return 0
+    assert step.emission is not None
+    return len(keys) if step.emission.scatter_method == 'nested_crossproduct' else 1
+
+
+def _step_path(graph: WorkflowGraph,
+               step_id: StepId) -> tuple[tuple[WorkflowGraph, StepNode], ...]:
+    local = next((step for step in graph.steps if step.id == step_id), None)
+    if local is not None:
+        return ((graph, local),)
+    for child in graph.children:
+        if not _namespace_contains(child.namespace, step_id.namespace):
+            continue
+        nested = _step_path(child, step_id)
+        wrapper = next((step for step in graph.steps
+                        if step.emission is not None
+                        and step.emission.run.child is not None
+                        and step.emission.run.child.namespace == child.namespace), None)
+        if wrapper is not None and nested:
+            return ((graph, wrapper), *nested)
+    return ()
+
+
+def _boundary_name(graph: WorkflowGraph, port: PortId) -> str:
+    path = _step_path(graph, port.step)
+    if not path:
+        return port.port
+    step = path[-1][1]
+    assert step.emission is not None
+    return f'{step.emission.id}___{port.port}'
 
 
 def _raw_type(graph: WorkflowGraph, port: PortId) -> Any:
@@ -282,6 +337,63 @@ def _place_edges(graph: WorkflowGraph, edges: tuple[Edge, ...],
     return replace(graph, children=children,
                    composition_edges=graph.composition_edges + local_edges,
                    discharged_obligations=graph.discharged_obligations + local_discharged)
+
+
+def _expose_cross_scope_inputs(graph: WorkflowGraph,
+                               edges: tuple[Edge, ...]) -> WorkflowGraph:
+    """Give every edge entering a child an explicit workflow boundary.
+
+    Composition edges remain owned by their lowest common ancestor.  The
+    child still needs a typed input through which that edge can enter its CWL
+    document; otherwise emission would have to rediscover a semantic path.
+    """
+    children = tuple(_expose_cross_scope_inputs(child, edges) for child in graph.children)
+    current = replace(graph, children=children)
+    inputs = list(current.workflow_inputs)
+    mappings = list(current.input_mapping)
+    for edge in edges:
+        if not _namespace_contains(current.namespace, edge.sink.step.namespace):
+            continue
+        if _namespace_contains(current.namespace, edge.source.step.namespace):
+            continue
+        if edge.sink.step.namespace == current.namespace:
+            step = _step(current, edge.sink.step)
+            if step is None or step.emission is None:
+                continue
+            name = f'{step.emission.id}___{edge.sink.port}'
+        elif any(_namespace_contains(child.namespace, edge.sink.step.namespace)
+                 for child in current.children):
+            child = next(child for child in current.children
+                         if _namespace_contains(child.namespace, edge.sink.step.namespace))
+            child_mapping = next(((name, sinks) for name, sinks in child.input_mapping
+                                  if edge.sink in sinks), None)
+            if child_mapping is None:
+                continue
+            name = child_mapping[0]
+        else:
+            continue
+        if name not in {port.name for port in inputs}:
+            sink_port = _port(current, edge.sink)
+            if sink_port is None:
+                continue
+            declaration = sink_port.declaration
+            if declaration is None:
+                declaration = port_declaration(deepcopy(sink_port.type.declared))
+            effective = _effective_type(current, edge.sink, producing=False)
+            declaration = replace(
+                declaration,
+                type=port_declaration({'type': deepcopy(effective)}).type,
+                shorthand=False,
+            )
+            inputs.append(WorkflowPort(name, declaration))
+        for index, (existing, sinks) in enumerate(mappings):
+            if existing == name:
+                if edge.sink not in sinks:
+                    mappings[index] = (existing, (*sinks, edge.sink))
+                break
+        else:
+            mappings.append((name, (edge.sink,)))
+    return replace(current, workflow_inputs=tuple(inputs), input_mapping=tuple(mappings))
 
 
 def _namespace_contains(parent: Namespace, child: Namespace) -> bool:

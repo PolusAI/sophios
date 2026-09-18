@@ -14,44 +14,39 @@ from hypothesis import HealthCheck, given, settings
 from sophios.ir import (
     Namespace,
     RegistrySnapshot,
-    ResolvedDocument,
     WorkflowGraph,
     front_end,
-    legacy_after_link,
     link,
 )
 from sophios.lang import SophiosErrorCode
 from sophios.wic_types import StepId as LegacyStepId, Tool, Yaml
 
 from . import ast_strategies as strat
-from .differential import assert_compilations_equivalent
-from .equivalence import Strength
 from .hermetic import ORACLE, compile_hermetic
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
 from .test_resolve import _scalar_literals_fit, _source_model
 
 
-def _front(workflow: Yaml) -> tuple[WorkflowGraph, ResolvedDocument]:
+def _front(workflow: Yaml) -> WorkflowGraph:
     source, workflows = _source_model(workflow)
     registry = RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows)
     result = front_end(source, registry, name='oracle')
     assert result.resolved is not None and result.resolved.document is not None
     assert result.graph is not None, list(result.diagnostics)
-    return result.graph, result.resolved.document
+    return result.graph
 
 
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows().filter(_scalar_literals_fit))
 @ORACLE
-def test_link_is_equivalent_up_to_embedding(workflow: Yaml) -> None:
-    """Typed Link preserves everything except a legitimate run-path embedding."""
-    graph, document = _front(copy.deepcopy(workflow))
-    linked = link(graph)
+def test_the_live_compiler_retains_linked_explicit_edges(workflow: Yaml) -> None:
+    """The default path carries every linked authored edge into its final graph."""
+    typed = _front(copy.deepcopy(workflow))
+    linked = link(typed)
     assert linked.graph is not None, list(linked.diagnostics)
-    bridged = legacy_after_link(document, linked.graph)
-    old = compile_hermetic(copy.deepcopy(workflow))
-    new = compile_hermetic(bridged)
-    assert_compilations_equivalent(old, new, Strength.UP_TO_EMBEDDING)
+    live = compile_hermetic(copy.deepcopy(workflow)).graph
+    linked_edges = {(edge.source, edge.sink) for edge in linked.graph.edges}
+    assert linked_edges <= {(edge.source, edge.sink) for edge in live.edges}
 
 
 def _cross_scope(source_tool: str, source_type: object, child_input: str = 'name', *,
@@ -67,14 +62,15 @@ def _cross_scope(source_tool: str, source_type: object, child_input: str = 'name
     registry = RegistrySnapshot.from_tools(
         tools, workflows={(SYNTHETIC_NS, 'child'): child})
     result = front_end(root, registry, name='root')
-    assert result.graph is not None, list(result.diagnostics)
+    assert result.graph is not None and result.resolved is not None
     return result.graph
 
 
 @pytest.mark.fast
 def test_cross_scope_obligation_is_discharged_at_its_lca() -> None:
     """The edge belongs to the parent graph and the child owes nothing afterward."""
-    linked = link(_cross_scope('string_source', 'string'))
+    typed = _cross_scope('string_source', 'string')
+    linked = link(typed)
     assert linked.graph is not None, list(linked.diagnostics)
     assert linked.graph.obligations == ()
     assert len(linked.graph.composition_edges) == 1
@@ -242,8 +238,8 @@ def test_unknown_call_argument_cannot_restore_a_deleted_formal() -> None:
 @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 def test_composed_namespaces_are_injective(workflow: Yaml) -> None:
     """No two step occurrences in a composed graph share an identity."""
-    graph, _ = _front(workflow)
-    linked = link(graph)
+    typed = _front(workflow)
+    linked = link(typed)
     assert linked.graph is not None, list(linked.diagnostics)
     identities = [step.id for step in linked.graph.all_steps]
     assert len(identities) == len(set(identities))
@@ -252,6 +248,7 @@ def test_composed_namespaces_are_injective(workflow: Yaml) -> None:
 @pytest.mark.fast
 def test_graph_rejects_a_planted_namespace_collision() -> None:
     """The injectivity assertion demonstrably detects a duplicate child graph."""
-    child = _cross_scope('string_source', 'string').children[0]
+    typed = _cross_scope('string_source', 'string')
+    child = typed.children[0]
     with pytest.raises(ValueError, match='injective'):
         WorkflowGraph(Namespace(), children=(child, child))
