@@ -1014,6 +1014,11 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
                             utils_graphs.add_graph_edge(
                                 graph_settings, graph_init, nss_def, nss_call, label, color='blue')
+                case {'wic_linked_source': expression}:
+                    # Temporary typed-Link handoff.  The source has already
+                    # been resolved and checked; retain the canonical CWL
+                    # InputParameter shape the legacy linker produced.
+                    setup.steps[i]['in'][arg_key] = {'source': expression}
                 case {'wic_raw_cwl': expression}:
                     # A local, explicit escape hatch.  Unlike a bare string it
                     # does not ask Sophios to resolve or validate the CWL

@@ -376,6 +376,8 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     namespaces: tuple[tuple[str, OpaqueCwl], ...] = ()
     schemas: tuple[OpaqueCwl, ...] = ()
     children: tuple['WorkflowGraph', ...] = ()
+    composition_edges: tuple[Edge, ...] = ()
+    discharged_obligations: tuple[PortId, ...] = ()
     field_order: tuple[str, ...] = ('steps', 'cwlVersion', 'class', '$namespaces', '$schemas',
                                     'inputs', 'sophios:lang_version', 'outputs')
 
@@ -400,9 +402,20 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
             raise ValueError('a workflow field order cannot repeat a field')
 
         known = {port.id for step in self.steps for port in step.inputs + step.outputs}
+        recursive_known = self.port_ids
         for where, port_id in self._references():
-            if port_id not in known:
+            allowed = recursive_known if where == 'an edge source' else known
+            if port_id not in allowed:
                 raise ValueError(f'{where} names a port no step declares: {port_id}')
+        for edge in self.composition_edges:
+            if edge.source not in recursive_known or edge.sink not in recursive_known:
+                raise ValueError(f'a composition edge names a port outside this graph tree: {edge}')
+        for sink in self.discharged_obligations:
+            if sink not in recursive_known:
+                raise ValueError(f'a discharged obligation names no port in this graph tree: {sink}')
+        recursive_steps = [step.id for step in self.all_steps]
+        if len(recursive_steps) != len(set(recursive_steps)):
+            raise ValueError('step identities must be injective across a composed graph')
 
     def _references(self) -> tuple[tuple[str, PortId], ...]:
         """Every port identity this graph holds, with where it came from."""
@@ -423,14 +436,30 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     @property
     def edges(self) -> tuple[Edge, ...]:
         """Every resolved edge, derived from the bindings that produced them."""
-        return tuple(b.resolution for s in self.steps for b in s.bindings
-                     if isinstance(b.resolution, Edge))
+        local = tuple(b.resolution for s in self.steps for b in s.bindings
+                      if isinstance(b.resolution, Edge))
+        return local + self.composition_edges + tuple(
+            edge for child in self.children for edge in child.edges)
 
     @property
     def obligations(self) -> tuple[DeferredObligation, ...]:
         """Every binding this document cannot satisfy on its own."""
-        return tuple(b.resolution for s in self.steps for b in s.bindings
-                     if isinstance(b.resolution, DeferredObligation))
+        local = tuple(b.resolution for s in self.steps for b in s.bindings
+                      if isinstance(b.resolution, DeferredObligation))
+        nested = tuple(obligation for child in self.children for obligation in child.obligations)
+        discharged = set(self.discharged_obligations)
+        return tuple(obligation for obligation in local + nested
+                     if obligation.sink not in discharged)
+
+    @property
+    def all_steps(self) -> tuple[StepNode, ...]:
+        """Every step in this graph tree, preserving authored traversal order."""
+        return self.steps + tuple(step for child in self.children for step in child.all_steps)
+
+    @property
+    def port_ids(self) -> frozenset[PortId]:
+        """Every port identity in this graph tree."""
+        return frozenset(port.id for step in self.all_steps for port in step.inputs + step.outputs)
 
     def step(self, name: str) -> StepNode | None:
         """The first occurrence called `name`, or None.

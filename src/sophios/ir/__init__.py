@@ -36,7 +36,8 @@ from .resolve import (
     generated_process_id,
     resolve,
 )
-from .pipeline import FrontEndResult, front_end, legacy_after_lower
+from .pipeline import FrontEndResult, front_end, legacy_after_link, legacy_after_lower
+from .link import Linked, link
 
 __all__ = [
     'Binding',
@@ -71,4 +72,7 @@ __all__ = [
     'FrontEndResult',
     'front_end',
     'legacy_after_lower',
+    'legacy_after_link',
+    'Linked',
+    'link',
 ]

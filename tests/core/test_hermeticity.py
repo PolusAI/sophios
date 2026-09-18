@@ -50,6 +50,9 @@ ORACLE_MODULES = (
     'core.test_predicates',
     'core.test_reference_compatibility',
     'core.test_canonical_path',
+    'core.test_emit',
+    'core.test_resolve',
+    'core.test_link',
 )
 
 #: Reaching any of these means the suite's meaning depends on the machine.
@@ -299,6 +302,9 @@ ORACLE_FILES: tuple[str, ...] = (
     'tests/core/test_predicates.py',
     'tests/core/test_reference_compatibility.py',
     'tests/core/test_canonical_path.py',
+    'tests/core/test_emit.py',
+    'tests/core/test_resolve.py',
+    'tests/core/test_link.py',
 )
 
 

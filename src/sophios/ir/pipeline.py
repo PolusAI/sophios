@@ -73,3 +73,42 @@ def legacy_after_lower(document: ResolvedDocument, graph: WorkflowGraph) -> Yaml
         bridged.append(step_copy)
     raw['steps'] = bridged
     return raw
+
+
+def legacy_after_link(document: ResolvedDocument, graph: WorkflowGraph) -> Yaml:
+    """Hand a linked graph to legacy Infer without asking legacy Link again.
+
+    Edges local to each workflow are written as explicit CWL sources.  Edges
+    crossing a workflow-call boundary stay in their authored form until the
+    typed Infer extraction removes the final legacy consumer.
+    """
+    raw = legacy_after_lower(document, graph)
+    edges_by_sink = {edge.sink: edge for edge in graph.edges
+                     if edge.sink.step.namespace == graph.namespace
+                     and edge.source.step.namespace == graph.namespace}
+    steps: list[Yaml] = raw.get('steps', [])
+    rewritten: list[Yaml] = []
+    for raw_step, node, resolved in zip(steps, graph.steps, document.steps, strict=True):
+        step = dict(raw_step)
+        bindings = dict(step.get('in', {}))
+        for binding in node.bindings:
+            edge = edges_by_sink.get(binding.sink)
+            if edge is None:
+                continue
+            producer = next(candidate for candidate in graph.steps
+                            if candidate.id == edge.source.step)
+            producer_id = producer.emission.id if producer.emission is not None else producer.id.name
+            bindings[binding.sink.port] = {
+                'wic_linked_source': f'{producer_id}/{edge.source.port}'}
+        if bindings:
+            step['in'] = bindings
+        if resolved.process.child is not None:
+            child = next(candidate for candidate in graph.children
+                         if candidate.name == resolved.process.child.name)
+            step['subtree'] = legacy_after_link(resolved.process.child, child)
+        if 'out' in step:
+            step['out'] = [next(iter(value)) if isinstance(value, dict) and len(value) == 1 else value
+                           for value in step['out']]
+        rewritten.append(step)
+    raw['steps'] = rewritten
+    return raw

@@ -154,6 +154,18 @@ def _lower_resolved(document: ResolvedDocument,
     passthrough = dict(document.source.passthrough)
     workflow_inputs = _workflow_ports(passthrough.get('inputs', {}), output=False)
     workflow_outputs = _workflow_ports(passthrough.get('outputs', {}), output=True)
+    workflow_input_names = {port.name for port in workflow_inputs}
+    input_mapping = tuple(
+        (name, tuple(binding.sink for node in nodes for binding in node.bindings
+                     if _unresolved_name(binding) == name))
+        for name in (port.name for port in workflow_inputs)
+    )
+    output_mapping = tuple(
+        (port.name, source)
+        for port in workflow_outputs
+        for source in [_output_port(nodes, port.output_source)]
+        if source is not None
+    )
     namespaces_raw = passthrough.get('$namespaces', {})
     namespaces = tuple(namespaces_raw.items()) if isinstance(namespaces_raw, dict) else ()
     namespaces = tuple((str(key), value) for key, value in namespaces
@@ -171,10 +183,19 @@ def _lower_resolved(document: ResolvedDocument,
         'inputs', ANNOTATION_KEY, 'outputs')
     if requirements:
         field_order += ('requirements',)
+    known_ports = {port.id for node in nodes for port in node.inputs + node.outputs}
     graph = WorkflowGraph(
         namespace=here,
         steps=tuple(nodes),
-        explicit_edge_defs=tuple(defined_anywhere.items()),
+        explicit_edge_defs=tuple((name, port) for name, port in defined_anywhere.items()
+                                 if port in known_ports),
+        explicit_edge_calls=tuple((obligation.name, obligation.sink)
+                                  for node in nodes for obligation in (
+                                      binding.resolution for binding in node.bindings)
+                                  if isinstance(obligation, DeferredObligation)),
+        input_mapping=tuple((name, sinks) for name, sinks in input_mapping
+                            if name in workflow_input_names and sinks),
+        output_mapping=output_mapping,
         passthrough=opaque,
         name=document.name,
         lang_version=document.lang_version,
@@ -198,9 +219,20 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
     declared_inputs = {port.name: port.declaration for port in resolved.process.inputs}
     declared_outputs = {port.name: port.declaration for port in resolved.process.outputs}
     for name, _ in source.inputs:
-        declared_inputs.setdefault(name, port_declaration(None))
+        if name not in declared_inputs:
+            diagnostics.error(
+                SophiosErrorCode.SUBWORKFLOW_INVALID,
+                f"step '{source.id}' binds '{name}', which its resolved process does not declare",
+                source.span,
+            )
     for authored in source.outputs:
-        declared_outputs.setdefault(authored.name, port_declaration(None))
+        if authored.name not in declared_outputs:
+            diagnostics.error(
+                SophiosErrorCode.SUBWORKFLOW_INVALID,
+                f"step '{source.id}' names output '{authored.name}', which its resolved process "
+                'does not declare',
+                authored.span,
+            )
     inputs = tuple(Port(PortId(identity, Direction.INPUT, name), declaration.type,
                         declaration, source.span)
                    for name, declaration in declared_inputs.items())
@@ -211,7 +243,7 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
     bindings = tuple(Binding(by_input[name].id, value,
                              _resolve(value, by_input[name], defined_so_far,
                                       defined_anywhere, diagnostics))
-                     for name, value in source.inputs)
+                     for name, value in source.inputs if name in by_input)
     interpreted = dict(source.interpreted)
     emitted_id = f'{workflow_name}__step__{identity.index}__{source.id}'
     field_order = ['id']
@@ -261,6 +293,26 @@ def _workflow_ports(raw: object, *, output: bool) -> tuple[WorkflowPort, ...]:
         source = declaration_raw.get('outputSource') if has_source else None
         ports.append(WorkflowPort(str(name), declaration, source, has_source))
     return tuple(ports)
+
+
+def _output_port(nodes: list[StepNode], raw: object) -> PortId | None:
+    if not isinstance(raw, str) or '/' not in raw:
+        return None
+    step_name, port_name = raw.rsplit('/', 1)
+    for node in nodes:
+        emitted = node.emission.id if node.emission is not None else node.id.name
+        if step_name in {emitted, node.id.name}:
+            return next((port.id for port in node.outputs if port.id.port == port_name), None)
+    return None
+
+
+def _unresolved_name(binding: Binding) -> str | None:
+    """Return a workflow-input reference without traversing opaque payloads."""
+    match binding:
+        case Binding(value=UnresolvedName(name=name)):
+            return name
+        case _:
+            return None
 
 
 def _step_identities(document: Document, here: Namespace,
