@@ -101,6 +101,10 @@ class NodeData(NamedTuple):
     graph: GraphReps
     inputs_workflow: WorkflowInputs
     step_name_1: str
+    # Typed-IR migration: the immutable semantic graph from which compiled_cwl
+    # was emitted.  Optional only for leaf CommandLineTool artifacts, which do
+    # not represent workflows.
+    emission_graph: Any = None
 
 
 class EnvData(NamedTuple):
@@ -148,6 +152,8 @@ class CompilerOptions(TypedDict):
     #: The explicit language version, if the user set one; None means infer.
     #: NotRequired so existing constructors of this dict stay valid.
     lang_version: NotRequired[str | None]
+    inference_rules: NotRequired[dict[str, str]]
+    renaming_conventions: NotRequired[list[tuple[str, str]]]
 
 
 class GraphSettings(TypedDict):

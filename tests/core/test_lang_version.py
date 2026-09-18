@@ -231,14 +231,17 @@ def test_a_file_tag_survives_schema_validation() -> None:
     import sophios.ast
     import sophios.cli
 
-    from .test_setup import tools_cwl, validator, yml_paths
+    from .test_setup import load_test_registry
+
+    registry = load_test_registry()
 
     pinned: Yaml = {'wic': {'lang_version': LANG_VERSION}, **TOUCH}
     tree = YamlTree(StepId('pinned.wic', 'global'), pinned)
     args = sophios.cli.get_args('pinned.wic')
 
     # Must not raise: the validator is the gate the compiler sits behind.
-    sophios.ast.read_ast_from_disk(args.homedir, tree, yml_paths, tools_cwl, validator, False)
+    sophios.ast.read_ast_from_disk(args.homedir, tree, registry.workflows,
+                                   registry.tools, registry.validator, False)
 
 
 @pytest.mark.fast

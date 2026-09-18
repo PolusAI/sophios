@@ -215,6 +215,8 @@ def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions
         'inference_disable': args.inference_disable,
         'allow_raw_cwl': args.allow_raw_cwl,
         'lang_version': args.lang_version,
+        'inference_rules': {},
+        'renaming_conventions': [],
     }
 
     # to be given to graph util functions

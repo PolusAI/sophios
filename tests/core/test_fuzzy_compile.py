@@ -3,7 +3,7 @@ from typing import Final
 import unittest
 
 import graphviz
-from hypothesis import given, settings, HealthCheck
+from hypothesis import given, settings, HealthCheck, strategies as st
 import networkx as nx
 import pytest
 
@@ -16,7 +16,7 @@ import sophios.plugins
 import sophios.utils
 from sophios.wic_types import GraphData, GraphReps, Yaml, YamlTree, StepId
 
-from .test_setup import tools_cwl, yml_paths, validator, wic_strategy
+from .test_setup import load_test_registry, wic_strategy
 
 
 #: Structured failures the fuzz job accepts. Exactly the former `sys.exit(1)`
@@ -39,13 +39,13 @@ TOLERATED_CODES: Final[frozenset[SophiosErrorCode]] = frozenset({
 class TestFuzzyCompile(unittest.TestCase):
 
     @pytest.mark.slow
-    @given(wic_strategy)
+    @given(data=st.data())
     @settings(max_examples=100,
               suppress_health_check=[HealthCheck.too_slow,
                                      HealthCheck.filter_too_much],
               deadline=None)
     # TODO: Improve schema so we can remove the health checks
-    def test_fuzzy_compile(self, yml: Yaml) -> None:
+    def test_fuzzy_compile(self, data: st.DataObject) -> None:  # pylint: disable=too-many-locals
         """Tests that the compiler doesn't crash when given random allegedly valid input.\n
         Note that the full schema has performance limitations, so a random subset of\n
         wic_main_schema is chosen when hypothesis=True, then random values are generated.
@@ -53,6 +53,11 @@ class TestFuzzyCompile(unittest.TestCase):
         Args:
             yml (Yaml): Yaml input, randomly generated according to a random subset of wic_main_schema
         """
+        registry = load_test_registry()
+        yml: Yaml = data.draw(wic_strategy(registry))
+        tools_cwl = registry.tools
+        yml_paths = registry.workflows
+        validator = registry.validator
         plugin_ns = 'global'
         yml_path = Path('random_stepid')
         steps_keys = sophios.utils.get_steps_keys(yml.get('steps', []))
