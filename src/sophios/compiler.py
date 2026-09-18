@@ -231,9 +231,7 @@ def _prepare_compilation_state(yaml_tree_ast: YamlTree,
 
     Escapes as `ValueError` on a malformed AST (missing `steps`) and as
     `TypeError` on a top-level tag of the wrong type (`$namespaces`,
-    `$schemas`). Stated in prose rather than a field block: this is private, so
-    Sphinx renders nothing for it, and the field block was the last one left
-    after the pass that removed the other eleven.
+    `$schemas`).
     """
     # NOTE: Use deepcopy so that when we delete wic: we don't modify any call sites
     (step_id, yaml_tree) = copy.deepcopy(yaml_tree_ast)

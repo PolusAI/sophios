@@ -17,7 +17,6 @@ import re
 import shlex
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final
 
@@ -91,8 +90,12 @@ def _covered() -> set[str]:
     """Every test any configured invocation collects."""
     argvs = sorted({tuple(argv) for lane in sorted(WORKFLOWS.glob('*.yml'))
                     for argv in _invocations(lane)})
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        return set().union(*pool.map(lambda a: _collect(list(a)), argvs))
+    covered: set[str] = set()
+    for argv in argvs:
+        # Collection imports test_setup, which writes the generated schema.
+        # Concurrent collectors can observe another process's truncated file.
+        covered.update(_collect(list(argv)))
+    return covered
 
 
 @pytest.mark.fast
@@ -121,8 +124,9 @@ def test_no_test_is_collected_by_nothing() -> None:
     """Every test the repository defines is selected by some lane.
 
     Slow because it asks pytest once per distinct invocation -- about thirty
-    collections, in parallel. That is the price of the answer being pytest's
-    rather than a model's, and a model is what this file used to be.
+    sequential collections. They cannot run concurrently while test_setup
+    writes the shared generated schema. That is the price of the answer being
+    pytest's rather than a model's, and a model is what this file used to be.
     """
     orphans = sorted(_collect([]) - _covered())
     assert not orphans, (

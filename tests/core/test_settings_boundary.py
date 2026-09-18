@@ -34,11 +34,6 @@ import sophios.compiler
 import sophios.main
 from sophios.wic_types import CompilerOptions, GraphSettings, YamlTagPaths
 
-#: A static scan over the repository, not a claim about a compilation.
-#: Collected by run_workflows_weekly.yml and by no lane that blocks a pull
-#: request -- these guard the codebase's shape, which changes slowly.
-pytestmark = pytest.mark.sanity
-
 #: The one module that may hold an `argparse.Namespace`: it makes them.
 PARSER_MODULE: Final = SRC / 'cli.py'
 
@@ -46,6 +41,7 @@ PARSER_MODULE: Final = SRC / 'cli.py'
 CLI_ADAPTER: Final = SRC / 'main.py'
 
 
+@pytest.mark.sanity
 @pytest.mark.fast
 def test_the_scans_are_pointed_at_something() -> None:
     """The file list is non-empty.
@@ -71,6 +67,7 @@ def _patches_argv(tree: ast.AST) -> list[int]:
     return found
 
 
+@pytest.mark.sanity
 @pytest.mark.fast
 @pytest.mark.parametrize('path', package_files(), ids=lambda p: str(p.relative_to(SRC)))
 def test_no_module_synthesises_a_command_line(path: Path) -> None:
@@ -82,6 +79,7 @@ def test_no_module_synthesises_a_command_line(path: Path) -> None:
     )
 
 
+@pytest.mark.sanity
 @pytest.mark.fast
 def test_the_scan_can_actually_fail() -> None:
     """The scan sees both spellings, so it is not vacuous."""
@@ -131,6 +129,7 @@ def _namespace_parameters(tree: ast.AST) -> list[tuple[int, str]]:
     return found
 
 
+@pytest.mark.sanity
 @pytest.mark.fast
 @pytest.mark.parametrize('path', package_files(), ids=lambda p: str(p.relative_to(SRC)))
 def test_no_library_function_accepts_a_namespace(path: Path) -> None:
@@ -182,6 +181,7 @@ def test_the_compile_helper_takes_settings_not_arguments() -> None:
     assert 'graph_settings' in signature.parameters
 
 
+@pytest.mark.sanity
 @pytest.mark.fast
 def test_the_namespace_scan_can_actually_fail() -> None:
     """The signature scan sees every spelling it claims to, and only those.

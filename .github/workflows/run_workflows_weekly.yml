@@ -154,13 +154,9 @@ jobs:
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
       run: cd sophios/ && pytest -k test_run_inlined_workflows_weekly --workers 8 --cwl_runner toil-cwl-runner # --cov
 
-    # The codebase-sanity scans: the core/contrib import boundary, the prose
-    # boundary, the settings boundary and the leak boundary. Static reads of
-    # the repository -- no compilation, no containers -- so they are fast, but
-    # what they guard is the shape of the codebase, which changes over weeks
-    # rather than per pull request. They block nothing here; a lane that blocks
-    # a merge should be failing on the workflow, not on a docstring.
+    # Repository-wide AST scans over configuration boundaries. Compiler-driving
+    # settings tests remain in the pull-request lanes.
     - name: PyTest Codebase Sanity
       if: always()
       timeout-minutes: 20
-      run: cd sophios/ && pytest tests/core/test_zone_boundary.py tests/core/test_settings_boundary.py tests/core/test_leak_boundary.py
+      run: cd sophios/ && pytest tests/core/test_settings_boundary.py -m sanity
