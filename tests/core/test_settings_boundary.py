@@ -321,7 +321,12 @@ def _non_default(name: str, annotation: type) -> tuple[list[str], object]:
 #: `cachedir` name real directories the run reads from — pointing them at
 #: sentinels breaks the run rather than testing delivery. `yaml` is covered by
 #: its own case below; the other two share the code path it exercises.
-UNDELIVERABLE_BY_SENTINEL: Final = frozenset({'yaml', 'homedir', 'cachedir'})
+UNDELIVERABLE_BY_SENTINEL: Final = frozenset({
+    'yaml', 'homedir', 'cachedir',
+    # These are values in global_config.json, not CLI flags. They still travel
+    # in CompilerOptions after main has loaded that explicit configuration.
+    'inference_rules', 'renaming_conventions',
+})
 
 _DELIVERABLE: Final = [field for field in _settings_fields()
                        if field[1] not in UNDELIVERABLE_BY_SENTINEL]
