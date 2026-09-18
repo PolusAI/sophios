@@ -241,9 +241,5 @@ def test_emit_needs_no_state_beyond_the_graph(workflow: Yaml) -> None:
     graph = compile_hermetic(copy.deepcopy(workflow)).rose.data.emission_graph
     expected = emit(graph)
     from sophios import compiler  # pylint: disable=import-outside-toplevel
-    saved = compiler.inference_rules
-    try:
-        compiler.inference_rules = {'poison': 'poison'}
-        assert emit(graph) == expected
-    finally:
-        compiler.inference_rules = saved
+    assert not hasattr(compiler, 'inference_rules')
+    assert emit(graph) == expected

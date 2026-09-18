@@ -323,6 +323,8 @@ class StepNode:  # pylint: disable=too-many-instance-attributes
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
     span: SourceSpan | None = None
     emission: StepEmission | None = None
+    inference_rules: tuple[tuple[str, str], ...] = ()
+    synthesized: bool = False
 
     def __post_init__(self) -> None:
         """Reject ports or bindings that belong to another step.
@@ -377,6 +379,7 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     schemas: tuple[OpaqueCwl, ...] = ()
     children: tuple['WorkflowGraph', ...] = ()
     composition_edges: tuple[Edge, ...] = ()
+    inferred_edges: tuple[Edge, ...] = ()
     discharged_obligations: tuple[PortId, ...] = ()
     field_order: tuple[str, ...] = ('steps', 'cwlVersion', 'class', '$namespaces', '$schemas',
                                     'inputs', 'sophios:lang_version', 'outputs')
@@ -410,6 +413,9 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
         for edge in self.composition_edges:
             if edge.source not in recursive_known or edge.sink not in recursive_known:
                 raise ValueError(f'a composition edge names a port outside this graph tree: {edge}')
+        for edge in self.inferred_edges:
+            if edge.source not in recursive_known or edge.sink not in recursive_known:
+                raise ValueError(f'an inferred edge names a port outside this graph tree: {edge}')
         for sink in self.discharged_obligations:
             if sink not in recursive_known:
                 raise ValueError(f'a discharged obligation names no port in this graph tree: {sink}')
@@ -443,7 +449,7 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
         """
         local = tuple(b.resolution for s in self.steps for b in s.bindings
                       if isinstance(b.resolution, Edge))
-        return local + self.composition_edges
+        return local + self.composition_edges + self.inferred_edges
 
     @property
     def obligations(self) -> tuple[DeferredObligation, ...]:

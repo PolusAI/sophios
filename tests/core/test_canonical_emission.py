@@ -444,8 +444,7 @@ def _four_seed_compilations(seeds: tuple[int, ...]) -> list[Yaml]:
     interpreter, and return the parsed CWL in seed order.
 
     A fresh process per seed, not a shared one with `PYTHONHASHSEED` patched
-    in between: the compiler mutates a module global
-    (`compiler.inference_rules`), the `tools` dict it is handed, and several
+    in between: the compiler mutates the `tools` dict it is handed and several
     structures threaded through the recursion, so seeded compilations sharing
     an interpreter could agree — or disagree — for a reason that has nothing
     to do with `PYTHONHASHSEED`. Four processes cost about 3s; a shared

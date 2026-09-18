@@ -12,7 +12,7 @@ import networkx as nx
 from jsonschema import Draft202012Validator
 
 from . import input_output as io
-from . import ast, cli, compiler, inference, utils
+from . import ast, cli, compiler, utils
 from .post_compile import stage_input_files
 from .plugins import get_tools_cwl, get_yml_paths, logging_filters
 from .schemas import wic_schema
@@ -59,7 +59,9 @@ def absolute_paths(config: Json, cachedir_path: Path) -> Json:
 
 def rerun_cwltool(homedir: str, _directory_realtime: Path, cachedir_path: Path, cwl_tool: str,
                   args_vals: Json, tools_cwl: Tools, yml_paths: dict[str, dict[str, Path]],
-                  validator: Draft202012Validator, root_workflow_yml_path: Path) -> None:
+                  validator: Draft202012Validator, root_workflow_yml_path: Path,
+                  inference_rules: dict[str, str] | None = None,
+                  renaming_conventions: list[tuple[str, str]] | None = None) -> None:
     """This will speculatively execute cwltool for real-time analysis purposes.\n
     It will NOT check for return code 0. See docs/userguide.md
 
@@ -107,6 +109,8 @@ def rerun_cwltool(homedir: str, _directory_realtime: Path, cachedir_path: Path, 
         # YamlTagPaths. They would only be read by a nested cwl_subinterpreter
         # step, which does not occur, so the defaults are unobservable here.
         compiler_options, graph_settings, yaml_tag_paths = cli.default_compilation_settings()
+        compiler_options['inference_rules'] = inference_rules or {}
+        compiler_options['renaming_conventions'] = renaming_conventions or []
 
         # TODO: Support other namespaces
         plugin_ns = 'global'  # wic['wic'].get('namespace', 'global')
@@ -237,10 +241,6 @@ def main() -> None:
     tools_cwl = get_tools_cwl(global_config, quiet=args.quiet)
     yml_paths = get_yml_paths(global_config)
 
-    # Perform initialization via mutating global variables (This is not ideal)
-    compiler.inference_rules = global_config.get('inference_rules', {})
-    inference.renaming_conventions = global_config.get('renaming_conventions', [])
-
     # Generate schemas for validation
     yaml_stems = utils.flatten([list(p) for p in yml_paths.values()])
     validator = wic_schema.get_validator(tools_cwl, yaml_stems)
@@ -265,7 +265,9 @@ def main() -> None:
                     print(file)
                     rerun_cwltool(args.homedir, Path(file).parent, cachedir_path, cwl_tool,
                                   args_vals, tools_cwl, yml_paths, validator,
-                                  root_workflow_yml_path)
+                                  root_workflow_yml_path,
+                                  global_config.get('inference_rules', {}),
+                                  global_config.get('renaming_conventions', []))
             prev_files = {**prev_files, **changed_files}
 
             time.sleep(1.0)  # Wait at least 1 second so we don't just spin.

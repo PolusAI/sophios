@@ -75,6 +75,7 @@ def legacy_after_lower(document: ResolvedDocument, graph: WorkflowGraph) -> Yaml
     return raw
 
 
+# pylint: disable-next=too-many-locals
 def legacy_after_link(document: ResolvedDocument, graph: WorkflowGraph) -> Yaml:
     """Hand a linked graph to legacy Infer without asking legacy Link again.
 
@@ -110,5 +111,79 @@ def legacy_after_link(document: ResolvedDocument, graph: WorkflowGraph) -> Yaml:
             step['out'] = [next(iter(value)) if isinstance(value, dict) and len(value) == 1 else value
                            for value in step['out']]
         rewritten.append(step)
+    raw['steps'] = rewritten
+    return raw
+
+
+# pylint: disable-next=too-many-locals,too-many-branches
+def legacy_after_infer(document: ResolvedDocument, graph: WorkflowGraph) -> Yaml:
+    """Adapt a fully inferred graph to the legacy finalizer oracle.
+
+    Synthetic converter nodes and inferred sources come from the graph.  The
+    source document contributes only authored literal and passthrough spelling;
+    the legacy inference search has no unsatisfied input left to decide.
+    """
+    raw = utils_cwl.desugar_into_canonical_normal_form(to_json(document.source))
+    authored: list[Yaml] = raw.get('steps', [])
+    authored_index = 0
+    resolved_index = 0
+    inferred_sinks = {edge.sink for edge in graph.inferred_edges}
+    edges = {edge.sink: edge for edge in graph.edges
+             if edge.sink.step.namespace == graph.namespace}
+    by_id = {step.id: step for step in graph.all_steps}
+    rewritten: list[Yaml] = []
+
+    for node in graph.steps:
+        resolved = None
+        if node.synthesized:
+            step: Yaml = {'id': node.id.name}
+        else:
+            step = dict(authored[authored_index])
+            resolved = document.steps[resolved_index]
+            authored_index += 1
+            resolved_index += 1
+            if resolved.process.generated:
+                step['id'] = resolved.process.key.name
+
+        authored_inputs = 'in' in step
+        bindings = dict(step.get('in', {}))
+        for port in node.inputs:
+            edge = edges.get(port.id)
+            if edge is not None:
+                producer = by_id[edge.source.step]
+                producer_id = (producer.emission.id if producer.emission is not None
+                               else producer.id.name)
+                marker = ('wic_inferred_source' if port.id in inferred_sinks
+                          else 'wic_linked_source')
+                bindings[port.id.port] = {
+                    marker: f'{producer_id}/{edge.source.port}'}
+                continue
+            if node.emission is not None:
+                emitted_inputs = dict(node.emission.inputs)
+                if port.id.port in emitted_inputs and port.id.port not in bindings:
+                    bindings[port.id.port] = {'wic_inferred_input': True}
+        if bindings:
+            if not authored_inputs and node.emission is not None:
+                # The old path adds ``run`` before synthesizing a missing
+                # ``in`` mapping.  Preserve that canonical field order while
+                # handing it an already-inferred source.
+                step['run'] = node.emission.run.target
+            step['in'] = bindings
+
+        if resolved is not None and resolved.process.child is not None:
+            child = node.emission.run.child if node.emission is not None else None
+            if child is None:
+                raise ValueError('an inferred workflow call has no attached child graph')
+            parentargs = {key: value for key, value in step.items() if key != 'id'}
+            step = {
+                'id': resolved.source.id,
+                'subtree': legacy_after_infer(resolved.process.child, child),
+                'parentargs': parentargs,
+            }
+        if 'out' in step:
+            step['out'] = [next(iter(value)) if isinstance(value, dict) and len(value) == 1 else value
+                           for value in step['out']]
+        rewritten.append(step)
+
     raw['steps'] = rewritten
     return raw

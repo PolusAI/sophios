@@ -282,7 +282,7 @@ jobs:
       - name: PyTest Spec 3 Phases
         if: always()
         timeout-minutes: 30
-        run: cd sophios/ && pytest tests/core/test_lower.py tests/core/test_emit.py tests/core/test_resolve.py tests/core/test_link.py
+        run: cd sophios/ && pytest tests/core/test_lower.py tests/core/test_emit.py tests/core/test_resolve.py tests/core/test_link.py tests/core/test_infer_phase.py
 
       # The Python API surfaces that used to be example scripts nothing executed:
       # `search_paths_wic` reaches the corpus repositories and docs/tutorials,

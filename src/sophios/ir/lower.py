@@ -267,7 +267,8 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
         field_order=tuple(field_order),
     )
     return StepNode(identity, inputs, outputs, bindings, source.interpreted,
-                    source.passthrough, source.span, emission)
+                    source.passthrough, source.span, emission,
+                    _inference_rules(resolved.sidecar))
 
 
 def _input_surface(value: InputValue):  # type: ignore[no-untyped-def]
@@ -313,6 +314,15 @@ def _unresolved_name(binding: Binding) -> str | None:
             return name
         case _:
             return None
+
+
+def _inference_rules(sidecar: object) -> tuple[tuple[str, str], ...]:
+    """Normalize the local output-selection policy carried by a step sidecar."""
+    entries = getattr(sidecar, 'entries', ())
+    raw = dict(entries).get('inference') if entries else None
+    if not isinstance(raw, dict):
+        return ()
+    return tuple((str(name), str(rule)) for name, rule in raw.items())
 
 
 def _step_identities(document: Document, here: Namespace,

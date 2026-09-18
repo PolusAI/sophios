@@ -16,7 +16,7 @@ from sophios.lang.diagnostics import SophiosError
 from sophios.utils_yaml import wic_loader
 from . import input_output as io
 from . import post_compile as pc
-from . import ast, cli, compiler, inference, inlineing, plugins, run_local, utils  # , utils_graphs
+from . import ast, cli, compiler, inlineing, plugins, run_local, utils  # , utils_graphs
 from .schemas import wic_schema
 from .wic_types import (CompilerOptions, GraphData, GraphReps, GraphSettings, Json, RoseTree,
                         StepId, Tools, Yaml, YamlTagPaths, YamlTree)
@@ -201,10 +201,6 @@ def _main() -> None:
     # pass around config object instead of reading from the disk!
     yml_paths = plugins.get_yml_paths(global_config)
 
-    # Perform initialization via mutating global variables (This is not ideal)
-    compiler.inference_rules = global_config.get('inference_rules', {})
-    inference.renaming_conventions = global_config.get('renaming_conventions', [])
-
     # Generate schemas for validation and vscode IntelliSense code completion
     yaml_stems = utils.flatten([list(p) for p in yml_paths.values()])
     schema_store: dict[str, Json] = {}
@@ -246,6 +242,8 @@ def _main() -> None:
     # The one conversion from parsed arguments to settings, at the boundary.
     # Everything below this line takes values; no Namespace goes further.
     compiler_options, graph_settings, yaml_tag_paths = cli.get_dicts_for_compilation(args)
+    compiler_options['inference_rules'] = global_config.get('inference_rules', {})
+    compiler_options['renaming_conventions'] = global_config.get('renaming_conventions', [])
     rootgraph, rose_tree = _build_and_compile_workflow(yaml_path, yaml_stem, yaml_tree, tools_cwl,
                                                        compiler_options, graph_settings, yaml_tag_paths)
 

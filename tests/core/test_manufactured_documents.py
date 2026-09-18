@@ -64,6 +64,7 @@ MANUFACTURING_SITES: Final[dict[str, str]] = {
     'sophios/inlineing.py::inline_subworkflow_wic_tag': DOCUMENT,
     'sophios/ir/pipeline.py::legacy_after_lower': DOCUMENT,
     'sophios/ir/pipeline.py::legacy_after_link': DOCUMENT,
+    'sophios/ir/pipeline.py::legacy_after_infer': DOCUMENT,
     'sophios/main.py::_load_and_prepare_yaml_tree': DOCUMENT,
     'sophios/utils.py::extract_implementation': DOCUMENT,
     'sophios/utils.py::flatten_forest': DOCUMENT,
@@ -103,6 +104,8 @@ UNREACHED: Final[dict[str, str]] = {
     'typed Resolve property, not these legacy drivers',
     'sophios/ir/pipeline.py::legacy_after_link': 'temporary differential bridge exercised by the '
     'typed Link property, not these legacy drivers',
+    'sophios/ir/pipeline.py::legacy_after_infer': 'temporary differential bridge exercised by the '
+    'typed Infer property, not these legacy drivers',
 }
 
 

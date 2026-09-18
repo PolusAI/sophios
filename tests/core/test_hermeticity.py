@@ -53,6 +53,7 @@ ORACLE_MODULES = (
     'core.test_emit',
     'core.test_resolve',
     'core.test_link',
+    'core.test_infer_phase',
 )
 
 #: Reaching any of these means the suite's meaning depends on the machine.
@@ -305,6 +306,7 @@ ORACLE_FILES: tuple[str, ...] = (
     'tests/core/test_emit.py',
     'tests/core/test_resolve.py',
     'tests/core/test_link.py',
+    'tests/core/test_infer_phase.py',
 )
 
 

@@ -5,9 +5,6 @@ from . import utils, utils_cwl, utils_graphs
 from .wic_types import (GraphReps, GraphSettings, InternalOutputs, Namespaces, StepId, Tool, Tools,
                         WorkflowInputs, Yaml)
 
-# NOTE: This must be initialized in main.py and/or cwl_subinterpreter.py
-renaming_conventions: list[tuple[str, str]] = []
-
 
 def types_match(in_type: Any, out_type: Any) -> bool:
     """True if the CWL input type in_type and output type out_type are compatible."""
@@ -193,7 +190,8 @@ def perform_edge_inference(inference_use_naming_conventions: bool,
                            arg_key_in_yaml_tree_inputs: bool,
                            insertions: list[StepId],
                            wic_steps: Yaml,
-                           testing: bool) -> Yaml:
+                           testing: bool,
+                           renaming_conventions: tuple[tuple[str, str], ...] = ()) -> Yaml:
     """This function implements the core edge inference feature.
     NOTE: steps[i], vars_workflow_output_internal, inputs_workflow are mutably updated.
 

@@ -26,9 +26,6 @@ from .legacy_graph import LegacyEmissionState, graph_from_legacy_state, legacy_e
 
 logger = logging.getLogger('sophios')
 
-# NOTE: This must be initialized in main.py and/or cwl_subinterpreter.py
-inference_rules: dict[str, str] = {}
-
 
 def compile_workflow(yaml_tree_ast: YamlTree,
                      compiler_options: CompilerOptions,
@@ -1019,6 +1016,17 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                     # been resolved and checked; retain the canonical CWL
                     # InputParameter shape the legacy linker produced.
                     setup.steps[i]['in'][arg_key] = {'source': expression}
+                case {'wic_inferred_source': expression}:
+                    # Temporary typed-Infer handoff.  Inferred sources use the
+                    # scalar WorkflowStepInput spelling produced by the old
+                    # candidate-selection path.
+                    setup.steps[i]['in'][arg_key] = expression
+                case {'wic_inferred_input': _}:
+                    # Temporary typed-Infer handoff for an unmatched required
+                    # input.  Preserve the old boundary-input spelling and
+                    # declaration without running candidate selection again.
+                    setup.inputs_workflow.update({in_name: in_dict})
+                    setup.steps[i]['in'][arg_key] = in_name
                 case {'wic_raw_cwl': expression}:
                     # A local, explicit escape hatch.  Unlike a bare string it
                     # does not ask Sophios to resolve or validate the CWL
@@ -1195,7 +1203,8 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                     is_root, namespaces, vars_workflow_output_internal,
                     setup.input_mapping_copy, setup.output_mapping_copy, setup.inputs_workflow,
                     in_name, in_name_in_inputs_file_workflow,
-                    arg_key_in_yaml_tree_inputs, insertions, setup.wic_steps, testing)
+                    arg_key_in_yaml_tree_inputs, insertions, setup.wic_steps, testing,
+                    tuple(compiler_options.get('renaming_conventions', ())))
                 # NOTE: For now, perform_edge_inference mutably appends to
                 # inputs_workflow and vars_workflow_output_internal.
 
@@ -1214,7 +1223,8 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                         print('Warning! More than one step! Choosing', insertion)
 
                     yaml_tree_mod = insert_step_into_workflow(
-                        setup.yaml_tree_orig, insertion, tools, i)
+                        setup.yaml_tree_orig, insertion, tools, i,
+                        compiler_options.get('inference_rules', {}))
 
                     node_data = NodeData(namespaces, setup.yaml_stem, yaml_tree_mod, setup.yaml_tree, tool_i, {},
                                          setup.explicit_edge_defs_copy2, setup.explicit_edge_calls_copy2,
@@ -1392,7 +1402,8 @@ def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowIn
     return yaml_inputs
 
 
-def insert_step_into_workflow(yaml_tree_orig: Yaml, stepid: StepId, tools: Tools, i: int) -> Yaml:
+def insert_step_into_workflow(yaml_tree_orig: Yaml, stepid: StepId, tools: Tools, i: int,
+                              inference_rules: dict[str, str] | None = None) -> Yaml:
     """Inserts the step with given stepid into a workflow at the given index.
 
     Args:
@@ -1413,10 +1424,11 @@ def insert_step_into_workflow(yaml_tree_orig: Yaml, stepid: StepId, tools: Tools
     tool = tools[stepid]
     out_tool = tool.cwl['outputs']
 
+    configured_rules = inference_rules or {}
     inference_rules_dict = {}
     for out_key, out_val in out_tool.items():
         if 'format' in out_val:
-            inference_rules_dict[out_key] = inference_rules.get(
+            inference_rules_dict[out_key] = configured_rules.get(
                 out_val['format'], 'default')
     inf_dict = {'wic': {'inference': inference_rules_dict}}
     keystr = f'({i+1}, {stepid.stem})'  # The yml file uses 1-based indexing
