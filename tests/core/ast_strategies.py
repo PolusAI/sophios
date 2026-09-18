@@ -19,7 +19,7 @@ from hypothesis.strategies import SearchStrategy
 
 from sophios import utils_cwl
 from sophios.lang import (SophiosErrorCode, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
-                          OpaqueCwl, OutputBinding, Step, StepKey, UnresolvedName, WicSidecar,
+                          OpaqueCwl, OutputBinding, RawCwlRef, Step, StepKey, UnresolvedName, WicSidecar,
                           render)
 from sophios.lang.spans import SourceSpan
 from sophios.utils_yaml import wic_loader
@@ -42,13 +42,11 @@ _SPAN: Final = SourceSpan('<generated>', 1, 1, 1, 1)
 #: that cannot be drawn is a declared gap rather than a silent one --
 #: `test_the_construct_inventory_accounts_for_every_input_kind` fails if a member
 #: of the `InputValue` union appears in neither this nor `CONSTRUCTS`.
-NOT_GENERATED: Final[dict[str, str]] = {
-    'raw_cwl_ref': '`wic_loader` does not resolve `!cwl` until the IR migration',
-}
+NOT_GENERATED: Final[dict[str, str]] = {}
 
 CONSTRUCTS: Final[tuple[str, ...]] = (
     'steps_mapping', 'steps_sequence',
-    'inline_literal', 'edge_ref', 'unresolved_name',
+    'inline_literal', 'edge_ref', 'raw_cwl_ref', 'unresolved_name',
     'output_bare', 'output_edge',
     'interpreted_scatter', 'interpreted_when',
     'step_passthrough', 'top_passthrough',
@@ -84,6 +82,8 @@ def constructs_in(document: Document) -> frozenset[str]:
                     found.add('inline_literal')
                 case EdgeRef():
                     found.add('edge_ref')
+                case RawCwlRef():
+                    found.add('raw_cwl_ref')
                 case _:
                     found.add('unresolved_name')
         if not step.id.endswith('.wic') and set(required_inputs_of(step.id)) - bound:
@@ -200,7 +200,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
             continue
 
         references = _references_for(stem, name)
-        forms = ['literal'] + (['unresolved'] if references else []) + (['ref'] if fits else [])
+        forms = ['literal'] + (['unresolved', 'raw'] if references else []) + (['ref'] if fits else [])
         match draw(st.sampled_from(forms)):
             case 'literal':
                 bindings.append((name, InlineLiteral(draw(_literal_for(sink_type)), _SPAN)))
@@ -208,6 +208,10 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
                 declared = draw(st.sampled_from(references))
                 referenced_inputs.add(declared)
                 bindings.append((name, UnresolvedName(declared, _SPAN)))
+            case 'raw':
+                declared = draw(st.sampled_from(references))
+                referenced_inputs.add(declared)
+                bindings.append((name, RawCwlRef(declared, _SPAN)))
             case _:
                 bindings.append((name, EdgeRef(draw(st.sampled_from(fits)), _SPAN)))
 
@@ -252,11 +256,9 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
 def documents(draw: st.DrawFn) -> Document:
     """A well-formed Sophios document, over every construct in `CONSTRUCTS`.
 
-    CANNOT GENERATE (declared, and checked): the kinds in `NOT_GENERATED` --
-    `!cwl`, which `wic_loader` does not resolve until the IR migration. Also
-    `python_script` steps, whose tool name is a uuid4 and so is never
-    deterministic; that is a step shape rather than an input kind, so no
-    inventory check covers it.
+    CANNOT GENERATE (declared, and checked): the kinds in `NOT_GENERATED`.
+    ``python_script`` steps are absent because their module definition belongs
+    to the registry; deterministic generated identities are tested separately.
 
     Well-formed is not well-typed. `!ii` places no constraint relating a
     literal to the CWL type of the input it binds — nothing in the grammar
@@ -356,9 +358,6 @@ def documents(draw: st.DrawFn) -> Document:
 #: because `EdgeDef` is not a member of the `InputValue` union, so the
 #: construct cannot be built here to be filtered out.
 #:
-#: The machinery stays because the next pending construct is already named:
-#: `!cwl` is specified and parsed, and is not compilable until the front end is
-#: wired into the pipeline.
 NOT_YET_COMPILABLE: Final[dict[str, str]] = {}
 
 #: One predicate per `NOT_YET_COMPILABLE` entry, keyed identically. Separate
