@@ -107,7 +107,7 @@ def equivalent(left: Yaml, right: Yaml, strength: Strength) -> Divergence | None
     kept short with a reason each.
 
     Takes no graphs. Letting a caller supply the compiler's own
-    `NodeData.graph.networkx` pair in place of the graph derived here would be
+    graph-view pair in place of the graph derived here would be
     strictly worse in three ways: nothing in the suite passes them,
     so the branch was untested; the compiler's nodes are namespaced strings
     carrying no tool label, so they can only be matched with a bare
@@ -115,7 +115,7 @@ def equivalent(left: Yaml, right: Yaml, strength: Strength) -> Divergence | None
     blind to a graph whose every step was swapped for a different tool of the
     same arity; and the report told a consumer to use them, which would have
     routed every downstream consumer onto the unverified path. If a
-    restructuring rewrite (inlining, partitioning) later needs supplied
+    restructuring rewrite (partitioning or embedding) later needs supplied
     graphs, they come back labelled and tested, as a deliberate change.
     """
     match strength:
@@ -525,8 +525,8 @@ def _requirement_names(document: Yaml) -> list[str]:
 def _same_dag(left: Yaml, right: Yaml) -> Divergence | None:
     """Whether two workflows have the same shape under renaming.
 
-    Isomorphism alone is too weak and `test_inline_subworkflows` uses it alone
-    (tests/core/test_examples.py:418): a bare `DiGraphMatcher` accepts a graph
+    Isomorphism alone is too weak: the retired source-inlining regression used
+    a bare `DiGraphMatcher`, which accepts a graph
     in which every step has been replaced by a *different tool of the same
     arity*, which is precisely the kind of thing an IR migration could get
     wrong. The answer here is a *labelled* matcher — see `_dataflow` — not a

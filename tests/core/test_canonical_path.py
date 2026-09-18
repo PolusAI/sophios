@@ -34,10 +34,11 @@ import sophios.post_compile
 from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
 from sophios.cli import default_compilation_settings
 from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest
+from sophios.ir.artifacts import CompilationResult
 from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_graphs import get_graph_reps
 from sophios.utils_yaml import wic_loader
-from sophios.wic_types import CompilerInfo, StepId, Yaml, YamlTree
+from sophios.wic_types import StepId, Yaml, YamlTree
 
 from . import ast_strategies as strat
 from .ast_strategies import passthrough_keys, passthrough_values
@@ -99,7 +100,7 @@ def _build_workflow(spec: _PathSpec) -> Workflow:
     return workflow
 
 
-def _compile_from_document(document: Yaml, name: str) -> CompilerInfo:
+def _compile_from_document(document: Yaml, name: str) -> CompilationResult:
     """Compile a plain YAML document via the same compiler entry point and
     options `sophios.api.python._workflow_runtime.compile_workflow` uses for
     the direct path — built from a document already loaded off disk, rather
@@ -112,10 +113,10 @@ def _compile_from_document(document: Yaml, name: str) -> CompilerInfo:
     graph = get_graph_reps(name)
     yaml_tree = YamlTree(StepId(name, SYNTHETIC_NS), document)
     compiler_options, graph_settings, yaml_tag_paths = default_compilation_settings()
-    return sophios.compiler.compile_workflow(
+    return sophios.compiler.compile_document(
         yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
-        [], [graph], {}, {}, {}, {}, SYNTHETIC_TOOLS, True,
-        relative_run_path=True, testing=False)
+        SYNTHETIC_TOOLS, relative_run_path=True, testing=False,
+        graph_target=graph)
 
 
 @pytest.mark.fast
@@ -186,7 +187,7 @@ def test_the_two_front_ends_compile_to_the_same_cwl(spec: _PathSpec) -> None:
         written_text = path.read_text(encoding='utf-8')
     document = desugar_into_canonical_normal_form(yaml.load(written_text, Loader=wic_loader()))
     info = _compile_from_document(document, via_file_workflow.process_name)
-    via_file = _workflow_runtime.compiled_workflow_from_compiler_info(via_file_workflow, info)
+    via_file = _workflow_runtime.compiled_workflow_from_result(via_file_workflow, info)
 
     found = equivalent(direct.cwl_workflow, via_file.cwl_workflow, Strength.IDENTICAL)
     assert found is None, (
@@ -247,7 +248,7 @@ def test_compiled_output_validates_as_cwl(yml: Yaml) -> None:
     import cwltool.main  # pylint: disable=import-outside-toplevel  # expensive; slow lane only
 
     info = compile_hermetic(yml, 'oracle')
-    inlined = sophios.post_compile.cwl_inline_runtag(info.rose).data.compiled_cwl
+    inlined = sophios.post_compile.inline_artifact_runs(info.artifact).cwl
 
     with tempfile.TemporaryDirectory() as workdir:
         target = Path(workdir) / 'oracle.cwl'
@@ -281,7 +282,7 @@ def test_compute_request_builds_and_validates_every_compiled_workflow(yml: Yaml)
     cannot see that.
     """
     info = compile_hermetic(yml, 'oracle')
-    compiled = CompiledWorkflow('oracle', info.rose.data.compiled_cwl, info.rose.data.workflow_inputs_file)
+    compiled = CompiledWorkflow('oracle', info.artifact.cwl, info.artifact.job_inputs)
     request = ComputeRequest(
         compiled, compute_config=ComputeExecutionConfig(output=ComputeOutputConfig.workflow_declared()))
 

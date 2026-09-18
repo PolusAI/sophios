@@ -50,6 +50,10 @@ ORACLE_MODULES = (
     'core.test_predicates',
     'core.test_reference_compatibility',
     'core.test_canonical_path',
+    'core.test_emit',
+    'core.test_resolve',
+    'core.test_link',
+    'core.test_infer_phase',
 )
 
 #: Reaching any of these means the suite's meaning depends on the machine.
@@ -191,17 +195,20 @@ def test_every_stub_is_valid_cwl(stem: str) -> None:
 @pytest.mark.fast
 @pytest.mark.parametrize('stem', STEMS)
 def test_required_inputs_agree_with_the_compilers_own_rule(stem: str) -> None:
-    """The second implementation and the compiler's must not have drifted."""
-    from sophios.compiler import _arg_has_default_or_is_optional  # pylint: disable=import-outside-toplevel
+    """The independent model and typed declarations must not drift."""
+    from sophios.ir.declarations import port_declaration  # pylint: disable=import-outside-toplevel
 
     in_tool = inputs_of(stem)
-    theirs = tuple(a for a in in_tool if not _arg_has_default_or_is_optional(a, in_tool))
+    declarations = {name: port_declaration(raw) for name, raw in in_tool.items()}
+    theirs = tuple(name for name, declaration in declarations.items()
+                   if not ((declaration.has_default and declaration.default is not None)
+                           or declaration.type.optional))
     assert required_inputs_of(stem) == theirs
 
 
 @pytest.mark.fast
 def test_falsy_default_still_counts_as_a_default() -> None:
-    """`_arg_has_default_or_is_optional` must test presence, not truth.
+    """Typed declarations preserve the presence of falsy defaults.
 
     `in_tool[arg].get('default')` used to be used directly as a boolean, so a
     tool declaring `default: False` (or `0`, or `''`) was treated as having no
@@ -215,18 +222,19 @@ def test_falsy_default_still_counts_as_a_default() -> None:
     truthiness and the falsy one fails; break the ordinary case and the truthy
     one fails.
     """
-    from sophios.compiler import _arg_has_default_or_is_optional  # pylint: disable=import-outside-toplevel
+    from sophios.ir.declarations import port_declaration  # pylint: disable=import-outside-toplevel
 
     in_tool = {
         'convert_Kd_dG': {'type': 'boolean', 'default': False},
         'control': {'type': 'boolean', 'default': True},
         'extras': {'type': 'File[]', 'default': []},
     }
-    assert _arg_has_default_or_is_optional('convert_Kd_dG', in_tool), \
+    declarations = {name: port_declaration(raw) for name, raw in in_tool.items()}
+    assert declarations['convert_Kd_dG'].has_default, \
         'a present-but-falsy default must still count as a default'
-    assert _arg_has_default_or_is_optional('control', in_tool), \
+    assert declarations['control'].has_default, \
         'a present, truthy default must still count as a default'
-    assert _arg_has_default_or_is_optional('extras', in_tool), \
+    assert declarations['extras'].has_default, \
         'an empty-collection default must still count as a default'
 
 
@@ -242,15 +250,19 @@ def test_a_null_default_does_not_satisfy_a_non_nullable_input() -> None:
     control, and must stay optional for the type's sake rather than the
     default's.
     """
-    from sophios.compiler import _arg_has_default_or_is_optional  # pylint: disable=import-outside-toplevel
+    from sophios.ir.declarations import port_declaration  # pylint: disable=import-outside-toplevel
 
     in_tool = {
         'required': {'type': 'File', 'default': None},
         'nullable': {'type': ['null', 'File'], 'default': None},
     }
-    assert not _arg_has_default_or_is_optional('required', in_tool), \
+    declarations = {name: port_declaration(raw) for name, raw in in_tool.items()}
+    required = declarations['required']
+    nullable = declarations['nullable']
+    assert not ((required.has_default and required.default is not None)
+                or required.type.optional), \
         'a null default cannot satisfy a non-nullable input, so the input stays required'
-    assert _arg_has_default_or_is_optional('nullable', in_tool), \
+    assert nullable.type.optional, \
         'a null-permitting type is optional whatever its default'
 
 
@@ -299,6 +311,10 @@ ORACLE_FILES: tuple[str, ...] = (
     'tests/core/test_predicates.py',
     'tests/core/test_reference_compatibility.py',
     'tests/core/test_canonical_path.py',
+    'tests/core/test_emit.py',
+    'tests/core/test_resolve.py',
+    'tests/core/test_link.py',
+    'tests/core/test_infer_phase.py',
 )
 
 
@@ -379,9 +395,11 @@ def test_the_oracle_suite_passes_with_plugin_discovery_disabled() -> None:
 @pytest.mark.slow
 @pytest.mark.serial
 def test_the_poison_fires_on_a_suite_that_needs_discovery() -> None:
-    """The companion. `test_fuzzy_compile` samples an environment-dependent
-    schema by design, so it must fail under the poison. If it passes, the
-    poison is not installed and the run above proved nothing.
+    """The companion probe deliberately calls plugin discovery.
+
+    Corpus fixtures no longer discover plugins during collection, so a
+    purpose-built, non-default-collected probe is the stable way to prove the
+    poison is installed. If it passes, the run above proved nothing.
 
     Asserts `POISON_MESSAGE` appears in the output, not merely that the
     subprocess exits nonzero: pytest exits nonzero for reasons unrelated to
@@ -389,7 +407,7 @@ def test_the_poison_fires_on_a_suite_that_needs_discovery() -> None:
     check is satisfied by any of them just as well as by the poison firing —
     which is exactly how this test passed for the wrong reason before.
     """
-    result = _run_poisoned(('tests/core/test_fuzzy_compile.py',))
+    result = _run_poisoned(('tests/core/discovery_probe.py',))
     output = result.stdout + result.stderr
     assert result.returncode != 0, output
     assert POISON_MESSAGE in output, output

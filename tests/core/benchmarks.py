@@ -116,9 +116,9 @@ def _compile_corpus_file(path: Path) -> None:
     yaml_tree = sophios.ast.python_script_generate_cwl(yaml_tree, root_yml_dir_abs, env.tools)
     compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
     graph = get_graph_reps(str(path))
-    sophios.compiler.compile_workflow(
+    sophios.compiler.compile_document(
         yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
-        [], [graph], {}, {}, {}, {}, env.tools, True, relative_run_path=True, testing=True)
+        env.tools, relative_run_path=True, testing=True, graph_target=graph)
 
 
 # --------------------------------------------------------------------------
@@ -185,7 +185,7 @@ _DEEP_NESTING_YML: Final = _deep_nesting_yml()
 def _wide_inference_yml() -> Yaml:
     """One hundred `mk_file` steps, each with its one `name` input left
     unspecified. `name` is a string and every prior output is a `File`, so
-    `types_match` never accepts — `perform_edge_inference`'s backward scan
+    `types_match` never accepts — Infer's backward scan
     always runs to completion instead of returning at the first match, which
     is what makes this case pay for the full quadratic scan rather than the
     linear common case."""
@@ -234,7 +234,7 @@ CASES: Final[tuple[Case, ...]] = tuple(
          run=lambda: compile_hermetic(_DEEP_NESTING_YML, 'oracle', tools=SYNTHETIC_TOOLS)),
     Case('wide_inference',
          "One hundred steps, every input inferred and never matched, so "
-         "perform_edge_inference's backward scan always runs to completion. "
+         "Infer's backward scan always runs to completion. "
          "It scans backwards over previous steps, so this is the quadratic "
          "one.",
          run=lambda: compile_hermetic(_WIDE_INFERENCE_YML, 'oracle', tools=SYNTHETIC_TOOLS)),

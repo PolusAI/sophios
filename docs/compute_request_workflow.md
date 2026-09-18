@@ -99,9 +99,9 @@ attributes:
 - `cwl_workflow`
 - `cwl_job_inputs`
 
-That object is the public workflow-to-compute handoff. The lower-level
-`CompilerInfo` tree is internal and remains available to Sophios internals via
-`workflow._compile()`.
+That object is the public workflow-to-compute handoff. Compiler graphs and
+artifact trees remain internal; the public API does not expose a second,
+lower-level compilation result.
 
 ## Compute Boundary
 

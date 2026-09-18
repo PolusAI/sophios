@@ -13,7 +13,7 @@ from sophios.lang.compatibility import TypeRelation, reference_relation
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.versions import KNOWN_VERSIONS
-from sophios.wic_types import CompilerInfo, Tools
+from sophios.wic_types import Tools
 
 from ._compiled import CompiledWorkflow
 from ._errors import (
@@ -40,7 +40,6 @@ from ._utils import (
 from ._types import ScatterMethod
 from ._workflow_runtime import (
     coerce_path as _coerce_path,
-    compile_workflow as _compile_workflow,
     compiled_workflow as _compiled_workflow,
     load_clt_document as _load_clt_document,
     load_clt as _load_clt,
@@ -883,10 +882,6 @@ class Workflow(_ProcessBase):
         """Return this workflow and all nested subworkflows."""
         return [self, *[workflow for child in self.steps for workflow in child._flatten_subworkflows()]]
 
-    def _compile(self, write_to_disk: bool = False, *, tool_registry: Tools | None = None) -> CompilerInfo:
-        """Compile this workflow through the internal compiler path."""
-        return _compile_workflow(self, write_to_disk=write_to_disk, tool_registry=tool_registry)
-
     def compile(
         self,
         *,
@@ -894,9 +889,6 @@ class Workflow(_ProcessBase):
         lang_version: str | None = None,
     ) -> CompiledWorkflow:
         """Compile this workflow into CWL and generated job inputs.
-
-        The old ``CompilerInfo`` result remains available only through the
-        internal :meth:`_compile`.
 
         Args:
             tool_registry (Tools | None): Optional tool registry override.

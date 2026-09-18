@@ -214,12 +214,17 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 #:
 #: `test_canonical_path.py`'s two are reached only by `build_wheel.yml`, which
 #: is `runs-on: ubuntu-latest`, so they have no Windows run to lose either.
+#: `test_emit.py`'s validator pair exercise cwltool itself; the phase lane
+#: collects their platform-neutral siblings on Windows and these two run on
+#: the POSIX matrix legs where cwltool's `pwd` dependency is available.
 #:
 #: The list is the claim. Growing it is a deliberate edit here, not a marker
 #: added in passing, because every entry is Windows coverage given up.
 WINDOWS_EXCLUDED: Final = frozenset({
     'tests/core/test_canonical_path.py::test_compiled_output_validates_as_cwl',
     'tests/core/test_canonical_path.py::test_cwltool_validate_rejects_an_invalid_document',
+    'tests/core/test_emit.py::test_emit_validates_as_cwl_v1_2',
+    'tests/core/test_emit.py::test_validator_rejects_the_independent_invalid_control',
     'tests/core/test_hermeticity.py::test_every_stub_is_valid_cwl',
     'tests/core/test_lang_version.py::test_annotation_is_declared_and_the_cwl_stays_valid',
     'tests/core/test_leak_boundary.py::test_residue_validates_as_cwl_v1_2',

@@ -12,14 +12,13 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from sophios.api.python.workflow import _python_api_types_match
-from sophios.inlineing import get_inlineable_subworkflows
 from sophios.lang.compatibility import TypeRelation, reference_relation
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.versions import KNOWN_VERSIONS
 from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_yaml import wic_loader
-from sophios.wic_types import StepId, Tool, Tools, Yaml, YamlTree
+from sophios.wic_types import StepId, Tool, Tools, Yaml
 
 from .synthetic_tools import clt
 
@@ -93,40 +92,6 @@ def test_every_language_version_owns_a_judgment() -> None:
                is TypeRelation.OVERLAPS for version in KNOWN_VERSIONS)
     with pytest.raises(ValueError, match='No reference judgment'):
         reference_relation('string', 'string', lang_version='not-a-version')
-
-
-def _subworkflow_tree(parentargs: Yaml, wic: Yaml | None = None) -> YamlTree:
-    """A root workflow with one subworkflow call, as the AST reader leaves it."""
-    tree: Yaml = {'steps': [{'id': 'child.wic',
-                             'subtree': {'inputs': {'x': {'type': 'string'}},
-                                         'steps': [{'id': 'sink', 'in': {'value': 'x'}}]},
-                             'parentargs': parentargs}]}
-    if wic is not None:
-        tree['wic'] = wic
-    return YamlTree(StepId('root', 'global'), tree)
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('claim', 'parentargs', 'wic', 'offered'), [
-    ('scatter at the call site', {'in': {'x': 'actual'}, 'scatter': ['sink___value']}, None, False),
-    ('scatter in wic: steps: metadata', {'in': {'x': 'actual'}},
-     {'steps': {'(1, child.wic)': {'scatter': ['sink___value']}}}, False),
-    ('metadata without scatter', {}, {'steps': {'(1, child.wic)': {'in': {'x': 1}}}}, True),
-    ('no scatter anywhere', {'in': {'x': 'actual'}}, None, True),
-])
-def test_a_scattered_subworkflow_is_not_offered_to_the_ast_inliner(
-        claim: str, parentargs: Yaml, wic: Yaml | None, offered: bool) -> None:
-    """Inlining cannot erase scatter and manufacture a disjoint reference.
-
-    Scatter reaches a step from two places and the inliner runs before they are
-    merged: `parentargs` is the call site as written under `steps:`, while
-    `wic: steps:` metadata is merged onto it in `compile_workflow_once`, which
-    is later. Reading only the first offers a subworkflow whose scatter is
-    spelled in the metadata, and inlining it erases that scatter.
-    """
-    result = get_inlineable_subworkflows(
-        _subworkflow_tree(parentargs, wic), implementation=False, namespaces_init=[])
-    assert bool(result) is offered, claim
 
 
 @pytest.mark.fast

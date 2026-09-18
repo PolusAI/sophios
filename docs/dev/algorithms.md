@@ -32,38 +32,80 @@ On the other hand, GraphViz and NetworkX require all names to be globally unique
 
 ## Compilation Algorithm
 
-One of the main design criteria is that users should be able to recursively
-combine workflow steps into reusable subworkflows. Compilation should be
-independent of how the root workflow is partitioned into subworkflows. The
-regression test for this behavior is `test_inline_subworkflows`.
+Compilation is a one-way typed pipeline:
 
-First let's consider the base case, i.e. the case that all of the steps in the workflow are already CWL CommandLineTools and thus there is no recursion. In other words, we have a list of steps with inputs that need to be connected to previous outputs, either explicitly or using inference, which will be discussed below.
+1. **Parse** converts authored YAML into the versioned language AST. Unknown
+   CWL payload remains opaque.
+2. **Resolve** selects the language version and resolves tools, workflows,
+   implementations, generated Python tools, and sidecar overrides from an
+   immutable registry snapshot. It performs no discovery.
+3. **Lower** creates an immutable `WorkflowGraph` with complete process
+   interfaces, authored bindings, workflow boundaries, and child graphs.
+4. **Link** composes child graphs, resolves authored references at their lowest
+   common ancestor, and discharges deferred obligations.
+5. **Infer** adds only missing edges and optional converter steps. Its
+   fixed-point loop is local to this phase; the preceding phases run once.
+6. **Emit** projects the final graph to CWL v1.2. It does not reopen source,
+   consult registries, or replay an older compiler result.
 
-Now for the recursive case: If we are in the process of compiling the steps of a workflow and we encounter a subworkflow, we simply compile the subworkflow's wic file contents to CWL, replace the wic file contents in-memory with the compiled CWL, and continue the compilation of the parent workflow as if the subworkflow was already a CWL CommandLineTool.
+An idempotent internal graph-completion operation materializes emission facts
+already determined by those phases. It may derive a CWL-facing boundary or
+source spelling from typed graph facts, but it performs no lookup and makes no
+independent semantic decision.
 
-However, there are two major additional points: After compilation, a namespace is prepended to the input and output variables of a subworkflow to guarantee uniqueness. More importantly, from within the subworkflow, it may not be possible to completely determine all inputs concretely; satisfaction of some inputs may need to be deferred.
+`compile_document` is the sole internal compiler entry point. It accepts the
+assembled source plus immutable settings and registries, and returns the final
+`WorkflowGraph` with its emitted artifact tree. The CLI and public Python API
+adapt to that result once at their boundaries; the retired mutable compiler
+environment and result tree no longer exist.
 
-## Deferred Satisfaction
-When compiling a subworkflow, inputs which originate in a parent workflow (and are thus external to the subworkflow) are not yet in scope. Thus, we cannot yet make an edge (either explicit or inferred) and the inputs cannot yet be concretely satisfied. So we simply create an intermediate input variable in the intermediate subworkflow(s), and as the recursion unwinds there will eventually be a concrete input in some parent workflow. It is very important to note that deferring inputs does NOT affect the DAGs of any of the parent workflows! (Again, see test_inline_subworkflows()) Also note that deferred intermediate inputs will be namespaced accordingly.
+Compilation remains independent of how the root workflow is partitioned into
+subworkflows. The property suite flattens final graph-derived artifacts with an
+independent test model and compares their observable behavior at
+`UP_TO_EMBEDDING`. Embedding a linked child directly in a CWL `run:` field is a
+placement choice; it does not invoke a second source-level implementation of
+workflow-call semantics.
+
+## Deferred obligations
+
+When a child refers to a producer outside its scope, Lower records a
+`DeferredObligation` instead of manufacturing a source string. Link owns the
+composed graph, so it can find the definition at the lowest common ancestor,
+apply the versioned reference relation to the effective endpoint types, and
+place the edge in exactly one graph. An unresolved root obligation is
+`wic025`.
+
+Workflow boundaries are graph facts. Link exposes whatever intermediate input
+or output a child artifact needs after composition; Emit only spells that
+boundary. An omitted call argument stays omitted and remains available to
+Infer. A wrapper output maps to its concrete producing port rather than
+becoming a second producer.
 
 ## Explicit Edges
 
-Explicit edges are handled first, to prevent edge inference from being applied. Whereas the edge inference algorithm operates 'locally', at one level of recursion at a time, the explicit edge algorithm inherently operates 'globally', requiring deferred information to be passed around through the various levels of recursion. (As such, it was actually much more difficult to implement correctly.)
+Explicit edges are handled before inference. A definition site (`!&`) records
+an output port identity and a call site (`!*`) records an obligation on an
+input port identity. Link compares their structured namespaces, places the
+edge at the [lowest common ancestor](https://en.wikipedia.org/wiki/Lowest_common_ancestor),
+and redirects workflow-wrapper outputs to their concrete producers.
 
-First, when an edge definition site (`!&`) is encountered, its namespaces are
-stored in `explicit_edge_defs`. Then, when an edge call site (`!*`) is
-encountered, Sophios compares the namespaces of the definition and call sites
-using the [lowest common ancestor](https://en.wikipedia.org/wiki/Lowest_common_ancestor)
-algorithm to see whether they have leading namespaces in common. If compilation
-is already in the common namespace, the definition information can be applied
-immediately. Otherwise, the information is stored in `explicit_edge_calls` and
-deferred until recursion reaches the common namespace.
+Sophios rejects an authored reference only when its versioned type relation is
+`DISJOINT`. `UNKNOWN`—including `Any`, named schemas, and opaque record or enum
+information—is deferred to final CWL validation. Scatter contributes its
+effective array rank on both producing and consuming endpoints.
 
 ## Edge Inference
 
-Since users may eventually need to know how edge inference works, the edge inference algorithm is described in [Advanced YAML and Operations](../advanced.md#edge-inference).
+The user-facing edge inference algorithm is described in
+[Advanced YAML and Operations](../advanced.md#edge-inference). Inference reads a
+complete graph and an explicit immutable policy. It preserves the historical
+candidate order, naming/format rules, defaults, ambiguity behavior, and
+converter catalog. `types_match()` remains a candidate-selection heuristic; it
+does not have authority to reject authored references.
 
-Again note that if we are in a subworkflow, edge inference may temporarily fail for some inputs and we may need to defer to a parent workflow.
+The fixed-point loop exists only in Infer. A successful insertion produces a
+new graph iteration; exhausting the iteration limit reports `wic022`. Parse,
+Resolve, Lower, Link, and Emit are not rerun speculatively.
 
 ### Mathematical Aside
 
@@ -80,22 +122,23 @@ one inserted step.
 
 The algorithm is actually rather simple: first we attempt to perform edge inference. If it fails, that means there are no outputs that *directly* match the given input. So what happens if we insert an intermediate step? Specifically, the compiler attempts to *transitively* match the input of the current step with the outputs of the intermediate step, and the inputs of the intermediate step with the outputs (plural) that failed to directly match.
 
-Due to implementation details, the compiler temporarily attempts to match a
-single output with the intermediate inputs. At that point the insertion is still
-tentative, so Sophios stops compiling the current subworkflow, inserts the
-candidate step, and speculatively recompiles the subworkflow from scratch. If
-the insertion is valid, inference should then match all required outputs.
+Infer attempts to match a missing input through one catalogued intermediate
+process. The insertion is represented as a synthesized `StepNode` and judged
+in the next inference iteration. No source document is rewritten and no
+workflow is recompiled from scratch.
 
 ### Known Issues
 
-Speculative compilation can repeatedly fail while repeatedly attempting to
-insert an additional step. To guarantee termination, `compiler.compile_workflow`
-currently stops after a fixed maximum number of iterations and reports an error.
-Future work could detect this condition earlier and report a more specific
-diagnostic.
+The limit is part of `InferencePolicy`, not mutable compiler state. Because the
+loop transforms only immutable graphs, failed speculation cannot leak a
+partially inserted source tree into another compilation.
 
-There is a pathological case where speculative recompilation has time
-complexity `O(2^n)`. Insertions can happen at any level of recursion, so Sophios
-may recompile deeply nested subworkflows unnecessarily. This should be
-amenable to [dynamic programming](https://en.wikipedia.org/wiki/Dynamic_programming)
-or subworkflow caching if it becomes a practical bottleneck.
+## Compatibility contract
+
+The typed compiler promises behaviorally identical workflows, not byte-identical
+serialization relative to the retired implementation. The end-to-end P57
+contract is `UP_TO_EMBEDDING`: generated `run:` paths may move when artifacts
+are embedded differently, while workflow structure, bindings, ports, types,
+requirements, and opaque payloads remain equivalent. Narrower phase properties
+may assert `IDENTICAL` where exact projection or determinism is the behavior
+being specified.

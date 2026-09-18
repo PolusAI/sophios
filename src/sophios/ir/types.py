@@ -10,7 +10,7 @@ having only if it cannot be invalidated afterwards. An `OpaqueCwl` payload may
 still be a `list` or a `dict` -- nothing reads one, which is the point of the
 type, so nothing can be invalidated through it.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final, TypeAlias
 
@@ -129,11 +129,109 @@ class PortType:
 
 
 @dataclass(frozen=True, slots=True)
+class PortDeclaration:  # pylint: disable=too-many-instance-attributes
+    """The complete declaration of one process or workflow port.
+
+    ``PortType`` is the deliberately small algebra later phases may reason
+    about.  The other fields are emission facts: they preserve declarations
+    that affect CWL without inviting Link or Infer to interpret arbitrary CWL.
+    ``has_default`` distinguishes an authored ``default: null`` from no
+    default at all.
+    """
+
+    type: PortType
+    format: OpaqueCwl = None
+    has_format: bool = False
+    default: OpaqueCwl = None
+    has_default: bool = False
+    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
+    field_order: tuple[str, ...] = ('type',)
+    shorthand: bool = False
+
+    def __post_init__(self) -> None:
+        if len(self.field_order) != len(set(self.field_order)):
+            raise ValueError('a port declaration field order cannot repeat a field')
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowPort:
+    """A port on the workflow boundary, including its CWL declaration."""
+
+    name: str
+    declaration: PortDeclaration
+    output_source: OpaqueCwl = None
+    has_output_source: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError('a workflow port must be named')
+
+
+@dataclass(frozen=True, slots=True)
+class JobBinding:
+    """One concrete value in the job input document projected from a graph."""
+
+    name: str
+    value: OpaqueCwl
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError('a job binding must be named')
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessRun:
+    """What a step executes.
+
+    ``target`` is transported exactly as CWL: normally a relative path, but an
+    inline process object is legal too.  ``process_id`` is the resolved logical
+    identity; it is separate because a path is an embedding choice, not a tool
+    identity.  A child graph records a resolved subworkflow without hiding its
+    emitted CWL in an opaque value.
+    """
+
+    target: OpaqueCwl
+    process_id: str
+    child: 'WorkflowGraph | None' = None
+
+    def __post_init__(self) -> None:
+        if not self.process_id:
+            raise ValueError('a resolved process must have an identity')
+
+
+@dataclass(frozen=True, slots=True)
+class StepEmission:  # pylint: disable=too-many-instance-attributes
+    """The CWL surface of a step after semantic phases have finished.
+
+    Known fields are named.  ``passthrough`` is only the open CWL residue, and
+    ``field_order`` records canonical byte order without storing a completed
+    step dictionary.  Emit is the only phase allowed to traverse the payloads.
+    """
+
+    id: str
+    inputs: tuple[tuple[str, OpaqueCwl], ...]
+    run: ProcessRun
+    outputs: tuple[OpaqueCwl, ...]
+    scatter: OpaqueCwl = None
+    scatter_method: OpaqueCwl = None
+    when: OpaqueCwl = None
+    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
+    field_order: tuple[str, ...] = ('id', 'in', 'run', 'out')
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            raise ValueError('an emitted step must have an id')
+        if len(self.field_order) != len(set(self.field_order)):
+            raise ValueError('an emitted step field order cannot repeat a field')
+
+
+@dataclass(frozen=True, slots=True)
 class Port:
     """One port of one step: its identity, its type, and where it was written."""
 
     id: PortId
     type: PortType
+    declaration: PortDeclaration | None = None
     span: SourceSpan | None = None
 
 
@@ -210,7 +308,7 @@ class Binding:
 
 
 @dataclass(frozen=True, slots=True)
-class StepNode:
+class StepNode:  # pylint: disable=too-many-instance-attributes
     """A step occurrence, with the ports it exposes and what its inputs bind to.
 
     `interpreted` holds the CWL keys Sophios acts upon and `passthrough` the
@@ -224,6 +322,9 @@ class StepNode:
     interpreted: tuple[tuple[str, OpaqueCwl], ...] = ()
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
     span: SourceSpan | None = None
+    emission: StepEmission | None = None
+    inference_rules: tuple[tuple[str, str], ...] = ()
+    synthesized: bool = False
 
     def __post_init__(self) -> None:
         """Reject ports or bindings that belong to another step.
@@ -252,7 +353,7 @@ InputMapping: TypeAlias = tuple[tuple[str, tuple[PortId, ...]], ...]
 
 
 @dataclass(frozen=True, slots=True)
-class WorkflowGraph:
+class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     """A whole workflow: its steps, what their inputs bind to, and what it owes.
 
     The four mappings are fields, not arguments. Threaded through a call stack
@@ -267,6 +368,21 @@ class WorkflowGraph:
     output_mapping: PortMapping = ()
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
     span: SourceSpan | None = None
+    name: str = ''
+    lang_version: str = ''
+    cwl_version: str = ''
+    workflow_inputs: tuple[WorkflowPort, ...] = ()
+    workflow_outputs: tuple[WorkflowPort, ...] = ()
+    job_bindings: tuple[JobBinding, ...] = ()
+    requirements: tuple[tuple[str, OpaqueCwl], ...] = ()
+    namespaces: tuple[tuple[str, OpaqueCwl], ...] = ()
+    schemas: tuple[OpaqueCwl, ...] = ()
+    children: tuple['WorkflowGraph', ...] = ()
+    composition_edges: tuple[Edge, ...] = ()
+    inferred_edges: tuple[Edge, ...] = ()
+    discharged_obligations: tuple[PortId, ...] = ()
+    field_order: tuple[str, ...] = ('steps', 'cwlVersion', 'class', '$namespaces', '$schemas',
+                                    'inputs', 'sophios:lang_version', 'outputs')
 
     def __post_init__(self) -> None:
         """Reject a graph naming a port no step declares, anywhere.
@@ -285,11 +401,27 @@ class WorkflowGraph:
                 raise ValueError(
                     f'{step.id} sits in {step.id.namespace.parts}, not this graph\'s '
                     f'{self.namespace.parts}')
+        if len(self.field_order) != len(set(self.field_order)):
+            raise ValueError('a workflow field order cannot repeat a field')
 
         known = {port.id for step in self.steps for port in step.inputs + step.outputs}
+        recursive_known = self.port_ids
         for where, port_id in self._references():
-            if port_id not in known:
+            allowed = recursive_known if where in {'an edge source', 'an output mapping'} else known
+            if port_id not in allowed:
                 raise ValueError(f'{where} names a port no step declares: {port_id}')
+        for edge in self.composition_edges:
+            if edge.source not in recursive_known or edge.sink not in recursive_known:
+                raise ValueError(f'a composition edge names a port outside this graph tree: {edge}')
+        for edge in self.inferred_edges:
+            if edge.source not in recursive_known or edge.sink not in recursive_known:
+                raise ValueError(f'an inferred edge names a port outside this graph tree: {edge}')
+        for sink in self.discharged_obligations:
+            if sink not in recursive_known:
+                raise ValueError(f'a discharged obligation names no port in this graph tree: {sink}')
+        recursive_steps = [step.id for step in self.all_steps]
+        if len(recursive_steps) != len(set(recursive_steps)):
+            raise ValueError('step identities must be injective across a composed graph')
 
     def _references(self) -> tuple[tuple[str, PortId], ...]:
         """Every port identity this graph holds, with where it came from."""
@@ -301,8 +433,10 @@ class WorkflowGraph:
                     found.append(('an edge source', binding.resolution.source))
                 elif isinstance(binding.resolution, DeferredObligation):
                     found.append(('an obligation', binding.resolution.sink))
-        for name, port_id in (*self.explicit_edge_defs, *self.explicit_edge_calls, *self.output_mapping):
+        for name, port_id in (*self.explicit_edge_defs, *self.explicit_edge_calls):
             found.append((f'mapping {name!r}', port_id))
+        for _name, port_id in self.output_mapping:
+            found.append(('an output mapping', port_id))
         for name, port_ids in self.input_mapping:
             found.extend((f'input mapping {name!r}', port_id) for port_id in port_ids)
         return tuple(found)
@@ -310,14 +444,30 @@ class WorkflowGraph:
     @property
     def edges(self) -> tuple[Edge, ...]:
         """Every resolved edge, derived from the bindings that produced them."""
-        return tuple(b.resolution for s in self.steps for b in s.bindings
-                     if isinstance(b.resolution, Edge))
+        local = tuple(b.resolution for s in self.steps for b in s.bindings
+                      if isinstance(b.resolution, Edge))
+        return local + self.composition_edges + self.inferred_edges + tuple(
+            edge for child in self.children for edge in child.edges)
 
     @property
     def obligations(self) -> tuple[DeferredObligation, ...]:
         """Every binding this document cannot satisfy on its own."""
-        return tuple(b.resolution for s in self.steps for b in s.bindings
-                     if isinstance(b.resolution, DeferredObligation))
+        local = tuple(b.resolution for s in self.steps for b in s.bindings
+                      if isinstance(b.resolution, DeferredObligation))
+        nested = tuple(obligation for child in self.children for obligation in child.obligations)
+        discharged = set(self.discharged_obligations)
+        return tuple(obligation for obligation in local + nested
+                     if obligation.sink not in discharged)
+
+    @property
+    def all_steps(self) -> tuple[StepNode, ...]:
+        """Every step in this graph tree, preserving authored traversal order."""
+        return self.steps + tuple(step for child in self.children for step in child.all_steps)
+
+    @property
+    def port_ids(self) -> frozenset[PortId]:
+        """Every port identity in this graph tree."""
+        return frozenset(port.id for step in self.all_steps for port in step.inputs + step.outputs)
 
     def step(self, name: str) -> StepNode | None:
         """The first occurrence called `name`, or None.

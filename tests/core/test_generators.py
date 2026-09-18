@@ -48,10 +48,9 @@ def test_every_construct_appears_within_a_bounded_sample() -> None:
     claim about the sample, not any example, while never asking a single
     execution to be internally diverse.
 
-    CANNOT GENERATE (declared, per the negative-testing rules): `!cwl`
-    (RawCwlRef) — specified but not compilable until the front end is wired in, so a compilable
-    generator must exclude it; `python_script` steps — named with a uuid4, so
-    nothing over them is deterministic; multi-document YAML streams; merge keys.
+    CANNOT GENERATE (declared, per the negative-testing rules):
+    `python_script` steps, whose module definition belongs to the registry;
+    multi-document YAML streams; merge keys.
     """
     seen: Counter[str] = Counter()
 
@@ -129,7 +128,7 @@ def test_the_workflows_strategy_produces_documents_the_compiler_accepts() -> Non
     `to_yml` is the only part of this generator that must satisfy the *compiler*
     rather than the grammar. Delete its `desugar_into_canonical_normal_form`
     call and every mapping-form document raises `KeyError: 0` in
-    `compile_workflow_once`'s per-step loop -- which is why both surface forms
+    the compiler's per-step lowering -- which is why both surface forms
     must reach a successful compilation.
 
     The bar is a bare majority, not everything: `!ii` constrains no literal to

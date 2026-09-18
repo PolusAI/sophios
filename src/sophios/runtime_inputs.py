@@ -9,7 +9,8 @@ import re
 from typing import Any
 
 from sophios.edam import resolve_file_format
-from sophios.wic_types import Json, NodeData, RoseTree
+from sophios.ir.artifacts import CompilationArtifact
+from sophios.wic_types import Json
 
 
 _INPUT_REFERENCE = re.compile(r"\binputs\.([A-Za-z_][A-Za-z0-9_-]*)")
@@ -20,11 +21,10 @@ def normalize_job_inputs(cwl_workflow: Mapping[str, Any], job_inputs: Mapping[st
     return _normalize_job_inputs(cwl_workflow, {}, job_inputs)
 
 
-def normalize_rose_tree_job_inputs(rose_tree: RoseTree, job_inputs: Mapping[str, Any]) -> Json:
-    """Return normalized job inputs using a compiled rose tree's step CLTs."""
-    run_by_step_id = _run_by_step_id(rose_tree)
-    node_data: NodeData = rose_tree.data
-    return _normalize_job_inputs(node_data.compiled_cwl, run_by_step_id, job_inputs)
+def normalize_artifact_job_inputs(artifact: CompilationArtifact,
+                                  job_inputs: Mapping[str, Any]) -> Json:
+    """Normalize job inputs from the graph-derived artifact tree."""
+    return _normalize_job_inputs(artifact.cwl, _runs_by_artifact_id(artifact), job_inputs)
 
 
 def normalize_cwl_document(cwl_document: Mapping[str, Any]) -> Json:
@@ -32,19 +32,14 @@ def normalize_cwl_document(cwl_document: Mapping[str, Any]) -> Json:
     return _normalize_cwl_document(cwl_document, {})
 
 
-def normalize_rose_tree_cwl(rose_tree: RoseTree) -> Json:
-    """Return generated CWL normalized using a compiled rose tree's step CLTs."""
-    node_data: NodeData = rose_tree.data
-    return _normalize_cwl_document(node_data.compiled_cwl, _run_by_step_id(rose_tree))
+def normalize_artifact_cwl(artifact: CompilationArtifact) -> Json:
+    """Normalize generated CWL from the graph-derived artifact tree."""
+    return _normalize_cwl_document(artifact.cwl, _runs_by_artifact_id(artifact))
 
 
-def _run_by_step_id(rose_tree: RoseTree) -> dict[str, Mapping[str, Any]]:
-    run_by_step_id: dict[str, Mapping[str, Any]] = {}
-    for sub_tree in rose_tree.sub_trees:
-        sub_node_data: NodeData = sub_tree.data
-        if sub_node_data.namespaces:
-            run_by_step_id[sub_node_data.namespaces[-1]] = sub_node_data.compiled_cwl
-    return run_by_step_id
+def _runs_by_artifact_id(artifact: CompilationArtifact) -> dict[str, Mapping[str, Any]]:
+    return {child.namespace[-1]: child.cwl for child in artifact.children
+            if child.namespace}
 
 
 def _normalize_job_inputs(

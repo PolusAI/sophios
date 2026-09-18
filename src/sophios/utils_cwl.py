@@ -1,11 +1,9 @@
 import copy
-from pathlib import Path
 from typing import Any
 import yaml
 
 from . import utils
-from .wic_types import (GraphReps, GraphSettings, InternalOutputs, Namespaces, Tool, Tools,
-                        WorkflowOutputs, Yaml, StepId)
+from .wic_types import Yaml
 
 
 def validate_out_tag(out_vals: Any) -> None:
@@ -157,122 +155,6 @@ def add_yamldict_keyval_out(steps_i: Yaml, step_key: str, strs: list[str]) -> Ya
     else:
         steps_i = {'id': step_key, 'out': strs}
     return steps_i
-
-
-def get_workflow_outputs(graph_settings: GraphSettings,
-                         namespaces: Namespaces,
-                         is_root: bool,
-                         yaml_stem: str,
-                         steps: list[Yaml],
-                         outputs_workflow: WorkflowOutputs,
-                         vars_workflow_output_internal: InternalOutputs,
-                         graph: GraphReps,
-                         tools_lst: list[Tool],
-                         step_node_name: str,
-                         tools: Tools) -> dict[str, dict[str, str]]:
-    """Chooses a subset of the CWL outputs: to actually output
-
-    Args:
-        graph_settings (GraphSettings): The settings dict for graphpviz graphs
-        namespaces (Namespaces): Specifies the path in the AST of the current subworkflow
-        is_root (bool): True if this is the root workflow
-        yaml_stem (str): The name of the current subworkflow (stem of the yaml filepath)
-        steps (list[Yaml]): The steps: tag of a CWL workflow
-        outputs_workflow (WorkflowOutputs): Contains the contents of the out: tags for each step.
-        vars_workflow_output_internal (InternalOutputs): Keeps track of output\n
-        variables which are internal to the root workflow, but not necessarily to subworkflows.
-        graph (GraphReps): A tuple of a GraphViz DiGraph and a networkx DiGraph
-        tools_lst (list[Tool]): A list of the CWL CommandLineTools or compiled subworkflows for the current workflow.
-        step_node_name (str): The namespaced name of the current step
-        tools (Tools): The CWL CommandLineTool definitions found using get_tools_cwl()
-
-    Returns:
-        dict[str, dict[str, str]]: The actual outputs to be specified in the generated CWL file
-    """
-    # Add the outputs of each step to the workflow outputs
-    workflow_outputs = {}
-    steps_keys = utils.get_steps_keys(steps)
-    for i, step_key in enumerate(steps_keys):
-        tool_i = tools_lst[i].cwl
-        step_name_i = utils.step_name_str(yaml_stem, i, step_key)
-        step_id = StepId(Path(step_key).stem, 'global')
-        step_name_or_key = step_name_i if step_key.endswith('.wic') \
-            or step_id in tools \
-            or Path(step_key).stem == Path(tools_lst[i].run_path).stem else step_key
-        # step_name_or_key = step_name_i if stepid in tools else step_key
-        out_keys = require_string_out_keys(steps[i]['out'])
-        for out_key in out_keys:
-            out_var = f'{step_name_or_key}/{out_key}'
-            # Avoid duplicating intermediate outputs in GraphViz
-            out_key_no_namespace = out_key.split('___')[-1]
-            if graph_settings['graph_show_outputs']:
-                vars_nss = [var.replace('/', '___')
-                            for var in vars_workflow_output_internal]
-                case1 = (tool_i['class'] == 'Workflow') and (
-                    not out_key in vars_nss)
-                # Avoid duplicating outputs from subgraphs in parent graphs.
-                namespaced_output_name = '___'.join(
-                    namespaces + [step_name_or_key, out_key])
-                lengths_off_by_one = (len(step_node_name.split(
-                    '___')) + 1 == len(namespaced_output_name.split('___')))
-                # TODO: check is_root here
-                case1 = case1 and not is_root and lengths_off_by_one
-                case2 = (tool_i['class'] == 'CommandLineTool') and (
-                    not out_var in vars_workflow_output_internal)
-                if case1 or case2:
-                    graph_gv, graph_nx, graphdata = graph
-                    attrs = {'label': out_key_no_namespace, 'shape': 'box',
-                             'style': 'rounded, filled', 'fillcolor': 'lightyellow'}
-                    graph_gv.node(namespaced_output_name, **attrs)
-                    font_edge_color = 'black' if graph_settings['graph_dark_theme'] else 'white'
-                    if graph_settings['graph_label_edges']:
-                        graph_gv.edge(step_node_name, namespaced_output_name, color=font_edge_color,
-                                      label=out_key_no_namespace)  # Is labeling necessary?
-                    else:
-                        graph_gv.edge(
-                            step_node_name, namespaced_output_name, color=font_edge_color)
-                    graph_nx.add_node(namespaced_output_name)
-                    graph_nx.add_edge(step_node_name, namespaced_output_name)
-                    graphdata.nodes.append((namespaced_output_name, attrs))
-                    graphdata.edges.append(
-                        (step_node_name, namespaced_output_name, {}))
-            # NOTE: Unless we are in the root workflow, we always need to
-            # output everything. This is because while we are within a
-            # subworkflow, we do not yet know if a subworkflow output will be used as
-            # an input in a parent workflow (either explicitly, or using inference).
-            # Thus, we have to output everything.
-            # However, once we reach the root workflow, we can choose whether
-            # we want to pollute our output directory with intermediate files.
-            # (You can always enable --provenance to get intermediate files.)
-            # NOTE: Remove is_root for now because in test_cwl_embedding_independence,
-            # we recompile all subworkflows as if they were root.
-            # Exclude intermediate 'output' files.
-            if out_var in vars_workflow_output_internal:  # and is_root
-                continue
-            # Use triple underscore for namespacing so we can split later
-            out_name = f'{step_name_or_key}___{out_key}'
-
-        for out_key, out_dict in outputs_workflow[i].items():
-            out_dict['type'] = canonicalize_type(out_dict['type'])
-            if 'scatter' in steps[i]:
-                # Promote scattered output types to arrays
-                out_dict['type'] = {'type': 'array', 'items': out_dict['type']}
-
-            # Use triple underscore for namespacing so we can split later
-            out_name = f'{step_name_or_key}___{out_key}'
-            out_var = f'{step_name_or_key}/{out_key}'
-            workflow_outputs.update(
-                {out_name: {**out_dict, 'outputSource': out_var}})
-    # NOTE: The fix_conflicts 'feature' of cwltool prevents files from being
-    # overwritten by appending _2, _3 etc.
-    # The problem is that these renamed files now no longer match the glob
-    # patterns in the outputBinding tags, thus they are not copied to the
-    # final output folder in relocateOutputs() and/or stage_files().
-    # Note that this error is not detected using --validate.
-    # One workaround is to simply output all files.
-    # TODO: glob "." is still returning null; need to use InitialWorkDirRequirement??
-    # This crashes toil-cwl-runner, but not cwltool.
-    return workflow_outputs
 
 
 def canonicalize_type(type_obj: Any) -> Any:

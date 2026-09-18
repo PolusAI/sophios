@@ -175,7 +175,7 @@ def test_annotation_is_declared_and_the_cwl_stays_valid() -> None:
     import cwltool.main  # pylint: disable=import-outside-toplevel  # expensive; slow lane only
 
     info = compile_info(TOUCH, 'lang_version')
-    inlined = sophios.post_compile.cwl_inline_runtag(info.rose).data.compiled_cwl
+    inlined = sophios.post_compile.inline_artifact_runs(info.artifact).cwl
 
     assert inlined[ANNOTATION_KEY] == LANG_VERSION
     assert inlined['$namespaces'][ANNOTATION_NAMESPACE] == ANNOTATION_NAMESPACE_URI
@@ -231,14 +231,17 @@ def test_a_file_tag_survives_schema_validation() -> None:
     import sophios.ast
     import sophios.cli
 
-    from .test_setup import tools_cwl, validator, yml_paths
+    from .test_setup import load_test_registry
+
+    registry = load_test_registry()
 
     pinned: Yaml = {'wic': {'lang_version': LANG_VERSION}, **TOUCH}
     tree = YamlTree(StepId('pinned.wic', 'global'), pinned)
     args = sophios.cli.get_args('pinned.wic')
 
     # Must not raise: the validator is the gate the compiler sits behind.
-    sophios.ast.read_ast_from_disk(args.homedir, tree, yml_paths, tools_cwl, validator, False)
+    sophios.ast.read_ast_from_disk(args.homedir, tree, registry.workflows,
+                                   registry.tools, registry.validator, False)
 
 
 @pytest.mark.fast

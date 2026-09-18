@@ -225,8 +225,10 @@ def _document(root: yaml.nodes.MappingNode, file: str, diags: Diagnostics) -> Do
     steps_as_mapping = False
     sidecar: WicSidecar | None = None
     passthrough: list[tuple[str, OpaqueCwl]] = []
+    field_order: list[str] = []
 
     for key, value_node in _unique_entries(root, file, diags, 'top-level key'):
+        field_order.append(key)
         match key:
             case 'steps':
                 steps, steps_as_mapping = _steps(value_node, file, diags)
@@ -241,6 +243,7 @@ def _document(root: yaml.nodes.MappingNode, file: str, diags: Diagnostics) -> Do
         passthrough=tuple(passthrough),
         span=SourceSpan.of(file, root),
         steps_as_mapping=steps_as_mapping,
+        field_order=tuple(field_order),
     )
 
 
@@ -398,6 +401,7 @@ def _step_body(
     outputs: tuple[OutputBinding, ...] = ()
     interpreted: list[tuple[str, OpaqueCwl]] = []
     passthrough: list[tuple[str, OpaqueCwl]] = []
+    field_order: list[str] = ['id']
 
     seen: set[str] = set()
     for key_node, value_node in entries:
@@ -417,6 +421,7 @@ def _step_body(
                         f'step {step_id!r} already has its identity; a second id: is contradictory',
                         SourceSpan.of(file, key_node))
             continue
+        field_order.append(key)
         if key == 'in':
             inputs = _inputs(value_node, file, diags)
         elif key == 'out':
@@ -433,6 +438,7 @@ def _step_body(
         interpreted=tuple(interpreted),
         passthrough=tuple(passthrough),
         span=span,
+        field_order=tuple(field_order),
     )
 
 

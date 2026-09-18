@@ -156,10 +156,11 @@ COMPILED.update({
 
 def _provoke_literal_type_mismatch() -> None:
     # !ii places no constraint relating a literal to the declared CWL type of
-    # the input it binds, so an int-typed input can carry a literal that does
-    # not convert. generate_yaml_inputs is the site that discovers this.
-    from sophios.compiler import generate_yaml_inputs  # pylint: disable=import-outside-toplevel
-    generate_yaml_inputs({'n': {'type': 'int', 'value': '_'}})
+    # the input it binds, so the typed job boundary must reject a literal that
+    # does not convert.
+    from sophios.ir.complete import coerce_job_value  # pylint: disable=import-outside-toplevel
+    from sophios.ir.declarations import port_declaration  # pylint: disable=import-outside-toplevel
+    coerce_job_value('n', port_declaration({'type': 'int'}), '_')
 
 
 COMPILED.update({
@@ -202,13 +203,25 @@ def _provoke_empty_name() -> None:
     Raises:
         SophiosError: Always, carrying `wic027`.
     """
+    from sophios.ir.declarations import port_declaration  # pylint: disable=import-outside-toplevel
     from sophios.ir.lower import lower  # pylint: disable=import-outside-toplevel
+    from sophios.ir.resolve import (  # pylint: disable=import-outside-toplevel
+        RegistryKey, ResolvedDocument, ResolvedPort, ResolvedProcess, ResolvedStep,
+    )
     from sophios.lang.diagnostics import SophiosError  # pylint: disable=import-outside-toplevel
     from sophios.lang.parser import parse  # pylint: disable=import-outside-toplevel
 
     document = parse('steps:\n- id: s\n  in:\n    "": !* e\n', 'provoke.wic').document
     assert document is not None
-    diagnostics = lower(document).diagnostics
+    step = document.steps[0]
+    process = ResolvedProcess(
+        RegistryKey('test', 's'), 's.cwl',
+        (ResolvedPort('', port_declaration(None)),), (),
+        {'class': 'CommandLineTool'},
+    )
+    resolved = ResolvedDocument(
+        'provoke', document, (ResolvedStep(step, process),), '0.0.1')
+    diagnostics = lower(resolved).diagnostics
     raise SophiosError(tuple(diagnostics))
 
 

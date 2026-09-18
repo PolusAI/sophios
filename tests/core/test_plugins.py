@@ -15,9 +15,9 @@ from sophios.wic_types import Yaml
 def test_partial_failure_success_codes_are_canonically_ordered() -> None:
     """`successCodes` is emitted CWL, so no set's iteration order may reach it.
 
-    Under `--partial_failure_enable`, `main` rewrites the compiled tree with
-    `cwl_update_outputs_optional_rosetree` and writes the result to disk, which
-    makes this list output rather than an internal collection. The codes are
+    Under `--partial_failure_enable`, `main` transforms the emitted artifact
+    tree and writes the result to disk, which makes this list output rather
+    than an internal collection. The codes are
     chosen so a set's iteration order is not accidentally the sorted one.
     """
     tool: Yaml = {'class': 'CommandLineTool', 'baseCommand': 'true', 'inputs': {},

@@ -22,14 +22,6 @@ sophios.cwl_subinterpreter
 ------------------------------------
 .. automodule:: sophios.cwl_subinterpreter
 
-sophios.inference
-------------------------------------
-.. automodule:: sophios.inference
-
-sophios.inlineing
-------------------------------------
-.. automodule:: sophios.inlineing
-
 sophios.input_output
 ------------------------------------
 .. automodule:: sophios.input_output
