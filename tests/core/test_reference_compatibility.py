@@ -14,7 +14,8 @@ from hypothesis import strategies as st
 from sophios.api.python.workflow import _python_api_types_match
 from sophios.inlineing import get_inlineable_subworkflows
 from sophios.lang.compatibility import TypeRelation, reference_relation
-from sophios.lang.diagnostics import SophiosErrorCode, SophiosError
+from sophios.lang.diagnostics import SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.versions import KNOWN_VERSIONS
 from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_yaml import wic_loader

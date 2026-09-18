@@ -5,7 +5,8 @@ import sys
 from types import ModuleType
 from typing import Any
 from .lang.cwl import CWL_VERSION
-from .lang.diagnostics import SophiosErrorCode, SophiosError
+from .lang.diagnostics import SophiosError
+from .lang.error_codes import SophiosErrorCode
 
 DRIVER_SCRIPT = '/python_cwl_driver.py'
 TYPES_SCRIPT = '/workflow_types.py'

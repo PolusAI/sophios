@@ -61,10 +61,10 @@ _silence_autodiscovery_logging()
 
 
 StrPath = str | Path
-#: Re-exported so a caller can `except SophiosError` without importing
-#: `sophios.lang.diagnostics`. Everything this module raises is one of these,
-#: and `.diagnostics` carries the codes -- `wic0NN` when the document is wrong,
-#: `api0NN` when the call is.
+#: Re-exported so callers can catch structured compile and validation failures
+#: without importing `sophios.lang.diagnostics`. Their `.diagnostics` carry
+#: `wic0NN` when a document is wrong and `api0NN` when a reported API operation
+#: fails. Ordinary Python call-contract errors remain built-in exceptions.
 __all__ = [
     "ApiError",
     "CompiledWorkflow",

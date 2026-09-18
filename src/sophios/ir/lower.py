@@ -11,7 +11,8 @@ type is what the document declared and inference has not run.
 """
 from dataclasses import dataclass
 
-from ..lang.diagnostics import SophiosErrorCode, Diagnostics
+from ..lang.diagnostics import Diagnostics
+from ..lang.error_codes import SophiosErrorCode
 from ..lang.nodes import Document, EdgeRef, InputValue, Step
 from .types import (
     Binding,

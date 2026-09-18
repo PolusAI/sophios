@@ -9,7 +9,8 @@ import pytest
 
 import sophios
 import sophios.ast
-from sophios.lang.diagnostics import SophiosErrorCode, SophiosError
+from sophios.lang.diagnostics import SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
 import sophios.cli
 import sophios.plugins
 import sophios.utils

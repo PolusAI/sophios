@@ -5,7 +5,8 @@ import shutil
 import subprocess as sub
 from . import plugins
 from .wic_types import RoseTree, NodeData, Yaml
-from .lang.diagnostics import SophiosErrorCode, SophiosError
+from .lang.diagnostics import SophiosError
+from .lang.error_codes import SophiosErrorCode
 
 
 def verify_container_engine_config(container_engine: str, ignore_container_install: bool) -> None:

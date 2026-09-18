@@ -12,7 +12,8 @@ when nobody will want to discover the resolver was a stub.
 """
 from typing import Final
 
-from .diagnostics import SophiosErrorCode, SophiosError
+from .diagnostics import SophiosError
+from .error_codes import SophiosErrorCode
 
 #: Every version that has ever existed, oldest first. Append-only.
 KNOWN_VERSIONS: Final[tuple[str, ...]] = ('0.0.1',)

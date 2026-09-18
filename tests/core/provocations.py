@@ -15,7 +15,7 @@ extends this registry in the same commit, or the meta-test says so.
 from collections.abc import Callable
 from typing import Final
 
-from sophios.lang.diagnostics import SophiosErrorCode
+from sophios.lang.error_codes import SophiosErrorCode
 
 #: Codes provoked through `parse()` alone: source text in, diagnostic out.
 PARSE: Final[dict[SophiosErrorCode, str]] = {
@@ -213,33 +213,47 @@ def _provoke_empty_name() -> None:
 
 
 def _provoke_invalid_input_value() -> None:
-    """A value bound to a step input the input cannot take."""
-    from sophios.api.python.workflow import InvalidInputValueError  # pylint: disable=import-outside-toplevel
+    """Load a config `File` value that names neither a location nor a path."""
+    from pathlib import Path  # pylint: disable=import-outside-toplevel
+    from tempfile import TemporaryDirectory  # pylint: disable=import-outside-toplevel
 
-    raise InvalidInputValueError('a value the input cannot take')
+    from sophios.api.python.workflow import Step  # pylint: disable=import-outside-toplevel
+
+    adapter = Path(__file__).resolve().parents[2] / 'cwl_adapters' / 'append.cwl'
+    with TemporaryDirectory() as directory:
+        config = Path(directory) / 'inputs.yml'
+        config.write_text('file:\n  class: File\n', encoding='utf-8')
+        Step(clt_path=adapter, config_path=config)
 
 
 def _provoke_invalid_step() -> None:
-    """An output bound to a step the workflow does not own."""
-    from sophios.api.python.workflow import (  # pylint: disable=import-outside-toplevel
-        InvalidStepError,
-    )
+    """Compile a workflow whose input is linked to an external step."""
+    from pathlib import Path  # pylint: disable=import-outside-toplevel
 
-    raise InvalidStepError('step is not a child of this workflow')
+    from sophios.api.python.workflow import Step, Workflow  # pylint: disable=import-outside-toplevel
+
+    adapters = Path(__file__).resolve().parents[2] / 'cwl_adapters'
+    external = Step(clt_path=adapters / 'touch.cwl')
+    external.inputs.filename = 'empty.txt'
+    append = Step(clt_path=adapters / 'append.cwl')
+    append.inputs.file = external.outputs.file
+    append.inputs.str = 'Hello'
+    Workflow([append], 'provoke').compile()
 
 
 def _provoke_invalid_link() -> None:
-    """A workflow output whose source is not one of its steps."""
-    from sophios.api.python.workflow import InvalidLinkError  # pylint: disable=import-outside-toplevel
+    """Bind a workflow output to a value that is not a port."""
+    from sophios.api.python.workflow import Workflow  # pylint: disable=import-outside-toplevel
 
-    raise InvalidLinkError('source is not one of the workflow steps')
+    workflow = Workflow([], 'provoke')
+    workflow.outputs.out = 3
 
 
 def _provoke_invalid_tool() -> None:
     """A CWL tool that cannot be loaded."""
-    from sophios.api.python.workflow import InvalidCLTError  # pylint: disable=import-outside-toplevel
+    from sophios.api.python.workflow import Step  # pylint: disable=import-outside-toplevel
 
-    raise InvalidCLTError('invalid cwl file: no_such_tool.cwl')
+    Step(clt_path='no_such_tool.cwl')
 
 
 COMPILED.update({

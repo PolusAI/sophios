@@ -11,7 +11,8 @@ from typing import Final
 
 import pytest
 
-from sophios.lang.diagnostics import SophiosErrorCode, SophiosError
+from sophios.lang.diagnostics import SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
 
 from .hermetic import compile_production, subworkflow_step
 

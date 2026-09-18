@@ -1,9 +1,9 @@
-"""What the Python API raises when a call cannot be carried out.
+"""Structured failures from Python API compilation and validation.
 
-One type escapes this package: `SophiosError`. These four are subclasses of it,
-so a caller writes one `except` and reads `.diagnostics` whatever went wrong --
-a document the language rejects and a tool that will not load arrive the same
-way, which is what the CLI has always done and the API never did.
+These four errors are subclasses of `SophiosError`, so callers handling a
+reported API failure can write one `except` and read `.diagnostics` whether a
+document is rejected or a tool cannot be loaded. Ordinary Python call-contract
+errors such as a wrong argument type remain their usual built-in exceptions.
 
 Each carries an `api0NN` code rather than a `wic0NN` one. The document is not
 what is wrong in any of these; the call is.
@@ -40,7 +40,7 @@ class InvalidStepError(ApiError):
 
 
 class InvalidLinkError(ApiError):
-    """An output bound to a source that is not one of the workflow's steps."""
+    """A binding whose source, ownership, or types do not form a valid link."""
 
     code = SophiosErrorCode.INVALID_LINK
 

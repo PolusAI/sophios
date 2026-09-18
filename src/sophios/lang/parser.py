@@ -16,7 +16,8 @@ from typing import Any, Final, Mapping, TypeAlias, final
 import yaml
 
 from ..utils_yaml import Key, Tag
-from .diagnostics import SophiosErrorCode, Diagnostics
+from .diagnostics import Diagnostics
+from .error_codes import SophiosErrorCode
 from .nodes import (
     Document,
     EdgeDef,

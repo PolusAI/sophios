@@ -19,7 +19,8 @@ from .wic_types import (CompilerInfo, CompilerOptions, EnvData, ExplicitEdgeCall
 from .lang import versions
 from .lang.compatibility import TypeRelation, reference_relation
 from .lang.cwl import CWL_VERSION
-from .lang.diagnostics import SophiosErrorCode, SophiosError
+from .lang.diagnostics import SophiosError
+from .lang.error_codes import SophiosErrorCode
 
 logger = logging.getLogger('sophios')
 

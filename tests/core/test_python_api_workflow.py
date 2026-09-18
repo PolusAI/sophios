@@ -767,6 +767,22 @@ def test_config_yaml_normalizes_cwl_file_and_directory_objects(tmp_path: Path) -
 
 
 @pytest.mark.fast
+def test_config_file_without_location_is_a_structured_api_failure(tmp_path: Path) -> None:
+    """A malformed CWL file value stays inside the one structured error family."""
+    config = tmp_path / "append.yml"
+    config.write_text("file:\n  class: File\n", encoding="utf-8")
+
+    with pytest.raises(SophiosError) as caught:
+        Step(clt_path=_adapter("append"), config_path=config)
+
+    assert isinstance(caught.value, InvalidInputValueError)
+    assert [diagnostic.code for diagnostic in caught.value.diagnostics] == [
+        SophiosErrorCode.INVALID_INPUT_VALUE
+    ]
+    assert caught.value.diagnostics[0].message == "File value has no location or path"
+
+
+@pytest.mark.fast
 def test_scatter_rejects_unbound_foreign_or_scalar_inputs() -> None:
     """Scatter needs a bound, array-valued port belonging to the step itself.
 

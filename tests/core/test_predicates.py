@@ -24,7 +24,8 @@ import pytest
 from hypothesis import given
 
 import sophios.compiler
-from sophios.lang.diagnostics import SophiosErrorCode, SophiosError
+from sophios.lang.diagnostics import SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
 from sophios.utils import parse_step_name_str, step_name_str
 from sophios.wic_types import CompilerInfo, RoseTree, Yaml
 

@@ -161,13 +161,17 @@ def get_value_from_cfg(value: Any) -> Any:
         case tuple() as items:
             return [get_value_from_cfg(item) for item in items]
         case dict() as data if data.get("class") in {"Directory", "File"}:
+            path_text = data.get("location", data.get("path"))
+            if path_text is None:
+                raise InvalidInputValueError(
+                    f"{data['class']} value has no location or path"
+                )
             try:
-                path_text = data.get("location", data.get("path"))
-                if path_text is None:
-                    raise KeyError("location")
                 path_value = Path(path_text)
-            except Exception as exc:
-                raise InvalidInputValueError() from exc
+            except (TypeError, ValueError) as exc:
+                raise InvalidInputValueError(
+                    f"{data['class']} path must be a string or path-like value: {path_text!r}"
+                ) from exc
             return _validate_fs_object(path_value, class_name=str(data["class"]))
         case dict() as data:
             return {key: get_value_from_cfg(item) for key, item in data.items()}

@@ -19,7 +19,8 @@ from hypothesis import strategies as st
 
 import sophios.post_compile
 from sophios.lang import KNOWN_VERSIONS, LANG_VERSION, resolve_lang_version
-from sophios.lang.diagnostics import SophiosErrorCode, SophiosError
+from sophios.lang.diagnostics import SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.versions import ANNOTATION_KEY, ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
 from sophios.wic_types import StepId, Yaml, YamlTree
 
