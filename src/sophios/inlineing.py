@@ -58,6 +58,16 @@ def _step_metadata(subtree: Yaml, index: int, step_key: str) -> Yaml | None:
     return metadata if isinstance(metadata, dict) else None
 
 
+def _bind_metadata_inputs(wic: Any, bindings: Yaml) -> None:
+    """Rewrite immediate-step overrides that still refer to this scope."""
+    steps = wic.get('steps') if isinstance(wic, dict) else None
+    if not isinstance(steps, dict):
+        return
+    for metadata in steps.values():
+        if isinstance(metadata, dict):
+            _replace_input_references(metadata.get('in'), bindings)
+
+
 def _bind_inputs(subtree: Yaml, bindings: Yaml) -> None:
     """Discharge a complete interface without crossing a nested formal scope."""
     for index, step in enumerate(subtree['steps']):
@@ -69,25 +79,6 @@ def _bind_inputs(subtree: Yaml, bindings: Yaml) -> None:
         metadata = _step_metadata(subtree, index, step_key)
         if metadata is not None:
             _replace_input_references(metadata.get('in'), bindings)
-        if 'subtree' not in step or not isinstance(parentargs, dict):
-            continue
-
-        # The compiler supplies an omitted nested-workflow argument as the
-        # same-named bare reference. Materialize that implicit capture before
-        # removing this scope, or a renamed outer actual cannot reach it.
-        nested_inputs = step['subtree'].get('inputs', {})
-        wic = subtree.get('wic', {})
-        nested_call = _call_arguments(step, wic if isinstance(wic, dict) else {}, index, step_key)
-        effective_inputs = nested_call.get('in', {}) if isinstance(nested_call, dict) else {}
-        if not isinstance(nested_inputs, dict) or not isinstance(effective_inputs, dict):
-            continue
-        implicit = {name: copy.deepcopy(bindings[name])
-                    for name in nested_inputs
-                    if name in bindings and name not in effective_inputs}
-        if implicit:
-            parent_inputs = parentargs.setdefault('in', {})
-            if isinstance(parent_inputs, dict):
-                parent_inputs.update(implicit)
 
 
 def _output_target(subtree: Yaml, workflow_stem: str, output_name: str) -> tuple[int, str] | None:
@@ -356,6 +347,7 @@ def inline_subworkflow(yaml_tree_tuple: YamlTree, namespaces: Namespaces) -> tup
         parent_wic_tag = wic.get('wic', {}).get("steps", {}).get(
             f'({i + 1}, {step_key})', {}).get('wic', {})
         sub_wic_tag = sub_yml_tree.get('wic', {})
+        _bind_metadata_inputs(parent_wic_tag, plan.bindings)
 
         # TODO: need cleaner code to make arbitrary-depth dictionary.
         if 'wic' not in wic:

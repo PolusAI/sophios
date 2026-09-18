@@ -3,11 +3,12 @@ import copy
 
 import pytest
 
+import sophios.ast
 from sophios.inlineing import get_inlineable_subworkflows, inline_subworkflow
 from sophios.wic_types import StepId, Yaml, YamlTree
 
 from .hermetic import compile_hermetic, subworkflow_step
-from .synthetic_tools import SYNTHETIC_NS
+from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 
 
 def _tree(child: Yaml, call: Yaml, *, inputs: Yaml | None = None,
@@ -107,8 +108,37 @@ def test_child_step_metadata_cannot_reintroduce_a_deleted_formal() -> None:
 
 
 @pytest.mark.fast
-def test_nested_child_keeps_its_formal_scope() -> None:
-    """Only the nested call is rebound; its own body is a new scope."""
+def test_omitted_nested_argument_stays_omitted() -> None:
+    """Omission keeps inference authoritative across the removed boundary."""
+    nested: Yaml = {
+        'inputs': {'name': {'type': 'string'}},
+        'steps': [{'id': 'mk_file', 'in': {'name': 'name'}}],
+    }
+    child: Yaml = {
+        'inputs': {'name': {'type': 'string'}},
+        'steps': [
+            {'id': 'poly', 'in': {'value': 'name'}},
+            subworkflow_step('nested.wic', nested),
+        ],
+    }
+    tree = _tree(child, {'in': {'name': 'actual'}},
+                 inputs={'actual': {'type': 'string'}})
+    before = compile_hermetic(tree.yml).rose.sub_trees[0].data.compiled_cwl
+    assert before['steps'][1]['in']['name'] == 'child__step__1__poly/value'
+
+    inlined = _inline_first(tree)
+    nested_call = inlined.yml['steps'][1]
+
+    assert 'in' not in nested_call['parentargs']
+    assert nested_call['subtree']['inputs'] == {'name': {'type': 'string'}}
+    assert nested_call['subtree']['steps'][0]['in']['name'] == 'name'
+    after = compile_hermetic(inlined.yml).rose.data.compiled_cwl
+    assert after['steps'][1]['in']['name'] == 'oracle__step__1__poly/value'
+
+
+@pytest.mark.fast
+def test_parent_override_cannot_reintroduce_a_deleted_formal() -> None:
+    """An override merged before inlining is rewritten with the child scope."""
     nested: Yaml = {
         'inputs': {'formal': {'type': 'string'}},
         'steps': [{'id': 'mk_file', 'in': {'name': 'formal'}}],
@@ -117,15 +147,23 @@ def test_nested_child_keeps_its_formal_scope() -> None:
         'inputs': {'formal': {'type': 'string'}},
         'steps': [subworkflow_step('nested.wic', nested)],
     }
-    tree = _tree(child, {'in': {'formal': 'actual'}},
-                 inputs={'actual': {'type': 'string'}})
+    child['steps'][0]['parentargs']['in'] = {'formal': 'formal'}
+    parent_override: Yaml = {
+        'steps': {
+            '(1, child.wic)': {
+                'wic': {'steps': {'(1, nested.wic)': {'in': {'formal': 'formal'}}}},
+            },
+        },
+    }
+    raw = _tree(child, {'in': {'formal': 'actual'}},
+                inputs={'actual': {'type': 'string'}}, wic=parent_override)
+    merged = sophios.ast.merge_yml_trees(raw, {}, SYNTHETIC_TOOLS)
+    compile_hermetic(merged.yml)
 
-    inlined = _inline_first(tree)
-    nested_call = inlined.yml['steps'][0]
+    inlined = _inline_first(merged)
 
-    assert nested_call['parentargs']['in']['formal'] == 'actual'
-    assert nested_call['subtree']['inputs'] == {'formal': {'type': 'string'}}
-    assert nested_call['subtree']['steps'][0]['in']['name'] == 'formal'
+    nested_metadata = inlined.yml['wic']['steps']['(1, nested.wic)']
+    assert nested_metadata['in']['formal'] == 'actual'
     compile_hermetic(inlined.yml)
 
 
