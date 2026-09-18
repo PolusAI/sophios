@@ -30,7 +30,8 @@ PARTITION: Final = settings(max_examples=50, suppress_health_check=[HealthCheck.
 def compile_hermetic(yml: Yaml, name: str = 'oracle', *,
                      tools: Tools | None = None,
                      insert_steps_automatically: bool = False,
-                     is_root: bool = True) -> CompilerInfo:
+                     is_root: bool = True,
+                     legacy_emission: bool = False) -> CompilerInfo:  # pylint: disable=too-many-arguments
     """Compile one in-memory workflow against the synthetic registry.
 
     `insert_steps_automatically` is named rather than taken as `**options` so a
@@ -45,7 +46,8 @@ def compile_hermetic(yml: Yaml, name: str = 'oracle', *,
         compiler_options, graph_settings, tag_paths,
         [], [graph], {}, {}, {}, {},
         SYNTHETIC_TOOLS if tools is None else tools,
-        is_root, relative_run_path=True, testing=True)
+        is_root, relative_run_path=True, testing=True,
+        legacy_emission=legacy_emission)
 
 
 def compile_production(yml: Yaml, name: str = 'binding', *,

@@ -21,6 +21,8 @@ from .lang.compatibility import TypeRelation, reference_relation
 from .lang.cwl import CWL_VERSION
 from .lang.diagnostics import SophiosError
 from .lang.error_codes import SophiosErrorCode
+from .ir.emit import emit, emit_job_inputs
+from .legacy_graph import LegacyEmissionState, graph_from_legacy_state, legacy_emit
 
 logger = logging.getLogger('sophios')
 
@@ -41,7 +43,9 @@ def compile_workflow(yaml_tree_ast: YamlTree,
                      tools: Tools,
                      is_root: bool,
                      relative_run_path: bool,
-                     testing: bool) -> CompilerInfo:
+                     testing: bool,
+                     *,
+                     legacy_emission: bool = False) -> CompilerInfo:
     """fixed-point wrapper around compile_workflow_once
     See https://en.wikipedia.org/wiki/Fixed_point_(mathematics)
 
@@ -79,7 +83,8 @@ def compile_workflow(yaml_tree_ast: YamlTree,
         compiler_info = compile_workflow_once(yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
                                               namespaces, subgraphs, explicit_edge_defs, explicit_edge_calls,
                                               input_mapping, output_mapping,
-                                              tools, is_root, relative_run_path, testing)
+                                              tools, is_root, relative_run_path, testing,
+                                              legacy_emission=legacy_emission)
         node_data: NodeData = compiler_info.rose.data
         ast_modified = not yaml_tree.yml == node_data.yml
         if ast_modified:
@@ -375,7 +380,8 @@ def _finalize_compilation(*,
                           rose_tree_list: list[RoseTree],
                           input_mapping_copy: dict[str, list[str]],
                           explicit_edge_defs_copy: ExplicitEdgeDefs,
-                          explicit_edge_calls_copy: ExplicitEdgeCalls) -> CompilerInfo:
+                          explicit_edge_calls_copy: ExplicitEdgeCalls,
+                          legacy_emission: bool) -> CompilerInfo:
     """Finishes compile_workflow_once: graphviz subgraphs, workflow-level in/outs, unique step names,
     final RoseTree/EnvData/CompilerInfo. Mutates `graph`, `output_mapping_copy`, and maybe `yaml_tree` in place.
     """
@@ -438,17 +444,40 @@ def _finalize_compilation(*,
         del step_i_copy['id']
         step_i_copy = {'id': step_name_or_key, **step_i_copy}
         steps_list.append(step_i_copy)
-    yaml_tree.update({'steps': steps_list})
-
     yaml_inputs = generate_yaml_inputs(inputs_file_workflow)
+
+    # This is the sole live terminal path.  The bridge receives the semantic
+    # components separately, before a completed CWL document exists; Emit then
+    # projects the immutable graph.  The old dictionary assembly remains
+    # selectable only for the typed-IR differential oracle.
+    child_graphs = tuple(
+        child.data.emission_graph for child in rose_tree_list
+        if child.data.emission_graph is not None
+    )
+    top_level_items = tuple((key, value) for key, value in yaml_tree.items() if key != 'steps')
+    emission_graph = graph_from_legacy_state(LegacyEmissionState(
+        name=yaml_stem,
+        namespace=tuple(namespaces),
+        lang_version=lang_version,
+        top_level_items=top_level_items,
+        field_order=tuple(yaml_tree),
+        steps=tuple(steps_list),
+        tools=tuple(tools_lst),
+        job_inputs=yaml_inputs,
+        children=child_graphs,
+    ))
+    compiled_cwl = (legacy_emit(top_level_items=top_level_items,
+                                field_order=tuple(yaml_tree), steps=steps_list)
+                    if legacy_emission else emit(emission_graph))
+    yaml_inputs = emit_job_inputs(emission_graph)
 
     if not testing:
         print('finishing compilation of', ('  ' * len(namespaces)) + yaml_path)
     # Note: We do not necessarily need to return inputs_workflow.
     # 'Internal' inputs are encoded in yaml_tree. See Comment above.
-    node_data = NodeData(namespaces, yaml_stem, yaml_tree_orig, yaml_tree, tool_i, yaml_inputs,
+    node_data = NodeData(namespaces, yaml_stem, yaml_tree_orig, compiled_cwl, tool_i, yaml_inputs,
                          explicit_edge_defs_copy2, explicit_edge_calls_copy2,
-                         graph, inputs_workflow, step_name_1)
+                         graph, inputs_workflow, step_name_1, emission_graph)
     rose_tree = RoseTree(node_data, rose_tree_list)
     env_data = EnvData(input_mapping_copy, output_mapping_copy, inputs_file_workflow, vars_workflow_output_internal,
                        explicit_edge_defs_copy, explicit_edge_calls_copy)
@@ -504,7 +533,9 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                           tools: Tools,
                           is_root: bool,
                           relative_run_path: bool,
-                          testing: bool) -> CompilerInfo:
+                          testing: bool,
+                          *,
+                          legacy_emission: bool = False) -> CompilerInfo:
     """STOP: Have you read the Developer's Guide?? docs/dev/devguide.md\n
     Recursively compiles yml workflow definition ASTs to CWL file contents
 
@@ -599,7 +630,8 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                                                  [subgraph],
                                                  setup.explicit_edge_defs_copy, setup.explicit_edge_calls_copy,
                                                  setup.input_mapping_copy, setup.output_mapping_copy,
-                                                 tools, False, relative_run_path, testing)
+                                                 tools, False, relative_run_path, testing,
+                                                 legacy_emission=legacy_emission)
 
             sub_rose_tree = sub_compiler_info.rose
             setup.rose_tree_list.append(sub_rose_tree)
@@ -1221,7 +1253,8 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
         explicit_edge_defs_copy2=setup.explicit_edge_defs_copy2,
         explicit_edge_calls_copy2=setup.explicit_edge_calls_copy2, rose_tree_list=setup.rose_tree_list,
         input_mapping_copy=setup.input_mapping_copy, explicit_edge_defs_copy=setup.explicit_edge_defs_copy,
-        explicit_edge_calls_copy=setup.explicit_edge_calls_copy)
+        explicit_edge_calls_copy=setup.explicit_edge_calls_copy,
+        legacy_emission=legacy_emission)
 
 
 def generate_yaml_inputs(inputs_file_workflow: WorkflowInputsFile) -> WorkflowInputsFile:

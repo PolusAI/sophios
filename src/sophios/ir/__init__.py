@@ -10,13 +10,19 @@ from .types import (
     Direction,
     Edge,
     Namespace,
+    JobBinding,
     Port,
+    PortDeclaration,
     PortId,
     PortType,
+    ProcessRun,
     StepId,
+    StepEmission,
     StepNode,
+    WorkflowPort,
     WorkflowGraph,
 )
+from .emit import emit, emit_job_inputs, emit_visualization
 
 __all__ = [
     'Binding',
@@ -24,10 +30,18 @@ __all__ = [
     'Direction',
     'Edge',
     'Namespace',
+    'JobBinding',
     'Port',
+    'PortDeclaration',
     'PortId',
     'PortType',
+    'ProcessRun',
     'StepId',
+    'StepEmission',
     'StepNode',
+    'WorkflowPort',
     'WorkflowGraph',
+    'emit',
+    'emit_job_inputs',
+    'emit_visualization',
 ]

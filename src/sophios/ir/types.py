@@ -10,7 +10,7 @@ having only if it cannot be invalidated afterwards. An `OpaqueCwl` payload may
 still be a `list` or a `dict` -- nothing reads one, which is the point of the
 type, so nothing can be invalidated through it.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final, TypeAlias
 
@@ -129,11 +129,109 @@ class PortType:
 
 
 @dataclass(frozen=True, slots=True)
+class PortDeclaration:  # pylint: disable=too-many-instance-attributes
+    """The complete declaration of one process or workflow port.
+
+    ``PortType`` is the deliberately small algebra later phases may reason
+    about.  The other fields are emission facts: they preserve declarations
+    that affect CWL without inviting Link or Infer to interpret arbitrary CWL.
+    ``has_default`` distinguishes an authored ``default: null`` from no
+    default at all.
+    """
+
+    type: PortType
+    format: OpaqueCwl = None
+    has_format: bool = False
+    default: OpaqueCwl = None
+    has_default: bool = False
+    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
+    field_order: tuple[str, ...] = ('type',)
+    shorthand: bool = False
+
+    def __post_init__(self) -> None:
+        if len(self.field_order) != len(set(self.field_order)):
+            raise ValueError('a port declaration field order cannot repeat a field')
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowPort:
+    """A port on the workflow boundary, including its CWL declaration."""
+
+    name: str
+    declaration: PortDeclaration
+    output_source: OpaqueCwl = None
+    has_output_source: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError('a workflow port must be named')
+
+
+@dataclass(frozen=True, slots=True)
+class JobBinding:
+    """One concrete value in the job input document projected from a graph."""
+
+    name: str
+    value: OpaqueCwl
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError('a job binding must be named')
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessRun:
+    """What a step executes.
+
+    ``target`` is transported exactly as CWL: normally a relative path, but an
+    inline process object is legal too.  ``process_id`` is the resolved logical
+    identity; it is separate because a path is an embedding choice, not a tool
+    identity.  A child graph records a resolved subworkflow without hiding its
+    emitted CWL in an opaque value.
+    """
+
+    target: OpaqueCwl
+    process_id: str
+    child: 'WorkflowGraph | None' = None
+
+    def __post_init__(self) -> None:
+        if not self.process_id:
+            raise ValueError('a resolved process must have an identity')
+
+
+@dataclass(frozen=True, slots=True)
+class StepEmission:  # pylint: disable=too-many-instance-attributes
+    """The CWL surface of a step after semantic phases have finished.
+
+    Known fields are named.  ``passthrough`` is only the open CWL residue, and
+    ``field_order`` records canonical byte order without storing a completed
+    step dictionary.  Emit is the only phase allowed to traverse the payloads.
+    """
+
+    id: str
+    inputs: tuple[tuple[str, OpaqueCwl], ...]
+    run: ProcessRun
+    outputs: tuple[OpaqueCwl, ...]
+    scatter: OpaqueCwl = None
+    scatter_method: OpaqueCwl = None
+    when: OpaqueCwl = None
+    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
+    field_order: tuple[str, ...] = ('id', 'in', 'run', 'out')
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            raise ValueError('an emitted step must have an id')
+        if len(self.field_order) != len(set(self.field_order)):
+            raise ValueError('an emitted step field order cannot repeat a field')
+
+
+@dataclass(frozen=True, slots=True)
 class Port:
     """One port of one step: its identity, its type, and where it was written."""
 
     id: PortId
     type: PortType
+    declaration: PortDeclaration | None = None
     span: SourceSpan | None = None
 
 
@@ -210,7 +308,7 @@ class Binding:
 
 
 @dataclass(frozen=True, slots=True)
-class StepNode:
+class StepNode:  # pylint: disable=too-many-instance-attributes
     """A step occurrence, with the ports it exposes and what its inputs bind to.
 
     `interpreted` holds the CWL keys Sophios acts upon and `passthrough` the
@@ -224,6 +322,7 @@ class StepNode:
     interpreted: tuple[tuple[str, OpaqueCwl], ...] = ()
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
     span: SourceSpan | None = None
+    emission: StepEmission | None = None
 
     def __post_init__(self) -> None:
         """Reject ports or bindings that belong to another step.
@@ -252,7 +351,7 @@ InputMapping: TypeAlias = tuple[tuple[str, tuple[PortId, ...]], ...]
 
 
 @dataclass(frozen=True, slots=True)
-class WorkflowGraph:
+class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     """A whole workflow: its steps, what their inputs bind to, and what it owes.
 
     The four mappings are fields, not arguments. Threaded through a call stack
@@ -267,6 +366,18 @@ class WorkflowGraph:
     output_mapping: PortMapping = ()
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
     span: SourceSpan | None = None
+    name: str = ''
+    lang_version: str = ''
+    cwl_version: str = ''
+    workflow_inputs: tuple[WorkflowPort, ...] = ()
+    workflow_outputs: tuple[WorkflowPort, ...] = ()
+    job_bindings: tuple[JobBinding, ...] = ()
+    requirements: tuple[tuple[str, OpaqueCwl], ...] = ()
+    namespaces: tuple[tuple[str, OpaqueCwl], ...] = ()
+    schemas: tuple[OpaqueCwl, ...] = ()
+    children: tuple['WorkflowGraph', ...] = ()
+    field_order: tuple[str, ...] = ('steps', 'cwlVersion', 'class', '$namespaces', '$schemas',
+                                    'inputs', 'sophios:lang_version', 'outputs')
 
     def __post_init__(self) -> None:
         """Reject a graph naming a port no step declares, anywhere.
@@ -285,6 +396,8 @@ class WorkflowGraph:
                 raise ValueError(
                     f'{step.id} sits in {step.id.namespace.parts}, not this graph\'s '
                     f'{self.namespace.parts}')
+        if len(self.field_order) != len(set(self.field_order)):
+            raise ValueError('a workflow field order cannot repeat a field')
 
         known = {port.id for step in self.steps for port in step.inputs + step.outputs}
         for where, port_id in self._references():
