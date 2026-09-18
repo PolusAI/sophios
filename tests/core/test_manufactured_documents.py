@@ -41,6 +41,7 @@ DOCUMENT: Final = 'DOCUMENT'
 SCHEMA: Final = 'SCHEMA'          # JSON Schema, a description of documents
 RENDERER: Final = 'RENDERER'      # sophios.lang's own writer, pinned separately
 TOOL: Final = 'TOOL'              # a CWL tool, which has `steps` only incidentally
+CWL: Final = 'CWL'                # compiled CWL workflow, not Sophios source
 CONTRIB: Final = 'CONTRIB'        # outside the core zone
 
 #: Every place in `src/sophios` that builds or rewrites a document-shaped object,
@@ -54,7 +55,6 @@ MANUFACTURING_SITES: Final[dict[str, str]] = {
     'sophios/ast.py::merge_yml_trees': DOCUMENT,
     'sophios/ast.py::python_script_generate_cwl': DOCUMENT,
     'sophios/ast.py::read_ast_from_disk': DOCUMENT,
-    'sophios/compiler.py::_finalize_compilation': DOCUMENT,
     'sophios/compiler.py::_prepare_compilation_state': DOCUMENT,
     'sophios/compiler.py::compile_workflow_once': DOCUMENT,
     'sophios/compiler.py::insert_step_into_workflow': DOCUMENT,
@@ -66,6 +66,8 @@ MANUFACTURING_SITES: Final[dict[str, str]] = {
     'sophios/utils.py::extract_implementation': DOCUMENT,
     'sophios/utils.py::flatten_forest': DOCUMENT,
     # Not documents.
+    'sophios/ir/emit.py::emit': CWL,
+    'sophios/legacy_graph.py::legacy_emit': CWL,
     'sophios/lang/render.py::_Writer.document': RENDERER,
     'sophios/lang/render.py::_Writer.sidecar': RENDERER,
     'sophios/lang/schema.py::_defs': SCHEMA,

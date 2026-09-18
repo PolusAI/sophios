@@ -318,8 +318,12 @@ def test_the_graph_owns_no_mutable_container() -> None:
 
 
 @pytest.mark.fast
-def test_nothing_in_the_ir_reads_an_opaque_payload() -> None:
-    """`OpaqueCwl` is carried, never inspected.
+def test_semantic_phases_do_not_read_an_opaque_payload() -> None:
+    """`OpaqueCwl` is carried, never inspected by semantic phases.
+
+    Emit is the boundary: it may traverse a payload to transport it byte for
+    byte.  The rule protects Lower, Link and Infer from assigning it meaning,
+    not the serializer from copying it.
 
     CANNOT DETECT: a payload bound to a local and read through that, or reached
     by iteration, comparison or pattern matching. A static scan sees the direct
@@ -329,6 +333,8 @@ def test_nothing_in_the_ir_reads_an_opaque_payload() -> None:
     carriers = {'passthrough', 'interpreted', 'declared', 'value'}
     offenders: list[str] = []
     for path in sorted((REPO_ROOT / 'src' / 'sophios' / 'ir').rglob('*.py')):
+        if path.name == 'emit.py':
+            continue
         for node in pyast.walk(parsed(path)):
             if not isinstance(node, (pyast.Subscript, pyast.Attribute)):
                 continue
