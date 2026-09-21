@@ -435,11 +435,15 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
 
     @property
     def edges(self) -> tuple[Edge, ...]:
-        """Every resolved edge, derived from the bindings that produced them."""
+        """The edges this graph owns: its own bindings, and what Link placed here.
+
+        Local, not tree-wide. A child's edge belongs to the child, whose
+        indices name nothing at this level -- so a consumer that wants the
+        whole tree asks for it by name, as it does for `all_steps`.
+        """
         local = tuple(b.resolution for s in self.steps for b in s.bindings
                       if isinstance(b.resolution, Edge))
-        return local + self.composition_edges + tuple(
-            edge for child in self.children for edge in child.edges)
+        return local + self.composition_edges
 
     @property
     def obligations(self) -> tuple[DeferredObligation, ...]:
