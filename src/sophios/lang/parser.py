@@ -687,6 +687,28 @@ def _output_binding(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Out
             return OutputBinding('', None, span)
 
 
+def _sidecar_out_entry(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> OpaqueCwl:
+    """Parse a `wic:` sidecar step's `out:` entry exactly as a step's own `out:`.
+
+    A `(N, name): out:` block inside a `wic:` sidecar *is* a step's `out:`
+    entry, just written at a distance (§4.1.1) — `basic.wic` relies on this to
+    place `!&` on a nested step's output without touching the file that
+    defines that step. Reusing `_outputs` is what keeps the two grammars from
+    drifting: a form legal in one out: position and rejected in the other
+    would be the exact defect `_is_edge_def`'s "both spellings" reasoning
+    exists to prevent, transplanted to position instead of spelling.
+
+    The result is re-expressed as `OpaqueCwl` passthrough, in the same
+    desugared shape `render.py` already emits for a stored edge def, because a
+    bare `EdgeDef` is not a member of that closed union — it is reachable
+    only through `OutputBinding.edge_def` (see `nodes.py`), and this sidecar
+    entry is never consumed as anything but passthrough.
+    """
+    return [binding.name if binding.edge_def is None
+            else {binding.name: {Key.ANCHOR: binding.edge_def.name}}
+            for binding in _outputs(node, file, diags)]
+
+
 #: The key a nested sidecar step wraps its child sidecar in, on the surface.
 #: One constant read by both the parser (unwrap) and the renderer (re-wrap), so
 #: the two cannot disagree about it. Separate tables allow the parser to unwrap
@@ -703,13 +725,35 @@ def _child_sidecar_node(node: yaml.nodes.Node) -> yaml.nodes.Node:
     depth two or more sat in `entries` as opaque content and `(1, inner)` was
     never normalised to a `StepKey` — falsifying the very docstring that says
     nobody downstream should ever parse that string again.
+
+    A hand-authored file only ever nests the wrapper alone (`{wic: {...}}`),
+    but `merge_yml_trees` (`ast.py`) produces a second shape this unwrap must
+    also cover: a distant ancestor's `out:`/`in:` parameter-passing
+    contribution (unwrapped, per §4.1.1/§6.1) merged as a *sibling* of this
+    step's own `wic:` metadata — `{wic: {namespace: ...}, out: [...]}` — once
+    both land on the same `(N, name)` key. Unwrapping only the pure single-key
+    form left `namespace` (and anything else nested under the sibling `wic:`)
+    stranded one level too deep, opaque and unread, which silently fell back
+    to the default namespace instead of the one actually selected.
     """
-    if isinstance(node, yaml.nodes.MappingNode) and len(node.value) == 1:
-        key_node, value_node = node.value[0]
+    if not isinstance(node, yaml.nodes.MappingNode):
+        return node
+    wrapper: yaml.nodes.Node | None = None
+    siblings: list[tuple[yaml.nodes.Node, yaml.nodes.Node]] = []
+    for key_node, value_node in node.value:
         if getattr(key_node, 'value', None) == SIDECAR_WRAPPER_KEY:
-            assert isinstance(value_node, yaml.nodes.Node)  # untyped tuple from PyYAML
-            return value_node
-    return node
+            wrapper = value_node
+        else:
+            siblings.append((key_node, value_node))
+    if wrapper is None:
+        return node
+    assert isinstance(wrapper, yaml.nodes.Node)  # untyped tuple from PyYAML
+    if not siblings:
+        return wrapper
+    if not isinstance(wrapper, yaml.nodes.MappingNode):
+        return node
+    return yaml.nodes.MappingNode(wrapper.tag, [*wrapper.value, *siblings],
+                                  start_mark=node.start_mark, end_mark=node.end_mark)
 
 
 def _out_edge_def(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> EdgeDef | None:
@@ -742,7 +786,10 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
 
     for key, value_node in _unique_entries(node, file, diags, 'wic: entry'):
         if key != 'steps':
-            entries.append((key, _opaque(value_node, file, diags)))
+            if key == 'out':
+                entries.append((key, _sidecar_out_entry(value_node, file, diags)))
+            else:
+                entries.append((key, _opaque(value_node, file, diags)))
             continue
         if not isinstance(value_node, yaml.nodes.MappingNode):
             diags.error(

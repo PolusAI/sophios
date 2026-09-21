@@ -255,6 +255,21 @@ def test_a_name_defined_twice_is_reported() -> None:
 
 
 @pytest.mark.fast
+def test_a_sidecar_out_mentioning_the_name_does_not_mask_a_real_duplicate() -> None:
+    """A `wic:` sidecar `out:` entry (§4.1.1, accepted since `wic019` no
+    longer rejects it there) is inert passthrough, never itself a second
+    definition — `basic.wic` relies on exactly this to place `min.tpr`'s one
+    definition at a distance without it colliding with anything. A real
+    duplicate among the document's own steps must still be reported once,
+    whether or not a sidecar block happens to mention the same name.
+    """
+    result = _lower(
+        'wic:\n  steps:\n    (1, a):\n      out:\n      - f: {wic_anchor: e}\n'
+        'steps:\n- id: a\n  out:\n  - f: !& e\n- id: b\n  out:\n  - f: !& e\n')
+    assert [d.code.value for d in result.diagnostics] == ['wic026']
+
+
+@pytest.mark.fast
 def test_a_step_with_no_id_is_reported_not_raised() -> None:
     """The parser recovers such a document, which is exactly when a caller is
     least able to handle an exception.

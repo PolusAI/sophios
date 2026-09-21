@@ -833,6 +833,45 @@ def test_sidecar_nesting_is_normalised_at_every_depth() -> None:
 
 
 @pytest.mark.fast
+def test_a_sidecar_steps_out_accepts_an_edge_definition() -> None:
+    """`!&` is legal under `wic.steps.(N, name).out`, exactly as on a step's
+    own `out:` (§4.1.1) — a sidecar `(N, name): out:` block *is* a step's
+    `out:` entry, just written at a distance (see `basic.wic`, which places
+    the corpus's only definition of `min.tpr` here rather than in the nested
+    file, precisely to avoid a `wic026 DUPLICATE_EDGE_DEF`).
+    """
+    tagged = parse(
+        'wic:\n  steps:\n    (1, s):\n      out:\n      - output_tpr_path: !& min.tpr\n'
+        'steps:\n- id: s\n', 'basic.wic')
+    assert tagged.ok, [str(d) for d in tagged.diagnostics]
+    sugared = parse(
+        'wic:\n  steps:\n    (1, s):\n      out:\n'
+        '      - output_tpr_path: {wic_anchor: min.tpr}\n'
+        'steps:\n- id: s\n', 'basic.wic')
+    assert sugared.ok, [str(d) for d in sugared.diagnostics]
+
+
+@pytest.mark.fast
+def test_a_sidecar_steps_out_sibling_to_wic_still_unwraps() -> None:
+    """A merged parent contribution can land as a sibling of a step's own
+    `wic:` metadata — `{wic: {namespace: ...}, out: [...]}` — once
+    `ast.py::merge_yml_trees` combines a distant ancestor's unwrapped `out:`
+    with this step's own wrapped sidecar (see `cg.wic`'s `mdrun`, called
+    through `basic.wic`). Both must survive: the metadata is not stranded
+    opaque under the `wic:` key, and `!&` under `out:` is still accepted.
+    """
+    result = parse(
+        'wic:\n  steps:\n    (1, s):\n      wic:\n        namespace: gpu\n'
+        '      out:\n      - value: !& e\n'
+        'steps:\n- id: s\n', 'merged.wic')
+    assert result.ok, [str(d) for d in result.diagnostics]
+    assert result.document is not None and result.document.sidecar is not None
+    child = result.document.sidecar.steps[0][1]
+    assert dict(child.entries)['namespace'] == 'gpu'
+    assert dict(child.entries)['out'] == [{'value': {Key.ANCHOR: 'e'}}]
+
+
+@pytest.mark.fast
 def test_the_loader_accepts_every_owned_tag() -> None:
     """`!cwl` is registered with the loader like its three siblings.
 
