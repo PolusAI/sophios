@@ -22,6 +22,8 @@ from sophios.cli import get_args
 from sophios.utils_yaml import wic_loader
 from sophios.post_compile import (cwl_docker_extract, inline_artifact_runs,
                                   remove_artifact_entrypoints, stage_input_files)
+from sophios.lang.diagnostics import SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
 from sophios.post_compile import verify_container_engine_config
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.wic_types import StepId, Yaml, YamlTree, Json
@@ -272,6 +274,17 @@ def run_workflows(
         assert retval != 0
 
 
+def _is_includer_fragment(error: SophiosError) -> bool:
+    """Whether a document failed only for edges an includer would supply.
+
+    Such a document has no standalone compilation, so comparing one against
+    an embedded one compares nothing. `sophios --generate_schemas` skips the
+    same outcome for the same reason.
+    """
+    return bool(error.diagnostics) and all(
+        item.code is SophiosErrorCode.UNDEFINED_EDGE for item in error.diagnostics)
+
+
 @pytest.mark.fast
 @pytest.mark.serial
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_large)
@@ -310,9 +323,14 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
     graph = get_graph_reps(str(yml_path))
     compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
 
-    result = sophios.compiler.compile_document(
-        yaml_tree, compiler_options, graph_settings, yaml_tag_paths, tools_cwl,
-        relative_run_path=False, testing=True, graph_target=graph)
+    try:
+        result = sophios.compiler.compile_document(
+            yaml_tree, compiler_options, graph_settings, yaml_tag_paths, tools_cwl,
+            relative_run_path=False, testing=True, graph_target=graph)
+    except SophiosError as error:
+        if _is_includer_fragment(error):
+            pytest.skip(f'{yml_path_str} consumes edges from an includer')
+        raise
     workflow_artifacts = [artifact for artifact in _artifacts(result.artifact)
                           if artifact.graph is not None]
 
@@ -335,10 +353,15 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
         # (due to the various instances of `if len(namespaces) < args.graph_inline_depth`)
 
         graph_fakeroot = get_graph_reps(str(sub_name))
-        fake_result = sophios.compiler.compile_document(
-            sub_yaml_forest.yaml_tree, compiler_options, graph_settings,
-            yaml_tag_paths, tools_cwl, relative_run_path=False, testing=True,
-            graph_target=graph_fakeroot)
+        try:
+            fake_result = sophios.compiler.compile_document(
+                sub_yaml_forest.yaml_tree, compiler_options, graph_settings,
+                yaml_tag_paths, tools_cwl, relative_run_path=False, testing=True,
+                graph_target=graph_fakeroot)
+        except SophiosError as error:
+            if _is_includer_fragment(error):
+                continue
+            raise
         sub_cwl_fakeroot = fake_result.artifact.cwl
 
         # NOTE: Relative run: paths cause this test to fail, so remove them.
@@ -404,9 +427,14 @@ def test_inline_subworkflows(yml_path_str: str, yml_path: Path,
     compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
 
     graph = get_graph_reps(str(yml_path))
-    result = sophios.compiler.compile_document(
-        yaml_tree, compiler_options, graph_settings, yaml_tag_paths, tools_cwl,
-        relative_run_path=True, testing=True, graph_target=graph)
+    try:
+        result = sophios.compiler.compile_document(
+            yaml_tree, compiler_options, graph_settings, yaml_tag_paths, tools_cwl,
+            relative_run_path=True, testing=True, graph_target=graph)
+    except SophiosError as error:
+        if _is_includer_fragment(error):
+            pytest.skip(f'{yml_path_str} consumes edges from an includer')
+        raise
     embedded = inline_artifact_runs(result.artifact)
     divergence = equivalent(result.artifact.cwl,
                             embedded.cwl,
