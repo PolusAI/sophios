@@ -146,6 +146,62 @@ def test_consuming_scatter_participates_in_reference_judgment() -> None:
 
 
 @pytest.mark.fast
+def test_a_wrapper_scattering_an_inferred_nested_input_by_its_mangled_name() -> None:
+    """An input the child never declares in `inputs:` (`docs/tutorials/fail.wic`
+    has none) has no authored surface name to scatter by, so `infer` exposes
+    it under a mangled `{emitted step id}___{port}` name instead — the only
+    name a wrapper's own `scatter:` list can then name it with. A wrapper
+    naming this mangled boundary must still array the sink it reaches,
+    exactly as it would for a declared input scattered by its plain name.
+    """
+    tools = copy.deepcopy(SYNTHETIC_TOOLS)
+    tools[LegacyStepId('mk_a', SYNTHETIC_NS)] = Tool(
+        '/synthetic/mk_a.cwl', clt({}, {'value': {'type': 'File'}}))
+    tools[LegacyStepId('mk_b', SYNTHETIC_NS)] = Tool(
+        '/synthetic/mk_b.cwl', clt({'value': {'type': 'File'}}, {}))
+    child = 'steps:\n- id: mk_b\n  in: {value: !* shared}\n'
+    root = ('steps:\n- id: mk_a\n  out:\n  - value: !& shared\n'
+            '- id: child.wic\n  scatter: [child__step__1__mk_b___value]\n')
+    registry = RegistrySnapshot.from_tools(tools, workflows={(SYNTHETIC_NS, 'child'): child})
+    typed = front_end(root, registry, name='root')
+    assert typed.graph is not None, list(typed.diagnostics)
+    linked = link(typed.graph)
+    assert linked.graph is None
+    assert [diagnostic.code for diagnostic in linked.diagnostics] == [
+        SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE]
+
+
+@pytest.mark.fast
+def test_a_local_edge_inside_a_scattered_subworkflow_is_not_disjoint_from_itself() -> None:
+    """A step-to-step edge wholly inside a subworkflow is judged in that
+    subworkflow's own scope, not the scope of whatever ancestor happens to
+    call it.
+
+    An ancestor that scatters over some *other* input of the wrapper step
+    still owns an array boundary — but that boundary sits between the
+    wrapper and the subworkflow's own exposed ports, not between two of the
+    subworkflow's *internal* steps, which never cross it. Judging the local
+    edge against the top-level scope added that ancestor's scatter rank to
+    one side and not the other, so `File` was judged disjoint from itself.
+    """
+    tools = copy.deepcopy(SYNTHETIC_TOOLS)
+    tools[LegacyStepId('mk_a', SYNTHETIC_NS)] = Tool(
+        '/synthetic/mk_a.cwl', clt({}, {'value': {'type': 'File'}}))
+    tools[LegacyStepId('mk_b', SYNTHETIC_NS)] = Tool(
+        '/synthetic/mk_b.cwl', clt({'value': {'type': 'File'}}, {}))
+    child = ('inputs:\n  gate: {type: string}\n'
+             'steps:\n'
+             '- id: mk_a\n  out:\n  - value: !& shared\n'
+             '- id: mk_b\n  in: {value: !* shared}\n')
+    root = 'steps:\n- id: child.wic\n  scatter: [gate]\n  in: {gate: !ii [a, b]}\n'
+    registry = RegistrySnapshot.from_tools(tools, workflows={(SYNTHETIC_NS, 'child'): child})
+    typed = front_end(root, registry, name='root')
+    assert typed.graph is not None, list(typed.diagnostics)
+    linked = link(typed.graph)
+    assert linked.graph is not None, list(linked.diagnostics)
+
+
+@pytest.mark.fast
 def test_producing_scatter_participates_in_reference_judgment() -> None:
     """A scattered producer yields an array and cannot feed a scalar sink."""
     source = '''

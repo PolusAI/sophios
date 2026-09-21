@@ -103,7 +103,18 @@ def _normalize_explicit_edges(graph: WorkflowGraph, universe: WorkflowGraph,
                     resolution,
                     source=_concrete_output(universe, resolution.source),
                 )
-                _reject_if_disjoint(universe, resolution, diagnostics)
+                # `universe` is needed above to follow a wrapper-output alias
+                # to its concrete producer, wherever in the tree that is. The
+                # judgment itself is scoped to `graph`, not `universe`: this
+                # is a *local* edge (the docstring's own claim) — both
+                # endpoints live in `graph` — and `_effective_type` sums a
+                # scatter layer for every ancestor on the path it is given.
+                # Handing it `universe` walked that sum past this edge's own
+                # scope, through wrapper steps whose scatter multiplies this
+                # subworkflow's own boundary but never touches values that
+                # never leave it, over-counting layers a purely internal
+                # edge never crosses and rejecting it as disjoint from itself.
+                _reject_if_disjoint(graph, resolution, diagnostics)
             bindings.append(replace(binding, resolution=resolution))
         steps.append(replace(step, bindings=tuple(bindings)))
     children = tuple(_normalize_explicit_edges(child, universe, diagnostics)
@@ -248,9 +259,24 @@ def _effective_type(graph: WorkflowGraph, port: PortId, *, producing: bool) -> A
     else:
         actual = path[-1][1]
         layers = _scatter_keys(actual).count(port.port)
-        for index, (_owner, wrapper) in enumerate(path[:-1]):
-            child = path[index + 1][0]
-            layers += _scatter_keys(wrapper).count(_boundary_name(child, port))
+        # An ancestor wrapper's own `scatter:` list names the boundary it
+        # crosses under one of two names, depending on how the subworkflow
+        # it wraps exposes the port. A declared `inputs:` entry keeps its
+        # authored surface name at every depth it is threaded through
+        # (`assign_partial_charges.wic` scatters `[input_path]`, and the step
+        # two levels down that actually consumes it is still named
+        # `input_path`) — that is `port.port`, the same name `actual` above
+        # is matched by. An *inferred* input (no `inputs:` declared at all,
+        # as `fail.wic` has none) has no authored name to keep, so it is
+        # exposed under the mangled name the infer phase gives it
+        # (`_boundary_name`), and only that name is what a scatter list can
+        # name it by. Both spellings are legal, so each ancestor is checked
+        # against whichever one names this crossing.
+        boundary = _boundary_name(path[-1][0], port)
+        for _owner, wrapper in path[:-1]:
+            layers += _scatter_keys(wrapper).count(port.port)
+            if boundary != port.port:
+                layers += _scatter_keys(wrapper).count(boundary)
     for _ in range(layers):
         raw = {'type': 'array', 'items': raw}
     return raw
@@ -294,6 +320,13 @@ def _step_path(graph: WorkflowGraph,
 
 
 def _boundary_name(graph: WorkflowGraph, port: PortId) -> str:
+    """The mangled name Sophios exposes `port` under when it has no authored one.
+
+    Matches the naming `infer` gives a workflow input it had to synthesize —
+    `{emitted step id}___{port name}` — which is the only name a `scatter:`
+    list can use to reach such a port from an ancestor wrapper (see
+    `_effective_type`).
+    """
     path = _step_path(graph, port.step)
     if not path:
         return port.port
