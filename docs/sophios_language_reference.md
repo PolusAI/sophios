@@ -214,12 +214,20 @@ A step input is exactly one of these. There is no fifth form.
 |---|---|---|
 | Inline literal | `f: !ii empty.txt` | A literal value. Never an edge. |
 | Edge reference | `f: !* name` | Consumes an edge defined elsewhere |
-| Raw CWL reference | `f: !cwl step/out` | Opaque to Sophios; passed through unresolved. |
+| Raw CWL reference | `f: !cwl greeting` | Opaque to Sophios; passed through unresolved. |
 | Unresolved name | `f: some_input` | Must resolve to a workflow input |
 
 An untagged bare string is an **unresolved name**. If it does not name a
 workflow input, you get a diagnostic telling you which of the two remedies you
 probably meant — `!ii` for a literal, `!cwl` for a CWL reference.
+
+`!cwl` is passed through exactly as written, so what it names has to be a name
+that survives into the emitted CWL. A workflow input does. **A step id does
+not**: steps are renamed on emission to `<workflow>__step__<n>__<id>`, so
+`!cwl echo/stdout` emits a reference to a step that no longer exists under
+that name. To consume a step's output, use `!*` and let Sophios name the
+producer; `!cwl` with an emitted id would work but ties the document to a
+name that changes when the workflow is embedded or inlined.
 
 `!ii` accepts any YAML value, not just scalars:
 
