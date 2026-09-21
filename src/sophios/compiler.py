@@ -25,6 +25,7 @@ from .wic_types import (
     GraphData,
     GraphReps,
     GraphSettings,
+    StepId as LegacyStepId,
     Tools,
     Yaml,
     YamlTagPaths,
@@ -161,6 +162,9 @@ def _detach_sources(document: Yaml, path: tuple[str, ...],
         return copied
     sidecar = copied.get('wic') or {}
     sidecar_steps = sidecar.get('steps', {}) if isinstance(sidecar, dict) else {}
+    if isinstance(sidecar, dict) and isinstance(sidecar.get('implementations'), dict):
+        copied['wic'] = {**sidecar, 'implementations': _detach_implementations(
+            sidecar, path, workflows, documents)}
     detached: list[Yaml] = []
     for index, step in enumerate(steps, start=1):
         if not isinstance(step, dict) or 'subtree' not in step:
@@ -182,6 +186,26 @@ def _detach_sources(document: Yaml, path: tuple[str, ...],
                          **(deepcopy(parentargs) if isinstance(parentargs, dict) else {})})
     copied['steps'] = detached
     return copied
+
+
+def _detach_implementations(sidecar: Yaml, path: tuple[str, ...],
+                            workflows: dict[tuple[str, str], str],
+                            documents: dict[tuple[str, ...], Yaml]) -> Yaml:
+    """Move inline implementation bodies into the registry, as subtrees are.
+
+    The loader leaves each body attached and rekeys the mapping by ``StepId``,
+    which no longer round-trips through YAML. Resolve selects an implementation
+    by name from the registry, so the names are what the source needs to carry.
+    """
+    namespace = str(sidecar.get('namespace', 'global'))
+    detached: Yaml = {}
+    for key, body in sidecar['implementations'].items():
+        name = Path(key.stem if isinstance(key, LegacyStepId) else str(key)).stem
+        if isinstance(body, dict) and body:
+            child = _detach_sources(body, (*path, name), workflows, documents)
+            workflows[(namespace, name)] = _dump_source(child)
+        detached[name] = {}
+    return detached
 
 
 def _dump_source(document: Yaml) -> str:
