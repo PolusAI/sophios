@@ -22,7 +22,7 @@ from .types import (
     WorkflowPort,
     WorkflowGraph,
 )
-from .emit import emit, emit_job_inputs, emit_visualization
+from .emit import emit, emit_job_inputs
 
 __all__ = [
     'Binding',
@@ -43,5 +43,4 @@ __all__ = [
     'WorkflowGraph',
     'emit',
     'emit_job_inputs',
-    'emit_visualization',
 ]

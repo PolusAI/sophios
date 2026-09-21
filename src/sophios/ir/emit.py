@@ -51,19 +51,6 @@ def emit_job_inputs(graph: WorkflowGraph) -> WorkflowInputsFile:
     return {binding.name: deepcopy(binding.value) for binding in graph.job_bindings}
 
 
-def emit_visualization(graph: WorkflowGraph) -> dict[str, Any]:
-    """Project a representation-neutral visualization model from ``graph``."""
-    return {
-        'name': graph.name,
-        'nodes': tuple(step.emission.id if step.emission is not None else step.id.name
-                       for step in graph.steps),
-        'edges': tuple((edge.source.step.index, edge.source.port,
-                        edge.sink.step.index, edge.sink.port)
-                       for edge in graph.edges),
-        'children': tuple(emit_visualization(child) for child in graph.children),
-    }
-
-
 def _emit_step(step: StepEmission) -> dict[str, Any]:
     """Render one structured step descriptor in its declared canonical order."""
     known: dict[str, Any] = {
