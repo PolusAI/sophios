@@ -63,6 +63,28 @@ def test_emit_is_identical_to_the_legacy_finalizer(workflow: Yaml) -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize('authored', [
+    [{'class': 'ResourceRequirement', 'coresMin': 1}],
+    None,
+], ids=['list-form', 'bare'])
+def test_a_requirements_shape_sophios_does_not_model_survives_emission(authored: object) -> None:
+    """`requirements:` in a shape the compiler never writes reaches CWL unchanged.
+
+    Pinned rather than generated: `ast_strategies.workflows` has no
+    `requirements:` dimension, so the IDENTICAL differential above cannot
+    reach either spelling. Both are valid CWL, and the compiler only ever
+    builds the mapping form, so nothing else would notice a bridge that
+    assumed it.
+    """
+    workflow = {'requirements': authored,
+                'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]}
+    old = compile_hermetic(copy.deepcopy(workflow), legacy_emission=True)
+    new = compile_hermetic(copy.deepcopy(workflow))
+    assert_compilations_equivalent(old, new, Strength.IDENTICAL)
+    assert new.rose.data.compiled_cwl['requirements'] == authored
+
+
+@pytest.mark.fast
 def test_differential_oracle_detects_a_changed_document() -> None:
     """A same-arm comparison or a disabled equivalence relation cannot pass."""
     workflow = {'steps': [{'id': 'mk_file',

@@ -73,12 +73,19 @@ def graph_from_legacy_state(state: LegacyEmissionState) -> WorkflowGraph:
 
     namespaces = top.get('$namespaces', {})
     schemas = top.get('$schemas', [])
-    requirements = top.get('requirements', {})
+    # CWL also spells `requirements:` as a list, and a bare `requirements:`
+    # parses to None. Sophios merges into the mapping form and models only
+    # that; any other shape is residue the graph carries opaquely, so Emit
+    # writes back what the document had. The bridge does not decide the shape.
+    authored = top.get('requirements', {})
+    requirements = authored if isinstance(authored, dict) else {}
+    residue = {key: value for key, value in top.items() if key not in _WORKFLOW_FIELDS}
+    if 'requirements' in top and not isinstance(authored, dict):
+        residue['requirements'] = authored
     return WorkflowGraph(
         namespace=here,
         steps=nodes,
-        passthrough=tuple((key, deepcopy(value)) for key, value in top.items()
-                          if key not in _WORKFLOW_FIELDS),
+        passthrough=tuple((key, deepcopy(value)) for key, value in residue.items()),
         name=state.name,
         lang_version=state.lang_version,
         cwl_version=str(top['cwlVersion']),
