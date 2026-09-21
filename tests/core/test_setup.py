@@ -31,6 +31,10 @@ class CorpusRegistry:
     tools: Tools
     workflows: dict[str, dict[str, Path]]
     validator: Draft202012Validator
+    #: The store the validator was built from, carrying a schema per tool and
+    #: per compiled workflow. `wic_main_schema(hypothesis=True)` inlines from
+    #: it, because hypothesis-jsonschema will not resolve an external `$ref`.
+    schema_store: dict[str, Json]
 
 
 def _config() -> tuple[Json, bool]:
@@ -115,7 +119,7 @@ def load_test_registry() -> CorpusRegistry:
             schema_store[schema['$id']] = schema
     validator = sophios.schemas.wic_schema.get_validator(
         tools, stems, schema_store, write_to_disk=False)
-    return CorpusRegistry(tools, workflows, validator)
+    return CorpusRegistry(tools, workflows, validator, schema_store)
 
 
 @pytest.fixture(scope='session')
@@ -184,11 +188,22 @@ def wic_yaml_filter_implementations_or_steps(yml: Yaml) -> bool:
     return ('implementations' in yml or 'steps' in yml)
 
 
-def wic_strategy(registry: CorpusRegistry) -> SearchStrategy:
-    """Construct the schema strategy from an explicitly loaded registry."""
+@lru_cache(maxsize=1)
+def wic_strategy() -> SearchStrategy:
+    """The schema strategy, built once from the loaded registry.
+
+    Built from the registry's own `schema_store`, not an empty one: with no
+    store, every step is an unresolved `{"$ref": "tools/<stem>.json"}` and
+    hypothesis-jsonschema draws nothing at all, because it does not fetch
+    remote references.
+
+    Cached because the caller draws through `st.data()`, so an uncached build
+    would re-derive the schema once per example rather than once per session.
+    """
+    registry = load_test_registry()
     stems = sophios.utils.flatten([list(paths) for paths in registry.workflows.values()])
     schema = sophios.schemas.wic_schema.wic_main_schema(
-        registry.tools, stems, {}, hypothesis=True)
+        registry.tools, stems, registry.schema_store, hypothesis=True)
     strategy = cast(SearchStrategy[Yaml], hj.from_schema(schema))
     strategy = strategy.filter(wic_yaml_filter_blank_steps)
     strategy = strategy.filter(wic_yaml_filter_implementations_or_steps)

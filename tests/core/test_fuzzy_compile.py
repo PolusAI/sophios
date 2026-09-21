@@ -54,7 +54,7 @@ class TestFuzzyCompile(unittest.TestCase):
             yml (Yaml): Yaml input, randomly generated according to a random subset of wic_main_schema
         """
         registry = load_test_registry()
-        yml: Yaml = data.draw(wic_strategy(registry))
+        yml: Yaml = data.draw(wic_strategy())
         tools_cwl = registry.tools
         yml_paths = registry.workflows
         validator = registry.validator
