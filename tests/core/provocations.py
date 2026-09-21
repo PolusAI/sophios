@@ -212,6 +212,31 @@ def _provoke_empty_name() -> None:
     raise SophiosError(tuple(diagnostics))
 
 
+def _provoke_undeclared_port() -> None:
+    """Bind an input of a tool whose interface does not declare it.
+
+    A CommandLineTool, deliberately: the check runs for every resolved step,
+    and reporting a subworkflow code for a tool step was what this code
+    replaced.
+
+    Raises:
+        SophiosError: Always, carrying `wic028`.
+    """
+    from sophios.ir.lower import lower  # pylint: disable=import-outside-toplevel
+    from sophios.ir.resolve import RegistrySnapshot, resolve  # pylint: disable=import-outside-toplevel
+    from sophios.lang.diagnostics import SophiosError  # pylint: disable=import-outside-toplevel
+    from sophios.lang.parser import parse  # pylint: disable=import-outside-toplevel
+
+    from .synthetic_tools import SYNTHETIC_TOOLS  # pylint: disable=import-outside-toplevel
+
+    document = parse('steps:\n- id: mk_file\n  in: {name: !ii a, ghost: !ii x}\n',
+                     'provoke.wic').document
+    assert document is not None
+    resolved = resolve(document, RegistrySnapshot.from_tools(SYNTHETIC_TOOLS), name='provoke')
+    assert resolved.document is not None
+    raise SophiosError(tuple(lower(resolved.document).diagnostics))
+
+
 def _provoke_invalid_input_value() -> None:
     """Load a config `File` value that names neither a location nor a path."""
     from pathlib import Path  # pylint: disable=import-outside-toplevel
@@ -264,4 +289,5 @@ COMPILED.update({
     SophiosErrorCode.UNDEFINED_EDGE: _provoke_undefined_edge,
     SophiosErrorCode.DUPLICATE_EDGE_DEF: _provoke_duplicate_edge_def,
     SophiosErrorCode.EMPTY_NAME: _provoke_empty_name,
+    SophiosErrorCode.UNDECLARED_PORT: _provoke_undeclared_port,
 })

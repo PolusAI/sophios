@@ -221,14 +221,14 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
     for name, _ in source.inputs:
         if name not in declared_inputs:
             diagnostics.error(
-                SophiosErrorCode.SUBWORKFLOW_INVALID,
+                SophiosErrorCode.UNDECLARED_PORT,
                 f"step '{source.id}' binds '{name}', which its resolved process does not declare",
                 source.span,
             )
     for authored in source.outputs:
         if authored.name not in declared_outputs:
             diagnostics.error(
-                SophiosErrorCode.SUBWORKFLOW_INVALID,
+                SophiosErrorCode.UNDECLARED_PORT,
                 f"step '{source.id}' names output '{authored.name}', which its resolved process "
                 'does not declare',
                 authored.span,

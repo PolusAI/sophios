@@ -54,6 +54,11 @@ class SophiosErrorCode(StrEnum):
     #: an input, an `out:` entry, or an edge. One code across the positions
     #: because it is one mistake -- the reader wrote nothing where a name goes.
     EMPTY_NAME = 'wic027'
+    #: A step naming a port its resolved process does not have, on either
+    #: side. One code across the positions because it is one mistake, and
+    #: one code across the process kinds because a CommandLineTool has an
+    #: interface just as a subworkflow does.
+    UNDECLARED_PORT = 'wic028'
     RECURSIVE_ALIAS = 'wic030'
 
     #: --- Python API. The document is valid; the call was not. ---
