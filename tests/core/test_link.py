@@ -83,6 +83,38 @@ def test_cross_scope_obligation_is_discharged_at_its_lca() -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize('definition_first', [True, False], ids=['before', 'after'])
+def test_a_call_does_not_exempt_an_edge_from_document_order(definition_first: bool) -> None:
+    """The order rule is one rule, whether the reference is flat or in a call.
+
+    Reference §4.1.2: a reference resolves against the definitions before it,
+    and a child may consume what its includer has *already* defined. Lower
+    applies that within one scope. If Link ignored it across a call, the same
+    program would be `wic025` written flat and legal once split into a
+    subworkflow, which is two rules for one construct.
+    """
+    tools = copy.deepcopy(SYNTHETIC_TOOLS)
+    tools[LegacyStepId('string_source', SYNTHETIC_NS)] = Tool(
+        '/synthetic/string_source.cwl', clt({}, {'value': {'type': 'string'}}))
+    child = 'steps:\n- id: mk_file\n  in:\n    name: !* shared\n'
+    producer = '- id: string_source\n  out:\n  - value: !& shared\n'
+    call = '- id: child.wic\n'
+    root = 'steps:\n' + (producer + call if definition_first else call + producer)
+    registry = RegistrySnapshot.from_tools(tools, workflows={(SYNTHETIC_NS, 'child'): child})
+    typed = front_end(root, registry, name='root')
+    assert typed.graph is not None, list(typed.diagnostics)
+
+    linked = link(typed.graph)
+    if definition_first:
+        assert linked.graph is not None, list(linked.diagnostics)
+        assert len(linked.graph.composition_edges) == 1
+    else:
+        assert linked.graph is None
+        assert [diagnostic.code for diagnostic in linked.diagnostics] == [
+            SophiosErrorCode.UNDEFINED_EDGE]
+
+
+@pytest.mark.fast
 def test_unresolved_root_obligation_is_exactly_undefined_edge() -> None:
     """An obligation with no producer is reported rather than silently promoted."""
     child = 'steps:\n- id: mk_file\n  in:\n    name: !* nowhere\n'
@@ -201,7 +233,8 @@ def test_unknown_call_argument_cannot_restore_a_deleted_formal() -> None:
     typed = front_end('steps:\n- id: child.wic\n  in: {ghost: !ii x}\n',
                       registry, name='root')
     assert typed.graph is None
-    assert typed.diagnostics.has_errors
+    assert [diagnostic.code for diagnostic in typed.diagnostics] == [
+        SophiosErrorCode.UNDECLARED_PORT]
 
 
 @pytest.mark.skip_pypi_ci

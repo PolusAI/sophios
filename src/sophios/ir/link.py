@@ -49,6 +49,19 @@ def link(graph: WorkflowGraph) -> Linked:
                 obligation.span,
             )
             continue
+        if _position(attached, source.step) >= _position(attached, obligation.sink.step):
+            # Reference §4.1.2: a reference resolves against the definitions
+            # seen so far, and a child may consume what its includer has
+            # *already* defined. Lower applies that within one scope; a call
+            # does not exempt a document from it, or the same program would
+            # be an error flat and legal once split.
+            diagnostics.error(
+                SophiosErrorCode.UNDEFINED_EDGE,
+                f"'!* {obligation.name}' is defined after the step that consumes it. "
+                'An edge reference resolves against the definitions before it.',
+                obligation.span,
+            )
+            continue
         for sink in _concrete_input_sinks(attached, obligation.sink):
             edge = Edge(source, sink, obligation.span)
             if _relation(attached, edge) is TypeRelation.DISJOINT:
@@ -144,6 +157,31 @@ def _attach_children(graph: WorkflowGraph) -> WorkflowGraph:
         run = replace(emission.run, child=child) if child is not None else emission.run
         steps.append(replace(step, emission=replace(emission, run=run)))
     return replace(graph, steps=tuple(steps), children=children)
+
+
+def _position(graph: WorkflowGraph, step_id: StepId) -> tuple[int, ...]:
+    """Document order for a step, as the indices on the path down to it.
+
+    Compared lexicographically, so a step of an enclosing workflow precedes
+    everything inside a call that comes after it, and follows everything
+    inside a call that comes before.
+    """
+    for step in graph.steps:
+        if step.id == step_id:
+            return (step.id.index,)
+    for child in graph.children:
+        if not _namespace_contains(child.namespace, step_id.namespace):
+            continue
+        nested = _position(child, step_id)
+        if not nested:
+            continue
+        wrapper = next((step for step in graph.steps
+                        if step.emission is not None
+                        and step.emission.run.child is not None
+                        and step.emission.run.child.namespace == child.namespace), None)
+        if wrapper is not None:
+            return (wrapper.id.index, *nested)
+    return ()
 
 
 def _definitions(graph: WorkflowGraph) -> dict[str, PortId]:
