@@ -71,17 +71,14 @@ def test_a_requirements_shape_sophios_does_not_model_survives_emission(authored:
     """`requirements:` in a shape the compiler never writes reaches CWL unchanged.
 
     Pinned rather than generated: `ast_strategies.workflows` has no
-    `requirements:` dimension, so the IDENTICAL differential above cannot
-    reach either spelling. Both are valid CWL, and the compiler only ever
-    builds the mapping form, so nothing else would notice a bridge that
-    assumed it.
+    `requirements:` dimension, so no generated property reaches either
+    spelling. Both are valid CWL and the compiler only ever builds the
+    mapping form, so nothing else would notice a phase that assumed it.
     """
     workflow = {'requirements': authored,
                 'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]}
-    old = compile_hermetic(copy.deepcopy(workflow), legacy_emission=True)
-    new = compile_hermetic(copy.deepcopy(workflow))
-    assert_compilations_equivalent(old, new, Strength.IDENTICAL)
-    assert new.rose.data.compiled_cwl['requirements'] == authored
+    compiled = compile_hermetic(copy.deepcopy(workflow)).artifact.cwl
+    assert compiled['requirements'] == authored
 
 
 @pytest.mark.fast

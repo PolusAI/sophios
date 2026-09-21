@@ -128,11 +128,19 @@ def _lower_resolved(document: ResolvedDocument,
                            (ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI),)
     schemas_raw = passthrough.get('$schemas', ())
     schemas = tuple(schemas_raw) if isinstance(schemas_raw, list) else ()
+    # CWL also spells `requirements:` as a list, and a bare `requirements:`
+    # parses to None. Sophios merges into the mapping form, so that is the one
+    # shape the graph models; any other is residue it carries opaquely and
+    # Emit writes back unchanged. Dropping it silently rewrote the document.
     requirements_raw = passthrough.get('requirements', {})
-    requirements = tuple(requirements_raw.items()) if isinstance(requirements_raw, dict) else ()
+    requirements = (tuple(requirements_raw.items())
+                    if isinstance(requirements_raw, dict) else ())
+    reserved = {'inputs', 'outputs', '$namespaces', '$schemas',
+                'cwlVersion', 'class', ANNOTATION_KEY}
+    if isinstance(requirements_raw, dict):
+        reserved.add('requirements')
     opaque = tuple((key, value) for key, value in document.source.passthrough
-                   if key not in {'inputs', 'outputs', '$namespaces', '$schemas',
-                                  'requirements', 'cwlVersion', 'class', ANNOTATION_KEY})
+                   if key not in reserved)
     field_order_list = [key for key in document.source.field_order if key != 'wic']
     for key in ('cwlVersion', 'class', '$namespaces', '$schemas', 'inputs',
                 ANNOTATION_KEY, 'outputs'):
