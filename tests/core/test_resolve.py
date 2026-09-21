@@ -103,13 +103,61 @@ def _typed(workflow: Yaml):  # type: ignore[no-untyped-def]
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows().filter(_scalar_literals_fit))
 @ORACLE
-def test_resolution_is_identical_to_legacy_lookup(workflow: Yaml) -> None:
-    """Typed registry resolution changes no final artifact bytes."""
+def test_the_typed_front_door_round_trips_the_source(workflow: Yaml) -> None:
+    """Parse and Lower hand legacy Link/Infer the document it would have read.
+
+    Named for what it checks rather than for resolution: `legacy_after_lower`
+    rebuilds the step list from the parsed source, so what Resolve found
+    reaches this comparison only through a child graph or a generated id.
+    A resolver returning the wrong process for every step still produces
+    identical bytes here -- which is why
+    `test_every_resolved_process_is_the_one_the_registry_holds` exists.
+    """
     typed = _typed(copy.deepcopy(workflow))
     bridged = legacy_after_lower(typed.resolved.document, typed.graph)
     old = compile_hermetic(copy.deepcopy(workflow))
     new = compile_hermetic(bridged)
     assert_compilations_equivalent(old, new, Strength.IDENTICAL)
+
+
+def _assert_processes_match_the_registry(document: Any) -> None:
+    """Every non-generated process equals the tool the registry holds for it."""
+    for step in document.steps:
+        process = step.process
+        if process.child is not None:
+            _assert_processes_match_the_registry(process.child)
+            continue
+        if process.generated:
+            continue
+        # The name the step authored, not the key the resolver returned: a
+        # resolver that answers every lookup with one tool reports that tool's
+        # key too, so comparing its own answer to itself proves nothing.
+        stem = step.source.id
+        assert process.key.name == stem
+        assert process.run_path == SYNTHETIC_TOOLS[LegacyStepId(stem, SYNTHETIC_NS)].run_path
+        assert tuple(port.name for port in process.inputs) == tuple(inputs_of(stem))
+        assert tuple(port.name for port in process.outputs) == tuple(outputs_of(stem))
+
+
+@pytest.mark.skip_pypi_ci
+@given(strat.workflows())
+@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+def test_every_resolved_process_is_the_one_the_registry_holds(workflow: Yaml) -> None:
+    """Resolution is compared where the bridged differential cannot see it.
+
+    Run path and both interfaces, per step and recursively through child
+    workflows, against an independent model of the same registry -- not
+    against the compiled bytes, which the source round-trip already fixes
+    whatever Resolve returned.
+    """
+    source, workflows = _source_model(copy.deepcopy(workflow))
+    parsed = parse(source, 'oracle.wic')
+    assert parsed.document is not None
+    resolved = resolve(parsed.document,
+                       RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows),
+                       name='oracle')
+    assert resolved.document is not None, list(resolved.diagnostics)
+    _assert_processes_match_the_registry(resolved.document)
 
 
 @pytest.mark.fast
@@ -170,19 +218,6 @@ def test_registry_order_cannot_change_resolution(workflow: Yaml) -> None:
     right = resolve(parsed.document, reversed_snapshot, name='oracle')
     assert left.document == right.document
     assert list(left.diagnostics) == list(right.diagnostics)
-
-
-@pytest.mark.skip_pypi_ci
-@given(strat.workflows())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-def test_parse_front_door_is_identical_to_the_legacy_input(workflow: Yaml) -> None:
-    """Source enters Parse and reaches legacy Link/Infer only after typed Lower."""
-    if not _scalar_literals_fit(workflow):
-        return
-    typed = _typed(copy.deepcopy(workflow))
-    new = compile_hermetic(legacy_after_lower(typed.resolved.document, typed.graph))
-    old = compile_hermetic(copy.deepcopy(workflow))
-    assert_compilations_equivalent(old, new, Strength.IDENTICAL)
 
 
 @pytest.mark.skip_pypi_ci
