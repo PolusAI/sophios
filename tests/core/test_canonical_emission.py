@@ -1,10 +1,14 @@
 """Canonical emission: no `set` iteration order reaches the compiled CWL.
 
-`set` iteration is hash-seeded, and three sites in the compile path once let
-that order out: `maybe_add_requirements` set the emitted `requirements:` key
-order (eight seeds, eight orders), `add_yamldict_keyval_out` set a step's
-`out:` list order (six seeds, three orders), and the speculative-insertion list
-in the compiler is deduplicated through one behind a default-off flag.
+`set` iteration is hash-seeded, and three sites once let that order out: the
+emitted `requirements:` key order (eight seeds, eight orders), a step's `out:`
+list order (six seeds, three orders), and the speculative-insertion list,
+deduplicated through one behind a default-off flag. The first two sites were
+`utils_cwl`'s `maybe_add_requirements` and `add_yamldict_keyval_out`, retired
+with the legacy compiler; `ir/complete.py` now sorts `requirements:` and takes
+a step's `out:` from the resolved interface. These properties therefore guard
+against reintroduction rather than against a live escape, which is why the
+adequacy companions below matter more, not less.
 
 Stated as sortedness rather than as agreement across interpreters: the hash
 seed is the symptom, and sortedness is checkable per example at 0.1s without a
@@ -23,12 +27,9 @@ from typing import Final
 import pytest
 from hypothesis import given
 
-import sophios.cli
-import sophios.compiler
 from sophios.lang.cwl import CWL_VERSION
 from sophios.utils_cwl import desugar_into_canonical_normal_form
-from sophios.utils_graphs import get_graph_reps
-from sophios.wic_types import Cwl, StepId, Tool, Tools, Yaml, YamlTree
+from sophios.wic_types import Cwl, StepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
 from .source_scan import REPO_ROOT, SRC, not_vacuous, package_files
@@ -112,8 +113,8 @@ def test_the_out_order_property_needs_this_tool_to_mean_anything() -> None:
 
     Confirmed by reverting the fix and re-running that property: it still
     passed, at 100 examples. Every stock synthetic tool
-    (`synthetic_tools.STEMS`) has at most one output, so
-    `add_yamldict_keyval_out`'s `set` never holds more than one element for
+    (`synthetic_tools.STEMS`) has at most one output, so a step's `out:` never
+    holds more than one element for
     any workflow that property's generator (`strat.workflows()`) can produce
     — a one-element (or empty) list is trivially sorted regardless of `list`
     vs. `sorted`, so that half of the assertion is guaranteed true by the
@@ -128,9 +129,8 @@ def test_the_out_order_property_needs_this_tool_to_mean_anything() -> None:
 @pytest.mark.fast
 def test_out_order_is_canonical_for_a_multi_output_tool() -> None:
     """The `out:`-order site, actually exercised: a step whose tool has three
-    outputs and no explicit `out:` of its own, so `add_yamldict_keyval_out`
-    merges `[]` with all three tool output names — see the module docstring's
-    second finding."""
+    outputs and no explicit `out:` of its own, so the emitted `out:` carries
+    all three tool output names — see the module docstring's second finding."""
     yml = {'steps': [{'id': 'multi', 'in': {'seed': {'wic_inline_input': '1'}}}]}
     compiled = compile_hermetic_cwl(yml, 'canon', tools=_TOOLS_WITH_MULTI)
     for step in compiled['steps']:
@@ -383,7 +383,7 @@ _FOUR_SEED_WORKFLOW: Final[Yaml] = {
     'steps': [
         {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a.txt'}}},
         {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'b.txt'}}, 'scatter': ['name']},
-        {'id': 'multi', 'in': {'seed': {'valueFrom': '$(1)'}}},
+        {'id': 'multi', 'in': {'seed': {'wic_inline_input': '1'}}},
         subworkflow_step('sub.wic', {'steps': [
             {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'c.txt'}}},
         ]}),
@@ -396,23 +396,8 @@ def _compile_four_seed_workflow() -> Yaml:
 
     Module-level, not a closure: the subprocess this file's regression test
     spawns imports this module and calls this function by name.
-
-    Not `compile_hermetic`: that helper does not expose `allow_raw_cwl`, and
-    a step's `in:` value is only left un-evaluated (so `multi`'s raw
-    `valueFrom` survives to the emitted step) with that flag set
-    (`src/sophios/compiler.py`'s `case _:` fallback in the `in:` match).
-    Otherwise identical to `compile_hermetic`'s own fourteen-argument call.
     """
-    compiler_options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
-    compiler_options['allow_raw_cwl'] = True
-    graph = get_graph_reps('canon')
-    info = sophios.compiler.compile_document(
-        YamlTree(StepId('canon', SYNTHETIC_NS), _FOUR_SEED_WORKFLOW),
-        compiler_options, graph_settings, tag_paths,
-        _TOOLS_WITH_MULTI, relative_run_path=True, testing=True,
-        graph_target=graph)
-    compiled: Yaml = info.artifact.cwl
-    return compiled
+    return compile_hermetic_cwl(_FOUR_SEED_WORKFLOW, 'canon', tools=_TOOLS_WITH_MULTI)
 
 
 def _four_seed_compilations(seeds: tuple[int, ...]) -> list[Yaml]:

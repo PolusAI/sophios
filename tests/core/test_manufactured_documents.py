@@ -107,7 +107,8 @@ def _scan_for_sites() -> dict[str, list[int]]:
     this scan is a floor rather than a proof.
 
     Known to be below the floor, from reading the call graph:
-    `maybe_add_requirements`, which writes a key none of these markers name,
+    `ir/complete.py`'s requirement merge, which writes a key none of these
+    markers name,
     and every `mergedeep.merge` whose
     result set is decided at runtime. Those manufacture *into* documents the
     instrumented sites already hand over, so the parse claim still covers them

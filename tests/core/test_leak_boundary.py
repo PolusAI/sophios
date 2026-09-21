@@ -172,8 +172,8 @@ def test_user_requirements_are_merged_into_not_copied() -> None:
     """`requirements` keeps what you wrote and gains what the workflow needs.
 
     The third compiler-owned key, and the one the reference used to list as an
-    example of pure passthrough. `maybe_add_requirements` fires whenever a step
-    scatters, uses `when` or `valueFrom`, or names a `.wic` subworkflow — so a
+    example of pure passthrough. `ir/complete.py` adds a requirement whenever a
+    step scatters, uses `when`, or names a `.wic` subworkflow — so a
     workflow that supplies its own `requirements` gets them back extended, not
     unchanged. The generated properties never see it: their one step is a plain
     tool step, so the requirement set is empty and the merge is skipped on
@@ -244,8 +244,8 @@ def test_unknown_keys_change_nothing_else(key: str, value: Any) -> None:
     without = _compile(_touch_workflow({}, {}))
     with_key = _compile(_touch_workflow({key: value}, {}))
 
-    # The whole document, not just the step: `maybe_add_requirements` reads
-    # step keys and writes a *top-level* key, so a step key reaching that path
+    # The whole document, not just the step: the requirement merge reads
+    # step facts and writes a *top-level* key, so a step key reaching that path
     # would change the document while leaving the step subtree identical — and
     # comparing only the step would call that inert. `_step` returns a
     # reference into `with_key`, so popping there removes the key from the

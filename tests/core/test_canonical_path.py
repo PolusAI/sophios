@@ -306,8 +306,8 @@ def test_passthrough_survives_a_scatter_in_a_multi_step_workflow(data: st.DataOb
     `test_leak_boundary.py`'s single-step generator cannot reach.
 
     `test_step_passthrough_is_byte_identical` and its siblings quantify over
-    `_touch_workflow`'s one, always-non-scattering step, so
-    `maybe_add_requirements` never fires there and a step that scatters
+    `_touch_workflow`'s one, always-non-scattering step, so the requirement
+    merge in `ir/complete.py` never fires there and a step that scatters
     *beside* its own passthrough freight is unreachable by that generator.
     `ast_strategies.freighted_documents` forces exactly that shape; the
     passthrough alphabets are imported from `test_leak_boundary` rather than
@@ -315,14 +315,14 @@ def test_passthrough_survives_a_scatter_in_a_multi_step_workflow(data: st.DataOb
     reaches this property too, instead of a second copy silently missing it.
 
     Includes its own tautology guard: `ScatterFeatureRequirement` must appear
-    in the compiled `requirements`, proving `maybe_add_requirements` really
+    in the compiled `requirements`, proving the requirement merge really
     fired for this example rather than this property silently degrading into
     `test_leak_boundary`'s already-covered case.
 
     BLIND SPOTS: `freighted_documents`'s own (no mapping-form `steps:`, no
     subworkflow, no sidecar). Only one step is ever forced to scatter, and
-    only via `scatter` — `when` and a `.wic` subworkflow step are
-    `maybe_add_requirements`'s other two triggers, neither exercised here.
+    only via `scatter` — `when` and a `.wic` subworkflow step are the
+    merge's other two triggers, neither exercised here.
     """
     document, index = data.draw(strat.freighted_documents())
     freight = data.draw(st.dictionaries(passthrough_keys, passthrough_values, min_size=1, max_size=4))

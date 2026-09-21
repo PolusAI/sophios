@@ -83,7 +83,7 @@ broad enough to cover them would have to be weak enough to say nothing:
   was used instead.
 - `requirements` is **merged into**: your entries survive, and Sophios adds
   what the workflow needs — `ScatterFeatureRequirement` for a scattering step,
-  `InlineJavascriptRequirement` for `when` or `valueFrom`,
+  `InlineJavascriptRequirement` for `when`,
   `SubworkflowFeatureRequirement` for a `.wic` step. The mapping you wrote is
   extended, not replaced, and not copied out byte-identically.
 - `$schemas` is **append-only**: your entries survive and the EDAM entry is
