@@ -32,6 +32,11 @@ TOLERATED_CODES: Final[frozenset[SophiosErrorCode]] = frozenset({
     # moved it to this arm; leaving it out of this set turned a
     # tolerated draw into a job failure.
     SophiosErrorCode.DUPLICATE_EDGE_DEF,
+    # `wic028` was reported as `wic013` until it was given a code of its own.
+    # Splitting a code does not change which draws the job tolerates, so it
+    # inherits its predecessor's membership -- the same reasoning as `wic026`
+    # above, one step further along.
+    SophiosErrorCode.UNDECLARED_PORT,
 })
 
 
