@@ -255,6 +255,12 @@ def _select_implementation(document: Document,
                           'a workflow with implementations needs an implementation selection',
                           document.sidecar.span)
         return None, diagnostics
+    # Parsed in place by the parser: the bodies are written inline in this
+    # document, so the selection is a lookup, and the spans inside the chosen
+    # one already point at the file the reader wrote.
+    selected = dict(document.sidecar.implementations).get(chosen)
+    if selected is not None:
+        return selected, diagnostics
     namespace = str(entries.get('namespace', 'global'))
     source = registry.workflow(RegistryKey(namespace, chosen))
     if source is None:
@@ -404,7 +410,9 @@ def _inherit_parameters(document: Document, sidecar: WicSidecar | None) -> Docum
     if not sidecar.steps and not entries:
         return document
     return replace(document, sidecar=_merged_sidecar(
-        document.sidecar, WicSidecar(sidecar.steps, entries, sidecar.span)))
+        document.sidecar, WicSidecar(sidecar.steps, entries,
+                                     implementations=sidecar.implementations,
+                                     span=sidecar.span)))
 
 
 def _merged_sidecar(own: WicSidecar | None, contributed: WicSidecar) -> WicSidecar:
@@ -418,7 +426,9 @@ def _merged_sidecar(own: WicSidecar | None, contributed: WicSidecar) -> WicSidec
     entries = dict(own.entries)
     for name, value in contributed.entries:
         entries[name] = _merged_value(entries.get(name), value)
-    return WicSidecar(tuple(steps.items()), tuple(entries.items()), own.span)
+    return WicSidecar(tuple(steps.items()), tuple(entries.items()),
+                      implementations=own.implementations or contributed.implementations,
+                      span=own.span)
 
 
 def _merged_value(own: OpaqueCwl, contributed: OpaqueCwl) -> OpaqueCwl:

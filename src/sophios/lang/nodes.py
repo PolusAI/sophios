@@ -244,6 +244,12 @@ class WicSidecar:
 
     steps: tuple[tuple[StepKey, 'WicSidecar'], ...] = surface(Shape.SIDECAR_STEPS, 'steps', default=())
     entries: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.PASSTHROUGH, default=())
+    #: Each `implementations:` body, parsed. Internal, not a second surface:
+    #: the bodies stay in `entries` and are spelled from there, so rendering is
+    #: unchanged. They are parsed because they are documents written inline in
+    #: this file, and a consumer that needs one should not have to rebuild text
+    #: to read it -- nor lose the spans, which point at this file's real lines.
+    implementations: tuple[tuple[str, 'Document'], ...] = surface(Shape.INTERNAL, default=())
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
 
 

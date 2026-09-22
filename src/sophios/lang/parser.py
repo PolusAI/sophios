@@ -767,6 +767,25 @@ def _out_edge_def(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> EdgeD
     return None
 
 
+def _sidecar_implementations(node: yaml.nodes.MappingNode, file: str,
+                             diags: Diagnostics) -> list[tuple[str, Document]]:
+    """Parse each `implementations:` body as the document it is.
+
+    The bodies are written inline in this file, so parsing them here is what
+    gives their constructs spans pointing at the reader's own lines. A caller
+    that wants one no longer has to be handed text to parse again.
+    """
+    parsed: list[tuple[str, Document]] = []
+    for key_node, body in node.value:
+        name = _key_text(key_node, file, diags)
+        # An empty body names an implementation without giving one, which is
+        # how a document defers to whatever supplies it. Recording an empty
+        # document for it would shadow that supplier with nothing.
+        if isinstance(body, yaml.nodes.MappingNode) and body.value:
+            parsed.append((name, _document(body, file, diags)))
+    return parsed
+
+
 def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
              _path: frozenset[int] = frozenset()) -> WicSidecar:
     """Parse a `wic:` block, normalising its `"(1, name)"` step keys."""
@@ -783,6 +802,7 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
 
     steps: list[tuple[StepKey, WicSidecar]] = []
     entries: list[tuple[str, OpaqueCwl]] = []
+    implementations: list[tuple[str, Document]] = []
 
     for key, value_node in _unique_entries(node, file, diags, 'wic: entry'):
         if key != 'steps':
@@ -790,6 +810,9 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
                 entries.append((key, _sidecar_out_entry(value_node, file, diags)))
             else:
                 entries.append((key, _opaque(value_node, file, diags)))
+            if key == 'implementations' and isinstance(value_node, yaml.nodes.MappingNode):
+                implementations.extend(
+                    _sidecar_implementations(value_node, file, diags))
             continue
         if not isinstance(value_node, yaml.nodes.MappingNode):
             diags.error(
@@ -817,7 +840,8 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
                 continue
             steps.append((parsed, _sidecar(_child_sidecar_node(sub_value), file, diags, _path | {id(node)})))
 
-    return WicSidecar(steps=tuple(steps), entries=tuple(entries), span=span)
+    return WicSidecar(steps=tuple(steps), entries=tuple(entries),
+                      implementations=tuple(implementations), span=span)
 
 
 def _step_key(text: str) -> StepKey | None:
