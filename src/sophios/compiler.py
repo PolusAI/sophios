@@ -1025,6 +1025,10 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                     # Temporary typed-Infer handoff for an unmatched required
                     # input.  Preserve the old boundary-input spelling and
                     # declaration without running candidate selection again.
+                    inferred_format = in_dict.get('format')
+                    if (isinstance(inferred_format, str)
+                            and not any(marker in inferred_format for marker in ('$(', '${'))):
+                        in_dict['format'] = [inferred_format]
                     setup.inputs_workflow.update({in_name: in_dict})
                     setup.steps[i]['in'][arg_key] = in_name
                 case {'wic_raw_cwl': expression}:

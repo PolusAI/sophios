@@ -155,6 +155,8 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
                 declaration = port.declaration or port_declaration(port.type.declared)
                 declaration = replace(
                     declaration,
+                    format=(_canonical_boundary_format(declaration.format)
+                            if declaration.has_format else declaration.format),
                     passthrough=tuple((name, value) for name, value in declaration.passthrough
                                       if name not in {'inputBinding', 'loadContents'}),
                     field_order=tuple(name for name in declaration.field_order
@@ -396,6 +398,13 @@ def _formats(declaration: PortDeclaration | None) -> tuple[Any, ...]:
         return ()
     value = declaration.format
     return tuple(value) if isinstance(value, list) else (value,)
+
+
+def _canonical_boundary_format(value: Any) -> Any:
+    """Canonicalize a literal IRI without rewriting an opaque CWL expression."""
+    if isinstance(value, str) and not any(marker in value for marker in ('$(', '${')):
+        return [value]
+    return value
 
 
 def _formats_match(sink: tuple[Any, ...], source: tuple[Any, ...],
