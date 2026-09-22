@@ -1,7 +1,8 @@
 """The typed compiler boundary over the phase pipeline."""
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import graphviz
 import networkx as nx
@@ -16,9 +17,11 @@ from .ir.infer import InferencePolicy, InsertionCatalog, infer
 from .ir.link import link
 from .ir.pipeline import front_end
 from .ir.resolve import RegistryKey, RegistrySnapshot
-from .ir.types import PortId, WorkflowGraph
+from .ir.types import Binding, PortId, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import SophiosError
+from .lang.nodes import InlineLiteral
+from .lang.spans import SourceSpan
 from .lang.error_codes import SophiosErrorCode
 from .wic_types import (
     CompilerOptions,
@@ -46,7 +49,7 @@ def compile_document(yaml_tree_ast: YamlTree,
     if not testing:
         print(' starting compilation of', yaml_tree_ast.step_id.stem)
 
-    source_tree = _adapt_subinterpreter_source(yaml_tree_ast.yml, yaml_tag_paths)
+    source_tree = yaml_tree_ast.yml
     source, workflow_sources, source_documents = _source_bundle(source_tree)
     registry = RegistrySnapshot.from_tools(tools, workflows=workflow_sources)
     selected_version = versions.resolve(
@@ -61,7 +64,7 @@ def compile_document(yaml_tree_ast: YamlTree,
     _check_unresolved_names(front.graph, compiler_options['allow_raw_cwl'])
 
     prepared = complete(
-        front.graph,
+        _bind_subinterpreter_locations(front.graph, yaml_tag_paths),
         relative_run_path=relative_run_path,
         partial_failure=compiler_options['partial_failure_enable'],
     )
@@ -107,42 +110,44 @@ def _source_bundle(root: Yaml) -> tuple[str, dict[tuple[str, str], str],
     return _dump_source(detached_root), workflows, documents
 
 
-def _adapt_subinterpreter_source(root: Yaml, yaml_tag_paths: YamlTagPaths) -> Yaml:
-    """Supply the narrow runtime adapter's three location parameters.
+#: The runtime adapter's own declared inputs, whose values come from the
+#: invocation rather than from the document. Named like `resolve`'s
+#: contribution span: not a file, and not pretending to be one.
+_LOCATION_SPAN: Final = SourceSpan('<subinterpreter locations>', 1, 1, 1, 1)
 
-    This compatibility concern terminates before Parse.  The typed phases see
-    ordinary literal bindings and have no special case for the watcher.
+
+def _bind_subinterpreter_locations(graph: WorkflowGraph,
+                                   yaml_tag_paths: YamlTagPaths) -> WorkflowGraph:
+    """Bind the three locations the runtime adapter declares as inputs.
+
+    `cwl_subinterpreter.cwl` declares `root_workflow_yml_path`,
+    `cachedir_path` and `homedir` like any other input; only their values come
+    from the invocation. Supplying them here makes that a fact about a step in
+    the graph, where it belongs, rather than an edit to the reader's document
+    made before anything has parsed it -- which is what forced the source to be
+    rebuilt as text in the first place. A binding the document already wrote is
+    left alone.
     """
-    copied = deepcopy(root)
     values = {
         'root_workflow_yml_path': str(Path(yaml_tag_paths['yaml']).parent.absolute()),
         'cachedir_path': str(Path(yaml_tag_paths['cachedir']).absolute()),
         'homedir': yaml_tag_paths['homedir'],
     }
-
-    def visit(document: Yaml) -> None:
-        raw_steps = document.get('steps', [])
-        if isinstance(raw_steps, dict):
-            steps = list(raw_steps.items())
-        elif isinstance(raw_steps, list):
-            steps = [(None, step) for step in raw_steps]
-        else:
-            return
-        for authored_name, step in steps:
-            if not isinstance(step, dict):
-                continue
-            name = step.get('id', authored_name or '')
-            if Path(str(name)).stem == 'cwl_subinterpreter':
-                inputs = step.setdefault('in', {})
-                if isinstance(inputs, dict):
-                    inputs.update({name: {'wic_inline_input': value}
-                                   for name, value in values.items()})
-            subtree = step.get('subtree')
-            if isinstance(subtree, dict):
-                visit(subtree)
-
-    visit(copied)
-    return copied
+    steps = []
+    for step in graph.steps:
+        if Path(step.id.name).stem != 'cwl_subinterpreter':
+            steps.append(step)
+            continue
+        already = {binding.sink.port for binding in step.bindings}
+        supplied = tuple(
+            Binding(port.id, InlineLiteral(values[port.id.port], _LOCATION_SPAN))
+            for port in step.inputs
+            if port.id.port in values and port.id.port not in already)
+        steps.append(replace(step, bindings=step.bindings + supplied))
+    return replace(
+        graph, steps=tuple(steps),
+        children=tuple(_bind_subinterpreter_locations(child, yaml_tag_paths)
+                       for child in graph.children))
 
 
 def _detach_sources(document: Yaml, path: tuple[str, ...],
