@@ -244,9 +244,26 @@ def _workflow_call_edges(graph: WorkflowGraph) -> tuple[Edge, ...]:
 
 
 def _relation(graph: WorkflowGraph, edge: Edge) -> TypeRelation:
-    source = _effective_type(graph, edge.source, producing=True)
-    sink = _effective_type(graph, edge.sink, producing=False)
-    return reference_relation(source, sink, lang_version=graph.lang_version)
+    """Judge one edge in its own scope, not whatever scope it was handed.
+
+    `_owner_namespace` names where an edge's two endpoints last diverge -- the
+    lowest document both live under. Scatter layers below that point are ones
+    the value genuinely crosses on its way to one endpoint or the other.
+    Scatter layers above it belong to an ancestor call that wraps *both*
+    endpoints alike (this edge is local to it, the wrapping-alias case
+    `_normalize_explicit_edges` already fixed, generalized to any depth), so
+    they inflate the two sides equally and must not enter the comparison at
+    all. Handing `_effective_type` a wider graph than the edge's own scope
+    walks its ancestor sum past that boundary: the producing side counts
+    every ancestor unconditionally while the consuming side only counts an
+    ancestor whose `scatter:` list names this port, so a shared ancestor that
+    scatters something else inflates one side and not the other and the edge
+    is rejected as disjoint from a scope it never depended on.
+    """
+    scope = _graph_at(graph, _owner_namespace(edge))
+    source = _effective_type(scope, edge.source, producing=True)
+    sink = _effective_type(scope, edge.sink, producing=False)
+    return reference_relation(source, sink, lang_version=scope.lang_version)
 
 
 def _effective_type(graph: WorkflowGraph, port: PortId, *, producing: bool) -> Any:
@@ -357,6 +374,20 @@ def _owner_namespace(edge: Edge) -> Namespace:
             break
         common.append(source_part)
     return Namespace(tuple(common))
+
+
+def _graph_at(graph: WorkflowGraph, namespace: Namespace) -> WorkflowGraph:
+    """The tree node whose own namespace is exactly `namespace`.
+
+    `namespace` is always an ancestor-or-self of wherever the search starts
+    -- every caller derives it from `_owner_namespace` of an edge reachable
+    from `graph` -- so a child containing it is always found.
+    """
+    if graph.namespace == namespace:
+        return graph
+    child = next(child for child in graph.children
+                 if _namespace_contains(child.namespace, namespace))
+    return _graph_at(child, namespace)
 
 
 def _place_edges(graph: WorkflowGraph, edges: tuple[Edge, ...],

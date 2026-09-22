@@ -188,6 +188,37 @@ def test_only_proven_disjoint_cross_scope_types_are_rejected() -> None:
 
 
 @pytest.mark.fast
+def test_unrelated_ancestor_scatter_does_not_inflate_a_cross_scope_edge() -> None:
+    """A scatter two documents out, over a value this edge never touches,
+    must not enter the judgment at all.
+
+    `outer.wic` defines the edge (`string_source` producing `shared`) and
+    calls `child.wic`, whose own step consumes it -- an edge local to
+    `outer`, not to `root`. `root` calls `outer.wic` scattered over `gate`,
+    an input this edge shares nothing with. Judging the edge at `root`'s
+    scope (or wider) sums `root`'s own scatter rank into the producing side
+    unconditionally, while the consuming side only counts an ancestor whose
+    `scatter:` list names this port -- so the same scalar `string` was
+    judged disjoint from itself.
+    """
+    tools = copy.deepcopy(SYNTHETIC_TOOLS)
+    tools[LegacyStepId('string_source', SYNTHETIC_NS)] = Tool(
+        '/synthetic/string_source.cwl', clt({}, {'value': {'type': 'string'}}))
+    child = 'steps:\n- id: mk_file\n  in:\n    name: !* shared\n'
+    outer = ('inputs:\n  gate: {type: string}\n'
+             'steps:\n'
+             '- id: string_source\n  out:\n  - value: !& shared\n'
+             '- id: child.wic\n')
+    root = 'steps:\n- id: outer.wic\n  scatter: [gate]\n  in: {gate: !ii [a, b]}\n'
+    registry = RegistrySnapshot.from_tools(
+        tools, workflows={(SYNTHETIC_NS, 'child'): child, (SYNTHETIC_NS, 'outer'): outer})
+    typed = front_end(root, registry, name='root')
+    assert typed.graph is not None, list(typed.diagnostics)
+    linked = link(typed.graph)
+    assert linked.graph is not None, list(linked.diagnostics)
+
+
+@pytest.mark.fast
 def test_consuming_scatter_participates_in_reference_judgment() -> None:
     """A scattered scalar input consumes an array, so a scalar source is disjoint."""
     result = link(_cross_scope('string_source', 'string', scatter=True))
