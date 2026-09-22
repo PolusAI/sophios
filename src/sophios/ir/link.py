@@ -68,11 +68,11 @@ def link(graph: WorkflowGraph) -> Linked:
         for sink in _concrete_input_sinks(attached, obligation.sink):
             edge = Edge(source, sink, obligation.span)
             if _relation(attached, edge) is TypeRelation.DISJOINT:
+                produced, consumed = _compared_types(attached, edge)
                 diagnostics.error(
                     SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
                     f"edge '{obligation.name}' is provably disjoint: "
-                    f'{_raw_type(attached, source)!r} cannot feed '
-                    f'{_raw_type(attached, sink)!r}.',
+                    f'{produced!r} cannot feed {consumed!r}.',
                     obligation.span,
                 )
                 continue
@@ -149,10 +149,10 @@ def _reject_if_disjoint(graph: WorkflowGraph, edge: Edge,
     """Diagnose one edge only when the language relation proves rejection."""
     if _relation(graph, edge) is not TypeRelation.DISJOINT:
         return False
+    produced, consumed = _compared_types(graph, edge)
     diagnostics.error(
         SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
-        f'edge is provably disjoint: {_raw_type(graph, edge.source)!r} cannot feed '
-        f'{_raw_type(graph, edge.sink)!r}.',
+        f'edge is provably disjoint: {produced!r} cannot feed {consumed!r}.',
         edge.span,
     )
     return True
@@ -243,6 +243,19 @@ def _workflow_call_edges(graph: WorkflowGraph) -> tuple[Edge, ...]:
     return tuple(found)
 
 
+def _compared_types(graph: WorkflowGraph, edge: Edge) -> tuple[Any, Any]:
+    """The two types `_relation` judges, in the scope it judges them in.
+
+    The message quotes these rather than the raw declarations. A scatter
+    mismatch differs only in array depth, so printing the raw types renders
+    every one of them as "'File' cannot feed 'File'" -- a contradiction that
+    tells the reader nothing about the actual difference.
+    """
+    scope = _graph_at(graph, _owner_namespace(edge))
+    return (_effective_type(scope, edge.source, producing=True),
+            _effective_type(scope, edge.sink, producing=False))
+
+
 def _relation(graph: WorkflowGraph, edge: Edge) -> TypeRelation:
     """Judge one edge in its own scope, not whatever scope it was handed.
 
@@ -261,8 +274,7 @@ def _relation(graph: WorkflowGraph, edge: Edge) -> TypeRelation:
     is rejected as disjoint from a scope it never depended on.
     """
     scope = _graph_at(graph, _owner_namespace(edge))
-    source = _effective_type(scope, edge.source, producing=True)
-    sink = _effective_type(scope, edge.sink, producing=False)
+    source, sink = _compared_types(graph, edge)
     return reference_relation(source, sink, lang_version=scope.lang_version)
 
 
