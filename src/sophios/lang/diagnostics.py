@@ -27,6 +27,31 @@ class Severity(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class Locator:
+    """Where a problem sits in a document's structure, independent of text.
+
+    A file has a line; a workflow assembled in memory does not, and inventing
+    one for it would be a guess. What both have is structure, so this is what
+    a caller who built a workflow programmatically can be told: which step,
+    and which of its ports.
+
+    Independent of `SourceSpan` rather than a substitute for it. A document
+    read from disk carries both, and each surface renders the one it can act
+    on — an editor jumps to the line, the Python API names the object.
+    """
+
+    step: str | None = None
+    #: 1-based, matching the position a caller passed the step in.
+    index: int | None = None
+    port: str | None = None
+
+    def __str__(self) -> str:
+        step = self.step if self.step is not None else '?'
+        where = f'step {step!r}' if self.index is None else f'step {self.index} {step!r}'
+        return where if self.port is None else f'{where}, port {self.port!r}'
+
+
+@dataclass(frozen=True, slots=True)
 class Diagnostic:
     """A single problem, located in source when a location is known.
 
@@ -34,16 +59,22 @@ class Diagnostic:
     positions, so it has one to give. Compile-phase diagnostics may not: until
     the compiler runs on the AST, a failure often knows which workflow it came
     from but not which line. An honest `None` beats an invented position.
+
+    `locator` is the other half of that: a phase that knows which step and
+    port it is complaining about can say so even when no file exists to point
+    into. The two are independent — either, both, or neither may be present.
     """
 
     severity: Severity
     code: _error_codes.SophiosErrorCode
     message: str
     span: SourceSpan | None = None
+    locator: 'Locator | None' = None
 
     def __str__(self) -> str:
         prefix = f'{self.span}: ' if self.span is not None else ''
-        return f'{prefix}{self.severity} [{self.code}] {self.message}'
+        suffix = f' ({self.locator})' if self.locator is not None else ''
+        return f'{prefix}{self.severity} [{self.code}] {self.message}{suffix}'
 
 
 class Diagnostics(Sequence[Diagnostic]):
@@ -59,14 +90,17 @@ class Diagnostics(Sequence[Diagnostic]):
         self._items: list[Diagnostic] = list(items)
 
     def error(self, code: _error_codes.SophiosErrorCode,
-              message: str, span: SourceSpan | None = None) -> None:
+              message: str, span: SourceSpan | None = None,
+              locator: Locator | None = None) -> None:
         """Record an error.
 
         `span` is optional because a phase after parsing can be handed a node
         the parser never built -- a document assembled in memory -- and a
-        diagnostic with no position is still better than an exception.
+        diagnostic with no position is still better than an exception. That is
+        exactly when `locator` earns its place: the structure survives where
+        the text does not.
         """
-        self._append(Diagnostic(Severity.ERROR, code, message, span))
+        self._append(Diagnostic(Severity.ERROR, code, message, span, locator))
 
     def _append(self, diagnostic: Diagnostic) -> None:
         """Append, dropping exact duplicates.

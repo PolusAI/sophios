@@ -12,7 +12,7 @@ type is what the document declared and inference has not run.
 from dataclasses import dataclass
 
 from ..lang.cwl import CWL_VERSION
-from ..lang.diagnostics import Diagnostics
+from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.nodes import (Document, EdgeRef, InlineLiteral, InputValue, RawCwlRef,
                           UnresolvedName)
@@ -190,6 +190,7 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
                 SophiosErrorCode.UNDECLARED_PORT,
                 f"step '{source.id}' binds '{name}', which its resolved process does not declare",
                 source.span,
+                Locator(step=source.id, index=identity.index, port=name),
             )
     for authored in source.outputs:
         if authored.name not in declared_outputs:
@@ -198,6 +199,7 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
                 f"step '{source.id}' names output '{authored.name}', which its resolved process "
                 'does not declare',
                 authored.span,
+                Locator(step=source.id, index=identity.index, port=authored.name),
             )
     inputs = tuple(Port(PortId(identity, Direction.INPUT, name), declaration.type,
                         declaration, source.span)
@@ -322,26 +324,29 @@ def _every_name_is_present(document: Document, diagnostics: Diagnostics) -> bool
     of the four the checker noticed first.
     """
     found = False
-    for step in document.steps:
+    for index, step in enumerate(document.steps, start=1):
         for name, value in step.inputs:
             if not name:
                 diagnostics.error(SophiosErrorCode.EMPTY_NAME,
-                                  f"step '{step.id}' binds an input with no name", step.span)
+                                  f"step '{step.id}' binds an input with no name", step.span,
+                                  Locator(step=step.id, index=index))
                 found = True
             if isinstance(value, EdgeRef) and not value.name:
                 diagnostics.error(SophiosErrorCode.EMPTY_NAME,
-                                  f"'!*' on '{step.id}.{name}' names no edge", value.span)
+                                  f"'!*' on '{step.id}.{name}' names no edge", value.span,
+                                  Locator(step=step.id, index=index, port=name))
                 found = True
         for binding in step.outputs:
             if not binding.name:
                 diagnostics.error(SophiosErrorCode.EMPTY_NAME,
                                   f"step '{step.id}' declares an out: entry with no name",
-                                  binding.span)
+                                  binding.span, Locator(step=step.id, index=index))
                 found = True
             if binding.edge_def is not None and not binding.edge_def.name:
                 diagnostics.error(SophiosErrorCode.EMPTY_NAME,
                                   f"'!&' on '{step.id}.{binding.name}' defines no edge",
-                                  binding.edge_def.span)
+                                  binding.edge_def.span,
+                                  Locator(step=step.id, index=index, port=binding.name))
                 found = True
     return not found
 
