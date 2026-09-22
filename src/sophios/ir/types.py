@@ -71,6 +71,20 @@ class Namespace:
         return NAMESPACE_SEPARATOR.join(self.parts)
 
 
+@dataclass(frozen=True, slots=True, order=True)
+class RegistryKey:
+    """A process name in one plugin namespace.
+
+    An identity, so it lives with the others. A step's resolved process is
+    recorded as this pair rather than as a joined string, because every reader
+    of a joined string has to take it apart again -- and a name split back out
+    of text is a guess where the pair is a fact.
+    """
+
+    namespace: str
+    name: str
+
+
 @dataclass(frozen=True, slots=True)
 class StepId:
     """One *occurrence* of a step, which is not the same as the tool it runs.
@@ -161,6 +175,10 @@ class WorkflowPort:
     declaration: PortDeclaration
     output_source: OpaqueCwl = None
     has_output_source: bool = False
+    #: The port this one was derived from, when its name was built by joining a
+    #: step id to a port name rather than written by hand. Recorded because the
+    #: two halves are facts here and a guess once they are one string.
+    origin: PortId | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -191,11 +209,11 @@ class ProcessRun:
     """
 
     target: OpaqueCwl
-    process_id: str
+    process_id: RegistryKey
     child: 'WorkflowGraph | None' = None
 
     def __post_init__(self) -> None:
-        if not self.process_id:
+        if not self.process_id.name:
             raise ValueError('a resolved process must have an identity')
 
 
@@ -233,6 +251,9 @@ class Port:
     type: PortType
     declaration: PortDeclaration | None = None
     span: SourceSpan | None = None
+    #: The port this one re-exports, when a parent exposed a child's interface
+    #: under a joined name. `None` for a port a process declares itself.
+    origin: PortId | None = None
 
 
 @dataclass(frozen=True, slots=True)

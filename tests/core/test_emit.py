@@ -35,6 +35,7 @@ from sophios.ir import (
     PortId,
     PortType,
     ProcessRun,
+    RegistryKey,
     StepEmission,
     StepId,
     StepNode,
@@ -120,7 +121,7 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
         outputs=(Port(output_id, out_decl.type, out_decl),),
         emission=StepEmission(
             'write', (('message', {'source': 'message'}),),
-            ProcessRun('write.cwl', 'global/write'), ('file',),
+            ProcessRun('write.cwl', RegistryKey('global', 'write')), ('file',),
         ),
     )
     graph = WorkflowGraph(

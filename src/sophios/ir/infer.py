@@ -14,6 +14,7 @@ from .types import (
     PortDeclaration,
     PortId,
     ProcessRun,
+    RegistryKey,
     StepEmission,
     StepId,
     StepNode,
@@ -168,7 +169,8 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
                     field_order=tuple(name for name in declaration.field_order
                                       if name not in {'inputBinding', 'loadContents'}),
                 )
-                workflow_inputs.append(WorkflowPort(input_name, declaration))
+                workflow_inputs.append(
+                    WorkflowPort(input_name, declaration, origin=port.origin or port.id))
             if input_name not in {name for name, _ in input_mapping}:
                 input_mapping.append((input_name, (port.id,)))
             steps[position] = _set_emission_input(current_step, port.id.port, input_name)
@@ -184,13 +186,13 @@ def _candidate(steps: list[StepNode], position: int, sink: Port,
     sink_type = _effective_sink_type(steps[position], sink)
     sink_formats = _formats(sink.declaration)
     break_inference = False
-    break_namespace = ''
+    break_scope: StepId | None = None
     attempted: list[Port] = []
     for producer in reversed(steps[:position]):
         matches: list[Port] = []
         for output in reversed(producer.outputs):
-            namespace = output.id.port.split('___')[-2] if '___' in output.id.port else ''
-            if break_inference and namespace != break_namespace:
+            scope = output.origin.step if output.origin is not None else None
+            if break_inference and scope != break_scope:
                 break
             attempted.append(output)
             output_type = _effective_source_type(producer, output)
@@ -201,24 +203,29 @@ def _candidate(steps: list[StepNode], position: int, sink: Port,
                 matches.append(output)
             if dict(producer.inference_rules).get(output.id.port, 'default') == 'break':
                 break_inference = True
-                break_namespace = namespace
+                break_scope = scope
         if matches:
-            return _choose_by_name(matches, sink.id.port, policy).id, tuple(attempted)
+            return _choose_by_name(matches, sink, policy).id, tuple(attempted)
         if break_inference:
             break
     return None, tuple(attempted)
 
 
-def _choose_by_name(matches: list[Port], sink_name: str,
+def _choose_by_name(matches: list[Port], sink: Port,
                     policy: InferencePolicy) -> Port:
     if not policy.use_naming_conventions or len(matches) == 1:
         return matches[0]
-    wanted = sink_name.split('___')[-1].replace('input_', '')
+    wanted = _authored(sink).replace('input_', '')
     for before, after in policy.renaming_conventions:
         wanted = wanted.replace(before, after)
     named = [port for port in matches
-             if port.id.port.split('___')[-1].replace('output_', '') == wanted]
+             if _authored(port).replace('output_', '') == wanted]
     return named[0] if named else matches[0]
+
+
+def _authored(port: Port) -> str:
+    """The name the port was written under, wherever that was."""
+    return port.origin.port if port.origin is not None else port.id.port
 
 
 def _insertion_candidate(attempted: tuple[Port, ...], sink: Port,
@@ -253,7 +260,7 @@ def _insert(graph: WorkflowGraph, position: int, insertion: Insertion,
         id=f'{graph.name}__step__{position + 1}__{insertion.name}',
         inputs=(),
         run=ProcessRun(insertion.run_path,
-                       f'{insertion.namespace}/{insertion.name}'),
+                       RegistryKey(insertion.namespace, insertion.name)),
         outputs=tuple(name for name, _ in insertion.outputs),
         field_order=('id', 'run', 'out'),
     )
@@ -295,15 +302,16 @@ def _propagate_child_interface(graph: WorkflowGraph) -> WorkflowGraph:
         existing_inputs = {port.id.port for port in step.inputs}
         added_inputs = tuple(
             Port(PortId(step.id, Direction.INPUT, workflow_port.name),
-                 workflow_port.declaration.type, workflow_port.declaration, step.span)
+                 workflow_port.declaration.type, workflow_port.declaration, step.span,
+                 workflow_port.origin)
             for workflow_port in child.workflow_inputs
             if workflow_port.name not in existing_inputs
         )
         existing_outputs = {port.id.port for port in step.outputs}
         added_outputs = tuple(
             Port(PortId(step.id, Direction.OUTPUT, name), declaration.type,
-                 declaration, step.span)
-            for name, declaration in _exported_outputs(child)
+                 declaration, step.span, origin)
+            for name, declaration, origin in _exported_outputs(child)
             if name not in existing_outputs
         )
         emission = replace(step.emission, run=replace(step.emission.run, child=child))
@@ -312,19 +320,26 @@ def _propagate_child_interface(graph: WorkflowGraph) -> WorkflowGraph:
     return replace(graph, steps=tuple(steps))
 
 
-def _exported_outputs(graph: WorkflowGraph) -> tuple[tuple[str, PortDeclaration], ...]:
-    """The output interface legacy compilation gives a child workflow."""
-    exported = {port.name: port.declaration for port in graph.workflow_outputs}
+def _exported_outputs(
+        graph: WorkflowGraph) -> tuple[tuple[str, PortDeclaration, PortId | None], ...]:
+    """The output interface legacy compilation gives a child workflow.
+
+    Each derived name is paired with the port it was derived from, so a reader
+    wanting the step or the authored name back has them rather than a slice.
+    """
+    exported: dict[str, tuple[PortDeclaration, PortId | None]] = {
+        port.name: (port.declaration, port.origin) for port in graph.workflow_outputs}
     for step in graph.steps:
         emitted = step.emission.id if step.emission is not None else step.id.name
         for output in step.outputs:
             name = f'{emitted}___{output.id.port}'
             declaration = output.declaration or port_declaration(output.type.declared)
-            exported[name] = replace(
+            exported[name] = (replace(
                 declaration,
                 type=port_declaration(_effective_source_type(step, output)).type,
-            )
-    return tuple(exported.items())
+            ), output.origin or output.id)
+    return tuple((name, declaration, origin)
+                 for name, (declaration, origin) in exported.items())
 
 
 def _attach_children(graph: WorkflowGraph) -> WorkflowGraph:

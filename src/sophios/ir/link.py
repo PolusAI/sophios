@@ -441,6 +441,7 @@ def _expose_cross_scope_inputs(graph: WorkflowGraph,
             if step is None or step.emission is None:
                 continue
             name = f'{step.emission.id}___{edge.sink.port}'
+            derived_from: PortId | None = edge.sink
         elif any(_namespace_contains(child.namespace, edge.sink.step.namespace)
                  for child in current.children):
             child = next(child for child in current.children
@@ -450,6 +451,8 @@ def _expose_cross_scope_inputs(graph: WorkflowGraph,
             if child_mapping is None:
                 continue
             name = child_mapping[0]
+            derived_from = next((port.origin for port in child.workflow_inputs
+                                 if port.name == name), None)
         else:
             continue
         if name not in {port.name for port in inputs}:
@@ -465,7 +468,9 @@ def _expose_cross_scope_inputs(graph: WorkflowGraph,
                 type=port_declaration({'type': deepcopy(effective)}).type,
                 shorthand=False,
             )
-            inputs.append(WorkflowPort(name, declaration))
+            inputs.append(WorkflowPort(
+                name, declaration,
+                origin=sink_port.origin or derived_from))
         for index, (existing, sinks) in enumerate(mappings):
             if existing == name:
                 if edge.sink not in sinks:

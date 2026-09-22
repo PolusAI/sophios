@@ -298,12 +298,13 @@ def _artifact_tree(graph: WorkflowGraph, registry: RegistrySnapshot,
             child_reps = _project_graph(child, graph_settings)
             children.append(_artifact_tree(child, registry, graph_settings, child_reps))
             continue
-        namespace, name = step.emission.run.process_id.split('/', 1)
-        definition = registry.tool(RegistryKey(namespace, name))
+        key = step.emission.run.process_id
+        definition = registry.tool(key)
         if definition is None:
-            raise SophiosError.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
-                                     f'process {namespace}/{name} disappeared after resolution')
-        leaf_graph = utils_graphs.get_graph_reps(name)
+            raise SophiosError.error(
+                SophiosErrorCode.SUBWORKFLOW_INVALID,
+                f'process {key.namespace}/{key.name} disappeared after resolution')
+        leaf_graph = utils_graphs.get_graph_reps(key.name)
         children.append(CompilationArtifact(
             (step.emission.id,), Path(definition.run_path).stem,
             definition.run_path, deepcopy(definition.cwl), {}, None,

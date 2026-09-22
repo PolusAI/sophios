@@ -29,15 +29,7 @@ from ..lang.diagnostics import Diagnostic, Diagnostics
 from ..lang.nodes import InputValue, OpaqueCwl, Step
 from ..wic_types import Cwl, Tools
 from .declarations import port_declaration
-from .types import PortDeclaration
-
-
-@dataclass(frozen=True, slots=True, order=True)
-class RegistryKey:
-    """A process name in one plugin namespace."""
-
-    namespace: str
-    name: str
+from .types import PortDeclaration, RegistryKey
 
 
 @dataclass(frozen=True, slots=True)
