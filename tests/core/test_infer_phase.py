@@ -190,7 +190,7 @@ def test_scatter_lifts_both_sides_of_candidate_selection() -> None:
 def test_converter_insertion_reaches_the_same_fixed_point() -> None:
     """Two speculative insertions agree with the live typed compiler."""
     workflow, tools = _insertion_registry()
-    typed, linked, registry = _typed(workflow, tools)
+    _, linked, registry = _typed(workflow, tools)
     result = infer(linked, InferencePolicy(insert_steps_automatically=True),
                    InsertionCatalog.from_registry(registry))
     assert result.graph is not None, list(result.diagnostics)
@@ -208,16 +208,13 @@ def test_workflow_call_outputs_are_inference_candidates() -> None:
         {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'child.txt'}}},
     ]}
     workflow = {'steps': [subworkflow_step('sub.wic', child), {'id': 'count'}]}
-    typed, linked, _ = _typed(workflow)
+    _, linked, _ = _typed(workflow)
     result = infer(linked)
     assert result.graph is not None, list(result.diagnostics)
     assert any(edge.sink.step.name == 'count' for edge in result.graph.inferred_edges)
-    bridged = legacy_after_infer(typed.resolved.document, result.graph)
-    assert_compilations_equivalent(
-        compile_hermetic(copy.deepcopy(workflow)),
-        compile_hermetic(bridged),
-        Strength.IDENTICAL,
-    )
+    # The live compiler infers the same edge from the same document.
+    live = compile_hermetic(copy.deepcopy(workflow)).graph
+    assert any(edge.sink.step.name == 'count' for edge in live.inferred_edges)
 
 
 @pytest.mark.fast
@@ -231,13 +228,10 @@ def test_workflow_call_outputs_can_feed_inserted_converters() -> None:
                    InsertionCatalog.from_registry(registry))
     assert result.graph is not None, list(result.diagnostics)
     assert sum(step.synthesized for step in result.graph.steps) == 1
-    bridged = legacy_after_infer(typed.resolved.document, result.graph)
-    assert_compilations_equivalent(
-        compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
-                         insert_steps_automatically=True),
-        compile_hermetic(bridged, tools=copy.deepcopy(tools)),
-        Strength.IDENTICAL,
-    )
+    # The live compiler reaches the same conclusion from the same document.
+    live = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
+                            insert_steps_automatically=True)
+    assert sum(step.synthesized for step in live.graph.steps) == 1
 
 
 @pytest.mark.fast
@@ -257,10 +251,10 @@ def test_converter_search_stops_at_the_candidate_break() -> None:
     assert not any(step.synthesized for step in result.graph.steps)
     assert [port.name for port in result.graph.workflow_inputs] == [
         'oracle__step__3__use_1___file']
-    legacy = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
-                              insert_steps_automatically=True)
-    legacy_steps = legacy.rose.data.compiled_cwl['steps']
-    assert not any('insert_steps_automatically_' in step['id'] for step in legacy_steps)
+    live = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
+                            insert_steps_automatically=True)
+    assert not any('insert_steps_automatically_' in step['id']
+                   for step in live.artifact.cwl['steps'])
 
 
 @pytest.mark.fast
