@@ -9,6 +9,7 @@ READS THE AST AND NOTHING ELSE -- no registry, no filesystem, no config.
 Resolving a step's tool against the environment is `Resolve`'s job, so a port's
 type is what the document declared and inference has not run.
 """
+from typing import Final
 from dataclasses import dataclass
 
 from ..lang.cwl import CWL_VERSION
@@ -178,14 +179,24 @@ def _lower_resolved(document: ResolvedDocument,
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
+#: Bound on a `python_script` step to build its tool, never passed to it.
+_GENERATION_PARAMETERS: Final = ('script', 'dockerPull')
+
+
 def _resolved_step_node(workflow_name: str, identity: StepId, resolved: ResolvedStep,
                         defined_so_far: dict[str, PortId], defined_anywhere: dict[str, PortId],
                         diagnostics: Diagnostics) -> StepNode:
     source = resolved.source
     declared_inputs = {port.name: port.declaration for port in resolved.process.inputs}
     declared_outputs = {port.name: port.declaration for port in resolved.process.outputs}
+    # A generated process consumes its generation parameters rather than
+    # declaring them: `script` becomes the command and `dockerPull` a container
+    # hint, so neither survives into the tool's interface. The document still
+    # binds them, and that binding is what produced the tool -- not a port the
+    # step got wrong.
+    consumed = _GENERATION_PARAMETERS if resolved.process.generated else ()
     for name, _ in source.inputs:
-        if name not in declared_inputs:
+        if name not in declared_inputs and name not in consumed:
             diagnostics.error(
                 SophiosErrorCode.UNDECLARED_PORT,
                 f"step '{source.id}' binds '{name}', which its resolved process does not declare",
