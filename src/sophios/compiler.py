@@ -57,7 +57,7 @@ def compile_source(bundle: SourceBundle,
         compiler_options.get('lang_version'), bundle.lang_version_pins)
     front = front_end(bundle.source, bundle.registry, name=bundle.name,
                       lang_version=selected_version)
-    result = _compile_front(front, bundle.registry, {}, {},
+    result = _compile_front(front, bundle.registry,
                             compiler_options, graph_settings, yaml_tag_paths,
                             relative_run_path=relative_run_path, testing=testing,
                             graph_target=graph_target)
@@ -86,13 +86,13 @@ def compile_document(yaml_tree_ast: YamlTree,
     if not testing:
         print(' starting compilation of', yaml_tree_ast.step_id.stem)
 
-    source, workflow_sources, source_documents = _source_bundle(yaml_tree_ast.yml)
+    source, workflow_sources = _source_bundle(yaml_tree_ast.yml)
     registry = RegistrySnapshot.from_tools(tools, workflows=workflow_sources)
     selected_version = versions.resolve(
         compiler_options.get('lang_version'), _lang_version_pins(yaml_tree_ast.yml))
     front = front_end(source, registry, name=Path(yaml_tree_ast.step_id.stem).stem,
                       lang_version=selected_version)
-    result = _compile_front(front, registry, source_documents, yaml_tree_ast.yml,
+    result = _compile_front(front, registry,
                             compiler_options, graph_settings, yaml_tag_paths,
                             relative_run_path=relative_run_path, testing=testing,
                             graph_target=graph_target)
@@ -104,8 +104,6 @@ def compile_document(yaml_tree_ast: YamlTree,
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _compile_front(front: FrontEndResult,
                    registry: RegistrySnapshot,
-                   source_documents: dict[tuple[str, ...], Yaml],
-                   root_source: Yaml,
                    compiler_options: CompilerOptions,
                    graph_settings: GraphSettings,
                    yaml_tag_paths: YamlTagPaths,
@@ -151,19 +149,16 @@ def _compile_front(front: FrontEndResult,
     )
     compiled = emit(graph)
     graph_reps = _project_graph(graph, graph_settings, graph_target)
-    artifact = _artifact_tree(graph, registry, source_documents, graph_settings,
-                              root_source, graph_reps)
+    artifact = _artifact_tree(graph, registry, graph_settings, graph_reps)
     assert artifact.cwl == compiled
     return CompilationResult(graph, artifact)
 
 
-def _source_bundle(root: Yaml) -> tuple[str, dict[tuple[str, str], str],
-                                        dict[tuple[str, ...], Yaml]]:
+def _source_bundle(root: Yaml) -> tuple[str, dict[tuple[str, str], str]]:
     """Detach loader-attached subtrees into an immutable Resolve snapshot."""
     workflows: dict[tuple[str, str], str] = {}
-    documents: dict[tuple[str, ...], Yaml] = {}
-    detached_root = _detach_sources(root, (), workflows, documents)
-    return _dump_source(detached_root), workflows, documents
+    detached_root = _detach_sources(root, (), workflows)
+    return _dump_source(detached_root), workflows
 
 
 #: The runtime adapter's own declared inputs, whose values come from the
@@ -207,11 +202,9 @@ def _bind_subinterpreter_locations(graph: WorkflowGraph,
 
 
 def _detach_sources(document: Yaml, path: tuple[str, ...],
-                    workflows: dict[tuple[str, str], str],
-                    documents: dict[tuple[str, ...], Yaml]) -> Yaml:
+                    workflows: dict[tuple[str, str], str]) -> Yaml:
     """Recursively replace attached child bodies with registry entries."""
     copied = deepcopy(document)
-    documents[path] = deepcopy(document)
     raw_steps = copied.get('steps', [])
     if isinstance(raw_steps, dict):
         steps = [{'id': str(name), **({} if body is None else body)}
@@ -225,7 +218,7 @@ def _detach_sources(document: Yaml, path: tuple[str, ...],
     sidecar_steps = sidecar.get('steps', {}) if isinstance(sidecar, dict) else {}
     if isinstance(sidecar, dict) and isinstance(sidecar.get('implementations'), dict):
         copied['wic'] = {**sidecar, 'implementations': _detach_implementations(
-            sidecar, path, workflows, documents)}
+            sidecar, path, workflows)}
     detached: list[Yaml] = []
     for index, step in enumerate(steps, start=1):
         if not isinstance(step, dict) or 'subtree' not in step:
@@ -240,7 +233,7 @@ def _detach_sources(document: Yaml, path: tuple[str, ...],
             namespace = str(metadata['wic'].get('namespace', 'global'))
         workflow_name = Path(path[-1]).stem if path else ''
         child_path = (*path, _emitted_step_name(workflow_name, index, step_name))
-        child = _detach_sources(step['subtree'], child_path, workflows, documents)
+        child = _detach_sources(step['subtree'], child_path, workflows)
         workflows[(namespace, child_name)] = _dump_source(child)
         parentargs = step.get('parentargs', {})
         detached.append({'id': step_name,
@@ -250,8 +243,7 @@ def _detach_sources(document: Yaml, path: tuple[str, ...],
 
 
 def _detach_implementations(sidecar: Yaml, path: tuple[str, ...],
-                            workflows: dict[tuple[str, str], str],
-                            documents: dict[tuple[str, ...], Yaml]) -> Yaml:
+                            workflows: dict[tuple[str, str], str]) -> Yaml:
     """Move inline implementation bodies into the registry, as subtrees are.
 
     The loader leaves each body attached and rekeys the mapping by ``StepId``,
@@ -263,7 +255,7 @@ def _detach_implementations(sidecar: Yaml, path: tuple[str, ...],
     for key, body in sidecar['implementations'].items():
         name = Path(key.stem if isinstance(key, LegacyStepId) else str(key)).stem
         if isinstance(body, dict) and body:
-            child = _detach_sources(body, (*path, name), workflows, documents)
+            child = _detach_sources(body, (*path, name), workflows)
             workflows[(namespace, name)] = _dump_source(child)
         detached[name] = {}
     return detached
@@ -296,8 +288,7 @@ def _check_unresolved_names(graph: WorkflowGraph, allow_raw_cwl: bool) -> None:
 
 
 def _artifact_tree(graph: WorkflowGraph, registry: RegistrySnapshot,
-                   documents: dict[tuple[str, ...], Yaml], graph_settings: GraphSettings,
-                   root_source: Yaml,
+                   graph_settings: GraphSettings,
                    graph_reps: GraphReps | None = None) -> CompilationArtifact:
     children: list[CompilationArtifact] = []
     for step in graph.steps:
@@ -305,9 +296,7 @@ def _artifact_tree(graph: WorkflowGraph, registry: RegistrySnapshot,
         child = step.emission.run.child
         if child is not None:
             child_reps = _project_graph(child, graph_settings)
-            children.append(_artifact_tree(
-                child, registry, documents, graph_settings,
-                documents.get(child.namespace.parts, {}), child_reps))
+            children.append(_artifact_tree(child, registry, graph_settings, child_reps))
             continue
         namespace, name = step.emission.run.process_id.split('/', 1)
         definition = registry.tool(RegistryKey(namespace, name))
@@ -317,21 +306,18 @@ def _artifact_tree(graph: WorkflowGraph, registry: RegistrySnapshot,
         leaf_graph = utils_graphs.get_graph_reps(name)
         children.append(CompilationArtifact(
             (step.emission.id,), Path(definition.run_path).stem,
-            definition.run_path, deepcopy(definition.cwl), {}, {}, None,
+            definition.run_path, deepcopy(definition.cwl), {}, None,
             leaf_graph,
         ))
 
     compiled = emit(graph)
     reps = graph_reps or _project_graph(graph, graph_settings)
-    source = deepcopy(root_source if not graph.namespace.parts
-                      else documents.get(graph.namespace.parts, root_source))
     return CompilationArtifact(
         graph.namespace.parts,
         graph.name,
         f'{graph.name}.cwl',
         compiled,
         emit_job_inputs(graph),
-        source,
         graph,
         reps,
         tuple(children),

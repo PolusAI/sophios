@@ -6,7 +6,7 @@ the compilation's authority.
 """
 from dataclasses import dataclass
 
-from ..wic_types import Cwl, GraphReps, Yaml
+from ..wic_types import Cwl, GraphReps
 from .types import WorkflowGraph
 
 
@@ -19,7 +19,6 @@ class CompilationArtifact:
     run_path: str
     cwl: Cwl
     job_inputs: Cwl
-    source: Yaml
     graph: WorkflowGraph | None
     graph_view: GraphReps
     children: tuple['CompilationArtifact', ...] = ()
