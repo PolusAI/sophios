@@ -79,27 +79,6 @@ def shorten_namespaced_output_name(namespaced_output_name: str, sep: str = ' ') 
     return (yaml_stem_init, shortened)
 
 
-def partition_by_lowest_common_ancestor(nss1: Namespaces, nss2: Namespaces) -> tuple[Namespaces, Namespaces]:
-    """See https://en.wikipedia.org/wiki/Lowest_common_ancestor
-
-    Args:
-        nss1 (Namespaces): The namespaces associated with the first node
-        nss2 (Namespaces): The namespaces associated with the second node
-
-    Returns:
-        tuple[Namespaces, Namespaces]: nss1, partitioned by lowest common ancestor
-    """
-    # Only partition nss1; if you want to partition nss1
-    # just switch the arguments at the call site.
-    if nss1 == [] or nss2 == []:
-        return ([], nss1)  # Base case
-    if nss1[0] == nss2[0]:  # Keep going
-        (nss1_heads, nss1_tails) = partition_by_lowest_common_ancestor(
-            nss1[1:], nss2[1:])
-        return ([nss1[0]] + nss1_heads, nss1_tails)
-    return ([], nss1)
-
-
 def get_steps_keys(steps: list[Yaml]) -> list[str]:
     """Returns the name (dict key) of each step in the given CWL workflow
 
@@ -187,96 +166,6 @@ def recursively_delete_dict_key(key: str, obj: Any) -> Any:
     return obj
 
 
-def recursively_contains_dict_key(key: str, obj: Any) -> bool:
-    """Recursively checks whether obj contains entries with the given key.
-
-    Args:
-        key (str): The key to be checked
-        obj (Any): The object from which to check the key.
-
-    Returns:
-        bool: True if key is found, else False.
-    """
-    if isinstance(obj, list):
-        return any(recursively_contains_dict_key(key, x) for x in obj)
-    if isinstance(obj, dict):
-        return key in obj or any(recursively_contains_dict_key(key, val) for val in obj.values())
-    return False
-
-
-def parse_int_string_tuple(string: str) -> tuple[int, str]:
-    """Parses a string of the form '(int, string)'
-
-    Args:
-        string (str): A string with the above encoding
-
-    Returns:
-        tuple[int, str]: The parsed result
-    """
-    string_no_parens = string.strip()[1:-1]
-    (str1, str2) = string_no_parens.split(',')
-    return (int(str1.strip()), str2.strip())
-
-
-def reindex_wic_steps(wic_steps: Yaml, index: int, num_steps: int = 1) -> Yaml:
-    """ Increment 1-based step index starting from the step with the given index by num_steps.
-
-    This function can be used to reindex steps after inserting num_steps at the given index: in\n
-    the wic: metadata annotations tag whose index (before insertion) is >= the given index.
-
-    Args:
-        wic_steps (Yaml): The steps: subtag of the wic: metadata annotations tag.
-        index (int): The (one-based) start index that needs to be reindexed.
-        num_steps (int): The number of steps inserted.
-
-    Returns:
-        Yaml: The updated wic: steps: tag, with the appropriate indices incremented.
-    """
-    wic_steps_reindexed = {}
-    for keystr, val in wic_steps.items():
-        (i, s) = parse_int_string_tuple(keystr)
-        newstr = f'({i+num_steps}, {s})' if i >= index else keystr
-        wic_steps_reindexed[newstr] = val
-    return wic_steps_reindexed
-
-
-def get_step_name_1(step_1_names: list[str],
-                    yaml_stem: str,
-                    namespaces: Namespaces,
-                    steps_keys: list[str],
-                    subkeys: list[str]) -> str:
-    """Finds the name of the first step in the current subworkflow. If the first
-    step is itself subworkflow, the call site recurses until it finds a node.
-    This is necessary because ranksame in GraphViz can only be applied to
-    individual nodes, not cluster_subgraphs.
-
-    Args:
-        step_1_names (list[str]): The list of potential first node names
-        yaml_stem (str): The name of the current subworkflow (stem of the yaml filepath)
-        namespaces (Namespaces): Specifies the path in the AST of the current subworkflow
-        steps_keys (list[str]): The name of each step in the current CWL workflow
-        subkeys (list[str]): The keys associated with subworkflows
-
-    Returns:
-        str: The name of the first step
-    """
-    if not steps_keys:
-        raise ValueError('Error! workflows must define at least one step.')
-    if steps_keys[0] in subkeys:
-        if not step_1_names:
-            raise ValueError('Error! Subworkflow has no concrete first step.')
-        step_name_1 = step_1_names[0]
-    else:
-        step_name_1 = step_name_str(yaml_stem, 0, steps_keys[0])
-        step_name_1 = '___'.join(namespaces + [step_name_1])
-    # NOTE: Since the names of subgraphs '*.wic' contain a period, we need to
-    # escape them by enclosing the whole name in double quotes. Otherwise:
-    # "Error: *.wic.gv: syntax error in line n near '.'"
-        step_name_1 = f'"{step_name_1}"'
-
-    return step_name_1
-
-
 def parse_provenance_output_files(output_json: Json) -> list[tuple[str, str, str]]:
     """Parses the primary workflow provenance JSON object.
 
@@ -318,72 +207,6 @@ def parse_provenance_output_files_(obj: Any, parentdirs: str) -> list[tuple[str,
         # Should we flatten?? This will lose the structure of 2D (and higher) array outputs.
         return [y for x in files for y in x]
     return []
-
-
-def get_input_mappings(input_mapping: dict[str, list[str]], arg_keys: list[str],
-                       arg_key_in_yaml_tree_inputs: bool) -> list[str]:
-    """Gets all of the workflow step inputs / call sites that are mapped from the given workflow inputs.
-
-    Args:
-        input_mapping (dict[str, list[str]]): Maps workflow inputs to workflow step inputs, recursively namespaced.
-        arg_keys (list[str]): A (singleton) list of root workflow inputs.
-        arg_key_in_yaml_tree_inputs (bool): Determines whether at least one level of recursion has been performed.
-
-    Returns:
-        list[str]: A list of the workflow step inputs / call sites, recursively namespaced.
-    """
-    # Since each workflow input can be used in many workflow steps, we
-    # need to (recursively) find all of the leaves of the mapping tree
-    # corresponding to the root arg_key/in_name. Since we already added all
-    # sub-input_mapping's (with namespacing) after each recursive call,
-    # this flattens the recursion into iteration here. The only trick is
-    # that we also need to remove the intermediate variables associated
-    # with subworkflow boundaries.
-    if not arg_key_in_yaml_tree_inputs:
-        done = False
-        while not done:
-            done = True
-            arg_keys_accum = []
-            for arg_key_ in arg_keys:
-                if arg_key_ in input_mapping:
-                    # Remove the intermediate variables associated with subworkflow boundaries.
-                    arg_key_init_namespaces = arg_key_.split('___')[:-1]
-                    temp = ['___'.join(arg_key_init_namespaces + [s])
-                            for s in input_mapping[arg_key_]]
-                    arg_keys_accum.append(temp)
-                    done = False
-                else:
-                    arg_keys_accum.append([arg_key_])
-            arg_keys = [y for x in arg_keys_accum for y in x]
-
-    return arg_keys
-
-
-def get_output_mapping(output_mapping: dict[str, str], out_key: str) -> str:
-    """Gets the workflow step output / return location that is mapped to the given workflow output.
-
-    Args:
-        output_mapping (dict[str, str]): Maps workflow outputs to workflow step outputs, recursively namespaced.
-        out_key (str): The root workflow output.
-
-    Returns:
-        str: The workflow step output / return location, recursively namespaced.
-    """
-    # Similarly, we need to find the fixed-point of output_mapping.
-    # This is simpler since a workflow output can only come from one workflow step.
-    # if not out_key_in_yaml_tree_outputs:
-    done = False
-    while not done:
-        done = True
-        # out_key = f'{step_name_j}___{out_key}' # TODO: Check this
-        if out_key in output_mapping:
-            # Remove the intermediate variables associated with subworkflow boundaries.
-            out_key_init_namespaces = out_key.split('___')[:-1]
-            out_key = '___'.join(out_key_init_namespaces +
-                                 [output_mapping[out_key]])
-            done = False
-
-    return out_key
 
 
 def convert_args_dict_to_args_list(
