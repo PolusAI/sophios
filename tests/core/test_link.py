@@ -78,6 +78,57 @@ def test_cross_scope_obligation_is_discharged_at_its_lca() -> None:
     assert all(not child.composition_edges for child in linked.graph.children)
 
 
+def _cross_scope_two_levels(source_tool: str, source_type: object,
+                            child_input: str = 'name') -> WorkflowGraph:
+    """As `_cross_scope`, but the consuming step sits two documents under
+    the definition: `root` defines the edge and calls `wrapper.wic`, which
+    calls `child.wic`, whose own step consumes it."""
+    tools = copy.deepcopy(SYNTHETIC_TOOLS)
+    tools[LegacyStepId(source_tool, SYNTHETIC_NS)] = Tool(
+        f'/synthetic/{source_tool}.cwl', clt({}, {'value': {'type': source_type}}))
+    child = f'steps:\n- id: mk_file\n  in:\n    {child_input}: !* shared\n'
+    wrapper = 'steps:\n- id: child.wic\n'
+    root = (f'steps:\n- id: {source_tool}\n  out:\n  - value: !& shared\n'
+            '- id: wrapper.wic\n')
+    registry = RegistrySnapshot.from_tools(
+        tools, workflows={(SYNTHETIC_NS, 'child'): child, (SYNTHETIC_NS, 'wrapper'): wrapper})
+    result = front_end(root, registry, name='root')
+    assert result.graph is not None and result.resolved is not None
+    return result.graph
+
+
+@pytest.mark.fast
+def test_cross_scope_obligation_discharged_two_levels_below_the_definition() -> None:
+    """A child two documents under the edge's definition still compiles.
+
+    `prod.wic`, called from `basic.wic`, called from `stability.wic`,
+    consumes an edge only an ancestor's sibling defines. Building the
+    intermediate `wrapper.wic` graph while placing that discharge must not
+    raise, the obligation must end up fully discharged, and the boundary
+    name it is threaded through must resolve to the same sink at every
+    level on the way down -- never to a port that level's own steps do not
+    declare.
+    """
+    typed = _cross_scope_two_levels('string_source', 'string')
+    linked = link(typed)
+    assert linked.graph is not None, list(linked.diagnostics)
+    assert linked.graph.obligations == ()
+    assert len(linked.graph.composition_edges) == 1
+    edge = linked.graph.composition_edges[0]
+
+    wrapper = linked.graph.children[0]
+    child = wrapper.children[0]
+    assert not wrapper.composition_edges and not child.composition_edges
+    assert child.steps[0].inputs[0].id == edge.sink
+
+    assert {port.name for port in wrapper.workflow_inputs} == \
+        {name for name, _ in wrapper.input_mapping}
+    for _name, sinks in wrapper.input_mapping:
+        assert sinks == (edge.sink,)
+    for _name, sinks in child.input_mapping:
+        assert sinks == (edge.sink,)
+
+
 @pytest.mark.fast
 @pytest.mark.parametrize('definition_first', [True, False], ids=['before', 'after'])
 def test_a_call_does_not_exempt_an_edge_from_document_order(definition_first: bool) -> None:

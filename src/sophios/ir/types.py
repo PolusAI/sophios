@@ -406,8 +406,17 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
 
         known = {port.id for step in self.steps for port in step.inputs + step.outputs}
         recursive_known = self.port_ids
+        recursive_wheres = {'an edge source', 'an output mapping'}
         for where, port_id in self._references():
-            allowed = recursive_known if where in {'an edge source', 'an output mapping'} else known
+            # An input mapping relays a boundary name down to its consuming
+            # port exactly as an output mapping relays one up from its
+            # producer (`_redirect_output_mappings`): `_direct_sink` walks
+            # that relay one hop at a time through each ancestor's own
+            # `input_mapping`, so an entry several levels above the sink
+            # legitimately names a port outside this graph's own steps, the
+            # same way an output mapping already may.
+            recursive = where in recursive_wheres or where.startswith('input mapping ')
+            allowed = recursive_known if recursive else known
             if port_id not in allowed:
                 raise ValueError(f'{where} names a port no step declares: {port_id}')
         for edge in self.composition_edges:
