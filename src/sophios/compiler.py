@@ -15,7 +15,8 @@ from .ir.artifacts import CompilationArtifact, CompilationResult
 from .ir.emit import emit, emit_job_inputs
 from .ir.infer import InferencePolicy, InsertionCatalog, infer
 from .ir.link import link
-from .ir.pipeline import front_end
+from .ir.frontdoor import SourceBundle
+from .ir.pipeline import FrontEndResult, front_end
 from .ir.resolve import RegistryKey, RegistrySnapshot
 from .ir.types import Binding, PortId, WorkflowGraph
 from .lang import versions
@@ -36,6 +37,35 @@ from .wic_types import (
 )
 
 
+def compile_source(bundle: SourceBundle,
+                   compiler_options: CompilerOptions,
+                   graph_settings: GraphSettings,
+                   yaml_tag_paths: YamlTagPaths,
+                   *,
+                   relative_run_path: bool,
+                   testing: bool,
+                   graph_target: GraphReps | None = None) -> CompilationResult:
+    """Compile a workflow from the text its author wrote.
+
+    The door for a caller that has files. Parse reads those bytes, so every
+    span it reports is a position the reader can open -- unlike
+    `compile_document`, which must rebuild text from an assembled tree.
+    """
+    if not testing:
+        print(' starting compilation of', bundle.name)
+    selected_version = versions.resolve(
+        compiler_options.get('lang_version'), bundle.lang_version_pins)
+    front = front_end(bundle.source, bundle.registry, name=bundle.name,
+                      lang_version=selected_version)
+    result = _compile_front(front, bundle.registry, {}, {},
+                            compiler_options, graph_settings, yaml_tag_paths,
+                            relative_run_path=relative_run_path, testing=testing,
+                            graph_target=graph_target)
+    if not testing:
+        print('finishing compilation of', bundle.name)
+    return result
+
+
 def compile_document(yaml_tree_ast: YamlTree,
                      compiler_options: CompilerOptions,
                      graph_settings: GraphSettings,
@@ -45,17 +75,45 @@ def compile_document(yaml_tree_ast: YamlTree,
                      relative_run_path: bool,
                      testing: bool,
                      graph_target: GraphReps | None = None) -> CompilationResult:
-    """Compile one assembled document through the typed pipeline."""
+    """Compile one assembled document through the typed pipeline.
+
+    The door for a caller that has no file -- the Python API and the REST
+    surface build their workflow in memory. Text is rebuilt here so Parse has
+    something to read; the spans that follow are positions in that rebuilt
+    text, which is why a diagnostic from this door carries a `Locator` and not
+    a location anyone can open.
+    """
     if not testing:
         print(' starting compilation of', yaml_tree_ast.step_id.stem)
 
-    source_tree = yaml_tree_ast.yml
-    source, workflow_sources, source_documents = _source_bundle(source_tree)
+    source, workflow_sources, source_documents = _source_bundle(yaml_tree_ast.yml)
     registry = RegistrySnapshot.from_tools(tools, workflows=workflow_sources)
     selected_version = versions.resolve(
         compiler_options.get('lang_version'), _lang_version_pins(yaml_tree_ast.yml))
     front = front_end(source, registry, name=Path(yaml_tree_ast.step_id.stem).stem,
                       lang_version=selected_version)
+    result = _compile_front(front, registry, source_documents, yaml_tree_ast.yml,
+                            compiler_options, graph_settings, yaml_tag_paths,
+                            relative_run_path=relative_run_path, testing=testing,
+                            graph_target=graph_target)
+    if not testing:
+        print('finishing compilation of', yaml_tree_ast.step_id.stem)
+    return result
+
+
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
+def _compile_front(front: FrontEndResult,
+                   registry: RegistrySnapshot,
+                   source_documents: dict[tuple[str, ...], Yaml],
+                   root_source: Yaml,
+                   compiler_options: CompilerOptions,
+                   graph_settings: GraphSettings,
+                   yaml_tag_paths: YamlTagPaths,
+                   *,
+                   relative_run_path: bool,
+                   testing: bool,
+                   graph_target: GraphReps | None) -> CompilationResult:
+    """The phases both doors share, from a finished front end to an artifact."""
     if front.graph is None or front.resolved is None or front.resolved.document is None:
         raise SophiosError(front.diagnostics)
     if not front.graph.steps:
@@ -94,9 +152,7 @@ def compile_document(yaml_tree_ast: YamlTree,
     compiled = emit(graph)
     graph_reps = _project_graph(graph, graph_settings, graph_target)
     artifact = _artifact_tree(graph, registry, source_documents, graph_settings,
-                              yaml_tree_ast.yml, graph_reps)
-    if not testing:
-        print('finishing compilation of', yaml_tree_ast.step_id.stem)
+                              root_source, graph_reps)
     assert artifact.cwl == compiled
     return CompilationResult(graph, artifact)
 

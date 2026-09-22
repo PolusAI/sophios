@@ -36,6 +36,10 @@ class SourceBundle:
     source: str
     name: str
     registry: RegistrySnapshot
+    #: Every `wic: lang_version:` the reachable documents pin. Collected
+    #: while reading, because the version must be chosen before Parse runs
+    #: and only the door has seen every file by then.
+    lang_version_pins: tuple[str, ...] = ()
 
 
 def bundle_from_disk(yml_path: Path,
@@ -45,11 +49,13 @@ def bundle_from_disk(yml_path: Path,
     source = yml_path.read_text(encoding='utf-8')
     workflows: dict[tuple[str, str], str] = {}
     generated: Tools = {}
+    pins: list[str] = []
     _visit(source, yml_path.stem, yml_paths, yml_path.parent,
-           workflows, generated, {yml_path.resolve()})
+           workflows, generated, {yml_path.resolve()}, pins)
     return SourceBundle(source, yml_path.stem,
                         RegistrySnapshot.from_tools({**tools, **generated},
-                                                    workflows=workflows))
+                                                    workflows=workflows),
+                        tuple(pins))
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
@@ -58,11 +64,33 @@ def _visit(source: str, stem: str,
            script_dir: Path,
            workflows: dict[tuple[str, str], str],
            generated: Tools,
-           seen: set[Path]) -> Document | None:
+           seen: set[Path],
+           pins: list[str]) -> Document | None:
     """Register every workflow and generated tool one file's text reaches."""
     document = parse(source, f'{stem}.wic').document
     if document is None:
         return None
+    pinned = dict(document.sidecar.entries).get('lang_version') if document.sidecar else None
+    if pinned is not None:
+        pins.append(pinned if isinstance(pinned, str) else str(pinned))
+    _reach(document, yml_paths, script_dir, workflows, generated, seen, pins)
+    return document
+
+
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def _reach(document: Document,
+           yml_paths: dict[str, dict[str, Path]],
+           script_dir: Path,
+           workflows: dict[tuple[str, str], str],
+           generated: Tools,
+           seen: set[Path],
+           pins: list[str]) -> None:
+    """Follow every workflow and generated tool one document's steps reach.
+
+    Its implementation bodies are followed too: each is a document written
+    inline in this file, and the steps inside one reach further files exactly
+    as this document's own steps do.
+    """
     for index, step in enumerate(document.steps, start=1):
         namespace = _namespace(_step_sidecar(document.sidecar, index, step.id))
         if step.id == 'python_script':
@@ -75,13 +103,14 @@ def _visit(source: str, stem: str,
             seen.add(child_path.resolve())
             child_source = child_path.read_text(encoding='utf-8')
             _visit(child_source, child_path.stem, yml_paths, script_dir,
-                   workflows, generated, seen)
+                   workflows, generated, seen, pins)
             # Keyed by the namespace the *call site* declares, which is the
             # one `_resolve_process` builds its `RegistryKey` from -- and the
             # same one this loop just used to find the file. A producer that
             # keys differently from the consumer files entries nothing reads.
             workflows[(namespace, child_path.stem)] = child_source
-    return document
+    for _name, body in (document.sidecar.implementations if document.sidecar else ()):
+        _reach(body, yml_paths, script_dir, workflows, generated, seen, pins)
 
 
 def _namespace(sidecar: WicSidecar | None) -> str:
