@@ -288,24 +288,28 @@ def _effective_type(graph: WorkflowGraph, port: PortId, *, producing: bool) -> A
     else:
         actual = path[-1][1]
         layers = _scatter_keys(actual).count(port.port)
-        # An ancestor wrapper's own `scatter:` list names the boundary it
-        # crosses under one of two names, depending on how the subworkflow
-        # it wraps exposes the port. A declared `inputs:` entry keeps its
-        # authored surface name at every depth it is threaded through
-        # (`assign_partial_charges.wic` scatters `[input_path]`, and the step
-        # two levels down that actually consumes it is still named
-        # `input_path`) — that is `port.port`, the same name `actual` above
-        # is matched by. An *inferred* input (no `inputs:` declared at all,
-        # as `fail.wic` has none) has no authored name to keep, so it is
-        # exposed under the mangled name the infer phase gives it
-        # (`_boundary_name`), and only that name is what a scatter list can
-        # name it by. Both spellings are legal, so each ancestor is checked
-        # against whichever one names this crossing.
+        # An ancestor wrapper's `scatter:` list names the boundary it crosses
+        # by the name the document it calls exposes the port under, which is
+        # not derivable from the port: a declared `inputs:` entry may be
+        # threaded to an inner port of another name entirely
+        # (`gen_topol_params.wic` scatters `input_receptor_xyz_path` and the
+        # step that consumes it is `combine_structure.input_structure1`), and
+        # an inferred input has no authored name at all. Guessing either
+        # spelling misses the other and drops the layer silently.
+        #
+        # The association is already recorded: each child's `input_mapping`
+        # says which boundary name reaches which sink, and is exactly what
+        # `complete._direct_sink` walks to wire the same crossing.
+        # Before `complete` runs, an inferred input has no mapping entry yet,
+        # and the only name a scatter list can reach it by is the mangled one
+        # `infer` will give it. That spelling is the fallback, not the rule.
         boundary = _boundary_name(path[-1][0], port)
-        for _owner, wrapper in path[:-1]:
-            layers += _scatter_keys(wrapper).count(port.port)
-            if boundary != port.port:
-                layers += _scatter_keys(wrapper).count(boundary)
+        for index, (_owner, wrapper) in enumerate(path[:-1]):
+            child = path[index + 1][0]
+            crossing = next((name for name, sinks in child.input_mapping if port in sinks), None)
+            if crossing is None:
+                crossing = boundary
+            layers += _scatter_keys(wrapper).count(crossing)
     for _ in range(layers):
         raw = {'type': 'array', 'items': raw}
     return raw

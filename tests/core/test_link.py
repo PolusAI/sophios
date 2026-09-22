@@ -18,6 +18,7 @@ from sophios.ir import (
     front_end,
     link,
 )
+from sophios.ir.complete import complete
 from sophios.lang import SophiosErrorCode
 from sophios.wic_types import StepId as LegacyStepId, Tool, Yaml
 
@@ -390,3 +391,41 @@ def test_graph_rejects_a_planted_namespace_collision() -> None:
     child = typed.children[0]
     with pytest.raises(ValueError, match='injective'):
         WorkflowGraph(Namespace(), children=(child, child))
+
+
+@pytest.mark.fast
+def test_a_wrapper_scatters_a_declared_input_threaded_to_another_name() -> None:
+    """A callee may thread a declared input to an inner port of another name.
+
+    `gen_topol_params.wic` declares `input_receptor_xyz_path` and scatters it;
+    the step that actually consumes it is `combine_structure.input_structure1`.
+    The wrapper's `scatter:` list can only name the boundary, so matching it
+    against the inner port's own name -- or against the mangled name an
+    inferred input would get -- finds neither, drops the layer, and reports a
+    producer's `File[]` as disjoint from a `File` it in fact feeds one element
+    of. The child's `input_mapping` already records which boundary reaches
+    which sink, and is what `complete._direct_sink` walks for the same edge.
+    """
+    tools = copy.deepcopy(SYNTHETIC_TOOLS)
+    tools[LegacyStepId('make', SYNTHETIC_NS)] = Tool(
+        '/synthetic/make.cwl', clt({'seed': {'type': 'string'}}, {'value': {'type': 'File'}}))
+    tools[LegacyStepId('take', SYNTHETIC_NS)] = Tool(
+        '/synthetic/take.cwl', clt({'inner_name': {'type': 'File'}}, {}))
+
+    producer = ('inputs:\n  seed: {type: string}\n'
+                'steps:\n- id: make\n  in: {seed: seed}\n  out:\n  - value: !& shared\n')
+    # Declared as `outer_name`, consumed as `inner_name`: the two differ.
+    consumer = ('inputs:\n  outer_name: {type: File}\n'
+                'steps:\n- id: take\n  in: {inner_name: outer_name}\n')
+    root = ('steps:\n'
+            '- id: producer.wic\n  in: {seed: !ii [a, b]}\n  scatter: [seed]\n'
+            '- id: consumer.wic\n  in: {outer_name: !* shared}\n  scatter: [outer_name]\n')
+
+    registry = RegistrySnapshot.from_tools(
+        tools, workflows={(SYNTHETIC_NS, 'producer'): producer,
+                          (SYNTHETIC_NS, 'consumer'): consumer})
+    typed = front_end(root, registry, name='root')
+    assert typed.graph is not None, list(typed.diagnostics)
+
+    linked = link(complete(typed.graph))
+    assert linked.graph is not None, [str(item) for item in linked.diagnostics]
