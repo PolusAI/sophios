@@ -232,12 +232,22 @@ def _spell_scalar(value: Any) -> str | None:
     which is exactly why quoted spellings cannot protect a string like '0' —
     if the simulated round-trip does not reproduce the value, there is no
     tagged spelling, and the caller must desugar.
+
+    The re-parse can also *raise* rather than disagree: `@`, `*`, `%` and `&`
+    open a scalar YAML will not scan, and `,`, `:`, `...`, `{` and `[` start a
+    structure it will not close. That is the same answer as a mismatch -- no
+    faithful tagged spelling exists -- so it is reported the same way, rather
+    than escaping as a `ScannerError` from a function whose job is to decide
+    whether a spelling round-trips.
     """
     candidate = yaml.safe_dump(value, default_flow_style=True).partition('\n')[0].strip()
-    node = yaml.compose(candidate, Loader=yaml.SafeLoader)
-    if not isinstance(node, yaml.nodes.ScalarNode):
+    try:
+        node = yaml.compose(candidate, Loader=yaml.SafeLoader)
+        if not isinstance(node, yaml.nodes.ScalarNode):
+            return None
+        reparsed = yaml.safe_load(node.value) if node.value != '' else ''
+    except yaml.YAMLError:
         return None
-    reparsed = yaml.safe_load(node.value) if node.value != '' else ''
     if isinstance(value, float) and isinstance(reparsed, float) and math.isnan(value) and math.isnan(reparsed):
         return candidate
     if reparsed == value and type(reparsed) is type(value):

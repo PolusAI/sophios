@@ -358,3 +358,31 @@ def test_a_parsed_literal_records_the_text_it_came_from(spelling: str) -> None:
     literal = dict(document.steps[0].inputs)['f']
     assert isinstance(literal, InlineLiteral)
     assert literal.text == spelling
+
+
+#: Scalars whose `yaml.safe_dump` spelling the parser refuses to read back.
+#: The first four open a scalar it will not scan; the rest start a structure
+#: it will not close.
+UNSPELLABLE: Final = ('@', '*', '%', '&', ',', ':', '...', '{', '[')
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('literal', UNSPELLABLE)
+def test_a_literal_with_no_tagged_spelling_renders_desugared(literal: str) -> None:
+    """Deciding whether a spelling round-trips must not raise on its own probe.
+
+    `_spell_scalar` re-parses its candidate to see whether the value survives.
+    For these the re-parse raises instead of disagreeing, which is the same
+    answer -- no faithful tagged spelling -- and must be reported as one. It
+    escaped as a `ScannerError` or `ParserError` from whichever generated
+    property happened to draw such a literal, reading as a failure of that
+    property rather than of the renderer.
+    """
+    span = SourceSpan('probe.wic', 1, 1, 1, 1)
+    document = Document(steps=(Step('echo', inputs=(('message', InlineLiteral(literal, span)),)),))
+
+    rendered = render(document)
+
+    # Round-trips: the desugared spelling carries what the tag cannot.
+    reloaded = yaml.load(rendered, Loader=wic_loader())
+    assert reloaded['steps'][0]['in']['message'] == {'wic_inline_input': literal}
