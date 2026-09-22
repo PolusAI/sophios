@@ -5,9 +5,10 @@ not import the production phase or either production type predicate.  The
 differential then carries the stronger claim: after typed Infer has made every
 candidate decision, the legacy compiler emits byte-identical artifacts.
 
-BLIND SPOTS: the generated registry has no converter processes.  Converter
-selection, ambiguity, falsy defaults, scatter, and exhaustion therefore have
-separate planted examples.
+BLIND SPOTS: the generated workflows never put a tool after a workflow call,
+and their registry has no converter processes. Workflow-call candidates,
+converter selection, ambiguity, falsy defaults, scatter, and exhaustion
+therefore have separate planted examples.
 """
 import copy
 from typing import Any
@@ -31,7 +32,7 @@ from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 from . import ast_strategies as strat
 from .differential import assert_compilations_equivalent
 from .equivalence import Strength
-from .hermetic import ORACLE, compile_hermetic
+from .hermetic import ORACLE, compile_hermetic, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
 from .test_resolve import _scalar_literals_fit, _source_model
 
@@ -147,6 +148,68 @@ def test_converter_insertion_reaches_the_same_fixed_point() -> None:
                            insert_steps_automatically=True)
     new = compile_hermetic(bridged, tools=copy.deepcopy(tools))
     assert_compilations_equivalent(old, new, Strength.IDENTICAL)
+
+
+@pytest.mark.fast
+def test_workflow_call_outputs_are_inference_candidates() -> None:
+    """A child output remains visible to a later tool in its parent."""
+    child = {'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'child.txt'}}},
+    ]}
+    workflow = {'steps': [subworkflow_step('sub.wic', child), {'id': 'count'}]}
+    typed, linked, _ = _typed(workflow)
+    result = infer(linked)
+    assert result.graph is not None, list(result.diagnostics)
+    assert any(edge.sink.step.name == 'count' for edge in result.graph.inferred_edges)
+    bridged = legacy_after_infer(typed.resolved.document, result.graph)
+    assert_compilations_equivalent(
+        compile_hermetic(copy.deepcopy(workflow)),
+        compile_hermetic(bridged),
+        Strength.IDENTICAL,
+    )
+
+
+@pytest.mark.fast
+def test_workflow_call_outputs_can_feed_inserted_converters() -> None:
+    """Converter search sees formats exported through a workflow call."""
+    _, tools = _insertion_registry()
+    child = {'steps': [{'id': 'mk_2'}]}
+    workflow = {'steps': [subworkflow_step('sub.wic', child), {'id': 'use_2'}]}
+    typed, linked, registry = _typed(workflow, tools)
+    result = infer(linked, InferencePolicy(insert_steps_automatically=True),
+                   InsertionCatalog.from_registry(registry))
+    assert result.graph is not None, list(result.diagnostics)
+    assert sum(step.synthesized for step in result.graph.steps) == 1
+    bridged = legacy_after_infer(typed.resolved.document, result.graph)
+    assert_compilations_equivalent(
+        compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
+                         insert_steps_automatically=True),
+        compile_hermetic(bridged, tools=copy.deepcopy(tools)),
+        Strength.IDENTICAL,
+    )
+
+
+@pytest.mark.fast
+def test_converter_search_stops_at_the_candidate_break() -> None:
+    """Insertion cannot reuse formats hidden behind a local break rule."""
+    _, tools = _insertion_registry()
+    workflow = {
+        'steps': [{'id': 'mk_1'}, {'id': 'mk_2'}, {'id': 'use_1'}],
+        'wic': {'steps': {
+            '(2, mk_2)': {'wic': {'inference': {'file': 'break'}}},
+        }},
+    }
+    _, linked, registry = _typed(workflow, tools)
+    result = infer(linked, InferencePolicy(insert_steps_automatically=True),
+                   InsertionCatalog.from_registry(registry))
+    assert result.graph is not None, list(result.diagnostics)
+    assert not any(step.synthesized for step in result.graph.steps)
+    assert [port.name for port in result.graph.workflow_inputs] == [
+        'oracle__step__3__use_1___file']
+    legacy = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
+                              insert_steps_automatically=True)
+    legacy_steps = legacy.rose.data.compiled_cwl['steps']
+    assert not any('insert_steps_automatically_' in step['id'] for step in legacy_steps)
 
 
 @pytest.mark.fast
