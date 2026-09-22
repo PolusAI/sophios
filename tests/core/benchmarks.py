@@ -34,7 +34,7 @@ from core.hermetic import compile_hermetic, subworkflow_step
 from core.synthetic_tools import clt, SYNTHETIC_TOOLS
 from core.wic_corpus import CORPUS, corpus_id
 
-import sophios.ast
+from sophios.ir import frontdoor
 import sophios.cli
 import sophios.compiler
 import sophios.input_output as io
@@ -105,20 +105,12 @@ def _compile_corpus_file(path: Path) -> None:
     `.wic` file from disk rather than an in-memory dict."""
     env = _get_corpus_env()
     args = sophios.cli.get_args(str(path), ['--ignore_validation_errors'])
-    root_yaml_tree: Yaml = yaml.load(path.read_text(encoding='utf-8'), Loader=wic_loader())
-    plugin_ns = root_yaml_tree.get('wic', {}).get('namespace', 'global')
-    step_id = StepId(path.stem, plugin_ns)
-    y_t = YamlTree(step_id, root_yaml_tree)
-    yaml_tree_raw = sophios.ast.read_ast_from_disk(
-        args.homedir, y_t, env.yml_paths, env.tools, env.validator, args.ignore_validation_errors)
-    yaml_tree = sophios.ast.merge_yml_trees(yaml_tree_raw, {}, env.tools)
-    root_yml_dir_abs = Path(args.yaml).parent.absolute()
-    yaml_tree = sophios.ast.python_script_generate_cwl(yaml_tree, root_yml_dir_abs, env.tools)
+    bundle = frontdoor.bundle_from_disk(path, env.yml_paths, env.tools)
     compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
     graph = get_graph_reps(str(path))
-    sophios.compiler.compile_document(
-        yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
-        env.tools, relative_run_path=True, testing=True, graph_target=graph)
+    sophios.compiler.compile_source(
+        bundle, compiler_options, graph_settings, yaml_tag_paths,
+        relative_run_path=True, testing=True, graph_target=graph)
 
 
 # --------------------------------------------------------------------------

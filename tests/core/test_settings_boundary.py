@@ -278,11 +278,12 @@ def _settings_from_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Calla
         workflow = tmp_path / 'probe.wic'
         workflow.write_text(yaml.safe_dump(PROBE_WORKFLOW), encoding='utf-8')
 
-        def capture(_tree: Any, compiler_options: Any, graph_settings: Any,
+        def capture(_bundle: Any, compiler_options: Any, graph_settings: Any,
                     yaml_tag_paths: Any, *_args: Any, **_kwargs: Any) -> None:
             raise _Delivered((compiler_options, graph_settings, yaml_tag_paths))
 
-        monkeypatch.setattr(sophios.compiler, 'compile_document', capture)
+        # The CLI reads files, so it enters through the source door.
+        monkeypatch.setattr(sophios.compiler, 'compile_source', capture)
         monkeypatch.setattr(sys, 'argv', ['sophios', '--yaml', str(workflow), *flags])
         try:
             sophios.main._main()

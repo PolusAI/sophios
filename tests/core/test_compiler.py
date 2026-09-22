@@ -6,7 +6,10 @@ from typing import Any
 import pytest
 from jsonschema.validators import Draft202012Validator
 
-from sophios import ast, compiler, cwl_subinterpreter, utils
+import yaml
+
+from sophios import compiler, cwl_subinterpreter, utils
+from sophios.utils_yaml import wic_loader
 from sophios.wic_types import StepId, Tool, Yaml
 
 from .hermetic import compile_hermetic_cwl
@@ -18,13 +21,13 @@ class _Captured(Exception):
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(('cwl_tool', 'module', 'name', 'tree_arg', 'config'), [
-    ('tool', compiler, 'compile_document', 0, {'id': 'elsewhere', 'in': {}}),
-    ('tool.wic', ast, 'read_ast_from_disk', 1, {'in': {}}),
+@pytest.mark.parametrize(('cwl_tool', 'config'), [
+    ('tool', {'id': 'elsewhere', 'in': {}}),
+    ('tool.wic', {'in': {}}),
 ])
 def test_rerun_cwltool_builds_an_id_form_step(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        cwl_tool: str, module: Any, name: str, tree_arg: int, config: Yaml) -> None:
+        cwl_tool: str, config: Yaml) -> None:
     """`rerun_cwltool` builds a step `get_steps_keys` can read back, on both branches.
 
     Asserting on literals copied into the test proves nothing about the code:
@@ -42,10 +45,12 @@ def test_rerun_cwltool_builds_an_id_form_step(
     seen: list[Yaml] = []
 
     def capture(*args: Any, **_: Any) -> None:
-        seen.append(args[tree_arg].yml)
+        # Both branches end at the same door now, and it is handed text, so the
+        # document the branch built is read back from the source it bundled.
+        seen.append(yaml.load(args[0].source, Loader=wic_loader()))
         raise _Captured
 
-    monkeypatch.setattr(module, name, capture)
+    monkeypatch.setattr(compiler, 'compile_source', capture)
     with pytest.raises(_Captured):
         cwl_subinterpreter.rerun_cwltool(
             '', tmp_path, tmp_path, cwl_tool, config, {}, {},

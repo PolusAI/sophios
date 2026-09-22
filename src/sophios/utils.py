@@ -5,7 +5,7 @@ from typing import Any
 import yaml
 
 from .wic_types import (Namespaces, StepId,
-                        Json, Yaml, YamlForest, YamlTree)
+                        Json, Yaml, YamlTree)
 
 
 def step_name_str(yaml_stem: str, i: int, step_key: str) -> str:
@@ -164,62 +164,6 @@ def flatten(lists: list[list[Any]]) -> list[Any]:
         list[Any]: A single list
     """
     return [x for lst in lists for x in lst]
-
-
-def pretty_print_forest(forest: YamlForest) -> None:
-    """pretty prints a YamlForest
-
-    Args:
-        forest (YamlForest): The forest to be printed
-    """
-    print(forest.yaml_tree.step_id)
-    print(yaml.dump(forest.yaml_tree.yml))
-    print(yaml.dump(forest.sub_forests))
-
-
-def flatten_forest(forest: YamlForest) -> list[YamlForest]:
-    """Flattens the sub-trees encountered while traversing an AST
-
-    Args:
-        forest (YamlForest): The yaml AST forest to be flattened
-
-    Raises:
-        ValueError: If implementation: tags are missing.
-
-    Returns:
-        list[YamlForest]: The flattened forest
-    """
-    if forest == {}:
-        return []
-    yaml_tree = forest.yaml_tree.yml
-    wic = {'wic': yaml_tree.get('wic') or {}}
-    plugin_ns = wic['wic'].get('namespace', 'global')
-
-    if 'implementations' in wic['wic']:
-        back_name = ''
-        if 'default_implementation' in wic['wic']:
-            back_name = wic['wic']['default_implementation']
-        if 'implementation' in wic['wic']:
-            back_name = wic['wic']['implementation']
-        if back_name == '':
-            pretty_print_forest(forest)
-            raise ValueError('Error! No implementation in yaml forest!\n')
-        sub_forests_dict = dict(forest.sub_forests)
-        step_id = StepId(back_name, plugin_ns)
-        yaml_tree_back: YamlTree = sub_forests_dict[step_id].yaml_tree
-        step_1 = yaml_tree_back.yml['steps'][0]
-        step_name_1 = list(step_1.keys())[0]
-        if Path(step_name_1).suffix == '.wic':
-            # Choose a specific implementation
-            return flatten_forest(sub_forests_dict[step_id])
-        return [forest]
-
-    forests = [f[1] for f in forest.sub_forests]
-    sub_forests = [flatten_forest(f) for f in forests]
-    # Use depth-first traversal to preserve authored order.
-    dfs_lists = [[f] + fs for f, fs in zip(forests, sub_forests)]
-    dfs = flatten(dfs_lists)
-    return dfs
 
 
 def recursively_delete_dict_key(key: str, obj: Any) -> Any:

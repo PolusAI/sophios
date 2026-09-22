@@ -51,21 +51,14 @@ CONTRIB: Final = 'CONTRIB'        # outside the core zone
 #: something the language does not accept.
 MANUFACTURING_SITES: Final[dict[str, str]] = {
     'sophios/api/python/_workflow_runtime.py::workflow_document': DOCUMENT,
-    'sophios/ast.py::_tree_to_forest': DOCUMENT,
-    'sophios/ast.py::merge_yml_trees': DOCUMENT,
-    'sophios/ast.py::python_script_generate_cwl': DOCUMENT,
-    'sophios/ast.py::read_ast_from_disk': DOCUMENT,
     'sophios/compiler.py::_detach_sources': DOCUMENT,
     'sophios/cwl_subinterpreter.py::rerun_cwltool': DOCUMENT,
-    'sophios/main.py::_load_and_prepare_yaml_tree': DOCUMENT,
-    'sophios/utils.py::flatten_forest': DOCUMENT,
     # Not documents.
     'sophios/ir/emit.py::emit': CWL,
     'sophios/lang/render.py::_Writer.document': RENDERER,
     'sophios/lang/render.py::_Writer.sidecar': RENDERER,
     'sophios/lang/schema.py::_defs': SCHEMA,
     'sophios/schemas/wic_schema.py::_wic_tag_schema': SCHEMA,
-    'sophios/schemas/wic_schema.py::compile_workflow_generate_schema': SCHEMA,
     'sophios/schemas/wic_schema.py::wic_main_schema': SCHEMA,
     'sophios/utils_cwl.py::desugar_into_canonical_normal_form': TOOL,
     'sophios/contrib/converter.py::wfb_to_wic': CONTRIB,
@@ -75,14 +68,8 @@ MANUFACTURING_SITES: Final[dict[str, str]] = {
 #: Instrumented sites no driver below reaches, and why. Each is evidence not
 #: gathered, so each needs a reason that can be checked rather than a shrug.
 UNREACHED: Final[dict[str, str]] = {
-    'sophios/ast.py::read_ast_from_disk': 'needs a .wic on disk plus a discovered tool registry',
-    'sophios/ast.py::merge_yml_trees': 'on the file-loading path, which the in-memory drivers skip',
-    'sophios/main.py::_load_and_prepare_yaml_tree': 'the CLI entry point, same file-loading path',
-    'sophios/ast.py::python_script_generate_cwl': 'only reached by a `python_script` step',
     'sophios/cwl_subinterpreter.py::rerun_cwltool': 'shells out to a CWL runner; its documents are '
     'pinned directly by test_compiler.py',
-    'sophios/ast.py::_tree_to_forest': 'reached by the CLI post-compile path, not by compile_workflow',
-    'sophios/utils.py::flatten_forest': 'same post-compile path as _tree_to_forest',
 }
 
 

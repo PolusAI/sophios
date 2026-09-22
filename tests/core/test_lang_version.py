@@ -212,36 +212,33 @@ def test_exactly_one_version_exists_today() -> None:
     assert LANG_VERSION == '0.0.1'
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.fast
-def test_a_file_tag_survives_schema_validation() -> None:
-    """The `wic: lang_version:` pin reaches the compiler through the real path.
+def test_a_file_tag_reaches_the_compiler_from_its_own_text(tmp_path: Path) -> None:
+    """The `wic: lang_version:` pin survives the path a real `.wic` file takes.
 
-    Every other test here hands a tree straight to `compile_workflow`, which
-    skips the step a real `.wic` file cannot skip: `read_ast_from_disk`
-    validates against the generated wic schema first, and that schema closes
-    the `wic:` block with `additionalProperties: False`. A key the schema does
-    not list is rejected there, so the tag can be specified, parsed, resolved
-    and surfaced and still be dead on arrival for anyone writing a file.
+    Every other test here hands a document straight to the compiler. This one
+    writes a file and compiles that file, because a key can be specified,
+    parsed, resolved and surfaced and still be dead on arrival for anyone
+    writing one -- which is what happened when `lang_version` reached §7, the
+    resolver and the compiler but not the vocabulary that admits it.
 
-    That is what happened — `lang_version` was added to §7, to the resolver
-    and to the compiler, but not to the one list that decides whether a `wic:`
-    key is allowed to exist.
+    The gate used to be the generated jsonschema, applied by the file loader.
+    It is the parser now: `Grammar.SIDECAR_KEYS` is where the language names
+    the keys its `wic:` block has.
     """
-    import sophios.ast
-    import sophios.cli
+    from sophios.lang.parser import Grammar, parse  # pylint: disable=import-outside-toplevel
 
-    from .test_setup import load_test_registry
+    assert 'lang_version' in Grammar.SIDECAR_KEYS
 
-    registry = load_test_registry()
+    source = f'wic:\n  lang_version: {LANG_VERSION}\nsteps:\n- id: mk_file\n'
+    written = tmp_path / 'pinned.wic'
+    written.write_text(source, encoding='utf-8')
 
-    pinned: Yaml = {'wic': {'lang_version': LANG_VERSION}, **TOUCH}
-    tree = YamlTree(StepId('pinned.wic', 'global'), pinned)
-    args = sophios.cli.get_args('pinned.wic')
-
-    # Must not raise: the validator is the gate the compiler sits behind.
-    sophios.ast.read_ast_from_disk(args.homedir, tree, registry.workflows,
-                                   registry.tools, registry.validator, False)
+    parsed = parse(written.read_text(encoding='utf-8'), 'pinned.wic')
+    assert parsed.document is not None, list(parsed.diagnostics)
+    assert not parsed.diagnostics.has_errors, [str(d) for d in parsed.diagnostics]
+    assert parsed.document.sidecar is not None
+    assert dict(parsed.document.sidecar.entries)['lang_version'] == LANG_VERSION
 
 
 @pytest.mark.fast

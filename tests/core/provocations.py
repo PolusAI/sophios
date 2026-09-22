@@ -81,21 +81,13 @@ def _provoke_missing_required_input() -> None:
 
 
 def _provoke_subworkflow_invalid() -> None:
-    from typing import cast  # pylint: disable=import-outside-toplevel
+    """Compile a document that declares no step at all.
 
-    import sophios.ast  # pylint: disable=import-outside-toplevel
-    from jsonschema import Draft202012Validator  # pylint: disable=import-outside-toplevel
-    from sophios.wic_types import StepId, YamlTree  # pylint: disable=import-outside-toplevel
-
-    class _RefusesEverything:  # pylint: disable=too-few-public-methods
-        def validate(self, _tree: object) -> None:
-            """Refuse any tree: a stand-in for the validator the caller must supply."""
-            raise ValueError('provoked')
-
-    tree = YamlTree(StepId('provoke.wic', 'global'), {'steps': [{'id': 's'}]})
-    # cast: the raise path only needs .validate; a real validator that always
-    # refuses would drag schema construction into a provocation.
-    sophios.ast.read_ast_from_disk('.', tree, {}, {}, cast(Draft202012Validator, _RefusesEverything()), False)
+    The compiler refuses a workflow with nothing to run. Previously provoked
+    through the file loader with a validator that refused everything; that
+    loader is gone, and this reaches the same code from the compiler itself.
+    """
+    _compile_minimal({'steps': []})
 
 
 def _provoke_script_argument_mismatch() -> None:

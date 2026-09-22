@@ -8,7 +8,8 @@ import networkx as nx
 import pytest
 
 import sophios
-import sophios.ast
+import yaml
+from sophios.ir import frontdoor
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 import sophios.cli
@@ -88,18 +89,13 @@ class TestFuzzyCompile(unittest.TestCase):
         compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
 
         try:
-            yaml_tree_raw = sophios.ast.read_ast_from_disk(args.homedir, y_t, yml_paths, tools_cwl, validator,
-                                                           args.ignore_validation_errors)
-            yaml_tree = sophios.ast.merge_yml_trees(
-                yaml_tree_raw, {}, tools_cwl)
-            root_yml_dir_abs = yml_path.parent.absolute()
-            yaml_tree = sophios.ast.python_script_generate_cwl(
-                yaml_tree, root_yml_dir_abs, tools_cwl)
+            bundle = frontdoor.bundle_from_source(
+                yaml.dump(yml, sort_keys=False, line_break='\n', indent=2),
+                'random_stepid', yml_paths, tools_cwl)
 
-            sophios.compiler.compile_document(
-                yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
-                tools_cwl, relative_run_path=True, testing=True,
-                graph_target=graph)
+            sophios.compiler.compile_source(
+                bundle, compiler_options, graph_settings, yaml_tag_paths,
+                relative_run_path=True, testing=True, graph_target=graph)
         except SophiosError as e:
             # Structured failures are tolerated only for the codes that were
             # tolerated before this change, and no others.

@@ -42,6 +42,26 @@ class SourceBundle:
     lang_version_pins: tuple[str, ...] = ()
 
 
+def bundle_from_source(source: str, name: str,
+                       yml_paths: dict[str, dict[str, Path]],
+                       tools: Tools) -> SourceBundle:
+    """Bundle a root nobody wrote, plus every file its steps reach.
+
+    For a caller that constructs its own root -- the runtime adapter builds a
+    one-step workflow around a `.wic` it was handed. That root has no file and
+    no spans worth keeping, but the documents it reaches are ordinary files,
+    and they keep theirs.
+    """
+    workflows: dict[tuple[str, str], str] = {}
+    generated: Tools = {}
+    pins: list[str] = []
+    _visit(source, name, yml_paths, Path('.'), workflows, generated, set(), pins)
+    return SourceBundle(source, name,
+                        RegistrySnapshot.from_tools({**tools, **generated},
+                                                    workflows=workflows),
+                        tuple(pins))
+
+
 def bundle_from_disk(yml_path: Path,
                      yml_paths: dict[str, dict[str, Path]],
                      tools: Tools) -> SourceBundle:
@@ -97,7 +117,12 @@ def _reach(document: Document,
             generated[StepId(generated_process_id(step), namespace)] = \
                 _generated_tool(step, script_dir)
         elif step.id.endswith('.wic'):
-            child_path = yml_paths[namespace][Path(step.id).stem]
+            # An undiscovered workflow is left unregistered rather than raising:
+            # Resolve reports it as absent from the registry, which is a
+            # diagnostic the reader can act on, not a KeyError from a loader.
+            child_path = yml_paths.get(namespace, {}).get(Path(step.id).stem)
+            if child_path is None:
+                continue
             if child_path.resolve() in seen:
                 continue
             seen.add(child_path.resolve())

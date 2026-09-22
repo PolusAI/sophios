@@ -73,11 +73,6 @@ class YamlTree(NamedTuple):
     yml: Yaml
 
 
-class YamlForest(NamedTuple):
-    yaml_tree: YamlTree
-    sub_forests: list[tuple[StepId, Any]]  # Any = YamlForest
-
-
 class CompilerOptions(TypedDict):
     """Core compiler flags needed for compilation and transformation into CWL."""
     partial_failure_enable: bool
