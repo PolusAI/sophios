@@ -440,8 +440,14 @@ def _expose_cross_scope_inputs(graph: WorkflowGraph,
             step = _step(current, edge.sink.step)
             if step is None or step.emission is None:
                 continue
-            name = f'{step.emission.id}___{edge.sink.port}'
-            derived_from: PortId | None = edge.sink
+            # A sink already relayed by this workflow needs no second name.
+            # The check below is by name, so it cannot see that an authored
+            # boundary input already carries this port: deriving one here adds
+            # an `inputs:` entry no step ever reads, and the interface a
+            # workflow exposes then depends on who called it.
+            relayed = next((entry for entry, sinks in mappings if edge.sink in sinks), None)
+            derived_from: PortId | None = None if relayed is not None else edge.sink
+            name = relayed if relayed is not None else f'{step.emission.id}___{edge.sink.port}'
         elif any(_namespace_contains(child.namespace, edge.sink.step.namespace)
                  for child in current.children):
             child = next(child for child in current.children
