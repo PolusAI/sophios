@@ -6,7 +6,7 @@ from typing import Any
 from ..lang import SophiosErrorCode
 from ..lang.compatibility import TypeRelation, reference_relation
 from ..lang.diagnostics import Diagnostics
-from .declarations import port_declaration
+from .declarations import boundary_declaration, port_declaration
 from .types import (
     Edge,
     Namespace,
@@ -469,11 +469,11 @@ def _expose_cross_scope_inputs(graph: WorkflowGraph,
             if declaration is None:
                 declaration = port_declaration(deepcopy(sink_port.type.declared))
             effective = _effective_type(current, edge.sink, producing=False)
-            declaration = replace(
+            declaration = boundary_declaration(replace(
                 declaration,
                 type=port_declaration({'type': deepcopy(effective)}).type,
                 shorthand=False,
-            )
+            ))
             inputs.append(WorkflowPort(
                 name, declaration,
                 origin=sink_port.origin or derived_from))

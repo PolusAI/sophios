@@ -14,7 +14,7 @@ from ..lang.nodes import EdgeRef, InlineLiteral, RawCwlRef, UnresolvedName
 from ..lang.diagnostics import SophiosError
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.versions import ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
-from .declarations import port_declaration
+from .declarations import boundary_declaration, port_declaration
 from .types import (
     Direction,
     Edge,
@@ -333,7 +333,7 @@ def _direct_sink(graph: WorkflowGraph, sink: PortId) -> tuple[Any, str]:
 
 
 def _input_declaration(port: Port, scatter: Any) -> PortDeclaration:
-    declaration = _boundary_declaration(port.declaration or port_declaration(port.type.declared))
+    declaration = boundary_declaration(port.declaration or port_declaration(port.type.declared))
     keys = [scatter] if isinstance(scatter, str) else (
         list(scatter) if isinstance(scatter, list) else [])
     layers = keys.count(port.id.port)
@@ -344,22 +344,12 @@ def _input_declaration(port: Port, scatter: Any) -> PortDeclaration:
 
 
 def _output_declaration(port: Port, scatter: Any) -> PortDeclaration:
-    declaration = _boundary_declaration(port.declaration or port_declaration(port.type.declared))
+    declaration = boundary_declaration(port.declaration or port_declaration(port.type.declared))
     raw = _canonical_type(declaration.type.declared)
     if scatter:
         raw = {'type': 'array', 'items': raw}
     order = tuple((*declaration.field_order, 'outputSource'))
     return replace(declaration, type=port_declaration({'type': raw}).type, field_order=order)
-
-
-def _boundary_declaration(declaration: PortDeclaration) -> PortDeclaration:
-    passthrough = tuple((name, deepcopy(value)) for name, value in declaration.passthrough
-                        if name in {'label', 'doc'})
-    allowed = {'type', 'format', 'label', 'doc'}
-    order = tuple(name for name in declaration.field_order if name in allowed)
-    if 'type' not in order:
-        order = ('type', *order)
-    return replace(declaration, passthrough=passthrough, field_order=order, shorthand=False)
 
 
 def _canonical_type(value: Any) -> Any:

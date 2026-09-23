@@ -5,7 +5,7 @@ from typing import Any
 
 from ..lang import SophiosErrorCode
 from ..lang.diagnostics import Diagnostics
-from .declarations import port_declaration
+from .declarations import boundary_declaration, port_declaration
 from .resolve import RegistrySnapshot
 from .types import (
     Direction,
@@ -160,15 +160,11 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
             input_name = _input_name(current_step, port)
             if input_name not in {item.name for item in workflow_inputs}:
                 declaration = port.declaration or port_declaration(port.type.declared)
-                declaration = replace(
+                declaration = boundary_declaration(replace(
                     declaration,
                     format=(_canonical_boundary_format(declaration.format)
                             if declaration.has_format else declaration.format),
-                    passthrough=tuple((name, value) for name, value in declaration.passthrough
-                                      if name not in {'inputBinding', 'loadContents'}),
-                    field_order=tuple(name for name in declaration.field_order
-                                      if name not in {'inputBinding', 'loadContents'}),
-                )
+                ))
                 workflow_inputs.append(
                     WorkflowPort(input_name, declaration, origin=port.origin or port.id))
             if input_name not in {name for name, _ in input_mapping}:
