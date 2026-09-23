@@ -22,7 +22,7 @@ from .ir import frontdoor
 from .ir.frontdoor import SourceBundle
 from .schemas import wic_schema
 from .wic_types import (CompilerOptions, GraphData, GraphReps, GraphSettings, Json,
-                        StepId, Tools, Yaml, YamlTagPaths, YamlTree)
+                        Tools, YamlTagPaths)
 
 
 def _load_source_bundle(args: argparse.Namespace,

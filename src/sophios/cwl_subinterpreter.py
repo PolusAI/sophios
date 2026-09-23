@@ -1,4 +1,3 @@
-import yaml
 import argparse
 import glob
 import json
@@ -7,6 +6,8 @@ import subprocess as sub
 import sys
 import time
 from pathlib import Path
+
+import yaml
 
 import graphviz
 import networkx as nx
@@ -19,7 +20,7 @@ from .post_compile import stage_input_files
 from .plugins import get_tools_cwl, get_yml_paths, logging_filters
 from .schemas import wic_schema
 from .lang.diagnostics import SophiosError
-from .wic_types import GraphData, GraphReps, Json, StepId, Tools, YamlTree
+from .wic_types import GraphData, GraphReps, Json, Tools
 
 #: The compiler's `--inputs_file` default. Named rather than fished out of a
 #: synthesised parse, which is the pattern this module has stopped using.
@@ -112,7 +113,6 @@ def rerun_cwltool(homedir: str, _directory_realtime: Path, cachedir_path: Path, 
         # TODO: Support other namespaces
         plugin_ns = 'global'  # wic['wic'].get('namespace', 'global')
         yaml_path = f'{cwl_tool}_only.wic'
-        stepid = StepId(yaml_path, plugin_ns)
         subgraph = GraphReps(graphviz.Digraph(name=yaml_path), nx.DiGraph(), GraphData(yaml_path))
 
         # The root here is constructed, not read, so it is spelled out once --

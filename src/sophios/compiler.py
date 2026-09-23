@@ -17,7 +17,7 @@ from .ir.infer import InferencePolicy, InsertionCatalog, infer
 from .ir.link import link
 from .ir.frontdoor import SourceBundle
 from .ir.pipeline import FrontEndResult, front_end
-from .ir.resolve import RegistryKey, RegistrySnapshot
+from .ir.resolve import RegistrySnapshot
 from .ir.types import Binding, PortId, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import SophiosError

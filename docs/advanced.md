@@ -66,12 +66,10 @@ sophios --generate_schemas
 sophios --generate_config
 ```
 
-Intermediate compiler `.wic` trees are not written by default. If you need them
-while debugging the compiler, opt in explicitly:
-
-```bash
-sophios --yaml workflow.wic --generate_cwl_workflow --write_intermediate_wic
-```
+Intermediate compiler `.wic` trees are not written, and there is no flag that
+writes them. The compiler reads the files you wrote rather than assembling a
+document of its own, so a diagnostic names a line in your `.wic` and there is
+no intermediate tree left to inspect.
 
 Useful flags:
 
