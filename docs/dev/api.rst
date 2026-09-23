@@ -1,10 +1,6 @@
 Developer API
 ====================================
 
-sophios.ast
-------------------------------------
-.. automodule:: sophios.ast
-
 sophios.cli
 ------------------------------------
 .. automodule:: sophios.cli
