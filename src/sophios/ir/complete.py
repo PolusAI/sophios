@@ -421,7 +421,15 @@ def _required(declaration: PortDeclaration | None) -> bool:
 
 
 def coerce_job_value(name: str, declaration: PortDeclaration, value: Any) -> Any:
-    """Coerce one literal exactly once at the graph/job boundary."""
+    """Coerce one literal exactly once at the graph/job boundary.
+
+    `OpaqueCwl` admits an `InputValue`, so a literal's body legitimately holds
+    parsed nodes wherever the document nested a construct inside it. A job
+    value may not: it is written as JSON. Unwrapping here, once, rather than
+    in whichever branch happens to notice, is what makes that true of every
+    declared type rather than of `string` alone.
+    """
+    value = _plain(value)
     raw = declaration.type.declared
     if value is None:
         if declaration.type.optional:
@@ -476,7 +484,7 @@ def _coerce_scalar(name: str, raw: Any, value: Any, fmt: Any) -> Any:
         # repr, whose single quotes are not JSON, so the tool falls through to
         # treating the text as a path and fails on a file named after a dict.
         if isinstance(value, (dict, list)):
-            return json.dumps(_plain(value))
+            return json.dumps(value)
         return str(value)
     try:
         if raw == 'int':
