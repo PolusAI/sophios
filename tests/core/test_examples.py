@@ -325,6 +325,7 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
     # and check that the generated CWL is identical. In other words,
     # check that the generated CWL of a subworkflow is independent of its
     # embedding into a parent workflow.
+    compared = 0
     for embedded_artifact in workflow_artifacts[1:]:
         sub_name = embedded_artifact.name
         # Its own file, compiled as a root: the subworkflow embedded above came
@@ -387,6 +388,16 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
         sub_graph_fakeroot_nx = fake_result.artifact.graph_view.networkx
         g_m = isomorphism.DiGraphMatcher(sub_graph_nx, sub_graph_fakeroot_nx)
         is_isomorphic_with_timeout(g_m, yml_path_str)
+        compared += 1
+
+    # A root every one of whose subworkflows classifies as a fragment reaches
+    # here having compared nothing, and used to be green for it. The `continue`
+    # above is per subworkflow; this reports the case where it fired for all of
+    # them, so the parametrization says what it did rather than passing
+    # silently. `test_rand_fail` is one: its only child is `fail.wic`, whose
+    # own first line says it is not a standalone workflow.
+    if workflow_artifacts[1:] and not compared:
+        pytest.skip(f'{yml_path_str}: every subworkflow is a fragment, none compiles alone')
 
 
 @pytest.mark.serial
