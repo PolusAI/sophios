@@ -19,7 +19,6 @@ from ..lang.nodes import (Document, EdgeRef, InlineLiteral, InputValue, RawCwlRe
                           UnresolvedName)
 from ..lang.versions import (ANNOTATION_KEY, ANNOTATION_NAMESPACE,
                              ANNOTATION_NAMESPACE_URI)
-from ..utils_yaml import Key
 from .declarations import port_declaration
 from .resolve import ResolvedDocument, ResolvedStep
 from .types import (
@@ -234,8 +233,13 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
             field_order.append(key)
     emission = StepEmission(
         id=emitted_id,
-        inputs=tuple((name, _input_surface(value)) for name, value in source.inputs
-                     if name not in consumed),
+        # Empty, deliberately. Every authored input naming a declared port
+        # becomes a `Binding` above, and Complete writes each one: a literal to
+        # a workflow input, a raw reference to its expression, a name to
+        # itself, an edge to its source. Seeding this with the spelling the
+        # document used made the *default* state invalid CWL -- a `wic_alias:`
+        # nobody replaced reached the runner instead of the compiler.
+        inputs=(),
         run=ProcessRun(resolved.process.run_path, resolved.process.key),
         outputs=tuple(declared_outputs),
         scatter=interpreted.get('scatter'),
@@ -247,18 +251,6 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
     return StepNode(identity, inputs, outputs, bindings, source.interpreted,
                     source.passthrough, source.span, emission,
                     _inference_rules(resolved.sidecar))
-
-
-def _input_surface(value: InputValue):  # type: ignore[no-untyped-def]
-    match value:
-        case InlineLiteral(value=literal):
-            return {Key.INLINE_INPUT: literal}
-        case EdgeRef(name=name):
-            return {Key.ALIAS: name}
-        case RawCwlRef(expression=expression):
-            return {Key.RAW_CWL: expression}
-        case UnresolvedName(name=name):
-            return name
 
 
 def _workflow_ports(raw: object, *, output: bool) -> tuple[WorkflowPort, ...]:
