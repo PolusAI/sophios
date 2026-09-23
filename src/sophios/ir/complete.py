@@ -206,8 +206,28 @@ def _materialize_edges(graph: WorkflowGraph) -> WorkflowGraph:
     return replace(graph, steps=tuple(ordered_steps))
 
 
+def _emitted_source(graph: WorkflowGraph, port_id: PortId) -> str | None:
+    """The `step/port` spelling an emitted document can resolve."""
+    step = next((item for item in graph.steps if item.id == port_id.step), None)
+    if step is None or step.emission is None:
+        return None
+    return f'{step.emission.id}/{port_id.port}'
+
+
 def _materialize_outputs(graph: WorkflowGraph) -> WorkflowGraph:
-    outputs = list(graph.workflow_outputs)
+    # An authored `outputSource:` names the step as the document wrote it, and
+    # emission renames every step to `{workflow}__step__{i}__{name}`. Carrying
+    # the authored string through leaves the emitted document pointing at a
+    # step that does not exist there. Link already resolved the same string to
+    # a port, so rewrite from that rather than from the text.
+    resolved = dict(graph.output_mapping)
+    outputs = [
+        replace(port, output_source=emitted)
+        if port.has_output_source and port.name in resolved
+        and (emitted := _emitted_source(graph, resolved[port.name])) is not None
+        else port
+        for port in graph.workflow_outputs
+    ]
     output_mapping = list(graph.output_mapping)
     authored = {port.name for port in outputs}
     for step in graph.steps:

@@ -155,7 +155,13 @@ def test_class_is_written_while_inputs_outputs_and_version_are_not() -> None:
     assert compiled['class'] == 'Workflow', 'class is written, not merged'
     assert compiled['inputs']['mine'] == {'type': 'string'}, 'user input lost'
     assert len(compiled['inputs']) > 1, 'compiler inputs not merged alongside'
-    assert compiled['outputs']['mine'] == user_output, 'user output lost'
+    # Kept entry, rewritten reference: `outputSource` is the one field of a
+    # supplied output the compiler must not carry through, because emission
+    # renames the step it names. Asserting the authored spelling survived was
+    # asserting a document cwltool rejects.
+    assert compiled['outputs']['mine'] == {
+        **user_output, 'outputSource': 'leak__step__1__touch/file',
+    }, 'user output lost, or its source not rewritten to the emitted step'
     assert len(compiled['outputs']) > 1, 'compiler outputs not merged alongside'
 
     # The compiler wins. Sophios generates for one substrate version, so a
@@ -298,6 +304,32 @@ def test_residue_validates_as_cwl_v1_2(freight: dict[str, Any]) -> None:
         target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
         assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 0
     assert inlined['cwlVersion'] == CWL_VERSION
+
+
+@pytest.mark.needs_cwltool
+@pytest.mark.skip_pypi_ci
+@pytest.mark.fast
+def test_an_authored_output_source_validates() -> None:
+    """A supplied `outputSource` names a step cwltool can find.
+
+    Planted rather than generated: the workflow strategy never writes an
+    authored `outputSource:`, so the property above reaches only the
+    synthesized path, which computes the emitted step name correctly. The
+    authored path carried the document's own spelling through to a document
+    whose steps are all renamed, and nothing looked until a runner did.
+    """
+    import cwltool.main  # pylint: disable=import-outside-toplevel  # expensive
+
+    info = compile_info({
+        'outputs': {'mine': {'type': 'File', 'outputSource': 'touch/file'}},
+        **_touch_workflow({}, {}),
+    }, 'leak')
+    inlined = sophios.post_compile.inline_artifact_runs(info.artifact).cwl
+    assert inlined['outputs']['mine']['outputSource'] == 'leak__step__1__touch/file'
+    with tempfile.TemporaryDirectory() as workdir:
+        target = Path(workdir) / 'authored_output_source.cwl'
+        target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
+        assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 0
 
 
 # --------------------------------------------------------------------------
