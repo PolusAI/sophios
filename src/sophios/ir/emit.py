@@ -13,6 +13,9 @@ from copy import deepcopy
 from typing import Any
 
 from ..lang import versions
+from ..lang.diagnostics import SophiosError
+from ..lang.error_codes import SophiosErrorCode
+from ..utils_yaml import Key
 from ..wic_types import Cwl
 from .types import StepEmission, WorkflowGraph, WorkflowPort
 
@@ -52,7 +55,22 @@ def emit_job_inputs(graph: WorkflowGraph) -> Cwl:
 
 
 def _emit_step(step: StepEmission) -> dict[str, Any]:
-    """Render one structured step descriptor in its declared canonical order."""
+    """Render one structured step descriptor in its declared canonical order.
+
+    A binding reaches here as the source, expression or literal it stands for.
+    The spelling the document used -- `wic_alias`, `wic_inline_input` -- is a
+    Sophios word, not a CWL one, and `in:` has no field for it: writing one out
+    produces a document the compiler accepts and a runner refuses. Lower no
+    longer seeds these, so this cannot fire; it is here because the failure it
+    replaces was silent and arrived a whole CI lane later.
+    """
+    for name, value in step.inputs:
+        residue = set(value) & Key.ALL if isinstance(value, dict) else set()
+        if residue:
+            raise SophiosError.error(
+                SophiosErrorCode.SUBWORKFLOW_INVALID,
+                f"step '{step.id}' reaches emission with '{name}' still written as "
+                f"'{sorted(residue)[0]}'; nothing resolved what it names")
     known: dict[str, Any] = {
         'id': step.id,
         'in': {name: deepcopy(value) for name, value in step.inputs},

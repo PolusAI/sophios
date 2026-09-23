@@ -228,6 +228,12 @@ WINDOWS_EXCLUDED: Final = frozenset({
     'tests/core/test_hermeticity.py::test_every_stub_is_valid_cwl',
     'tests/core/test_lang_version.py::test_annotation_is_declared_and_the_cwl_stays_valid',
     'tests/core/test_leak_boundary.py::test_residue_validates_as_cwl_v1_2',
+    # One compile and one `--validate` of a four-line workflow, under a second.
+    # It buys the authored `outputSource` path, which the residue property
+    # above cannot reach: the workflow strategy never writes one, so only the
+    # synthesized path was ever validated, and the authored one emitted a
+    # reference to a step the document does not contain.
+    'tests/core/test_leak_boundary.py::test_an_authored_output_source_validates',
 })
 
 
