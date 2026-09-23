@@ -30,7 +30,7 @@ from sophios.wic_types import StepId as LegacyStepId, Yaml
 from . import ast_strategies as strat
 from .compile_harness import TOUCH, compile_cwl
 from .equivalence import Strength, equivalent
-from .hermetic import ORACLE, compile_hermetic
+from .hermetic import ORACLE, compile_hermetic, subworkflow_step
 from .synthetic_tools import SYNTHETIC_TOOLS
 from .test_resolve import _scalar_literals_fit, _source_model
 
@@ -64,6 +64,29 @@ def test_full_pipeline_agrees_at_up_to_embedding(workflow: Yaml) -> None:
     live = compile_hermetic(copy.deepcopy(workflow)).artifact.cwl
     divergence = equivalent(direct, live, Strength.UP_TO_EMBEDDING)
     assert divergence is None, divergence
+
+
+@pytest.mark.fast
+def test_completing_twice_is_completing_once() -> None:
+    """`complete` says it is idempotent, and the driver takes it at its word.
+
+    `_compile_front` calls it three times -- before Link, after Link, after
+    Infer -- so any arm that reads its own previous output compounds. The
+    namespaced `run:` arm did: it took `PurePath(target).stem` of the last
+    pass and prefixed again, so a subworkflow's `run:` gained a prefix per
+    call and named no file that was ever written. `relative_run_path=False`
+    is the arm that drifts, and `cwl_subinterpreter` compiles with it.
+    """
+    child = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'c.txt'}}}]}
+    workflow: Yaml = {'steps': [subworkflow_step('sub.wic', child)]}
+    source, workflows = _source_model(copy.deepcopy(workflow))
+    registry = RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows)
+    front = front_end(source, registry, name='oracle')
+    assert front.graph is not None, list(front.diagnostics)
+
+    once = complete(front.graph, relative_run_path=False)
+    twice = complete(once, relative_run_path=False)
+    assert emit(twice) == emit(once)
 
 
 @pytest.mark.fast

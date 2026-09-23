@@ -254,7 +254,13 @@ def _workflow_surface(graph: WorkflowGraph, relative_run_path: bool) -> Workflow
             continue
         target = emission.run.target
         if isinstance(target, str):
-            leaf = f'{PurePath(target).stem}.cwl'
+            # From the resolved identity, not from `target`. `target` is this
+            # function's own output, and `complete()` runs three times, so a
+            # leaf read back out of it grows a prefix per pass: the namespaced
+            # arm below produced `step___step___step___sub.cwl` and named no
+            # file on disk. The identity is what the leaf was always meant to
+            # spell, and it does not move.
+            leaf = f'{emission.run.process_id.name}.cwl'
             if relative_run_path:
                 target = f'{emission.id}/{leaf}'
             elif emission.run.child is not None:
