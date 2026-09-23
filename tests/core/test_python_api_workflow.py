@@ -17,7 +17,6 @@ import sophios
 import sophios.api.python as python_api_package
 import sophios.api.python._workflow_runtime as python_runtime
 import sophios.compute_request as compute_request_module
-import sophios.main as main_module
 import sophios.plugins
 from sophios import input_output as io
 from sophios import run_local

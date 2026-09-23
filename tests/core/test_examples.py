@@ -26,11 +26,12 @@ from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.post_compile import verify_container_engine_config
 from sophios.ir.artifacts import CompilationArtifact
-from sophios.wic_types import StepId, Yaml, YamlTree, Json
+from sophios.wic_types import Json
 from sophios.utils_graphs import get_graph_reps
 
+# pylint: disable-next=unused-import  # `corpus_registry` is a pytest fixture
 from .test_setup import (CorpusRegistry, corpus_registry, workflow_paths,
-                         yml_path_is_workflow)  # pylint: disable=unused-import
+                         yml_path_is_workflow)
 from .equivalence import Strength, equivalent
 
 yml_paths = workflow_paths()

@@ -1,14 +1,18 @@
-"""The completed typed pipeline and its retired-state boundary.
+"""The completed typed pipeline, and the phases' freedom from ambient state.
 
 The end-to-end property composes the independently tested phases over the full
 generator and uses the established equivalence relation. ``UP_TO_EMBEDDING``
 is the compatibility contract: generated paths may move, while workflow
 structure, ports, types, bindings, requirements, and opaque payloads may not.
 
-The state-retirement property is static because ambient state can hide on a
-branch no generated example reaches. It inspects the public phase signatures
-and module bodies, and its planted breach proves the detector is not a vacuous
-scan.
+The ambient-state property is static because mutable state can hide on a branch
+no generated example reaches. It inspects the public phase signatures and module
+bodies, and its planted breach proves the detector is not a vacuous scan.
+
+Nothing here asserts that a retired name has stayed retired. Those scans were
+removed deliberately: a symbol that no longer exists cannot come back by
+accident, so such a check restates its own deletion and fails only when someone
+retypes the name on purpose -- which review catches and a test does not.
 """
 import ast
 import copy

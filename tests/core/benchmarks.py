@@ -16,7 +16,6 @@ from functools import partial
 from pathlib import Path
 from typing import Callable, Final
 
-import yaml
 from jsonschema import Draft202012Validator
 
 # `tests/` has no `__init__.py` (test_hermeticity.py's own comment explains
@@ -42,8 +41,7 @@ import sophios.plugins
 from sophios.lang import parse
 from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_graphs import get_graph_reps
-from sophios.utils_yaml import wic_loader
-from sophios.wic_types import Cwl, StepId, Tool, Tools, Yaml, YamlTree
+from sophios.wic_types import Cwl, StepId, Tool, Tools, Yaml
 
 
 @dataclass(frozen=True, slots=True)

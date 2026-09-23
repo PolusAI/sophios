@@ -7,7 +7,6 @@ import pytest
 import yaml
 
 import sophios.api.python._tool_builder_support as tool_builder_support
-import sophios.api.python.tool_builder as tool_builder_module
 from sophios.api.python.tool_builder import (
     CommandLineTool,
     Dirent,

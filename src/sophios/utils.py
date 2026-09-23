@@ -1,11 +1,7 @@
-from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any
 
-import yaml
-
-from .wic_types import (Namespaces, StepId,
-                        Json, Yaml, YamlTree)
+from .wic_types import Json, Yaml
 
 
 def step_name_str(yaml_stem: str, i: int, step_key: str) -> str:

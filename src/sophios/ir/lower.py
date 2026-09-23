@@ -15,8 +15,7 @@ from dataclasses import dataclass
 from ..lang.cwl import CWL_VERSION
 from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.error_codes import SophiosErrorCode
-from ..lang.nodes import (Document, EdgeRef, InlineLiteral, InputValue, RawCwlRef,
-                          UnresolvedName)
+from ..lang.nodes import Document, EdgeRef, InputValue, UnresolvedName
 from ..lang.versions import (ANNOTATION_KEY, ANNOTATION_NAMESPACE,
                              ANNOTATION_NAMESPACE_URI)
 from .declarations import port_declaration

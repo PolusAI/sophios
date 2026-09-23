@@ -8,14 +8,10 @@ import graphviz
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
-import yaml
-
-import sophios
 from sophios import compiler, utils_cwl
 from sophios.ir import frontdoor
 from sophios.cli import default_compilation_settings
-from sophios.utils_yaml import wic_loader
-from sophios.wic_types import GraphData, GraphReps, StepId, Yaml, YamlTree
+from sophios.wic_types import GraphData, GraphReps
 from ..wic_types import Json, Tools
 from ..lang.cwl import CWL_VERSIONS
 

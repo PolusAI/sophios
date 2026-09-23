@@ -30,7 +30,6 @@ from sophios.lang import SophiosErrorCode
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
-from .equivalence import Strength
 from .hermetic import ORACLE, compile_hermetic, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
 from .test_resolve import _scalar_literals_fit, _source_model

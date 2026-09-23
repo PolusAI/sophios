@@ -276,7 +276,9 @@ jobs:
         run: cd sophios/ && pytest tests/core/test_manufactured_documents.py
 
       # Spec 3's cumulative blocking lane: phase contracts plus the composed
-      # pipeline and retired-state boundary.
+      # pipeline. It does not assert that a retired name has stayed retired --
+      # a deleted symbol coming back is a review failure, and a test that
+      # names one can only ever restate its own deletion.
       - name: PyTest Spec 3 Phases
         if: always()
         timeout-minutes: 30
