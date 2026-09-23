@@ -122,11 +122,23 @@ def equivalent(left: Yaml, right: Yaml, strength: Strength) -> Divergence | None
         case Strength.IDENTICAL:
             return _first_difference(left, right, strength, '', ordered=True)
         case Strength.UP_TO_EMBEDDING:
-            return _first_difference(recursively_delete_dict_key('run', left),
-                                     recursively_delete_dict_key('run', right),
+            # `$namespaces` goes with `run:`, and not as a convenience. A
+            # prefix must be declared in the document that uses it, so
+            # embedding a child moves the child's declarations up into its
+            # parent (`post_compile.inline_artifact_runs`). Deleting `run:`
+            # alone therefore does not erase what embedding changed: it erases
+            # the child and leaves the prefixes the child brought with it.
+            return _first_difference(_without_embedding(left),
+                                     _without_embedding(right),
                                      strength, '', ordered=False)
         case _:
             return _same_dag(left, right)
+
+
+def _without_embedding(document: Any) -> Any:
+    """A document with everything embedding decides removed."""
+    return recursively_delete_dict_key(
+        '$namespaces', recursively_delete_dict_key('run', document))
 
 
 def _first_difference(left: Any, right: Any, strength: Strength, path: str, *,
