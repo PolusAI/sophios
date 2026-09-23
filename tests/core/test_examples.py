@@ -5,6 +5,7 @@ from pathlib import Path
 import signal
 import sys
 import argparse
+from typing import Final
 
 import pytest
 import yaml
@@ -19,7 +20,7 @@ from sophios.ir import frontdoor
 import sophios.plugins
 from sophios import auto_gen_header
 from sophios.cli import get_args
-from sophios.utils_yaml import wic_loader
+from sophios.utils_yaml import Key, wic_loader
 from sophios.post_compile import (cwl_docker_extract, inline_artifact_runs,
                                   remove_artifact_entrypoints, stage_input_files)
 from sophios.lang.diagnostics import SophiosError
@@ -292,6 +293,59 @@ def _is_includer_fragment(error: SophiosError) -> bool:
     """
     return bool(error.diagnostics) and all(
         item.code is SophiosErrorCode.UNDEFINED_EDGE for item in error.diagnostics)
+
+
+#: Fields a CWL `CommandLineTool` input may declare and a workflow input may
+#: not. `declarations.boundary_declaration` is the one place that reduces a
+#: promoted port, and this is what says so about the output rather than about
+#: the call.
+_TOOL_ONLY_BOUNDARY_FIELDS: Final = ('inputBinding', 'loadContents', 'loadListing',
+                                     'secondaryFiles', 'streamable')
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_large)
+def test_emitted_cwl_says_nothing_cwl_cannot_read(yml_path_str: str, yml_path: Path,
+                                                  corpus_registry: CorpusRegistry) -> None:
+    """No Sophios word and no tool-only field survives into an emitted document.
+
+    Two defect classes, one scan, and both reached a runner before they reached
+    a test: a `wic_alias` written into `in:`, and a promoted port carrying the
+    `inputBinding` its tool declared, whose `position` a workflow input has no
+    field for. cwltool catches each of them, but only in `run_workflows`,
+    behind a container pull. This is the same claim for the price of a compile.
+
+    `EmittedValue` now makes the first unrepresentable in a step's `in:`, but
+    `OpaqueCwl` admits an `InputValue` by design, so passthrough freight can
+    still carry one anywhere else in the document.
+    """
+    bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, corpus_registry.tools)
+    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(
+        get_args(str(yml_path)))
+    try:
+        result = sophios.compiler.compile_source(
+            bundle, compiler_options, graph_settings, yaml_tag_paths,
+            relative_run_path=True, testing=True, graph_target=get_graph_reps(str(yml_path)))
+    except SophiosError as error:
+        if _is_includer_fragment(error):
+            pytest.skip(f'{yml_path_str} consumes edges from an includer')
+        raise
+
+    def scan(artifact: CompilationArtifact) -> None:
+        text = json.dumps(artifact.cwl, default=str)
+        for word in Key.ALL:
+            assert f'"{word}"' not in text, f'{artifact.name} emits the Sophios key {word}'
+        if artifact.cwl.get('class') == 'Workflow':
+            for port, declared in (artifact.cwl.get('inputs') or {}).items():
+                if isinstance(declared, dict):
+                    for field in _TOOL_ONLY_BOUNDARY_FIELDS:
+                        assert field not in declared, (
+                            f'{artifact.name}: workflow input {port} declares {field}, '
+                            'which belongs to a tool input')
+        for child in artifact.children:
+            scan(child)
+
+    scan(result.artifact)
 
 
 @pytest.mark.fast

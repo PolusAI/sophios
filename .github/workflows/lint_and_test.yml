@@ -218,6 +218,15 @@ jobs:
         # NOTE: This test MUST be run in serial! See is_isomorphic_with_timeout()
         timeout-minutes: 20 # backup timeout for windows
 
+      # Two defect classes cwltool already catches -- a Sophios key written
+      # into `in:`, and a promoted port carrying a tool-only `inputBinding` --
+      # but only in run_workflows, behind a container pull. Measured at 21s
+      # over the full corpus here, against the minutes that round trip costs.
+      - name: PyTest Emitted CWL Residue
+        if: always()
+        run: cd sophios/ && pytest -k test_emitted_cwl_says_nothing_cwl_cannot_read
+        timeout-minutes: 20 # backup timeout for windows
+
       - name: PyTest Inline Subworkflows
         if: always()
         run: cd sophios/ && pytest -k test_inline_subworkflows # --cov --cov-config=.coveragerc_serial
