@@ -234,7 +234,8 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
             field_order.append(key)
     emission = StepEmission(
         id=emitted_id,
-        inputs=tuple((name, _input_surface(value)) for name, value in source.inputs),
+        inputs=tuple((name, _input_surface(value)) for name, value in source.inputs
+                     if name not in consumed),
         run=ProcessRun(resolved.process.run_path, resolved.process.key),
         outputs=tuple(declared_outputs),
         scatter=interpreted.get('scatter'),
