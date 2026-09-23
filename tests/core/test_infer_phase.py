@@ -113,28 +113,26 @@ def test_falsy_defaults_satisfy_inputs(default: object) -> None:
 
 
 @pytest.mark.fast
-def test_promoted_input_normalizes_a_scalar_format_like_legacy() -> None:
-    """Canonicalize a synthesized literal format set to legacy's list spelling.
+def test_promoted_input_normalizes_a_scalar_format() -> None:
+    """Canonicalize a synthesized literal format set to the list spelling.
 
     CWL v1.2 permits one literal IRI as either a string or a list of strings.
     This is a new workflow input synthesized by Sophios, not an authored
-    declaration whose spelling must be preserved, so the singleton list is
-    our deterministic canonical form as well as the legacy-compatible one.
+    declaration whose spelling must be preserved, so the singleton list is our
+    deterministic canonical form.
     """
     tool = clt({'file': {'type': 'File', 'format': 'edam:format_1'}}, {}, canonical=True)
     tools = {LegacyStepId('formatted_sink', SYNTHETIC_NS):
              Tool('/synthetic/formatted_sink.cwl', tool)}
     workflow = {'steps': [{'id': 'formatted_sink'}]}
-    typed, linked, _ = _typed(workflow, tools)
+    _, linked, _ = _typed(workflow, tools)
     result = infer(linked)
     assert result.graph is not None, list(result.diagnostics)
     assert result.graph.workflow_inputs[0].declaration.format == ['edam:format_1']
-    bridged = legacy_after_infer(typed.resolved.document, result.graph)
-    assert_compilations_equivalent(
-        compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools)),
-        compile_hermetic(bridged, tools=copy.deepcopy(tools)),
-        Strength.IDENTICAL,
-    )
+    # The phase's decision is what the compiler emits, not merely what it holds.
+    compiled = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools))
+    boundary = next(iter(compiled.artifact.cwl['inputs'].values()))
+    assert boundary['format'] == ['edam:format_1']
 
 
 @pytest.mark.fast
@@ -147,22 +145,20 @@ def test_promoted_input_preserves_a_cwl_format_expression(expression: str) -> No
 
     CWL v1.2 defines ``format`` as string, array-of-string IRIs, or Expression.
     An expression therefore occupies a different union arm from a literal
-    singleton set. Legacy wraps every string and incorrectly turns expressions
-    into array elements; typed Infer keeps any string containing a CWL ``$(``
-    or ``${`` marker opaque. This test intentionally asserts the typed artifact
-    alone rather than claiming ``IDENTICAL`` agreement with that legacy bug.
+    singleton set. Infer keeps any string containing a CWL ``$(`` or ``${``
+    marker opaque, so an expression reaches the boundary unchanged rather than
+    becoming the sole element of an array.
     """
     tool = clt({'file': {'type': 'File', 'format': expression}}, {}, canonical=True)
     tools = {LegacyStepId('formatted_sink', SYNTHETIC_NS):
              Tool('/synthetic/formatted_sink.cwl', tool)}
     workflow = {'steps': [{'id': 'formatted_sink'}]}
-    typed, linked, _ = _typed(workflow, tools)
+    _, linked, _ = _typed(workflow, tools)
     result = infer(linked)
     assert result.graph is not None, list(result.diagnostics)
     assert result.graph.workflow_inputs[0].declaration.format == expression
-    bridged = legacy_after_infer(typed.resolved.document, result.graph)
-    compiled = compile_hermetic(bridged, tools=copy.deepcopy(tools))
-    boundary = next(iter(compiled.rose.data.compiled_cwl['inputs'].values()))
+    compiled = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools))
+    boundary = next(iter(compiled.artifact.cwl['inputs'].values()))
     assert boundary['format'] == expression
 
 
