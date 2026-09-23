@@ -8,6 +8,9 @@ from ..lang.diagnostics import Diagnostics
 from .declarations import boundary_declaration, port_declaration
 from .resolve import RegistrySnapshot
 from .types import (
+    EmittedValue,
+    Expression,
+    Source,
     Direction,
     Edge,
     Port,
@@ -169,7 +172,8 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
                     WorkflowPort(input_name, declaration, origin=port.origin or port.id))
             if input_name not in {name for name, _ in input_mapping}:
                 input_mapping.append((input_name, (port.id,)))
-            steps[position] = _set_emission_input(current_step, port.id.port, input_name)
+            steps[position] = _set_emission_input(
+                current_step, port.id.port, Source(input_name, shorthand=True))
             bound.add(port.id)
 
     return replace(graph, steps=tuple(steps), inferred_edges=tuple(inferred_edges),
@@ -352,7 +356,7 @@ def _attach_children(graph: WorkflowGraph) -> WorkflowGraph:
     return replace(graph, steps=steps)
 
 
-def _set_emission_input(step: StepNode, name: str, value: str) -> StepNode:
+def _set_emission_input(step: StepNode, name: str, value: EmittedValue) -> StepNode:
     if step.emission is None:
         return step
     inputs = dict(step.emission.inputs)

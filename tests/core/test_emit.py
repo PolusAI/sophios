@@ -36,6 +36,7 @@ from sophios.ir import (
     PortType,
     ProcessRun,
     RegistryKey,
+    Source,
     StepEmission,
     StepId,
     StepNode,
@@ -120,7 +121,7 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
         inputs=(Port(input_id, in_decl.type, in_decl),),
         outputs=(Port(output_id, out_decl.type, out_decl),),
         emission=StepEmission(
-            'write', (('message', {'source': 'message'}),),
+            'write', (('message', Source('message')),),
             ProcessRun('write.cwl', RegistryKey('global', 'write')), ('file',),
         ),
     )

@@ -17,6 +17,9 @@ from ..lang.error_codes import SophiosErrorCode
 from ..lang.versions import ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
 from .declarations import boundary_declaration, port_declaration
 from .types import (
+    EmittedValue,
+    Expression,
+    Source,
     Direction,
     Edge,
     JobBinding,
@@ -91,7 +94,7 @@ def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
             _put_job(job_bindings, JobBinding(outer_name, child_jobs[boundary.name]))
             sink = next(port.id for port in inputs if port.id.port == boundary.name)
             _put_input_mapping(input_mapping, outer_name, sink)
-            emitted_inputs[boundary.name] = outer_name
+            emitted_inputs[boundary.name] = Source(outer_name, shorthand=True)
 
         steps.append(replace(
             step,
@@ -128,11 +131,11 @@ def _materialize_bindings(graph: WorkflowGraph, partial_failure: bool) -> Workfl
                     _put_job(job_bindings, JobBinding(
                         name, coerce_job_value(name, declaration, value)))
                     _put_input_mapping(input_mapping, name, port.id)
-                    emitted[port.id.port] = {'source': name}
+                    emitted[port.id.port] = Source(name)
                 case RawCwlRef(expression=expression):
-                    emitted[port.id.port] = expression
+                    emitted[port.id.port] = Expression(expression)
                 case UnresolvedName(name=name):
-                    emitted[port.id.port] = name
+                    emitted[port.id.port] = Source(name, shorthand=True)
                     if name in authored_inputs:
                         _put_input_mapping(input_mapping, name, port.id)
                         _merge_boundary_documentation(workflow_inputs, name, port.declaration)
@@ -166,7 +169,7 @@ def _materialize_edges(graph: WorkflowGraph) -> WorkflowGraph:
             return
         inputs = dict(step.emission.inputs)
         source = _direct_source(graph, edge.source)
-        inputs[target_port] = {'source': source} if explicit else source
+        inputs[target_port] = Source(source, shorthand=not explicit)
         steps[position] = replace(step, emission=replace(step.emission,
                                                          inputs=tuple(inputs.items())))
 
@@ -188,7 +191,7 @@ def _materialize_edges(graph: WorkflowGraph) -> WorkflowGraph:
             if step.emission is None:
                 continue
             inputs = dict(step.emission.inputs)
-            inputs.setdefault(target_port, {'source': name})
+            inputs.setdefault(target_port, Source(name))
             steps[position] = replace(
                 step, emission=replace(step.emission, inputs=tuple(inputs.items())))
     ordered_steps: list[StepNode] = []

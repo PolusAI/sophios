@@ -13,11 +13,9 @@ from copy import deepcopy
 from typing import Any
 
 from ..lang import versions
-from ..lang.diagnostics import SophiosError
-from ..lang.error_codes import SophiosErrorCode
-from ..utils_yaml import Key
 from ..wic_types import Cwl
-from .types import StepEmission, WorkflowGraph, WorkflowPort
+from .types import (EmittedValue, Expression, Source, StepEmission, WorkflowGraph,
+                    WorkflowPort)
 
 
 def emit(graph: WorkflowGraph) -> Cwl:
@@ -57,23 +55,16 @@ def emit_job_inputs(graph: WorkflowGraph) -> Cwl:
 def _emit_step(step: StepEmission) -> dict[str, Any]:
     """Render one structured step descriptor in its declared canonical order.
 
-    A binding reaches here as the source, expression or literal it stands for.
-    The spelling the document used -- `wic_alias`, `wic_inline_input` -- is a
-    Sophios word, not a CWL one, and `in:` has no field for it: writing one out
-    produces a document the compiler accepts and a runner refuses. Lower no
-    longer seeds these, so this cannot fire; it is here because the failure it
-    replaces was silent and arrived a whole CI lane later.
+    A binding arrives as an `EmittedValue`, and rendering it is the one
+    decision this module makes. The check that used to stand here -- refusing a
+    `wic_alias` that reached emission -- is gone with the state it guarded: the
+    union has no member that can carry a Sophios word, so a phase cannot build
+    one and mypy says so at the producer rather than the runner saying so a CI
+    lane later.
     """
-    for name, value in step.inputs:
-        residue = set(value) & Key.ALL if isinstance(value, dict) else set()
-        if residue:
-            raise SophiosError.error(
-                SophiosErrorCode.SUBWORKFLOW_INVALID,
-                f"step '{step.id}' reaches emission with '{name}' still written as "
-                f"'{sorted(residue)[0]}'; nothing resolved what it names")
     known: dict[str, Any] = {
         'id': step.id,
-        'in': {name: deepcopy(value) for name, value in step.inputs},
+        'in': {name: _emit_binding(value) for name, value in step.inputs},
         'run': deepcopy(step.run.target),
         'out': deepcopy(list(step.outputs)),
         'scatter': deepcopy(step.scatter),
@@ -82,6 +73,17 @@ def _emit_step(step: StepEmission) -> dict[str, Any]:
     }
     known.update({name: deepcopy(value) for name, value in step.passthrough})
     return {name: known[name] for name in step.field_order if name in known}
+
+
+def _emit_binding(value: EmittedValue) -> Any:
+    """One `in:` entry, in the spelling its value asks for."""
+    match value:
+        case Source(name=name, shorthand=True):
+            return name
+        case Source(name=name):
+            return {'source': name}
+        case Expression(text=text):
+            return text
 
 
 def _emit_port(port: WorkflowPort) -> Any:

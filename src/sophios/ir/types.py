@@ -198,6 +198,33 @@ class JobBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class Source:
+    """A step input bound to a name the emitted document defines.
+
+    `shorthand` is CWL's spelling choice and nothing more, the same
+    distinction `PortDeclaration.shorthand` records: `in: {x: src}` and
+    `in: {x: {source: src}}` mean one thing and are written two ways.
+    """
+
+    name: str
+    shorthand: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Expression:
+    """Raw CWL the document supplied for a binding, emitted verbatim."""
+
+    text: str
+
+
+#: What a step's `in:` entry can be. Three shapes, and the set is closed: a
+#: value that is neither is not something CWL has a field for, so the phases
+#: cannot express one and Emit cannot be handed one. Authored values are
+#: `InputValue`, and the two unions not meeting is the whole point.
+EmittedValue: TypeAlias = Source | Expression
+
+
+@dataclass(frozen=True, slots=True)
 class ProcessRun:
     """What a step executes.
 
@@ -227,7 +254,7 @@ class StepEmission:  # pylint: disable=too-many-instance-attributes
     """
 
     id: str
-    inputs: tuple[tuple[str, OpaqueCwl], ...]
+    inputs: tuple[tuple[str, EmittedValue], ...]
     run: ProcessRun
     outputs: tuple[OpaqueCwl, ...]
     scatter: OpaqueCwl = None
