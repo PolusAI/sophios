@@ -38,6 +38,21 @@ TOLERATED_CODES: Final[frozenset[SophiosErrorCode]] = frozenset({
     # inherits its predecessor's membership -- the same reasoning as `wic026`
     # above, one step further along.
     SophiosErrorCode.UNDECLARED_PORT,
+    # The four shape codes, for the third time and the same reason. The front
+    # door now parses before canonicalization runs, so a draw like
+    # `{'steps': {'0': []}}` is reported as `wic003` where it used to arrive as
+    # `ValueError: Error! If steps: tag is a Dictionary then all its values
+    # should be Dictionaries!` -- a string listed below. Whichever of the two
+    # lists a shape error lands in, it is the same draw and the same verdict.
+    SophiosErrorCode.NOT_A_MAPPING,
+    SophiosErrorCode.EXPECTED_MAPPING,
+    SophiosErrorCode.EXPECTED_SEQUENCE,
+    SophiosErrorCode.EXPECTED_SCALAR,
+    # A drawn `!*` names an edge no drawn `!&` defines, which the schema
+    # cannot exclude and the retired compiler accepted by leaving the input
+    # unbound. Refusing it is the improvement; the draw is a defective
+    # document, not a defective compiler, and this set is for the former.
+    SophiosErrorCode.UNDEFINED_EDGE,
 })
 
 
@@ -119,24 +134,12 @@ class TestFuzzyCompile(unittest.TestCase):
                 raise
         except Exception as e:
             expected_messages = (
-                'Error! Unbound literal variable ~',
                 'Error! Cannot load python_script',
-                'Error! Cannot self-reference the same step!',
                 'Error! If steps: tag is a List then all its elements should be Dictionaries!',
                 'Error! Each step dictionary must contain a non-empty string id: tag.',
                 'Error! If steps: tag is a Dictionary then all its keys should be non-empty strings!',
                 'Error! If steps: tag is a Dictionary then all its values should be Dictionaries!',
-                'Error! The `out` tag should be a list.',
-                'Error! There should only be one non-empty string anchor per out: list entry!',
-                'Error! Each out: list entry should be a string or a single-key dictionary.',
-                'Error! Each out: list entry should resolve to a string output name before workflow compilation.',
-                'Error! Provided input ',
                 "Error! Neither ",
-                'Error! No implementations and/or steps in ',
-                'Error! workflows must define at least one step.',
-                'Error! $namespaces tag must be a dictionary if present.',
-                'Error! $schemas tag must be a list if present.',
-                'Error! Subworkflow has no concrete first step.',
             )
             # Certain constraints are conditionally dependent on values and are
             # not easily encoded in the schema, so catch them here.
