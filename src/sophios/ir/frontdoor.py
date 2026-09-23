@@ -141,17 +141,24 @@ def _reach(document: Document,
             child_path = yml_paths.get(namespace, {}).get(Path(step.id).stem)
             if child_path is None:
                 continue
-            if child_path.resolve() in seen:
-                continue
-            seen.add(child_path.resolve())
-            child_source = child_path.read_text(encoding='utf-8')
-            _visit(child_source, child_path.stem, yml_paths, script_dir,
-                   workflows, generated, seen, pins, validator)
             # Keyed by the namespace the *call site* declares, which is the
             # one `_resolve_process` builds its `RegistryKey` from -- and the
             # same one this loop just used to find the file. A producer that
             # keys differently from the consumer files entries nothing reads.
-            workflows[(namespace, child_path.stem)] = child_source
+            key = (namespace, child_path.stem)
+            if key in workflows:
+                continue
+            child_source = child_path.read_text(encoding='utf-8')
+            workflows[key] = child_source
+            # The recursion is what `seen` is for, and it is keyed by path
+            # because a cycle is a cycle whichever namespace reaches it. The
+            # registry is keyed by namespace, so one file called under two
+            # namespaces needs both entries though it is read and walked once.
+            if child_path.resolve() in seen:
+                continue
+            seen.add(child_path.resolve())
+            _visit(child_source, child_path.stem, yml_paths, script_dir,
+                   workflows, generated, seen, pins, validator)
     for _name, body in (document.sidecar.implementations if document.sidecar else ()):
         _reach(body, yml_paths, script_dir, workflows, generated, seen, pins, validator)
 

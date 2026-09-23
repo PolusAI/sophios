@@ -127,6 +127,30 @@ def test_the_call_sites_namespace_keys_the_workflow(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
+def test_one_file_called_twice_is_registered_under_each_namespace(tmp_path: Path) -> None:
+    """Reading a file once does not mean filing it once.
+
+    The traversal skips a path it has already walked, which is what stops a
+    cycle. The registry is keyed by the namespace the call site declares, so a
+    second call site under a different namespace needs its own entry from the
+    same text -- and suppressing it left Resolve reporting a file as absent
+    from the registry when the front door had read it moments before.
+    """
+    leaf = tmp_path / 'leaf.wic'
+    leaf.write_text('steps:\n- id: mk_file\n  in:\n    name: l.txt\n', encoding='utf-8')
+    root = tmp_path / 'root.wic'
+    root.write_text('steps:\n- id: leaf.wic\n- id: leaf.wic\n'
+                    'wic:\n  steps:\n    (2, leaf.wic):\n      wic:\n        namespace: gpu\n',
+                    encoding='utf-8')
+
+    bundle = bundle_from_disk(
+        root, {'global': {'leaf': leaf}, 'gpu': {'leaf': leaf}}, SYNTHETIC_TOOLS)
+
+    assert bundle.registry.workflow(RegistryKey('global', 'leaf')) is not None
+    assert bundle.registry.workflow(RegistryKey('gpu', 'leaf')) is not None
+
+
+@pytest.mark.fast
 def test_span_names_the_line_in_the_authored_file(tmp_path: Path) -> None:
     """A diagnostic points at the line the construct occupies on disk.
 
