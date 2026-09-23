@@ -197,7 +197,15 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
         _copy_diagnostics(diagnostics, parsed.diagnostics)
         if parsed.document is None:
             return None
-        child_source = _inherit_parameters(parsed.document, sidecar)
+        inherited = _inherit_parameters(parsed.document, sidecar)
+        # A called workflow selects its implementation exactly as a root one
+        # does. Selecting only in `resolve` left the rule true of whichever
+        # document happened to be the root, so the same file compiled to a
+        # body of steps on its own and to an empty workflow when called.
+        child_source, selection = _select_implementation(inherited, registry)
+        _copy_diagnostics(diagnostics, selection)
+        if child_source is None:
+            return None
         child, child_diagnostics = _resolve_document(
             child_source, registry, workflow_key.name, version, trail + (workflow_key,))
         _copy_diagnostics(diagnostics, child_diagnostics)
