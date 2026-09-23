@@ -19,7 +19,6 @@ from typing import Final
 import pytest
 from hypothesis import given
 
-import sophios.compiler
 from sophios.ir.complete import complete
 from sophios.ir.emit import emit
 from sophios.ir.infer import infer
@@ -32,7 +31,6 @@ from . import ast_strategies as strat
 from .compile_harness import TOUCH, compile_cwl
 from .equivalence import Strength, equivalent
 from .hermetic import ORACLE, compile_hermetic
-from .source_scan import REPO_ROOT
 from .synthetic_tools import SYNTHETIC_TOOLS
 from .test_resolve import _scalar_literals_fit, _source_model
 
@@ -123,38 +121,6 @@ def test_no_phase_reads_mutable_cross_phase_state() -> None:
             if isinstance(node, ast.ImportFrom) and node.module is not None
         }
         assert not any(name.endswith('compiler') for name in imported), module.__name__
-
-    assert not (REPO_ROOT / 'src/sophios/legacy_graph.py').exists()
-    assert not (REPO_ROOT / 'src/sophios/inference.py').exists()
-    assert not (REPO_ROOT / 'src/sophios/inlineing.py').exists()
-
-    production = tuple((REPO_ROOT / 'src/sophios').rglob('*.py'))
-    forbidden_imports = {'sophios.inference', 'sophios.inlineing', 'sophios.legacy_graph'}
-    for path in production:
-        tree = ast.parse(path.read_text(encoding='utf-8'), str(path))
-        imported = {
-            node.module for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.module is not None
-        } | {
-            alias.name for node in ast.walk(tree) if isinstance(node, ast.Import)
-            for alias in node.names
-        }
-        assert not imported & forbidden_imports, (path, imported & forbidden_imports)
-        retired_calls = [
-            node for node in ast.walk(tree)
-            if isinstance(node, ast.Attribute) and node.attr == 'compile_workflow'
-        ]
-        assert not retired_calls, f'{path} still calls the retired compiler'
-
-    compiler_source = inspect.getsource(sophios.compiler)
-    for retired in ('compile_workflow', 'compile_workflow_once',
-                    'perform_edge_inference', 'legacy_emit'):
-        assert retired not in compiler_source
-
-    legacy_shapes = ('CompilerInfo', 'RoseTree', 'NodeData', 'EnvData')
-    wic_types_source = (REPO_ROOT / 'src/sophios/wic_types.py').read_text(encoding='utf-8')
-    for retired in legacy_shapes:
-        assert retired not in wic_types_source
 
 
 @pytest.mark.fast

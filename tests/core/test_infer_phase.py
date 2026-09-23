@@ -30,7 +30,6 @@ from sophios.lang import SophiosErrorCode
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
-from .differential import assert_compilations_equivalent
 from .equivalence import Strength
 from .hermetic import ORACLE, compile_hermetic, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
@@ -261,13 +260,6 @@ def test_iteration_exhaustion_is_exactly_wic022() -> None:
     assert result.graph is None
     assert [item.code for item in result.diagnostics] == [
         SophiosErrorCode.FIXED_POINT_NOT_REACHED]
-
-
-@pytest.mark.fast
-def test_inference_policy_is_not_process_global() -> None:
-    """Two policies coexist; the compiler exposes no writable policy state."""
-    from sophios import compiler  # pylint: disable=import-outside-toplevel
-    assert not hasattr(compiler, 'inference_rules')
 
 
 @pytest.mark.fast

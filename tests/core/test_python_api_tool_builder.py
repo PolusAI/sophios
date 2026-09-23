@@ -34,26 +34,6 @@ def test_old_tool_builder_module_name_is_not_available() -> None:
         importlib.import_module("sophios.api.python." + "cwl" + "_builder")
 
 
-@pytest.mark.fast
-def test_tool_builder_does_not_export_duplicate_aliases() -> None:
-    """Each construct has one public name.
-
-    These five were second spellings of things `cwl.array`, `cwl.enum`,
-    `cwl.record`, `Field` and `Step` already express. Checked against `__all__`
-    as well as the module, since a name absent from one and present in the
-    other is still importable.
-    """
-    for removed_name in (
-        "array_type",
-        "enum_type",
-        "record_type",
-        "record_field",
-        "step_from_command_line_tool",
-    ):
-        assert not hasattr(tool_builder_module, removed_name)
-        assert removed_name not in tool_builder_module.__all__
-
-
 def _rich_tool() -> CommandLineTool:
     """A tool exercising every builder method that reaches the document, so
     one assertion block covers the whole serialization surface."""

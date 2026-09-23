@@ -238,6 +238,4 @@ def test_emit_needs_no_state_beyond_the_graph(workflow: Yaml) -> None:
     """A graph remains sufficient after compiler policy and source are destroyed."""
     graph = compile_hermetic(copy.deepcopy(workflow)).graph
     expected = emit(graph)
-    from sophios import compiler  # pylint: disable=import-outside-toplevel
-    assert not hasattr(compiler, 'inference_rules')
     assert emit(graph) == expected

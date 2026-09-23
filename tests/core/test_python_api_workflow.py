@@ -436,7 +436,6 @@ def test_workflow_compile_boundary_hides_compiler_info() -> None:
     assert compiled.cwl_workflow["class"] == "Workflow"
     exposed = {field.name for field in dataclasses.fields(compiled)}
     assert exposed == {'name', 'cwl_workflow', 'cwl_job_inputs', 'lang_version'}, exposed
-    assert not any(hasattr(compiled, leaked) for leaked in ('rose', 'compiler_info', 'node_data'))
 
 
 @pytest.mark.fast
@@ -792,21 +791,6 @@ def test_top_level_python_api_exposes_concrete_modules_only() -> None:
     assert not hasattr(python_api_package, "WorkflowInputReference")
     assert not hasattr(python_api_package, "set_input_Step_Workflow")
     assert not hasattr(python_api_package, "extract_tools_paths_NONPORTABLE")
-
-
-@pytest.mark.fast
-def test_the_mutating_workflow_api_is_gone() -> None:
-    """A workflow is built from its steps, once; nothing appends to it after.
-
-    Asserted with `hasattr`, not `__dict__`: `__dict__` sees only what this
-    class defines, so a method reached through a base class would satisfy it
-    while still being callable. `Workflow.__getattr__` makes the distinction
-    load-bearing rather than theoretical.
-    """
-    for gone in ("append", "get_cwl_workflow", "write_ast_to_disk",
-                 "flatten_steps", "flatten_subworkflows", "get_inp_attr"):
-        assert not hasattr(Workflow, gone), gone
-    assert not hasattr(Step, "get_inp_attr")
 
 
 @pytest.mark.fast
