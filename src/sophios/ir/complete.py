@@ -5,6 +5,7 @@ It does not load a process, discover a file, or replay source.  It turns facts
 already present in a ``WorkflowGraph`` into the workflow boundary and CWL
 surface that Emit projects.
 """
+import json
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import PurePath
@@ -444,6 +445,22 @@ def _coerce_type(name: str, raw: Any, value: Any, fmt: Any) -> Any:
     return _coerce_scalar(name, raw, value, fmt)
 
 
+def _plain(value: Any) -> Any:
+    """`value` with any nested literal replaced by the data it stands for.
+
+    A `!ii` body is parsed, so a mapping literal holds `InlineLiteral` nodes
+    wherever the document nested one. They are the same data; only the node
+    is in the way of serializing it.
+    """
+    if isinstance(value, InlineLiteral):
+        return _plain(value.value)
+    if isinstance(value, dict):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_plain(item) for item in value]
+    return value
+
+
 def _coerce_scalar(name: str, raw: Any, value: Any, fmt: Any) -> Any:
     if raw == 'File':
         result = {'class': 'File', 'location': value}
@@ -453,6 +470,13 @@ def _coerce_scalar(name: str, raw: Any, value: Any, fmt: Any) -> Any:
     if raw == 'Directory':
         return {'class': 'Directory', 'location': value}
     if raw == 'string':
+        # A mapping or a sequence bound to a `string` port is a document the
+        # tool will parse, not a value to print: biobb's `config` is the
+        # common case, and it reads the string as JSON. `str` gives Python's
+        # repr, whose single quotes are not JSON, so the tool falls through to
+        # treating the text as a path and fails on a file named after a dict.
+        if isinstance(value, (dict, list)):
+            return json.dumps(_plain(value))
         return str(value)
     try:
         if raw == 'int':
