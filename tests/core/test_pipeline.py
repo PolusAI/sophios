@@ -70,6 +70,27 @@ def test_full_pipeline_agrees_at_up_to_embedding(workflow: Yaml) -> None:
     assert divergence is None, divergence
 
 
+@pytest.mark.skip_pypi_ci
+@given(strat.workflows().filter(_scalar_literals_fit))
+@ORACLE
+def test_completing_twice_is_completing_once_for_any_workflow(workflow: Yaml) -> None:
+    """The planted case below, over the generated space and both run paths.
+
+    `complete` documents itself idempotent and `_compile_front` calls it three
+    times on that promise, so any arm reading its own previous output compounds
+    silently. One such arm shipped -- the namespaced `run:` target grew a prefix
+    per call. A single example caught it once; the property is what makes the
+    next one fail on the commit that writes it.
+    """
+    source, workflows = _source_model(copy.deepcopy(workflow))
+    registry = RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows)
+    front = front_end(source, registry, name='oracle')
+    assert front.graph is not None, list(front.diagnostics)
+    for relative in (True, False):
+        once = complete(front.graph, relative_run_path=relative)
+        assert emit(complete(once, relative_run_path=relative)) == emit(once), relative
+
+
 @pytest.mark.fast
 def test_completing_twice_is_completing_once() -> None:
     """`complete` says it is idempotent, and the driver takes it at its word.
