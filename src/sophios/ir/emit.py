@@ -75,8 +75,15 @@ def _emit_step(step: StepEmission) -> dict[str, Any]:
     return {name: known[name] for name in step.field_order if name in known}
 
 
-def _emit_binding(value: EmittedValue) -> Any:
-    """One `in:` entry, in the spelling its value asks for."""
+def _emit_binding(value: EmittedValue) -> str | dict[str, str]:
+    """One `in:` entry, in the spelling its value asks for.
+
+    The return type is written out rather than left as `Any` so that mypy
+    checks this `match` covers the union. That check is what the runtime guard
+    this replaced used to do: under `Any` a third member would fall off every
+    arm, return `None`, and emit `in: {x: null}` -- the same silent, runner-only
+    failure, arriving the same way.
+    """
     match value:
         case Source(name=name, shorthand=True):
             return name

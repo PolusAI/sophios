@@ -8,22 +8,21 @@ from ..lang.diagnostics import Diagnostics
 from .declarations import boundary_declaration, port_declaration
 from .resolve import RegistrySnapshot
 from .types import (
-    EmittedValue,
-    Expression,
-    Source,
     Direction,
     Edge,
+    EmittedValue,
     Port,
     PortDeclaration,
     PortId,
+    PortType,
     ProcessRun,
     RegistryKey,
+    Source,
     StepEmission,
     StepId,
     StepNode,
     WorkflowGraph,
     WorkflowPort,
-    PortType,
 )
 
 

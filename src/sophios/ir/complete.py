@@ -17,15 +17,14 @@ from ..lang.error_codes import SophiosErrorCode
 from ..lang.versions import ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
 from .declarations import boundary_declaration, port_declaration
 from .types import (
-    EmittedValue,
-    Expression,
-    Source,
     Direction,
     Edge,
+    Expression,
     JobBinding,
     Port,
     PortDeclaration,
     PortId,
+    Source,
     StepNode,
     WorkflowGraph,
     WorkflowPort,
