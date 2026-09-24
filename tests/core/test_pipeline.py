@@ -24,7 +24,7 @@ import pytest
 from hypothesis import given
 
 from sophios.ir.complete import complete
-from sophios.ir.emit import emit
+from sophios.ir.emit import emit, surface
 from sophios.ir.infer import infer
 from sophios.ir.link import link
 from sophios.ir.pipeline import front_end
@@ -63,7 +63,7 @@ def test_full_pipeline_agrees_at_up_to_embedding(workflow: Yaml) -> None:
     assert linked.graph is not None, list(linked.diagnostics)
     inferred = infer(complete(linked.graph))
     assert inferred.graph is not None, list(inferred.diagnostics)
-    direct = emit(complete(inferred.graph))
+    direct = emit(surface(complete(inferred.graph)))
 
     live = compile_hermetic(copy.deepcopy(workflow)).artifact.cwl
     divergence = equivalent(direct, live, Strength.UP_TO_EMBEDDING)
@@ -116,22 +116,21 @@ def test_every_emitted_reference_resolves_in_its_own_document(workflow: Yaml) ->
 @given(strat.workflows().filter(_scalar_literals_fit))
 @ORACLE
 def test_completing_twice_is_completing_once_for_any_workflow(workflow: Yaml) -> None:
-    """`complete` is idempotent, over the generated space and both run paths.
+    """`complete` is idempotent, over the generated space.
 
     It documents itself so and `_compile_front` calls it three times on that
     promise, so any arm reading its own previous output compounds silently.
-    One such arm shipped: the namespaced `run:` target took `PurePath(target).stem`
-    of the last pass and prefixed again, so a subworkflow gained a prefix per
-    call and named no file that was ever written. `relative_run_path=False` is
-    the arm that drifts, and `cwl_subinterpreter` compiles with it.
+    One such arm shipped, in the half that is now `surface`: the `run:` target
+    was recomputed from the last pass and grew a prefix each time. That half
+    runs once per document now and cannot compound; this covers what still
+    repeats.
     """
     source, workflows = _source_model(copy.deepcopy(workflow))
     registry = RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows)
     front = front_end(source, registry, name='oracle')
     assert front.graph is not None, list(front.diagnostics)
-    for relative in (True, False):
-        once = complete(front.graph, relative_run_path=relative)
-        assert emit(complete(once, relative_run_path=relative)) == emit(once), relative
+    once = complete(front.graph)
+    assert emit(surface(complete(once))) == emit(surface(once))
 
 
 @pytest.mark.fast

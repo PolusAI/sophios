@@ -12,7 +12,7 @@ from . import utils_graphs
 from .input_output import NoAliasDumper
 from .ir.complete import complete
 from .ir.artifacts import CompilationArtifact, CompilationResult
-from .ir.emit import emit, emit_job_inputs
+from .ir.emit import emit, emit_job_inputs, surface
 from .ir.infer import InferencePolicy, InsertionCatalog, infer
 from .ir.link import link
 from .ir.frontdoor import SourceBundle
@@ -59,7 +59,7 @@ def compile_source(bundle: SourceBundle,
                       lang_version=selected_version)
     result = _compile_front(front, bundle.registry,
                             compiler_options, graph_settings, yaml_tag_paths,
-                            relative_run_path=relative_run_path, testing=testing,
+                            relative_run_path=relative_run_path,
                             graph_target=graph_target)
     if not testing:
         print('finishing compilation of', bundle.name)
@@ -94,7 +94,7 @@ def compile_document(yaml_tree_ast: YamlTree,
                       lang_version=selected_version)
     result = _compile_front(front, registry,
                             compiler_options, graph_settings, yaml_tag_paths,
-                            relative_run_path=relative_run_path, testing=testing,
+                            relative_run_path=relative_run_path,
                             graph_target=graph_target)
     if not testing:
         print('finishing compilation of', yaml_tree_ast.step_id.stem)
@@ -109,7 +109,6 @@ def _compile_front(front: FrontEndResult,
                    yaml_tag_paths: YamlTagPaths,
                    *,
                    relative_run_path: bool,
-                   testing: bool,
                    graph_target: GraphReps | None) -> CompilationResult:
     """The phases both doors share, from a finished front end to an artifact."""
     if front.graph is None or front.resolved is None or front.resolved.document is None:
@@ -121,7 +120,6 @@ def _compile_front(front: FrontEndResult,
 
     prepared = complete(
         _bind_subinterpreter_locations(front.graph, yaml_tag_paths),
-        relative_run_path=relative_run_path,
         partial_failure=compiler_options['partial_failure_enable'],
     )
     linked = link(prepared)
@@ -129,7 +127,6 @@ def _compile_front(front: FrontEndResult,
         raise SophiosError(linked.diagnostics)
     prepared = complete(
         linked.graph,
-        relative_run_path=relative_run_path,
         partial_failure=compiler_options['partial_failure_enable'],
     )
     policy = InferencePolicy(
@@ -144,13 +141,11 @@ def _compile_front(front: FrontEndResult,
         raise SophiosError(inferred.diagnostics)
     graph = complete(
         inferred.graph,
-        relative_run_path=relative_run_path,
         partial_failure=compiler_options['partial_failure_enable'],
     )
-    compiled = emit(graph)
     graph_reps = _project_graph(graph, graph_settings, graph_target)
-    artifact = _artifact_tree(graph, registry, graph_settings, graph_reps)
-    assert artifact.cwl == compiled
+    artifact = _artifact_tree(graph, registry, graph_settings, graph_reps,
+                              relative_run_path=relative_run_path)
     return CompilationResult(graph, artifact)
 
 
@@ -285,14 +280,18 @@ def _check_unresolved_names(graph: WorkflowGraph, allow_raw_cwl: bool) -> None:
 
 def _artifact_tree(graph: WorkflowGraph, registry: RegistrySnapshot,
                    graph_settings: GraphSettings,
-                   graph_reps: GraphReps | None = None) -> CompilationArtifact:
+                   graph_reps: GraphReps | None = None,
+                   *, relative_run_path: bool = True) -> CompilationArtifact:
+    """One artifact per emitted document, each surfaced exactly once."""
+    document = surface(graph, relative_run_path=relative_run_path)
     children: list[CompilationArtifact] = []
-    for step in graph.steps:
+    for step in document.steps:
         assert step.emission is not None
         child = step.emission.run.child
         if child is not None:
             child_reps = _project_graph(child, graph_settings)
-            children.append(_artifact_tree(child, registry, graph_settings, child_reps))
+            children.append(_artifact_tree(child, registry, graph_settings, child_reps,
+                                           relative_run_path=relative_run_path))
             continue
         key = step.emission.run.process_id
         definition = registry.tool(key)
@@ -307,14 +306,13 @@ def _artifact_tree(graph: WorkflowGraph, registry: RegistrySnapshot,
             leaf_graph,
         ))
 
-    compiled = emit(graph)
     reps = graph_reps or _project_graph(graph, graph_settings)
     return CompilationArtifact(
         graph.namespace.parts,
         graph.name,
         f'{graph.name}.cwl',
-        compiled,
-        emit_job_inputs(graph),
+        emit(document),
+        emit_job_inputs(document),
         graph,
         reps,
         tuple(children),

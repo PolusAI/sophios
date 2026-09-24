@@ -45,6 +45,7 @@ from sophios.ir import (
     WorkflowPort,
     emit,
     emit_job_inputs,
+    surface,
 )
 from sophios.lang.cwl import CWL_VERSION
 from sophios.lang.versions import ANNOTATION_KEY, ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
@@ -62,7 +63,7 @@ from .source_scan import REPO_ROOT
 def test_the_live_compiler_emits_only_from_its_graph(workflow: Yaml) -> None:
     """The public compiler's artifact is exactly its final graph projection."""
     result = compile_hermetic(copy.deepcopy(workflow))
-    assert result.artifact.cwl == emit(result.graph)
+    assert result.artifact.cwl == emit(surface(result.graph))
 
 
 @pytest.mark.fast
@@ -99,7 +100,11 @@ def test_differential_oracle_detects_a_changed_document() -> None:
 @given(strat.workflows())
 @ORACLE
 def test_one_graph_emits_identically(workflow: Yaml) -> None:
-    """A graph, not its mutable source dictionaries, determines every byte."""
+    """A graph, not its mutable source dictionaries, determines every byte.
+
+    Emit needs nothing beyond it: the source is emptied between the two
+    projections and neither byte moves.
+    """
     source = copy.deepcopy(workflow)
     graph = compile_hermetic(source).graph
     first = emit(graph)
@@ -232,13 +237,3 @@ def test_boundary_guard_detects_a_planted_dependency() -> None:
             return Path("registry.yml").read_text()
     ''')
     assert _emit_boundary(source)
-
-
-@pytest.mark.skip_pypi_ci
-@given(strat.workflows())
-@settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-def test_emit_needs_no_state_beyond_the_graph(workflow: Yaml) -> None:
-    """A graph remains sufficient after compiler policy and source are destroyed."""
-    graph = compile_hermetic(copy.deepcopy(workflow)).graph
-    expected = emit(graph)
-    assert emit(graph) == expected
