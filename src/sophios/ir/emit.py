@@ -21,8 +21,9 @@ from typing import Any
 from ..lang import versions
 from ..lang.versions import ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
 from ..wic_types import Cwl
-from .types import (EmittedValue, Expression, namespaced, NAMESPACE_SEPARATOR, Source,
-                    StepEmission, StepNode, WorkflowGraph, WorkflowPort)
+from .types import (EmissionDocument, EmittedValue, Expression, namespaced,
+                    NAMESPACE_SEPARATOR, Source, StepEmission, StepNode, WorkflowGraph,
+                    WorkflowPort)
 
 EDAM_NAMESPACE = ('edam', 'https://edamontology.org/')
 EDAM_SCHEMA = 'https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl'
@@ -32,8 +33,7 @@ def _step_spelling(step: StepNode, namespace: tuple[str, ...],
                    relative_run_path: bool) -> StepNode:
     """`step` with its `run:` path written and its field order settled."""
     emission = step.emission
-    if emission is None:
-        return step
+    assert emission is not None, 'surface refuses a graph with an unemitted step'
     target = emission.run.target
     if isinstance(target, str):
         # From the resolved identity: `target` is this function's own output,
@@ -55,7 +55,7 @@ def _step_spelling(step: StepNode, namespace: tuple[str, ...],
         emission, run=replace(emission.run, target=target), field_order=tuple(order)))
 
 
-def surface(graph: WorkflowGraph, *, relative_run_path: bool = True) -> WorkflowGraph:
+def surface(graph: WorkflowGraph, *, relative_run_path: bool = True) -> EmissionDocument:
     """Spell `graph`'s facts as the document Emit renders, for this graph alone.
 
     Requirements implied by the steps, the EDAM namespace and schema, a step's
@@ -70,8 +70,20 @@ def surface(graph: WorkflowGraph, *, relative_run_path: bool = True) -> Workflow
             to the step directory or namespaced beside the root.
 
     Returns:
-        WorkflowGraph: The same graph, carrying the spelling Emit renders.
+        EmissionDocument: The same graph, carrying the spelling Emit renders.
+
+    Raises:
+        ValueError: If the graph states no document -- a missing version, or a
+            step with no emission. Emit asks for the type this returns, so this
+            is the only place the question is asked.
     """
+    if not graph.cwl_version:
+        raise ValueError('an emission graph must declare its CWL version')
+    if not graph.lang_version:
+        raise ValueError('an emission graph must declare its Sophios language version')
+    if any(step.emission is None for step in graph.steps):
+        raise ValueError('every step in an emission graph needs an emission descriptor')
+
     steps = [_step_spelling(step, graph.namespace.parts, relative_run_path)
              for step in graph.steps]
 
@@ -107,26 +119,20 @@ def surface(graph: WorkflowGraph, *, relative_run_path: bool = True) -> Workflow
                                    key=lambda port: boundary_order(port.name)))
     job_bindings = tuple(sorted(graph.job_bindings,
                                 key=lambda binding: boundary_order(binding.name)))
-    return replace(graph, steps=tuple(steps), requirements=tuple(requirements.items()),
-                   workflow_inputs=workflow_inputs, job_bindings=job_bindings,
-                   namespaces=tuple(namespaces.items()), schemas=tuple(schemas),
-                   field_order=tuple(order))
+    return EmissionDocument(replace(
+        graph, steps=tuple(steps), requirements=tuple(requirements.items()),
+        workflow_inputs=workflow_inputs, job_bindings=job_bindings,
+        namespaces=tuple(namespaces.items()), schemas=tuple(schemas),
+        field_order=tuple(order)))
 
 
-def emit(graph: WorkflowGraph) -> Cwl:
+def emit(graph: EmissionDocument) -> Cwl:
     """Render ``graph`` as canonical CWL v1.2.
 
     The field-order tuples are part of the graph's emission surface, not an
-    implicit dependency on dictionary insertion order.  Missing semantic data
-    is an invalid graph for emission and fails close to its producer.
+    implicit dependency on dictionary insertion order. What makes a graph
+    renderable is stated by the argument type, so nothing is checked here.
     """
-    if not graph.cwl_version:
-        raise ValueError('an emission graph must declare its CWL version')
-    if not graph.lang_version:
-        raise ValueError('an emission graph must declare its Sophios language version')
-    if any(step.emission is None for step in graph.steps):
-        raise ValueError('every step in an emission graph needs an emission descriptor')
-
     known: dict[str, Any] = {
         'steps': [_emit_step(step.emission) for step in graph.steps if step.emission is not None],
         'cwlVersion': graph.cwl_version,
@@ -142,7 +148,7 @@ def emit(graph: WorkflowGraph) -> Cwl:
     return {name: known[name] for name in graph.field_order if name in known}
 
 
-def emit_job_inputs(graph: WorkflowGraph) -> Cwl:
+def emit_job_inputs(graph: EmissionDocument) -> Cwl:
     """Project the concrete job input document carried by ``graph``."""
     return {binding.name: deepcopy(binding.value) for binding in graph.job_bindings}
 

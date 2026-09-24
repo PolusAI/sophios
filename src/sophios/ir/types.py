@@ -578,3 +578,11 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
             StepNode | None: The first occurrence, if this graph has one.
         """
         return next((s for s in self.steps if s.id.name == name), None)
+
+
+#: A `WorkflowGraph` that states a whole CWL document: both versions set and
+#: every step carrying an emission. Distinct from `WorkflowGraph` so that
+#: `emit` can ask for one -- a graph between phases satisfies neither, and
+#: nothing in the type said so, which is why every render re-checked it at
+#: runtime. Only `emit.surface` produces one.
+EmissionDocument = NewType('EmissionDocument', WorkflowGraph)

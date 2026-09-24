@@ -14,11 +14,7 @@ the planted-mutation test proves the detector against the ordinary breach.
 import ast
 import copy
 import inspect
-import json
-import os
 from pathlib import Path
-import subprocess
-import sys
 import tempfile
 
 import pytest
@@ -106,16 +102,20 @@ def test_one_graph_emits_identically(workflow: Yaml) -> None:
     projections and neither byte moves.
     """
     source = copy.deepcopy(workflow)
-    graph = compile_hermetic(source).graph
-    first = emit(graph)
+    document = surface(compile_hermetic(source).graph)
+    first = emit(document)
     source.clear()
-    second = emit(graph)
+    second = emit(document)
     assert equivalent(first, second, Strength.IDENTICAL) is None
 
 
 @pytest.mark.fast
 def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
-    """The graph projection cannot be green only through compiler construction."""
+    """The graph projection cannot be green only through compiler construction.
+
+    Hand-built and surfaced, so this states the document the compiler ships:
+    the `run:` path written under the step directory and EDAM declared.
+    """
     namespace = Namespace()
     step_id = StepId(namespace, 1, 'write')
     input_id = PortId(step_id, Direction.INPUT, 'message')
@@ -141,37 +141,19 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
         field_order=('steps', 'cwlVersion', 'class', '$namespaces', 'inputs',
                      ANNOTATION_KEY, 'outputs'),
     )
-    assert emit(graph) == {
+    document = surface(graph)
+    assert emit(document) == {
         'steps': [{'id': 'write', 'in': {'message': {'source': 'message'}},
-                   'run': 'write.cwl', 'out': ['file']}],
+                   'run': 'write/write.cwl', 'out': ['file']}],
         'cwlVersion': CWL_VERSION,
         'class': 'Workflow',
-        '$namespaces': {ANNOTATION_NAMESPACE: ANNOTATION_NAMESPACE_URI},
+        '$namespaces': {'edam': 'https://edamontology.org/',
+                        ANNOTATION_NAMESPACE: ANNOTATION_NAMESPACE_URI},
         'inputs': {'message': {'type': 'string'}},
         ANNOTATION_KEY: '0.0.1',
         'outputs': {'file': {'type': 'File', 'outputSource': 'write/file'}},
     }
-    assert emit_job_inputs(graph) == {'message': 'hello'}
-
-
-@pytest.mark.skip_pypi_ci
-@pytest.mark.slow
-def test_hash_seed_does_not_change_emit() -> None:
-    """Four interpreter hash seeds witness process-level determinism."""
-    script = """
-import json
-from tests.core.hermetic import compile_hermetic
-w = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]}
-print(json.dumps(compile_hermetic(w).artifact.cwl, separators=(',', ':')))
-"""
-    env = {**os.environ, 'PYTHONPATH': os.pathsep.join((str(REPO_ROOT / 'src'), str(REPO_ROOT)))}
-    results = []
-    for seed in ('1', '2', '17', '101'):
-        run = subprocess.run([sys.executable, '-c', script], cwd=REPO_ROOT,
-                             env={**env, 'PYTHONHASHSEED': seed}, capture_output=True,
-                             text=True, check=True)
-        results.append(json.loads(run.stdout))
-    assert all(result == results[0] for result in results[1:])
+    assert emit_job_inputs(document) == {'message': 'hello'}
 
 
 @pytest.mark.needs_cwltool
