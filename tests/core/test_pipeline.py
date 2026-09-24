@@ -116,13 +116,14 @@ def test_every_emitted_reference_resolves_in_its_own_document(workflow: Yaml) ->
 @given(strat.workflows().filter(_scalar_literals_fit))
 @ORACLE
 def test_completing_twice_is_completing_once_for_any_workflow(workflow: Yaml) -> None:
-    """The planted case below, over the generated space and both run paths.
+    """`complete` is idempotent, over the generated space and both run paths.
 
-    `complete` documents itself idempotent and `_compile_front` calls it three
-    times on that promise, so any arm reading its own previous output compounds
-    silently. One such arm shipped -- the namespaced `run:` target grew a prefix
-    per call. A single example caught it once; the property is what makes the
-    next one fail on the commit that writes it.
+    It documents itself so and `_compile_front` calls it three times on that
+    promise, so any arm reading its own previous output compounds silently.
+    One such arm shipped: the namespaced `run:` target took `PurePath(target).stem`
+    of the last pass and prefixed again, so a subworkflow gained a prefix per
+    call and named no file that was ever written. `relative_run_path=False` is
+    the arm that drifts, and `cwl_subinterpreter` compiles with it.
     """
     source, workflows = _source_model(copy.deepcopy(workflow))
     registry = RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows)
@@ -131,29 +132,6 @@ def test_completing_twice_is_completing_once_for_any_workflow(workflow: Yaml) ->
     for relative in (True, False):
         once = complete(front.graph, relative_run_path=relative)
         assert emit(complete(once, relative_run_path=relative)) == emit(once), relative
-
-
-@pytest.mark.fast
-def test_completing_twice_is_completing_once() -> None:
-    """`complete` says it is idempotent, and the driver takes it at its word.
-
-    `_compile_front` calls it three times -- before Link, after Link, after
-    Infer -- so any arm that reads its own previous output compounds. The
-    namespaced `run:` arm did: it took `PurePath(target).stem` of the last
-    pass and prefixed again, so a subworkflow's `run:` gained a prefix per
-    call and named no file that was ever written. `relative_run_path=False`
-    is the arm that drifts, and `cwl_subinterpreter` compiles with it.
-    """
-    child = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'c.txt'}}}]}
-    workflow: Yaml = {'steps': [subworkflow_step('sub.wic', child)]}
-    source, workflows = _source_model(copy.deepcopy(workflow))
-    registry = RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows)
-    front = front_end(source, registry, name='oracle')
-    assert front.graph is not None, list(front.diagnostics)
-
-    once = complete(front.graph, relative_run_path=False)
-    twice = complete(once, relative_run_path=False)
-    assert emit(twice) == emit(once)
 
 
 @pytest.mark.fast
