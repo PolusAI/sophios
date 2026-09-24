@@ -5,7 +5,7 @@ from pathlib import Path
 import signal
 import sys
 import argparse
-from typing import Final
+from typing import Any, Final
 
 import pytest
 import yaml
@@ -18,6 +18,7 @@ import sophios.run_local
 import sophios.utils
 from sophios.ir import frontdoor
 import sophios.plugins
+from sophios import post_compile
 from sophios import auto_gen_header
 from sophios.cli import get_args
 from sophios.utils_yaml import Key, wic_loader
@@ -346,6 +347,23 @@ def test_emitted_cwl_says_nothing_cwl_cannot_read(yml_path_str: str, yml_path: P
             scan(child)
 
     scan(result.artifact)
+
+    # The inlined form is a different document and CWL judges it separately: a
+    # field that belongs to a document has to leave the `run:` it was embedded
+    # into. A tool declaring `cwlVersion: v1.0` made every inlined corpus
+    # workflow invalid, and only the weekly lane ran one.
+    def embedded(node: Any, depth: int = 0, path: str = 'root') -> None:
+        if not isinstance(node, dict):
+            return
+        if depth:
+            for field in post_compile.DOCUMENT_FIELDS:
+                assert field not in node, (
+                    f'{path} is embedded and declares {field}, which belongs to '
+                    'the document it was embedded into')
+        for step in node.get('steps', []) or []:
+            embedded(step.get('run'), depth + 1, f'{path}/{step.get("id")}')
+
+    embedded(post_compile.inline_artifact_runs(result.artifact).cwl)
 
 
 @pytest.mark.fast
