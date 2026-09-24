@@ -40,7 +40,9 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: ${{ github.repository_owner }}/sophios
-          ref: master
+          # See run_workflows_weekly.yml: the triggering ref, so a dispatch on
+          # a branch tests that branch.
+          ref: ${{ github.ref }}
           path: sophios
           fetch-depth: 0 # setuptools-scm needs full history to resolve the version from tags
 

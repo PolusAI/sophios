@@ -99,6 +99,33 @@ def _covered() -> set[str]:
 
 
 @pytest.mark.fast
+@pytest.mark.fast
+def test_no_lane_checks_our_own_repo_out_at_a_literal_ref() -> None:
+    """A lane tests the ref it was triggered on, or it tests nothing it claims.
+
+    `run_workflows_weekly.yml` carried `ref: master` on its own checkout, so a
+    `workflow_dispatch` on a branch reported itself against that branch's sha
+    and built master. Three dispatches produced byte-identical failures before
+    anyone looked at the checkout step; the run page gives no hint, because the
+    sha it shows is the dispatched one.
+
+    Third-party checkouts are exempt: pinning `biobb_adapters` to its master is
+    a real choice about someone else's repository.
+    """
+    offenders = []
+    for workflow in sorted(WORKFLOWS.glob('*.yml')):
+        script = yaml.safe_load(workflow.read_text(encoding='utf-8'))
+        for job in (script.get('jobs') or {}).values():
+            for step in (job.get('steps') or []):
+                if not str(step.get('uses', '')).startswith('actions/checkout'):
+                    continue
+                spec = step.get('with') or {}
+                repo, ref = str(spec.get('repository', '')), str(spec.get('ref', ''))
+                if repo.endswith('/sophios') and ref and '${{' not in ref:
+                    offenders.append(f'{workflow.name}: checks out sophios at {ref!r}')
+    assert not offenders, '\n'.join(offenders)
+
+
 def test_the_census_sees_the_repo() -> None:
     """Zero invocations is a green census that checks nothing."""
     found = [a for lane in WORKFLOWS.glob('*.yml') for a in _invocations(lane)]
