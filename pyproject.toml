@@ -28,10 +28,20 @@ dependencies = [
     "requests",
     "mergedeep",
     "networkx",
-    "cwl-utils>=0.32",
+    "cwl-utils>=0.32,<0.43",
     # CommandInputParameter attr changed from `type_` to `type` and back to `type_`
     # between versions 0.30, 0.31, 0.32
     # See https://github.com/common-workflow-language/cwl-utils/releases/
+    #
+    # Upper bound because 0.43 cannot read a document whose embedded process
+    # declares a `cwlVersion` other than the root's -- it resolves the value as
+    # a URI relative to the document and reports an undefined reference to
+    # `.../v1.0`. Bisected: 0.42 reads it, 0.43 and 0.44 do not, with
+    # schema-salad held constant. CWL v1.2 permits the field on an embedded
+    # process ("Not required for a Process embedded inside another Process"),
+    # so this is a regression in 0.43's PR #442, whose subject was mixed-version
+    # support. Every inlined workflow reaching a third-party adapter that
+    # declares v1.0 is affected, which on this corpus is most of them.
     "pydantic>=2.6",
     "pydantic[email]",
     "docker",
@@ -104,7 +114,9 @@ mypy-types = [
 # toml language has problem with underscore in array name
 runners = [
     "toil[cwl]",
-    "cwl-utils",
+    # Same bound as the core dependency above, and for the same reason: an
+    # extra that re-lists the package without it would undo the pin.
+    "cwl-utils>=0.32,<0.43",
 ]
 runners-src = [
     "cwl-utils @ git+https://github.com/sameeul/cwl-utils.git",
