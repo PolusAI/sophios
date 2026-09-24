@@ -118,6 +118,13 @@ def cwl_docker_extract(container_engine: str, pull_dir: str, cwl_path: str | Pat
     sub.run(cmd, check=True)
 
 
+#: Fields that belong to a CWL *document* rather than to a process. An embedded
+#: process is not a document, so each has to leave the `run:` it is embedded
+#: into -- either by moving up to the document that now contains it, or by
+#: being dropped because that document already states it.
+DOCUMENT_FIELDS = ('$namespaces', '$schemas', 'cwlVersion')
+
+
 def inline_artifact_runs(artifact: CompilationArtifact) -> CompilationArtifact:
     """Embed every emitted child in its parent's ``run`` field."""
     children = tuple(inline_artifact_runs(child) for child in artifact.children)
@@ -127,10 +134,20 @@ def inline_artifact_runs(artifact: CompilationArtifact) -> CompilationArtifact:
             step_id = child.namespace[-1]
             step = next(item for item in cwl['steps'] if item.get('id') == step_id)
             step['run'] = copy.deepcopy(child.cwl)
+            # A prefix and an ontology must be declared in the document that
+            # uses them, so these move up. `cwlVersion` is dropped instead:
+            # the parent already names one, and a second on an embedded
+            # process is resolved as a reference and fails validation -- which
+            # is what a tool declaring `v1.0` did to every inlined corpus
+            # workflow, in a lane that runs weekly.
             cwl['$namespaces'] = cwl.get('$namespaces', {}) | step['run'].get(
                 '$namespaces', {})
-            step['run'].pop('$namespaces', None)
-            step['run'].pop('$schemas', None)
+            cwl['$schemas'] = list(dict.fromkeys(
+                list(cwl.get('$schemas', [])) + list(step['run'].get('$schemas', []))))
+            if not cwl['$schemas']:
+                cwl.pop('$schemas')
+            for field in DOCUMENT_FIELDS:
+                step['run'].pop(field, None)
     return replace(artifact, cwl=cwl, children=children)
 
 
