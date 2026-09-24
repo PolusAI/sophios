@@ -22,6 +22,7 @@ from .declarations import port_declaration
 from .resolve import ResolvedDocument, ResolvedStep
 from .types import (
     Binding,
+    BoundaryDeclaration,
     DeferredObligation,
     Direction,
     Edge,
@@ -258,7 +259,12 @@ def _workflow_ports(raw: object, *, output: bool) -> tuple[WorkflowPort, ...]:
         return ()
     ports: list[WorkflowPort] = []
     for name, declaration_raw in raw.items():
-        declaration = port_declaration(declaration_raw, output=output)
+        # Written under the workflow's own `inputs:`/`outputs:`, so it is a
+        # boundary declaration by where it appears. Asserted, not reduced:
+        # `boundary_declaration` drops what a tool may say and a boundary may
+        # not, and here that would discard fields the author wrote at the
+        # boundary on purpose.
+        declaration = BoundaryDeclaration(port_declaration(declaration_raw, output=output))
         has_source = output and isinstance(declaration_raw, dict) \
             and 'outputSource' in declaration_raw
         source = declaration_raw.get('outputSource') if has_source else None

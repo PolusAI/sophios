@@ -12,7 +12,7 @@ type, so nothing can be invalidated through it.
 """
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Final, TypeAlias
+from typing import Final, NewType, TypeAlias
 
 from ..lang.nodes import InputValue, OpaqueCwl
 from ..lang.spans import SourceSpan
@@ -197,12 +197,20 @@ class PortDeclaration:  # pylint: disable=too-many-instance-attributes
             raise ValueError('a port declaration field order cannot repeat a field')
 
 
+#: A `PortDeclaration` reduced to what a workflow boundary may state. Distinct
+#: from `PortDeclaration` so that `WorkflowPort` can ask for one: a tool's
+#: declaration is the larger record, and promoting it without reducing it is
+#: how `inputBinding.position` reached a workflow input. Only
+#: `declarations.boundary_declaration` produces one.
+BoundaryDeclaration = NewType('BoundaryDeclaration', PortDeclaration)
+
+
 @dataclass(frozen=True, slots=True)
 class WorkflowPort:
     """A port on the workflow boundary, including its CWL declaration."""
 
     name: str
-    declaration: PortDeclaration
+    declaration: BoundaryDeclaration
     output_source: OpaqueCwl = None
     has_output_source: bool = False
     #: The port this one was derived from, when its name was built by joining a

@@ -27,6 +27,7 @@ from hypothesis import HealthCheck, given, settings
 
 import sophios.post_compile
 from sophios.ir import (
+    BoundaryDeclaration,
     Direction,
     JobBinding,
     Namespace,
@@ -127,8 +128,9 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
     )
     graph = WorkflowGraph(
         namespace, (step,), name='handmade', lang_version='0.0.1', cwl_version=CWL_VERSION,
-        workflow_inputs=(WorkflowPort('message', in_decl),),
-        workflow_outputs=(WorkflowPort('file', out_decl, 'write/file', True),),
+        workflow_inputs=(WorkflowPort('message', BoundaryDeclaration(in_decl)),),
+        workflow_outputs=(
+            WorkflowPort('file', BoundaryDeclaration(out_decl), 'write/file', True),),
         job_bindings=(JobBinding('message', 'hello'),),
         namespaces=((ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI),),
         field_order=('steps', 'cwlVersion', 'class', '$namespaces', 'inputs',

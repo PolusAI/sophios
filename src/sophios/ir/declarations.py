@@ -3,7 +3,7 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any, Final
 
-from .types import PortDeclaration, PortType
+from .types import BoundaryDeclaration, PortDeclaration, PortType
 
 #: What a workflow boundary port may state. An allowlist, not a list of
 #: things to drop: CWL gives a tool's input and a workflow's input different
@@ -57,7 +57,7 @@ def port_declaration(raw: Any, *, output: bool = False) -> PortDeclaration:
     )
 
 
-def boundary_declaration(declaration: PortDeclaration) -> PortDeclaration:
+def boundary_declaration(declaration: PortDeclaration) -> BoundaryDeclaration:
     """`declaration` as a workflow boundary may state it.
 
     Every phase that promotes a step's port to a workflow input goes through
@@ -77,4 +77,5 @@ def boundary_declaration(declaration: PortDeclaration) -> PortDeclaration:
     order = tuple(name for name in declaration.field_order if name in _BOUNDARY_FIELDS)
     if 'type' not in order:
         order = ('type', *order)
-    return replace(declaration, passthrough=passthrough, field_order=order, shorthand=False)
+    return BoundaryDeclaration(
+        replace(declaration, passthrough=passthrough, field_order=order, shorthand=False))
