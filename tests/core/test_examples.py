@@ -303,6 +303,12 @@ def _is_includer_fragment(error: SophiosError) -> bool:
 _TOOL_ONLY_BOUNDARY_FIELDS: Final = ('inputBinding', 'loadContents', 'loadListing',
                                      'secondaryFiles', 'streamable')
 
+#: Fields belonging to a CWL document rather than to a process, which an
+#: embedded process therefore may not keep. The same set `post_compile` lifts
+#: or drops when inlining, written again here on purpose: a test that reads the
+#: constant it is checking can only ever agree with it.
+_EMBEDDED_FORBIDDEN_FIELDS: Final = ('$namespaces', '$schemas', 'cwlVersion')
+
 
 @pytest.mark.fast
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_large)
@@ -352,11 +358,16 @@ def test_emitted_cwl_says_nothing_cwl_cannot_read(yml_path_str: str, yml_path: P
     # field that belongs to a document has to leave the `run:` it was embedded
     # into. A tool declaring `cwlVersion: v1.0` made every inlined corpus
     # workflow invalid, and only the weekly lane ran one.
+    #
+    # Spelled out rather than read from `post_compile.DOCUMENT_FIELDS`, which
+    # is what the production code pops: iterating that would make the test
+    # agree with whatever the constant happens to say, so dropping `cwlVersion`
+    # from it would delete the check for `cwlVersion` and stay green.
     def embedded(node: Any, depth: int = 0, path: str = 'root') -> None:
         if not isinstance(node, dict):
             return
         if depth:
-            for field in post_compile.DOCUMENT_FIELDS:
+            for field in _EMBEDDED_FORBIDDEN_FIELDS:
                 assert field not in node, (
                     f'{path} is embedded and declares {field}, which belongs to '
                     'the document it was embedded into')
