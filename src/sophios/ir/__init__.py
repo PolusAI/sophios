@@ -15,6 +15,7 @@ from .types import (
     PortDeclaration,
     PortId,
     PortType,
+    BoundaryDeclaration,
     EmittedValue,
     Expression,
     ProcessRun,
@@ -25,7 +26,7 @@ from .types import (
     WorkflowPort,
     WorkflowGraph,
 )
-from .emit import emit, emit_job_inputs
+from .emit import emit, emit_job_inputs, surface
 from .resolve import (
     RegistryKey,
     RegistrySnapshot,
@@ -56,6 +57,7 @@ __all__ = [
     'PortDeclaration',
     'PortId',
     'PortType',
+    'BoundaryDeclaration',
     'EmittedValue',
     'Expression',
     'ProcessRun',
@@ -67,6 +69,7 @@ __all__ = [
     'WorkflowGraph',
     'emit',
     'emit_job_inputs',
+    'surface',
     'RegistryKey',
     'RegistrySnapshot',
     'Resolved',

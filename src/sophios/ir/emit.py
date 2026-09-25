@@ -8,14 +8,109 @@ process state.
 
 Opaque CWL is the exception to the IR's no-inspection rule at this boundary:
 Emit may traverse it to make an owned copy, but never branches on its meaning.
+
+`surface` is the one thing here that computes rather than copies, and it is
+here because what it computes -- requirements, `$namespaces`, `$schemas`, a
+`run:` path, field order -- is a property of the document, not of the workflow.
+Nothing upstream reads it, so it runs once per document and never again.
 """
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 
 from ..lang import versions
+from ..lang.versions import ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
 from ..wic_types import Cwl
-from .types import (EmittedValue, Expression, Source, StepEmission, WorkflowGraph,
-                    WorkflowPort)
+from .types import (EmittedValue, Expression, namespaced, NAMESPACE_SEPARATOR, Source,
+                    StepEmission, StepNode, WorkflowGraph, WorkflowPort)
+
+EDAM_NAMESPACE = ('edam', 'https://edamontology.org/')
+EDAM_SCHEMA = 'https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl'
+
+
+def _step_spelling(step: StepNode, namespace: tuple[str, ...],
+                   relative_run_path: bool) -> StepNode:
+    """`step` with its `run:` path written and its field order settled."""
+    emission = step.emission
+    if emission is None:
+        return step
+    target = emission.run.target
+    if isinstance(target, str):
+        # From the resolved identity: `target` is this function's own output,
+        # so a leaf read back out of it would compound.
+        leaf = f'{emission.run.process_id.name}.cwl'
+        if relative_run_path:
+            target = f'{emission.id}/{leaf}'
+        elif emission.run.child is not None:
+            target = namespaced(*namespace, emission.id, leaf)
+        else:
+            target = f'../{leaf}'
+    order = list(emission.field_order)
+    if 'in' not in order:
+        run_index = order.index('run') if 'run' in order else len(order)
+        order.insert(run_index + 1, 'in')
+    if emission.when is not None and 'when' not in order:
+        order.append('when')
+    return replace(step, emission=replace(
+        emission, run=replace(emission.run, target=target), field_order=tuple(order)))
+
+
+def surface(graph: WorkflowGraph, *, relative_run_path: bool = True) -> WorkflowGraph:
+    """Spell `graph`'s facts as the document Emit renders, for this graph alone.
+
+    Requirements implied by the steps, the EDAM namespace and schema, a step's
+    `run:` path and the order fields appear in: none is a fact about the
+    workflow, and none is read by any phase. They are computed here, once per
+    emitted document, rather than in `complete`, which runs whenever a phase
+    needs the facts current.
+
+    Args:
+        graph (WorkflowGraph): One completed document, without its children.
+        relative_run_path (bool): Whether a `run:` target is written relative
+            to the step directory or namespaced beside the root.
+
+    Returns:
+        WorkflowGraph: The same graph, carrying the spelling Emit renders.
+    """
+    steps = [_step_spelling(step, graph.namespace.parts, relative_run_path)
+             for step in graph.steps]
+
+    requirements = dict(graph.requirements)
+    if graph.children:
+        requirements['SubworkflowFeatureRequirement'] = {}
+    if any(step.emission is not None and step.emission.scatter for step in steps):
+        requirements['ScatterFeatureRequirement'] = {}
+    if any(step.emission is not None and step.emission.when is not None for step in steps):
+        requirements['InlineJavascriptRequirement'] = {}
+    requirements = dict(sorted(requirements.items()))
+
+    namespaces = {name: value for name, value in graph.namespaces
+                  if name not in {EDAM_NAMESPACE[0], ANNOTATION_NAMESPACE}}
+    namespaces[EDAM_NAMESPACE[0]] = EDAM_NAMESPACE[1]
+    namespaces[ANNOTATION_NAMESPACE] = ANNOTATION_NAMESPACE_URI
+    schemas = list(graph.schemas)
+    if EDAM_SCHEMA not in schemas:
+        schemas.append(EDAM_SCHEMA)
+    order = list(graph.field_order)
+    if requirements and 'requirements' not in order:
+        order.append('requirements')
+    generated_prefixes = tuple(step.emission.id + NAMESPACE_SEPARATOR for step in steps
+                               if step.emission is not None)
+
+    def boundary_order(name: str) -> tuple[int, int]:
+        for index, prefix in enumerate(generated_prefixes):
+            if name.startswith(prefix):
+                return (1, index)
+        return (0, 0)
+
+    workflow_inputs = tuple(sorted(graph.workflow_inputs,
+                                   key=lambda port: boundary_order(port.name)))
+    job_bindings = tuple(sorted(graph.job_bindings,
+                                key=lambda binding: boundary_order(binding.name)))
+    return replace(graph, steps=tuple(steps), requirements=tuple(requirements.items()),
+                   workflow_inputs=workflow_inputs, job_bindings=job_bindings,
+                   namespaces=tuple(namespaces.items()), schemas=tuple(schemas),
+                   field_order=tuple(order))
 
 
 def emit(graph: WorkflowGraph) -> Cwl:

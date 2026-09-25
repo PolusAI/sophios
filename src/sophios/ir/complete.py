@@ -2,26 +2,30 @@
 
 This is the deliberately small seam between semantic inference and emission.
 It does not load a process, discover a file, or replay source.  It turns facts
-already present in a ``WorkflowGraph`` into the workflow boundary and CWL
-surface that Emit projects.
+already present in a ``WorkflowGraph`` into the workflow boundary that Link and
+Infer compose against.
+
+It states no document. Requirements, `$namespaces`, `$schemas`, a step's `run:`
+path and the order fields appear in are how the facts are *spelled*, and they
+live in `emit.surface`. Complete ran three times because it did both jobs, and
+a spelling recomputed from its own last output is how a subworkflow `run:`
+target came to grow a prefix per pass.
 """
 import json
 from copy import deepcopy
 from dataclasses import replace
-from pathlib import PurePath
 from typing import Any
 
 from ..lang.nodes import EdgeRef, InlineLiteral, RawCwlRef, UnresolvedName
 from ..lang.diagnostics import SophiosError
 from ..lang.error_codes import SophiosErrorCode
-from ..lang.versions import ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
 from .declarations import boundary_declaration, port_declaration
 from .types import (
+    BoundaryDeclaration,
     Direction,
     Edge,
     Expression,
     JobBinding,
-    NAMESPACE_SEPARATOR,
     namespaced,
     Port,
     PortDeclaration,
@@ -33,27 +37,22 @@ from .types import (
 )
 
 
-EDAM_NAMESPACE = ('edam', 'https://edamontology.org/')
-EDAM_SCHEMA = 'https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl'
+def complete(graph: WorkflowGraph, *, partial_failure: bool = False) -> WorkflowGraph:
+    """Return a graph carrying every fact its resolved interfaces determine.
 
-
-def complete(graph: WorkflowGraph, *, relative_run_path: bool = True,
-             partial_failure: bool = False) -> WorkflowGraph:
-    """Return an emission-complete graph without consulting external state.
-
-    The operation is idempotent.  Calling it before Link makes recursively
-    derived workflow interfaces visible to composition; calling it once more
-    after Infer materializes newly inferred sources and boundary inputs.
+    Facts only.  How those facts are spelled as a document is `emit.surface`,
+    which runs once; this runs whenever a phase needs the facts current, so it
+    is idempotent -- calling it before Link makes recursively derived workflow
+    interfaces visible to composition, and calling it after Infer materializes
+    newly inferred sources and boundary inputs.
     """
-    children = tuple(complete(child, relative_run_path=relative_run_path,
-                              partial_failure=partial_failure)
+    children = tuple(complete(child, partial_failure=partial_failure)
                      for child in graph.children)
     current = replace(graph, children=children)
     current = _synchronize_children(current)
     current = _materialize_bindings(current, partial_failure)
     current = _materialize_edges(current)
-    current = _materialize_outputs(current)
-    return _workflow_surface(current, relative_run_path)
+    return _materialize_outputs(current)
 
 
 def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
@@ -249,75 +248,6 @@ def _materialize_outputs(graph: WorkflowGraph) -> WorkflowGraph:
     return replace(graph, workflow_outputs=tuple(outputs), output_mapping=tuple(output_mapping))
 
 
-def _workflow_surface(graph: WorkflowGraph, relative_run_path: bool) -> WorkflowGraph:
-    steps: list[StepNode] = []
-    for step in graph.steps:
-        emission = step.emission
-        if emission is None:
-            steps.append(step)
-            continue
-        target = emission.run.target
-        if isinstance(target, str):
-            # From the resolved identity, not from `target`. `target` is this
-            # function's own output, and `complete()` runs three times, so a
-            # leaf read back out of it grows a prefix per pass: the namespaced
-            # arm below produced `step___step___step___sub.cwl` and named no
-            # file on disk. The identity is what the leaf was always meant to
-            # spell, and it does not move.
-            leaf = f'{emission.run.process_id.name}.cwl'
-            if relative_run_path:
-                target = f'{emission.id}/{leaf}'
-            elif emission.run.child is not None:
-                target = namespaced(*graph.namespace.parts, emission.id, leaf)
-            else:
-                target = str(PurePath('..') / leaf)
-        order = list(emission.field_order)
-        if 'in' not in order:
-            run_index = order.index('run') if 'run' in order else len(order)
-            order.insert(run_index + 1, 'in')
-        if emission.when is not None and 'when' not in order:
-            order.append('when')
-        steps.append(replace(step, emission=replace(
-            emission, run=replace(emission.run, target=target), field_order=tuple(order))))
-
-    requirements = dict(graph.requirements)
-    if graph.children:
-        requirements['SubworkflowFeatureRequirement'] = {}
-    if any(step.emission is not None and step.emission.scatter for step in steps):
-        requirements['ScatterFeatureRequirement'] = {}
-    if any(step.emission is not None and step.emission.when is not None for step in steps):
-        requirements['InlineJavascriptRequirement'] = {}
-    requirements = dict(sorted(requirements.items()))
-
-    namespaces = {name: value for name, value in graph.namespaces
-                  if name not in {EDAM_NAMESPACE[0], ANNOTATION_NAMESPACE}}
-    namespaces[EDAM_NAMESPACE[0]] = EDAM_NAMESPACE[1]
-    namespaces[ANNOTATION_NAMESPACE] = ANNOTATION_NAMESPACE_URI
-    schemas = list(graph.schemas)
-    if EDAM_SCHEMA not in schemas:
-        schemas.append(EDAM_SCHEMA)
-    order = list(graph.field_order)
-    if requirements and 'requirements' not in order:
-        order.append('requirements')
-    generated_prefixes = tuple(step.emission.id + NAMESPACE_SEPARATOR for step in steps
-                               if step.emission is not None)
-
-    def boundary_order(name: str) -> tuple[int, int]:
-        for index, prefix in enumerate(generated_prefixes):
-            if name.startswith(prefix):
-                return (1, index)
-        return (0, 0)
-
-    workflow_inputs = tuple(sorted(graph.workflow_inputs,
-                                   key=lambda port: boundary_order(port.name)))
-    job_bindings = tuple(sorted(graph.job_bindings,
-                                key=lambda binding: boundary_order(binding.name)))
-    return replace(graph, steps=tuple(steps), requirements=tuple(requirements.items()),
-                   workflow_inputs=workflow_inputs, job_bindings=job_bindings,
-                   namespaces=tuple(namespaces.items()), schemas=tuple(schemas),
-                   field_order=tuple(order))
-
-
 def _direct_source(graph: WorkflowGraph, source: PortId) -> str:
     if source.step.namespace == graph.namespace:
         step = next(step for step in graph.steps if step.id == source.step)
@@ -343,7 +273,7 @@ def _direct_sink(graph: WorkflowGraph, sink: PortId) -> tuple[Any, str]:
     return wrapper.id, boundary
 
 
-def _input_declaration(port: Port, scatter: Any) -> PortDeclaration:
+def _input_declaration(port: Port, scatter: Any) -> BoundaryDeclaration:
     declaration = boundary_declaration(port.declaration or port_declaration(port.type.declared))
     keys = [scatter] if isinstance(scatter, str) else (
         list(scatter) if isinstance(scatter, list) else [])
@@ -351,16 +281,17 @@ def _input_declaration(port: Port, scatter: Any) -> PortDeclaration:
     raw = _canonical_type(declaration.type.declared)
     for _ in range(layers):
         raw = {'type': 'array', 'items': raw}
-    return replace(declaration, type=port_declaration({'type': raw}).type)
+    return BoundaryDeclaration(replace(declaration, type=port_declaration({'type': raw}).type))
 
 
-def _output_declaration(port: Port, scatter: Any) -> PortDeclaration:
+def _output_declaration(port: Port, scatter: Any) -> BoundaryDeclaration:
     declaration = boundary_declaration(port.declaration or port_declaration(port.type.declared))
     raw = _canonical_type(declaration.type.declared)
     if scatter:
         raw = {'type': 'array', 'items': raw}
     order = tuple((*declaration.field_order, 'outputSource'))
-    return replace(declaration, type=port_declaration({'type': raw}).type, field_order=order)
+    return BoundaryDeclaration(
+        replace(declaration, type=port_declaration({'type': raw}).type, field_order=order))
 
 
 def _canonical_type(value: Any) -> Any:
