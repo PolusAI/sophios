@@ -17,6 +17,7 @@ from ..lang.error_codes import SophiosErrorCode
 from ..lang.versions import ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
 from .declarations import boundary_declaration, port_declaration
 from .types import (
+    BoundaryDeclaration,
     Direction,
     Edge,
     Expression,
@@ -343,7 +344,7 @@ def _direct_sink(graph: WorkflowGraph, sink: PortId) -> tuple[Any, str]:
     return wrapper.id, boundary
 
 
-def _input_declaration(port: Port, scatter: Any) -> PortDeclaration:
+def _input_declaration(port: Port, scatter: Any) -> BoundaryDeclaration:
     declaration = boundary_declaration(port.declaration or port_declaration(port.type.declared))
     keys = [scatter] if isinstance(scatter, str) else (
         list(scatter) if isinstance(scatter, list) else [])
@@ -351,16 +352,17 @@ def _input_declaration(port: Port, scatter: Any) -> PortDeclaration:
     raw = _canonical_type(declaration.type.declared)
     for _ in range(layers):
         raw = {'type': 'array', 'items': raw}
-    return replace(declaration, type=port_declaration({'type': raw}).type)
+    return BoundaryDeclaration(replace(declaration, type=port_declaration({'type': raw}).type))
 
 
-def _output_declaration(port: Port, scatter: Any) -> PortDeclaration:
+def _output_declaration(port: Port, scatter: Any) -> BoundaryDeclaration:
     declaration = boundary_declaration(port.declaration or port_declaration(port.type.declared))
     raw = _canonical_type(declaration.type.declared)
     if scatter:
         raw = {'type': 'array', 'items': raw}
     order = tuple((*declaration.field_order, 'outputSource'))
-    return replace(declaration, type=port_declaration({'type': raw}).type, field_order=order)
+    return BoundaryDeclaration(
+        replace(declaration, type=port_declaration({'type': raw}).type, field_order=order))
 
 
 def _canonical_type(value: Any) -> Any:

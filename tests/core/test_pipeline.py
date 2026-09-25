@@ -18,7 +18,7 @@ import ast
 import copy
 import importlib
 import inspect
-from typing import Final
+from typing import Any, Final
 
 import pytest
 from hypothesis import given
@@ -70,27 +70,68 @@ def test_full_pipeline_agrees_at_up_to_embedding(workflow: Yaml) -> None:
     assert divergence is None, divergence
 
 
-@pytest.mark.fast
-def test_completing_twice_is_completing_once() -> None:
-    """`complete` says it is idempotent, and the driver takes it at its word.
+@pytest.mark.skip_pypi_ci
+@given(strat.workflows().filter(_scalar_literals_fit))
+@ORACLE
+def test_every_emitted_reference_resolves_in_its_own_document(workflow: Yaml) -> None:
+    """A `source:` names something the document it appears in defines.
 
-    `_compile_front` calls it three times -- before Link, after Link, after
-    Infer -- so any arm that reads its own previous output compounds. The
-    namespaced `run:` arm did: it took `PurePath(target).stem` of the last
-    pass and prefixed again, so a subworkflow's `run:` gained a prefix per
-    call and named no file that was ever written. `relative_run_path=False`
-    is the arm that drifts, and `cwl_subinterpreter` compiles with it.
+    The types close what a binding may *be*; they cannot say that the name
+    inside one exists. A reference that resolves nowhere is accepted by CWL's
+    schema and fails at the runner -- which is how an authored `outputSource`
+    pointing at a step emission had renamed got as far as it did.
+
+    Checked on the artifact rather than the graph, because the document is what
+    has to be self-contained: a `run:` child is its own document, so each is
+    judged against its own inputs and steps.
     """
-    child = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'c.txt'}}}]}
-    workflow: Yaml = {'steps': [subworkflow_step('sub.wic', child)]}
+    info = compile_hermetic(copy.deepcopy(workflow))
+
+    def check(cwl: Yaml, where: str) -> None:
+        if cwl.get('class') != 'Workflow':
+            return
+        defined = set(cwl.get('inputs') or {})
+        for step in cwl.get('steps') or []:
+            for out in step.get('out') or []:
+                defined.add(f'{step["id"]}/{out}')
+        for step in cwl.get('steps') or []:
+            for port, value in (step.get('in') or {}).items():
+                name = value.get('source') if isinstance(value, dict) else value
+                if isinstance(name, str) and '$(' not in name and '${' not in name:
+                    assert name in defined, f'{where}: {step["id"]}.{port} sources {name!r}'
+        for name, declared in (cwl.get('outputs') or {}).items():
+            source = declared.get('outputSource') if isinstance(declared, dict) else None
+            if isinstance(source, str):
+                assert source in defined, f'{where}: output {name} sources {source!r}'
+
+    def walk(artifact: Any) -> None:
+        check(artifact.cwl, artifact.name)
+        for child in artifact.children:
+            walk(child)
+
+    walk(info.artifact)
+
+
+@pytest.mark.skip_pypi_ci
+@given(strat.workflows().filter(_scalar_literals_fit))
+@ORACLE
+def test_completing_twice_is_completing_once_for_any_workflow(workflow: Yaml) -> None:
+    """`complete` is idempotent, over the generated space and both run paths.
+
+    It documents itself so and `_compile_front` calls it three times on that
+    promise, so any arm reading its own previous output compounds silently.
+    One such arm shipped: the namespaced `run:` target took `PurePath(target).stem`
+    of the last pass and prefixed again, so a subworkflow gained a prefix per
+    call and named no file that was ever written. `relative_run_path=False` is
+    the arm that drifts, and `cwl_subinterpreter` compiles with it.
+    """
     source, workflows = _source_model(copy.deepcopy(workflow))
     registry = RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows)
     front = front_end(source, registry, name='oracle')
     assert front.graph is not None, list(front.diagnostics)
-
-    once = complete(front.graph, relative_run_path=False)
-    twice = complete(once, relative_run_path=False)
-    assert emit(twice) == emit(once)
+    for relative in (True, False):
+        once = complete(front.graph, relative_run_path=relative)
+        assert emit(complete(once, relative_run_path=relative)) == emit(once), relative
 
 
 @pytest.mark.fast
