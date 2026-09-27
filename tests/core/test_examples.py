@@ -371,6 +371,14 @@ def test_emitted_cwl_says_nothing_cwl_cannot_read(yml_path_str: str, yml_path: P
                 assert field not in node, (
                     f'{path} is embedded and declares {field}, which belongs to '
                     'the document it was embedded into')
+            # Nor does it keep its location: a relative `$include` resolves
+            # against the embedding document, which is somewhere else.
+            include = node.get('hints', {}).get('DockerRequirement', {}).get(
+                'dockerFile', {}).get('$include')
+            if include is not None:
+                assert Path(include).is_absolute() and Path(include).is_file(), (
+                    f'{path} is embedded and includes {include}, which does not '
+                    'name a file wherever the document is written')
         for step in node.get('steps', []) or []:
             embedded(step.get('run'), depth + 1, f'{path}/{step.get("id")}')
 

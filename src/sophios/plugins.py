@@ -289,9 +289,10 @@ def cwl_prepend_dockerFile_include_path(cwl: Cwl, cwl_path: str) -> Cwl:
     inc_path: str = cwl.get('hints', {}).get('DockerRequirement', {}).get('dockerFile', {}).get('$include', '')
     if inc_path:
         # cwl_path is an absolute path including (original) filename .cwl
-        # we just need to prepend the dir of cwl_path to the inc_path
-        cwl_dir: str = str(Path(cwl_path).parent)
-        cwl_mod['hints']['DockerRequirement']['dockerFile']['$include'] = cwl_dir + '/' + inc_path
+        # we just need to prepend the dir of cwl_path to the inc_path.
+        # An absolute inc_path is left as is, so applying this twice is harmless.
+        cwl_mod['hints']['DockerRequirement']['dockerFile']['$include'] = str(
+            Path(cwl_path).parent / inc_path)
     return cwl_mod
 
 

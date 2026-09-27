@@ -133,7 +133,9 @@ def inline_artifact_runs(artifact: CompilationArtifact) -> CompilationArtifact:
         for child in children:
             step_id = child.namespace[-1]
             step = next(item for item in cwl['steps'] if item.get('id') == step_id)
-            step['run'] = copy.deepcopy(child.cwl)
+            # An embedded process has no location of its own, so a relative
+            # `$include` would resolve against whichever document embeds it.
+            step['run'] = plugins.cwl_prepend_dockerFile_include_path(child.cwl, child.run_path)
             # A prefix and an ontology must be declared in the document that
             # uses them, so these move up. `cwlVersion` is dropped instead:
             # the parent already names one, and a second on an embedded
