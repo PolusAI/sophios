@@ -5,7 +5,7 @@ import logging
 import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, ClassVar, overload
+from typing import Any, ClassVar, cast, overload
 
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
@@ -426,36 +426,28 @@ class Step(_ProcessBase):
         """Populate a step from an already parsed CLT and optional config."""
         resolved_name = process_name or clt_path.stem
 
-        object.__setattr__(self, "clt", clt)
-        object.__setattr__(self, "clt_path", clt_path)
-        object.__setattr__(self, "process_name", resolved_name)
-        object.__setattr__(self, "cwl_version", clt.cwlVersion)
-        object.__setattr__(self, "yaml", yaml_file)
-        object.__setattr__(self, "cfg_yaml", dict(cfg_yaml))
-        object.__setattr__(self, "_tool_registry", tool_registry)
-        object.__setattr__(self, "_inputs", ParameterStore())
-        object.__setattr__(self, "_outputs", ParameterStore())
+        self.clt = clt
+        self.clt_path = clt_path
+        self.process_name = resolved_name
+        self.cwl_version = cast(str, clt.cwlVersion)
+        self.yaml = yaml_file
+        self.cfg_yaml = dict(cfg_yaml)
+        self._tool_registry = tool_registry
+        self._inputs = ParameterStore()
+        self._outputs = ParameterStore()
         # This proxy is the main bit of API "magic": it supports both
         # list-style access (`step.inputs[0]`) and named attribute access
         # (`step.inputs.message`) without duplicating wrapper classes.
-        object.__setattr__(
-            self,
-            "inputs",
-            ParameterNamespace(self._inputs, self._get_input, self.bind_input, read_only_error=""),
+        self.inputs = ParameterNamespace(self._inputs, self._get_input, self.bind_input, read_only_error="")
+        self.outputs = ParameterNamespace(
+            self._outputs,
+            self.get_output,
+            None,
+            read_only_error="Step outputs are read-only; cannot set {name!r}",
         )
-        object.__setattr__(
-            self,
-            "outputs",
-            ParameterNamespace(
-                self._outputs,
-                self.get_output,
-                None,
-                read_only_error="Step outputs are read-only; cannot set {name!r}",
-            ),
-        )
-        object.__setattr__(self, "scatter", [])
-        object.__setattr__(self, "scatterMethod", "")
-        object.__setattr__(self, "when", "")
+        self.scatter = []
+        self.scatterMethod = ""
+        self.when = ""
 
         _populate_parameters(clt.inputs, self._inputs, InputParameter, parent=self)
         _populate_parameters(clt.outputs, self._outputs, OutputParameter, parent=self)
@@ -619,31 +611,23 @@ class Workflow(_ProcessBase):
         Returns:
             None: The workflow is initialized in place.
         """
-        object.__setattr__(self, "steps", list(steps))
-        object.__setattr__(self, "process_name", _normalize_workflow_name(workflow_name))
-        object.__setattr__(self, "_inputs", ParameterStore())
-        object.__setattr__(self, "_outputs", ParameterStore())
-        object.__setattr__(
-            self,
-            "inputs",
-            ParameterNamespace(
-                self._inputs,
-                self._input_reference,
-                self._bind_input_from_namespace,
-                read_only_error="",
-            ),
+        self.steps = list(steps)
+        self.process_name = _normalize_workflow_name(workflow_name)
+        self._inputs = ParameterStore()
+        self._outputs = ParameterStore()
+        self.inputs = ParameterNamespace(
+            self._inputs,
+            self._input_reference,
+            self._bind_input_from_namespace,
+            read_only_error="",
         )
-        object.__setattr__(
-            self,
-            "outputs",
-            ParameterNamespace(
-                self._outputs,
-                self.add_output,
-                self._bind_output_from_namespace,
-                read_only_error="",
-            ),
+        self.outputs = ParameterNamespace(
+            self._outputs,
+            self.add_output,
+            self._bind_output_from_namespace,
+            read_only_error="",
         )
-        object.__setattr__(self, "yml_path", None)
+        self.yml_path = None
 
     def __repr__(self) -> str:
         return f"Workflow(process_name={self.process_name!r}, steps={len(self.steps)})"
