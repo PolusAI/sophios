@@ -177,6 +177,10 @@ jobs:
         # src/sophios/__init__.py: error: Duplicate module named "wic"
         # (also at "./build/lib/sophios/__init__.py")
 
+      - name: Import Boundaries
+        if: runner.os == 'Linux'
+        run: cd sophios/ && lint-imports
+
       - name: PyLint Check Code Quality
         if: runner.os == 'Linux'
         run: cd sophios/ && pylint src/ examples/**/*.py tests/
@@ -232,12 +236,11 @@ jobs:
         run: cd sophios/ && pytest -k test_inline_subworkflows # --cov --cov-config=.coveragerc_serial
         timeout-minutes: 20 # backup timeout for windows
 
-      # design_docs/core-refactor-design.md, Spec 0: both Spec 0 mechanisms —
-      # the core/contrib import boundary and entry-point resolution. Neither
-      # needs containers; both are static checks over the repository.
+      # design_docs/core-refactor-design.md, Spec 0: entry-point resolution. The
+      # core/contrib import boundary is the Import Boundaries lint step.
       - name: PyTest Spec 0 Invariants
         if: always()
-        run: cd sophios/ && pytest tests/core/test_zone_boundary.py tests/core/test_entry_points.py tests/core/test_ci_coverage.py
+        run: cd sophios/ && pytest tests/core/test_entry_points.py tests/core/test_ci_coverage.py
 
       # The packaging lane runs `pytest -m "not skip_pypi_ci"`, so a test with
       # that marker runs only where a step names its file. This is that place,
@@ -269,8 +272,7 @@ jobs:
       # and the four-hash-seed subprocess regression — are marked slow and
       # skip_pypi_ci, so every marker-filtered lane in this repository excludes
       # them and the wheel lane's default collection excludes them too. Named
-      # here so they run somewhere. test_no_canonical_emission_test_is_uncollected
-      # fails if a future marker or rename silently drops them again.
+      # here so they run somewhere.
       - name: PyTest Spec 2 Canonical Emission
         if: always()
         timeout-minutes: 20

@@ -30,3 +30,6 @@ run.sh
 # beside each discovered Python workflow.
 examples/workflows/*.wic
 examples/workflows/config_ci.json
+
+# import-linter graph cache (lint-imports, pre-commit)
+.import_linter_cache/

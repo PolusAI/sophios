@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from .test_zone_boundary import CONTRIB_PREFIXES
+CONTRIB_PREFIXES = ('sophios.contrib',)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCKER_DIR = REPO_ROOT / 'docker'

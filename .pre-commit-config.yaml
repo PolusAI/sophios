@@ -107,6 +107,16 @@ repos:
     types: [python]
     entry: '(?:\bP\d{1,2}[a-c]?\b|\bCE-\d+\b|\bCR-\d+\b|\bT\d\.\d+\b|\bTasks? \d+\b|(?<![\w/])\#\d{3,}\b)|^(?!.*design_docs/).*\bSpec \d\b'
 
+- repo: local
+  hooks:
+  - id: import-linter
+    name: core never imports contrib
+    entry: env PYTHONPATH=src lint-imports
+    language: python
+    additional_dependencies: [import-linter]
+    types: [python]
+    pass_filenames: false
+
 - repo: https://github.com/codespell-project/codespell
   rev: v2.2.6
   hooks:

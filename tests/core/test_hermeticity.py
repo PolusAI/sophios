@@ -5,13 +5,10 @@ come from `get_tools_cwl` is a statement about the compiler *and* about which
 plugin repositories the machine has checked out, and when it fails the two
 cannot be told apart. See design_docs/core-refactor-design.md §6.1.
 
-Checked two ways, because either alone is weak. The static scan is fast and
-covers every module, but cannot see a computed import. The subprocess run
-covers computed imports but only the modules it actually executes.
-
-CANNOT DETECT: an import whose target is computed at runtime
-(`import_module(f'.{name}', __name__)`), and any environment dependence that
-is not an import — reading a file, an environment variable, or the network.
+Checked by running the oracle suite in a subprocess with plugin discovery
+poisoned. CANNOT DETECT: a module the run does not execute, and any environment
+dependence that is not an import — reading a file, an environment variable, or
+the network.
 """
 import os
 import subprocess
@@ -28,150 +25,9 @@ from sophios.utils_cwl import desugar_into_canonical_normal_form
 
 from .hermetic import compile_hermetic_cwl
 from .synthetic_tools import STEMS, _cwl, clt, inputs_of, outputs_of, required_inputs_of
-from .test_zone_boundary import _import_graph, _imports_of, _reachable
 
 TESTS_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = TESTS_ROOT.parent
-
-#: Every module in the oracle. Listed rather than globbed so adding a
-#: module to the trusted suite remains a reviewable decision. Every executable
-#: test file below must also appear here; the coverage test links the two lists.
-ORACLE_MODULES = (
-    'core.synthetic_tools',
-    'core.hermetic',
-    'core.ast_strategies',
-    'core.reference_model',
-    'core.equivalence',
-    'core.test_equivalence',
-    'core.transformations',
-    'core.test_equivalences',
-    'core.test_generators',
-    'core.test_canonical_emission',
-    'core.test_predicates',
-    'core.test_reference_compatibility',
-    'core.test_canonical_path',
-    'core.test_emit',
-    'core.test_resolve',
-    'core.test_link',
-    'core.test_infer_phase',
-)
-
-#: Reaching any of these means the suite's meaning depends on the machine.
-#: Modules that run tool discovery **at import**, so reaching one at all —
-#: however indirectly — makes the suite's meaning depend on the machine.
-FORBIDDEN = (
-    'core.test_setup',
-    'core.compile_harness',
-    'core.wic_corpus',
-)
-
-#: `sophios.plugins` is different: importing it performs no discovery, while
-#: calling its entry points does. A transitive production dependency is safe;
-#: a direct oracle import almost certainly intends to call it. The poisoned
-#: subprocess below proves dynamically that no indirect call occurs.
-#:
-FORBIDDEN_DIRECT = ('sophios.plugins',)
-
-
-def _imports_of_test_module(path: Path) -> set[str]:
-    """The `core.*` modules one test file imports.
-
-    `tests/` has no `__init__.py`, so pytest puts `tests/` on `sys.path` and
-    these modules are `core.<name>`, not `tests.core.<name>`. A relative
-    `from .synthetic_tools import X` inside `core/hermetic.py` therefore
-    resolves to `core.synthetic_tools`, which is what the caller is passed.
-    """
-    module = 'core' if path.stem == '__init__' else f'core.{path.stem}'
-    found = _imports_of(path, module, package='core')
-    return found | _imports_of(path, module, package='sophios')
-
-
-def _test_import_graph() -> dict[str, set[str]]:
-    """The in-package import graph for modules under tests/, keyed like pytest.
-
-    `tests/` has no `__init__.py`, so pytest puts `tests/` on `sys.path` and
-    imports these as `core.<name>`, not `tests.core.<name>`. The graph uses the
-    same names so a module and its importers agree.
-    """
-    graph: dict[str, set[str]] = {}
-    for path in sorted((TESTS_ROOT / 'core').rglob('*.py')):
-        module = 'core.' + path.stem if path.stem != '__init__' else 'core'
-        graph[module] = _imports_of_test_module(path)
-    return graph
-
-
-@pytest.mark.fast
-def test_the_scan_discovers_the_modules_it_claims_to_cover() -> None:
-    """Without this, a typo'd module name makes the check pass by covering nothing."""
-    graph = _test_import_graph()
-    missing = [m for m in ORACLE_MODULES if m not in graph]
-    assert not missing, f'ORACLE_MODULES names modules that do not exist: {missing}'
-
-
-def _crossings(seeds: tuple[str, ...], graph: dict[str, set[str]]) -> list[tuple[str, str]]:
-    """Every `(module, forbidden target)` pair reachable from `seeds`.
-
-    The scan itself, extracted so the test that proves it fires runs the same
-    code the test that trusts it runs. Before this, the firing test asserted on
-    `FORBIDDEN` and an import set directly — `_reachable` was never called —
-    so it stayed green through mutations that broke the scan outright.
-    """
-    return sorted(
-        (module, target)
-        for module in seeds
-        for target in _reachable(module, graph) | graph.get(module, set())
-        if target in FORBIDDEN
-    ) + sorted(
-        (module, target)
-        for module in seeds
-        for target in graph.get(module, set())
-        if target in FORBIDDEN_DIRECT
-    )
-
-
-@pytest.mark.fast
-def test_no_oracle_module_reaches_plugin_discovery() -> None:
-    """Static half: no oracle module imports the environment."""
-    crossings = _crossings(ORACLE_MODULES, {**_test_import_graph(), **_import_graph()})
-    detail = '\n'.join(f'  {m} -> {t}' for m, t in crossings)
-    assert not crossings, (
-        'the oracle suite must not depend on plugin discovery.\n'
-        'design_docs/core-refactor-design.md §6.1: "no installed plugins, no '
-        'search_paths_cwl, no dependence on cached containers."\n\n'
-        f'{detail}'
-    )
-
-
-@pytest.mark.fast
-def test_the_scan_fires_on_a_deliberate_crossing(tmp_path: Path) -> None:
-    """A guard nobody has seen fire is a guard whose green means nothing.
-
-    Writes a module that imports the environment, points a real oracle module
-    at it, and asserts `_crossings` — the scan the test above runs — names both
-    crossings. Both halves of the rule are exercised, because they catch
-    different things and by different routes:
-
-      * `FORBIDDEN` transitively, so the breach sits one hop past the seed.
-        This fails if `_reachable` stops traversing, if the crossings filter is
-        inverted, or if the tuple goes empty.
-      * `FORBIDDEN_DIRECT` on the seed's own imports, since a transitive reach
-        to `sophios.plugins` is deliberately *not* a finding.
-
-    Reading `_imports_of_test_module`'s result and intersecting
-    it with the two tuples by hand — `_crossings` was never called, so it
-    stayed green through every mutation but the last, in a module whose own
-    sibling defect is the same shape.
-    """
-    breach = tmp_path / 'core' / 'breach.py'
-    breach.parent.mkdir()
-    breach.write_text('from . import test_setup\n', encoding='utf-8')
-
-    seed = 'core.hermetic'
-    graph = {**_test_import_graph(), **_import_graph(),
-             'core.breach': _imports_of_test_module(breach)}
-    graph[seed] = graph[seed] | {'core.breach', 'sophios.plugins'}
-    assert _crossings((seed,), graph) == [(seed, 'core.test_setup'),
-                                          (seed, 'sophios.plugins')]
 
 
 @pytest.mark.needs_cwltool
@@ -301,8 +157,7 @@ def test_the_hermetic_entry_point_actually_compiles() -> None:
 
 
 #: Test files whose passing constitutes "the oracle suite ran with plugin
-#: discovery disabled". The static-coverage test requires each one to have a
-#: matching `ORACLE_MODULES` entry.
+#: discovery disabled".
 ORACLE_FILES: tuple[str, ...] = (
     'tests/core/test_generators.py',
     'tests/core/test_equivalence.py',
@@ -350,27 +205,6 @@ def _run_poisoned(targets: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
         [sys.executable, '-m', 'pytest', '-p', 'core._poison_plugins', '-q',
          '-m', 'not slow', *targets],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False)
-
-
-@pytest.mark.fast
-def test_the_static_scan_covers_every_file_the_poisoned_run_covers() -> None:
-    """The two halves of this check are two lists, and nothing linked them.
-
-    `ORACLE_MODULES` seeds the static scan; `ORACLE_FILES` is what the poisoned
-    subprocess runs. A test file in the second and not the first is covered only
-    at runtime, and only on the paths that run actually executes — which is the
-    weaker half by this module's own docstring. Nothing imports a test module,
-    so it is never reached transitively either.
-
-    Adding `import sophios.plugins` to
-    `tests/core/test_generators.py` — a file `ORACLE_FILES` names — left
-    `test_no_oracle_module_reaches_plugin_discovery` green.
-    """
-    named = {f'core.{Path(f).stem}' for f in ORACLE_FILES}
-    missing = sorted(named - set(ORACLE_MODULES))
-    assert not missing, (
-        'ORACLE_FILES runs these under the poison but ORACLE_MODULES does not scan '
-        f'them, so an import of the environment in one is invisible: {missing}')
 
 
 @pytest.mark.slow

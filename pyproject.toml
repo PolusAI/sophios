@@ -78,6 +78,7 @@ test = [
     "pre-commit",
     "hypothesis",
     "hypothesis-jsonschema",
+    "import-linter",
 ]
 # NOTE: The following list was generated using the command
 # mypy --install-types
@@ -274,3 +275,16 @@ max-module-lines=750
 
 # List of note tags to take in consideration, separated by a comma.
 notes="FIXME,XXX,TODO"
+
+# The core/contrib boundary: contrib may import core, core may never import
+# contrib (design_docs/core-refactor-design.md). Static, so an import whose
+# target is computed at runtime is not seen.
+[tool.importlinter]
+root_package = "sophios"
+
+[[tool.importlinter.contracts]]
+name = "Core never imports contrib"
+type = "forbidden"
+source_modules = ["sophios", "sophios.*"]
+forbidden_modules = ["sophios.contrib"]
+ignore_imports = ["sophios.contrib.** -> sophios.contrib.**"]
