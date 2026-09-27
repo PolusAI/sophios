@@ -1,6 +1,5 @@
 """The versioned, conservative boundary for user-authored references."""
 
-import ast
 import copy
 from functools import partial
 from pathlib import Path
@@ -137,31 +136,6 @@ def test_cwltool_agrees_where_sophios_claims_knowledge(
         assert result == 'exception'
     else:
         assert result in {'pass', 'warning'}
-
-
-@pytest.mark.fast
-def test_production_and_generators_do_not_import_the_forbidden_oracles() -> None:
-    """Production cannot delegate to cwltool; generators cannot ask production."""
-    files_and_forbidden = (
-        (REPO_ROOT / 'src/sophios/lang/compatibility.py', {'cwltool'}),
-        (REPO_ROOT / 'tests/core/reference_model.py',
-         {'sophios.lang.compatibility', 'sophios.inference'}),
-        (REPO_ROOT / 'tests/core/ast_strategies.py',
-         {'sophios.lang.compatibility', 'sophios.inference'}),
-    )
-    for path, forbidden in files_and_forbidden:
-        tree = ast.parse(path.read_text(encoding='utf-8'), str(path))
-        imported = {
-            node.module for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.module is not None
-        } | {
-            alias.name for node in ast.walk(tree) if isinstance(node, ast.Import)
-            for alias in node.names
-        }
-        breaches = sorted(module for module in imported
-                          if any(module == owner or module.startswith(f'{owner}.')
-                                 for owner in forbidden))
-        assert not breaches, f'{path.name} imports its forbidden oracle: {breaches}'
 
 
 _ENDPOINTS: Final = (

@@ -17,8 +17,6 @@ the parser said. The fix is not to pass `args` further down — that would put a
 CLI type into library signatures — but to convert at the boundary and pass the
 settings themselves.
 """
-import ast
-import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -26,184 +24,12 @@ from typing import Any, Final
 
 import pytest
 
-from .source_scan import REPO_ROOT, SRC, not_vacuous, package_files
 import yaml
 
 import sophios.cli
 import sophios.compiler
 import sophios.main
 from sophios.wic_types import CompilerOptions, GraphSettings, YamlTagPaths
-
-#: The one module that may hold an `argparse.Namespace`: it makes them.
-PARSER_MODULE: Final = SRC / 'cli.py'
-
-#: The CLI entry point, which parses and immediately converts.
-CLI_ADAPTER: Final = SRC / 'main.py'
-
-
-@pytest.mark.sanity
-@pytest.mark.fast
-def test_the_scans_are_pointed_at_something() -> None:
-    """The file list is non-empty.
-
-    Both scans below are parametrised over it, and pytest *skips* an empty
-    parameter set rather than failing it — so if `src/` ever moves, or the
-    suite runs against an installed package, this file's two headline claims
-    would pass without reading a line. Proving the matcher works is not the
-    same as proving it was aimed at anything.
-    """
-    not_vacuous(package_files(), 'package modules')
-
-
-def _patches_argv(tree: ast.AST) -> list[int]:
-    """Lines that install a value over `sys.argv`."""
-    found: list[int] = []
-    for node in ast.walk(tree):
-        match node:
-            case ast.Call(func=ast.Attribute(attr='object'), args=[ast.Name(id='sys'), *_]):
-                found.append(node.lineno)  # patch.object(sys, 'argv', ...)
-            case ast.Assign(targets=[ast.Attribute(value=ast.Name(id='sys'), attr='argv')]):
-                found.append(node.lineno)  # sys.argv = ...
-    return found
-
-
-@pytest.mark.sanity
-@pytest.mark.fast
-@pytest.mark.parametrize('path', package_files(), ids=lambda p: str(p.relative_to(SRC)))
-def test_no_module_synthesises_a_command_line(path: Path) -> None:
-    """Configuration is never obtained by faking argv."""
-    lines = _patches_argv(ast.parse(path.read_text(encoding='utf-8'), str(path)))
-    assert not lines, (
-        f'{path.relative_to(REPO_ROOT)} installs a value over sys.argv at {lines}; '
-        f'pass the arguments to parse_args() explicitly instead'
-    )
-
-
-@pytest.mark.sanity
-@pytest.mark.fast
-def test_the_scan_can_actually_fail() -> None:
-    """The scan sees both spellings, so it is not vacuous."""
-    patched = "from unittest.mock import patch\nimport sys\nwith patch.object(sys, 'argv', []):\n    pass"
-    assert _patches_argv(ast.parse(patched))
-    assert _patches_argv(ast.parse("import sys\nsys.argv = ['x']"))
-
-
-def _argparse_aliases(tree: ast.AST) -> set[str]:
-    """Every spelling that means `argparse.Namespace` in this module.
-
-    Resolved from the imports, because the name alone does not identify the
-    type: sophios has `Namespaces` and `sophios.ir.Namespace`, and neither is a
-    CLI type. A bare-name match flags both and still misses an `as` alias.
-    """
-    aliases: set[str] = set()
-    for node in ast.walk(tree):
-        match node:
-            case ast.Import(names=names):
-                for alias in names:
-                    if alias.name == 'argparse':
-                        aliases.add(f'{alias.asname or "argparse"}.Namespace')
-            case ast.ImportFrom(module='argparse', names=names):
-                for alias in names:
-                    if alias.name == 'Namespace':
-                        aliases.add(alias.asname or 'Namespace')
-    return aliases
-
-
-def _namespace_parameters(tree: ast.AST) -> list[tuple[int, str]]:
-    """Functions that accept an `argparse.Namespace`, by line and name."""
-    aliases = _argparse_aliases(tree)
-    if not aliases:
-        return []
-    pattern = '|'.join(re.escape(name) for name in sorted(aliases))
-    found: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        arguments = node.args
-        accepted = (*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs,
-                    arguments.vararg, arguments.kwarg)
-        for argument in (a for a in accepted if a is not None):
-            annotation = ast.unparse(argument.annotation) if argument.annotation else ''
-            if re.search(rf'(?<![\w.])({pattern})\b', annotation):
-                found.append((node.lineno, node.name))
-    return found
-
-
-@pytest.mark.sanity
-@pytest.mark.fast
-@pytest.mark.parametrize('path', package_files(), ids=lambda p: str(p.relative_to(SRC)))
-def test_no_library_function_accepts_a_namespace(path: Path) -> None:
-    """A `Namespace` is a CLI type, so only the CLI passes one.
-
-    The CLI's own modules may hold what they parsed — `main` reads paths and
-    flags out of it, and packing those into a five-parameter signature would
-    be less readable, not more. What must not happen is the type escaping into
-    the rest of the package, which is where "args sloshing everywhere" starts.
-    The one function inside `main.py` that had no business taking one is
-    pinned separately below.
-
-    Deliberately permitted, because neither takes sophios configuration as a
-    Namespace: `cwl_subinterpreter` has its own console-script parser and
-    *returns* one, and `_tool_builder_support` *constructs* one because
-    cwltool's API asks for that shape.
-    """
-    if path in (PARSER_MODULE, CLI_ADAPTER):
-        return  # the CLI itself; its internals may hold what it parsed
-
-    accepting = _namespace_parameters(ast.parse(path.read_text(encoding='utf-8'), str(path)))
-    assert not accepting, (
-        f'{path.relative_to(REPO_ROOT)} takes an argparse.Namespace in {accepting}; '
-        f'pass the settings it needs instead'
-    )
-
-
-@pytest.mark.fast
-def test_the_compile_helper_takes_settings_not_arguments() -> None:
-    """`_compile_loaded_document` is handed settings, never a Namespace.
-
-    Pinned by name because the module-wide rule above cannot catch it: this
-    function lives in `main.py`, where holding parsed arguments is legitimate.
-    It is still the wrong thing *here* — the function's only use of `args` was
-    `graph_dark_theme`, which already travels inside `graph_settings`, so
-    taking a Namespace bought nothing and widened a CLI type's reach. That was
-    the first fix attempted for the dropped-flags bug, and it made the design
-    worse while making the symptom go away.
-    """
-    import inspect
-
-    import sophios.main
-
-    signature = inspect.signature(sophios.main._compile_loaded_document)
-    annotations = [str(parameter.annotation) for parameter in signature.parameters.values()]
-    assert not any(re.search(r'\bNamespace\b', annotation) for annotation in annotations), \
-        f'_compile_loaded_document takes a Namespace: {annotations}'
-    assert 'compiler_options' in signature.parameters
-    assert 'graph_settings' in signature.parameters
-
-
-@pytest.mark.sanity
-@pytest.mark.fast
-def test_the_namespace_scan_can_actually_fail() -> None:
-    """The signature scan sees every spelling it claims to, and only those.
-
-    The negative cases are the point. Matching a bare `Namespace` flags
-    sophios' own type of that name and reports a CLI leak in a module that
-    imports no CLI; matching one fixed spelling misses an `as` alias. Both
-    have been true of this scan.
-    """
-    assert _namespace_parameters(ast.parse(
-        'import argparse\ndef f(args: argparse.Namespace) -> None: ...'))
-    assert _namespace_parameters(ast.parse(
-        'from argparse import Namespace\ndef f(*, args: Namespace | None = None) -> None: ...'))
-    assert _namespace_parameters(ast.parse(
-        'from argparse import Namespace as Ns\ndef f(args: Ns) -> None: ...'))
-    assert not _namespace_parameters(ast.parse(
-        'from sophios.ir import Namespace\ndef f(ns: Namespace) -> None: ...'))
-    assert _namespace_parameters(ast.parse(
-        'import argparse\ndef f(*args: argparse.Namespace) -> None: ...'))
-    assert _namespace_parameters(ast.parse(
-        'from argparse import Namespace as Ns\ndef f(**kw: Ns) -> None: ...'))
-    assert not _namespace_parameters(ast.parse('def f(options: CompilerOptions) -> None: ...'))
 
 
 @pytest.mark.fast

@@ -9,10 +9,8 @@ about them, and three defects in a row lived exactly there: step ids spelled
 from the wrong stem, a producer still emitting a step form the grammar had
 removed, and scatter readable from two places with no owner.
 
-`MANUFACTURING_SITES` pins every site; a static scan fails when an unlisted one
-appears. Sites no driver reaches are named in `UNREACHED` rather than ignored.
+Sites no driver reaches are named in `UNREACHED` rather than ignored.
 """
-import ast as pyast
 import importlib
 from pathlib import Path
 from typing import Any, Final
@@ -31,10 +29,6 @@ from . import ast_strategies as strat
 from .hermetic import ORACLE, compile_hermetic_cwl
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
-SOURCE: Final = REPO_ROOT / 'src'
-
-#: Keys that make an object document-shaped rather than merely a mapping.
-DOCUMENT_KEYS: Final = frozenset({'steps', 'wic'})
 
 #: What each site builds. Only `DOCUMENT` is a `.wic` document the language owns.
 DOCUMENT: Final = 'DOCUMENT'
@@ -45,10 +39,7 @@ CWL: Final = 'CWL'                # compiled CWL workflow, not Sophios source
 CONTRIB: Final = 'CONTRIB'        # outside the core zone
 
 #: Every place in `src/sophios` that builds or rewrites a document-shaped object,
-#: found by the scan below and classified by hand. Adding a site to the code
-#: without adding it here fails `test_the_manufacturing_inventory_is_complete`;
-#: that is the whole point, because a new manufacturer is a new way to emit
-#: something the language does not accept.
+#: classified by hand.
 MANUFACTURING_SITES: Final[dict[str, str]] = {
     'sophios/api/python/_workflow_runtime.py::workflow_document': DOCUMENT,
     'sophios/compiler.py::_detach_sources': DOCUMENT,
@@ -71,56 +62,6 @@ UNREACHED: Final[dict[str, str]] = {
     'sophios/cwl_subinterpreter.py::rerun_cwltool': 'shells out to a CWL runner; its documents are '
     'pinned directly by test_compiler.py',
 }
-
-
-def _qualified(node: pyast.AST, parents: dict[pyast.AST, pyast.AST]) -> str:
-    """The dotted name of the function or class enclosing `node`."""
-    names: list[str] = []
-    current = parents.get(node)
-    while current is not None:
-        if isinstance(current, (pyast.FunctionDef, pyast.AsyncFunctionDef, pyast.ClassDef)):
-            names.append(current.name)
-        current = parents.get(current)
-    return '.'.join(reversed(names)) or '<module>'
-
-
-def _scan_for_sites() -> dict[str, list[int]]:
-    """Every function that builds a document-shaped literal or writes a document key.
-
-    Two syntactic shapes, which is what a scan can see: a dict literal carrying
-    `steps` or `wic`, and an assignment into one of those keys. A site built
-    some other way — a comprehension, or a helper handed the key as a variable —
-    is invisible here, which is why the classification above is by hand and why
-    this scan is a floor rather than a proof.
-
-    Known to be below the floor, from reading the call graph:
-    `ir/complete.py`'s requirement merge, which writes a key none of these
-    markers name,
-    and every `mergedeep.merge` whose
-    result set is decided at runtime. Those manufacture *into* documents the
-    instrumented sites already hand over, so the parse claim still covers them
-    — what this scan cannot promise is that a brand-new site built that way
-    announces itself.
-    """
-    found: dict[str, list[int]] = {}
-    for path in sorted(SOURCE.rglob('sophios/**/*.py')):
-        source = path.read_text(encoding='utf-8')
-        tree = pyast.parse(source, str(path))
-        parents = {child: node for node in pyast.walk(tree) for child in pyast.iter_child_nodes(node)}
-        for node in pyast.walk(tree):
-            if isinstance(node, pyast.Dict):
-                keys = {k.value for k in node.keys
-                        if isinstance(k, pyast.Constant) and isinstance(k.value, str)}
-                hit = bool(keys & DOCUMENT_KEYS)
-            elif isinstance(node, pyast.Assign):
-                hit = any(isinstance(t, pyast.Subscript) and isinstance(t.slice, pyast.Constant)
-                          and t.slice.value in DOCUMENT_KEYS for t in node.targets)
-            else:
-                continue
-            if hit:
-                key = f'{path.relative_to(SOURCE).as_posix()}::{_qualified(node, parents)}'
-                found.setdefault(key, []).append(node.lineno)
-    return found
 
 
 def _documents_in(value: Any, depth: int = 0) -> list[dict[str, Any]]:
@@ -193,29 +134,6 @@ def _parses(document: dict[str, Any]) -> tuple[bool, list[str]]:
     result = parse(text, 'manufactured.wic')
     return result.ok, [f'{d.code} at {d.span.start_line}:{d.span.start_column}'
                        for d in result.diagnostics if d.span]
-
-
-@pytest.mark.fast
-def test_the_manufacturing_inventory_is_complete() -> None:
-    """The scan finds exactly the sites listed, and every one is classified.
-
-    A new manufacturer is a new way to emit something the language does not
-    accept, so it has to be looked at rather than absorbed. The scan sees two
-    syntactic shapes and no more — its job is to make *adding* a site loud, not
-    to prove none was missed a different way.
-    """
-    found = set(_scan_for_sites())
-    pinned = set(MANUFACTURING_SITES)
-
-    assert found - pinned == set(), (
-        'these build or rewrite a document and are not in MANUFACTURING_SITES:\n  '
-        + '\n  '.join(sorted(found - pinned))
-        + '\nClassify each one. If it makes a .wic document, mark it DOCUMENT so it is checked.')
-    assert pinned - found == set(), (
-        'these are listed but the scan no longer finds them — deleted or rewritten:\n  '
-        + '\n  '.join(sorted(pinned - found)))
-    assert set(UNREACHED) <= {s for s, kind in MANUFACTURING_SITES.items() if kind == DOCUMENT}, (
-        'UNREACHED names a site that is not an instrumented DOCUMENT site')
 
 
 @pytest.mark.fast

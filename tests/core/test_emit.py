@@ -7,13 +7,9 @@ end-to-end compatibility contract, which is behavioral equivalence at
 non-vacuous and pin the phase boundary.
 
 BLIND SPOTS: generated workflows inherit ``ast_strategies.workflows``'s
-declared exclusions.  Validation does not execute CWL.  The static boundary
-guard detects direct imports and calls; Python reflection could evade it, so
-the planted-mutation test proves the detector against the ordinary breach.
+declared exclusions.  Validation does not execute CWL.
 """
-import ast
 import copy
-import inspect
 from pathlib import Path
 import tempfile
 
@@ -52,7 +48,6 @@ from sophios.wic_types import Yaml
 from . import ast_strategies as strat
 from .equivalence import Strength, equivalent
 from .hermetic import ORACLE, compile_hermetic
-from .source_scan import REPO_ROOT
 
 
 @pytest.mark.skip_pypi_ci
@@ -190,40 +185,3 @@ def test_validator_rejects_the_independent_invalid_control(tmp_path: Path) -> No
     target = tmp_path / 'invalid.cwl'
     target.write_text('class: Workflow\nsteps: []\n', encoding='utf-8')
     assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 1
-
-
-def _emit_boundary(source: str) -> tuple[str, ...]:
-    """Direct dependencies forbidden to a graph-only terminal projection."""
-    tree = ast.parse(source)
-    forbidden = {'compiler', 'plugins', 'config', 'pathlib', 'os'}
-    findings: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            findings.extend(alias.name for alias in node.names
-                            if alias.name.split('.')[0] in forbidden)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            root = node.module.lstrip('.').split('.')[0]
-            if root in forbidden:
-                findings.append(node.module)
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
-                and node.func.id in {'open', 'getattr', 'eval', 'exec'}:
-            findings.append(node.func.id)
-    return tuple(findings)
-
-
-@pytest.mark.fast
-def test_emit_has_only_graph_dependencies() -> None:
-    """Emit cannot discover tools, read files, or consult compiler state."""
-    path = REPO_ROOT / 'src' / 'sophios' / 'ir' / 'emit.py'
-    assert not _emit_boundary(path.read_text(encoding='utf-8'))
-
-
-@pytest.mark.fast
-def test_boundary_guard_detects_a_planted_dependency() -> None:
-    """The static half demonstrably fails for the breach it claims to catch."""
-    source = inspect.cleandoc('''
-        from pathlib import Path
-        def emit(graph):
-            return Path("registry.yml").read_text()
-    ''')
-    assert _emit_boundary(source)

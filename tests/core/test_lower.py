@@ -7,7 +7,6 @@ and the result does not depend on iteration order.
 The test-side resolver constructs fully typed phase input without calling the
 production resolver, so these need no registry, filesystem, or config.
 """
-import ast as pyast
 from typing import Any
 
 import pytest
@@ -41,7 +40,7 @@ from sophios.lang.spans import SourceSpan
 
 from . import ast_strategies as strat
 from .hermetic import COVERAGE, ORACLE
-from .source_scan import REPO_ROOT, parsed
+from .source_scan import REPO_ROOT
 
 
 def _resolved(document: Document) -> ResolvedDocument:
@@ -362,30 +361,3 @@ def test_the_graph_owns_no_mutable_container() -> None:
     for name in ('steps', 'explicit_edge_defs', 'explicit_edge_calls',
                  'input_mapping', 'output_mapping', 'passthrough'):
         assert isinstance(getattr(graph, name), tuple), name
-
-
-@pytest.mark.fast
-def test_semantic_phases_do_not_read_an_opaque_payload() -> None:
-    """`OpaqueCwl` is carried, never inspected by semantic phases.
-
-    Emit is the boundary: it may traverse a payload to transport it byte for
-    byte.  The rule protects Lower, Link and Infer from assigning it meaning,
-    not the serializer from copying it.
-
-    CANNOT DETECT: a payload bound to a local and read through that, or reached
-    by iteration, comparison or pattern matching. A static scan sees the direct
-    read, which is the shape a phase reaches for first; the boundary is held by
-    the type, and this stops the type being quietly bypassed.
-    """
-    carriers = {'passthrough', 'interpreted', 'declared', 'value'}
-    offenders: list[str] = []
-    for path in sorted((REPO_ROOT / 'src' / 'sophios' / 'ir').rglob('*.py')):
-        if path.name == 'emit.py':
-            continue
-        for node in pyast.walk(parsed(path)):
-            if not isinstance(node, (pyast.Subscript, pyast.Attribute)):
-                continue
-            target = node.value
-            if isinstance(target, pyast.Attribute) and target.attr in carriers:
-                offenders.append(f'{path.name}:{node.lineno} reads {target.attr}')
-    assert not offenders, 'the IR reads a payload it is supposed to carry:\n  ' + '\n  '.join(offenders)

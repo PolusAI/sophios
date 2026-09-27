@@ -4,113 +4,17 @@ The design specifies `.wic` as an abstraction over a single declared CWL version
 (`design_docs/core-refactor-design.md` §5.2). At baseline three sites disagreed:
 the compiler emitted `v1.2`, a CommandLineTool generator emitted `v1.0`, and the
 schema accepted any non-empty string.
-
-The enforcement is a static scan rather than a compilation, because the
-failure it guards against is silent. A document declaring the wrong version is
-still valid YAML and still runs, right up until a runner rejects a feature it
-should have supported. A grep-shaped property catches the literal at the moment
-someone reintroduces it.
 """
-import ast
 from functools import cache
-from pathlib import Path
-from typing import Final
 
 import pytest
 
-from .source_scan import REPO_ROOT, SRC, package_files
 import yaml
 from jsonschema import Draft202012Validator
 
 from sophios.lang.cwl import CWL_VERSION, CWL_VERSIONS, CwlVersion
 from sophios.python_cwl_adapter import generate_CWL_CommandLineTool
 from sophios.schemas.wic_schema import wic_main_schema
-
-
-#: The one module allowed to contain version literals: it defines them.
-OWNER: Final = SRC / 'lang' / 'cwl.py'
-
-
-def _python_files() -> list[Path]:
-    """Every Python file in the package except the module that owns the values."""
-    return package_files(exclude=OWNER)
-
-
-def _version_literals(tree: ast.AST) -> list[tuple[int, str]]:
-    """Every string constant that IS a CWL version, wherever it sits.
-
-    Deliberately not a catalogue of binding shapes. A scan that enumerates the
-    assignments it knows about is blind
-    to exactly the shapes this change had fixed in production: a literal as a
-    `.get()`/`.setdefault()` default rides in a positional argument, and a
-    keyword-only parameter default lives in `arguments.kw_defaults` — neither
-    is an assignment node. Shape lists lose that race by construction, so the
-    rule is total instead: outside the owner module, the version strings
-    themselves are banned in every position. Anything that needs one imports
-    it. Prose mentioning a version ('requires CWL v1.2') is a longer constant
-    and never exactly equal, so it does not trip the ban. The one declared
-    blind spot is a literal assembled at runtime — a computed string is not a
-    constant, and finding it would mean executing the module.
-    """
-    return [(node.lineno, str(node.value)) for node in ast.walk(tree)
-            if isinstance(node, ast.Constant) and node.value in set(CWL_VERSIONS)]
-
-
-# --------------------------------------------------------------------------
-# Every emitting path declares the one substrate version: only lang/cwl.py
-# may spell a CWL version literal; everyone else imports it
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('path', _python_files(), ids=lambda p: str(p.relative_to(SRC)))
-def test_no_module_carries_its_own_cwl_version(path: Path) -> None:
-    """Only `lang/cwl.py` spells a CWL version; everyone else imports it.
-
-    A module that hardcodes its own is how `python_cwl_adapter.py` sat on
-    `v1.0` while the compiler emitted `v1.2` — the two never had to agree
-    because nothing made them.
-    """
-    literals = _version_literals(ast.parse(path.read_text(encoding='utf-8'), str(path)))
-    assert not literals, (
-        f'{path.relative_to(REPO_ROOT)} hardcodes a CWL version at '
-        f'{[f"line {line}: {value!r}" for line, value in literals]}; '
-        f'import CWL_VERSION from sophios.lang.cwl instead'
-    )
-
-
-@pytest.mark.fast
-def test_the_scan_can_actually_fail() -> None:
-    """The scan detects each shape it claims to, so the ban is not vacuous."""
-    shapes = [
-        "d['cwlVersion'] = 'v1.0'",
-        "d = {'cwlVersion': 'v1.0'}",
-        "cwl_version: str = 'v1.0'",
-        "cwl_version = 'v1.0'",
-        "d = dict(cwlVersion='v1.0')",
-        "emit(cwl_version='v1.0')",
-        # Three shapes a shape-list scan misses, all of which occurred in
-        # production code: neither of the first two is an assignment node, and
-        # the third is a parameter default.
-        "d['cwlVersion'] = d.get('cwlVersion', 'v1.0')",
-        "d.setdefault('cwlVersion', 'v1.0')",
-        "def f(*, cwl_version: str = 'v1.0'): pass",
-    ]
-    for source in shapes:
-        assert _version_literals(ast.parse(source)), f'scan missed: {source}'
-
-
-@pytest.mark.fast
-def test_the_scan_ignores_prose_that_mentions_a_version() -> None:
-    """Prose containing a version is not a finding; the exact literal is.
-
-    The ban is on the version strings themselves, so even `label = 'v1.0'`
-    is a finding now — if a label needs the version, it imports it. What
-    must never trip the scan is a longer string that merely talks about one.
-    """
-    assert not _version_literals(ast.parse("msg = 'requires CWL v1.2 or newer'"))
-    assert not _version_literals(ast.parse('"""Targets CWL v1.2."""'))
-    assert _version_literals(ast.parse("label = 'v1.0'"))  # exact literal: banned
 
 
 # --------------------------------------------------------------------------

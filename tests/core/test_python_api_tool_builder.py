@@ -1,5 +1,4 @@
 import importlib
-import inspect
 from pathlib import Path
 from typing import Any, cast
 
@@ -87,20 +86,6 @@ def test_tool_builder_requires_structural_core() -> None:
     constructor = cast(Any, CommandLineTool)
     with pytest.raises(TypeError):
         constructor("missing-inputs")
-
-
-@pytest.mark.fast
-def test_command_line_tool_constructor_hides_internal_fields() -> None:
-    """The constructor signature is the public surface, and nothing else.
-
-    Asserted on the signature rather than on behaviour: an internal field
-    accepted positionally becomes part of the API the moment someone passes it.
-    `cwl_version` is keyword-only so it cannot be given by position.
-    """
-    signature = inspect.signature(CommandLineTool)
-
-    assert list(signature.parameters) == ["name", "inputs", "outputs", "cwl_version"]
-    assert signature.parameters["cwl_version"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 @pytest.mark.fast

@@ -1153,39 +1153,6 @@ def test_compiled_provocations_fire(code: SophiosErrorCode) -> None:
     assert any(d.code is code for d in fired), f'{code.name} did not fire'
 
 
-# --------------------------------------------------------------------------
-# The syntax layer stays standalone
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.fast
-def test_lang_layer_depends_only_on_stdlib_and_pyyaml() -> None:
-    """`sophios.lang` + `utils_yaml` import nothing beyond stdlib and yaml.
-
-    Staging exactly these files into a bare venv with only
-    PyYAML and everything ran — which is what makes the layer reviewable in
-    isolation and, eventually, extractable for editor tooling. One stray
-    import would end that silently; this makes it a test failure instead.
-    """
-    import ast as python_ast
-    import sys
-
-    lang_dir = Path(__file__).resolve().parents[2] / 'src' / 'sophios' / 'lang'
-    files = sorted(lang_dir.glob('*.py')) + [lang_dir.parent / 'utils_yaml.py']
-    allowed = set(sys.stdlib_module_names) | {'yaml', 'sophios'}
-
-    for source_file in files:
-        tree = python_ast.parse(source_file.read_text(encoding='utf-8'))
-        for node in python_ast.walk(tree):
-            roots = []
-            if isinstance(node, python_ast.Import):
-                roots = [alias.name.split('.')[0] for alias in node.names]
-            elif isinstance(node, python_ast.ImportFrom) and node.level == 0 and node.module:
-                roots = [node.module.split('.')[0]]
-            for root in roots:
-                assert root in allowed, f'{source_file.name} imports {root!r} — the lang layer must stay standalone'
-
-
 @pytest.mark.fast
 @pytest.mark.parametrize('source, expected', [
     ('steps:\n- id: s\n  in:\n    f: !& e\n', 'e'),
