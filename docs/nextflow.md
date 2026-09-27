@@ -237,11 +237,22 @@ takes one element per task while the step's other inputs stay value channels
 and broadcast to every task. Scattering over an empty array runs zero tasks:
 the run still terminates and the workflow output is simply empty.
 
-Multi-input scatter is not supported, and neither is any `scatterMethod` that
-would decide how two scattered arrays combine. With exactly one scattered
-input all three CWL methods coincide, so `dotproduct`,
-`flat_crossproduct`, and `nested_crossproduct` are each accepted as inert
-restatements; any other value is rejected.
+With exactly one scattered input all three CWL methods coincide, so
+`dotproduct`, `flat_crossproduct`, and `nested_crossproduct` are each
+accepted as inert restatements; any other value is rejected.
+
+Scattering two or more inputs requires an explicit `scatterMethod`, and only
+`dotproduct` is supported there; `flat_crossproduct` and `nested_crossproduct`
+over two or more inputs are rejected. Each scattered input is still sourced
+from its own array-typed workflow input. The whole arrays are combined and
+paired by index into one invocation per index — never by pairing per-element
+channels, whose pairing would depend on arrival order. Unequal lengths fail
+the run, naming each scattered input and its length; an empty array runs zero
+invocations. Every invocation carries its index as a hidden value alongside
+the scattered step's inputs and outputs, and the gather sorts by that index
+before stripping it, so the gathered workflow output is always in invocation
+order, regardless of which task finishes first. Unscattered inputs, including
+File and Directory, still broadcast to every invocation.
 
 A scattered step's outputs can only reach a workflow output, where a channel
 of N values is exactly the array-typed CWL output. Feeding them into another

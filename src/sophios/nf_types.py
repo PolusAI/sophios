@@ -15,8 +15,10 @@ from .nf_symbols import validate_nextflow_identifier
 _T = TypeVar("_T")
 NF_SHELL_QUOTE_HELPER = "__sophios_shell_quote_9f72e"
 NF_LOAD_CONTENTS_HELPER = "__sophios_load_contents_9f72e"
+NF_SCATTER_INDEX_NAME = "__sophios_scatter_index_9f72e"
 NF_INTERNAL_IDENTIFIERS = frozenset({
     NF_SHELL_QUOTE_HELPER, NF_LOAD_CONTENTS_HELPER, NF_FINITE_HELPER, NF_ROUND_HELPER, NF_NUMBER_TEXT_HELPER,
+    NF_SCATTER_INDEX_NAME,
 })
 # CWL v1.2 requires a loadContents file to be a UTF-8 text file of this many
 # bytes or fewer, read entirely, with a fatal error above the limit.
@@ -891,11 +893,15 @@ class NfWorkflowInputConnection:
 
     ``adapter`` names the one approved channel adaptation applied at the
     consumption site. The approved set is closed: ``"scatter"`` fans a
-    list-carrying value channel out into one element per task. Every other
-    adaptation a topology might require is rejected before lowering.
+    list-carrying value channel out into one element per task, one input at a
+    time. ``"dotproduct"`` marks one of two or more inputs whose whole arrays
+    are paired by index into one invocation per index (design §6, Topology);
+    every input in the group carries this same adapter, which is validated
+    below. Every other adaptation a topology might require is rejected
+    before lowering.
     """
 
-    ALLOWED_ADAPTERS: ClassVar[frozenset[str]] = frozenset({"scatter"})
+    ALLOWED_ADAPTERS: ClassVar[frozenset[str]] = frozenset({"scatter", "dotproduct"})
 
     from_port: str
     to_process: str
@@ -1088,10 +1094,10 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow."""
 
-    SCHEMA_VERSION: ClassVar[int] = 11
+    SCHEMA_VERSION: ClassVar[int] = 12
     # Earlier versions whose value space is a strict subset of the current
     # model hydrate unchanged; serialization always writes SCHEMA_VERSION.
-    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11})
+    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12})
     # Each additive token or segment kind declares the version that
     # introduced it, so the subset property is enforced rather than assumed.
     KIND_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
@@ -1104,6 +1110,12 @@ class ExecutableNextflowWorkflow:
     # KIND_SCHEMA_VERSIONS.
     FIELD_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
         {"is_array": 5, "stage_as": 7, "adapter": 8, "capture": 9, "condition": 11}
+    )
+    # A specific field VALUE introduced after the field itself: "dotproduct"
+    # is a value of the existing "adapter" field, not a new field, so it
+    # needs its own gate keyed by (field, value) rather than by field alone.
+    FIELD_VALUE_SCHEMA_VERSIONS: ClassVar[Mapping[tuple[str, str], int]] = MappingProxyType(
+        {("adapter", "dotproduct"): 12}
     )
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
@@ -1165,6 +1177,8 @@ class ExecutableNextflowWorkflow:
         param_destinations: dict[str, tuple[bool, str, str]] = {}
         workflow_outputs: set[str] = set()
         dependencies: dict[str, set[str]] = {name: set() for name in process_by_name}
+        adapters_by_process: dict[str, set[str]] = {}
+        dotproduct_count_by_process: dict[str, int] = {}
 
         for connection in self.connections:
             match connection:
@@ -1196,10 +1210,16 @@ class ExecutableNextflowWorkflow:
                     # what the adapter consumes rather than what the port
                     # declares: scatter takes the whole array and feeds one
                     # element per task.
-                    expects_array = destination.is_array or connection.adapter == "scatter"
+                    expects_array = destination.is_array or connection.adapter in ("scatter", "dotproduct")
                     param_destinations.setdefault(
                         from_port, (expects_array, to_process, to_port)
                     )
+                    if adapter is not None:
+                        adapters_by_process.setdefault(to_process, set()).add(adapter)
+                    if adapter == "dotproduct":
+                        dotproduct_count_by_process[to_process] = (
+                            dotproduct_count_by_process.get(to_process, 0) + 1
+                        )
                     self._record_incoming(incoming, to_process, to_port)
                 case NfProcessConnection(from_process, from_port, to_process, to_port):
                     source = self._source_port(process_by_name, from_process, from_port)
@@ -1234,6 +1254,19 @@ class ExecutableNextflowWorkflow:
                     if to_port in workflow_outputs:
                         raise ValueError(f"workflow contains duplicate output emit name {to_port!r}")
                     workflow_outputs.add(to_port)
+
+        for process_name, adapters in adapters_by_process.items():
+            if len(adapters) > 1:
+                raise ValueError(
+                    f"process {process_name!r} mixes channel adapters "
+                    f"{', '.join(sorted(adapters))}; a process may use only one scatter shape"
+                )
+        for process_name, count in dotproduct_count_by_process.items():
+            if count < 2:
+                raise ValueError(
+                    f"process {process_name!r} has {count} dotproduct-adapted input(s); "
+                    "dotproduct scatter requires two or more"
+                )
 
         # Checked after the loop: a parameter feeding inconsistent shapes is
         # reported as inconsistent above, so by here every destination agrees
@@ -1389,6 +1422,13 @@ class ExecutableNextflowWorkflow:
                         raise ValueError(
                             f"{field_name!r} requires executable Nextflow schema version "
                             f"{field_introduced}, but the payload declares schema version {declared}"
+                        )
+                for (field_name, field_value), value_introduced in cls.FIELD_VALUE_SCHEMA_VERSIONS.items():
+                    if mapping.get(field_name) == field_value and declared < value_introduced:
+                        raise ValueError(
+                            f"{field_name}={field_value!r} requires executable Nextflow schema "
+                            f"version {value_introduced}, but the payload declares schema "
+                            f"version {declared}"
                         )
                 for item in mapping.values():
                     cls._reject_newer_kinds(item, declared=declared)

@@ -907,10 +907,7 @@ def _scatter_rose(
     )
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize("method", ["dotproduct", "flat_crossproduct", "nested_crossproduct"])
-def test_rejects_multi_input_scatter_under_every_scatter_method(method: str) -> None:
-    """Multi-input scatter is the only shape where scatterMethod is load-bearing."""
+def _two_input_scatter_rose(*, scatterMethod: Any = "dotproduct") -> CompiledNextflowSource:
     scatter_tool = tool(
         "SCATTER",
         inputs={
@@ -919,17 +916,16 @@ def test_rejects_multi_input_scatter_under_every_scatter_method(method: str) -> 
         },
         outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
     )
-    rose = synthetic_source(
+    fields: dict[str, Any] = {
+        "in": {"first": "firsts", "second": "seconds"},
+        "out": ["result"],
+        "scatter": ["first", "second"],
+    }
+    if scatterMethod is not None:
+        fields["scatterMethod"] = scatterMethod
+    return synthetic_source(
         workflow_doc(
-            [step(
-                "SCATTER",
-                **{
-                    "in": {"first": "firsts", "second": "seconds"},
-                    "out": ["result"],
-                    "scatter": ["first", "second"],
-                    "scatterMethod": method,
-                },
-            )],
+            [step("SCATTER", **fields)],
             inputs={
                 "firsts": {"type": _STRING_ARRAY},
                 "seconds": {"type": _STRING_ARRAY},
@@ -939,10 +935,33 @@ def test_rejects_multi_input_scatter_under_every_scatter_method(method: str) -> 
         workflow_inputs={"firsts": ["a"], "seconds": ["b"]},
     )
 
-    assert _findings(rose) == [
-        "steps[0].scatter: multi-input scatter over 2 inputs is deferred beyond this "
-        "lowering; exactly one scattered input is supported"
+
+@pytest.mark.fast
+@pytest.mark.parametrize("method", ["flat_crossproduct", "nested_crossproduct"])
+def test_rejects_multi_input_scatter_under_every_method_but_dotproduct(method: str) -> None:
+    """Two or more scattered inputs need dotproduct; the other methods are deferred."""
+    assert _findings(_two_input_scatter_rose(scatterMethod=method)) == [
+        f"steps[0].scatterMethod: {method!r} over 2 inputs is deferred beyond this "
+        "lowering; only 'dotproduct' is supported for two or more scattered inputs"
     ]
+
+
+@pytest.mark.fast
+def test_rejects_multi_input_scatter_without_a_scatter_method() -> None:
+    assert _findings(_two_input_scatter_rose(scatterMethod=None)) == [
+        "steps[0].scatterMethod: multi-input scatter over 2 inputs requires an explicit "
+        "scatterMethod"
+    ]
+
+
+@pytest.mark.fast
+def test_accepts_two_input_dotproduct_scatter() -> None:
+    workflow = compiled_source_to_nextflow(_two_input_scatter_rose(scatterMethod="dotproduct"))
+
+    assert set(workflow.connections) >= {
+        NfWorkflowInputConnection("firsts", "SCATTER", "first", "dotproduct"),
+        NfWorkflowInputConnection("seconds", "SCATTER", "second", "dotproduct"),
+    }
 
 
 @pytest.mark.fast
@@ -951,7 +970,7 @@ def test_rejects_multi_input_scatter_under_every_scatter_method(method: str) -> 
 ])
 def test_rejects_a_scatter_field_that_does_not_name_one_input(scatter: Any) -> None:
     assert _findings(_scatter_rose(scatter=scatter)) == [
-        "steps[0].scatter: scatter must name one input, as a string or a one-element list"
+        "steps[0].scatter: scatter must name one input, as a string or a non-empty list"
     ]
 
 

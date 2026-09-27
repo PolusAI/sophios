@@ -11,6 +11,7 @@ from .nf_types import (
     ExecutableNextflowWorkflow,
     NF_LOAD_CONTENTS_HELPER,
     NF_LOAD_CONTENTS_LIMIT,
+    NF_SCATTER_INDEX_NAME,
     NF_SHELL_QUOTE_HELPER,
     NfArrayBinding,
     NfBasenameReference,
@@ -219,14 +220,15 @@ def _capture_literal(port: NfPort) -> str:
     return _groovy_literal(segment.value)
 
 
-def _process_output(port: NfPort) -> str:
+def _process_output(port: NfPort, *, tuple_element: bool = False) -> str:
     # NfProcess guarantees every output has a typed glob, and the val
     # qualifier only for a text capture.
     assert port.glob is not None
     emit = port.emit or port.name
     if port.capture == "text":
         read = f"{NF_LOAD_CONTENTS_HELPER}(task.workDir.resolve({_capture_literal(port)}))"
-        return f"val({read}), emit: {emit}"
+        body = f"val({read})"
+        return body if tuple_element else f"{body}, emit: {emit}"
     # The two options are independent: one says how the name is matched, the
     # other how many matches the author declared. A text capture returns
     # above, so neither reaches a val declaration.
@@ -239,16 +241,26 @@ def _process_output(port: NfPort) -> str:
     # declaration, so it is stated in the generated pipeline rather than
     # dropped: arity: '1' emits one path value and fails on no match.
     arity = ", arity: '1'" if port.capture == "single" else ""
+    if tuple_element:
+        # A dotproduct-scattered process re-emits the hidden invocation
+        # index alongside every output, one tuple line per output port
+        # (design §6, Topology), so the "path ..." spelling used inside a
+        # standalone output line becomes a parenthesized tuple element here.
+        return f"path({_render_glob(port.glob)}{literal}{arity})"
     return f"path {_render_glob(port.glob)}{literal}{arity}, emit: {emit}"
 
 
-def _process_input(port: NfPort) -> str:
+def _process_input(port: NfPort, *, tuple_element: bool = False) -> str:
+    if tuple_element:
+        if port.stage_as is not None:
+            return f"{port.qualifier}({port.name}, stageAs: {_groovy_literal(port.stage_as)})"
+        return f"{port.qualifier}({port.name})"
     if port.stage_as is not None:
         return f"{port.qualifier} {port.name}, stageAs: {_groovy_literal(port.stage_as)}"
     return f"{port.qualifier} {port.name}"
 
 
-def _render_process(process: NfProcess) -> str:
+def _render_process(process: NfProcess, dotproduct_ports: tuple[str, ...] = ()) -> str:
     lines = [f"process {process.name} {{"]
     if process.container is not None:
         lines.append(f"    container {_groovy_literal(process.container)}")
@@ -259,10 +271,28 @@ def _render_process(process: NfProcess) -> str:
 
     if process.inputs:
         lines.extend(["", "    input:"])
-        lines.extend(f"    {_process_input(port)}" for port in process.inputs)
+        if dotproduct_ports:
+            scattered = [port for port in process.inputs if port.name in dotproduct_ports]
+            other = [port for port in process.inputs if port.name not in dotproduct_ports]
+            tuple_elements = ", ".join(
+                [f"val({NF_SCATTER_INDEX_NAME})"]
+                + [_process_input(port, tuple_element=True) for port in scattered]
+            )
+            lines.append(f"    tuple {tuple_elements}")
+            lines.extend(f"    {_process_input(port)}" for port in other)
+        else:
+            lines.extend(f"    {_process_input(port)}" for port in process.inputs)
     if process.outputs:
         lines.extend(["", "    output:"])
-        lines.extend(f"    {_process_output(port)}" for port in process.outputs)
+        if dotproduct_ports:
+            for port in process.outputs:
+                emit = port.emit or port.name
+                lines.append(
+                    f"    tuple val({NF_SCATTER_INDEX_NAME}), "
+                    f"{_process_output(port, tuple_element=True)}, emit: {emit}"
+                )
+        else:
+            lines.extend(f"    {_process_output(port)}" for port in process.outputs)
 
     command = " ".join(_render_command_token(token) for token in process.command.tokens)
     streams = (
@@ -371,6 +401,56 @@ def _incoming_connections(workflow: ExecutableNextflowWorkflow) -> dict[tuple[st
 _ADAPTER_OPERATORS = {"scatter": ".flatten()"}
 
 
+def _dotproduct_sources(
+    workflow: ExecutableNextflowWorkflow, process: NfProcess
+) -> list[tuple[str, str]]:
+    """Return (port name, workflow input name) pairs for dotproduct ports, in port order."""
+    by_port = {
+        connection.to_port: connection.from_port
+        for connection in workflow.connections
+        if isinstance(connection, NfWorkflowInputConnection)
+        and connection.to_process == process.name
+        and connection.adapter == "dotproduct"
+    }
+    return [(port.name, by_port[port.name]) for port in process.inputs if port.name in by_port]
+
+
+def _render_dotproduct_channel(
+    channel_name: str, process_name: str, sources: list[tuple[str, str]]
+) -> str:
+    """Combine dotproduct source value channels into one [index, elem...] queue channel.
+
+    Combines the whole-array value channels the design requires (design §6,
+    Topology), then computes every invocation from the whole arrays directly
+    by one fixed Groovy idiom -- never by pairing per-element queue channels,
+    whose pairing would depend on arrival order. Unequal lengths fail the run
+    naming each scattered input and its length; an empty array yields zero
+    invocations.
+    """
+    locals_ = [f"__d{index}" for index in range(len(sources))]
+    # Nextflow's combine flattens a List-valued item into the concatenated
+    # tuple, and a whole scattered array is exactly such a value; boxing each
+    # one in a singleton list first keeps combine from splicing its elements
+    # into the tuple instead of carrying the array itself.
+    boxed = f"{sources[0][1]}.map {{ [it] }}"
+    for _, from_port in sources[1:]:
+        boxed = f"{boxed}.combine({from_port}.map {{ [it] }})"
+    combine_expr = boxed
+    mismatch = " || ".join(f"{locals_[0]}.size() != {name}.size()" for name in locals_[1:])
+    detail = ", ".join(
+        f"{from_port}=${{{local}.size()}}" for local, (_, from_port) in zip(locals_, sources)
+    )
+    message = f"{process_name}: dotproduct scatter inputs have mismatched lengths: {detail}"
+    tuple_elements = ", ".join(f"{local}[i]" for local in locals_)
+    params_decl = ", ".join(locals_)
+    return "\n".join([
+        f"    {channel_name} = {combine_expr}.flatMap {{ {params_decl} ->",
+        f'        if ({mismatch}) {{ throw new RuntimeException("{message}") }}',
+        f"        (0..<{locals_[0]}.size()).collect {{ i -> tuple(i, {tuple_elements}) }}",
+        "    }",
+    ])
+
+
 def _source_expression(connection: NfConnection, processes: Mapping[str, NfProcess]) -> str:
     match connection:
         case NfWorkflowInputConnection(from_port, _, _, adapter):
@@ -416,13 +496,30 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
         lines.append("    take:")
         lines.extend(f"    {name}" for name in workflow_inputs)
 
+    dotproduct_process_names = {
+        connection.to_process
+        for connection in workflow.connections
+        if isinstance(connection, NfWorkflowInputConnection) and connection.adapter == "dotproduct"
+    }
+
     lines.append("    main:")
     for process in _ordered_processes(workflow):
-        # The executable IR guarantees every process input is connected.
-        arguments = [
-            _source_expression(incoming[(process.name, port.name)], processes)
-            for port in process.inputs
-        ]
+        dotproduct_sources = _dotproduct_sources(workflow, process)
+        if dotproduct_sources:
+            dotproduct_names = {name for name, _ in dotproduct_sources}
+            channel_name = f"ch_{process.name}_scatter"
+            lines.append(_render_dotproduct_channel(channel_name, process.name, dotproduct_sources))
+            other_ports = [port for port in process.inputs if port.name not in dotproduct_names]
+            arguments = [channel_name] + [
+                _source_expression(incoming[(process.name, port.name)], processes)
+                for port in other_ports
+            ]
+        else:
+            # The executable IR guarantees every process input is connected.
+            arguments = [
+                _source_expression(incoming[(process.name, port.name)], processes)
+                for port in process.inputs
+            ]
         if process.condition is None:
             lines.append(f"    {process.name}({', '.join(arguments)})")
         else:
@@ -436,9 +533,16 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
     if workflow_outputs:
         lines.append("    emit:")
         for connection in workflow_outputs:
-            lines.append(
-                f"    {connection.to_port} = {_source_expression(connection, processes)}"
-            )
+            expression = _source_expression(connection, processes)
+            if connection.from_process in dotproduct_process_names:
+                # Sort by the hidden invocation index before stripping it, so
+                # the gathered workflow output never depends on task
+                # completion order (design §6, Topology, Gather).
+                expression = (
+                    f"{expression}.toSortedList {{ it[0] }}"
+                    ".flatMap { it.collect { row -> row[1] } }"
+                )
+            lines.append(f"    {connection.to_port} = {expression}")
     lines.append("}")
     return "\n".join(lines)
 
@@ -462,7 +566,7 @@ def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> st
         candidate.to_process
         for candidate in workflow.connections
         if isinstance(candidate, NfWorkflowInputConnection)
-        and candidate.adapter == "scatter"
+        and candidate.adapter in ("scatter", "dotproduct")
     }
     feeds_scattered_process = any(
         isinstance(candidate, NfWorkflowInputConnection)
@@ -470,10 +574,10 @@ def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> st
         and candidate.to_process in scattered_processes
         for candidate in workflow.connections
     )
-    # A scatter-adapted parameter carries the whole source array; the graph
-    # validator keeps every sink of one parameter in agreement, so one sink
-    # decides the construction for all of them.
-    carries_list = port.is_array or connection.adapter == "scatter"
+    # A scatter- or dotproduct-adapted parameter carries the whole source
+    # array; the graph validator keeps every sink of one parameter in
+    # agreement, so one sink decides the construction for all of them.
+    carries_list = port.is_array or connection.adapter in ("scatter", "dotproduct")
     if port.qualifier == "path":
         path_type = "dir" if port.path_kind == "directory" else "file"
         if carries_list:
@@ -532,7 +636,13 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
         for token in process.command.tokens
     ) or any(process.condition is not None for process in workflow.processes):
         sections.append(NF_EXPRESSION_FUNCTIONS)
-    sections.extend(_render_process(process) for process in workflow.processes)
+    sections.extend(
+        _render_process(
+            process,
+            tuple(name for name, _ in _dotproduct_sources(workflow, process)),
+        )
+        for process in workflow.processes
+    )
     sections.append(_render_named_workflow(workflow))
     arguments = ",\n        ".join(
         _parameter_expression(workflow, name) for name in _workflow_input_names(workflow)

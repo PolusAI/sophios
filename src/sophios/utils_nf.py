@@ -2065,25 +2065,21 @@ _SCATTER_METHODS = frozenset({"dotproduct", "flat_crossproduct", "nested_crosspr
 def _scatter_names(step: Mapping[str, Any]) -> list[str]:
     """Return the raw input names one step scatters over.
 
-    Only the single-input forms are representable: a bare name, or a
-    one-element list. Multi-input scatter is the only shape where
-    scatterMethod is load-bearing, and it is deferred rather than guessed.
+    A bare name or a one-element list is single-input scatter, where
+    scatterMethod is an inert restatement. A list of two or more names is
+    multi-input scatter, where scatterMethod decides how the named inputs
+    combine; ``_scatter_findings`` rejects the methods this lowering does
+    not support.
     """
     match step.get("scatter"):
         case str() as name if name:
-            names = [name]
+            return [name]
         case list() as items if items and all(isinstance(item, str) and item for item in items):
-            names = list(items)
+            return list(items)
         case _:
             raise ValueError(
-                "scatter must name one input, as a string or a one-element list"
+                "scatter must name one input, as a string or a non-empty list"
             )
-    if len(names) > 1:
-        raise ValueError(
-            f"multi-input scatter over {len(names)} inputs is deferred beyond this lowering; "
-            "exactly one scattered input is supported"
-        )
-    return names
 
 
 def _step_indices_by_id(steps: list[Mapping[str, Any]]) -> dict[str, int]:
@@ -2169,7 +2165,7 @@ def _scatter_findings(
     steps: list[Mapping[str, Any]],
     tools: tuple[Mapping[str, Any], ...],
 ) -> list[str]:
-    """Validate every scattered step against the single-input scatter lowering."""
+    """Validate every scattered step against the single- and multi-input scatter lowerings."""
     findings: list[str] = []
     source_types = _source_types(workflow, steps, tools)
     for step_index, (step, tool) in enumerate(zip(steps, tools, strict=True)):
@@ -2186,6 +2182,21 @@ def _scatter_findings(
             findings.append(
                 f"{path}.scatterMethod: unsupported CWL scatter method {method!r}"
             )
+        elif len(names) > 1:
+            # At exactly one scattered input all three methods coincide, so a
+            # method is required to decide two or more; only dotproduct is an
+            # approved multi-input lowering (design §6, Topology).
+            if method is None:
+                findings.append(
+                    f"{path}.scatterMethod: multi-input scatter over {len(names)} inputs "
+                    "requires an explicit scatterMethod"
+                )
+            elif method != "dotproduct":
+                findings.append(
+                    f"{path}.scatterMethod: {method!r} over {len(names)} inputs is deferred "
+                    "beyond this lowering; only 'dotproduct' is supported for two or more "
+                    "scattered inputs"
+                )
         tool_inputs = tool.get("inputs", {})
         step_inputs = step.get("in", {})
         if not isinstance(tool_inputs, Mapping) or not isinstance(step_inputs, Mapping):
@@ -2779,12 +2790,16 @@ def _step_connections(
             for source in _source_values(raw_source, context=f"step input {process.name}.{destination_port}"):
                 source_process, source_port = _source_endpoint(source, step_names)
                 if source_process is None:
+                    if destination_port in scattered:
+                        adapter = "dotproduct" if len(scattered) > 1 else "scatter"
+                    else:
+                        adapter = None
                     connections.append(
                         NfWorkflowInputConnection(
                             source_port,
                             process.name,
                             destination_port,
-                            "scatter" if destination_port in scattered else None,
+                            adapter,
                         )
                     )
                 else:
