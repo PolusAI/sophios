@@ -2,21 +2,10 @@
 
 The AST is the source of truth: every key comes from a field's `Surface`
 declaration in `nodes.py` and every construct from the parser's dispatch
-tables, so nothing here restates the shape of a document and nothing here can
-disagree with the parser about it. Add a field to `Step` and either the schema
-moves or generation fails.
-
-Two limits are structural rather than oversights. JSON has no YAML tags, so the
-schema describes the **desugared** projection (§6.1) — what a validator sees
-after loading. And passthrough is open by definition (§1), so the schema cannot
-close any object that may carry it; that openness is declared in the AST as
-`Shape.PASSTHROUGH`, not decided here.
-
-The result is a deliberate over-approximation: everything the parser accepts
-validates, and the structural mistakes the parser reports are rejected. An
-editor aid, not a second implementation of the language.
-
-See docs/sophios_language_reference.md.
+tables, so nothing here can disagree with the parser about the shape of a
+document. The schema describes the desugared projection (§6.1), since JSON
+has no YAML tags, and is a deliberate over-approximation — an editor aid, not
+a second implementation of the language.
 """
 from collections.abc import Callable, Mapping
 from dataclasses import fields
@@ -29,37 +18,19 @@ from .parser import Forms, Grammar
 
 @final
 class Json:  # pylint: disable=too-few-public-methods  # a namespace, not a type
-    """What this module needs to speak JSON Schema, and nothing more.
-
-    The vocabulary being translated belongs to `nodes.Shape`; this namespace
-    holds only the target format's own constants.
-    """
+    """What this module needs to speak JSON Schema, and nothing more."""
 
     #: Draft this schema targets. 2020-12 is what current editors consume.
     DIALECT: Final = 'https://json-schema.org/draft/2020-12/schema'
 
-    #: Stable identifier, so an editor can bind it to `*.wic` by URI.
-    #: A URN, deliberately: the previous value was a raw.githubusercontent URL
-    #: that nothing publishes, so an editor following it got a 404. When a
-    #: publishing step exists, this becomes its URL in the same commit.
+    #: Stable identifier, so an editor can bind it to `*.wic` by URI. A URN,
+    #: deliberately, since nothing publishes a URL for this schema yet.
     SCHEMA_ID: Final = 'urn:sophios:schema:lang'
 
 
 #: How each declared shape is expressed in JSON Schema — as builders, not as
-#: fragments.
-#:
-#: A table of literal fragments cannot be shared safely: the fragments nest,
-#: so `dict(fragment)` duplicates the outer mapping and hands out everything
-#: inside it, and one deepcopy at the export boundary keeps whatever aliasing
-#: the build introduced. Both leaks are copying bugs, and copying is a
-#: discipline every future use site would have to remember. Building instead
-#: removes the shared object entirely: each call returns a structure nothing
-#: else holds a reference to, so no export can disturb another and no two
-#: places in one export are secretly the same dict.
-#:
-#: The table itself is a read-only view: `Final` stops rebinding but not
-#: mutation, and a module-level dict is reachable from every thread — swapping
-#: a builder in it would change every later export process-wide.
+#: fragments, so each call returns a structure nothing else holds a
+#: reference to.
 _SHAPE_SCHEMA: Final[Mapping[Shape, Callable[[], dict[str, Any]]]] = MappingProxyType({
     Shape.INPUT_BINDINGS: lambda: {
         'description': 'Input bindings. Each input may be bound only once (§4.2).',
@@ -78,10 +49,9 @@ _SHAPE_SCHEMA: Final[Mapping[Shape, Callable[[], dict[str, Any]]]] = MappingProx
         'patternProperties': {Grammar.WIC_STEP_KEY_PATTERN: {'$ref': '#/$defs/wicBlock'}},
         'additionalProperties': False,
     },
-    #: Structure only. A field's own constraints live with that field: the
-    #: parser rejects an empty step id (wic007) but accepts an empty output
-    #: name, and both fields are IDENTITY-shaped, so a `minLength` here would
-    #: silently make the schema stricter than the language for one of them.
+    #: Structure only; a field's own constraints (e.g. non-empty step id)
+    #: live with that field, not here, since IDENTITY is shared by fields
+    #: with different constraints.
     Shape.IDENTITY: lambda: {'type': 'string'},
 })
 
@@ -89,11 +59,8 @@ _SHAPE_SCHEMA: Final[Mapping[Shape, Callable[[], dict[str, Any]]]] = MappingProx
 def wic_schema() -> dict[str, Any]:
     """Build the JSON Schema describing a desugared Sophios document.
 
-    Returned fresh each call, all the way down and with nothing aliased
-    inside: the result is the caller's to annotate or edit in place, and doing
-    so must change neither the next export nor some other part of this one.
-    That holds because every fragment is built here rather than copied from a
-    shared table.
+    Returned fresh each call, with nothing aliased inside, so the caller may
+    annotate or edit the result in place.
     """
     document = _object_schema(Document)
     return {
@@ -111,8 +78,7 @@ def _object_schema(node_type: type, *, omit: frozenset[str] = frozenset()) -> di
     """Turn one AST node into a JSON Schema object, field by field.
 
     Walks `dataclasses.fields` rather than a hand-written list, so a field
-    without a `Surface` declaration raises out of `surface_of` instead of being
-    quietly left out of the schema.
+    without a `Surface` declaration raises rather than being silently omitted.
     """
     properties: dict[str, Any] = {}
     open_object = False
@@ -167,15 +133,7 @@ def _step_body() -> dict[str, Any]:
 
 
 def _sequence_step() -> dict[str, Any]:
-    """A step written in a sequence, which carries its own `id:`.
-
-    `id` is tightened to non-empty here, where the step's own identity is
-    spelled — not on the IDENTITY shape, which `OutputBinding.name` also
-    wears. The parser reports an empty step id (wic007) and says nothing about
-    an empty output name, so this is where the schema's two directions stay
-    honest: it rejects what the parser rejects without rejecting what the
-    parser accepts.
-    """
+    """A step written in a sequence, which carries its own non-empty `id:` (wic007)."""
     body = _object_schema(Step)
     identity = body['properties']['id']
     return {
@@ -209,15 +167,10 @@ def _wic_block() -> dict[str, Any]:
 
 
 def _input_value() -> dict[str, Any]:
-    """One of the four input forms (§4.1). There is no fifth.
+    """One of the four input forms (§4.1).
 
-    Unconstrained on purpose. A mapping whose single key is a construct key is
-    a construct; any other value is an inline literal or an unresolved name,
-    and the parser accepts all of them. `construct` is referenced so editors
-    can offer the three input-position keys as completions — `wic_anchor` is
-    not among them: `!&` defines an edge, which is legal only on an `out:`
-    entry (§4.1.1), so `Forms.DESUGARED` — and therefore this schema — never
-    offers it in input position.
+    Unconstrained on purpose; `construct` is referenced only so editors can
+    offer construct keys as completions.
     """
     return {
         'description': 'An inline literal, edge reference, '
@@ -230,7 +183,7 @@ def _construct() -> dict[str, Any]:
     """A desugared Sophios construct valid in input position: a single-key mapping.
 
     Derived from the parser's dispatch table, so a construct added there
-    appears here without anyone remembering to update a schema.
+    appears here automatically.
     """
     return {
         'type': 'object',

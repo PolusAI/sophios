@@ -1,9 +1,9 @@
 """Version-owned judgments over raw CWL port type declarations.
 
-This module answers one deliberately narrow question: may Sophios reject a
-user-authored reference before handing the emitted document to CWL?  It does
-does not normalize declarations into a larger CWL type system, and it does not
-replace the separate edge-inference candidate heuristic.
+Answers one narrow question: may Sophios reject a user-authored reference
+before handing the emitted document to CWL? It does not normalize
+declarations into a larger CWL type system, and does not replace the
+separate edge-inference candidate heuristic.
 """
 
 from collections.abc import Callable
@@ -70,9 +70,8 @@ def _v0_0_1(source: Any, sink: Any,  # pylint: disable=too-many-return-statement
             return TypeRelation.DISJOINT
         return TypeRelation.UNKNOWN
 
-    # An `items`-less array is malformed, not an array: judging it by its kind
-    # would answer `disjoint` to a declaration whose real fault is that CWL
-    # validation has not seen it yet.
+    # An `items`-less array is malformed, not an array; treating it as one
+    # would falsely answer `disjoint` for CWL to reject instead.
     def _is_array(declared: Any) -> bool:
         return isinstance(declared, dict) and declared.get('type') == 'array' and 'items' in declared
 
@@ -106,9 +105,9 @@ if tuple(_JUDGES) != KNOWN_VERSIONS:
 def reference_relation(source: Any, sink: Any, *, lang_version: str) -> TypeRelation:
     """Return the relation Sophios can prove between raw endpoint declarations.
 
-    The function is non-mutating and conservative.  A caller may reject a
-    reference only for :attr:`TypeRelation.DISJOINT`; ``UNKNOWN`` deliberately
-    leaves the final decision to validation of the emitted CWL document.
+    Non-mutating and conservative: a caller may reject a reference only for
+    :attr:`TypeRelation.DISJOINT`; ``UNKNOWN`` leaves the final decision to
+    validation of the emitted CWL document.
     """
     try:
         judge = _JUDGES[lang_version]

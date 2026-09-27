@@ -1,24 +1,13 @@
 """Write a Sophios AST back out, in either of the YAML surface's two spellings.
 
-Rendering is the inverse of parsing, and having both is what makes the syntax
-layer checkable; the round-trip property in `tests/core/test_lang_render.py` is
-that claim's single home.
-
-*Transcription over reconstruction.* A literal parsed from tagged YAML carries
-its source text and is emitted verbatim, so the round-trip is exact by
-construction. Only literals that never had a spelling are serialised, and where
-the tagged form structurally cannot express a value — the string `'0'`, whose
-quotes the composer strips before `!ii` payloads are re-resolved — the
-desugared spelling is used rather than a lossy tag.
-
-*Totality over the closed union.* `OpaqueCwl` is closed and matched
-exhaustively, so a construct nested in a collection is re-spelled rather than
-handed raw to the dumper.
+Rendering is the inverse of parsing. A literal parsed from tagged YAML
+carries its source text and is emitted verbatim, so the round-trip is exact
+by construction; only literals that never had a spelling are serialised.
+`OpaqueCwl` is closed and matched exhaustively, so a construct nested in a
+collection is re-spelled rather than handed raw to the dumper.
 
     render(document)   ->  text,  tagged spelling      (`!ii x`)
     to_json(document)  ->  data,  desugared spelling, JSON-serialisable
-
-See docs/sophios_language_reference.md.
 """
 import math
 import re
@@ -47,11 +36,7 @@ from .parser import SIDECAR_WRAPPER_KEY
 
 @final
 class _Emit:  # pylint: disable=too-few-public-methods  # a namespace, not a type
-    """Everything the emitter needs to decide how to write a value.
-
-    Grouped so the two rules that govern output style sit together, and
-    immutable so they can be read from any thread without coordination.
-    """
+    """Everything the emitter needs to decide how to write a value."""
 
     #: Every tag the tagged spelling emits.
     WIC_TAGS: Final = Tag.ALL
@@ -80,7 +65,7 @@ class _Writer:
 
     `mode='tagged'` is what people write and what `render` emits;
     `mode='json'` is the desugared, JSON-serialisable projection `to_json`
-    returns — dates become ISO-8601 text there, because JSON has no date.
+    returns.
     """
 
     mode: Literal['tagged', 'json']
@@ -98,9 +83,9 @@ class _Writer:
             body['steps'] = (
                 {step.id: self.step(step) for step in document.steps}
                 if document.steps_as_mapping
-                # id first for readability, and re-assigned after the spread so a
-                # stray passthrough 'id' can never win — dict displays keep the
-                # first position but take the last value.
+                # 'id' re-assigned after the spread so a stray passthrough
+                # 'id' can never win — dict displays keep first position but
+                # take the last value.
                 else [{'id': step.id, **self.step(step), 'id': step.id}  # pylint: disable=duplicate-key
                       for step in document.steps]
             )
@@ -128,24 +113,15 @@ class _Writer:
         return {binding.name: self.edge_def(binding.edge_def)}
 
     def edge_def(self, edge: EdgeDef) -> Any:
-        """Spell an `!&` edge definition — legal only on an `out:` entry (§4.1.1).
-
-        `EdgeDef` is not a member of `InputValue`, so this is a sibling of
-        `input_value` rather than one of its cases: the only caller is
-        `output`, and `plain`'s walk over `OpaqueCwl` never reaches an
-        `EdgeDef` either, for the same reason.
-        """
+        """Spell an `!&` edge definition — legal only on an `out:` entry (§4.1.1)."""
         return _Tagged(Tag.ANCHOR, edge.name) if self.mode == 'tagged' else {Key.ANCHOR: edge.name}
 
     def sidecar(self, sidecar: WicSidecar) -> Any:
         """A `wic:` block, restoring its `(index, name)` step keys.
 
-        Children are re-wrapped in the same key the parser unwraps
-        (`SIDECAR_WRAPPER_KEY`): every downstream consumer reads through that
-        wrapper explicitly, so dropping it is a semantic edit, not a
-        simplification. An empty block renders `{}`, never `None` — consumers
-        defend against a *missing* key with `.get(k, {})`, and a key present
-        with `None` sails past that defence into an AttributeError.
+        Children are re-wrapped in `SIDECAR_WRAPPER_KEY`, matching the
+        parser's unwrap. An empty block renders `{}`, never `None`, since
+        consumers defend against a missing key with `.get(k, {})`.
         """
         out: dict[str, Any] = {key: self.plain(value) for key, value in sidecar.entries}
         if sidecar.steps:
@@ -166,16 +142,7 @@ class _Writer:
                 return name
 
     def _literal(self, literal: InlineLiteral) -> Any:
-        """Spell an `!ii` literal.
-
-        Parsed literals are transcribed from their source text — exact by
-        construction, since the value was computed from that text. Literals
-        with no text are serialised: collections render tagged block-style
-        with their payload walked (so nested constructs are re-spelled, never
-        handed raw to the dumper), and scalars go through PyYAML's emitter
-        with a desugared fallback where the tagged form cannot express the
-        value at all.
-        """
+        """Spell an `!ii` literal: transcribed from source text when parsed, else serialised."""
         if self.mode != 'tagged':
             return {Key.INLINE_INPUT: self.plain(literal.value)}
 
@@ -199,11 +166,7 @@ class _Writer:
         return {Key.INLINE_INPUT: self.plain(literal.value)}
 
     def plain(self, value: OpaqueCwl) -> Any:
-        """Passthrough content, exhaustively over the closed `OpaqueCwl` union.
-
-        Every member is handled by name; there is no silent default in which a
-        forgotten node kind reaches the dumper as a live dataclass.
-        """
+        """Spell passthrough content, exhaustively over the closed `OpaqueCwl` union."""
         match value:
             case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName():
                 return self.input_value(value)
@@ -223,22 +186,12 @@ class _Writer:
 
 
 def _spell_scalar(value: Any) -> str | None:
-    """A tagged spelling for `value`, or None when no faithful one exists.
+    """Return a tagged spelling for `value`, or None when no faithful one exists.
 
-    PyYAML's own emitter chooses the text, so the spelling is always one its
-    own resolver accepts (`.inf`, `1.0e+300`, dates). Fidelity is then checked
-    against the parser's actual pipeline: a tagged payload has its quotes
-    resolved by the composer *before* `yaml.safe_load` re-types the content,
-    which is exactly why quoted spellings cannot protect a string like '0' —
-    if the simulated round-trip does not reproduce the value, there is no
-    tagged spelling, and the caller must desugar.
-
-    The re-parse can also *raise* rather than disagree: `@`, `*`, `%` and `&`
-    open a scalar YAML will not scan, and `,`, `:`, `...`, `{` and `[` start a
-    structure it will not close. That is the same answer as a mismatch -- no
-    faithful tagged spelling exists -- so it is reported the same way, rather
-    than escaping as a `ScannerError` from a function whose job is to decide
-    whether a spelling round-trips.
+    Checked by simulating the parser's actual pipeline: a tagged payload has
+    its quotes resolved by the composer before `yaml.safe_load` re-types the
+    content, which is why quoted spellings cannot protect a string like '0'.
+    A `ScannerError` from the re-parse is treated the same as a mismatch.
     """
     candidate = yaml.safe_dump(value, default_flow_style=True).partition('\n')[0].strip()
     try:
@@ -283,10 +236,8 @@ class _WicDumper(yaml.SafeDumper):
     def choose_scalar_style(self) -> str:
         """Allow plain scalars after a wic tag.
 
-        PyYAML only permits plain style when a scalar's tag is implicit, so an
-        explicit tag forces quotes and every value comes out as `!ii 'x'`.
-        YAML itself has no such rule, so plain style is restored for the wic
-        tags whenever the value analyses as safe to write bare.
+        PyYAML only permits plain style when a scalar's tag is implicit, so
+        an explicit tag would otherwise force quotes on every value.
         """
         event = self.event
         if isinstance(event, yaml.events.ScalarEvent) and event.tag in _Emit.WIC_TAGS and event.style == '':
@@ -316,8 +267,7 @@ def render(document: Document) -> str:
 def to_json(document: Document) -> dict[str, Any]:
     """Project a document into JSON-serialisable data, desugared.
 
-    This is what a consumer without YAML tags sees, and what the exported JSON
-    Schema describes. `json.dumps` of the result always succeeds — that claim
-    is a property, not a comment (see `test_lang_schema.py`).
+    This is what a consumer without YAML tags sees, and what the exported
+    JSON Schema describes. `json.dumps` of the result always succeeds.
     """
     return _Writer('json').document(document)

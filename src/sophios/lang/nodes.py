@@ -1,13 +1,9 @@
 """Typed AST for the Sophios language.
 
 The nodes here are the executable specification of the syntax layer: what a
-well-formed Sophios document may contain, independent of which tools happen to
-be installed. See design_docs/core-refactor-design.md, Spec 1.
-
-Every node is frozen and slotted. Frozen because an AST that consumers can
-mutate is not a specification of anything; slotted because these are allocated
-once per construct in a document and the dict-per-instance overhead is pure
-waste.
+well-formed Sophios document may contain, independent of which tools happen
+to be installed. Every node is frozen (an AST consumers can mutate is not a
+specification of anything) and slotted (allocated once per construct).
 """
 from dataclasses import dataclass, field, fields
 from datetime import date, datetime
@@ -20,11 +16,8 @@ from .spans import SourceSpan
 class Shape(StrEnum):
     """What a field looks like in the YAML surface.
 
-    Semantic, not serialisation-specific: this says *what kind of thing* a
-    field is, and downstream consumers decide how to express it. A JSON Schema
-    generator turns `INPUT_BINDINGS` into an object of input values; a
-    different consumer could turn it into something else. Neither gets to
-    invent the fact that `Step.inputs` is spelled `in:`.
+    Semantic, not serialisation-specific: says *what kind of thing* a field
+    is, and downstream consumers decide how to express it.
     """
 
     #: Not surface syntax at all — source spans, surface-form flags.
@@ -51,10 +44,8 @@ class Shape(StrEnum):
 class Surface:
     """How one AST field appears in the language's YAML surface.
 
-    Declared beside the field it describes, so the mapping between the AST and
-    the syntax lives in exactly one place. Everything that needs to know the
-    shape of a document — the exported JSON Schema, the reference table —
-    reads this rather than restating it.
+    Declared beside the field it describes, so the mapping between the AST
+    and the syntax lives in exactly one place.
     """
 
     shape: Shape
@@ -63,12 +54,7 @@ class Surface:
 
 
 def surface(shape: Shape, key: str | None = None, **kwargs: Any) -> Any:
-    """Declare a field's surface form. Thin wrapper over `dataclasses.field`.
-
-    The `field()` call is made here rather than at each use site so that every
-    declaration is one readable line. Pylint expects `field()` to appear
-    literally inside a class body and cannot see through the indirection.
-    """
+    """Declare a field's surface form. Thin wrapper over `dataclasses.field`."""
     # pylint: disable=invalid-field-call
     return field(metadata={'surface': Surface(shape, key)}, **kwargs)
 
@@ -76,9 +62,9 @@ def surface(shape: Shape, key: str | None = None, **kwargs: Any) -> Any:
 def surface_of(node_type: type, field_name: str) -> Surface:
     """The declared surface form of one field.
 
-    Raises if the field was never declared. That is the point: a field added
-    to a node without saying how it is written is a hole in the specification,
-    and it should stop the build rather than silently widen the language.
+    Raises if the field was never declared: an undeclared field is a hole in
+    the specification and should stop the build, not silently widen the
+    language.
     """
     for declared in fields(node_type):
         if declared.name == field_name:
@@ -96,12 +82,10 @@ def surface_of(node_type: type, field_name: str) -> Surface:
 class InlineLiteral:
     """`!ii value` — a literal, never an edge.
 
-    `text` is the literal's source spelling when it was parsed from tagged
-    YAML, and None when it was built from the desugared form or the Python
-    API. Rendering a parsed literal is transcription of `text`, never
-    re-serialisation of `value` — reconstruction is lossy by nature (the
-    tagged form has no spelling for the string '0'), and preserving the
-    surface is what makes the round-trip exact by construction.
+    `text` is the literal's source spelling when parsed from tagged YAML,
+    and None when built from the desugared form or the Python API.
+    Rendering a parsed literal transcribes `text` rather than
+    re-serialising `value`, since reconstruction is lossy by nature.
     """
 
     value: 'OpaqueCwl' = surface(Shape.IDENTITY)
@@ -114,10 +98,8 @@ class EdgeDef:
     """`!& name` — an explicit edge definition site.
 
     Legal only where a value comes into being: an output. Reachable only
-    through `OutputBinding.edge_def` — it is not a member of `InputValue`, so
-    it cannot appear on an input, nested inside a literal, or anywhere else
-    `OpaqueCwl` reaches. `!&` written in input position is not this node; the
-    parser reports it as `wic019` instead (§4.1.1).
+    through `OutputBinding.edge_def`, not a member of `InputValue`. `!&`
+    written in input position is reported as `wic019` instead.
     """
 
     name: str = surface(Shape.IDENTITY)
@@ -156,26 +138,18 @@ class UnresolvedName:
     span: SourceSpan = surface(Shape.INTERNAL)
 
 
-#: The complete set of forms a step input may take — exactly the four forms
-#: of §4.1: a literal, an edge reference, a raw CWL reference, or an
-#: unresolved name. There is no fifth. Position is part of the type: `EdgeDef`
-#: is deliberately not a member, because an edge is defined where its value
-#: comes into being, which is an output, not an input (§4.1.1) — it is
-#: reachable only through `OutputBinding.edge_def`. Closed by construction:
-#: the parser produces nothing outside this union, so exhaustive `match`
-#: statements over it stay exhaustive.
+#: The complete set of forms a step input may take: a literal, an edge
+#: reference, a raw CWL reference, or an unresolved name. `EdgeDef` is
+#: deliberately not a member — an edge is defined on an output, reachable
+#: only through `OutputBinding.edge_def`. Closed by construction, so
+#: exhaustive `match` statements over it stay exhaustive.
 InputValue: TypeAlias = InlineLiteral | EdgeRef | RawCwlRef | UnresolvedName
 
-#: CWL that Sophios does not interpret and passes through unchanged — but no
-#: longer `Any`: a closed recursive union of exactly what YAML's safe schema
-#: can produce, plus the Sophios constructs the passthrough walk preserves.
-#: Closing the type is what lets the writer's match be exhaustiveness-checked
-#: (a construct nested in a collection becomes a type error, not a runtime
-#: RepresenterError) and what lets the test generator be *derived* from the
-#: type instead of hand-written beside it — so the space the properties
-#: quantify over and the space the type admits coincide by construction.
-#: `date`/`datetime` are members because YAML resolves timestamps; their JSON
-#: projection is ISO-8601 text (see `render.to_json`).
+#: CWL that Sophios does not interpret and passes through unchanged: a closed
+#: recursive union of what YAML's safe schema can produce, plus the Sophios
+#: constructs the passthrough walk preserves. `date`/`datetime` are members
+#: because YAML resolves timestamps; their JSON projection is ISO-8601 text
+#: (see `render.to_json`).
 OpaqueCwl: TypeAlias = (
     None | bool | int | float | str | date | datetime
     | list['OpaqueCwl'] | dict[str, 'OpaqueCwl'] | InputValue
@@ -220,11 +194,7 @@ class Step:
 
 @dataclass(frozen=True, slots=True)
 class StepKey:
-    """A `wic:` sidecar step key, normalised from its `"(1, name)"` form.
-
-    The surface syntax is retained for compatibility, but nothing downstream
-    should ever parse that string again.
-    """
+    """A `wic:` sidecar step key, normalised from its `"(1, name)"` form."""
 
     index: int = surface(Shape.IDENTITY)
     name: str = surface(Shape.IDENTITY)
@@ -245,10 +215,8 @@ class WicSidecar:
     steps: tuple[tuple[StepKey, 'WicSidecar'], ...] = surface(Shape.SIDECAR_STEPS, 'steps', default=())
     entries: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.PASSTHROUGH, default=())
     #: Each `implementations:` body, parsed. Internal, not a second surface:
-    #: the bodies stay in `entries` and are spelled from there, so rendering is
-    #: unchanged. They are parsed because they are documents written inline in
-    #: this file, and a consumer that needs one should not have to rebuild text
-    #: to read it -- nor lose the spans, which point at this file's real lines.
+    #: the bodies stay in `entries` and are spelled from there, so rendering
+    #: is unchanged.
     implementations: tuple[tuple[str, 'Document'], ...] = surface(Shape.INTERNAL, default=())
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
 

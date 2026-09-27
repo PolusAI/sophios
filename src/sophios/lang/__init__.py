@@ -1,15 +1,8 @@
 """The Sophios language layer: typed AST, parser, and diagnostics.
 
-This package is the syntax layer of the specification — it answers "is this a
-well-formed Sophios document?" without consulting which tools happen to be
-installed. Name resolution and type checking are separate, environment-
-dependent concerns.
-
-`parse` and `render` are inverses. That claim lives in exactly one place —
-the round-trip property in `tests/core/test_lang_render.py` — and this line
-is a pointer to it, not a second copy that can drift.
-
-See design_docs/core-refactor-design.md, Spec 1.
+Answers "is this a well-formed Sophios document?" without consulting which
+tools happen to be installed; name resolution and type checking are separate,
+environment-dependent concerns. `parse` and `render` are inverses.
 """
 from .cwl import CWL_VERSION, CWL_VERSIONS, CwlVersion
 from .diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError

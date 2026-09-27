@@ -1,14 +1,8 @@
 """The Sophios language version: what exists, and how one is chosen.
 
-The scheme and its selection rules have one normative home — the language
-reference, §7 — and one enforcement, `tests/core/test_lang_version.py`.
-This module implements them and owns the version list itself;
-it does not restate them, so it cannot disagree with them.
-
-Today exactly one version exists, so resolution always lands on 0.0.1 — but
-the *mechanism* is written for the general case and property-tested with
-fabricated version lists, because the first real version bump is precisely
-when nobody will want to discover the resolver was a stub.
+Owns the version list and implements the selection rules normatively defined
+in the language reference, §7. Resolution always lands on 0.0.1 today, but
+the mechanism handles the general case of multiple known versions.
 """
 from typing import Final
 
@@ -34,11 +28,10 @@ def resolve(requested: str | None = None,
             known: tuple[str, ...] = KNOWN_VERSIONS) -> str:
     """Choose the one version this compilation runs under.
 
-    `requested` is the explicit setting and always wins when given; asking for
-    a version that does not exist is reported, never coerced. `pins` are the
-    per-file tags found in the tree — exact pins, so more than one distinct
-    pin is a conflict. With neither, the newest known version is chosen: never
-    silently anything lower.
+    `requested` is the explicit setting and always wins when given; asking
+    for a version that does not exist is reported, never coerced. `pins` are
+    the per-file tags found in the tree, and more than one distinct pin is a
+    conflict. With neither, the newest known version is chosen.
 
     `known` exists so the mechanism can be tested against fabricated version
     histories; production callers never pass it.

@@ -1,8 +1,8 @@
 """Structured diagnostics.
 
-Parsing reports problems as values rather than raising, so a caller can decide
-what to do with them and a malformed document can yield several errors in one
-pass instead of one per run. See design_docs/core-refactor-design.md, Spec 1.
+Parsing reports problems as values rather than raising, so a caller can
+decide what to do with them and a malformed document can yield several
+errors in one pass instead of one per run.
 """
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
@@ -16,11 +16,8 @@ from .spans import SourceSpan
 class Severity(StrEnum):
     """How much a diagnostic matters.
 
-    One member today, deliberately. Nothing in the library emits a warning,
-    and a severity no code path can produce is a claim no test can provoke —
-    the same reasoning that keeps unrunnable CWL versions out of `CwlVersion`.
-    The axis stays so `WARNING` can return the day the first real warning
-    exists, as one line here plus the emitting site that justifies it.
+    One member today: nothing in the library emits a warning, and a severity
+    no code path can produce is a claim no test can provoke.
     """
 
     ERROR = 'error'
@@ -30,14 +27,11 @@ class Severity(StrEnum):
 class Locator:
     """Where a problem sits in a document's structure, independent of text.
 
-    A file has a line; a workflow assembled in memory does not, and inventing
-    one for it would be a guess. What both have is structure, so this is what
-    a caller who built a workflow programmatically can be told: which step,
-    and which of its ports.
-
-    Independent of `SourceSpan` rather than a substitute for it. A document
+    A file has a line; a workflow assembled in memory does not but still has
+    structure, so this names which step and which of its ports instead.
+    Independent of `SourceSpan` rather than a substitute for it — a document
     read from disk carries both, and each surface renders the one it can act
-    on — an editor jumps to the line, the Python API names the object.
+    on.
     """
 
     step: str | None = None
@@ -55,14 +49,10 @@ class Locator:
 class Diagnostic:
     """A single problem, located in source when a location is known.
 
-    Parse-phase diagnostics always carry a span — the parser worked from
-    positions, so it has one to give. Compile-phase diagnostics may not: until
-    the compiler runs on the AST, a failure often knows which workflow it came
-    from but not which line. An honest `None` beats an invented position.
-
-    `locator` is the other half of that: a phase that knows which step and
-    port it is complaining about can say so even when no file exists to point
-    into. The two are independent — either, both, or neither may be present.
+    Parse-phase diagnostics always carry a span; compile-phase diagnostics
+    may not, since a failure found on the AST often knows which workflow it
+    came from but not which line. `span` and `locator` are independent —
+    either, both, or neither may be present.
     """
 
     severity: Severity
@@ -78,11 +68,7 @@ class Diagnostic:
 
 
 class Diagnostics(Sequence[Diagnostic]):
-    """An ordered, append-only collection of diagnostics.
-
-    Implemented as a `Sequence` so callers can index, iterate, and take a
-    length without reaching for an attribute.
-    """
+    """An ordered, append-only collection of diagnostics."""
 
     __slots__ = ('_items',)
 
@@ -94,23 +80,14 @@ class Diagnostics(Sequence[Diagnostic]):
               locator: Locator | None = None) -> None:
         """Record an error.
 
-        `span` is optional because a phase after parsing can be handed a node
-        the parser never built -- a document assembled in memory -- and a
-        diagnostic with no position is still better than an exception. That is
-        exactly when `locator` earns its place: the structure survives where
-        the text does not.
+        `span` is optional: a phase after parsing may be handed a node the
+        parser never built, and a diagnostic with no position is still
+        better than an exception.
         """
         self._append(Diagnostic(Severity.ERROR, code, message, span, locator))
 
     def _append(self, diagnostic: Diagnostic) -> None:
-        """Append, dropping exact duplicates.
-
-        Several parse paths legitimately visit the same node — a key is read
-        once to find `id:` and again to build the body — and a diagnostic-
-        emitting helper called twice would otherwise report the same problem
-        twice at the same position. `Diagnostic` is frozen, so identity is
-        equality of all four fields; a repeat adds nothing a reader could use.
-        """
+        """Append, dropping exact duplicates."""
         if diagnostic not in self._items:
             self._items.append(diagnostic)
 
@@ -143,13 +120,8 @@ class Diagnostics(Sequence[Diagnostic]):
 class SophiosError(Exception):
     """A failure the library reports, never a process it terminates.
 
-    This is the deliverable of the design's §3 exception 1: library code used
-    to call `sys.exit(1)`, which meant an embedder's process died and the fuzz
-    test had to whitelist `SystemExit`. Every former exit site now raises this
-    instead, carrying the same messages as structured diagnostics.
-
-    Carries at least one diagnostic by construction — an error with nothing to
-    say is not reportable, so it is unrepresentable.
+    Carries at least one diagnostic by construction — an error with nothing
+    to say is not reportable, so it is unrepresentable.
     """
 
     def __init__(self, diagnostics: Iterable[Diagnostic]) -> None:
@@ -163,7 +135,6 @@ class SophiosError(Exception):
     def error(cls, code: _error_codes.SophiosErrorCode, *messages: str) -> 'SophiosError':
         """Build from one error, spelled as one or more message lines.
 
-        Multiple lines become multiple diagnostics under the same code, so the
-        advice text the exit sites used to print survives verbatim.
+        Multiple lines become multiple diagnostics under the same code.
         """
         return cls(Diagnostic(Severity.ERROR, code, message) for message in messages)

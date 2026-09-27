@@ -48,9 +48,8 @@ def compile_source(bundle: SourceBundle,
                    graph_target: GraphReps | None = None) -> CompilationResult:
     """Compile a workflow from the text its author wrote.
 
-    The door for a caller that has files. Parse reads those bytes, so every
-    span it reports is a position the reader can open -- unlike
-    `compile_document`, which must rebuild text from an assembled tree.
+    The door for a caller that has files: parse reads those bytes, so every
+    span it reports is a position the reader can open.
     """
     if not testing:
         print(' starting compilation of', bundle.name)
@@ -78,11 +77,10 @@ def compile_document(yaml_tree_ast: YamlTree,
                      graph_target: GraphReps | None = None) -> CompilationResult:
     """Compile one assembled document through the typed pipeline.
 
-    The door for a caller that has no file -- the Python API and the REST
-    surface build their workflow in memory. Text is rebuilt here so Parse has
-    something to read; the spans that follow are positions in that rebuilt
-    text, which is why a diagnostic from this door carries a `Locator` and not
-    a location anyone can open.
+    The door for a caller with no file — the Python API and the REST surface
+    build their workflow in memory — so text is rebuilt here for Parse to
+    read, and a diagnostic from this door carries a `Locator` rather than an
+    openable location.
     """
     if not testing:
         print(' starting compilation of', yaml_tree_ast.step_id.stem)
@@ -151,23 +149,13 @@ def _source_bundle(root: Yaml) -> tuple[str, dict[tuple[str, str], str]]:
 
 
 #: The runtime adapter's own declared inputs, whose values come from the
-#: invocation rather than from the document. Named like `resolve`'s
-#: contribution span: not a file, and not pretending to be one.
+#: invocation rather than from the document.
 _LOCATION_SPAN: Final = SourceSpan('<subinterpreter locations>', 1, 1, 1, 1)
 
 
 def _bind_subinterpreter_locations(graph: WorkflowGraph,
                                    yaml_tag_paths: YamlTagPaths) -> WorkflowGraph:
-    """Bind the three locations the runtime adapter declares as inputs.
-
-    `cwl_subinterpreter.cwl` declares `root_workflow_yml_path`,
-    `cachedir_path` and `homedir` like any other input; only their values come
-    from the invocation. Supplying them here makes that a fact about a step in
-    the graph, where it belongs, rather than an edit to the reader's document
-    made before anything has parsed it -- which is what forced the source to be
-    rebuilt as text in the first place. A binding the document already wrote is
-    left alone.
-    """
+    """Bind the three locations the runtime adapter declares as inputs, leaving any existing binding alone."""
     values: dict[PortName, str] = {
         AuthoredName('root_workflow_yml_path'): str(Path(yaml_tag_paths['yaml']).parent.absolute()),
         AuthoredName('cachedir_path'): str(Path(yaml_tag_paths['cachedir']).absolute()),
@@ -229,12 +217,7 @@ def _detach_sources(document: Yaml, workflows: dict[tuple[str, str], str]) -> Ya
 
 
 def _detach_implementations(sidecar: Yaml, workflows: dict[tuple[str, str], str]) -> Yaml:
-    """Move inline implementation bodies into the registry, as subtrees are.
-
-    The loader leaves each body attached and rekeys the mapping by ``StepId``,
-    which no longer round-trips through YAML. Resolve selects an implementation
-    by name from the registry, so the names are what the source needs to carry.
-    """
+    """Move inline implementation bodies into the registry, as subtrees are."""
     namespace = str(sidecar.get('namespace', 'global'))
     detached: Yaml = {}
     for key, body in sidecar['implementations'].items():
