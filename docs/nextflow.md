@@ -355,6 +355,22 @@ another process is rejected, because every process output before this one
 carried the `path` qualifier and the executable graph has no qualifier
 agreement check for process edges yet.
 
+## Computed values
+
+A `valueFrom` on an `arguments` entry or a scalar `inputBinding` may compute a
+number with the safe JavaScript subset: numbers, `inputs.<name>` references to
+required scalar inputs, parentheses, unary `+ -`, `* / % + -`, and
+`Math.abs`, `sqrt`, `floor`, `ceil`, `round`, `pow`, `min`, `max`. Numbers are
+binary64 as in JavaScript, so integers are exact only within ±2^53. The whole
+field must be one `$( … )`. Anything outside the subset is rejected by name.
+
+A NaN or ±Infinity anywhere in the computation, such as division by zero,
+fails the task with the step, field, expression, subexpression, and input
+values; CWL would instead carry the value on. The result is printed as cwltool
+prints it; a result that would need exponent notation, or a non-integral
+result bound to an `int` or `long` input, fails the task. A computed
+`valueFrom` on an optional input, or beside `separate: false`, is rejected.
+
 ## Current limits
 
 - Processes must be `CommandLineTool`-equivalent.

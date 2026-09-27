@@ -11,6 +11,7 @@ from typing import Any
 
 from .ir.artifacts import CompilationArtifact, CompilationResult
 from .ir.types import Direction, Edge, PortId, StepNode, WorkflowGraph
+from .nf_expr import check as check_safe_subset, is_safe_subset_text, parse as parse_safe_subset
 from .nf_symbols import normalize_nextflow_identifier
 from .nf_types import (
     ExecutableNextflowWorkflow,
@@ -20,6 +21,7 @@ from .nf_types import (
     NfBasenameReference,
     NfCommand,
     NfCommandToken,
+    NfComputed,
     NfConnection,
     NfFlag,
     NfInputReference,
@@ -382,10 +384,47 @@ def _shell_literal_value(
     return NfShellLiteral("".join(literal_parts))
 
 
+def _computed_value(value_from: Any, *, tool: Mapping[str, Any], field: str, integral: bool) -> NfComputed | None:
+    """Lower a safe-subset valueFrom, or return None when it is a projection or literal.
+
+    Projections keep the template lowering; any other whole-field
+    ``$( … )`` text must be a number-typed safe-subset expression.
+    """
+    if not is_safe_subset_text(value_from) or _INPUT_EXPRESSION.fullmatch(value_from.strip()):
+        return None
+    inputs = _as_mapping(tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
+    input_types = {
+        str(raw_name): definition.get("type") if isinstance(definition, Mapping) else definition
+        for raw_name, definition in inputs.items()
+    }
+    try:
+        expression = parse_safe_subset(value_from)
+        result = check_safe_subset(expression, input_types)
+    except ValueError as exc:
+        raise ValueError(f"{field} {value_from!r} is outside the safe JavaScript subset: {exc}") from exc
+    if result != "number":
+        raise ValueError(f"{field} {value_from!r} must compute a number, not a {result}")
+    authored = " ".join(value_from.split())
+    return NfComputed(expression, f"{tool.get('id', 'tool')} {field} {authored}", integral)
+
+
+def _computed_tokens(prefix: Any, value: NfComputed, *, separate: Any = True) -> tuple[NfCommandToken, ...]:
+    match prefix:
+        case None:
+            return (value,)
+        case str() as text if separate is not False:
+            return _template(text, context="CWL command prefix"), value
+        case str():
+            raise ValueError("separate: false beside a computed valueFrom is not supported")
+        case _:
+            raise ValueError("CWL command prefix must be a string")
+
+
 def _argument_items(
     arguments: list[Any],
     *,
     shell_mode: bool,
+    tool: Mapping[str, Any],
 ) -> list[tuple[tuple[int, int, int], tuple[NfCommandToken, ...]]]:
     items: list[tuple[tuple[int, int, int], tuple[NfCommandToken, ...]]] = []
     for index, argument in enumerate(arguments):
@@ -395,6 +434,12 @@ def _argument_items(
                 if argument.get("shellQuote") is False:
                     tokens: tuple[NfCommandToken, ...] = (
                         _shell_literal_value(f"arguments[{index}]", argument, shell_mode=shell_mode),
+                    )
+                elif computed := _computed_value(
+                    value_from, tool=tool, field=f"arguments[{index}].valueFrom", integral=False
+                ):
+                    tokens = _computed_tokens(
+                        argument.get("prefix"), computed, separate=argument.get("separate", True)
                     )
                 else:
                     value = _template(value_from, context="CWL argument valueFrom")
@@ -675,6 +720,7 @@ def _input_binding_items(
     inputs: Mapping[str, Any],
     *,
     shell_mode: bool,
+    tool: Mapping[str, Any],
 ) -> list[tuple[tuple[int, int, str], tuple[NfCommandToken, ...]]]:
     items: list[tuple[tuple[int, int, str], tuple[NfCommandToken, ...]]] = []
     for raw_name, definition in inputs.items():
@@ -717,6 +763,24 @@ def _input_binding_items(
                     continue
                 case _:
                     raise ValueError(f"CWL command prefix for {raw_name!r} must be a non-empty string")
+        computed = _computed_value(
+            value_from,
+            tool=tool,
+            field=f"inputs.{raw_name}.inputBinding.valueFrom",
+            integral=required_type in {"int", "long"},
+        )
+        if computed is not None:
+            if _is_optional(input_definition.get("type")):
+                # CWL omits the whole binding for an absent input; a computed
+                # token always renders, so the two would disagree.
+                raise ValueError(
+                    f"a computed valueFrom on optional input {raw_name!r} is not supported"
+                )
+            items.append((
+                (position, 1, str(raw_name)),
+                _computed_tokens(binding.get("prefix"), computed, separate=binding.get("separate", True)),
+            ))
+            continue
         value = (
             _template(value_from, context=f"CWL input {raw_name!r} valueFrom")
             if value_from is not None else NfTemplate((NfInputReference(name),))
@@ -731,8 +795,8 @@ def _command_items(tool: Mapping[str, Any]) -> tuple[NfCommandToken, ...]:
     inputs = _as_mapping(tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
     shell_mode = _requirement(tool, "ShellCommandRequirement") is not None
     ordered = sorted([
-        *_argument_items(arguments, shell_mode=shell_mode),
-        *_input_binding_items(inputs, shell_mode=shell_mode),
+        *_argument_items(arguments, shell_mode=shell_mode, tool=tool),
+        *_input_binding_items(inputs, shell_mode=shell_mode, tool=tool),
     ])
     return tuple(token for _key, tokens in ordered for token in tokens)
 
@@ -2251,7 +2315,8 @@ def _safe_absence_names(tool: Mapping[str, Any]) -> set[str] | None:
         }
     except ValueError:
         return None
-    unsafe = plain | basenamed | shell_literal_names
+    computed = {name for token in command.tokens if isinstance(token, NfComputed) for name in token.names}
+    unsafe = plain | basenamed | shell_literal_names | computed
     return all_names - unsafe
 
 

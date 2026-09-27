@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .nf_expr import NF_EXPRESSION_FUNCTIONS, NF_NUMBER_TEXT_HELPER, render_groovy
 from .nf_types import (
     ExecutableNextflowWorkflow,
     NF_LOAD_CONTENTS_HELPER,
@@ -21,6 +22,7 @@ from .nf_types import (
     NfProcess,
     NfProcessConnection,
     NfShellLiteral,
+    NfComputed,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
     process_dependencies,
@@ -126,8 +128,22 @@ def _render_shell_literal(token: NfShellLiteral) -> str:
     return _groovy_gstring_fragment(token.text)
 
 
+def _render_computed(token: NfComputed) -> str:
+    """Render one safe-subset argv word through its fixed Groovy idiom."""
+    inputs = "[" + ", ".join(f"{name}: {name}" for name in sorted(token.names)) + "]"
+    if inputs == "[]":
+        inputs = "[:]"
+    where = _groovy_literal(token.where)
+    expression = render_groovy(token.expression, where=token.where, inputs=inputs)
+    integral = "true" if token.integral else "false"
+    text = f"{NF_NUMBER_TEXT_HELPER}({expression}, {integral}, {where}, {inputs})"
+    return f"${{{NF_SHELL_QUOTE_HELPER}({text})}}"
+
+
 def _render_command_token(token: Any) -> str:
     """Render one argv token; flags and array bindings collapse away when falsy/empty."""
+    if isinstance(token, NfComputed):
+        return _render_computed(token)
     if isinstance(token, NfFlag):
         quoted = f"{NF_SHELL_QUOTE_HELPER}({_groovy_literal(token.prefix)})"
         return f"${{{token.name} ? {quoted} : ''}}"
@@ -428,6 +444,12 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
         for port in process.outputs
     ):
         sections.append(NF_LOAD_CONTENTS_FUNCTION)
+    if any(
+        isinstance(token, NfComputed)
+        for process in workflow.processes
+        for token in process.command.tokens
+    ):
+        sections.append(NF_EXPRESSION_FUNCTIONS)
     sections.extend(_render_process(process) for process in workflow.processes)
     sections.append(_render_named_workflow(workflow))
     arguments = ",\n        ".join(
