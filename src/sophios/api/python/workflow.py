@@ -113,17 +113,6 @@ def _python_api_types_match(parameter_type: Any, candidate_type: Any) -> bool:
                 and proven_disjoint({'type': 'array', 'items': parameter_type}))
 
 
-def _parameter_namespace(
-    store: ParameterStore[Any],
-    getter: Any,
-    setter: Any,
-    *,
-    read_only_error: str,
-) -> ParameterNamespace[Any, Any]:
-    """Create the list-like attribute proxy used for ``.inputs`` and ``.outputs``."""
-    return ParameterNamespace(store, getter, setter, read_only_error=read_only_error)
-
-
 def _resolve_parameter_type(
     parameter: InputParameter | OutputParameter,
     candidate_type: Any,
@@ -452,12 +441,12 @@ class Step(_ProcessBase):
         object.__setattr__(
             self,
             "inputs",
-            _parameter_namespace(self._inputs, self._get_input, self.bind_input, read_only_error=""),
+            ParameterNamespace(self._inputs, self._get_input, self.bind_input, read_only_error=""),
         )
         object.__setattr__(
             self,
             "outputs",
-            _parameter_namespace(
+            ParameterNamespace(
                 self._outputs,
                 self.get_output,
                 None,
@@ -637,7 +626,7 @@ class Workflow(_ProcessBase):
         object.__setattr__(
             self,
             "inputs",
-            _parameter_namespace(
+            ParameterNamespace(
                 self._inputs,
                 self._input_reference,
                 self._bind_input_from_namespace,
@@ -647,7 +636,7 @@ class Workflow(_ProcessBase):
         object.__setattr__(
             self,
             "outputs",
-            _parameter_namespace(
+            ParameterNamespace(
                 self._outputs,
                 self.add_output,
                 self._bind_output_from_namespace,

@@ -62,12 +62,6 @@ class _CWLParameterDefinition(Protocol):  # pylint: disable=too-few-public-metho
     type_: Any
 
 
-def _parameter_name(parameter_id: Any) -> str:
-    """Normalize a CWL parameter id to its public parameter name."""
-    text = str(parameter_id)
-    return text.rsplit("#", maxsplit=1)[-1].rsplit("/", maxsplit=1)[-1]
-
-
 def coerce_path(value: str | Path | None, *, field_name: str, allow_none: bool = False) -> Path | None:
     """Normalize string-like path input to `Path`. `field_name` names the
     parameter in the `TypeError` the last branch raises."""
@@ -112,39 +106,6 @@ def lookup_parameter(
         raise AttributeError(f"{owner_name!r} has no {kind} named {name!r}") from exc
 
 
-def _validate_scatter_assignment(items: list[Any], owner: Any | None = None) -> None:
-    """Validate `scatter` assignments on a step."""
-    if not all(isinstance(item, InputParameter) for item in items):
-        raise TypeError("all scatter inputs must be InputParameter type")
-    if len({id(item) for item in items}) != len(items):
-        raise ValueError("scatter inputs must be unique")
-    if owner is None:
-        return
-    for item in items:
-        if item.parent_obj is not owner:
-            raise ValueError("scatter inputs must belong to the same step")
-        if not item.is_bound():
-            raise ValueError("scatter inputs must be bound before scattering")
-        if not item.is_scatterable():
-            raise ValueError("scatter inputs must be bound to array-valued data")
-
-
-def _validate_scatter_method_assignment(scatter_method: str) -> None:
-    """Validate the `scatterMethod` special step attribute."""
-    allowed = {member.value for member in ScatterMethod}
-    if scatter_method not in allowed:
-        raise ValueError(
-            "Invalid value for scatterMethod. "
-            f"Valid values are: {', '.join(sorted(allowed))}"
-        )
-
-
-def _validate_when_assignment(condition: str) -> None:
-    """Validate the `when` JavaScript expression wrapper."""
-    if not condition.startswith("$(") or not condition.endswith(")"):
-        raise ValueError("Invalid input to when. The js string must start with '$(' and end with ')'")
-
-
 def validate_step_assignment(name: str, value: Any, *, owner: Any | None = None) -> None:
     """Validate assignments to special step attributes.
 
@@ -162,13 +123,30 @@ def validate_step_assignment(name: str, value: Any, *, owner: Any | None = None)
     """
     match name, value:
         case "scatter", list() as items:
-            _validate_scatter_assignment(items, owner=owner)
+            if not all(isinstance(item, InputParameter) for item in items):
+                raise TypeError("all scatter inputs must be InputParameter type")
+            if len({id(item) for item in items}) != len(items):
+                raise ValueError("scatter inputs must be unique")
+            if owner is not None:
+                for item in items:
+                    if item.parent_obj is not owner:
+                        raise ValueError("scatter inputs must belong to the same step")
+                    if not item.is_bound():
+                        raise ValueError("scatter inputs must be bound before scattering")
+                    if not item.is_scatterable():
+                        raise ValueError("scatter inputs must be bound to array-valued data")
         case "scatter", invalid if invalid:
             raise TypeError("scatter must be assigned a list of InputParameter values")
         case "scatterMethod", str() as scatter_method if scatter_method:
-            _validate_scatter_method_assignment(scatter_method)
+            allowed = {member.value for member in ScatterMethod}
+            if scatter_method not in allowed:
+                raise ValueError(
+                    "Invalid value for scatterMethod. "
+                    f"Valid values are: {', '.join(sorted(allowed))}"
+                )
         case "when", str() as condition if condition:
-            _validate_when_assignment(condition)
+            if not condition.startswith("$(") or not condition.endswith(")"):
+                raise ValueError("Invalid input to when. The js string must start with '$(' and end with ')'")
         case "when", invalid if invalid:
             raise ValueError("Invalid input to when. The js string must start with '$(' and end with ')'")
 
@@ -192,7 +170,8 @@ def populate_parameters(
         None: The destination store is populated in place.
     """
     for parameter in cwl_parameters:
-        store.add(parameter_cls(_parameter_name(parameter.id), parameter.type_, parent_obj=parent))
+        name = str(parameter.id).rsplit("#", maxsplit=1)[-1].rsplit("/", maxsplit=1)[-1]
+        store.add(parameter_cls(name, parameter.type_, parent_obj=parent))
 
 
 def load_clt(clt_path: Path, tool_registry: Tools) -> tuple[CWLCommandLineTool, dict[str, Any]]:
@@ -405,21 +384,11 @@ def write_workflow_wic(
     return output_path
 
 
-def _extract_tools_paths_nonportable(steps: list["Step"]) -> Tools:
-    """Extract concrete tool definitions from instantiated steps."""
-    return {StepId(step.process_name, "global"): Tool(str(step.clt_path), step.yaml) for step in steps}
-
-
-def _step_registries(steps: list["Step"]) -> Tools:
-    merged_tools: Tools = {}
+def _merged_known_tools(steps: list["Step"], tool_registry: Tools | None = None) -> Tools:
+    """Merge known tools: step tools, then step registries, then the explicit registry."""
+    merged_tools: Tools = {StepId(step.process_name, "global"): Tool(str(step.clt_path), step.yaml) for step in steps}
     for step in steps:
         merged_tools.update(step._tool_registry)
-    return merged_tools
-
-
-def _merged_known_tools(steps: list["Step"], tool_registry: Tools | None = None) -> Tools:
-    merged_tools = dict(_extract_tools_paths_nonportable(steps))
-    merged_tools.update(_step_registries(steps))
     if tool_registry is not None:
         merged_tools.update(tool_registry)
     return merged_tools
@@ -514,26 +483,6 @@ def compiled_workflow(
     return compiled_workflow_from_result(workflow, result)
 
 
-def effective_run_args(run_args_dict: dict[str, str] | None = None) -> dict[str, str]:
-    """Merge user runtime arguments with the default local-run settings.
-
-    Args:
-        run_args_dict (dict[str, str] | None): User-supplied runtime overrides.
-
-    Returns:
-        dict[str, str]: Effective runtime argument mapping.
-    """
-    effective = dict(DEFAULT_RUN_ARGS)
-    if run_args_dict:
-        effective.update(run_args_dict)
-    return effective
-
-
-def _run_arg_enabled(value: Any) -> bool:
-    """Return whether a yes/no style runtime option is enabled."""
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-
 def run_workflow(
     workflow: "Workflow",
     *,
@@ -557,7 +506,7 @@ def run_workflow(
     logger.info("Running %s", workflow.process_name)
     plugins.logging_filters()
 
-    resolved_run_args = effective_run_args(run_args_dict)
+    resolved_run_args = {**DEFAULT_RUN_ARGS, **(run_args_dict or {})}
     result = compile_workflow_result(workflow, tool_registry=tool_registry)
     artifact = pc.inline_artifact_runs(result.artifact)
     pc.verify_container_engine_config(resolved_run_args["container_engine"], False)
@@ -572,7 +521,7 @@ def run_workflow(
         resolved_run_args["pull_dir"],
         Path(basepath) / f"{workflow.process_name}.cwl",
     )
-    if _run_arg_enabled(resolved_run_args.get("docker_remove_entrypoints")):
+    if str(resolved_run_args.get("docker_remove_entrypoints")).strip().lower() in {"1", "true", "yes", "on"}:
         artifact = pc.remove_artifact_entrypoints(
             resolved_run_args["container_engine"], artifact)
     user_args = convert_args_dict_to_args_list(
