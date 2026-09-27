@@ -28,7 +28,7 @@ class _Captured(Exception):
 def test_rerun_cwltool_builds_an_id_form_step(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
         cwl_tool: str, config: Yaml) -> None:
-    """`rerun_cwltool` builds a step `get_steps_keys` can read back, on both branches.
+    """`rerun_cwltool` builds a step whose `id` can be read back, on both branches.
 
     Asserting on literals copied into the test proves nothing about the code:
     the documents are built inside `rerun_cwltool`, so the test has to get them

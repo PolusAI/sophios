@@ -326,7 +326,6 @@ def _project_graph(graph: WorkflowGraph, names: Names, settings: GraphSettings,
     reps.graphdata.nodes = []
     reps.graphdata.edges = []
     reps.graphdata.subgraphs = []
-    reps.graphdata.ranksame = []
     for step in graph.steps:
         assert step.emission is not None
         name = names.qualified(step.id)

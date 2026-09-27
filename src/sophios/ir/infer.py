@@ -6,6 +6,7 @@ from typing import Any
 from ..lang import SophiosErrorCode
 from ..lang.diagnostics import Diagnostics
 from .declarations import boundary_declaration, port_declaration
+from .link import attach_step_children
 from .resolve import RegistrySnapshot
 from .types import (
     AuthoredName,
@@ -125,7 +126,8 @@ def _infer_tree(graph: WorkflowGraph, policy: InferencePolicy,
         children.append(inferred_child)
         if inserted:
             return replace(graph, children=tuple(children) + graph.children[len(children):]), True
-    current = _attach_children(replace(graph, children=tuple(children)))
+    graph_with_children = replace(graph, children=tuple(children))
+    current = attach_step_children(graph_with_children, graph_with_children.children)
     current = _propagate_child_interface(current)
     if policy.disabled:
         return current, False
@@ -347,20 +349,6 @@ def _exported_outputs(
             ), output.origin or output.id)
     return tuple((name, declaration, origin)
                  for name, (declaration, origin) in exported.items())
-
-
-def _attach_children(graph: WorkflowGraph) -> WorkflowGraph:
-    by_name = {child.namespace.parts[-1]: child for child in graph.children
-               if child.namespace.parts}
-    steps = tuple(
-        replace(step, emission=replace(
-            step.emission,
-            run=replace(step.emission.run,
-                        child=by_name.get(step.id, step.emission.run.child))))
-        if step.emission is not None else step
-        for step in graph.steps
-    )
-    return replace(graph, steps=steps)
 
 
 def _set_emission_input(step: StepNode, name: PortName, value: EmittedValue) -> StepNode:

@@ -296,8 +296,8 @@ def documents(draw: st.DrawFn) -> Document:
                          for stem in stems]
 
     # A subworkflow step, drawn sometimes. Its id is what makes it one:
-    # `get_subkeys` recognises a subworkflow by the `.wic` suffix and nothing
-    # else (src/sophios/utils.py:145-155). The body lives in `subtree`, which
+    # a subworkflow is recognised by the `.wic` suffix and nothing else.
+    # The body lives in `subtree`, which
     # the AST has no field for, so `to_yml` attaches it after rendering.
     if bool(steps) and draw(st.booleans()):
         steps.append(Step(id=f'sub{len(steps)}.wic', span=_SPAN))
@@ -519,8 +519,8 @@ def to_yml_with_freight(document: Document, step_index: int, freight: dict[str, 
 def partitionings(draw: st.DrawFn, steps: int) -> tuple[tuple[int, ...], ...]:
     """A contiguous grouping of `range(steps)`.
 
-    Contiguous because that is what a subworkflow is: `get_subkeys` splits a
-    step list at a `.wic` id, and the steps a subworkflow contains are the ones
+    Contiguous because that is what a subworkflow is: a step list splits at a
+    `.wic` id, and the steps a subworkflow contains are the ones
     written inside its file. A non-contiguous 'partitioning' is not expressible
     in the language, so generating one would test nothing.
     """

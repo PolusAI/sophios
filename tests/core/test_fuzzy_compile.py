@@ -81,8 +81,8 @@ class TestFuzzyCompile(unittest.TestCase):
         validator = registry.validator
         plugin_ns = 'global'
         yml_path = Path('random_stepid')
-        steps_keys = sophios.utils.get_steps_keys(yml.get('steps', []))
-        subkeys = sophios.utils.get_subkeys(steps_keys)
+        subkeys = [sd.get('id', '') for sd in yml.get('steps', [])
+                   if isinstance(sd, dict) and sd.get('id', '').endswith('.wic')]
         if subkeys:
             # NOTE: Since all filepaths are currently relative w.r.t. --yaml,
             # we need to supply a fake --yaml. Using [0] works because we are

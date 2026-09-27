@@ -4,24 +4,6 @@ from typing import Any
 from .wic_types import Yaml
 
 
-def get_steps_keys(steps: list[Yaml]) -> list[str]:
-    """Returns the name (dict key) of each step in the given CWL workflow
-
-    Args:
-        steps (list[Yaml]): The steps: tag of a CWL workflow
-
-    Returns:
-        list[str]: The name of each step in the given CWL workflow
-    """
-    steps_keys = []
-    for step_dict in steps:
-        if isinstance(step_dict, dict):
-            steps_keys.append(step_dict.get('id', ''))
-        else:
-            steps_keys.append('')
-    return steps_keys
-
-
 def require_step_id(step_dict: Yaml, context: str = "step") -> str:
     """Return a validated step id from a step dictionary.
 
@@ -43,19 +25,6 @@ def require_step_id(step_dict: Yaml, context: str = "step") -> str:
         raise ValueError(
             'Error! Each step dictionary must contain a non-empty string id: tag.')
     return step_id
-
-
-def get_subkeys(steps_keys: list[str]) -> list[str]:
-    """This function determines which step keys are associated with subworkflows.\n
-    This is critical for the control flow in many areas of the compiler.
-
-    Args:
-        steps_keys (list[str]): All of the step keys for the current workflow.
-
-    Returns:
-        list[str]: The list of step keys associated with subworkflows of the current workflow.
-    """
-    return [key for key in steps_keys if key and key.endswith('.wic')]
 
 
 def flatten(lists: list[list[Any]]) -> list[Any]:

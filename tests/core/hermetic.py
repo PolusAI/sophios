@@ -82,5 +82,5 @@ def subworkflow_step(stem: str, subtree: Yaml) -> Yaml:
     partitioned workflow exist without a file on disk, which is what makes partition independence
     hermetic.
     """
-    assert stem.endswith('.wic'), 'get_subkeys recognises a subworkflow by suffix only'
+    assert stem.endswith('.wic'), 'a subworkflow step is recognised by its .wic suffix only'
     return {'id': stem, 'subtree': subtree, 'parentargs': {}}

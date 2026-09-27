@@ -163,6 +163,16 @@ def _reject_if_disjoint(graph: WorkflowGraph, edge: Edge,
 
 def _attach_children(graph: WorkflowGraph) -> WorkflowGraph:
     children = tuple(_attach_children(child) for child in graph.children)
+    return attach_step_children(graph, children)
+
+
+def attach_step_children(graph: WorkflowGraph,
+                         children: tuple[WorkflowGraph, ...]) -> WorkflowGraph:
+    """Attach ``children`` to the steps that call them, at this level only.
+
+    Shared by Link (which recurses itself, see ``_attach_children`` above)
+    and Infer (whose own tree walk already recursed before calling this).
+    """
     by_namespace = {child.namespace.parts[-1]: child for child in children
                     if child.namespace.parts}
     steps: list[StepNode] = []
