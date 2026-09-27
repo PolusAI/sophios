@@ -314,8 +314,8 @@ are rejected with a diagnostic naming the reason.
 Every other `outputEval` text is rejected. `.dirname` and `.path` are
 rejected permanently rather than pending: a produced file's directory here is
 the Nextflow task work directory, which is never the directory the CWL author
-described, so a mapping would run and quietly mean something else. Evaluating
-CWL JavaScript in any form is ruled out by design, so a tool may declare
+described, so a mapping would run and quietly mean something else. Arbitrary
+CWL JavaScript is ruled out by design, so a tool may declare
 `InlineJavascriptRequirement` and still be supported as long as it uses only
 approved forms.
 
