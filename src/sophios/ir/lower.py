@@ -9,27 +9,31 @@ READS THE AST AND NOTHING ELSE -- no registry, no filesystem, no config.
 Resolving a step's tool against the environment is `Resolve`'s job, so a port's
 type is what the document declared and inference has not run.
 """
+from collections.abc import Iterator
 from typing import Final
 from dataclasses import dataclass
 
 from ..lang.cwl import CWL_VERSION
 from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.error_codes import SophiosErrorCode
-from ..lang.nodes import Document, EdgeRef, InputValue, UnresolvedName
+from ..lang.nodes import Document, EdgeRef, InputValue, OpaqueCwl, UnresolvedName
 from ..lang.versions import (ANNOTATION_KEY, ANNOTATION_NAMESPACE,
                              ANNOTATION_NAMESPACE_URI)
 from .declarations import port_declaration
+from .names import Names, render_step_id
 from .resolve import ResolvedDocument, ResolvedStep
 from .types import (
+    AuthoredName,
     Binding,
     BoundaryDeclaration,
     DeferredObligation,
+    DerivedName,
     Direction,
     Edge,
-    emitted_step_id,
     Namespace,
     Port,
     PortId,
+    PortName,
     ProcessRun,
     Resolution,
     StepEmission,
@@ -91,17 +95,18 @@ def _lower_resolved(document: ResolvedDocument,
     children: list[WorkflowGraph] = []
 
     for identity, resolved_step in zip(identities, document.steps, strict=True):
-        node = _resolved_step_node(document.name, identity, resolved_step,
+        # Lowered before its step, which may scatter over the child's boundary.
+        child = (_lower_resolved(resolved_step.process.child, here.child(identity))
+                 if resolved_step.process.child is not None else None)
+        node = _resolved_step_node(identity, resolved_step, child.graph if child is not None else None,
                                    defined_so_far, defined_anywhere, diagnostics)
         nodes.append(node)
         for authored in resolved_step.source.outputs:
             if authored.edge_def is not None:
                 defined_so_far.setdefault(
                     authored.edge_def.name,
-                    PortId(identity, Direction.OUTPUT, authored.name))
-        if resolved_step.process.child is not None:
-            child_namespace = here.child(node.emission.id if node.emission is not None else identity.name)
-            child = _lower_resolved(resolved_step.process.child, child_namespace)
+                    PortId(identity, Direction.OUTPUT, AuthoredName(authored.name)))
+        if child is not None:
             if child.graph is not None:
                 children.append(child.graph)
             for diagnostic in child.diagnostics:
@@ -119,7 +124,7 @@ def _lower_resolved(document: ResolvedDocument,
     output_mapping = tuple(
         (port.name, source)
         for port in workflow_outputs
-        for source in [_output_port(nodes, port.output_source)]
+        for source in [_output_port(document.name, nodes, port.output_source)]
         if source is not None
     )
     namespaces_raw = passthrough.get('$namespaces', {})
@@ -183,12 +188,12 @@ def _lower_resolved(document: ResolvedDocument,
 _GENERATION_PARAMETERS: Final = ('script', 'dockerPull')
 
 
-def _resolved_step_node(workflow_name: str, identity: StepId, resolved: ResolvedStep,
+def _resolved_step_node(identity: StepId, resolved: ResolvedStep, child: WorkflowGraph | None,
                         defined_so_far: dict[str, PortId], defined_anywhere: dict[str, PortId],
                         diagnostics: Diagnostics) -> StepNode:
     source = resolved.source
-    declared_inputs = {port.name: port.declaration for port in resolved.process.inputs}
-    declared_outputs = {port.name: port.declaration for port in resolved.process.outputs}
+    declared_inputs = {AuthoredName(port.name): port.declaration for port in resolved.process.inputs}
+    declared_outputs = {AuthoredName(port.name): port.declaration for port in resolved.process.outputs}
     # A generated process consumes its generation parameters rather than
     # declaring them: `script` becomes the command and `dockerPull` a container
     # hint, so neither survives into the tool's interface. The document still
@@ -219,12 +224,11 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
                          declaration, source.span)
                     for name, declaration in declared_outputs.items())
     by_input = {port.id.port: port for port in inputs}
-    bindings = tuple(Binding(by_input[name].id, value,
-                             _resolve(value, by_input[name], defined_so_far,
-                                      defined_anywhere, diagnostics))
-                     for name, value in source.inputs if name in by_input)
+    bindings = tuple(Binding(port.id, value,
+                             _resolve(value, port, defined_so_far, defined_anywhere, diagnostics))
+                     for name, value in source.inputs
+                     if (port := by_input.get(AuthoredName(name))) is not None)
     interpreted = dict(source.interpreted)
-    emitted_id = emitted_step_id(workflow_name, identity.index, source.id)
     field_order = list(source.field_order)
     if 'id' in field_order:
         field_order.remove('id')
@@ -233,7 +237,6 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
         if key not in field_order:
             field_order.append(key)
     emission = StepEmission(
-        id=emitted_id,
         # Empty, deliberately. Every authored input naming a declared port
         # becomes a `Binding` above, and Complete writes each one: a literal to
         # a workflow input, a raw reference to its expression, a name to
@@ -244,6 +247,7 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
         run=ProcessRun(resolved.process.run_path, resolved.process.key),
         outputs=tuple(declared_outputs),
         scatter=interpreted.get('scatter'),
+        scatter_ports=_scatter_ports(interpreted.get('scatter'), inputs, child),
         scatter_method=interpreted.get('scatterMethod'),
         when=interpreted.get('when'),
         passthrough=source.passthrough,
@@ -252,6 +256,34 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
     return StepNode(identity, inputs, outputs, bindings, source.interpreted,
                     source.passthrough, source.span, emission,
                     _inference_rules(resolved.sidecar))
+
+
+def _scatter_ports(scatter: OpaqueCwl, inputs: tuple[Port, ...],
+                   child: WorkflowGraph | None) -> tuple[PortName, ...]:
+    """The ports an authored `scatter:` names, in the order written.
+
+    A name is the step's own input, or else the rendered spelling of a boundary
+    input its subworkflow exposes -- recognized by rendering every candidate,
+    never by taking the text apart. Anything else stays the authored name.
+    """
+    written: list[object] = [scatter] if isinstance(scatter, str) else (
+        list(scatter) if isinstance(scatter, list) else [])
+    own = {port.id.port for port in inputs}
+    derived: dict[str, PortName] = {}
+    if child is not None:
+        names = Names.of(child)
+        derived = {names.port(candidate): candidate for candidate in _exposed_inputs(child)}
+    return tuple(AuthoredName(text) if text in own else derived.get(text, AuthoredName(text))
+                 for text in written if isinstance(text, str))
+
+
+def _exposed_inputs(graph: WorkflowGraph) -> Iterator[DerivedName]:
+    """Every input `graph` can expose one level up, through any depth of nesting."""
+    for step in graph.steps:
+        yield from (DerivedName(step.id, port.id.port) for port in step.inputs)
+        for nested in graph.children:
+            if nested.namespace.parts[-1] == step.id:
+                yield from (DerivedName(step.id, name) for name in _exposed_inputs(nested))
 
 
 def _workflow_ports(raw: object, *, output: bool) -> tuple[WorkflowPort, ...]:
@@ -268,18 +300,23 @@ def _workflow_ports(raw: object, *, output: bool) -> tuple[WorkflowPort, ...]:
         has_source = output and isinstance(declaration_raw, dict) \
             and 'outputSource' in declaration_raw
         source = declaration_raw.get('outputSource') if has_source else None
-        ports.append(WorkflowPort(str(name), declaration, source, has_source))
+        ports.append(WorkflowPort(AuthoredName(str(name)), declaration, source, has_source))
     return tuple(ports)
 
 
-def _output_port(nodes: list[StepNode], raw: object) -> PortId | None:
+def _output_port(workflow_name: str, nodes: list[StepNode], raw: object) -> PortId | None:
+    """The step output an authored `outputSource: <step>/<port>` names, if any.
+
+    `<step>` may be the authored step name or the id the step will be emitted
+    under, so the latter is rendered to compare against -- never taken apart.
+    """
     if not isinstance(raw, str) or '/' not in raw:
         return None
     step_name, port_name = raw.rsplit('/', 1)
-    for node in nodes:
-        emitted = node.emission.id if node.emission is not None else node.id.name
-        if step_name in {emitted, node.id.name}:
-            return next((port.id for port in node.outputs if port.id.port == port_name), None)
+    for position, node in enumerate(nodes, start=1):
+        if step_name in {render_step_id(workflow_name, position, node.id.name), node.id.name}:
+            return next((port.id for port in node.outputs
+                         if port.id.port == AuthoredName(port_name)), None)
     return None
 
 
@@ -380,7 +417,7 @@ def _edge_definitions(identities: tuple[StepId, ...], document: Document,
                     f"'&{name}' is defined more than once. An edge name identifies one producer.",
                     binding.edge_def.span)
                 continue
-            defined[name] = PortId(step_id, Direction.OUTPUT, binding.name)
+            defined[name] = PortId(step_id, Direction.OUTPUT, AuthoredName(binding.name))
     return defined
 
 

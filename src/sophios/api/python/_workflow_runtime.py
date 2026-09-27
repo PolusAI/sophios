@@ -19,11 +19,12 @@ from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
 from sophios import compiler, input_output, plugins, post_compile as pc, run_local as rl
-from sophios.ir.artifacts import CompilationArtifact, CompilationResult
+from sophios.ir.artifacts import CompilationResult
+from sophios.ir.names import render_step_id
 from sophios.input_output import dump_wic_yaml as _dump_yaml
 from sophios.cli import default_compilation_settings, get_known_and_unknown_args
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
-from sophios.utils import convert_args_dict_to_args_list, step_name_str
+from sophios.utils import convert_args_dict_to_args_list
 from sophios.utils_graphs import get_graph_reps
 from sophios.wic_types import StepId, Tool, Tools, YamlTree
 
@@ -301,12 +302,12 @@ def workflow_document(
     # Keyed by object identity, not by process_name: a step renamed after an
     # output was bound to it still is the step the output names.
     compiled_step_ids = {
-        id(step): step_name_str(
+        id(step): render_step_id(
             stem,
             index,
             f"{step.process_name}.wic" if isinstance(step, Workflow) else step.process_name,
         )
-        for index, step in enumerate(workflow.steps)
+        for index, step in enumerate(workflow.steps, start=1)
     }
 
     workflow_outputs: dict[str, dict[str, Any]] = {}
@@ -465,13 +466,6 @@ def compile_workflow_result(
     return result
 
 
-def runtime_artifact(workflow: "Workflow", *,
-                     tool_registry: Tools | None = None) -> CompilationArtifact:
-    """Compile and embed the graph-derived artifacts for local execution."""
-    result = compile_workflow_result(workflow, tool_registry=tool_registry)
-    return pc.inline_artifact_runs(result.artifact)
-
-
 def compiled_workflow_from_result(
     workflow: "Workflow",
     result: CompilationResult,
@@ -564,7 +558,8 @@ def run_workflow(
     plugins.logging_filters()
 
     resolved_run_args = effective_run_args(run_args_dict)
-    artifact = runtime_artifact(workflow, tool_registry=tool_registry)
+    result = compile_workflow_result(workflow, tool_registry=tool_registry)
+    artifact = pc.inline_artifact_runs(result.artifact)
     pc.verify_container_engine_config(resolved_run_args["container_engine"], False)
     input_output.write_artifacts_to_disk(
         artifact,
@@ -593,4 +588,5 @@ def run_workflow(
         basepath=basepath,
         passthrough_args=unknown_args,
         user_env_vars=dict(user_env_vars or {}),
+        output_directories=rl.output_directories(result.graph),
     )

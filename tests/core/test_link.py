@@ -19,6 +19,7 @@ from sophios.ir import (
     link,
 )
 from sophios.ir.complete import complete
+from sophios.ir.types import AuthoredName
 from sophios.lang import SophiosErrorCode
 from sophios.wic_types import StepId as LegacyStepId, Tool, Yaml
 
@@ -356,7 +357,7 @@ steps:
     child_step = child_graph.steps[0]
     assert wrapper.bindings == ()
     assert child_step.inputs and child_step.bindings
-    assert dict(child_graph.input_mapping)['name'] == (child_step.inputs[0].id,)
+    assert dict(child_graph.input_mapping)[AuthoredName('name')] == (child_step.inputs[0].id,)
 
 
 @pytest.mark.fast

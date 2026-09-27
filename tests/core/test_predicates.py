@@ -17,6 +17,7 @@ Three claims live here:
 See design_docs/core-refactor-design.md §6.2.
 """
 import copy
+from pathlib import PurePosixPath
 from typing import Any
 
 import pytest
@@ -24,22 +25,29 @@ from hypothesis import given
 
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.utils import parse_step_name_str, step_name_str
 from sophios.ir import InferencePolicy, Namespace, WorkflowGraph, infer
+from sophios.ir.artifacts import CompilationResult
+from sophios.ir.names import Names
+from sophios.ir.types import AuthoredName, DerivedName
 from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
 from .hermetic import ORACLE, compile_hermetic, compile_hermetic_cwl
 from .reference_model import ReferenceExpectation, reference_expectation
-from .synthetic_tools import inputs_of, outputs_of
+from .synthetic_tools import STEMS, inputs_of, outputs_of
 
 # --------------------------------------------------------------------------
 # Namespace injectivity
 # --------------------------------------------------------------------------
 
 
-def _expected_port_names(yml: Yaml, stem: str) -> list[str]:
-    """Every namespaced output name this workflow should produce.
+def _expected_port_names(yml: Yaml, compiled: CompilationResult) -> dict[str, list[str]]:
+    """The emitted spelling of every port this workflow should expose, per section.
+
+    `inputs` holds the workflow input each inline literal (`wic_inline_input`)
+    becomes, `outputs` each registry step's outputs. They are kept apart
+    because they are separate namespaces: a tool may name an input and an
+    output alike.
 
     Rebuilt from the AST and the registry rather than read back from the
     compiled document, and that direction is the whole point: a collision is
@@ -47,16 +55,40 @@ def _expected_port_names(yml: Yaml, stem: str) -> list[str]:
     invisible — the document simply has one fewer key than it should, and
     nothing in it says which one went missing.
 
-    Mirrors `docs/dev/algorithms.md`: a namespace segment is
-    `step_name_str(stem, i, key)` and a port is the segments joined with
-    `'___'`.
+    Only the step occurrences are taken from the compiled graph. Each port is
+    a structural `DerivedName`, so each list is distinct by construction and a
+    duplicate in its rendering is `Names` spelling two identities alike.
     """
-    return [
-        f'{step_name_str(stem, index, str(step["id"]))}___{out_key}'
-        for index, step in enumerate(yml['steps'])
-        if not str(step['id']).endswith('.wic')
-        for out_key in outputs_of(str(step['id']))
-    ]
+    steps = compiled.graph.steps
+    assert [step.id.name for step in steps] == [str(step['id']) for step in yml['steps']], (
+        'the compiled graph no longer lists the authored steps in order')
+    names = Names.of(compiled.graph)
+    tools = [(node.id, step) for node, step in zip(steps, yml['steps'])
+             if not str(step['id']).endswith('.wic')]
+    return {
+        'inputs': [names.port(DerivedName(identity, AuthoredName(key)))
+                   for identity, step in tools
+                   for key, value in (step.get('in') or {}).items()
+                   if isinstance(value, dict) and 'wic_inline_input' in value],
+        'outputs': [names.port(DerivedName(identity, AuthoredName(key)))
+                    for identity, step in tools for key in outputs_of(str(step['id']))],
+    }
+
+
+def _assert_every_port_survives(yml: Yaml, compiled: CompilationResult) -> None:
+    """Each expected port renders uniquely and is a key of its emitted section."""
+    cwl = compiled.artifact.cwl
+    for section, expected in _expected_port_names(yml, compiled).items():
+        duplicates = sorted({name for name in expected if expected.count(name) > 1})
+        assert not duplicates, f'two distinct {section} namespace to the same string: {duplicates}'
+        missing = sorted(set(expected) - set(cwl.get(section) or {}))
+        assert not missing, f'namespaced {section} were dropped or overwritten: {missing}'
+
+
+def _refuses_no_collision(error: SophiosError) -> None:
+    """A diagnosed workflow may be skipped, but not one refused for a collision."""
+    assert all(diagnostic.code is not SophiosErrorCode.DUPLICATE_DOCUMENT_NAME
+               for diagnostic in error.diagnostics), f'two distinct ports rendered alike: {error}'
 
 
 @pytest.mark.skip_pypi_ci
@@ -67,54 +99,42 @@ def test_distinct_ports_never_collide_after_namespacing(yml: Yaml) -> None:
     """Every port a workflow has survives namespacing under its own name.
 
     BLIND SPOTS: quantifies over the stems in the synthetic registry, none of
-    which contain `__` — the separator `step_name_str` joins on. The
-    workflow-stem half of that gap is covered by the parametrised test below,
-    which supplies stems containing both separators directly. Subworkflow
-    steps are skipped: their ports come from the subtree, so reconstructing
-    them independently would mean recursing through it, and the relative
-    namespacing that governs them is what the `split` rewrite
+    which contain `__`. The workflow-stem half of that gap is covered by the
+    parametrised test below, which supplies stems containing both separators
+    directly. Subworkflow steps are skipped: their ports come from the subtree,
+    so reconstructing them independently would mean recursing through it, and
+    the relative namespacing that governs them is what the `split` rewrite
     already quantifies over. A workflow the compiler *diagnoses* is skipped
-    rather than failed: this claim is about the ports a successful compilation
-    produces, and a rejected document has none.
+    rather than failed — this claim is about the ports a successful
+    compilation produces — unless the diagnosis is `wic031`, which is this
+    claim failing at Emit rather than here.
     """
     try:
-        compiled = compile_hermetic_cwl(copy.deepcopy(yml), 'ns')
-    except SophiosError:
+        compiled = compile_hermetic(copy.deepcopy(yml), 'ns')
+    except SophiosError as error:
+        _refuses_no_collision(error)
         return  # a diagnosed workflow has no ports to collide; see BLIND SPOTS
-    expected = _expected_port_names(yml, 'ns')
-
-    duplicates = sorted({name for name in expected if expected.count(name) > 1})
-    assert not duplicates, f'two distinct ports namespace to the same string: {duplicates}'
-
-    emitted = set(compiled.get('inputs', {})) | set(compiled.get('outputs', {}))
-    missing = sorted(set(expected) - emitted)
-    assert not missing, f'namespaced ports were dropped or overwritten: {missing}'
+    _assert_every_port_survives(yml, compiled)
 
 
 @pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @pytest.mark.parametrize('stem', ['ns', 'a__b', 'x___y'], ids=['plain', 'double', 'triple'])
 def test_injectivity_survives_a_workflow_name_containing_the_separators(stem: str) -> None:
-    """`step_name_str` joins on `__` and ports join on `___`.
+    """Steps render as `{workflow}__step__{i}__{name}` and ports join on `___`.
 
-    Its docstring states the precondition — "as long as yaml_stem and step_key
-    do not contain `__`" — and nothing enforces it. A workflow named `a__b` is
-    a legal filename, so the precondition is reachable from ordinary use.
-    Either injectivity holds anyway, or this finds the collision; both are
-    results worth having, which is why the case is stated rather than avoided.
+    Nothing stops a workflow's name containing either separator — `a__b` is a
+    legal filename — so the spelling is not injective by construction for
+    ordinary input. Either distinct identities still render apart, or this
+    finds the collision; both are results worth having, which is why the case
+    is stated rather than avoided.
     """
     yml: Yaml = {'steps': [
         {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a.txt'}}},
         {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'b.txt'}}},
     ]}
-    compiled = compile_hermetic_cwl(copy.deepcopy(yml), stem)
-    expected = _expected_port_names(yml, stem)
-
-    assert len(set(expected)) == len(expected), (
-        f'workflow stem {stem!r} makes two ports namespace alike: {expected}')
-    emitted = set(compiled.get('inputs', {})) | set(compiled.get('outputs', {}))
-    missing = sorted(set(expected) - emitted)
-    assert not missing, f'namespaced ports were dropped or overwritten: {missing}'
+    compiled = compile_hermetic(copy.deepcopy(yml), stem)
+    _assert_every_port_survives(yml, compiled)
 
 
 # --------------------------------------------------------------------------
@@ -143,8 +163,13 @@ def _compatible(in_type: Any, out_type: Any) -> bool:
             return bool(in_type == out_type)
 
 
+def _process(step: Yaml) -> str:
+    """The process a step runs, read from its `run:` path and never from its id."""
+    return PurePosixPath(str(step['run'])).stem
+
+
 def _inferred_edges(compiled: Yaml) -> list[tuple[str, str, str]]:
-    """`(consuming stem, consuming arg, producing "step/out")` for each inferred edge.
+    """`(consuming process, consuming arg, producing "step/out")` for each inferred edge.
 
     An inferred edge is a **bare string** with exactly one `/`
     (`src/sophios/inference.py`, `_finalize_matched_edge`). `{'source': …}` is
@@ -154,24 +179,28 @@ def _inferred_edges(compiled: Yaml) -> list[tuple[str, str, str]]:
     """
     edges = []
     for step in compiled['steps']:
-        _, _, stem = parse_step_name_str(str(step['id']))
         for arg, value in (step.get('in') or {}).items():
             if isinstance(value, str) and value.count('/') == 1:
-                edges.append((stem, arg, value))
+                edges.append((_process(step), arg, value))
     return edges
 
 
+def _producers(compiled: Yaml) -> dict[str, tuple[str, str]]:
+    """Each `step/out` reference the document can make, to its process and output."""
+    return {f'{step["id"]}/{out}': (_process(step), out)
+            for step in compiled['steps'] for out in step.get('out') or []}
+
+
 def _workflow_input_edges(compiled: Yaml) -> list[tuple[str, str, str, bool]]:
-    """Return consuming tool/argument, workflow input, and scatter state."""
+    """Return consuming process/argument, workflow input, and scatter state."""
     declared = compiled.get('inputs') or {}
     edges = []
     for step in compiled['steps']:
-        _, _, stem = parse_step_name_str(str(step['id']))
         scatter = step.get('scatter') or []
         for argument, value in (step.get('in') or {}).items():
             source = value.get('source') if isinstance(value, dict) else value
             if isinstance(source, str) and source in declared:
-                edges.append((stem, argument, source, argument in scatter))
+                edges.append((_process(step), argument, source, argument in scatter))
     return edges
 
 
@@ -229,10 +258,10 @@ def test_every_inferred_edge_connects_compatible_ports(yml: Yaml) -> None:
     except SophiosError:
         return  # a diagnosed workflow has no inferred edges; see BLIND SPOTS
 
+    producers = _producers(compiled)
     for stem, arg, source in _inferred_edges(compiled):
-        producer, out_key = source.split('/')
-        _, _, producer_stem = parse_step_name_str(producer)
-        if stem not in inputs_of.__globals__['STEMS'] or producer_stem.endswith('.wic'):
+        producer_stem, out_key = producers[source]
+        if stem not in STEMS or producer_stem not in STEMS:
             continue  # a subworkflow port; its type lives in the subtree
         in_type = inputs_of(stem)[arg]['type']
         out_type = outputs_of(producer_stem)[out_key]['type']
@@ -254,7 +283,7 @@ def test_every_generated_workflow_input_reference_is_not_proven_disjoint(yml: Ya
     compiled = compile_hermetic_cwl(copy.deepcopy(yml), 'refs')
     declared = compiled.get('inputs') or {}
     for stem, argument, source, scattered in _workflow_input_edges(compiled):
-        if stem not in inputs_of.__globals__['STEMS'] or stem.endswith('.wic'):
+        if stem not in STEMS:
             continue
         sink_type = inputs_of(stem)[argument]['type']
         if scattered:

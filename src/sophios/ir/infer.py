@@ -8,14 +8,15 @@ from ..lang.diagnostics import Diagnostics
 from .declarations import boundary_declaration, port_declaration
 from .resolve import RegistrySnapshot
 from .types import (
+    AuthoredName,
+    DerivedName,
     Direction,
     Edge,
-    emitted_step_id,
-    namespaced,
     EmittedValue,
     Port,
     PortDeclaration,
     PortId,
+    PortName,
     PortType,
     ProcessRun,
     RegistryKey,
@@ -47,8 +48,8 @@ class Insertion:
     namespace: str
     name: str
     run_path: str
-    inputs: tuple[tuple[str, PortDeclaration], ...]
-    outputs: tuple[tuple[str, PortDeclaration], ...]
+    inputs: tuple[tuple[AuthoredName, PortDeclaration], ...]
+    outputs: tuple[tuple[AuthoredName, PortDeclaration], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,7 +162,7 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
             if policy.insert_steps_automatically and insertion is not None:
                 return _insert(graph, position, insertion, policy), True
             current_step = steps[position]
-            input_name = _input_name(current_step, port)
+            input_name = DerivedName(current_step.id, port.id.port)
             if input_name not in {item.name for item in workflow_inputs}:
                 declaration = port.declaration or port_declaration(port.type.declared)
                 declaration = boundary_declaration(replace(
@@ -200,9 +201,9 @@ def _candidate(steps: list[StepNode], position: int, sink: Port,
             output_formats = _formats(output.declaration)
             if (types_match(sink_type, output_type)
                     and _formats_match(sink_formats, output_formats, output_type)
-                    and '_log_' not in output.id.port):
+                    and not any('_log_' in part for part in _parts(output.id.port))):
                 matches.append(output)
-            if dict(producer.inference_rules).get(output.id.port, 'default') == 'break':
+            if _rule(producer, output.id.port) == 'break':
                 break_inference = True
                 break_scope = scope
         if matches:
@@ -226,7 +227,23 @@ def _choose_by_name(matches: list[Port], sink: Port,
 
 def _authored(port: Port) -> str:
     """The name the port was written under, wherever that was."""
-    return port.origin.port if port.origin is not None else port.id.port
+    return _parts(port.origin.port if port.origin is not None else port.id.port)[-1]
+
+
+def _parts(name: PortName) -> tuple[str, ...]:
+    """The authored names `name` is made of: each step it was exposed
+    through, outermost first, then the port a tool or author declared."""
+    if isinstance(name, DerivedName):
+        return (name.step.name, *_parts(name.port))
+    return (name,)
+
+
+def _rule(step: StepNode, port: PortName) -> str:
+    """The inference rule `step` declares for `port`. Rules are keyed by the
+    names an author wrote, so a derived name has none."""
+    if isinstance(port, DerivedName):
+        return 'default'
+    return dict(step.inference_rules).get(port, 'default')
 
 
 def _insertion_candidate(attempted: tuple[Port, ...], sink: Port,
@@ -258,7 +275,6 @@ def _insert(graph: WorkflowGraph, position: int, insertion: Insertion,
     outputs = tuple(Port(PortId(identity, Direction.OUTPUT, name), declaration.type,
                          declaration) for name, declaration in insertion.outputs)
     descriptor = StepEmission(
-        id=emitted_step_id(graph.name, position + 1, insertion.name),
         inputs=(),
         run=ProcessRun(insertion.run_path,
                        RegistryKey(insertion.namespace, insertion.name)),
@@ -273,16 +289,7 @@ def _insert(graph: WorkflowGraph, position: int, insertion: Insertion,
                         inference_rules=rules, synthesized=True)
     steps = list(graph.steps)
     steps.insert(position, inserted)
-    steps = [_renumber_emission(graph.name, index, step)
-             for index, step in enumerate(steps, start=1)]
     return replace(graph, steps=tuple(steps))
-
-
-def _renumber_emission(name: str, index: int, step: StepNode) -> StepNode:
-    if step.emission is None:
-        return step
-    return replace(step, emission=replace(
-        step.emission, id=emitted_step_id(name, index, step.id.name)))
 
 
 def _propagate_child_interface(graph: WorkflowGraph) -> WorkflowGraph:
@@ -294,7 +301,7 @@ def _propagate_child_interface(graph: WorkflowGraph) -> WorkflowGraph:
         if step.emission is None:
             steps.append(step)
             continue
-        child = children.get(step.emission.id)
+        child = children.get(step.id)
         if child is None:
             child = step.emission.run.child
         if child is None:
@@ -322,18 +329,17 @@ def _propagate_child_interface(graph: WorkflowGraph) -> WorkflowGraph:
 
 
 def _exported_outputs(
-        graph: WorkflowGraph) -> tuple[tuple[str, PortDeclaration, PortId | None], ...]:
+        graph: WorkflowGraph) -> tuple[tuple[PortName, PortDeclaration, PortId | None], ...]:
     """The output interface legacy compilation gives a child workflow.
 
     Each derived name is paired with the port it was derived from, so a reader
     wanting the step or the authored name back has them rather than a slice.
     """
-    exported: dict[str, tuple[PortDeclaration, PortId | None]] = {
+    exported: dict[PortName, tuple[PortDeclaration, PortId | None]] = {
         port.name: (port.declaration, port.origin) for port in graph.workflow_outputs}
     for step in graph.steps:
-        emitted = step.emission.id if step.emission is not None else step.id.name
         for output in step.outputs:
-            name = namespaced(emitted, output.id.port)
+            name = DerivedName(step.id, output.id.port)
             declaration = output.declaration or port_declaration(output.type.declared)
             exported[name] = (replace(
                 declaration,
@@ -350,14 +356,14 @@ def _attach_children(graph: WorkflowGraph) -> WorkflowGraph:
         replace(step, emission=replace(
             step.emission,
             run=replace(step.emission.run,
-                        child=by_name.get(step.emission.id, step.emission.run.child))))
+                        child=by_name.get(step.id, step.emission.run.child))))
         if step.emission is not None else step
         for step in graph.steps
     )
     return replace(graph, steps=steps)
 
 
-def _set_emission_input(step: StepNode, name: str, value: EmittedValue) -> StepNode:
+def _set_emission_input(step: StepNode, name: PortName, value: EmittedValue) -> StepNode:
     if step.emission is None:
         return step
     inputs = dict(step.emission.inputs)
@@ -378,11 +384,6 @@ def _required(port: Port) -> bool:
                 or declaration.type.optional)
 
 
-def _input_name(step: StepNode, port: Port) -> str:
-    emitted = step.emission.id if step.emission is not None else step.id.name
-    return namespaced(emitted, port.id.port)
-
-
 def _effective_source_type(step: StepNode, port: Port) -> Any:
     raw = _candidate_type(port.type)
     if step.emission is not None and step.emission.scatter:
@@ -392,11 +393,7 @@ def _effective_source_type(step: StepNode, port: Port) -> Any:
 
 def _effective_sink_type(step: StepNode, port: Port) -> Any:
     raw = _candidate_type(port.type)
-    scatter = step.emission.scatter if step.emission is not None else None
-    keys = [scatter] if isinstance(scatter, str) else (
-        [item for item in scatter if isinstance(item, str)]
-        if isinstance(scatter, list) else [])
-    if port.id.port in keys:
+    if step.emission is not None and port.id.port in step.emission.scatter_ports:
         return {'type': 'array', 'items': raw}
     return raw
 
@@ -448,10 +445,10 @@ def _type_permits_format(cwl_type: Any) -> bool:
     return False
 
 
-def _catalog_ports(raw: Any, *, output: bool) -> tuple[tuple[str, PortDeclaration], ...]:
+def _catalog_ports(raw: Any, *, output: bool) -> tuple[tuple[AuthoredName, PortDeclaration], ...]:
     if not isinstance(raw, dict):
         return ()
-    return tuple((str(name), port_declaration(deepcopy(declaration), output=output))
+    return tuple((AuthoredName(str(name)), port_declaration(deepcopy(declaration), output=output))
                  for name, declaration in raw.items())
 
 

@@ -3,7 +3,8 @@
 This is the deliberately small seam between semantic inference and emission.
 It does not load a process, discover a file, or replay source.  It turns facts
 already present in a ``WorkflowGraph`` into the workflow boundary that Link and
-Infer compose against.
+Infer compose against. A boundary name it derives is a `DerivedName`, not
+text: `ir.names` spells it, at Emit.
 
 It states no document. Requirements, `$namespaces`, `$schemas`, a step's `run:`
 path and the order fields appear in are how the facts are *spelled*, and they
@@ -21,26 +22,31 @@ from ..lang.diagnostics import SophiosError
 from ..lang.error_codes import SophiosErrorCode
 from .declarations import boundary_declaration, port_declaration
 from .types import (
+    AuthoredName,
     BoundaryDeclaration,
+    DerivedName,
     Direction,
     Edge,
     Expression,
     JobBinding,
-    namespaced,
     Port,
     PortDeclaration,
     PortId,
+    PortName,
     Source,
+    StepId,
     StepNode,
+    StepOutputRef,
     WorkflowGraph,
     WorkflowPort,
 )
 
 
-def complete(graph: WorkflowGraph, *, partial_failure: bool = False) -> WorkflowGraph:
+def complete(graph: WorkflowGraph) -> WorkflowGraph:
     """Return a graph carrying every fact its resolved interfaces determine.
 
-    Facts, and the derived boundary names Link and Infer compose against. How
+    Facts, and the derived boundary names Link and Infer compose against,
+    stated structurally for Emit to spell. How
     the document is spelled -- requirements, `$namespaces`, `$schemas`, `run:`
     paths, field order -- is `emit.surface`, which runs once; this runs
     whenever a phase needs the facts current, so it
@@ -48,17 +54,16 @@ def complete(graph: WorkflowGraph, *, partial_failure: bool = False) -> Workflow
     interfaces visible to composition, and calling it after Infer materializes
     newly inferred sources and boundary inputs.
     """
-    children = tuple(complete(child, partial_failure=partial_failure)
-                     for child in graph.children)
+    children = tuple(complete(child) for child in graph.children)
     current = replace(graph, children=children)
     current = _synchronize_children(current)
-    current = _materialize_bindings(current, partial_failure)
+    current = _materialize_bindings(current)
     current = _materialize_edges(current)
     return _materialize_outputs(current)
 
 
 def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
-    child_by_name = {child.namespace.parts[-1]: child for child in graph.children
+    child_by_step = {child.namespace.parts[-1]: child for child in graph.children
                      if child.namespace.parts}
     workflow_inputs = list(graph.workflow_inputs)
     job_bindings = list(graph.job_bindings)
@@ -67,7 +72,7 @@ def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
 
     for step in graph.steps:
         emission = step.emission
-        child = child_by_name.get(emission.id) if emission is not None else None
+        child = child_by_step.get(step.id)
         if emission is None or child is None:
             steps.append(step)
             continue
@@ -91,7 +96,7 @@ def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
         for boundary in child.workflow_inputs:
             if boundary.name in authored or boundary.name not in child_jobs:
                 continue
-            outer_name = namespaced(emission.id, boundary.name)
+            outer_name = DerivedName(step.id, boundary.name)
             _put_port(workflow_inputs, WorkflowPort(outer_name, boundary.declaration))
             _put_job(job_bindings, JobBinding(outer_name, child_jobs[boundary.name]))
             sink = next(port.id for port in inputs if port.id.port == boundary.name)
@@ -110,7 +115,7 @@ def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
                    job_bindings=tuple(job_bindings), input_mapping=tuple(input_mapping))
 
 
-def _materialize_bindings(graph: WorkflowGraph, partial_failure: bool) -> WorkflowGraph:
+def _materialize_bindings(graph: WorkflowGraph) -> WorkflowGraph:
     workflow_inputs = list(graph.workflow_inputs)
     job_bindings = list(graph.job_bindings)
     input_mapping = list(graph.input_mapping)
@@ -127,32 +132,26 @@ def _materialize_bindings(graph: WorkflowGraph, partial_failure: bool) -> Workfl
             port = next(port for port in step.inputs if port.id == binding.sink)
             match binding.value:
                 case InlineLiteral(value=value):
-                    name = namespaced(emission.id, port.id.port)
-                    declaration = _input_declaration(port, emission.scatter)
+                    name = DerivedName(step.id, port.id.port)
+                    declaration = _input_declaration(port, emission.scatter_ports)
                     _put_port(workflow_inputs, WorkflowPort(name, declaration))
                     _put_job(job_bindings, JobBinding(
-                        name, coerce_job_value(name, declaration, value)))
+                        name, coerce_job_value(str(port.id.port), declaration, value)))
                     _put_input_mapping(input_mapping, name, port.id)
                     emitted[port.id.port] = Source(name)
                 case RawCwlRef(expression=expression):
                     emitted[port.id.port] = Expression(expression)
-                case UnresolvedName(name=name):
-                    emitted[port.id.port] = Source(name, shorthand=True)
-                    if name in authored_inputs:
-                        _put_input_mapping(input_mapping, name, port.id)
-                        _merge_boundary_documentation(workflow_inputs, name, port.declaration)
+                case UnresolvedName(name=text):
+                    authored = AuthoredName(text)
+                    emitted[port.id.port] = Source(authored, shorthand=True)
+                    if authored in authored_inputs:
+                        _put_input_mapping(input_mapping, authored, port.id)
+                        _merge_boundary_documentation(workflow_inputs, authored, port.declaration)
                 case EdgeRef():
                     # Link supplies the concrete source.  Keeping this arm
                     # empty prevents the source spelling from being guessed.
                     pass
-        when = emission.when
-        if partial_failure:
-            required = [port.id.port for port in step.inputs if _required(port.declaration)]
-            if required:
-                when = '$(' + ' && '.join(f'inputs["{name}"] != null'
-                                          for name in required) + ')'
-        steps.append(replace(step, emission=replace(emission,
-                                                    inputs=tuple(emitted.items()), when=when)))
+        steps.append(replace(step, emission=replace(emission, inputs=tuple(emitted.items()))))
     return replace(graph, steps=tuple(steps), workflow_inputs=tuple(workflow_inputs),
                    job_bindings=tuple(job_bindings), input_mapping=tuple(input_mapping))
 
@@ -212,20 +211,20 @@ def _materialize_edges(graph: WorkflowGraph) -> WorkflowGraph:
     return replace(graph, steps=tuple(ordered_steps))
 
 
-def _emitted_source(graph: WorkflowGraph, port_id: PortId) -> str | None:
-    """The `step/port` spelling an emitted document can resolve."""
+def _emitted_source(graph: WorkflowGraph, port_id: PortId) -> StepOutputRef | None:
+    """The `step/port` reference an emitted document can resolve."""
     step = next((item for item in graph.steps if item.id == port_id.step), None)
     if step is None or step.emission is None:
         return None
-    return f'{step.emission.id}/{port_id.port}'
+    return StepOutputRef(step.id, port_id.port)
 
 
 def _materialize_outputs(graph: WorkflowGraph) -> WorkflowGraph:
     # An authored `outputSource:` names the step as the document wrote it, and
-    # emission renames every step to `{workflow}__step__{i}__{name}`. Carrying
-    # the authored string through leaves the emitted document pointing at a
-    # step that does not exist there. Link already resolved the same string to
-    # a port, so rewrite from that rather than from the text.
+    # emission renames every step. Carrying the authored string through leaves
+    # the emitted document pointing at a step that does not exist there. Link
+    # already resolved the same string to a port, so record that producer
+    # rather than the text.
     resolved = dict(graph.output_mapping)
     outputs = [
         replace(port, output_source=emitted)
@@ -240,31 +239,28 @@ def _materialize_outputs(graph: WorkflowGraph) -> WorkflowGraph:
         if step.emission is None:
             continue
         for port in step.outputs:
-            name = namespaced(step.emission.id, port.id.port)
+            name = DerivedName(step.id, port.id.port)
             if name in authored:
                 continue
             declaration = _output_declaration(port, step.emission.scatter)
             outputs.append(WorkflowPort(
-                name, declaration, f'{step.emission.id}/{port.id.port}', True))
+                name, declaration, StepOutputRef(step.id, port.id.port), True))
             output_mapping.append((name, port.id))
     return replace(graph, workflow_outputs=tuple(outputs), output_mapping=tuple(output_mapping))
 
 
-def _direct_source(graph: WorkflowGraph, source: PortId) -> str:
+def _direct_source(graph: WorkflowGraph, source: PortId) -> StepOutputRef:
     if source.step.namespace == graph.namespace:
-        step = next(step for step in graph.steps if step.id == source.step)
-        assert step.emission is not None
-        return f'{step.emission.id}/{source.port}'
+        return StepOutputRef(source.step, source.port)
     child = next(child for child in graph.children
                  if source.step.namespace.parts[:len(child.namespace.parts)] == child.namespace.parts)
     wrapper = next(step for step in graph.steps
                    if step.emission is not None and step.emission.run.child == child)
     boundary = next(name for name, port in child.output_mapping if port == source)
-    assert wrapper.emission is not None
-    return f'{wrapper.emission.id}/{boundary}'
+    return StepOutputRef(wrapper.id, boundary)
 
 
-def _direct_sink(graph: WorkflowGraph, sink: PortId) -> tuple[Any, str]:
+def _direct_sink(graph: WorkflowGraph, sink: PortId) -> tuple[StepId, PortName]:
     if sink.step.namespace == graph.namespace:
         return sink.step, sink.port
     child = next(child for child in graph.children
@@ -275,11 +271,9 @@ def _direct_sink(graph: WorkflowGraph, sink: PortId) -> tuple[Any, str]:
     return wrapper.id, boundary
 
 
-def _input_declaration(port: Port, scatter: Any) -> BoundaryDeclaration:
+def _input_declaration(port: Port, scatter_ports: tuple[PortName, ...]) -> BoundaryDeclaration:
     declaration = boundary_declaration(port.declaration or port_declaration(port.type.declared))
-    keys = [scatter] if isinstance(scatter, str) else (
-        list(scatter) if isinstance(scatter, list) else [])
-    layers = keys.count(port.id.port)
+    layers = scatter_ports.count(port.id.port)
     raw = _canonical_type(declaration.type.declared)
     for _ in range(layers):
         raw = {'type': 'array', 'items': raw}
@@ -316,8 +310,8 @@ def _put_job(bindings: list[JobBinding], binding: JobBinding) -> None:
         bindings.append(binding)
 
 
-def _put_input_mapping(mappings: list[tuple[str, tuple[PortId, ...]]],
-                       name: str, sink: PortId) -> None:
+def _put_input_mapping(mappings: list[tuple[PortName, tuple[PortId, ...]]],
+                       name: PortName, sink: PortId) -> None:
     for index, (existing, sinks) in enumerate(mappings):
         if existing == name:
             if sink not in sinks:
@@ -326,7 +320,7 @@ def _put_input_mapping(mappings: list[tuple[str, tuple[PortId, ...]]],
     mappings.append((name, (sink,)))
 
 
-def _merge_boundary_documentation(ports: list[WorkflowPort], name: str,
+def _merge_boundary_documentation(ports: list[WorkflowPort], name: PortName,
                                   source: PortDeclaration | None) -> None:
     if source is None:
         return
@@ -355,12 +349,6 @@ def _merge_boundary_documentation(ports: list[WorkflowPort], name: str,
 
 def _as_text(value: Any) -> Any:
     return '\n'.join(value) if isinstance(value, list) else value
-
-
-def _required(declaration: PortDeclaration | None) -> bool:
-    return declaration is None or not (
-        (declaration.has_default and declaration.default is not None)
-        or declaration.type.optional)
 
 
 def coerce_job_value(name: str, declaration: PortDeclaration, value: Any) -> Any:

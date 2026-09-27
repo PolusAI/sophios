@@ -1,78 +1,7 @@
 from urllib.parse import urlparse
 from typing import Any
 
-from .ir.types import emitted_step_id, namespaced, NAMESPACE_SEPARATOR
-from .wic_types import Json, Yaml
-
-
-def step_name_str(yaml_stem: str, i: int, step_key: str) -> str:
-    """Returns a string which uniquely and hierarchically identifies a step in a workflow
-
-    Args:
-        yaml_stem (str): The name of the workflow (filepath stem)
-        i (int): The (zero-based) step number
-        step_key (str): The name of the step (used as a dict key)
-
-    Returns:
-        str: The parameters (and the word 'step') joined together with double underscores
-    """
-    # (This should work as long as yaml_stem and step_key do not contain __)
-    return emitted_step_id(yaml_stem, i + 1, step_key)
-
-
-def parse_step_name_str(step_name: str) -> tuple[str, int, str]:
-    """The inverse function to step_name_str()
-
-    Args:
-        step_name (str): A string of the same form as returned by step_name_str()
-
-    Raises:
-        ValueError: If the argument is not of the same form as returned by step_name_str()
-
-    Returns:
-        tuple[str, int, str]: The parameters used to create step_name
-    """
-    vals = step_name.split('__')  # double underscore
-    if len(vals) != 4:
-        raise ValueError(f"Error! {step_name} is not of the format produced by "
-                         'step_name_str(). yaml_stem and step_key should not contain '
-                         'any double underscores.')
-    try:
-        i = int(vals[2])
-    except ValueError as ex:
-        raise ValueError(f"Error! {step_name} is not of the format produced by "
-                         'step_name_str().') from ex
-    return (vals[0], i-1, vals[3])
-
-
-def shorten_namespaced_output_name(namespaced_output_name: str, sep: str = ' ') -> tuple[str, str]:
-    """Removes the intentionally redundant yaml_stem prefixes from the list of
-    step_name_str's embedded in namespaced_output_name which allows each
-    step_name_str to be context-free and unique. This is potentially dangerous,
-    and the only purpose is so we can slightly shorten the output filenames.
-
-    Args:
-        namespaced_output_name (str): A string of the form:
-        '___'.join(namespaces + [step_name_i, out_key])
-        sep (str): The separator used to construct the shortened step name strings.
-
-    Returns:
-        tuple[str, str]: the first yaml_stem, so this function can be inverted,
-        and namespaced_output_name, with the embedded yaml_stem prefixes
-        removed and double underscores replaced with a single space.
-    """
-    split = namespaced_output_name.split(NAMESPACE_SEPARATOR)
-    namespaces = split[:-1]
-    output_name = split[-1]
-    strs = []
-    yaml_stem_init = ''
-    if len(namespaces) > 0:
-        yaml_stem_init = parse_step_name_str(namespaces[0])[0]
-        for stepnamestr in namespaces:
-            _, i, step_key = parse_step_name_str(stepnamestr)
-            strs.append(f'step{sep}{i+1}{sep}{step_key}')
-    shortened = namespaced(*strs, output_name)
-    return (yaml_stem_init, shortened)
+from .wic_types import Yaml
 
 
 def get_steps_keys(steps: list[Yaml]) -> list[str]:
@@ -162,23 +91,7 @@ def recursively_delete_dict_key(key: str, obj: Any) -> Any:
     return obj
 
 
-def parse_provenance_output_files(output_json: Json) -> list[tuple[str, str, str]]:
-    """Parses the primary workflow provenance JSON object.
-
-    Args:
-        output_json (Json): The JSON results object, containing the metadata for all output files.
-
-    Returns:
-        list[tuple[str, str, str]]: A List of (location, parentdirs, basename) for each output file.
-    """
-    files = []
-    for namespaced_output_name, obj in output_json.items():
-        files.append(parse_provenance_output_files_(
-            obj, namespaced_output_name))
-    return [y for x in files for y in x]
-
-
-def parse_provenance_output_files_(obj: Any, parentdirs: str) -> list[tuple[str, str, str]]:
+def parse_provenance_output_files(obj: Any, parentdirs: str) -> list[tuple[str, str, str]]:
     """Parses the primary workflow provenance JSON object.
 
     Args:
@@ -195,11 +108,11 @@ def parse_provenance_output_files_(obj: Any, parentdirs: str) -> list[tuple[str,
         if obj.get('class', '') == 'Directory':
             # This basename is a directory name
             subdir = parentdirs + '/' + obj['basename']
-            return parse_provenance_output_files_(obj['listing'], subdir)
+            return parse_provenance_output_files(obj['listing'], subdir)
     if isinstance(obj, list):
         files = []
         for o in obj:
-            files.append(parse_provenance_output_files_(o, parentdirs))
+            files.append(parse_provenance_output_files(o, parentdirs))
         # Should we flatten?? This will lose the structure of 2D (and higher) array outputs.
         return [y for x in files for y in x]
     return []

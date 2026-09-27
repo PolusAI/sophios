@@ -44,8 +44,8 @@ MUST_DIFFER: Final[list[tuple[str, Yaml, Yaml]]] = [
      {'steps': [{'id': 'a__step__1__mk', 'out': ['file']}]},
      {'steps': []}),
     ('a step names a different tool',
-     {'steps': [{'id': 'a__step__1__mk', 'out': ['file']}]},
-     {'steps': [{'id': 'a__step__1__xf', 'out': ['file']}]}),
+     {'steps': [{'id': 'a__step__1__mk', 'run': 'a__step__1__mk/mk.cwl', 'out': ['file']}]},
+     {'steps': [{'id': 'a__step__1__xf', 'run': 'a__step__1__xf/xf.cwl', 'out': ['file']}]}),
     ('an edge points somewhere else',
      {'steps': [{'id': 'a__step__1__mk', 'in': {'f': 'a__step__1__mk/file'}}]},
      {'steps': [{'id': 'a__step__1__mk', 'in': {'f': 'a__step__2__xf/file'}}]}),
@@ -320,7 +320,7 @@ def test_the_dag_check_sees_a_moved_edge_without_being_handed_a_graph() -> None:
     `MUST_DIFFER`'s "an edge points somewhere else" is the case that forced it
     to exist, so this asserts the mechanism directly rather than only through
     that table: two documents with identical step ids and identical tool
-    stems, differing only in where one `in:` source points, must diverge at
+    labels, differing only in where one `in:` source points, must diverge at
     UP_TO_RENAMING with the DAG named as the place it happened.
     """
     left: Yaml = {'steps': [{'id': 'a__step__1__mk', 'out': ['file']},
@@ -337,18 +337,20 @@ def test_the_dag_check_sees_a_moved_edge_without_being_handed_a_graph() -> None:
 def test_the_dag_check_sees_the_same_tools_wired_up_differently() -> None:
     """The companion for `_dataflow`'s node labels.
 
-    Both documents hold the same three tools, so the stem multiset agrees, and
-    both graphs are three nodes with one edge and one isolate, so a bare
-    `DiGraphMatcher` maps them onto each other. Only matching nodes by tool
-    stem sees that the edge runs `mk_file -> xform` on one side and
+    Both documents hold the same three tools, so the process multiset agrees,
+    and both graphs are three nodes with one edge and one isolate, so a bare
+    `DiGraphMatcher` maps them onto each other. Only matching nodes by the
+    process each runs sees that the edge runs `mk_file -> xform` on one side and
     `join -> xform` on the other. Written as its own case because mutating
     `node_match` to `True` left every other test in this file green.
     """
     def _document(producer: str) -> Yaml:
         others = {'mk_file': 'join', 'join': 'mk_file'}
-        return {'steps': [{'id': f'a__step__1__{producer}', 'out': ['file']},
-                          {'id': f'a__step__2__{others[producer]}', 'out': ['file']},
-                          {'id': 'a__step__3__xform',
+        return {'steps': [{'id': f'a__step__1__{producer}', 'run': f'{producer}.cwl',
+                           'out': ['file']},
+                          {'id': f'a__step__2__{others[producer]}',
+                           'run': f'{others[producer]}.cwl', 'out': ['file']},
+                          {'id': 'a__step__3__xform', 'run': 'xform.cwl',
                            'in': {'file': {'source': f'a__step__1__{producer}/file'}}}]}
     found = equivalent(_document('mk_file'), _document('join'), Strength.UP_TO_RENAMING)
     assert found is not None and found.path == '<dag>'
@@ -413,8 +415,8 @@ def test_up_to_renaming_forgives_nothing_inside_a_step_but_names_and_paths(
         why: str, left_step: Yaml, right_step: Yaml) -> None:
     """The weakest strength still reads the whole step.
 
-    `UP_TO_RENAMING` forgives a step's `id`, its `run` and the `source` inside
-    each binding, and the module docstring says so and says why. Anything else
+    `UP_TO_RENAMING` forgives a step's `id`, the directory of its `run` and
+    the `source` inside each binding, and the module docstring says so and says why. Anything else
     it forgave would be forgiveness with no stated reason — the thing that
     module's own thesis is against — so each of these must be rejected.
     """
@@ -473,9 +475,9 @@ def test_a_declared_step_is_not_the_same_as_one_only_referenced() -> None:
     Left declares `mk_file` and consumes its output. Right consumes the same
     output from a step it never declares — a dangling reference, which is what
     a migration that dropped a step from `steps:` while leaving its consumers
-    intact produces. Both graphs are two nodes and one edge, both tool stems
-    agree, and neither document has ports or requirements to compare, so
-    nothing but the marker separates them.
+    intact produces. Both graphs are two nodes and one edge, and neither
+    document has ports or requirements to compare, so nothing but the marker
+    separates them.
 
     Relabelling absent producers as if they were declared
     steps left every other test in this file green.
@@ -517,17 +519,17 @@ def test_isomorphism_alone_would_not_be_enough() -> None:
 
     Asserts the *verdict*, not the path string. Asserting
     `'tool multiset' in found.path` would be this project's recurring failure
-    written into the artifact everything imports: a separate stem-multiset
+    written into the artifact everything imports: a separate tool-multiset
     check had by then been subsumed by the labelled isomorphism, so the name of
     the test claimed a discrimination the code no longer performed and only the
     string kept it green. The check was deleted; this is what remains, and it
     fails if `node_match` stops looking at the label.
     """
-    left: Yaml = {'steps': [{'id': 'a__step__1__mk_file', 'out': ['file']},
-                            {'id': 'a__step__2__xform',
+    left: Yaml = {'steps': [{'id': 'a__step__1__mk_file', 'run': 'mk_file.cwl', 'out': ['file']},
+                            {'id': 'a__step__2__xform', 'run': 'xform.cwl',
                              'in': {'file': {'source': 'a__step__1__mk_file/file'}}}]}
-    right: Yaml = {'steps': [{'id': 'a__step__1__mk_text', 'out': ['file']},
-                             {'id': 'a__step__2__join',
+    right: Yaml = {'steps': [{'id': 'a__step__1__mk_text', 'run': 'mk_text.cwl', 'out': ['file']},
+                             {'id': 'a__step__2__join', 'run': 'join.cwl',
                               'in': {'file': {'source': 'a__step__1__mk_text/file'}}}]}
     found = equivalent(left, right, Strength.UP_TO_RENAMING)
     assert found is not None and found.path == '<dag>'
@@ -639,14 +641,13 @@ def test_a_shape_the_relation_cannot_read_is_loud(why: str, document: Yaml) -> N
 
 @pytest.mark.fast
 def test_an_unparsable_producer_keeps_its_whole_name() -> None:
-    """The companion for `_stem`'s fallback.
+    """The companion for `_dataflow`'s `('external', name)` label.
 
-    `parse_step_name_str` raises on anything that is not
-    `{stem}__step__{i}__{key}`, and `_stem` then falls back to the whole
-    string. That fallback is the *stricter* choice, and the docstring says so —
-    two unparsable ids have to be equal rather than being lumped together as
-    one anonymous stem. Nothing pinned it: returning a constant instead left
-    the file green, and these two documents equivalent.
+    A producer the document does not declare has no `run:` to read, so it is
+    labelled by the whole name it is referenced by. That is the *stricter*
+    choice — two different absent producers have to be equal rather than
+    being lumped together as one anonymous "external". Nothing else pins it:
+    a constant label leaves these two documents equivalent.
     """
     def _document(producer: str) -> Yaml:
         return {'steps': [{'id': 'a__step__1__xform',

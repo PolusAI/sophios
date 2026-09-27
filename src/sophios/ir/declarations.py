@@ -57,6 +57,13 @@ def port_declaration(raw: Any, *, output: bool = False) -> PortDeclaration:
     )
 
 
+def required(declaration: PortDeclaration | None) -> bool:
+    """Whether a port must be given a value: no non-null default, not optional."""
+    return declaration is None or not (
+        (declaration.has_default and declaration.default is not None)
+        or declaration.type.optional)
+
+
 def boundary_declaration(declaration: PortDeclaration) -> BoundaryDeclaration:
     """`declaration` as a workflow boundary may state it.
 

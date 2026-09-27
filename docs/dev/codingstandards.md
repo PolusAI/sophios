@@ -27,8 +27,8 @@ Use docstrings to clarify behavior, not to repeat obvious type information. For
 example, this is useful because it explains the naming convention:
 
 ```python
-def step_name_str(yaml_stem: str, i: int, step_key: str) -> str:
-    """Return the stable internal name for one workflow step."""
+def render_step_id(workflow: str, index: int, name: str) -> str:
+    """The text a step occurrence carries at `index` in `workflow`."""
     ...
 ```
 

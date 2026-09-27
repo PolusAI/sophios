@@ -12,45 +12,10 @@ type, so nothing can be invalidated through it.
 """
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Final, NewType, TypeAlias
+from typing import NewType, TypeAlias
 
 from ..lang.nodes import InputValue, OpaqueCwl
 from ..lang.spans import SourceSpan
-
-#: How namespaces are joined when a port identity is flattened for emission.
-#: Structured identities are carried through the phases and joined only here,
-#: so this is the one place the legacy spelling exists.
-NAMESPACE_SEPARATOR: Final = '___'
-
-
-def emitted_step_id(workflow: str, index: int, name: str) -> str:
-    """The id a step carries in the emitted document.
-
-    One function because this convention was written out in four places and
-    taken apart in several more, and a convention spelled in four places is
-    four chances to spell it differently.
-
-    Args:
-        workflow (str): The workflow the step belongs to.
-        index (int): The step's one-based position in it.
-        name (str): The step's authored name.
-
-    Returns:
-        str: The emitted id.
-    """
-    return f'{workflow}__step__{index}__{name}'
-
-
-def namespaced(*parts: str) -> str:
-    """`parts` joined the way the emitted document flattens a nesting.
-
-    Args:
-        parts: The names to join, outermost first.
-
-    Returns:
-        str: The joined spelling.
-    """
-    return NAMESPACE_SEPARATOR.join(parts)
 
 
 class Direction(StrEnum):
@@ -67,38 +32,22 @@ class Direction(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Namespace:
-    """Where a step sits in the nesting of subworkflows: a path, outermost
-    first. The compiler spells it joined and splits it back; holding the parts
-    gives the splitting one home."""
+    """Where a step sits in the nesting of subworkflows: the step occurrences
+    that enclose it, outermost first. Occurrences, not their spelling, so a
+    child is found by the step that calls it and nothing is split back apart."""
 
-    parts: tuple[str, ...] = ()
+    parts: tuple['StepId', ...] = ()
 
-    def __post_init__(self) -> None:
-        """Reject an empty part. A part containing the separator is *allowed*:
-        a workflow may legitimately be named that way, and refusing it here
-        would narrow the language to suit the emitted spelling."""
-        for part in self.parts:
-            if not part:
-                raise ValueError('a namespace part cannot be empty')
-
-    def child(self, name: str) -> 'Namespace':
-        """This namespace with `name` appended.
+    def child(self, step: 'StepId') -> 'Namespace':
+        """This namespace with `step` appended.
 
         Args:
-            name (str): The step or subworkflow to descend into.
+            step (StepId): The subworkflow call to descend into.
 
         Returns:
             Namespace: The nested namespace.
         """
-        return Namespace(self.parts + (name,))
-
-    def flatten(self) -> str:
-        """The joined spelling the emitted document carries.
-
-        Returns:
-            str: The parts joined by the separator.
-        """
-        return NAMESPACE_SEPARATOR.join(self.parts)
+        return Namespace(self.parts + (step,))
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -121,8 +70,8 @@ class StepId:
 
     `docs/tutorials/append_twice.wic` invokes `append` twice, and sequence-form
     `steps:` exists so that it can. `name` is the authored id and repeats with
-    the tool; `index` is the occurrence, and the pair is the identity -- which
-    is what the compiler already means by `{stem}__step__{i}__{key}`.
+    the tool; `index` is the occurrence, and the pair is the identity. How a
+    document numbers its steps is `ir.names`, which counts positions.
     """
 
     namespace: Namespace
@@ -137,13 +86,36 @@ class StepId:
             raise ValueError(f'a step occurrence is 1-based, not {self.index}')
 
 
+#: A name as its author wrote it: a tool's port, a workflow input, a step key.
+#: Distinct from `str` so that a rendered name cannot stand in for one -- the
+#: checker refuses a plain string where an identity is expected.
+AuthoredName = NewType('AuthoredName', str)
+
+
+@dataclass(frozen=True, slots=True)
+class DerivedName:
+    """A name the compiler makes by exposing `port` of `step` one level up.
+
+    A literal becomes a workflow input, a child's boundary is re-exported by
+    the step that calls it, an unconsumed output is promoted. Each is this
+    pair, and `ir.names` alone decides how it is written.
+    """
+
+    step: StepId
+    port: 'PortName'
+
+
+#: What a port or workflow boundary is called: written, or derived from one.
+PortName: TypeAlias = AuthoredName | DerivedName
+
+
 @dataclass(frozen=True, slots=True)
 class PortId:
     """A port's identity: which step occurrence, which side, and which port."""
 
     step: StepId
     direction: Direction
-    port: str
+    port: PortName
 
     def __post_init__(self) -> None:
         """Reject a port with no name."""
@@ -209,9 +181,10 @@ BoundaryDeclaration = NewType('BoundaryDeclaration', PortDeclaration)
 class WorkflowPort:
     """A port on the workflow boundary, including its CWL declaration."""
 
-    name: str
+    name: PortName
     declaration: BoundaryDeclaration
-    output_source: OpaqueCwl = None
+    #: A resolved producer, or the authored text when Link could not resolve it.
+    output_source: 'StepOutputRef | OpaqueCwl' = None
     has_output_source: bool = False
     #: The port this one was derived from, when its name was built by joining a
     #: step id to a port name rather than written by hand. Recorded because the
@@ -227,7 +200,7 @@ class WorkflowPort:
 class JobBinding:
     """One concrete value in the job input document projected from a graph."""
 
-    name: str
+    name: PortName
     value: OpaqueCwl
 
     def __post_init__(self) -> None:
@@ -236,15 +209,23 @@ class JobBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class StepOutputRef:
+    """An output of a step in the same document: CWL's `step/port`."""
+
+    step: StepId
+    port: PortName
+
+
+@dataclass(frozen=True, slots=True)
 class Source:
-    """A step input bound to a name the emitted document defines.
+    """A step input bound to a workflow input or to a step's output.
 
     `shorthand` is CWL's spelling choice and nothing more, the same
     distinction `PortDeclaration.shorthand` records: `in: {x: src}` and
     `in: {x: {source: src}}` mean one thing and are written two ways.
     """
 
-    name: str
+    ref: PortName | StepOutputRef
     shorthand: bool = False
 
 
@@ -291,19 +272,19 @@ class StepEmission:  # pylint: disable=too-many-instance-attributes
     step dictionary.  Emit is the only phase allowed to traverse the payloads.
     """
 
-    id: str
-    inputs: tuple[tuple[str, EmittedValue], ...]
+    inputs: tuple[tuple[PortName, EmittedValue], ...]
     run: ProcessRun
-    outputs: tuple[OpaqueCwl, ...]
+    outputs: tuple[PortName, ...]
     scatter: OpaqueCwl = None
+    #: The ports `scatter` names, resolved once where the document is read.
+    #: `scatter` itself is emitted as written; phases read only this.
+    scatter_ports: tuple[PortName, ...] = ()
     scatter_method: OpaqueCwl = None
     when: OpaqueCwl = None
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
     field_order: tuple[str, ...] = ('id', 'in', 'run', 'out')
 
     def __post_init__(self) -> None:
-        if not self.id:
-            raise ValueError('an emitted step must have an id')
         if len(self.field_order) != len(set(self.field_order)):
             raise ValueError('an emitted step field order cannot repeat a field')
 
@@ -434,8 +415,11 @@ class StepNode:  # pylint: disable=too-many-instance-attributes
 #: The four mappings the compiler threads through its recursion, as pairs
 #: rather than dicts: a frozen graph holding a mutable mapping can have its
 #: invariants invalidated after the constructor has checked them.
-PortMapping: TypeAlias = tuple[tuple[str, PortId], ...]
-InputMapping: TypeAlias = tuple[tuple[str, tuple[PortId, ...]], ...]
+#: `explicit_edge_*` are keyed by authored edge labels; the other two by the
+#: boundary name a port is exposed under.
+EdgeMapping: TypeAlias = tuple[tuple[str, PortId], ...]
+PortMapping: TypeAlias = tuple[tuple[PortName, PortId], ...]
+InputMapping: TypeAlias = tuple[tuple[PortName, tuple[PortId, ...]], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -448,8 +432,8 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
 
     namespace: Namespace
     steps: tuple[StepNode, ...] = ()
-    explicit_edge_defs: PortMapping = ()
-    explicit_edge_calls: PortMapping = ()
+    explicit_edge_defs: EdgeMapping = ()
+    explicit_edge_calls: EdgeMapping = ()
     input_mapping: InputMapping = ()
     output_mapping: PortMapping = ()
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
@@ -532,8 +516,8 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
             found.append((f'mapping {name!r}', port_id))
         for _name, port_id in self.output_mapping:
             found.append(('an output mapping', port_id))
-        for name, port_ids in self.input_mapping:
-            found.extend((f'input mapping {name!r}', port_id) for port_id in port_ids)
+        for boundary, port_ids in self.input_mapping:
+            found.extend((f'input mapping {boundary!r}', port_id) for port_id in port_ids)
         return tuple(found)
 
     @property

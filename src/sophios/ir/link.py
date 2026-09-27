@@ -7,11 +7,13 @@ from ..lang import SophiosErrorCode
 from ..lang.compatibility import TypeRelation, reference_relation
 from ..lang.diagnostics import Diagnostics
 from .declarations import boundary_declaration, port_declaration
+from .names import Names
 from .types import (
+    DerivedName,
     Edge,
     Namespace,
-    namespaced,
     Port,
+    PortName,
     WorkflowPort,
     PortId,
     StepId,
@@ -137,7 +139,7 @@ def _check_workflow_inputs(graph: WorkflowGraph, diagnostics: Diagnostics) -> No
             if relation is TypeRelation.DISJOINT:
                 diagnostics.error(
                     SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
-                    f"workflow input '{name}' is provably disjoint: "
+                    f"workflow input '{Names.of(graph).port(name)}' is provably disjoint: "
                     f'{source_type!r} cannot feed {sink_type!r}.',
                     sink_port.span if sink_port is not None else None,
                 )
@@ -169,7 +171,7 @@ def _attach_children(graph: WorkflowGraph) -> WorkflowGraph:
         if emission is None:
             steps.append(step)
             continue
-        child = by_namespace.get(emission.id)
+        child = by_namespace.get(step.id)
         run = replace(emission.run, child=child) if child is not None else emission.run
         steps.append(replace(step, emission=replace(emission, run=run)))
     return replace(graph, steps=tuple(steps), children=children)
@@ -302,8 +304,8 @@ def _effective_type(graph: WorkflowGraph, port: PortId, *, producing: bool) -> A
         # says which boundary name reaches which sink, and is exactly what
         # `complete._direct_sink` walks to wire the same crossing.
         # Before `complete` runs, an inferred input has no mapping entry yet,
-        # and the only name a scatter list can reach it by is the mangled one
-        # `infer` will give it. That spelling is the fallback, not the rule.
+        # and the only name a scatter list can reach it by is the one `infer`
+        # will derive for it. That name is the fallback, not the rule.
         boundary = _boundary_name(path[-1][0], port)
         for index, (_owner, wrapper) in enumerate(path[:-1]):
             child = path[index + 1][0]
@@ -316,15 +318,9 @@ def _effective_type(graph: WorkflowGraph, port: PortId, *, producing: bool) -> A
     return raw
 
 
-def _scatter_keys(step: StepNode) -> tuple[str, ...]:
-    if step.emission is None:
-        return ()
-    scatter = step.emission.scatter
-    if isinstance(scatter, str):
-        return (scatter,)
-    if isinstance(scatter, list):
-        return tuple(item for item in scatter if isinstance(item, str))
-    return ()
+def _scatter_keys(step: StepNode) -> tuple[PortName, ...]:
+    """The ports a step scatters over, as Lower resolved them."""
+    return step.emission.scatter_ports if step.emission is not None else ()
 
 
 def _output_scatter_rank(step: StepNode) -> int:
@@ -353,20 +349,16 @@ def _step_path(graph: WorkflowGraph,
     return ()
 
 
-def _boundary_name(graph: WorkflowGraph, port: PortId) -> str:
-    """The mangled name Sophios exposes `port` under when it has no authored one.
+def _boundary_name(graph: WorkflowGraph, port: PortId) -> PortName:
+    """The name Sophios exposes `port` under when it has no authored one.
 
-    Matches the naming `infer` gives a workflow input it had to synthesize —
-    `{emitted step id}___{port name}` — which is the only name a `scatter:`
-    list can use to reach such a port from an ancestor wrapper (see
-    `_effective_type`).
+    The name `infer` derives for a workflow input it had to synthesize, which
+    is the only name a `scatter:` list can use to reach such a port from an
+    ancestor wrapper (see `_effective_type`).
     """
-    path = _step_path(graph, port.step)
-    if not path:
+    if not _step_path(graph, port.step):
         return port.port
-    step = path[-1][1]
-    assert step.emission is not None
-    return namespaced(step.emission.id, port.port)
+    return DerivedName(port.step, port.port)
 
 
 def _raw_type(graph: WorkflowGraph, port: PortId) -> Any:
@@ -385,7 +377,7 @@ def _step(graph: WorkflowGraph, step_id: StepId) -> StepNode | None:
 
 def _owner_namespace(edge: Edge) -> Namespace:
     left, right = edge.source.step.namespace.parts, edge.sink.step.namespace.parts
-    common: list[str] = []
+    common: list[StepId] = []
     for source_part, sink_part in zip(left, right):
         if source_part != sink_part:
             break
@@ -448,7 +440,7 @@ def _expose_cross_scope_inputs(graph: WorkflowGraph,
             # workflow exposes then depends on who called it.
             relayed = next((entry for entry, sinks in mappings if edge.sink in sinks), None)
             derived_from: PortId | None = None if relayed is not None else edge.sink
-            name = relayed if relayed is not None else namespaced(step.emission.id, edge.sink.port)
+            name = relayed if relayed is not None else DerivedName(step.id, edge.sink.port)
         elif any(_namespace_contains(child.namespace, edge.sink.step.namespace)
                  for child in current.children):
             child = next(child for child in current.children

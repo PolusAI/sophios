@@ -33,6 +33,7 @@ from sophios.ir import (
     WorkflowGraph,
 )
 from sophios.ir.lower import lower
+from sophios.ir.types import AuthoredName
 from sophios.ir.declarations import port_declaration
 from sophios.lang.nodes import Document, InlineLiteral, Step
 from sophios.lang.parser import parse
@@ -154,9 +155,10 @@ def test_an_input_and_an_output_of_one_name_are_different_ports() -> None:
     one of every such pair.
     """
     step = StepId(Namespace(), 1, 's')
-    assert PortId(step, Direction.INPUT, 'file') != PortId(step, Direction.OUTPUT, 'file')
-    assert len({PortId(step, Direction.INPUT, 'file'),
-                PortId(step, Direction.OUTPUT, 'file')}) == 2
+    file = AuthoredName('file')
+    assert PortId(step, Direction.INPUT, file) != PortId(step, Direction.OUTPUT, file)
+    assert len({PortId(step, Direction.INPUT, file),
+                PortId(step, Direction.OUTPUT, file)}) == 2
 
 
 @pytest.mark.fast
@@ -306,10 +308,12 @@ _SPAN = SourceSpan('probe.wic', 1, 1, 1, 1)
 @st.composite
 def _hostile_graphs(draw: st.DrawFn) -> Any:
     """A construction that violates one invariant, drawn rather than listed."""
-    ns = Namespace(tuple(draw(st.lists(st.text('ab', min_size=1, max_size=2), max_size=2))))
+    ns = Namespace(tuple(draw(st.lists(st.builds(StepId, st.just(Namespace()), st.integers(1, 4),
+                                                 st.text('ab', min_size=1, max_size=2)),
+                                       max_size=2))))
     one = StepId(ns, draw(st.integers(1, 4)), draw(st.text('xy', min_size=1, max_size=2)))
     two = StepId(ns, one.index + draw(st.integers(1, 3)), one.name)
-    name = draw(st.text('pq', min_size=1, max_size=2))
+    name = AuthoredName(draw(st.text('pq', min_size=1, max_size=2)))
     out = PortId(one, Direction.OUTPUT, name)
     inp = PortId(one, Direction.INPUT, name)
     elsewhere = PortId(two, Direction.INPUT, name)
@@ -324,14 +328,15 @@ def _hostile_graphs(draw: st.DrawFn) -> Any:
         lambda: StepNode(one, bindings=(Binding(inp, InlineLiteral(1, _SPAN)),)),
         lambda: StepId(ns, 0, name),                              # a zero-based occurrence
         lambda: StepId(ns, 1, ''),                                # an unnamed occurrence
-        lambda: PortId(one, Direction.INPUT, ''),                 # an unnamed port
+        lambda: PortId(one, Direction.INPUT, AuthoredName('')),   # an unnamed port
         lambda: PortType(declared='File', array_depth=-1),
-        lambda: Namespace(('',)),
+        lambda: Namespace((StepId(Namespace(), 1, ''),)),         # an unnamed enclosing step
         lambda: WorkflowGraph(ns, steps=(StepNode(one), StepNode(one))),
         lambda: WorkflowGraph(ns, output_mapping=((name, out),)),
         lambda: WorkflowGraph(ns, input_mapping=((name, (inp,)),)),
         lambda: WorkflowGraph(ns, explicit_edge_defs=((name, out),)),
-        lambda: WorkflowGraph(Namespace(('elsewhere',)), steps=(StepNode(one),)),
+        lambda: WorkflowGraph(Namespace((StepId(Namespace(), 1, 'elsewhere'),)),
+                              steps=(StepNode(one),)),
     ]))
 
 

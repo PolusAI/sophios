@@ -18,7 +18,8 @@ from .ir.link import link
 from .ir.frontdoor import SourceBundle
 from .ir.pipeline import FrontEndResult, front_end
 from .ir.resolve import RegistrySnapshot
-from .ir.types import Binding, emitted_step_id, namespaced, PortId, WorkflowGraph
+from .ir.names import Names
+from .ir.types import AuthoredName, Binding, PortName, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import SophiosError
 from .lang.nodes import InlineLiteral
@@ -118,17 +119,11 @@ def _compile_front(front: FrontEndResult,
                                  'workflows must define at least one step')
     _check_unresolved_names(front.graph, compiler_options['allow_raw_cwl'])
 
-    prepared = complete(
-        _bind_subinterpreter_locations(front.graph, yaml_tag_paths),
-        partial_failure=compiler_options['partial_failure_enable'],
-    )
+    prepared = complete(_bind_subinterpreter_locations(front.graph, yaml_tag_paths))
     linked = link(prepared)
     if linked.graph is None:
         raise SophiosError(linked.diagnostics)
-    prepared = complete(
-        linked.graph,
-        partial_failure=compiler_options['partial_failure_enable'],
-    )
+    prepared = complete(linked.graph)
     policy = InferencePolicy(
         disabled=compiler_options['inference_disable'],
         use_naming_conventions=compiler_options['inference_use_naming_conventions'],
@@ -139,20 +134,19 @@ def _compile_front(front: FrontEndResult,
     inferred = infer(prepared, policy, InsertionCatalog.from_registry(registry))
     if inferred.graph is None:
         raise SophiosError(inferred.diagnostics)
-    graph = complete(
-        inferred.graph,
-        partial_failure=compiler_options['partial_failure_enable'],
-    )
-    graph_reps = _project_graph(graph, graph_settings, graph_target)
-    artifact = _artifact_tree(graph, registry, graph_settings, graph_reps,
-                              relative_run_path=relative_run_path)
+    graph = complete(inferred.graph)
+    names = Names.of(graph)
+    graph_reps = _project_graph(graph, names, graph_settings, graph_target)
+    artifact = _artifact_tree(graph, names, registry, graph_settings, graph_reps,
+                              relative_run_path=relative_run_path,
+                              partial_failure=compiler_options['partial_failure_enable'])
     return CompilationResult(graph, artifact)
 
 
 def _source_bundle(root: Yaml) -> tuple[str, dict[tuple[str, str], str]]:
     """Detach loader-attached subtrees into an immutable Resolve snapshot."""
     workflows: dict[tuple[str, str], str] = {}
-    detached_root = _detach_sources(root, (), workflows)
+    detached_root = _detach_sources(root, workflows)
     return _dump_source(detached_root), workflows
 
 
@@ -174,10 +168,10 @@ def _bind_subinterpreter_locations(graph: WorkflowGraph,
     rebuilt as text in the first place. A binding the document already wrote is
     left alone.
     """
-    values = {
-        'root_workflow_yml_path': str(Path(yaml_tag_paths['yaml']).parent.absolute()),
-        'cachedir_path': str(Path(yaml_tag_paths['cachedir']).absolute()),
-        'homedir': yaml_tag_paths['homedir'],
+    values: dict[PortName, str] = {
+        AuthoredName('root_workflow_yml_path'): str(Path(yaml_tag_paths['yaml']).parent.absolute()),
+        AuthoredName('cachedir_path'): str(Path(yaml_tag_paths['cachedir']).absolute()),
+        AuthoredName('homedir'): yaml_tag_paths['homedir'],
     }
     steps = []
     for step in graph.steps:
@@ -196,8 +190,7 @@ def _bind_subinterpreter_locations(graph: WorkflowGraph,
                        for child in graph.children))
 
 
-def _detach_sources(document: Yaml, path: tuple[str, ...],
-                    workflows: dict[tuple[str, str], str]) -> Yaml:
+def _detach_sources(document: Yaml, workflows: dict[tuple[str, str], str]) -> Yaml:
     """Recursively replace attached child bodies with registry entries."""
     copied = deepcopy(document)
     raw_steps = copied.get('steps', [])
@@ -213,7 +206,7 @@ def _detach_sources(document: Yaml, path: tuple[str, ...],
     sidecar_steps = sidecar.get('steps', {}) if isinstance(sidecar, dict) else {}
     if isinstance(sidecar, dict) and isinstance(sidecar.get('implementations'), dict):
         copied['wic'] = {**sidecar, 'implementations': _detach_implementations(
-            sidecar, path, workflows)}
+            sidecar, workflows)}
     detached: list[Yaml] = []
     for index, step in enumerate(steps, start=1):
         if not isinstance(step, dict) or 'subtree' not in step:
@@ -226,9 +219,7 @@ def _detach_sources(document: Yaml, path: tuple[str, ...],
         namespace = 'global'
         if isinstance(metadata, dict) and isinstance(metadata.get('wic'), dict):
             namespace = str(metadata['wic'].get('namespace', 'global'))
-        workflow_name = Path(path[-1]).stem if path else ''
-        child_path = (*path, emitted_step_id(workflow_name, index, step_name))
-        child = _detach_sources(step['subtree'], child_path, workflows)
+        child = _detach_sources(step['subtree'], workflows)
         workflows[(namespace, child_name)] = _dump_source(child)
         parentargs = step.get('parentargs', {})
         detached.append({'id': step_name,
@@ -237,8 +228,7 @@ def _detach_sources(document: Yaml, path: tuple[str, ...],
     return copied
 
 
-def _detach_implementations(sidecar: Yaml, path: tuple[str, ...],
-                            workflows: dict[tuple[str, str], str]) -> Yaml:
+def _detach_implementations(sidecar: Yaml, workflows: dict[tuple[str, str], str]) -> Yaml:
     """Move inline implementation bodies into the registry, as subtrees are.
 
     The loader leaves each body attached and rekeys the mapping by ``StepId``,
@@ -250,7 +240,7 @@ def _detach_implementations(sidecar: Yaml, path: tuple[str, ...],
     for key, body in sidecar['implementations'].items():
         name = Path(key.stem if isinstance(key, LegacyStepId) else str(key)).stem
         if isinstance(body, dict) and body:
-            child = _detach_sources(body, (*path, name), workflows)
+            child = _detach_sources(body, workflows)
             workflows[(namespace, name)] = _dump_source(child)
         detached[name] = {}
     return detached
@@ -261,8 +251,13 @@ def _dump_source(document: Yaml) -> str:
                      line_break='\n', indent=2)
 
 
-def _check_unresolved_names(graph: WorkflowGraph, allow_raw_cwl: bool) -> None:
-    declared = {port.name for port in graph.workflow_inputs}
+def _check_unresolved_names(graph: WorkflowGraph, allow_raw_cwl: bool,
+                            names: Names | None = None) -> None:
+    # Authored text is recognized by comparing it with what each declared
+    # input is spelled as -- an author may write a derived name -- never by
+    # taking the text apart.
+    names = names or Names.of(graph)
+    declared = {names.port(port.name) for port in graph.workflow_inputs}
     for step in graph.steps:
         for binding in step.bindings:
             value = binding.value
@@ -275,23 +270,26 @@ def _check_unresolved_names(graph: WorkflowGraph, allow_raw_cwl: bool) -> None:
                     f'Warning! Did you forget to use !ii before {name} in {graph.name}.wic?',
                     'If you want to compile the workflow anyway, use --allow_raw_cwl')
     for child in graph.children:
-        _check_unresolved_names(child, allow_raw_cwl)
+        _check_unresolved_names(child, allow_raw_cwl, names)
 
 
-def _artifact_tree(graph: WorkflowGraph, registry: RegistrySnapshot,
+def _artifact_tree(graph: WorkflowGraph, names: Names, registry: RegistrySnapshot,
                    graph_settings: GraphSettings,
                    graph_reps: GraphReps | None = None,
-                   *, relative_run_path: bool = True) -> CompilationArtifact:
+                   *, relative_run_path: bool = True,
+                   partial_failure: bool = False) -> CompilationArtifact:
     """One artifact per emitted document, each surfaced exactly once."""
-    document = surface(graph, relative_run_path=relative_run_path)
+    document = surface(graph, names, relative_run_path=relative_run_path,
+                       partial_failure=partial_failure)
     children: list[CompilationArtifact] = []
     for step in document.steps:
         assert step.emission is not None
         child = step.emission.run.child
         if child is not None:
-            child_reps = _project_graph(child, graph_settings)
-            children.append(_artifact_tree(child, registry, graph_settings, child_reps,
-                                           relative_run_path=relative_run_path))
+            child_reps = _project_graph(child, names, graph_settings)
+            children.append(_artifact_tree(child, names, registry, graph_settings, child_reps,
+                                           relative_run_path=relative_run_path,
+                                           partial_failure=partial_failure))
             continue
         key = step.emission.run.process_id
         definition = registry.tool(key)
@@ -301,25 +299,25 @@ def _artifact_tree(graph: WorkflowGraph, registry: RegistrySnapshot,
                 f'process {key.namespace}/{key.name} disappeared after resolution')
         leaf_graph = utils_graphs.get_graph_reps(key.name)
         children.append(CompilationArtifact(
-            (step.emission.id,), Path(definition.run_path).stem,
+            (names.step(step.id),), Path(definition.run_path).stem,
             definition.run_path, deepcopy(definition.cwl), {}, None,
             leaf_graph,
         ))
 
-    reps = graph_reps or _project_graph(graph, graph_settings)
+    reps = graph_reps or _project_graph(graph, names, graph_settings)
     return CompilationArtifact(
-        graph.namespace.parts,
+        tuple(names.step(part) for part in graph.namespace.parts),
         graph.name,
         f'{graph.name}.cwl',
-        emit(document),
-        emit_job_inputs(document),
+        emit(document, names),
+        emit_job_inputs(document, names),
         graph,
         reps,
         tuple(children),
     )
 
 
-def _project_graph(graph: WorkflowGraph, settings: GraphSettings,
+def _project_graph(graph: WorkflowGraph, names: Names, settings: GraphSettings,
                    target: GraphReps | None = None) -> GraphReps:
     reps = target or GraphReps(graphviz.Digraph(name=f'cluster_{graph.name}'),
                                nx.DiGraph(), GraphData(graph.name))
@@ -331,38 +329,32 @@ def _project_graph(graph: WorkflowGraph, settings: GraphSettings,
     reps.graphdata.ranksame = []
     for step in graph.steps:
         assert step.emission is not None
-        name = namespaced(*graph.namespace.parts, step.emission.id)
-        label = step.emission.id if settings['graph_label_stepname'] else step.id.name
+        name = names.qualified(step.id)
+        label = names.step(step.id) if settings['graph_label_stepname'] else step.id.name
         attrs = {'label': label, 'shape': 'box', 'style': 'rounded, filled',
                  'fillcolor': 'lightblue'}
         reps.graphviz.node(name, **attrs)
         reps.networkx.add_node(name)
         reps.graphdata.nodes.append((name, attrs))
     for edge in graph.edges:
-        source = _graph_step_name(graph, edge.source)
-        sink = _graph_step_name(graph, edge.sink)
+        source = names.qualified(edge.source.step)
+        sink = names.qualified(edge.sink.step)
         edge_attrs: dict[str, str] = {}
         if settings['graph_label_edges']:
-            edge_attrs['label'] = edge.source.port
+            edge_attrs['label'] = names.port(edge.source.port)
         if not reps.networkx.has_edge(source, sink) or settings['graph_label_edges']:
             if source != sink:
                 reps.graphviz.edge(source, sink, **edge_attrs)
             reps.networkx.add_edge(source, sink)
             reps.graphdata.edges.append((source, sink, edge_attrs))
     for child in graph.children:
-        child_reps = _project_graph(child, settings)
+        child_reps = _project_graph(child, names, settings)
         reps.graphdata.subgraphs.append(child_reps.graphdata)
         reps.networkx.add_nodes_from(child_reps.networkx.nodes)
         reps.networkx.add_edges_from(child_reps.networkx.edges)
         if len(graph.namespace.parts) < settings['graph_inline_depth']:
             reps.graphviz.subgraph(child_reps.graphviz)
     return reps
-
-
-def _graph_step_name(graph: WorkflowGraph, port: PortId) -> str:
-    step = next(step for step in graph.all_steps if step.id == port.step)
-    assert step.emission is not None
-    return namespaced(*step.id.namespace.parts, step.emission.id)
 
 
 def _lang_version_pins(node: Any, _path: frozenset[int] = frozenset()) -> tuple[str, ...]:

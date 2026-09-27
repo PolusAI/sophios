@@ -60,6 +60,10 @@ class SophiosErrorCode(StrEnum):
     #: interface just as a subworkflow does.
     UNDECLARED_PORT = 'wic028'
     RECURSIVE_ALIAS = 'wic030'
+    #: Two different ports that the emitted document would spell the same way:
+    #: an authored name equal to one the compiler derives, for instance. CWL
+    #: could not tell them apart, so neither can be emitted.
+    DUPLICATE_DOCUMENT_NAME = 'wic031'
 
     #: --- Python API. The document is valid; the call was not. ---
     #:

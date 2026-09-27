@@ -25,7 +25,9 @@ from sophios.ir import (
     infer,
     link,
 )
-from sophios.ir.types import Port, PortDeclaration, PortId, StepNode, WorkflowGraph
+from sophios.ir.names import Names
+from sophios.ir.types import (DerivedName, Port, PortDeclaration, PortId, PortName, StepNode,
+                              WorkflowGraph)
 from sophios.lang import SophiosErrorCode
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
@@ -243,7 +245,7 @@ def test_converter_search_stops_at_the_candidate_break() -> None:
                    InsertionCatalog.from_registry(registry))
     assert result.graph is not None, list(result.diagnostics)
     assert not any(step.synthesized for step in result.graph.steps)
-    assert [port.name for port in result.graph.workflow_inputs] == [
+    assert [Names.of(result.graph).port(port.name) for port in result.graph.workflow_inputs] == [
         'oracle__step__3__use_1___file']
     live = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
                             insert_steps_automatically=True)
@@ -327,7 +329,7 @@ def _model_candidate(steps: tuple[StepNode, ...], position: int,
         for output in reversed(producer.outputs):
             source_type = _model_source_type(producer, output)
             source_formats = _model_formats(output.declaration)
-            if ('_log_' not in output.id.port
+            if (not any('_log_' in name for name in _model_names(output.id.port))
                     and _model_types_match(sink_type, source_type)
                     and _model_formats_match(sink_formats, source_formats, source_type)):
                 return output.id
@@ -396,7 +398,11 @@ def _model_type(port: Port) -> Any:
     return ['null', value] if port.type.optional else value
 
 
-def _port(ports: tuple[Port, ...], name: str) -> Port:
+def _model_names(name: PortName) -> tuple[str, ...]:
+    return (name.step.name, *_model_names(name.port)) if isinstance(name, DerivedName) else (name,)
+
+
+def _port(ports: tuple[Port, ...], name: PortName) -> Port:
     return next(port for port in ports if port.id.port == name)
 
 

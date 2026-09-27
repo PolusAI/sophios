@@ -43,6 +43,8 @@ from sophios.ir import (
     emit_job_inputs,
     surface,
 )
+from sophios.ir.names import Names
+from sophios.ir.types import AuthoredName, StepOutputRef
 from sophios.lang.cwl import CWL_VERSION
 from sophios.lang.versions import ANNOTATION_KEY, ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
 from sophios.wic_types import Yaml
@@ -59,7 +61,8 @@ from .source_scan import REPO_ROOT
 def test_the_live_compiler_emits_only_from_its_graph(workflow: Yaml) -> None:
     """The public compiler's artifact is exactly its final graph projection."""
     result = compile_hermetic(copy.deepcopy(workflow))
-    assert result.artifact.cwl == emit(surface(result.graph))
+    names = Names.of(result.graph)
+    assert result.artifact.cwl == emit(surface(result.graph, names), names)
 
 
 @pytest.mark.fast
@@ -102,10 +105,12 @@ def test_one_graph_emits_identically(workflow: Yaml) -> None:
     projections and neither byte moves.
     """
     source = copy.deepcopy(workflow)
-    document = surface(compile_hermetic(source).graph)
-    first = emit(document)
+    graph = compile_hermetic(source).graph
+    names = Names.of(graph)
+    document = surface(graph, names)
+    first = emit(document, names)
     source.clear()
-    second = emit(document)
+    second = emit(document, names)
     assert equivalent(first, second, Strength.IDENTICAL) is None
 
 
@@ -118,8 +123,8 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
     """
     namespace = Namespace()
     step_id = StepId(namespace, 1, 'write')
-    input_id = PortId(step_id, Direction.INPUT, 'message')
-    output_id = PortId(step_id, Direction.OUTPUT, 'file')
+    input_id = PortId(step_id, Direction.INPUT, AuthoredName('message'))
+    output_id = PortId(step_id, Direction.OUTPUT, AuthoredName('file'))
     in_decl = PortDeclaration(PortType('string'))
     out_decl = PortDeclaration(PortType('File'), field_order=('type', 'outputSource'))
     step = StepNode(
@@ -127,33 +132,36 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
         inputs=(Port(input_id, in_decl.type, in_decl),),
         outputs=(Port(output_id, out_decl.type, out_decl),),
         emission=StepEmission(
-            'write', (('message', Source('message')),),
-            ProcessRun('write.cwl', RegistryKey('global', 'write')), ('file',),
+            ((AuthoredName('message'), Source(AuthoredName('message'))),),
+            ProcessRun('write.cwl', RegistryKey('global', 'write')), (AuthoredName('file'),),
         ),
     )
     graph = WorkflowGraph(
         namespace, (step,), name='handmade', lang_version='0.0.1', cwl_version=CWL_VERSION,
-        workflow_inputs=(WorkflowPort('message', BoundaryDeclaration(in_decl)),),
+        workflow_inputs=(WorkflowPort(AuthoredName('message'), BoundaryDeclaration(in_decl)),),
         workflow_outputs=(
-            WorkflowPort('file', BoundaryDeclaration(out_decl), 'write/file', True),),
-        job_bindings=(JobBinding('message', 'hello'),),
+            WorkflowPort(AuthoredName('file'), BoundaryDeclaration(out_decl),
+                         StepOutputRef(step_id, AuthoredName('file')), True),),
+        job_bindings=(JobBinding(AuthoredName('message'), 'hello'),),
         namespaces=((ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI),),
         field_order=('steps', 'cwlVersion', 'class', '$namespaces', 'inputs',
                      ANNOTATION_KEY, 'outputs'),
     )
-    document = surface(graph)
-    assert emit(document) == {
-        'steps': [{'id': 'write', 'in': {'message': {'source': 'message'}},
-                   'run': 'write/write.cwl', 'out': ['file']}],
+    names = Names.of(graph)
+    document = surface(graph, names)
+    assert emit(document, names) == {
+        'steps': [{'id': 'handmade__step__1__write', 'in': {'message': {'source': 'message'}},
+                   'run': 'handmade__step__1__write/write.cwl', 'out': ['file']}],
         'cwlVersion': CWL_VERSION,
         'class': 'Workflow',
         '$namespaces': {'edam': 'https://edamontology.org/',
                         ANNOTATION_NAMESPACE: ANNOTATION_NAMESPACE_URI},
         'inputs': {'message': {'type': 'string'}},
         ANNOTATION_KEY: '0.0.1',
-        'outputs': {'file': {'type': 'File', 'outputSource': 'write/file'}},
+        'outputs': {'file': {'type': 'File',
+                             'outputSource': 'handmade__step__1__write/file'}},
     }
-    assert emit_job_inputs(document) == {'message': 'hello'}
+    assert emit_job_inputs(document, names) == {'message': 'hello'}
 
 
 @pytest.mark.needs_cwltool

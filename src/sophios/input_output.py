@@ -8,7 +8,7 @@ import yaml
 
 from . import auto_gen_header
 from .runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
-from .ir.types import namespaced
+from .ir.names import NAMESPACE_SEPARATOR
 from .ir.artifacts import CompilationArtifact
 from .wic_types import Yaml, Json
 
@@ -61,8 +61,8 @@ def _write_artifacts_to_disk(artifact: CompilationArtifact, path: Path,
         filename_cwl = f'{artifact.name}.cwl'
         filename_yml = f'{artifact.name}_inputs.yml'
     else:
-        filename_cwl = namespaced(*artifact.namespace, f'{artifact.name}.cwl')
-        filename_yml = namespaced(*artifact.namespace, f'{artifact.name}_inputs.yml')
+        filename_cwl = NAMESPACE_SEPARATOR.join((*artifact.namespace, f'{artifact.name}.cwl'))
+        filename_yml = NAMESPACE_SEPARATOR.join((*artifact.namespace, f'{artifact.name}_inputs.yml'))
 
     cwl = normalize_artifact_cwl(artifact)
     job = normalize_artifact_job_inputs(artifact, {**artifact.job_inputs, **inputs})

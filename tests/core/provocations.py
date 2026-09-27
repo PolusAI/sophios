@@ -279,6 +279,22 @@ def _provoke_invalid_link() -> None:
     workflow.outputs.out = 3
 
 
+def _provoke_duplicate_document_name() -> None:
+    """Author a workflow input spelled like the one a literal is lifted to.
+
+    The two are different ports -- one written, one derived -- that the
+    emitted document would spell the same way, so neither can be emitted.
+
+    Raises:
+        SophiosError: Always, carrying `wic031`.
+    """
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+
+    compile_hermetic({'inputs': {'provoke__step__1__mk_file___name': 'string'},
+                      'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]},
+                     'provoke')
+
+
 def _provoke_invalid_tool() -> None:
     """A CWL tool that cannot be loaded."""
     from sophios.api.python.workflow import Step  # pylint: disable=import-outside-toplevel
@@ -295,4 +311,5 @@ COMPILED.update({
     SophiosErrorCode.DUPLICATE_EDGE_DEF: _provoke_duplicate_edge_def,
     SophiosErrorCode.EMPTY_NAME: _provoke_empty_name,
     SophiosErrorCode.UNDECLARED_PORT: _provoke_undeclared_port,
+    SophiosErrorCode.DUPLICATE_DOCUMENT_NAME: _provoke_duplicate_document_name,
 })
