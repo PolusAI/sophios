@@ -35,7 +35,6 @@ Tools: TypeAlias = dict[StepId, Tool]
 
 # NOTE: Please read the Namespacing section of docs/dev/devguide.md !!!
 Namespace: TypeAlias = str
-Namespaces: TypeAlias = list[Namespace]
 
 DiGraph: TypeAlias = Any  # graphviz.DiGraph
 

@@ -96,7 +96,7 @@ def _load_global_config() -> Json:
 
 def _iter_python_workflow_paths(global_config: Json) -> list[tuple[str, Path]]:
     """Every discovered Python workflow, minus the corpora with their own lanes."""
-    paths = sophios.plugins.get_py_paths(global_config)
+    paths = sophios.plugins.get_workflow_paths(global_config, 'py')
     return [
         (path_str, path)
         for _, paths_dict in paths.items()

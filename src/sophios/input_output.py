@@ -154,10 +154,13 @@ def read_config_from_disk(config_file: Path, abspath: bool = True) -> Json:
     config: Json = json.loads(config_file.read_text(encoding='utf-8'))
     conf_tags = ['search_paths_cwl', 'search_paths_wic']
     for tag in conf_tags:
-        if abspath:
-            config[tag] = get_absolute_paths(config[tag])
-        else:  # this is a hacky way to fix global paths wrt ~/home/wic/
-            config[tag] = get_home_paths(config[tag])
+        sub_config = copy.deepcopy(config[tag])
+        for ns in sub_config:
+            if abspath:
+                sub_config[ns] = [str(Path(path).absolute()) for path in sub_config[ns]]
+            else:  # this is a hacky way to fix global paths wrt ~/home/wic/
+                sub_config[ns] = [str(Path.home() / path) for path in sub_config[ns]]
+        config[tag] = sub_config
     return config
 
 
@@ -174,35 +177,3 @@ def get_basic_config() -> Json:
     # read_config_from_disk handles converting them to absolute paths
     basic_config = read_config_from_disk(src_dir/'config_basic.json', False)
     return basic_config
-
-
-def get_absolute_paths(sub_config: Json) -> Json:
-    """Update the paths within the sub_config json object as absolute paths
-
-    Args:
-        sub_config (dict): The json (sub)object where filepaths are stored
-
-    Returns:
-        Json: The json (sub)object with absolute filepaths
-    """
-    abs_sub_config = copy.deepcopy(sub_config)
-    for ns in abs_sub_config:
-        abs_paths = [str(Path(path).absolute()) for path in abs_sub_config[ns]]
-        abs_sub_config[ns] = abs_paths
-    return abs_sub_config
-
-
-def get_home_paths(sub_config: Json) -> Json:
-    """Update the paths within the sub_config json object as absolute paths
-
-    Args:
-        sub_config (dict): The json (sub)object where filepaths are stored
-
-    Returns:
-        Json: The json (sub)object with absolute filepaths
-    """
-    abs_sub_config = copy.deepcopy(sub_config)
-    for ns in abs_sub_config:
-        abs_paths = [str(Path.home() / path) for path in abs_sub_config[ns]]
-        abs_sub_config[ns] = abs_paths
-    return abs_sub_config

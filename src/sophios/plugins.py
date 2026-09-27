@@ -11,7 +11,6 @@ from typing import Any, TypeAlias
 import cwltool.load_tool
 import yaml
 import podman
-from podman.domain.images_build import BuildMixin
 import docker
 
 
@@ -210,23 +209,6 @@ def remove_entrypoints(client: Client, build: Any) -> None:
                     )
 
 
-def remove_entrypoints_docker() -> None:
-    """remove/overwrite the entrypoints from all images (using docker)
-    """
-    client = docker.from_env()  # type: ignore
-    remove_entrypoints(client, client.images)
-
-
-def remove_entrypoints_podman() -> None:
-    """remove/overwrite the entrypoints from all images (using podman)
-    """
-    # See https://github.com/containers/podman-py?tab=readme-ov-file#example-usage
-    uri = "unix:///run/user/1000/podman/podman.sock"
-
-    with podman.PodmanClient(base_url=uri) as client:
-        remove_entrypoints(client, BuildMixin())
-
-
 def cwl_update_outputs_optional_artifact(
         artifact: CompilationArtifact,
         failure_code_range: list[int],
@@ -353,8 +335,3 @@ def get_workflow_paths(config: Json, extension: str) -> dict[str, dict[str, Path
 def get_yml_paths(config: Json) -> dict[str, dict[str, Path]]:
     """Find all `.wic` workflow definition files. See `get_workflow_paths`."""
     return get_workflow_paths(config, 'wic')
-
-
-def get_py_paths(config: Json) -> dict[str, dict[str, Path]]:
-    """Find all `.py` workflow definition files. See `get_workflow_paths`."""
-    return get_workflow_paths(config, 'py')
