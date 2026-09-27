@@ -134,10 +134,8 @@ def _lower_resolved(document: ResolvedDocument,
                            (ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI),)
     schemas_raw = passthrough.get('$schemas', ())
     schemas = tuple(schemas_raw) if isinstance(schemas_raw, list) else ()
-    # CWL also spells `requirements:` as a list, and a bare `requirements:`
-    # parses to None. Sophios merges into the mapping form, so that is the one
-    # shape the graph models; any other is residue it carries opaquely and
-    # Emit writes back unchanged. Dropping it silently rewrote the document.
+    # Only the mapping form of `requirements:` is modeled; any other shape
+    # (list, or None from a bare key) is carried opaquely and Emit writes it back unchanged.
     requirements_raw = passthrough.get('requirements', {})
     requirements = (tuple(requirements_raw.items())
                     if isinstance(requirements_raw, dict) else ())
@@ -194,11 +192,8 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep, child: Workflo
     source = resolved.source
     declared_inputs = {AuthoredName(port.name): port.declaration for port in resolved.process.inputs}
     declared_outputs = {AuthoredName(port.name): port.declaration for port in resolved.process.outputs}
-    # A generated process consumes its generation parameters rather than
-    # declaring them: `script` becomes the command and `dockerPull` a container
-    # hint, so neither survives into the tool's interface. The document still
-    # binds them, and that binding is what produced the tool -- not a port the
-    # step got wrong.
+    # A generated process consumes `script`/`dockerPull` to build its tool;
+    # neither survives into the tool's declared interface.
     consumed = _GENERATION_PARAMETERS if resolved.process.generated else ()
     for name, _ in source.inputs:
         if name not in declared_inputs and name not in consumed:
@@ -237,12 +232,8 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep, child: Workflo
         if key not in field_order:
             field_order.append(key)
     emission = StepEmission(
-        # Empty, deliberately. Every authored input naming a declared port
-        # becomes a `Binding` above, and Complete writes each one: a literal to
-        # a workflow input, a raw reference to its expression, a name to
-        # itself, an edge to its source. Seeding this with the spelling the
-        # document used made the *default* state invalid CWL -- a `wic_alias:`
-        # nobody replaced reached the runner instead of the compiler.
+        # Empty, deliberately: every bound input is a `Binding` above, and
+        # Complete writes each one's emitted spelling.
         inputs=(),
         run=ProcessRun(resolved.process.run_path, resolved.process.key),
         outputs=tuple(declared_outputs),
@@ -260,12 +251,7 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep, child: Workflo
 
 def _scatter_ports(scatter: OpaqueCwl, inputs: tuple[Port, ...],
                    child: WorkflowGraph | None) -> tuple[PortName, ...]:
-    """The ports an authored `scatter:` names, in the order written.
-
-    A name is the step's own input, or else the rendered spelling of a boundary
-    input its subworkflow exposes -- recognized by rendering every candidate,
-    never by taking the text apart. Anything else stays the authored name.
-    """
+    """The ports an authored `scatter:` names, in the order written."""
     written: list[object] = [scatter] if isinstance(scatter, str) else (
         list(scatter) if isinstance(scatter, list) else [])
     own = {port.id.port for port in inputs}
@@ -291,11 +277,9 @@ def _workflow_ports(raw: object, *, output: bool) -> tuple[WorkflowPort, ...]:
         return ()
     ports: list[WorkflowPort] = []
     for name, declaration_raw in raw.items():
-        # Written under the workflow's own `inputs:`/`outputs:`, so it is a
-        # boundary declaration by where it appears. Asserted, not reduced:
-        # `boundary_declaration` drops what a tool may say and a boundary may
-        # not, and here that would discard fields the author wrote at the
-        # boundary on purpose.
+        # Asserted, not reduced via `boundary_declaration`: it is already a
+        # boundary declaration by where it's written, and reducing it would
+        # discard fields the author wrote at the boundary on purpose.
         declaration = BoundaryDeclaration(port_declaration(declaration_raw, output=output))
         has_source = output and isinstance(declaration_raw, dict) \
             and 'outputSource' in declaration_raw
@@ -305,11 +289,7 @@ def _workflow_ports(raw: object, *, output: bool) -> tuple[WorkflowPort, ...]:
 
 
 def _output_port(workflow_name: str, nodes: list[StepNode], raw: object) -> PortId | None:
-    """The step output an authored `outputSource: <step>/<port>` names, if any.
-
-    `<step>` may be the authored step name or the id the step will be emitted
-    under, so the latter is rendered to compare against -- never taken apart.
-    """
+    """The step output an authored `outputSource: <step>/<port>` names, if any."""
     if not isinstance(raw, str) or '/' not in raw:
         return None
     step_name, port_name = raw.rsplit('/', 1)
@@ -340,12 +320,9 @@ def _inference_rules(sidecar: object) -> tuple[tuple[str, str], ...]:
 
 def _step_identities(document: Document, here: Namespace,
                      diagnostics: Diagnostics) -> tuple[StepId, ...] | None:
-    """One occurrence identity per step, or None when a step cannot have one.
+    """One occurrence identity per step, or None when a step lacks an id.
 
-    A repeated `id` is not an error: sequence-form `steps:` exists so that a
-    tool can be invoked twice, and `docs/tutorials/append_twice.wic` does. What
-    cannot be lowered is a step the parser recovered without a name, which is
-    reported rather than raised.
+    A repeated `id` is not an error: sequence-form `steps:` invokes one tool twice.
     """
     identities: list[StepId] = []
     for index, step in enumerate(document.steps, start=1):
@@ -358,16 +335,8 @@ def _step_identities(document: Document, here: Namespace,
 
 
 def _every_name_is_present(document: Document, diagnostics: Diagnostics) -> bool:
-    """Report every position where the document left a name empty.
-
-    The types refuse an unnamed port or obligation, and refusing is right --
-    but the refusal is a `ValueError`, and `parse` accepts `in: {"": ...}`.
-    Checking here is what keeps lowering total: the same reason `_step_identities`
-    reports an unnamed step rather than letting `StepId` raise.
-
-    All of them report one code. They are one mistake in four positions, and a
-    reader who wrote nothing where a name goes is not helped by being told which
-    of the four the checker noticed first.
+    """Report every position where the document left a name empty, all under
+    one error code, so lowering stays total rather than raising `ValueError`.
     """
     found = False
     for index, step in enumerate(document.steps, start=1):
@@ -399,12 +368,7 @@ def _every_name_is_present(document: Document, diagnostics: Diagnostics) -> bool
 
 def _edge_definitions(identities: tuple[StepId, ...], document: Document,
                       diagnostics: Diagnostics) -> dict[str, PortId]:
-    """Which port defines each explicit edge name, reporting any defined twice.
-
-    Every definition is visited before any is dropped, so a repeat is a
-    diagnostic rather than a silently discarded second entry that no later phase
-    could report.
-    """
+    """Which port defines each explicit edge name, reporting any defined twice."""
     defined: dict[str, PortId] = {}
     for step_id, step in zip(identities, document.steps, strict=True):
         for binding in step.outputs:

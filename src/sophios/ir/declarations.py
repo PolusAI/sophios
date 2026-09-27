@@ -5,12 +5,10 @@ from typing import Any, Final
 
 from .types import BoundaryDeclaration, PortDeclaration, PortType
 
-#: What a workflow boundary port may state. An allowlist, not a list of
-#: things to drop: CWL gives a tool's input and a workflow's input different
-#: records, and the tool's is the larger one, so naming what survives is the
-#: only version that stays correct as declarations grow. `inputBinding` is the
-#: one that bites -- a workflow input's is an `InputBinding`, a tool's is a
-#: `CommandLineBinding`, so a promoted `position` fails validation.
+#: What a workflow boundary port may state. An allowlist, not a denylist,
+#: because a tool's input record is a strict superset of a workflow input's
+#: (e.g. `inputBinding` is a `CommandLineBinding` on a tool, an `InputBinding`
+#: on a workflow input, so a promoted `position` fails validation).
 _BOUNDARY_FIELDS: Final = frozenset({'type', 'format', 'label', 'doc'})
 
 
@@ -68,9 +66,8 @@ def boundary_declaration(declaration: PortDeclaration) -> BoundaryDeclaration:
     """`declaration` as a workflow boundary may state it.
 
     Every phase that promotes a step's port to a workflow input goes through
-    here. Each used to carry its own version -- an allowlist in Complete, a
-    two-name denylist in Infer, nothing at all in Link -- so whether a
-    promoted port emitted valid CWL depended on which phase promoted it.
+    here, so a promoted port always emits valid CWL regardless of which phase
+    promoted it.
 
     Args:
         declaration (PortDeclaration): A port declaration, usually a step's.

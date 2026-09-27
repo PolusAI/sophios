@@ -1,8 +1,7 @@
 """Immutable graph-derived compilation artifacts.
 
-These are the sole internal boundary after Emit.  Application code consumes
-this immutable tree, so the typed graph—not a replayed legacy environment—is
-the compilation's authority.
+The sole internal boundary after Emit: application code consumes this
+immutable tree, and the typed graph is the compilation's sole authority.
 """
 from dataclasses import dataclass
 

@@ -173,11 +173,8 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
     name = generated_process_id(step) if generated else authored_name
     key = RegistryKey(namespace, name)
 
-    # A tool and a workflow may intentionally share a stem.  The authored
-    # ``.wic`` spelling selects the workflow; an ordinary step selects the
-    # tool when one exists and falls back to a workflow only when it does not.
-    # Looking up workflows first makes an attached ``fail.wic`` recursively
-    # resolve the ``fail`` tool inside itself as the workflow again.
+    # A tool and workflow may share a stem: an ordinary step prefers the tool,
+    # falling back to a workflow only when no tool exists.
     explicit_workflow = step.id.endswith('.wic') \
         or (isinstance(run, str) and run.endswith('.wic'))
     tool = registry.tool(key)
@@ -198,10 +195,7 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
         if parsed.document is None:
             return None
         inherited = _inherit_parameters(parsed.document, sidecar)
-        # A called workflow selects its implementation exactly as a root one
-        # does. Selecting only in `resolve` left the rule true of whichever
-        # document happened to be the root, so the same file compiled to a
-        # body of steps on its own and to an empty workflow when called.
+        # A called workflow selects its implementation exactly as a root one does.
         child_source, selection = _select_implementation(inherited, registry)
         _copy_diagnostics(diagnostics, selection)
         if child_source is None:
@@ -255,9 +249,7 @@ def _select_implementation(document: Document,
                           'a workflow with implementations needs an implementation selection',
                           document.sidecar.span)
         return None, diagnostics
-    # Parsed in place by the parser: the bodies are written inline in this
-    # document, so the selection is a lookup, and the spans inside the chosen
-    # one already point at the file the reader wrote.
+    # Bodies are written inline in this document, so selection is a lookup.
     selected = dict(document.sidecar.implementations).get(chosen)
     if selected is not None:
         return selected, diagnostics
@@ -299,10 +291,8 @@ def _workflow_interface(document: Document) -> tuple[tuple[ResolvedPort, ...],
             _ports(passthrough.get('outputs', {}), output=True))
 
 
-#: The two keys a `(N, name)` body contributes to the step it names. Every
-#: other key under it belongs to the child document's own `wic:` block --
-#: `namespace`, `graphviz`, `steps` -- which is why `merge_yml_trees` deletes
-#: `wic` from the step arguments and merges it into the child instead.
+#: The two keys a `(N, name)` body contributes to the step it names; every
+#: other key under it belongs to the child document's own `wic:` block.
 _CONTRIBUTED_KEYS = ('in', 'out')
 
 #: The span a contributed value carries when the sidecar it came from has
@@ -312,16 +302,7 @@ _CONTRIBUTION_SPAN = SourceSpan('<wic parameter passing>', 1, 1, 1, 1)
 
 
 def _apply_parameters(document: Document) -> Document:
-    """Contribute each `wic: steps: (N, name):` body to the step it names.
-
-    Parameter passing (`ast.py::merge_yml_trees`): a document reaches a step
-    of a subworkflow by nesting `wic:` blocks, and the innermost body's `in:`
-    and `out:` land on that step -- which is how `basic.wic` places the sole
-    definition of an edge on a step of a subworkflow called from two roots.
-    Every ancestor's contribution is merged into a document's own sidecar
-    before it is resolved, so applying the sidecar a document carries applies
-    the whole chain, at whatever depth each contribution entered it.
-    """
+    """Contribute each `wic: steps: (N, name):` body to the step it names."""
     if document.sidecar is None:
         return document
     steps = tuple(_contributed_step(step, _step_sidecar(document.sidecar, index, step.id))
@@ -330,13 +311,9 @@ def _apply_parameters(document: Document) -> Document:
 
 
 def _contributed_step(step: Step, sidecar: WicSidecar | None) -> Step:
-    """One step with its contributed `in:`/`out:` applied, the contributor winning.
-
-    A `.wic` step receives nothing: its body names steps *inside* the
-    subworkflow and is passed down, exactly as `merge_yml_trees` applies step
-    arguments only off the subworkflow keys. `out:` is a sequence, so a
-    contributed one replaces the step's own entirely, as `TYPESAFE_REPLACE`
-    does for every non-mapping.
+    """One step with its contributed `in:`/`out:` applied, the contributor
+    winning; a `.wic` step receives nothing, since its body addresses steps
+    inside the subworkflow. A contributed `out:` replaces the step's own entirely.
     """
     if sidecar is None or step.id.endswith('.wic'):
         return step
@@ -360,9 +337,8 @@ def _contributed_step(step: Step, sidecar: WicSidecar | None) -> Step:
 def _contributed_input(value: OpaqueCwl, span: SourceSpan) -> InputValue:
     """Read one contributed `in:` value back into the closed input union.
 
-    A sidecar entry is opaque content, so a tagged construct arrives already
-    typed while the desugared spelling of the same construct arrives as the
-    mapping `render` emits for it. Both surfaces mean one thing (§4.1).
+    Accepts either an already-typed tagged construct or its desugared mapping
+    spelling; both surfaces mean one thing (§4.1).
     """
     match value:
         case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName():
@@ -380,10 +356,8 @@ def _contributed_input(value: OpaqueCwl, span: SourceSpan) -> InputValue:
 
 
 def _contributed_output(entry: OpaqueCwl, span: SourceSpan) -> OutputBinding:
-    """Read one contributed `out:` entry back into an output binding.
-
-    The shape is the one the parser stores for a sidecar `out:`: a bare name,
-    or a single-key mapping of that name to a desugared edge definition.
+    """Read one contributed `out:` entry -- a bare name, or a single-key
+    mapping to a desugared edge definition -- back into an output binding.
     """
     match entry:
         case {**binding} if len(binding) == 1:
@@ -395,12 +369,8 @@ def _contributed_output(entry: OpaqueCwl, span: SourceSpan) -> OutputBinding:
 
 
 def _inherit_parameters(document: Document, sidecar: WicSidecar | None) -> Document:
-    """A child document with the calling step's `wic:` body merged into its own.
-
-    The contributor wins wherever both name the same key, which is what
-    `TYPESAFE_REPLACE` buys `merge_yml_trees`: a parent overrides the value a
-    subworkflow chose for itself. `in:` and `out:` are excluded because they
-    are siblings of the `wic:` wrapper rather than part of it -- they address
+    """A child document with the calling step's `wic:` body merged into its
+    own, the contributor winning; `in:`/`out:` are excluded since they address
     the calling step, not the document it calls.
     """
     if sidecar is None:

@@ -56,11 +56,8 @@ def link(graph: WorkflowGraph) -> Linked:
             )
             continue
         if _position(attached, source.step) >= _position(attached, obligation.sink.step):
-            # Reference §4.1.2: a reference resolves against the definitions
-            # seen so far, and a child may consume what its includer has
-            # *already* defined. Lower applies that within one scope; a call
-            # does not exempt a document from it, or the same program would
-            # be an error flat and legal once split.
+            # Reference §4.1.2: a call does not exempt a document from resolving
+            # against definitions seen so far, or splitting it would legalize the error.
             diagnostics.error(
                 SophiosErrorCode.UNDEFINED_EDGE,
                 f"'!* {obligation.name}' is defined after the step that consumes it. "
@@ -106,17 +103,9 @@ def _normalize_explicit_edges(graph: WorkflowGraph, universe: WorkflowGraph,
                     resolution,
                     source=_concrete_output(universe, resolution.source),
                 )
-                # `universe` is needed above to follow a wrapper-output alias
-                # to its concrete producer, wherever in the tree that is. The
-                # judgment itself is scoped to `graph`, not `universe`: this
-                # is a *local* edge (the docstring's own claim) — both
-                # endpoints live in `graph` — and `_effective_type` sums a
-                # scatter layer for every ancestor on the path it is given.
-                # Handing it `universe` walked that sum past this edge's own
-                # scope, through wrapper steps whose scatter multiplies this
-                # subworkflow's own boundary but never touches values that
-                # never leave it, over-counting layers a purely internal
-                # edge never crosses and rejecting it as disjoint from itself.
+                # `universe` resolves the alias to its concrete producer, but the
+                # judgment stays scoped to `graph` so ancestor scatter layers
+                # outside this local edge's scope are not double-counted.
                 _reject_if_disjoint(graph, resolution, diagnostics)
             bindings.append(replace(binding, resolution=resolution))
         steps.append(replace(step, bindings=tuple(bindings)))
@@ -188,12 +177,7 @@ def attach_step_children(graph: WorkflowGraph,
 
 
 def _position(graph: WorkflowGraph, step_id: StepId) -> tuple[int, ...]:
-    """Document order for a step, as the indices on the path down to it.
-
-    Compared lexicographically, so a step of an enclosing workflow precedes
-    everything inside a call that comes after it, and follows everything
-    inside a call that comes before.
-    """
+    """Document order for a step: the indices on the path down to it, compared lexicographically."""
     for step in graph.steps:
         if step.id == step_id:
             return (step.id.index,)
@@ -257,35 +241,14 @@ def _workflow_call_edges(graph: WorkflowGraph) -> tuple[Edge, ...]:
 
 
 def _compared_types(graph: WorkflowGraph, edge: Edge) -> tuple[Any, Any]:
-    """The two types `_relation` judges, in the scope it judges them in.
-
-    The message quotes these rather than the raw declarations. A scatter
-    mismatch differs only in array depth, so printing the raw types renders
-    every one of them as "'File' cannot feed 'File'" -- a contradiction that
-    tells the reader nothing about the actual difference.
-    """
+    """The two types `_relation` judges, in the scope it judges them in."""
     scope = _graph_at(graph, _owner_namespace(edge))
     return (_effective_type(scope, edge.source, producing=True),
             _effective_type(scope, edge.sink, producing=False))
 
 
 def _relation(graph: WorkflowGraph, edge: Edge) -> TypeRelation:
-    """Judge one edge in its own scope, not whatever scope it was handed.
-
-    `_owner_namespace` names where an edge's two endpoints last diverge -- the
-    lowest document both live under. Scatter layers below that point are ones
-    the value genuinely crosses on its way to one endpoint or the other.
-    Scatter layers above it belong to an ancestor call that wraps *both*
-    endpoints alike (this edge is local to it, the wrapping-alias case
-    `_normalize_explicit_edges` already fixed, generalized to any depth), so
-    they inflate the two sides equally and must not enter the comparison at
-    all. Handing `_effective_type` a wider graph than the edge's own scope
-    walks its ancestor sum past that boundary: the producing side counts
-    every ancestor unconditionally while the consuming side only counts an
-    ancestor whose `scatter:` list names this port, so a shared ancestor that
-    scatters something else inflates one side and not the other and the edge
-    is rejected as disjoint from a scope it never depended on.
-    """
+    """Judge one edge in its own scope, excluding ancestor scatter layers that wrap both endpoints alike and would inflate the comparison unevenly."""
     scope = _graph_at(graph, _owner_namespace(edge))
     source, sink = _compared_types(graph, edge)
     return reference_relation(source, sink, lang_version=scope.lang_version)
@@ -301,21 +264,9 @@ def _effective_type(graph: WorkflowGraph, port: PortId, *, producing: bool) -> A
     else:
         actual = path[-1][1]
         layers = _scatter_keys(actual).count(port.port)
-        # An ancestor wrapper's `scatter:` list names the boundary it crosses
-        # by the name the document it calls exposes the port under, which is
-        # not derivable from the port: a declared `inputs:` entry may be
-        # threaded to an inner port of another name entirely
-        # (`gen_topol_params.wic` scatters `input_receptor_xyz_path` and the
-        # step that consumes it is `combine_structure.input_structure1`), and
-        # an inferred input has no authored name at all. Guessing either
-        # spelling misses the other and drops the layer silently.
-        #
-        # The association is already recorded: each child's `input_mapping`
-        # says which boundary name reaches which sink, and is exactly what
-        # `complete._direct_sink` walks to wire the same crossing.
-        # Before `complete` runs, an inferred input has no mapping entry yet,
-        # and the only name a scatter list can reach it by is the one `infer`
-        # will derive for it. That name is the fallback, not the rule.
+        # A `scatter:` list names the boundary by the name the callee exposes
+        # it under, not derivable from the port; use `input_mapping` when it's
+        # recorded, else fall back to the name `infer` would derive for it.
         boundary = _boundary_name(path[-1][0], port)
         for index, (_owner, wrapper) in enumerate(path[:-1]):
             child = path[index + 1][0]
@@ -360,12 +311,7 @@ def _step_path(graph: WorkflowGraph,
 
 
 def _boundary_name(graph: WorkflowGraph, port: PortId) -> PortName:
-    """The name Sophios exposes `port` under when it has no authored one.
-
-    The name `infer` derives for a workflow input it had to synthesize, which
-    is the only name a `scatter:` list can use to reach such a port from an
-    ancestor wrapper (see `_effective_type`).
-    """
+    """The name Sophios exposes `port` under when it has no authored one."""
     if not _step_path(graph, port.step):
         return port.port
     return DerivedName(port.step, port.port)
@@ -396,12 +342,7 @@ def _owner_namespace(edge: Edge) -> Namespace:
 
 
 def _graph_at(graph: WorkflowGraph, namespace: Namespace) -> WorkflowGraph:
-    """The tree node whose own namespace is exactly `namespace`.
-
-    `namespace` is always an ancestor-or-self of wherever the search starts
-    -- every caller derives it from `_owner_namespace` of an edge reachable
-    from `graph` -- so a child containing it is always found.
-    """
+    """The tree node whose own namespace is exactly `namespace`; always found, since callers derive `namespace` as an ancestor-or-self of `graph`."""
     if graph.namespace == namespace:
         return graph
     child = next(child for child in graph.children
@@ -424,12 +365,7 @@ def _place_edges(graph: WorkflowGraph, edges: tuple[Edge, ...],
 
 def _expose_cross_scope_inputs(graph: WorkflowGraph,
                                edges: tuple[Edge, ...]) -> WorkflowGraph:
-    """Give every edge entering a child an explicit workflow boundary.
-
-    Composition edges remain owned by their lowest common ancestor.  The
-    child still needs a typed input through which that edge can enter its CWL
-    document; otherwise emission would have to rediscover a semantic path.
-    """
+    """Give every edge entering a child an explicit workflow boundary input."""
     children = tuple(_expose_cross_scope_inputs(child, edges) for child in graph.children)
     current = replace(graph, children=children)
     inputs = list(current.workflow_inputs)
@@ -443,11 +379,8 @@ def _expose_cross_scope_inputs(graph: WorkflowGraph,
             step = _step(current, edge.sink.step)
             if step is None or step.emission is None:
                 continue
-            # A sink already relayed by this workflow needs no second name.
-            # The check below is by name, so it cannot see that an authored
-            # boundary input already carries this port: deriving one here adds
-            # an `inputs:` entry no step ever reads, and the interface a
-            # workflow exposes then depends on who called it.
+            # Reuse a sink already relayed by name, or deriving a second name
+            # here adds an `inputs:` entry no step ever reads.
             relayed = next((entry for entry, sinks in mappings if edge.sink in sinks), None)
             derived_from: PortId | None = None if relayed is not None else edge.sink
             name = relayed if relayed is not None else DerivedName(step.id, edge.sink.port)

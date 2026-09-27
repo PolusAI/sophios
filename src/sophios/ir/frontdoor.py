@@ -1,13 +1,9 @@
 """Build a Resolve snapshot from the files a user wrote.
 
-The legacy path assembles a YAML tree by splicing every child ``.wic`` into
-its parent, then dumps each subtree back to text so Parse has something to
-read.  Every span Parse produces is then a position in that dump, not in the
-file the user edited.  This module reads the bytes instead: the root's own
-text is the source, and each reachable workflow is registered verbatim.
-
-Nothing here serialises YAML.  ``yaml`` is parsed only to discover structure;
-the text that reaches the registry is always what was on disk.
+Reads the bytes directly: the root's own text is the source, and each
+reachable workflow is registered verbatim, so every span Parse produces is a
+position in the file the user edited. Nothing here serialises YAML -- `yaml`
+is parsed only to discover structure.
 """
 import traceback
 from dataclasses import dataclass
@@ -123,11 +119,8 @@ def _reach(document: Document,
            seen: set[Path],
            pins: list[str],
            validator: Draft202012Validator | None) -> None:
-    """Follow every workflow and generated tool one document's steps reach.
-
-    Its implementation bodies are followed too: each is a document written
-    inline in this file, and the steps inside one reach further files exactly
-    as this document's own steps do.
+    """Follow every workflow and generated tool one document's steps reach,
+    including its inline implementation bodies.
     """
     for index, step in enumerate(document.steps, start=1):
         namespace = _namespace(_step_sidecar(document.sidecar, index, step.id))
@@ -135,25 +128,19 @@ def _reach(document: Document,
             generated[StepId(generated_process_id(step), namespace)] = \
                 _generated_tool(step, script_dir)
         elif step.id.endswith('.wic'):
-            # An undiscovered workflow is left unregistered rather than raising:
-            # Resolve reports it as absent from the registry, which is a
-            # diagnostic the reader can act on, not a KeyError from a loader.
+            # Left unregistered rather than raising: Resolve reports it as
+            # absent, a diagnostic the reader can act on.
             child_path = yml_paths.get(namespace, {}).get(Path(step.id).stem)
             if child_path is None:
                 continue
-            # Keyed by the namespace the *call site* declares, which is the
-            # one `_resolve_process` builds its `RegistryKey` from -- and the
-            # same one this loop just used to find the file. A producer that
-            # keys differently from the consumer files entries nothing reads.
+            # Keyed by the call site's namespace, matching how `_resolve_process` builds its `RegistryKey`.
             key = (namespace, child_path.stem)
             if key in workflows:
                 continue
             child_source = child_path.read_text(encoding='utf-8')
             workflows[key] = child_source
-            # The recursion is what `seen` is for, and it is keyed by path
-            # because a cycle is a cycle whichever namespace reaches it. The
-            # registry is keyed by namespace, so one file called under two
-            # namespaces needs both entries though it is read and walked once.
+            # `seen` is keyed by path (a cycle is a cycle regardless of namespace);
+            # a file called under two namespaces still gets both registry entries.
             if child_path.resolve() in seen:
                 continue
             seen.add(child_path.resolve())
@@ -164,14 +151,8 @@ def _reach(document: Document,
 
 
 def _validate(source: str, stem: str, validator: Draft202012Validator | None) -> None:
-    """Check one document against the generated schema before anything reads it.
-
-    The schema closes the `wic:` block, so a key the language does not have is
-    refused here rather than carried through as opaque data. Validated in the
-    canonical normal form, as the schema is written against it.
-
-    The traceback goes to a file: a jsonschema failure prints a wall of text
-    that tells a reader nothing about their workflow.
+    """Check one document, in canonical normal form, against the schema before
+    anything reads it; the traceback goes to a file, not the reader's screen.
     """
     if validator is None:
         return

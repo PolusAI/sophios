@@ -195,15 +195,7 @@ def emit_job_inputs(graph: EmissionDocument, names: Names) -> Cwl:
 
 
 def _emit_step(node: StepNode, names: Names) -> dict[str, Any]:
-    """Render one structured step descriptor in its declared canonical order.
-
-    A binding arrives as an `EmittedValue`, and rendering it is the one
-    decision this module makes. The check that used to stand here -- refusing a
-    `wic_alias` that reached emission -- is gone with the state it guarded: the
-    union has no member that can carry a Sophios word, so a phase cannot build
-    one and mypy says so at the producer rather than the runner saying so a CI
-    lane later.
-    """
+    """Render one structured step descriptor in its declared canonical order."""
     step = node.emission
     assert step is not None, 'an EmissionDocument has no unemitted step'
     known: dict[str, Any] = {
@@ -232,11 +224,8 @@ def _emit_scatter(step: StepEmission, names: Names) -> Any:
 def _emit_binding(value: EmittedValue, names: Names) -> str | dict[str, str]:
     """One `in:` entry, in the spelling its value asks for.
 
-    The return type is written out rather than left as `Any` so that mypy
-    checks this `match` covers the union. That check is what the runtime guard
-    this replaced used to do: under `Any` a third member would fall off every
-    arm, return `None`, and emit `in: {x: null}` -- the same silent, runner-only
-    failure, arriving the same way.
+    Returns `str | dict[str, str]` rather than `Any` so mypy checks this
+    `match` covers the union instead of a missed arm silently falling through.
     """
     match value:
         case Source(ref=ref, shorthand=True):

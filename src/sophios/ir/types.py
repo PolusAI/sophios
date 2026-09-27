@@ -1,14 +1,9 @@
 """The types a compiled workflow is made of.
 
-Each names something the compiler already manipulates and spells as a string or
-threads through a call stack, so the checker can verify what it means rather
-than only what it computes.
-
-Frozen and slotted, as `sophios.lang.nodes` is, and holding no mutable
-container that any invariant depends on: a check in `__post_init__` is worth
-having only if it cannot be invalidated afterwards. An `OpaqueCwl` payload may
-still be a `list` or a `dict` -- nothing reads one, which is the point of the
-type, so nothing can be invalidated through it.
+Each names something the compiler already manipulates, so the checker can
+verify what it means rather than only what it computes. Frozen and slotted,
+holding no mutable container that any invariant depends on: a check in
+`__post_init__` is worth having only if it cannot be invalidated afterwards.
 """
 from dataclasses import dataclass
 from enum import StrEnum
@@ -19,11 +14,8 @@ from ..lang.spans import SourceSpan
 
 
 class Direction(StrEnum):
-    """Which side of a step a port is on.
-
-    Part of a port's identity because CWL puts inputs and outputs in separate
-    namespaces: a tool may declare `file` on both, and an identity without this
-    makes the two compare equal and an edge between them look like a self-loop.
+    """Which side of a step a port is on; part of a port's identity because
+    CWL puts inputs and outputs in separate namespaces.
     """
 
     INPUT = 'input'
@@ -33,8 +25,7 @@ class Direction(StrEnum):
 @dataclass(frozen=True, slots=True)
 class Namespace:
     """Where a step sits in the nesting of subworkflows: the step occurrences
-    that enclose it, outermost first. Occurrences, not their spelling, so a
-    child is found by the step that calls it and nothing is split back apart."""
+    that enclose it, outermost first."""
 
     parts: tuple['StepId', ...] = ()
 
@@ -52,12 +43,8 @@ class Namespace:
 
 @dataclass(frozen=True, slots=True, order=True)
 class RegistryKey:
-    """A process name in one plugin namespace.
-
-    An identity, so it lives with the others. A step's resolved process is
-    recorded as this pair rather than as a joined string, because every reader
-    of a joined string has to take it apart again -- and a name split back out
-    of text is a guess where the pair is a fact.
+    """A process name in one plugin namespace, kept as a pair rather than a
+    joined string so no reader has to take it apart again.
     """
 
     namespace: str
@@ -66,12 +53,8 @@ class RegistryKey:
 
 @dataclass(frozen=True, slots=True)
 class StepId:
-    """One *occurrence* of a step, which is not the same as the tool it runs.
-
-    `docs/tutorials/append_twice.wic` invokes `append` twice, and sequence-form
-    `steps:` exists so that it can. `name` is the authored id and repeats with
-    the tool; `index` is the occurrence, and the pair is the identity. How a
-    document numbers its steps is `ir.names`, which counts positions.
+    """One *occurrence* of a step, which is not the same as the tool it runs:
+    `name` is the authored id and may repeat; `index` plus `name` is the identity.
     """
 
     namespace: Namespace
@@ -94,11 +77,8 @@ AuthoredName = NewType('AuthoredName', str)
 
 @dataclass(frozen=True, slots=True)
 class DerivedName:
-    """A name the compiler makes by exposing `port` of `step` one level up.
-
-    A literal becomes a workflow input, a child's boundary is re-exported by
-    the step that calls it, an unconsumed output is promoted. Each is this
-    pair, and `ir.names` alone decides how it is written.
+    """A name the compiler makes by exposing `port` of `step` one level up;
+    `ir.names` alone decides how it is written.
     """
 
     step: StepId
@@ -126,11 +106,7 @@ class PortId:
 @dataclass(frozen=True, slots=True)
 class PortType:
     """What a port carries, in the algebra the compiler reasons within.
-
-    `declared` keeps the CWL verbatim, because passthrough is open and whatever
-    was given must be emitted. The fields beside it are the part Sophios
-    interprets. A type it does not interpret has `declared` and nothing else --
-    the leak boundary as a type rather than a convention.
+    `declared` keeps the CWL verbatim; the other fields are what Sophios interprets.
     """
 
     declared: OpaqueCwl
@@ -146,13 +122,10 @@ class PortType:
 
 @dataclass(frozen=True, slots=True)
 class PortDeclaration:  # pylint: disable=too-many-instance-attributes
-    """The complete declaration of one process or workflow port.
-
-    ``PortType`` is the deliberately small algebra later phases may reason
-    about.  The other fields are emission facts: they preserve declarations
-    that affect CWL without inviting Link or Infer to interpret arbitrary CWL.
-    ``has_default`` distinguishes an authored ``default: null`` from no
-    default at all.
+    """The complete declaration of one process or workflow port. The fields
+    beside `type` preserve emission facts without inviting Link or Infer to
+    interpret arbitrary CWL; `has_default` distinguishes an authored
+    `default: null` from no default at all.
     """
 
     type: PortType
@@ -169,10 +142,7 @@ class PortDeclaration:  # pylint: disable=too-many-instance-attributes
             raise ValueError('a port declaration field order cannot repeat a field')
 
 
-#: A `PortDeclaration` reduced to what a workflow boundary may state. Distinct
-#: from `PortDeclaration` so that `WorkflowPort` can ask for one: a tool's
-#: declaration is the larger record, and promoting it without reducing it is
-#: how `inputBinding.position` reached a workflow input. Only
+#: A `PortDeclaration` reduced to what a workflow boundary may state. Only
 #: `declarations.boundary_declaration` produces one.
 BoundaryDeclaration = NewType('BoundaryDeclaration', PortDeclaration)
 
@@ -236,22 +206,17 @@ class Expression:
     text: str
 
 
-#: What a step's `in:` entry can be. Three shapes, and the set is closed: a
-#: value that is neither is not something CWL has a field for, so the phases
-#: cannot express one and Emit cannot be handed one. Authored values are
-#: `InputValue`, and the two unions not meeting is the whole point.
+#: What a step's `in:` entry can be: a closed set of the shapes CWL has a
+#: field for, distinct from the authored `InputValue` union.
 EmittedValue: TypeAlias = Source | Expression
 
 
 @dataclass(frozen=True, slots=True)
 class ProcessRun:
-    """What a step executes.
-
-    ``target`` is transported exactly as CWL: normally a relative path, but an
-    inline process object is legal too.  ``process_id`` is the resolved logical
-    identity; it is separate because a path is an embedding choice, not a tool
-    identity.  A child graph records a resolved subworkflow without hiding its
-    emitted CWL in an opaque value.
+    """What a step executes: `target` is transported exactly as CWL (usually a
+    relative path, but an inline process object is legal), and `process_id` is
+    the resolved logical identity, kept separate since a path is an embedding
+    choice, not a tool identity.
     """
 
     target: OpaqueCwl
@@ -265,11 +230,9 @@ class ProcessRun:
 
 @dataclass(frozen=True, slots=True)
 class StepEmission:  # pylint: disable=too-many-instance-attributes
-    """The CWL surface of a step after semantic phases have finished.
-
-    Known fields are named.  ``passthrough`` is only the open CWL residue, and
-    ``field_order`` records canonical byte order without storing a completed
-    step dictionary.  Emit is the only phase allowed to traverse the payloads.
+    """The CWL surface of a step after semantic phases have finished. Known
+    fields are named; `passthrough` is the open CWL residue, and `field_order`
+    records canonical byte order without storing a completed step dictionary.
     """
 
     inputs: tuple[tuple[PortName, EmittedValue], ...]
@@ -326,12 +289,9 @@ class Edge:
 
 @dataclass(frozen=True, slots=True)
 class DeferredObligation:
-    """An input whose producer is not in this document.
-
-    A subworkflow may bind an input to something a parent supplies. The compiler
-    carries that as an intermediate input made on the way down and satisfied as
-    the recursion unwinds (docs/dev/algorithms.md); naming it lets `Link` say
-    whether every one was discharged.
+    """An input whose producer is not in this document, satisfied as the
+    compiler's recursion unwinds; naming it lets `Link` say whether every one
+    was discharged.
     """
 
     sink: PortId
@@ -355,13 +315,9 @@ Resolution: TypeAlias = Edge | DeferredObligation | None
 
 @dataclass(frozen=True, slots=True)
 class Binding:
-    """One authored input binding, and what it resolved to.
-
-    Every `in:` entry becomes one of these, whatever was written. Keeping only
-    the edges would make two documents differing solely in a literal lower to
-    the same graph, so `Emit` would have to read the AST again to tell them
-    apart -- and a graph that cannot reproduce its own document is not the
-    document's meaning.
+    """One authored input binding, and what it resolved to; every `in:` entry
+    becomes one of these, whatever was written, so the graph reproduces the
+    document rather than only its edges.
     """
 
     sink: PortId
@@ -376,10 +332,8 @@ class Binding:
 
 @dataclass(frozen=True, slots=True)
 class StepNode:  # pylint: disable=too-many-instance-attributes
-    """A step occurrence, with the ports it exposes and what its inputs bind to.
-
-    `interpreted` holds the CWL keys Sophios acts upon and `passthrough` the
-    rest -- the split the AST already makes, carried forward, not redrawn.
+    """A step occurrence, with the ports it exposes and what its inputs bind
+    to. `interpreted` holds the CWL keys Sophios acts upon and `passthrough` the rest.
     """
 
     id: StepId
@@ -455,13 +409,8 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
                                     'inputs', 'sophios:lang_version', 'outputs')
 
     def __post_init__(self) -> None:
-        """Reject a graph naming a port no step declares, anywhere.
-
-        Checked over every reference the graph holds -- edges, obligations and
-        all four mappings -- rather than over the edges alone. An identity that
-        resolves to nothing is the same defect wherever it is stored, and it
-        reaches emission as a dangling `source:`, which CWL accepts and a runner
-        then fails on.
+        """Reject a graph naming a port no step declares, checked over every
+        reference the graph holds, not only its edges.
         """
         occurrences = [step.id for step in self.steps]
         if len(occurrences) != len(set(occurrences)):
@@ -478,13 +427,9 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
         recursive_known = self.port_ids
         recursive_wheres = {'an edge source', 'an output mapping'}
         for where, port_id in self._references():
-            # An input mapping relays a boundary name down to its consuming
-            # port exactly as an output mapping relays one up from its
-            # producer (`_redirect_output_mappings`): `_direct_sink` walks
-            # that relay one hop at a time through each ancestor's own
-            # `input_mapping`, so an entry several levels above the sink
-            # legitimately names a port outside this graph's own steps, the
-            # same way an output mapping already may.
+            # An input mapping may legitimately relay a boundary name to a
+            # sink several levels below it, outside this graph's own steps,
+            # the same way an output mapping already may.
             recursive = where in recursive_wheres or where.startswith('input mapping ')
             allowed = recursive_known if recursive else known
             if port_id not in allowed:
@@ -522,11 +467,8 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
 
     @property
     def edges(self) -> tuple[Edge, ...]:
-        """The edges this graph owns: its own bindings, and what Link placed here.
-
-        Local, not tree-wide. A child's edge belongs to the child, whose
-        indices name nothing at this level -- so a consumer that wants the
-        whole tree asks for it by name, as it does for `all_steps`.
+        """The edges this graph owns: its own bindings, and what Link placed
+        here. Local, not tree-wide.
         """
         local = tuple(b.resolution for s in self.steps for b in s.bindings
                       if isinstance(b.resolution, Edge))
@@ -565,8 +507,7 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
 
 
 #: A `WorkflowGraph` that states a whole CWL document: both versions set and
-#: every step carrying an emission. Distinct from `WorkflowGraph` so that
-#: `emit` can ask for one -- a graph between phases satisfies neither, and
-#: nothing in the type said so, which is why every render re-checked it at
-#: runtime. Only `emit.surface` produces one.
+#: every step carrying an emission. Distinct from `WorkflowGraph` so `emit`
+#: can ask for one; a graph between phases satisfies neither. Only
+#: `emit.surface` produces one.
 EmissionDocument = NewType('EmissionDocument', WorkflowGraph)

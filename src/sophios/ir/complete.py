@@ -1,16 +1,11 @@
 """Complete graph facts that are determined by resolved process interfaces.
 
-This is the deliberately small seam between semantic inference and emission.
-It does not load a process, discover a file, or replay source.  It turns facts
-already present in a ``WorkflowGraph`` into the workflow boundary that Link and
-Infer compose against. A boundary name it derives is a `DerivedName`, not
-text: `ir.names` spells it, at Emit.
-
-It states no document. Requirements, `$namespaces`, `$schemas`, a step's `run:`
-path and the order fields appear in are how the facts are *spelled*, and they
-live in `emit.surface`. Complete ran three times because it did both jobs, and
-a spelling recomputed from its own last output is how a subworkflow `run:`
-target came to grow a prefix per pass.
+The seam between semantic inference and emission: it turns facts already
+present in a `WorkflowGraph` into the workflow boundary that Link and Infer
+compose against, without loading a process, discovering a file, or replaying
+source. A boundary name it derives is a `DerivedName`, not text: `ir.names`
+spells it, at Emit. It states no document -- requirements, `$namespaces`,
+`$schemas`, a step's `run:` path and field order are spelled in `emit.surface`.
 """
 import json
 from copy import deepcopy
@@ -45,14 +40,10 @@ from .types import (
 def complete(graph: WorkflowGraph) -> WorkflowGraph:
     """Return a graph carrying every fact its resolved interfaces determine.
 
-    Facts, and the derived boundary names Link and Infer compose against,
-    stated structurally for Emit to spell. How
-    the document is spelled -- requirements, `$namespaces`, `$schemas`, `run:`
-    paths, field order -- is `emit.surface`, which runs once; this runs
-    whenever a phase needs the facts current, so it
-    is idempotent -- calling it before Link makes recursively derived workflow
-    interfaces visible to composition, and calling it after Infer materializes
-    newly inferred sources and boundary inputs.
+    Idempotent, so any phase may call it whenever it needs the facts current:
+    calling it before Link makes recursively derived workflow interfaces
+    visible to composition, and calling it after Infer materializes newly
+    inferred sources and boundary inputs.
     """
     children = tuple(complete(child) for child in graph.children)
     current = replace(graph, children=children)
@@ -220,11 +211,8 @@ def _emitted_source(graph: WorkflowGraph, port_id: PortId) -> StepOutputRef | No
 
 
 def _materialize_outputs(graph: WorkflowGraph) -> WorkflowGraph:
-    # An authored `outputSource:` names the step as the document wrote it, and
-    # emission renames every step. Carrying the authored string through leaves
-    # the emitted document pointing at a step that does not exist there. Link
-    # already resolved the same string to a port, so record that producer
-    # rather than the text.
+    # Record Link's resolved producer, not the authored `outputSource:` string:
+    # emission renames every step, so the authored text points nowhere.
     resolved = dict(graph.output_mapping)
     outputs = [
         replace(port, output_source=emitted)
@@ -354,11 +342,8 @@ def _as_text(value: Any) -> Any:
 def coerce_job_value(name: str, declaration: PortDeclaration, value: Any) -> Any:
     """Coerce one literal exactly once at the graph/job boundary.
 
-    `OpaqueCwl` admits an `InputValue`, so a literal's body legitimately holds
-    parsed nodes wherever the document nested a construct inside it. A job
-    value may not: it is written as JSON. Unwrapping here, once, rather than
-    in whichever branch happens to notice, is what makes that true of every
-    declared type rather than of `string` alone.
+    A literal's body may hold parsed `InputValue` nodes; a job value must be
+    plain JSON. Unwrapping happens here, once, for every declared type.
     """
     value = _plain(value)
     raw = declaration.type.declared
@@ -385,12 +370,7 @@ def _coerce_type(name: str, raw: Any, value: Any, fmt: Any) -> Any:
 
 
 def _plain(value: Any) -> Any:
-    """`value` with any nested literal replaced by the data it stands for.
-
-    A `!ii` body is parsed, so a mapping literal holds `InlineLiteral` nodes
-    wherever the document nested one. They are the same data; only the node
-    is in the way of serializing it.
-    """
+    """Return `value` with any nested `InlineLiteral` replaced by its data."""
     if isinstance(value, InlineLiteral):
         return _plain(value.value)
     if isinstance(value, dict):
@@ -409,11 +389,7 @@ def _coerce_scalar(name: str, raw: Any, value: Any, fmt: Any) -> Any:
     if raw == 'Directory':
         return {'class': 'Directory', 'location': value}
     if raw == 'string':
-        # A mapping or a sequence bound to a `string` port is a document the
-        # tool will parse, not a value to print: biobb's `config` is the
-        # common case, and it reads the string as JSON. `str` gives Python's
-        # repr, whose single quotes are not JSON, so the tool falls through to
-        # treating the text as a path and fails on a file named after a dict.
+        # A dict/list bound to `string` is JSON to parse, not Python repr to print.
         if isinstance(value, (dict, list)):
             return json.dumps(value)
         return str(value)
