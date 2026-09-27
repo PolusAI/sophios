@@ -114,7 +114,10 @@ def test_computed_token_requires_schema_version_ten() -> None:
 @pytest.mark.parametrize(("argument", "message"), [
     ({"valueFrom": "$(inputs.a > 1)"}, "must compute a number, not a boolean"),
     ({"valueFrom": "$(inputs.a ** 2)"}, "is outside the safe JavaScript subset: unsupported construct '\\*\\*'"),
-    ({"prefix": "-n", "separate": False, "valueFrom": "$(inputs.a + 1)"}, "separate: false beside a computed valueFrom"),
+    (
+        {"prefix": "-n", "separate": False, "valueFrom": "$(inputs.a + 1)"},
+        "separate: false beside a computed valueFrom",
+    ),
 ])
 def test_computed_argument_rejections(argument: dict[str, Any], message: str) -> None:
     with pytest.raises(ValueError, match=message):
@@ -161,5 +164,6 @@ def test_a_non_finite_subexpression_fails_with_a_named_diagnostic(tmp_path: Path
     workflow = _calc_workflow(ARGUMENTS, {"a": 7, "b": 1.25, "d": 0}, a="int", b="float", d="int")
     code, _text, log = _run(workflow, tmp_path)
     assert code != 0
-    assert "Sophios expression CALC arguments[3].valueFrom $(inputs.a / inputs.d): (inputs.a / inputs.d) is Infinity" in log
+    where = "CALC arguments[3].valueFrom $(inputs.a / inputs.d)"
+    assert f"Sophios expression {where}: (inputs.a / inputs.d) is Infinity" in log
     assert "[a:7, d:0]" in log
