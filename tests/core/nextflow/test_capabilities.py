@@ -469,12 +469,19 @@ def test_requires_workflow_root() -> None:
 
 @pytest.mark.fast
 def test_rejects_unsupported_workflow_constructs() -> None:
-    conditional = synthetic_source(
-        workflow_doc([step("conditional", run="tool.cwl", when="$(true)")]),
-        [tool("tool")],
+    # A step's when is now lowered (design §6, Topology); a scattered step's
+    # when stays unsupported, since per-combination when is not this PR.
+    scattered_conditional = synthetic_source(
+        workflow_doc([step(
+            "conditional",
+            run="tool.cwl",
+            **{"in": {"a": "a"}, "when": "$(inputs.a > 0)", "scatter": "a"},
+        )]),
+        [tool("tool", inputs={"a": {"type": "int"}})],
+        workflow_inputs={"a": [1]},
     )
-    with pytest.raises(ValueError, match="when.*not supported.*Phase 1"):
-        compiled_source_to_nextflow(conditional)
+    with pytest.raises(ValueError, match="per-combination when is not supported yet"):
+        compiled_source_to_nextflow(scattered_conditional)
 
 
 @pytest.mark.fast

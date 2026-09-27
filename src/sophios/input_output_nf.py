@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .nf_expr import NF_EXPRESSION_FUNCTIONS, NF_NUMBER_TEXT_HELPER, render_groovy
+from .nf_expr import Expr, NF_EXPRESSION_FUNCTIONS, NF_NUMBER_TEXT_HELPER, references, render_groovy, source_text
 from .nf_types import (
     ExecutableNextflowWorkflow,
     NF_LOAD_CONTENTS_HELPER,
@@ -279,6 +279,80 @@ def _render_process(process: NfProcess) -> str:
     return "\n".join(lines)
 
 
+def _conditional_channel_name(process_name: str, port_name: str) -> str:
+    return f"ch_{process_name}_{port_name}"
+
+
+def _rename_refs(node: Expr, mapping: dict[str, str]) -> Expr:
+    """Rebuild a typed tree with every ``ref`` renamed through ``mapping``."""
+    if node.op == "ref":
+        return Expr("ref", (), mapping.get(node.value, node.value))
+    if node.args:
+        return Expr(node.op, tuple(_rename_refs(arg, mapping) for arg in node.args), node.value)
+    return node
+
+
+def _render_conditional_invocation(process: NfProcess, arguments: list[str]) -> list[str]:
+    """Lower a conditional process call: branch on the predicate, mix in the sentinel.
+
+    Combines the process's bound input channels into one tuple channel,
+    branches it on the rendered predicate (wrapped so a non-finite
+    subexpression fails via the finite helper), calls the process with the
+    run branch's per-input maps, and mixes each output with the skip branch
+    mapped to the ``[]`` sentinel — one element per output per invocation.
+
+    Closure parameters use synthetic names rather than the port names
+    themselves: Groovy rejects a closure parameter that shadows an
+    already-declared script variable, and every port name here is also the
+    name of an outer take:/channel variable.
+    """
+    assert process.condition is not None
+    ports = process.inputs
+    if not ports:
+        raise ValueError(
+            f"process {process.name!r} condition requires at least one input to gate on"
+        )
+    synthetic = [f"__w{index}" for index in range(len(ports))]
+    params = ", ".join(synthetic)
+    in_channel = f"ch_{process.name}_in"
+    branch_channel = f"ch_{process.name}_branch"
+    lines: list[str] = []
+    if len(ports) == 1:
+        # A single-element channel needs no tuple: Nextflow only auto-spreads
+        # a multi-element item across more than one closure parameter.
+        in_channel = arguments[0]
+    else:
+        tuple_expr = f"tuple({params})"
+        merge_targets = ", ".join(arguments[1:])
+        lines.append(
+            f"    {in_channel} = {arguments[0]}.merge({merge_targets}) "
+            f"{{ {params} -> {tuple_expr} }}"
+        )
+    rename = dict(zip((port.name for port in ports), synthetic, strict=True))
+    condition = _rename_refs(process.condition, rename)
+    inputs_map = "[" + ", ".join(f"{name}: {name}" for name in sorted(references(condition))) + "]"
+    if inputs_map == "[]":
+        inputs_map = "[:]"
+    where = f"{process.name} when {source_text(process.condition)}"
+    predicate = render_groovy(condition, where=where, inputs=inputs_map)
+    lines.append(f"    {branch_channel} = {in_channel}.branch {{ {params} ->")
+    lines.append(f"        run: {predicate}")
+    lines.append("        skip: true")
+    lines.append("    }")
+    call_args = ", ".join(
+        f"{branch_channel}.run.map {{ {params} -> {synthetic[index]} }}"
+        for index in range(len(ports))
+    )
+    lines.append(f"    {process.name}({call_args})")
+    for port in process.outputs:
+        emit = port.emit or port.name
+        channel_name = _conditional_channel_name(process.name, emit)
+        lines.append(
+            f"    {channel_name} = {process.name}.out.{emit}.mix({branch_channel}.skip.map {{ [] }})"
+        )
+    return lines
+
+
 def _process_map(workflow: ExecutableNextflowWorkflow) -> dict[str, NfProcess]:
     return {process.name: process for process in workflow.processes}
 
@@ -306,7 +380,10 @@ def _source_expression(connection: NfConnection, processes: Mapping[str, NfProce
         ):
             process = processes[from_process]
             output = next(port for port in process.outputs if port.name == from_port)
-            return f"{process.name}.out.{output.emit or output.name}"
+            emit = output.emit or output.name
+            if process.condition is not None:
+                return _conditional_channel_name(process.name, emit)
+            return f"{process.name}.out.{emit}"
 
 
 def _ordered_processes(workflow: ExecutableNextflowWorkflow) -> list[NfProcess]:
@@ -340,11 +417,14 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
     lines.append("    main:")
     for process in _ordered_processes(workflow):
         # The executable IR guarantees every process input is connected.
-        arguments = ", ".join(
+        arguments = [
             _source_expression(incoming[(process.name, port.name)], processes)
             for port in process.inputs
-        )
-        lines.append(f"    {process.name}({arguments})")
+        ]
+        if process.condition is None:
+            lines.append(f"    {process.name}({', '.join(arguments)})")
+        else:
+            lines.extend(_render_conditional_invocation(process, arguments))
 
     workflow_outputs = [
         connection
@@ -448,7 +528,7 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
         isinstance(token, NfComputed)
         for process in workflow.processes
         for token in process.command.tokens
-    ):
+    ) or any(process.condition is not None for process in workflow.processes):
         sections.append(NF_EXPRESSION_FUNCTIONS)
     sections.extend(_render_process(process) for process in workflow.processes)
     sections.append(_render_named_workflow(workflow))

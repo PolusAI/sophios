@@ -73,14 +73,14 @@ def test_executable_schema_declares_version_and_kind() -> None:
     workflow = ExecutableNextflowWorkflow("wf", [], [], {})
     payload = workflow.to_dict()
 
-    assert payload["schema_version"] == 10
+    assert payload["schema_version"] == 11
     assert payload["representation_kind"] == "executable"
 
     payload["schema_version"] = 1
     with pytest.raises(ValueError, match="schema version"):
         ExecutableNextflowWorkflow.from_dict(payload)
 
-    payload["schema_version"] = 10
+    payload["schema_version"] = 11
     payload["representation_kind"] = "structural"
     with pytest.raises(ValueError, match="representation kind"):
         ExecutableNextflowWorkflow.from_dict(payload)
@@ -697,13 +697,13 @@ def test_hydration_accepts_earlier_subset_schema_versions() -> None:
     payload = ExecutableNextflowWorkflow(
         "wf", [NfProcess("P", [], [], command("true"))], [], {}
     ).to_dict()
-    assert payload["schema_version"] == 10
+    assert payload["schema_version"] == 11
 
-    for earlier in (2, 3, 4, 5, 6, 7, 8, 9):
+    for earlier in (2, 3, 4, 5, 6, 7, 8, 9, 10):
         payload["schema_version"] = earlier
-        assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 10
+        assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 11
 
-    for unsupported in (1, 11):
+    for unsupported in (1, 12):
         payload["schema_version"] = unsupported
         with pytest.raises(ValueError, match="schema version"):
             ExecutableNextflowWorkflow.from_dict(payload)

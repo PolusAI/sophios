@@ -11,7 +11,7 @@ from typing import Any
 
 from .ir.artifacts import CompilationArtifact, CompilationResult
 from .ir.types import Direction, Edge, PortId, StepNode, WorkflowGraph
-from .nf_expr import check as check_safe_subset, is_safe_subset_text, parse as parse_safe_subset
+from .nf_expr import Expr, check as check_safe_subset, is_safe_subset_text, parse as parse_safe_subset
 from .nf_symbols import normalize_nextflow_identifier
 from .nf_types import (
     ExecutableNextflowWorkflow,
@@ -1700,8 +1700,8 @@ def _tool_capability_findings(
     """Collect unsupported executable semantics without lowering the tool."""
     path = f"steps[{step_index}]"
     findings: list[str] = []
-    if "when" in step:
-        findings.append(f"{path}.when: CWL step when conditions are not supported in Nextflow Phase 1")
+    if "when" in step and "scatter" in step:
+        findings.append(f"{path}.when: per-combination when is not supported yet")
 
     match tool.get("class"):
         case "CommandLineTool":
@@ -2392,6 +2392,100 @@ def _absent_optional_findings(
     return findings
 
 
+def _conditional_consumer_findings(
+    steps: list[Mapping[str, Any]],
+    tools: tuple[Mapping[str, Any], ...],
+) -> list[str]:
+    """Reject every consumer of a conditional step's output the design does not admit.
+
+    A conditional step's output may be null at runtime (design §6, Topology).
+    That null is admitted only at a workflow output (which reports null) or an
+    optional val input of a later step whose use the absent-optional lowering
+    already admits (never referenced, or referenced solely as a boolean-flag
+    token). Every other consumer is rejected by name, as is an array-typed
+    output of a conditional step outside scatter, where the sentinel would
+    collide with a genuinely empty array.
+    """
+    findings: list[str] = []
+    conditional_ids: dict[str, int] = {}
+    for step_index, (step, tool) in enumerate(zip(steps, tools, strict=True)):
+        if "when" not in step or tool.get("class") != "CommandLineTool":
+            continue
+        raw_id = step.get("id")
+        if not isinstance(raw_id, str):
+            continue
+        conditional_ids[raw_id] = step_index
+        conditional_ids[raw_id.rsplit("#", maxsplit=1)[-1]] = step_index
+        outputs = tool.get("outputs", {})
+        if isinstance(outputs, Mapping):
+            for raw_name, definition in outputs.items():
+                if not isinstance(definition, Mapping):
+                    continue
+                if _is_array_type(_required_type(definition.get("type"))):
+                    findings.append(
+                        f"steps[{step_index}].out.{raw_name}: array-typed output of a "
+                        "conditional step is not supported outside scatter"
+                    )
+
+    if not conditional_ids:
+        return findings
+
+    for step_index, (step, tool) in enumerate(zip(steps, tools, strict=True)):
+        step_in = step.get("in", {})
+        tool_inputs = tool.get("inputs", {})
+        if not isinstance(step_in, Mapping) or not isinstance(tool_inputs, Mapping):
+            continue
+        for raw_name, raw_source in step_in.items():
+            try:
+                sources = _source_values(raw_source, context="")
+            except ValueError:
+                continue
+            consumes_conditional = any(
+                "/" in source and source.rsplit("/", maxsplit=1)[0] in conditional_ids
+                for source in sources
+            )
+            if not consumes_conditional:
+                continue
+            path = f"steps[{step_index}].in.{raw_name}"
+            definition = tool_inputs.get(raw_name)
+            if not isinstance(definition, Mapping):
+                continue
+            cwl_type = definition.get("type")
+            if _is_array_type(_required_type(cwl_type)):
+                findings.append(
+                    f"{path}: array-typed output of a conditional step is not "
+                    "supported outside scatter"
+                )
+                continue
+            try:
+                qualifier = cwl_type_to_nf_qualifier(cwl_type)
+            except ValueError:
+                qualifier = None
+            if qualifier == "path":
+                findings.append(
+                    f"{path}: a path consumer of a possibly-null conditional step "
+                    "output is not supported"
+                )
+                continue
+            if not _is_optional(cwl_type):
+                findings.append(
+                    f"{path}: a non-optional port cannot consume a possibly-null "
+                    "conditional step output"
+                )
+                continue
+            safe_names = _safe_absence_names(tool)
+            try:
+                name = _identifier(raw_name, context="input reference")
+            except ValueError:
+                name = None
+            if safe_names is None or name not in safe_names:
+                findings.append(
+                    f"{path}: this input's use of a possibly-null conditional step "
+                    "output is not one the absent-optional lowering admits"
+                )
+    return findings
+
+
 def _is_flag_binding(definition: Mapping[str, Any]) -> bool:
     """Return whether a tool input will lower to a conditional flag token."""
     match definition.get("inputBinding"):
@@ -2503,6 +2597,12 @@ def _text_capture_endpoints(
                 pass
             case _:
                 continue
+        if "when" in step:
+            # A conditional step's captured-text output is the one proven
+            # exception (design §6, Topology): _conditional_consumer_findings
+            # already governs its downstream sinks with the admission rules
+            # a possibly-null value requires.
+            continue
         outputs = tool.get("outputs", {})
         if not isinstance(outputs, Mapping):
             continue
@@ -2559,14 +2659,37 @@ def _raise_capability_findings(findings: list[str]) -> None:
         raise ValueError(f"Nextflow Phase 1 capability analysis failed:\n{details}")
 
 
+def _condition_value(when: Any, *, tool: Mapping[str, Any]) -> Expr:
+    """Parse and boolean-type a step's ``when`` against its tool's input types.
+
+    Mirrors ``_computed_value``'s reuse of the safe-subset parser and
+    checker; a step's when is evaluated once per invocation, after inputs
+    are bound, so it is typed exactly like any other safe-subset expression.
+    """
+    if not isinstance(when, str) or not is_safe_subset_text(when):
+        raise ValueError(f"step when {when!r} must be a safe JavaScript subset $( … ) expression")
+    inputs = _as_mapping(tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
+    input_types = {
+        str(raw_name): definition.get("type") if isinstance(definition, Mapping) else definition
+        for raw_name, definition in inputs.items()
+    }
+    try:
+        expression = parse_safe_subset(when)
+        result = check_safe_subset(expression, input_types)
+    except ValueError as exc:
+        raise ValueError(f"step when {when!r} is outside the safe JavaScript subset: {exc}") from exc
+    if result != "boolean":
+        raise ValueError(f"step when {when!r} must compute a boolean, not a {result}")
+    return expression
+
+
 def _process(step: Mapping[str, Any], tool: Mapping[str, Any]) -> NfProcess:
-    if "when" in step:
-        raise ValueError("CWL step when conditions are not supported in Nextflow Phase 1")
     match tool.get("class"):
         case "CommandLineTool":
             pass
         case unsupported_class:
             raise ValueError(f"unsupported compiled step class {unsupported_class!r}")
+    when = step.get("when")
     return NfProcess(
         name=_identifier(step.get("id"), context="workflow step id"),
         inputs=_ports(tool.get("inputs", {}), outputs=False, stage_as=_iwdr_stage_as(tool)),
@@ -2574,6 +2697,7 @@ def _process(step: Mapping[str, Any], tool: Mapping[str, Any]) -> NfProcess:
         command=_command(tool),
         container=_container(tool),
         resources=_resources(tool),
+        condition=_condition_value(when, tool=tool) if when is not None else None,
     )
 
 
@@ -2876,6 +3000,7 @@ def compiled_source_to_nextflow(
     ]
     findings.extend(_workflow_capability_findings(workflow, compiled.params, steps))
     findings.extend(_absent_optional_findings(workflow, compiled.params, steps, tools))
+    findings.extend(_conditional_consumer_findings(list(steps), tools))
     findings.extend(_flag_source_findings(workflow, steps, tools))
     findings.extend(_scatter_findings(workflow, steps, tools))
     findings.extend(_text_capture_sink_findings(steps, tools))

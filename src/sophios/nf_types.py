@@ -699,6 +699,7 @@ class NfProcess:
     command: NfCommand
     container: str | None = None
     resources: NfResources = field(default_factory=NfResources)
+    condition: Expr | None = None
 
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.name, field_name="process name")
@@ -749,8 +750,8 @@ class NfProcess:
         computed_names = {
             name for token in self.command.tokens if isinstance(token, NfComputed) for name in token.names
         }
-        references = flag_names | array_binding_names | basename_names | plain_reference_names | computed_names
-        if unknown := references - input_names:
+        referenced_names = flag_names | array_binding_names | basename_names | plain_reference_names | computed_names
+        if unknown := referenced_names - input_names:
             raise ValueError(
                 f"process {self.name!r} templates reference unknown inputs: {', '.join(sorted(unknown))}"
             )
@@ -790,7 +791,7 @@ class NfProcess:
                 f"array bindings: {', '.join(sorted(invalid))}"
             )
         stage_as_names = {port.name for port in inputs if port.stage_as is not None}
-        if overlap := stage_as_names & references:
+        if overlap := stage_as_names & referenced_names:
             raise ValueError(
                 f"process {self.name!r} references a renamed IWDR input elsewhere in its "
                 f"command, stream targets, or output globs: {', '.join(sorted(overlap))}"
@@ -809,15 +810,27 @@ class NfProcess:
                 raise ValueError("process container must be a non-empty string or None")
         if not isinstance(self.resources, NfResources):
             raise TypeError("process resources must be NfResources")
+        if self.condition is not None:
+            if not isinstance(self.condition, Expr):
+                raise TypeError("process condition must be a typed Expr or None")
+            condition_names = references(self.condition)
+            if invalid := {
+                name for name in condition_names
+                if name not in qualifiers or qualifiers[name] != "val" or is_array_by_name[name]
+            }:
+                raise ValueError(
+                    f"process {self.name!r} condition must reference scalar val inputs: "
+                    f"{', '.join(sorted(invalid))}"
+                )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation.
 
         Returns:
             dict[str, Any]: The process name, ports, command, container,
-                and resources.
+                resources, and optional condition.
         """
-        return {
+        item: dict[str, Any] = {
             "name": self.name,
             "inputs": [port.to_dict() for port in self.inputs],
             "outputs": [port.to_dict() for port in self.outputs],
@@ -825,6 +838,9 @@ class NfProcess:
             "container": self.container,
             "resources": self.resources.to_dict(),
         }
+        if self.condition is not None:
+            item["condition"] = self.condition.to_dict()
+        return item
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
@@ -842,10 +858,11 @@ class NfProcess:
             Self: The validated process.
         """
         item = _mapping(value, type_name=cls.__name__)
-        _check_fields(
+        _check_fields_with_optional(
             item,
             type_name=cls.__name__,
             required={"name", "inputs", "outputs", "command", "container", "resources"},
+            optional={"condition"},
         )
         match item["inputs"], item["outputs"]:
             case list() as inputs, list() as outputs:
@@ -856,6 +873,7 @@ class NfProcess:
                     command=NfCommand.from_dict(item["command"]),
                     container=item["container"],
                     resources=NfResources.from_dict(item["resources"]),
+                    condition=Expr.from_dict(item["condition"]) if item.get("condition") else None,
                 )
             case _:
                 raise TypeError("NfProcess inputs and outputs must be lists")
@@ -1064,10 +1082,10 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow."""
 
-    SCHEMA_VERSION: ClassVar[int] = 10
+    SCHEMA_VERSION: ClassVar[int] = 11
     # Earlier versions whose value space is a strict subset of the current
     # model hydrate unchanged; serialization always writes SCHEMA_VERSION.
-    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10})
+    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11})
     # Each additive token or segment kind declares the version that
     # introduced it, so the subset property is enforced rather than assumed.
     KIND_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
@@ -1079,7 +1097,7 @@ class ExecutableNextflowWorkflow:
     # connection kind, so each needs its own gate alongside
     # KIND_SCHEMA_VERSIONS.
     FIELD_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
-        {"is_array": 5, "stage_as": 7, "adapter": 8, "capture": 9}
+        {"is_array": 5, "stage_as": 7, "adapter": 8, "capture": 9, "condition": 11}
     )
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
@@ -1189,12 +1207,16 @@ class ExecutableNextflowWorkflow:
                             f"connection {from_process}.{from_port} -> {to_process}.{to_port} "
                             "joins incompatible channel cardinalities"
                         )
-                    if source.capture == "text":
+                    if source.capture == "text" and process_by_name[from_process].condition is None:
                         # The qualifier axis still has no general agreement
                         # check for process edges, because every process
                         # output carried the path qualifier until this one; a
                         # captured value's only approved sink is a workflow
-                        # output.
+                        # output. A conditional step's captured-text output is
+                        # the one proven exception (design §6, Topology): its
+                        # value is either the captured string or the []
+                        # sentinel, never colliding with a real string, so it
+                        # may reach a later step's admitted optional val port.
                         raise ValueError(
                             f"process output {from_process}.{from_port} captures file text; "
                             "its only approved sink is a workflow output"

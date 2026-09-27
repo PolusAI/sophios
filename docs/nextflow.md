@@ -371,13 +371,35 @@ prints it; a result that would need exponent notation, or a non-integral
 result bound to an `int` or `long` input, fails the task. A computed
 `valueFrom` on an optional input, or beside `separate: false`, is rejected.
 
+## Conditional steps
+
+A `CommandLineTool` step's `when` may be a boolean-typed safe-subset
+expression over that step's own bound inputs. A true condition runs the
+process; a false condition runs no task, and the step's outputs are `null`,
+carried by the same `[]` sentinel the absent-optional lowering uses, so a
+skipped invocation still emits exactly one element per output and downstream
+channels never hang.
+
+That possibly-null value is admitted only where the sentinel is sound: at a
+workflow output (which reports `null`), or at an optional `val` input of a
+later step whose use the absent-optional lowering already admits (never
+referenced, or referenced only as a boolean flag). Every other consumer is
+rejected by name — a non-optional port, a `path` consumer, or an array-typed
+output of a conditional step outside scatter.
+
+`when` on a step whose `run` is a workflow is rejected, since skipping an
+inlined sub-DAG is not this lowering's single-process shape. `pickValue` is
+rejected everywhere. `when` on a scattered step is rejected too;
+per-combination `when` is deferred beyond this lowering.
+
 ## Current limits
 
 - Processes must be `CommandLineTool`-equivalent.
 - Fractional CPU requirements reject before lowering; they are not silently
   rounded.
 - Arbitrary Groovy, channel operators beyond the one supported adapter,
-  `when`, and `exec` blocks are not interpreted.
+  `when` on a scattered or nested-workflow step, and `exec` blocks are not
+  interpreted.
 - The generated scatter call is outside the reader's recognized subset, so a
   scattered workflow round-trips as loss-aware structure with an opaque
   region rather than being promoted back to executable IR.
