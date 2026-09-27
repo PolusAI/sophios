@@ -400,9 +400,10 @@ per-combination `when` is deferred beyond this lowering.
 - Arbitrary Groovy, channel operators beyond the one supported adapter,
   `when` on a scattered or nested-workflow step, and `exec` blocks are not
   interpreted.
-- The generated scatter call is outside the reader's recognized subset, so a
-  scattered workflow round-trips as loss-aware structure with an opaque
-  region rather than being promoted back to executable IR.
+- The generated scatter call and conditional-step channel wiring are outside
+  the reader's recognized subset, so a scattered or conditional workflow
+  round-trips as loss-aware structure with an opaque region rather than being
+  promoted back to executable IR.
 - Structurally imported scripts remain opaque. CWL/Sophios import preserves representable
   names, ports, resources, and topology but does not promise executable
   equivalence for arbitrary shell or Groovy semantics.
