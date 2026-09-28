@@ -295,6 +295,14 @@ def _provoke_duplicate_document_name() -> None:
                      'provoke')
 
 
+def _provoke_unknown_scatter_port() -> None:
+    """Scatter a step over a name that is none of its inputs."""
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+
+    compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': ['a']}},
+                                 'scatter': ['nope']}]}, 'provoke')
+
+
 def _provoke_invalid_tool() -> None:
     """A CWL tool that cannot be loaded."""
     from sophios.api.python.workflow import Step  # pylint: disable=import-outside-toplevel
@@ -312,4 +320,5 @@ COMPILED.update({
     SophiosErrorCode.EMPTY_NAME: _provoke_empty_name,
     SophiosErrorCode.UNDECLARED_PORT: _provoke_undeclared_port,
     SophiosErrorCode.DUPLICATE_DOCUMENT_NAME: _provoke_duplicate_document_name,
+    SophiosErrorCode.UNKNOWN_SCATTER_PORT: _provoke_unknown_scatter_port,
 })

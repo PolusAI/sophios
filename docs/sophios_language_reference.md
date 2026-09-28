@@ -377,6 +377,9 @@ scatter    scatterMethod    when    run
 
 Everything else on a step is passthrough.
 
+Each `scatter:` entry must name an input of its step. Any other name is
+`wic032`, whose message lists the inputs that are valid.
+
 ---
 
 ## 5. The `wic:` block

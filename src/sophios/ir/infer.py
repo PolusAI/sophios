@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from ..lang import SophiosErrorCode
-from ..lang.diagnostics import Diagnostics
+from ..lang.diagnostics import Diagnostics, Locator
 from .declarations import (feeding_declaration, input_rank, layered, output_rank, port_declaration,
                            produced_declaration, required)
 from .link import attach_step_children
@@ -100,7 +100,8 @@ def infer(graph: WorkflowGraph, policy: InferencePolicy = InferencePolicy(),
     for iteration in range(1, policy.iteration_limit + 1):
         current, inserted = _infer_tree(current, policy, catalog)
         if not inserted:
-            return Inferred(current, diagnostics, iteration)
+            _unbound_scatter(current, diagnostics)
+            return Inferred(None if diagnostics.has_errors else current, diagnostics, iteration)
     _exhausted(diagnostics, policy.iteration_limit)
     return Inferred(None, diagnostics, policy.iteration_limit)
 
@@ -142,20 +143,7 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
     input_mapping = list(graph.input_mapping)
     shorthand_relays = list(graph.shorthand_relays)
     steps = list(graph.steps)
-    bound = {binding.sink for step in steps for binding in step.bindings}
-    # A sink an earlier phase already relayed to a workflow input, or already
-    # connected by an edge, satisfies this graph's own boundary port for it
-    # even though that port carries no `Binding` of its own -- translated
-    # through `direct_sink`, since `input_mapping` and a cross-scope edge both
-    # record the deep port a connection actually names, not the local step
-    # `Complete` synchronized to relay it.
-
-    def _local(sink: PortId) -> PortId:
-        step_id, port_name = direct_sink(graph, sink)
-        return PortId(step_id, Direction.INPUT, port_name)
-
-    bound.update(_local(sink) for _name, sinks in graph.input_mapping for sink in sinks)
-    bound.update(_local(edge.sink) for edge in linked_edges)
+    bound = _bound(graph)
 
     for position, step in enumerate(steps):
         for port in step.inputs:
@@ -186,6 +174,38 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
                    workflow_inputs=tuple(workflow_inputs),
                    input_mapping=tuple(input_mapping),
                    shorthand_relays=tuple(shorthand_relays)), False
+
+
+def _bound(graph: WorkflowGraph) -> set[PortId]:
+    """Every step input of `graph` that receives a value.
+
+    A binding, a relay to a workflow input, or an edge. `input_mapping` and a
+    cross-scope edge name the deep port a connection reaches, so each is
+    translated through `direct_sink` to the local step port it arrives at.
+    """
+    def _local(sink: PortId) -> PortId:
+        step_id, port_name = direct_sink(graph, sink)
+        return PortId(step_id, Direction.INPUT, port_name)
+
+    bound = {binding.sink for step in graph.steps for binding in step.bindings}
+    bound.update(_local(sink) for _name, sinks in graph.input_mapping for sink in sinks)
+    bound.update(_local(edge.sink) for edge in graph.linked_edges)
+    return bound
+
+
+def _unbound_scatter(graph: WorkflowGraph, diagnostics: Diagnostics) -> None:
+    """Report each scattered input still without a value once inference is done."""
+    bound = _bound(graph)
+    for step in graph.steps:
+        for name in step.scatter_ports:
+            if PortId(step.id, Direction.INPUT, name) not in bound:
+                diagnostics.error(
+                    SophiosErrorCode.UNKNOWN_SCATTER_PORT,
+                    f"step '{step.id.name}' scatters over '{name}', but nothing binds it, and a "
+                    "scatter needs a value to split. Bind it in `in:`, or drop it from `scatter:`.",
+                    step.span, Locator(step=step.id.name, index=step.id.index, port=str(name)))
+    for child in graph.children:
+        _unbound_scatter(child, diagnostics)
 
 
 def _candidate(steps: list[StepNode], position: int, sink: Port,

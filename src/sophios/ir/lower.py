@@ -9,25 +9,24 @@ READS THE AST AND NOTHING ELSE -- no registry, no filesystem, no config.
 Resolving a step's tool against the environment is `Resolve`'s job, so a port's
 type is what the document declared and inference has not run.
 """
-from collections.abc import Iterator
+import difflib
 from typing import Final
 from dataclasses import dataclass
 
 from ..lang.cwl import CWL_VERSION
 from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.error_codes import SophiosErrorCode
-from ..lang.nodes import Document, EdgeRef, InputValue, OpaqueCwl, UnresolvedName
+from ..lang.nodes import Document, EdgeRef, InputValue, Step, UnresolvedName
 from ..lang.versions import (ANNOTATION_KEY, ANNOTATION_NAMESPACE,
                              ANNOTATION_NAMESPACE_URI)
 from .declarations import port_declaration
-from .names import Names, render_step_id
+from .names import render_step_id
 from .resolve import ResolvedDocument, ResolvedStep
 from .types import (
     AuthoredName,
     Binding,
     BoundaryDeclaration,
     DeferredObligation,
-    DerivedName,
     Direction,
     Edge,
     Namespace,
@@ -94,11 +93,11 @@ def _lower_resolved(document: ResolvedDocument,
     children: list[WorkflowGraph] = []
 
     for identity, resolved_step in zip(identities, document.steps, strict=True):
-        # Lowered before its step, which may scatter over the child's boundary.
+        # Lowered before its step, so the child's diagnostics travel with it.
         child = (_lower_resolved(resolved_step.process.child, here.child(identity))
                  if resolved_step.process.child is not None else None)
-        node = _resolved_step_node(identity, resolved_step, child.graph if child is not None else None,
-                                   defined_so_far, defined_anywhere, diagnostics)
+        node = _resolved_step_node(identity, resolved_step, defined_so_far,
+                                   defined_anywhere, diagnostics)
         nodes.append(node)
         for authored in resolved_step.source.outputs:
             if authored.edge_def is not None:
@@ -176,7 +175,7 @@ def _lower_resolved(document: ResolvedDocument,
 _GENERATION_PARAMETERS: Final = ('script', 'dockerPull')
 
 
-def _resolved_step_node(identity: StepId, resolved: ResolvedStep, child: WorkflowGraph | None,
+def _resolved_step_node(identity: StepId, resolved: ResolvedStep,
                         defined_so_far: dict[str, PortId], defined_anywhere: dict[str, PortId],
                         diagnostics: Diagnostics) -> StepNode:
     source = resolved.source
@@ -215,33 +214,52 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep, child: Workflo
                      if (port := by_input.get(AuthoredName(name))) is not None)
     interpreted = dict(source.interpreted)
     run = ProcessRun(resolved.process.run_path, resolved.process.key)
-    scatter_ports = _scatter_ports(interpreted.get('scatter'), inputs, child)
+    scatter_ports = _scatter_ports(source, identity, inputs, diagnostics)
     return StepNode(identity, inputs, outputs, bindings, source.interpreted,
                     source.passthrough, source.span, run, scatter_ports,
                     _inference_rules(resolved.sidecar))
 
 
-def _scatter_ports(scatter: OpaqueCwl, inputs: tuple[Port, ...],
-                   child: WorkflowGraph | None) -> tuple[PortName, ...]:
-    """The ports an authored `scatter:` names, in the order written."""
+def _scatter_ports(source: Step, identity: StepId, inputs: tuple[Port, ...],
+                   diagnostics: Diagnostics) -> tuple[PortName, ...]:
+    """The ports an authored `scatter:` names, in the order written.
+
+    A scatter entry names an input of its step. A name that is none of them
+    is `wic032` and is dropped from the ports rank and Emit read.
+    """
+    scatter = dict(source.interpreted).get('scatter')
     written: list[object] = [scatter] if isinstance(scatter, str) else (
         list(scatter) if isinstance(scatter, list) else [])
-    own = {port.id.port for port in inputs}
-    derived: dict[str, PortName] = {}
-    if child is not None:
-        names = Names.of(child)
-        derived = {names.port(candidate): candidate for candidate in _exposed_inputs(child)}
-    return tuple(AuthoredName(text) if text in own else derived.get(text, AuthoredName(text))
-                 for text in written if isinstance(text, str))
+    ports: dict[str, PortName] = {str(port.id.port): port.id.port for port in inputs}
+    found: list[PortName] = []
+    for text in written:
+        if not isinstance(text, str):
+            continue
+        port = ports.get(text)
+        if port is not None:
+            found.append(port)
+            continue
+        diagnostics.error(SophiosErrorCode.UNKNOWN_SCATTER_PORT,
+                          _unknown_scatter(source.id, text, list(ports)),
+                          source.span, Locator(step=source.id, index=identity.index))
+    return tuple(found)
 
 
-def _exposed_inputs(graph: WorkflowGraph) -> Iterator[DerivedName]:
-    """Every input `graph` can expose one level up, through any depth of nesting."""
-    for step in graph.steps:
-        yield from (DerivedName(step.id, port.id.port) for port in step.inputs)
-        for nested in graph.children:
-            if nested.namespace.parts[-1] == step.id:
-                yield from (DerivedName(step.id, name) for name in _exposed_inputs(nested))
+def _unknown_scatter(step: str, text: str, ports: list[str]) -> str:
+    """Name the step and the bad name, then the closest input, then all of them."""
+    message = f"step '{step}' scatters over '{text}', which is not one of its inputs."
+    close = difflib.get_close_matches(text, ports, n=1)
+    if close:
+        message += f" Did you mean '{close[0]}'?"
+    if ports:
+        shown = ', '.join(f"'{name}'" for name in ports[:_SHOWN_NAMES])
+        more = f' and {len(ports) - _SHOWN_NAMES} more' if len(ports) > _SHOWN_NAMES else ''
+        message += f' Its inputs: {shown}{more}.'
+    return message
+
+
+#: How many valid names an unknown-scatter message lists before truncating.
+_SHOWN_NAMES: Final = 8
 
 
 def _workflow_ports(raw: object, *, output: bool) -> tuple[WorkflowPort, ...]:

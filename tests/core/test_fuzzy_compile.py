@@ -53,6 +53,10 @@ TOLERATED_CODES: Final[frozenset[SophiosErrorCode]] = frozenset({
     # unbound. Refusing it is the improvement; the draw is a defective
     # document, not a defective compiler, and this set is for the former.
     SophiosErrorCode.UNDEFINED_EDGE,
+    # A drawn `scatter:` may name a port its step does not have. That draw
+    # used to compile into CWL no runner accepts; refusing it is the same
+    # improvement as `wic025` above, and the draw is again the defect.
+    SophiosErrorCode.UNKNOWN_SCATTER_PORT,
 })
 
 
