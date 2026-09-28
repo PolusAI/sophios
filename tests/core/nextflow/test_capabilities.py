@@ -469,8 +469,8 @@ def test_requires_workflow_root() -> None:
 
 @pytest.mark.fast
 def test_rejects_unsupported_workflow_constructs() -> None:
-    # A step's when is now lowered (design §6, Topology); a scattered step's
-    # when stays unsupported, since per-combination when is not this PR.
+    # A step's when is lowered (design §6, Topology), and so is a multi-input
+    # scattered step's; a single-input scatter carries no invocation index.
     scattered_conditional = synthetic_source(
         workflow_doc([step(
             "conditional",
@@ -480,7 +480,7 @@ def test_rejects_unsupported_workflow_constructs() -> None:
         [tool("tool", inputs={"a": {"type": "int"}})],
         workflow_inputs={"a": [1]},
     )
-    with pytest.raises(ValueError, match="per-combination when is not supported yet"):
+    with pytest.raises(ValueError, match="per-combination when requires a multi-input scatter"):
         compiled_source_to_nextflow(scattered_conditional)
 
 
