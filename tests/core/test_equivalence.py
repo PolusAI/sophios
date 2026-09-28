@@ -428,8 +428,8 @@ def test_up_to_renaming_forgives_nothing_inside_a_step_but_names_and_paths(
 
 @pytest.mark.fast
 def test_only_identical_compares_key_order() -> None:
-    """IDENTICAL is a claim about bytes; the weaker two are claims about a
-    workflow, and a YAML mapping is unordered by its own specification.
+    """IDENTICAL is a claim about bytes; the weaker strengths are claims about
+    a workflow, and a YAML mapping is unordered by its own specification.
 
     Emitted key order is the subject here — `requirements` built from a set,
     eight hash seeds giving eight orders — so a relation that normalised order
@@ -441,6 +441,7 @@ def test_only_identical_compares_key_order() -> None:
     found = equivalent(left, right, Strength.IDENTICAL)
     assert found is not None and found.path == '<root> (key order)'
     assert (found.left, found.right) == (['class', 'steps'], ['steps', 'class'])
+    assert equivalent(left, right, Strength.UP_TO_ORDER) is None
     assert equivalent(left, right, Strength.UP_TO_EMBEDDING) is None
     assert equivalent(left, right, Strength.UP_TO_RENAMING) is None
 
@@ -448,6 +449,7 @@ def test_only_identical_compares_key_order() -> None:
     nested_right: Yaml = {'steps': [{'id': 'a__step__1__mk', 'run': 'r', 'out': ['f']}]}
     nested = equivalent(nested_left, nested_right, Strength.IDENTICAL)
     assert nested is not None and nested.path == '.steps[0] (key order)'
+    assert equivalent(nested_left, nested_right, Strength.UP_TO_ORDER) is None
     assert equivalent(nested_left, nested_right, Strength.UP_TO_EMBEDDING) is None
 
 

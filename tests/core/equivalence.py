@@ -5,6 +5,7 @@ may ignore and why that is legitimate rather than convenient — a normalisation
 without a reason is a place for a real difference to hide.
 
     IDENTICAL          nothing is ignored.
+    UP_TO_ORDER        mapping key order is ignored.
     UP_TO_EMBEDDING    `run:` paths are ignored.
     UP_TO_RENAMING     namespaced names are ignored; the DAG must match.
 
@@ -42,6 +43,12 @@ class Strength(IntEnum):
     #: (src/sophios/compiler.py:626-634) — which is embedding, not meaning.
     UP_TO_EMBEDDING = 2
 
+    #: Mapping key order may differ; nothing else may. Legitimate because a
+    #: YAML mapping is unordered by its own specification and CWL reads these
+    #: documents as mappings. The compatibility gate for emitted CWL: every
+    #: name, value, list order and `run:` path is compared.
+    UP_TO_ORDER = 3
+
     #: Byte-for-byte, after nothing — mapping *key order* included. Available
     #: as a real strength only because emission is canonical (see the
     #: canonical-emission predicate): while `requirements` key order came from
@@ -57,7 +64,7 @@ class Strength(IntEnum):
     #: CWL reads these documents as mappings, so two orderings are the same
     #: workflow. IDENTICAL is not a claim about the workflow, it is a claim
     #: about the bytes, and it is the only strength that makes one.
-    IDENTICAL = 3
+    IDENTICAL = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +131,8 @@ def equivalent(left: Yaml, right: Yaml, strength: Strength) -> Divergence | None
     match strength:
         case Strength.IDENTICAL:
             return _first_difference(left, right, strength, '', ordered=True)
+        case Strength.UP_TO_ORDER:
+            return _first_difference(left, right, strength, '', ordered=False)
         case Strength.UP_TO_EMBEDDING:
             # `$namespaces` goes with `run:`, and not as a convenience. A
             # prefix must be declared in the document that uses it, so
