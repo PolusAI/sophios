@@ -887,6 +887,11 @@ class NfProcess:
                 raise TypeError("NfProcess inputs and outputs must be lists")
 
 
+# Adapters that combine two or more scattered whole arrays into invocations
+# (design §6, Topology, Multi-input scatter); each value names its method.
+MULTI_INPUT_ADAPTERS = frozenset({"dotproduct", "flat_crossproduct"})
+
+
 @dataclass(frozen=True, slots=True)
 class NfWorkflowInputConnection:
     """Connect one workflow parameter to one process input.
@@ -901,7 +906,7 @@ class NfWorkflowInputConnection:
     before lowering.
     """
 
-    ALLOWED_ADAPTERS: ClassVar[frozenset[str]] = frozenset({"scatter", "dotproduct"})
+    ALLOWED_ADAPTERS: ClassVar[frozenset[str]] = frozenset({"scatter", *MULTI_INPUT_ADAPTERS})
 
     from_port: str
     to_process: str
@@ -1094,10 +1099,10 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow."""
 
-    SCHEMA_VERSION: ClassVar[int] = 12
+    SCHEMA_VERSION: ClassVar[int] = 13
     # Earlier versions whose value space is a strict subset of the current
     # model hydrate unchanged; serialization always writes SCHEMA_VERSION.
-    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12})
+    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13})
     # Each additive token or segment kind declares the version that
     # introduced it, so the subset property is enforced rather than assumed.
     KIND_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
@@ -1115,7 +1120,7 @@ class ExecutableNextflowWorkflow:
     # is a value of the existing "adapter" field, not a new field, so it
     # needs its own gate keyed by (field, value) rather than by field alone.
     FIELD_VALUE_SCHEMA_VERSIONS: ClassVar[Mapping[tuple[str, str], int]] = MappingProxyType(
-        {("adapter", "dotproduct"): 12}
+        {("adapter", "dotproduct"): 12, ("adapter", "flat_crossproduct"): 13}
     )
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
@@ -1211,13 +1216,13 @@ class ExecutableNextflowWorkflow:
                     # what the adapter consumes rather than what the port
                     # declares: scatter takes the whole array and feeds one
                     # element per task.
-                    expects_array = destination.is_array or connection.adapter in ("scatter", "dotproduct")
+                    expects_array = destination.is_array or connection.adapter in ("scatter", *MULTI_INPUT_ADAPTERS)
                     param_destinations.setdefault(
                         from_port, (expects_array, to_process, to_port)
                     )
                     if adapter is not None:
                         adapters_by_process.setdefault(to_process, set()).add(adapter)
-                    if adapter == "dotproduct":
+                    if adapter in MULTI_INPUT_ADAPTERS:
                         dotproduct_count_by_process[to_process] = (
                             dotproduct_count_by_process.get(to_process, 0) + 1
                         )
@@ -1266,8 +1271,8 @@ class ExecutableNextflowWorkflow:
         for process_name, count in dotproduct_count_by_process.items():
             if count < 2:
                 raise ValueError(
-                    f"process {process_name!r} has {count} dotproduct-adapted input(s); "
-                    "dotproduct scatter requires two or more"
+                    f"process {process_name!r} has {count} multi-input-scatter-adapted input(s); "
+                    "dotproduct and flat_crossproduct scatter require two or more"
                 )
             if process_by_name[process_name].condition is not None:
                 # The conditional rendering merges one channel per input port,

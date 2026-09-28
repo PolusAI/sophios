@@ -14,6 +14,7 @@ from .ir.types import Direction, Edge, PortId, StepNode, WorkflowGraph
 from .nf_expr import Expr, check as check_safe_subset, is_safe_subset_text, parse as parse_safe_subset
 from .nf_symbols import normalize_nextflow_identifier
 from .nf_types import (
+    MULTI_INPUT_ADAPTERS,
     ExecutableNextflowWorkflow,
     GLOB_WILDCARDS,
     NF_INTERNAL_IDENTIFIERS,
@@ -2184,18 +2185,18 @@ def _scatter_findings(
             )
         elif len(names) > 1:
             # At exactly one scattered input all three methods coincide, so a
-            # method is required to decide two or more; only dotproduct is an
-            # approved multi-input lowering (design §6, Topology).
+            # method is required to decide two or more; dotproduct and
+            # flat_crossproduct are approved multi-input lowerings (design §6, Topology).
             if method is None:
                 findings.append(
                     f"{path}.scatterMethod: multi-input scatter over {len(names)} inputs "
                     "requires an explicit scatterMethod"
                 )
-            elif method != "dotproduct":
+            elif method not in MULTI_INPUT_ADAPTERS:
                 findings.append(
                     f"{path}.scatterMethod: {method!r} over {len(names)} inputs is deferred "
-                    "beyond this lowering; only 'dotproduct' is supported for two or more "
-                    "scattered inputs"
+                    "beyond this lowering; only 'dotproduct' and 'flat_crossproduct' are "
+                    "supported for two or more scattered inputs"
                 )
         tool_inputs = tool.get("inputs", {})
         step_inputs = step.get("in", {})
@@ -2785,13 +2786,15 @@ def _step_connections(
             _identifier(raw_name, context="scattered input")
             for raw_name in (_scatter_names(step) if "scatter" in step else [])
         }
+        # Capability analysis already admitted only an approved method for two or more.
+        scatter_method = str(step.get("scatterMethod", "dotproduct"))
         for raw_port, raw_source in raw_inputs.items():
             destination_port = _identifier(raw_port, context="process input destination")
             for source in _source_values(raw_source, context=f"step input {process.name}.{destination_port}"):
                 source_process, source_port = _source_endpoint(source, step_names)
                 if source_process is None:
                     if destination_port in scattered:
-                        adapter = "dotproduct" if len(scattered) > 1 else "scatter"
+                        adapter = scatter_method if len(scattered) > 1 else "scatter"
                     else:
                         adapter = None
                     connections.append(

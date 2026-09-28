@@ -241,9 +241,11 @@ With exactly one scattered input all three CWL methods coincide, so
 `dotproduct`, `flat_crossproduct`, and `nested_crossproduct` are each
 accepted as inert restatements; any other value is rejected.
 
-Scattering two or more inputs requires an explicit `scatterMethod`, and only
-`dotproduct` is supported there; `flat_crossproduct` and `nested_crossproduct`
-over two or more inputs are rejected. Each scattered input is still sourced
+Scattering two or more inputs requires an explicit `scatterMethod`:
+`dotproduct` or `flat_crossproduct`. `nested_crossproduct` over two or more
+inputs is rejected. Under `flat_crossproduct` every combination runs, with the
+first declared input outermost — CWL's order — so N inputs run the product of
+their lengths, and an empty input runs none. Each scattered input is still sourced
 from its own array-typed workflow input. The whole arrays are combined and
 paired by index into one invocation per index — never by pairing per-element
 channels, whose pairing would depend on arrival order. Unequal lengths fail

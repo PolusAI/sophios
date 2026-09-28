@@ -75,14 +75,14 @@ def test_executable_schema_declares_version_and_kind() -> None:
     workflow = ExecutableNextflowWorkflow("wf", [], [], {})
     payload = workflow.to_dict()
 
-    assert payload["schema_version"] == 12
+    assert payload["schema_version"] == 13
     assert payload["representation_kind"] == "executable"
 
     payload["schema_version"] = 1
     with pytest.raises(ValueError, match="schema version"):
         ExecutableNextflowWorkflow.from_dict(payload)
 
-    payload["schema_version"] = 12
+    payload["schema_version"] = 13
     payload["representation_kind"] = "structural"
     with pytest.raises(ValueError, match="representation kind"):
         ExecutableNextflowWorkflow.from_dict(payload)
@@ -699,13 +699,13 @@ def test_hydration_accepts_earlier_subset_schema_versions() -> None:
     payload = ExecutableNextflowWorkflow(
         "wf", [NfProcess("P", [], [], command("true"))], [], {}
     ).to_dict()
-    assert payload["schema_version"] == 12
+    assert payload["schema_version"] == 13
 
-    for earlier in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11):
+    for earlier in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
         payload["schema_version"] = earlier
-        assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 12
+        assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 13
 
-    for unsupported in (1, 13):
+    for unsupported in (1, 14):
         payload["schema_version"] = unsupported
         with pytest.raises(ValueError, match="schema version"):
             ExecutableNextflowWorkflow.from_dict(payload)
@@ -919,7 +919,7 @@ def test_hydration_defaults_a_missing_adapter_to_none() -> None:
 @pytest.mark.fast
 @pytest.mark.parametrize("adapter", ["gather", "flatten", "", "collect"])
 def test_rejects_an_adapter_outside_the_approved_set(adapter: str) -> None:
-    with pytest.raises(ValueError, match="channel adapter must be one of dotproduct, scatter"):
+    with pytest.raises(ValueError, match="channel adapter must be one of dotproduct, flat_crossproduct, scatter"):
         _adapted_workflow(adapter)
 
 
@@ -1012,7 +1012,7 @@ def test_hydration_rejects_a_dotproduct_adapter_older_than_schema_version_12() -
 @pytest.mark.fast
 def test_rejects_a_single_dotproduct_adapted_input() -> None:
     process = NfProcess("PAIR", [NfPort("first", "val")], [], command("true"))
-    with pytest.raises(ValueError, match="dotproduct scatter requires two or more"):
+    with pytest.raises(ValueError, match="dotproduct and flat_crossproduct scatter require two or more"):
         ExecutableNextflowWorkflow(
             "wf",
             [process],

@@ -8,6 +8,7 @@ from typing import Any
 
 from .nf_expr import Expr, NF_EXPRESSION_FUNCTIONS, NF_NUMBER_TEXT_HELPER, references, render_groovy, source_text
 from .nf_types import (
+    MULTI_INPUT_ADAPTERS,
     ExecutableNextflowWorkflow,
     NF_LOAD_CONTENTS_HELPER,
     NF_LOAD_CONTENTS_LIMIT,
@@ -410,13 +411,24 @@ def _dotproduct_sources(
         for connection in workflow.connections
         if isinstance(connection, NfWorkflowInputConnection)
         and connection.to_process == process.name
-        and connection.adapter == "dotproduct"
+        and connection.adapter in MULTI_INPUT_ADAPTERS
     }
     return [(port.name, by_port[port.name]) for port in process.inputs if port.name in by_port]
 
 
+def _multi_input_method(workflow: ExecutableNextflowWorkflow, process: NfProcess) -> str:
+    """The one multi-input scatter method a process's adapted inputs share."""
+    return next(
+        connection.adapter
+        for connection in workflow.connections
+        if isinstance(connection, NfWorkflowInputConnection)
+        and connection.to_process == process.name
+        and connection.adapter in MULTI_INPUT_ADAPTERS
+    )
+
+
 def _render_dotproduct_channel(
-    channel_name: str, process_name: str, sources: list[tuple[str, str]]
+    channel_name: str, process_name: str, sources: list[tuple[str, str]], method: str = "dotproduct"
 ) -> str:
     """Combine dotproduct source value channels into one [index, elem...] queue channel.
 
@@ -436,13 +448,27 @@ def _render_dotproduct_channel(
     for _, from_port in sources[1:]:
         boxed = f"{boxed}.combine({from_port}.map {{ [it] }})"
     combine_expr = boxed
+    params_decl = ", ".join(locals_)
+    if method == "flat_crossproduct":
+        # Nested loops with the first declared input outermost: the CWL
+        # reference order. Groovy's combinations() varies the first list
+        # fastest, so it cannot be used.
+        # Strict Nextflow syntax has no for loops, so the nesting is collectMany.
+        loop_vars = [f"__e{index}" for index in range(len(locals_))]
+        product = f"[[{', '.join(loop_vars)}]]"
+        for var, local in reversed(list(zip(loop_vars, locals_))):
+            product = f"{local}.collectMany {{ {var} -> {product} }}"
+        return "\n".join([
+            f"    {channel_name} = {combine_expr}.flatMap {{ {params_decl} ->",
+            f"        {product}.withIndex().collect {{ combination, index -> [index] + combination }}",
+            "    }",
+        ])
     mismatch = " || ".join(f"{locals_[0]}.size() != {name}.size()" for name in locals_[1:])
     detail = ", ".join(
         f"{from_port}=${{{local}.size()}}" for local, (_, from_port) in zip(locals_, sources)
     )
     message = f"{process_name}: dotproduct scatter inputs have mismatched lengths: {detail}"
     tuple_elements = ", ".join(f"{local}[i]" for local in locals_)
-    params_decl = ", ".join(locals_)
     return "\n".join([
         f"    {channel_name} = {combine_expr}.flatMap {{ {params_decl} ->",
         f'        if ({mismatch}) {{ throw new RuntimeException("{message}") }}',
@@ -499,7 +525,7 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
     dotproduct_process_names = {
         connection.to_process
         for connection in workflow.connections
-        if isinstance(connection, NfWorkflowInputConnection) and connection.adapter == "dotproduct"
+        if isinstance(connection, NfWorkflowInputConnection) and connection.adapter in MULTI_INPUT_ADAPTERS
     }
 
     lines.append("    main:")
@@ -508,7 +534,9 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
         if dotproduct_sources:
             dotproduct_names = {name for name, _ in dotproduct_sources}
             channel_name = f"ch_{process.name}_scatter"
-            lines.append(_render_dotproduct_channel(channel_name, process.name, dotproduct_sources))
+            lines.append(_render_dotproduct_channel(
+                channel_name, process.name, dotproduct_sources, _multi_input_method(workflow, process)
+            ))
             other_ports = [port for port in process.inputs if port.name not in dotproduct_names]
             arguments = [channel_name] + [
                 _source_expression(incoming[(process.name, port.name)], processes)
@@ -566,7 +594,7 @@ def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> st
         candidate.to_process
         for candidate in workflow.connections
         if isinstance(candidate, NfWorkflowInputConnection)
-        and candidate.adapter in ("scatter", "dotproduct")
+        and candidate.adapter in ("scatter", *MULTI_INPUT_ADAPTERS)
     }
     feeds_scattered_process = any(
         isinstance(candidate, NfWorkflowInputConnection)
@@ -577,7 +605,7 @@ def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> st
     # A scatter- or dotproduct-adapted parameter carries the whole source
     # array; the graph validator keeps every sink of one parameter in
     # agreement, so one sink decides the construction for all of them.
-    carries_list = port.is_array or connection.adapter in ("scatter", "dotproduct")
+    carries_list = port.is_array or connection.adapter in ("scatter", *MULTI_INPUT_ADAPTERS)
     if port.qualifier == "path":
         path_type = "dir" if port.path_kind == "directory" else "file"
         if carries_list:
