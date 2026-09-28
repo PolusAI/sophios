@@ -45,7 +45,7 @@ class SophiosErrorCode(StrEnum):
     RESERVED_KEY = 'wic024'
     UNDEFINED_EDGE = 'wic025'
     DUPLICATE_EDGE_DEF = 'wic026'
-    #: A name the document left empty: an input, an `out:` entry, or an edge.
+    #: A name the document left empty, in an input, an `out` entry or an edge.
     EMPTY_NAME = 'wic027'
     #: A step naming a port its resolved process does not have, on either
     #: side, for either a CommandLineTool or a subworkflow.
