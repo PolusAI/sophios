@@ -937,12 +937,9 @@ def _two_input_scatter_rose(*, scatterMethod: Any = "dotproduct") -> CompiledNex
 
 
 @pytest.mark.fast
-def test_rejects_multi_input_nested_crossproduct() -> None:
-    """Two or more scattered inputs need dotproduct or flat_crossproduct; nested is deferred."""
-    assert _findings(_two_input_scatter_rose(scatterMethod="nested_crossproduct")) == [
-        "steps[0].scatterMethod: 'nested_crossproduct' over 2 inputs is deferred beyond this "
-        "lowering; only 'dotproduct' and 'flat_crossproduct' are supported for two or more scattered inputs"
-    ]
+def test_accepts_multi_input_scatter_under_every_method() -> None:
+    for method in ("dotproduct", "flat_crossproduct", "nested_crossproduct"):
+        compiled_source_to_nextflow(_two_input_scatter_rose(scatterMethod=method))
 
 
 @pytest.mark.fast

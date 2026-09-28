@@ -16,9 +16,10 @@ _T = TypeVar("_T")
 NF_SHELL_QUOTE_HELPER = "__sophios_shell_quote_9f72e"
 NF_LOAD_CONTENTS_HELPER = "__sophios_load_contents_9f72e"
 NF_SCATTER_INDEX_NAME = "__sophios_scatter_index_9f72e"
+NF_NEST_HELPER = "__sophios_nest_9f72e"
 NF_INTERNAL_IDENTIFIERS = frozenset({
     NF_SHELL_QUOTE_HELPER, NF_LOAD_CONTENTS_HELPER, NF_FINITE_HELPER, NF_ROUND_HELPER, NF_NUMBER_TEXT_HELPER,
-    NF_SCATTER_INDEX_NAME,
+    NF_SCATTER_INDEX_NAME, NF_NEST_HELPER,
 })
 # CWL v1.2 requires a loadContents file to be a UTF-8 text file of this many
 # bytes or fewer, read entirely, with a fatal error above the limit.
@@ -889,7 +890,7 @@ class NfProcess:
 
 # Adapters that combine two or more scattered whole arrays into invocations
 # (design §6, Topology, Multi-input scatter); each value names its method.
-MULTI_INPUT_ADAPTERS = frozenset({"dotproduct", "flat_crossproduct"})
+MULTI_INPUT_ADAPTERS = frozenset({"dotproduct", "flat_crossproduct", "nested_crossproduct"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -899,12 +900,12 @@ class NfWorkflowInputConnection:
     ``adapter`` names the one approved channel adaptation applied at the
     consumption site. The approved set is closed: ``"scatter"`` fans a
     list-carrying value channel out into one element per task, one input at a
-    time. ``"dotproduct"`` and ``"flat_crossproduct"`` each mark one of two or
-    more inputs whose whole arrays are combined into one invocation per
-    shared index or per combination respectively (design §6, Topology); every
-    input in the group carries this same adapter, which is validated below.
-    Every other adaptation a topology might require is rejected before
-    lowering.
+    time. ``"dotproduct"``, ``"flat_crossproduct"`` and ``"nested_crossproduct"``
+    each mark one of two or more inputs whose whole arrays are combined into
+    one invocation per shared index (dotproduct) or per combination (the
+    crossproducts) (design §6, Topology); every input in the group carries
+    this same adapter, which is validated below. Every other adaptation a
+    topology might require is rejected before lowering.
     """
 
     ALLOWED_ADAPTERS: ClassVar[frozenset[str]] = frozenset({"scatter", *MULTI_INPUT_ADAPTERS})
@@ -1117,10 +1118,10 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow."""
 
-    SCHEMA_VERSION: ClassVar[int] = 14
+    SCHEMA_VERSION: ClassVar[int] = 15
     # Earlier versions whose value space is a strict subset of the current
     # model hydrate unchanged; serialization always writes SCHEMA_VERSION.
-    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14})
+    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
     # Each additive token or segment kind declares the version that
     # introduced it, so the subset property is enforced rather than assumed.
     KIND_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
@@ -1135,11 +1136,16 @@ class ExecutableNextflowWorkflow:
         {"is_array": 5, "stage_as": 7, "adapter": 8, "capture": 9, "condition": 11}
     )
     # A specific field VALUE introduced after the field itself: "dotproduct",
-    # "flat_crossproduct" and "gather" are values of the existing "adapter"
-    # field, not new fields, so each needs its own gate keyed by (field, value)
-    # rather than by field alone.
+    # "flat_crossproduct", "gather" and "nested_crossproduct" are values of the
+    # existing "adapter" field, not new fields, so each needs its own gate keyed
+    # by (field, value) rather than by field alone.
     FIELD_VALUE_SCHEMA_VERSIONS: ClassVar[Mapping[tuple[str, str], int]] = MappingProxyType(
-        {("adapter", "dotproduct"): 12, ("adapter", "flat_crossproduct"): 13, ("adapter", "gather"): 14}
+        {
+            ("adapter", "dotproduct"): 12,
+            ("adapter", "flat_crossproduct"): 13,
+            ("adapter", "gather"): 14,
+            ("adapter", "nested_crossproduct"): 15,
+        }
     )
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
@@ -1204,7 +1210,7 @@ class ExecutableNextflowWorkflow:
         adapters_by_process: dict[str, set[str]] = {}
         multi_input_count_by_process: dict[str, int] = {}
         multi_scattered = {
-            connection.to_process
+            connection.to_process: connection.adapter
             for connection in self.connections
             if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
             and connection.adapter in MULTI_INPUT_ADAPTERS
@@ -1270,6 +1276,11 @@ class ExecutableNextflowWorkflow:
                             f"connection {from_process}.{from_port} -> {to_process}.{to_port} gathers "
                             f"the skipped positions of conditional process {from_process!r}; its outputs "
                             "can only reach a workflow output"
+                        )
+                    if adapter is not None and multi_scattered.get(from_process) == "nested_crossproduct":
+                        raise ValueError(
+                            f"connection {from_process}.{from_port} -> {to_process}.{to_port} consumes a "
+                            "nested_crossproduct result, which reaches workflow outputs only"
                         )
                     if adapter == "gather" and not destination.is_array:
                         raise ValueError(

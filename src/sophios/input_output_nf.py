@@ -9,6 +9,7 @@ from typing import Any
 
 from .nf_expr import Expr, NF_EXPRESSION_FUNCTIONS, NF_NUMBER_TEXT_HELPER, references, render_groovy, source_text
 from .nf_types import (
+    NF_NEST_HELPER,
     MULTI_INPUT_ADAPTERS,
     ExecutableNextflowWorkflow,
     NF_LOAD_CONTENTS_HELPER,
@@ -459,6 +460,20 @@ def _incoming_connections(workflow: ExecutableNextflowWorkflow) -> dict[tuple[st
 _ADAPTER_OPERATORS = {"scatter": ".flatten()"}
 
 
+def _shape_channel(process_name: str) -> str:
+    return f"ch_{process_name}_shape"
+
+
+NF_NEST_FUNCTION = f'''def {NF_NEST_HELPER}(List flat, List shape) {{
+    if( shape.size() == 1 )
+        return flat
+    def inner = shape.drop(1).inject(1) {{ product, size -> product * size }}
+    return (0..<shape[0]).collect {{ position ->
+        {NF_NEST_HELPER}(flat.subList(position * inner, (position + 1) * inner), shape.drop(1))
+    }}
+}}'''
+
+
 def _gathered(expression: str) -> str:
     """Collect an indexed scatter's outputs once, as one array in invocation order."""
     return f"{expression}.toSortedList {{ it[0] }}.map {{ it.collect {{ row -> row[1] }} }}"
@@ -514,6 +529,9 @@ def _render_multi_input_channel(
     and its length, and equal empty arrays yield zero invocations.
     ``flat_crossproduct`` runs every combination with the first declared input
     outermost and checks no lengths; any empty array yields zero invocations.
+    ``nested_crossproduct`` runs the same invocations and also emits each
+    input's length on a shape channel, so the workflow output can regroup the
+    results into one dimension per input.
     """
     locals_ = [f"__d{index}" for index in range(len(sources))]
     # Nextflow's combine flattens a List-valued item into the concatenated
@@ -525,7 +543,7 @@ def _render_multi_input_channel(
         boxed = f"{boxed}.combine({channel}.map {{ [it] }})"
     combine_expr = boxed
     params_decl = ", ".join(locals_)
-    if method == "flat_crossproduct":
+    if method in {"flat_crossproduct", "nested_crossproduct"}:
         # Nested loops with the first declared input outermost: the CWL
         # reference order. Groovy's combinations() varies the first list
         # fastest, so it cannot be used.
@@ -534,11 +552,18 @@ def _render_multi_input_channel(
         product = f"[[{', '.join(loop_vars)}]]"
         for var, local in reversed(list(zip(loop_vars, locals_))):
             product = f"{local}.collectMany {{ {var} -> {product} }}"
-        return "\n".join([
+        lines = [
             f"    {channel_name} = {combine_expr}.flatMap {{ {params_decl} ->",
             f"        {product}.withIndex().collect {{ combination, index -> [index] + combination }}",
             "    }",
-        ])
+        ]
+        if method == "nested_crossproduct":
+            # The same invocations as flat, plus each input's length, so the
+            # gathered results can be regrouped into one dimension per input
+            # even where a dimension is empty.
+            sizes = ", ".join(f"{local}.size()" for local in locals_)
+            lines.append(f"    {_shape_channel(process_name)} = {combine_expr}.map {{ {params_decl} -> [[{sizes}]] }}")
+        return "\n".join(lines)
     mismatch = " || ".join(f"{locals_[0]}.size() != {name}.size()" for name in locals_[1:])
     detail = ", ".join(
         f"{label}=${{{local}.size()}}" for local, (_, _channel, label) in zip(locals_, sources)
@@ -607,6 +632,12 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
         and connection.adapter in MULTI_INPUT_ADAPTERS
     }
 
+    nested_process_names = {
+        connection.to_process
+        for connection in workflow.connections
+        if isinstance(connection, NfWorkflowInputConnection) and connection.adapter == "nested_crossproduct"
+    }
+
     lines.append("    main:")
     for process in _ordered_processes(workflow):
         multi_input_sources = _multi_input_sources(workflow, process)
@@ -645,7 +676,15 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
         lines.append("    emit:")
         for connection in workflow_outputs:
             expression = _source_expression(connection, processes)
-            if connection.from_process in multi_input_process_names:
+            if connection.from_process in nested_process_names:
+                # Regroup the index-sorted results by the recorded input
+                # lengths: one array dimension per scattered input.
+                expression = (
+                    f"{expression}.toSortedList {{ it[0] }}.map {{ [it.collect {{ row -> row[1] }}] }}"
+                    f".combine({_shape_channel(connection.from_process)})"
+                    f".flatMap {{ flat, shape -> {NF_NEST_HELPER}(flat, shape) }}"
+                )
+            elif connection.from_process in multi_input_process_names:
                 # Sort by the hidden invocation index before stripping it, so
                 # the gathered workflow output never depends on task
                 # completion order (design §6, Topology, Gather).
@@ -747,6 +786,11 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
         for token in process.command.tokens
     ) or any(process.condition is not None for process in workflow.processes):
         sections.append(NF_EXPRESSION_FUNCTIONS)
+    if any(
+        isinstance(connection, NfWorkflowInputConnection) and connection.adapter == "nested_crossproduct"
+        for connection in workflow.connections
+    ):
+        sections.append(NF_NEST_FUNCTION)
     sections.extend(
         _render_process(
             process,

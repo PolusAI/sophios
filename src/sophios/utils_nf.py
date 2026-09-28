@@ -2188,18 +2188,12 @@ def _scatter_findings(
             )
         elif len(names) > 1:
             # At exactly one scattered input all three methods coincide, so a
-            # method is required to decide two or more; dotproduct and
-            # flat_crossproduct are approved multi-input lowerings (design §6, Topology).
+            # method is required to decide two or more; each of them is an
+            # approved multi-input lowering (design §6, Topology).
             if method is None:
                 findings.append(
                     f"{path}.scatterMethod: multi-input scatter over {len(names)} inputs "
                     "requires an explicit scatterMethod"
-                )
-            elif method not in MULTI_INPUT_ADAPTERS:
-                findings.append(
-                    f"{path}.scatterMethod: {method!r} over {len(names)} inputs is deferred "
-                    "beyond this lowering; only 'dotproduct' and 'flat_crossproduct' are "
-                    "supported for two or more scattered inputs"
                 )
         tool_inputs = tool.get("inputs", {})
         step_inputs = step.get("in", {})
@@ -2275,7 +2269,12 @@ def _scatter_edge_findings(steps: list[Mapping[str, Any]]) -> list[str]:
                 if producer is not None and producer in scattered and len(scattered[producer]) > 1:
                     # A multi-input scatter's outputs are gathered once, in
                     # invocation order (design §6, Topology, Gather).
-                    if step_index in scattered and len(scattered[step_index]) < 2:
+                    if steps[producer].get("scatterMethod") == "nested_crossproduct":
+                        findings.append(
+                            f"steps[{step_index}].in.{raw_name}: {source!r} is a nested_crossproduct "
+                            "result, which reaches workflow outputs only"
+                        )
+                    elif step_index in scattered and len(scattered[step_index]) < 2:
                         findings.append(
                             f"steps[{step_index}].in.{raw_name}: a gathered array can feed only a "
                             "multi-input scatter"

@@ -25,6 +25,7 @@ from .nf_expr import NF_EXPRESSION_FUNCTIONS
 from .nf_types import NF_LOAD_CONTENTS_HELPER
 from .input_output_nf import (
     NF_LOAD_CONTENTS_FUNCTION,
+    NF_NEST_FUNCTION,
     NF_SHELL_QUOTE_FUNCTION,
     render_nextflow,
 )
@@ -423,7 +424,7 @@ def parse_nf_text(text: str, *, params: Mapping[str, Any] | None = None) -> Next
     covered: set[int] = set()
     for _name, block_start, block_end in [*process_blocks, *workflow_blocks]:
         covered.update(range(block_start, block_end + 1))
-    for helper in (NF_SHELL_QUOTE_FUNCTION, NF_LOAD_CONTENTS_FUNCTION, NF_EXPRESSION_FUNCTIONS):
+    for helper in (NF_SHELL_QUOTE_FUNCTION, NF_LOAD_CONTENTS_FUNCTION, NF_EXPRESSION_FUNCTIONS, NF_NEST_FUNCTION):
         helper_lines = helper.splitlines()
         for helper_start in range(len(lines) - len(helper_lines) + 1):
             if lines[helper_start:helper_start + len(helper_lines)] == helper_lines:

@@ -127,7 +127,7 @@ def _pair_then_use(method: str, params: dict[str, Any]) -> ExecutableNextflowWor
 _PAIR_THEN_USE_PARAMS = {"as": ["a", "b", "c"], "bs": ["x", "y", "z"], "n": 2, "xs": ["p", "q"], "ys": ["r", "s"]}
 
 
-def _two_gathered_arrays_into_use(second: str) -> ExecutableNextflowWorkflow:
+def _two_gathered_arrays_into_use(second: str, method: str = "dotproduct") -> ExecutableNextflowWorkflow:
     """USE scatters x and y and takes two gathered File arrays of out.txt files.
 
     ``files`` gathers PAIR; ``more`` gathers ``second``, which is PAIR again or
@@ -149,15 +149,16 @@ def _two_gathered_arrays_into_use(second: str) -> ExecutableNextflowWorkflow:
     ]
     steps.append(step("USE", **{
         "in": {"x": "xs", "y": "ys", "files": "PAIR/out", "more": f"{second}/out"}, "out": ["used"],
-        "scatter": ["x", "y"], "scatterMethod": "dotproduct",
+        "scatter": ["x", "y"], "scatterMethod": method,
     }))
+    used = {"type": "array", "items": FILES} if method == "nested_crossproduct" else FILES
     workflow = workflow_doc(
         steps,
         inputs={
             "as": {"type": STRINGS}, "bs": {"type": STRINGS}, "n": {"type": "int"},
             "xs": {"type": STRINGS}, "ys": {"type": STRINGS},
         },
-        outputs={"used": {"type": FILES, "outputSource": "USE/used"}},
+        outputs={"used": {"type": used, "outputSource": "USE/used"}},
     )
     return compiled_source_to_nextflow(synthetic_source(workflow, tools, workflow_inputs=_PAIR_THEN_USE_PARAMS))
 

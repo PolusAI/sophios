@@ -242,11 +242,10 @@ With exactly one scattered input all three CWL methods coincide, so
 accepted as inert restatements; any other value is rejected.
 
 Scattering two or more inputs requires an explicit `scatterMethod`:
-`dotproduct` or `flat_crossproduct`. `nested_crossproduct` over two or more
-inputs is rejected. Each scattered input is still sourced from its own
-array-typed workflow input. The whole arrays are combined into one invocation
-per index or per combination — never by pairing per-element channels, whose
-pairing would depend on arrival order.
+`dotproduct`, `flat_crossproduct`, or `nested_crossproduct`. Each scattered
+input is still sourced from its own array-typed workflow input. The whole
+arrays are combined into one invocation per index or per combination — never
+by pairing per-element channels, whose pairing would depend on arrival order.
 
 Under `dotproduct` the arrays are paired by index into one invocation per
 index. Unequal lengths fail the run, naming each scattered input and its
@@ -256,7 +255,12 @@ Under `flat_crossproduct` every combination runs, with the first declared
 input outermost — CWL's order — so N inputs run the product of their lengths.
 Lengths are not compared, and an empty array runs zero invocations.
 
-Under either method every invocation carries its index as a hidden value
+`nested_crossproduct` runs the same invocations as `flat_crossproduct` and
+reports one array dimension per scattered input, in declared order, keeping
+empty dimensions; its result reaches workflow outputs only, and feeding it to
+a later step is rejected.
+
+Under every method each invocation carries its index as a hidden value
 alongside the scattered step's inputs and outputs, and the gather sorts by that
 index before stripping it, so the gathered workflow output is always in
 invocation order, regardless of which task finishes first. Unscattered inputs,
