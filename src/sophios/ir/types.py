@@ -332,12 +332,9 @@ class StepNode:  # pylint: disable=too-many-instance-attributes
     interpreted: tuple[tuple[str, OpaqueCwl], ...] = ()
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
     span: SourceSpan | None = None
-    #: What this step executes. `None` only while a step has not yet been
-    #: attached a process by `Lower` or `Infer`'s speculative insertion.
+    #: What this step executes; `None` only before Lower or Infer attaches it.
     run: ProcessRun | None = None
-    #: The ports an authored `scatter:` names, resolved once where the
-    #: document is read. `scatter` itself lives in `interpreted`; phases that
-    #: need the resolved ports read this instead.
+    #: The ports `interpreted['scatter']` names, resolved where it is read.
     scatter_ports: tuple[PortName, ...] = ()
     inference_rules: tuple[tuple[str, str], ...] = ()
     synthesized: bool = False
@@ -401,13 +398,8 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     #: distinguished by `Edge.origin`.
     linked_edges: tuple[Edge, ...] = ()
     discharged_obligations: tuple[PortId, ...] = ()
-    #: Names in `input_mapping` that stand for a step's own unbound input
-    #: rather than a value relayed in from elsewhere -- Complete's own child
-    #: default lift, or Infer's speculative boundary input -- and so must be
-    #: emitted as shorthand. Nothing about the name itself says this: a
-    #: cross-scope relay Link exposes can be spelled identically. Recorded
-    #: where each is created, since that is the only place the distinction
-    #: still exists.
+    #: `input_mapping` names emitted in shorthand: a step's own lifted input,
+    #: recorded where Complete or Infer creates it (a name cannot tell).
     shorthand_relays: tuple[PortName, ...] = ()
 
     def __post_init__(self) -> None:
