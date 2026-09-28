@@ -58,3 +58,41 @@ def test_a_dotproduct_length_mismatch_fails_the_run_naming_each_input(tmp_path: 
     assert result.returncode != 0
     assert "STEP: dotproduct scatter inputs have mismatched lengths: items=2, tags=1" in result.stdout + result.stderr
     assert not list((tmp_path / "work").glob("*/*/.command.sh"))
+
+
+PREDICATES = {
+    "$(true)": True,
+    "$(false)": False,
+    "$(inputs.flag)": True,
+    "$(inputs.s === 'x')": True,
+    "$(inputs.s == 'y')": False,
+    "$(inputs.flag && !(inputs.n < 0) || false)": True,
+    "$(Math.round(inputs.n / 2) >= 2)": True,
+    "$(inputs.maybe === null)": True,
+    "$(inputs.maybe !== null)": False,
+}
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_every_predicate_kind_decides_under_nextflow(tmp_path: Path) -> None:
+    """W1-W7: literals, boolean input, equality, logic, calculator operand, and null checks execute."""
+    # pylint: disable=import-outside-toplevel
+    from .testkit import step, synthetic_source, tool, workflow_doc
+    declared = {"flag": {"type": "boolean"}, "s": {"type": "string"}, "n": {"type": "int"}, "maybe": {"type": "int?"}}
+    tools, steps, outputs = [], [], {}
+    for index, predicate in enumerate(PREDICATES):
+        name = f"P{index}"
+        tools.append(tool(
+            name, inputs=declared, baseCommand="touch", arguments=[f"ran_{index}.txt"],
+            outputs={"out": {"type": "File", "outputBinding": {"glob": f"ran_{index}.txt"}}},
+        ))
+        steps.append(step(name, **{"in": {key: key for key in declared}, "out": ["out"], "when": predicate}))
+        outputs[f"out_{index}"] = {"type": "File?", "outputSource": f"{name}/out"}
+    workflow = workflow_doc(steps, inputs={key: value["type"] for key, value in declared.items()}, outputs=outputs)
+    source = synthetic_source(workflow, tools, workflow_inputs={"flag": True, "s": "x", "n": 3})
+    write_nextflow_artifacts(compiled_source_to_nextflow(source), tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    ran = {path.name for path in (tmp_path / "work").glob("*/*/ran_*.txt")}
+    assert ran == {f"ran_{index}.txt" for index, expected in enumerate(PREDICATES.values()) if expected}
