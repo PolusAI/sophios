@@ -14,6 +14,8 @@ import warnings
 from .lang.cwl import CWL_VERSION
 from .nf_types import (
     ExecutableNextflowWorkflow,
+    NfBasenameReference,
+    NfLiteral,
     NfConnection,
     NfProcessConnection,
     NfWorkflowInputConnection,
@@ -483,16 +485,81 @@ def parse_nf_file(path: str | Path) -> NextflowDocument:
             raise ValueError("nextflow_params.json must contain a JSON object")
         params = loaded
     source_text = source.read_text(encoding="utf-8")
-    document = parse_nf_text(source_text, params=params)
     ir_path = source.with_name("nextflow_workflow.json")
     if not ir_path.exists():
-        return document
+        return parse_nf_text(source_text, params=params)
     executable = ExecutableNextflowWorkflow.from_json(ir_path.read_text(encoding="utf-8"))
     if render_nextflow(executable) != source_text:
         raise ValueError("generated Nextflow source does not match its executable IR artifact")
     if executable.params != params:
         raise ValueError("generated Nextflow parameters do not match its executable IR artifact")
+    try:
+        document = parse_nf_text(source_text, params=params)
+    except ValueError:
+        document = None
+    if document is None or document.opaque_regions:
+        # The renderer is a deterministic total function of the model, and the
+        # model renders to exactly this source, so every construct the text
+        # parser could not recognize is accounted for: the model is the parse.
+        return _document_from_model(executable, source_text)
     return replace(document, verified_executable=executable)
+
+
+def _glob_text(template: Any) -> str:
+    return "".join(
+        segment.value if isinstance(segment, NfLiteral)
+        else f"${{{segment.name}.name}}" if isinstance(segment, NfBasenameReference)
+        else f"${{{segment.name}}}"
+        for segment in template.segments
+    )
+
+
+def _process_scripts(source_text: str) -> dict[str, str]:
+    """Each process block's script text; the script block parses on its own."""
+    lines = source_text.splitlines()
+    scripts: dict[str, str] = {}
+    for name, start, end in _blocks(lines, _PROCESS):
+        try:
+            process, _opaque = _parse_process(name or "", lines[start + 1:end])
+        except ValueError:
+            continue
+        scripts[process.name] = process.script
+    return scripts
+
+
+def _document_from_model(executable: ExecutableNextflowWorkflow, source_text: str) -> NextflowDocument:
+    """The structural document of a source that a verified model renders byte for byte."""
+    scripts = _process_scripts(source_text)
+    processes = tuple(
+        NextflowProcess(
+            process.name,
+            tuple(NextflowPort(port.name, port.qualifier) for port in process.inputs),
+            tuple(
+                NextflowPort(
+                    port.name,
+                    port.qualifier,
+                    port.emit or port.name,
+                    _glob_text(port.glob) if port.glob is not None else None,
+                    port.capture,
+                )
+                for port in process.outputs
+            ),
+            scripts.get(process.name, ""),
+            process.container,
+            None if process.resources.cpus is None else str(process.resources.cpus),
+            None if process.resources.memory_mb is None else f"{process.resources.memory_mb} MB",
+        )
+        for process in executable.processes
+    )
+    return NextflowDocument(
+        executable.name,
+        processes,
+        tuple(executable.connections),
+        dict(executable.params),
+        source_text,
+        (),
+        verified_executable=executable,
+    )
 
 
 def promote_nextflow_document(

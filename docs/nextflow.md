@@ -440,10 +440,10 @@ inputs is rejected.
 - Arbitrary Groovy, channel operators beyond the one supported adapter,
   `when` on a scattered or nested-workflow step, and `exec` blocks are not
   interpreted.
-- The generated scatter call and conditional-step channel wiring are outside
-  the reader's recognized subset, so a scattered or conditional workflow
-  round-trips as loss-aware structure with an opaque region rather than being
-  promoted back to executable IR.
+- Read beside its generated `nextflow_workflow.json`, every generated workflow
+  — scatter, conditions, gather — reads back exactly and promotes to the model
+  that produced it. Read alone, the reader recognizes only the plain call
+  subset, so generated scatter and conditional wiring stay opaque regions.
 - Structurally imported scripts remain opaque. CWL/Sophios import preserves representable
   names, ports, resources, and topology but does not promise executable
   equivalence for arbitrary shell or Groovy semantics.
