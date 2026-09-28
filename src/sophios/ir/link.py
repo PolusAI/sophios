@@ -1,12 +1,11 @@
 """Pure composition and reference linking over workflow graphs."""
-from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Any
 
 from ..lang import SophiosErrorCode
 from ..lang.compatibility import TypeRelation, reference_relation
 from ..lang.diagnostics import Diagnostics, Locator
-from .declarations import boundary_declaration, port_declaration
+from .declarations import boundary_declaration, input_rank, layered, output_rank
 from .names import Names
 from .types import (
     DerivedName,
@@ -123,7 +122,6 @@ def _check_workflow_inputs(graph: WorkflowGraph, diagnostics: Diagnostics) -> No
         source_type = declarations.get(name)
         for sink in sinks:
             sink_type = _effective_type(graph, sink, producing=False)
-            sink_port = _port(graph, sink)
             relation = reference_relation(
                 source_type, sink_type, lang_version=graph.lang_version)
             if relation is TypeRelation.DISJOINT:
@@ -131,7 +129,7 @@ def _check_workflow_inputs(graph: WorkflowGraph, diagnostics: Diagnostics) -> No
                     SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
                     f"workflow input '{Names.of(graph).port(name)}' is provably disjoint: "
                     f'{source_type!r} cannot feed {sink_type!r}.',
-                    sink_port.span if sink_port is not None else None,
+                    _port(graph, sink).span,
                     _locator(graph, sink),
                 )
     for child in graph.children:
@@ -265,40 +263,26 @@ def _relation(graph: WorkflowGraph, edge: Edge) -> TypeRelation:
 
 
 def _effective_type(graph: WorkflowGraph, port: PortId, *, producing: bool) -> Any:
-    raw = _raw_type(graph, port)
+    return layered(_port(graph, port).type, _rank(graph, port, producing=producing)).canonical
+
+
+def _rank(graph: WorkflowGraph, port: PortId, *, producing: bool) -> int:
+    """The array layers every scatter between `graph` and `port` adds."""
     path = _step_path(graph, port.step)
-    if not path:
-        return raw
     if producing:
-        layers = sum(_output_scatter_rank(step) for _owner, step in path)
-    else:
-        actual = path[-1][1]
-        layers = _scatter_keys(actual).count(port.port)
-        # A `scatter:` list names the boundary by the name the callee exposes
-        # it under, not derivable from the port; use `input_mapping` when it's
-        # recorded, else fall back to the name `infer` would derive for it.
-        boundary = _boundary_name(path[-1][0], port)
-        for index, (_owner, wrapper) in enumerate(path[:-1]):
-            child = path[index + 1][0]
-            crossing = next((name for name, sinks in child.input_mapping if port in sinks), None)
-            if crossing is None:
-                crossing = boundary
-            layers += _scatter_keys(wrapper).count(crossing)
-    for _ in range(layers):
-        raw = {'type': 'array', 'items': raw}
-    return raw
-
-
-def _scatter_keys(step: StepNode) -> tuple[PortName, ...]:
-    """The ports a step scatters over, as Lower resolved them."""
-    return step.scatter_ports
-
-
-def _output_scatter_rank(step: StepNode) -> int:
-    keys = _scatter_keys(step)
-    if not keys:
+        return sum(output_rank(step) for _owner, step in path)
+    if not path:
         return 0
-    return len(keys) if dict(step.interpreted).get('scatterMethod') == 'nested_crossproduct' else 1
+    rank = input_rank(path[-1][1], port.port)
+    # A `scatter:` list names the boundary by the name the callee exposes
+    # it under, not derivable from the port; use `input_mapping` when it's
+    # recorded, else fall back to the name `infer` would derive for it.
+    for index, (_owner, wrapper) in enumerate(path[:-1]):
+        child = path[index + 1][0]
+        crossing = next((name for name, sinks in child.input_mapping if port in sinks),
+                        DerivedName(port.step, port.port))
+        rank += input_rank(wrapper, crossing)
+    return rank
 
 
 def _step_path(graph: WorkflowGraph,
@@ -319,21 +303,9 @@ def _step_path(graph: WorkflowGraph,
     return ()
 
 
-def _boundary_name(graph: WorkflowGraph, port: PortId) -> PortName:
-    """The name Sophios exposes `port` under when it has no authored one."""
-    if not _step_path(graph, port.step):
-        return port.port
-    return DerivedName(port.step, port.port)
-
-
-def _raw_type(graph: WorkflowGraph, port: PortId) -> Any:
-    found = _port(graph, port)
-    return found.type.canonical if found is not None else None
-
-
-def _port(graph: WorkflowGraph, port_id: PortId) -> Port | None:
-    return next((port for step in graph.all_steps for port in step.inputs + step.outputs
-                 if port.id == port_id), None)
+def _port(graph: WorkflowGraph, port_id: PortId) -> Port:
+    return next(port for step in graph.all_steps for port in step.inputs + step.outputs
+                if port.id == port_id)
 
 
 def _step(graph: WorkflowGraph, step_id: StepId) -> StepNode | None:
@@ -412,19 +384,8 @@ def _expose_cross_scope_inputs(graph: WorkflowGraph,
             continue
         if name not in {port.name for port in inputs}:
             sink_port = _port(current, edge.sink)
-            if sink_port is None:
-                continue
-            declaration = sink_port.declaration
-            if declaration is None:
-                declaration = port_declaration(deepcopy(sink_port.type.declared))
-            effective = _effective_type(current, edge.sink, producing=False)
-            declaration = boundary_declaration(replace(
-                declaration,
-                type=port_declaration({'type': deepcopy(effective)}).type,
-                shorthand=False,
-            ))
             inputs.append(WorkflowPort(
-                name, declaration,
+                name, boundary_declaration(sink_port, _rank(current, edge.sink, producing=False)),
                 origin=sink_port.origin or derived_from))
         for index, (existing, sinks) in enumerate(mappings):
             if existing == name:

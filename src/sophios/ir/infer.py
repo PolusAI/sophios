@@ -5,12 +5,14 @@ from typing import Any
 
 from ..lang import SophiosErrorCode
 from ..lang.diagnostics import Diagnostics
-from .declarations import boundary_declaration, port_declaration, required
+from .declarations import (feeding_declaration, input_rank, layered, output_rank, port_declaration,
+                           produced_declaration, required)
 from .link import attach_step_children
 from .resolve import RegistrySnapshot
 from .stepin import direct_sink
 from .types import (
     AuthoredName,
+    BoundaryDeclaration,
     DerivedName,
     Direction,
     Edge,
@@ -169,12 +171,9 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
                 return _insert(graph, position, insertion, policy), True
             input_name = DerivedName(step.id, port.id.port)
             if input_name not in {item.name for item in workflow_inputs}:
-                declaration = port.declaration or port_declaration(port.type.declared)
-                declaration = boundary_declaration(replace(
-                    declaration,
-                    format=(_canonical_boundary_format(declaration.format)
-                            if declaration.has_format else declaration.format),
-                ))
+                declaration = feeding_declaration(step, port)
+                declaration = BoundaryDeclaration(replace(
+                    declaration, format=_canonical_boundary_format(declaration.format)))
                 workflow_inputs.append(
                     WorkflowPort(input_name, declaration, origin=port.origin or port.id))
             if input_name not in {name for name, _ in input_mapping}:
@@ -339,28 +338,18 @@ def _exported_outputs(
         port.name: (port.declaration, port.origin) for port in graph.workflow_outputs}
     for step in graph.steps:
         for output in step.outputs:
-            name = DerivedName(step.id, output.id.port)
-            declaration = output.declaration or port_declaration(output.type.declared)
-            exported[name] = (replace(
-                declaration,
-                type=port_declaration(_effective_source_type(step, output)).type,
-            ), output.origin or output.id)
+            exported[DerivedName(step.id, output.id.port)] = (
+                produced_declaration(step, output), output.origin or output.id)
     return tuple((name, declaration, origin)
                  for name, (declaration, origin) in exported.items())
 
 
 def _effective_source_type(step: StepNode, port: Port) -> Any:
-    raw = port.type.canonical
-    if dict(step.interpreted).get('scatter'):
-        return {'type': 'array', 'items': raw}
-    return raw
+    return layered(port.type, output_rank(step)).canonical
 
 
 def _effective_sink_type(step: StepNode, port: Port) -> Any:
-    raw = port.type.canonical
-    if port.id.port in step.scatter_ports:
-        return {'type': 'array', 'items': raw}
-    return raw
+    return layered(port.type, input_rank(step, port.id.port)).canonical
 
 
 def _formats(declaration: PortDeclaration | None) -> tuple[Any, ...]:

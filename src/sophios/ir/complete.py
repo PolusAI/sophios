@@ -15,10 +15,9 @@ from typing import Any, TypeVar
 from ..lang.nodes import InlineLiteral, UnresolvedName
 from ..lang.diagnostics import SophiosError
 from ..lang.error_codes import SophiosErrorCode
-from .declarations import boundary_declaration, port_declaration
+from .declarations import feeding_declaration, produced_declaration
 from .types import (
     AuthoredName,
-    BoundaryDeclaration,
     DerivedName,
     Direction,
     JobBinding,
@@ -26,7 +25,6 @@ from .types import (
     PortDeclaration,
     PortId,
     PortName,
-    PortType,
     StepOutputRef,
     WorkflowGraph,
     WorkflowPort,
@@ -119,7 +117,7 @@ def _materialize_bindings(graph: WorkflowGraph) -> WorkflowGraph:
             match binding.value:
                 case InlineLiteral(value=value):
                     name = DerivedName(step.id, port.id.port)
-                    declaration = _boundary(port, step.scatter_ports.count(port.id.port))
+                    declaration = feeding_declaration(step, port)
                     _put(workflow_inputs, WorkflowPort(name, declaration))
                     _put(job_bindings, JobBinding(
                         name, coerce_job_value(str(port.id.port), declaration, value)))
@@ -163,20 +161,10 @@ def _materialize_outputs(graph: WorkflowGraph) -> WorkflowGraph:
             name = DerivedName(step.id, port.id.port)
             if name in authored:
                 continue
-            declaration = _boundary(port, 1 if dict(step.interpreted).get('scatter') else 0)
-            outputs.append(WorkflowPort(
-                name, declaration, StepOutputRef(step.id, port.id.port), True))
+            outputs.append(WorkflowPort(name, produced_declaration(step, port),
+                                        StepOutputRef(step.id, port.id.port), True))
             output_mapping.append((name, port.id))
     return replace(graph, workflow_outputs=tuple(outputs), output_mapping=tuple(output_mapping))
-
-
-def _boundary(port: Port, layers: int) -> BoundaryDeclaration:
-    """`port` as a workflow boundary declares it, wrapped in `layers` array levels."""
-    declaration = boundary_declaration(port.declaration or port_declaration(port.type.declared))
-    raw = declaration.type.canonical
-    for _ in range(layers):
-        raw = {'type': 'array', 'items': raw}
-    return BoundaryDeclaration(replace(declaration, type=PortType(raw)))
 
 
 _Named = TypeVar('_Named', WorkflowPort, JobBinding)

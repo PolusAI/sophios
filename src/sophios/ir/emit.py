@@ -109,7 +109,7 @@ def surface(graph: WorkflowGraph, names: Names, *,
     requirements = dict(graph.requirements)
     if graph.children:
         requirements['SubworkflowFeatureRequirement'] = {}
-    if any(dict(step.interpreted).get('scatter') for step in steps):
+    if any(step.scatter_ports for step in steps):
         requirements['ScatterFeatureRequirement'] = {}
     if any(dict(step.interpreted).get('when') is not None for step in steps):
         requirements['InlineJavascriptRequirement'] = {}
