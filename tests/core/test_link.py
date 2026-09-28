@@ -25,15 +25,14 @@ from sophios.lang import SophiosErrorCode, parse
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
-from .hermetic import ORACLE, compile_hermetic
+from .hermetic import ORACLE, bundle, compile_hermetic
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
-from .test_resolve import _scalar_literals_fit, _source_model
+from .test_resolve import _scalar_literals_fit
 
 
 def _front(workflow: Yaml) -> WorkflowGraph:
-    source, workflows = _source_model(workflow)
-    registry = RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows)
-    result = front_end(source, registry, name='oracle')
+    model = bundle(workflow, 'oracle', SYNTHETIC_TOOLS)
+    result = front_end(model.parsed, model.registry, name='oracle')
     assert result.resolved is not None and result.resolved.document is not None
     assert result.graph is not None, list(result.diagnostics)
     return result.graph
@@ -43,7 +42,7 @@ def _rooted(root: str, tools: Tools = SYNTHETIC_TOOLS, **children: str) -> Front
     """`root` through the front end, against `tools` and the named child sources."""
     registry = RegistrySnapshot.from_tools(tools, workflows={
         (SYNTHETIC_NS, name): parse(text, f'{name}.wic') for name, text in children.items()})
-    return front_end(root, registry, name='root')
+    return front_end(parse(root, 'root.wic'), registry, name='root')
 
 
 @pytest.mark.skip_pypi_ci
@@ -295,7 +294,7 @@ steps:
 - id: count
   in: {file: !* files}
 '''
-    typed = front_end(source, RegistrySnapshot.from_tools(SYNTHETIC_TOOLS), name='root')
+    typed = _rooted(source)
     assert typed.graph is not None
     linked = link(typed.graph)
     assert linked.graph is None

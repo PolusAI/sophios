@@ -20,7 +20,6 @@ from hypothesis import given
 from sophios.ir import (
     InferencePolicy,
     InsertionCatalog,
-    RegistrySnapshot,
     front_end,
     infer,
     link,
@@ -32,19 +31,18 @@ from sophios.lang import SophiosErrorCode
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
-from .hermetic import ORACLE, compile_hermetic, subworkflow_step
+from .hermetic import ORACLE, bundle, compile_hermetic, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
-from .test_resolve import _scalar_literals_fit, _source_model
+from .test_resolve import _scalar_literals_fit
 
 
 def _typed(workflow: Yaml, tools: Tools = SYNTHETIC_TOOLS):  # type: ignore[no-untyped-def]
-    source, workflows = _source_model(workflow)
-    registry = RegistrySnapshot.from_tools(tools, workflows=workflows)
-    result = front_end(source, registry, name='oracle')
+    model = bundle(workflow, 'oracle', tools)
+    result = front_end(model.parsed, model.registry, name='oracle')
     assert result.graph is not None and result.resolved is not None
     linked = link(result.graph)
     assert linked.graph is not None, list(linked.diagnostics)
-    return result, linked.graph, registry
+    return result, linked.graph, model.registry
 
 
 @pytest.mark.skip_pypi_ci

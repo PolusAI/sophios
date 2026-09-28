@@ -9,23 +9,56 @@ The two are deliberately separate files rather than one file with a `tools=`
 parameter. A shared module would have to import `test_setup` for one of its two
 callers, and the import is the thing being forbidden.
 """
+from pathlib import Path
 from typing import Final
 
+import yaml
 from hypothesis import HealthCheck, settings
 
 import sophios.cli
 import sophios.compiler
+from sophios.input_output import NoAliasDumper
 from sophios.utils_graphs import get_graph_reps
 from sophios.ir.artifacts import CompilationResult
-from sophios.wic_types import StepId, Tools, Yaml, YamlTree
+from sophios.ir.frontdoor import SourceBundle
+from sophios.ir.resolve import RegistrySnapshot
+from sophios.lang import ParseResult, parse
+from sophios.wic_types import Tools, Yaml
 
-from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
+from .synthetic_tools import SYNTHETIC_TOOLS
 
 #: Budgets, per the TDD guide's table. They may be raised for a dispatch run.
 #: They may never be lowered to make a failing property pass.
 COVERAGE: Final = settings(max_examples=500, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 ORACLE: Final = settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 PARTITION: Final = settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+
+
+def bundle(yml: Yaml, name: str, tools: Tools) -> SourceBundle:
+    """`yml` as the file door would read it, each `subtree` the file it stands for.
+
+    A test-side model of the loader's shape (see `subworkflow_step`): the body
+    becomes a registry entry keyed by the step's stem, `parentargs` the step's
+    own keys, and every document's `wic: lang_version:` a pin.
+    """
+    workflows: dict[tuple[str, str], ParseResult] = {}
+
+    def parsed(document: Yaml, stem: str) -> ParseResult:
+        steps = []
+        for step in document.get('steps', []):
+            if isinstance(step, dict) and 'subtree' in step:
+                child = Path(step['id']).stem
+                workflows[('global', child)] = parsed(step['subtree'], child)
+                step = {'id': step['id'], **step.get('parentargs', {})}
+            steps.append(step)
+        return parse(yaml.dump({**document, 'steps': steps}, Dumper=NoAliasDumper,
+                               sort_keys=False, line_break='\n', indent=2), f'{stem}.wic')
+
+    root = parsed(yml, name)
+    pins = tuple(str(entries['lang_version']) for result in (root, *workflows.values())
+                 if result.document is not None and result.document.sidecar is not None
+                 for entries in [dict(result.document.sidecar.entries)] if 'lang_version' in entries)
+    return SourceBundle(root, name, RegistrySnapshot.from_tools(tools, workflows=workflows), pins)
 
 
 def compile_hermetic(yml: Yaml, name: str = 'oracle', *,
@@ -42,10 +75,9 @@ def compile_hermetic(yml: Yaml, name: str = 'oracle', *,
     compiler_options['insert_steps_automatically'] = insert_steps_automatically
     graph = get_graph_reps(name)
     del is_root
-    return sophios.compiler.compile_document(
-        YamlTree(StepId(name, SYNTHETIC_NS), yml),
+    return sophios.compiler.compile_source(
+        bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools),
         compiler_options, graph_settings, tag_paths,
-        SYNTHETIC_TOOLS if tools is None else tools,
         relative_run_path=True, testing=True, graph_target=graph)
 
 
@@ -55,10 +87,9 @@ def compile_production(yml: Yaml, name: str = 'binding', *,
     """Compile with user-facing progress enabled (``testing=False``)."""
     compiler_options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
     del is_root
-    return sophios.compiler.compile_document(
-        YamlTree(StepId(name, SYNTHETIC_NS), yml),
+    return sophios.compiler.compile_source(
+        bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools),
         compiler_options, graph_settings, tag_paths,
-        SYNTHETIC_TOOLS if tools is None else tools,
         relative_run_path=True, testing=False, graph_target=get_graph_reps(name))
 
 
@@ -73,14 +104,11 @@ def compile_hermetic_cwl(yml: Yaml, name: str = 'oracle', *,
 
 
 def subworkflow_step(stem: str, subtree: Yaml) -> Yaml:
-    """A subworkflow step, shaped as `read_ast_from_disk` shapes one.
+    """A subworkflow step: its body in `subtree`, its own keys in `parentargs`.
 
-    `read_ast_from_disk` splits a `.wic` step into `subtree` (applied before
-    compilation) and `parentargs` (applied after) — src/sophios/ast.py:119-125 —
-    and the compiler boundary reads both unconditionally
-    (src/sophios/compiler.py:492, :512). Building the shape here is what lets a
-    partitioned workflow exist without a file on disk, which is what makes partition independence
-    hermetic.
+    `bundle` turns the body into the registry entry a file on disk would be.
+    Building the shape here is what lets a partitioned workflow exist without
+    a file on disk, which is what makes partition independence hermetic.
     """
     assert stem.endswith('.wic'), 'a subworkflow step is recognised by its .wic suffix only'
     return {'id': stem, 'subtree': subtree, 'parentargs': {}}

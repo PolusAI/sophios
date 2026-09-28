@@ -1,7 +1,7 @@
-"""The direct typed front end: Parse, then Resolve, then Lower."""
+"""The direct typed front end: a parse, then Resolve, then Lower."""
 from dataclasses import dataclass
 
-from ..lang import Diagnostics, ParseResult, parse
+from ..lang import Diagnostics, ParseResult
 from .lower import Lowered, lower
 from .resolve import RegistrySnapshot, Resolved, resolve
 from .types import WorkflowGraph
@@ -30,10 +30,10 @@ class FrontEndResult:
         return self.parsed.diagnostics
 
 
-def front_end(source: str, registry: RegistrySnapshot, *, name: str = 'workflow',
+def front_end(parsed: ParseResult, registry: RegistrySnapshot, *, name: str = 'workflow',
               lang_version: str | None = None) -> FrontEndResult:
-    """Run the direct typed chain; no mapping or text adapter sits within it."""
-    parsed = parse(source, f'{name}.wic')
+    """Run the direct typed chain from a root already parsed; no mapping or
+    text adapter sits within it."""
     if parsed.document is None or parsed.diagnostics.has_errors:
         return FrontEndResult(parsed, None, None)
     resolved = resolve(parsed.document, registry, name=name, lang_version=lang_version)

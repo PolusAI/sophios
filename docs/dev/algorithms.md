@@ -55,9 +55,12 @@ already determined by those phases. It may derive a CWL-facing boundary or
 source spelling from typed graph facts, but it performs no lookup and makes no
 independent semantic decision.
 
-`compile_document` is the sole internal compiler entry point. It accepts the
-assembled source plus immutable settings and registries, and returns the final
-`WorkflowGraph` with its emitted artifact tree. The CLI and public Python API
+`compile_source` is the sole compiler entry point. It accepts a `SourceBundle`
+-- the parsed root, the registry of every parsed workflow and tool it reaches,
+and their language-version pins -- plus immutable settings, and returns the
+final `WorkflowGraph` with its emitted artifact tree. `.wic` files reach it
+through `frontdoor.bundle_from_disk`, which parses each file once; the Python
+API builds its bundle from the `Document` it constructs. The CLI and public Python API
 adapt to that result once at their boundaries; the retired mutable compiler
 environment and result tree no longer exist.
 

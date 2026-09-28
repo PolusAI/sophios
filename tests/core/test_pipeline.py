@@ -23,15 +23,13 @@ from sophios.ir.types import WorkflowGraph
 from sophios.ir.infer import infer
 from sophios.ir.link import link
 from sophios.ir.pipeline import front_end
-from sophios.ir.resolve import RegistrySnapshot
-from sophios.wic_types import StepId as LegacyStepId, Yaml
+from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
-from .compile_harness import TOUCH, compile_cwl
 from .equivalence import Strength, equivalent
-from .hermetic import ORACLE, compile_hermetic, subworkflow_step
+from .hermetic import ORACLE, bundle, compile_hermetic
 from .synthetic_tools import SYNTHETIC_TOOLS
-from .test_resolve import _scalar_literals_fit, _source_model
+from .test_resolve import _scalar_literals_fit
 
 
 def _render(graph: WorkflowGraph) -> Any:
@@ -45,9 +43,8 @@ def _render(graph: WorkflowGraph) -> Any:
 @ORACLE
 def test_full_pipeline_agrees_at_up_to_embedding(workflow: Yaml) -> None:
     """The live boundary agrees with direct typed phase composition."""
-    source, workflows = _source_model(copy.deepcopy(workflow))
-    registry = RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows)
-    front = front_end(source, registry, name='oracle')
+    model = bundle(copy.deepcopy(workflow), 'oracle', SYNTHETIC_TOOLS)
+    front = front_end(model.parsed, model.registry, name='oracle')
     assert front.graph is not None, list(front.diagnostics)
 
     prepared = complete(front.graph)
@@ -117,27 +114,8 @@ def test_completing_twice_is_completing_once_for_any_workflow(workflow: Yaml) ->
     runs once per document now and cannot compound; this covers what still
     repeats.
     """
-    source, workflows = _source_model(copy.deepcopy(workflow))
-    registry = RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows)
-    front = front_end(source, registry, name='oracle')
+    model = bundle(copy.deepcopy(workflow), 'oracle', SYNTHETIC_TOOLS)
+    front = front_end(model.parsed, model.registry, name='oracle')
     assert front.graph is not None, list(front.diagnostics)
     once = complete(front.graph)
     assert _render(complete(once)) == _render(once)
-
-
-@pytest.mark.fast
-def test_an_assembled_implementation_body_reaches_the_registry() -> None:
-    """The bundle detaches what the loader attached, not only step subtrees.
-
-    `read_ast_from_disk` leaves each implementation body inline and rekeys the
-    mapping by `StepId`. A `StepId` has no YAML representation, and Resolve
-    selects an implementation from the registry rather than from the document,
-    so a body left in place is both undumpable and unreachable.
-    """
-    dispatcher: Yaml = {'wic': {
-        'implementations': {LegacyStepId('impl', 'global'): copy.deepcopy(TOUCH)},
-        'implementation': 'impl',
-        'namespace': 'global',
-    }}
-    compiled = compile_cwl(dispatcher, 'dispatch')
-    assert [step['id'] for step in compiled['steps']] == ['dispatch__step__1__touch']

@@ -6,10 +6,8 @@ from typing import Any
 import pytest
 from jsonschema.validators import Draft202012Validator
 
-import yaml
-
 from sophios import compiler, cwl_subinterpreter, utils
-from sophios.utils_yaml import wic_loader
+from sophios.lang import to_json
 from sophios.wic_types import StepId, Tool, Yaml
 
 from .hermetic import compile_hermetic_cwl
@@ -45,9 +43,9 @@ def test_rerun_cwltool_builds_an_id_form_step(
     seen: list[Yaml] = []
 
     def capture(*args: Any, **_: Any) -> None:
-        # Both branches end at the same door now, and it is handed text, so the
-        # document the branch built is read back from the source it bundled.
-        seen.append(yaml.load(args[0].source, Loader=wic_loader()))
+        # Both branches end at the same door, so the document the branch
+        # built is read back from the parse it bundled.
+        seen.append(to_json(args[0].parsed.document))
         raise _Captured
 
     monkeypatch.setattr(compiler, 'compile_source', capture)

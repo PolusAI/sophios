@@ -5,6 +5,7 @@ import copy
 import uvicorn
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+import yaml
 
 from sophios import compiler
 from sophios import input_output
@@ -13,9 +14,10 @@ from sophios import utils_cwl
 from sophios.post_compile import inline_artifact_runs
 from sophios.cli import get_args, get_dicts_for_compilation
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
-from sophios.wic_types import Json, Tool, Tools, StepId, YamlTree
+from sophios.wic_types import Json, Tool, Tools, StepId
 from sophios.contrib import converter
 from sophios import plugins
+from sophios.ir import frontdoor
 
 
 app = FastAPI()
@@ -78,11 +80,7 @@ async def compile_wf(request: Request) -> Json:
         if can_step.get("run", None):
             # add a new tool
             tools_cwl[StepId(can_step["id"], "global")] = Tool(".", can_step["run"])
-    wic_obj = {'wic': workflow_can.get('wic') or {}}
-    plugin_ns = wic_obj['wic'].get('namespace', 'global')
-
     graph = get_graph_reps(wkflw_name)
-    yaml_tree: YamlTree = YamlTree(StepId(wkflw_name, plugin_ns), workflow_can)
 
     # From the arguments this endpoint actually built, not a fresh default
     # parse. Nothing observable changes here — `wkflw_name` is a name, not a
@@ -92,8 +90,10 @@ async def compile_wf(request: Request) -> Json:
     compiler_options, graph_settings, yaml_tag_paths = get_dicts_for_compilation(args)
 
     # ========= COMPILE WORKFLOW ================
-    result = compiler.compile_document(
-        yaml_tree, compiler_options, graph_settings, yaml_tag_paths, tools_cwl,
+    bundle = frontdoor.bundle_from_source(
+        yaml.safe_dump(workflow_can, sort_keys=False), wkflw_name, {}, tools_cwl)
+    result = compiler.compile_source(
+        bundle, compiler_options, graph_settings, yaml_tag_paths,
         relative_run_path=True, testing=False, graph_target=graph)
     # generating cwl inline within the 'run' tag is post compile
     # and always on when compiling and preparing REST return payload

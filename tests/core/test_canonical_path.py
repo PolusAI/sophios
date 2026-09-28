@@ -38,12 +38,12 @@ from sophios.ir.artifacts import CompilationResult
 from sophios.utils_cwl import desugar_into_canonical_normal_form
 from sophios.utils_graphs import get_graph_reps
 from sophios.utils_yaml import wic_loader
-from sophios.wic_types import StepId, Yaml, YamlTree
+from sophios.wic_types import StepId, Yaml
 
 from . import ast_strategies as strat
 from .ast_strategies import passthrough_keys, passthrough_values
 from .equivalence import Strength, equivalent
-from .hermetic import ORACLE, PARTITION, compile_hermetic, compile_hermetic_cwl
+from .hermetic import ORACLE, PARTITION, bundle, compile_hermetic, compile_hermetic_cwl
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 
 # --------------------------------------------------------------------------
@@ -102,7 +102,7 @@ def _build_workflow(spec: _PathSpec) -> Workflow:
 
 def _compile_from_document(document: Yaml, name: str) -> CompilationResult:
     """Compile a plain YAML document via the same compiler entry point and
-    options `sophios.api.python._workflow_runtime.compile_workflow` uses for
+    options `sophios.api.python._workflow_runtime.compile_workflow_result` uses for
     the direct path — built from a document already loaded off disk, rather
     than from `workflow_document(workflow)`.
 
@@ -110,13 +110,11 @@ def _compile_from_document(document: Yaml, name: str) -> CompilationResult:
     only variable between the two arms is the one this property is actually
     about: where the document came from.
     """
-    graph = get_graph_reps(name)
-    yaml_tree = YamlTree(StepId(name, SYNTHETIC_NS), document)
     compiler_options, graph_settings, yaml_tag_paths = default_compilation_settings()
-    return sophios.compiler.compile_document(
-        yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
-        SYNTHETIC_TOOLS, relative_run_path=True, testing=False,
-        graph_target=graph)
+    return sophios.compiler.compile_source(
+        bundle(document, name, SYNTHETIC_TOOLS), compiler_options, graph_settings,
+        yaml_tag_paths, relative_run_path=True, testing=False,
+        graph_target=get_graph_reps(name))
 
 
 @pytest.mark.fast

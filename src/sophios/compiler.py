@@ -2,25 +2,23 @@
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Final
+from typing import Final
 
 import graphviz
 import networkx as nx
-import yaml
 
 from . import utils_graphs
-from .input_output import NoAliasDumper
 from .ir.complete import complete
 from .ir.artifacts import CompilationArtifact, CompilationResult
 from .ir.emit import emit, emit_job_inputs, surface
 from .ir.infer import InferencePolicy, InsertionCatalog, infer
 from .ir.link import link
 from .ir.frontdoor import SourceBundle
-from .ir.pipeline import FrontEndResult, front_end
+from .ir.pipeline import front_end
 from .ir.resolve import RegistrySnapshot
 from .ir.names import Names
 from .ir.types import AuthoredName, Binding, PortName, WorkflowGraph
-from .lang import ParseResult, parse, versions
+from .lang import versions
 from .lang.diagnostics import SophiosError
 from .lang.nodes import InlineLiteral
 from .lang.spans import SourceSpan
@@ -30,14 +28,11 @@ from .wic_types import (
     GraphData,
     GraphReps,
     GraphSettings,
-    StepId as LegacyStepId,
-    Tools,
-    Yaml,
     YamlTagPaths,
-    YamlTree,
 )
 
 
+# pylint: disable-next=too-many-locals
 def compile_source(bundle: SourceBundle,
                    compiler_options: CompilerOptions,
                    graph_settings: GraphSettings,
@@ -46,70 +41,18 @@ def compile_source(bundle: SourceBundle,
                    relative_run_path: bool,
                    testing: bool,
                    graph_target: GraphReps | None = None) -> CompilationResult:
-    """Compile a workflow from the text its author wrote.
+    """Compile a parsed root workflow and every workflow it reaches.
 
-    The door for a caller that has files: parse reads those bytes, so every
-    span it reports is a position the reader can open.
+    The one door. A bundle read from files carries the spans of the text its
+    author wrote, so a diagnostic names a position the reader can open; one
+    the Python API built carries none, and its diagnostics name a `Locator`.
     """
     if not testing:
         print(' starting compilation of', bundle.name)
     selected_version = versions.resolve(
         compiler_options.get('lang_version'), bundle.lang_version_pins)
-    front = front_end(bundle.source, bundle.registry, name=bundle.name,
+    front = front_end(bundle.parsed, bundle.registry, name=bundle.name,
                       lang_version=selected_version)
-    result = _compile_front(front, bundle.registry,
-                            compiler_options, graph_settings, yaml_tag_paths,
-                            relative_run_path=relative_run_path,
-                            graph_target=graph_target)
-    if not testing:
-        print('finishing compilation of', bundle.name)
-    return result
-
-
-def compile_document(yaml_tree_ast: YamlTree,
-                     compiler_options: CompilerOptions,
-                     graph_settings: GraphSettings,
-                     yaml_tag_paths: YamlTagPaths,
-                     tools: Tools,
-                     *,
-                     relative_run_path: bool,
-                     testing: bool,
-                     graph_target: GraphReps | None = None) -> CompilationResult:
-    """Compile one assembled document through the typed pipeline.
-
-    The door for a caller with no file — the Python API and the REST surface
-    build their workflow in memory — so text is rebuilt here for Parse to
-    read, and a diagnostic from this door carries a `Locator` rather than an
-    openable location.
-    """
-    if not testing:
-        print(' starting compilation of', yaml_tree_ast.step_id.stem)
-
-    source, workflow_sources = _source_bundle(yaml_tree_ast.yml)
-    registry = RegistrySnapshot.from_tools(tools, workflows=workflow_sources)
-    selected_version = versions.resolve(
-        compiler_options.get('lang_version'), _lang_version_pins(yaml_tree_ast.yml))
-    front = front_end(source, registry, name=Path(yaml_tree_ast.step_id.stem).stem,
-                      lang_version=selected_version)
-    result = _compile_front(front, registry,
-                            compiler_options, graph_settings, yaml_tag_paths,
-                            relative_run_path=relative_run_path,
-                            graph_target=graph_target)
-    if not testing:
-        print('finishing compilation of', yaml_tree_ast.step_id.stem)
-    return result
-
-
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
-def _compile_front(front: FrontEndResult,
-                   registry: RegistrySnapshot,
-                   compiler_options: CompilerOptions,
-                   graph_settings: GraphSettings,
-                   yaml_tag_paths: YamlTagPaths,
-                   *,
-                   relative_run_path: bool,
-                   graph_target: GraphReps | None) -> CompilationResult:
-    """The phases both doors share, from a finished front end to an artifact."""
     if front.graph is None or front.resolved is None or front.resolved.document is None:
         raise SophiosError(front.diagnostics)
     if not front.graph.steps:
@@ -128,23 +71,18 @@ def _compile_front(front: FrontEndResult,
         insert_steps_automatically=compiler_options['insert_steps_automatically'],
         format_rules=tuple(compiler_options.get('inference_rules', {}).items()),
     )
-    inferred = infer(linked.graph, policy, InsertionCatalog.from_registry(registry))
+    inferred = infer(linked.graph, policy, InsertionCatalog.from_registry(bundle.registry))
     if inferred.graph is None:
         raise SophiosError(inferred.diagnostics)
     graph = complete(inferred.graph)
     names = Names.of(graph)
     graph_reps = _project_graph(graph, names, graph_settings, graph_target)
-    artifact = _artifact_tree(graph, names, registry, graph_settings, graph_reps,
+    artifact = _artifact_tree(graph, names, bundle.registry, graph_settings, graph_reps,
                               relative_run_path=relative_run_path,
                               partial_failure=compiler_options['partial_failure_enable'])
+    if not testing:
+        print('finishing compilation of', bundle.name)
     return CompilationResult(graph, artifact)
-
-
-def _source_bundle(root: Yaml) -> tuple[str, dict[tuple[str, str], ParseResult]]:
-    """Detach loader-attached subtrees into an immutable Resolve snapshot."""
-    workflows: dict[tuple[str, str], ParseResult] = {}
-    detached_root = _detach_sources(root, workflows)
-    return _dump_source(detached_root), workflows
 
 
 #: The runtime adapter's own declared inputs, whose values come from the
@@ -175,62 +113,6 @@ def _bind_subinterpreter_locations(graph: WorkflowGraph,
         graph, steps=tuple(steps),
         children=tuple(_bind_subinterpreter_locations(child, yaml_tag_paths)
                        for child in graph.children))
-
-
-def _detach_sources(document: Yaml, workflows: dict[tuple[str, str], ParseResult]) -> Yaml:
-    """Recursively replace attached child bodies with registry entries."""
-    copied = deepcopy(document)
-    raw_steps = copied.get('steps', [])
-    if isinstance(raw_steps, dict):
-        steps = [{'id': str(name), **({} if body is None else body)}
-                 for name, body in raw_steps.items()]
-    else:
-        steps = list(raw_steps) if isinstance(raw_steps, list) else raw_steps
-    if not isinstance(steps, list):
-        copied['steps'] = steps
-        return copied
-    sidecar = copied.get('wic') or {}
-    sidecar_steps = sidecar.get('steps', {}) if isinstance(sidecar, dict) else {}
-    if isinstance(sidecar, dict) and isinstance(sidecar.get('implementations'), dict):
-        copied['wic'] = {**sidecar, 'implementations': _detach_implementations(
-            sidecar, workflows)}
-    detached: list[Yaml] = []
-    for index, step in enumerate(steps, start=1):
-        if not isinstance(step, dict) or 'subtree' not in step:
-            detached.append(step)
-            continue
-        step_name = str(step.get('id', ''))
-        child_name = Path(step_name).stem
-        metadata = sidecar_steps.get(f'({index}, {step_name})', {}) \
-            if isinstance(sidecar_steps, dict) else {}
-        namespace = 'global'
-        if isinstance(metadata, dict) and isinstance(metadata.get('wic'), dict):
-            namespace = str(metadata['wic'].get('namespace', 'global'))
-        child = _detach_sources(step['subtree'], workflows)
-        workflows[(namespace, child_name)] = parse(_dump_source(child), f'{child_name}.wic')
-        parentargs = step.get('parentargs', {})
-        detached.append({'id': step_name,
-                         **(deepcopy(parentargs) if isinstance(parentargs, dict) else {})})
-    copied['steps'] = detached
-    return copied
-
-
-def _detach_implementations(sidecar: Yaml, workflows: dict[tuple[str, str], ParseResult]) -> Yaml:
-    """Move inline implementation bodies into the registry, as subtrees are."""
-    namespace = str(sidecar.get('namespace', 'global'))
-    detached: Yaml = {}
-    for key, body in sidecar['implementations'].items():
-        name = Path(key.stem if isinstance(key, LegacyStepId) else str(key)).stem
-        if isinstance(body, dict) and body:
-            child = _detach_sources(body, workflows)
-            workflows[(namespace, name)] = parse(_dump_source(child), f'{name}.wic')
-        detached[name] = {}
-    return detached
-
-
-def _dump_source(document: Yaml) -> str:
-    return yaml.dump(document, Dumper=NoAliasDumper, sort_keys=False,
-                     line_break='\n', indent=2)
 
 
 def _check_unresolved_names(graph: WorkflowGraph, allow_raw_cwl: bool,
@@ -336,22 +218,3 @@ def _project_graph(graph: WorkflowGraph, names: Names, settings: GraphSettings,
         if len(graph.namespace.parts) < settings['graph_inline_depth']:
             reps.graphviz.subgraph(child_reps.graphviz)
     return reps
-
-
-def _lang_version_pins(node: Any, _path: frozenset[int] = frozenset()) -> tuple[str, ...]:
-    """Collect every language pin in an assembled source tree."""
-    if id(node) in _path:
-        return ()
-    path = _path | {id(node)}
-    pins: list[str] = []
-    if isinstance(node, dict):
-        wic = node.get('wic')
-        if isinstance(wic, dict) and 'lang_version' in wic:
-            value = wic['lang_version']
-            pins.append(value if isinstance(value, str) else str(value))
-        for value in node.values():
-            pins.extend(_lang_version_pins(value, path))
-    elif isinstance(node, list):
-        for value in node:
-            pins.extend(_lang_version_pins(value, path))
-    return tuple(pins)

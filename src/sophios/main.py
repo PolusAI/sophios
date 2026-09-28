@@ -8,13 +8,11 @@ import json
 
 import graphviz
 import networkx as nx
-import yaml
 from jsonschema import Draft202012Validator
 
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.ir.artifacts import CompilationResult
-from sophios.utils_yaml import wic_loader
 from . import input_output as io
 from . import post_compile as pc
 from . import cli, compiler, plugins, run_local, utils  # , utils_graphs
@@ -29,10 +27,10 @@ def _load_source_bundle(args: argparse.Namespace,
                         yml_paths: dict[str, dict[str, Path]],
                         tools_cwl: Tools,
                         validator: Draft202012Validator) -> tuple[str, str, SourceBundle]:
-    """Read the root workflow and everything it reaches, as text.
+    """Read and parse the root workflow and everything it reaches.
 
     Nothing is spliced into anything and nothing is rebuilt, so the document
-    the compiler parses is the one on disk and a diagnostic's position is a
+    the compiler reads is the one on disk and a diagnostic's position is a
     place the reader can open.
     """
     yaml_path = args.yaml
@@ -65,11 +63,11 @@ def _compile_loaded_document(yaml_path: str, yaml_stem: str, bundle: SourceBundl
     # rootgraph.attr(rankdir='LR') # When --graph_inline_depth 1, this usually looks better.
     with rootgraph.subgraph(name=f'cluster_{yaml_path}') as subgraph_gv:
         # get the label (if any) from the workflow
-        # The root's own `wic: graphviz:` label, read from the text that was
-        # compiled -- not from an assembled tree, which no longer exists.
-        root_wic = (yaml.load(bundle.source, Loader=wic_loader()) or {}).get('wic') or {}
-        step_i_wic_graphviz = root_wic.get('graphviz', {})
-        label = step_i_wic_graphviz.get('label', yaml_path)
+        # The root's own `wic: graphviz:` label, read from the document that
+        # is compiled.
+        root = bundle.parsed.document
+        drawn = dict(root.sidecar.entries).get('graphviz') if root and root.sidecar else None
+        label = drawn.get('label', yaml_path) if isinstance(drawn, dict) else yaml_path
         subgraph_gv.attr(label=label)
         subgraph_gv.attr(color='lightblue')  # color of cluster subgraph outline
         subgraph_nx = nx.DiGraph()

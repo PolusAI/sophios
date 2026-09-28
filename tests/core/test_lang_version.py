@@ -18,6 +18,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 import sophios.post_compile
+from sophios.ir.frontdoor import bundle_from_disk
 from sophios.lang import KNOWN_VERSIONS, LANG_VERSION, resolve_lang_version
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
@@ -25,6 +26,7 @@ from sophios.lang.versions import ANNOTATION_KEY, ANNOTATION_NAMESPACE, ANNOTATI
 from sophios.wic_types import Yaml
 
 from .compile_harness import FAST, TOUCH, compile_cwl, compile_info
+from .hermetic import subworkflow_step
 
 #: Fabricated, ordered version histories: what the resolver will face someday.
 histories = st.lists(
@@ -118,12 +120,10 @@ def test_one_version_or_a_conflict_report(known: tuple[str, ...], data: st.DataO
 @pytest.mark.fast
 def test_conflicting_pins_across_a_tree_are_caught_at_the_root() -> None:
     """The same, through the compiler: a subworkflow pin that disagrees with the root's is a
-    conflict at compile time — the walk sees the whole merged tree."""
+    conflict at compile time — every reachable document's pin is collected."""
     tree: Yaml = {
         'wic': {'lang_version': '0.0.1'},
-        'steps': [{'id': 'touch',
-                   'in': {'filename': {'wic_inline_input': 'empty.txt'}},
-                   'wic': {'lang_version': '9.9.9'}}],
+        'steps': [subworkflow_step('child.wic', {'wic': {'lang_version': '9.9.9'}, **TOUCH})],
     }
     with pytest.raises(SophiosError) as caught:
         _compile(tree)
@@ -271,43 +271,18 @@ def test_the_cli_flag_reaches_the_compiler() -> None:
 
 
 @pytest.mark.fast
-def test_pin_collection_survives_recursive_trees() -> None:
-    """The pins walk must not recurse forever on a cyclic tree.
-
-    The loader constructs self-referential structures from YAML aliases, so
-    the walk meets them through the real compile path. Found by applying the
-    parser's cycle-guard lesson as an audit lens across the stack — the same
-    defect class, recurring in code written after the lesson.
-    """
-    import yaml as _yaml
-
-    from sophios.compiler import _lang_version_pins
-    from sophios.utils_yaml import wic_loader
-
-    cyclic = _yaml.load('steps: &a\n- id: s\n  wic: {x: *a}\n', Loader=wic_loader())
-    assert _lang_version_pins(cyclic) == ()  # must not raise
-
-    pinned = _yaml.load('wic: {lang_version: 0.0.1}\nsteps: &a\n- id: s\n  wic: {x: *a}\n',
-                        Loader=wic_loader())
-    assert _lang_version_pins(pinned) == ('0.0.1',)  # acyclic regions still visited
-
-
-@pytest.mark.fast
-def test_a_mistyped_pin_is_reported_not_ignored() -> None:
+def test_a_mistyped_pin_is_reported_not_ignored(tmp_path: Path) -> None:
     """`lang_version: 1.0` is a YAML float, not a string. A walk that only
     collected strings made it vanish — silently inferred over, when the
     author plainly asked for something, and by the no-silent-selection rule
     above, silence is the one wrong answer. Any value under the key is a pin
     claim; a non-version is reported as unknown, naming what was written."""
-    import yaml as _yaml
-
-    from sophios.compiler import _lang_version_pins
-    from sophios.utils_yaml import wic_loader
-
-    mistyped = _yaml.load('wic: {lang_version: 1.0}\nsteps:\n- id: s\n', Loader=wic_loader())
-    assert _lang_version_pins(mistyped) == ('1.0',)
+    written = tmp_path / 'mistyped.wic'
+    written.write_text('wic: {lang_version: 1.0}\nsteps:\n- id: s\n', encoding='utf-8')
+    pins = bundle_from_disk(written, {'global': {}}, {}).lang_version_pins
+    assert pins == ('1.0',)
 
     with pytest.raises(SophiosError) as caught:
-        resolve_lang_version(None, _lang_version_pins(mistyped))
+        resolve_lang_version(None, pins)
     assert caught.value.diagnostics[0].code is SophiosErrorCode.UNKNOWN_LANG_VERSION
     assert "'1.0'" in caught.value.diagnostics[0].message

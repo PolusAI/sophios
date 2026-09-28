@@ -36,14 +36,18 @@ from .resolve import RegistrySnapshot, generated_process_id
 
 @dataclass(frozen=True, slots=True)
 class SourceBundle:
-    """A root workflow's own text plus every workflow reachable from it."""
+    """A parsed root workflow plus every workflow reachable from it.
 
-    source: str
+    What the compiler's one door takes. A file's bundle carries the spans of
+    the text its author wrote; one the Python API builds carries none.
+    """
+
+    parsed: ParseResult
     name: str
     registry: RegistrySnapshot
     #: Every `wic: lang_version:` the reachable documents pin. Collected
-    #: while reading, because the version must be chosen before Parse runs
-    #: and only the door has seen every file by then.
+    #: while reading, because the version must be chosen before Resolve runs
+    #: and only the door has seen every document by then.
     lang_version_pins: tuple[str, ...] = ()
 
 
@@ -61,8 +65,9 @@ def bundle_from_source(source: str, name: str,
     workflows: dict[tuple[str, str], ParseResult] = {}
     generated: Tools = {}
     pins: list[str] = []
-    _visit(source, name, None, yml_paths, Path('.'), workflows, generated, {}, pins, validator)
-    return SourceBundle(source, name,
+    parsed = _visit(source, name, None, yml_paths, Path('.'), workflows, generated, {}, pins,
+                    validator)
+    return SourceBundle(parsed, name,
                         RegistrySnapshot.from_tools({**tools, **generated},
                                                     workflows=workflows),
                         tuple(pins))
@@ -78,13 +83,12 @@ def bundle_from_disk(yml_path: Path,
     supplied -- the same gate the file loader applied, at the same point: before
     anything downstream sees the document.
     """
-    source = yml_path.read_text(encoding='utf-8')
     workflows: dict[tuple[str, str], ParseResult] = {}
     generated: Tools = {}
     pins: list[str] = []
-    _visit(source, yml_path.stem, yml_path.resolve(), yml_paths, yml_path.parent,
-           workflows, generated, {}, pins, validator)
-    return SourceBundle(source, yml_path.stem,
+    parsed = _visit(yml_path.read_text(encoding='utf-8'), yml_path.stem, yml_path.resolve(), yml_paths, yml_path.parent,
+                    workflows, generated, {}, pins, validator)
+    return SourceBundle(parsed, yml_path.stem,
                         RegistrySnapshot.from_tools({**tools, **generated},
                                                     workflows=workflows),
                         tuple(pins))

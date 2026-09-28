@@ -2,8 +2,7 @@
 
 The corpus is not the interesting input: documents a *user* wrote already have
 a parse property. What nothing checked is the documents the compiler *makes* —
-the Python API's output, the tree after `wic:` metadata is merged onto a step,
-and the documents `rerun_cwltool` builds. Those
+the Python API's output and the documents `rerun_cwltool` builds. Those
 never pass through `sophios.lang`, so the grammar has never had an opinion
 about them, and three defects in a row lived exactly there: step ids spelled
 from the wrong stem, a producer still emitting a step form the grammar had
@@ -20,13 +19,7 @@ import yaml
 
 from sophios.input_output import NoAliasDumper
 from sophios.lang.parser import parse
-
-from hypothesis import given
-
 from sophios.api.python.workflow import Step, Workflow
-
-from . import ast_strategies as strat
-from .hermetic import ORACLE, compile_hermetic_cwl
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
@@ -42,7 +35,6 @@ CONTRIB: Final = 'CONTRIB'        # outside the core zone
 #: classified by hand.
 MANUFACTURING_SITES: Final[dict[str, str]] = {
     'sophios/api/python/_workflow_runtime.py::workflow_document': DOCUMENT,
-    'sophios/compiler.py::_detach_sources': DOCUMENT,
     'sophios/cwl_subinterpreter.py::rerun_cwltool': DOCUMENT,
     # Not documents.
     'sophios/ir/emit.py::emit': CWL,
@@ -193,15 +185,10 @@ def test_the_sites_no_driver_reaches_are_the_recorded_ones() -> None:
 
 
 def _drive_everything() -> None:
-    """Run every entry point these drivers can reach, instrumentation in place.
-
-    Two doors, because they manufacture different things: `compile_workflow`
-    for the in-memory path, and the Python API, whose `workflow_document` is
-    the site that spelled step ids from the wrong stem.
+    """Run every entry point these drivers can reach, instrumentation in place:
+    the Python API, whose `workflow_document` is the site that spelled step ids
+    from the wrong stem.
     """
-    for document in _DRIVERS:
-        compile_hermetic_cwl(document, 'manufactured', insert_steps_automatically=True)
-
     adapters = REPO_ROOT / 'cwl_adapters'
     touch = Step(clt_path=adapters / 'touch.cwl')
     touch.inputs.filename = 'empty.txt'
@@ -218,44 +205,3 @@ def _drive_everything() -> None:
     # Exercise the direct Python API serialization entry point as well as its
     # compile path.
     workflow.to_wic_yaml()
-
-
-#: Documents chosen to drive the manufacturing sites rather than to be
-#: interesting themselves: a linear chain, an explicit edge, and a `wic:`
-#: sidecar — the shapes these drivers put in front of the manufacturing sites.
-_DRIVERS: Final[list[dict[str, Any]]] = [
-    {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}},
-               {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'y'}}}]},
-    {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}},
-                'out': [{'file': {'wic_anchor': 'produced'}}]},
-               {'id': 'sink', 'in': {'file': {'wic_alias': 'produced'}}}]},
-    {'wic': {'steps': {'(1, mk_file)': {'wic': {}}}},
-     'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'z'}}}]},
-]
-
-
-@pytest.mark.slow
-@given(strat.workflows())
-@ORACLE
-def test_manufactured_documents_parse_over_generated_input(yml: dict[str, Any]) -> None:
-    """The same claim, quantified over the oracle's generator rather than a list.
-
-    `_DRIVERS` is chosen to reach particular sites and is therefore a statement
-    about those sites. This one says nothing about which sites it reaches and
-    everything about the range of input: whatever `workflows()` can draw, the
-    documents the compiler makes from it are documents the language accepts.
-    """
-    monkeypatch = pytest.MonkeyPatch()
-    seen: list[tuple[str, dict[str, Any]]] = []
-    try:
-        for site, kind in MANUFACTURING_SITES.items():
-            if kind == DOCUMENT:
-                _instrument(monkeypatch, site, seen)
-        compile_hermetic_cwl(yml, 'generated')
-    finally:
-        monkeypatch.undo()
-
-    rejected = [f'{site}: {codes}' for site, document in seen
-                for accepted, codes in [_parses(document)] if not accepted]
-    assert not rejected, ('the compiler manufactured documents the language does not accept:\n  '
-                          + '\n  '.join(sorted(set(rejected))))
