@@ -12,7 +12,6 @@ from .resolve import RegistrySnapshot
 from .stepin import direct_sink
 from .types import (
     AuthoredName,
-    BoundaryDeclaration,
     DerivedName,
     Direction,
     Edge,
@@ -159,11 +158,8 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
                 return _insert(graph, position, insertion, policy), True
             input_name = DerivedName(step.id, port.id.port)
             if input_name not in {item.name for item in workflow_inputs}:
-                declaration = feeding_declaration(step, port)
-                declaration = BoundaryDeclaration(replace(
-                    declaration, format=_canonical_boundary_format(declaration.format)))
-                workflow_inputs.append(
-                    WorkflowPort(input_name, declaration, origin=port.origin or port.id))
+                workflow_inputs.append(WorkflowPort(input_name, feeding_declaration(step, port),
+                                                    origin=port.origin or port.id))
             if input_name not in {name for name, _ in input_mapping}:
                 input_mapping.append((input_name, (port.id,)))
             if input_name not in shorthand_relays:
@@ -377,13 +373,6 @@ def _formats(declaration: PortDeclaration | None) -> tuple[Any, ...]:
         return ()
     value = declaration.format
     return tuple(value) if isinstance(value, list) else (value,)
-
-
-def _canonical_boundary_format(value: Any) -> Any:
-    """Canonicalize a literal IRI without rewriting an opaque CWL expression."""
-    if isinstance(value, str) and not any(marker in value for marker in ('$(', '${')):
-        return [value]
-    return value
 
 
 def _formats_match(sink: tuple[Any, ...], source: tuple[Any, ...],
