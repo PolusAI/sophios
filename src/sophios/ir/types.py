@@ -5,7 +5,8 @@ verify what it means rather than only what it computes. Frozen and slotted,
 holding no mutable container that any invariant depends on: a check in
 `__post_init__` is worth having only if it cannot be invalidated afterwards.
 """
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import NewType, TypeAlias
 
@@ -105,19 +106,44 @@ class PortId:
 
 @dataclass(frozen=True, slots=True)
 class PortType:
-    """What a port carries, in the algebra the compiler reasons within.
-    `declared` keeps the CWL verbatim; the other fields are what Sophios interprets.
+    """What a port carries. `declared` keeps the CWL verbatim, for Emit;
+    `canonical` is the one parse of it every other reader uses: CWL's `T?` and
+    `T[]` shorthand expanded, through array items and every union member, so
+    `string?[]` is an array of nullable strings and not a nullable array, and
+    `[File?, string]` accepts null in either spelling of that member.
     """
 
     declared: OpaqueCwl
-    optional: bool = False
-    array_depth: int = 0
-    union: tuple['PortType', ...] = ()
+    canonical: OpaqueCwl = field(init=False)
 
     def __post_init__(self) -> None:
-        """Reject a depth that cannot describe a real type."""
-        if self.array_depth < 0:
-            raise ValueError('array_depth counts wrappers and cannot be negative')
+        """Parse `declared` once, here, so no port type exists unparsed."""
+        object.__setattr__(self, 'canonical', _canonical(deepcopy(self.declared)))
+
+    @property
+    def optional(self) -> bool:
+        """Whether the port accepts `null` itself, not merely in its items."""
+        return isinstance(self.canonical, list) and 'null' in self.canonical
+
+
+def _canonical(raw: OpaqueCwl) -> OpaqueCwl:
+    """Expand `T?` and `T[]` wherever they are written, including inside a member."""
+    if isinstance(raw, str) and raw.endswith('?'):
+        return ['null', _canonical(raw[:-1])]
+    if isinstance(raw, str) and raw.endswith('[]'):
+        return {'type': 'array', 'items': _canonical(raw[:-2])}
+    if isinstance(raw, dict) and raw.get('type') == 'array' and 'items' in raw:
+        return {**raw, 'items': _canonical(raw['items'])}
+    if isinstance(raw, list):
+        # A member's own shorthand, expanded: `null` once, first; no duplicates.
+        members: list[OpaqueCwl] = []
+        for item in raw:
+            expanded = _canonical(item)
+            for member in expanded if isinstance(expanded, list) else [expanded]:
+                if member not in members:
+                    members.append(member)
+        return ['null'] * ('null' in members) + [item for item in members if item != 'null']
+    return raw
 
 
 @dataclass(frozen=True, slots=True)

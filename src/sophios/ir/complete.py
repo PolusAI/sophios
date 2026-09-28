@@ -26,6 +26,7 @@ from .types import (
     PortDeclaration,
     PortId,
     PortName,
+    PortType,
     StepOutputRef,
     WorkflowGraph,
     WorkflowPort,
@@ -172,20 +173,10 @@ def _materialize_outputs(graph: WorkflowGraph) -> WorkflowGraph:
 def _boundary(port: Port, layers: int) -> BoundaryDeclaration:
     """`port` as a workflow boundary declares it, wrapped in `layers` array levels."""
     declaration = boundary_declaration(port.declaration or port_declaration(port.type.declared))
-    raw = _canonical_type(declaration.type.declared)
+    raw = declaration.type.canonical
     for _ in range(layers):
         raw = {'type': 'array', 'items': raw}
-    return BoundaryDeclaration(replace(declaration, type=port_declaration({'type': raw}).type))
-
-
-def _canonical_type(value: Any) -> Any:
-    if isinstance(value, str) and value.endswith('?'):
-        return ['null', _canonical_type(value[:-1])]
-    if isinstance(value, str) and value.endswith('[]'):
-        return {'type': 'array', 'items': _canonical_type(value[:-2])}
-    if isinstance(value, dict) and value.get('type') == 'array':
-        return {**value, 'items': _canonical_type(value.get('items'))}
-    return deepcopy(value)
+    return BoundaryDeclaration(replace(declaration, type=PortType(raw)))
 
 
 _Named = TypeVar('_Named', WorkflowPort, JobBinding)
@@ -242,13 +233,14 @@ def coerce_job_value(name: str, declaration: PortDeclaration, value: Any) -> Any
     plain JSON. Unwrapping happens here, once, for every declared type.
     """
     value = _plain(value)
-    raw = declaration.type.declared
     if value is None:
         if declaration.type.optional:
             return None
         raise SophiosError.error(SophiosErrorCode.MISSING_REQUIRED_INPUT,
-                                 f'Required input of type {raw} was not provided.')
-    return _coerce_type(name, raw, value, declaration.format if declaration.has_format else None)
+                                 f'Required input of type {declaration.type.declared} '
+                                 'was not provided.')
+    return _coerce_type(name, declaration.type.canonical, value,
+                        declaration.format if declaration.has_format else None)
 
 
 def _coerce_type(name: str, raw: Any, value: Any, fmt: Any) -> Any:
@@ -257,8 +249,6 @@ def _coerce_type(name: str, raw: Any, value: Any, fmt: Any) -> Any:
         arrays = [item for item in non_null if isinstance(item, dict)
                   and item.get('type') == 'array']
         raw = arrays[0] if arrays else (non_null[0] if len(non_null) == 1 else non_null)
-    if isinstance(raw, str) and raw.endswith('?'):
-        raw = raw[:-1]
     if isinstance(raw, dict) and raw.get('type') == 'array':
         values = value if isinstance(value, list) else [value]
         return [_coerce_scalar(name, raw.get('items'), item, fmt) for item in values]

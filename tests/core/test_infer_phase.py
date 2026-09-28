@@ -25,6 +25,7 @@ from sophios.ir import (
     link,
 )
 from sophios.ir.names import Names
+from sophios.ir.declarations import input_rank, layered, output_rank
 from sophios.ir.types import (DerivedName, EdgeOrigin, Port, PortDeclaration, PortId, PortName,
                               StepNode, WorkflowGraph)
 from sophios.lang import SophiosErrorCode
@@ -115,41 +116,15 @@ def test_falsy_defaults_satisfy_inputs(default: object) -> None:
 
 
 @pytest.mark.fast
-def test_promoted_input_normalizes_a_scalar_format() -> None:
-    """Canonicalize a synthesized literal format set to the list spelling.
-
-    CWL v1.2 permits one literal IRI as either a string or a list of strings.
-    This is a new workflow input synthesized by Sophios, not an authored
-    declaration whose spelling must be preserved, so the singleton list is our
-    deterministic canonical form.
-    """
-    tool = clt({'file': {'type': 'File', 'format': 'edam:format_1'}}, {}, canonical=True)
-    tools = {LegacyStepId('formatted_sink', SYNTHETIC_NS):
-             Tool('/synthetic/formatted_sink.cwl', tool)}
-    workflow = {'steps': [{'id': 'formatted_sink'}]}
-    _, linked, _ = _typed(workflow, tools)
-    result = infer(linked)
-    assert result.graph is not None, list(result.diagnostics)
-    assert result.graph.workflow_inputs[0].declaration.format == ['edam:format_1']
-    # The phase's decision is what the compiler emits, not merely what it holds.
-    compiled = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools))
-    boundary = next(iter(compiled.artifact.cwl['inputs'].values()))
-    assert boundary['format'] == ['edam:format_1']
-
-
-@pytest.mark.fast
 @pytest.mark.parametrize('expression', [
     '$(inputs.source.format)',
     '${ return inputs.source.format; }',
 ])
 def test_promoted_input_preserves_a_cwl_format_expression(expression: str) -> None:
-    """Preserve an expression, deliberately diverging from legacy spelling.
-
-    CWL v1.2 defines ``format`` as string, array-of-string IRIs, or Expression.
-    An expression therefore occupies a different union arm from a literal
-    singleton set. Infer keeps any string containing a CWL ``$(`` or ``${``
-    marker opaque, so an expression reaches the boundary unchanged rather than
-    becoming the sole element of an array.
+    """A lifted input carries the tool's `format` verbatim, in the graph and
+    in the emitted document -- the one test that a promoted boundary keeps
+    `format` at all. An expression is the spelling a rewrite would most
+    likely break.
     """
     tool = clt({'file': {'type': 'File', 'format': expression}}, {}, canonical=True)
     tools = {LegacyStepId('formatted_sink', SYNTHETIC_NS):
@@ -377,31 +352,11 @@ def _model_permits_format(value: Any) -> bool:
 
 
 def _model_source_type(step: StepNode, port: Port) -> Any:
-    raw = _model_type(port)
-    return {'type': 'array', 'items': raw} \
-        if dict(step.interpreted).get('scatter') else raw
+    return layered(port.type, output_rank(step)).canonical
 
 
 def _model_sink_type(step: StepNode, port: Port) -> Any:
-    raw = _model_type(port)
-    scatter = dict(step.interpreted).get('scatter')
-    keys = [scatter] if isinstance(scatter, str) else (
-        [item for item in scatter if isinstance(item, str)]
-        if isinstance(scatter, list) else [])
-    return {'type': 'array', 'items': raw} if port.id.port in keys else raw
-
-
-def _model_type(port: Port) -> Any:
-    raw = port.type.declared
-    if not isinstance(raw, str):
-        return raw
-    base = raw.removesuffix('?')
-    while base.endswith('[]'):
-        base = base[:-2]
-    value: Any = base
-    for _ in range(port.type.array_depth):
-        value = {'type': 'array', 'items': value}
-    return ['null', value] if port.type.optional else value
+    return layered(port.type, input_rank(step, port.id.port)).canonical
 
 
 def _model_names(name: PortName) -> tuple[str, ...]:

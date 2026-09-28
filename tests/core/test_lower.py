@@ -33,8 +33,8 @@ from sophios.ir import (
     WorkflowGraph,
 )
 from sophios.ir.lower import lower
-from sophios.ir.types import AuthoredName
 from sophios.ir.declarations import port_declaration
+from sophios.ir.types import AuthoredName
 from sophios.lang.nodes import Document, InlineLiteral, Step
 from sophios.lang.parser import parse
 from sophios.lang.spans import SourceSpan
@@ -239,6 +239,22 @@ def test_a_document_the_parser_recovered_never_raises() -> None:
 
 
 @pytest.mark.fast
+def test_a_union_member_written_either_way_parses_the_same() -> None:
+    """`?` on a union member makes the port optional in either spelling of that member.
+
+    The shorthand expands; the same member written as a record does too, and a
+    `?` that sits on an array's items does not make the array itself optional.
+    """
+    string = port_declaration(['File?', 'string']).type
+    record = port_declaration([{'type': 'array', 'items': 'string?'}, 'int']).type
+    assert string.optional
+    assert string.canonical == ['null', 'File', 'string']
+    assert not record.optional
+    assert record.canonical == [
+        {'type': 'array', 'items': ['null', 'string']}, 'int']
+
+
+@pytest.mark.fast
 def test_a_reference_before_its_definition_is_reported() -> None:
     """`!* e` above its `!& e` is `wic025`, as the reference and compiler say.
 
@@ -330,7 +346,6 @@ def _hostile_graphs(draw: st.DrawFn) -> Any:
         lambda: StepId(ns, 0, name),                              # a zero-based occurrence
         lambda: StepId(ns, 1, ''),                                # an unnamed occurrence
         lambda: PortId(one, Direction.INPUT, AuthoredName('')),   # an unnamed port
-        lambda: PortType(declared='File', array_depth=-1),
         lambda: Namespace((StepId(Namespace(), 1, ''),)),         # an unnamed enclosing step
         lambda: WorkflowGraph(ns, steps=(StepNode(one), StepNode(one))),
         lambda: WorkflowGraph(ns, output_mapping=((name, out),)),

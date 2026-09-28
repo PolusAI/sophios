@@ -117,7 +117,7 @@ def _normalize_explicit_edges(graph: WorkflowGraph, universe: WorkflowGraph,
 
 def _check_workflow_inputs(graph: WorkflowGraph, diagnostics: Diagnostics) -> None:
     """Apply the same conservative relation to typed workflow-input references."""
-    declarations = {port.name: port.declaration.type.declared
+    declarations = {port.name: port.declaration.type.canonical
                     for port in graph.workflow_inputs}
     for name, sinks in graph.input_mapping:
         source_type = declarations.get(name)
@@ -328,7 +328,7 @@ def _boundary_name(graph: WorkflowGraph, port: PortId) -> PortName:
 
 def _raw_type(graph: WorkflowGraph, port: PortId) -> Any:
     found = _port(graph, port)
-    return found.type.declared if found is not None else None
+    return found.type.canonical if found is not None else None
 
 
 def _port(graph: WorkflowGraph, port_id: PortId) -> Port | None:

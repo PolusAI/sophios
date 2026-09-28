@@ -19,7 +19,6 @@ from .types import (
     PortDeclaration,
     PortId,
     PortName,
-    PortType,
     ProcessRun,
     RegistryKey,
     StepId,
@@ -359,31 +358,17 @@ def _required(port: Port) -> bool:
 
 
 def _effective_source_type(step: StepNode, port: Port) -> Any:
-    raw = _candidate_type(port.type)
+    raw = port.type.canonical
     if dict(step.interpreted).get('scatter'):
         return {'type': 'array', 'items': raw}
     return raw
 
 
 def _effective_sink_type(step: StepNode, port: Port) -> Any:
-    raw = _candidate_type(port.type)
+    raw = port.type.canonical
     if port.id.port in step.scatter_ports:
         return {'type': 'array', 'items': raw}
     return raw
-
-
-def _candidate_type(port_type: PortType) -> Any:
-    """Canonical type shape used by the legacy candidate matcher."""
-    raw = port_type.declared
-    if not isinstance(raw, str):
-        return raw
-    base = raw[:-1] if raw.endswith('?') else raw
-    while base.endswith('[]'):
-        base = base[:-2]
-    value: Any = base
-    for _ in range(port_type.array_depth):
-        value = {'type': 'array', 'items': value}
-    return ['null', value] if port_type.optional else value
 
 
 def _formats(declaration: PortDeclaration | None) -> tuple[Any, ...]:
