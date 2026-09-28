@@ -196,3 +196,14 @@ def test_a_non_finite_subexpression_fails_with_a_named_diagnostic(tmp_path: Path
     where = "CALC arguments[3].valueFrom $(inputs.a / inputs.d)"
     assert f"Sophios expression {where}: (inputs.a / inputs.d) is Infinity" in log
     assert "[a:7, d:0]" in log
+
+
+@pytest.mark.fast
+def test_a_computed_workflow_reads_back_and_promotes(tmp_path: Path) -> None:
+    from sophios.input_output_nf import write_nextflow_artifacts  # pylint: disable=import-outside-toplevel
+    from sophios.nf_reader import parse_nf_file, promote_nextflow_document  # pylint: disable=import-outside-toplevel
+    workflow = _calc_workflow(ARGUMENTS, {"a": 7, "b": 1.25, "d": 2}, a="int", b="float", d="int")
+    write_nextflow_artifacts(workflow, tmp_path)
+    parsed = parse_nf_file(tmp_path / "workflow.nf")
+    assert parsed.opaque_regions == ()
+    assert promote_nextflow_document(parsed) == workflow

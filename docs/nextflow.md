@@ -281,8 +281,9 @@ is not supported. A scattered leaf step *inside* a subworkflow is not a
 special case: after projection it follows the scatter rules above, so its
 source must be an array-typed workflow input.
 
-Workflow-level `ScatterFeatureRequirement` and
-`SubworkflowFeatureRequirement` are accepted as inert declarations, at the
+Workflow-level `ScatterFeatureRequirement`, `SubworkflowFeatureRequirement`,
+and `InlineJavascriptRequirement` (which Sophios adds for `when`) are accepted
+as inert declarations, at the
 outer and subworkflow level alike; every other workflow-level requirement is
 rejected by name.
 

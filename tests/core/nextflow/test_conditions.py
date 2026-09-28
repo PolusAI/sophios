@@ -222,3 +222,25 @@ def test_a_false_condition_runs_no_task_and_downstream_completes(tmp_path: Path)
     processes = [child for child in (tmp_path / "work").glob("*/*") if child.is_dir()]
     # A zero exit with exactly one task means CONSUME ran and PRODUCE was skipped.
     assert len(processes) == 1
+
+
+@pytest.mark.fast
+def test_a_condition_inside_an_inlined_subworkflow_survives_inlining() -> None:
+    # pylint: disable=import-outside-toplevel
+    from sophios.api.python._workflow_runtime import compile_workflow_result
+    from sophios.api.python.workflow import Step, Workflow
+    from sophios.nf_expr import parse
+    from .test_capabilities import _copy_tool, _write_step
+    write = _write_step()
+    inner = Step(_copy_tool(), step_name="inner_copy")
+    inner.when = "$(false)"
+    child = Workflow([inner], "child")
+    inner.inputs.source = child.inputs.source
+    child.outputs.result = inner.outputs.result
+    child.inputs.source = write.outputs.result
+    workflow = compiled_source_to_nextflow(compile_workflow_result(Workflow([write, child], "root")))
+    conditions = {process.name: process.condition for process in workflow.processes}
+    assert [name for name, condition in conditions.items() if condition == parse("$(false)")] == [
+        name for name in conditions if "inner_copy" in name
+    ]
+    assert sum(condition is not None for condition in conditions.values()) == 1

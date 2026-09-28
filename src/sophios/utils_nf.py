@@ -1177,8 +1177,11 @@ _WORKFLOW_CONSUMED_FIELDS = frozenset({
     "steps",
 }) | _INERT_DOCUMENTATION_FIELDS
 # Workflow-level requirements that only declare a feature whose lowering is
-# decided per step, so they are consumed as inert no-ops.
+# decided per step, so they are consumed as inert no-ops. Sophios adds
+# InlineJavascriptRequirement for every `when`; declaring it is not the use
+# of JavaScript, and each expression is judged where it appears.
 _SUPPORTED_WORKFLOW_REQUIREMENTS = frozenset({
+    "InlineJavascriptRequirement",
     "ScatterFeatureRequirement",
     "SubworkflowFeatureRequirement",
 })
