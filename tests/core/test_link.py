@@ -19,9 +19,10 @@ from sophios.ir import (
     link,
 )
 from sophios.ir.complete import complete
+from sophios.ir.pipeline import FrontEndResult
 from sophios.ir.types import AuthoredName
-from sophios.lang import SophiosErrorCode
-from sophios.wic_types import StepId as LegacyStepId, Tool, Yaml
+from sophios.lang import SophiosErrorCode, parse
+from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
 from .hermetic import ORACLE, compile_hermetic
@@ -36,6 +37,13 @@ def _front(workflow: Yaml) -> WorkflowGraph:
     assert result.resolved is not None and result.resolved.document is not None
     assert result.graph is not None, list(result.diagnostics)
     return result.graph
+
+
+def _rooted(root: str, tools: Tools = SYNTHETIC_TOOLS, **children: str) -> FrontEndResult:
+    """`root` through the front end, against `tools` and the named child sources."""
+    registry = RegistrySnapshot.from_tools(tools, workflows={
+        (SYNTHETIC_NS, name): parse(text, f'{name}.wic') for name, text in children.items()})
+    return front_end(root, registry, name='root')
 
 
 @pytest.mark.skip_pypi_ci
@@ -61,9 +69,7 @@ def _cross_scope(source_tool: str, source_type: object, child_input: str = 'name
              f'{child_scatter}')
     root = (f'steps:\n- id: {source_tool}\n  out:\n  - value: !& shared\n'
             '- id: child.wic\n')
-    registry = RegistrySnapshot.from_tools(
-        tools, workflows={(SYNTHETIC_NS, 'child'): child})
-    result = front_end(root, registry, name='root')
+    result = _rooted(root, tools, child=child)
     assert result.graph is not None and result.resolved is not None
     return result.graph
 
@@ -92,9 +98,7 @@ def _cross_scope_two_levels(source_tool: str, source_type: object,
     wrapper = 'steps:\n- id: child.wic\n'
     root = (f'steps:\n- id: {source_tool}\n  out:\n  - value: !& shared\n'
             '- id: wrapper.wic\n')
-    registry = RegistrySnapshot.from_tools(
-        tools, workflows={(SYNTHETIC_NS, 'child'): child, (SYNTHETIC_NS, 'wrapper'): wrapper})
-    result = front_end(root, registry, name='root')
+    result = _rooted(root, tools, child=child, wrapper=wrapper)
     assert result.graph is not None and result.resolved is not None
     return result.graph
 
@@ -149,8 +153,7 @@ def test_a_call_does_not_exempt_an_edge_from_document_order(definition_first: bo
     producer = '- id: string_source\n  out:\n  - value: !& shared\n'
     call = '- id: child.wic\n'
     root = 'steps:\n' + (producer + call if definition_first else call + producer)
-    registry = RegistrySnapshot.from_tools(tools, workflows={(SYNTHETIC_NS, 'child'): child})
-    typed = front_end(root, registry, name='root')
+    typed = _rooted(root, tools, child=child)
     assert typed.graph is not None, list(typed.diagnostics)
 
     linked = link(typed.graph)
@@ -167,9 +170,7 @@ def test_a_call_does_not_exempt_an_edge_from_document_order(definition_first: bo
 def test_unresolved_root_obligation_is_exactly_undefined_edge() -> None:
     """An obligation with no producer is reported rather than silently promoted."""
     child = 'steps:\n- id: mk_file\n  in:\n    name: !* nowhere\n'
-    registry = RegistrySnapshot.from_tools(
-        SYNTHETIC_TOOLS, workflows={(SYNTHETIC_NS, 'child'): child})
-    typed = front_end('steps:\n- id: child.wic\n', registry, name='root')
+    typed = _rooted('steps:\n- id: child.wic\n', child=child)
     assert typed.graph is not None
     linked = link(typed.graph)
     assert linked.graph is None
@@ -212,9 +213,7 @@ def test_unrelated_ancestor_scatter_does_not_inflate_a_cross_scope_edge() -> Non
              '- id: string_source\n  out:\n  - value: !& shared\n'
              '- id: child.wic\n')
     root = 'steps:\n- id: outer.wic\n  scatter: [gate]\n  in: {gate: !ii [a, b]}\n'
-    registry = RegistrySnapshot.from_tools(
-        tools, workflows={(SYNTHETIC_NS, 'child'): child, (SYNTHETIC_NS, 'outer'): outer})
-    typed = front_end(root, registry, name='root')
+    typed = _rooted(root, tools, child=child, outer=outer)
     assert typed.graph is not None, list(typed.diagnostics)
     linked = link(typed.graph)
     assert linked.graph is not None, list(linked.diagnostics)
@@ -246,8 +245,7 @@ def test_a_wrapper_scattering_an_inferred_nested_input_by_its_mangled_name() -> 
     child = 'steps:\n- id: mk_b\n  in: {value: !* shared}\n'
     root = ('steps:\n- id: mk_a\n  out:\n  - value: !& shared\n'
             '- id: child.wic\n  scatter: [child__step__1__mk_b___value]\n')
-    registry = RegistrySnapshot.from_tools(tools, workflows={(SYNTHETIC_NS, 'child'): child})
-    typed = front_end(root, registry, name='root')
+    typed = _rooted(root, tools, child=child)
     assert typed.graph is not None, list(typed.diagnostics)
     linked = link(typed.graph)
     assert linked.graph is None
@@ -278,8 +276,7 @@ def test_a_local_edge_inside_a_scattered_subworkflow_is_not_disjoint_from_itself
              '- id: mk_a\n  out:\n  - value: !& shared\n'
              '- id: mk_b\n  in: {value: !* shared}\n')
     root = 'steps:\n- id: child.wic\n  scatter: [gate]\n  in: {gate: !ii [a, b]}\n'
-    registry = RegistrySnapshot.from_tools(tools, workflows={(SYNTHETIC_NS, 'child'): child})
-    typed = front_end(root, registry, name='root')
+    typed = _rooted(root, tools, child=child)
     assert typed.graph is not None, list(typed.diagnostics)
     linked = link(typed.graph)
     assert linked.graph is not None, list(linked.diagnostics)
@@ -326,9 +323,7 @@ steps:
 - id: count
   in: {file: !* made}
 '''
-    registry = RegistrySnapshot.from_tools(
-        SYNTHETIC_TOOLS, workflows={(SYNTHETIC_NS, 'child'): child})
-    typed = front_end(root, registry, name='root')
+    typed = _rooted(root, child=child)
     assert typed.graph is not None
     linked = link(typed.graph)
     assert linked.graph is not None, list(linked.diagnostics)
@@ -346,9 +341,7 @@ steps:
 - id: mk_file
   in: {name: name}
 '''
-    registry = RegistrySnapshot.from_tools(
-        SYNTHETIC_TOOLS, workflows={(SYNTHETIC_NS, 'child'): child})
-    typed = front_end('steps:\n- id: child.wic\n', registry, name='root')
+    typed = _rooted('steps:\n- id: child.wic\n', child=child)
     assert typed.graph is not None
     linked = link(typed.graph)
     assert linked.graph is not None, list(linked.diagnostics)
@@ -364,10 +357,7 @@ steps:
 def test_unknown_call_argument_cannot_restore_a_deleted_formal() -> None:
     """Authored call metadata cannot widen the resolved child interface."""
     child = 'inputs: {name: {type: string}}\nsteps:\n- id: mk_file\n  in: {name: name}\n'
-    registry = RegistrySnapshot.from_tools(
-        SYNTHETIC_TOOLS, workflows={(SYNTHETIC_NS, 'child'): child})
-    typed = front_end('steps:\n- id: child.wic\n  in: {ghost: !ii x}\n',
-                      registry, name='root')
+    typed = _rooted('steps:\n- id: child.wic\n  in: {ghost: !ii x}\n', child=child)
     assert typed.graph is None
     assert [diagnostic.code for diagnostic in typed.diagnostics] == [
         SophiosErrorCode.UNDECLARED_PORT]
@@ -422,10 +412,7 @@ def test_a_wrapper_scatters_a_declared_input_threaded_to_another_name() -> None:
             '- id: producer.wic\n  in: {seed: !ii [a, b]}\n  scatter: [seed]\n'
             '- id: consumer.wic\n  in: {outer_name: !* shared}\n  scatter: [outer_name]\n')
 
-    registry = RegistrySnapshot.from_tools(
-        tools, workflows={(SYNTHETIC_NS, 'producer'): producer,
-                          (SYNTHETIC_NS, 'consumer'): consumer})
-    typed = front_end(root, registry, name='root')
+    typed = _rooted(root, tools, producer=producer, consumer=consumer)
     assert typed.graph is not None, list(typed.diagnostics)
 
     linked = link(complete(typed.graph))

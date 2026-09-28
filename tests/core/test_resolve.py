@@ -33,7 +33,7 @@ from sophios.ir import (
 )
 from sophios.ir.complete import complete
 from sophios.ir.lower import lower
-from sophios.lang import (EdgeRef, InlineLiteral, RawCwlRef, SourceSpan, Step,
+from sophios.lang import (EdgeRef, InlineLiteral, ParseResult, RawCwlRef, SourceSpan, Step,
                           UnresolvedName, parse)
 from sophios.wic_types import StepId as LegacyStepId, Yaml
 
@@ -64,14 +64,14 @@ def _scalar_literals_fit(workflow: Yaml) -> bool:
     return True
 
 
-def _source_model(workflow: Yaml) -> tuple[str, dict[tuple[str, str], str]]:
+def _source_model(workflow: Yaml) -> tuple[str, dict[tuple[str, str], ParseResult]]:
     """Undo only the filesystem loader's subtree attachment for test source.
 
     This is a test-side model: real authored source names a ``.wic`` child and
     the registry supplies that child's source; ``ast_strategies.to_yml`` has
     already attached it in the shape the public compiler boundary accepts.
     """
-    sources: dict[tuple[str, str], str] = {}
+    sources: dict[tuple[str, str], ParseResult] = {}
 
     def detach(document: Yaml) -> Yaml:
         copied = copy.deepcopy(document)
@@ -82,7 +82,8 @@ def _source_model(workflow: Yaml) -> tuple[str, dict[tuple[str, str], str]]:
                 continue
             child = detach(step['subtree'])
             child_name = str(step['id']).removesuffix('.wic')
-            sources[(SYNTHETIC_NS, child_name)] = yaml.safe_dump(child, sort_keys=False)
+            sources[(SYNTHETIC_NS, child_name)] = parse(yaml.safe_dump(child, sort_keys=False),
+                                                        f'{child_name}.wic')
             detached.append({'id': step['id'], **step.get('parentargs', {})})
         copied['steps'] = detached
         return copied
@@ -247,7 +248,7 @@ def test_nested_workflow_source_is_resolved_from_the_snapshot() -> None:
     """A child source is registry content, not a path Resolve may open."""
     child = 'steps:\n- id: mk_file\n  in:\n    name: !ii child.txt\n'
     registry = RegistrySnapshot.from_tools(
-        SYNTHETIC_TOOLS, workflows={(SYNTHETIC_NS, 'child'): child})
+        SYNTHETIC_TOOLS, workflows={(SYNTHETIC_NS, 'child'): parse(child, 'child.wic')})
     result = front_end('steps:\n- id: child.wic\n', registry, name='root')
     assert result.resolved is not None and result.resolved.document is not None
     assert result.graph is not None and len(result.graph.children) == 1
@@ -280,8 +281,8 @@ def test_explicit_implementation_overrides_the_default() -> None:
     """Implementation selection is deterministic and uses the explicit choice first."""
     registry = RegistrySnapshot(
         RegistrySnapshot.from_tools(SYNTHETIC_TOOLS).tools,
-        (WorkflowSource(RegistryKey('global', 'fast'), 'steps:\n- id: mk_file\n'),
-         WorkflowSource(RegistryKey('global', 'safe'), 'steps:\n- id: mk_text\n')),
+        (WorkflowSource(RegistryKey('global', 'fast'), parse('steps:\n- id: mk_file\n')),
+         WorkflowSource(RegistryKey('global', 'safe'), parse('steps:\n- id: mk_text\n'))),
     )
     source = '''
 wic:
@@ -349,7 +350,8 @@ def _resolved(source: str, **workflows: str) -> Any:
     assert parsed.document is not None, list(parsed.diagnostics)
     registry = RegistrySnapshot.from_tools(
         SYNTHETIC_TOOLS,
-        workflows={(SYNTHETIC_NS, name): child for name, child in workflows.items()})
+        workflows={(SYNTHETIC_NS, name): parse(child, f'{name}.wic')
+                   for name, child in workflows.items()})
     result = resolve(parsed.document, registry, name='root')
     assert result.document is not None, list(result.diagnostics)
     return result.document

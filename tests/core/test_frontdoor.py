@@ -84,8 +84,8 @@ def test_source_is_the_file_verbatim(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
-def test_child_workflow_is_registered_as_its_own_text(tmp_path: Path) -> None:
-    """A called `.wic` enters the registry as the file, not as a re-dump."""
+def test_child_workflow_is_registered_as_its_own_parse(tmp_path: Path) -> None:
+    """A called `.wic` enters the registry parsed from the file, not from a re-dump."""
     child_text = ('# the child keeps its comments too\n'
                   'steps:\n'
                   '- id: mk_file\n'
@@ -100,8 +100,8 @@ def test_child_workflow_is_registered_as_its_own_text(tmp_path: Path) -> None:
 
     entry = bundle.registry.workflow(RegistryKey('global', 'child'))
     assert entry is not None
-    assert entry.source == child_text
-    assert entry.source != _redump(child_text)
+    assert entry.parsed.document == parse(child_text, 'child.wic').document
+    assert entry.parsed.document != parse(_redump(child_text), 'child.wic').document
     assert front_end(bundle.source, bundle.registry, name=bundle.name).graph is not None
 
 

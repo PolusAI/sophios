@@ -1,9 +1,9 @@
 """Build a Resolve snapshot from the files a user wrote.
 
-Reads the bytes directly: the root's own text is the source, and each
-reachable workflow is registered verbatim, so every span Parse produces is a
-position in the file the user edited. Nothing here serialises YAML -- `yaml`
-is parsed only to discover structure.
+Reads the bytes directly and parses each reachable file exactly once: the
+root's own text is the source, and each reachable workflow is registered as
+the parse of its own file, so every span is a position in the file the user
+edited. Nothing here serialises YAML.
 """
 import traceback
 from dataclasses import dataclass
@@ -20,6 +20,7 @@ from ..lang import (
     EdgeRef,
     InlineLiteral,
     InputValue,
+    ParseResult,
     RawCwlRef,
     Step,
     UnresolvedName,
@@ -57,10 +58,10 @@ def bundle_from_source(source: str, name: str,
     no spans worth keeping, but the documents it reaches are ordinary files,
     and they keep theirs.
     """
-    workflows: dict[tuple[str, str], str] = {}
+    workflows: dict[tuple[str, str], ParseResult] = {}
     generated: Tools = {}
     pins: list[str] = []
-    _visit(source, name, yml_paths, Path('.'), workflows, generated, set(), pins, validator)
+    _visit(source, name, None, yml_paths, Path('.'), workflows, generated, {}, pins, validator)
     return SourceBundle(source, name,
                         RegistrySnapshot.from_tools({**tools, **generated},
                                                     workflows=workflows),
@@ -78,11 +79,11 @@ def bundle_from_disk(yml_path: Path,
     anything downstream sees the document.
     """
     source = yml_path.read_text(encoding='utf-8')
-    workflows: dict[tuple[str, str], str] = {}
+    workflows: dict[tuple[str, str], ParseResult] = {}
     generated: Tools = {}
     pins: list[str] = []
-    _visit(source, yml_path.stem, yml_paths, yml_path.parent,
-           workflows, generated, {yml_path.resolve()}, pins, validator)
+    _visit(source, yml_path.stem, yml_path.resolve(), yml_paths, yml_path.parent,
+           workflows, generated, {}, pins, validator)
     return SourceBundle(source, yml_path.stem,
                         RegistrySnapshot.from_tools({**tools, **generated},
                                                     workflows=workflows),
@@ -90,33 +91,39 @@ def bundle_from_disk(yml_path: Path,
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
-def _visit(source: str, stem: str,
+def _visit(source: str, stem: str, path: Path | None,
            yml_paths: dict[str, dict[str, Path]],
            script_dir: Path,
-           workflows: dict[tuple[str, str], str],
+           workflows: dict[tuple[str, str], ParseResult],
            generated: Tools,
-           seen: set[Path],
+           read: dict[Path, ParseResult],
            pins: list[str],
-           validator: Draft202012Validator | None) -> Document | None:
-    """Register every workflow and generated tool one file's text reaches."""
+           validator: Draft202012Validator | None) -> ParseResult:
+    """Parse one file's text and register every workflow and generated tool it reaches.
+
+    The parse is recorded under ``path`` before anything it reaches is read,
+    so a file reached again -- a cycle, or a second namespace -- reuses it.
+    """
     _validate(source, stem, validator)
-    document = parse(source, f'{stem}.wic').document
-    if document is None:
-        return None
-    pinned = dict(document.sidecar.entries).get('lang_version') if document.sidecar else None
-    if pinned is not None:
-        pins.append(pinned if isinstance(pinned, str) else str(pinned))
-    _reach(document, yml_paths, script_dir, workflows, generated, seen, pins, validator)
-    return document
+    parsed = parse(source, f'{stem}.wic')
+    if path is not None:
+        read[path] = parsed
+    document = parsed.document
+    if document is not None:
+        pinned = dict(document.sidecar.entries).get('lang_version') if document.sidecar else None
+        if pinned is not None:
+            pins.append(pinned if isinstance(pinned, str) else str(pinned))
+        _reach(document, yml_paths, script_dir, workflows, generated, read, pins, validator)
+    return parsed
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def _reach(document: Document,
            yml_paths: dict[str, dict[str, Path]],
            script_dir: Path,
-           workflows: dict[tuple[str, str], str],
+           workflows: dict[tuple[str, str], ParseResult],
            generated: Tools,
-           seen: set[Path],
+           read: dict[Path, ParseResult],
            pins: list[str],
            validator: Draft202012Validator | None) -> None:
     """Follow every workflow and generated tool one document's steps reach,
@@ -137,17 +144,14 @@ def _reach(document: Document,
             key = (namespace, child_path.stem)
             if key in workflows:
                 continue
-            child_source = child_path.read_text(encoding='utf-8')
-            workflows[key] = child_source
-            # `seen` is keyed by path (a cycle is a cycle regardless of namespace);
+            # `read` is keyed by path (a cycle is a cycle regardless of namespace);
             # a file called under two namespaces still gets both registry entries.
-            if child_path.resolve() in seen:
-                continue
-            seen.add(child_path.resolve())
-            _visit(child_source, child_path.stem, yml_paths, script_dir,
-                   workflows, generated, seen, pins, validator)
+            resolved = child_path.resolve()
+            workflows[key] = read[resolved] if resolved in read else _visit(
+                child_path.read_text(encoding='utf-8'), child_path.stem, resolved,
+                yml_paths, script_dir, workflows, generated, read, pins, validator)
     for _name, body in (document.sidecar.implementations if document.sidecar else ()):
-        _reach(body, yml_paths, script_dir, workflows, generated, seen, pins, validator)
+        _reach(body, yml_paths, script_dir, workflows, generated, read, pins, validator)
 
 
 def _validate(source: str, stem: str, validator: Draft202012Validator | None) -> None:

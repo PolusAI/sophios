@@ -20,7 +20,7 @@ from .ir.pipeline import FrontEndResult, front_end
 from .ir.resolve import RegistrySnapshot
 from .ir.names import Names
 from .ir.types import AuthoredName, Binding, PortName, WorkflowGraph
-from .lang import versions
+from .lang import ParseResult, parse, versions
 from .lang.diagnostics import SophiosError
 from .lang.nodes import InlineLiteral
 from .lang.spans import SourceSpan
@@ -140,9 +140,9 @@ def _compile_front(front: FrontEndResult,
     return CompilationResult(graph, artifact)
 
 
-def _source_bundle(root: Yaml) -> tuple[str, dict[tuple[str, str], str]]:
+def _source_bundle(root: Yaml) -> tuple[str, dict[tuple[str, str], ParseResult]]:
     """Detach loader-attached subtrees into an immutable Resolve snapshot."""
-    workflows: dict[tuple[str, str], str] = {}
+    workflows: dict[tuple[str, str], ParseResult] = {}
     detached_root = _detach_sources(root, workflows)
     return _dump_source(detached_root), workflows
 
@@ -177,7 +177,7 @@ def _bind_subinterpreter_locations(graph: WorkflowGraph,
                        for child in graph.children))
 
 
-def _detach_sources(document: Yaml, workflows: dict[tuple[str, str], str]) -> Yaml:
+def _detach_sources(document: Yaml, workflows: dict[tuple[str, str], ParseResult]) -> Yaml:
     """Recursively replace attached child bodies with registry entries."""
     copied = deepcopy(document)
     raw_steps = copied.get('steps', [])
@@ -207,7 +207,7 @@ def _detach_sources(document: Yaml, workflows: dict[tuple[str, str], str]) -> Ya
         if isinstance(metadata, dict) and isinstance(metadata.get('wic'), dict):
             namespace = str(metadata['wic'].get('namespace', 'global'))
         child = _detach_sources(step['subtree'], workflows)
-        workflows[(namespace, child_name)] = _dump_source(child)
+        workflows[(namespace, child_name)] = parse(_dump_source(child), f'{child_name}.wic')
         parentargs = step.get('parentargs', {})
         detached.append({'id': step_name,
                          **(deepcopy(parentargs) if isinstance(parentargs, dict) else {})})
@@ -215,7 +215,7 @@ def _detach_sources(document: Yaml, workflows: dict[tuple[str, str], str]) -> Ya
     return copied
 
 
-def _detach_implementations(sidecar: Yaml, workflows: dict[tuple[str, str], str]) -> Yaml:
+def _detach_implementations(sidecar: Yaml, workflows: dict[tuple[str, str], ParseResult]) -> Yaml:
     """Move inline implementation bodies into the registry, as subtrees are."""
     namespace = str(sidecar.get('namespace', 'global'))
     detached: Yaml = {}
@@ -223,7 +223,7 @@ def _detach_implementations(sidecar: Yaml, workflows: dict[tuple[str, str], str]
         name = Path(key.stem if isinstance(key, LegacyStepId) else str(key)).stem
         if isinstance(body, dict) and body:
             child = _detach_sources(body, workflows)
-            workflows[(namespace, name)] = _dump_source(child)
+            workflows[(namespace, name)] = parse(_dump_source(child), f'{name}.wic')
         detached[name] = {}
     return detached
 

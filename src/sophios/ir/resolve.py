@@ -1,8 +1,9 @@
 """Resolve a parsed document against an explicit immutable registry snapshot.
 
-Resolution does no discovery and performs no filesystem access.  Workflow
-sources and process definitions are values in ``RegistrySnapshot``; changing
-the environment cannot change the result of resolving the same two values.
+Resolution does no discovery, performs no filesystem access, and parses
+nothing.  Parsed workflows and process definitions are values in
+``RegistrySnapshot``; changing the environment cannot change the result of
+resolving the same two values.
 """
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -17,12 +18,12 @@ from ..lang import (
     InlineLiteral,
     Key,
     OutputBinding,
+    ParseResult,
     RawCwlRef,
     SophiosErrorCode,
     SourceSpan,
     UnresolvedName,
     WicSidecar,
-    parse,
     resolve_lang_version,
 )
 from ..lang.diagnostics import Diagnostic, Diagnostics
@@ -43,10 +44,14 @@ class ToolDefinition:
 
 @dataclass(frozen=True, slots=True)
 class WorkflowSource:
-    """One named workflow source supplied to Resolve as data."""
+    """One named workflow, parsed once by whoever read it, supplied as data.
+
+    The parse diagnostics travel with the document: Resolve reports them
+    only for a workflow a step actually calls.
+    """
 
     key: RegistryKey
-    source: str
+    parsed: ParseResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +63,7 @@ class RegistrySnapshot:
 
     @classmethod
     def from_tools(cls, tools: Tools, *,
-                   workflows: Mapping[tuple[str, str], str] | None = None) -> 'RegistrySnapshot':
+                   workflows: Mapping[tuple[str, str], ParseResult] | None = None) -> 'RegistrySnapshot':
         """Own a deterministic snapshot of the legacy public registry."""
         definitions = tuple(sorted((
             ToolDefinition(RegistryKey(step_id.plugin_ns, step_id.stem),
@@ -66,8 +71,8 @@ class RegistrySnapshot:
             for step_id, tool in tools.items()
         ), key=lambda item: item.key))
         sources = tuple(sorted((
-            WorkflowSource(RegistryKey(namespace, name), source)
-            for (namespace, name), source in (workflows or {}).items()
+            WorkflowSource(RegistryKey(namespace, name), parsed)
+            for (namespace, name), parsed in (workflows or {}).items()
         ), key=lambda item: item.key))
         return cls(definitions, sources)
 
@@ -76,7 +81,7 @@ class RegistrySnapshot:
         return next((tool for tool in self.tools if tool.key == key), None)
 
     def workflow(self, key: RegistryKey) -> WorkflowSource | None:
-        """Look up workflow source content without touching a path."""
+        """Look up a parsed workflow without touching a path."""
         return next((workflow for workflow in self.workflows if workflow.key == key), None)
 
 
@@ -190,7 +195,7 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
                               f'workflow cycle reaches {workflow_key.namespace}/{workflow_key.name}',
                               step.span)
             return None
-        parsed = parse(workflow.source, f'{workflow_key.name}.wic')
+        parsed = workflow.parsed
         _copy_diagnostics(diagnostics, parsed.diagnostics)
         if parsed.document is None:
             return None
@@ -260,9 +265,8 @@ def _select_implementation(document: Document,
                           f'implementation {namespace}/{chosen} is absent from the supplied registry',
                           document.sidecar.span)
         return None, diagnostics
-    parsed = parse(source.source, f'{chosen}.wic')
-    _copy_diagnostics(diagnostics, parsed.diagnostics)
-    return parsed.document, diagnostics
+    _copy_diagnostics(diagnostics, source.parsed.diagnostics)
+    return source.parsed.document, diagnostics
 
 
 def _input_identity(value: InputValue) -> Any:

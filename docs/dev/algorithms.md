@@ -39,7 +39,8 @@ Compilation is a one-way typed pipeline:
    CWL payload remains opaque.
 2. **Resolve** selects the language version and resolves tools, workflows,
    implementations, generated Python tools, and sidecar overrides from an
-   immutable registry snapshot. It performs no discovery.
+   immutable registry snapshot of already-parsed workflows and process
+   definitions. It performs no discovery and parses nothing.
 3. **Lower** creates an immutable `WorkflowGraph` with complete process
    interfaces, authored bindings, workflow boundaries, and child graphs.
 4. **Link** composes child graphs, resolves authored references at their lowest
