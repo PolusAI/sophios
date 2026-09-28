@@ -62,6 +62,11 @@ class _CWLParameterDefinition(Protocol):  # pylint: disable=too-few-public-metho
     type_: Any
 
 
+def _parameter_name(parameter_id: Any) -> str:
+    """The public name of a CWL parameter id (its last `#` or `/` segment)."""
+    return str(parameter_id).rsplit("#", maxsplit=1)[-1].rsplit("/", maxsplit=1)[-1]
+
+
 def coerce_path(value: str | Path | None, *, field_name: str, allow_none: bool = False) -> Path | None:
     """Normalize string-like path input to `Path`. `field_name` names the
     parameter in the `TypeError` the last branch raises."""
@@ -106,6 +111,23 @@ def lookup_parameter(
         raise AttributeError(f"{owner_name!r} has no {kind} named {name!r}") from exc
 
 
+def _validate_scatter(items: list[Any], owner: Any | None) -> None:
+    """Raise unless `items` are distinct, bound, array-valued inputs of `owner`."""
+    if not all(isinstance(item, InputParameter) for item in items):
+        raise TypeError("all scatter inputs must be InputParameter type")
+    if len({id(item) for item in items}) != len(items):
+        raise ValueError("scatter inputs must be unique")
+    if owner is None:
+        return
+    for item in items:
+        if item.parent_obj is not owner:
+            raise ValueError("scatter inputs must belong to the same step")
+        if not item.is_bound():
+            raise ValueError("scatter inputs must be bound before scattering")
+        if not item.is_scatterable():
+            raise ValueError("scatter inputs must be bound to array-valued data")
+
+
 def validate_step_assignment(name: str, value: Any, *, owner: Any | None = None) -> None:
     """Validate assignments to special step attributes.
 
@@ -123,18 +145,7 @@ def validate_step_assignment(name: str, value: Any, *, owner: Any | None = None)
     """
     match name, value:
         case "scatter", list() as items:
-            if not all(isinstance(item, InputParameter) for item in items):
-                raise TypeError("all scatter inputs must be InputParameter type")
-            if len({id(item) for item in items}) != len(items):
-                raise ValueError("scatter inputs must be unique")
-            if owner is not None:
-                for item in items:
-                    if item.parent_obj is not owner:
-                        raise ValueError("scatter inputs must belong to the same step")
-                    if not item.is_bound():
-                        raise ValueError("scatter inputs must be bound before scattering")
-                    if not item.is_scatterable():
-                        raise ValueError("scatter inputs must be bound to array-valued data")
+            _validate_scatter(items, owner)
         case "scatter", invalid if invalid:
             raise TypeError("scatter must be assigned a list of InputParameter values")
         case "scatterMethod", str() as scatter_method if scatter_method:
@@ -144,10 +155,8 @@ def validate_step_assignment(name: str, value: Any, *, owner: Any | None = None)
                     "Invalid value for scatterMethod. "
                     f"Valid values are: {', '.join(sorted(allowed))}"
                 )
-        case "when", str() as condition if condition:
-            if not condition.startswith("$(") or not condition.endswith(")"):
-                raise ValueError("Invalid input to when. The js string must start with '$(' and end with ')'")
-        case "when", invalid if invalid:
+        case "when", condition if condition and not (
+                isinstance(condition, str) and condition.startswith("$(") and condition.endswith(")")):
             raise ValueError("Invalid input to when. The js string must start with '$(' and end with ')'")
 
 
@@ -170,8 +179,7 @@ def populate_parameters(
         None: The destination store is populated in place.
     """
     for parameter in cwl_parameters:
-        name = str(parameter.id).rsplit("#", maxsplit=1)[-1].rsplit("/", maxsplit=1)[-1]
-        store.add(parameter_cls(name, parameter.type_, parent_obj=parent))
+        store.add(parameter_cls(_parameter_name(parameter.id), parameter.type_, parent_obj=parent))
 
 
 def load_clt(clt_path: Path, tool_registry: Tools) -> tuple[CWLCommandLineTool, dict[str, Any]]:
@@ -483,6 +491,11 @@ def compiled_workflow(
     return compiled_workflow_from_result(workflow, result)
 
 
+def _enabled(value: Any) -> bool:
+    """Whether a yes/no style runtime option is on."""
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def run_workflow(
     workflow: "Workflow",
     *,
@@ -521,7 +534,7 @@ def run_workflow(
         resolved_run_args["pull_dir"],
         Path(basepath) / f"{workflow.process_name}.cwl",
     )
-    if str(resolved_run_args.get("docker_remove_entrypoints")).strip().lower() in {"1", "true", "yes", "on"}:
+    if _enabled(resolved_run_args.get("docker_remove_entrypoints")):
         artifact = pc.remove_artifact_entrypoints(
             resolved_run_args["container_engine"], artifact)
     user_args = convert_args_dict_to_args_list(
