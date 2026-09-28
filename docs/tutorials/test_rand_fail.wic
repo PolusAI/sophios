@@ -8,7 +8,9 @@ steps:
     out:
     - array: !& arr_float
   fail.wic:
-    scatter: [fail__step__1__fail___with_probability]
+    scatter: [with_probability]
+    in:
+      with_probability: !* arr_float
   echo:
     scatter: [message]
     in:

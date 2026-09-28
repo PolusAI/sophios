@@ -273,14 +273,13 @@ def _rank(graph: WorkflowGraph, port: PortId, *, producing: bool) -> int:
     if not path:
         return 0
     rank = input_rank(path[-1][1], port.port)
-    # A `scatter:` list names the boundary by the name the callee exposes
-    # it under, not derivable from the port; use `input_mapping` when it's
-    # recorded, else fall back to the name `infer` would derive for it.
+    # A wrapper's `scatter:` names the callee's declared input, which
+    # `input_mapping` relates to the port it feeds.
     for index, (_owner, wrapper) in enumerate(path[:-1]):
         child = path[index + 1][0]
-        crossing = next((name for name, sinks in child.input_mapping if port in sinks),
-                        DerivedName(port.step, port.port))
-        rank += input_rank(wrapper, crossing)
+        crossing = next((name for name, sinks in child.input_mapping if port in sinks), None)
+        if crossing is not None:
+            rank += input_rank(wrapper, crossing)
     return rank
 
 

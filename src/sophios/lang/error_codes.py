@@ -54,8 +54,9 @@ class SophiosErrorCode(StrEnum):
     #: Two different ports the emitted document would spell the same way,
     #: e.g. an authored name equal to one the compiler derives.
     DUPLICATE_DOCUMENT_NAME = 'wic031'
-    #: A scatter entry naming no input of its step, or one nothing binds
-    #: once inference is done.
+    #: A scatter entry naming no input of its step, or one nothing binds once
+    #: inference is done. On a subworkflow call the inputs are the ones the
+    #: subworkflow declares.
     UNKNOWN_SCATTER_PORT = 'wic032'
 
     #: --- Python API. The document is valid; the call was not. ---

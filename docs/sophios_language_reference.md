@@ -377,9 +377,31 @@ scatter    scatterMethod    when    run
 
 Everything else on a step is passthrough.
 
-Each `scatter:` entry must name an input of its step, or, on a
-subworkflow call, a name that call's callee exposes. Any other name is
-`wic032`, whose message lists the inputs that are valid.
+Each `scatter:` entry must name an input of its step. On a subworkflow call,
+those are exactly the inputs the subworkflow declares in its `inputs:`, the
+same names its caller's `in:` may bind. A name the compiler generates for a
+step inside the subworkflow, such as `child__step__1__touch___filename`, is
+not an input of the call: depending on it would tie the caller to how the
+callee's steps are laid out. To scatter over such an input, declare it in
+the subworkflow and bind the inner step to it:
+
+```yaml
+# child.wic
+inputs:
+  filename: string
+steps:
+  touch:
+    in:
+      filename: filename
+
+# caller
+  child.wic:
+    scatter: [filename]
+    in:
+      filename: !ii [a.txt, b.txt]
+```
+
+Any other name is `wic032`.
 
 ---
 

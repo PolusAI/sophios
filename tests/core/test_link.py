@@ -229,13 +229,12 @@ def test_consuming_scatter_participates_in_reference_judgment() -> None:
 
 
 @pytest.mark.fast
-def test_a_wrapper_scattering_an_inferred_nested_input_by_its_mangled_name() -> None:
-    """An input the child never declares in `inputs:` (`docs/tutorials/fail.wic`
-    has none) has no authored surface name to scatter by, so `infer` exposes
-    it under a mangled `{emitted step id}___{port}` name instead — the only
-    name a wrapper's own `scatter:` list can then name it with. A wrapper
-    naming this mangled boundary must still array the sink it reaches,
-    exactly as it would for a declared input scattered by its plain name.
+def test_a_wrapper_cannot_scatter_over_a_name_generated_inside_its_callee() -> None:
+    """A caller scatters only over what its callee declares.
+
+    `child__step__1__mk_b___value` is how the compiler spells `mk_b`'s input
+    once `child.wic` is emitted; a wrapper naming it would depend on the
+    callee's step layout. It is `wic032`.
     """
     tools = copy.deepcopy(SYNTHETIC_TOOLS)
     tools[LegacyStepId('mk_a', SYNTHETIC_NS)] = Tool(
@@ -246,48 +245,23 @@ def test_a_wrapper_scattering_an_inferred_nested_input_by_its_mangled_name() -> 
     root = ('steps:\n- id: mk_a\n  out:\n  - value: !& shared\n'
             '- id: child.wic\n  scatter: [child__step__1__mk_b___value]\n')
     typed = _rooted(root, tools, child=child)
-    assert typed.graph is not None, list(typed.diagnostics)
-    linked = link(typed.graph)
-    assert linked.graph is None
-    assert [diagnostic.code for diagnostic in linked.diagnostics] == [
-        SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE]
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('child_type, literal, lifted', [
-    ('string[]', '[a, b]', [['a', 'b']]),
-    ('string', 'solo', ['solo']),
-    ('string[]', 'solo', [['solo']]),
-])
-def test_a_scattered_lift_wraps_the_child_value_once_per_scatter_layer(
-        child_type: str, literal: str, lifted: object) -> None:
-    """A child's job value is exactly one value of the child's type, and the
-    caller's scatter adds one array layer around it. So a list the child
-    already holds is one invocation's value, not the values to split: the child
-    runs once with its own value, just as it does for a scalar."""
-    tools = copy.deepcopy(SYNTHETIC_TOOLS)
-    tools[LegacyStepId('arr', SYNTHETIC_NS)] = Tool(
-        '/synthetic/arr.cwl', clt({'xs': {'type': child_type}}, {}))
-    child = f'steps:\n- id: arr\n  in: {{xs: !ii {literal}}}\n'
-    root = 'steps:\n- id: child.wic\n  scatter: [child__step__1__arr___xs]\n'
-    typed = _rooted(root, tools, child=child)
-    assert typed.graph is not None, list(typed.diagnostics)
-
-    completed = complete(typed.graph)
-
-    assert [binding.value for binding in completed.job_bindings] == [lifted]
+    assert typed.graph is None
+    [diagnostic] = typed.diagnostics
+    assert diagnostic.code is SophiosErrorCode.UNKNOWN_SCATTER_PORT
+    assert "declares in `inputs:`" in diagnostic.message
 
 
 @pytest.mark.fast
 def test_an_unbound_scattered_callee_input_is_wic032_spelled_as_scatter_spells_it() -> None:
-    """Infer's `wic032`: the callee exposes an optional input nothing binds, and
-    the caller scatters it. The message and the locator name it the way
-    `scatter:` does, never as the internal DerivedName."""
+    """Infer's `wic032`: the callee declares an optional input and threads it
+    to its step, and the caller scatters it without binding it. Lower accepts
+    the name, since the callee declares it; Infer then finds nothing binds it,
+    and names it the way `scatter:` does."""
     tools = copy.deepcopy(SYNTHETIC_TOOLS)
     tools[LegacyStepId('opt_in', SYNTHETIC_NS)] = Tool(
         '/synthetic/opt_in.cwl', clt({'x': {'type': 'string?'}}, {}))
-    child = 'steps:\n- id: opt_in\n'
-    root = 'steps:\n- id: child.wic\n  scatter: [child__step__1__opt_in___x]\n'
+    child = 'inputs:\n  x: string?\nsteps:\n- id: opt_in\n  in: {x: x}\n'
+    root = 'steps:\n- id: child.wic\n  scatter: [x]\n'
     typed = _rooted(root, tools, child=child)
     assert typed.graph is not None, list(typed.diagnostics)
     linked = link(typed.graph)
@@ -298,9 +272,8 @@ def test_an_unbound_scattered_callee_input_is_wic032_spelled_as_scatter_spells_i
     assert result.graph is None
     [diagnostic] = result.diagnostics
     assert diagnostic.code is SophiosErrorCode.UNKNOWN_SCATTER_PORT
-    assert "scatters over 'child__step__1__opt_in___x'" in diagnostic.message
-    assert diagnostic.locator is not None and diagnostic.locator.port == 'child__step__1__opt_in___x'
-    assert 'DerivedName' not in str(diagnostic)
+    assert "scatters over 'x', but nothing binds it" in diagnostic.message
+    assert diagnostic.locator is not None and diagnostic.locator.port == 'x'
 
 
 @pytest.mark.fast
