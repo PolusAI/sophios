@@ -167,7 +167,9 @@ def _cwl_schema_inputs_props(name: str, cwl_inputs: Json) -> Json:
     ii = default_schema()
     ii['properties'] = {'wic_inline_input': anytype}  # !ii
 
-    for key, val in cwl_inputs.items():
+    for key, declared in cwl_inputs.items():
+        # `name: type` is CWL shorthand for `name: {type: type}`.
+        val = declared if isinstance(declared, dict) else {'type': declared}
         metadata = {'title': val.get('label', ''), 'description': val.get('doc', '')}
         str_nonempty = {'type': 'string', 'minLength': 1, **metadata}
 
