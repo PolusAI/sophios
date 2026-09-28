@@ -18,6 +18,7 @@ from dataclasses import MISSING, dataclass, field, fields as dataclass_fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from cwl_utils.parser import cwl_v1_2 as _cwl
 import yaml
 from sophios.wic_types import Tools
 
@@ -276,7 +277,7 @@ class CommandLineTool:
         extra: dict[str, Any] | None = None,
     ) -> "CommandLineTool":
         return self._apply_spec(
-            InlineJavascriptRequirement(list(expression_lib) or None, dict(extra or {})),
+            InlineJavascriptRequirement(list(expression_lib) or None, extra=dict(extra or {})),
             as_hint=as_hint,
         )
 
@@ -287,7 +288,7 @@ class CommandLineTool:
         extra: dict[str, Any] | None = None,
     ) -> "CommandLineTool":
         return self._apply_spec(
-            SchemaDefRequirement(list(types), dict(extra or {})),
+            SchemaDefRequirement(list(types), extra=dict(extra or {})),
             as_hint=as_hint,
         )
 
@@ -298,7 +299,7 @@ class CommandLineTool:
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
     ) -> "CommandLineTool":
-        return self._apply_spec(LoadListingRequirement(value, dict(extra or {})), as_hint=as_hint)
+        return self._apply_spec(LoadListingRequirement(value, extra=dict(extra or {})), as_hint=as_hint)
 
     def shell_command(
         self,
@@ -306,7 +307,7 @@ class CommandLineTool:
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
     ) -> "CommandLineTool":
-        return self._apply_spec(ShellCommandRequirement(dict(extra or {})), as_hint=as_hint)
+        return self._apply_spec(ShellCommandRequirement(extra=dict(extra or {})), as_hint=as_hint)
 
     def software(
         self,
@@ -315,7 +316,7 @@ class CommandLineTool:
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
     ) -> "CommandLineTool":
-        return self._apply_spec(SoftwareRequirement(packages, dict(extra or {})), as_hint=as_hint)
+        return self._apply_spec(SoftwareRequirement(packages, extra=dict(extra or {})), as_hint=as_hint)
 
     def initial_workdir(
         self,
@@ -324,7 +325,7 @@ class CommandLineTool:
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
     ) -> "CommandLineTool":
-        return self._apply_spec(InitialWorkDirRequirement(listing, dict(extra or {})), as_hint=as_hint)
+        return self._apply_spec(InitialWorkDirRequirement(listing, extra=dict(extra or {})), as_hint=as_hint)
 
     # This helper deliberately bundles the common staging knobs into one call.
     # The slightly wider signature is easier to use than forcing nested objects.
@@ -410,7 +411,7 @@ class CommandLineTool:
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
     ) -> "CommandLineTool":
-        return self._apply_spec(WorkReuse(enable, dict(extra or {})), as_hint=as_hint)
+        return self._apply_spec(WorkReuse(enable, extra=dict(extra or {})), as_hint=as_hint)
 
     def network_access(
         self,
@@ -419,7 +420,7 @@ class CommandLineTool:
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
     ) -> "CommandLineTool":
-        return self._apply_spec(NetworkAccess(enable, dict(extra or {})), as_hint=as_hint)
+        return self._apply_spec(NetworkAccess(enable, extra=dict(extra or {})), as_hint=as_hint)
 
     def inplace_update(
         self,
@@ -429,7 +430,7 @@ class CommandLineTool:
         extra: dict[str, Any] | None = None,
     ) -> "CommandLineTool":
         return self._apply_spec(
-            InplaceUpdateRequirement(enable, dict(extra or {})),
+            InplaceUpdateRequirement(enable, extra=dict(extra or {})),
             as_hint=as_hint,
         )
 
@@ -440,7 +441,7 @@ class CommandLineTool:
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
     ) -> "CommandLineTool":
-        return self._apply_spec(ToolTimeLimit(seconds, dict(extra or {})), as_hint=as_hint)
+        return self._apply_spec(ToolTimeLimit(seconds, extra=dict(extra or {})), as_hint=as_hint)
 
     def success_codes(self, *codes: int) -> "CommandLineTool":
         self._success_codes = list(codes)
@@ -493,50 +494,44 @@ class CommandLineTool:
         )
 
     def to_cwl_document(self) -> dict[str, Any]:
-        document: dict[str, Any] = {
-            "class": "CommandLineTool",
-            "cwlVersion": self.cwl_version,
-            "id": self.name,
-            "inputs": self.inputs.to_dict(),
-            "outputs": self.outputs.to_dict(),
-        }
+        requirements = [{"class": name, **payload} for name, payload in self._requirements.items()]
+        hints = [{"class": name, **payload} for name, payload in self._hints.items()]
+        base_command = (
+            self._base_command[0] if len(self._base_command) == 1 else list(self._base_command)
+        ) if self._base_command else None
+        clt = _cwl.CommandLineTool(
+            id=self.name,
+            cwlVersion=self.cwl_version,
+            inputs=self.inputs.to_dict(),
+            outputs=self.outputs.to_dict(),
+            label=self.label_text,
+            doc=_render_doc(self.doc_text),
+            intent=list(self._intent) or None,
+            baseCommand=base_command,
+            arguments=list(self._arguments) or None,
+            requirements=requirements or None,
+            hints=hints or None,
+            stdin=self._stdin,
+            stdout=self._stdout,
+            stderr=self._stderr,
+            successCodes=list(self._success_codes) or None,
+            temporaryFailCodes=list(self._temporary_fail_codes) or None,
+            permanentFailCodes=list(self._permanent_fail_codes) or None,
+        )
+        document: dict[str, Any] = clt.save(top=True)
         if self._namespaces:
             document["$namespaces"] = dict(self._namespaces)
         if self._schemas:
             document["$schemas"] = list(self._schemas)
-        _merge_if_set(document, "label", self.label_text)
-        _merge_if_set(document, "doc", _render_doc(self.doc_text))
-        if self._intent:
-            document["intent"] = list(self._intent)
-        if self._base_command:
-            document["baseCommand"] = (
-                self._base_command[0]
-                if len(self._base_command) == 1
-                else list(self._base_command)
-            )
-        if self._arguments:
-            document["arguments"] = list(self._arguments)
-        if self._requirements:
-            document["requirements"] = _render(self._requirements)
-        if self._hints:
-            document["hints"] = _render(self._hints)
-        _merge_if_set(document, "stdin", self._stdin)
-        _merge_if_set(document, "stdout", self._stdout)
-        _merge_if_set(document, "stderr", self._stderr)
-        if self._success_codes:
-            document["successCodes"] = list(self._success_codes)
-        if self._temporary_fail_codes:
-            document["temporaryFailCodes"] = list(self._temporary_fail_codes)
-        if self._permanent_fail_codes:
-            document["permanentFailCodes"] = list(self._permanent_fail_codes)
         document.update(_render(self._extra))
         if _contains_expression(document):
-            requirements = document.setdefault("requirements", {})
-            if (
-                "InlineJavascriptRequirement" not in requirements
-                and "InlineJavascriptRequirement" not in document.get("hints", {})
-            ):
-                requirements["InlineJavascriptRequirement"] = {}
+            requirements = document.setdefault("requirements", [])
+            has_inline_js = any(
+                item.get("class") == "InlineJavascriptRequirement"
+                for item in [*requirements, *document.get("hints", [])]
+            )
+            if not has_inline_js:
+                requirements.append({"class": "InlineJavascriptRequirement"})
         return document
 
     def to_cwl_yaml(self) -> str:

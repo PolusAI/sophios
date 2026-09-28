@@ -127,7 +127,7 @@ def test_tool_builder_names_reject_namespace_collisions() -> None:
         Outputs(to_dict=Output(cwl.file, glob="out.txt"))
 
     with pytest.raises(ValueError, match="reserved"):
-        Fields(to_list=Field(cwl.string))
+        Fields(to_dict=Field(cwl.string))
 
     with pytest.raises(ValueError, match="reserved"):
         Inputs(_items=Input(cwl.file))
@@ -152,6 +152,16 @@ def test_structured_port_references_do_not_accept_raw_strings() -> None:
         tool.stage("input")
 
 
+def _by_class(entries: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Index a cwl_utils requirements/hints list by its `class` key."""
+    return {entry["class"]: {k: v for k, v in entry.items() if k != "class"} for entry in entries}
+
+
+def _by_id(entries: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Index a cwl_utils inputs/outputs list by its `id` key."""
+    return {entry["id"]: {k: v for k, v in entry.items() if k != "id"} for entry in entries}
+
+
 @pytest.mark.fast
 def test_tool_builder_covers_common_clt_surface() -> None:
     """Every builder method reaches the emitted document.
@@ -160,6 +170,10 @@ def test_tool_builder_covers_common_clt_surface() -> None:
     would otherwise pass every test that never inspects the document.
     """
     tool = _rich_tool().to_cwl_document()
+    inputs = _by_id(tool["inputs"])
+    outputs = _by_id(tool["outputs"])
+    requirements = _by_class(tool["requirements"])
+    hints = _by_class(tool["hints"])
 
     assert tool["$namespaces"] == {"edam": "https://edamontology.org/"}
     assert tool["$schemas"] == ["https://example.org/formats.rdf"]
@@ -168,28 +182,28 @@ def test_tool_builder_covers_common_clt_surface() -> None:
     assert tool["arguments"] == [{"position": 0, "valueFrom": "run-aligner"}]
     assert tool["stdout"] == "aligned.sam"
     assert tool["successCodes"] == [0, 2]
-    assert tool["inputs"]["reads"]["secondaryFiles"] == [{"pattern": ".bai", "required": False}]
-    assert tool["inputs"]["settings"]["loadListing"] == "shallow_listing"
-    assert tool["outputs"]["sam"]["type"] == "stdout"
-    assert tool["requirements"]["ShellCommandRequirement"] == {}
-    assert tool["requirements"]["DockerRequirement"] == {"dockerPull": "alpine:3.20"}
-    assert tool["requirements"]["ResourceRequirement"] == {
+    assert inputs["reads"]["secondaryFiles"] == [{"pattern": ".bai", "required": False}]
+    assert inputs["settings"]["loadListing"] == "shallow_listing"
+    assert outputs["sam"]["type"] == "stdout"
+    assert requirements["ShellCommandRequirement"] == {}
+    assert requirements["DockerRequirement"] == {"dockerPull": "alpine:3.20"}
+    assert requirements["ResourceRequirement"] == {
         "coresMin": 1.5,
         "ramMin": 1024,
         "outdirMin": 256,
     }
-    assert tool["requirements"]["EnvVarRequirement"] == {
+    assert requirements["EnvVarRequirement"] == {
         "envDef": [{"envName": "LC_ALL", "envValue": "C"}]
     }
-    assert tool["requirements"]["InitialWorkDirRequirement"] == {
+    assert requirements["InitialWorkDirRequirement"] == {
         "listing": [{"entry": "threads=4\n", "entryname": "config.txt"}]
     }
-    assert tool["requirements"]["NetworkAccess"] == {"networkAccess": False}
-    assert tool["requirements"]["InlineJavascriptRequirement"] == {
+    assert requirements["NetworkAccess"] == {"networkAccess": False}
+    assert requirements["InlineJavascriptRequirement"] == {
         "expressionLib": ["function passthrough(x) { return x; }"]
     }
-    assert len(tool["requirements"]["SchemaDefRequirement"]["types"]) == 2
-    assert tool["hints"]["WorkReuse"] == {"enableReuse": False}
+    assert len(requirements["SchemaDefRequirement"]["types"]) == 2
+    assert hints["WorkReuse"] == {"enableReuse": False}
 
 
 @pytest.mark.fast
@@ -211,7 +225,7 @@ def test_tool_builder_accepts_raw_extensions() -> None:
             customExtension={"enabled": True},
         ).to_cwl_document()
 
-    assert rendered["requirements"]["ToolTimeLimit"] == {"timelimit": 60}
+    assert _by_class(rendered["requirements"])["ToolTimeLimit"] == {"timelimit": 60}
     assert rendered["sbol_intent"] == "example:custom"
     assert rendered["customExtension"] == {"enabled": True}
 
@@ -267,19 +281,23 @@ def test_tool_builder_high_level_helpers_hide_cwl_plumbing() -> None:
         .base_command("/backend/.venv/bin/python", "/backend/dagster_pipelines/jobs/autosegmentation/logic.py")
         .to_cwl_document()
     )
+    emitted_inputs = _by_id(tool["inputs"])
+    emitted_outputs = _by_id(tool["outputs"])
+    requirements = _by_class(tool["requirements"])
+    hints = _by_class(tool["hints"])
 
     assert tool["$namespaces"]["edam"] == "https://edamontology.org/"
     assert tool["$namespaces"]["cwltool"] == "http://commonwl.org/cwltool#"
     assert tool["$schemas"] == [
         "https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl"
     ]
-    assert tool["hints"]["cwltool:CUDARequirement"] == {
+    assert hints["cwltool:CUDARequirement"] == {
         "cudaVersionMin": "11.7",
         "cudaComputeCapability": "3.0",
         "cudaDeviceCountMin": 2,
     }
-    assert tool["requirements"]["ResourceRequirement"] == {"coresMin": 4, "ramMin": 64000}
-    assert tool["requirements"]["InitialWorkDirRequirement"] == {
+    assert requirements["ResourceRequirement"] == {"coresMin": 4, "ramMin": 64000}
+    assert requirements["InitialWorkDirRequirement"] == {
         "listing": [
             {
                 "entry": "$(inputs.output)",
@@ -293,12 +311,12 @@ def test_tool_builder_high_level_helpers_hide_cwl_plumbing() -> None:
             },
         ]
     }
-    assert tool["requirements"]["InlineJavascriptRequirement"] == {}
-    assert tool["inputs"]["input"]["inputBinding"] == {"position": 1}
-    assert tool["inputs"]["model"]["type"] == ["null", "File"]
-    assert tool["inputs"]["model"]["inputBinding"] == {"prefix": "--model"}
-    assert tool["inputs"]["tile_size"]["type"] == ["null", "int"]
-    assert tool["outputs"]["output"]["outputBinding"] == {"glob": "$(inputs.output.basename)"}
+    assert requirements["InlineJavascriptRequirement"] == {}
+    assert emitted_inputs["input"]["inputBinding"] == {"position": 1}
+    assert emitted_inputs["model"]["type"] == ["null", "File"]
+    assert emitted_inputs["model"]["inputBinding"] == {"prefix": "--model"}
+    assert emitted_inputs["tile_size"]["type"] == ["null", "int"]
+    assert emitted_outputs["output"]["outputBinding"] == {"glob": "$(inputs.output.basename)"}
 
 
 @pytest.mark.fast
@@ -411,6 +429,6 @@ def test_tool_builder_converts_to_in_memory_step() -> None:
             pytest.fail("tool.to_step() must return a Step")
     assert step.process_name == "say_hello"
     assert step.clt_path.name == "say_hello.cwl"
-    assert step.yaml["inputs"]["message"]["type"] == "string"
-    assert step.yaml["outputs"]["out"]["type"] == "stdout"
+    assert _by_id(step.yaml["inputs"])["message"]["type"] == "string"
+    assert _by_id(step.yaml["outputs"])["out"]["type"] == "stdout"
     assert step._yml["in"]["message"] == {"wic_inline_input": "hello"}

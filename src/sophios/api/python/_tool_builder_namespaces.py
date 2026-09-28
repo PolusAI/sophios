@@ -110,9 +110,9 @@ class _NamedCollection(Mapping[str, SpecT]):
         except KeyError as exc:
             raise AttributeError(name) from exc
 
-    def to_dict(self) -> dict[str, Any]:
-        """Render the named collection into a CWL parameter mapping."""
-        return {name: spec.to_dict() for name, spec in self._items.items()}
+    def to_dict(self) -> list[dict[str, Any]]:
+        """Render the named collection into cwl_utils's canonical parameter list."""
+        return [spec.to_dict() for spec in self._items.values()]
 
 
 class Inputs(_NamedCollection[InputSpec]):
@@ -125,7 +125,3 @@ class Outputs(_NamedCollection[OutputSpec]):
 
 class Fields(_NamedCollection[FieldSpec]):
     """Named CWL record fields. Names come from Python keyword arguments."""
-
-    def to_list(self) -> list[dict[str, Any]]:
-        """Render record fields in CWL's list-of-fields shape."""
-        return [spec.to_dict() for spec in self._items.values()]

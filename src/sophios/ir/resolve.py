@@ -278,10 +278,20 @@ def _input_identity(value: InputValue) -> Any:
 
 
 def _ports(raw: Any, *, output: bool) -> tuple[ResolvedPort, ...]:
-    if not isinstance(raw, dict):
-        return ()
-    return tuple(ResolvedPort(str(name), port_declaration(declaration, output=output))
-                 for name, declaration in raw.items())
+    return tuple(ResolvedPort(name, port_declaration(declaration, output=output))
+                 for name, declaration in _named_entries(raw))
+
+
+def _named_entries(raw: Any) -> tuple[tuple[str, Any], ...]:
+    """CWL's map form (`{name: decl}`) or its `id`-keyed list form."""
+    match raw:
+        case dict():
+            return tuple(raw.items())
+        case list():
+            return tuple((str(item['id']).rsplit('#', 1)[-1], {k: v for k, v in item.items() if k != 'id'})
+                         for item in raw)
+        case _:
+            return ()
 
 
 def _workflow_interface(document: Document) -> tuple[tuple[ResolvedPort, ...],

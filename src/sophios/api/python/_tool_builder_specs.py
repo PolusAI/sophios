@@ -1,14 +1,21 @@
-"""Private dataclasses for the Tool Builder."""
+"""Private spec wrappers for the Tool Builder.
+
+Every class here is a thin, order-preserving wrapper around a `cwl_utils`
+generated class: constructors accept the builder's public (snake_case)
+argument names, and `to_dict()`/`to_fields()` build the matching
+`cwl_utils.parser.cwl_v1_2` object and render it with `.save()`. CWL
+semantics (what fields exist, what they mean, how they serialize) come
+from `cwl_utils`; this module only adapts the calling convention.
+"""
 
 # pylint: disable=missing-function-docstring,too-few-public-methods
 # pylint: disable=too-many-instance-attributes,too-many-arguments
 # pylint: disable=too-many-locals,redefined-builtin,too-many-lines
-# These frozen dataclasses mirror the CWL schema closely, so field-rich
-# constructors and small fluent helpers are intentional rather than accidental.
 
-from collections.abc import Mapping
-from dataclasses import MISSING, dataclass, field, fields as dataclass_fields
+from dataclasses import dataclass, field, fields as dataclass_fields
 from typing import Any, ClassVar, TypeVar, cast
+
+from cwl_utils.parser import cwl_v1_2 as _cwl_v12
 
 from ._tool_builder_support import (
     _SUPPORT,
@@ -29,35 +36,6 @@ from ._tool_builder_support import (
 FrozenSpecT = TypeVar("FrozenSpecT")
 
 
-def _render_sequence(values: list[Any]) -> list[Any]:
-    return [_render(value) for value in values]
-
-
-def _canonicalize_sequence(values: list[Any]) -> list[Any]:
-    return [_canonicalize_type(value) for value in values]
-
-
-def _render_dataclass_cwl(obj: Any) -> dict[str, Any]:
-    """Render any dataclass whose fields carry a ``cwl`` metadata key.
-
-    This is the one renderer shared by the hand-authored `_CWLObject` specs
-    (position/keyword parsed by field order) and the fluent frozen specs
-    (`InputSpec`, `OutputSpec`, `FieldSpec`).
-    """
-    payload: dict[str, Any] = {}
-    for item in dataclass_fields(cast(Any, obj)):
-        cwl_key = item.metadata.get("cwl")
-        if cwl_key is None:
-            continue
-        value = getattr(obj, item.name)
-        if value is None or value is _SUPPORT.unset or (item.metadata.get("omit_empty") and not value):
-            continue
-        payload[str(cwl_key)] = item.metadata.get("render", _render)(value)
-    if extra := getattr(obj, "extra", None):
-        payload.update(_render(extra))
-    return payload
-
-
 def _replace_frozen(obj: FrozenSpecT, **changes: Any) -> FrozenSpecT:
     """Copy a frozen dataclass-like object while overriding selected fields."""
     clone = object.__new__(obj.__class__)
@@ -76,59 +54,42 @@ def _set_frozen_attrs(obj: Any, **values: Any) -> None:
         object.__setattr__(obj, name, value)
 
 
-@dataclass(init=False, eq=False)
-class _CWLObject:
-    """Base for hand-authored CWL specs parsed by field declaration order.
+def _camel(name: str) -> str:
+    """`docker_pull` -> `dockerPull`: a builder field name as its CWL name."""
+    head, *rest = name.split("_")
+    return head + "".join(word.capitalize() for word in rest)
 
-    Subclasses declare CWL-mapped fields exactly like any other dataclass
-    (`field(metadata={"cwl": ..., "render": ..., "omit_empty": ...})`); this
-    base class supplies the one non-standard behaviour they all share: values
-    may be passed positionally in field order, and a single extra trailing
-    positional (or an `extra=` keyword) is accepted as a raw passthrough dict.
+
+@dataclass(eq=False)
+class _CWLObject:
+    """A builder spec whose fields are passed, camelCased, to its `cwl_utils` class `_cwl`.
+
+    `extra` is a raw CWL mapping applied over the rendered payload last. A
+    field's `render` metadata, if any, prepares its value.
     """
 
+    _cwl: ClassVar[type]
     extra: dict[str, Any] = field(default_factory=dict, kw_only=True)
 
-    def __init__(self, *args: Any, extra: dict[str, Any] | None = None, **kwargs: Any) -> None:
-        cwl_fields = [item for item in dataclass_fields(type(self)) if item.name != "extra"]
-        values = list(args)
-        if len(values) > len(cwl_fields):
-            if len(values) == len(cwl_fields) + 1 and extra is None:
-                extra = values.pop()
-            else:
-                raise TypeError(f"{type(self).__name__} accepts at most {len(cwl_fields)} positional arguments")
-
-        for item, value in zip(cwl_fields, values):
-            if item.name in kwargs:
-                raise TypeError(f"{type(self).__name__} got multiple values for {item.name!r}")
-            setattr(self, item.name, value)
-        for item in cwl_fields[len(values):]:
-            default = item.default if item.default is not MISSING else _SUPPORT.unset
-            value = kwargs.pop(item.name, default)
-            if value is _SUPPORT.unset:
-                raise TypeError(f"{type(self).__name__} missing required argument: {item.name!r}")
-            setattr(self, item.name, value)
-        if kwargs:
-            unknown = next(iter(kwargs))
-            raise TypeError(f"{type(self).__name__} got an unexpected keyword argument {unknown!r}")
-        self.extra = dict(extra or {})
-
-    def to_dict(self) -> Any:
-        return _render_dataclass_cwl(self)
+    def to_dict(self) -> dict[str, Any]:
+        kwargs = {
+            _camel(item.name): item.metadata.get("render", _render)(getattr(self, item.name))
+            for item in dataclass_fields(self)
+            if item.name != "extra" and getattr(self, item.name) is not None
+        }
+        payload: dict[str, Any] = self._cwl(**kwargs).save()
+        payload.pop("class", None)
+        payload.update(_render(self.extra))
+        return payload
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class SecondaryFile(_CWLObject):
     """A CWL secondary file pattern."""
 
-    pattern: Any = field(metadata={"cwl": "pattern"})
-    required: Any = field(default=None, metadata={"cwl": "required"})
-
-    def to_dict(self) -> str | dict[str, Any]:
-        match self.pattern, self.required, self.extra:
-            case str() as pattern, None, extra if not extra:
-                return pattern
-        return _render_dataclass_cwl(self)
+    _cwl = _cwl_v12.SecondaryFileSchema
+    pattern: Any
+    required: Any = None
 
 
 def secondary_file(pattern: Any, *, required: bool | str | None = None, **extra: Any) -> "SecondaryFile":
@@ -136,13 +97,14 @@ def secondary_file(pattern: Any, *, required: bool | str | None = None, **extra:
     return SecondaryFile(pattern=pattern, required=required, extra=dict(extra))
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class Dirent(_CWLObject):
     """A CWL InitialWorkDirRequirement listing entry."""
 
-    entry: Any = field(metadata={"cwl": "entry"})
-    entryname: Any = field(default=None, metadata={"cwl": "entryname"})
-    writable: Any = field(default=None, metadata={"cwl": "writable"})
+    _cwl = _cwl_v12.Dirent
+    entry: Any
+    entryname: Any = None
+    writable: Any = None
 
     @classmethod
     def from_input(
@@ -154,44 +116,39 @@ class Dirent(_CWLObject):
         extra: dict[str, Any] | None = None,
     ) -> "Dirent":
         name = _named_parameter(reference, kind="input")
-        return cls(
-            entry=_input_expression(name),
-            entryname=entryname or _basename_expression(name),
-            writable=writable,
-            extra=dict(extra or {}),
-        )
+        return cls(_input_expression(name), entryname or _basename_expression(name), writable, extra=extra or {})
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class EnvironmentDef(_CWLObject):
     """An EnvVarRequirement entry."""
 
-    env_name: Any = field(metadata={"cwl": "envName"})
-    env_value: Any = field(metadata={"cwl": "envValue"})
-
-    def to_dict(self) -> dict[str, str]:
-        return cast(dict[str, str], _render_dataclass_cwl(self))
+    _cwl = _cwl_v12.EnvironmentDef
+    env_name: Any
+    env_value: Any
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class CommandLineBinding(_CWLObject):
     """A CWL input binding or argument binding."""
 
-    position: Any = field(default=None, metadata={"cwl": "position"})
-    prefix: Any = field(default=None, metadata={"cwl": "prefix"})
-    separate: Any = field(default=None, metadata={"cwl": "separate"})
-    item_separator: Any = field(default=None, metadata={"cwl": "itemSeparator"})
-    value_from: Any = field(default=None, metadata={"cwl": "valueFrom"})
-    shell_quote: Any = field(default=None, metadata={"cwl": "shellQuote"})
+    _cwl = _cwl_v12.CommandLineBinding
+    position: Any = None
+    prefix: Any = None
+    separate: Any = None
+    item_separator: Any = None
+    value_from: Any = None
+    shell_quote: Any = None
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class CommandOutputBinding(_CWLObject):
     """A CWL output binding."""
 
-    glob: Any = field(default=None, metadata={"cwl": "glob"})
-    load_contents: Any = field(default=None, metadata={"cwl": "loadContents"})
-    output_eval: Any = field(default=None, metadata={"cwl": "outputEval"})
+    _cwl = _cwl_v12.CommandOutputBinding
+    glob: Any = None
+    load_contents: Any = None
+    output_eval: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +173,8 @@ class CommandArgument:
 
 
 class _RequirementSpec(_CWLObject):
+    """A requirement or hint: rendered as `to_fields()` under its `class_name`."""
+
     class_name: ClassVar[str]
 
     def __init_subclass__(cls) -> None:
@@ -223,119 +182,132 @@ class _RequirementSpec(_CWLObject):
         cls.class_name = cls.__name__
 
     def to_fields(self) -> dict[str, Any]:
-        return _render_dataclass_cwl(self)
+        return self.to_dict()
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class DockerRequirement(_RequirementSpec):
     """DockerRequirement helper."""
 
-    docker_pull: Any = field(default=None, metadata={"cwl": "dockerPull"})
-    docker_load: Any = field(default=None, metadata={"cwl": "dockerLoad"})
-    docker_file: Any = field(default=None, metadata={"cwl": "dockerFile"})
-    docker_import: Any = field(default=None, metadata={"cwl": "dockerImport"})
-    docker_image_id: Any = field(default=None, metadata={"cwl": "dockerImageId"})
-    docker_output_directory: Any = field(default=None, metadata={"cwl": "dockerOutputDirectory"})
+    _cwl = _cwl_v12.DockerRequirement
+    docker_pull: Any = None
+    docker_load: Any = None
+    docker_file: Any = None
+    docker_import: Any = None
+    docker_image_id: Any = None
+    docker_output_directory: Any = None
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class InlineJavascriptRequirement(_RequirementSpec):
     """InlineJavascriptRequirement helper."""
 
-    expression_lib: Any = field(
-        default=None, metadata={"cwl": "expressionLib", "render": _render_sequence, "omit_empty": True}
-    )
+    _cwl = _cwl_v12.InlineJavascriptRequirement
+    expression_lib: Any = None
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class SchemaDefRequirement(_RequirementSpec):
     """SchemaDefRequirement helper."""
 
-    types: Any = field(metadata={"cwl": "types", "render": _canonicalize_sequence})
+    _cwl = _cwl_v12.SchemaDefRequirement
+    types: Any = field(metadata={"render": lambda values: [_canonicalize_type(value) for value in values]})
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class LoadListingRequirement(_RequirementSpec):
     """LoadListingRequirement helper."""
 
-    load_listing: Any = field(metadata={"cwl": "loadListing"})
+    _cwl = _cwl_v12.LoadListingRequirement
+    load_listing: Any
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class ShellCommandRequirement(_RequirementSpec):
     """ShellCommandRequirement helper."""
 
+    _cwl = _cwl_v12.ShellCommandRequirement
 
-@dataclass(init=False, eq=False)
+
+@dataclass(eq=False)
 class SoftwarePackage(_CWLObject):
     """A SoftwareRequirement package entry."""
 
-    package: Any = field(metadata={"cwl": "package"})
-    version: Any = field(default=None, metadata={"cwl": "version"})
-    specs: Any = field(default=None, metadata={"cwl": "specs"})
+    _cwl = _cwl_v12.SoftwarePackage
+    package: Any
+    version: Any = None
+    specs: Any = None
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class SoftwareRequirement(_RequirementSpec):
     """SoftwareRequirement helper."""
 
-    packages: Any = field(metadata={"cwl": "packages", "render": _render_sequence})
+    _cwl = _cwl_v12.SoftwareRequirement
+    packages: Any
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class InitialWorkDirRequirement(_RequirementSpec):
     """InitialWorkDirRequirement helper."""
 
-    listing: Any = field(metadata={"cwl": "listing"})
+    _cwl = _cwl_v12.InitialWorkDirRequirement
+    listing: Any
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class EnvVarRequirement(_RequirementSpec):
     """EnvVarRequirement helper."""
 
-    env_def: Any = field(metadata={"cwl": "envDef", "render": _render_sequence})
+    _cwl = _cwl_v12.EnvVarRequirement
+    env_def: Any
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class ResourceRequirement(_RequirementSpec):
     """ResourceRequirement helper."""
 
-    cores_min: Any = field(default=None, metadata={"cwl": "coresMin"})
-    cores_max: Any = field(default=None, metadata={"cwl": "coresMax"})
-    ram_min: Any = field(default=None, metadata={"cwl": "ramMin"})
-    ram_max: Any = field(default=None, metadata={"cwl": "ramMax"})
-    tmpdir_min: Any = field(default=None, metadata={"cwl": "tmpdirMin"})
-    tmpdir_max: Any = field(default=None, metadata={"cwl": "tmpdirMax"})
-    outdir_min: Any = field(default=None, metadata={"cwl": "outdirMin"})
-    outdir_max: Any = field(default=None, metadata={"cwl": "outdirMax"})
+    _cwl = _cwl_v12.ResourceRequirement
+    cores_min: Any = None
+    cores_max: Any = None
+    ram_min: Any = None
+    ram_max: Any = None
+    tmpdir_min: Any = None
+    tmpdir_max: Any = None
+    outdir_min: Any = None
+    outdir_max: Any = None
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class NetworkAccess(_RequirementSpec):
     """NetworkAccess helper."""
 
-    network_access: Any = field(metadata={"cwl": "networkAccess"})
+    _cwl = _cwl_v12.NetworkAccess
+    network_access: Any
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class WorkReuse(_RequirementSpec):
     """WorkReuse helper."""
 
-    enable_reuse: Any = field(metadata={"cwl": "enableReuse"})
+    _cwl = _cwl_v12.WorkReuse
+    enable_reuse: Any
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class InplaceUpdateRequirement(_RequirementSpec):
     """InplaceUpdateRequirement helper."""
 
-    inplace_update: Any = field(default=True, metadata={"cwl": "inplaceUpdate"})
+    _cwl = _cwl_v12.InplaceUpdateRequirement
+    inplace_update: Any = True
 
 
-@dataclass(init=False, eq=False)
+@dataclass(eq=False)
 class ToolTimeLimit(_RequirementSpec):
     """ToolTimeLimit helper."""
 
-    timelimit: Any = field(metadata={"cwl": "timelimit"})
+    _cwl = _cwl_v12.ToolTimeLimit
+    timelimit: Any
 
 
 class _CommonSpecMixin:
@@ -354,7 +326,7 @@ class _CommonSpecMixin:
     @classmethod
     def record(
         cls: Any,
-        fields: Mapping[str, "FieldSpec"] | list[Any],
+        fields: Any,
         *,
         name: str | None = None,
         **kwargs: Any,
@@ -401,9 +373,9 @@ class FieldSpec(_CommonSpecMixin, _DefaultSpecMixin):
 
     type_: Any
     name: str | None = None
-    label_text: str | None = field(default=None, metadata={"cwl": "label"})
-    doc_text: str | list[str] | None = field(default=None, metadata={"cwl": "doc", "render": _render_doc})
-    default_value: Any = field(default=_SUPPORT.unset, metadata={"cwl": "default", "present": True})
+    label_text: str | None = None
+    doc_text: str | list[str] | None = None
+    default_value: Any = _SUPPORT.unset
     extra: dict[str, Any] = field(default_factory=dict)
 
     def __init__(
@@ -429,8 +401,15 @@ class FieldSpec(_CommonSpecMixin, _DefaultSpecMixin):
     def to_dict(self) -> dict[str, Any]:
         if self.name is None:
             raise ValueError("Record fields must have a name before serialization")
-        payload = {"name": self.name, "type": _canonicalize_type(self.type_)}
-        payload.update(_render_dataclass_cwl(self))
+        payload: dict[str, Any] = _cwl_v12.CommandInputRecordField(
+            name=self.name,
+            type_=_canonicalize_type(self.type_),
+            label=self.label_text,
+            doc=_render_doc(self.doc_text),
+        ).save()
+        if self.default_value is not _SUPPORT.unset:
+            payload["default"] = _render(self.default_value)
+        payload.update(_render(self.extra))
         return payload
 
 
@@ -448,14 +427,14 @@ class InputSpec(_CommonSpecMixin, _DefaultSpecMixin, _IOFacetMixin):
     item_separator: str | None = None
     binding_value_from: Any = None
     shell_quote: bool | None = None
-    label_text: str | None = field(default=None, metadata={"cwl": "label"})
-    doc_text: str | list[str] | None = field(default=None, metadata={"cwl": "doc", "render": _render_doc})
-    format_value: Any = field(default=None, metadata={"cwl": "format"})
-    secondary_files_value: Any = field(default=None, metadata={"cwl": "secondaryFiles"})
-    streamable_value: bool | None = field(default=None, metadata={"cwl": "streamable"})
-    load_contents_value: bool | None = field(default=None, metadata={"cwl": "loadContents"})
-    load_listing_value: str | None = field(default=None, metadata={"cwl": "loadListing"})
-    default_value: Any = field(default=_SUPPORT.unset, metadata={"cwl": "default", "present": True})
+    label_text: str | None = None
+    doc_text: str | list[str] | None = None
+    format_value: Any = None
+    secondary_files_value: Any = None
+    streamable_value: bool | None = None
+    load_contents_value: bool | None = None
+    load_listing_value: str | None = None
+    default_value: Any = _SUPPORT.unset
     binding_extra: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
     name: str | None = None
@@ -510,7 +489,8 @@ class InputSpec(_CommonSpecMixin, _DefaultSpecMixin, _IOFacetMixin):
         return _replace_frozen(self, binding_value_from=expression)
 
     def to_dict(self) -> dict[str, Any]:
-        payload = {"type": _apply_required(self.type_, self.required)}
+        if self.name is None:
+            raise ValueError("Inputs must have a name before serialization")
         binding = _optional_binding(
             CommandLineBinding(
                 position=self.position,
@@ -522,9 +502,21 @@ class InputSpec(_CommonSpecMixin, _DefaultSpecMixin, _IOFacetMixin):
                 extra=dict(self.binding_extra),
             )
         )
-        if binding is not None:
-            payload["inputBinding"] = binding.to_dict()
-        payload.update(_render_dataclass_cwl(self))
+        payload: dict[str, Any] = _cwl_v12.CommandInputParameter(
+            id=self.name,
+            type_=_apply_required(self.type_, self.required),
+            label=self.label_text,
+            doc=_render_doc(self.doc_text),
+            format=_render(self.format_value),
+            secondaryFiles=_render(self.secondary_files_value),
+            streamable=self.streamable_value,
+            loadContents=self.load_contents_value,
+            loadListing=self.load_listing_value,
+            inputBinding=None if binding is None else binding.to_dict(),
+        ).save()
+        if self.default_value is not _SUPPORT.unset:
+            payload["default"] = _render(self.default_value)
+        payload.update(_render(self.extra))
         return payload
 
 
@@ -539,12 +531,12 @@ class OutputSpec(_CommonSpecMixin, _IOFacetMixin):
     glob: Any = None
     load_contents_value: bool | None = None
     output_eval: str | None = None
-    label_text: str | None = field(default=None, metadata={"cwl": "label"})
-    doc_text: str | list[str] | None = field(default=None, metadata={"cwl": "doc", "render": _render_doc})
-    format_value: Any = field(default=None, metadata={"cwl": "format"})
-    secondary_files_value: Any = field(default=None, metadata={"cwl": "secondaryFiles"})
-    streamable_value: bool | None = field(default=None, metadata={"cwl": "streamable"})
-    load_listing_value: str | None = field(default=None, metadata={"cwl": "loadListing"})
+    label_text: str | None = None
+    doc_text: str | list[str] | None = None
+    format_value: Any = None
+    secondary_files_value: Any = None
+    streamable_value: bool | None = None
+    load_listing_value: str | None = None
     binding_extra: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
     name: str | None = None
@@ -602,7 +594,8 @@ class OutputSpec(_CommonSpecMixin, _IOFacetMixin):
         return cls("stderr", **kwargs)
 
     def to_dict(self) -> dict[str, Any]:
-        payload = {"type": _apply_required(self.type_, self.required)}
+        if self.name is None:
+            raise ValueError("Outputs must have a name before serialization")
         binding = _optional_binding(
             CommandOutputBinding(
                 glob=self.glob,
@@ -611,7 +604,19 @@ class OutputSpec(_CommonSpecMixin, _IOFacetMixin):
                 extra=dict(self.binding_extra),
             )
         )
-        if binding is not None:
-            payload["outputBinding"] = binding.to_dict()
-        payload.update(_render_dataclass_cwl(self))
+        payload: dict[str, Any] = _cwl_v12.CommandOutputParameter(
+            id=self.name,
+            type_=_apply_required(self.type_, self.required),
+            label=self.label_text,
+            doc=_render_doc(self.doc_text),
+            format=_render(self.format_value),
+            secondaryFiles=_render(self.secondary_files_value),
+            streamable=self.streamable_value,
+            outputBinding=None if binding is None else binding.to_dict(),
+        ).save()
+        # loadListing is not part of CommandOutputParameter in the CWL v1.2
+        # schema; kept as a builder extension for symmetry with InputSpec.
+        if self.load_listing_value is not None:
+            payload["loadListing"] = self.load_listing_value
+        payload.update(_render(self.extra))
         return payload

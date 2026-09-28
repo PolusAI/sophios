@@ -134,7 +134,8 @@ def test_two_in_memory_tools_chain_and_keep_their_output_binding() -> None:
     compiled = module.build_workflow('hello from test').compile()
     steps = _steps(compiled)
 
-    binding = steps['read_text']['run']['outputs']['result']
+    run_outputs = {entry['id']: entry for entry in steps['read_text']['run']['outputs']}
+    binding = run_outputs['result']
     assert binding['type'] == 'string'
     assert binding['outputBinding'] == {
         'glob': 'stdout.txt', 'loadContents': True, 'outputEval': '$(self[0].contents)',
