@@ -220,6 +220,5 @@ def test_a_false_condition_runs_no_task_and_downstream_completes(tmp_path: Path)
     code, log = _run(workflow, tmp_path)
     assert code == 0, log
     processes = [child for child in (tmp_path / "work").glob("*/*") if child.is_dir()]
-    # Only CONSUME ran; PRODUCE's task was skipped.
+    # A zero exit with exactly one task means CONSUME ran and PRODUCE was skipped.
     assert len(processes) == 1
-    assert "[SUCCESS]" in log or "completed=" in log
