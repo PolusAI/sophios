@@ -56,6 +56,8 @@ def test_admitted_expressions_type_check(text: str, expected: str) -> None:
 @pytest.mark.fast
 @pytest.mark.parametrize(("text", "message"), [
     ("$(inputs.a ** 2)", "unsupported construct '**'"),
+    ("$(--inputs.a)", "unsupported construct '--'"),
+    ("$(1 ++ 2)", "unsupported construct '++'"),
     ("$(inputs.a ? 1 : 2)", "unsupported construct '?'"),
     ("$(inputs.a & 1)", "unsupported construct '&'"),
     ("$(Math.PI)", "unsupported construct 'Math.PI'"),
