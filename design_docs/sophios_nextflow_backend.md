@@ -83,7 +83,7 @@ Unsupported input exits through structured diagnostics before executable IR or a
   -> structural CWL/Sophios reconstruction where representable
 ```
 
-The direct `.nf -> NextflowDocument -> .nf` path is loss-aware. Opaque syntax is preserved and reported. Structural conversion to CWL compares representable names, ports, resources, and topology; it does not claim executable equivalence for opaque Groovy.
+The direct `.nf -> NextflowDocument -> .nf` path is loss-aware. Opaque syntax is preserved and reported. A generated source read beside its executable model is the one exception, and it is exact rather than loss-aware: when the model renders to the source byte for byte, the renderer's determinism accounts for every construct in it, so the model supplies the structural document and nothing is opaque. Without that model, the same source is read by the supported DSL2 reader alone, and whatever it does not recognize stays opaque. Export followed by import therefore returns every generated workflow exactly, whatever channel wiring its lowering renders. Structural conversion to CWL compares representable names, ports, resources, and topology; it does not claim executable equivalence for opaque Groovy.
 
 ### 4.3 Public boundary
 
