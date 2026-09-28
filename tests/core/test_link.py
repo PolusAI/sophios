@@ -75,9 +75,9 @@ def test_cross_scope_obligation_is_discharged_at_its_lca() -> None:
     linked = link(typed)
     assert linked.graph is not None, list(linked.diagnostics)
     assert linked.graph.obligations == ()
-    assert len(linked.graph.composition_edges) == 1
-    assert linked.graph.composition_edges[0].sink.step.namespace.parts
-    assert all(not child.composition_edges for child in linked.graph.children)
+    assert len(linked.graph.linked_edges) == 1
+    assert linked.graph.linked_edges[0].sink.step.namespace.parts
+    assert all(not child.linked_edges for child in linked.graph.children)
 
 
 def _cross_scope_two_levels(source_tool: str, source_type: object,
@@ -115,12 +115,12 @@ def test_cross_scope_obligation_discharged_two_levels_below_the_definition() -> 
     linked = link(typed)
     assert linked.graph is not None, list(linked.diagnostics)
     assert linked.graph.obligations == ()
-    assert len(linked.graph.composition_edges) == 1
-    edge = linked.graph.composition_edges[0]
+    assert len(linked.graph.linked_edges) == 1
+    edge = linked.graph.linked_edges[0]
 
     wrapper = linked.graph.children[0]
     child = wrapper.children[0]
-    assert not wrapper.composition_edges and not child.composition_edges
+    assert not wrapper.linked_edges and not child.linked_edges
     assert child.steps[0].inputs[0].id == edge.sink
 
     assert {port.name for port in wrapper.workflow_inputs} == \
@@ -156,7 +156,7 @@ def test_a_call_does_not_exempt_an_edge_from_document_order(definition_first: bo
     linked = link(typed.graph)
     if definition_first:
         assert linked.graph is not None, list(linked.diagnostics)
-        assert len(linked.graph.composition_edges) == 1
+        assert len(linked.graph.linked_edges) == 1
     else:
         assert linked.graph is None
         assert [diagnostic.code for diagnostic in linked.diagnostics] == [

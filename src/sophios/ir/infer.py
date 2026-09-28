@@ -13,6 +13,7 @@ from .types import (
     DerivedName,
     Direction,
     Edge,
+    EdgeOrigin,
     EmittedValue,
     Port,
     PortDeclaration,
@@ -137,7 +138,7 @@ def _infer_tree(graph: WorkflowGraph, policy: InferencePolicy,
 # pylint: disable-next=too-many-locals
 def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
                  catalog: InsertionCatalog) -> tuple[WorkflowGraph, bool]:
-    inferred_edges = list(graph.inferred_edges)
+    linked_edges = list(graph.linked_edges)
     workflow_inputs = list(graph.workflow_inputs)
     input_mapping = list(graph.input_mapping)
     steps = list(graph.steps)
@@ -148,8 +149,7 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
         for port in step.inputs
         if port.id.port in dict(step.emission.inputs)
     )
-    bound.update(edge.sink for edge in graph.composition_edges)
-    bound.update(edge.sink for edge in inferred_edges)
+    bound.update(edge.sink for edge in linked_edges)
 
     for position, step in enumerate(steps):
         for port in step.inputs:
@@ -157,7 +157,7 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
                 continue
             source, attempted = _candidate(steps, position, port, policy)
             if source is not None:
-                inferred_edges.append(Edge(source, port.id, port.span))
+                linked_edges.append(Edge(source, port.id, port.span, origin=EdgeOrigin.INFERRED))
                 bound.add(port.id)
                 continue
             insertion = _insertion_candidate(attempted, port, catalog)
@@ -180,7 +180,7 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
                 current_step, port.id.port, Source(input_name, shorthand=True))
             bound.add(port.id)
 
-    return replace(graph, steps=tuple(steps), inferred_edges=tuple(inferred_edges),
+    return replace(graph, steps=tuple(steps), linked_edges=tuple(linked_edges),
                    workflow_inputs=tuple(workflow_inputs),
                    input_mapping=tuple(input_mapping)), False
 

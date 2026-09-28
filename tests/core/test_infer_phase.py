@@ -26,8 +26,8 @@ from sophios.ir import (
     link,
 )
 from sophios.ir.names import Names
-from sophios.ir.types import (DerivedName, Port, PortDeclaration, PortId, PortName, StepNode,
-                              WorkflowGraph)
+from sophios.ir.types import (DerivedName, EdgeOrigin, Port, PortDeclaration, PortId, PortName,
+                              StepNode, WorkflowGraph)
 from sophios.lang import SophiosErrorCode
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
@@ -56,8 +56,10 @@ def test_the_live_compiler_retains_typed_inference(workflow: Yaml) -> None:
     inferred = infer(linked)
     assert inferred.graph is not None, list(inferred.diagnostics)
     live = compile_hermetic(copy.deepcopy(workflow)).graph
-    expected = {(edge.source, edge.sink) for edge in inferred.graph.inferred_edges}
-    assert expected <= {(edge.source, edge.sink) for edge in live.inferred_edges}
+    expected = {(edge.source, edge.sink) for edge in inferred.graph.linked_edges
+                if edge.origin is EdgeOrigin.INFERRED}
+    assert expected <= {(edge.source, edge.sink) for edge in live.linked_edges
+                        if edge.origin is EdgeOrigin.INFERRED}
 
 
 @pytest.mark.skip_pypi_ci
@@ -70,7 +72,9 @@ def test_every_inferred_edge_is_the_independent_models_choice(workflow: Yaml) ->
     assert inferred.graph is not None, list(inferred.diagnostics)
     for graph in _graphs(inferred.graph):
         original = next(item for item in _graphs(linked) if item.namespace == graph.namespace)
-        for edge in graph.inferred_edges:
+        for edge in graph.linked_edges:
+            if edge.origin is not EdgeOrigin.INFERRED:
+                continue
             position = next(index for index, step in enumerate(original.steps)
                             if step.id == edge.sink.step)
             sink = _port(original.steps[position].inputs, edge.sink.port)
@@ -92,8 +96,8 @@ def test_most_recent_step_and_last_declared_output_win() -> None:
     _, linked, _ = _typed(workflow, tools)
     result = infer(linked)
     assert result.graph is not None
-    count_edge = next(edge for edge in result.graph.inferred_edges
-                      if edge.sink.step.name == 'count')
+    count_edge = next(edge for edge in result.graph.linked_edges
+                      if edge.origin is EdgeOrigin.INFERRED and edge.sink.step.name == 'count')
     assert count_edge.source.step.name == 'multi_file'
     assert count_edge.source.port == 'last'
 
@@ -108,7 +112,7 @@ def test_falsy_defaults_satisfy_inputs(default: object) -> None:
     _, linked, _ = _typed({'steps': [{'id': 'defaulted'}]}, tools)
     result = infer(linked)
     assert result.graph is not None
-    assert result.graph.inferred_edges == ()
+    assert not any(edge.origin is EdgeOrigin.INFERRED for edge in result.graph.linked_edges)
     assert result.graph.workflow_inputs == ()
 
 
@@ -177,7 +181,8 @@ def test_scatter_lifts_both_sides_of_candidate_selection() -> None:
     _, linked, _ = _typed(workflow, tools)
     result = infer(linked)
     assert result.graph is not None
-    sinks = {(edge.sink.step.name, edge.sink.port) for edge in result.graph.inferred_edges}
+    sinks = {(edge.sink.step.name, edge.sink.port) for edge in result.graph.linked_edges
+             if edge.origin is EdgeOrigin.INFERRED}
     assert ('file_array_sink', 'files') in sinks
     assert ('count', 'file') not in sinks
 
@@ -207,10 +212,12 @@ def test_workflow_call_outputs_are_inference_candidates() -> None:
     _, linked, _ = _typed(workflow)
     result = infer(linked)
     assert result.graph is not None, list(result.diagnostics)
-    assert any(edge.sink.step.name == 'count' for edge in result.graph.inferred_edges)
+    assert any(edge.sink.step.name == 'count' for edge in result.graph.linked_edges
+               if edge.origin is EdgeOrigin.INFERRED)
     # The live compiler infers the same edge from the same document.
     live = compile_hermetic(copy.deepcopy(workflow)).graph
-    assert any(edge.sink.step.name == 'count' for edge in live.inferred_edges)
+    assert any(edge.sink.step.name == 'count' for edge in live.linked_edges
+               if edge.origin is EdgeOrigin.INFERRED)
 
 
 @pytest.mark.fast
@@ -279,7 +286,7 @@ def test_format_substrings_do_not_match() -> None:
     _, linked, _ = _typed({'steps': [{'id': 'producer'}, {'id': 'consumer'}]}, tools)
     result = infer(linked)
     assert result.graph is not None
-    assert not result.graph.inferred_edges
+    assert not any(edge.origin is EdgeOrigin.INFERRED for edge in result.graph.linked_edges)
 
 
 @pytest.mark.fast
@@ -297,7 +304,7 @@ def test_non_file_output_without_format_can_satisfy_formatted_input() -> None:
     _, linked, _ = _typed({'steps': [{'id': 'producer'}, {'id': 'consumer'}]}, tools)
     result = infer(linked)
     assert result.graph is not None
-    assert len(result.graph.inferred_edges) == 1
+    assert sum(edge.origin is EdgeOrigin.INFERRED for edge in result.graph.linked_edges) == 1
 
 
 @pytest.mark.fast
@@ -317,7 +324,8 @@ def test_unknown_file_format_does_not_outrank_an_exact_match() -> None:
     _, linked, _ = _typed({'steps': [{'id': 'producer'}, {'id': 'consumer'}]}, tools)
     result = infer(linked)
     assert result.graph is not None
-    assert result.graph.inferred_edges[0].source.port == 'matching'
+    assert next(edge for edge in result.graph.linked_edges
+                if edge.origin is EdgeOrigin.INFERRED).source.port == 'matching'
 
 
 def _model_candidate(steps: tuple[StepNode, ...], position: int,

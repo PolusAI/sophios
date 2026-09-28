@@ -11,6 +11,7 @@ from .names import Names
 from .types import (
     DerivedName,
     Edge,
+    EdgeOrigin,
     Namespace,
     Port,
     PortName,
@@ -360,13 +361,14 @@ def _graph_at(graph: WorkflowGraph, namespace: Namespace) -> WorkflowGraph:
 def _place_edges(graph: WorkflowGraph, edges: tuple[Edge, ...],
                  discharged: tuple[PortId, ...]) -> WorkflowGraph:
     children = tuple(_place_edges(child, edges, discharged) for child in graph.children)
-    local_edges = tuple(edge for edge in edges if _owner_namespace(edge) == graph.namespace)
+    local_edges = tuple(replace(edge, origin=EdgeOrigin.COMPOSED)
+                        for edge in edges if _owner_namespace(edge) == graph.namespace)
     local_discharged = tuple(sink for sink in discharged
                              if _namespace_contains(graph.namespace, sink.step.namespace)
                              and not any(_namespace_contains(child.namespace, sink.step.namespace)
                                          for child in children))
     return replace(graph, children=children,
-                   composition_edges=graph.composition_edges + local_edges,
+                   linked_edges=graph.linked_edges + local_edges,
                    discharged_obligations=graph.discharged_obligations + local_discharged)
 
 

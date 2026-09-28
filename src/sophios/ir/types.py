@@ -254,17 +254,33 @@ class Port:
     origin: PortId | None = None
 
 
+class EdgeOrigin(StrEnum):
+    """How an edge stored on `WorkflowGraph` was placed there. `complete`
+    reads this to decide `shorthand`: an inferred edge was never authored,
+    so it must emit as one; a composed edge stands for something the
+    document itself said, so it must not.
+    """
+
+    COMPOSED = 'composed'
+    INFERRED = 'inferred'
+
+
 @dataclass(frozen=True, slots=True)
 class Edge:
     """A value flowing from one port to another.
 
     Between *ports*, not steps: two edges into one step are different bindings,
     and a step pair would lose which input each satisfies.
+
+    `origin` is `None` for an edge that lives in `Binding.resolution`: a
+    binding is already provenance, an authored `in:` entry, so nothing reads
+    its origin.
     """
 
     source: PortId
     sink: PortId
     span: SourceSpan | None = None
+    origin: EdgeOrigin | None = None
 
     def __post_init__(self) -> None:
         """Reject an edge that does not run from an output to an input."""
@@ -391,8 +407,9 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     namespaces: tuple[tuple[str, OpaqueCwl], ...] = ()
     schemas: tuple[OpaqueCwl, ...] = ()
     children: tuple['WorkflowGraph', ...] = ()
-    composition_edges: tuple[Edge, ...] = ()
-    inferred_edges: tuple[Edge, ...] = ()
+    #: Every edge Link or Infer placed here (not a binding's own resolution),
+    #: distinguished by `Edge.origin`.
+    linked_edges: tuple[Edge, ...] = ()
     discharged_obligations: tuple[PortId, ...] = ()
 
     def __post_init__(self) -> None:
@@ -419,12 +436,9 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
             allowed = recursive_known if recursive else known
             if port_id not in allowed:
                 raise ValueError(f'{where} names a port no step declares: {port_id}')
-        for edge in self.composition_edges:
+        for edge in self.linked_edges:
             if edge.source not in recursive_known or edge.sink not in recursive_known:
-                raise ValueError(f'a composition edge names a port outside this graph tree: {edge}')
-        for edge in self.inferred_edges:
-            if edge.source not in recursive_known or edge.sink not in recursive_known:
-                raise ValueError(f'an inferred edge names a port outside this graph tree: {edge}')
+                raise ValueError(f'a linked edge names a port outside this graph tree: {edge}')
         for sink in self.discharged_obligations:
             if sink not in recursive_known:
                 raise ValueError(f'a discharged obligation names no port in this graph tree: {sink}')
@@ -452,12 +466,12 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
 
     @property
     def edges(self) -> tuple[Edge, ...]:
-        """The edges this graph owns: its own bindings, and what Link placed
-        here. Local, not tree-wide.
+        """The edges this graph owns: its own bindings, and what Link or
+        Infer placed here. Local, not tree-wide.
         """
         local = tuple(b.resolution for s in self.steps for b in s.bindings
                       if isinstance(b.resolution, Edge))
-        return local + self.composition_edges + self.inferred_edges
+        return local + self.linked_edges
 
     @property
     def obligations(self) -> tuple[DeferredObligation, ...]:

@@ -22,6 +22,7 @@ from .types import (
     DerivedName,
     Direction,
     Edge,
+    EdgeOrigin,
     Expression,
     JobBinding,
     Port,
@@ -169,10 +170,8 @@ def _materialize_edges(graph: WorkflowGraph) -> WorkflowGraph:
         for binding in step.bindings:
             if isinstance(binding.resolution, Edge):
                 bind(binding.resolution, explicit=True)
-    for edge in graph.composition_edges:
-        bind(edge, explicit=True)
-    for edge in graph.inferred_edges:
-        bind(edge, explicit=False)
+    for edge in graph.linked_edges:
+        bind(edge, explicit=edge.origin is not EdgeOrigin.INFERRED)
     for name, sinks in graph.input_mapping:
         for sink in sinks:
             target_step, target_port = _direct_sink(graph, sink)
