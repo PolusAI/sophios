@@ -381,12 +381,12 @@ def _model_permits_format(value: Any) -> bool:
 def _model_source_type(step: StepNode, port: Port) -> Any:
     raw = _model_type(port)
     return {'type': 'array', 'items': raw} \
-        if step.emission is not None and step.emission.scatter else raw
+        if dict(step.interpreted).get('scatter') else raw
 
 
 def _model_sink_type(step: StepNode, port: Port) -> Any:
     raw = _model_type(port)
-    scatter = step.emission.scatter if step.emission is not None else None
+    scatter = dict(step.interpreted).get('scatter')
     keys = [scatter] if isinstance(scatter, str) else (
         [item for item in scatter if isinstance(item, str)]
         if isinstance(scatter, list) else [])

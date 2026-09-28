@@ -224,24 +224,6 @@ class ProcessRun:
 
 
 @dataclass(frozen=True, slots=True)
-class StepEmission:  # pylint: disable=too-many-instance-attributes
-    """The CWL surface of a step after semantic phases have finished. Known
-    fields are named; `passthrough` is the open CWL residue.
-    """
-
-    inputs: tuple[tuple[PortName, EmittedValue], ...]
-    run: ProcessRun
-    outputs: tuple[PortName, ...]
-    scatter: OpaqueCwl = None
-    #: The ports `scatter` names, resolved once where the document is read;
-    #: Emit spells these, keeping only `scatter`'s shape (string or list).
-    scatter_ports: tuple[PortName, ...] = ()
-    scatter_method: OpaqueCwl = None
-    when: OpaqueCwl = None
-    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class Port:
     """One port of one step: its identity, its type, and where it was written."""
 
@@ -338,7 +320,9 @@ class Binding:
 @dataclass(frozen=True, slots=True)
 class StepNode:  # pylint: disable=too-many-instance-attributes
     """A step occurrence, with the ports it exposes and what its inputs bind
-    to. `interpreted` holds the CWL keys Sophios acts upon and `passthrough` the rest.
+    to. `interpreted` holds the CWL keys Sophios acts upon (including
+    `scatter`, `scatterMethod` and `when`, read verbatim by `emit`) and
+    `passthrough` the rest.
     """
 
     id: StepId
@@ -348,7 +332,13 @@ class StepNode:  # pylint: disable=too-many-instance-attributes
     interpreted: tuple[tuple[str, OpaqueCwl], ...] = ()
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
     span: SourceSpan | None = None
-    emission: StepEmission | None = None
+    #: What this step executes. `None` only while a step has not yet been
+    #: attached a process by `Lower` or `Infer`'s speculative insertion.
+    run: ProcessRun | None = None
+    #: The ports an authored `scatter:` names, resolved once where the
+    #: document is read. `scatter` itself lives in `interpreted`; phases that
+    #: need the resolved ports read this instead.
+    scatter_ports: tuple[PortName, ...] = ()
     inference_rules: tuple[tuple[str, str], ...] = ()
     synthesized: bool = False
 
@@ -411,6 +401,14 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     #: distinguished by `Edge.origin`.
     linked_edges: tuple[Edge, ...] = ()
     discharged_obligations: tuple[PortId, ...] = ()
+    #: Names in `input_mapping` that stand for a step's own unbound input
+    #: rather than a value relayed in from elsewhere -- Complete's own child
+    #: default lift, or Infer's speculative boundary input -- and so must be
+    #: emitted as shorthand. Nothing about the name itself says this: a
+    #: cross-scope relay Link exposes can be spelled identically. Recorded
+    #: where each is created, since that is the only place the distinction
+    #: still exists.
+    shorthand_relays: tuple[PortName, ...] = ()
 
     def __post_init__(self) -> None:
         """Reject a graph naming a port no step declares, checked over every
@@ -506,7 +504,7 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
 
 
 #: A `WorkflowGraph` that states a whole CWL document: both versions set and
-#: every step carrying an emission. Distinct from `WorkflowGraph` so `emit`
-#: can ask for one; a graph between phases satisfies neither. Only
+#: every step carrying a `run`. Distinct from `WorkflowGraph` so `emit` can
+#: ask for one; a graph between phases satisfies neither. Only
 #: `emit.surface` produces one.
 EmissionDocument = NewType('EmissionDocument', WorkflowGraph)

@@ -266,15 +266,15 @@ def _artifact_tree(graph: WorkflowGraph, names: Names, registry: RegistrySnapsho
                        partial_failure=partial_failure)
     children: list[CompilationArtifact] = []
     for step in document.steps:
-        assert step.emission is not None
-        child = step.emission.run.child
+        assert step.run is not None
+        child = step.run.child
         if child is not None:
             child_reps = _project_graph(child, names, graph_settings)
             children.append(_artifact_tree(child, names, registry, graph_settings, child_reps,
                                            relative_run_path=relative_run_path,
                                            partial_failure=partial_failure))
             continue
-        key = step.emission.run.process_id
+        key = step.run.process_id
         definition = registry.tool(key)
         if definition is None:
             raise SophiosError.error(
@@ -310,7 +310,7 @@ def _project_graph(graph: WorkflowGraph, names: Names, settings: GraphSettings,
     reps.graphdata.edges = []
     reps.graphdata.subgraphs = []
     for step in graph.steps:
-        assert step.emission is not None
+        assert step.run is not None
         name = names.qualified(step.id)
         label = names.step(step.id) if settings['graph_label_stepname'] else step.id.name
         attrs = {'label': label, 'shape': 'box', 'style': 'rounded, filled',

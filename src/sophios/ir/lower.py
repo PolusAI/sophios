@@ -36,7 +36,6 @@ from .types import (
     PortName,
     ProcessRun,
     Resolution,
-    StepEmission,
     StepId,
     StepNode,
     WorkflowGraph,
@@ -215,20 +214,10 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep, child: Workflo
                      for name, value in source.inputs
                      if (port := by_input.get(AuthoredName(name))) is not None)
     interpreted = dict(source.interpreted)
-    emission = StepEmission(
-        # Empty, deliberately: every bound input is a `Binding` above, and
-        # Complete writes each one's emitted spelling.
-        inputs=(),
-        run=ProcessRun(resolved.process.run_path, resolved.process.key),
-        outputs=tuple(declared_outputs),
-        scatter=interpreted.get('scatter'),
-        scatter_ports=_scatter_ports(interpreted.get('scatter'), inputs, child),
-        scatter_method=interpreted.get('scatterMethod'),
-        when=interpreted.get('when'),
-        passthrough=source.passthrough,
-    )
+    run = ProcessRun(resolved.process.run_path, resolved.process.key)
+    scatter_ports = _scatter_ports(interpreted.get('scatter'), inputs, child)
     return StepNode(identity, inputs, outputs, bindings, source.interpreted,
-                    source.passthrough, source.span, emission,
+                    source.passthrough, source.span, run, scatter_ports,
                     _inference_rules(resolved.sidecar))
 
 

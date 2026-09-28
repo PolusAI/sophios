@@ -29,8 +29,6 @@ from sophios.ir import (
     PortType,
     ProcessRun,
     RegistryKey,
-    Source,
-    StepEmission,
     StepId,
     StepNode,
     WorkflowGraph,
@@ -126,10 +124,7 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
         step_id,
         inputs=(Port(input_id, in_decl.type, in_decl),),
         outputs=(Port(output_id, out_decl.type, out_decl),),
-        emission=StepEmission(
-            ((AuthoredName('message'), Source(AuthoredName('message'))),),
-            ProcessRun('write.cwl', RegistryKey('global', 'write')), (AuthoredName('file'),),
-        ),
+        run=ProcessRun('write.cwl', RegistryKey('global', 'write')),
     )
     graph = WorkflowGraph(
         namespace, (step,), name='handmade', lang_version='0.0.1', cwl_version=CWL_VERSION,
@@ -138,6 +133,7 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
             WorkflowPort(AuthoredName('file'), BoundaryDeclaration(out_decl),
                          StepOutputRef(step_id, AuthoredName('file')), True),),
         job_bindings=(JobBinding(AuthoredName('message'), 'hello'),),
+        input_mapping=((AuthoredName('message'), (input_id,)),),
         namespaces=((ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI),),
     )
     names = Names.of(graph)

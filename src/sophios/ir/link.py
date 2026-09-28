@@ -167,13 +167,12 @@ def attach_step_children(graph: WorkflowGraph,
                     if child.namespace.parts}
     steps: list[StepNode] = []
     for step in graph.steps:
-        emission = step.emission
-        if emission is None:
+        if step.run is None:
             steps.append(step)
             continue
         child = by_namespace.get(step.id)
-        run = replace(emission.run, child=child) if child is not None else emission.run
-        steps.append(replace(step, emission=replace(emission, run=run)))
+        run = replace(step.run, child=child) if child is not None else step.run
+        steps.append(replace(step, run=run))
     return replace(graph, steps=tuple(steps), children=children)
 
 
@@ -189,9 +188,9 @@ def _position(graph: WorkflowGraph, step_id: StepId) -> tuple[int, ...]:
         if not nested:
             continue
         wrapper = next((step for step in graph.steps
-                        if step.emission is not None
-                        and step.emission.run.child is not None
-                        and step.emission.run.child.namespace == child.namespace), None)
+                        if step.run is not None
+                        and step.run.child is not None
+                        and step.run.child.namespace == child.namespace), None)
         if wrapper is not None:
             return (wrapper.id.index, *nested)
     return ()
@@ -209,25 +208,25 @@ def _definitions(graph: WorkflowGraph) -> dict[str, PortId]:
 
 def _concrete_output(graph: WorkflowGraph, port: PortId) -> PortId:
     step = _step(graph, port.step)
-    if step is None or step.emission is None or step.emission.run.child is None:
+    if step is None or step.run is None or step.run.child is None:
         return port
-    child = step.emission.run.child
+    child = step.run.child
     mapped = dict(child.output_mapping).get(port.port)
     return _concrete_output(child, mapped) if mapped is not None else port
 
 
 def _concrete_input_sinks(graph: WorkflowGraph, port: PortId) -> tuple[PortId, ...]:
     step = _step(graph, port.step)
-    if step is None or step.emission is None or step.emission.run.child is None:
+    if step is None or step.run is None or step.run.child is None:
         return (port,)
-    mapped = dict(step.emission.run.child.input_mapping).get(port.port, ())
+    mapped = dict(step.run.child.input_mapping).get(port.port, ())
     return tuple(mapped) if mapped else (port,)
 
 
 def _workflow_call_edges(graph: WorkflowGraph) -> tuple[Edge, ...]:
     found: list[Edge] = []
     for step in graph.steps:
-        child = step.emission.run.child if step.emission is not None else None
+        child = step.run.child if step.run is not None else None
         if child is None:
             continue
         child_inputs = dict(child.input_mapping)
@@ -286,15 +285,14 @@ def _effective_type(graph: WorkflowGraph, port: PortId, *, producing: bool) -> A
 
 def _scatter_keys(step: StepNode) -> tuple[PortName, ...]:
     """The ports a step scatters over, as Lower resolved them."""
-    return step.emission.scatter_ports if step.emission is not None else ()
+    return step.scatter_ports
 
 
 def _output_scatter_rank(step: StepNode) -> int:
     keys = _scatter_keys(step)
     if not keys:
         return 0
-    assert step.emission is not None
-    return len(keys) if step.emission.scatter_method == 'nested_crossproduct' else 1
+    return len(keys) if dict(step.interpreted).get('scatterMethod') == 'nested_crossproduct' else 1
 
 
 def _step_path(graph: WorkflowGraph,
@@ -307,9 +305,9 @@ def _step_path(graph: WorkflowGraph,
             continue
         nested = _step_path(child, step_id)
         wrapper = next((step for step in graph.steps
-                        if step.emission is not None
-                        and step.emission.run.child is not None
-                        and step.emission.run.child.namespace == child.namespace), None)
+                        if step.run is not None
+                        and step.run.child is not None
+                        and step.run.child.namespace == child.namespace), None)
         if wrapper is not None and nested:
             return ((graph, wrapper), *nested)
     return ()
@@ -386,7 +384,7 @@ def _expose_cross_scope_inputs(graph: WorkflowGraph,
             continue
         if edge.sink.step.namespace == current.namespace:
             step = _step(current, edge.sink.step)
-            if step is None or step.emission is None:
+            if step is None or step.run is None:
                 continue
             # Reuse a sink already relayed by name, or deriving a second name
             # here adds an `inputs:` entry no step ever reads.

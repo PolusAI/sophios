@@ -8,13 +8,13 @@ from ..lang.diagnostics import Diagnostics
 from .declarations import boundary_declaration, port_declaration
 from .link import attach_step_children
 from .resolve import RegistrySnapshot
+from .stepin import direct_sink
 from .types import (
     AuthoredName,
     DerivedName,
     Direction,
     Edge,
     EdgeOrigin,
-    EmittedValue,
     Port,
     PortDeclaration,
     PortId,
@@ -22,8 +22,6 @@ from .types import (
     PortType,
     ProcessRun,
     RegistryKey,
-    Source,
-    StepEmission,
     StepId,
     StepNode,
     WorkflowGraph,
@@ -141,15 +139,22 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
     linked_edges = list(graph.linked_edges)
     workflow_inputs = list(graph.workflow_inputs)
     input_mapping = list(graph.input_mapping)
+    shorthand_relays = list(graph.shorthand_relays)
     steps = list(graph.steps)
     bound = {binding.sink for step in steps for binding in step.bindings}
-    bound.update(
-        port.id
-        for step in steps if step.emission is not None
-        for port in step.inputs
-        if port.id.port in dict(step.emission.inputs)
-    )
-    bound.update(edge.sink for edge in linked_edges)
+    # A sink an earlier phase already relayed to a workflow input, or already
+    # connected by an edge, satisfies this graph's own boundary port for it
+    # even though that port carries no `Binding` of its own -- translated
+    # through `direct_sink`, since `input_mapping` and a cross-scope edge both
+    # record the deep port a connection actually names, not the local step
+    # `Complete` synchronized to relay it.
+
+    def _local(sink: PortId) -> PortId:
+        step_id, port_name = direct_sink(graph, sink)
+        return PortId(step_id, Direction.INPUT, port_name)
+
+    bound.update(_local(sink) for _name, sinks in graph.input_mapping for sink in sinks)
+    bound.update(_local(edge.sink) for edge in linked_edges)
 
     for position, step in enumerate(steps):
         for port in step.inputs:
@@ -176,13 +181,14 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
                     WorkflowPort(input_name, declaration, origin=port.origin or port.id))
             if input_name not in {name for name, _ in input_mapping}:
                 input_mapping.append((input_name, (port.id,)))
-            steps[position] = _set_emission_input(
-                current_step, port.id.port, Source(input_name, shorthand=True))
+            if input_name not in shorthand_relays:
+                shorthand_relays.append(input_name)
             bound.add(port.id)
 
     return replace(graph, steps=tuple(steps), linked_edges=tuple(linked_edges),
                    workflow_inputs=tuple(workflow_inputs),
-                   input_mapping=tuple(input_mapping)), False
+                   input_mapping=tuple(input_mapping),
+                   shorthand_relays=tuple(shorthand_relays)), False
 
 
 def _candidate(steps: list[StepNode], position: int, sink: Port,
@@ -276,17 +282,12 @@ def _insert(graph: WorkflowGraph, position: int, insertion: Insertion,
                         declaration) for name, declaration in insertion.inputs)
     outputs = tuple(Port(PortId(identity, Direction.OUTPUT, name), declaration.type,
                          declaration) for name, declaration in insertion.outputs)
-    descriptor = StepEmission(
-        inputs=(),
-        run=ProcessRun(insertion.run_path,
-                       RegistryKey(insertion.namespace, insertion.name)),
-        outputs=tuple(name for name, _ in insertion.outputs),
-    )
+    run = ProcessRun(insertion.run_path, RegistryKey(insertion.namespace, insertion.name))
     format_rules = dict(policy.format_rules)
     rules = tuple((name, format_rules.get(str(declaration.format), 'default'))
                   for name, declaration in insertion.outputs
                   if declaration.has_format)
-    inserted = StepNode(identity, inputs, outputs, emission=descriptor,
+    inserted = StepNode(identity, inputs, outputs, run=run,
                         inference_rules=rules, synthesized=True)
     steps = list(graph.steps)
     steps.insert(position, inserted)
@@ -299,12 +300,12 @@ def _propagate_child_interface(graph: WorkflowGraph) -> WorkflowGraph:
                 if child.namespace.parts}
     steps: list[StepNode] = []
     for step in graph.steps:
-        if step.emission is None:
+        if step.run is None:
             steps.append(step)
             continue
         child = children.get(step.id)
         if child is None:
-            child = step.emission.run.child
+            child = step.run.child
         if child is None:
             steps.append(step)
             continue
@@ -323,9 +324,9 @@ def _propagate_child_interface(graph: WorkflowGraph) -> WorkflowGraph:
             for name, declaration, origin in _exported_outputs(child)
             if name not in existing_outputs
         )
-        emission = replace(step.emission, run=replace(step.emission.run, child=child))
+        run = replace(step.run, child=child)
         steps.append(replace(step, inputs=step.inputs + added_inputs,
-                             outputs=step.outputs + added_outputs, emission=emission))
+                             outputs=step.outputs + added_outputs, run=run))
     return replace(graph, steps=tuple(steps))
 
 
@@ -350,14 +351,6 @@ def _exported_outputs(
                  for name, (declaration, origin) in exported.items())
 
 
-def _set_emission_input(step: StepNode, name: PortName, value: EmittedValue) -> StepNode:
-    if step.emission is None:
-        return step
-    inputs = dict(step.emission.inputs)
-    inputs[name] = value
-    return replace(step, emission=replace(step.emission, inputs=tuple(inputs.items())))
-
-
 def _required(port: Port) -> bool:
     declaration = port.declaration
     if declaration is None:
@@ -368,14 +361,14 @@ def _required(port: Port) -> bool:
 
 def _effective_source_type(step: StepNode, port: Port) -> Any:
     raw = _candidate_type(port.type)
-    if step.emission is not None and step.emission.scatter:
+    if dict(step.interpreted).get('scatter'):
         return {'type': 'array', 'items': raw}
     return raw
 
 
 def _effective_sink_type(step: StepNode, port: Port) -> Any:
     raw = _candidate_type(port.type)
-    if step.emission is not None and port.id.port in step.emission.scatter_ports:
+    if port.id.port in step.scatter_ports:
         return {'type': 'array', 'items': raw}
     return raw
 

@@ -70,8 +70,8 @@ class Names:
             for position, step in enumerate(graph.steps, start=1):
                 found[step.id] = render_step_id(graph.name, position, step.id.name)
                 positions[step.id] = position
-            nested = [step.emission.run.child for step in graph.steps
-                      if step.emission is not None and step.emission.run.child is not None]
+            nested = [step.run.child for step in graph.steps
+                      if step.run is not None and step.run.child is not None]
             for child in (*graph.children, *nested):
                 visit(child)
 

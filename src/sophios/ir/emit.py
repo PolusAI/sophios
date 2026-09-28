@@ -29,8 +29,9 @@ from ..lang.versions import ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
 from ..wic_types import Cwl
 from .declarations import required
 from .names import NAMESPACE_SEPARATOR, Names
+from .stepin import step_inputs, step_out
 from .types import (DerivedName, EmissionDocument, EmittedValue, Expression, PortName,
-                    Source, StepEmission, StepNode, StepOutputRef, WorkflowGraph, WorkflowPort)
+                    Source, StepNode, StepOutputRef, WorkflowGraph, WorkflowPort)
 
 EDAM_NAMESPACE = ('edam', 'https://edamontology.org/')
 EDAM_SCHEMA = 'https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl'
@@ -43,25 +44,26 @@ def _step_spelling(step: StepNode, names: Names, relative_run_path: bool,
     Under partial failure a step runs only when every required input arrived,
     so its `when` is rewritten from the ports it declares.
     """
-    emission = step.emission
-    assert emission is not None, 'surface refuses a graph with an unemitted step'
+    run = step.run
+    assert run is not None, 'surface refuses a graph with an unrun step'
+    interpreted = dict(step.interpreted)
     if partial_failure:
         needed = [names.port(port.id.port) for port in step.inputs if required(port.declaration)]
         if needed:
-            emission = replace(emission, when='$(' + ' && '.join(
-                f'inputs["{name}"] != null' for name in needed) + ')')
-    target = emission.run.target
+            interpreted['when'] = '$(' + ' && '.join(
+                f'inputs["{name}"] != null' for name in needed) + ')'
+    target = run.target
     if isinstance(target, str):
         # From the resolved identity: `target` is this function's own output,
         # so a leaf read back out of it would compound.
-        leaf = f'{emission.run.process_id.name}.cwl'
+        leaf = f'{run.process_id.name}.cwl'
         if relative_run_path:
             target = f'{names.step(step.id)}/{leaf}'
-        elif emission.run.child is not None:
+        elif run.child is not None:
             target = f'{names.qualified(step.id)}{NAMESPACE_SEPARATOR}{leaf}'
         else:
             target = f'../{leaf}'
-    return replace(step, emission=replace(emission, run=replace(emission.run, target=target)))
+    return replace(step, interpreted=tuple(interpreted.items()), run=replace(run, target=target))
 
 
 def surface(graph: WorkflowGraph, names: Names, *,
@@ -87,7 +89,7 @@ def surface(graph: WorkflowGraph, names: Names, *,
 
     Raises:
         ValueError: If the graph states no document -- a missing version, or a
-            step with no emission. Emit asks for the type this returns, so this
+            step with no run. Emit asks for the type this returns, so this
             is the only place the question is asked.
         SophiosError: `wic031` if two distinct boundary names are spelled
             alike, which the emitted document could not tell apart.
@@ -96,8 +98,8 @@ def surface(graph: WorkflowGraph, names: Names, *,
         raise ValueError('an emission graph must declare its CWL version')
     if not graph.lang_version:
         raise ValueError('an emission graph must declare its Sophios language version')
-    if any(step.emission is None for step in graph.steps):
-        raise ValueError('every step in an emission graph needs an emission descriptor')
+    if any(step.run is None for step in graph.steps):
+        raise ValueError('every step in an emission graph needs a run')
 
     for ports in (graph.workflow_inputs, graph.workflow_outputs):
         _refuse_colliding_names(tuple(port.name for port in ports), names)
@@ -107,9 +109,9 @@ def surface(graph: WorkflowGraph, names: Names, *,
     requirements = dict(graph.requirements)
     if graph.children:
         requirements['SubworkflowFeatureRequirement'] = {}
-    if any(step.emission is not None and step.emission.scatter for step in steps):
+    if any(dict(step.interpreted).get('scatter') for step in steps):
         requirements['ScatterFeatureRequirement'] = {}
-    if any(step.emission is not None and step.emission.when is not None for step in steps):
+    if any(dict(step.interpreted).get('when') is not None for step in steps):
         requirements['InlineJavascriptRequirement'] = {}
     requirements = dict(sorted(requirements.items()))
 
@@ -162,8 +164,9 @@ def emit(graph: EmissionDocument, names: Names) -> Cwl:
     ``graph.passthrough``. What makes a graph renderable is stated by the
     argument type, so nothing is checked here.
     """
+    ins = step_inputs(graph)
     known: dict[str, Any] = {
-        'steps': [_emit_step(step, names) for step in graph.steps],
+        'steps': [_emit_step(step, ins[step.id], names) for step in graph.steps],
         'cwlVersion': graph.cwl_version,
         'class': 'Workflow',
         '$namespaces': {name: deepcopy(value) for name, value in graph.namespaces},
@@ -185,34 +188,39 @@ def emit_job_inputs(graph: EmissionDocument, names: Names) -> Cwl:
     return {names.port(binding.name): deepcopy(binding.value) for binding in graph.job_bindings}
 
 
-def _emit_step(node: StepNode, names: Names) -> dict[str, Any]:
+def _emit_step(node: StepNode, ins: tuple[tuple[PortName, EmittedValue], ...],
+               names: Names) -> dict[str, Any]:
     """Render one structured step descriptor in canonical order."""
-    step = node.emission
-    assert step is not None, 'an EmissionDocument has no unemitted step'
+    run = node.run
+    assert run is not None, 'an EmissionDocument has no unrun step'
+    interpreted = dict(node.interpreted)
     known: dict[str, Any] = {
         'id': names.step(node.id),
-        'in': {names.port(name): _emit_binding(value, names) for name, value in step.inputs},
-        'run': deepcopy(step.run.target),
-        'out': [names.port(name) for name in step.outputs],
+        'in': {names.port(name): _emit_binding(value, names) for name, value in ins},
+        'run': deepcopy(run.target),
+        'out': [names.port(name) for name in step_out(node)],
     }
-    if step.scatter is not None:
-        known['scatter'] = _emit_scatter(step, names)
-    if step.scatter_method is not None:
-        known['scatterMethod'] = deepcopy(step.scatter_method)
-    if step.when is not None:
-        known['when'] = deepcopy(step.when)
-    known.update({name: deepcopy(value) for name, value in step.passthrough})
+    scatter = interpreted.get('scatter')
+    if scatter is not None:
+        known['scatter'] = _emit_scatter(scatter, node.scatter_ports, names)
+    scatter_method = interpreted.get('scatterMethod')
+    if scatter_method is not None:
+        known['scatterMethod'] = deepcopy(scatter_method)
+    when = interpreted.get('when')
+    if when is not None:
+        known['when'] = deepcopy(when)
+    known.update({name: deepcopy(value) for name, value in node.passthrough})
     return known
 
 
-def _emit_scatter(step: StepEmission, names: Names) -> Any:
-    """`scatter:` spelled from its resolved ports, in the authored shape."""
-    match step.scatter:
+def _emit_scatter(scatter: Any, ports: tuple[PortName, ...], names: Names) -> Any:
+    """`scatter:` spelled from its resolved `ports`, in the authored shape."""
+    match scatter:
         case list():
-            return [names.port(port) for port in step.scatter_ports]
+            return [names.port(port) for port in ports]
         case str():
-            return names.port(step.scatter_ports[0])
-    return deepcopy(step.scatter)
+            return names.port(ports[0])
+    return deepcopy(scatter)
 
 
 def _emit_binding(value: EmittedValue, names: Names) -> str | dict[str, str]:
