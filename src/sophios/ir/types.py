@@ -237,7 +237,7 @@ class Port:
 
 
 class EdgeOrigin(StrEnum):
-    """How an edge stored on `WorkflowGraph` was placed there. `complete`
+    """How an edge stored on `WorkflowGraph` was placed there. `stepin`
     reads this to decide `shorthand`: an inferred edge was never authored,
     so it must emit as one; a composed edge stands for something the
     document itself said, so it must not.

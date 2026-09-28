@@ -168,8 +168,7 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
             insertion = _insertion_candidate(attempted, port, catalog)
             if policy.insert_steps_automatically and insertion is not None:
                 return _insert(graph, position, insertion, policy), True
-            current_step = steps[position]
-            input_name = DerivedName(current_step.id, port.id.port)
+            input_name = DerivedName(step.id, port.id.port)
             if input_name not in {item.name for item in workflow_inputs}:
                 declaration = port.declaration or port_declaration(port.type.declared)
                 declaration = boundary_declaration(replace(
