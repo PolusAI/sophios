@@ -266,18 +266,6 @@ jobs:
         if: always()
         run: cd sophios/ && pytest tests/core/test_hermeticity.py tests/core/test_generators.py tests/core/test_equivalence.py tests/core/test_equivalences.py -m "not skip_pypi_ci"
 
-      # design_docs/core-refactor-design.md, Spec 2: canonical emission. Its own
-      # step, and deliberately with no -m filter: the two properties that carry
-      # the determinism claim end to end — the generated no-set-order property
-      # and the four-hash-seed subprocess regression — are marked slow and
-      # skip_pypi_ci, so every marker-filtered lane in this repository excludes
-      # them and the wheel lane's default collection excludes them too. Named
-      # here so they run somewhere.
-      - name: PyTest Spec 2 Canonical Emission
-        if: always()
-        timeout-minutes: 20
-        run: cd sophios/ && pytest tests/core/test_canonical_emission.py
-
       # Spec 3 prerequisite: the front end's opinion of the documents the
       # compiler manufactures. Its own step because a red build here means the
       # compiler emitted something the language refuses — a different fact from

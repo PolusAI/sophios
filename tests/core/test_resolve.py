@@ -39,8 +39,9 @@ from sophios.wic_types import StepId as LegacyStepId, Yaml
 
 from . import ast_strategies as strat
 from .hermetic import ORACLE, compile_hermetic
-from .source_scan import REPO_ROOT
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, inputs_of, outputs_of
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _scalar_literals_fit(workflow: Yaml) -> bool:

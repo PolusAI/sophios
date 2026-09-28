@@ -7,6 +7,7 @@ and the result does not depend on iteration order.
 The test-side resolver constructs fully typed phase input without calling the
 production resolver, so these need no registry, filesystem, or config.
 """
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -40,7 +41,8 @@ from sophios.lang.spans import SourceSpan
 
 from . import ast_strategies as strat
 from .hermetic import COVERAGE, ORACLE
-from .source_scan import REPO_ROOT
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _resolved(document: Document) -> ResolvedDocument:
