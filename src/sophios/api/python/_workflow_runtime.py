@@ -491,6 +491,11 @@ def compiled_workflow(
     return compiled_workflow_from_result(workflow, result)
 
 
+def _run_args(overrides: dict[str, str] | None) -> dict[str, str]:
+    """The default local-run settings with `overrides` applied."""
+    return {**DEFAULT_RUN_ARGS, **(overrides or {})}
+
+
 def _enabled(value: Any) -> bool:
     """Whether a yes/no style runtime option is on."""
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
@@ -519,7 +524,7 @@ def run_workflow(
     logger.info("Running %s", workflow.process_name)
     plugins.logging_filters()
 
-    resolved_run_args = {**DEFAULT_RUN_ARGS, **(run_args_dict or {})}
+    resolved_run_args = _run_args(run_args_dict)
     result = compile_workflow_result(workflow, tool_registry=tool_registry)
     artifact = pc.inline_artifact_runs(result.artifact)
     pc.verify_container_engine_config(resolved_run_args["container_engine"], False)
