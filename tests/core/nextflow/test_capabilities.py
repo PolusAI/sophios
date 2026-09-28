@@ -468,23 +468,6 @@ def test_requires_workflow_root() -> None:
 
 
 @pytest.mark.fast
-def test_rejects_unsupported_workflow_constructs() -> None:
-    # A step's when is lowered (design §6, Topology), and so is a multi-input
-    # scattered step's; a single-input scatter carries no invocation index.
-    scattered_conditional = synthetic_source(
-        workflow_doc([step(
-            "conditional",
-            run="tool.cwl",
-            **{"in": {"a": "a"}, "when": "$(inputs.a > 0)", "scatter": "a"},
-        )]),
-        [tool("tool", inputs={"a": {"type": "int"}})],
-        workflow_inputs={"a": [1]},
-    )
-    with pytest.raises(ValueError, match="per-combination when requires a multi-input scatter"):
-        compiled_source_to_nextflow(scattered_conditional)
-
-
-@pytest.mark.fast
 @pytest.mark.parametrize(
     ("mutation", "diagnostic"),
     [
@@ -995,7 +978,7 @@ def test_accepts_an_inert_scatter_method_at_one_scattered_input(
     workflow = compiled_source_to_nextflow(_scatter_rose(**step_fields))
 
     assert workflow.connections == (
-        NfWorkflowInputConnection("items", "SCATTER", "item", "scatter"),
+        NfWorkflowInputConnection("items", "SCATTER", "item", "dotproduct"),
     )
 
 
@@ -1005,7 +988,7 @@ def test_accepts_both_single_input_scatter_spellings(scatter: Any) -> None:
     workflow = compiled_source_to_nextflow(_scatter_rose(scatter=scatter))
 
     assert workflow.connections == (
-        NfWorkflowInputConnection("items", "SCATTER", "item", "scatter"),
+        NfWorkflowInputConnection("items", "SCATTER", "item", "dotproduct"),
     )
 
 
@@ -1124,8 +1107,8 @@ def test_rejects_a_process_output_source_on_a_scattered_steps_other_input() -> N
 
 
 @pytest.mark.fast
-def test_rejects_a_downstream_process_consumer_of_a_scattered_step() -> None:
-    """A queue channel of N drives N downstream tasks where CWL gives one an array."""
+def test_rejects_a_scalar_consumer_of_a_scattered_step() -> None:
+    """A scattered step's output is an array; a scalar port cannot take it."""
     consumer = tool(
         "CONSUMER",
         inputs={"source": {"type": "File", "inputBinding": {"position": 1}}},
@@ -1146,11 +1129,8 @@ def test_rejects_a_downstream_process_consumer_of_a_scattered_step() -> None:
         workflow_inputs={"items": ["a"]},
     )
 
-    assert _findings(rose) == [
-        "steps[1].in.source: 'SCATTER/result' is an output of scattered step steps[0]; "
-        "gathering a single-input scatter is not supported yet, because it carries no "
-        "invocation index to order by"
-    ]
+    with pytest.raises(ValueError, match="gathers into a port that is not array-typed"):
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1208,7 +1188,7 @@ def test_accepts_inert_workflow_level_scatter_requirement(requirements: Any) -> 
     cast(dict[str, Any], rose.workflow)["requirements"] = requirements
 
     assert compiled_source_to_nextflow(rose).connections == (
-        NfWorkflowInputConnection("items", "SCATTER", "item", "scatter"),
+        NfWorkflowInputConnection("items", "SCATTER", "item", "dotproduct"),
     )
 
 
@@ -2264,7 +2244,7 @@ def test_a_scattered_step_inside_a_subworkflow_uses_the_outer_scatter_contract()
         compile_workflow_result(Workflow([child], "root"))
     )
     assert any(
-        isinstance(edge, NfWorkflowInputConnection) and edge.adapter == "scatter"
+        isinstance(edge, NfWorkflowInputConnection) and edge.adapter == "dotproduct"
         for edge in workflow.connections
     )
 

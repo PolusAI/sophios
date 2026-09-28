@@ -1020,19 +1020,6 @@ def test_hydration_rejects_a_multi_input_adapter_older_than_its_schema_version(
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("method", ["dotproduct", "flat_crossproduct"])
-def test_rejects_a_single_multi_input_adapted_input(method: str) -> None:
-    process = NfProcess("PAIR", [NfPort("first", "val")], [], command("true"))
-    with pytest.raises(ValueError, match=f"{method} scatter requires two or more"):
-        ExecutableNextflowWorkflow(
-            "wf",
-            [process],
-            [NfWorkflowInputConnection("firsts", "PAIR", "first", method)],
-            {"firsts": ["a"]},
-        )
-
-
-@pytest.mark.fast
 def test_rejects_a_process_mixing_scatter_and_dotproduct_adapters() -> None:
     process = NfProcess(
         "PAIR", [NfPort("first", "val"), NfPort("second", "val")], [], command("true")

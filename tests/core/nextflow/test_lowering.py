@@ -659,7 +659,7 @@ def test_scatter_lowers_to_an_adapted_workflow_input_connection(
         "wf__step__1__echo_item___item",
         "wf__step__1__echo_item",
         "item",
-        "scatter",
+        "dotproduct",
     )
 
 

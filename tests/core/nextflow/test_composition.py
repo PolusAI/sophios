@@ -366,25 +366,7 @@ def test_one_output_of_a_scattered_step_gathers_into_a_step_while_another_reache
 
 
 @pytest.mark.fast
-def test_gathering_a_single_input_scatter_is_rejected_by_name() -> None:
-    tools = _tools()
-    steps = [
-        step("JOIN", **{"in": {"f": "fs", "g": "g"}, "out": ["out"], "scatter": ["f"]}),
-        step("CONCAT", **{"in": {"files": "JOIN/out"}, "out": ["all"]}),
-    ]
-    workflow = workflow_doc(
-        steps,
-        inputs={"fs": {"type": FILES}, "g": {"type": "File"}},
-        outputs={"all": {"type": "File", "outputSource": "CONCAT/all"}},
-    )
-    with pytest.raises(ValueError, match="gathering a single-input scatter is not supported yet"):
-        compiled_source_to_nextflow(
-            synthetic_source(workflow, tools[1:], workflow_inputs={"fs": ["/tmp/a"], "g": "/tmp/b"})
-        )
-
-
-@pytest.mark.fast
-def test_a_gathered_array_cannot_feed_a_single_input_scatter() -> None:
+def test_a_gathered_array_feeds_a_single_input_scatter_staged_in_numbered_directories() -> None:
     steps = [
         step("PAIR", **{
             "in": {"a": "as", "b": "bs", "n": "n"}, "out": ["out"],
@@ -401,6 +383,9 @@ def test_a_gathered_array_cannot_feed_a_single_input_scatter() -> None:
         outputs={"used": {"type": FILES, "outputSource": "USE/used"}},
     )
     params = {"as": ["a"], "bs": ["x"], "n": 2, "xs": ["p"], "y": "r"}
-    expected = r"steps\[1\]\.in\.files: a gathered array can feed only a multi-input scatter"
-    with pytest.raises(ValueError, match=expected):
+    rendered = render_nextflow(
         compiled_source_to_nextflow(synthetic_source(workflow, [_tools()[0], _use_tool()], workflow_inputs=params))
+    )
+    assert (
+        "tuple val(__sophios_scatter_index_9f72e), val(x)\n    val y\n    path files, stageAs: 'gather_files_*/*'\n"
+    ) in rendered

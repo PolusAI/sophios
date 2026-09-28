@@ -136,7 +136,7 @@ def test_when_outside_the_safe_subset_is_rejected_by_name() -> None:
 
 
 @pytest.mark.fast
-def test_when_on_a_scattered_step_is_rejected() -> None:
+def test_when_on_a_single_input_scattered_step_lowers() -> None:
     produce = tool(
         "PRODUCE",
         inputs={"a": {"type": "int"}},
@@ -150,8 +150,8 @@ def test_when_on_a_scattered_step_is_rejected() -> None:
         inputs={"a": {"type": {"type": "array", "items": "int"}}},
         outputs={"result": {"type": {"type": "array", "items": "File"}, "outputSource": "PRODUCE/result"}},
     )
-    with pytest.raises(ValueError, match="per-combination when requires a multi-input scatter"):
-        compiled_source_to_nextflow(synthetic_source(workflow, [produce], workflow_inputs={"a": [1, 2]}))
+    lowered = compiled_source_to_nextflow(synthetic_source(workflow, [produce], workflow_inputs={"a": [1, 2]}))
+    assert lowered.processes[0].condition is not None
 
 
 @pytest.mark.fast
