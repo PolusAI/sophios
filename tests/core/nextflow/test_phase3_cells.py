@@ -31,7 +31,9 @@ def _text_output() -> Output:
     return Output(cwl.string, glob="out.txt", load_contents=True, output_eval="$(self[0].contents)")
 
 
-def _run(root: Workflow, directory: Path, *emits: str) -> tuple["subprocess.CompletedProcess[str]", dict[str, list[str]]]:
+def _run(
+    root: Workflow, directory: Path, *emits: str
+) -> tuple["subprocess.CompletedProcess[str]", dict[str, list[str]]]:
     """Lower, render, observe each named workflow output in arrival order, and run."""
     workflow = compiled_source_to_nextflow(compile_workflow_result(root))
     write_nextflow_artifacts(workflow, directory)
