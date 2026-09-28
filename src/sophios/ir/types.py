@@ -276,8 +276,8 @@ class StepEmission:  # pylint: disable=too-many-instance-attributes
     run: ProcessRun
     outputs: tuple[PortName, ...]
     scatter: OpaqueCwl = None
-    #: The ports `scatter` names, resolved once where the document is read.
-    #: `scatter` itself is emitted as written; phases read only this.
+    #: The ports `scatter` names, resolved once where the document is read;
+    #: Emit spells these, keeping only `scatter`'s shape (string or list).
     scatter_ports: tuple[PortName, ...] = ()
     scatter_method: OpaqueCwl = None
     when: OpaqueCwl = None

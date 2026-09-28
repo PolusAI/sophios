@@ -30,7 +30,7 @@ from ..wic_types import Cwl
 from .declarations import required
 from .names import NAMESPACE_SEPARATOR, Names
 from .types import (DerivedName, EmissionDocument, EmittedValue, Expression, PortName,
-                    Source, StepNode, StepOutputRef, WorkflowGraph, WorkflowPort)
+                    Source, StepEmission, StepNode, StepOutputRef, WorkflowGraph, WorkflowPort)
 
 EDAM_NAMESPACE = ('edam', 'https://edamontology.org/')
 EDAM_SCHEMA = 'https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl'
@@ -211,12 +211,22 @@ def _emit_step(node: StepNode, names: Names) -> dict[str, Any]:
         'in': {names.port(name): _emit_binding(value, names) for name, value in step.inputs},
         'run': deepcopy(step.run.target),
         'out': [names.port(name) for name in step.outputs],
-        'scatter': deepcopy(step.scatter),
+        'scatter': _emit_scatter(step, names),
         'scatterMethod': deepcopy(step.scatter_method),
         'when': deepcopy(step.when),
     }
     known.update({name: deepcopy(value) for name, value in step.passthrough})
     return {name: known[name] for name in step.field_order if name in known}
+
+
+def _emit_scatter(step: StepEmission, names: Names) -> Any:
+    """`scatter:` spelled from its resolved ports, in the authored shape."""
+    match step.scatter:
+        case list():
+            return [names.port(port) for port in step.scatter_ports]
+        case str():
+            return names.port(step.scatter_ports[0])
+    return deepcopy(step.scatter)
 
 
 def _emit_binding(value: EmittedValue, names: Names) -> str | dict[str, str]:
