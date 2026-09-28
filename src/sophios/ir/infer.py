@@ -5,7 +5,7 @@ from typing import Any
 
 from ..lang import SophiosErrorCode
 from ..lang.diagnostics import Diagnostics
-from .declarations import boundary_declaration, port_declaration
+from .declarations import boundary_declaration, port_declaration, required
 from .link import attach_step_children
 from .resolve import RegistrySnapshot
 from .stepin import direct_sink
@@ -157,7 +157,7 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy,
 
     for position, step in enumerate(steps):
         for port in step.inputs:
-            if port.id in bound or not _required(port):
+            if port.id in bound or not required(port.declaration):
                 continue
             source, attempted = _candidate(steps, position, port, policy)
             if source is not None:
@@ -347,14 +347,6 @@ def _exported_outputs(
             ), output.origin or output.id)
     return tuple((name, declaration, origin)
                  for name, (declaration, origin) in exported.items())
-
-
-def _required(port: Port) -> bool:
-    declaration = port.declaration
-    if declaration is None:
-        return True
-    return not ((declaration.has_default and declaration.default is not None)
-                or declaration.type.optional)
 
 
 def _effective_source_type(step: StepNode, port: Port) -> Any:
