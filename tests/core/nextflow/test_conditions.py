@@ -150,7 +150,7 @@ def test_when_on_a_scattered_step_is_rejected() -> None:
         inputs={"a": {"type": {"type": "array", "items": "int"}}},
         outputs={"result": {"type": {"type": "array", "items": "File"}, "outputSource": "PRODUCE/result"}},
     )
-    with pytest.raises(ValueError, match="per-combination when is not supported yet"):
+    with pytest.raises(ValueError, match="per-combination when requires a multi-input scatter"):
         compiled_source_to_nextflow(synthetic_source(workflow, [produce], workflow_inputs={"a": [1, 2]}))
 
 

@@ -1704,8 +1704,11 @@ def _tool_capability_findings(
     """Collect unsupported executable semantics without lowering the tool."""
     path = f"steps[{step_index}]"
     findings: list[str] = []
-    if "when" in step and "scatter" in step:
-        findings.append(f"{path}.when: per-combination when is not supported yet")
+    if "when" in step and "scatter" in step and len(_scatter_names(step)) < 2:
+        findings.append(
+            f"{path}.when: per-combination when requires a multi-input scatter, whose invocation "
+            "index keeps skipped positions in order"
+        )
     if "when" in step and not tool.get("inputs"):
         findings.append(
             f"{path}.when: a conditional step needs at least one input to gate on, "
@@ -2269,14 +2272,23 @@ def _scatter_edge_findings(steps: list[Mapping[str, Any]]) -> list[str]:
                     raw_process,
                     indices.get(raw_process.rsplit("#", maxsplit=1)[-1]),
                 )
-                if producer is not None and producer in scattered:
+                if producer is not None and producer in scattered and len(scattered[producer]) > 1:
+                    # A multi-input scatter's outputs are gathered once, in
+                    # invocation order (design §6, Topology, Gather).
+                    if step_index in scattered and len(scattered[step_index]) < 2:
+                        findings.append(
+                            f"steps[{step_index}].in.{raw_name}: a gathered array can feed only a "
+                            "multi-input scatter"
+                        )
+                elif producer is not None and producer in scattered:
                     findings.append(
                         f"steps[{step_index}].in.{raw_name}: {source!r} is an output of "
-                        f"scattered step steps[{producer}]; a scattered step's outputs can "
-                        "only reach a workflow output, because gathering them back into one "
-                        "value is deferred beyond this lowering"
+                        f"scattered step steps[{producer}]; gathering a single-input scatter "
+                        "is not supported yet, because it carries no invocation index to order by"
                     )
-                elif step_index in scattered:
+                elif step_index in scattered and not (
+                    producer is not None and producer in scattered and len(scattered[producer]) > 1
+                ):
                     findings.append(
                         f"steps[{step_index}].in.{raw_name}: a scattered step's inputs must "
                         f"come from workflow inputs; the process output {source!r} would "
@@ -2776,6 +2788,12 @@ def _step_connections(
     step_names: Mapping[str, str],
 ) -> list[NfConnection]:
     connections: list[NfConnection] = []
+    # Only a multi-input scatter carries the invocation index a gather sorts by.
+    multi_scattered = {
+        process.name
+        for step, process in zip(steps, processes, strict=True)
+        if "scatter" in step and len(_scatter_names(step)) > 1
+    }
     for step, process in zip(steps, processes, strict=True):
         match step.get("in", {}):
             case Mapping() as raw_inputs:
@@ -2806,12 +2824,14 @@ def _step_connections(
                         )
                     )
                 else:
+                    gathers = source_process in multi_scattered
                     connections.append(
                         NfProcessConnection(
                             source_process,
                             source_port,
                             process.name,
                             destination_port,
+                            (scatter_method if destination_port in scattered else "gather") if gathers else None,
                         )
                     )
     return connections

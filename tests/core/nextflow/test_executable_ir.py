@@ -75,14 +75,14 @@ def test_executable_schema_declares_version_and_kind() -> None:
     workflow = ExecutableNextflowWorkflow("wf", [], [], {})
     payload = workflow.to_dict()
 
-    assert payload["schema_version"] == 13
+    assert payload["schema_version"] == 14
     assert payload["representation_kind"] == "executable"
 
     payload["schema_version"] = 1
     with pytest.raises(ValueError, match="schema version"):
         ExecutableNextflowWorkflow.from_dict(payload)
 
-    payload["schema_version"] = 13
+    payload["schema_version"] = 14
     payload["representation_kind"] = "structural"
     with pytest.raises(ValueError, match="representation kind"):
         ExecutableNextflowWorkflow.from_dict(payload)
@@ -699,13 +699,13 @@ def test_hydration_accepts_earlier_subset_schema_versions() -> None:
     payload = ExecutableNextflowWorkflow(
         "wf", [NfProcess("P", [], [], command("true"))], [], {}
     ).to_dict()
-    assert payload["schema_version"] == 13
+    assert payload["schema_version"] == 14
 
-    for earlier in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
+    for earlier in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13):
         payload["schema_version"] = earlier
-        assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 13
+        assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 14
 
-    for unsupported in (1, 14):
+    for unsupported in (1, 15):
         payload["schema_version"] = unsupported
         with pytest.raises(ValueError, match="schema version"):
             ExecutableNextflowWorkflow.from_dict(payload)
@@ -1050,32 +1050,8 @@ def test_rejects_a_process_mixing_scatter_and_dotproduct_adapters() -> None:
 
 @pytest.mark.fast
 @pytest.mark.parametrize("method", ["dotproduct", "flat_crossproduct"])
-def test_rejects_a_conditional_process_with_multi_input_adapted_inputs(method: str) -> None:
-    process = NfProcess(
-        "PAIR",
-        [NfPort("a", "val"), NfPort("b", "val"), NfPort("c", "val")],
-        [output_port("f", "out.txt")],
-        command("true"),
-        condition=parse("$(inputs.c == 'go')"),
-    )
-    with pytest.raises(ValueError, match=f"process 'PAIR' has a condition and {method}-adapted inputs"):
-        ExecutableNextflowWorkflow(
-            "wf",
-            [process],
-            [
-                NfWorkflowInputConnection("avals", "PAIR", "a", method),
-                NfWorkflowInputConnection("bvals", "PAIR", "b", method),
-                NfWorkflowInputConnection("c", "PAIR", "c"),
-                NfWorkflowOutputConnection("PAIR", "f", "result"),
-            ],
-            {"avals": ["x"], "bvals": ["y"], "c": "go"},
-        )
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize("method", ["dotproduct", "flat_crossproduct"])
 @pytest.mark.parametrize("process_connection_first", [False, True])
-def test_rejects_a_process_connection_out_of_a_multi_input_scattered_process(
+def test_rejects_an_ungathered_process_connection_out_of_a_multi_input_scattered_process(
     method: str, process_connection_first: bool
 ) -> None:
     pair = NfProcess(
@@ -1088,7 +1064,36 @@ def test_rejects_a_process_connection_out_of_a_multi_input_scattered_process(
     ]
     edge = NfProcessConnection("PAIR", "f", "NEXT", "x")
     connections = [edge, *inputs] if process_connection_first else [*inputs, edge]
-    with pytest.raises(ValueError, match=rf"connection PAIR\.f -> NEXT\.x leaves {method}-scattered process 'PAIR'"):
+    with pytest.raises(ValueError, match=r"connection PAIR\.f -> NEXT\.x must carry a gather adapter"):
+        ExecutableNextflowWorkflow(
+            "wf",
+            [pair, following],
+            [*connections, NfWorkflowOutputConnection("NEXT", "g", "result")],
+            {"avals": ["x"], "bvals": ["y"]},
+        )
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("method", ["dotproduct", "flat_crossproduct"])
+@pytest.mark.parametrize("process_connection_first", [False, True])
+def test_rejects_gathering_the_skipped_positions_of_a_conditional_multi_input_process(
+    method: str, process_connection_first: bool
+) -> None:
+    pair = NfProcess(
+        "PAIR",
+        [NfPort("a", "val"), NfPort("b", "val")],
+        [output_port("f", "out.txt")],
+        command("true"),
+        condition=parse("$(inputs.a == 'x')"),
+    )
+    following = NfProcess("NEXT", [NfPort("x", "path", is_array=True)], [output_port("g", "g.txt")], command("true"))
+    inputs: list[NfConnection] = [
+        NfWorkflowInputConnection("avals", "PAIR", "a", method),
+        NfWorkflowInputConnection("bvals", "PAIR", "b", method),
+    ]
+    edge = NfProcessConnection("PAIR", "f", "NEXT", "x", "gather")
+    connections = [edge, *inputs] if process_connection_first else [*inputs, edge]
+    with pytest.raises(ValueError, match=r"connection PAIR\.f -> NEXT\.x gathers the skipped positions"):
         ExecutableNextflowWorkflow(
             "wf",
             [pair, following],

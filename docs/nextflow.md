@@ -262,14 +262,24 @@ index before stripping it, so the gathered workflow output is always in
 invocation order, regardless of which task finishes first. Unscattered inputs,
 including File and Directory, still broadcast to every invocation.
 
-A scattered step's outputs can only reach a workflow output, where a channel
-of N values is exactly the array-typed CWL output. Feeding them into another
-process is rejected: CWL gives that step one invocation receiving an array,
-while the channel would drive N invocations, and collecting them back into
-one value is not yet supported. For the same reason a scattered step's own
-inputs must all come from workflow inputs — a process output would truncate
-the scatter to one task. Scattering over an array-typed port, over a
-non-array source, and scattering a nested workflow step are all rejected.
+A multi-input scatter's outputs can also feed later steps. Into an
+unscattered array-typed input they are gathered once, as one array in
+invocation order; each gathered file is staged in its own numbered directory,
+so same-named files never collide. A gathered array may itself be a source of
+a later multi-input scatter. A multi-input scattered step may carry a `when`,
+evaluated per invocation; the gathered result keeps `null` at each skipped
+position, so a conditional scatter's outputs can only reach a workflow output.
+
+A single-input scatter's outputs can only reach a workflow output: it carries
+no invocation index, so gathering it into another step, or putting a `when`
+on it, is rejected. A single-input scattered step's own inputs must all come
+from workflow inputs — a process output would truncate the scatter to one
+task. Scattering over an array-typed port, over a non-array source, and
+scattering a nested workflow step are all rejected.
+
+An output named like one of the task's own staged inputs overwrites that
+input, because Nextflow stages inputs in the task directory; give a tool's
+outputs names distinct from its inputs' basenames.
 
 ## Nested workflows
 

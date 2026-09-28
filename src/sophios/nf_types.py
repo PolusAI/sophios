@@ -941,18 +941,33 @@ class NfWorkflowInputConnection:
 
 @dataclass(frozen=True, slots=True)
 class NfProcessConnection:
-    """Connect one process output to one process input."""
+    """Connect one process output to one process input.
+
+    ``adapter`` is set exactly when the source is a multi-input-scattered
+    process (design §6, Topology, Gather): ``"gather"`` collects its outputs
+    once, in invocation order, into an unscattered array-typed port; a
+    multi-input scatter method means the gathered array is that method's
+    whole-array source for the destination's scatter.
+    """
+
+    ALLOWED_ADAPTERS: ClassVar[frozenset[str]] = frozenset({"gather", *MULTI_INPUT_ADAPTERS})
 
     from_process: str
     from_port: str
     to_process: str
     to_port: str
+    adapter: str | None = None
 
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.from_process, field_name="connection source process")
         _validate_ir_identifier(self.from_port, field_name="connection source port")
         _validate_ir_identifier(self.to_process, field_name="connection destination process")
         _validate_ir_identifier(self.to_port, field_name="connection destination port")
+        if self.adapter is not None and self.adapter not in self.ALLOWED_ADAPTERS:
+            raise ValueError(
+                f"process connection adapter must be one of {', '.join(sorted(self.ALLOWED_ADAPTERS))}, "
+                f"got {self.adapter!r}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation.
@@ -966,6 +981,7 @@ class NfProcessConnection:
             "from_port": self.from_port,
             "to_process": self.to_process,
             "to_port": self.to_port,
+            **({"adapter": self.adapter} if self.adapter is not None else {}),
         }
 
 
@@ -1077,13 +1093,14 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
                 item.get("adapter"),
             )
         case "process":
-            _check_fields(
+            _check_fields_with_optional(
                 item,
                 type_name="NfProcessConnection",
                 required={"kind", "from_process", "from_port", "to_process", "to_port"},
+                optional={"adapter"},
             )
             return NfProcessConnection(
-                item["from_process"], item["from_port"], item["to_process"], item["to_port"]
+                item["from_process"], item["from_port"], item["to_process"], item["to_port"], item.get("adapter")
             )
         case "workflow_output":
             _check_fields(
@@ -1100,10 +1117,10 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow."""
 
-    SCHEMA_VERSION: ClassVar[int] = 13
+    SCHEMA_VERSION: ClassVar[int] = 14
     # Earlier versions whose value space is a strict subset of the current
     # model hydrate unchanged; serialization always writes SCHEMA_VERSION.
-    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13})
+    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14})
     # Each additive token or segment kind declares the version that
     # introduced it, so the subset property is enforced rather than assumed.
     KIND_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
@@ -1117,12 +1134,12 @@ class ExecutableNextflowWorkflow:
     FIELD_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
         {"is_array": 5, "stage_as": 7, "adapter": 8, "capture": 9, "condition": 11}
     )
-    # A specific field VALUE introduced after the field itself: "dotproduct"
-    # and "flat_crossproduct" are values of the existing "adapter" field, not
-    # new fields, so each needs its own gate keyed by (field, value) rather
-    # than by field alone.
+    # A specific field VALUE introduced after the field itself: "dotproduct",
+    # "flat_crossproduct" and "gather" are values of the existing "adapter"
+    # field, not new fields, so each needs its own gate keyed by (field, value)
+    # rather than by field alone.
     FIELD_VALUE_SCHEMA_VERSIONS: ClassVar[Mapping[tuple[str, str], int]] = MappingProxyType(
-        {("adapter", "dotproduct"): 12, ("adapter", "flat_crossproduct"): 13}
+        {("adapter", "dotproduct"): 12, ("adapter", "flat_crossproduct"): 13, ("adapter", "gather"): 14}
     )
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
@@ -1186,7 +1203,12 @@ class ExecutableNextflowWorkflow:
         dependencies: dict[str, set[str]] = {name: set() for name in process_by_name}
         adapters_by_process: dict[str, set[str]] = {}
         multi_input_count_by_process: dict[str, int] = {}
-        process_connections: list[NfProcessConnection] = []
+        multi_scattered = {
+            connection.to_process
+            for connection in self.connections
+            if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
+            and connection.adapter in MULTI_INPUT_ADAPTERS
+        }
 
         for connection in self.connections:
             match connection:
@@ -1229,14 +1251,42 @@ class ExecutableNextflowWorkflow:
                             multi_input_count_by_process.get(to_process, 0) + 1
                         )
                     self._record_incoming(incoming, to_process, to_port)
-                case NfProcessConnection(from_process, from_port, to_process, to_port):
+                case NfProcessConnection(from_process, from_port, to_process, to_port, adapter):
                     source = self._source_port(process_by_name, from_process, from_port)
                     destination = self._destination_port(process_by_name, to_process, to_port)
+                    # Only a multi-input-scattered source carries the hidden
+                    # invocation index a gather sorts by, so the adapter is
+                    # present exactly when the source is one.
+                    if (adapter is not None) != (from_process in multi_scattered):
+                        raise ValueError(
+                            f"connection {from_process}.{from_port} -> {to_process}.{to_port} must carry "
+                            "a gather adapter exactly when its source is a multi-input scatter"
+                        )
+                    if adapter is not None and process_by_name[from_process].condition is not None:
+                        # A skipped invocation gathers as the [] null sentinel.
+                        # A workflow output reports it as null; a step's input
+                        # cannot hold it (a path array fails inside Nextflow).
+                        raise ValueError(
+                            f"connection {from_process}.{from_port} -> {to_process}.{to_port} gathers "
+                            f"the skipped positions of conditional process {from_process!r}; its outputs "
+                            "can only reach a workflow output"
+                        )
+                    if adapter == "gather" and not destination.is_array:
+                        raise ValueError(
+                            f"connection {from_process}.{from_port} -> {to_process}.{to_port} gathers "
+                            "into a port that is not array-typed"
+                        )
+                    if adapter in MULTI_INPUT_ADAPTERS:
+                        adapters_by_process.setdefault(to_process, set()).add(adapter)
+                        multi_input_count_by_process[to_process] = (
+                            multi_input_count_by_process.get(to_process, 0) + 1
+                        )
                     # Cardinality is half the channel contract, so it is
                     # checked on a process edge too: a scalar output driving
                     # an array-marked port renders list operations against a
                     # single value, failing inside Nextflow rather than here.
-                    if source.is_array != destination.is_array:
+                    # A gather is the one approved scalar-to-array edge.
+                    if adapter is None and source.is_array != destination.is_array:
                         raise ValueError(
                             f"connection {from_process}.{from_port} -> {to_process}.{to_port} "
                             "joins incompatible channel cardinalities"
@@ -1257,7 +1307,6 @@ class ExecutableNextflowWorkflow:
                         )
                     self._record_incoming(incoming, to_process, to_port)
                     dependencies[to_process].add(from_process)
-                    process_connections.append(connection)
                 case NfWorkflowOutputConnection(from_process, from_port, to_port):
                     self._source_port(process_by_name, from_process, from_port)
                     if to_port in workflow_outputs:
@@ -1276,26 +1325,6 @@ class ExecutableNextflowWorkflow:
                 raise ValueError(
                     f"process {process_name!r} has {count} multi-input-scatter-adapted input(s); "
                     f"{method} scatter requires two or more"
-                )
-            if process_by_name[process_name].condition is not None:
-                # The conditional rendering merges one channel per input port,
-                # but a multi-input-scattered process's scattered ports share
-                # one tuple channel, and its [] skip sentinel has no index for
-                # the gather to sort on.
-                raise ValueError(
-                    f"process {process_name!r} has a condition and {method}-adapted inputs; "
-                    f"a per-combination condition under {method} scatter is not supported yet"
-                )
-        for connection in process_connections:
-            if connection.from_process in multi_input_count_by_process:
-                # Every output of a multi-input-scattered process carries the
-                # hidden scatter index, so only the gather can consume it.
-                (method,) = adapters_by_process[connection.from_process]
-                raise ValueError(
-                    f"connection {connection.from_process}.{connection.from_port} -> "
-                    f"{connection.to_process}.{connection.to_port} leaves {method}-scattered "
-                    f"process {connection.from_process!r}; its outputs can only reach a workflow "
-                    "output until gathering them into a step is supported"
                 )
 
         # Checked after the loop: a parameter feeding inconsistent shapes is

@@ -1150,9 +1150,9 @@ def test_rejects_a_downstream_process_consumer_of_a_scattered_step() -> None:
     )
 
     assert _findings(rose) == [
-        "steps[1].in.source: 'SCATTER/result' is an output of scattered step steps[0]; a "
-        "scattered step's outputs can only reach a workflow output, because gathering "
-        "them back into one value is deferred beyond this lowering"
+        "steps[1].in.source: 'SCATTER/result' is an output of scattered step steps[0]; "
+        "gathering a single-input scatter is not supported yet, because it carries no "
+        "invocation index to order by"
     ]
 
 
