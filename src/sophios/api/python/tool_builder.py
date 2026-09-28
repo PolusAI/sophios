@@ -14,9 +14,9 @@ Everything else is optional and chainable.
 # pylint: disable=missing-function-docstring
 # The fluent builder intentionally exposes many small self-descriptive methods.
 
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field, fields as dataclass_fields
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import yaml
 from sophios.wic_types import Tools
@@ -95,6 +95,8 @@ class CommandLineTool:
     _permanent_fail_codes: list[int] = field(default_factory=list)
     _extra: dict[str, Any] = field(default_factory=dict)
 
+    _CONSTRUCTOR_FIELDS: ClassVar[frozenset[str]] = frozenset({"name", "inputs", "outputs", "cwl_version"})
+
     def __init__(
         self,
         name: str,
@@ -103,26 +105,14 @@ class CommandLineTool:
         *,
         cwl_version: str = CWL_VERSION,
     ) -> None:
+        for item in dataclass_fields(self):
+            if item.name in self._CONSTRUCTOR_FIELDS:
+                continue
+            setattr(self, item.name, item.default_factory() if item.default_factory is not MISSING else item.default)
         self.name = name
         self.inputs = inputs
         self.outputs = outputs
         self.cwl_version = cwl_version
-        self.label_text = None
-        self.doc_text = None
-        self._base_command = []
-        self._arguments = []
-        self._requirements = {}
-        self._hints = {}
-        self._stdin = None
-        self._stdout = None
-        self._stderr = None
-        self._intent = []
-        self._namespaces = {}
-        self._schemas = []
-        self._success_codes = []
-        self._temporary_fail_codes = []
-        self._permanent_fail_codes = []
-        self._extra = {}
         self.__post_init__()
 
     def __post_init__(self) -> None:

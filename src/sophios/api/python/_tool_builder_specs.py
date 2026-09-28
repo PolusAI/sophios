@@ -6,9 +6,9 @@
 # These frozen dataclasses mirror the CWL schema closely, so field-rich
 # constructors and small fluent helpers are intentional rather than accidental.
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, fields as dataclass_fields
-from typing import Any, ClassVar, NamedTuple, TypeVar, cast
+from collections.abc import Mapping
+from dataclasses import MISSING, dataclass, field, fields as dataclass_fields
+from typing import Any, ClassVar, TypeVar, cast
 
 from ._tool_builder_support import (
     _SUPPORT,
@@ -29,14 +29,6 @@ from ._tool_builder_support import (
 FrozenSpecT = TypeVar("FrozenSpecT")
 
 
-class _CWLField(NamedTuple):
-    name: str
-    cwl_name: str
-    default: Any = _SUPPORT.unset
-    render: Callable[[Any], Any] = _render
-    omit_empty: bool = False
-
-
 def _render_sequence(values: list[Any]) -> list[Any]:
     return [_render(value) for value in values]
 
@@ -46,11 +38,19 @@ def _canonicalize_sequence(values: list[Any]) -> list[Any]:
 
 
 def _render_dataclass_cwl(obj: Any) -> dict[str, Any]:
+    """Render any dataclass whose fields carry a ``cwl`` metadata key.
+
+    This is the one renderer shared by the hand-authored `_CWLObject` specs
+    (position/keyword parsed by field order) and the fluent frozen specs
+    (`InputSpec`, `OutputSpec`, `FieldSpec`).
+    """
     payload: dict[str, Any] = {}
     for item in dataclass_fields(cast(Any, obj)):
         cwl_key = item.metadata.get("cwl")
+        if cwl_key is None:
+            continue
         value = getattr(obj, item.name)
-        if cwl_key is None or value is None or value is _SUPPORT.unset:
+        if value is None or value is _SUPPORT.unset or (item.metadata.get("omit_empty") and not value):
             continue
         payload[str(cwl_key)] = item.metadata.get("render", _render)(value)
     if extra := getattr(obj, "extra", None):
@@ -76,23 +76,35 @@ def _set_frozen_attrs(obj: Any, **values: Any) -> None:
         object.__setattr__(obj, name, value)
 
 
+@dataclass(init=False)
 class _CWLObject:
-    _fields: ClassVar[tuple[_CWLField, ...]] = ()
+    """Base for hand-authored CWL specs parsed by field declaration order.
+
+    Subclasses declare CWL-mapped fields exactly like any other dataclass
+    (`field(metadata={"cwl": ..., "render": ..., "omit_empty": ...})`); this
+    base class supplies the one non-standard behaviour they all share: values
+    may be passed positionally in field order, and a single extra trailing
+    positional (or an `extra=` keyword) is accepted as a raw passthrough dict.
+    """
+
+    extra: dict[str, Any] = field(default_factory=dict, kw_only=True)
 
     def __init__(self, *args: Any, extra: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        cwl_fields = [item for item in dataclass_fields(type(self)) if item.name != "extra"]
         values = list(args)
-        if len(values) > len(self._fields):
-            if len(values) == len(self._fields) + 1 and extra is None:
+        if len(values) > len(cwl_fields):
+            if len(values) == len(cwl_fields) + 1 and extra is None:
                 extra = values.pop()
             else:
-                raise TypeError(f"{type(self).__name__} accepts at most {len(self._fields)} positional arguments")
+                raise TypeError(f"{type(self).__name__} accepts at most {len(cwl_fields)} positional arguments")
 
-        for item, value in zip(self._fields, values):
+        for item, value in zip(cwl_fields, values):
             if item.name in kwargs:
                 raise TypeError(f"{type(self).__name__} got multiple values for {item.name!r}")
             setattr(self, item.name, value)
-        for item in self._fields[len(values):]:
-            value = kwargs.pop(item.name, item.default)
+        for item in cwl_fields[len(values):]:
+            default = item.default if item.default is not MISSING else _SUPPORT.unset
+            value = kwargs.pop(item.name, default)
             if value is _SUPPORT.unset:
                 raise TypeError(f"{type(self).__name__} missing required argument: {item.name!r}")
             setattr(self, item.name, value)
@@ -101,34 +113,22 @@ class _CWLObject:
             raise TypeError(f"{type(self).__name__} got an unexpected keyword argument {unknown!r}")
         self.extra = dict(extra or {})
 
-    def _render_cwl(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {}
-        for item in self._fields:
-            value = getattr(self, item.name)
-            if value is None or value is _SUPPORT.unset or (item.omit_empty and not value):
-                continue
-            payload[item.cwl_name] = item.render(value)
-        if self.extra:
-            payload.update(_render(self.extra))
-        return payload
-
     def to_dict(self) -> Any:
-        return self._render_cwl()
+        return _render_dataclass_cwl(self)
 
 
+@dataclass(init=False)
 class SecondaryFile(_CWLObject):
     """A CWL secondary file pattern."""
 
-    _fields = (
-        _CWLField("pattern", "pattern"),
-        _CWLField("required", "required", None),
-    )
+    pattern: Any = field(metadata={"cwl": "pattern"})
+    required: Any = field(default=None, metadata={"cwl": "required"})
 
     def to_dict(self) -> str | dict[str, Any]:
-        match getattr(self, "pattern"), getattr(self, "required"), self.extra:
+        match self.pattern, self.required, self.extra:
             case str() as pattern, None, extra if not extra:
                 return pattern
-        return self._render_cwl()
+        return _render_dataclass_cwl(self)
 
 
 def secondary_file(pattern: Any, *, required: bool | str | None = None, **extra: Any) -> "SecondaryFile":
@@ -136,14 +136,13 @@ def secondary_file(pattern: Any, *, required: bool | str | None = None, **extra:
     return SecondaryFile(pattern=pattern, required=required, extra=dict(extra))
 
 
+@dataclass(init=False)
 class Dirent(_CWLObject):
     """A CWL InitialWorkDirRequirement listing entry."""
 
-    _fields = (
-        _CWLField("entry", "entry"),
-        _CWLField("entryname", "entryname", None),
-        _CWLField("writable", "writable", None),
-    )
+    entry: Any = field(metadata={"cwl": "entry"})
+    entryname: Any = field(default=None, metadata={"cwl": "entryname"})
+    writable: Any = field(default=None, metadata={"cwl": "writable"})
 
     @classmethod
     def from_input(
@@ -163,39 +162,36 @@ class Dirent(_CWLObject):
         )
 
 
+@dataclass(init=False)
 class EnvironmentDef(_CWLObject):
     """An EnvVarRequirement entry."""
 
-    _fields = (
-        _CWLField("env_name", "envName"),
-        _CWLField("env_value", "envValue"),
-    )
+    env_name: Any = field(metadata={"cwl": "envName"})
+    env_value: Any = field(metadata={"cwl": "envValue"})
 
     def to_dict(self) -> dict[str, str]:
-        return cast(dict[str, str], self._render_cwl())
+        return cast(dict[str, str], _render_dataclass_cwl(self))
 
 
+@dataclass(init=False)
 class CommandLineBinding(_CWLObject):
     """A CWL input binding or argument binding."""
 
-    _fields = (
-        _CWLField("position", "position", None),
-        _CWLField("prefix", "prefix", None),
-        _CWLField("separate", "separate", None),
-        _CWLField("item_separator", "itemSeparator", None),
-        _CWLField("value_from", "valueFrom", None),
-        _CWLField("shell_quote", "shellQuote", None),
-    )
+    position: Any = field(default=None, metadata={"cwl": "position"})
+    prefix: Any = field(default=None, metadata={"cwl": "prefix"})
+    separate: Any = field(default=None, metadata={"cwl": "separate"})
+    item_separator: Any = field(default=None, metadata={"cwl": "itemSeparator"})
+    value_from: Any = field(default=None, metadata={"cwl": "valueFrom"})
+    shell_quote: Any = field(default=None, metadata={"cwl": "shellQuote"})
 
 
+@dataclass(init=False)
 class CommandOutputBinding(_CWLObject):
     """A CWL output binding."""
 
-    _fields = (
-        _CWLField("glob", "glob", None),
-        _CWLField("load_contents", "loadContents", None),
-        _CWLField("output_eval", "outputEval", None),
-    )
+    glob: Any = field(default=None, metadata={"cwl": "glob"})
+    load_contents: Any = field(default=None, metadata={"cwl": "loadContents"})
+    output_eval: Any = field(default=None, metadata={"cwl": "outputEval"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,109 +223,119 @@ class _RequirementSpec(_CWLObject):
         cls.class_name = cls.__name__
 
     def to_fields(self) -> dict[str, Any]:
-        return self._render_cwl()
+        return _render_dataclass_cwl(self)
 
 
+@dataclass(init=False)
 class DockerRequirement(_RequirementSpec):
     """DockerRequirement helper."""
 
-    _fields = (
-        _CWLField("docker_pull", "dockerPull", None),
-        _CWLField("docker_load", "dockerLoad", None),
-        _CWLField("docker_file", "dockerFile", None),
-        _CWLField("docker_import", "dockerImport", None),
-        _CWLField("docker_image_id", "dockerImageId", None),
-        _CWLField("docker_output_directory", "dockerOutputDirectory", None),
-    )
+    docker_pull: Any = field(default=None, metadata={"cwl": "dockerPull"})
+    docker_load: Any = field(default=None, metadata={"cwl": "dockerLoad"})
+    docker_file: Any = field(default=None, metadata={"cwl": "dockerFile"})
+    docker_import: Any = field(default=None, metadata={"cwl": "dockerImport"})
+    docker_image_id: Any = field(default=None, metadata={"cwl": "dockerImageId"})
+    docker_output_directory: Any = field(default=None, metadata={"cwl": "dockerOutputDirectory"})
 
 
+@dataclass(init=False)
 class InlineJavascriptRequirement(_RequirementSpec):
     """InlineJavascriptRequirement helper."""
 
-    _fields = (_CWLField("expression_lib", "expressionLib", None, _render_sequence, True),)
+    expression_lib: Any = field(
+        default=None, metadata={"cwl": "expressionLib", "render": _render_sequence, "omit_empty": True}
+    )
 
 
+@dataclass(init=False)
 class SchemaDefRequirement(_RequirementSpec):
     """SchemaDefRequirement helper."""
 
-    _fields = (_CWLField("types", "types", _SUPPORT.unset, _canonicalize_sequence),)
+    types: Any = field(metadata={"cwl": "types", "render": _canonicalize_sequence})
 
 
+@dataclass(init=False)
 class LoadListingRequirement(_RequirementSpec):
     """LoadListingRequirement helper."""
 
-    _fields = (_CWLField("load_listing", "loadListing"),)
+    load_listing: Any = field(metadata={"cwl": "loadListing"})
 
 
+@dataclass(init=False)
 class ShellCommandRequirement(_RequirementSpec):
     """ShellCommandRequirement helper."""
 
 
+@dataclass(init=False)
 class SoftwarePackage(_CWLObject):
     """A SoftwareRequirement package entry."""
 
-    _fields = (
-        _CWLField("package", "package"),
-        _CWLField("version", "version", None),
-        _CWLField("specs", "specs", None),
-    )
+    package: Any = field(metadata={"cwl": "package"})
+    version: Any = field(default=None, metadata={"cwl": "version"})
+    specs: Any = field(default=None, metadata={"cwl": "specs"})
 
 
+@dataclass(init=False)
 class SoftwareRequirement(_RequirementSpec):
     """SoftwareRequirement helper."""
 
-    _fields = (_CWLField("packages", "packages", _SUPPORT.unset, _render_sequence),)
+    packages: Any = field(metadata={"cwl": "packages", "render": _render_sequence})
 
 
+@dataclass(init=False)
 class InitialWorkDirRequirement(_RequirementSpec):
     """InitialWorkDirRequirement helper."""
 
-    _fields = (_CWLField("listing", "listing"),)
+    listing: Any = field(metadata={"cwl": "listing"})
 
 
+@dataclass(init=False)
 class EnvVarRequirement(_RequirementSpec):
     """EnvVarRequirement helper."""
 
-    _fields = (_CWLField("env_def", "envDef", _SUPPORT.unset, _render_sequence),)
+    env_def: Any = field(metadata={"cwl": "envDef", "render": _render_sequence})
 
 
+@dataclass(init=False)
 class ResourceRequirement(_RequirementSpec):
     """ResourceRequirement helper."""
 
-    _fields = (
-        _CWLField("cores_min", "coresMin", None),
-        _CWLField("cores_max", "coresMax", None),
-        _CWLField("ram_min", "ramMin", None),
-        _CWLField("ram_max", "ramMax", None),
-        _CWLField("tmpdir_min", "tmpdirMin", None),
-        _CWLField("tmpdir_max", "tmpdirMax", None),
-        _CWLField("outdir_min", "outdirMin", None),
-        _CWLField("outdir_max", "outdirMax", None),
-    )
+    cores_min: Any = field(default=None, metadata={"cwl": "coresMin"})
+    cores_max: Any = field(default=None, metadata={"cwl": "coresMax"})
+    ram_min: Any = field(default=None, metadata={"cwl": "ramMin"})
+    ram_max: Any = field(default=None, metadata={"cwl": "ramMax"})
+    tmpdir_min: Any = field(default=None, metadata={"cwl": "tmpdirMin"})
+    tmpdir_max: Any = field(default=None, metadata={"cwl": "tmpdirMax"})
+    outdir_min: Any = field(default=None, metadata={"cwl": "outdirMin"})
+    outdir_max: Any = field(default=None, metadata={"cwl": "outdirMax"})
 
 
+@dataclass(init=False)
 class NetworkAccess(_RequirementSpec):
     """NetworkAccess helper."""
 
-    _fields = (_CWLField("network_access", "networkAccess"),)
+    network_access: Any = field(metadata={"cwl": "networkAccess"})
 
 
+@dataclass(init=False)
 class WorkReuse(_RequirementSpec):
     """WorkReuse helper."""
 
-    _fields = (_CWLField("enable_reuse", "enableReuse"),)
+    enable_reuse: Any = field(metadata={"cwl": "enableReuse"})
 
 
+@dataclass(init=False)
 class InplaceUpdateRequirement(_RequirementSpec):
     """InplaceUpdateRequirement helper."""
 
-    _fields = (_CWLField("inplace_update", "inplaceUpdate", True),)
+    inplace_update: Any = field(default=True, metadata={"cwl": "inplaceUpdate"})
 
 
+@dataclass(init=False)
 class ToolTimeLimit(_RequirementSpec):
     """ToolTimeLimit helper."""
 
-    _fields = (_CWLField("timelimit", "timelimit"),)
+    timelimit: Any = field(metadata={"cwl": "timelimit"})
 
 
 class _CommonSpecMixin:
