@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterable, Mapping
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from os import PathLike
 import re
@@ -1231,6 +1231,25 @@ def _unconsumed_field_findings(
     ]
 
 
+def _local_locations_as_paths(value: Any) -> Any:
+    """Rewrite a File or Directory object's plain local ``location`` as its ``path``.
+
+    The Python API writes file values in CWL's ``location`` form; for a local
+    path with no URI scheme the two keys mean the same file. A URI keeps its
+    ``location`` and stays rejected, since the model does not represent schemes.
+    """
+    match value:
+        case {"class": "File" | "Directory", "location": str() as location} if (
+            set(value) == {"class", "location"} and "://" not in location
+        ):
+            return {"class": value["class"], "path": location}
+        case Mapping():
+            return {key: _local_locations_as_paths(item) for key, item in value.items()}
+        case list():
+            return [_local_locations_as_paths(item) for item in value]
+    return value
+
+
 def _phase1_value_matches(cwl_type: Any, value: Any) -> bool:
     """Return whether a concrete boundary value has the supported runtime shape."""
     required = _required_type(cwl_type)
@@ -1703,11 +1722,6 @@ def _tool_capability_findings(
     """Collect unsupported executable semantics without lowering the tool."""
     path = f"steps[{step_index}]"
     findings: list[str] = []
-    if "when" in step and "scatter" in step and len(_scatter_names(step)) < 2:
-        findings.append(
-            f"{path}.when: per-combination when requires a multi-input scatter, whose invocation "
-            "index keeps skipped positions in order"
-        )
     if "when" in step and not tool.get("inputs"):
         findings.append(
             f"{path}.when: a conditional step needs at least one input to gate on, "
@@ -2265,25 +2279,14 @@ def _scatter_edge_findings(steps: list[Mapping[str, Any]]) -> list[str]:
                     raw_process,
                     indices.get(raw_process.rsplit("#", maxsplit=1)[-1]),
                 )
-                if producer is not None and producer in scattered and len(scattered[producer]) > 1:
-                    # A multi-input scatter's outputs are gathered once, in
+                if producer is not None and producer in scattered:
+                    # Every scatter is indexed, so its outputs are gathered once, in
                     # invocation order (design §6, Topology, Gather).
                     if steps[producer].get("scatterMethod") == "nested_crossproduct":
                         findings.append(
                             f"steps[{step_index}].in.{raw_name}: {source!r} is a nested_crossproduct "
                             "result, which reaches workflow outputs only"
                         )
-                    elif step_index in scattered and len(scattered[step_index]) < 2:
-                        findings.append(
-                            f"steps[{step_index}].in.{raw_name}: a gathered array can feed only a "
-                            "multi-input scatter"
-                        )
-                elif producer is not None and producer in scattered:
-                    findings.append(
-                        f"steps[{step_index}].in.{raw_name}: {source!r} is an output of "
-                        f"scattered step steps[{producer}]; gathering a single-input scatter "
-                        "is not supported yet, because it carries no invocation index to order by"
-                    )
                 elif step_index in scattered:
                     findings.append(
                         f"steps[{step_index}].in.{raw_name}: a scattered step's inputs must "
@@ -2788,7 +2791,7 @@ def _step_connections(
     multi_scattered = {
         process.name
         for step, process in zip(steps, processes, strict=True)
-        if "scatter" in step and len(_scatter_names(step)) > 1
+        if "scatter" in step
     }
     for step, process in zip(steps, processes, strict=True):
         match step.get("in", {}):
@@ -2808,7 +2811,9 @@ def _step_connections(
                 source_process, source_port = _source_endpoint(source, step_names)
                 if source_process is None:
                     if destination_port in scattered:
-                        adapter = scatter_method if len(scattered) > 1 else "scatter"
+                        # Every scatter is indexed, so its gather keeps input order; at
+                        # one scattered input the three methods coincide.
+                        adapter = scatter_method if len(scattered) > 1 else "dotproduct"
                     else:
                         adapter = None
                     connections.append(
@@ -3029,6 +3034,7 @@ def compiled_source_to_nextflow(
         compiled = source
     else:
         raise TypeError("Nextflow conversion requires a CompilationResult")
+    compiled = replace(compiled, params=_local_locations_as_paths(compiled.params))
     workflow = compiled.workflow
     tools = compiled.tools
     steps = _workflow_steps(workflow, child_count=len(tools))

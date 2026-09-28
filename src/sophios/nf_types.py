@@ -1208,7 +1208,6 @@ class ExecutableNextflowWorkflow:
         workflow_outputs: set[str] = set()
         dependencies: dict[str, set[str]] = {name: set() for name in process_by_name}
         adapters_by_process: dict[str, set[str]] = {}
-        multi_input_count_by_process: dict[str, int] = {}
         multi_scattered = {
             connection.to_process: connection.adapter
             for connection in self.connections
@@ -1252,10 +1251,6 @@ class ExecutableNextflowWorkflow:
                     )
                     if adapter is not None:
                         adapters_by_process.setdefault(to_process, set()).add(adapter)
-                    if adapter in MULTI_INPUT_ADAPTERS:
-                        multi_input_count_by_process[to_process] = (
-                            multi_input_count_by_process.get(to_process, 0) + 1
-                        )
                     self._record_incoming(incoming, to_process, to_port)
                 case NfProcessConnection(from_process, from_port, to_process, to_port, adapter):
                     source = self._source_port(process_by_name, from_process, from_port)
@@ -1289,9 +1284,6 @@ class ExecutableNextflowWorkflow:
                         )
                     if adapter in MULTI_INPUT_ADAPTERS:
                         adapters_by_process.setdefault(to_process, set()).add(adapter)
-                        multi_input_count_by_process[to_process] = (
-                            multi_input_count_by_process.get(to_process, 0) + 1
-                        )
                     # Cardinality is half the channel contract, so it is
                     # checked on a process edge too: a scalar output driving
                     # an array-marked port renders list operations against a
@@ -1329,13 +1321,6 @@ class ExecutableNextflowWorkflow:
                 raise ValueError(
                     f"process {process_name!r} mixes channel adapters "
                     f"{', '.join(sorted(adapters))}; a process may use only one scatter shape"
-                )
-        for process_name, count in multi_input_count_by_process.items():
-            (method,) = adapters_by_process[process_name]
-            if count < 2:
-                raise ValueError(
-                    f"process {process_name!r} has {count} multi-input-scatter-adapted input(s); "
-                    f"{method} scatter requires two or more"
                 )
 
         # Checked after the loop: a parameter feeding inconsistent shapes is

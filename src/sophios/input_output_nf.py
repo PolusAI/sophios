@@ -551,7 +551,9 @@ def _render_multi_input_channel(
     boxed = f"{sources[0][1]}.map {{ [it] }}"
     for _, channel, _label in sources[1:]:
         boxed = f"{boxed}.combine({channel}.map {{ [it] }})"
-    combine_expr = boxed
+    # A one-parameter closure receives a single boxed item unspread, so a lone
+    # array is passed as itself.
+    combine_expr = boxed if len(sources) > 1 else sources[0][1]
     params_decl = ", ".join(locals_)
     if method in {"flat_crossproduct", "nested_crossproduct"}:
         # Nested loops with the first declared input outermost: the CWL
@@ -582,7 +584,7 @@ def _render_multi_input_channel(
     tuple_elements = ", ".join(f"{local}[i]" for local in locals_)
     return "\n".join([
         f"    {channel_name} = {combine_expr}.flatMap {{ {params_decl} ->",
-        f'        if ({mismatch}) {{ throw new RuntimeException("{message}") }}',
+        *([f'        if ({mismatch}) {{ throw new RuntimeException("{message}") }}'] if mismatch else []),
         f"        (0..<{locals_[0]}.size()).collect {{ i -> tuple(i, {tuple_elements}) }}",
         "    }",
     ])

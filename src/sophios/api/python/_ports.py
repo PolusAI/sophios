@@ -205,6 +205,8 @@ class InputParameter(_ParameterBase):
             return False
         return (
             (self._binding.kind == "inline" and isinstance(self._binding.value, (list, tuple)))
+            # A scattered step's output is an array, whatever its tool declares.
+            or bool(getattr(getattr(self._binding.source, "parent_obj", None), "scatter", None))
             or is_array_type(self._bound_parameter_type)
             or contains_any_type(self._bound_parameter_type)
         )
