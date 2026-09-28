@@ -134,12 +134,7 @@ class PortDeclaration:  # pylint: disable=too-many-instance-attributes
     default: OpaqueCwl = None
     has_default: bool = False
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
-    field_order: tuple[str, ...] = ('type',)
     shorthand: bool = False
-
-    def __post_init__(self) -> None:
-        if len(self.field_order) != len(set(self.field_order)):
-            raise ValueError('a port declaration field order cannot repeat a field')
 
 
 #: A `PortDeclaration` reduced to what a workflow boundary may state. Only
@@ -231,8 +226,7 @@ class ProcessRun:
 @dataclass(frozen=True, slots=True)
 class StepEmission:  # pylint: disable=too-many-instance-attributes
     """The CWL surface of a step after semantic phases have finished. Known
-    fields are named; `passthrough` is the open CWL residue, and `field_order`
-    records canonical byte order without storing a completed step dictionary.
+    fields are named; `passthrough` is the open CWL residue.
     """
 
     inputs: tuple[tuple[PortName, EmittedValue], ...]
@@ -245,11 +239,6 @@ class StepEmission:  # pylint: disable=too-many-instance-attributes
     scatter_method: OpaqueCwl = None
     when: OpaqueCwl = None
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
-    field_order: tuple[str, ...] = ('id', 'in', 'run', 'out')
-
-    def __post_init__(self) -> None:
-        if len(self.field_order) != len(set(self.field_order)):
-            raise ValueError('an emitted step field order cannot repeat a field')
 
 
 @dataclass(frozen=True, slots=True)
@@ -405,8 +394,6 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     composition_edges: tuple[Edge, ...] = ()
     inferred_edges: tuple[Edge, ...] = ()
     discharged_obligations: tuple[PortId, ...] = ()
-    field_order: tuple[str, ...] = ('steps', 'cwlVersion', 'class', '$namespaces', '$schemas',
-                                    'inputs', 'sophios:lang_version', 'outputs')
 
     def __post_init__(self) -> None:
         """Reject a graph naming a port no step declares, checked over every
@@ -420,8 +407,6 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
                 raise ValueError(
                     f'{step.id} sits in {step.id.namespace.parts}, not this graph\'s '
                     f'{self.namespace.parts}')
-        if len(self.field_order) != len(set(self.field_order)):
-            raise ValueError('a workflow field order cannot repeat a field')
 
         known = {port.id for step in self.steps for port in step.inputs + step.outputs}
         recursive_known = self.port_ids

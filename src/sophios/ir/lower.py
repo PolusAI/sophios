@@ -145,14 +145,6 @@ def _lower_resolved(document: ResolvedDocument,
         reserved.add('requirements')
     opaque = tuple((key, value) for key, value in document.source.passthrough
                    if key not in reserved)
-    field_order_list = [key for key in document.source.field_order if key != 'wic']
-    for key in ('cwlVersion', 'class', '$namespaces', '$schemas', 'inputs',
-                ANNOTATION_KEY, 'outputs'):
-        if key not in field_order_list:
-            field_order_list.append(key)
-    field_order: tuple[str, ...] = tuple(field_order_list)
-    if requirements and 'requirements' not in field_order:
-        field_order += ('requirements',)
     known_ports = {port.id for node in nodes for port in node.inputs + node.outputs}
     graph = WorkflowGraph(
         namespace=here,
@@ -176,7 +168,6 @@ def _lower_resolved(document: ResolvedDocument,
         namespaces=namespaces,
         schemas=schemas,
         children=tuple(children),
-        field_order=field_order,
     )
     return Lowered(graph if not diagnostics.has_errors else None, diagnostics)
 
@@ -224,13 +215,6 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep, child: Workflo
                      for name, value in source.inputs
                      if (port := by_input.get(AuthoredName(name))) is not None)
     interpreted = dict(source.interpreted)
-    field_order = list(source.field_order)
-    if 'id' in field_order:
-        field_order.remove('id')
-    field_order.insert(0, 'id')
-    for key in ('run', 'in', 'out'):
-        if key not in field_order:
-            field_order.append(key)
     emission = StepEmission(
         # Empty, deliberately: every bound input is a `Binding` above, and
         # Complete writes each one's emitted spelling.
@@ -242,7 +226,6 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep, child: Workflo
         scatter_method=interpreted.get('scatterMethod'),
         when=interpreted.get('when'),
         passthrough=source.passthrough,
-        field_order=tuple(field_order),
     )
     return StepNode(identity, inputs, outputs, bindings, source.interpreted,
                     source.passthrough, source.span, emission,

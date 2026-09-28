@@ -38,7 +38,7 @@ EDAM_SCHEMA = 'https://raw.githubusercontent.com/edamontology/edamontology/maste
 
 def _step_spelling(step: StepNode, names: Names, relative_run_path: bool,
                    partial_failure: bool) -> StepNode:
-    """`step` with its `run:` path written and its field order settled.
+    """`step` with its `run:` path written.
 
     Under partial failure a step runs only when every required input arrived,
     so its `when` is rewritten from the ports it declares.
@@ -61,14 +61,7 @@ def _step_spelling(step: StepNode, names: Names, relative_run_path: bool,
             target = f'{names.qualified(step.id)}{NAMESPACE_SEPARATOR}{leaf}'
         else:
             target = f'../{leaf}'
-    order = list(emission.field_order)
-    if 'in' not in order:
-        run_index = order.index('run') if 'run' in order else len(order)
-        order.insert(run_index + 1, 'in')
-    if emission.when is not None and 'when' not in order:
-        order.append('when')
-    return replace(step, emission=replace(
-        emission, run=replace(emission.run, target=target), field_order=tuple(order)))
+    return replace(step, emission=replace(emission, run=replace(emission.run, target=target)))
 
 
 def surface(graph: WorkflowGraph, names: Names, *,
@@ -127,9 +120,6 @@ def surface(graph: WorkflowGraph, names: Names, *,
     schemas = list(graph.schemas)
     if EDAM_SCHEMA not in schemas:
         schemas.append(EDAM_SCHEMA)
-    order = list(graph.field_order)
-    if requirements and 'requirements' not in order:
-        order.append('requirements')
     positions = {step.id: index for index, step in enumerate(steps)}
 
     def boundary_order(name: PortName) -> tuple[int, int]:
@@ -149,8 +139,7 @@ def surface(graph: WorkflowGraph, names: Names, *,
     return EmissionDocument(replace(
         graph, steps=tuple(steps), requirements=tuple(requirements.items()),
         workflow_inputs=workflow_inputs, job_bindings=job_bindings,
-        namespaces=tuple(namespaces.items()), schemas=tuple(schemas),
-        field_order=tuple(order)))
+        namespaces=tuple(namespaces.items()), schemas=tuple(schemas)))
 
 
 def _refuse_colliding_names(declared: tuple[PortName, ...], names: Names) -> None:
@@ -168,9 +157,10 @@ def _refuse_colliding_names(declared: tuple[PortName, ...], names: Names) -> Non
 def emit(graph: EmissionDocument, names: Names) -> Cwl:
     """Render ``graph`` as canonical CWL v1.2.
 
-    The field-order tuples are part of the graph's emission surface, not an
-    implicit dependency on dictionary insertion order. What makes a graph
-    renderable is stated by the argument type, so nothing is checked here.
+    Known keys are written in one fixed order (dict insertion order, below),
+    then authored passthrough keys in the order they appear in
+    ``graph.passthrough``. What makes a graph renderable is stated by the
+    argument type, so nothing is checked here.
     """
     known: dict[str, Any] = {
         'steps': [_emit_step(step, names) for step in graph.steps],
@@ -183,10 +173,11 @@ def emit(graph: EmissionDocument, names: Names) -> Cwl:
         versions.ANNOTATION_KEY: graph.lang_version,
         'outputs': {names.port(port.name): _emit_port(port, names)
                     for port in graph.workflow_outputs},
-        'requirements': {name: deepcopy(value) for name, value in graph.requirements},
     }
+    if graph.requirements:
+        known['requirements'] = {name: deepcopy(value) for name, value in graph.requirements}
     known.update({name: deepcopy(value) for name, value in graph.passthrough})
-    return {name: known[name] for name in graph.field_order if name in known}
+    return known
 
 
 def emit_job_inputs(graph: EmissionDocument, names: Names) -> Cwl:
@@ -195,7 +186,7 @@ def emit_job_inputs(graph: EmissionDocument, names: Names) -> Cwl:
 
 
 def _emit_step(node: StepNode, names: Names) -> dict[str, Any]:
-    """Render one structured step descriptor in its declared canonical order."""
+    """Render one structured step descriptor in canonical order."""
     step = node.emission
     assert step is not None, 'an EmissionDocument has no unemitted step'
     known: dict[str, Any] = {
@@ -203,12 +194,15 @@ def _emit_step(node: StepNode, names: Names) -> dict[str, Any]:
         'in': {names.port(name): _emit_binding(value, names) for name, value in step.inputs},
         'run': deepcopy(step.run.target),
         'out': [names.port(name) for name in step.outputs],
-        'scatter': _emit_scatter(step, names),
-        'scatterMethod': deepcopy(step.scatter_method),
-        'when': deepcopy(step.when),
     }
+    if step.scatter is not None:
+        known['scatter'] = _emit_scatter(step, names)
+    if step.scatter_method is not None:
+        known['scatterMethod'] = deepcopy(step.scatter_method)
+    if step.when is not None:
+        known['when'] = deepcopy(step.when)
     known.update({name: deepcopy(value) for name, value in step.passthrough})
-    return {name: known[name] for name in step.field_order if name in known}
+    return known
 
 
 def _emit_scatter(step: StepEmission, names: Names) -> Any:
@@ -251,4 +245,4 @@ def _emit_port(port: WorkflowPort, names: Names) -> Any:
                                  if isinstance(port.output_source, StepOutputRef)
                                  else deepcopy(port.output_source))
     known.update({name: deepcopy(value) for name, value in declaration.passthrough})
-    return {name: known[name] for name in declaration.field_order if name in known}
+    return known

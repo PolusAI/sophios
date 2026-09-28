@@ -273,9 +273,8 @@ def _output_declaration(port: Port, scatter: Any) -> BoundaryDeclaration:
     raw = _canonical_type(declaration.type.declared)
     if scatter:
         raw = {'type': 'array', 'items': raw}
-    order = tuple((*declaration.field_order, 'outputSource'))
     return BoundaryDeclaration(
-        replace(declaration, type=port_declaration({'type': raw}).type, field_order=order))
+        replace(declaration, type=port_declaration({'type': raw}).type))
 
 
 def _canonical_type(value: Any) -> Any:
@@ -318,7 +317,6 @@ def _merge_boundary_documentation(ports: list[WorkflowPort], name: PortName,
             continue
         declaration = port.declaration
         values = dict(declaration.passthrough)
-        order = list(declaration.field_order)
         for key in ('doc', 'label'):
             addition = _as_text(additions.get(key, ''))
             if not addition:
@@ -328,10 +326,8 @@ def _merge_boundary_documentation(ports: list[WorkflowPort], name: PortName,
                                         and existing.endswith(f'\n{addition}')):
                 continue
             values[key] = f'{existing}\n{addition}' if existing else addition
-            if key not in order:
-                order.append(key)
         ports[index] = replace(port, declaration=replace(
-            declaration, passthrough=tuple(values.items()), field_order=tuple(order)))
+            declaration, passthrough=tuple(values.items())))
         return
 
 

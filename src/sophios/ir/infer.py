@@ -281,7 +281,6 @@ def _insert(graph: WorkflowGraph, position: int, insertion: Insertion,
         run=ProcessRun(insertion.run_path,
                        RegistryKey(insertion.namespace, insertion.name)),
         outputs=tuple(name for name, _ in insertion.outputs),
-        field_order=('id', 'run', 'out'),
     )
     format_rules = dict(policy.format_rules)
     rules = tuple((name, format_rules.get(str(declaration.format), 'default'))
@@ -356,12 +355,7 @@ def _set_emission_input(step: StepNode, name: PortName, value: EmittedValue) -> 
         return step
     inputs = dict(step.emission.inputs)
     inputs[name] = value
-    order = step.emission.field_order
-    if 'in' not in order:
-        order = tuple(item for item in order if item != 'id')
-        order = ('id', 'in', *order)
-    return replace(step, emission=replace(step.emission, inputs=tuple(inputs.items()),
-                                          field_order=order))
+    return replace(step, emission=replace(step.emission, inputs=tuple(inputs.items())))
 
 
 def _required(port: Port) -> bool:

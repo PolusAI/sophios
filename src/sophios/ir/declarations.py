@@ -51,7 +51,6 @@ def port_declaration(raw: Any, *, output: bool = False) -> PortDeclaration:
         has_default='default' in raw,
         passthrough=tuple((key, deepcopy(value)) for key, value in raw.items()
                           if key not in reserved),
-        field_order=tuple(raw),
     )
 
 
@@ -78,8 +77,5 @@ def boundary_declaration(declaration: PortDeclaration) -> BoundaryDeclaration:
     """
     passthrough = tuple((name, deepcopy(value)) for name, value in declaration.passthrough
                         if name in _BOUNDARY_FIELDS)
-    order = tuple(name for name in declaration.field_order if name in _BOUNDARY_FIELDS)
-    if 'type' not in order:
-        order = ('type', *order)
-    return BoundaryDeclaration(
-        replace(declaration, passthrough=passthrough, field_order=order, shorthand=False))
+    return BoundaryDeclaration(replace(declaration, passthrough=passthrough, shorthand=False,
+                                       default=None, has_default=False))

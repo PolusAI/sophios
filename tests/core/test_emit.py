@@ -121,7 +121,7 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
     input_id = PortId(step_id, Direction.INPUT, AuthoredName('message'))
     output_id = PortId(step_id, Direction.OUTPUT, AuthoredName('file'))
     in_decl = PortDeclaration(PortType('string'))
-    out_decl = PortDeclaration(PortType('File'), field_order=('type', 'outputSource'))
+    out_decl = PortDeclaration(PortType('File'))
     step = StepNode(
         step_id,
         inputs=(Port(input_id, in_decl.type, in_decl),),
@@ -139,8 +139,6 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
                          StepOutputRef(step_id, AuthoredName('file')), True),),
         job_bindings=(JobBinding(AuthoredName('message'), 'hello'),),
         namespaces=((ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI),),
-        field_order=('steps', 'cwlVersion', 'class', '$namespaces', 'inputs',
-                     ANNOTATION_KEY, 'outputs'),
     )
     names = Names.of(graph)
     document = surface(graph, names)
@@ -151,6 +149,7 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
         'class': 'Workflow',
         '$namespaces': {'edam': 'https://edamontology.org/',
                         ANNOTATION_NAMESPACE: ANNOTATION_NAMESPACE_URI},
+        '$schemas': ['https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl'],
         'inputs': {'message': {'type': 'string'}},
         ANNOTATION_KEY: '0.0.1',
         'outputs': {'file': {'type': 'File',
