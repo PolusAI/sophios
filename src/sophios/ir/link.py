@@ -248,7 +248,11 @@ def _compared_types(graph: WorkflowGraph, edge: Edge) -> tuple[Any, Any]:
 
 
 def _relation(graph: WorkflowGraph, edge: Edge) -> TypeRelation:
-    """Judge one edge in its own scope, excluding ancestor scatter layers that wrap both endpoints alike and would inflate the comparison unevenly."""
+    """Judge one edge in its own scope.
+
+    Ancestor scatter layers that wrap both endpoints alike are excluded; they
+    would inflate the comparison unevenly.
+    """
     scope = _graph_at(graph, _owner_namespace(edge))
     source, sink = _compared_types(graph, edge)
     return reference_relation(source, sink, lang_version=scope.lang_version)
@@ -342,7 +346,10 @@ def _owner_namespace(edge: Edge) -> Namespace:
 
 
 def _graph_at(graph: WorkflowGraph, namespace: Namespace) -> WorkflowGraph:
-    """The tree node whose own namespace is exactly `namespace`; always found, since callers derive `namespace` as an ancestor-or-self of `graph`."""
+    """The tree node whose own namespace is exactly `namespace`.
+
+    Always found: callers derive `namespace` as an ancestor-or-self of `graph`.
+    """
     if graph.namespace == namespace:
         return graph
     child = next(child for child in graph.children
