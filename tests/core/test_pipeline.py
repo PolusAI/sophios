@@ -29,7 +29,7 @@ from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
 from .equivalence import Strength, equivalent
-from .hermetic import ORACLE, bundle, compile_hermetic
+from .hermetic import COVERAGE, ORACLE, bundle, compile_hermetic
 from .synthetic_tools import SYNTHETIC_TOOLS
 from .test_resolve import _scalar_literals_fit
 
@@ -133,13 +133,15 @@ _OBJECTS = st.fixed_dictionaries(
     {'class': st.sampled_from(['File', 'Directory']), 'location': st.text(max_size=2)},
     optional={'format': st.just('edam:format_2')})
 _VALUES = st.recursive(
-    st.one_of(st.text(max_size=2), st.integers(), st.booleans(),
-              st.floats(allow_nan=False, allow_infinity=False), _OBJECTS),
+    # NaN is excluded: `nan != nan`, so no value holding it equals itself.
+    st.one_of(st.text(max_size=2), st.integers(), st.booleans(), st.floats(allow_nan=False),
+              st.sampled_from([float('inf'), float('-inf')]), _OBJECTS),
     lambda inner: st.lists(inner, max_size=2), max_leaves=4)
 
 
 @pytest.mark.skip_pypi_ci
 @given(_TYPES, st.sampled_from([{}, {'format': 'edam:format_1'}]), _VALUES)
+@COVERAGE
 def test_a_job_value_is_its_own_normal_form(raw: Any, fmt: Yaml, value: Any) -> None:
     """Coercing a coerced job value changes nothing, which is what lets a
     child's job value be lifted a level and coerced against the outer port."""
