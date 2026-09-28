@@ -4,11 +4,13 @@
 import logging
 import warnings
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, ClassVar, cast, overload
 
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
+from sophios.lang import InputValue, OpaqueCwl, nodes, to_json
 from sophios.lang.compatibility import TypeRelation, reference_relation
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
@@ -209,8 +211,9 @@ class _ProcessBase:  # pylint: disable=too-few-public-methods
     def _lookup_input(self, name: str) -> InputParameter:
         return _lookup_parameter(self._inputs, name, owner_name=self.process_name, kind="input")
 
-    def _bound_input_yaml(self) -> dict[str, Any]:
-        return {port.name: port.to_yaml_value() for port in self._inputs if port.is_bound()}
+    def _bound_inputs(self) -> tuple[tuple[str, InputValue], ...]:
+        return tuple((port.name, port._binding.to_input_value())
+                     for port in self._inputs if port._binding is not None)
 
 
 class Step(_ProcessBase):
@@ -557,27 +560,22 @@ class Step(_ProcessBase):
         """Return an empty subworkflow list because steps do not nest workflows."""
         return []
 
-    def _as_workflow_step(self, *, inline_subtrees: bool, directory: Path | None = None) -> dict[str, Any]:
+    def _as_workflow_step(self, *, inline_subtrees: bool, directory: Path | None = None) -> nodes.Step:
+        """Return this step as the language's step node."""
         del inline_subtrees, directory
-        return self._yml
-
-    @property
-    def _yml(self) -> dict[str, Any]:
-        """Return the internal WIC step representation for this step."""
-        step_yaml: dict[str, Any] = {
-            "id": self.process_name,
-            "in": self._bound_input_yaml(),
-            "out": [{port.name: port.value} for port in self._outputs if port.value is not None],
-        }
-
+        interpreted: list[tuple[str, OpaqueCwl]] = []
         if self.scatter:
-            step_yaml["scatter"] = [input_port.name for input_port in self.scatter]
-            step_yaml["scatterMethod"] = self.scatterMethod or ScatterMethod.dotproduct.value
-
+            interpreted += [("scatter", [input_port.name for input_port in self.scatter]),
+                            ("scatterMethod", self.scatterMethod or ScatterMethod.dotproduct.value)]
         if self.when:
-            step_yaml["when"] = self.when
-
-        return step_yaml
+            interpreted.append(("when", self.when))
+        return nodes.Step(
+            id=self.process_name,
+            inputs=self._bound_inputs(),
+            outputs=tuple(nodes.OutputBinding(port.name, nodes.EdgeDef(port._anchor_name))
+                          for port in self._outputs if port._anchor_name is not None),
+            interpreted=tuple(interpreted),
+        )
 
 
 class Workflow(_ProcessBase):
@@ -809,10 +807,13 @@ class Workflow(_ProcessBase):
     def yaml(self) -> dict[str, Any]:
         """Return the in-memory WIC YAML representation of this workflow.
 
+        This is the `sophios.lang.to_json` projection of the workflow's
+        document: the desugared spelling of what `to_wic_yaml` writes.
+
         Returns:
             dict[str, Any]: A WIC-compatible YAML tree represented as a Python dict.
         """
-        return _workflow_document(self, inline_subtrees=True)
+        return to_json(_workflow_document(self, inline_subtrees=True))
 
     def to_wic_yaml(self, *, inline_subworkflows: bool = True) -> str:
         """Return this workflow as ``.wic`` YAML text.
@@ -901,15 +902,13 @@ class Workflow(_ProcessBase):
             tool_registry=tool_registry,
         )
 
-    def _as_workflow_step(self, *, inline_subtrees: bool, directory: Path | None = None) -> dict[str, Any]:
-        # Nested workflows are serialized in one of two ways:
-        # 1. inline during in-memory compilation (`subtree`)
-        # 2. as sibling `.wic` files when writing an AST to disk
-        bound_inputs = self._bound_input_yaml()
-        parentargs = {"in": bound_inputs} if bound_inputs else {}
+    def _as_workflow_step(self, *, inline_subtrees: bool, directory: Path | None = None) -> nodes.Step:
+        # A nested workflow's step names it; its body is shown inline under
+        # `subtree` in the inline views, written as a sibling `.wic` file into
+        # `directory`, or -- for compilation -- supplied by the registry.
+        step = nodes.Step(id=f"{self.process_name}.wic", inputs=self._bound_inputs())
         if inline_subtrees:
-            return {"id": f"{self.process_name}.wic", "subtree": self.yaml, "parentargs": parentargs}
-        if directory is None:
-            raise ValueError("directory is required when serializing subworkflows to disk")
-        self.write_wic(directory, inline_subworkflows=False)
-        return {"id": f"{self.process_name}.wic", **parentargs}
+            return replace(step, passthrough=(("subtree", self.yaml),))
+        if directory is not None:
+            self.write_wic(directory, inline_subworkflows=False)
+        return step

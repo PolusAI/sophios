@@ -22,9 +22,8 @@ from sophios import compiler, input_output, plugins, post_compile as pc, run_loc
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.resolve import RegistrySnapshot
-from sophios.lang import ParseResult, parse
+from sophios.lang import Diagnostics, Document, ParseResult, render
 from sophios.ir.names import render_step_id
-from sophios.input_output import dump_wic_yaml as _dump_yaml
 from sophios.cli import default_compilation_settings, get_known_and_unknown_args
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
 from sophios.utils import convert_args_dict_to_args_list
@@ -258,8 +257,8 @@ def workflow_document(
     inline_subtrees: bool,
     directory: Path | None = None,
     document_stem: str | None = None,
-) -> dict[str, Any]:
-    """Render a workflow into its in-memory WIC YAML representation.
+) -> Document:
+    """Build a workflow's language document.
 
     A workflow output's `outputSource` is always written in the compiler's
     concrete step-id spelling, because the compiler boundary consumes an
@@ -272,11 +271,12 @@ def workflow_document(
         directory (Path | None): Output directory for sibling `.wic` files.
 
     Returns:
-        dict[str, Any]: Serialized workflow document.
+        Document: The workflow's document; nested workflows appear as steps
+        naming them, their bodies under `subtree` when inlined.
     """
     from .workflow import Workflow  # pylint: disable=import-outside-toplevel
 
-    workflow_inputs: dict[str, dict[str, Any]] = {}
+    workflow_inputs: dict[str, Any] = {}
     for parameter in workflow._inputs:
         cwl_type = parameter.cwl_type()
         if cwl_type is None:
@@ -300,22 +300,18 @@ def workflow_document(
         for index, step in enumerate(workflow.steps, start=1)
     }
 
-    workflow_outputs: dict[str, dict[str, Any]] = {}
+    workflow_outputs: dict[str, Any] = {}
     for output_parameter in workflow._outputs:
         workflow_outputs[output_parameter.name] = output_parameter.to_workflow_output(
             step_ids=compiled_step_ids
         )
 
-    steps_yaml = [
-        step._as_workflow_step(inline_subtrees=inline_subtrees, directory=directory)
-        for step in workflow.steps
-    ]
-    document: dict[str, Any] = {"steps": steps_yaml}
-    if workflow_inputs:
-        document["inputs"] = workflow_inputs
-    if workflow_outputs:
-        document["outputs"] = workflow_outputs
-    return document
+    return Document(
+        steps=tuple(step._as_workflow_step(inline_subtrees=inline_subtrees, directory=directory)
+                    for step in workflow.steps),
+        passthrough=tuple((key, value) for key, value in
+                          (("inputs", workflow_inputs), ("outputs", workflow_outputs)) if value),
+    )
 
 
 def _wic_output_path(workflow: "Workflow", path: str | Path | None) -> Path:
@@ -357,7 +353,7 @@ def workflow_wic_yaml(workflow: "Workflow", *, inline_subworkflows: bool = True)
             "to_wic_yaml(inline_subworkflows=False) cannot emit sibling files; "
             "use write_wic(..., inline_subworkflows=False) instead"
         )
-    return _dump_yaml(workflow_document(workflow, inline_subtrees=inline_subworkflows))
+    return render(workflow_document(workflow, inline_subtrees=inline_subworkflows))
 
 
 def write_workflow_wic(
@@ -388,10 +384,7 @@ def write_workflow_wic(
         directory=output_path.parent if not inline_subworkflows else None,
         document_stem=output_path.stem,
     )
-    output_path.write_text(
-        _dump_yaml(document),
-        encoding="utf-8",
-    )
+    output_path.write_text(render(document), encoding="utf-8")
     return output_path
 
 
@@ -405,22 +398,17 @@ def _merged_known_tools(steps: list["Step"], tool_registry: Tools | None = None)
     return merged_tools
 
 
-def _bundle(document: dict[str, Any], name: str, tools: Tools) -> SourceBundle:
-    """The document as the compiler's door takes it: each inline subtree a registry entry."""
-    workflows: dict[tuple[str, str], ParseResult] = {}
+def _nested_documents(workflow: "Workflow") -> dict[tuple[str, str], ParseResult]:
+    """Every nested workflow's document, keyed as Resolve looks it up."""
+    from .workflow import Workflow  # pylint: disable=import-outside-toplevel
 
-    def detached(node: dict[str, Any]) -> str:
-        steps = []
-        for step in node["steps"]:
-            if "subtree" in step:
-                child = Path(step["id"]).stem
-                workflows[("global", child)] = parse(detached(step["subtree"]), f"{child}.wic")
-                step = {"id": step["id"], **step["parentargs"]}
-            steps.append(step)
-        return _dump_yaml({**node, "steps": steps})
-
-    return SourceBundle(parse(detached(document), f"{name}.wic"), name,
-                        RegistrySnapshot.from_tools(tools, workflows=workflows))
+    documents: dict[tuple[str, str], ParseResult] = {}
+    for step in workflow.steps:
+        if isinstance(step, Workflow):
+            documents |= _nested_documents(step)
+            documents[("global", step.process_name)] = ParseResult(
+                workflow_document(step, inline_subtrees=False), Diagnostics())
+    return documents
 
 
 def compile_workflow_result(
@@ -451,10 +439,12 @@ def compile_workflow_result(
     compiler_options, graph_settings, yaml_tag_paths = default_compilation_settings()
     if lang_version is not None:
         compiler_options = {**compiler_options, 'lang_version': lang_version}
+    bundle = SourceBundle(
+        ParseResult(workflow_document(workflow, inline_subtrees=False), Diagnostics()),
+        Path(workflow.process_name).stem,
+        RegistrySnapshot.from_tools(merged_tools, workflows=_nested_documents(workflow)))
     result = compiler.compile_source(
-        _bundle(workflow_document(workflow, inline_subtrees=True),
-                Path(workflow.process_name).stem, merged_tools),
-        compiler_options, graph_settings, yaml_tag_paths,
+        bundle, compiler_options, graph_settings, yaml_tag_paths,
         relative_run_path=True, testing=False, graph_target=graph)
     if write_to_disk:
         input_output.write_artifacts_to_disk(result.artifact, Path("autogenerated/"), True)

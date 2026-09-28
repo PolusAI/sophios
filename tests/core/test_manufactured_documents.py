@@ -3,8 +3,8 @@
 The corpus is not the interesting input: documents a *user* wrote already have
 a parse property. What nothing checked is the documents the compiler *makes* —
 the Python API's output and the documents `rerun_cwltool` builds. Those
-never pass through `sophios.lang`, so the grammar has never had an opinion
-about them, and three defects in a row lived exactly there: step ids spelled
+are built rather than parsed, so the grammar has no opinion about them unless
+asked, and three defects in a row lived exactly there: step ids spelled
 from the wrong stem, a producer still emitting a step form the grammar had
 removed, and scatter readable from two places with no owner.
 
@@ -18,7 +18,7 @@ import pytest
 import yaml
 
 from sophios.input_output import NoAliasDumper
-from sophios.lang.parser import parse
+from sophios.lang import Document, parse, to_json
 from sophios.api.python.workflow import Step, Workflow
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
@@ -73,8 +73,8 @@ def _documents_in(value: Any, depth: int = 0) -> list[dict[str, Any]]:
     elif isinstance(value, (list, tuple)):
         for item in value:
             found += _documents_in(item, depth + 1)
-    elif hasattr(value, 'yml'):          # YamlTree and the node types wrapping one
-        found += _documents_in(getattr(value, 'yml'), depth + 1)
+    elif isinstance(value, Document):    # the Python API builds the AST directly
+        found.append(to_json(value))
     return found
 
 
@@ -196,7 +196,7 @@ def _drive_everything() -> None:
     append.inputs.file = touch.outputs.file
     append.inputs.str = 'Hello'
     # A declared workflow output, so the step's `out:` is built from a bound
-    # port rather than left empty: `Step._yml` spells it `[{name: value}]`, and
+    # port rather than left empty: `Step._as_workflow_step` spells it as an edge, and
     # an edge written there in the wrong spelling is the likeliest way this
     # front end emits something the grammar refuses.
     workflow = Workflow([touch, append], 'manufactured_py')

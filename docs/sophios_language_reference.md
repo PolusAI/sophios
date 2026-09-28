@@ -460,8 +460,11 @@ its single home, so a disagreement between this text and the implementation
 shows up as a test failure rather than as three subtly different sentences.
 
 **The Python API** (`Workflow`, `Step`) is the second surface of the same
-language. `Workflow.write_wic()` and `.to_wic_yaml()` emit `.wic` documents,
-using the desugared spelling and sequence-form steps with explicit `id:`.
+language. It builds a `sophios.lang.Document` directly, compiles it through
+the same door as a `.wic` file, and writes it with `sophios.lang.render`:
+`Workflow.write_wic()` and `.to_wic_yaml()` emit the tagged spelling with
+sequence-form steps and explicit `id:`, and `Workflow.yaml` is the same
+document's `to_json` projection.
 
 Two obligations follow, and both are enforced by tests rather than convention:
 

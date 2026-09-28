@@ -5,7 +5,7 @@ from typing import Any
 
 from ..lang import SophiosErrorCode
 from ..lang.compatibility import TypeRelation, reference_relation
-from ..lang.diagnostics import Diagnostics
+from ..lang.diagnostics import Diagnostics, Locator
 from .declarations import boundary_declaration, port_declaration
 from .names import Names
 from .types import (
@@ -53,7 +53,7 @@ def link(graph: WorkflowGraph) -> Linked:
             diagnostics.error(
                 SophiosErrorCode.UNDEFINED_EDGE,
                 f"'!* {obligation.name}' names an edge nothing in the composed workflow defines.",
-                obligation.span,
+                obligation.span, _locator(attached, obligation.sink),
             )
             continue
         if _position(attached, source.step) >= _position(attached, obligation.sink.step):
@@ -63,7 +63,7 @@ def link(graph: WorkflowGraph) -> Linked:
                 SophiosErrorCode.UNDEFINED_EDGE,
                 f"'!* {obligation.name}' is defined after the step that consumes it. "
                 'An edge reference resolves against the definitions before it.',
-                obligation.span,
+                obligation.span, _locator(attached, obligation.sink),
             )
             continue
         for sink in _concrete_input_sinks(attached, obligation.sink):
@@ -74,7 +74,7 @@ def link(graph: WorkflowGraph) -> Linked:
                     SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
                     f"edge '{obligation.name}' is provably disjoint: "
                     f'{produced!r} cannot feed {consumed!r}.',
-                    obligation.span,
+                    obligation.span, _locator(attached, sink),
                 )
                 continue
             edges.append(edge)
@@ -132,6 +132,7 @@ def _check_workflow_inputs(graph: WorkflowGraph, diagnostics: Diagnostics) -> No
                     f"workflow input '{Names.of(graph).port(name)}' is provably disjoint: "
                     f'{source_type!r} cannot feed {sink_type!r}.',
                     sink_port.span if sink_port is not None else None,
+                    _locator(graph, sink),
                 )
     for child in graph.children:
         _check_workflow_inputs(child, diagnostics)
@@ -146,9 +147,14 @@ def _reject_if_disjoint(graph: WorkflowGraph, edge: Edge,
     diagnostics.error(
         SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
         f'edge is provably disjoint: {produced!r} cannot feed {consumed!r}.',
-        edge.span,
+        edge.span, _locator(graph, edge.sink),
     )
     return True
+
+
+def _locator(graph: WorkflowGraph, sink: PortId) -> Locator:
+    """Where `sink` sits, for a reader with no source position to open."""
+    return Locator(sink.step.name, sink.step.index, Names.of(graph).port(sink.port))
 
 
 def _attach_children(graph: WorkflowGraph) -> WorkflowGraph:

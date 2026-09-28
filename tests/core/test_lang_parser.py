@@ -65,20 +65,26 @@ def _spans(node: Any) -> list[SourceSpan]:
             for _, value in node.inputs:
                 found += _spans(value)
             for binding in node.outputs:
-                found.append(binding.span)
+                found.append(_parsed(binding.span))
                 if binding.edge_def is not None:
-                    found.append(binding.edge_def.span)
+                    found.append(_parsed(binding.edge_def.span))
         case WicSidecar():
             found += _opt(node.span)
             for _, child in node.steps:
                 found += _spans(child)
         case InlineLiteral() | EdgeDef() | EdgeRef() | RawCwlRef() | UnresolvedName():
-            found.append(node.span)
+            found.append(_parsed(node.span))
     return found
 
 
 def _opt(span: SourceSpan | None) -> list[SourceSpan]:
     return [span] if span is not None else []
+
+
+def _parsed(span: SourceSpan | None) -> SourceSpan:
+    """A value node's span, which may be absent only on a document built in memory."""
+    assert span is not None, 'a parsed value node has no span'
+    return span
 
 
 def _resolvable(span: SourceSpan, text: str) -> bool:

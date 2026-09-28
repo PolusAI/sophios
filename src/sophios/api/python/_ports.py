@@ -4,6 +4,8 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
+from sophios.lang import EdgeRef, InlineLiteral, InputValue, UnresolvedName
+
 from ._errors import InvalidLinkError
 from ._utils import (contains_any_type,
                      is_array_type,
@@ -39,10 +41,15 @@ class InputBinding:
             return {"wic_alias": serialize_value(self.value)}
         return self.value
 
-    def to_yaml_value(self) -> Any:
-        """Return the CWL-serializable representation of this binding."""
-        cwl_key = {"inline": "wic_inline_input", "alias": "wic_alias"}.get(self.kind)
-        return self.value if cwl_key is None else {cwl_key: serialize_value(self.value)}
+    def to_input_value(self) -> InputValue:
+        """Return this binding as the language's input construct."""
+        match self.kind:
+            case "inline":
+                return InlineLiteral(serialize_value(self.value))
+            case "alias":
+                return EdgeRef(self.value)
+            case _:
+                return UnresolvedName(self.value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,10 +219,6 @@ class InputParameter(_ParameterBase):
     def is_bound(self) -> bool:
         """Return whether this input currently has a bound value."""
         return self._binding is not None
-
-    def to_yaml_value(self) -> Any:
-        """Return the CWL-serializable representation of this input's binding."""
-        return None if self._binding is None else self._binding.to_yaml_value()
 
 
 @dataclass(slots=True)

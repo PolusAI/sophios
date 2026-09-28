@@ -27,6 +27,7 @@ from sophios.api.python.workflow import (_python_api_types_match, ApiError, Comp
                                          InvalidCLTError, InvalidInputValueError, InvalidLinkError,
                                          InvalidStepError, SophiosError, SophiosErrorCode, Step,
                                          Workflow)
+from sophios.lang import InlineLiteral
 from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest, ComputeSubmission
 from sophios.python_cwl_adapter import import_python_file
 from sophios.schemas import wic_schema
@@ -172,7 +173,7 @@ def test_linear_python_workflow_reuses_compiler_edge_inference() -> None:
     workflow = Workflow([touch, append, cat], "wf")
     workflow_yaml = workflow.yaml
     assert "file" not in workflow_yaml["steps"][1]["in"]
-    assert "file" not in workflow_yaml["steps"][2]["in"]
+    assert "file" not in workflow_yaml["steps"][2].get("in", {})
 
     compiled = workflow.compile()
 
@@ -471,11 +472,9 @@ def test_subworkflow_inputs_use_child_workflow_name_and_formal_parameters() -> N
     subworkflow_step = root_yaml["steps"][1]
 
     assert subworkflow_step["id"] == "child.wic"
-    assert subworkflow_step["parentargs"] == {
-        "in": {
-            "file": {"wic_alias": "filechild"},
-            "str": {"wic_inline_input": "Hello"},
-        }
+    assert subworkflow_step["in"] == {
+        "file": {"wic_alias": "filechild"},
+        "str": {"wic_inline_input": "Hello"},
     }
     assert subworkflow_step["subtree"]["inputs"] == {
         "file": {"type": "File"},
@@ -483,22 +482,6 @@ def test_subworkflow_inputs_use_child_workflow_name_and_formal_parameters() -> N
     }
     assert subworkflow_step["subtree"]["steps"][0]["in"]["file"] == "file"
     assert subworkflow_step["subtree"]["steps"][0]["in"]["str"] == "str"
-
-
-@pytest.mark.fast
-def test_inline_subworkflow_always_emits_parentargs_key() -> None:
-    """`parentargs` is present even when empty.
-
-    A reader that expects the key would otherwise have to distinguish absent
-    from empty, which are the same thing here."""
-    sub_step = Step(clt_path=_adapter("append"))
-    subworkflow = Workflow([sub_step], "child")
-
-    root_yaml = Workflow([subworkflow], "root").yaml
-    subworkflow_step = root_yaml["steps"][0]
-
-    assert subworkflow_step["id"] == "child.wic"
-    assert subworkflow_step["parentargs"] == {}
 
 
 @pytest.mark.fast
@@ -637,7 +620,7 @@ def test_workflow_write_wic_exports_source_workflow_with_inferred_edges(tmp_path
     output_path = workflow.write_wic(tmp_path / "linear_export.wic")
 
     assert output_path == tmp_path / "linear_export.wic"
-    exported = yaml.safe_load(output_path.read_text(encoding="utf-8"))
+    exported = yaml.load(output_path.read_text(encoding="utf-8"), Loader=wic_loader())
     assert exported == workflow.yaml
     assert "file" not in exported["steps"][1]["in"]
 
@@ -721,8 +704,8 @@ def test_config_yaml_normalizes_cwl_file_and_directory_objects(tmp_path: Path) -
         encoding="utf-8",
     )
     subdirectory = Step(clt_path=_adapter("subdirectory"), config_path=subdirectory_cfg)
-    assert subdirectory._yml["in"]["directory"] == {
-        "wic_inline_input": str(input_dir)}
+    assert subdirectory._as_workflow_step(inline_subtrees=False).input("directory") == \
+        InlineLiteral(str(input_dir))
 
     append_cfg = tmp_path / "append.yml"
     append_cfg.write_text(
@@ -736,7 +719,7 @@ def test_config_yaml_normalizes_cwl_file_and_directory_objects(tmp_path: Path) -
         encoding="utf-8",
     )
     append = Step(clt_path=_adapter("append"), config_path=append_cfg)
-    assert append._yml["in"]["file"] == {"wic_inline_input": str(input_file)}
+    assert append._as_workflow_step(inline_subtrees=False).input("file") == InlineLiteral(str(input_file))
 
 
 @pytest.mark.fast

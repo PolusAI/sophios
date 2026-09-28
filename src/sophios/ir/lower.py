@@ -351,7 +351,8 @@ def _edge_definitions(identities: tuple[StepId, ...], document: Document,
                 diagnostics.error(
                     SophiosErrorCode.DUPLICATE_EDGE_DEF,
                     f"'&{name}' is defined more than once. An edge name identifies one producer.",
-                    binding.edge_def.span)
+                    binding.edge_def.span,
+                    Locator(step=step.id, index=step_id.index, port=binding.name))
                 continue
             defined[name] = PortId(step_id, Direction.OUTPUT, AuthoredName(binding.name))
     return defined
@@ -369,6 +370,7 @@ def _resolve(value: InputValue, port: Port, defined_so_far: dict[str, PortId],
         diagnostics.error(
             SophiosErrorCode.UNDEFINED_EDGE,
             f"'!* {value.name}' is referenced before '!& {value.name}' defines it.",
-            value.span)
+            value.span,
+            Locator(step=port.id.step.name, index=port.id.step.index, port=str(port.id.port)))
         return None
     return DeferredObligation(port.id, value.name, port.type, span=value.span)

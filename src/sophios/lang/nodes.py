@@ -89,7 +89,7 @@ class InlineLiteral:
     """
 
     value: 'OpaqueCwl' = surface(Shape.IDENTITY)
-    span: SourceSpan = surface(Shape.INTERNAL)
+    span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
     text: str | None = surface(Shape.INTERNAL, default=None)
 
 
@@ -103,7 +103,7 @@ class EdgeDef:
     """
 
     name: str = surface(Shape.IDENTITY)
-    span: SourceSpan = surface(Shape.INTERNAL)
+    span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +111,7 @@ class EdgeRef:
     """`!* name` — an explicit edge call site."""
 
     name: str = surface(Shape.IDENTITY)
-    span: SourceSpan = surface(Shape.INTERNAL)
+    span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +123,7 @@ class RawCwlRef:
     """
 
     expression: str = surface(Shape.IDENTITY)
-    span: SourceSpan = surface(Shape.INTERNAL)
+    span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +135,7 @@ class UnresolvedName:
     """
 
     name: str = surface(Shape.IDENTITY)
-    span: SourceSpan = surface(Shape.INTERNAL)
+    span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
 
 
 #: The complete set of forms a step input may take: a literal, an edge
@@ -166,7 +166,7 @@ class OutputBinding:
 
     name: str = surface(Shape.IDENTITY)
     edge_def: EdgeDef | None = surface(Shape.IDENTITY)
-    span: SourceSpan = surface(Shape.INTERNAL)
+    span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
 
 
 @dataclass(frozen=True, slots=True)
