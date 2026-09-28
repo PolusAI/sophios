@@ -121,7 +121,6 @@ def _compile_front(front: FrontEndResult,
     linked = link(prepared)
     if linked.graph is None:
         raise SophiosError(linked.diagnostics)
-    prepared = complete(linked.graph)
     policy = InferencePolicy(
         disabled=compiler_options['inference_disable'],
         use_naming_conventions=compiler_options['inference_use_naming_conventions'],
@@ -129,7 +128,7 @@ def _compile_front(front: FrontEndResult,
         insert_steps_automatically=compiler_options['insert_steps_automatically'],
         format_rules=tuple(compiler_options.get('inference_rules', {}).items()),
     )
-    inferred = infer(prepared, policy, InsertionCatalog.from_registry(registry))
+    inferred = infer(linked.graph, policy, InsertionCatalog.from_registry(registry))
     if inferred.graph is None:
         raise SophiosError(inferred.diagnostics)
     graph = complete(inferred.graph)

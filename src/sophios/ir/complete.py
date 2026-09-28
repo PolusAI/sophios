@@ -10,7 +10,7 @@ spells it, at Emit. It states no document -- requirements, `$namespaces`,
 import json
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any
+from typing import Any, TypeVar
 
 from ..lang.nodes import InlineLiteral, UnresolvedName
 from ..lang.diagnostics import SophiosError
@@ -86,8 +86,8 @@ def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
             if boundary.name in authored or boundary.name not in child_jobs:
                 continue
             outer_name = DerivedName(step.id, boundary.name)
-            _put_port(workflow_inputs, WorkflowPort(outer_name, boundary.declaration))
-            _put_job(job_bindings, JobBinding(outer_name, child_jobs[boundary.name]))
+            _put(workflow_inputs, WorkflowPort(outer_name, boundary.declaration))
+            _put(job_bindings, JobBinding(outer_name, child_jobs[boundary.name]))
             sink = next(port.id for port in inputs if port.id.port == boundary.name)
             _put_input_mapping(input_mapping, outer_name, sink)
             if outer_name not in shorthand_relays:
@@ -118,9 +118,9 @@ def _materialize_bindings(graph: WorkflowGraph) -> WorkflowGraph:
             match binding.value:
                 case InlineLiteral(value=value):
                     name = DerivedName(step.id, port.id.port)
-                    declaration = _input_declaration(port, step.scatter_ports)
-                    _put_port(workflow_inputs, WorkflowPort(name, declaration))
-                    _put_job(job_bindings, JobBinding(
+                    declaration = _boundary(port, step.scatter_ports.count(port.id.port))
+                    _put(workflow_inputs, WorkflowPort(name, declaration))
+                    _put(job_bindings, JobBinding(
                         name, coerce_job_value(str(port.id.port), declaration, value)))
                     _put_input_mapping(input_mapping, name, port.id)
                 case UnresolvedName(name=text):
@@ -162,29 +162,20 @@ def _materialize_outputs(graph: WorkflowGraph) -> WorkflowGraph:
             name = DerivedName(step.id, port.id.port)
             if name in authored:
                 continue
-            declaration = _output_declaration(port, dict(step.interpreted).get('scatter'))
+            declaration = _boundary(port, 1 if dict(step.interpreted).get('scatter') else 0)
             outputs.append(WorkflowPort(
                 name, declaration, StepOutputRef(step.id, port.id.port), True))
             output_mapping.append((name, port.id))
     return replace(graph, workflow_outputs=tuple(outputs), output_mapping=tuple(output_mapping))
 
 
-def _input_declaration(port: Port, scatter_ports: tuple[PortName, ...]) -> BoundaryDeclaration:
+def _boundary(port: Port, layers: int) -> BoundaryDeclaration:
+    """`port` as a workflow boundary declares it, wrapped in `layers` array levels."""
     declaration = boundary_declaration(port.declaration or port_declaration(port.type.declared))
-    layers = scatter_ports.count(port.id.port)
     raw = _canonical_type(declaration.type.declared)
     for _ in range(layers):
         raw = {'type': 'array', 'items': raw}
     return BoundaryDeclaration(replace(declaration, type=port_declaration({'type': raw}).type))
-
-
-def _output_declaration(port: Port, scatter: Any) -> BoundaryDeclaration:
-    declaration = boundary_declaration(port.declaration or port_declaration(port.type.declared))
-    raw = _canonical_type(declaration.type.declared)
-    if scatter:
-        raw = {'type': 'array', 'items': raw}
-    return BoundaryDeclaration(
-        replace(declaration, type=port_declaration({'type': raw}).type))
 
 
 def _canonical_type(value: Any) -> Any:
@@ -197,14 +188,13 @@ def _canonical_type(value: Any) -> Any:
     return deepcopy(value)
 
 
-def _put_port(ports: list[WorkflowPort], port: WorkflowPort) -> None:
-    if port.name not in {item.name for item in ports}:
-        ports.append(port)
+_Named = TypeVar('_Named', WorkflowPort, JobBinding)
 
 
-def _put_job(bindings: list[JobBinding], binding: JobBinding) -> None:
-    if binding.name not in {item.name for item in bindings}:
-        bindings.append(binding)
+def _put(items: list[_Named], item: _Named) -> None:
+    """Append `item` unless an entry with its name is already present."""
+    if item.name not in {existing.name for existing in items}:
+        items.append(item)
 
 
 def _put_input_mapping(mappings: list[tuple[PortName, tuple[PortId, ...]]],
