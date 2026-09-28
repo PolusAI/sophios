@@ -14,15 +14,17 @@ import copy
 from typing import Any
 
 import pytest
-from hypothesis import given
+from hypothesis import given, strategies as st
 
-from sophios.ir.complete import complete
+from sophios.ir.complete import coerce_job_value, complete
+from sophios.ir.declarations import port_declaration
 from sophios.ir.emit import emit, surface
 from sophios.ir.names import Names
 from sophios.ir.types import WorkflowGraph
 from sophios.ir.infer import infer
 from sophios.ir.link import link
 from sophios.ir.pipeline import front_end
+from sophios.lang.diagnostics import SophiosError
 from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
@@ -119,3 +121,31 @@ def test_completing_twice_is_completing_once_for_any_workflow(workflow: Yaml) ->
     assert front.graph is not None, list(front.diagnostics)
     once = complete(front.graph)
     assert _render(complete(once)) == _render(once)
+
+
+_ATOMS = st.sampled_from(['string', 'int', 'float', 'boolean', 'File', 'Directory'])
+_TYPES = st.recursive(
+    st.one_of(_ATOMS, _ATOMS.map(lambda atom: atom + '?'), _ATOMS.map(lambda atom: atom + '[]')),
+    lambda inner: st.one_of(inner.map(lambda item: ['null', item]),
+                            inner.map(lambda item: {'type': 'array', 'items': item})),
+    max_leaves=3)
+_OBJECTS = st.fixed_dictionaries(
+    {'class': st.sampled_from(['File', 'Directory']), 'location': st.text(max_size=2)},
+    optional={'format': st.just('edam:format_2')})
+_VALUES = st.recursive(
+    st.one_of(st.text(max_size=2), st.integers(), st.booleans(),
+              st.floats(allow_nan=False, allow_infinity=False), _OBJECTS),
+    lambda inner: st.lists(inner, max_size=2), max_leaves=4)
+
+
+@pytest.mark.skip_pypi_ci
+@given(_TYPES, st.sampled_from([{}, {'format': 'edam:format_1'}]), _VALUES)
+def test_a_job_value_is_its_own_normal_form(raw: Any, fmt: Yaml, value: Any) -> None:
+    """Coercing a coerced job value changes nothing, which is what lets a
+    child's job value be lifted a level and coerced against the outer port."""
+    declaration = port_declaration({'type': raw, **fmt})
+    try:
+        once = coerce_job_value('x', declaration, value)
+    except SophiosError:
+        return
+    assert coerce_job_value('x', declaration, once) == once

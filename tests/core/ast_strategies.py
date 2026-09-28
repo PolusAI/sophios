@@ -112,6 +112,8 @@ def _literal_for(declared: Any) -> SearchStrategy[Any]:
     members = declared if isinstance(declared, list) else [declared]
     for member in members:
         name = member[:-1] if isinstance(member, str) and member.endswith('?') else member
+        while isinstance(name, str) and name.endswith('[]'):
+            name = name[:-2]
         if isinstance(name, str) and name in _LITERALS_BY_TYPE:
             return _LITERALS_BY_TYPE[name]
     return literals

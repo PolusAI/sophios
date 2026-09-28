@@ -284,12 +284,8 @@ def _normalize_output_target_name(value: Any, source_key: str) -> Any:
     match value:
         case str() as location:
             return _output_target_basename(location, source_key)
-        case {"class": "Directory", "location": {"wic_inline_input": str() as location}}:
-            return _output_target_basename(location, source_key)
         case {"class": "Directory", "location": str() as location}:
             return _output_target_basename(location, source_key)
-        case {"class": "Directory", "location": _}:
-            return value
         case {"class": "Directory", "basename": str() as location}:
             return _output_target_basename(location, source_key)
         case _:

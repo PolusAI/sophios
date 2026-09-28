@@ -85,10 +85,13 @@ def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
             if boundary.name in authored or boundary.name not in child_jobs:
                 continue
             outer_name = DerivedName(step.id, boundary.name)
-            _put(workflow_inputs, WorkflowPort(outer_name, boundary.declaration))
-            _put(job_bindings, JobBinding(outer_name, child_jobs[boundary.name]))
-            sink = next(port.id for port in inputs if port.id.port == boundary.name)
-            _put_input_mapping(input_mapping, outer_name, sink)
+            sink = next(port for port in inputs if port.id.port == boundary.name)
+            declaration = feeding_declaration(step, sink)
+            value = child_jobs[boundary.name]
+            _put(workflow_inputs, WorkflowPort(outer_name, declaration))
+            _put(job_bindings, JobBinding(outer_name, coerce_job_value(
+                str(boundary.name), declaration, value)))
+            _put_input_mapping(input_mapping, outer_name, sink.id)
             if outer_name not in shorthand_relays:
                 shorthand_relays.append(outer_name)
 
@@ -215,10 +218,11 @@ def _as_text(value: Any) -> Any:
 
 
 def coerce_job_value(name: str, declaration: PortDeclaration, value: Any) -> Any:
-    """Coerce one literal exactly once at the graph/job boundary.
+    """`value` in the one plain-JSON form a job document holds for `declaration`.
 
-    A literal's body may hold parsed `InputValue` nodes; a job value must be
-    plain JSON. Unwrapping happens here, once, for every declared type.
+    A projection: a value already in that form (a lifted child job value, an
+    authored `File` object) passes through. Each array layer of the type wraps
+    a scalar in a list and keeps a list.
     """
     value = _plain(value)
     if value is None:
@@ -239,7 +243,7 @@ def _coerce_type(name: str, raw: Any, value: Any, fmt: Any) -> Any:
         raw = arrays[0] if arrays else (non_null[0] if len(non_null) == 1 else non_null)
     if isinstance(raw, dict) and raw.get('type') == 'array':
         values = value if isinstance(value, list) else [value]
-        return [_coerce_scalar(name, raw.get('items'), item, fmt) for item in values]
+        return [_coerce_type(name, raw.get('items'), item, fmt) for item in values]
     return _coerce_scalar(name, raw, value, fmt)
 
 
@@ -255,13 +259,15 @@ def _plain(value: Any) -> Any:
 
 
 def _coerce_scalar(name: str, raw: Any, value: Any, fmt: Any) -> Any:
-    if raw == 'File':
-        result = {'class': 'File', 'location': value}
-        if fmt:
+    if raw in ('File', 'Directory'):
+        if isinstance(value, str):
+            value = {'class': raw, 'location': value}
+        elif not isinstance(value, dict) or value.get('class') != raw:
+            raise _mismatch(name, raw, value)
+        result = deepcopy(value)
+        if raw == 'File' and fmt and 'format' not in result:
             result['format'] = fmt
         return result
-    if raw == 'Directory':
-        return {'class': 'Directory', 'location': value}
     if raw == 'string':
         # A dict/list bound to `string` is JSON to parse, not Python repr to print.
         if isinstance(value, (dict, list)):
@@ -274,9 +280,13 @@ def _coerce_scalar(name: str, raw: Any, value: Any, fmt: Any) -> Any:
             return float(value)
         if raw == 'boolean':
             return bool(value)
-    except (TypeError, ValueError) as exc:
-        raise SophiosError.error(
-            SophiosErrorCode.LITERAL_TYPE_MISMATCH,
-            f'Input {name!r} is declared type {raw!r} but its literal {value!r} '
-            'does not convert to it.') from exc
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise _mismatch(name, raw, value) from exc
     return deepcopy(value)
+
+
+def _mismatch(name: str, raw: Any, value: Any) -> SophiosError:
+    return SophiosError.error(
+        SophiosErrorCode.LITERAL_TYPE_MISMATCH,
+        f'Input {name!r} is declared type {raw!r} but its literal {value!r} '
+        'does not convert to it.')

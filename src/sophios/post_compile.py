@@ -189,8 +189,11 @@ def stage_input_files(yml_inputs: Yaml,
         FileNotFoundError: If throw and any of the input files do not exist.
     """
 
-    for val in yml_inputs.values():
+    values = list(yml_inputs.values())
+    for val in values:  # grows: a scattered value is a list of File objects
         match val:
+            case list() as items:
+                values.extend(items)
             case {"class": "File", "location": location, **_rest_val}:
                 src_path = root_yml_dir_abs / Path(location)
                 if not src_path.exists() and throw:
