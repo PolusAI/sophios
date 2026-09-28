@@ -481,12 +481,13 @@ differential property in Spec 3, have one shape:
 
 for a rewrite `f` that must not change meaning. They differ only in `f` and in
 what `≡` may ignore. That relation is therefore a **deliverable of this spec,
-not an idiom repeated per property**: three strengths, ordered as a lattice,
+not an idiom repeated per property**: four strengths, ordered as a lattice,
 each naming exactly what it forgives and why.
 
 | Strength | Ignores | Legitimate because |
 |---|---|---|
 | `IDENTICAL` | nothing | — |
+| `UP_TO_ORDER` | mapping key order | a YAML mapping is unordered, and CWL reads these documents as mappings; this is the compatibility gate for emitted CWL |
 | `UP_TO_EMBEDDING` | `run:` paths | `run:` encodes where a document sits relative to its parent |
 | `UP_TO_RENAMING` | namespaced names | a namespace encodes nesting depth, so regrouping renames every port and moves no edge |
 
@@ -521,9 +522,9 @@ takes the most recent match, so order is part of what a workflow means.
   list order and need no flag, and the third is on the speculative-insertion
   path, reachable only behind `--insert_steps_automatically` with two or more
   whitelisted converter tools. Stated as canonical order rather than as
-  agreement across `PYTHONHASHSEED`: the seed is the symptom, sortedness is
-  checkable on every example without a second interpreter, and a total static
-  scan reaches the site no generator can. It is also a precondition for the
+  agreement across `PYTHONHASHSEED`: the seed is the symptom, and sortedness is
+  checkable on every example without a second interpreter. It is also a
+  precondition for the
   relation above — while emitted order came from a set, `IDENTICAL` was a
   strength nothing could satisfy.
 - **Namespace injectivity** — distinct ports never collide after namespacing.
