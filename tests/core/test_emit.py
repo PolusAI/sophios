@@ -160,15 +160,28 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
 @given(strat.workflows())
 @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 def test_emit_validates_as_cwl_v1_2(workflow: Yaml) -> None:
-    """CWL's external validator accepts each graph-derived artifact."""
+    """CWL's external validator accepts each emitted workflow and its job inputs.
+
+    `cwltool --validate` type-checks every link, scatter included, and every
+    job value against its input's declared type. It does not open the files a
+    job names. A required input the job leaves unset is one the user supplies
+    at run time, so it is made optional first: cwltool then still rejects a
+    link that no member of the widened type fits.
+    """
     import cwltool.main  # pylint: disable=import-outside-toplevel
 
     info = compile_hermetic(workflow)
     inlined = sophios.post_compile.inline_artifact_runs(info.artifact).cwl
+    job = info.artifact.job_inputs
+    for name, declared in inlined['inputs'].items():
+        if name not in job and 'default' not in declared:
+            members = declared['type'] if isinstance(declared['type'], list) else [declared['type']]
+            declared['type'] = members if 'null' in members else ['null', *members]
     with tempfile.TemporaryDirectory() as workdir:
-        target = Path(workdir) / 'workflow.cwl'
+        target, values = Path(workdir) / 'workflow.cwl', Path(workdir) / 'job.yml'
         target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
-        assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 0
+        values.write_text(yaml.safe_dump(job, sort_keys=False), encoding='utf-8')
+        assert cwltool.main.main(['--validate', '--quiet', str(target), str(values)]) == 0
 
 
 @pytest.mark.needs_cwltool

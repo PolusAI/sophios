@@ -1,11 +1,10 @@
-"""The canonical path: two front ends, real CWL, a submittable payload.
+"""The canonical path: two front ends, one submittable payload.
 
-Four claims about the compatibility contract the two front ends advertise:
+Three claims about the compatibility contract the two front ends advertise:
 
   * **Path agreement.** A workflow built through the Python API and compiled
     directly must equal the same workflow written with `write_wic` and
     compiled from the file. Two spellings of one DAG, one compiled result.
-  * **CWL validity.** Compiled output validates under `cwltool`, in-process.
   * **Compute-payload conformance.** `ComputeRequest` builds and validates its
     own payload. No network: build and validate, never submit.
   * **Passthrough fidelity over workflows the narrower generators miss** — a
@@ -13,9 +12,8 @@ Four claims about the compatibility contract the two front ends advertise:
     cannot express.
 
 Nothing here is `skip_pypi_ci`, and no job names this file, so that marker
-would mean "runs nowhere" rather than "excluded from one lane". The
-`cwltool --validate` cases carry none: `cwltool` is a hard dependency,
-`--validate` is in-process, and no case pulls or runs a container.
+would mean "runs nowhere" rather than "excluded from one lane". CWL validity
+is `test_emit.test_emit_validates_as_cwl_v1_2`'s.
 """
 import json
 import tempfile
@@ -25,12 +23,11 @@ from typing import Final
 
 import pytest
 import yaml
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 from sophios.api.python import _workflow_runtime
 import sophios.compiler
-import sophios.post_compile
 from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
 from sophios.cli import default_compilation_settings
 from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest
@@ -143,12 +140,8 @@ def test_the_written_wic_file_is_a_real_independent_document() -> None:
         'agreement downstream would prove nothing about the file-based path')
 
 
-#: A restricted, safe alphabet for the three string-typed literals `_PathSpec`
-#: carries. All three bind `string`-typed tool inputs (`mk_file.name`,
-#: `mk_text.name`, `join.name`), so there is no scalar-coercion gap to avoid
-#: here (contrast `ast_strategies.py`'s own PENDING FINDING, which is about
-#: `int`/`float`-typed arguments); restricted anyway to keep this property
-#: about path agreement rather than about YAML's more exotic corners.
+#: The three string-typed literals `_PathSpec` carries, restricted to keep
+#: this property about path agreement rather than YAML's exotic corners.
 _safe_text: Final = st.text('abcxyz_', max_size=8)
 
 
@@ -196,62 +189,6 @@ def test_the_two_front_ends_compile_to_the_same_cwl(spec: _PathSpec) -> None:
     assert inputs_found is None, (
         f'the two front ends disagree about the generated job inputs.\n{inputs_found}\n\n'
         f'--- written .wic ---\n{written_text}')
-
-
-# --------------------------------------------------------------------------
-# CWL validity
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.needs_cwltool
-@pytest.mark.slow
-def test_cwltool_validate_rejects_an_invalid_document() -> None:
-    """Tautology guard: `cwltool` must be able to say no, or a 0 from
-    `test_compiled_output_validates_as_cwl` proves nothing."""
-    import cwltool.main  # pylint: disable=import-outside-toplevel  # expensive; slow lane only
-
-    with tempfile.TemporaryDirectory() as workdir:
-        target = Path(workdir) / 'invalid.cwl'
-        # No `cwlVersion`, no `inputs`/`outputs`: not a document any version
-        # of the CWL schema accepts.
-        target.write_text(yaml.safe_dump({'class': 'Workflow', 'steps': []}, sort_keys=False),
-                          encoding='utf-8')
-        assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 1
-
-
-@pytest.mark.needs_cwltool
-@pytest.mark.slow
-@given(strat.workflows())
-# Ten examples, not the suite's usual hundred: `workflows()`'s shape space is
-# small (eight stems, a handful of surface forms) and the literal values
-# inside a document cannot change whether the emitted document is valid CWL —
-# `test_leak_boundary.test_residue_validates_as_cwl_v1_2` learned this at
-# about ninety seconds of CI for a strategy with exactly this property. A
-# budget set at design time from measurement, not a weakened count.
-@settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-def test_compiled_output_validates_as_cwl(yml: Yaml) -> None:
-    """`cwltool` agrees every compiled workflow this oracle produces is
-    valid CWL v1.2.
-
-    Checked in-process (`cwltool.main.main(['--validate', '--quiet', path])`),
-    not a subprocess: confirmed to return 1 for an invalid document by
-    `test_cwltool_validate_rejects_an_invalid_document`, so a 0 here is a real
-    validity claim rather than an unchecked assumption about the oracle.
-
-    BLIND SPOTS: `workflows()`'s own — no `!cwl`, no `python_script` steps, no
-    `NOT_YET_COMPILABLE` exclusions (currently none, see `ast_strategies.py`).
-    Validated, never executed: a document that validates can still fail at
-    runtime, which is outside what `--validate` checks.
-    """
-    import cwltool.main  # pylint: disable=import-outside-toplevel  # expensive; slow lane only
-
-    info = compile_hermetic(yml, 'oracle')
-    inlined = sophios.post_compile.inline_artifact_runs(info.artifact).cwl
-
-    with tempfile.TemporaryDirectory() as workdir:
-        target = Path(workdir) / 'oracle.cwl'
-        target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
-        assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 0
 
 
 # --------------------------------------------------------------------------
