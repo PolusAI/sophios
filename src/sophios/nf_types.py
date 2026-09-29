@@ -8,7 +8,7 @@ import math
 from types import MappingProxyType
 from typing import Any, ClassVar, Generic, Self, TypeVar, get_args
 
-from .nf_expr import NF_FINITE_HELPER, NF_NUMBER_TEXT_HELPER, NF_ROUND_HELPER, Expr, references
+from .nf_expr import NF_FINITE_HELPER, NF_NUMBER_TEXT_HELPER, NF_ROUND_HELPER, Expr, references, validate
 from .nf_symbols import validate_nextflow_identifier
 
 
@@ -370,6 +370,7 @@ class NfComputed:
     def __post_init__(self) -> None:
         if not isinstance(self.expression, Expr):
             raise TypeError("computed token expression must be a typed Expr")
+        validate(self.expression)
         if not isinstance(self.where, str) or not self.where:
             raise ValueError("computed token requires a non-empty diagnostic location")
         if not isinstance(self.integral, bool):

@@ -33,14 +33,21 @@ _BINARY_LEVELS: tuple[frozenset[str], ...] = (
     frozenset({"+", "-"}),
     frozenset({"*", "/", "%"}),
 )
+_BINARY = frozenset(op for level in _BINARY_LEVELS for op in level)
 _CALLS = {
     "Math.abs": 1, "Math.sqrt": 1, "Math.floor": 1, "Math.ceil": 1, "Math.round": 1,
     "Math.pow": 2, "Math.min": -2, "Math.max": -2,
 }
 _WHOLE_FIELD = re.compile(r"^\$\((?P<body>.*)\)$", re.DOTALL)
+# JavaScript strict mode rejects a leading zero on an integer (octal). ASCII
+# digits only: Python's float() accepts U+0663, and Double.valueOf does not.
+# The exponent is part of the literal, so 1e999 is one non-finite number
+# rather than the number 1 followed by an identifier.
+_NUMBER_BODY = r"(?:0|[1-9][0-9]*)(?:\.[0-9]*)?|\.[0-9]+"
+_NUMBER = re.compile(rf"(?:{_NUMBER_BODY})(?:[eE][+-]?[0-9]+)?")
 _TOKEN = re.compile(
     r"\s*(?:"
-    r"(?P<number>(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)"
+    rf"(?P<number>0[0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?|(?:{_NUMBER_BODY})(?:[eE][+-]?[0-9]+)?)"
     r"|(?P<string>\"[ !#-\[\]-~]*\"|'[ -&(-\[\]-~]*')"
     r"|(?P<name>[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*)"
     r"|(?P<op>===|!==|==|!=|<=|>=|&&|\|\||\*\*|[-+*/%<>!(),?:&|^~=\[\]{}`;])"
@@ -76,8 +83,27 @@ class Expr:
 
 
 def is_safe_subset_text(value: Any) -> bool:
-    """Whether a field is one whole ``$( … )`` reference the subset parser should own."""
-    return isinstance(value, str) and _WHOLE_FIELD.match(value.strip()) is not None
+    """Whether a field is one whole ``$( … )`` reference the subset parser should own.
+
+    A body whose parentheses are unbalanced is a template that happens to
+    start with ``$(`` and end with ``)``, such as ``$(inputs.a)-$(inputs.b)``.
+    That stays a projection template.
+    """
+    if not isinstance(value, str) or (match := _WHOLE_FIELD.match(value.strip())) is None:
+        return False
+    return _parentheses_balance(match.group("body"))
+
+
+def _parentheses_balance(body: str) -> bool:
+    depth = 0
+    for character in body:
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
 
 
 class _Parser:
@@ -191,7 +217,13 @@ def check(node: Expr, input_types: Mapping[str, Any]) -> str:
 
     match node.op:
         case "number":
-            if not math.isfinite(float(node.value)):
+            if not isinstance(node.value, str) or _NUMBER.fullmatch(node.value) is None:
+                raise ValueError(f"number literal {node.value!r} is not a strict-mode decimal")
+            try:
+                parsed = float(node.value)
+            except ValueError as exc:
+                raise ValueError(f"number literal {node.value} is not finite") from exc
+            if not math.isfinite(parsed):
                 raise ValueError(f"number literal {node.value} is not finite")
             return NUMBER
         case "string" | "boolean" | "null":
@@ -260,6 +292,59 @@ def _require(expected: str, actual: str, construct: str) -> str:
     if actual != expected:
         raise ValueError(f"{construct} requires {expected} operands, not {actual}")
     return expected
+
+
+def validate(node: Expr) -> None:
+    """Reject a hydrated tree the closed grammar would not have built.
+
+    ``from_dict`` rebuilds nodes without parsing, and the renderer writes a
+    call's ``op`` into the script. Hydration therefore re-checks each operator
+    against the closed set, each arity, and each literal.
+    """
+    match node.op:
+        case "number":
+            if not isinstance(node.value, str) or _NUMBER.fullmatch(node.value) is None:
+                raise ValueError(f"number literal {node.value!r} is not a strict-mode decimal")
+            try:
+                parsed = float(node.value)
+            except ValueError as exc:
+                raise ValueError(f"number literal {node.value} is not finite") from exc
+            if not math.isfinite(parsed):
+                raise ValueError(f"number literal {node.value} is not finite")
+            if node.args:
+                raise ValueError("a number literal takes no arguments")
+        case "string":
+            if not isinstance(node.value, str) or not re.fullmatch(r"[ -~]*", node.value) or "\\" in node.value:
+                raise ValueError(f"string literal {node.value!r} is outside the admitted alphabet")
+            if node.args:
+                raise ValueError("a string literal takes no arguments")
+        case "boolean":
+            if not isinstance(node.value, bool):
+                raise ValueError("a boolean literal must be true or false")
+            if node.args:
+                raise ValueError("a boolean literal takes no arguments")
+        case "null":
+            if node.args or node.value is not None:
+                raise ValueError("null takes no arguments and no value")
+        case "ref":
+            if not isinstance(node.value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", node.value):
+                raise ValueError(f"input reference {node.value!r} is not an identifier")
+            if node.args:
+                raise ValueError("an input reference takes no arguments")
+        case "u!" | "u-" | "u+":
+            if len(node.args) != 1:
+                raise ValueError(f"{node.op[1]} takes one operand")
+        case op if op in _BINARY:
+            if len(node.args) != 2:
+                raise ValueError(f"{op} takes two operands")
+        case call if call in _CALLS:
+            arity = _CALLS[call]
+            if (arity > 0 and len(node.args) != arity) or (arity < 0 and len(node.args) < -arity):
+                raise ValueError(f"{call} takes {abs(arity)}{' or more' if arity < 0 else ''} arguments")
+        case _:
+            raise ValueError(f"unsupported construct {node.op!r}")
+    for arg in node.args:
+        validate(arg)
 
 
 def references(node: Expr) -> set[str]:
@@ -336,13 +421,17 @@ def render_groovy(node: Expr, *, where: str, inputs: str) -> str:
                 return numeric(f"({args[0]} {child.op} {args[1]})", child)
             case "Math.round":
                 return numeric(f"{NF_ROUND_HELPER}({args[0]})", child)
+            case "Math.pow":
+                return numeric(f"StrictMath.pow({', '.join(args)})", child)
             case "Math.min" | "Math.max":
                 folded = args[0]
                 for arg in args[1:]:
                     folded = f"{child.op}({folded}, {arg})"
                 return numeric(folded, child)
-            case call:
+            case call if call in _CALLS:
                 return numeric(f"{call}({', '.join(args)})", child)
+            case _:
+                raise ValueError(f"unsupported construct {child.op!r}")
 
     _numeric_refs = _numeric_ref_nodes(node)
     return go(node)

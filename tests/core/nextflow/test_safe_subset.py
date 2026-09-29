@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from sophios.nf_expr import check, parse
-from sophios.nf_types import ExecutableNextflowWorkflow, NfComputed
+from sophios.nf_expr import Expr, check, parse
+from sophios.nf_types import ExecutableNextflowWorkflow, NfComputed, NfTemplate
 from sophios.utils_nf import compiled_source_to_nextflow
 
 from .testkit import execute_nextflow, step, synthetic_source, tool, workflow_doc
@@ -70,6 +70,9 @@ def test_admitted_expressions_type_check(text: str, expected: str) -> None:
     ("$(Math.pow(1))", "Math.pow takes 2 arguments"),
     ("$(Math.min(1))", "Math.min takes 2 or more arguments"),
     ("$(1e999)", "number literal 1e999 is not finite"),
+    ("$(010 + 1)", "number literal '010' is not a strict-mode decimal"),
+    ("$(08)", "number literal '08' is not a strict-mode decimal"),
+    ("$(\u0663)", "unsupported character"),
     ("$(inputs.nope)", "inputs.nope is not an input of this tool"),
     ("$(\"a\\\"b\")", "unsupported character"),
 ])
@@ -122,6 +125,32 @@ def test_computed_token_requires_schema_version_ten() -> None:
 def test_computed_argument_rejections(argument: dict[str, Any], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         _calc_workflow([argument], {"a": 3}, a="int")
+
+
+@pytest.mark.fast
+@pytest.mark.fast
+@pytest.mark.parametrize("value_from", ["$(inputs.a)-$(inputs.b)", "$(inputs.a).$(inputs.b)"])
+def test_two_projections_in_one_field_stay_a_template(value_from: str) -> None:
+    workflow = _calc_workflow([{"valueFrom": value_from}], {"a": 1, "b": 2}, a="int", b="int")
+    value = workflow.processes[0].command.tokens[-1]
+    assert isinstance(value, NfTemplate)
+    assert not any(isinstance(token, NfComputed) for token in workflow.processes[0].command.tokens)
+
+
+@pytest.mark.fast
+def test_a_hydrated_call_outside_the_closed_set_is_rejected() -> None:
+    payload = _calc_workflow([{"valueFrom": "$(Math.pow(inputs.a, 2))"}], {"a": 3}, a="int").to_dict()
+    tokens = payload["processes"][0]["command"]["tokens"]
+    token = next(item for item in tokens if item.get("kind") == "computed")
+    token["expression"]["op"] = "Runtime.getRuntime().exec"
+    with pytest.raises(ValueError, match="unsupported construct 'Runtime.getRuntime\\(\\)\\.exec'"):
+        ExecutableNextflowWorkflow.from_dict(payload)
+
+
+@pytest.mark.fast
+def test_a_hydrated_number_with_a_leading_zero_is_rejected() -> None:
+    with pytest.raises(ValueError, match="not a strict-mode decimal"):
+        NfComputed(Expr("number", value="010"), "tool field $(010)", False)
 
 
 @pytest.mark.fast
