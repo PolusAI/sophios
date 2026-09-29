@@ -10,6 +10,7 @@ Resolving a step's tool against the environment is `Resolve`'s job, so a port's
 type is what the document declared and inference has not run.
 """
 import difflib
+from collections.abc import Iterator
 from typing import Final
 from dataclasses import dataclass
 
@@ -20,13 +21,14 @@ from ..lang.nodes import Document, EdgeRef, InputValue, Step, UnresolvedName
 from ..lang.versions import (ANNOTATION_KEY, ANNOTATION_NAMESPACE,
                              ANNOTATION_NAMESPACE_URI)
 from .declarations import port_declaration
-from .names import render_step_id
+from .names import Names, render_step_id
 from .resolve import ResolvedDocument, ResolvedStep
 from .types import (
     AuthoredName,
     Binding,
     BoundaryDeclaration,
     DeferredObligation,
+    DerivedName,
     Direction,
     Edge,
     Namespace,
@@ -93,11 +95,12 @@ def _lower_resolved(document: ResolvedDocument,
     children: list[WorkflowGraph] = []
 
     for identity, resolved_step in zip(identities, document.steps, strict=True):
-        # Lowered before its step, so the child's diagnostics travel with it.
+        # Lowered before its step, which may scatter over a name the child exposes.
         child = (_lower_resolved(resolved_step.process.child, here.child(identity))
                  if resolved_step.process.child is not None else None)
-        node = _resolved_step_node(identity, resolved_step, defined_so_far,
-                                   defined_anywhere, diagnostics)
+        node = _resolved_step_node(identity, resolved_step,
+                                   child.graph if child is not None else None,
+                                   defined_so_far, defined_anywhere, diagnostics)
         nodes.append(node)
         for authored in resolved_step.source.outputs:
             if authored.edge_def is not None:
@@ -175,7 +178,7 @@ def _lower_resolved(document: ResolvedDocument,
 _GENERATION_PARAMETERS: Final = ('script', 'dockerPull')
 
 
-def _resolved_step_node(identity: StepId, resolved: ResolvedStep,
+def _resolved_step_node(identity: StepId, resolved: ResolvedStep, child: WorkflowGraph | None,
                         defined_so_far: dict[str, PortId], defined_anywhere: dict[str, PortId],
                         diagnostics: Diagnostics) -> StepNode:
     source = resolved.source
@@ -214,23 +217,28 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep,
                      if (port := by_input.get(AuthoredName(name))) is not None)
     interpreted = dict(source.interpreted)
     run = ProcessRun(resolved.process.run_path, resolved.process.key)
-    scatter_ports = _scatter_ports(source, identity, inputs, diagnostics)
+    scatter_ports = _scatter_ports(source, identity, inputs, diagnostics, child)
     return StepNode(identity, inputs, outputs, bindings, source.interpreted,
                     source.passthrough, source.span, run, scatter_ports,
                     _inference_rules(resolved.sidecar))
 
 
 def _scatter_ports(source: Step, identity: StepId, inputs: tuple[Port, ...],
-                   diagnostics: Diagnostics) -> tuple[PortName, ...]:
+                   diagnostics: Diagnostics, child: WorkflowGraph | None) -> tuple[PortName, ...]:
     """The ports an authored `scatter:` names, in the order written.
 
-    A scatter entry names an input of its step. A name that is none of them
-    is `wic032` and is dropped from the ports rank and Emit read.
+    A scatter entry names an input of its step, or a name the callee exposes.
+    A name that is neither is `wic032` and is dropped from the ports rank and
+    Emit read.
     """
     scatter = dict(source.interpreted).get('scatter')
     written: list[object] = [scatter] if isinstance(scatter, str) else (
         list(scatter) if isinstance(scatter, list) else [])
     ports: dict[str, PortName] = {str(port.id.port): port.id.port for port in inputs}
+    if child is not None:
+        names = Names.of(child)
+        for candidate in _exposed_inputs(child):
+            ports.setdefault(names.port(candidate), candidate)
     found: list[PortName] = []
     for text in written:
         if not isinstance(text, str):
@@ -243,6 +251,15 @@ def _scatter_ports(source: Step, identity: StepId, inputs: tuple[Port, ...],
                           _unknown_scatter(source.id, text, list(ports)),
                           source.span, Locator(step=source.id, index=identity.index))
     return tuple(found)
+
+
+def _exposed_inputs(graph: WorkflowGraph) -> Iterator[DerivedName]:
+    """Every input `graph` can expose one level up, through any depth of nesting."""
+    for step in graph.steps:
+        yield from (DerivedName(step.id, port.id.port) for port in step.inputs)
+        for nested in graph.children:
+            if nested.namespace.parts[-1] == step.id:
+                yield from (DerivedName(step.id, name) for name in _exposed_inputs(nested))
 
 
 def _unknown_scatter(step: str, text: str, ports: list[str]) -> str:

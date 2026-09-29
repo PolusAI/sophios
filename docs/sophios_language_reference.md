@@ -377,7 +377,8 @@ scatter    scatterMethod    when    run
 
 Everything else on a step is passthrough.
 
-Each `scatter:` entry must name an input of its step. Any other name is
+Each `scatter:` entry must name an input of its step, or, on a
+subworkflow call, a name that call's callee exposes. Any other name is
 `wic032`, whose message lists the inputs that are valid.
 
 ---
