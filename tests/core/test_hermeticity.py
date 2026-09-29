@@ -133,6 +133,9 @@ def test_the_registry_reaches_the_branches_it_claims_to() -> None:
         'every input is required: the optional-argument path is unreachable'
     formats = {o.get('format') for s in STEMS for o in outputs_of(s).values()}
     assert len({f for f in formats if f}) >= 2, 'one format: inference never has to choose'
+    assert any(len(outputs_of(s)) > 1 for s in STEMS), 'no tool promotes several outputs'
+    assert any(i.get('type') == 'Directory' for s in STEMS for i in inputs_of(s).values()), \
+        'no Directory input: its job value is never coerced'
 
 
 @pytest.mark.fast

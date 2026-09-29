@@ -352,10 +352,13 @@ def _model_permits_format(value: Any) -> bool:
 
 
 def _model_source_type(step: StepNode, port: Port) -> Any:
+    """CWL v1.2: `nested_crossproduct` nests one array per scattered input;
+    every other method yields one flat array. Rank is `output_rank`."""
     return layered(port.type, output_rank(step)).canonical
 
 
 def _model_sink_type(step: StepNode, port: Port) -> Any:
+    """One array per time `scatter:` names the input, which is `input_rank`."""
     return layered(port.type, input_rank(step, port.id.port)).canonical
 
 

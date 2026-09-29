@@ -11,6 +11,7 @@ a failure rather than a blind spot. Step ids name `synthetic_tools` stems and
 bindings name that tool's real inputs, so what is drawn is a workflow the
 compiler can resolve.
 """
+import copy
 from typing import Any, Callable, Final, cast
 
 import yaml
@@ -48,7 +49,7 @@ CONSTRUCTS: Final[tuple[str, ...]] = (
     'steps_mapping', 'steps_sequence',
     'inline_literal', 'edge_ref', 'raw_cwl_ref', 'unresolved_name',
     'output_bare', 'output_edge',
-    'interpreted_scatter', 'interpreted_when',
+    'interpreted_scatter', 'interpreted_scatterMethod', 'interpreted_when',
     'step_passthrough', 'top_passthrough',
     'sidecar', 'sidecar_steps',
     'subworkflow', 'inferred_input',
@@ -103,8 +104,12 @@ _LITERALS_BY_TYPE: Final[dict[str, SearchStrategy[Any]]] = {
     'int': st.integers(min_value=-4, max_value=4),
     'float': st.floats(min_value=-4, max_value=4, allow_nan=False, allow_infinity=False),
     'boolean': st.booleans(),
-    'File': st.text('abcxyz_.', min_size=1, max_size=8),
+    # No `.`: a location of `.` or `..` names a directory, which no File is.
+    'File': st.text('abcxyz_', min_size=1, max_size=8),
+    'Directory': st.text('abcxyz_', min_size=1, max_size=8),
 }
+
+_SCATTER_METHODS: Final = ('dotproduct', 'flat_crossproduct', 'nested_crossproduct')
 
 
 def _literal_for(declared: Any) -> SearchStrategy[Any]:
@@ -155,9 +160,8 @@ declared_inputs: Final[tuple[tuple[str, Any], ...]] = (
 )
 
 
-def _references_for(stem: str, name: str) -> tuple[str, ...]:
-    """Inputs the independent model does not prove disjoint from this argument."""
-    sink_type = inputs_of(stem)[name].get('type')
+def _references_for(sink_type: Any) -> tuple[str, ...]:
+    """Inputs the independent model does not prove disjoint from this sink."""
     return tuple(input_name for input_name, source_type in declared_inputs
                  if may_reference(source_type, sink_type))
 
@@ -181,13 +185,36 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
     """
     # pylint: disable=too-many-branches,too-many-locals  # one branch per input/output construct
     names = sorted(inputs_of(stem))
-    chosen = draw(st.lists(st.sampled_from(names), unique=True, max_size=len(names))) if names else []
 
-    connectable = [
-        name for name in names
-        if any(may_reference(carries, inputs_of(stem)[name].get('type'))
-               for _, carries in defined_edges)
-    ]
+    # Drawn first, because a scattered input consumes an array: a reference
+    # must carry one, while a literal may be a scalar Complete wraps. Left
+    # unbound, a required one is lifted by Infer or fed an array.
+    interpreted: list[tuple[str, OpaqueCwl]] = []
+    ports: list[str] = []
+    layers = 0
+    match draw(st.sampled_from([None, 'scatter', 'when'] if names else [None, 'when'])):
+        case 'scatter':
+            count = draw(st.sampled_from(range(1, min(3, len(names)) + 1)))
+            ports = draw(st.permutations(names))[:count]
+            interpreted.append(('scatter', ports))
+            # Required by the spec over two or more ports; optional over one.
+            method = draw(st.sampled_from(_SCATTER_METHODS) if len(ports) > 1
+                          else st.sampled_from((None, *_SCATTER_METHODS)))
+            if method is not None:
+                interpreted.append(('scatterMethod', method))
+            layers = len(ports) if method == 'nested_crossproduct' else 1
+        case 'when':
+            interpreted.append(('when', '$(true)'))
+
+    def sink(name: str) -> Any:
+        declared = inputs_of(stem)[name].get('type')
+        return {'type': 'array', 'items': declared} if name in ports else declared
+
+    chosen = draw(st.lists(st.sampled_from(names), unique=True, max_size=len(names))) if names else []
+    # Infer lifts only a required input, so a scattered one that is not must be bound.
+    chosen += [name for name in ports if name not in chosen and name not in required_inputs_of(stem)]
+    connectable = [name for name in names
+                   if any(may_reference(carries, sink(name)) for _, carries in defined_edges)]
     forced: str | None = None
     if bool(connectable) and draw(st.booleans()):
         forced = draw(st.sampled_from(connectable))
@@ -195,17 +222,19 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
 
     bindings: list[tuple[str, InputValue]] = []
     for name in chosen:
-        sink_type = inputs_of(stem)[name].get('type')
-        fits = [edge for edge, carries in defined_edges if may_reference(carries, sink_type)]
+        fits = [edge for edge, carries in defined_edges if may_reference(carries, sink(name))]
         if name == forced:
             bindings.append((name, EdgeRef(draw(st.sampled_from(fits)), _SPAN)))
             continue
 
-        references = _references_for(stem, name)
+        references = _references_for(sink(name))
         forms = ['literal'] + (['unresolved', 'raw'] if references else []) + (['ref'] if fits else [])
         match draw(st.sampled_from(forms)):
             case 'literal':
-                bindings.append((name, InlineLiteral(draw(_literal_for(sink_type)), _SPAN)))
+                literal = draw(_literal_for(inputs_of(stem)[name].get('type')))
+                if name in ports and draw(st.booleans()):
+                    literal = [literal]
+                bindings.append((name, InlineLiteral(literal, _SPAN)))
             case 'unresolved':
                 declared = draw(st.sampled_from(references))
                 referenced_inputs.add(declared)
@@ -223,23 +252,13 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
     # `DrawFn.__call__` on the right, so `outputs_of(stem) and draw(booleans())`
     # is checked as if `draw` had to return `dict[str, Cwl]`. A `bool()` around
     # a value already used only for truthiness costs nothing at runtime.
-    interpreted: list[tuple[str, OpaqueCwl]] = []
-    scatterable = [name for name, value in bindings if isinstance(value, InlineLiteral)]
-    if bool(bindings) and draw(st.booleans()):
-        match draw(st.sampled_from(['scatter', 'when'] if scatterable else ['when'])):
-            case 'scatter':
-                interpreted.append(('scatter', [scatterable[0]]))
-            case _:
-                interpreted.append(('when', '$(true)'))
-
-    scatters = any(key == 'scatter' for key, _ in interpreted)
     outs: list[OutputBinding] = []
     if bool(outputs_of(stem)) and draw(st.booleans()):
         for out_name in draw(st.lists(st.sampled_from(sorted(outputs_of(stem))),
                                       unique=True, max_size=2)):
             if draw(st.booleans()):
                 carries = outputs_of(stem)[out_name].get('type')
-                if scatters:
+                for _ in range(layers):
                     carries = {'type': 'array', 'items': carries}
                 edge = _fresh_edge(draw, defined_edges, carries)
                 outs.append(OutputBinding(out_name, EdgeDef(edge, _SPAN), _SPAN))
@@ -262,11 +281,9 @@ def documents(draw: st.DrawFn) -> Document:
     ``python_script`` steps are absent because their module definition belongs
     to the registry; deterministic generated identities are tested separately.
 
-    Well-formed is not well-typed. `!ii` places no constraint relating a
-    literal to the CWL type of the input it binds — nothing in the grammar
-    could, since that is a downstream concern — so a document binding `'_'` to
-    an `int`-typed input is drawn here and the compiler refuses it with
-    `wic020`. That is the compiler answering correctly, not a defect.
+    Well typed where it binds a literal: `_literal_for` draws one the bound
+    input's type admits, so every draw compiles unless `NOT_YET_COMPILABLE`
+    excludes it. Ill-typed literals are the provocation registry's.
 
     Both step surface forms, because mapping form and sequence form were once
     two languages to a generator that only spelled one. Mapping form cannot
@@ -302,7 +319,15 @@ def documents(draw: st.DrawFn) -> Document:
     # The body lives in `subtree`, which
     # the AST has no field for, so `to_yml` attaches it after rendering.
     if bool(steps) and draw(st.booleans()):
-        steps.append(Step(id=f'sub{len(steps)}.wic', span=_SPAN))
+        body = draw(st.sampled_from(sorted(SUBWORKFLOW_BODIES)))
+        call: tuple[tuple[str, InputValue], ...] = ()
+        scatter: tuple[tuple[str, OpaqueCwl], ...] = ()
+        if 'inputs' in SUBWORKFLOW_BODIES[body]:
+            call = (('label', InlineLiteral(draw(_literal_for('string')), _SPAN)),)
+            if draw(st.booleans()):
+                scatter = (('scatter', ['label']),)
+        steps.append(Step(id=f'{body}{len(steps)}.wic', inputs=call, interpreted=scatter,
+                          span=_SPAN))
 
     sidecar = None
     if draw(st.booleans()):
@@ -352,15 +377,10 @@ def documents(draw: st.DrawFn) -> Document:
 #: generator to dodge a compiler gap is the narrowing the binding constraints
 #: forbid. `compilable_documents()` is the subset with these filtered out,
 #: for properties that need their input to actually compile. Keys
-#: name the exclusion, not a `CONSTRUCTS` row: the one entry this ever held was
-#: `edge_def_in_input`, an AST *shape* narrower than any single construct.
-#:
-#: Empty — and that is the mechanism working, not a gap. Its one entry was an
-#: `!&` edge definition bound to a step *input*; that is now a type error,
-#: because `EdgeDef` is not a member of the `InputValue` union, so the
-#: construct cannot be built here to be filtered out.
-#:
+#: name the exclusion, not a `CONSTRUCTS` row: an exclusion is an AST *shape*
+#: narrower than any single construct.
 NOT_YET_COMPILABLE: Final[dict[str, str]] = {}
+
 
 #: One predicate per `NOT_YET_COMPILABLE` entry, keyed identically. Separate
 #: from `NOT_YET_COMPILABLE` itself (a plain name-to-reason mapping, so the
@@ -379,11 +399,6 @@ def compilable_documents() -> SearchStrategy[Document]:
     A property comparing two compilations cannot use a document that does not
     compile, so the compile-driving properties quantify over this. The
     parse-level ones keep `documents()` — the whole language, unfiltered.
-
-    The ill-typed draws above are *not* excluded: an exclusion here is a single
-    AST-shape predicate, and whether a literal fits its argument depends on
-    which value met which input. A property needing a successful compile skips
-    those draws instead; see `_hits_the_scalar_coercion_gap`.
 
     The strategy the compile-driving properties need: partition independence and the other
     compile-driving properties cannot compare two compilations of a document
@@ -408,6 +423,25 @@ def excluded_documents(name: str) -> SearchStrategy[Document]:
     """
     # pylint: disable=no-member  # see workflows()'s identical disable, below
     return documents().filter(_EXCLUSION_PREDICATES[name])
+
+
+#: The bodies a subworkflow step's id selects, by its stem less the index
+#: `documents()` appends. Each literal inside one is a child job value that
+#: Complete lifts to the caller: a string, a File written bare and as an
+#: object, a Directory. `decl` declares an input, so its caller binds it
+#: and may scatter over it.
+SUBWORKFLOW_BODIES: Final[dict[str, Yaml]] = {
+    'sub': {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'sub.txt'}}}]},
+    'file': {'steps': [{'id': 'xform', 'in': {'file': {'wic_inline_input': 'in.txt'},
+                                              'name': {'wic_inline_input': 'out.txt'}}}]},
+    'object': {'steps': [{'id': 'xform', 'in': {
+        'file': {'wic_inline_input': {'class': 'File', 'location': 'in.txt'}},
+        'name': {'wic_inline_input': 'out.txt'}}}]},
+    'dir': {'steps': [{'id': 'split', 'in': {'dir': {'wic_inline_input': 'data'},
+                                             'name': {'wic_inline_input': 'head.txt'}}}]},
+    'decl': {'inputs': {'label': {'type': 'string'}},
+             'steps': [{'id': 'mk_file', 'in': {'name': 'label'}}]},
+}
 
 
 def to_yml(document: Document) -> Yaml:
@@ -439,37 +473,16 @@ def to_yml(document: Document) -> Yaml:
         yaml.load(render(document), Loader=wic_loader()))
     for step in loaded.get('steps', []):
         if isinstance(step, dict) and str(step.get('id', '')).endswith('.wic'):
-            step['subtree'] = {'steps': [{'id': 'mk_file',
-                                          'in': {'name': {'wic_inline_input': 'sub.txt'}}}]}
+            body = str(step['id']).removesuffix('.wic').rstrip('0123456789')
+            step['subtree'] = copy.deepcopy(SUBWORKFLOW_BODIES[body])
             step['parentargs'] = {}
     return loaded
 
 
-def workflows_with_documents() -> SearchStrategy[tuple[Document, Yaml]]:
-    """Each document beside the compiler input it renders to.
-
-    `workflows()` is this projected onto the second half, so there is one
-    composition here rather than two. It exists because the composition needs a
-    test and a strategy yielding only the `Yaml` cannot carry one: the test
-    that holds `to_yml` to the compiler — both surface forms reach a successful
-    compilation, which is what pins the `desugar_into_canonical_normal_form`
-    call `to_yml`'s docstring warns against removing — needs
-    `steps_as_mapping`, and only the `Document` has it. Rebuilding
-    `compilable_documents().map(to_yml)` inside that test instead is what left
-    `workflows()` with zero call sites while every message in it said
-    otherwise.
-    """
-    return compilable_documents().map(lambda document: (document, to_yml(document)))
-
-
 def workflows() -> SearchStrategy[Yaml]:
-    """The strategy the compile-driving properties quantify over: `compilable_documents()` mapped
-    through `to_yml`, not `documents()` itself. Those properties compile their
-    input (partition independence compares two compilations; it cannot do
-    that with a document that does not compile once), so this excludes
-    exactly what `compilable_documents()` excludes — see `NOT_YET_COMPILABLE`
-    for the current list and why each entry is there."""
-    return workflows_with_documents().map(lambda pair: pair[1])
+    """The strategy the compile-driving properties quantify over:
+    `compilable_documents()` rendered through `to_yml`."""
+    return compilable_documents().map(to_yml)
 
 
 _SCATTERABLE_STRING_INPUTS: Final[tuple[tuple[str, str], ...]] = (

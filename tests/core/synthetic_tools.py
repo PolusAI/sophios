@@ -2,7 +2,7 @@
 
 `get_tools_cwl` globs `search_paths_cwl`, so the tools a property sees depend
 on which plugin repositories a machine has checked out. That cannot be an
-oracle. These eight stems are the whole vocabulary, so a counterexample
+oracle. These nine stems are the whole vocabulary, so a counterexample
 reproduces from this repository alone.
 
 The signatures are chosen to reach the compiler's branches rather than to model
@@ -128,6 +128,16 @@ _SPECS: Final[dict[str, Cwl]] = {
          'n': {'type': 'int', 'inputBinding': {'position': 2}},
          'extras': {'type': 'File[]', 'default': [], 'inputBinding': {'position': 3}}},
         {},
+    ),
+    # The one Directory input, and the one tool with several outputs (File,
+    # File and int): a step promotes each, and a scatter wraps each alike.
+    'split': clt(
+        {'dir': {'type': 'Directory', 'inputBinding': {'position': 1}},
+         'name': {'type': 'string', 'inputBinding': {'position': 2}}},
+        {'head': {'type': 'File', 'format': _TXT, 'outputBinding': {'glob': '$(inputs.name)'}},
+         'tail': {'type': 'File', 'format': _CSV, 'outputBinding': {'glob': 'tail'}},
+         'n': {'type': 'int', 'outputBinding': {'outputEval': '$(2)'}}},
+        javascript=True,
     ),
 }
 

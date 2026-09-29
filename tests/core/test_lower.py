@@ -46,6 +46,14 @@ from .hermetic import COVERAGE, ORACLE
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _declared_inputs(step: Step) -> tuple[str, ...]:
+    """What a process declares, as far as the step shows it: the inputs it
+    binds, and those it scatters over whether bound or not."""
+    scatter = dict(step.interpreted).get('scatter')
+    named = [name for name, _ in step.inputs] + (scatter if isinstance(scatter, list) else [])
+    return tuple(dict.fromkeys(named))
+
+
 def _resolved(document: Document) -> ResolvedDocument:
     """Build Lower's typed input independently of production Resolve."""
     declaration = port_declaration(None)
@@ -55,7 +63,7 @@ def _resolved(document: Document) -> ResolvedDocument:
             ResolvedProcess(
                 RegistryKey('test', step.id),
                 f'{step.id}.cwl',
-                tuple(ResolvedPort(name, declaration) for name, _ in step.inputs),
+                tuple(ResolvedPort(name, declaration) for name in _declared_inputs(step)),
                 tuple(ResolvedPort(binding.name, declaration) for binding in step.outputs),
                 {'class': 'CommandLineTool'},
             ),
