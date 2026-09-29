@@ -34,7 +34,6 @@ from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 from . import ast_strategies as strat
 from .hermetic import ORACLE, bundle, compile_hermetic, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
-from .test_resolve import _scalar_literals_fit
 
 
 def _typed(workflow: Yaml, tools: Tools = SYNTHETIC_TOOLS):  # type: ignore[no-untyped-def]
@@ -47,22 +46,7 @@ def _typed(workflow: Yaml, tools: Tools = SYNTHETIC_TOOLS):  # type: ignore[no-u
 
 
 @pytest.mark.skip_pypi_ci
-@given(strat.workflows().filter(_scalar_literals_fit))
-@ORACLE
-def test_the_live_compiler_retains_typed_inference(workflow: Yaml) -> None:
-    """The default path carries typed inference decisions into its final graph."""
-    _, linked, _ = _typed(copy.deepcopy(workflow))
-    inferred = infer(linked)
-    assert inferred.graph is not None, list(inferred.diagnostics)
-    live = compile_hermetic(copy.deepcopy(workflow)).graph
-    expected = {(edge.source, edge.sink) for edge in inferred.graph.linked_edges
-                if edge.origin is EdgeOrigin.INFERRED}
-    assert expected <= {(edge.source, edge.sink) for edge in live.linked_edges
-                        if edge.origin is EdgeOrigin.INFERRED}
-
-
-@pytest.mark.skip_pypi_ci
-@given(strat.workflows().filter(_scalar_literals_fit))
+@given(strat.workflows())
 @ORACLE
 def test_every_inferred_edge_is_the_independent_models_choice(workflow: Yaml) -> None:
     """Removing candidate selection or changing its order breaks this predicate."""

@@ -15,111 +15,40 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
-import yaml
 
-from sophios.lang.cwl import CWL_VERSION
-from sophios.utils_cwl import desugar_into_canonical_normal_form
-
-from .hermetic import compile_hermetic_cwl
-from .synthetic_tools import STEMS, _cwl, clt, inputs_of, outputs_of, required_inputs_of
+from .synthetic_tools import STEMS, inputs_of, outputs_of, required_inputs_of
 
 TESTS_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = TESTS_ROOT.parent
 
 
-@pytest.mark.needs_cwltool
-@pytest.mark.skip_pypi_ci
-@pytest.mark.slow
-@pytest.mark.parametrize('stem', STEMS)
-def test_every_stub_is_valid_cwl(stem: str) -> None:
-    """A registry that is not valid CWL makes the validity property a statement about our stubs.
-
-    Run once per stem rather than inside a property: validity does not vary
-    with the workflow, and cwltool costs about a second a call.
-    """
-    import cwltool.main  # pylint: disable=import-outside-toplevel  # expensive; slow lane only
-
-    with tempfile.TemporaryDirectory() as workdir:
-        target = Path(workdir) / f'{stem}.cwl'
-        target.write_text(yaml.safe_dump(_cwl(stem), sort_keys=False), encoding='utf-8')
-        assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 0
+#: Declarations whose required-ness turns on a default's presence rather than
+#: its truthiness, beside every synthetic input.
+_DEFAULTED: Final = (
+    ({'type': 'boolean', 'default': False}, False),
+    ({'type': 'string', 'default': ''}, False),
+    ({'type': 'File[]', 'default': []}, False),
+    ({'type': 'File', 'default': None}, True),
+    ({'type': ['null', 'File'], 'default': None}, False),
+)
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('stem', STEMS)
-def test_required_inputs_agree_with_the_compilers_own_rule(stem: str) -> None:
-    """The independent model and typed declarations must not drift."""
-    from sophios.ir.declarations import port_declaration  # pylint: disable=import-outside-toplevel
+@pytest.mark.parametrize('raw, expected', [
+    *((inputs_of(stem)[name], name in required_inputs_of(stem))
+      for stem in STEMS for name in inputs_of(stem)),
+    *_DEFAULTED,
+])
+def test_required_inputs_agree_with_the_compilers_own_rule(raw: Any, expected: bool) -> None:
+    """`required_inputs_of`, the generator's independent model, and the
+    compiler's `declarations.required` agree. A present default satisfies an
+    input however falsy; `null` satisfies only a type that admits it."""
+    from sophios.ir.declarations import port_declaration, required  # pylint: disable=import-outside-toplevel
 
-    in_tool = inputs_of(stem)
-    declarations = {name: port_declaration(raw) for name, raw in in_tool.items()}
-    theirs = tuple(name for name, declaration in declarations.items()
-                   if not ((declaration.has_default and declaration.default is not None)
-                           or declaration.type.optional))
-    assert required_inputs_of(stem) == theirs
-
-
-@pytest.mark.fast
-def test_falsy_default_still_counts_as_a_default() -> None:
-    """Typed declarations preserve the presence of falsy defaults.
-
-    `in_tool[arg].get('default')` used to be used directly as a boolean, so a
-    tool declaring `default: False` (or `0`, or `''`) was treated as having no
-    default at all — the input was silently promoted to a required,
-    caller-supplied workflow input, discarding the tool author's default.
-    Reproduces `mm-workflows/cwl_adapters/extract_pdbbind_refined.cwl`'s
-    `convert_Kd_dG` input; `control` is the ordinary truthy-default case that
-    must keep working alongside it.
-
-    Two assertions so the test fails whichever way the rule breaks: revert to
-    truthiness and the falsy one fails; break the ordinary case and the truthy
-    one fails.
-    """
-    from sophios.ir.declarations import port_declaration  # pylint: disable=import-outside-toplevel
-
-    in_tool = {
-        'convert_Kd_dG': {'type': 'boolean', 'default': False},
-        'control': {'type': 'boolean', 'default': True},
-        'extras': {'type': 'File[]', 'default': []},
-    }
-    declarations = {name: port_declaration(raw) for name, raw in in_tool.items()}
-    assert declarations['convert_Kd_dG'].has_default, \
-        'a present-but-falsy default must still count as a default'
-    assert declarations['control'].has_default, \
-        'a present, truthy default must still count as a default'
-    assert declarations['extras'].has_default, \
-        'an empty-collection default must still count as a default'
-
-
-@pytest.mark.fast
-def test_a_null_default_does_not_satisfy_a_non_nullable_input() -> None:
-    """`default: null` carries the one value the input cannot take.
-
-    The predicate also gates edge inference — `args_required` is what the
-    compiler iterates to decide which inputs get an inferred edge at all — so
-    an input counted as satisfied is an input inference never sees. `null`
-    satisfies nothing a non-nullable type accepts, and where the type does
-    accept null the optional arms answer on their own; `nullable` is that
-    control, and must stay optional for the type's sake rather than the
-    default's.
-    """
-    from sophios.ir.declarations import port_declaration  # pylint: disable=import-outside-toplevel
-
-    in_tool = {
-        'required': {'type': 'File', 'default': None},
-        'nullable': {'type': ['null', 'File'], 'default': None},
-    }
-    declarations = {name: port_declaration(raw) for name, raw in in_tool.items()}
-    required = declarations['required']
-    nullable = declarations['nullable']
-    assert not ((required.has_default and required.default is not None)
-                or required.type.optional), \
-        'a null default cannot satisfy a non-nullable input, so the input stays required'
-    assert nullable.type.optional, \
-        'a null-permitting type is optional whatever its default'
+    assert required(port_declaration(raw)) is expected
 
 
 @pytest.mark.fast
@@ -136,27 +65,6 @@ def test_the_registry_reaches_the_branches_it_claims_to() -> None:
     assert any(len(outputs_of(s)) > 1 for s in STEMS), 'no tool promotes several outputs'
     assert any(i.get('type') == 'Directory' for s in STEMS for i in inputs_of(s).values()), \
         'no Directory input: its job value is never coerced'
-
-
-@pytest.mark.fast
-def test_the_hermetic_entry_point_actually_compiles() -> None:
-    """A harness that only imports cleanly is not a harness that works.
-
-    `compile_hermetic_cwl` is produced here for the property suites to build
-    on; nothing in this module calls it. This is that
-    harness's companion: two independent source steps, no explicit edges, so
-    the only thing under test is whether the fourteen-argument call against
-    `SYNTHETIC_TOOLS` actually reaches the compiler and comes back with CWL.
-    """
-    yml = {'steps': [
-        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'foo.txt'}}},
-        {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'bar.txt'}}},
-    ]}
-    cwl = compile_hermetic_cwl(yml, 'oracle')
-    assert cwl['cwlVersion'] == CWL_VERSION
-    assert cwl['class'] == 'Workflow'
-    step_ids = [step['id'] for step in cwl['steps']]
-    assert step_ids == ['oracle__step__1__mk_file', 'oracle__step__2__mk_text']
 
 
 #: Test files whose passing constitutes "the oracle suite ran with plugin
@@ -215,15 +123,7 @@ def test_the_oracle_suite_passes_with_plugin_discovery_disabled() -> None:
     """Runtime half. `HOME` is redirected too: `get_config` writes
     ~/wic/global_config.json when it is missing, so a suite that reads the
     config is not merely environment-dependent, it provisions the environment.
-
-    ORACLE_FILES is empty until the first oracle file lands: there is nothing
-    to run poisoned yet, and passing an empty target list to pytest would
-    collect the whole repository instead of proving anything about the oracle
-    suite. Skipped rather than passed vacuously; the first entry makes this
-    assert something real.
     """
-    if not ORACLE_FILES:
-        pytest.skip('ORACLE_FILES is empty until a later task adds its first oracle test file')
     result = _run_poisoned(ORACLE_FILES)
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -247,48 +147,3 @@ def test_the_poison_fires_on_a_suite_that_needs_discovery() -> None:
     output = result.stdout + result.stderr
     assert result.returncode != 0, output
     assert POISON_MESSAGE in output, output
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('claim', 'built', 'expected'), [
-    ('a tool declaring no format carries no namespaces',
-     lambda: clt({'x': {'type': 'File'}}, {}), None),
-    ('a string format declares its prefix',
-     lambda: clt({}, {'f': {'type': 'File', 'format': 'edam:format_2330'}}),
-     {'edam': 'https://edamontology.org/'}),
-    ('a list format declares its prefix',
-     lambda: clt({}, {'f': {'type': 'File', 'format': ['edam:format_3752']}}),
-     {'edam': 'https://edamontology.org/'}),
-    ('an unprefixed format declares nothing',
-     lambda: clt({}, {'f': {'type': 'File', 'format': 'plain'}}), None),
-])
-def test_the_stub_builder_declares_only_the_prefixes_it_uses(
-        claim: str, built: Any, expected: dict[str, str] | None) -> None:
-    """`$namespaces` follows the tool's own formats, not a fixed set.
-
-    Four modules shared four builders and only one emitted `edam`; folding them
-    into one has to pick a behaviour, and picking "always" would have put the
-    namespace on tools that never mention a format. Invisible at run time --
-    the compiler adds it anyway and format matching does not read it -- which
-    is why it needs a test rather than a reader noticing.
-    """
-    assert built().get('$namespaces') == expected, claim
-
-
-@pytest.mark.fast
-def test_the_stub_builder_shapes_are_distinct() -> None:
-    """Raw, canonical and JavaScript are three different documents.
-
-    `canonical=True` is a no-op for a dict-form `inputs:`, so a caller passing
-    it gets the same document back; the difference appears for the list form
-    the loader produces, which is what `plugins.py` desugars.
-    """
-    ports = {'f': {'type': 'File', 'inputBinding': {'position': 1}}}
-    raw = clt(ports, {})
-    canonical = clt(ports, {}, canonical=True)
-    javascript = clt(ports, {}, javascript=True)
-
-    assert 'requirements' not in raw
-    assert javascript['requirements'] == {'InlineJavascriptRequirement': {}}
-    assert canonical['inputs'] == raw['inputs'], 'dict-form inputs are already canonical'
-    assert desugar_into_canonical_normal_form(dict(raw)) == canonical

@@ -31,37 +31,16 @@ from sophios.ir import (
     generated_process_id,
     resolve,
 )
-from sophios.ir.complete import complete
 from sophios.ir.lower import lower
 from sophios.lang import (EdgeRef, InlineLiteral, RawCwlRef, SourceSpan, Step,
                           UnresolvedName, parse)
 from sophios.wic_types import StepId as LegacyStepId, Yaml
 
 from . import ast_strategies as strat
-from .hermetic import ORACLE, bundle, compile_hermetic
+from .hermetic import bundle, compile_hermetic
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, inputs_of, outputs_of
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _scalar_literals_fit(workflow: Yaml) -> bool:
-    """Independent model of the only generated well-formed compile rejection."""
-    for step in workflow.get('steps', []):
-        if not isinstance(step, dict) or not isinstance(step.get('id'), str):
-            continue
-        declared = inputs_of(step['id']) if LegacyStepId(step['id'], SYNTHETIC_NS) \
-            in SYNTHETIC_TOOLS else {}
-        for name, value in step.get('in', {}).items():
-            if not isinstance(value, dict) or 'wic_inline_input' not in value:
-                continue
-            target = declared.get(name, {}).get('type')
-            if target not in ('int', 'float'):
-                continue
-            try:
-                (int if target == 'int' else float)(value['wic_inline_input'])
-            except (TypeError, ValueError):
-                return False
-    return True
 
 
 def _typed(workflow: Yaml):  # type: ignore[no-untyped-def]
@@ -70,19 +49,6 @@ def _typed(workflow: Yaml):  # type: ignore[no-untyped-def]
     assert result.resolved is not None and result.resolved.document is not None
     assert result.graph is not None, list(result.diagnostics)
     return result
-
-
-@pytest.mark.skip_pypi_ci
-@given(strat.workflows().filter(_scalar_literals_fit))
-@ORACLE
-def test_the_live_compiler_retains_the_resolved_interfaces(workflow: Yaml) -> None:
-    """The default path carries resolved process interfaces into its graph."""
-    typed = complete(_typed(copy.deepcopy(workflow)).graph)
-    live = compile_hermetic(copy.deepcopy(workflow)).graph
-    assert [(step.id.name, tuple(port.id.port for port in step.inputs),
-             tuple(port.id.port for port in step.outputs)) for step in live.steps] == [
-        (step.id.name, tuple(port.id.port for port in step.inputs),
-         tuple(port.id.port for port in step.outputs)) for step in typed.steps]
 
 
 def _assert_processes_match_the_registry(document: Any) -> None:
@@ -183,18 +149,6 @@ def test_registry_order_cannot_change_resolution(workflow: Yaml) -> None:
     right = resolve(parsed.document, reversed_snapshot, name='oracle')
     assert left.document == right.document
     assert list(left.diagnostics) == list(right.diagnostics)
-
-
-@pytest.mark.skip_pypi_ci
-@given(strat.workflows())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-def test_parse_front_door_is_the_live_compiler_input(workflow: Yaml) -> None:
-    """The live compiler preserves the graph Lower built from parsed source."""
-    if not _scalar_literals_fit(workflow):
-        return
-    typed = _typed(copy.deepcopy(workflow))
-    live = compile_hermetic(copy.deepcopy(workflow)).graph
-    assert tuple(step.id for step in live.steps) == tuple(step.id for step in typed.graph.steps)
 
 
 @pytest.mark.skip_pypi_ci

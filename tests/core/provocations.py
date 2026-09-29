@@ -161,15 +161,13 @@ COMPILED.update({
 
 
 def _never_converges() -> None:
-    """The fixed-point guard's provocation.
-
-    Imported lazily from the suite that owns the mechanism, matching how
-    `_compile_minimal` reaches `compile_harness` here. The direction matters:
-    `test_predicates` must not import this module, which reaches plugin
-    discovery through `compile_harness` and would break its hermeticity.
-    """
-    from .test_predicates import never_converges  # pylint: disable=import-outside-toplevel
-    never_converges()
+    """Drive the typed Infer fixed-point guard to its explicit limit."""
+    # pylint: disable=import-outside-toplevel
+    from sophios.ir import InferencePolicy, Namespace, WorkflowGraph, infer
+    from sophios.lang.diagnostics import SophiosError
+    result = infer(WorkflowGraph(Namespace()), InferencePolicy(iteration_limit=0))
+    if result.graph is None:
+        raise SophiosError(result.diagnostics)
 
 
 COMPILED.update({

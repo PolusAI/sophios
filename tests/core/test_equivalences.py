@@ -21,7 +21,6 @@ from sophios.wic_types import Yaml
 from . import ast_strategies as strat
 from .equivalence import Strength, equivalent
 from .hermetic import PARTITION, compile_hermetic, subworkflow_step
-from .synthetic_tools import STEMS, inputs_of
 from .transformations import TRANSFORMATIONS, Transformation, split, split_transformations
 
 #: The name both sides compile under. Identical on purpose: `identity` and
@@ -148,42 +147,6 @@ def _compile_flat(yml: Yaml) -> Yaml:
     return _flatten(info.artifact)
 
 
-def _hits_the_scalar_coercion_gap(document: Yaml) -> bool:
-    """Whether compiling `document` would be refused for an ill-typed `!ii`
-    literal, rather than tell us anything about this property's own claim.
-
-    `populate_scalar_val` refuses a literal that does not coerce to the bound
-    argument's declared type, with a `LITERAL_TYPE_MISMATCH` diagnostic.
-    `ast_strategies.py` documents why such documents are still drawn — they are
-    well-formed, and this is not a single AST-shape predicate — but a *refused*
-    compilation is no basis for an equivalence. Left unfiltered here, every draw
-    that hits it would abort *both* compiles this property needs before
-    `equivalent()` is ever called, smothering the property itself. Excluded
-    narrowly, by the exact predicate that names the gap, not by weakening what
-    `workflows()` generates.
-    """
-    for step in document.get('steps', []):
-        if not isinstance(step, dict):
-            continue
-        stem = step.get('id')
-        if stem not in STEMS:
-            continue  # a subworkflow step, or something else this check does not model
-        declared = inputs_of(stem)
-        for name, value in step.get('in', {}).items():
-            if not (isinstance(value, dict) and 'wic_inline_input' in value):
-                continue
-            arg_type = declared.get(name, {}).get('type')
-            literal = value['wic_inline_input']
-            if arg_type not in ('int', 'float'):
-                continue
-            coerce = int if arg_type == 'int' else float
-            try:
-                coerce(literal)
-            except (TypeError, ValueError):
-                return True
-    return False
-
-
 @pytest.mark.slow
 @pytest.mark.parametrize('constant', [*TRANSFORMATIONS, None],
                          ids=[rewrite.name for rewrite in TRANSFORMATIONS] + ['split'])
@@ -208,13 +171,8 @@ def test_a_meaning_preserving_rewrite_preserves_meaning(constant: Transformation
     module docstring); `!cwl` and `python_script` steps, which `workflows()`
     itself cannot generate (`ast_strategies.py`); partitionings that are not
     contiguous, which the language cannot express (`ast_strategies.partitionings`).
-    A transformation only ever regroups or re-derives a document's existing
-    steps, so a document that avoids `ast_strategies.py`'s own documented
-    scalar-coercion gap before any rewrite is applied still avoids it after —
-    see `_hits_the_scalar_coercion_gap`.
     """
-    yml = data.draw(strat.workflows().filter(
-        lambda w: len(w['steps']) >= 2 and not _hits_the_scalar_coercion_gap(w)))
+    yml = data.draw(strat.workflows().filter(lambda w: len(w['steps']) >= 2))
     rewrite = constant if constant is not None else data.draw(split_transformations())
     transformed = rewrite.apply(copy.deepcopy(yml))
 
@@ -264,8 +222,7 @@ def test_split_reaches_a_document_that_is_already_nested() -> None:
     @PARTITION
     @given(st.data())
     def _collect(data: st.DataObject) -> None:
-        yml = data.draw(strat.workflows().filter(
-            lambda w: len(w['steps']) >= 2 and not _hits_the_scalar_coercion_gap(w)))
+        yml = data.draw(strat.workflows().filter(lambda w: len(w['steps']) >= 2))
         rewrite = data.draw(split_transformations())
         depths[_nesting_depth(rewrite.apply(copy.deepcopy(yml)))] += 1
 

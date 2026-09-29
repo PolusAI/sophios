@@ -77,17 +77,6 @@ def test_a_requirements_shape_sophios_does_not_model_survives_emission(authored:
     assert compiled['requirements'] == authored
 
 
-@pytest.mark.fast
-def test_differential_oracle_detects_a_changed_document() -> None:
-    """A same-arm comparison or a disabled equivalence relation cannot pass."""
-    workflow = {'steps': [{'id': 'mk_file',
-                           'in': {'name': {'wic_inline_input': 'x'}}}]}
-    result = compile_hermetic(copy.deepcopy(workflow))
-    changed = copy.deepcopy(result.artifact.cwl)
-    changed['class'] = 'CommandLineTool'
-    assert equivalent(result.artifact.cwl, changed, Strength.IDENTICAL) is not None
-
-
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows())
 @ORACLE

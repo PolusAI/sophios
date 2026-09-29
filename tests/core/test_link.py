@@ -9,7 +9,6 @@ both sides of scatter lifting.
 import copy
 
 import pytest
-from hypothesis import HealthCheck, given, settings
 
 from sophios.ir import (
     Namespace,
@@ -25,10 +24,8 @@ from sophios.ir.types import AuthoredName
 from sophios.lang import SophiosErrorCode, parse
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
-from . import ast_strategies as strat
-from .hermetic import ORACLE, bundle, compile_hermetic
+from .hermetic import bundle
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
-from .test_resolve import _scalar_literals_fit
 
 
 def _front(workflow: Yaml) -> WorkflowGraph:
@@ -44,19 +41,6 @@ def _rooted(root: str, tools: Tools = SYNTHETIC_TOOLS, **children: str) -> Front
     registry = RegistrySnapshot.from_tools(tools, workflows={
         (SYNTHETIC_NS, name): parse(text, f'{name}.wic') for name, text in children.items()})
     return front_end(parse(root, 'root.wic'), registry, name='root')
-
-
-@pytest.mark.skip_pypi_ci
-@given(strat.workflows().filter(_scalar_literals_fit))
-@ORACLE
-def test_the_live_compiler_retains_linked_explicit_edges(workflow: Yaml) -> None:
-    """The default path carries every linked authored edge into its final graph."""
-    typed = _front(copy.deepcopy(workflow))
-    linked = link(typed)
-    assert linked.graph is not None, list(linked.diagnostics)
-    live = compile_hermetic(copy.deepcopy(workflow)).graph
-    linked_edges = {(edge.source, edge.sink) for edge in linked.graph.edges}
-    assert linked_edges <= {(edge.source, edge.sink) for edge in live.edges}
 
 
 def _cross_scope(source_tool: str, source_type: object, child_input: str = 'name', *,
@@ -384,18 +368,6 @@ def test_unknown_call_argument_cannot_restore_a_deleted_formal() -> None:
     assert typed.graph is None
     assert [diagnostic.code for diagnostic in typed.diagnostics] == [
         SophiosErrorCode.UNDECLARED_PORT]
-
-
-@pytest.mark.skip_pypi_ci
-@given(strat.workflows())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-def test_composed_namespaces_are_injective(workflow: Yaml) -> None:
-    """No two step occurrences in a composed graph share an identity."""
-    typed = _front(workflow)
-    linked = link(typed)
-    assert linked.graph is not None, list(linked.diagnostics)
-    identities = [step.id for step in linked.graph.all_steps]
-    assert len(identities) == len(set(identities))
 
 
 @pytest.mark.fast

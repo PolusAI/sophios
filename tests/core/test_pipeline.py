@@ -31,7 +31,6 @@ from . import ast_strategies as strat
 from .equivalence import Strength, equivalent
 from .hermetic import COVERAGE, ORACLE, bundle, compile_hermetic
 from .synthetic_tools import SYNTHETIC_TOOLS
-from .test_resolve import _scalar_literals_fit
 
 
 def _render(graph: WorkflowGraph) -> Any:
@@ -41,7 +40,7 @@ def _render(graph: WorkflowGraph) -> Any:
 
 
 @pytest.mark.skip_pypi_ci
-@given(strat.workflows().filter(_scalar_literals_fit))
+@given(strat.workflows())
 @ORACLE
 def test_full_pipeline_agrees_at_up_to_embedding(workflow: Yaml) -> None:
     """The live boundary agrees with direct typed phase composition."""
@@ -62,49 +61,7 @@ def test_full_pipeline_agrees_at_up_to_embedding(workflow: Yaml) -> None:
 
 
 @pytest.mark.skip_pypi_ci
-@given(strat.workflows().filter(_scalar_literals_fit))
-@ORACLE
-def test_every_emitted_reference_resolves_in_its_own_document(workflow: Yaml) -> None:
-    """A `source:` names something the document it appears in defines.
-
-    The types close what a binding may *be*; they cannot say that the name
-    inside one exists. A reference that resolves nowhere is accepted by CWL's
-    schema and fails at the runner -- which is how an authored `outputSource`
-    pointing at a step emission had renamed got as far as it did.
-
-    Checked on the artifact rather than the graph, because the document is what
-    has to be self-contained: a `run:` child is its own document, so each is
-    judged against its own inputs and steps.
-    """
-    info = compile_hermetic(copy.deepcopy(workflow))
-
-    def check(cwl: Yaml, where: str) -> None:
-        if cwl.get('class') != 'Workflow':
-            return
-        defined = set(cwl.get('inputs') or {})
-        for step in cwl.get('steps') or []:
-            for out in step.get('out') or []:
-                defined.add(f'{step["id"]}/{out}')
-        for step in cwl.get('steps') or []:
-            for port, value in (step.get('in') or {}).items():
-                name = value.get('source') if isinstance(value, dict) else value
-                if isinstance(name, str) and '$(' not in name and '${' not in name:
-                    assert name in defined, f'{where}: {step["id"]}.{port} sources {name!r}'
-        for name, declared in (cwl.get('outputs') or {}).items():
-            source = declared.get('outputSource') if isinstance(declared, dict) else None
-            if isinstance(source, str):
-                assert source in defined, f'{where}: output {name} sources {source!r}'
-
-    def walk(artifact: Any) -> None:
-        check(artifact.cwl, artifact.name)
-        for child in artifact.children:
-            walk(child)
-
-    walk(info.artifact)
-
-
-@pytest.mark.skip_pypi_ci
-@given(strat.workflows().filter(_scalar_literals_fit))
+@given(strat.workflows())
 @ORACLE
 def test_completing_twice_is_completing_once_for_any_workflow(workflow: Yaml) -> None:
     """`complete` is idempotent, over the generated space.

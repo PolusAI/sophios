@@ -236,8 +236,7 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 #: Every test that does not run on the Windows leg, and the evidence that
 #: excluding it takes nothing away: each one ran *nowhere* until a lane step
 #: named its file, so none has ever executed on Windows. Measured on the
-#: `Lint And Test` Windows job, where the step that names them selects 45 tests
-#: — 35 pass and these 10 fail on `import pwd`.
+#: `Lint And Test` Windows job, where they fail on `import pwd`.
 #:
 #: `test_emit.py`'s validator pair exercise cwltool itself; the phase lane
 #: collects their platform-neutral siblings on Windows and these two run on
@@ -248,8 +247,6 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 WINDOWS_EXCLUDED: Final = frozenset({
     'tests/core/test_emit.py::test_emit_validates_as_cwl_v1_2',
     'tests/core/test_emit.py::test_validator_rejects_the_independent_invalid_control',
-    'tests/core/test_hermeticity.py::test_every_stub_is_valid_cwl',
-    'tests/core/test_lang_version.py::test_annotation_is_declared_and_the_cwl_stays_valid',
     'tests/core/test_leak_boundary.py::test_residue_validates_as_cwl_v1_2',
     # One compile and one `--validate` of a four-line workflow, under a second.
     # It buys the authored `outputSource` path, which the residue property
