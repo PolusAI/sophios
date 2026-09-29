@@ -22,7 +22,7 @@ from sophios.utils_graphs import get_graph_reps
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.resolve import RegistrySnapshot
-from sophios.lang import ParseResult, parse
+from sophios.lang import Document, ParseResult, parse
 from sophios.wic_types import Tools, Yaml
 
 from .synthetic_tools import SYNTHETIC_TOOLS
@@ -32,6 +32,23 @@ from .synthetic_tools import SYNTHETIC_TOOLS
 COVERAGE: Final = settings(max_examples=500, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 ORACLE: Final = settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 PARTITION: Final = settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+
+
+def _documents(*results: ParseResult) -> tuple[Document, ...]:
+    """Each parsed document and the implementation bodies written inside it."""
+    documents = []
+    for result in results:
+        if result.document is None:
+            continue
+        documents.append(result.document)
+        documents.extend(_implementation_bodies(result.document))
+    return tuple(documents)
+
+
+def _implementation_bodies(document: Document) -> tuple[Document, ...]:
+    bodies = document.sidecar.implementations if document.sidecar is not None else ()
+    return tuple(body for _name, body in bodies) + tuple(
+        nested for _name, body in bodies for nested in _implementation_bodies(body))
 
 
 def bundle(yml: Yaml, name: str, tools: Tools) -> SourceBundle:
@@ -55,9 +72,10 @@ def bundle(yml: Yaml, name: str, tools: Tools) -> SourceBundle:
                                sort_keys=False, line_break='\n', indent=2), f'{stem}.wic')
 
     root = parsed(yml, name)
-    pins = tuple(str(entries['lang_version']) for result in (root, *workflows.values())
-                 if result.document is not None and result.document.sidecar is not None
-                 for entries in [dict(result.document.sidecar.entries)] if 'lang_version' in entries)
+    pins = tuple(str(entries['lang_version'])
+                 for document in _documents(root, *workflows.values())
+                 if document.sidecar is not None
+                 for entries in [dict(document.sidecar.entries)] if 'lang_version' in entries)
     return SourceBundle(root, name, RegistrySnapshot.from_tools(tools, workflows=workflows), pins)
 
 

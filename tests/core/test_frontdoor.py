@@ -14,8 +14,18 @@ import yaml
 
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.ir.pipeline import front_end
-from sophios.ir.resolve import RegistryKey, generated_process_id
-from sophios.lang import SophiosErrorCode, parse
+from sophios.ir.resolve import RegistryKey, RegistrySnapshot, generated_process_id
+from sophios.lang import (
+    Diagnostics,
+    Document,
+    EdgeDef,
+    EdgeRef,
+    OutputBinding,
+    ParseResult,
+    SophiosErrorCode,
+    Step,
+    parse,
+)
 from sophios.utils_yaml import wic_loader
 
 from .synthetic_tools import SYNTHETIC_TOOLS
@@ -176,6 +186,26 @@ def test_span_names_the_line_in_the_authored_file(tmp_path: Path) -> None:
     assert len(dumped) == 1
     assert dumped[0].span is not None
     assert dumped[0].span.start_line != undefined[0].span.start_line
+
+
+@pytest.mark.fast
+def test_a_spanless_forward_edge_names_its_consuming_step() -> None:
+    """An in-memory document has no span, so the locator is where the edge failed."""
+    document = Document(steps=(
+        Step('xform', inputs=(('file', EdgeRef('later', None)),)),
+        Step('mk_file', outputs=(OutputBinding('file', EdgeDef('later', None), None),)),
+    ))
+    result = front_end(ParseResult(document, Diagnostics()),
+                       RegistrySnapshot.from_tools(SYNTHETIC_TOOLS), name='memory')
+
+    undefined = [item for item in result.diagnostics
+                 if item.code is SophiosErrorCode.UNDEFINED_EDGE]
+    assert len(undefined) == 1
+    assert undefined[0].span is None
+    assert undefined[0].locator is not None
+    assert undefined[0].locator.step == 'xform'
+    assert undefined[0].locator.index == 1
+    assert undefined[0].locator.port == 'file'
 
 
 @pytest.mark.fast

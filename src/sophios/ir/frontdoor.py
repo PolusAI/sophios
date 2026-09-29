@@ -114,11 +114,27 @@ def _visit(source: str, stem: str, path: Path | None,
         read[path] = parsed
     document = parsed.document
     if document is not None:
-        pinned = dict(document.sidecar.entries).get('lang_version') if document.sidecar else None
-        if pinned is not None:
-            pins.append(pinned if isinstance(pinned, str) else str(pinned))
+        _collect_pins(document, pins)
         _reach(document, yml_paths, script_dir, workflows, generated, read, pins, validator)
     return parsed
+
+
+def _collect_pins(document: Document, pins: list[str]) -> None:
+    """Append this document's pin and each inline implementation body's pin.
+
+    A body is already parsed; this reads the pin the parser holds. `_reach`
+    follows the body's steps, and selection compiles the body, so a pin that
+    lives only there still decides the version.
+    """
+    _append_pin(document, pins)
+    for _name, body in (document.sidecar.implementations if document.sidecar else ()):
+        _collect_pins(body, pins)
+
+
+def _append_pin(document: Document, pins: list[str]) -> None:
+    pinned = dict(document.sidecar.entries).get('lang_version') if document.sidecar else None
+    if pinned is not None:
+        pins.append(pinned if isinstance(pinned, str) else str(pinned))
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments

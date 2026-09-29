@@ -130,6 +130,20 @@ def test_conflicting_pins_across_a_tree_are_caught_at_the_root() -> None:
     assert caught.value.diagnostics[0].code is SophiosErrorCode.UNKNOWN_LANG_VERSION
 
 
+@pytest.mark.skip_pypi_ci
+@pytest.mark.fast
+def test_an_inline_implementation_body_pin_is_collected() -> None:
+    """A pin that lives only on the selected implementation body still decides the version."""
+    body = {'wic': {'lang_version': '9.9.9'}, **TOUCH}
+    tree: Yaml = {
+        'wic': {'default_implementation': 'fast', 'implementations': {'fast': body}},
+        'steps': [],
+    }
+    with pytest.raises(SophiosError) as caught:
+        _compile(tree)
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.UNKNOWN_LANG_VERSION
+
+
 # --------------------------------------------------------------------------
 # The resolved version is never a secret: every compile reports
 # it (CLI, Python API), and the emitted CWL carries it as a namespaced
