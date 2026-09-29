@@ -20,6 +20,7 @@ from sophios.api.python.tool_builder import (
     secondary_file,
 )
 from sophios.api.python.workflow import Step
+from sophios.lang.cwl import CWL_VERSION
 
 
 @pytest.mark.fast
@@ -131,6 +132,26 @@ def test_tool_builder_names_reject_namespace_collisions() -> None:
 
     with pytest.raises(ValueError, match="reserved"):
         Inputs(_items=Input(cwl.file))
+
+
+@pytest.mark.fast
+def test_tool_name_with_slash_keeps_document_ids() -> None:
+    """A `/` in the tool name is an id, not a URI base for other fields."""
+    tool = CommandLineTool(
+        "tools/align",
+        Inputs(message=Input(cwl.string)),
+        Outputs(out=Output.stdout()),
+    ).to_cwl_document()
+    assert tool["class"] == "CommandLineTool"
+    assert tool["cwlVersion"] == CWL_VERSION
+    assert tool["id"] == "tools/align"
+
+
+@pytest.mark.fast
+def test_record_rejects_a_single_field_spec() -> None:
+    """A record's fields are a collection; one FieldSpec is not iterable."""
+    with pytest.raises(TypeError):
+        cwl.record(cast(Any, Field(cwl.int, name="x")), name="R")
 
 
 @pytest.mark.fast

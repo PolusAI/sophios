@@ -12,6 +12,7 @@ from `cwl_utils`; this module only adapts the calling convention.
 # pylint: disable=too-many-instance-attributes,too-many-arguments
 # pylint: disable=too-many-locals,redefined-builtin,too-many-lines
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, fields as dataclass_fields
 from typing import Any, ClassVar, TypeVar, cast
 
@@ -326,7 +327,7 @@ class _CommonSpecMixin:
     @classmethod
     def record(
         cls: Any,
-        fields: Any,
+        fields: Mapping[str, "FieldSpec"] | list[Any],
         *,
         name: str | None = None,
         **kwargs: Any,

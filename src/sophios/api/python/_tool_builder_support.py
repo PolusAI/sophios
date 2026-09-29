@@ -113,7 +113,9 @@ def _record_type_payload(
     name: str | None = None,
 ) -> dict[str, Any]:
     """Build a CWL record schema payload from named or positional field specs."""
-    if hasattr(fields, "to_dict") and callable(fields.to_dict):
+    from ._tool_builder_namespaces import Fields  # pylint: disable=import-outside-toplevel
+
+    if isinstance(fields, Fields):
         field_defs = fields.to_dict()
     else:
         match fields:

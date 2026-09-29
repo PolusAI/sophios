@@ -518,7 +518,7 @@ class CommandLineTool:
             temporaryFailCodes=list(self._temporary_fail_codes) or None,
             permanentFailCodes=list(self._permanent_fail_codes) or None,
         )
-        document: dict[str, Any] = clt.save(top=True)
+        document: dict[str, Any] = clt.save(top=True, relative_uris=False)
         if self._namespaces:
             document["$namespaces"] = dict(self._namespaces)
         if self._schemas:
