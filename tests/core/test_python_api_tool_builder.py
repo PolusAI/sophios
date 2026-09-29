@@ -9,6 +9,7 @@ import sophios.api.python._tool_builder_support as tool_builder_support
 from sophios.api.python.tool_builder import (
     CommandLineTool,
     Dirent,
+    DockerRequirement,
     Field,
     Fields,
     Input,
@@ -19,6 +20,15 @@ from sophios.api.python.tool_builder import (
     secondary_file,
 )
 from sophios.api.python.workflow import Step
+
+
+@pytest.mark.fast
+def test_hand_authored_cwl_specs_compare_by_identity() -> None:
+    """Hand-authored spec classes compare and hash by identity."""
+    left = DockerRequirement("ubuntu")
+    right = DockerRequirement("ubuntu")
+    assert left != right
+    assert isinstance(hash(left), int)
 
 
 @pytest.mark.fast

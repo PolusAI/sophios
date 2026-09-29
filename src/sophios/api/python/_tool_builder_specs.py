@@ -76,7 +76,7 @@ def _set_frozen_attrs(obj: Any, **values: Any) -> None:
         object.__setattr__(obj, name, value)
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class _CWLObject:
     """Base for hand-authored CWL specs parsed by field declaration order.
 
@@ -117,7 +117,7 @@ class _CWLObject:
         return _render_dataclass_cwl(self)
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class SecondaryFile(_CWLObject):
     """A CWL secondary file pattern."""
 
@@ -136,7 +136,7 @@ def secondary_file(pattern: Any, *, required: bool | str | None = None, **extra:
     return SecondaryFile(pattern=pattern, required=required, extra=dict(extra))
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class Dirent(_CWLObject):
     """A CWL InitialWorkDirRequirement listing entry."""
 
@@ -162,7 +162,7 @@ class Dirent(_CWLObject):
         )
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class EnvironmentDef(_CWLObject):
     """An EnvVarRequirement entry."""
 
@@ -173,7 +173,7 @@ class EnvironmentDef(_CWLObject):
         return cast(dict[str, str], _render_dataclass_cwl(self))
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class CommandLineBinding(_CWLObject):
     """A CWL input binding or argument binding."""
 
@@ -185,7 +185,7 @@ class CommandLineBinding(_CWLObject):
     shell_quote: Any = field(default=None, metadata={"cwl": "shellQuote"})
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class CommandOutputBinding(_CWLObject):
     """A CWL output binding."""
 
@@ -226,7 +226,7 @@ class _RequirementSpec(_CWLObject):
         return _render_dataclass_cwl(self)
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class DockerRequirement(_RequirementSpec):
     """DockerRequirement helper."""
 
@@ -238,7 +238,7 @@ class DockerRequirement(_RequirementSpec):
     docker_output_directory: Any = field(default=None, metadata={"cwl": "dockerOutputDirectory"})
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class InlineJavascriptRequirement(_RequirementSpec):
     """InlineJavascriptRequirement helper."""
 
@@ -247,26 +247,26 @@ class InlineJavascriptRequirement(_RequirementSpec):
     )
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class SchemaDefRequirement(_RequirementSpec):
     """SchemaDefRequirement helper."""
 
     types: Any = field(metadata={"cwl": "types", "render": _canonicalize_sequence})
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class LoadListingRequirement(_RequirementSpec):
     """LoadListingRequirement helper."""
 
     load_listing: Any = field(metadata={"cwl": "loadListing"})
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class ShellCommandRequirement(_RequirementSpec):
     """ShellCommandRequirement helper."""
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class SoftwarePackage(_CWLObject):
     """A SoftwareRequirement package entry."""
 
@@ -275,28 +275,28 @@ class SoftwarePackage(_CWLObject):
     specs: Any = field(default=None, metadata={"cwl": "specs"})
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class SoftwareRequirement(_RequirementSpec):
     """SoftwareRequirement helper."""
 
     packages: Any = field(metadata={"cwl": "packages", "render": _render_sequence})
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class InitialWorkDirRequirement(_RequirementSpec):
     """InitialWorkDirRequirement helper."""
 
     listing: Any = field(metadata={"cwl": "listing"})
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class EnvVarRequirement(_RequirementSpec):
     """EnvVarRequirement helper."""
 
     env_def: Any = field(metadata={"cwl": "envDef", "render": _render_sequence})
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class ResourceRequirement(_RequirementSpec):
     """ResourceRequirement helper."""
 
@@ -310,28 +310,28 @@ class ResourceRequirement(_RequirementSpec):
     outdir_max: Any = field(default=None, metadata={"cwl": "outdirMax"})
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class NetworkAccess(_RequirementSpec):
     """NetworkAccess helper."""
 
     network_access: Any = field(metadata={"cwl": "networkAccess"})
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class WorkReuse(_RequirementSpec):
     """WorkReuse helper."""
 
     enable_reuse: Any = field(metadata={"cwl": "enableReuse"})
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class InplaceUpdateRequirement(_RequirementSpec):
     """InplaceUpdateRequirement helper."""
 
     inplace_update: Any = field(default=True, metadata={"cwl": "inplaceUpdate"})
 
 
-@dataclass(init=False)
+@dataclass(init=False, eq=False)
 class ToolTimeLimit(_RequirementSpec):
     """ToolTimeLimit helper."""
 
