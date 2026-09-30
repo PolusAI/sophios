@@ -58,9 +58,9 @@ class SophiosErrorCode(StrEnum):
     #: inference is done. On a subworkflow call the inputs are the ones the
     #: subworkflow declares.
     UNKNOWN_SCATTER_PORT = 'wic032'
-    #: A key in a `wic:` block that the block does not have (§5).
+    #: A key in a ``wic:`` block that the block does not have (§5).
     UNKNOWN_WIC_KEY = 'wic033'
-    #: A `wic:` key whose value does not have the shape the key declares (§5).
+    #: A ``wic:`` key whose value does not have the shape the key declares (§5).
     MALFORMED_WIC_VALUE = 'wic034'
     #: An authored `cwlVersion` the substrate toolchain does not run (§1).
     UNSUPPORTED_CWL_VERSION = 'wic035'
