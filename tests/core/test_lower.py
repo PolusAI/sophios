@@ -50,7 +50,8 @@ def _declared_inputs(step: Step) -> tuple[str, ...]:
     """What a process declares, as far as the step shows it: the inputs it
     binds, and those it scatters over whether bound or not."""
     scatter = dict(step.interpreted).get('scatter')
-    named = [name for name, _ in step.inputs] + (scatter if isinstance(scatter, list) else [])
+    scattered = [name for name in scatter if isinstance(name, str)] if isinstance(scatter, list) else []
+    named = [name for name, _ in step.inputs] + scattered
     return tuple(dict.fromkeys(named))
 
 

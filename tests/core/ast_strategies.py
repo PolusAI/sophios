@@ -196,7 +196,8 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
         case 'scatter':
             count = draw(st.sampled_from(range(1, min(3, len(names)) + 1)))
             ports = draw(st.permutations(names))[:count]
-            interpreted.append(('scatter', ports))
+            scattered: list[OpaqueCwl] = list(ports)
+            interpreted.append(('scatter', scattered))
             # Required by the spec over two or more ports; optional over one.
             method = draw(st.sampled_from(_SCATTER_METHODS) if len(ports) > 1
                           else st.sampled_from((None, *_SCATTER_METHODS)))
