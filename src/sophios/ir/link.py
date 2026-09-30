@@ -13,7 +13,6 @@ from .types import (
     EdgeOrigin,
     Namespace,
     Port,
-    PortName,
     WorkflowPort,
     PortId,
     StepId,
