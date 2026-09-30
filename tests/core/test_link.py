@@ -16,6 +16,7 @@ from sophios.ir import (
     RegistrySnapshot,
     WorkflowGraph,
     front_end,
+    infer,
     link,
 )
 from sophios.ir.complete import complete
@@ -275,6 +276,31 @@ def test_a_scattered_lift_wraps_the_child_value_once_per_scatter_layer(
     completed = complete(typed.graph)
 
     assert [binding.value for binding in completed.job_bindings] == [lifted]
+
+
+@pytest.mark.fast
+def test_an_unbound_scattered_callee_input_is_wic032_spelled_as_scatter_spells_it() -> None:
+    """Infer's `wic032`: the callee exposes an optional input nothing binds, and
+    the caller scatters it. The message and the locator name it the way
+    `scatter:` does, never as the internal DerivedName."""
+    tools = copy.deepcopy(SYNTHETIC_TOOLS)
+    tools[LegacyStepId('opt_in', SYNTHETIC_NS)] = Tool(
+        '/synthetic/opt_in.cwl', clt({'x': {'type': 'string?'}}, {}))
+    child = 'steps:\n- id: opt_in\n'
+    root = 'steps:\n- id: child.wic\n  scatter: [child__step__1__opt_in___x]\n'
+    typed = _rooted(root, tools, child=child)
+    assert typed.graph is not None, list(typed.diagnostics)
+    linked = link(typed.graph)
+    assert linked.graph is not None, list(linked.diagnostics)
+
+    result = infer(linked.graph)
+
+    assert result.graph is None
+    [diagnostic] = result.diagnostics
+    assert diagnostic.code is SophiosErrorCode.UNKNOWN_SCATTER_PORT
+    assert "scatters over 'child__step__1__opt_in___x'" in diagnostic.message
+    assert diagnostic.locator is not None and diagnostic.locator.port == 'child__step__1__opt_in___x'
+    assert 'DerivedName' not in str(diagnostic)
 
 
 @pytest.mark.fast

@@ -8,6 +8,7 @@ from ..lang.diagnostics import Diagnostics, Locator
 from .declarations import (feeding_declaration, input_rank, layered, output_rank, port_declaration,
                            produced_declaration, required)
 from .link import attach_step_children
+from .names import Names
 from .resolve import RegistrySnapshot
 from .stepin import direct_sink
 from .types import (
@@ -189,19 +190,23 @@ def _bound(graph: WorkflowGraph) -> set[PortId]:
     return bound
 
 
-def _unbound_scatter(graph: WorkflowGraph, diagnostics: Diagnostics) -> None:
-    """Report each scattered input still without a value once inference is done."""
+def _unbound_scatter(graph: WorkflowGraph, diagnostics: Diagnostics,
+                     names: Names | None = None) -> None:
+    """Report each scattered input still without a value once inference is done,
+    spelled as `scatter:` spells it."""
+    names = names or Names.of(graph)
     bound = _bound(graph)
     for step in graph.steps:
         for name in step.scatter_ports:
             if PortId(step.id, Direction.INPUT, name) not in bound:
+                spelled = names.port(name)
                 diagnostics.error(
                     SophiosErrorCode.UNKNOWN_SCATTER_PORT,
-                    f"step '{step.id.name}' scatters over '{name}', but nothing binds it, and a "
+                    f"step '{step.id.name}' scatters over '{spelled}', but nothing binds it, and a "
                     "scatter needs a value to split. Bind it in `in:`, or drop it from `scatter:`.",
-                    step.span, Locator(step=step.id.name, index=step.id.index, port=str(name)))
+                    step.span, Locator(step=step.id.name, index=step.id.index, port=spelled))
     for child in graph.children:
-        _unbound_scatter(child, diagnostics)
+        _unbound_scatter(child, diagnostics, names)
 
 
 def _candidate(steps: list[StepNode], position: int, sink: Port,
