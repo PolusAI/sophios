@@ -6,6 +6,7 @@ main `tool_builder.py` file can stay focused on the user-facing surface.
 """
 
 from argparse import Namespace
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -113,16 +114,11 @@ def _record_type_payload(
     name: str | None = None,
 ) -> dict[str, Any]:
     """Build a CWL record schema payload from named or positional field specs."""
-    from ._tool_builder_namespaces import Fields  # pylint: disable=import-outside-toplevel
-
-    if isinstance(fields, Fields):
-        field_defs = fields.to_dict()
-    else:
-        match fields:
-            case dict() as mapping:
-                field_defs = [spec.named(field_name).to_dict() for field_name, spec in mapping.items()]
-            case _:
-                field_defs = [_render(field_spec) for field_spec in fields]
+    match fields:
+        case Mapping() as mapping:
+            field_defs = [spec.named(field_name).to_dict() for field_name, spec in mapping.items()]
+        case _:
+            field_defs = [_render(field_spec) for field_spec in fields]
     payload: dict[str, Any] = {"type": "record", "fields": field_defs}
     _merge_if_set(payload, "name", name)
     return payload
