@@ -62,6 +62,8 @@ class SophiosErrorCode(StrEnum):
     UNKNOWN_WIC_KEY = 'wic033'
     #: A `wic:` key whose value does not have the shape the key declares (§5).
     MALFORMED_WIC_VALUE = 'wic034'
+    #: An authored `cwlVersion` the substrate toolchain does not run (§1).
+    UNSUPPORTED_CWL_VERSION = 'wic035'
 
     #: --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = 'api001'

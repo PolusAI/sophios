@@ -78,9 +78,11 @@ broad enough to cover them would have to be weak enough to say nothing:
 - `cwlVersion` is **written by the compiler**: it is always the one declared
   substrate version, whatever the document says. Sophios generates constructs
   from that version — a workflow that declared `v1.0` and used `when:` used to
-  keep the declaration and emit CWL that is invalid against it. Supplying the
-  tag is not an error; it is ignored, with a warning naming the version that
-  was used instead.
+  keep the declaration and emit CWL that is invalid against it. Supplying
+  `v1.0`, `v1.1` or `v1.2` is not an error; it is ignored, with a warning
+  naming the version that was used instead. Any other value is `wic035`,
+  reported by the parser at the value: accepting a version is a promise to
+  process it, and the toolchain processes no other.
 - `requirements` is **merged into**: your entries survive, and Sophios adds
   what the workflow needs — `ScatterFeatureRequirement` for a scattering step,
   `InlineJavascriptRequirement` for `when`,

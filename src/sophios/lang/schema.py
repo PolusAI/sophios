@@ -64,6 +64,10 @@ def wic_schema() -> dict[str, Any]:
     annotate or edit the result in place.
     """
     document = _object_schema(Document)
+    document['properties']['cwlVersion'] = {
+        **Grammar.CWL_VERSION_VALUE.json(),
+        'description': 'Ignored in favour of the substrate version, but must be one the toolchain runs (§1).',
+    }
     return {
         '$schema': Json.DIALECT,
         '$id': Json.SCHEMA_ID,

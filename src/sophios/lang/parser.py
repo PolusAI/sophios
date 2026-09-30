@@ -30,6 +30,7 @@ from .nodes import (
     UnresolvedName,
     WicSidecar,
 )
+from .cwl import CWL_VERSIONS
 from .spans import SourceSpan
 from .values import Anything, AnyMapping, Flag, ListOf, OneOf, Record, Text, ValueShape
 
@@ -89,6 +90,11 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
         'scatterMethod': OneOf(('dotproduct', 'flat_crossproduct', 'nested_crossproduct')),
         'inference': Anything(),
     })
+
+    #: What an authored `cwlVersion:` may say: a version the substrate
+    #: toolchain runs (§1). The compiler still writes its own; any other value
+    #: is `wic035`, and the schema generator states the same enum.
+    CWL_VERSION_VALUE: Final = OneOf(CWL_VERSIONS)
 
     #: Every key a `wic:` block admits: its values, and `steps:`, which is
     #: structure rather than a value.
@@ -238,6 +244,11 @@ def _document(root: yaml.nodes.MappingNode, file: str, diags: Diagnostics) -> Do
                 steps, steps_as_mapping = _steps(value_node, file, diags)
             case 'wic':
                 sidecar = _sidecar(value_node, file, diags)
+            case 'cwlVersion':
+                version = _opaque(value_node, file, diags)
+                for message, at in Grammar.CWL_VERSION_VALUE.problems(version, value_node, key):
+                    diags.error(SophiosErrorCode.UNSUPPORTED_CWL_VERSION, message, SourceSpan.of(file, at))
+                passthrough.append((key, version))
             case _:
                 passthrough.append((key, _opaque(value_node, file, diags)))
 
