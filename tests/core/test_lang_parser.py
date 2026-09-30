@@ -899,6 +899,32 @@ def test_a_sidecar_steps_out_accepts_an_edge_definition() -> None:
     assert sugared.ok, [str(d) for d in sugared.diagnostics]
 
 
+#: A well-formed value for every `wic:` key, as flow YAML. Keyed by the
+#: declaration, so a key added there without a row here fails the lookup.
+WIC_VALUES: Final = {
+    'graphviz': '{label: x, style: dashed, ranksame: ["(1, s)"]}', 'implementations': '{}',
+    'driver': 'slurm', 'inlineable': 'true', 'scatterMethod': 'dotproduct', 'in': '{}',
+    'scatter': '[x]', 'inference': '{}', 'implementation': 'x', 'default_implementation': 'x',
+    'version': 'x', 'lang_version': 'x', 'namespace': 'x',
+}
+
+#: One wrong-shaped value per kind of declared shape, with where it is reported.
+MALFORMED_WIC_VALUES: Final = [
+    ('wic:\n  inlineable: sometimes\n', 2, 15),
+    ('wic:\n  driver: pbs\n', 2, 11),
+    ('wic:\n  namespace: ""\n', 2, 14),
+    ('wic:\n  lang_version: 1.0\n', 2, 17),
+    ('wic:\n  implementations: [a]\n', 2, 20),
+    ('wic:\n  graphviz: x\n', 2, 13),
+    ('wic:\n  graphviz:\n    label: ""\n', 3, 12),
+    ('wic:\n  graphviz:\n    style: bogus\n', 3, 12),
+    ('wic:\n  graphviz:\n    color: red\n', 3, 5),
+    ('wic:\n  graphviz:\n    ranksame: ["(1, a)", zz]\n', 3, 26),
+    ('wic:\n  steps:\n    (1, s):\n      scatterMethod: dot\n', 4, 22),
+    ('wic:\n  steps:\n    (1, s):\n      wic:\n        inlineable: 1\n', 5, 21),
+]
+
+
 @pytest.mark.fast
 def test_the_wic_block_is_closed_at_every_depth() -> None:
     """Each `wic:` key the language has parses clean; any other is `wic033`,
@@ -910,10 +936,11 @@ def test_the_wic_block_is_closed_at_every_depth() -> None:
     what it says about the step it names.
     """
     for key in sorted(Grammar.SIDECAR_KEYS - {'steps'}):
-        root = parse(f'wic:\n  {key}: x\nsteps:\n- id: s\n', 'root.wic')
+        root = parse(f'wic:\n  {key}: {WIC_VALUES[key]}\nsteps:\n- id: s\n', 'root.wic')
         assert not root.diagnostics.has_errors, (key, [str(d) for d in root.diagnostics])
     for key in sorted(Grammar.SIDECAR_STEP_KEYS - {'steps', 'out'}):
-        entry = parse(f'wic:\n  steps:\n    (1, s):\n      {key}: x\nsteps:\n- id: s\n', 'entry.wic')
+        entry = parse(f'wic:\n  steps:\n    (1, s):\n      {key}: {WIC_VALUES[key]}\nsteps:\n- id: s\n',
+                      'entry.wic')
         assert not entry.diagnostics.has_errors, (key, [str(d) for d in entry.diagnostics])
 
     for source, line, column in [
@@ -925,6 +952,16 @@ def test_the_wic_block_is_closed_at_every_depth() -> None:
         reported = [(d.code, d.span.start_line, d.span.start_column)
                     for d in parse(source, 'closed.wic').diagnostics if d.span is not None]
         assert reported == [(SophiosErrorCode.UNKNOWN_WIC_KEY, line, column)], source
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('source', 'line', 'column'), MALFORMED_WIC_VALUES)
+def test_a_wic_value_of_the_wrong_shape_is_reported_where_it_is(source: str, line: int, column: int) -> None:
+    """Each declared value shape refuses what the generated jsonschema used to
+    refuse, as `wic034`, at the node that is wrong -- a nested one included."""
+    reported = [(d.code, d.span.start_line, d.span.start_column)
+                for d in parse(source, 'malformed.wic').diagnostics if d.span is not None]
+    assert reported == [(SophiosErrorCode.MALFORMED_WIC_VALUE, line, column)], source
 
 
 @pytest.mark.fast

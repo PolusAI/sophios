@@ -31,6 +31,14 @@ from .nodes import (
     WicSidecar,
 )
 from .spans import SourceSpan
+from .values import Anything, AnyMapping, Flag, ListOf, OneOf, Record, Text, ValueShape
+
+#: A `graphviz: style:` value: one or more styles, comma separated.
+_GRAPHVIZ_STYLE: Final = ('((,\\s*)*(dashed|dotted|solid|invis|bold|tapered|filled|striped|wedged'
+                          '|diagonals|rounded))+')
+#: A `graphviz: ranksame:` entry: a `wic: steps:` key, `(index, name)`.
+_RANKSAME_ENTRY: Final = '\\([0-9]+, [A-Za-z0-9_\\.]+\\)'
+_NON_EMPTY: Final = Text(min_length=1)
 
 
 @final
@@ -51,20 +59,43 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     #: forgotten `id:` from a step called `run`.
     STEP_KEYS: Final = frozenset({'id', 'in', 'out'}) | INTERPRETED_STEP_KEYS
 
-    #: Every key a `wic:` block admits (§5). The block is Sophios's own
-    #: metadata, not passthrough CWL, so it is closed: any other key is
-    #: `wic033`.
-    SIDECAR_KEYS: Final = frozenset({
-        'graphviz', 'steps', 'implementation', 'implementations',
-        'default_implementation', 'version', 'lang_version', 'driver',
-        'namespace', 'inlineable',
+    #: Every value key a `wic:` block admits (§5), with the shape its value
+    #: takes. The block is Sophios's own metadata, not passthrough CWL, so it
+    #: is closed: any other key is `wic033`, and a value of the wrong shape is
+    #: `wic034`. The schema generator reads the same table.
+    SIDECAR_VALUES: Final[Mapping[str, ValueShape]] = MappingProxyType({
+        'graphviz': Record((('label', _NON_EMPTY),
+                            ('style', Text(pattern=_GRAPHVIZ_STYLE)),
+                            ('ranksame', ListOf(Text(pattern=_RANKSAME_ENTRY))))),
+        'implementation': _NON_EMPTY,
+        'implementations': AnyMapping(),
+        'default_implementation': _NON_EMPTY,
+        'version': _NON_EMPTY,
+        'lang_version': _NON_EMPTY,
+        'driver': OneOf(('slurm', 'argo')),
+        'namespace': _NON_EMPTY,
+        'inlineable': Flag(),
     })
 
-    #: What a `wic: steps:` entry admits: a `wic:` block's keys, plus what it
-    #: says about the step it names -- the step keys it may override, and
+    #: What a `wic: steps:` entry admits: a `wic:` block's values, plus what
+    #: it says about the step it names -- the step keys it may override, and
     #: that step's `inference:` rules. Siblings of the entry's own `wic:`
     #: wrapper are folded into the one block it parses to.
-    SIDECAR_STEP_KEYS: Final = SIDECAR_KEYS | frozenset({'in', 'out', 'scatter', 'scatterMethod', 'inference'})
+    SIDECAR_STEP_VALUES: Final[Mapping[str, ValueShape]] = MappingProxyType({
+        **SIDECAR_VALUES,
+        'in': Anything(),
+        'out': Anything(),
+        'scatter': Anything(),
+        'scatterMethod': OneOf(('dotproduct', 'flat_crossproduct', 'nested_crossproduct')),
+        'inference': Anything(),
+    })
+
+    #: Every key a `wic:` block admits: its values, and `steps:`, which is
+    #: structure rather than a value.
+    SIDECAR_KEYS: Final = frozenset(SIDECAR_VALUES) | {'steps'}
+
+    #: Every key a `wic: steps:` entry admits.
+    SIDECAR_STEP_KEYS: Final = frozenset(SIDECAR_STEP_VALUES) | {'steps'}
 
     #: `wic:` sidecar step keys have the surface form "(1, step_name)".
     WIC_STEP_KEY: Final = re.compile(r'^\(\s*(\d+)\s*,\s*(.+?)\s*\)$')
@@ -640,11 +671,11 @@ def _sidecar_implementations(node: yaml.nodes.MappingNode, file: str,
 
 def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
              _path: frozenset[int] = frozenset(),
-             admitted: frozenset[str] = Grammar.SIDECAR_KEYS) -> WicSidecar:
+             values: Mapping[str, ValueShape] = Grammar.SIDECAR_VALUES) -> WicSidecar:
     """Parse a `wic:` block, normalising its `"(1, name)"` step keys.
 
-    A key outside ``admitted`` is reported and dropped, since the block is
-    closed (§5).
+    A key outside ``values`` and `steps:` is reported and dropped, since the
+    block is closed (§5); a value is checked against its declared shape.
     """
     span = SourceSpan.of(file, node)
     if id(node) in _path:
@@ -661,12 +692,9 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
     entries: list[tuple[str, OpaqueCwl]] = []
     implementations: list[tuple[str, Document]] = []
 
-    for key, value_node in _admitted_entries(node, file, diags, admitted):
+    for key, value_node in _admitted_entries(node, file, diags, frozenset(values) | {'steps'}):
         if key != 'steps':
-            if key == 'out':
-                entries.append((key, _sidecar_out_entry(value_node, file, diags)))
-            else:
-                entries.append((key, _opaque(value_node, file, diags)))
+            entries.append((key, _sidecar_value(key, value_node, values[key], file, diags)))
             if key == 'implementations' and isinstance(value_node, yaml.nodes.MappingNode):
                 implementations.extend(
                     _sidecar_implementations(value_node, file, diags))
@@ -696,7 +724,7 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
                 )
                 continue
             steps.append((parsed, _sidecar(_child_sidecar_node(sub_value), file, diags, _path | {id(node)},
-                                           Grammar.SIDECAR_STEP_KEYS)))
+                                           Grammar.SIDECAR_STEP_VALUES)))
 
     return WicSidecar(steps=tuple(steps), entries=tuple(entries),
                       implementations=tuple(implementations), span=span)
@@ -718,6 +746,22 @@ def _admitted_entries(node: yaml.nodes.MappingNode, file: str, diags: Diagnostic
                 SourceSpan.of(file, key_node))
     return [(key, value) for key, value in _unique_entries(node, file, diags, 'wic: entry')
             if key in admitted]
+
+
+def _sidecar_value(key: str, node: yaml.nodes.Node, shape: ValueShape,
+                   file: str, diags: Diagnostics) -> OpaqueCwl:
+    """Materialise one `wic:` value and report each way it misses its
+    declared shape, at the node that misses (`wic034`).
+
+    A value that already earned a diagnostic while being read is not checked
+    again: one mistake, one diagnostic.
+    """
+    reported = len(diags)
+    value = _sidecar_out_entry(node, file, diags) if key == 'out' else _opaque(node, file, diags)
+    if len(diags) == reported:
+        for message, at in shape.problems(value, node, f'wic: {key}'):
+            diags.error(SophiosErrorCode.MALFORMED_WIC_VALUE, message, SourceSpan.of(file, at))
+    return value
 
 
 def _step_key(text: str) -> StepKey | None:

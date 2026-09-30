@@ -13,7 +13,8 @@ from types import MappingProxyType
 from typing import Any, Final, final
 
 from .nodes import Document, OutputBinding, Shape, Step, WicSidecar, surface_of
-from .parser import Forms, Grammar
+from .parser import SIDECAR_WRAPPER_KEY, Forms, Grammar
+from .values import ValueShape
 
 
 @final
@@ -46,7 +47,7 @@ _SHAPE_SCHEMA: Final[Mapping[Shape, Callable[[], dict[str, Any]]]] = MappingProx
     Shape.SIDECAR_STEPS: lambda: {
         'description': 'Per-step metadata, keyed "(index, name)".',
         'type': 'object',
-        'patternProperties': {Grammar.WIC_STEP_KEY_PATTERN: {'$ref': '#/$defs/wicBlock'}},
+        'patternProperties': {Grammar.WIC_STEP_KEY_PATTERN: {'$ref': '#/$defs/wicStepEntry'}},
         'additionalProperties': False,
     },
     #: Structure only; a field's own constraints (e.g. non-empty step id)
@@ -96,6 +97,9 @@ def _object_schema(node_type: type, *, omit: frozenset[str] = frozenset()) -> di
                 # left unconstrained — Sophios reads them, CWL owns their shapes.
                 for key in sorted(Grammar.INTERPRETED_STEP_KEYS):
                     properties[key] = {'description': f'Interpreted by Sophios: {key} (§4.3).'}
+            case Shape.SIDECAR_ENTRIES:
+                # Closed, and each value's shape is the one the parser checks.
+                properties.update(_values_schema(Grammar.SIDECAR_VALUES))
             case _ if form.key is not None:
                 properties[form.key] = _SHAPE_SCHEMA[form.shape]()
             case _:
@@ -122,6 +126,8 @@ def _defs() -> dict[str, Any]:
         'construct': _construct(),
         'outputEntry': _output_entry(),
         'wicBlock': _wic_block(),
+        'wicStepBlock': _wic_step_block(),
+        'wicStepEntry': _wic_step_entry(),
     }
 
 
@@ -156,6 +162,11 @@ def _output_entry() -> dict[str, Any]:
     }
 
 
+def _values_schema(values: Mapping[str, ValueShape]) -> dict[str, Any]:
+    """One property per declared `wic:` key, shaped as the parser checks it."""
+    return {key: shape.json() for key, shape in sorted(values.items())}
+
+
 def _wic_block() -> dict[str, Any]:
     """The `wic:` sidecar. Null is legal: a bare `wic:` is empty (§5)."""
     body = _object_schema(WicSidecar)
@@ -163,6 +174,28 @@ def _wic_block() -> dict[str, Any]:
         **body,
         'description': 'Compiler metadata. Never emitted to CWL (§5).',
         'type': ['object', 'null'],
+    }
+
+
+def _wic_step_block() -> dict[str, Any]:
+    """What a `wic: steps:` entry says about its step: a `wic:` block's
+    keys, plus the ones only a step entry has."""
+    body = _wic_block()
+    return {
+        **body,
+        'description': 'Metadata for the step this entry names (§5).',
+        'properties': {'steps': body['properties']['steps'],
+                       **_values_schema(Grammar.SIDECAR_STEP_VALUES)},
+    }
+
+
+def _wic_step_entry() -> dict[str, Any]:
+    """A `wic: steps:` entry: its keys directly, under a `wic:` wrapper, or both."""
+    body = _wic_step_block()
+    return {
+        **body,
+        'properties': {**body['properties'],
+                       SIDECAR_WRAPPER_KEY: {'$ref': '#/$defs/wicStepBlock'}},
     }
 
 

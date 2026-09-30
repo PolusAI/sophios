@@ -24,6 +24,7 @@ from typing import Any
 
 import jsonschema
 import pytest
+import yaml
 from hypothesis import HealthCheck, given, settings
 
 from sophios.lang import SophiosErrorCode, Forms, Grammar, parse, to_json, wic_schema
@@ -44,6 +45,7 @@ from sophios.lang.nodes import (
 )
 
 from .strategies import documents
+from .test_lang_parser import MALFORMED_WIC_VALUES, WIC_VALUES
 from .wic_corpus import CORPUS, corpus_id
 
 FAST = settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
@@ -198,6 +200,34 @@ def test_rejects_what_the_parser_reports(label: str, source: str, projection: An
     """Reverse direction: parser and schema agree on the structural mistakes."""
     assert not parse(source, 'bad.wic').ok, f'parser accepted {label!r}'
     assert not _accepts(projection), f'schema accepted {label!r}'
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('source', '_line', '_column'), MALFORMED_WIC_VALUES,
+                         ids=[c[0] for c in MALFORMED_WIC_VALUES])
+def test_rejects_every_wic_value_the_parser_reports(source: str, _line: int, _column: int) -> None:
+    """A `wic:` value of the wrong shape is refused by both readers of its
+    declaration. The sources carry no tags, so loading one is its projection."""
+    assert not parse(source, 'bad.wic').ok
+    assert not _accepts(yaml.safe_load(source))
+
+
+@pytest.mark.fast
+def test_the_wic_block_is_closed_and_complete_for_editors() -> None:
+    """Each `wic:` form offers exactly the keys the parser admits there, and
+    no other, so an editor completes them and flags the rest (§5)."""
+    forms = {'wicBlock': Grammar.SIDECAR_KEYS, 'wicStepBlock': Grammar.SIDECAR_STEP_KEYS,
+             'wicStepEntry': Grammar.SIDECAR_STEP_KEYS | {'wic'}}
+    for form, keys in forms.items():
+        assert set(SCHEMA['$defs'][form]['properties']) == keys, form
+        assert SCHEMA['$defs'][form]['additionalProperties'] is False, form
+    for key, value in WIC_VALUES.items():
+        entry = {'wic': {'steps': {'(1, s)': {key: yaml.safe_load(value)}}}}
+        assert _accepts(entry), (key, list(VALIDATOR.iter_errors(entry)))
+        if key in Grammar.SIDECAR_KEYS:
+            assert _accepts({'wic': {key: yaml.safe_load(value)}}), key
+        else:
+            assert not _accepts({'wic': {key: yaml.safe_load(value)}}), key
 
 
 # --------------------------------------------------------------------------

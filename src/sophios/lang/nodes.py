@@ -36,6 +36,9 @@ class Shape(StrEnum):
     SIDECAR_STEPS = 'sidecar_steps'
     #: A fixed set of CWL keys Sophios reads and acts upon.
     INTERPRETED = 'interpreted'
+    #: The `wic:` block's value keys: a closed set, each with a declared
+    #: value shape (`Grammar.SIDECAR_VALUES`, §5).
+    SIDECAR_ENTRIES = 'sidecar_entries'
     #: Any key not claimed above: CWL, copied through untouched.
     PASSTHROUGH = 'passthrough'
 
@@ -206,12 +209,12 @@ class WicSidecar:
     """The `wic:` metadata block.
 
     `steps` is normalised to `StepKey`; every other key (`graphviz`,
-    `default_implementation`, `namespace`, ...) is retained verbatim, because
-    the sidecar's surface is unchanged by this specification.
+    `default_implementation`, `namespace`, ...) is retained verbatim, once the
+    parser has checked it is a key the block has, with a value of its shape.
     """
 
     steps: tuple[tuple[StepKey, 'WicSidecar'], ...] = surface(Shape.SIDECAR_STEPS, 'steps', default=())
-    entries: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.PASSTHROUGH, default=())
+    entries: tuple[tuple[str, OpaqueCwl], ...] = surface(Shape.SIDECAR_ENTRIES, default=())
     #: Each `implementations:` body, parsed. Internal, not a second surface:
     #: the bodies stay in `entries` and are spelled from there, so rendering
     #: is unchanged.

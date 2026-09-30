@@ -60,6 +60,8 @@ class SophiosErrorCode(StrEnum):
     UNKNOWN_SCATTER_PORT = 'wic032'
     #: A key in a `wic:` block that the block does not have (§5).
     UNKNOWN_WIC_KEY = 'wic033'
+    #: A `wic:` key whose value does not have the shape the key declares (§5).
+    MALFORMED_WIC_VALUE = 'wic034'
 
     #: --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = 'api001'

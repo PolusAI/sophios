@@ -141,10 +141,12 @@ def documents(draw: st.DrawFn) -> str:
         if draw(st.booleans()):
             lines.extend(draw(_out_lines(body_indent)))
     if draw(st.booleans()):
-        lines += ['wic:', '  graphviz:', f'    label: {draw(identifiers)}']
+        # Quoted: a label is a string (§5), and `null`, `no` or `on` would
+        # load as something else.
+        lines += ['wic:', '  graphviz:', f"    label: '{draw(identifiers)}'"]
         if draw(st.booleans()):
             # A nested sidecar: the (index, name) key wraps a wic: block.
             lines += ['  steps:', f'    (1, {names[0]}):', '      wic:',
                       '        steps:', f'          (1, {draw(identifiers)}):',
-                      '            graphviz:', f'              label: {draw(identifiers)}']
+                      '            graphviz:', f"              label: '{draw(identifiers)}'"]
     return '\n'.join(lines) + '\n'

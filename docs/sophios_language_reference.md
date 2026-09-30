@@ -425,12 +425,24 @@ Step keys inside `wic: steps:` have the form `(index, name)` — the index is
 1-based and matches the step's position. Sophios parses these into a structured
 key; you should never have to parse that string yourself.
 
-The block is Sophios's own, not passthrough CWL, so it is closed. Its keys are
-`graphviz`, `steps`, `implementation`, `implementations`,
-`default_implementation`, `version`, `lang_version`, `driver`, `namespace` and
-`inlineable`. An entry under `steps:` may also say something about the step it
-names: `in`, `out`, `scatter`, `scatterMethod` and `inference`. Any other key
-is `wic033`, reported by the parser at the key.
+The block is Sophios's own, not passthrough CWL, so it is closed, and each key
+declares the shape of its value:
+
+| Key | Value |
+|---|---|
+| `steps` | a mapping keyed `(index, name)` |
+| `graphviz` | a mapping of `label` (a non-empty string), `style` (Graphviz styles, comma separated) and `ranksame` (a list of `(index, name)` keys), each optional |
+| `implementation`, `default_implementation`, `version`, `lang_version`, `namespace` | a non-empty string |
+| `implementations` | a mapping |
+| `driver` | `slurm` or `argo` |
+| `inlineable` | `true` or `false` |
+
+An entry under `steps:` may also say something about the step it names:
+`in`, `out`, `scatter` and `inference`, whose values are not checked here, and
+`scatterMethod`, one of `dotproduct`, `flat_crossproduct` and
+`nested_crossproduct`. Any other key is `wic033`, reported at the key; a value
+of the wrong shape is `wic034`, reported at the value. The parser and the
+schema (§6.3) read one declaration of these, `Grammar.SIDECAR_VALUES`.
 
 A bare `wic:` with nothing under it is an empty block, not an error. Nested
 step entries keep their `wic:` wrapper through a render — every consumer reads
@@ -563,7 +575,9 @@ itself rather than from any shortcut:
   object that might carry passthrough CWL.
 
 So the schema catches structural mistakes — `steps:` that is a string, `in:`
-that is a list, a malformed `(index, name)` key — and admits everything else.
+that is a list, a malformed `(index, name)` key, a `wic:` key or value §5 does
+not admit — and admits everything else. The `wic:` block is not passthrough, so
+it is the one object the schema closes.
 It is an editor aid, not a second implementation of this document.
 
 ### 6.4 What this does *not* cover
