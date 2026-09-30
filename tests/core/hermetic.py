@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Final
 
 import yaml
-from hypothesis import HealthCheck, settings
 
 import sophios.cli
 import sophios.compiler
@@ -25,13 +24,14 @@ from sophios.ir.resolve import RegistrySnapshot
 from sophios.lang import Document, ParseResult, parse
 from sophios.wic_types import Tools, Yaml
 
+from .budgets import budget
 from .synthetic_tools import SYNTHETIC_TOOLS
 
 #: Budgets, per the TDD guide's table. They may be raised for a dispatch run.
 #: They may never be lowered to make a failing property pass.
-COVERAGE: Final = settings(max_examples=500, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-ORACLE: Final = settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-PARTITION: Final = settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+COVERAGE: Final = budget(500)
+ORACLE: Final = budget(100)
+PARTITION: Final = budget(50)
 
 
 def _documents(*results: ParseResult) -> tuple[Document, ...]:

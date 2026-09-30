@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 import pytest
 import yaml
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 
 from sophios.ir import (
     RegistryKey,
@@ -37,7 +37,8 @@ from sophios.lang import (EdgeRef, InlineLiteral, RawCwlRef, SourceSpan, Step,
 from sophios.wic_types import StepId as LegacyStepId, Yaml
 
 from . import ast_strategies as strat
-from .hermetic import bundle, compile_hermetic
+from .budgets import budget
+from .hermetic import ORACLE, bundle, compile_hermetic
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, inputs_of, outputs_of
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -72,7 +73,7 @@ def _assert_processes_match_the_registry(document: Any) -> None:
 
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+@ORACLE
 def test_every_resolved_process_is_the_one_the_registry_holds(workflow: Yaml) -> None:
     """Resolution is compared where the bridged differential cannot see it.
 
@@ -105,7 +106,7 @@ def test_resolved_interfaces_match_an_independent_registry_model() -> None:
 
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+@ORACLE
 def test_resolution_depends_only_on_the_registry(workflow: Yaml) -> None:
     """Filesystem and ambient environment are unavailable during resolution."""
     model = bundle(workflow, 'oracle', SYNTHETIC_TOOLS)
@@ -136,7 +137,7 @@ def test_snapshot_owns_tool_definitions() -> None:
 
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+@ORACLE
 def test_registry_order_cannot_change_resolution(workflow: Yaml) -> None:
     """Lookup has no first-match semantics over registry iteration order."""
     model = bundle(workflow, 'oracle', SYNTHETIC_TOOLS)
@@ -153,7 +154,7 @@ def test_registry_order_cannot_change_resolution(workflow: Yaml) -> None:
 
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows())
-@settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+@budget(200)
 def test_parse_resolve_lower_are_directly_typed(workflow: Yaml) -> None:
     """Each phase consumes the preceding phase's value, not a rendered adapter."""
     model = bundle(workflow, 'oracle', SYNTHETIC_TOOLS)

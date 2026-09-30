@@ -15,7 +15,7 @@ from typing import Any, Final
 
 import pytest
 import yaml
-from hypothesis import HealthCheck, example, given, settings
+from hypothesis import example, given
 from hypothesis import strategies as st
 
 from sophios.lang import (
@@ -34,11 +34,12 @@ from sophios.lang.render import render
 from sophios.lang.spans import SourceSpan
 from sophios.utils_yaml import wic_loader
 
+from .budgets import budget
 from .strategies import documents, scalar_payload_texts
 
 from .wic_corpus import CORPUS, corpus_id
 
-FAST = settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+FAST = budget(200)
 
 #: The spellings whose source text IS the scalar's content — every payload
 #: above except the quoted ones, where the quotes belong to the YAML syntax

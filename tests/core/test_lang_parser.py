@@ -17,7 +17,7 @@ from typing import Any, Final, NamedTuple, get_args
 
 import pytest
 import yaml
-from hypothesis import HealthCheck, example, given, settings
+from hypothesis import example, given
 from hypothesis import strategies as st
 
 from sophios.lang import (
@@ -39,10 +39,11 @@ from sophios.lang.spans import SourceSpan
 from sophios.utils_yaml import Key, wic_loader
 
 from . import provocations
+from .budgets import budget
 from .wic_corpus import CORPUS, corpus_id
 from .strategies import documents, identifiers
 
-FAST = settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+FAST = budget(200)
 
 
 # --------------------------------------------------------------------------

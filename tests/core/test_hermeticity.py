@@ -147,3 +147,27 @@ def test_the_poison_fires_on_a_suite_that_needs_discovery() -> None:
     output = result.stdout + result.stderr
     assert result.returncode != 0, output
     assert POISON_MESSAGE in output, output
+
+
+def _budgets_under(scale: str | None) -> subprocess.CompletedProcess[str]:
+    """Import the budgets in a fresh interpreter with `scale` set, or unset."""
+    env = {key: value for key, value in os.environ.items() if key != 'SOPHIOS_PROPERTY_SCALE'}
+    if scale is not None:
+        env['SOPHIOS_PROPERTY_SCALE'] = scale
+    env['PYTHONPATH'] = os.pathsep.join((str(REPO_ROOT / 'src'), str(REPO_ROOT / 'tests')))
+    probe = ('from core import hermetic, compile_harness as c; '
+             'print(hermetic.COVERAGE.max_examples, hermetic.ORACLE.max_examples, '
+             'hermetic.PARTITION.max_examples, c.FAST.max_examples, c.COMPILED.max_examples)')
+    return subprocess.run([sys.executable, '-c', probe], cwd=REPO_ROOT, env=env,
+                          capture_output=True, text=True, check=False)
+
+
+@pytest.mark.fast
+def test_the_property_scale_multiplies_every_budget_and_is_one_by_default() -> None:
+    """An ordinary run draws exactly the examples it always did; the weekly
+    lane's knob multiplies every shared budget; a knob that is not a positive
+    integer stops the run rather than silently drawing nothing."""
+    assert _budgets_under(None).stdout.split() == ['500', '100', '50', '200', '100']
+    assert _budgets_under('3').stdout.split() == ['1500', '300', '150', '600', '300']
+    refused = _budgets_under('0')
+    assert refused.returncode != 0 and 'SOPHIOS_PROPERTY_SCALE' in refused.stderr

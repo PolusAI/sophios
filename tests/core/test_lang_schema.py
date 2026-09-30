@@ -25,7 +25,7 @@ from typing import Any
 import jsonschema
 import pytest
 import yaml
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 
 from sophios.lang import SophiosErrorCode, Forms, Grammar, parse, to_json, wic_schema
 from sophios.lang.nodes import (
@@ -44,11 +44,12 @@ from sophios.lang.nodes import (
     surface_of,
 )
 
+from .budgets import budget
 from .strategies import documents
 from .test_lang_parser import MALFORMED_WIC_VALUES, WIC_VALUES
 from .wic_corpus import CORPUS, corpus_id
 
-FAST = settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+FAST = budget(200)
 
 SCHEMA = wic_schema()
 VALIDATOR = jsonschema.Draft202012Validator(SCHEMA)

@@ -15,7 +15,7 @@ import tempfile
 
 import pytest
 import yaml
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 
 import sophios.post_compile
 from sophios.ir import (
@@ -147,7 +147,7 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
 @pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @given(strat.workflows())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+@ORACLE
 def test_emit_validates_as_cwl_v1_2(workflow: Yaml) -> None:
     """CWL's external validator accepts each emitted workflow and its job inputs.
 
