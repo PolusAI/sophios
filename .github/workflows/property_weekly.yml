@@ -1,0 +1,95 @@
+name: Property Weekly
+
+# The hermetic property suite, drawn far deeper than a push can afford. Every
+# property's budget is `tests/core/budgets.py::budget(n)`, and this lane sets
+# the one knob that multiplies all of them, SOPHIOS_PROPERTY_SCALE.
+#
+# Hermetic: the generators draw workflows over tests/core/synthetic_tools.py,
+# so nothing here needs a plugin checkout, a config, a container or the
+# self-hosted runner. It replaces the weekly fuzz job, which sampled an
+# environment-dependent schema that no longer exists.
+#
+# Each run draws fresh examples: the seed is the run id, recorded in the job
+# summary, and a failure prints the falsifying example with the
+# `@reproduce_failure` line that replays it. To replay a whole run locally:
+#   SOPHIOS_PROPERTY_SCALE=<scale> pytest <files> --hypothesis-seed=<seed>
+
+on:
+  # push:  # Do NOT run the deep properties on every push!
+  # pull_request: (either on origin or on upstream pull request)
+  schedule:
+    # Every Wednesday at midnight.
+    - cron: '0 0 * * 3'
+  workflow_dispatch:
+    inputs:
+      scale:
+        description: 'Multiply every property budget by this (SOPHIOS_PROPERTY_SCALE)'
+        required: false
+        default: '20'
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  properties:
+    # See https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#concurrency
+    # This will prevent DOS attacks from people blasting the CI with rapid fire commits.
+    concurrency:
+      group: ${{ github.workflow }}-properties-${{ github.ref }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    # On a laptop the oracle step takes about 2.5 minutes at scale 1 and 3.5
+    # at scale 2; the fixed cost dominates, so scale 20 extrapolates to under
+    # half an hour there. The ceilings leave room for a slower hosted runner.
+    timeout-minutes: 240
+    env:
+      SOPHIOS_PROPERTY_SCALE: ${{ inputs.scale || '20' }}
+      HYPOTHESIS_SEED: ${{ github.run_id }}
+
+    steps:
+      - name: Checkout sophios
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # cwltool is a core dependency, so this also provides the in-process
+      # `--validate` the emit property calls. ubuntu-latest ships nodejs.
+      - name: Install Sophios
+        run: pip install ".[test]"
+
+      - name: Record seed and scale
+        run: |
+          {
+            echo "SHA: $(git rev-parse --short HEAD)"
+            echo "Seed: $HYPOTHESIS_SEED (replay with --hypothesis-seed=$HYPOTHESIS_SEED)"
+            echo "Scale: $SOPHIOS_PROPERTY_SCALE"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The oracle suite (tests/core/test_hermeticity.py::ORACLE_FILES) and the
+      # phase properties beside it, slow ones included: the `--validate`
+      # property is slow-marked, and deepening it is the point of this lane.
+      - name: PyTest Oracle and Phase Properties
+        if: always()
+        timeout-minutes: 180
+        run: pytest tests/core/test_generators.py tests/core/test_equivalence.py tests/core/test_equivalences.py tests/core/test_predicates.py tests/core/test_reference_compatibility.py tests/core/test_canonical_path.py tests/core/test_emit.py tests/core/test_resolve.py tests/core/test_link.py tests/core/test_infer_phase.py tests/core/test_lower.py tests/core/test_pipeline.py --hypothesis-seed="$HYPOTHESIS_SEED" --junitxml=property-reports/oracle.xml
+
+      # The language layer's properties over `strategies.documents()`. Its
+      # skip_pypi_ci tests compile against a discovered registry, which this
+      # lane does not have; lint_and_test runs them.
+      - name: PyTest Language Properties
+        if: always()
+        timeout-minutes: 30
+        run: pytest tests/core/test_lang_parser.py tests/core/test_lang_render.py tests/core/test_lang_schema.py -m "not skip_pypi_ci" --hypothesis-seed="$HYPOTHESIS_SEED" --junitxml=property-reports/language.xml
+
+      - name: Upload pytest reports
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: property-weekly-reports
+          path: property-reports/
+          retention-days: 30

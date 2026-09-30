@@ -4,9 +4,10 @@ Three claims, each enforced below: compilation never terminates the process,
 every failure path produces at least one diagnostic, and the CLI's exit codes
 match their pre-change behaviour.
 
-The no-exit claim's dynamic half lives in the fuzz suite, which compiles
-generated documents with no `SystemExit` arm left in its handler, so a
-process-killing path is a test failure there rather than a whitelisted event.
+The no-exit claim's dynamic half lives in the generator properties
+(`test_pipeline.py`, `test_emit.py` and the rest of the oracle suite), which
+compile generated workflows with no `SystemExit` arm in any handler, so a
+process-killing path fails them; the weekly property lane runs them deep.
 
 The at-least-one-diagnostic claim holds by construction — `SophiosError`
 cannot be built with zero diagnostics — plus one test per converted site proving the site actually

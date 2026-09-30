@@ -91,6 +91,11 @@ Sophios uses property-based testing: it generates many synthetic workflows,
 from the language's own generators, and checks that the language and compiler
 behave consistently.
 
+Every property's example budget goes through `tests/core/budgets.py`. Setting
+`SOPHIOS_PROPERTY_SCALE` multiplies all of them; the weekly
+`property_weekly.yml` lane runs the hermetic suite at twenty times its usual
+depth, with a fresh seed each week.
+
 This is most useful for developers and maintainers. Users do not need to
 understand property-based testing to benefit from schema validation in their
 editor or from Python API validation in their scripts.

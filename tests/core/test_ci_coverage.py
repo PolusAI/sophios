@@ -40,6 +40,10 @@ REPORTING_ONLY: Final = frozenset({
 #: Reporting arguments that take a value, so the value is dropped with them.
 REPORTING_WITH_VALUE: Final = frozenset({'--workers', '--cwl_runner', '-n', '--parallel'})
 
+#: Reporting arguments spelled `--flag=value`. `--junitxml` would also write a
+#: report from inside the census's own collection.
+REPORTING_PREFIXES: Final = ('--cov', '--junitxml', '--hypothesis-seed')
+
 
 def _selection_argv(argv: list[str]) -> list[str]:
     """`argv` with the arguments that do not decide selection removed."""
@@ -50,7 +54,7 @@ def _selection_argv(argv: list[str]) -> list[str]:
             skip = False
         elif token in REPORTING_WITH_VALUE:
             skip = True
-        elif token not in REPORTING_ONLY and not token.startswith('--cov'):
+        elif token not in REPORTING_ONLY and not token.startswith(REPORTING_PREFIXES):
             kept.append(token)
     return kept
 
@@ -124,6 +128,23 @@ def test_no_lane_checks_our_own_repo_out_at_a_literal_ref() -> None:
                 if repo.endswith('/sophios') and ref and '${{' not in ref:
                     offenders.append(f'{workflow.name}: checks out sophios at {ref!r}')
     assert not offenders, '\n'.join(offenders)
+
+
+@pytest.mark.fast
+def test_the_weekly_property_lane_runs_the_whole_oracle_suite() -> None:
+    """The deep lane draws every oracle property, slow ones included.
+
+    `ORACLE_FILES` names the suite whose inputs are synthetic, which is what
+    lets the weekly lane run on a bare hosted runner. A file added there and
+    not to the lane would be deepened nowhere, and nothing else would notice.
+    """
+    from .test_hermeticity import ORACLE_FILES  # pylint: disable=import-outside-toplevel
+
+    weekly: set[str] = set()
+    for argv in _invocations(WORKFLOWS / 'property_weekly.yml'):
+        weekly |= _collect(argv)
+    missing = sorted(_collect(list(ORACLE_FILES)) - weekly)
+    assert not missing, 'the weekly property lane does not run:\n  ' + '\n  '.join(missing)
 
 
 def test_the_census_sees_the_repo() -> None:
