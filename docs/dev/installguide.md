@@ -197,15 +197,15 @@ tools and `.wic` workflows. Generate a starter config with:
 sophios --generate_config
 ```
 
-Generate schemas for editor validation with:
+Write the language's JSON Schema for editor validation with:
 
 ```bash
 sophios --generate_schemas
 ```
 
 If discovery looks stale after adding, removing, or renaming tools, inspect
-`~/wic/global_config.json` and regenerate schemas. Do not delete `~/wic`
-blindly if it contains local configuration you want to keep.
+`~/wic/global_config.json`. Do not delete `~/wic` blindly if it contains local
+configuration you want to keep.
 
 ## Optional: External Workflow Repositories
 

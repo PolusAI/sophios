@@ -157,13 +157,15 @@ outputs:
 
 ## Workflow Development
 
-When adding new `.cwl` or `.wic` files, regenerate the discovery config and
-schemas when editor validation or tool discovery looks stale:
+When adding new `.cwl` or `.wic` files, regenerate the discovery config when
+tool discovery looks stale:
 
 ```bash
 sophios --generate_config
-sophios --generate_schemas
 ```
+
+The editor schema describes syntax only, so it does not go stale when tools
+change. Write it once with `sophios --generate_schemas`.
 
 Sophios uses `~/wic/global_config.json` by default. Inspect that file before
 deleting `~/wic`, because it may contain local search paths you want to keep.

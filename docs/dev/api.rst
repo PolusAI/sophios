@@ -42,10 +42,6 @@ sophios.run_local_async
 ------------------------------------
 .. automodule:: sophios.run_local_async
 
-sophios.schemas.wic_schema
-------------------------------------
-.. automodule:: sophios.schemas.wic_schema
-
 sophios.utils
 ------------------------------------
 .. automodule:: sophios.utils
