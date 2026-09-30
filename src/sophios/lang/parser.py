@@ -650,6 +650,11 @@ def _child_sidecar_node(node: yaml.nodes.Node) -> yaml.nodes.Node:
     assert isinstance(wrapper, yaml.nodes.Node)  # untyped tuple from PyYAML
     if not siblings:
         return wrapper
+    if isinstance(wrapper, yaml.nodes.ScalarNode) and wrapper.tag == 'tag:yaml.org,2002:null':
+        # An empty wrapper beside its siblings is an empty mapping, as a bare
+        # `{wic: }` already is; otherwise `wic` itself would reach the key check.
+        return yaml.nodes.MappingNode('tag:yaml.org,2002:map', siblings,
+                                      start_mark=node.start_mark, end_mark=node.end_mark)
     if not isinstance(wrapper, yaml.nodes.MappingNode):
         return node
     return yaml.nodes.MappingNode(wrapper.tag, [*wrapper.value, *siblings],

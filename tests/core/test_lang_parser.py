@@ -986,6 +986,20 @@ def test_a_sidecar_steps_out_sibling_to_wic_still_unwraps() -> None:
 
 
 @pytest.mark.fast
+def test_an_empty_sidecar_wrapper_beside_siblings_is_an_empty_mapping() -> None:
+    """`(1, a): {wic: , in: ...}` is the siblings alone, rather than a `wic033`
+    naming the wrapper itself as an unknown key. The schema reads it the same
+    way (`test_lang_schema.py`)."""
+    source = 'wic:\n  steps:\n    (1, a):\n      wic:\n      in: {x: 1}\nsteps:\n- id: a\n'
+
+    result = parse(source, 'empty_wrapper.wic')
+
+    assert result.ok, [str(d) for d in result.diagnostics]
+    assert result.document is not None and result.document.sidecar is not None
+    assert dict(result.document.sidecar.steps[0][1].entries) == {'in': {'x': 1}}
+
+
+@pytest.mark.fast
 def test_the_loader_accepts_every_owned_tag() -> None:
     """`!cwl` is registered with the loader like its three siblings.
 

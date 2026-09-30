@@ -408,3 +408,12 @@ def test_an_empty_step_id_is_rejected_because_the_parser_reports_it() -> None:
     result = parse("steps:\n- id: ''\n", 'empty_id.wic')
     assert any(d.code is SophiosErrorCode.EMPTY_STEP_ID for d in result.diagnostics)
     assert not _accepts({'steps': [{'id': ''}]})
+
+
+@pytest.mark.fast
+def test_an_empty_sidecar_wrapper_beside_siblings_is_accepted() -> None:
+    """The schema half of the parser's reading of `(1, a): {wic: , in: ...}`:
+    `wicStepBlock` admits null, so both surfaces accept the siblings alone."""
+    data = yaml.safe_load('wic:\n  steps:\n    (1, a):\n      wic:\n      in: {x: 1}\nsteps:\n- id: a\n')
+
+    assert _accepts(data), list(VALIDATOR.iter_errors(data))
