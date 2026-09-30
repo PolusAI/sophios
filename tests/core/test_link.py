@@ -253,6 +253,31 @@ def test_a_wrapper_scattering_an_inferred_nested_input_by_its_mangled_name() -> 
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize('child_type, literal, lifted', [
+    ('string[]', '[a, b]', [['a', 'b']]),
+    ('string', 'solo', ['solo']),
+    ('string[]', 'solo', [['solo']]),
+])
+def test_a_scattered_lift_wraps_the_child_value_once_per_scatter_layer(
+        child_type: str, literal: str, lifted: object) -> None:
+    """A child's job value is exactly one value of the child's type, and the
+    caller's scatter adds one array layer around it. So a list the child
+    already holds is one invocation's value, not the values to split: the child
+    runs once with its own value, just as it does for a scalar."""
+    tools = copy.deepcopy(SYNTHETIC_TOOLS)
+    tools[LegacyStepId('arr', SYNTHETIC_NS)] = Tool(
+        '/synthetic/arr.cwl', clt({'xs': {'type': child_type}}, {}))
+    child = f'steps:\n- id: arr\n  in: {{xs: !ii {literal}}}\n'
+    root = 'steps:\n- id: child.wic\n  scatter: [child__step__1__arr___xs]\n'
+    typed = _rooted(root, tools, child=child)
+    assert typed.graph is not None, list(typed.diagnostics)
+
+    completed = complete(typed.graph)
+
+    assert [binding.value for binding in completed.job_bindings] == [lifted]
+
+
+@pytest.mark.fast
 def test_a_local_edge_inside_a_scattered_subworkflow_is_not_disjoint_from_itself() -> None:
     """A step-to-step edge wholly inside a subworkflow is judged in that
     subworkflow's own scope, not the scope of whatever ancestor happens to

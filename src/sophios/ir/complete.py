@@ -15,7 +15,7 @@ from typing import Any, TypeVar
 from ..lang.nodes import InlineLiteral, UnresolvedName
 from ..lang.diagnostics import SophiosError
 from ..lang.error_codes import SophiosErrorCode
-from .declarations import feeding_declaration, produced_declaration
+from .declarations import feeding_declaration, input_rank, produced_declaration
 from .types import (
     AuthoredName,
     DerivedName,
@@ -87,7 +87,12 @@ def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
             outer_name = DerivedName(step.id, boundary.name)
             sink = next(port for port in inputs if port.id.port == boundary.name)
             declaration = feeding_declaration(step, sink)
+            # The child's job value is exactly one value of the child's type;
+            # each scatter layer the caller adds goes around it, so a list the
+            # child already holds is one invocation's value, not the split.
             value = child_jobs[boundary.name]
+            for _ in range(input_rank(step, boundary.name)):
+                value = [value]
             _put(workflow_inputs, WorkflowPort(outer_name, declaration))
             _put(job_bindings, JobBinding(outer_name, coerce_job_value(
                 str(boundary.name), declaration, value)))
