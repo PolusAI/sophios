@@ -466,10 +466,21 @@ the same door as a `.wic` file, and writes it with `sophios.lang.render`:
 sequence-form steps and explicit `id:`, and `Workflow.yaml` is the same
 document's `to_json` projection.
 
+A workflow that contains a nested `Workflow` can be written two ways. With
+`inline_subworkflows=False`, each nested workflow is written as its own `.wic`
+file and the parent calls it by name, like any other subworkflow. The default,
+inline form instead nests the child's `to_json` projection under a `subtree:`
+key of the calling step. That form is what the compiler consumes in memory; it
+is not yet a `.wic` document the parser accepts, because the child's edge
+definitions sit inside passthrough, where they are `wic019` (§4.1.1).
+
 Two obligations follow, and both are enforced by tests rather than convention:
 
-1. **Whatever the Python API emits must parse.** An API that produced
-   documents its own parser rejects would mean two languages wearing one name.
+1. **Whatever the Python API writes as a `.wic` file must parse.** An API that
+   produced documents its own parser rejects would mean two languages wearing
+   one name. This holds for a flat workflow and for nested workflows written
+   with `inline_subworkflows=False`; the inline `subtree:` form above is the
+   known exception.
 2. **Both spellings must produce the same result.** `!ii x` and
    `{wic_inline_input: x}` are the same input, so compiling either must give
    the same answer.
