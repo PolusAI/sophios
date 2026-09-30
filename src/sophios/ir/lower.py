@@ -229,9 +229,16 @@ def _scatter_ports(source: Step, identity: StepId, inputs: tuple[Port, ...],
 
     A scatter entry names an input of its step, or a name the callee exposes.
     A name that is neither is `wic032` and is dropped from the ports rank and
-    Emit read.
+    Emit read. So is an entry that is not a name at all, and a `scatter:` that
+    is neither a name nor a list of them.
     """
     scatter = dict(source.interpreted).get('scatter')
+    locator = Locator(step=source.id, index=identity.index)
+    if scatter is not None and not isinstance(scatter, (str, list)):
+        diagnostics.error(SophiosErrorCode.UNKNOWN_SCATTER_PORT,
+                          f"step '{source.id}' has `scatter: {scatter!r}`, which names no input. "
+                          "`scatter:` is an input name or a list of them.",
+                          source.span, locator)
     written: list[object] = [scatter] if isinstance(scatter, str) else (
         list(scatter) if isinstance(scatter, list) else [])
     ports: dict[str, PortName] = {str(port.id.port): port.id.port for port in inputs}
@@ -242,6 +249,10 @@ def _scatter_ports(source: Step, identity: StepId, inputs: tuple[Port, ...],
     found: list[PortName] = []
     for text in written:
         if not isinstance(text, str):
+            diagnostics.error(SophiosErrorCode.UNKNOWN_SCATTER_PORT,
+                              f"step '{source.id}' has the scatter entry {text!r}, which is not "
+                              "a name. Each `scatter:` entry names one of the step's inputs.",
+                              source.span, locator)
             continue
         port = ports.get(text)
         if port is not None:
@@ -249,7 +260,7 @@ def _scatter_ports(source: Step, identity: StepId, inputs: tuple[Port, ...],
             continue
         diagnostics.error(SophiosErrorCode.UNKNOWN_SCATTER_PORT,
                           _unknown_scatter(source.id, text, list(ports)),
-                          source.span, Locator(step=source.id, index=identity.index))
+                          source.span, locator)
     return tuple(found)
 
 

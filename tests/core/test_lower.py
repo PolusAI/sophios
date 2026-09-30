@@ -35,6 +35,7 @@ from sophios.ir import (
 from sophios.ir.lower import lower
 from sophios.ir.declarations import port_declaration
 from sophios.ir.types import AuthoredName
+from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.nodes import Document, InlineLiteral, Step
 from sophios.lang.parser import parse
 from sophios.lang.spans import SourceSpan
@@ -378,3 +379,15 @@ def test_the_graph_owns_no_mutable_container() -> None:
     for name in ('steps', 'explicit_edge_defs', 'explicit_edge_calls',
                  'input_mapping', 'output_mapping', 'passthrough'):
         assert isinstance(getattr(graph, name), tuple), name
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('scatter', ['[1]', '[null]', '5', '{a: 1}', '[name, 1]'])
+def test_a_scatter_entry_that_is_not_a_name_is_wic032(scatter: str) -> None:
+    """`scatter:` names inputs. An entry that is no name at all, or a
+    `scatter:` that is neither a name nor a list, names none of them: it is
+    reported rather than dropped or emitted verbatim."""
+    result = _lower(f'steps:\n- id: mk_file\n  in: {{name: !ii [a, b]}}\n  scatter: {scatter}\n')
+
+    codes = [diagnostic.code for diagnostic in result.diagnostics]
+    assert SophiosErrorCode.UNKNOWN_SCATTER_PORT in codes, codes
