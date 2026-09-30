@@ -17,7 +17,7 @@ import pytest
 from hypothesis import find, given, settings
 from hypothesis.strategies import SearchStrategy
 
-from sophios.lang import Document, EdgeRef, Step, parse
+from sophios.lang import Document, Step, parse
 
 from . import ast_strategies as strat
 from .hermetic import COVERAGE
