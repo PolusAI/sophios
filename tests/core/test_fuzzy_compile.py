@@ -3,21 +3,20 @@ from typing import Final
 import unittest
 
 import graphviz
-from hypothesis import given, settings, HealthCheck, strategies as st
+from hypothesis import given, settings, HealthCheck
 import networkx as nx
 import pytest
 
 import sophios
-import yaml
 from sophios.ir import frontdoor
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 import sophios.cli
 import sophios.plugins
-import sophios.utils
-from sophios.wic_types import GraphData, GraphReps, Yaml, YamlTree, StepId
+from sophios.wic_types import GraphData, GraphReps
 
-from .test_setup import load_test_registry, wic_strategy
+from .strategies import documents
+from .test_setup import load_test_registry
 
 
 #: Structured failures the fuzz job accepts. Exactly the former `sys.exit(1)`
@@ -64,40 +63,24 @@ TOLERATED_CODES: Final[frozenset[SophiosErrorCode]] = frozenset({
 class TestFuzzyCompile(unittest.TestCase):
 
     @pytest.mark.slow
-    @given(data=st.data())
+    @given(source=documents())
     @settings(max_examples=100,
-              suppress_health_check=[HealthCheck.too_slow,
-                                     HealthCheck.filter_too_much],
+              suppress_health_check=[HealthCheck.too_slow],
               deadline=None)
-    # TODO: Improve schema so we can remove the health checks
-    def test_fuzzy_compile(self, data: st.DataObject) -> None:  # pylint: disable=too-many-locals
-        """Tests that the compiler doesn't crash when given random allegedly valid input.\n
-        Note that the full schema has performance limitations, so a random subset of\n
-        wic_main_schema is chosen when hypothesis=True, then random values are generated.
+    def test_fuzzy_compile(self, source: str) -> None:  # pylint: disable=too-many-locals
+        """The compiler does not crash on a well-formed document, against the
+        discovered registry.
+
+        Drawn from the language's own generator rather than from a schema: the
+        one this used to sample enumerated the environment, so what it drew
+        depended on which plugins were installed.
 
         Args:
-            yml (Yaml): Yaml input, randomly generated according to a random subset of wic_main_schema
+            source (str): A syntactically well-formed Sophios document.
         """
         registry = load_test_registry()
-        yml: Yaml = data.draw(wic_strategy())
-        tools_cwl = registry.tools
-        yml_paths = registry.workflows
-        validator = registry.validator
-        plugin_ns = 'global'
         yml_path = Path('random_stepid')
-        subkeys = [sd.get('id', '') for sd in yml.get('steps', [])
-                   if isinstance(sd, dict) and sd.get('id', '').endswith('.wic')]
-        if subkeys:
-            # NOTE: Since all filepaths are currently relative w.r.t. --yaml,
-            # we need to supply a fake --yaml. Using [0] works because we are
-            # using k=1 in wic_main_schema.
-            yml_path_stem = Path(subkeys[0]).stem
-            if yml_path_stem in yml_paths.get(plugin_ns, {}):
-                yml_path = yml_paths[plugin_ns][yml_path_stem]
-
         args = sophios.cli.get_args(str(yml_path))
-
-        y_t = YamlTree(StepId('random_stepid', plugin_ns), yml)
 
         graph_gv = graphviz.Digraph(name=f'cluster_{yml_path}')
         graph_gv.attr(newrank='True')
@@ -109,8 +92,7 @@ class TestFuzzyCompile(unittest.TestCase):
 
         try:
             bundle = frontdoor.bundle_from_source(
-                yaml.dump(yml, sort_keys=False, line_break='\n', indent=2),
-                'random_stepid', yml_paths, tools_cwl)
+                source, 'random_stepid', registry.workflows, registry.tools)
 
             sophios.compiler.compile_source(
                 bundle, compiler_options, graph_settings, yaml_tag_paths,

@@ -245,27 +245,19 @@ def test_python_script_resolves_without_writing_a_file(tmp_path: Path,
 
 
 @pytest.mark.fast
-def test_the_schema_gate_runs_before_anything_reads_the_document(tmp_path: Path) -> None:
-    """A document the schema refuses is refused as it is read.
+def test_the_parser_is_the_gate_a_file_passes_as_it_is_read(tmp_path: Path) -> None:
+    """A document with a `wic:` key the language does not have is refused as
+    it is read, at the key, and by the parser.
 
-    The `wic:` block is closed, so a key the language does not have is caught
-    here rather than carried through as opaque data -- which is what happened
-    while nothing validated. Supplying no validator is the other half of the
-    claim: it is the gate that rejects, not the parser.
+    A generated jsonschema used to be applied here, and the parser let the key
+    through as opaque data. Nothing validates against a schema now, so the
+    refusal is the parser's -- positioned, and with no environment involved:
+    the registry is empty.
     """
-    from sophios.lang.diagnostics import SophiosError  # pylint: disable=import-outside-toplevel
-
-    from .test_setup import load_test_registry  # pylint: disable=import-outside-toplevel
-
-    registry = load_test_registry()
     written = tmp_path / 'probe.wic'
     written.write_text('wic:\n  nonsense_key: 1\nsteps:\n- id: mk_file\n  in:\n    name: !ii a\n',
                        encoding='utf-8')
 
-    with pytest.raises(SophiosError) as caught:
-        bundle_from_disk(written, {'global': {}}, registry.tools, registry.validator)
-    assert [item.code for item in caught.value.diagnostics][0] is SophiosErrorCode.SUBWORKFLOW_INVALID
-
-    # Without the gate the same document is accepted, so the rejection above
-    # is the validator's and not something the parser would have caught.
-    assert bundle_from_disk(written, {'global': {}}, registry.tools) is not None
+    diagnostics = bundle_from_disk(written, {'global': {}}, {}).parsed.diagnostics
+    assert [(d.code, d.span.start_line if d.span else None) for d in diagnostics] == [
+        (SophiosErrorCode.UNKNOWN_WIC_KEY, 2)]

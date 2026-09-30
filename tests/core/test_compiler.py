@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from jsonschema.validators import Draft202012Validator
 
 from sophios import compiler, cwl_subinterpreter, utils
 from sophios.lang import to_json
@@ -33,9 +32,7 @@ def test_rerun_cwltool_builds_an_id_form_step(
     from there. Each branch hands its document to exactly one function, which is
     the seam to stub — the CWL runner is never reached, and the cache directory
     is never touched. `_Captured` is not a `FileNotFoundError`, so the
-    function's own handler does not swallow it. The validator is never reached
-    on either branch, but it is a real one rather than a `None` the signature
-    does not admit.
+    function's own handler does not swallow it.
 
     One row's config carries an `id` of its own, so the step the branch builds
     is only named for the tool if the config cannot overwrite it.
@@ -51,8 +48,7 @@ def test_rerun_cwltool_builds_an_id_form_step(
     monkeypatch.setattr(compiler, 'compile_source', capture)
     with pytest.raises(_Captured):
         cwl_subinterpreter.rerun_cwltool(
-            '', tmp_path, tmp_path, cwl_tool, config, {}, {},
-            Draft202012Validator({}), tmp_path)
+            '', tmp_path, tmp_path, cwl_tool, config, {}, {}, tmp_path)
 
     assert [utils.require_step_id(step) for step in seen[0]['steps']] == [cwl_tool]
 

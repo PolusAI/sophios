@@ -241,15 +241,13 @@ def test_raw_cwl_reference_needs_no_global_escape_hatch() -> None:
 
 
 @pytest.mark.fast
-def test_collecting_test_setup_neither_discovers_plugins_nor_writes_schemas(tmp_path: Path) -> None:
+def test_collecting_test_setup_neither_discovers_plugins_nor_writes_files(tmp_path: Path) -> None:
     """The corpus registry is an execution fixture, not an import side effect."""
     script = '''
 import sophios.plugins
-import sophios.schemas.wic_schema
 def forbidden(*args, **kwargs):
     raise AssertionError("collection performed environment discovery")
 sophios.plugins.get_tools_cwl = forbidden
-sophios.schemas.wic_schema.get_validator = forbidden
 import core.test_setup
 '''
     env = {**os.environ, 'PYTHONPATH': os.pathsep.join(

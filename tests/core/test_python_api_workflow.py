@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any, Iterator, cast
 from unittest.mock import patch
 
+from jsonschema import Draft202012Validator
 import pytest
 import yaml
 
@@ -21,16 +22,14 @@ import sophios.plugins
 from sophios import input_output as io
 from sophios import run_local
 from sophios import run_local_async
-from sophios import utils, utils_cwl
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import (_python_api_types_match, ApiError, CompiledWorkflow,
                                          InvalidCLTError, InvalidInputValueError, InvalidLinkError,
                                          InvalidStepError, SophiosError, SophiosErrorCode, Step,
                                          Workflow)
-from sophios.lang import InlineLiteral
+from sophios.lang import InlineLiteral, parse, to_json, wic_schema
 from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest, ComputeSubmission
 from sophios.python_cwl_adapter import import_python_file
-from sophios.schemas import wic_schema
 from sophios.utils_yaml import wic_loader
 from sophios.wic_types import Json, Tools
 
@@ -1131,31 +1130,25 @@ def test_compile_python_workflows() -> None:
 
 @pytest.mark.fast
 def test_validate_generated_python_workflows() -> None:
-    """Every `.wic` the discovery step generated validates against the exported schema."""
+    """Every `.wic` the discovery step generated parses clean and validates
+    against the exported schema."""
     if not PYTHON_WORKFLOW_MANIFEST.exists():
         pytest.fail(
             f"Missing generated workflow manifest: {PYTHON_WORKFLOW_MANIFEST}")
 
-    global_config = _load_global_config()
-    tools_cwl = sophios.plugins.get_tools_cwl(global_config)
-    yml_paths = sophios.plugins.get_yml_paths(global_config)
-    yaml_stems = utils.flatten([list(paths) for paths in yml_paths.values()])
-    validator = wic_schema.get_validator(
-        tools_cwl, yaml_stems, {}, write_to_disk=False)
-
+    validator = Draft202012Validator(wic_schema())
     workflow_paths = json.loads(
         PYTHON_WORKFLOW_MANIFEST.read_text(encoding="utf-8"))
     validation_errors: list[str] = []
     for workflow_path_str in workflow_paths:
         workflow_path = Path(workflow_path_str)
-        try:
-            with workflow_path.open("r", encoding="utf-8") as handle:
-                yaml_tree = yaml.load(handle.read(), Loader=wic_loader())
-            validator.validate(
-                utils_cwl.desugar_into_canonical_normal_form(yaml_tree))
-        except Exception as exc:  # pylint: disable=W0718:broad-exception-caught
-            validation_errors.append(
-                f"{workflow_path}: {type(exc).__name__}: {exc}")
+        parsed = parse(workflow_path.read_text(encoding="utf-8"), workflow_path.name)
+        if not parsed.ok or parsed.document is None:
+            validation_errors.extend(str(d) for d in parsed.diagnostics)
+            continue
+        validation_errors.extend(
+            f"{workflow_path}: {error.message}"
+            for error in validator.iter_errors(to_json(parsed.document)))
 
     if validation_errors:
         pytest.fail("Generated workflow validation failed:\n" +

@@ -5,16 +5,10 @@ root's own text is the source, and each reachable workflow is registered as
 the parse of its own file, so every span is a position in the file the user
 edited. Nothing here serialises YAML.
 """
-import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-from jsonschema import Draft202012Validator
-
-from ..lang.diagnostics import SophiosError
-from ..lang.error_codes import SophiosErrorCode
 from ..lang import (
     Document,
     EdgeRef,
@@ -28,8 +22,6 @@ from ..lang import (
     parse,
 )
 from ..python_cwl_adapter import generate_CWL_CommandLineTool, get_module
-from ..utils_cwl import desugar_into_canonical_normal_form
-from ..utils_yaml import wic_loader
 from ..wic_types import StepId, Tool, Tools
 from .resolve import RegistrySnapshot, generated_process_id
 
@@ -53,8 +45,7 @@ class SourceBundle:
 
 def bundle_from_source(source: str, name: str,
                        yml_paths: dict[str, dict[str, Path]],
-                       tools: Tools,
-                       validator: Draft202012Validator | None = None) -> SourceBundle:
+                       tools: Tools) -> SourceBundle:
     """Bundle a root nobody wrote, plus every file its steps reach.
 
     For a caller that constructs its own root -- the runtime adapter builds a
@@ -65,8 +56,7 @@ def bundle_from_source(source: str, name: str,
     workflows: dict[tuple[str, str], ParseResult] = {}
     generated: Tools = {}
     pins: list[str] = []
-    parsed = _visit(source, name, None, yml_paths, Path('.'), workflows, generated, {}, pins,
-                    validator)
+    parsed = _visit(source, name, None, yml_paths, Path('.'), workflows, generated, {}, pins)
     return SourceBundle(parsed, name,
                         RegistrySnapshot.from_tools({**tools, **generated},
                                                     workflows=workflows),
@@ -75,19 +65,18 @@ def bundle_from_source(source: str, name: str,
 
 def bundle_from_disk(yml_path: Path,
                      yml_paths: dict[str, dict[str, Path]],
-                     tools: Tools,
-                     validator: Draft202012Validator | None = None) -> SourceBundle:
+                     tools: Tools) -> SourceBundle:
     """Read ``yml_path`` and everything it reaches into an immutable snapshot.
 
-    Each file is validated against ``validator`` as it is read, when one is
-    supplied -- the same gate the file loader applied, at the same point: before
-    anything downstream sees the document.
+    The parser is the only gate a file passes as it is read: whether it is
+    well-formed is syntax, reported with positions. Whether its steps exist
+    here, and whether their ports line up, is for the passes that follow.
     """
     workflows: dict[tuple[str, str], ParseResult] = {}
     generated: Tools = {}
     pins: list[str] = []
     parsed = _visit(yml_path.read_text(encoding='utf-8'), yml_path.stem, yml_path.resolve(), yml_paths, yml_path.parent,
-                    workflows, generated, {}, pins, validator)
+                    workflows, generated, {}, pins)
     return SourceBundle(parsed, yml_path.stem,
                         RegistrySnapshot.from_tools({**tools, **generated},
                                                     workflows=workflows),
@@ -101,21 +90,19 @@ def _visit(source: str, stem: str, path: Path | None,
            workflows: dict[tuple[str, str], ParseResult],
            generated: Tools,
            read: dict[Path, ParseResult],
-           pins: list[str],
-           validator: Draft202012Validator | None) -> ParseResult:
+           pins: list[str]) -> ParseResult:
     """Parse one file's text and register every workflow and generated tool it reaches.
 
     The parse is recorded under ``path`` before anything it reaches is read,
     so a file reached again -- a cycle, or a second namespace -- reuses it.
     """
-    _validate(source, stem, validator)
     parsed = parse(source, f'{stem}.wic')
     if path is not None:
         read[path] = parsed
     document = parsed.document
     if document is not None:
         _collect_pins(document, pins)
-        _reach(document, yml_paths, script_dir, workflows, generated, read, pins, validator)
+        _reach(document, yml_paths, script_dir, workflows, generated, read, pins)
     return parsed
 
 
@@ -144,8 +131,7 @@ def _reach(document: Document,
            workflows: dict[tuple[str, str], ParseResult],
            generated: Tools,
            read: dict[Path, ParseResult],
-           pins: list[str],
-           validator: Draft202012Validator | None) -> None:
+           pins: list[str]) -> None:
     """Follow every workflow and generated tool one document's steps reach,
     including its inline implementation bodies.
     """
@@ -169,30 +155,9 @@ def _reach(document: Document,
             resolved = child_path.resolve()
             workflows[key] = read[resolved] if resolved in read else _visit(
                 child_path.read_text(encoding='utf-8'), child_path.stem, resolved,
-                yml_paths, script_dir, workflows, generated, read, pins, validator)
+                yml_paths, script_dir, workflows, generated, read, pins)
     for _name, body in (document.sidecar.implementations if document.sidecar else ()):
-        _reach(body, yml_paths, script_dir, workflows, generated, read, pins, validator)
-
-
-def _validate(source: str, stem: str, validator: Draft202012Validator | None) -> None:
-    """Check one document, in canonical normal form, against the schema before
-    anything reads it; the traceback goes to a file, not the reader's screen.
-    """
-    if validator is None:
-        return
-    try:
-        validator.validate(desugar_into_canonical_normal_form(
-            yaml.load(source, Loader=wic_loader())))
-    except Exception as error:  # pylint: disable=broad-exception-caught
-        # Deliberately broad: any failure while validating, not only a
-        # ValidationError, is reported to the reader rather than raised raw.
-        report = Path(f'validation_{stem}.txt')
-        with report.open(mode='w', encoding='utf-8') as handle:
-            traceback.print_exception(type(error), value=error, tb=None, file=handle)
-        raise SophiosError.error(
-            SophiosErrorCode.SUBWORKFLOW_INVALID,
-            f'Failed to validate {stem}',
-            f'See {report} for detailed technical information.') from error
+        _reach(body, yml_paths, script_dir, workflows, generated, read, pins)
 
 
 def _namespace(sidecar: WicSidecar | None) -> str:
