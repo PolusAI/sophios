@@ -146,5 +146,5 @@ def documents(draw: st.DrawFn) -> str:
             # A nested sidecar: the (index, name) key wraps a wic: block.
             lines += ['  steps:', f'    (1, {names[0]}):', '      wic:',
                       '        steps:', f'          (1, {draw(identifiers)}):',
-                      f'            label: {draw(identifiers)}']
+                      '            graphviz:', f'              label: {draw(identifiers)}']
     return '\n'.join(lines) + '\n'

@@ -425,6 +425,13 @@ Step keys inside `wic: steps:` have the form `(index, name)` — the index is
 1-based and matches the step's position. Sophios parses these into a structured
 key; you should never have to parse that string yourself.
 
+The block is Sophios's own, not passthrough CWL, so it is closed. Its keys are
+`graphviz`, `steps`, `implementation`, `implementations`,
+`default_implementation`, `version`, `lang_version`, `driver`, `namespace` and
+`inlineable`. An entry under `steps:` may also say something about the step it
+names: `in`, `out`, `scatter`, `scatterMethod` and `inference`. Any other key
+is `wic033`, reported by the parser at the key.
+
 A bare `wic:` with nothing under it is an empty block, not an error. Nested
 step entries keep their `wic:` wrapper through a render — every consumer reads
 through it — and an empty block renders as `{}`, never as a null.

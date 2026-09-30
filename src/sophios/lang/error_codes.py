@@ -58,6 +58,8 @@ class SophiosErrorCode(StrEnum):
     #: inference is done. On a subworkflow call the inputs are the ones the
     #: subworkflow declares.
     UNKNOWN_SCATTER_PORT = 'wic032'
+    #: A key in a `wic:` block that the block does not have (§5).
+    UNKNOWN_WIC_KEY = 'wic033'
 
     #: --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = 'api001'

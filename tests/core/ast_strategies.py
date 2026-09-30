@@ -336,7 +336,7 @@ def documents(draw: st.DrawFn) -> Document:
         nested: tuple[tuple[StepKey, WicSidecar], ...] = ()
         if bool(steps) and draw(st.booleans()):
             nested = ((StepKey(1, steps[0].id),
-                       WicSidecar(entries=(('label', draw(edge_names)),), span=_SPAN)),)
+                       WicSidecar(entries=(('graphviz', {'label': draw(edge_names)}),), span=_SPAN)),)
         sidecar = WicSidecar(steps=nested, entries=entries, span=_SPAN)
 
     passthrough: list[tuple[str, OpaqueCwl]] = []

@@ -32,6 +32,7 @@ PARSE: Final[dict[SophiosErrorCode, str]] = {
     SophiosErrorCode.RECURSIVE_ALIAS: 'top: &a [*a]\n',
     SophiosErrorCode.MISPLACED_EDGE_DEF: 'top: !& e\n',
     SophiosErrorCode.RESERVED_KEY: 'steps:\n- id: s\n  in:\n    f:\n      wic_inline_inpt: 1\n',
+    SophiosErrorCode.UNKNOWN_WIC_KEY: 'wic:\n  nonsense_key: 1\n',
 }
 
 #: Codes provoked through the compiler or its helpers. Callables raise

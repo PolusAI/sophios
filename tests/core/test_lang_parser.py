@@ -868,7 +868,7 @@ def test_sidecar_nesting_is_normalised_at_every_depth() -> None:
     result = parse(
         'wic:\n  steps:\n    (1, outer):\n      wic:\n        steps:\n'
         '          (1, inner):\n            wic:\n              steps:\n'
-        '                (1, innermost):\n                  x: 1\n',
+        '                (1, innermost):\n                  namespace: global\n',
         'nested.wic')
     assert result.ok and result.document is not None and result.document.sidecar is not None
 
@@ -897,6 +897,34 @@ def test_a_sidecar_steps_out_accepts_an_edge_definition() -> None:
         '      - output_tpr_path: {wic_anchor: min.tpr}\n'
         'steps:\n- id: s\n', 'basic.wic')
     assert sugared.ok, [str(d) for d in sugared.diagnostics]
+
+
+@pytest.mark.fast
+def test_the_wic_block_is_closed_at_every_depth() -> None:
+    """Each `wic:` key the language has parses clean; any other is `wic033`,
+    positioned at the key itself.
+
+    The generated jsonschema used to refuse such a key as the file was read.
+    The parser is the gate now, so it is the parser that must refuse it -- at
+    the root, and on a `steps:` entry, whose vocabulary is the root's plus
+    what it says about the step it names.
+    """
+    for key in sorted(Grammar.SIDECAR_KEYS - {'steps'}):
+        root = parse(f'wic:\n  {key}: x\nsteps:\n- id: s\n', 'root.wic')
+        assert not root.diagnostics.has_errors, (key, [str(d) for d in root.diagnostics])
+    for key in sorted(Grammar.SIDECAR_STEP_KEYS - {'steps', 'out'}):
+        entry = parse(f'wic:\n  steps:\n    (1, s):\n      {key}: x\nsteps:\n- id: s\n', 'entry.wic')
+        assert not entry.diagnostics.has_errors, (key, [str(d) for d in entry.diagnostics])
+
+    for source, line, column in [
+            ('wic:\n  nonsense_key: 1\nsteps:\n- id: s\n', 2, 3),
+            ('wic:\n  steps:\n    (1, s):\n      wic:\n        nonsense_key: 1\nsteps:\n- id: s\n', 5, 9),
+            ('wic:\n  steps:\n    (1, s):\n      nonsense_key: 1\nsteps:\n- id: s\n', 4, 7),
+            # A step-only key is not a root key.
+            ('wic:\n  scatter: [x]\nsteps:\n- id: s\n', 2, 3)]:
+        reported = [(d.code, d.span.start_line, d.span.start_column)
+                    for d in parse(source, 'closed.wic').diagnostics if d.span is not None]
+        assert reported == [(SophiosErrorCode.UNKNOWN_WIC_KEY, line, column)], source
 
 
 @pytest.mark.fast

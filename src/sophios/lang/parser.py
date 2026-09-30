@@ -51,13 +51,20 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     #: forgotten `id:` from a step called `run`.
     STEP_KEYS: Final = frozenset({'id', 'in', 'out'}) | INTERPRETED_STEP_KEYS
 
-    #: Every key the `wic:` validator admits (§5), checked against the shapes
-    #: `schemas/wic_schema.py` supplies.
+    #: Every key a `wic:` block admits (§5). The block is Sophios's own
+    #: metadata, not passthrough CWL, so it is closed: any other key is
+    #: `wic033`.
     SIDECAR_KEYS: Final = frozenset({
         'graphviz', 'steps', 'implementation', 'implementations',
         'default_implementation', 'version', 'lang_version', 'driver',
         'namespace', 'inlineable',
     })
+
+    #: What a `wic: steps:` entry admits: a `wic:` block's keys, plus what it
+    #: says about the step it names -- the step keys it may override, and
+    #: that step's `inference:` rules. Siblings of the entry's own `wic:`
+    #: wrapper are folded into the one block it parses to.
+    SIDECAR_STEP_KEYS: Final = SIDECAR_KEYS | frozenset({'in', 'out', 'scatter', 'scatterMethod', 'inference'})
 
     #: `wic:` sidecar step keys have the surface form "(1, step_name)".
     WIC_STEP_KEY: Final = re.compile(r'^\(\s*(\d+)\s*,\s*(.+?)\s*\)$')
@@ -632,8 +639,13 @@ def _sidecar_implementations(node: yaml.nodes.MappingNode, file: str,
 
 
 def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
-             _path: frozenset[int] = frozenset()) -> WicSidecar:
-    """Parse a `wic:` block, normalising its `"(1, name)"` step keys."""
+             _path: frozenset[int] = frozenset(),
+             admitted: frozenset[str] = Grammar.SIDECAR_KEYS) -> WicSidecar:
+    """Parse a `wic:` block, normalising its `"(1, name)"` step keys.
+
+    A key outside ``admitted`` is reported and dropped, since the block is
+    closed (§5).
+    """
     span = SourceSpan.of(file, node)
     if id(node) in _path:
         diags.error(SophiosErrorCode.RECURSIVE_ALIAS, 'alias cycle: a wic: block contains itself', span)
@@ -649,7 +661,7 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
     entries: list[tuple[str, OpaqueCwl]] = []
     implementations: list[tuple[str, Document]] = []
 
-    for key, value_node in _unique_entries(node, file, diags, 'wic: entry'):
+    for key, value_node in _admitted_entries(node, file, diags, admitted):
         if key != 'steps':
             if key == 'out':
                 entries.append((key, _sidecar_out_entry(value_node, file, diags)))
@@ -683,10 +695,29 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
                     SourceSpan.of(file, sub_key),
                 )
                 continue
-            steps.append((parsed, _sidecar(_child_sidecar_node(sub_value), file, diags, _path | {id(node)})))
+            steps.append((parsed, _sidecar(_child_sidecar_node(sub_value), file, diags, _path | {id(node)},
+                                           Grammar.SIDECAR_STEP_KEYS)))
 
     return WicSidecar(steps=tuple(steps), entries=tuple(entries),
                       implementations=tuple(implementations), span=span)
+
+
+def _admitted_entries(node: yaml.nodes.MappingNode, file: str, diags: Diagnostics,
+                      admitted: frozenset[str]) -> list[tuple[str, yaml.nodes.Node]]:
+    """A `wic:` block's unique entries, each key it does not have reported
+    at the key and dropped (`wic033`).
+
+    A key that is not a scalar has been reported already (`wic005`), and is
+    not reported twice.
+    """
+    for key_node, _ in node.value:
+        if isinstance(key_node, yaml.nodes.ScalarNode) and str(key_node.value) not in admitted:
+            diags.error(
+                SophiosErrorCode.UNKNOWN_WIC_KEY,
+                f'{key_node.value!r} is not a wic: key. The keys are: {", ".join(sorted(admitted))}',
+                SourceSpan.of(file, key_node))
+    return [(key, value) for key, value in _unique_entries(node, file, diags, 'wic: entry')
+            if key in admitted]
 
 
 def _step_key(text: str) -> StepKey | None:
