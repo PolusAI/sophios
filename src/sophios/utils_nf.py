@@ -14,7 +14,6 @@ from .ir.types import Direction, Edge, PortId, StepNode, WorkflowGraph
 from .nf_expr import Expr, check as check_safe_subset, is_safe_subset_text, parse as parse_safe_subset
 from .nf_symbols import normalize_nextflow_identifier
 from .nf_types import (
-    MULTI_INPUT_ADAPTERS,
     ExecutableNextflowWorkflow,
     GLOB_WILDCARDS,
     NF_INTERNAL_IDENTIFIERS,
