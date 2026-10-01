@@ -64,6 +64,8 @@ class SophiosErrorCode(StrEnum):
     MALFORMED_WIC_VALUE = 'wic034'
     #: An authored `cwlVersion` the substrate toolchain does not run (§1).
     UNSUPPORTED_CWL_VERSION = 'wic035'
+    #: An authored workflow output with no `type` and no producer to take one from.
+    UNTYPED_OUTPUT = 'wic036'
 
     #: --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = 'api001'

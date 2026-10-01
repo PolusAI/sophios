@@ -74,7 +74,10 @@ broad enough to cover them would have to be weak enough to say nothing:
   collision: entries you write survive unless the compiler generates one of
   the same name. `outputs` is additionally *read* — each entry's
   `outputSource` feeds the compiler's output mapping — so a workflow-level
-  `outputs:` is interpreted, not merely tolerated.
+  `outputs:` is interpreted, not merely tolerated. An output with no `type:`
+  takes the type of the step output its `outputSource:` names, as an array
+  when that step scatters. One whose `outputSource:` names no step output of
+  the workflow, or that has none, has no type to take and is `wic036`.
 - `cwlVersion` is **written by the compiler**: it is always the one declared
   substrate version, whatever the document says. Sophios generates constructs
   from that version — a workflow that declared `v1.0` and used `when:` used to

@@ -344,3 +344,17 @@ COMPILED.update({
     SophiosErrorCode.DUPLICATE_DOCUMENT_NAME: _provoke_duplicate_document_name,
     SophiosErrorCode.UNKNOWN_SCATTER_PORT: _provoke_unknown_scatter_port,
 })
+
+
+def _provoke_untyped_output() -> None:
+    """An authored output with neither a type nor a producer."""
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+
+    compile_hermetic({'outputs': {'o': {'label': 'no type here'}},
+                      'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]},
+                     'provoke')
+
+
+COMPILED.update({
+    SophiosErrorCode.UNTYPED_OUTPUT: _provoke_untyped_output,
+})

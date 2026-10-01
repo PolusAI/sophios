@@ -40,12 +40,14 @@ from sophios.ir import (
 from sophios.ir.names import Names
 from sophios.ir.types import AuthoredName, StepOutputRef
 from sophios.lang.cwl import CWL_VERSION
+from sophios.lang.diagnostics import SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.versions import ANNOTATION_KEY, ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
 from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
 from .equivalence import Strength, equivalent
-from .hermetic import ORACLE, compile_hermetic
+from .hermetic import ORACLE, compile_hermetic, subworkflow_step
 
 
 @pytest.mark.skip_pypi_ci
@@ -182,3 +184,69 @@ def test_validator_rejects_the_independent_invalid_control(tmp_path: Path) -> No
     target = tmp_path / 'invalid.cwl'
     target.write_text('class: Workflow\nsteps: []\n', encoding='utf-8')
     assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 1
+
+
+@pytest.mark.fast
+def test_an_untyped_authored_output_takes_its_producers_type() -> None:
+    """An output with an `outputSource:` and no `type:` was emitted as `type: None`."""
+    compiled = compile_hermetic({'outputs': {'o': {'outputSource': 'mk_file/file'}},
+                                 'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}]})
+    assert compiled.artifact.cwl['outputs']['o']['type'] == 'File'
+
+
+@pytest.mark.fast
+def test_an_untyped_output_under_scatter_takes_the_array_type() -> None:
+    """The type taken is the one the scattered step's output has, an array."""
+    compiled = compile_hermetic({'outputs': {'o': {'outputSource': 'mk_file/file'}},
+                                 'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': ['a', 'b']}},
+                                            'scatter': ['name']}]})
+    assert compiled.artifact.cwl['outputs']['o']['type'] == {'type': 'array', 'items': 'File'}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('call, expected', [
+    ({}, 'File'),
+    ({'in': {'name': {'wic_inline_input': ['a', 'b']}}, 'scatter': ['name']}, {'type': 'array', 'items': 'File'}),
+], ids=['call', 'scattered-call'])
+def test_an_untyped_output_of_a_called_workflow_is_typed_in_the_caller(
+        call: Yaml, expected: object) -> None:
+    """A called workflow's output the author left untyped takes its producer's type, and
+    so does the caller's output that names it, whether the call or the caller wrote it."""
+    kid = {'inputs': {'name': {'type': 'string'}},
+           'outputs': {'res': {'outputSource': 'kid__step__1__mk_file/file'}},
+           'steps': [{'id': 'mk_file', 'in': {'name': 'name'}}]}
+    compiled = compile_hermetic({
+        'outputs': {'o': {'outputSource': 'kid.wic/res'}},
+        'steps': [{**subworkflow_step('kid.wic', kid),
+                   'parentargs': {'in': {'name': {'wic_inline_input': 'a'}}, **call}}],
+    }, 'out_f')
+    outputs = compiled.artifact.cwl['outputs']
+    lifted = [declaration['type'] for name, declaration in outputs.items() if name.endswith('___res')]
+    assert [outputs['o']['type']] + lifted == [expected, expected]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('output, said', [
+    ({'label': 'no type here'}, ('has no `outputSource:` to take one from',)),
+    ({'outputSource': 'mk_file/fiel'},
+     ('`outputSource: mk_file/fiel` names no output of a step', "Did you mean 'mk_file/file'?")),
+    ({'outputSource': 'kid/res'},
+     ('`outputSource: kid/res` names no output of a step', "Did you mean 'kid.wic/res'?")),
+    ({'outputSource': 'nothing/at_all'},
+     ('names no output of a step', 'Check the step and output names.')),
+    ({'outputSource': 'kid.wic/kid__step__1__mk_file___file'},
+     ('names no output of a step', 'Check the step and output names.')),
+], ids=['no-source', 'misspelled-output', 'workflow-without-its-extension', 'nothing-close',
+        'name-the-compiler-derives'])
+def test_an_untyped_output_with_nothing_to_take_a_type_from_is_wic036(
+        output: Yaml, said: tuple[str, ...]) -> None:
+    """The message says which half of the author's `outputSource:` to fix, not only to add a `type:`."""
+    kid = {'outputs': {'res': {'type': 'File', 'outputSource': 'kid__step__1__mk_file/file'}},
+           'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]}
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'outputs': {'o': output},
+                          'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}},
+                                    subworkflow_step('kid.wic', kid)]})
+    diagnostic = caught.value.diagnostics[0]
+    assert diagnostic.code is SophiosErrorCode.UNTYPED_OUTPUT
+    assert all(part in diagnostic.message for part in ("'o'", *said)), diagnostic.message

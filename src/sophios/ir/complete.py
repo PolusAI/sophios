@@ -8,6 +8,7 @@ spells it, at Emit. It states no document -- requirements, `$namespaces`,
 `$schemas`, a step's `run:` path and field order are spelled in `emit.surface`.
 """
 import datetime
+import difflib
 import json
 import re
 from copy import deepcopy
@@ -18,8 +19,10 @@ from ..lang.nodes import InlineLiteral, UnresolvedName
 from ..lang.diagnostics import SophiosError
 from ..lang.error_codes import SophiosErrorCode
 from .declarations import feeding_declaration, produced_declaration
+from .names import Names
 from .types import (
     AuthoredName,
+    BoundaryDeclaration,
     DerivedName,
     Direction,
     JobBinding,
@@ -27,6 +30,7 @@ from .types import (
     PortDeclaration,
     PortId,
     PortName,
+    PortType,
     StepOutputRef,
     WorkflowGraph,
     WorkflowPort,
@@ -65,7 +69,7 @@ def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
             continue
 
         inputs = list(step.inputs)
-        outputs = list(step.outputs)
+        outputs = _completed_outputs(step.outputs, child)
         input_names = {port.id.port for port in inputs}
         output_names = {port.id.port for port in outputs}
         for boundary in child.workflow_inputs:
@@ -137,6 +141,19 @@ def _materialize_bindings(graph: WorkflowGraph) -> WorkflowGraph:
                    job_bindings=tuple(job_bindings), input_mapping=tuple(input_mapping))
 
 
+def _completed_outputs(outputs: tuple[Port, ...], child: WorkflowGraph) -> list[Port]:
+    """`outputs` of a call step, each taking the declaration its completed child gives it.
+
+    Resolve read the child's interface before the child was completed, so an
+    output its author left untyped is untyped there until it takes the type the
+    child gave it.
+    """
+    completed = {boundary.name: boundary.declaration for boundary in child.workflow_outputs}
+    return [replace(port, type=declaration.type, declaration=declaration)
+            if (declaration := completed.get(port.id.port)) is not None else port
+            for port in outputs]
+
+
 def _emitted_source(graph: WorkflowGraph, port_id: PortId) -> StepOutputRef | None:
     """The `step/port` reference an emitted document can resolve."""
     step = next((item for item in graph.steps if item.id == port_id.step), None)
@@ -145,17 +162,56 @@ def _emitted_source(graph: WorkflowGraph, port_id: PortId) -> StepOutputRef | No
     return StepOutputRef(step.id, port_id.port)
 
 
+def _produced_type(graph: WorkflowGraph, port_id: PortId) -> PortType:
+    """The boundary type the output `port_id` produces, scatter layers included.
+
+    `port_id` is a step of `graph`: Link has not yet redirected an output into
+    a child, which is why `compile_source` completes a graph before it links it.
+    """
+    step = next(item for item in graph.steps if item.id == port_id.step)
+    port = next(item for item in step.outputs if item.id == port_id)
+    # pylint: disable-next=no-member
+    return produced_declaration(step, port).type
+
+
+def _untyped_output(graph: WorkflowGraph, output: WorkflowPort) -> SophiosError:
+    """`wic036`: `output` declares no type and names no step output to take one from."""
+    names = Names.of(graph)
+    where = f'workflow output {names.port(output.name)!r} declares no type'
+    if not output.has_output_source:
+        return SophiosError.error(
+            SophiosErrorCode.UNTYPED_OUTPUT,
+            f'{where} and has no `outputSource:` to take one from; '
+            'add `type:`, or an `outputSource: <step>/<output>`.')
+    # What an `outputSource:` can name: not a name the compiler derives for a
+    # call's lifted outputs.
+    sources = [f'{step.id.name}/{names.port(port.id.port)}' for step in graph.steps
+               for port in step.outputs if not isinstance(port.id.port, DerivedName)]
+    close = difflib.get_close_matches(str(output.output_source), sources, n=1)
+    check = f"Did you mean '{close[0]}'?" if close else 'Check the step and output names.'
+    return SophiosError.error(
+        SophiosErrorCode.UNTYPED_OUTPUT,
+        f'{where}, and its `outputSource: {output.output_source}` names no output of a step in '
+        f'this workflow, so there is no type to take. {check} If it names something that is '
+        'not a step output, add `type:`.')
+
+
 def _materialize_outputs(graph: WorkflowGraph) -> WorkflowGraph:
     # Record Link's resolved producer, not the authored `outputSource:` string:
     # emission renames every step, so the authored text points nowhere.
     resolved = dict(graph.output_mapping)
-    outputs = [
-        replace(port, output_source=emitted)
-        if port.has_output_source and port.name in resolved
-        and (emitted := _emitted_source(graph, resolved[port.name])) is not None
-        else port
-        for port in graph.workflow_outputs
-    ]
+    outputs = []
+    for output in graph.workflow_outputs:
+        producer = resolved.get(output.name)
+        if output.declaration.type.declared is None:
+            if producer is None:
+                raise _untyped_output(graph, output)
+            output = replace(output, declaration=BoundaryDeclaration(replace(
+                output.declaration, type=_produced_type(graph, producer))))
+        emitted = _emitted_source(graph, producer) if producer is not None else None
+        if output.has_output_source and emitted is not None:
+            output = replace(output, output_source=emitted)
+        outputs.append(output)
     output_mapping = list(graph.output_mapping)
     authored = {port.name for port in outputs}
     for step in graph.steps:
