@@ -169,6 +169,9 @@ def read_config_from_disk(config_file: Path, base_dir: Path | None = None) -> Js
 
     Returns:
         Json: The config json object with absolute filepaths
+
+    Raises:
+        TypeError: A namespace under ``search_paths_cwl`` or ``search_paths_wic`` is not a list of paths.
     """
     # config_file can contain absolute or relative paths
     config: Json = json.loads(config_file.read_text(encoding='utf-8'))
@@ -177,6 +180,8 @@ def read_config_from_disk(config_file: Path, base_dir: Path | None = None) -> Js
     for tag in conf_tags:
         sub_config = copy.deepcopy(config[tag])
         for ns in sub_config:
+            if not isinstance(sub_config[ns], list):
+                raise TypeError(f'{tag}.{ns} must be a list of paths, not {type(sub_config[ns]).__name__}')
             sub_config[ns] = [str(base_dir / path) for path in sub_config[ns]]
         config[tag] = sub_config
     return config
