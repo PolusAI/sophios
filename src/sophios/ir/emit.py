@@ -107,12 +107,10 @@ def surface(graph: WorkflowGraph, names: Names, *,
              for step in graph.steps]
 
     requirements = dict(graph.requirements)
-    if graph.children:
-        requirements['SubworkflowFeatureRequirement'] = {}
-    if any(step.scatter_ports for step in steps):
-        requirements['ScatterFeatureRequirement'] = {}
-    if any(dict(step.interpreted).get('when') is not None for step in steps):
-        requirements['InlineJavascriptRequirement'] = {}
+    for requirement in _implied_requirements(graph, steps):
+        # An authored body is kept; an authored `Class:` with no body is `{}`, as CWL needs.
+        if requirements.get(requirement) is None:
+            requirements[requirement] = {}
     requirements = dict(sorted(requirements.items()))
 
     namespaces = {name: value for name, value in graph.namespaces
@@ -142,6 +140,16 @@ def surface(graph: WorkflowGraph, names: Names, *,
         graph, steps=tuple(steps), requirements=tuple(requirements.items()),
         workflow_inputs=workflow_inputs, job_bindings=job_bindings,
         namespaces=tuple(namespaces.items()), schemas=tuple(schemas)))
+
+
+def _implied_requirements(graph: WorkflowGraph, steps: list[StepNode]) -> tuple[str, ...]:
+    """The requirement classes `graph`'s calls, scatters and `when`s need."""
+    return tuple(requirement for requirement, needed in (
+        ('SubworkflowFeatureRequirement', bool(graph.children)),
+        ('ScatterFeatureRequirement', any(step.scatter_ports for step in steps)),
+        ('InlineJavascriptRequirement',
+         any(dict(step.interpreted).get('when') is not None for step in steps)),
+    ) if needed)
 
 
 def _refuse_colliding_names(declared: tuple[PortName, ...], names: Names) -> None:

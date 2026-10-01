@@ -87,7 +87,9 @@ broad enough to cover them would have to be weak enough to say nothing:
   what the workflow needs — `ScatterFeatureRequirement` for a scattering step,
   `InlineJavascriptRequirement` for `when`,
   `SubworkflowFeatureRequirement` for a `.wic` step. The mapping you wrote is
-  extended, not replaced, and not copied out byte-identically.
+  extended, not replaced, and not copied out byte-identically. A class you
+  wrote keeps its body: your `InlineJavascriptRequirement: {expressionLib: [...]}`
+  survives a `when`.
 - `$schemas` is **append-only**: your entries survive and the EDAM entry is
   added once.
 - `$namespaces` is **merged, with two reserved prefixes**: every binding you

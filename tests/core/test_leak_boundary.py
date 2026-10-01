@@ -183,17 +183,36 @@ def test_user_requirements_are_merged_into_not_copied() -> None:
     workflow that supplies its own `requirements` gets them back extended, not
     unchanged. The generated properties never see it: their one step is a plain
     tool step, so the requirement set is empty and the merge is skipped on
-    every example.
+    every example. A class the user already wrote keeps its body.
     """
     compiled = _compile({
-        'requirements': {'ResourceRequirement': {'coresMin': 4}},
+        'requirements': {'ResourceRequirement': {'coresMin': 4},
+                         'InlineJavascriptRequirement': {'expressionLib': ['function f(){}']}},
         'steps': [{'id': 'touch',
                    'in': {'filename': {'wic_inline_input': 'empty.txt'}},
-                   'scatter': ['filename']}],
+                   'scatter': ['filename'],
+                   'when': '$(true)'}],
     })
     requirements = compiled['requirements']
     assert requirements['ResourceRequirement'] == {'coresMin': 4}, 'user entry lost'
     assert 'ScatterFeatureRequirement' in requirements, 'scatter requirement not added'
+    assert requirements['InlineJavascriptRequirement'] == {'expressionLib': ['function f(){}']}, \
+        'the compiler needing the same class must not wipe the body the user wrote'
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.fast
+def test_an_authored_requirement_with_no_body_is_emitted_as_an_empty_one() -> None:
+    """`ScatterFeatureRequirement:` written with no value is YAML null, which cwltool rejects."""
+    compiled = _compile({
+        'requirements': {'ScatterFeatureRequirement': None, 'InlineJavascriptRequirement': None},
+        'steps': [{'id': 'touch',
+                   'in': {'filename': {'wic_inline_input': 'empty.txt'}},
+                   'scatter': ['filename'],
+                   'when': '$(true)'}],
+    })
+    assert compiled['requirements']['ScatterFeatureRequirement'] == {}
+    assert compiled['requirements']['InlineJavascriptRequirement'] == {}
 
 
 @pytest.mark.skip_pypi_ci
