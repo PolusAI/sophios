@@ -12,6 +12,7 @@ declared exclusions.  Validation does not execute CWL.
 import copy
 from pathlib import Path
 import tempfile
+from typing import Any
 
 import pytest
 import yaml
@@ -47,7 +48,7 @@ from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
 from .equivalence import Strength, equivalent
-from .hermetic import ORACLE, compile_hermetic, subworkflow_step
+from .hermetic import ORACLE, compile_hermetic, compile_hermetic_cwl, subworkflow_step
 
 
 @pytest.mark.skip_pypi_ci
@@ -61,22 +62,21 @@ def test_the_live_compiler_emits_only_from_its_graph(workflow: Yaml) -> None:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('authored', [
-    [{'class': 'ResourceRequirement', 'coresMin': 1}],
-    None,
+@pytest.mark.parametrize('authored, emitted', [
+    ([{'class': 'ResourceRequirement', 'coresMin': 1}], {'ResourceRequirement': {'coresMin': 1}}),
+    (None, None),
 ], ids=['list-form', 'bare'])
-def test_a_requirements_shape_sophios_does_not_model_survives_emission(authored: object) -> None:
-    """`requirements:` in a shape the compiler never writes reaches CWL unchanged.
+def test_authored_requirements_are_emitted_as_the_mapping_form(authored: object, emitted: object) -> None:
+    """CWL's list form of `requirements:` is emitted as the mapping the compiler writes.
 
     Pinned rather than generated: `ast_strategies.workflows` has no
-    `requirements:` dimension, so no generated property reaches either
-    spelling. Both are valid CWL and the compiler only ever builds the
-    mapping form, so nothing else would notice a phase that assumed it.
+    `requirements:` dimension. A bare `requirements:` has no entries to lift and
+    reaches CWL as written.
     """
     workflow = {'requirements': authored,
                 'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]}
     compiled = compile_hermetic(copy.deepcopy(workflow)).artifact.cwl
-    assert compiled['requirements'] == authored
+    assert compiled['requirements'] == emitted
 
 
 @pytest.mark.skip_pypi_ci
@@ -253,3 +253,20 @@ def test_an_untyped_output_with_nothing_to_take_a_type_from_is_wic036(
     diagnostic = caught.value.diagnostics[0]
     assert diagnostic.code is SophiosErrorCode.UNTYPED_OUTPUT
     assert all(part in diagnostic.message for part in ("'o'", *said)), diagnostic.message
+
+
+@pytest.mark.fast
+def test_list_form_outputs_and_requirements_compile_as_their_mapping_form() -> None:
+    """A scattered step beside list-form `outputs:` and `requirements:` emits what the mapping spelling does."""
+    def compiled(requirements: Any, outputs: Any) -> Yaml:
+        return compile_hermetic_cwl({
+            'requirements': requirements, 'outputs': outputs,
+            'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': ['a', 'b']}}, 'scatter': ['name']}]})
+
+    listed = compiled([{'class': 'InlineJavascriptRequirement'}],
+                      [{'id': 'o', 'type': 'File', 'outputSource': 'mk_file/file'}])
+    mapped = compiled({'InlineJavascriptRequirement': {}},
+                      {'o': {'type': 'File', 'outputSource': 'mk_file/file'}})
+    assert listed == mapped
+    assert listed['outputs']['o']['outputSource'] == 'oracle__step__1__mk_file/file'
+    assert set(listed['requirements']) == {'InlineJavascriptRequirement', 'ScatterFeatureRequirement'}

@@ -52,8 +52,22 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     """
 
     #: CWL keys on a step that Sophios reads and acts upon; everything else
-    #: on a step is passthrough, by definition.
+    #: on a step is passthrough, by definition, bar `STEP_LISTED_KEYS`, whose
+    #: list form is read as a mapping.
     INTERPRETED_STEP_KEYS: Final = frozenset({'scatter', 'scatterMethod', 'when', 'run'})
+
+    #: CWL keys whose entries are named, written either as a mapping or as a
+    #: list. Each maps to the key that names a list entry: `id` for a port,
+    #: `class` for a requirement. The parser reads both spellings as the mapping.
+    LISTED_BY: Final[Mapping[str, str]] = MappingProxyType({
+        'inputs': 'id', 'outputs': 'id', 'requirements': 'class', 'hints': 'class'})
+
+    #: The ones a step carries; a step's ports are `in:` and `out:`.
+    STEP_LISTED_KEYS: Final = frozenset({'requirements', 'hints'})
+
+    #: The keys of a list entry that names no `id:` or `class:` until cwltool has
+    #: read the file it points at. A list holding one is left as written.
+    IMPORT_KEYS: Final = frozenset({'$import', '$include'})
 
     #: Every key a step carries in its own right. A key here cannot also be a
     #: step's name in a sequence entry, which is how `wic006` tells a
@@ -231,6 +245,36 @@ def _unique_entries(node: yaml.nodes.MappingNode, file: str, diags: Diagnostics,
     return kept
 
 
+def _listed(key: str, node: yaml.nodes.Node, file: str, diags: Diagnostics) -> OpaqueCwl:
+    """Materialise `inputs`, `outputs`, `requirements` or `hints`, reading CWL's list form as its mapping form.
+
+    CWL writes each as a mapping or as a list of entries named by `id:` (ports)
+    or `class:` (requirements). The compiler acts on the mapping, so the list is
+    lifted here. An entry with no name, or a name already taken, cannot be a
+    mapping entry and is reported. A list holding an `$import` or `$include`
+    entry cannot be keyed, since that entry is named by a file only cwltool
+    reads, so it is returned as written for cwltool to resolve.
+    """
+    value = _opaque(node, file, diags)
+    if not (isinstance(node, yaml.nodes.SequenceNode) and isinstance(value, list)):
+        return value
+    if any(isinstance(entry, dict) and entry.keys() & Grammar.IMPORT_KEYS for entry in value):
+        return value
+    named_by = Grammar.LISTED_BY[key]
+    mapping: dict[str, OpaqueCwl] = {}
+    for entry_node, entry in zip(node.value, value, strict=True):
+        span = SourceSpan.of(file, entry_node)
+        if not isinstance(entry, dict) or not isinstance(name := entry.get(named_by), str):
+            diags.error(SophiosErrorCode.EXPECTED_MAPPING,
+                        f'a list-form {key}: entry must be a mapping with a string {named_by}:', span)
+            continue
+        if name in mapping:
+            diags.error(SophiosErrorCode.DUPLICATE_KEY, f'{key}: entry {name!r} is defined more than once', span)
+            continue
+        mapping[name] = {field: item for field, item in entry.items() if field != named_by}
+    return mapping
+
+
 def _document(root: yaml.nodes.MappingNode, file: str, diags: Diagnostics) -> Document:
     """Build a Document from the root mapping node."""
     steps: tuple[Step, ...] = ()
@@ -249,6 +293,8 @@ def _document(root: yaml.nodes.MappingNode, file: str, diags: Diagnostics) -> Do
                 for message, at in Grammar.CWL_VERSION_VALUE.problems(version, value_node, key):
                     diags.error(SophiosErrorCode.UNSUPPORTED_CWL_VERSION, message, SourceSpan.of(file, at))
                 passthrough.append((key, version))
+            case key if key in Grammar.LISTED_BY:
+                passthrough.append((key, _listed(key, value_node, file, diags)))
             case _:
                 passthrough.append((key, _opaque(value_node, file, diags)))
 
@@ -404,6 +450,8 @@ def _step_body(
             outputs = _outputs(value_node, file, diags)
         elif key in Grammar.INTERPRETED_STEP_KEYS:
             interpreted.append((key, _opaque(value_node, file, diags)))
+        elif key in Grammar.STEP_LISTED_KEYS:
+            passthrough.append((key, _listed(key, value_node, file, diags)))
         else:
             passthrough.append((key, _opaque(value_node, file, diags)))
 

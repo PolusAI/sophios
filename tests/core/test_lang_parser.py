@@ -1329,3 +1329,64 @@ def test_an_unknown_tag_and_a_misplaced_anchor_are_both_reported_in_both_positio
 
     assert {d.code for d in in_position.diagnostics} == expected
     assert {d.code for d in passthrough.diagnostics} == expected
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('source, key, expected', [
+    ('inputs:\n- id: a\n  type: string\n', 'inputs', {'a': {'type': 'string'}}),
+    ('outputs:\n- id: o\n  type: File\n  outputSource: s/f\n', 'outputs',
+     {'o': {'type': 'File', 'outputSource': 's/f'}}),
+    ('requirements:\n- class: ScatterFeatureRequirement\n', 'requirements', {'ScatterFeatureRequirement': {}}),
+    ('hints:\n- class: DockerRequirement\n  dockerPull: x\n', 'hints', {'DockerRequirement': {'dockerPull': 'x'}}),
+    ('inputs: []\n', 'inputs', {}),
+], ids=['inputs', 'outputs', 'requirements', 'hints', 'empty'])
+def test_cwl_list_forms_are_read_as_mappings(source: str, key: str, expected: dict) -> None:
+    """`inputs`, `outputs`, `requirements` and `hints` written as lists are keyed by `id` or `class`."""
+    result = parse(source, 'list.wic')
+    assert result.document is not None and result.ok, [str(d) for d in result.diagnostics]
+    assert dict(result.document.passthrough)[key] == expected
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('key', ['requirements', 'hints'])
+def test_a_steps_list_form_requirements_and_hints_are_read_as_mappings(key: str) -> None:
+    """A step's `requirements` and `hints` are lifted the same way."""
+    result = parse(f'steps:\n  s:\n    {key}:\n    - class: InlineJavascriptRequirement\n', 'list.wic')
+    assert result.document is not None and result.ok, [str(d) for d in result.diagnostics]
+    assert dict(result.document.steps[0].passthrough)[key] == {'InlineJavascriptRequirement': {}}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('source, code', [
+    ('inputs:\n- type: string\n', SophiosErrorCode.EXPECTED_MAPPING),
+    ('requirements:\n- coresMin: 1\n', SophiosErrorCode.EXPECTED_MAPPING),
+    ('outputs:\n- just-a-name\n', SophiosErrorCode.EXPECTED_MAPPING),
+    ('inputs:\n- id: [a]\n', SophiosErrorCode.EXPECTED_MAPPING),
+    ('inputs:\n- {id: a, type: string}\n- {id: a, type: int}\n', SophiosErrorCode.DUPLICATE_KEY),
+], ids=['no-id', 'no-class', 'not-a-mapping', 'id-not-a-string', 'duplicate'])
+def test_a_list_form_entry_that_cannot_be_keyed_is_reported(source: str, code: SophiosErrorCode) -> None:
+    """An entry with no usable `id` or `class`, or a name taken twice, has no place in the mapping."""
+    result = parse(source, 'list.wic')
+    assert [d.code for d in result.diagnostics] == [code]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('key, named_by', [
+    ('inputs', 'id'), ('outputs', 'id'), ('requirements', 'class'), ('hints', 'class'),
+])
+@pytest.mark.parametrize('directive', ['$import', '$include'])
+def test_a_list_form_holding_an_import_or_include_is_kept_as_written(key: str, named_by: str,
+                                                                     directive: str) -> None:
+    """cwltool reads the file such an entry names, so the list is neither keyed nor mapped here."""
+    result = parse(f'{key}:\n- {directive}: foo.yml\n- {named_by}: a\n', 'list.wic')
+    assert result.document is not None and result.ok, [str(d) for d in result.diagnostics]
+    assert dict(result.document.passthrough)[key] == [{directive: 'foo.yml'}, {named_by: 'a'}]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('key', ['requirements', 'hints'])
+def test_a_steps_list_form_holding_an_import_is_kept_as_written(key: str) -> None:
+    """A step's `requirements` and `hints` are left alone the same way."""
+    result = parse(f'steps:\n  s:\n    {key}:\n    - $import: foo.yml\n    - class: X\n', 'list.wic')
+    assert result.document is not None and result.ok, [str(d) for d in result.diagnostics]
+    assert dict(result.document.steps[0].passthrough)[key] == [{'$import': 'foo.yml'}, {'class': 'X'}]

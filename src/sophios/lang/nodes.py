@@ -178,7 +178,9 @@ class Step:
 
     `interpreted` holds the CWL keys Sophios acts upon (`scatter`,
     `scatterMethod`, `when`, `run`); `passthrough` holds everything else,
-    preserved verbatim.
+    preserved verbatim, bar the list form of `requirements` and `hints`: the
+    parser reads it as a mapping, unless the list holds an `$import` or
+    `$include`, which is held as written.
     """
 
     id: str = surface(Shape.IDENTITY, 'id')
@@ -228,7 +230,9 @@ class Document:
 
     `passthrough` carries every top-level key Sophios does not interpret —
     `$namespaces`, `$schemas`, `requirements`, `hints`, and anything else —
-    preserved so it can be emitted unchanged.
+    preserved so it can be emitted unchanged, bar the list form of `inputs`,
+    `outputs`, `requirements` and `hints`: the parser reads it as a mapping,
+    unless the list holds an `$import` or `$include`, which is held as written.
     """
 
     steps: tuple[Step, ...] = surface(Shape.STEPS, 'steps', default=())

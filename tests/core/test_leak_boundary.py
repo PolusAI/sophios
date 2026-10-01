@@ -15,13 +15,16 @@ statement lives in the reference's §1 footnote — the single home — and each
 enforced by a named test below rather than by a property: `requirements`,
 `inputs` and `outputs` are merged into, `$schemas` is append-only,
 `$namespaces` reserves the `edam` and `sophios` prefixes, and `class` and
-`cwlVersion` are written.
+`cwlVersion` are written. `hints` is the one other exception: its list form is
+read as a mapping, unless the list holds an `$import` or `$include`, so the
+properties generate only the mapping.
 A property broad enough to cover them would have to be weak enough to say
 nothing, so the properties quantify over the keys that really are untouched
 and the exceptions are pinned one at a time.
 
 See design_docs/core-refactor-design.md §5.4.
 """
+import copy
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -38,7 +41,7 @@ from sophios.lang import Grammar, parse
 from sophios.lang.cwl import CWL_VERSION
 from sophios.wic_types import Yaml
 
-from .ast_strategies import passthrough_keys, passthrough_values
+from .ast_strategies import hints_values, passthrough_keys, passthrough_values
 from .compile_harness import COMPILED, FAST, compile_cwl, compile_info
 
 #: Top-level keys the *compiler* owns, which is a larger set than the syntax
@@ -110,6 +113,68 @@ def test_top_level_passthrough_is_byte_identical(freight: dict[str, Any]) -> Non
     compiled = _compile(_touch_workflow({}, freight))
     for key, value in freight.items():
         assert compiled[key] == value, f'{key} was altered by compilation'
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.slow
+@given(hints_values)
+@COMPILED
+def test_hints_survive_on_the_document_and_the_step_and_change_nothing_else(hints: dict[str, Any]) -> None:
+    """`hints:` is read by the parser, so it is generated as the mapping the parser keeps."""
+    without = _compile(_touch_workflow({}, {}))
+    with_hints = _compile(_touch_workflow({'hints': hints}, {'hints': hints}))
+    assert _step(with_hints).pop('hints') == hints
+    assert with_hints.pop('hints') == hints
+    assert with_hints == without
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.fast
+def test_list_form_hints_are_emitted_as_a_mapping_on_the_document_and_the_step() -> None:
+    """CWL's list form of `hints:` reaches the emitted document as the mapping form, at both levels."""
+    hints = [{'class': 'DockerRequirement', 'dockerPull': 'x'}]
+    compiled = _compile(_touch_workflow({'hints': hints}, {'hints': hints}))
+    assert compiled['hints'] == {'DockerRequirement': {'dockerPull': 'x'}}
+    assert _step(compiled)['hints'] == {'DockerRequirement': {'dockerPull': 'x'}}
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.fast
+@pytest.mark.parametrize('key', ['requirements', 'hints'])
+def test_a_list_holding_an_import_is_emitted_as_authored_on_the_document_and_the_step(key: str) -> None:
+    """cwltool resolves an `$import` entry, so a list holding one reaches the emitted document untouched."""
+    def entries() -> list[dict[str, Any]]:
+        return [{'$import': 'shared.yml'}, {'class': 'ResourceRequirement', 'coresMin': 1}]
+
+    compiled = _compile(_touch_workflow({key: entries()}, {key: entries()}))
+    assert compiled[key] == entries()
+    assert _step(compiled)[key] == entries()
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.fast
+def test_a_requirements_list_holding_an_import_is_not_merged_into() -> None:
+    """The one `requirements:` that is not extended: a list holding an `$import` is emitted as written.
+
+    The file it names is read only by cwltool, so the compiler adds nothing to
+    it, not the `ScatterFeatureRequirement` a scattering step needs.
+    """
+    authored = [{'$import': 'shared.yml'}]
+    compiled = _compile({
+        'requirements': copy.deepcopy(authored),
+        'steps': [{'id': 'touch', 'in': {'filename': {'wic_inline_input': ['a.txt', 'b.txt']}},
+                   'scatter': ['filename']}],
+    })
+    assert compiled['requirements'] == authored
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.fast
+@pytest.mark.parametrize('key', ['inputs', 'outputs'])
+def test_a_root_inputs_or_outputs_list_holding_an_import_is_not_carried_into_the_output(key: str) -> None:
+    """The compiler models only the mapping form of `inputs:` and `outputs:`; the list is neither merged nor emitted."""
+    compiled = _compile(_touch_workflow({}, {key: [{'$import': 'shared.yml'}]}))
+    assert '$import' not in yaml.safe_dump(compiled)
 
 
 @pytest.mark.skip_pypi_ci

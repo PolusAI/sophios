@@ -576,11 +576,13 @@ def hostile_documents() -> SearchStrategy[tuple[str, SophiosErrorCode]]:
 
 
 #: Keys and JSON-shaped values the language does not claim and must preserve.
-CLAIMED_STEP_KEYS: Final = frozenset({'id', 'in', 'out', 'wic'}) | Grammar.INTERPRETED_STEP_KEYS
+#: `requirements` and `hints` are claimed: the parser reads their list form as a mapping.
+CLAIMED_STEP_KEYS: Final = (frozenset({'id', 'in', 'out', 'wic', 'requirements', 'hints'})
+                            | Grammar.INTERPRETED_STEP_KEYS)
 
 passthrough_keys: Final = st.one_of(
     st.text('abcdefghijklmnopqrstuvwxyz_', min_size=3, max_size=12),
-    st.sampled_from(['$namespaces', '$schemas', 'hints', 'label', 'doc', 'scatterMethod']),
+    st.sampled_from(['$namespaces', '$schemas', 'label', 'doc', 'scatterMethod']),
 ).filter(lambda key: key not in CLAIMED_STEP_KEYS)
 
 passthrough_values: Final = st.recursive(
@@ -590,4 +592,14 @@ passthrough_values: Final = st.recursive(
                                st.dictionaries(st.text('abc', min_size=1, max_size=5),
                                                children, max_size=3)),
     max_leaves=8,
+)
+
+#: A `hints:` value as the parser keeps it. Not free-form freight like the above:
+#: CWL's list form of `hints:` is read as this mapping from requirement class to
+#: body, so a list survives byte-identically only when it holds an `$import` or
+#: `$include`, which `test_leak_boundary` pins by name.
+hints_values: Final = st.dictionaries(
+    st.sampled_from(['DockerRequirement', 'ResourceRequirement', 'NetworkAccess', 'cwltool:CUDARequirement']),
+    st.dictionaries(st.text('abc', min_size=1, max_size=5), passthrough_values, max_size=3),
+    max_size=3,
 )

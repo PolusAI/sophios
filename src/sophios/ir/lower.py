@@ -132,8 +132,9 @@ def _lower_resolved(document: ResolvedDocument,
                            (ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI),)
     schemas_raw = passthrough.get('$schemas', ())
     schemas = tuple(schemas_raw) if isinstance(schemas_raw, list) else ()
-    # Only the mapping form of `requirements:` is modeled; any other shape
-    # (list, or None from a bare key) is carried opaquely and Emit writes it back unchanged.
+    # Only the mapping form of `requirements:` is modeled; any other shape (a list
+    # holding an `$import` or `$include`, or None from a bare key) is carried
+    # opaquely and Emit writes it back unchanged.
     requirements_raw = passthrough.get('requirements', {})
     requirements = (tuple(requirements_raw.items())
                     if isinstance(requirements_raw, dict) else ())

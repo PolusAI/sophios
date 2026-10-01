@@ -208,7 +208,10 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
         child, child_diagnostics = _resolve_document(
             child_source, registry, workflow_key.name, version, trail + (workflow_key,))
         _copy_diagnostics(diagnostics, child_diagnostics)
-        inputs, outputs = _workflow_interface(child_source)
+        interface = _workflow_interface(child_source, workflow_key, diagnostics)
+        if interface is None:
+            return None
+        inputs, outputs = interface
         return ResolvedProcess(workflow_key, f'{workflow_key.name}.cwl', inputs, outputs,
                                {'class': 'Workflow'}, child)
 
@@ -298,9 +301,24 @@ def _named_entries(raw: Any) -> tuple[tuple[str, Any], ...]:
             return ()
 
 
-def _workflow_interface(document: Document) -> tuple[tuple[ResolvedPort, ...],
-                                                     tuple[ResolvedPort, ...]]:
+def _workflow_interface(document: Document, key: RegistryKey, diagnostics: Diagnostics) \
+        -> tuple[tuple[ResolvedPort, ...], tuple[ResolvedPort, ...]] | None:
+    """The ports a called workflow declares, or None, reported, when it declares them in a list.
+
+    The parser reads CWL's list form of `inputs:` and `outputs:` as a mapping.
+    It leaves a list as written only when it holds an `$import` or `$include`,
+    which names ports in a file only cwltool reads, so no step could be checked
+    against them.
+    """
     passthrough = dict(document.passthrough)
+    listed = [name for name in ('inputs', 'outputs') if isinstance(passthrough.get(name), list)]
+    for name in listed:
+        diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
+                          f'workflow {key.namespace}/{key.name} lists its {name}: with an $import or $include, '
+                          'whose ports only cwltool can read; write them as a mapping to call it',
+                          document.span)
+    if listed:
+        return None
     return (_ports(passthrough.get('inputs', {}), output=False),
             _ports(passthrough.get('outputs', {}), output=True))
 

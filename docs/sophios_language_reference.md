@@ -57,7 +57,7 @@ point of this document:
 | **Sophios-owned** | Consumes it; never appears in the output | `!ii`, `!&`, `!*`, `!cwl`, the `wic:` block |
 | **Interpreted CWL** | Reads it *and acts on it* | `scatter`, `scatterMethod`, `when`, inline `run` |
 | **Compiler-owned** | Writes or extends it at the workflow level¹ | `class`, `cwlVersion`, `inputs`, `outputs`, `requirements`, `$namespaces`, `$schemas` |
-| **Passthrough CWL** | Copies it out unchanged | `hints`, `label`, `doc`, everything else |
+| **Passthrough CWL** | Copies it out unchanged² | `hints`, `label`, `doc`, everything else |
 
 The interpreted set is closed and listed in §4.3. **Anything not interpreted
 and not compiler-owned is passthrough, by definition.** That rule is what makes
@@ -79,7 +79,10 @@ broad enough to cover them would have to be weak enough to say nothing:
   when that step scatters. One whose `outputSource:` names no step output of
   the workflow, or that has none, has no type to take and is `wic036`. So is
   one whose `outputSource:` is a list: a list never gives a type, even when
-  its one element names a real step output, so write `type:` there.
+  its one element names a real step output, so write `type:` there. A list
+  of `inputs` or `outputs` holding an `$import` or `$include` is the exception
+  (§2): the compiler models only the mapping form, so it is neither merged
+  into nor carried into the output.
 - `cwlVersion` is **written by the compiler**: it is always the one declared
   substrate version, whatever the document says. Sophios generates constructs
   from that version — a workflow that declared `v1.0` and used `when:` used to
@@ -94,7 +97,10 @@ broad enough to cover them would have to be weak enough to say nothing:
   `SubworkflowFeatureRequirement` for a `.wic` step. The mapping you wrote is
   extended, not replaced, and not copied out byte-identically. A class you
   wrote keeps its body: your `InlineJavascriptRequirement: {expressionLib: [...]}`
-  survives a `when`.
+  survives a `when`. A `requirements:` list holding an `$import` or `$include`
+  is the exception (§2): it is emitted as written, Sophios adds nothing to it,
+  and the imported file has to supply what the workflow needs, such as the
+  `ScatterFeatureRequirement` of a scattering step.
 - `$schemas` is **append-only**: your entries survive and the EDAM entry is
   added once.
 - `$namespaces` is **merged, with two reserved prefixes**: every binding you
@@ -103,8 +109,12 @@ broad enough to cover them would have to be weak enough to say nothing:
   `test_user_namespaces_survive_except_edam` and
   `test_the_sophios_namespace_prefix_is_reserved`.
 
-Everything outside the compiler-owned row survives byte-identically, which is
-the statement the properties in that file quantify over.
+² Everything outside the compiler-owned row survives byte-identically, which
+is the statement the properties in that file quantify over. The exception is
+the list form of `hints:` (on the document or on a step) and of a step's
+`requirements:`, which the parser reads as the mapping form (§2) and which is
+written out as one, unless the list holds an `$import` or `$include` entry:
+that list is not read and survives as written.
 
 ---
 
@@ -119,6 +129,22 @@ inputs:         # CWL workflow inputs        (passthrough)
 outputs:        # CWL workflow outputs       (passthrough)
 $namespaces:    # any other CWL key          (passthrough)
 ```
+
+`inputs`, `outputs`, `requirements` and `hints` may be written in CWL's list form
+(`- id: x` / `- class: X`), and a step's `requirements` and `hints` likewise. The
+parser reads the list as the mapping form, so what follows it sees the mapping.
+An entry without its `id:` or `class:`, and one naming the same `id:` or
+`class:` twice, are reported.
+
+A list holding an `$import` or `$include` entry is the exception. That entry
+names no `id:` or `class:` until cwltool has read its file, so the whole list is
+left as written, and its other entries are not checked. A `requirements:` or
+`hints:` list reaches the output as written, for cwltool to resolve, and
+Sophios adds no requirement to a `requirements:` list so left. The compiler
+models only the mapping form of `inputs:` and `outputs:`, so a list of those
+left as written is not carried into the output of the document you compile. In
+a workflow that another calls it is `wic013`: no step can be checked against
+ports that only cwltool can read.
 
 An empty document is well-formed and carries nothing.
 

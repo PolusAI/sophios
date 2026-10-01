@@ -34,11 +34,13 @@ from sophios.ir import (
 from sophios.ir.lower import lower
 from sophios.lang import (EdgeRef, InlineLiteral, RawCwlRef, SourceSpan, Step,
                           UnresolvedName, parse)
+from sophios.lang.diagnostics import SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
 from sophios.wic_types import StepId as LegacyStepId, Yaml
 
 from . import ast_strategies as strat
 from .budgets import budget
-from .hermetic import ORACLE, bundle, compile_hermetic
+from .hermetic import ORACLE, bundle, compile_hermetic, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, inputs_of, outputs_of
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -179,6 +181,23 @@ def test_nested_workflow_source_is_resolved_from_the_snapshot() -> None:
     assert result.resolved is not None and result.resolved.document is not None
     assert result.graph is not None and len(result.graph.children) == 1
     assert result.resolved.document.steps[0].process.child is not None
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('key', ['inputs', 'outputs'])
+@pytest.mark.parametrize('directive', ['$import', '$include'])
+def test_a_called_workflow_listing_its_ports_with_an_import_is_reported(key: str, directive: str) -> None:
+    """The ports are in a file only cwltool reads, so no step can be checked against them.
+
+    Calling such a workflow is reported at the call, not met with a `KeyError`.
+    """
+    child = {key: [{directive: 'shared.yml'}],
+             'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]}
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [subworkflow_step('child.wic', child)]})
+    [diagnostic] = caught.value.diagnostics
+    assert diagnostic.code is SophiosErrorCode.SUBWORKFLOW_INVALID
+    assert f'workflow global/child lists its {key}:' in diagnostic.message
 
 
 @pytest.mark.fast
