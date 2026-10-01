@@ -8,7 +8,7 @@ adjacent executable model renders to it byte for byte is fully understood.
 
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 import pytest
 
@@ -30,8 +30,9 @@ from .test_dotproduct import _sleep_then_pair, _text_port
 from .test_safe_subset import ARGUMENTS, _calc_workflow
 
 
-def _scattered(method: str, *, condition: str | None = None) -> ExecutableNextflowWorkflow:
-    names = ["item"] if method == "scatter" else ["item", "tag"]
+def _scattered(
+    method: str, *, condition: str | None = None, names: Sequence[str] = ("item", "tag")
+) -> ExecutableNextflowWorkflow:
     process = NfProcess(
         "STEP",
         [NfPort(name, "val") for name in names],
@@ -47,7 +48,8 @@ def _scattered(method: str, *, condition: str | None = None) -> ExecutableNextfl
 
 
 BUILDERS: dict[str, Callable[[], ExecutableNextflowWorkflow]] = {
-    "single-input scatter": lambda: _scattered("scatter"),
+    "single-input scatter adapter": lambda: _scattered("scatter", names=("item",)),
+    "single-input dotproduct": lambda: _scattered("dotproduct", names=("item",)),
     "computed arguments": lambda: _calc_workflow(ARGUMENTS, {"a": 7, "b": 1.25, "d": 2}, a="int", b="float", d="int"),
     "conditional step": lambda: _when_workflow("$(inputs.a > 0)", {"a": 1}, second_step=True, a="int"),
     "dotproduct": lambda: _scattered("dotproduct"),
