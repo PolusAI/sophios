@@ -7,10 +7,12 @@ source. A boundary name it derives is a `DerivedName`, not text: `ir.names`
 spells it, at Emit. It states no document -- requirements, `$namespaces`,
 `$schemas`, a step's `run:` path and field order are spelled in `emit.surface`.
 """
+import datetime
 import json
+import re
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any, TypeVar
+from typing import Any, Final, TypeVar
 
 from ..lang.nodes import InlineLiteral, UnresolvedName
 from ..lang.diagnostics import SophiosError
@@ -221,7 +223,9 @@ def coerce_job_value(name: str, declaration: PortDeclaration, value: Any) -> Any
 
     A projection: a value already in that form (a lifted child job value, an
     authored `File` object) passes through. Each array layer of the type wraps
-    a scalar in a list and keeps a list.
+    a scalar in a list and keeps a list. A scalar literal must already have the
+    declared type: an int is also a float, and a scalar is also a `string`'s
+    text, but nothing else is converted.
     """
     value = _plain(value)
     if value is None:
@@ -268,24 +272,84 @@ def _coerce_scalar(name: str, raw: Any, value: Any, fmt: Any) -> Any:
             result['format'] = fmt
         return result
     if raw == 'string':
-        # A dict/list bound to `string` is JSON to parse, not Python repr to print.
-        if isinstance(value, (dict, list)):
-            return json.dumps(value)
-        return str(value)
-    try:
-        if raw == 'int':
-            return int(value)
-        if raw == 'float':
-            return float(value)
-        if raw == 'boolean':
-            return bool(value)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise _mismatch(name, raw, value) from exc
+        return _coerce_string(name, value)
+    if raw in ('int', 'long'):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        raise _mismatch(name, raw, value)
+    if raw in ('float', 'double'):
+        return _coerce_float(name, raw, value)
+    if raw == 'boolean':
+        if isinstance(value, bool):
+            return value
+        raise _mismatch(name, raw, value)
     return deepcopy(value)
+
+
+def _coerce_string(name: str, value: Any) -> str:
+    """The text of a scalar literal, or of a mapping or list as JSON.
+
+    The one conversion kept besides an int into a float: `!ii 20` cannot be
+    spelled as the text "20" (the composer resolves it to a number), and
+    `str()` of a scalar loses nothing. YAML reads an unquoted 2024-01-15 as a
+    date; its text is what the author wrote.
+    """
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value)
+        except TypeError as exc:
+            raise _mismatch(name, 'string', value) from exc
+    if isinstance(value, (str, int, float, datetime.date)):
+        return str(value)
+    raise _mismatch(name, 'string', value)
+
+
+def _coerce_float(name: str, raw: Any, value: Any) -> float:
+    """A float as it is, or an int the float holds exactly."""
+    if isinstance(value, float):
+        return float(value)
+    if isinstance(value, int) and not isinstance(value, bool):
+        try:
+            as_float = float(value)
+        except OverflowError as exc:
+            raise _mismatch(name, raw, value) from exc
+        if int(as_float) == value:
+            return as_float
+    raise _mismatch(name, raw, value)
+
+
+#: A number written in scientific notation that YAML 1.1 reads as text: PyYAML
+#: resolves a float only with a decimal point and a signed exponent.
+_UNSIGNED_EXPONENT: Final = re.compile(r'([-+]?\d+\.?\d*)[eE]([-+]?)(\d+)')
+
+_KINDS: Final = {str: 'text', bool: 'a boolean', int: 'an int', float: 'a float',
+                 list: 'a list', dict: 'a mapping', type(None): 'null'}
+
+#: The Python type each scalar port type is, named when a value of another type is passed.
+_PYTHON_TYPE: Final = {'int': int, 'long': int, 'float': float, 'double': float,
+                       'boolean': bool, 'string': str}
 
 
 def _mismatch(name: str, raw: Any, value: Any) -> SophiosError:
     return SophiosError.error(
         SophiosErrorCode.LITERAL_TYPE_MISMATCH,
-        f'Input {name!r} is declared type {raw!r} but its literal {value!r} '
-        'does not convert to it.')
+        f'Input {name!r} is declared type {raw!r} but its literal {value!r} {_what_is_wrong(raw, value)}')
+
+
+def _what_is_wrong(raw: Any, value: Any) -> str:
+    """What `value` is, for a message; for a float port, the cause and the fix."""
+    if raw in ('float', 'double'):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return 'is an int that a float cannot hold exactly.'
+        scientific = _UNSIGNED_EXPONENT.fullmatch(value) if isinstance(value, str) else None
+        if scientific:
+            mantissa, sign, digits = scientific.groups()
+            written = f'{mantissa if "." in mantissa else mantissa + ".0"}e{sign or "+"}{digits}'
+            return ('is text: YAML reads a number as a float only with a decimal point and a signed '
+                    f'exponent. Write {written}.')
+    kind = type(value)
+    if kind in _KINDS:
+        return f'is {_KINDS[kind]}.'
+    qualified = kind.__qualname__ if kind.__module__ == 'builtins' else f'{kind.__module__}.{kind.__qualname__}'
+    wanted = _PYTHON_TYPE.get(raw)
+    return f'is of type {qualified}' + (f', not a Python {wanted.__name__}.' if wanted else '.')

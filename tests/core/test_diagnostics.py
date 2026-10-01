@@ -15,6 +15,9 @@ raises it with the messages it used to print.
 
 See design_docs/core-refactor-design.md §3, deliberate exception 1.
 """
+import datetime
+import math
+import re
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -25,9 +28,14 @@ import pytest
 from sophios import post_compile
 from sophios.ir.complete import coerce_job_value
 from sophios.ir.declarations import port_declaration
+from sophios.lang import InlineLiteral, parse
 from sophios.lang.diagnostics import Diagnostic, Severity, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.python_cwl_adapter import check_args_match_inputs
+from sophios.wic_types import StepId, Tool
+
+from .hermetic import compile_hermetic
+from .synthetic_tools import SYNTHETIC_NS, clt
 
 
 # --------------------------------------------------------------------------
@@ -132,6 +140,96 @@ def test_literal_type_mismatch_reports_a_null_array_element() -> None:
     assert 'xs' in message
     assert 'int' in message
     assert 'None' in message
+
+
+def _job_value(declared: object, literal: object) -> object:
+    """The job value `!ii literal` gives the one input of a tool that declares `declared`."""
+    tool = Tool('/synthetic/probe.cwl',
+                clt({'x': {'type': declared, 'inputBinding': {'position': 1}}}, {}, canonical=True))
+    compiled = compile_hermetic({'steps': [{'id': 'probe', 'in': {'x': {'wic_inline_input': literal}}}]},
+                                tools={StepId('probe', SYNTHETIC_NS): tool})
+    (value,) = compiled.artifact.job_inputs.values()
+    return value
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('declared, literal', [
+    ('int', 2.9), ('int', '007'), ('int', True), ('long', 2.9),
+    ('boolean', 'yes'), ('boolean', 2),
+    ('float', '1e3'), ('float', True), ('double', 'x'),
+    ('float', 2**53 + 1), ('float', 10**400),
+    ('string', {'seen': datetime.date(2024, 1, 15)}), ({'type': 'array', 'items': 'string'}, ['a', None]),
+], ids=['float-into-int', 'text-into-int', 'bool-into-int', 'float-into-long',
+        'text-into-bool', 'int-into-bool',
+        'text-into-float', 'bool-into-float', 'text-into-double',
+        'int-a-float-rounds', 'int-a-float-overflows',
+        'date-in-a-mapping-into-string', 'null-in-a-list-into-string'])
+def test_a_literal_of_the_wrong_type_is_wic020_not_converted(declared: object, literal: object) -> None:
+    """`int('007')` and `bool('yes')` used to succeed, and the job carried a value
+    the author never wrote."""
+    with pytest.raises(SophiosError) as caught:
+        _job_value(declared, literal)
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('declared, literal, expected', [
+    ('string', 20, '20'), ('string', 1.5, '1.5'), ('string', True, 'True'),
+    ('string', datetime.date(2024, 1, 15), '2024-01-15'),
+    ('string', {'seen': 'a'}, '{"seen": "a"}'),
+    ('float', 1, 1.0), ('double', 2**53, float(2**53)), ('float', 1.0e-5, 1.0e-5),
+    ('int', 3, 3), ('long', 3, 3), ('boolean', False, False),
+])
+def test_the_lossless_conversions_still_hold(declared: object, literal: object, expected: object) -> None:
+    """YAML reads an unquoted 2024-01-15 as a date; bound to a string it is the text the author wrote."""
+    value = _job_value(declared, literal)
+    assert (value, type(value)) == (expected, type(expected))
+
+
+@pytest.mark.fast
+def test_a_float_port_takes_not_a_number() -> None:
+    """`!ii .nan` is a float, and NaN is not equal to itself, so equality cannot be what accepts it."""
+    value = _job_value('float', float('nan'))
+    assert isinstance(value, float) and math.isnan(value)
+
+
+def _parsed_literal(text: str) -> object:
+    """The value the parser gives `!ii <text>`."""
+    document = parse(f'steps:\n- id: probe\n  in:\n    x: !ii {text}\n', 'probe.wic').document
+    assert document is not None
+    literal = dict(document.steps[0].inputs)['x']
+    assert isinstance(literal, InlineLiteral)
+    return literal.value
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('text', ['1e-5', '1E3', '2.5e10'])
+def test_scientific_notation_yaml_reads_as_text_says_how_to_write_a_float(text: str) -> None:
+    """YAML reads a float with no signed exponent as text, so it is wic020. The message
+    gives the spelling the parser does read as a float, with the value the author meant."""
+    assert _parsed_literal(text) == text
+    with pytest.raises(SophiosError) as caught:
+        _job_value('float', text)
+    message = caught.value.diagnostics[0].message
+    advised = re.search(r'Write (\S+)\.$', message)
+    assert advised is not None, message
+    assert _parsed_literal(advised[1]) == float(text)
+
+
+@pytest.mark.fast
+def test_a_literal_of_another_python_type_says_which_python_type_the_port_wants() -> None:
+    """`b'abc'` is a YAML binary scalar; the message names the Python type the port holds."""
+    with pytest.raises(SophiosError) as caught:
+        _job_value('string', b'abc')
+    assert caught.value.diagnostics[0].message.endswith("its literal b'abc' is of type bytes, not a Python str.")
+
+
+@pytest.mark.fast
+def test_a_float_the_literal_cannot_hold_exactly_says_so() -> None:
+    """An int above 2**53 used to round silently; the message names why it is rejected."""
+    with pytest.raises(SophiosError) as caught:
+        _job_value('float', 2**53 + 1)
+    assert 'cannot hold exactly' in caught.value.diagnostics[0].message
 
 
 @pytest.mark.fast

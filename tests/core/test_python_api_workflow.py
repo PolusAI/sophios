@@ -2,6 +2,7 @@ from contextlib import contextmanager
 import asyncio
 import copy
 import dataclasses
+import decimal
 import importlib
 import json
 import os
@@ -210,6 +211,54 @@ def test_in_memory_cwl_step_compiles_through_workflow_api() -> None:
     assert compiled.cwl_workflow["steps"][0]["id"].endswith("say_hello")
     assert compiled.cwl_workflow["steps"][0]["run"]["class"] == "CommandLineTool"
     assert compiled.cwl_workflow["steps"][0]["run"]["baseCommand"] == "echo"
+
+
+@pytest.mark.fast
+def test_a_numpy_float_reaches_the_job_as_a_plain_float() -> None:
+    """numpy's float64 is a float, and a job file holds plain numbers."""
+    numpy = pytest.importorskip("numpy")
+    tool = (
+        CommandLineTool(
+            "scale_tool",
+            Inputs(factor=Input(cwl.float, position=1)),
+            Outputs(out=Output.stdout()),
+        )
+        .base_command("echo")
+        .stdout("stdout.txt")
+    )
+    step = Step.from_cwl_document(tool.to_cwl_document(), process_name="scale")
+    step.inputs.factor = numpy.float64(0.5)
+
+    (value,) = Workflow([step], "wf").compile().cwl_job_inputs.values()
+
+    assert (value, type(value)) == (0.5, float)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("declared, python_type", [
+    (cwl.int, "int"), (cwl.float, "float"), (cwl.boolean, "bool"), (cwl.string, "str"),
+])
+def test_a_value_of_another_python_type_is_wic020_naming_the_type_the_port_holds(
+        declared: Any, python_type: str) -> None:
+    """A numpy scalar or a Decimal is not a Python number: nothing converts it, and the message says so."""
+    tool = (
+        CommandLineTool(
+            "scale_tool",
+            Inputs(factor=Input(declared, position=1)),
+            Outputs(out=Output.stdout()),
+        )
+        .base_command("echo")
+        .stdout("stdout.txt")
+    )
+    step = Step.from_cwl_document(tool.to_cwl_document(), process_name="scale")
+    step.inputs.factor = decimal.Decimal(3)
+
+    with pytest.raises(SophiosError) as caught:
+        Workflow([step], "wf").compile()
+
+    diagnostic = caught.value.diagnostics[0]
+    assert diagnostic.code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
+    assert diagnostic.message.endswith(f"is of type decimal.Decimal, not a Python {python_type}.")
 
 
 @pytest.mark.fast

@@ -152,7 +152,7 @@ COMPILED.update({
 def _provoke_literal_type_mismatch() -> None:
     # !ii places no constraint relating a literal to the declared CWL type of
     # the input it binds, so the typed job boundary must reject a literal that
-    # does not convert.
+    # is not of that type.
     from sophios.ir.complete import coerce_job_value  # pylint: disable=import-outside-toplevel
     from sophios.ir.declarations import port_declaration  # pylint: disable=import-outside-toplevel
     coerce_job_value('n', port_declaration({'type': 'int'}), '_')
