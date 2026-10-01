@@ -14,12 +14,15 @@ from .lang.diagnostics import SophiosError
 from .lang.error_codes import SophiosErrorCode
 
 
-def verify_container_engine_config(container_engine: str, ignore_container_install: bool) -> None:
+def verify_container_engine_config(container_engine: str, ignore_container_install: bool,
+                                   ignore_container_processes: bool = False) -> None:
     """Verify that the container_engine is correctly installed and has
     correct permissions for the user.
     Args:
         container_engine (str): The container engine command
         ignore_container_install (bool): whether to ignore if container engine is not installed and run workflow anyway
+        ignore_container_processes (bool): whether to run the workflow anyway when too many container
+            engine processes are running
     """
     docker_like_engines = ['docker', 'podman']
     container_cmd: str = container_engine
@@ -70,7 +73,7 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
             num_processes = int(output.strip())
             max_processes = 1000
             too_many_processes = num_processes > max_processes
-            if too_many_processes and not ignore_container_install:
+            if too_many_processes and not ignore_container_processes:
                 raise SophiosError.error(
                     SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
                     f'Warning! There are {num_processes} running docker processes.',

@@ -244,7 +244,8 @@ def run_workflows(
         artifact, Path(basepath), True, args.inputs_file)
 
     # verify container_engine install and config
-    verify_container_engine_config(args.container_engine, args.ignore_docker_install)
+    verify_container_engine_config(args.container_engine, args.ignore_docker_install,
+                                   ignore_container_processes=args.ignore_docker_processes)
 
     if docker_pull_only:
         cwl_docker_extract(args.container_engine, args.pull_dir, Path(basepath) / f'{Path(yml_path).stem}.cwl')

@@ -15,6 +15,7 @@ raises it with the messages it used to print.
 
 See design_docs/core-refactor-design.md §3, deliberate exception 1.
 """
+import subprocess
 from pathlib import Path
 from types import ModuleType
 
@@ -155,6 +156,40 @@ def test_ignored_container_check_stays_silent(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(post_compile.sub, 'run', command_not_found)
     post_compile.verify_container_engine_config('docker', True)  # must not raise
+
+
+def _docker_with_processes(monkeypatch: pytest.MonkeyPatch, count: int) -> None:
+    """A working docker engine that reports `count` running docker processes."""
+    def probe(cmd: str | list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        if isinstance(cmd, list):
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'Hello from Docker!')
+        return subprocess.CompletedProcess(cmd, 0, stdout=f'{count}\n'.encode())
+
+    monkeypatch.setattr(post_compile.sub, 'run', probe)
+    monkeypatch.setattr(post_compile.sys, 'platform', 'linux')
+
+
+@pytest.mark.fast
+def test_too_many_docker_processes_reports(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The process-count check fires unless --ignore_docker_processes is given."""
+    _docker_with_processes(monkeypatch, 1001)
+
+    with pytest.raises(SophiosError) as caught:
+        post_compile.verify_container_engine_config('docker', False, ignore_container_processes=False)
+
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE
+    assert any('--ignore_docker_processes' in d.message for d in caught.value.diagnostics)
+
+
+@pytest.mark.fast
+def test_ignored_docker_process_check_stays_silent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--ignore_docker_processes alone silences the process-count check, and
+    --ignore_docker_install does not."""
+    _docker_with_processes(monkeypatch, 1001)
+    post_compile.verify_container_engine_config('docker', False, ignore_container_processes=True)  # must not raise
+
+    with pytest.raises(SophiosError):
+        post_compile.verify_container_engine_config('docker', True, ignore_container_processes=False)
 
 
 # --------------------------------------------------------------------------
