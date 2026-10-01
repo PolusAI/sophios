@@ -61,6 +61,10 @@ class StepId:
     namespace: Namespace
     index: int
     name: str
+    #: `hash((namespace, index, name))`, computed once. A namespace holds the step
+    #: ids that enclose it and each of those holds its own namespace, so hashing
+    #: on demand re-walks the whole chain and the cost doubles per level.
+    _hash: int = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Reject an occurrence that names nothing or sits nowhere."""
@@ -68,6 +72,10 @@ class StepId:
             raise ValueError('a step must be named')
         if self.index < 1:
             raise ValueError(f'a step occurrence is 1-based, not {self.index}')
+        object.__setattr__(self, '_hash', hash((self.namespace, self.index, self.name)))
+
+    def __hash__(self) -> int:
+        return self._hash
 
 
 #: A name as its author wrote it: a tool's port, a workflow input, a step key.
@@ -84,6 +92,15 @@ class DerivedName:
 
     step: StepId
     port: 'PortName'
+    #: `hash((step, port))`, computed once: `port` may itself be derived, so
+    #: hashing on demand walks every level the name was exposed through.
+    _hash: int = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, '_hash', hash((self.step, self.port)))
+
+    def __hash__(self) -> int:
+        return self._hash
 
 
 #: What a port or workflow boundary is called: written, or derived from one.
