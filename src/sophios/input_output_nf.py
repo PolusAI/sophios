@@ -243,7 +243,7 @@ def _process_output(port: NfPort, *, tuple_element: bool = False) -> str:
     # dropped: arity: '1' emits one path value and fails on no match.
     arity = ", arity: '1'" if port.capture == "single" else ""
     if tuple_element:
-        # A dotproduct-scattered process re-emits the hidden invocation
+        # A multi-input-scattered process re-emits the hidden invocation
         # index alongside every output, one tuple line per output port
         # (design §6, Topology), so the "path ..." spelling used inside a
         # standalone output line becomes a parenthesized tuple element here.
@@ -405,7 +405,7 @@ _ADAPTER_OPERATORS = {"scatter": ".flatten()"}
 def _multi_input_sources(
     workflow: ExecutableNextflowWorkflow, process: NfProcess
 ) -> list[tuple[str, str]]:
-    """Return (port name, workflow input name) pairs for dotproduct ports, in port order."""
+    """Return (port name, workflow input name) pairs for multi-input scatter ports, in port order."""
     by_port = {
         connection.to_port: connection.from_port
         for connection in workflow.connections
@@ -430,14 +430,16 @@ def _multi_input_method(workflow: ExecutableNextflowWorkflow, process: NfProcess
 def _render_multi_input_channel(
     channel_name: str, process_name: str, sources: list[tuple[str, str]], method: str = "dotproduct"
 ) -> str:
-    """Combine dotproduct source value channels into one [index, elem...] queue channel.
+    """Combine multi-input scatter source value channels into one [index, elem...] queue channel.
 
     Combines the whole-array value channels the design requires (design §6,
     Topology), then computes every invocation from the whole arrays directly
     by one fixed Groovy idiom -- never by pairing per-element queue channels,
-    whose pairing would depend on arrival order. Unequal lengths fail the run
-    naming each scattered input and its length; an empty array yields zero
-    invocations.
+    whose pairing would depend on arrival order. ``dotproduct`` pairs the
+    arrays by index: unequal lengths fail the run naming each scattered input
+    and its length, and equal empty arrays yield zero invocations.
+    ``flat_crossproduct`` runs every combination with the first declared input
+    outermost and checks no lengths; any empty array yields zero invocations.
     """
     locals_ = [f"__d{index}" for index in range(len(sources))]
     # Nextflow's combine flattens a List-valued item into the concatenated
@@ -602,7 +604,7 @@ def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> st
         and candidate.to_process in scattered_processes
         for candidate in workflow.connections
     )
-    # A scatter- or dotproduct-adapted parameter carries the whole source
+    # A scatter- or multi-input-adapted parameter carries the whole source
     # array; the graph validator keeps every sink of one parameter in
     # agreement, so one sink decides the construction for all of them.
     carries_list = port.is_array or connection.adapter in ("scatter", *MULTI_INPUT_ADAPTERS)

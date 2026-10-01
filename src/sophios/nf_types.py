@@ -899,11 +899,12 @@ class NfWorkflowInputConnection:
     ``adapter`` names the one approved channel adaptation applied at the
     consumption site. The approved set is closed: ``"scatter"`` fans a
     list-carrying value channel out into one element per task, one input at a
-    time. ``"dotproduct"`` marks one of two or more inputs whose whole arrays
-    are paired by index into one invocation per index (design §6, Topology);
-    every input in the group carries this same adapter, which is validated
-    below. Every other adaptation a topology might require is rejected
-    before lowering.
+    time. ``"dotproduct"`` and ``"flat_crossproduct"`` each mark one of two or
+    more inputs whose whole arrays are combined into one invocation per
+    shared index or per combination respectively (design §6, Topology); every
+    input in the group carries this same adapter, which is validated below.
+    Every other adaptation a topology might require is rejected before
+    lowering.
     """
 
     ALLOWED_ADAPTERS: ClassVar[frozenset[str]] = frozenset({"scatter", *MULTI_INPUT_ADAPTERS})
@@ -1117,8 +1118,9 @@ class ExecutableNextflowWorkflow:
         {"is_array": 5, "stage_as": 7, "adapter": 8, "capture": 9, "condition": 11}
     )
     # A specific field VALUE introduced after the field itself: "dotproduct"
-    # is a value of the existing "adapter" field, not a new field, so it
-    # needs its own gate keyed by (field, value) rather than by field alone.
+    # and "flat_crossproduct" are values of the existing "adapter" field, not
+    # new fields, so each needs its own gate keyed by (field, value) rather
+    # than by field alone.
     FIELD_VALUE_SCHEMA_VERSIONS: ClassVar[Mapping[tuple[str, str], int]] = MappingProxyType(
         {("adapter", "dotproduct"): 12, ("adapter", "flat_crossproduct"): 13}
     )
