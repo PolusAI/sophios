@@ -2286,9 +2286,7 @@ def _scatter_edge_findings(steps: list[Mapping[str, Any]]) -> list[str]:
                         f"scattered step steps[{producer}]; gathering a single-input scatter "
                         "is not supported yet, because it carries no invocation index to order by"
                     )
-                elif step_index in scattered and not (
-                    producer is not None and producer in scattered and len(scattered[producer]) > 1
-                ):
+                elif step_index in scattered:
                     findings.append(
                         f"steps[{step_index}].in.{raw_name}: a scattered step's inputs must "
                         f"come from workflow inputs; the process output {source!r} would "
