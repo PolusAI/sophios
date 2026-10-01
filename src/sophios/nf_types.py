@@ -1183,7 +1183,7 @@ class ExecutableNextflowWorkflow:
         workflow_outputs: set[str] = set()
         dependencies: dict[str, set[str]] = {name: set() for name in process_by_name}
         adapters_by_process: dict[str, set[str]] = {}
-        dotproduct_count_by_process: dict[str, int] = {}
+        multi_input_count_by_process: dict[str, int] = {}
         process_connections: list[NfProcessConnection] = []
 
         for connection in self.connections:
@@ -1223,8 +1223,8 @@ class ExecutableNextflowWorkflow:
                     if adapter is not None:
                         adapters_by_process.setdefault(to_process, set()).add(adapter)
                     if adapter in MULTI_INPUT_ADAPTERS:
-                        dotproduct_count_by_process[to_process] = (
-                            dotproduct_count_by_process.get(to_process, 0) + 1
+                        multi_input_count_by_process[to_process] = (
+                            multi_input_count_by_process.get(to_process, 0) + 1
                         )
                     self._record_incoming(incoming, to_process, to_port)
                 case NfProcessConnection(from_process, from_port, to_process, to_port):
@@ -1268,28 +1268,30 @@ class ExecutableNextflowWorkflow:
                     f"process {process_name!r} mixes channel adapters "
                     f"{', '.join(sorted(adapters))}; a process may use only one scatter shape"
                 )
-        for process_name, count in dotproduct_count_by_process.items():
+        for process_name, count in multi_input_count_by_process.items():
+            (method,) = adapters_by_process[process_name]
             if count < 2:
                 raise ValueError(
                     f"process {process_name!r} has {count} multi-input-scatter-adapted input(s); "
-                    "dotproduct and flat_crossproduct scatter require two or more"
+                    f"{method} scatter requires two or more"
                 )
             if process_by_name[process_name].condition is not None:
                 # The conditional rendering merges one channel per input port,
-                # but a dotproduct process's scattered ports share one tuple
-                # channel, and its [] skip sentinel has no index for the
-                # gather to sort on.
+                # but a multi-input-scattered process's scattered ports share
+                # one tuple channel, and its [] skip sentinel has no index for
+                # the gather to sort on.
                 raise ValueError(
-                    f"process {process_name!r} has a condition and dotproduct-adapted inputs; "
-                    "a per-combination condition under dotproduct scatter is not supported yet"
+                    f"process {process_name!r} has a condition and {method}-adapted inputs; "
+                    f"a per-combination condition under {method} scatter is not supported yet"
                 )
         for connection in process_connections:
-            if connection.from_process in dotproduct_count_by_process:
-                # Every output of a dotproduct-scattered process carries the
+            if connection.from_process in multi_input_count_by_process:
+                # Every output of a multi-input-scattered process carries the
                 # hidden scatter index, so only the gather can consume it.
+                (method,) = adapters_by_process[connection.from_process]
                 raise ValueError(
                     f"connection {connection.from_process}.{connection.from_port} -> "
-                    f"{connection.to_process}.{connection.to_port} leaves dotproduct-scattered "
+                    f"{connection.to_process}.{connection.to_port} leaves {method}-scattered "
                     f"process {connection.from_process!r}; its outputs can only reach a workflow "
                     "output until gathering them into a step is supported"
                 )

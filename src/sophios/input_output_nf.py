@@ -261,7 +261,7 @@ def _process_input(port: NfPort, *, tuple_element: bool = False) -> str:
     return f"{port.qualifier} {port.name}"
 
 
-def _render_process(process: NfProcess, dotproduct_ports: tuple[str, ...] = ()) -> str:
+def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...] = ()) -> str:
     lines = [f"process {process.name} {{"]
     if process.container is not None:
         lines.append(f"    container {_groovy_literal(process.container)}")
@@ -272,9 +272,9 @@ def _render_process(process: NfProcess, dotproduct_ports: tuple[str, ...] = ()) 
 
     if process.inputs:
         lines.extend(["", "    input:"])
-        if dotproduct_ports:
-            scattered = [port for port in process.inputs if port.name in dotproduct_ports]
-            other = [port for port in process.inputs if port.name not in dotproduct_ports]
+        if multi_input_ports:
+            scattered = [port for port in process.inputs if port.name in multi_input_ports]
+            other = [port for port in process.inputs if port.name not in multi_input_ports]
             tuple_elements = ", ".join(
                 [f"val({NF_SCATTER_INDEX_NAME})"]
                 + [_process_input(port, tuple_element=True) for port in scattered]
@@ -285,7 +285,7 @@ def _render_process(process: NfProcess, dotproduct_ports: tuple[str, ...] = ()) 
             lines.extend(f"    {_process_input(port)}" for port in process.inputs)
     if process.outputs:
         lines.extend(["", "    output:"])
-        if dotproduct_ports:
+        if multi_input_ports:
             for port in process.outputs:
                 emit = port.emit or port.name
                 lines.append(
@@ -402,7 +402,7 @@ def _incoming_connections(workflow: ExecutableNextflowWorkflow) -> dict[tuple[st
 _ADAPTER_OPERATORS = {"scatter": ".flatten()"}
 
 
-def _dotproduct_sources(
+def _multi_input_sources(
     workflow: ExecutableNextflowWorkflow, process: NfProcess
 ) -> list[tuple[str, str]]:
     """Return (port name, workflow input name) pairs for dotproduct ports, in port order."""
@@ -427,7 +427,7 @@ def _multi_input_method(workflow: ExecutableNextflowWorkflow, process: NfProcess
     )
 
 
-def _render_dotproduct_channel(
+def _render_multi_input_channel(
     channel_name: str, process_name: str, sources: list[tuple[str, str]], method: str = "dotproduct"
 ) -> str:
     """Combine dotproduct source value channels into one [index, elem...] queue channel.
@@ -522,7 +522,7 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
         lines.append("    take:")
         lines.extend(f"    {name}" for name in workflow_inputs)
 
-    dotproduct_process_names = {
+    multi_input_process_names = {
         connection.to_process
         for connection in workflow.connections
         if isinstance(connection, NfWorkflowInputConnection) and connection.adapter in MULTI_INPUT_ADAPTERS
@@ -530,14 +530,14 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
 
     lines.append("    main:")
     for process in _ordered_processes(workflow):
-        dotproduct_sources = _dotproduct_sources(workflow, process)
-        if dotproduct_sources:
-            dotproduct_names = {name for name, _ in dotproduct_sources}
+        multi_input_sources = _multi_input_sources(workflow, process)
+        if multi_input_sources:
+            multi_input_names = {name for name, _ in multi_input_sources}
             channel_name = f"ch_{process.name}_scatter"
-            lines.append(_render_dotproduct_channel(
-                channel_name, process.name, dotproduct_sources, _multi_input_method(workflow, process)
+            lines.append(_render_multi_input_channel(
+                channel_name, process.name, multi_input_sources, _multi_input_method(workflow, process)
             ))
-            other_ports = [port for port in process.inputs if port.name not in dotproduct_names]
+            other_ports = [port for port in process.inputs if port.name not in multi_input_names]
             arguments = [channel_name] + [
                 _source_expression(incoming[(process.name, port.name)], processes)
                 for port in other_ports
@@ -562,7 +562,7 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
         lines.append("    emit:")
         for connection in workflow_outputs:
             expression = _source_expression(connection, processes)
-            if connection.from_process in dotproduct_process_names:
+            if connection.from_process in multi_input_process_names:
                 # Sort by the hidden invocation index before stripping it, so
                 # the gathered workflow output never depends on task
                 # completion order (design §6, Topology, Gather).
@@ -667,7 +667,7 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
     sections.extend(
         _render_process(
             process,
-            tuple(name for name, _ in _dotproduct_sources(workflow, process)),
+            tuple(name for name, _ in _multi_input_sources(workflow, process)),
         )
         for process in workflow.processes
     )
