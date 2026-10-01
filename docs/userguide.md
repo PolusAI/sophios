@@ -384,7 +384,8 @@ workflow.run()
 
 A run that finishes with a non-zero exit code raises `WorkflowRunError` (its
 `exit_code` is the runner's); the runner's log, printed above the error, says why.
-A successful run returns `None`.
+A successful run returns `None`. Ctrl-C raises `KeyboardInterrupt`, not
+`WorkflowRunError`; with `cwltool` the runner's child processes are terminated first.
 
 Sophios supports two local CWL runners through `Workflow.run()`:
 

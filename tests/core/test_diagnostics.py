@@ -375,3 +375,22 @@ def test_cli_asks_the_runner_to_be_quiet_only_with_quiet(cli_on_helloworld: Call
     """Without `--quiet` the runner keeps its own log level, so `--debug` can be heard."""
     cli_on_helloworld('--generate_run_script', *flags)
     assert ('--quiet' in Path('run.sh').read_text(encoding='utf-8').split()) is quiet
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('cwl_runner', ['cwltool', 'toil-cwl-runner'])
+def test_ctrl_c_during_run_local_exits_130(monkeypatch: pytest.MonkeyPatch,
+                                           cli_on_helloworld: Callable[..., None], cwl_runner: str) -> None:
+    """The CLI turns the interrupt `run_local` lets through into the shell's SIGINT code, whichever runner ran."""
+    import sophios.run_local as rl
+
+    def interrupted(_args: list[str]) -> int:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(rl.cwltool.main, 'main', interrupted)
+    monkeypatch.setattr(rl.toil.cwl.cwltoil, 'main', interrupted)
+    # KeyboardInterrupt is listed so a regression fails this test instead of aborting the session.
+    with pytest.raises((SystemExit, KeyboardInterrupt)) as caught:
+        cli_on_helloworld('--run_local', '--cwl_runner', cwl_runner)
+    assert isinstance(caught.value, SystemExit)
+    assert caught.value.code == 130

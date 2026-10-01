@@ -901,6 +901,7 @@ class Workflow(_ProcessBase):
 
         Raises:
             WorkflowRunError: If the runner exits non-zero. Its `exit_code` is the runner's.
+            KeyboardInterrupt: On Ctrl-C. With cwltool, the runner's child processes are terminated first.
         """
         _run_workflow(
             self,

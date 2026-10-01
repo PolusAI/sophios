@@ -193,7 +193,15 @@ def _execute_inprocess(cmd: list[str], cwl_runner: str, workflow_name: str,
         with _temporary_env(user_env_vars or {}):
             if cwl_runner == 'cwltool':
                 print('via cwltool.main.main python API')
-                retval = cwltool.main.main(cmd[1:])
+                try:
+                    retval = cwltool.main.main(cmd[1:])
+                except KeyboardInterrupt:
+                    # cwltool handles SIGTERM itself and SIGINT not at all: the `docker run`
+                    # children it tracks would keep running after we are gone. Clean up, then
+                    # let the interrupt through: what Ctrl-C means is the caller's call.
+                    cwltool.main._terminate_processes()  # pylint: disable=protected-access
+                    print('Interrupted; the runner\'s processes were terminated.', file=sys.stderr)
+                    raise
                 print(
                     f'Final output json metadata blob is in output_{workflow_name}.json')
                 if run_args_dict.get('copy_output_files', 'no') == 'yes':
@@ -244,6 +252,10 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
 
     Returns:
         retval (int): 0 on success, else the runner's exit code
+
+    Raises:
+        KeyboardInterrupt: On Ctrl-C during an in-process run. With cwltool, after the runner's
+            child processes have been terminated.
     """
     yaml_path = Path(basepath) / workflow_name
     cwl_runner = run_args_dict['cwl_runner']

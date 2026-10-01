@@ -536,6 +536,7 @@ def run_workflow(
 
     Raises:
         WorkflowRunError: If the runner exits non-zero.
+        KeyboardInterrupt: On Ctrl-C. With cwltool, the runner's child processes are terminated first.
     """
     logger.info("Running %s", workflow.process_name)
     plugins.logging_filters()
