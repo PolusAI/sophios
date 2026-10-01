@@ -1,4 +1,3 @@
-import glob
 import json
 import subprocess as sub
 import sys
@@ -7,7 +6,6 @@ import re
 import stat
 from contextlib import contextmanager
 from pathlib import Path
-import shutil
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
@@ -226,16 +224,6 @@ def _report_outcome(retval: int | None, cmd: list[str], basepath: str) -> None:
         print('(You may have to scroll up A LOT.)')
 
 
-def _cleanup_cachedir(cachedir: str) -> None:
-    """Remove the annoying cachedir* directories. NOTE: cachedir must not be absolute, or this deletes the drive."""
-    cachedir_path = str(cachedir)
-    if not Path(cachedir_path).is_absolute():
-        for d in glob.glob(cachedir_path + '*'):
-            if not d == cachedir_path:
-                # Be VERY careful when programmatically deleting directories!
-                shutil.rmtree(d)
-
-
 def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
               passthrough_args: list[str], workflow_name: str,
               basepath: str, user_env_vars: dict[str, str] | None = None,
@@ -281,8 +269,6 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
                                 user_env_vars, yaml_path, cachedir, output_directories)
 
     _report_outcome(retval, cmd, basepath)
-
-    _cleanup_cachedir(cachedir)
 
     return retval
 
