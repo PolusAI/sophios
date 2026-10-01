@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 
+from sophios.nf_expr import parse
 from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
@@ -1033,6 +1034,29 @@ def test_rejects_a_process_mixing_scatter_and_dotproduct_adapters() -> None:
                 NfWorkflowInputConnection("seconds", "PAIR", "second", "dotproduct"),
             ],
             {"firsts": ["a"], "seconds": ["b"]},
+        )
+
+
+@pytest.mark.fast
+def test_rejects_a_conditional_process_with_dotproduct_adapted_inputs() -> None:
+    process = NfProcess(
+        "PAIR",
+        [NfPort("a", "val"), NfPort("b", "val"), NfPort("c", "val")],
+        [output_port("f", "out.txt")],
+        command("true"),
+        condition=parse("$(inputs.c == 'go')"),
+    )
+    with pytest.raises(ValueError, match="process 'PAIR' has a condition and dotproduct-adapted inputs"):
+        ExecutableNextflowWorkflow(
+            "wf",
+            [process],
+            [
+                NfWorkflowInputConnection("avals", "PAIR", "a", "dotproduct"),
+                NfWorkflowInputConnection("bvals", "PAIR", "b", "dotproduct"),
+                NfWorkflowInputConnection("c", "PAIR", "c"),
+                NfWorkflowOutputConnection("PAIR", "f", "result"),
+            ],
+            {"avals": ["x"], "bvals": ["y"], "c": "go"},
         )
 
 

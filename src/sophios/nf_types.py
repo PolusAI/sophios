@@ -1267,6 +1267,15 @@ class ExecutableNextflowWorkflow:
                     f"process {process_name!r} has {count} dotproduct-adapted input(s); "
                     "dotproduct scatter requires two or more"
                 )
+            if process_by_name[process_name].condition is not None:
+                # The conditional rendering merges one channel per input port,
+                # but a dotproduct process's scattered ports share one tuple
+                # channel, and its [] skip sentinel has no index for the
+                # gather to sort on.
+                raise ValueError(
+                    f"process {process_name!r} has a condition and dotproduct-adapted inputs; "
+                    "a per-combination condition under dotproduct scatter is not supported yet"
+                )
 
         # Checked after the loop: a parameter feeding inconsistent shapes is
         # reported as inconsistent above, so by here every destination agrees
