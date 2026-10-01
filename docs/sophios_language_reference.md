@@ -64,9 +64,10 @@ and not compiler-owned is passthrough, by definition.** That rule is what makes
 the leak a contract rather than a surprise.
 
 ¹ The compiler-owned row exists because "unchanged" has to mean unchanged.
-Each key in it is treated differently, and each is pinned by a named test in
-`tests/core/test_leak_boundary.py` rather than by a property — a property
-broad enough to cover them would have to be weak enough to say nothing:
+Each key in it is treated differently, and each is pinned by a named test, in
+`tests/core/test_leak_boundary.py` unless a bullet names another file, rather
+than by a property — a property broad enough to cover them would have to be
+weak enough to say nothing:
 
 - `class` is **written by the compiler**: a workflow-level value you supply
   does not survive.
@@ -105,9 +106,23 @@ broad enough to cover them would have to be weak enough to say nothing:
   added once.
 - `$namespaces` is **merged, with two reserved prefixes**: every binding you
   write survives except `edam` and `sophios`, which are replaced by the
-  canonical ones (see §7 for `sophios:lang_version`). Pinned by
-  `test_user_namespaces_survive_except_edam` and
-  `test_the_sophios_namespace_prefix_is_reserved`.
+  canonical ones (see §7 for `sophios:lang_version`). A port the document
+  promotes from a step keeps that port's `format:` CURIE, so the document also
+  declares each prefix such a format uses, bound as the step's tool or
+  subworkflow binds it. If the document and the steps whose promoted ports use
+  that prefix do not all bind it to the same URI, that is `wic031`: the CURIE
+  could only mean one of them. Those bindings are the only ones that count. A
+  tool that binds the prefix differently but promotes no port using it
+  conflicts with nothing, wherever the step sits, so compiling does not depend
+  on how the workflow is split into subworkflows. A prefix no promoted format
+  uses is not declared for you. A port you wrote keeps the prefixes you bound.
+  What a tool binds `edam` or `sophios` to is ignored, since the compiler binds
+  both. Pinned by `test_user_namespaces_survive_except_edam` and
+  `test_the_sophios_namespace_prefix_is_reserved`, and in
+  `tests/core/test_emit.py` by
+  `test_a_prefix_two_promoting_sources_bind_differently_is_reported`,
+  `test_a_clash_on_a_prefix_no_promoted_format_uses_is_no_error` and
+  `test_a_step_promoting_no_format_with_a_prefix_is_no_source_for_it_wherever_it_sits`.
 
 ² Everything outside the compiler-owned row survives byte-identically, which
 is the statement the properties in that file quantify over. The exception is

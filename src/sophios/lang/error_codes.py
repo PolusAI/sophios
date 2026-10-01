@@ -51,8 +51,10 @@ class SophiosErrorCode(StrEnum):
     #: side, for either a CommandLineTool or a subworkflow.
     UNDECLARED_PORT = 'wic028'
     RECURSIVE_ALIAS = 'wic030'
-    #: Two different ports the emitted document would spell the same way,
-    #: e.g. an authored name equal to one the compiler derives.
+    #: Two different things the emitted document would spell the same way:
+    #: ports, e.g. an authored name equal to one the compiler derives, or the
+    #: URIs one `$namespaces` prefix would stand for in the `format:` of a
+    #: promoted port.
     DUPLICATE_DOCUMENT_NAME = 'wic031'
     #: A scatter entry naming no input of its step, or one nothing binds once
     #: inference is done. On a subworkflow call the inputs are the ones the

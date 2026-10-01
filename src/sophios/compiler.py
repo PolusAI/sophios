@@ -13,6 +13,7 @@ from .ir.artifacts import CompilationArtifact, CompilationResult
 from .ir.emit import emit, emit_job_inputs, surface
 from .ir.infer import InferencePolicy, InsertionCatalog, infer
 from .ir.link import link
+from .ir.namespaces import declare_namespaces
 from .ir.frontdoor import SourceBundle
 from .ir.pipeline import front_end
 from .ir.resolve import RegistrySnapshot
@@ -74,7 +75,7 @@ def compile_source(bundle: SourceBundle,
     inferred = infer(linked.graph, policy, InsertionCatalog.from_registry(bundle.registry))
     if inferred.graph is None:
         raise SophiosError(inferred.diagnostics)
-    graph = complete(inferred.graph)
+    graph = declare_namespaces(complete(inferred.graph), bundle.registry)
     names = Names.of(graph)
     graph_reps = _project_graph(graph, names, graph_settings, graph_target)
     artifact = _artifact_tree(graph, names, bundle.registry, graph_settings, graph_reps,

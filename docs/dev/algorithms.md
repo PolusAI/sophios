@@ -47,7 +47,15 @@ Compilation is a one-way typed pipeline:
    common ancestor, and discharges deferred obligations.
 5. **Infer** adds only missing edges and optional converter steps. Its
    fixed-point loop is local to this phase; the preceding phases run once.
-6. **Emit** projects the final graph to CWL v1.2. It does not reopen source,
+6. **Declare namespaces** gives every workflow the `$namespaces` that the
+   `format:` CURIEs of its promoted ports need. Which ports are promoted is
+   known only once Infer is done, and the prefixes a tool binds are a fact about
+   the tool, so this phase reads the registry as Resolve does. It reports
+   `wic031` where the document and the steps whose promoted ports use a prefix
+   bind it to different URIs. A binding by any other step conflicts with
+   nothing, which keeps the result independent of how the workflow is
+   partitioned.
+7. **Emit** projects the final graph to CWL v1.2. It does not reopen source,
    consult registries, or replay an older compiler result.
 
 An idempotent internal graph-completion operation materializes emission facts

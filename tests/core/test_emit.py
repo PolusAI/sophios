@@ -273,14 +273,15 @@ def test_list_form_outputs_and_requirements_compile_as_their_mapping_form() -> N
     assert set(listed['requirements']) == {'InlineJavascriptRequirement', 'ScatterFeatureRequirement'}
 
 
-def _tools_with_probe(inputs: Yaml, outputs: Yaml, namespaces: Yaml | None = None) -> Tools:
-    """The synthetic registry plus a `probe` tool declaring these ports and prefixes."""
+def _tools_with_probe(inputs: Yaml, outputs: Yaml, namespaces: Yaml | None = None, *,
+                      tools: Tools | None = None, stem: str = 'probe') -> Tools:
+    """`tools` (the synthetic registry by default) plus a tool called `stem` declaring these ports and prefixes."""
     probe = clt(inputs, outputs)
     if namespaces:
         probe['$namespaces'] = namespaces
-    tools = copy.deepcopy(SYNTHETIC_TOOLS)
-    tools[LegacyStepId('probe', SYNTHETIC_NS)] = Tool('/synthetic/probe.cwl', probe)
-    return tools
+    registry = copy.deepcopy(SYNTHETIC_TOOLS if tools is None else tools)
+    registry[LegacyStepId(stem, SYNTHETIC_NS)] = Tool(f'/synthetic/{stem}.cwl', probe)
+    return registry
 
 
 @pytest.mark.fast
@@ -341,3 +342,177 @@ def test_a_promoted_output_keeps_the_fields_a_workflow_output_may_state() -> Non
     assert compiled['outputs'] == {'oracle__step__1__probe___o': {
         'type': 'File', 'secondaryFiles': ['.bai'], 'streamable': True,
         'outputSource': 'oracle__step__1__probe/o'}}
+
+
+_MYNS: Final = 'http://tool.example/'
+
+
+def _tools_binding_myns(**uris: str) -> Tools:
+    """One tool per stem, each taking a `File` whose `format:` is a `myns:` CURIE the tool binds to its URI."""
+    tools = copy.deepcopy(SYNTHETIC_TOOLS)
+    for stem, uri in uris.items():
+        tools = _tools_with_probe({'f': {'type': 'File', 'format': 'myns:format_1'}}, {}, {'myns': uri},
+                                  tools=tools, stem=stem)
+    return tools
+
+
+@pytest.mark.fast
+def test_a_tools_namespace_prefix_is_declared_by_the_document_that_promotes_its_port() -> None:
+    """The promoted port keeps its `myns:` CURIE, so the document that promotes it declares `myns`."""
+    compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=_tools_binding_myns(probe=_MYNS))
+    assert compiled['inputs']['oracle__step__1__probe___f']['format'] == 'myns:format_1'
+    assert compiled['$namespaces'].get('myns') == _MYNS
+
+
+@pytest.mark.fast
+def test_a_prefix_declared_beneath_a_subworkflow_is_declared_by_the_root_that_promotes_it() -> None:
+    """A port promoted through a subworkflow reaches the root with its CURIE, so the root declares the prefix."""
+    compiled = compile_hermetic_cwl({'steps': [subworkflow_step('child.wic', {'steps': [{'id': 'probe'}]})]},
+                                    tools=_tools_binding_myns(probe=_MYNS))
+    [promoted] = compiled['inputs'].values()
+    assert promoted['format'] == 'myns:format_1'
+    assert compiled['$namespaces'].get('myns') == _MYNS
+
+
+@pytest.mark.fast
+def test_a_workflow_an_explicit_edge_crosses_declares_the_prefix_of_the_step_beneath_its_subworkflow() -> None:
+    """An edge from the root into a grandchild promotes its port through the child, which keeps the CURIE.
+
+    The step the port derives from sits two workflows down, so the child owns
+    the port by the call that reaches it, and declares the prefix that call's
+    workflow declares.
+    """
+    grandchild = {'steps': [{'id': 'probe', 'in': {'f': {'wic_alias': 'shared'}}}]}
+    info = compile_hermetic({'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}, 'out': [{'file': {'wic_anchor': 'shared'}}]},
+        subworkflow_step('child.wic', {'steps': [subworkflow_step('grand.wic', grandchild)]})]},
+        tools=_tools_binding_myns(probe=_MYNS))
+    child = next(artifact for artifact in info.artifact.children if artifact.name == 'child')
+    assert child.cwl['inputs']['grand__step__1__probe___f']['format'] == 'myns:format_1'
+    assert child.cwl['$namespaces']['myns'] == _MYNS
+
+
+@pytest.mark.fast
+def test_tools_binding_a_prefix_alike_declare_it_once_and_edam_is_left_to_emit() -> None:
+    """Two tools agreeing on `myns` are no conflict; their disagreeing `edam` is not one either.
+
+    Emit binds `edam` itself, to the canonical URI, so what a tool says for it
+    cannot reach the document, though `mk_file` promotes an `edam:` format.
+    """
+    tools = _tools_binding_myns(probe=_MYNS, other=_MYNS)
+    for stem, uri in (('probe', 'http://edamontology.org/'), ('other', 'https://edamontology.org/')):
+        tools[LegacyStepId(stem, SYNTHETIC_NS)].cwl['$namespaces']['edam'] = uri
+    compiled = compile_hermetic_cwl({'steps': [
+        {'id': 'probe'}, {'id': 'other'}, {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]},
+        tools=tools)
+    assert compiled['outputs']['oracle__step__3__mk_file___file']['format'] == 'edam:format_2330'
+    assert compiled['$namespaces']['myns'] == _MYNS
+    assert compiled['$namespaces']['edam'] == 'https://edamontology.org/'
+
+
+_OTHER_URI: Final = 'http://other.example/'
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('workflow, tools, first, second', [
+    ({'$namespaces': {'myns': _OTHER_URI}, 'steps': [{'id': 'probe'}]},
+     _tools_binding_myns(probe=_MYNS), (_OTHER_URI, 'this document'), (_MYNS, "step 'probe'")),
+    ({'steps': [{'id': 'probe'}, {'id': 'other'}]},
+     _tools_binding_myns(probe=_MYNS, other=_OTHER_URI), (_MYNS, "step 'probe'"), (_OTHER_URI, "step 'other'")),
+    ({'steps': [subworkflow_step('child.wic', {'steps': [{'id': 'probe'}]}), {'id': 'other'}]},
+     _tools_binding_myns(probe=_MYNS, other=_OTHER_URI), (_MYNS, "step 'child.wic'"), (_OTHER_URI, "step 'other'")),
+    ({'steps': [subworkflow_step('child.wic', {'steps': [{'id': 'probe'}, {'id': 'other'}]})]},
+     _tools_binding_myns(probe=_MYNS, other=_OTHER_URI), (_MYNS, "step 'probe'"), (_OTHER_URI, "step 'other'")),
+], ids=['document-and-tool', 'tool-and-tool', 'subworkflow-and-tool', 'two-tools-in-a-subworkflow'])
+def test_a_prefix_two_promoting_sources_bind_differently_is_reported(
+        workflow: Yaml, tools: Tools, first: tuple[str, str], second: tuple[str, str]) -> None:
+    """The promoted CURIE would resolve to whichever binding the document kept, so neither is kept.
+
+    The sources are the document and the steps owning a promoted port that says
+    `myns:`. The one diagnostic is `wic031`, and names the prefix and what each
+    source binds it to.
+    """
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic_cwl(workflow, tools=tools)
+    [diagnostic] = caught.value.diagnostics
+    assert diagnostic.code is SophiosErrorCode.DUPLICATE_DOCUMENT_NAME
+    assert "'myns'" in diagnostic.message
+    for uri, source in (first, second):
+        assert repr(uri) in diagnostic.message and source in diagnostic.message
+
+
+def _tools_clashing_on_schema_org(*, probe_port: Yaml, namespaces: Yaml) -> Tools:
+    """`probe` takes `probe_port` and binds `namespaces`; `other` also binds `s` to a different URI."""
+    tools = _tools_with_probe({'f': probe_port}, {}, namespaces)
+    return _tools_with_probe({'g': {'type': 'File'}}, {}, {'s': 'https://schema.org/'}, tools=tools, stem='other')
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('probe_port, namespaces, declared', [
+    ({'type': 'File'}, {'s': 'http://schema.org/'}, {}),
+    ({'type': 'File', 'format': 'myns:format_1'}, {'s': 'http://schema.org/', 'myns': _MYNS}, {'myns': _MYNS}),
+], ids=['no-prefix-used', 'another-prefix-used'])
+def test_a_clash_on_a_prefix_no_promoted_format_uses_is_no_error(
+        probe_port: Yaml, namespaces: Yaml, declared: Yaml, capsys: pytest.CaptureFixture[str]) -> None:
+    """Two tools binding `s` differently conflict with nothing when no promoted port says `s:`.
+
+    The document is the one its tools' agreement would give, and it declares
+    only what a promoted format needs. Nothing is printed.
+    """
+    workflow = {'steps': [{'id': 'probe'}, {'id': 'other'}]}
+    compiled = compile_hermetic_cwl(workflow, tools=_tools_clashing_on_schema_org(
+        probe_port=probe_port, namespaces=namespaces))
+    control = compile_hermetic_cwl(workflow, tools=_tools_with_probe(
+        {'f': probe_port}, {}, {'myns': _MYNS}, tools=_tools_with_probe({'g': {'type': 'File'}}, {}, stem='other')))
+    assert compiled == control
+    assert compiled['$namespaces'] == {**declared, 'edam': 'https://edamontology.org/',
+                                       ANNOTATION_NAMESPACE: ANNOTATION_NAMESPACE_URI}
+    assert capsys.readouterr() == ('', '')
+
+
+_ELSE_URI: Final = 'http://else.example/'
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('other_port, declared', [
+    ({'type': 'File'}, {}),
+    ({'type': 'File', 'format': 'elsens:format_2'}, {'elsens': _ELSE_URI}),
+], ids=['no-format', 'a-format-with-another-prefix'])
+def test_a_step_promoting_no_format_with_a_prefix_is_no_source_for_it_wherever_it_sits(
+        other_port: Yaml, declared: Yaml) -> None:
+    """Only the document and the steps owning a promoted `myns:` port are sources for `myns`.
+
+    `other` binds `myns` elsewhere, but no CURIE it promotes says `myns:`, so
+    its binding conflicts with nothing: beside `probe` or beneath a
+    subworkflow, the root declares the same prefixes.
+    """
+    tools = _tools_with_probe({'g': other_port}, {}, {'myns': _OTHER_URI, 'elsens': _ELSE_URI},
+                              tools=_tools_binding_myns(probe=_MYNS), stem='other')
+    beside = compile_hermetic_cwl({'steps': [{'id': 'probe'}, {'id': 'other'}]}, tools=tools)
+    beneath = compile_hermetic_cwl(
+        {'steps': [{'id': 'probe'}, subworkflow_step('c.wic', {'steps': [{'id': 'other'}]})]}, tools=tools)
+    expected = {'myns': _MYNS, **declared, 'edam': 'https://edamontology.org/',
+                ANNOTATION_NAMESPACE: ANNOTATION_NAMESPACE_URI}
+    assert beside['$namespaces'] == expected
+    assert beneath['$namespaces'] == expected
+
+
+@pytest.mark.fast
+def test_a_prefix_only_a_promoted_output_format_uses_is_declared() -> None:
+    """A promoted output keeps its `format:` CURIE as an input does, so the document declares its prefix."""
+    tools = _tools_with_probe(
+        {}, {'o': {'type': 'File', 'format': 'myns:format_1', 'outputBinding': {'glob': 'o'}}}, {'myns': _MYNS})
+    compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
+    assert compiled['outputs']['oracle__step__1__probe___o']['format'] == 'myns:format_1'
+    assert compiled['$namespaces']['myns'] == _MYNS
+
+
+@pytest.mark.fast
+def test_a_port_the_author_wrote_keeps_its_own_prefix_whatever_a_tool_binds() -> None:
+    """A `format:` the author wrote at the boundary uses the author's binding, which no tool's can contradict."""
+    workflow = {'$namespaces': {'myns': _OTHER_URI},
+                'inputs': {'x': {'type': 'File', 'format': 'myns:format_1'}},
+                'steps': [{'id': 'probe', 'in': {'f': 'x'}}]}
+    compiled = compile_hermetic_cwl(workflow, tools=_tools_binding_myns(probe=_MYNS))
+    assert compiled['inputs']['x']['format'] == 'myns:format_1'
+    assert compiled['$namespaces']['myns'] == _OTHER_URI
