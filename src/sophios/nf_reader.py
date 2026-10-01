@@ -49,7 +49,7 @@ _PORT = re.compile(
     r"(?:,\s*arity:\s*'(?P<arity>1)')?"
     r"(?:,\s*emit:\s*(?P<emit>\S+))?$"
 )
-# The one generated input option: an array-typed path input declares its arity.
+# The one input option read from text: an array-typed path input declares its arity.
 _ARRAY_PATH_INPUT = re.compile(
     rf"^path\s+(?P<target>[^\s,]+),\s*arity:\s*'{re.escape(NF_ARRAY_PATH_ARITY)}'$"
 )

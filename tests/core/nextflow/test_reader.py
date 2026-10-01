@@ -479,7 +479,7 @@ def test_the_reader_records_and_reconstructs_a_capture_marker() -> None:
 
 @pytest.mark.fast
 def test_an_arity_option_on_an_input_port_is_not_recognized() -> None:
-    """arity is an output option here; on an input it stays unrecognized content.
+    """Only an array-typed path input reads back with an arity; on any other input it is unrecognized.
 
     An unrecognized input port leaves the process declaring no inputs, so the
     call that supplies one fails the reader's arity check rather than parsing
