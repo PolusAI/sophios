@@ -15,6 +15,7 @@ from sophios.nf_types import (
     NfBasenameReference,
     NfCommand,
     NfCommandToken,
+    NfConnection,
     NfFlag,
     NfInputReference,
     NfLiteral,
@@ -1057,6 +1058,28 @@ def test_rejects_a_conditional_process_with_dotproduct_adapted_inputs() -> None:
                 NfWorkflowOutputConnection("PAIR", "f", "result"),
             ],
             {"avals": ["x"], "bvals": ["y"], "c": "go"},
+        )
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("process_connection_first", [False, True])
+def test_rejects_a_process_connection_out_of_a_dotproduct_scattered_process(process_connection_first: bool) -> None:
+    pair = NfProcess(
+        "PAIR", [NfPort("a", "val"), NfPort("b", "val")], [output_port("f", "out.txt")], command("true")
+    )
+    following = NfProcess("NEXT", [NfPort("x", "path")], [output_port("g", "g.txt")], command("true"))
+    inputs: list[NfConnection] = [
+        NfWorkflowInputConnection("avals", "PAIR", "a", "dotproduct"),
+        NfWorkflowInputConnection("bvals", "PAIR", "b", "dotproduct"),
+    ]
+    edge = NfProcessConnection("PAIR", "f", "NEXT", "x")
+    connections = [edge, *inputs] if process_connection_first else [*inputs, edge]
+    with pytest.raises(ValueError, match=r"connection PAIR\.f -> NEXT\.x leaves dotproduct-scattered process 'PAIR'"):
+        ExecutableNextflowWorkflow(
+            "wf",
+            [pair, following],
+            [*connections, NfWorkflowOutputConnection("NEXT", "g", "result")],
+            {"avals": ["x"], "bvals": ["y"]},
         )
 
 

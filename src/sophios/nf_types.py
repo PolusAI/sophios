@@ -1179,6 +1179,7 @@ class ExecutableNextflowWorkflow:
         dependencies: dict[str, set[str]] = {name: set() for name in process_by_name}
         adapters_by_process: dict[str, set[str]] = {}
         dotproduct_count_by_process: dict[str, int] = {}
+        process_connections: list[NfProcessConnection] = []
 
         for connection in self.connections:
             match connection:
@@ -1249,6 +1250,7 @@ class ExecutableNextflowWorkflow:
                         )
                     self._record_incoming(incoming, to_process, to_port)
                     dependencies[to_process].add(from_process)
+                    process_connections.append(connection)
                 case NfWorkflowOutputConnection(from_process, from_port, to_port):
                     self._source_port(process_by_name, from_process, from_port)
                     if to_port in workflow_outputs:
@@ -1275,6 +1277,16 @@ class ExecutableNextflowWorkflow:
                 raise ValueError(
                     f"process {process_name!r} has a condition and dotproduct-adapted inputs; "
                     "a per-combination condition under dotproduct scatter is not supported yet"
+                )
+        for connection in process_connections:
+            if connection.from_process in dotproduct_count_by_process:
+                # Every output of a dotproduct-scattered process carries the
+                # hidden scatter index, so only the gather can consume it.
+                raise ValueError(
+                    f"connection {connection.from_process}.{connection.from_port} -> "
+                    f"{connection.to_process}.{connection.to_port} leaves dotproduct-scattered "
+                    f"process {connection.from_process!r}; its outputs can only reach a workflow "
+                    "output until gathering them into a step is supported"
                 )
 
         # Checked after the loop: a parameter feeding inconsistent shapes is
