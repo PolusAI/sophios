@@ -298,9 +298,9 @@ def _is_includer_fragment(error: SophiosError) -> bool:
 #: Fields a CWL `CommandLineTool` input may declare and a workflow input may
 #: not. `declarations.boundary_declaration` is the one place that reduces a
 #: promoted port, and this is what says so about the output rather than about
-#: the call.
-_TOOL_ONLY_BOUNDARY_FIELDS: Final = ('inputBinding', 'loadContents', 'loadListing',
-                                     'secondaryFiles', 'streamable')
+#: the call. `secondaryFiles`, `streamable`, `loadContents` and `loadListing`
+#: are not here: the CWL v1.2 schema allows each on a workflow input.
+_TOOL_ONLY_BOUNDARY_FIELDS: Final = ('inputBinding',)
 
 #: Fields belonging to a CWL document rather than to a process, which an
 #: embedded process therefore may not keep. The same set `post_compile` lifts

@@ -3,13 +3,21 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any, Final
 
-from .types import BoundaryDeclaration, Port, PortDeclaration, PortName, PortType, StepNode
+from ..lang.nodes import OpaqueCwl
+from .types import BoundaryDeclaration, Direction, Port, PortDeclaration, PortName, PortType, StepNode
 
-#: What a workflow boundary port may state. An allowlist, not a denylist,
-#: because a tool's input record is a strict superset of a workflow input's
-#: (e.g. `inputBinding` is a `CommandLineBinding` on a tool, an `InputBinding`
-#: on a workflow input, so a promoted `position` fails validation).
-_BOUNDARY_FIELDS: Final = frozenset({'type', 'format', 'label', 'doc'})
+#: What a workflow boundary port may state, by direction: the fields the CWL
+#: v1.2 schema gives `WorkflowOutputParameter` and `WorkflowInputParameter`.
+#: An allowlist, not a denylist, because a tool's port record is a superset of a
+#: workflow's (`inputBinding` is a `CommandLineBinding` on a tool and an
+#: `InputBinding` on a workflow input, so a promoted `position` fails
+#: validation; `outputBinding` has no workflow counterpart). Only an input may
+#: ask for `loadContents` and `loadListing`.
+_OUTPUT_BOUNDARY_FIELDS: Final = frozenset({'type', 'format', 'label', 'doc', 'secondaryFiles', 'streamable'})
+_INPUT_BOUNDARY_FIELDS: Final = _OUTPUT_BOUNDARY_FIELDS | {'loadContents', 'loadListing'}
+
+#: What makes a CWL string an expression.
+_EXPRESSION_MARKERS: Final = ('$(', '${')
 
 
 def port_declaration(raw: Any, *, output: bool = False) -> PortDeclaration:
@@ -70,6 +78,26 @@ def produced_declaration(step: StepNode, port: Port) -> BoundaryDeclaration:
     return boundary_declaration(port, output_rank(step))
 
 
+def _evaluated(entry: OpaqueCwl) -> bool:
+    """Whether a `secondaryFiles` entry holds an expression, as its pattern or as its `required`."""
+    texts = entry.values() if isinstance(entry, dict) else (entry,)
+    return any(isinstance(text, str) and any(marker in text for marker in _EXPRESSION_MARKERS)
+               for text in texts)
+
+
+def _statable_secondary_files(value: OpaqueCwl) -> OpaqueCwl:
+    """The `secondaryFiles` entries a workflow boundary can state.
+
+    An expression is evaluated by the tool that wrote it, against that tool's
+    `inputs` and `expressionLib`. The boundary has neither, so it would
+    evaluate the expression differently or fail on it at run time; the tool
+    still declares the entry and keeps evaluating it.
+    """
+    if isinstance(value, list):
+        return [entry for entry in value if not _evaluated(entry)]
+    return [] if _evaluated(value) else value
+
+
 def boundary_declaration(port: Port, rank: int) -> BoundaryDeclaration:
     """`port` as a workflow boundary may state it, `rank` array layers deep.
 
@@ -87,8 +115,16 @@ def boundary_declaration(port: Port, rank: int) -> BoundaryDeclaration:
         workflow boundary may say, its type canonical and layered.
     """
     declaration = port.declaration or port_declaration(port.type.declared)
-    passthrough = tuple((name, deepcopy(value)) for name, value in declaration.passthrough
-                        if name in _BOUNDARY_FIELDS)
+    allowed = _INPUT_BOUNDARY_FIELDS if port.id.direction is Direction.INPUT else _OUTPUT_BOUNDARY_FIELDS
+    passthrough: list[tuple[str, OpaqueCwl]] = []
+    for name, value in declaration.passthrough:
+        if name not in allowed:
+            continue
+        if name == 'secondaryFiles':
+            value = _statable_secondary_files(value)
+            if not value:
+                continue
+        passthrough.append((name, deepcopy(value)))
     return BoundaryDeclaration(replace(declaration, type=layered(declaration.type, rank),
-                                       passthrough=passthrough, shorthand=False,
+                                       passthrough=tuple(passthrough), shorthand=False,
                                        default=None, has_default=False))

@@ -12,7 +12,7 @@ declared exclusions.  Validation does not execute CWL.
 import copy
 from pathlib import Path
 import tempfile
-from typing import Any
+from typing import Any, Final
 
 import pytest
 import yaml
@@ -44,11 +44,12 @@ from sophios.lang.cwl import CWL_VERSION
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.versions import ANNOTATION_KEY, ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
-from sophios.wic_types import Yaml
+from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
 from .equivalence import Strength, equivalent
 from .hermetic import ORACLE, compile_hermetic, compile_hermetic_cwl, subworkflow_step
+from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
 
 
 @pytest.mark.skip_pypi_ci
@@ -270,3 +271,73 @@ def test_list_form_outputs_and_requirements_compile_as_their_mapping_form() -> N
     assert listed == mapped
     assert listed['outputs']['o']['outputSource'] == 'oracle__step__1__mk_file/file'
     assert set(listed['requirements']) == {'InlineJavascriptRequirement', 'ScatterFeatureRequirement'}
+
+
+def _tools_with_probe(inputs: Yaml, outputs: Yaml, namespaces: Yaml | None = None) -> Tools:
+    """The synthetic registry plus a `probe` tool declaring these ports and prefixes."""
+    probe = clt(inputs, outputs)
+    if namespaces:
+        probe['$namespaces'] = namespaces
+    tools = copy.deepcopy(SYNTHETIC_TOOLS)
+    tools[LegacyStepId('probe', SYNTHETIC_NS)] = Tool('/synthetic/probe.cwl', probe)
+    return tools
+
+
+@pytest.mark.fast
+def test_a_promoted_input_keeps_the_fields_a_workflow_input_may_state() -> None:
+    """A tool input promoted to the boundary keeps what `WorkflowInputParameter` allows, not its `inputBinding`."""
+    tools = _tools_with_probe(
+        {'f': {'type': 'File', 'secondaryFiles': ['.idx'], 'streamable': True, 'loadContents': True,
+               'loadListing': 'shallow_listing', 'inputBinding': {'position': 1}}}, {})
+    compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
+    assert compiled['inputs'] == {'oracle__step__1__probe___f': {
+        'type': 'File', 'secondaryFiles': ['.idx'], 'streamable': True, 'loadContents': True,
+        'loadListing': 'shallow_listing'}}
+
+
+_EXPRESSION_ENTRY: Final = {'pattern': '$(self.basename + ".bai")', 'required': False}
+_REQUIRED_EXPRESSION_ENTRY: Final = {'pattern': '.fai', 'required': '$(inputs.strict)'}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('declared, promoted', [
+    ([_EXPRESSION_ENTRY], None),
+    ('$(self.basename + ".idx")', None),
+    ('${return self.basename + ".idx";}', None),
+    (['.idx', _EXPRESSION_ENTRY, {'pattern': '.crai', 'required': False}, _REQUIRED_EXPRESSION_ENTRY,
+      {'pattern': '${return self.basename + ".bai";}', 'required': False}],
+     ['.idx', {'pattern': '.crai', 'required': False}]),
+], ids=['only-expression', 'single-string-expression', 'single-string-script',
+        'static-entries-beside-expressions'])
+def test_a_promoted_port_leaves_a_secondary_files_expression_to_its_tool(declared: Any, promoted: Any) -> None:
+    """The boundary states the static `secondaryFiles` entries and no expression.
+
+    An expression is evaluated against its tool's `inputs` and `expressionLib`,
+    which the workflow does not have, and the tool's `InlineJavascriptRequirement`
+    is not the workflow's: a promoted expression fails in cwltool at run time.
+    `plain` is the control: a port with a static entry, promoted beside it.
+    """
+    tools = _tools_with_probe(
+        {'f': {'type': 'File', 'secondaryFiles': declared, 'inputBinding': {'position': 1}},
+         'plain': {'type': 'File', 'secondaryFiles': ['.dict'], 'inputBinding': {'position': 2}}},
+        {'o': {'type': 'File', 'secondaryFiles': declared, 'outputBinding': {'glob': 'o'}},
+         'plain': {'type': 'File', 'secondaryFiles': ['.dict'], 'outputBinding': {'glob': 'p'}}})
+    compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
+    inputs, outputs = compiled['inputs'], compiled['outputs']
+    assert inputs['oracle__step__1__probe___plain']['secondaryFiles'] == ['.dict']
+    assert outputs['oracle__step__1__probe___plain']['secondaryFiles'] == ['.dict']
+    assert inputs['oracle__step__1__probe___f'].get('secondaryFiles') == promoted
+    assert outputs['oracle__step__1__probe___o'].get('secondaryFiles') == promoted
+    assert 'InlineJavascriptRequirement' not in (compiled.get('requirements') or {})
+
+
+@pytest.mark.fast
+def test_a_promoted_output_keeps_the_fields_a_workflow_output_may_state() -> None:
+    """A tool output promoted to the boundary keeps what `WorkflowOutputParameter` allows, not its `outputBinding`."""
+    tools = _tools_with_probe(
+        {}, {'o': {'type': 'File', 'secondaryFiles': ['.bai'], 'streamable': True,
+                   'outputBinding': {'glob': 'o.bam'}}})
+    compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
+    assert compiled['outputs'] == {'oracle__step__1__probe___o': {
+        'type': 'File', 'secondaryFiles': ['.bai'], 'streamable': True,
+        'outputSource': 'oracle__step__1__probe/o'}}
