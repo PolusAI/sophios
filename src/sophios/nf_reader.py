@@ -30,6 +30,7 @@ from .input_output_nf import (
     NF_NEST_FUNCTION,
     NF_SHELL_QUOTE_FUNCTION,
     render_nextflow,
+    render_number,
 )
 
 if TYPE_CHECKING:
@@ -547,7 +548,7 @@ def _document_from_model(executable: ExecutableNextflowWorkflow, source_text: st
             scripts.get(process.name, ""),
             process.container,
             None if process.resources.cpus is None else str(process.resources.cpus),
-            None if process.resources.memory_mb is None else f"{process.resources.memory_mb} MB",
+            None if process.resources.memory_mb is None else f"{render_number(process.resources.memory_mb)} MB",
         )
         for process in executable.processes
     )

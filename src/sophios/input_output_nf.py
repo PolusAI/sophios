@@ -173,7 +173,7 @@ def _render_glob(template: Any) -> str:
     return f'"{"".join(rendered)}"'
 
 
-def _render_number(value: int | float) -> str:
+def render_number(value: int | float) -> str:
     """Render a validated JSON number without exponent notation."""
     if isinstance(value, int):
         return str(value)
@@ -282,7 +282,7 @@ def _render_process(
     if process.resources.cpus is not None:
         lines.append(f"    cpus {process.resources.cpus}")
     if process.resources.memory_mb is not None:
-        lines.append(f'    memory "{_render_number(process.resources.memory_mb)} MB"')
+        lines.append(f'    memory "{render_number(process.resources.memory_mb)} MB"')
 
     if process.inputs:
         lines.extend(["", "    input:"])

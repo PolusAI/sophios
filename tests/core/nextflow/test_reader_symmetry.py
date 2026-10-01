@@ -6,6 +6,7 @@ adjacent executable model renders to it byte for byte is fully understood.
 
 # pylint: disable=missing-function-docstring
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
@@ -13,11 +14,12 @@ import pytest
 
 from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.nf_expr import parse
-from sophios.nf_reader import parse_nf_file, promote_nextflow_document
+from sophios.nf_reader import nextflow_to_cwl, parse_nf_file, promote_nextflow_document
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
     NfPort,
     NfProcess,
+    NfResources,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
@@ -66,3 +68,16 @@ def test_every_generated_pattern_reads_back_and_promotes(name: str, tmp_path: Pa
     assert parsed.connections == tuple(workflow.connections)
     assert [process.name for process in parsed.processes] == [process.name for process in workflow.processes]
     assert promote_nextflow_document(parsed) == workflow
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("name", ["dotproduct", "conditional step"])
+def test_model_derived_document_reads_exponent_form_memory(name: str, tmp_path: Path) -> None:
+    workflow = BUILDERS[name]()
+    resources = NfResources(memory_mb=1e-05)
+    workflow = replace(workflow, processes=[replace(process, resources=resources) for process in workflow.processes])
+    write_nextflow_artifacts(workflow, tmp_path)
+    parsed = parse_nf_file(tmp_path / "workflow.nf")
+    assert {process.memory for process in parsed.processes} == {"0.00001 MB"}
+    _, tools = nextflow_to_cwl(parsed)
+    assert [tool["requirements"]["ResourceRequirement"]["ramMin"] for tool in tools] == [1e-05] * len(tools)
