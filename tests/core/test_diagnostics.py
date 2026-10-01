@@ -16,6 +16,7 @@ raises it with the messages it used to print.
 See design_docs/core-refactor-design.md §3, deliberate exception 1.
 """
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
@@ -306,3 +307,52 @@ def test_every_exported_name_resolves() -> None:
 
     missing = [name for name in lang.__all__ if not hasattr(lang, name)]
     assert not missing, f'exported but not importable: {missing}'
+
+
+@pytest.fixture(name='cli_on_helloworld')
+def _cli_on_helloworld(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., None]:
+    """Run the CLI on the helloworld tutorial from a scratch directory.
+
+    What would reach for a container engine is replaced; compiling, argument handling and the
+    exit code are the CLI's own.
+    """
+    import sophios.main as cli
+    import sophios.post_compile as pc
+    monkeypatch.setattr(pc, 'verify_container_engine_config', lambda *_a, **_k: None)
+    monkeypatch.setattr(pc, 'cwl_docker_extract', lambda *_a, **_k: None)
+    monkeypatch.setattr(pc, 'stage_input_files', lambda *_a, **_k: None)
+    monkeypatch.chdir(tmp_path)
+    workflow = Path(__file__).resolve().parents[2] / 'docs' / 'tutorials' / 'helloworld.wic'
+
+    def run(*flags: str) -> None:
+        monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), *flags])
+        cli.main()
+    return run
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('mode', ['--generate_cwl_workflow', '--generate_run_script'])
+def test_unknown_cli_flags_are_rejected(mode: str, cli_on_helloworld: Callable[..., None],
+                                        capsys: pytest.CaptureFixture[str]) -> None:
+    """A flag Sophios does not know is an error, not a silent gift to the runner."""
+    with pytest.raises(SystemExit) as caught:
+        cli_on_helloworld(mode, '--no_such_flag')
+    assert caught.value.code == 2
+    assert '--no_such_flag' in capsys.readouterr().err
+
+
+@pytest.mark.fast
+def test_passthrough_flags_yes_sends_unrecognised_arguments_to_the_runner(
+        cli_on_helloworld: Callable[..., None]) -> None:
+    cli_on_helloworld('--generate_run_script', '--passthrough_flags', 'yes', '--debug')
+    assert '--debug' in Path('run.sh').read_text(encoding='utf-8').split()
+
+
+@pytest.mark.fast
+def test_passthrough_flags_need_a_command_that_runs_the_runner(cli_on_helloworld: Callable[..., None],
+                                                               capsys: pytest.CaptureFixture[str]) -> None:
+    """`--passthrough_flags yes` sends arguments to the runner; with no runner to send them to, they are an error."""
+    with pytest.raises(SystemExit) as caught:
+        cli_on_helloworld('--generate_cwl_workflow', '--passthrough_flags', 'yes', '--debug')
+    assert caught.value.code == 2
+    assert '--run_local' in capsys.readouterr().err

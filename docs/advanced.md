@@ -84,6 +84,8 @@ Useful flags:
 - `--container_engine podman`: use Podman instead of Docker.
 - `--inference_use_naming_conventions`: refine edge inference with naming rules.
 - `--insert_steps_automatically`: attempt limited automatic insertion when inference fails.
+- `--passthrough_flags yes`: send arguments Sophios does not recognise (for example `--debug`) to the CWL runner,
+  which needs `--run_local` or `--generate_run_script`. Without it an unrecognised argument is an error.
 
 ## Configuration and Discovery
 

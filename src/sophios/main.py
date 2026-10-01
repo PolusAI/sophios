@@ -134,6 +134,12 @@ def main() -> None:
 def _main() -> None:
     """See docs/userguide.md"""
     args, unknown_args = cli.parser.parse_known_args()
+    if unknown_args and args.passthrough_flags != 'yes':
+        cli.parser.error(f'unrecognized arguments: {" ".join(unknown_args)}. '
+                         'Flags for the CWL runner need --passthrough_flags yes')
+    if unknown_args and not (args.run_local or args.generate_run_script):
+        cli.parser.error(f'{" ".join(unknown_args)} would go to the CWL runner, which this command does not run. '
+                         'Add --run_local or --generate_run_script, or remove them')
     plugins.logging_filters()
 
     # `--yaml` is required unless one of the generate modes was asked for.
