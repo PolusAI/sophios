@@ -111,6 +111,7 @@ class PortType:
     `T[]` shorthand expanded, through array items and every union member, so
     `string?[]` is an array of nullable strings and not a nullable array, and
     `[File?, string]` accepts null in either spelling of that member.
+    `stdout` and `stderr` canonicalise to `File`.
     """
 
     declared: OpaqueCwl
@@ -128,6 +129,11 @@ class PortType:
 
 def _canonical(raw: OpaqueCwl) -> OpaqueCwl:
     """Expand `T?` and `T[]` wherever they are written, including inside a member."""
+    if raw in ('stdout', 'stderr'):
+        # A tool's own shorthand for "the captured stream, as a File". Only a
+        # CommandLineTool output may say it; a workflow boundary promoted from
+        # one must say `File`, which is what cwltool makes of it.
+        return 'File'
     if isinstance(raw, str) and raw.endswith('?'):
         return ['null', _canonical(raw[:-1])]
     if isinstance(raw, str) and raw.endswith('[]'):
