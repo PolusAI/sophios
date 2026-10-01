@@ -381,3 +381,25 @@ def test_gathering_a_single_input_scatter_is_rejected_by_name() -> None:
             synthetic_source(workflow, tools[1:], workflow_inputs={"fs": ["/tmp/a"], "g": "/tmp/b"})
         )
 
+
+@pytest.mark.fast
+def test_a_gathered_array_cannot_feed_a_single_input_scatter() -> None:
+    steps = [
+        step("PAIR", **{
+            "in": {"a": "as", "b": "bs", "n": "n"}, "out": ["out"],
+            "scatter": ["a", "b"], "scatterMethod": "dotproduct",
+        }),
+        step("USE", **{"in": {"x": "xs", "y": "y", "files": "PAIR/out"}, "out": ["used"], "scatter": ["x"]}),
+    ]
+    workflow = workflow_doc(
+        steps,
+        inputs={
+            "as": {"type": STRINGS}, "bs": {"type": STRINGS}, "n": {"type": "int"},
+            "xs": {"type": STRINGS}, "y": {"type": "string"},
+        },
+        outputs={"used": {"type": FILES, "outputSource": "USE/used"}},
+    )
+    params = {"as": ["a"], "bs": ["x"], "n": 2, "xs": ["p"], "y": "r"}
+    expected = r"steps\[1\]\.in\.files: a gathered array can feed only a multi-input scatter"
+    with pytest.raises(ValueError, match=expected):
+        compiled_source_to_nextflow(synthetic_source(workflow, [_tools()[0], _use_tool()], workflow_inputs=params))
