@@ -49,6 +49,7 @@ _RUN_ARG_BOOLEAN_FLAGS = {
     "copy_output_files",
     "docker_remove_entrypoints",
     "generate_run_script",
+    "quiet",
 }
 
 
@@ -501,8 +502,14 @@ def compiled_workflow(
 
 
 def _run_args(overrides: dict[str, str] | None) -> dict[str, str]:
-    """The default local-run settings with `overrides` applied."""
-    return {**DEFAULT_RUN_ARGS, **(overrides or {})}
+    """The default local-run settings with `overrides` applied.
+
+    `quiet` is on unless the caller turns it off, and is normalised to the `yes`/`no`
+    that `run_local` reads.
+    """
+    resolved = {**DEFAULT_RUN_ARGS, **(overrides or {})}
+    resolved["quiet"] = "yes" if _enabled(resolved["quiet"]) else "no"
+    return resolved
 
 
 def _enabled(value: Any) -> bool:

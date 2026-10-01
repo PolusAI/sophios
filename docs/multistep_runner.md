@@ -77,6 +77,8 @@ Common Sophios local-run settings include:
 - `cachedir`: override the cache directory used by local execution.
 - `generate_run_script`: use `"yes"` to write `run.sh` for inspection instead
   of invoking the runner.
+- `quiet`: `"yes"` by default, which passes `--quiet` to `cwltool`. Use `"no"` to leave
+  `cwltool` at its normal log level. `toil-cwl-runner` is never given `--quiet`.
 
 ## Run With Toil
 

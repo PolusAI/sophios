@@ -239,6 +239,7 @@ def _main() -> None:
         run_args_dict['cachedir'] = args.cachedir
         run_args_dict['outdir'] = args.outdir
         run_args_dict['generate_run_script'] = 'yes' if args.generate_run_script else 'no'
+        run_args_dict['quiet'] = 'yes' if args.quiet else 'no'
         retval = run_local.run_local(run_args_dict, False,
                                      workflow_name=artifact.name, passthrough_args=unknown_args,
                                      basepath=basepath,

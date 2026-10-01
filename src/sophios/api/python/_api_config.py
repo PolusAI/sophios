@@ -6,4 +6,5 @@ DEFAULT_RUN_ARGS: dict[str, str] = {
     "cwl_runner": "cwltool",
     "container_engine": "docker",
     "pull_dir": str(Path().cwd()),
+    "quiet": "yes",
 }

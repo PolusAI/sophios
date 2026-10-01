@@ -366,3 +366,12 @@ def test_run_local_exits_with_the_runners_exit_code(monkeypatch: pytest.MonkeyPa
     with pytest.raises(SystemExit) as caught:
         cli_on_helloworld('--run_local')
     assert caught.value.code == 3
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('flags', 'quiet'), [([], False), (['--quiet'], True)])
+def test_cli_asks_the_runner_to_be_quiet_only_with_quiet(cli_on_helloworld: Callable[..., None],
+                                                         flags: list[str], quiet: bool) -> None:
+    """Without `--quiet` the runner keeps its own log level, so `--debug` can be heard."""
+    cli_on_helloworld('--generate_run_script', *flags)
+    assert ('--quiet' in Path('run.sh').read_text(encoding='utf-8').split()) is quiet

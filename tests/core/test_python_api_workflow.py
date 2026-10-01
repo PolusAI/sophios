@@ -890,6 +890,85 @@ def test_build_cmd_uses_user_outdir(tmp_path: Path, cwl_runner: str) -> None:
 
 
 @pytest.mark.fast
+def test_build_cmd_is_quiet_unless_told_otherwise(tmp_path: Path) -> None:
+    """`--quiet` is on for callers that say nothing and off when `quiet=False`, so `--debug` can be heard."""
+    base = str(tmp_path / "exec")
+    assert "--quiet" in run_local.build_cmd("wf", base, "cwltool", "docker", passthrough_args=[])
+    assert "--quiet" not in run_local.build_cmd("wf", base, "cwltool", "docker", passthrough_args=[], quiet=False)
+    toil_cmd = run_local.build_cmd("wf", base, "toil-cwl-runner", "docker", passthrough_args=[])
+    assert "--quiet" not in toil_cmd
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("run_args", "expected"), [({}, True), ({"quiet": "yes"}, True), ({"quiet": "no"}, False)])
+def test_run_local_is_quiet_unless_told_otherwise(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    run_args: dict[str, str],
+    expected: bool,
+) -> None:
+    """A caller that leaves `quiet` out of `run_args_dict` gets the `--quiet` it always got."""
+    cmdlines: list[str] = []
+    monkeypatch.setattr(run_local, "generate_run_script", cmdlines.append)
+    run_local.run_local(
+        {"cwl_runner": "cwltool", "container_engine": "docker", "generate_run_script": "yes", **run_args},
+        False, passthrough_args=[], workflow_name="wf", basepath=str(tmp_path))
+    assert ("--quiet" in cmdlines[0].split()) is expected
+
+
+def _api_run_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, run_args: dict[str, Any]) -> list[str]:
+    """The runner command `Workflow.run()` builds for `run_args`, captured instead of executed."""
+    touch = Step(clt_path=_adapter("touch"))
+    touch.inputs.filename = "empty.txt"
+    workflow = Workflow([touch], "quiet_demo")
+    cmdlines: list[str] = []
+    monkeypatch.setattr(python_runtime.pc, "verify_container_engine_config", lambda container, ignore: None)
+    monkeypatch.setattr(python_runtime.pc, "cwl_docker_extract", lambda container, pull_dir, cwl_path: None)
+    monkeypatch.setattr(python_runtime.rl, "generate_run_script", cmdlines.append)
+    workflow.run(basepath=str(tmp_path), run_args_dict={"generate_run_script": "yes", **run_args})
+    return cmdlines[0].split()
+
+
+@pytest.mark.fast
+def test_workflow_run_is_quiet_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The Python API has always run `cwltool` with `--quiet`, and still does unless told otherwise."""
+    assert "--quiet" in _api_run_command(monkeypatch, tmp_path, {})
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    ("quiet", "expected"),
+    [("yes", True), ("true", True), (True, True), ("no", False), ("false", False), (False, False)],
+)
+def test_workflow_run_quiet_run_arg(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    quiet: str | bool,
+    expected: bool,
+) -> None:
+    """`run_args_dict={'quiet': ...}` switches `--quiet` and its value never reaches `cwltool` as a positional."""
+    cmd = _api_run_command(monkeypatch, tmp_path, {"quiet": quiet})
+    assert ("--quiet" in cmd) is expected
+    assert not {"yes", "no", "true", "false", "True", "False"} & set(cmd)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("run_args", "expected"), [({}, True), ({"quiet": "yes"}, True), ({"quiet": "no"}, False)])
+def test_run_cwl_workflow_is_quiet_unless_told_otherwise(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    run_args: dict[str, str],
+    expected: bool,
+) -> None:
+    """The async runner was always quiet, and still is unless `quiet` is `no`."""
+    cmdlines: list[str] = []
+    monkeypatch.setattr(run_local_async, "generate_run_script", cmdlines.append)
+    asyncio.run(run_local_async.run_cwl_workflow(
+        "wf", str(tmp_path), "cwltool", "docker", {}, run_args_dict={"generate_run_script": "yes", **run_args}))
+    assert ("--quiet" in cmdlines[0].split()) is expected
+
+
+@pytest.mark.fast
 def test_run_compute_does_not_apply_local_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """A compute submission carries the workflow and its inputs, and no local environment."""
     submitted: dict[str, Any] = {}

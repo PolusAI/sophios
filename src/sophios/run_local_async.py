@@ -37,6 +37,7 @@ async def run_cwl_workflow(
         container_cmd,
         list(passthrough_args or []),
         run_args.get("outdir") or None,
+        quiet=run_args.get("quiet", "yes") == "yes",
     )
     cmdline = " ".join(cmd)
 

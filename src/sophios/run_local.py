@@ -113,7 +113,8 @@ def _runner_outdir(basepath: str, cwl_runner: str, date_time: str, outdir: str |
 
 
 def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
-              container_cmd: str, passthrough_args: list[str], outdir: str | None = None) -> list[str]:
+              container_cmd: str, passthrough_args: list[str], outdir: str | None = None,
+              quiet: bool = True) -> list[str]:
     """Build the command to run the workflow in an environment
 
     Args:
@@ -121,11 +122,13 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
         basepath (str): The path at which the workflow to be executed
         cwl_runner (str): The CWL runner used to execute the workflow
         container_cmd (str): The container engine command
+        quiet (bool): Pass --quiet to cwltool. Turn it off so --debug and the runner's own log
+        level reach it. toil-cwl-runner is never given --quiet.
     Returns:
         cmd (list[str]): The command to run the workflow
     """
     basepath = str(Path(basepath).absolute().resolve())
-    quiet = ['--quiet']
+    quiet_flags = ['--quiet'] if quiet else []
     # NOTE: By default, cwltool will attempt to download schema files.
     # $schemas:
     #   - https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl
@@ -154,7 +157,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
     # Use cwl-docker-extract to pull images
     container_pull = ['--disable-pull']
     script = 'cwltool_filterlog' if cwl_runner == 'cwltool' else cwl_runner
-    cmd = [script] + container_pull + quiet + provenance + \
+    cmd = [script] + container_pull + quiet_flags + provenance + \
         container_cmd_ + write_summary + skip_schemas + path_check
     if cwl_runner == 'cwltool':
         cmd += ['--move-outputs', '--enable-ext',
@@ -231,7 +234,8 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
     """This function runs the compiled workflow locally.
 
     Args:
-        run_args_dict (dict[str,str]): The command line arguments dict for run_local
+        run_args_dict (dict[str,str]): The command line arguments dict for run_local.
+        Its 'quiet' is 'yes' (the default) or 'no'.
         use_subprocess (bool): When using cwltool, determines whether to use subprocess.run(...)
         or use the cwltool python api.
         basepath (str): The path at which the workflow to be executed
@@ -249,7 +253,8 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
 
     # build the runner command
     cmd = build_cmd(workflow_name, basepath, cwl_runner,
-                    container_engine, passthrough_args, run_args_dict.get('outdir') or None)
+                    container_engine, passthrough_args, run_args_dict.get('outdir') or None,
+                    quiet=run_args_dict.get('quiet', 'yes') == 'yes')
     cmdline = ' '.join(cmd)
     exec_env = create_safe_env(user_env_vars or {})
 
