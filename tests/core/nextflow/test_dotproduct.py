@@ -34,10 +34,8 @@ def _text_port(name: str, glob: str = "out.txt") -> NfPort:
     return NfPort(name, "val", name, NfTemplate((NfLiteral(glob),)), capture="text")
 
 
-def _write_and_sink(
-    process: NfProcess,
-    connections: list[NfConnection],
-    params: dict,
+def _sink(
+    workflow: ExecutableNextflowWorkflow,
     directory: Path,
     *,
     emit_name: str,
@@ -48,7 +46,6 @@ def _write_and_sink(
     channel produced inside the named workflow (design §6, Topology, Gather); this
     only observes, in a file, the order its items actually arrive downstream.
     """
-    workflow = ExecutableNextflowWorkflow("PIPELINE", [process], connections, params)
     write_nextflow_artifacts(workflow, directory)
     script = directory / "workflow.nf"
     text = script.read_text(encoding="utf-8")
@@ -67,6 +64,20 @@ def _write_and_sink(
     # in scope.
     script.write_text(text[:-2] + sink + "}\n", encoding="utf-8")
     return execute_nextflow(directory)
+
+
+def _write_and_sink(
+    process: NfProcess,
+    connections: list[NfConnection],
+    params: dict,
+    directory: Path,
+    *,
+    emit_name: str,
+    sink_name: str = "gathered.txt",
+) -> subprocess.CompletedProcess[str]:
+    """Run one process as ``PIPELINE`` and observe its ``emit_name`` output through ``_sink``."""
+    workflow = ExecutableNextflowWorkflow("PIPELINE", [process], connections, params)
+    return _sink(workflow, directory, emit_name=emit_name, sink_name=sink_name)
 
 
 def _sleep_then_pair(*port_names: str) -> NfCommand:

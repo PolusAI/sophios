@@ -10,12 +10,22 @@ from pathlib import Path
 
 import pytest
 
-from sophios.input_output_nf import write_nextflow_artifacts
-from sophios.nf_types import NfConnection, NfPort, NfProcess, NfWorkflowInputConnection, NfWorkflowOutputConnection
+from sophios.input_output_nf import render_nextflow, write_nextflow_artifacts
+from sophios.nf_types import (
+    NF_NEST_HELPER,
+    ExecutableNextflowWorkflow,
+    NfConnection,
+    NfPort,
+    NfProcess,
+    NfProcessConnection,
+    NfWorkflowInputConnection,
+    NfWorkflowOutputConnection,
+)
+from sophios.utils_nf import compiled_source_to_nextflow
 
-from .test_composition import STRINGS, _tools, _two_gathered_arrays_into_use
-from .test_dotproduct import _sleep_then_pair, _text_port, _write_and_sink
-from .testkit import execute_nextflow, step, synthetic_source, workflow_doc
+from .test_composition import FILES, STRINGS, _tools, _two_gathered_arrays_into_use
+from .test_dotproduct import _sink, _sleep_then_pair, _text_port, _write_and_sink
+from .testkit import command, execute_nextflow, output_port, step, synthetic_source, workflow_doc
 
 
 def _run(names: list[str], params: dict[str, list[str]], directory: Path) -> list[str]:
@@ -63,7 +73,6 @@ def test_a_nested_step_stages_two_gathered_arrays_of_same_named_files(tmp_path: 
 
 @pytest.mark.fast
 def test_a_nested_result_feeding_a_later_step_is_rejected_by_name() -> None:
-    from sophios.utils_nf import compiled_source_to_nextflow  # pylint: disable=import-outside-toplevel
     steps = [
         step("PAIR", **{
             "in": {"a": "as", "b": "bs", "n": "n"}, "out": ["out"],
@@ -82,3 +91,86 @@ def test_a_nested_result_feeding_a_later_step_is_rejected_by_name() -> None:
         compiled_source_to_nextflow(
             synthetic_source(workflow, tools, workflow_inputs={"as": ["a"], "bs": ["b"], "n": 1})
         )
+
+
+def _gathered_into_nested_join(second: str) -> ExecutableNextflowWorkflow:
+    """JOIN nests over PAIR's gathered outputs ``f`` and ``second``: PAIR's again or the ``gs`` input."""
+    steps = [
+        step("PAIR", **{
+            "in": {"a": "as", "b": "bs", "n": "n"}, "out": ["out"],
+            "scatter": ["a", "b"], "scatterMethod": "dotproduct",
+        }),
+        step("JOIN", **{
+            "in": {"f": "PAIR/out", "g": second}, "out": ["out"],
+            "scatter": ["f", "g"], "scatterMethod": "nested_crossproduct",
+        }),
+    ]
+    inputs = {"as": {"type": STRINGS}, "bs": {"type": STRINGS}, "n": {"type": "int"}}
+    params: dict[str, object] = {"as": ["a", "b"], "bs": ["x", "y"], "n": 1}
+    if second == "gs":
+        inputs["gs"] = {"type": FILES}
+        params["gs"] = ["/tmp/g1", "/tmp/g2", "/tmp/g3"]
+    workflow = workflow_doc(
+        steps,
+        inputs=inputs,
+        outputs={"all": {"type": {"type": "array", "items": FILES}, "outputSource": "JOIN/out"}},
+    )
+    tools = [tool for tool in _tools() if tool["id"] != "CONCAT"]
+    return compiled_source_to_nextflow(synthetic_source(workflow, tools, workflow_inputs=params))
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("second", ["PAIR/out", "gs"], ids=["all_gathered", "one_gathered"])
+def test_a_nested_step_over_gathered_arrays_regroups_its_output_by_the_recorded_shape(second: str) -> None:
+    rendered = render_nextflow(_gathered_into_nested_join(second))
+    assert f"def {NF_NEST_HELPER}(List flat, List shape) {{" in rendered
+    assert (
+        "all = JOIN.out.out.toSortedList { it[0] }.map { [it.collect { row -> row[1] }] }"
+        f".combine(ch_JOIN_shape).flatMap {{ flat, shape -> {NF_NEST_HELPER}(flat, shape) }}"
+    ) in rendered
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+@pytest.mark.parametrize(
+    ("second", "expected"),
+    [
+        ("gathered", ["[a-1a-1, a-1b-0]", "[b-0a-1, b-0b-0]"]),
+        ("workflow_input", ["[a-1x, a-1y, a-1z]", "[b-0x, b-0y, b-0z]"]),
+    ],
+)
+def test_a_nested_step_over_gathered_arrays_emits_one_array_per_outer_element(
+    tmp_path: Path, second: str, expected: list[str]
+) -> None:
+    """PAIR's two files, finishing out of order, are rescattered: the first input is the outer dimension."""
+    pair = NfProcess(
+        "PAIR",
+        [NfPort("item", "val"), NfPort("delay", "val")],
+        [output_port("line", "out.txt")],
+        _sleep_then_pair("item", "delay"),
+    )
+    # Renamed on staging: every gathered file is called out.txt.
+    join = NfProcess(
+        "JOIN",
+        [NfPort("f", "path", stage_as="f.txt"), NfPort("g", "path", stage_as="g.txt")],
+        [_text_port("line", "joined.txt")],
+        command("cat", "f.txt", "g.txt", stdout="joined.txt"),
+    )
+    params: dict[str, list[str]] = {"items": ["a", "b"], "delays": ["1", "0"]}
+    g_connection: NfConnection = NfProcessConnection("PAIR", "line", "JOIN", "g", "nested_crossproduct")
+    if second == "workflow_input":
+        for name in "xyz":
+            (tmp_path / f"{name}.txt").write_text(name, encoding="utf-8")
+        params["gs"] = [str(tmp_path / f"{name}.txt") for name in "xyz"]
+        g_connection = NfWorkflowInputConnection("gs", "JOIN", "g", "nested_crossproduct")
+    connections: list[NfConnection] = [
+        NfWorkflowInputConnection("items", "PAIR", "item", "dotproduct"),
+        NfWorkflowInputConnection("delays", "PAIR", "delay", "dotproduct"),
+        NfProcessConnection("PAIR", "line", "JOIN", "f", "nested_crossproduct"),
+        g_connection,
+        NfWorkflowOutputConnection("JOIN", "line", "all"),
+    ]
+    run = tmp_path / "run"
+    result = _sink(ExecutableNextflowWorkflow("PIPELINE", [pair, join], connections, params), run, emit_name="all")
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert (run / "gathered.txt").read_text(encoding="utf-8").split("\x01") == expected

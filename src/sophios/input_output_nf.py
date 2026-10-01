@@ -505,6 +505,16 @@ def _multi_input_sources(
     return [(port.name, *by_port[port.name]) for port in process.inputs if port.name in by_port]
 
 
+def _nested_process_names(workflow: ExecutableNextflowWorkflow) -> set[str]:
+    """Names of the processes whose scattered inputs, workflow inputs or gathered arrays, nest."""
+    return {
+        connection.to_process
+        for connection in workflow.connections
+        if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
+        and connection.adapter == "nested_crossproduct"
+    }
+
+
 def _multi_input_method(workflow: ExecutableNextflowWorkflow, process: NfProcess) -> str:
     """The one multi-input scatter method a process's adapted inputs share."""
     return next(
@@ -632,11 +642,7 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
         and connection.adapter in MULTI_INPUT_ADAPTERS
     }
 
-    nested_process_names = {
-        connection.to_process
-        for connection in workflow.connections
-        if isinstance(connection, NfWorkflowInputConnection) and connection.adapter == "nested_crossproduct"
-    }
+    nested_process_names = _nested_process_names(workflow)
 
     lines.append("    main:")
     for process in _ordered_processes(workflow):
@@ -786,10 +792,7 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
         for token in process.command.tokens
     ) or any(process.condition is not None for process in workflow.processes):
         sections.append(NF_EXPRESSION_FUNCTIONS)
-    if any(
-        isinstance(connection, NfWorkflowInputConnection) and connection.adapter == "nested_crossproduct"
-        for connection in workflow.connections
-    ):
+    if _nested_process_names(workflow):
         sections.append(NF_NEST_FUNCTION)
     sections.extend(
         _render_process(
