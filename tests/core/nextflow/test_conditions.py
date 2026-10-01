@@ -284,6 +284,71 @@ def test_a_null_check_on_an_optional_input_decides_as_cwl_does(
     assert len(_tasks(tmp_path)) == int(runs)
 
 
+def _gated_chain_workflow(
+    ports: tuple[str, ...], *, go: bool, flag: bool,
+) -> ExecutableNextflowWorkflow:
+    """UP runs when ``go``; GATED reads UP's result, the flag, an array and an absent optional."""
+    text_result = {
+        "type": "string",
+        "outputBinding": {"glob": "out.txt", "loadContents": True, "outputEval": "$(self[0].contents)"},
+    }
+    up = tool(
+        "UP", inputs={"go": {"type": "boolean"}}, baseCommand="echo",
+        arguments=[{"position": 1, "valueFrom": "ok"}], stdout="out.txt", outputs={"result": text_result},
+    )
+    declared = {
+        "prev": {"type": "string?"},
+        "flag": {"type": "boolean"},
+        "xs": {"type": {"type": "array", "items": "int"}, "inputBinding": {"position": 1}},
+        "maybe": {"type": "int?"},
+    }
+    gated = tool(
+        "GATED", inputs={name: declared[name] for name in ports}, baseCommand="echo", stdout="out.txt",
+        outputs={"result": text_result},
+    )
+    steps = [
+        step("UP", **{"in": {"go": "go"}, "out": ["result"], "when": "$(inputs.go)"}),
+        step("GATED", **{
+            "in": {"prev": "UP/result", "flag": "flag", "xs": "xs", "maybe": "maybe"},
+            "out": ["result"],
+            "when": "$(inputs.prev !== null && inputs.flag && inputs.maybe === null)",
+        }),
+    ]
+    workflow = workflow_doc(
+        steps,
+        inputs={
+            "go": "boolean", "flag": "boolean", "maybe": "int?",
+            "xs": {"type": {"type": "array", "items": "int"}},
+        },
+        outputs={"result": {"type": "string?", "outputSource": "GATED/result"}},
+    )
+    return compiled_source_to_nextflow(
+        synthetic_source(workflow, [up, gated], workflow_inputs={"go": go, "flag": flag, "xs": [1, 2, 3]})
+    )
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+@pytest.mark.parametrize(("ports", "go", "flag", "outputs"), [
+    pytest.param(("prev", "flag", "xs", "maybe"), True, True, ["1 2 3\n", "ok\n"], id="runs-with-the-queue-first"),
+    pytest.param(("flag", "xs", "maybe", "prev"), True, True, ["1 2 3\n", "ok\n"], id="runs-with-the-queue-last"),
+    pytest.param(("flag", "xs", "maybe", "prev"), False, True, [], id="skips-on-a-skipped-upstream"),
+    pytest.param(("flag", "xs", "maybe", "prev"), True, False, ["ok\n"], id="skips-on-a-false-parameter"),
+])
+def test_a_multi_input_condition_combines_parameters_and_process_outputs(
+    tmp_path: Path, ports: tuple[str, ...], go: bool, flag: bool, outputs: list[str],
+) -> None:
+    """Both polarities of a three-operand when over a process output, a parameter and the [] sentinel.
+
+    The array input and the absent optional's sentinel are list-valued items
+    in the combined tuple; the run case sees the whole array on its command line.
+    """
+    code, log = _run(_gated_chain_workflow(ports, go=go, flag=flag), tmp_path)
+    assert code == 0, log
+    assert len(_tasks(tmp_path)) == len(outputs)
+    assert sorted(path.read_text() for path in (tmp_path / "work").glob("*/*/out.txt")) == outputs
+
+
 @pytest.mark.fast
 def test_a_condition_inside_an_inlined_subworkflow_survives_inlining() -> None:
     # pylint: disable=import-outside-toplevel

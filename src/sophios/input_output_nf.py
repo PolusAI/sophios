@@ -295,8 +295,10 @@ def _rename_refs(node: Expr, mapping: dict[str, str]) -> Expr:
 def _render_conditional_invocation(process: NfProcess, arguments: list[str]) -> list[str]:
     """Lower a conditional process call: branch on the predicate, mix in the sentinel.
 
-    Combines the process's bound input channels into one tuple channel,
-    branches it on the rendered predicate (wrapped so a non-finite
+    Combines the process's bound input channels into one tuple channel by
+    merging them two at a time (the n-ary ``merge`` with a closure is not
+    callable once a later argument is a queue channel, as a process output
+    is), branches it on the rendered predicate (wrapped so a non-finite
     subexpression fails via the finite helper), calls the process with the
     run branch's per-input maps, and mixes each output with the skip branch
     mapped to the ``[]`` sentinel — one element per output per invocation.
@@ -318,12 +320,16 @@ def _render_conditional_invocation(process: NfProcess, arguments: list[str]) -> 
         # a multi-element item across more than one closure parameter.
         in_channel = arguments[0]
     else:
-        tuple_expr = f"tuple({params})"
-        merge_targets = ", ".join(arguments[1:])
         lines.append(
-            f"    {in_channel} = {arguments[0]}.merge({merge_targets}) "
-            f"{{ {params} -> {tuple_expr} }}"
+            f"    {in_channel} = {arguments[0]}.merge({arguments[1]}) "
+            f"{{ {synthetic[0]}, {synthetic[1]} -> tuple({synthetic[0]}, {synthetic[1]}) }}"
         )
+        for index in range(2, len(ports)):
+            carried = ", ".join(f"__merged[{earlier}]" for earlier in range(index))
+            lines.append(
+                f"        .merge({arguments[index]}) "
+                f"{{ __merged, {synthetic[index]} -> tuple({carried}, {synthetic[index]}) }}"
+            )
     rename = dict(zip((port.name for port in ports), synthetic, strict=True))
     condition = _rename_refs(process.condition, rename)
     inputs_map = "[" + ", ".join(f"{name}: {name}" for name in sorted(references(condition))) + "]"
