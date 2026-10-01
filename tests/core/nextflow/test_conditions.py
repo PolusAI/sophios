@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from sophios.input_output_nf import render_nextflow
 from sophios.nf_types import ExecutableNextflowWorkflow
 from sophios.utils_nf import compiled_source_to_nextflow
 
@@ -80,6 +81,20 @@ def test_admitted_when_cells_lower_to_a_process_condition(when: str, inputs: dic
     process = workflow.processes[0]
     assert process.condition is not None
     assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("when", "predicate"), [
+    ("$(inputs.maybe === null)", "(__w0 == null || __w0 == [])"),
+    ("$(inputs.maybe == null)", "(__w0 == null || __w0 == [])"),
+    ("$(null === inputs.maybe)", "(__w0 == null || __w0 == [])"),
+    ("$(inputs.maybe !== null)", "(!(__w0 == null || __w0 == []))"),
+    ("$(inputs.maybe != null)", "(!(__w0 == null || __w0 == []))"),
+])
+def test_a_null_check_renders_as_a_test_for_the_absent_sentinel(when: str, predicate: str) -> None:
+    # An absent optional input reaches the process as the [] sentinel, never as null.
+    workflow = _when_workflow(when, {}, maybe=["null", "int"])
+    assert f"        run: {predicate}\n" in render_nextflow(workflow)
 
 
 @pytest.mark.fast
@@ -202,6 +217,10 @@ def _run(workflow: ExecutableNextflowWorkflow, directory: Path) -> tuple[int, st
     return result.returncode, result.stdout + result.stderr
 
 
+def _tasks(directory: Path) -> list[Path]:
+    return [child for child in (directory / "work").glob("*/*") if child.is_dir()]
+
+
 @pytest.mark.nextflow
 @pytest.mark.serial
 def test_a_true_condition_runs_the_task(tmp_path: Path) -> None:
@@ -209,8 +228,7 @@ def test_a_true_condition_runs_the_task(tmp_path: Path) -> None:
     code, log = _run(workflow, tmp_path)
     assert code == 0, log
     assert (tmp_path / "work").exists()
-    processes = [child for child in (tmp_path / "work").glob("*/*") if child.is_dir()]
-    assert len(processes) == 1
+    assert len(_tasks(tmp_path)) == 1
 
 
 @pytest.mark.nextflow
@@ -219,9 +237,25 @@ def test_a_false_condition_runs_no_task_and_downstream_completes(tmp_path: Path)
     workflow = _when_workflow("$(inputs.a > 0)", {"a": 0}, second_step=True, a="int")
     code, log = _run(workflow, tmp_path)
     assert code == 0, log
-    processes = [child for child in (tmp_path / "work").glob("*/*") if child.is_dir()]
     # A zero exit with exactly one task means CONSUME ran and PRODUCE was skipped.
-    assert len(processes) == 1
+    assert len(_tasks(tmp_path)) == 1
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+@pytest.mark.parametrize(("when", "params", "runs"), [
+    pytest.param("$(inputs.maybe === null)", {}, True, id="absent-equals-null-runs"),
+    pytest.param("$(inputs.maybe !== null)", {}, False, id="absent-not-null-skips"),
+    pytest.param("$(inputs.maybe === null)", {"maybe": 1}, False, id="present-equals-null-skips"),
+    pytest.param("$(inputs.maybe !== null)", {"maybe": 1}, True, id="present-not-null-runs"),
+])
+def test_a_null_check_on_an_optional_input_decides_as_cwl_does(
+    tmp_path: Path, when: str, params: dict[str, Any], runs: bool,
+) -> None:
+    workflow = _when_workflow(when, params, maybe=["null", "int"])
+    code, log = _run(workflow, tmp_path)
+    assert code == 0, log
+    assert len(_tasks(tmp_path)) == int(runs)
 
 
 @pytest.mark.fast

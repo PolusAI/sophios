@@ -381,6 +381,10 @@ carried by the same `[]` sentinel the absent-optional lowering uses, so a
 skipped invocation still emits exactly one element per output and downstream
 channels never hang.
 
+A null check on an optional input, `inputs.x === null` or `inputs.x !== null`,
+tests for that sentinel too: `=== null` is true for an absent input or for a
+skipped upstream step, as in CWL.
+
 That possibly-null value is admitted only where the sentinel is sound: at a
 workflow output (which reports `null`), or at an optional `val` input of a
 later step whose use the absent-optional lowering already admits (never

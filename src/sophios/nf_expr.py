@@ -413,6 +413,12 @@ def render_groovy(node: Expr, *, where: str, inputs: str) -> str:
                 return args[0]
             case "&&" | "||" | "<" | "<=" | ">" | ">=":
                 return f"({args[0]} {child.op} {args[1]})"
+            case "==" | "===" | "!=" | "!==" if any(arg.op == "null" for arg in child.args):
+                # An absent optional value arrives as the reserved [] sentinel
+                # (design §6, Inputs and channels), so a null check tests for it.
+                other = args[1] if child.args[0].op == "null" else args[0]
+                absent = f"({other} == null || {other} == [])"
+                return absent if child.op in {"==", "==="} else f"(!{absent})"
             case "==" | "===":
                 return f"({args[0]} == {args[1]})"
             case "!=" | "!==":
