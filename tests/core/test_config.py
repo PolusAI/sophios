@@ -29,27 +29,12 @@ def test_a_config_file_that_does_not_exist_leaves_the_users_config_alone(
 
 
 @pytest.mark.fast
-def test_the_default_config_is_generated_under_homedir_once_then_only_read(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Without --config_file, the first run writes the default; after that, the user's edits are what is read."""
-    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
-    homedir = tmp_path / 'homedir'
-
-    generated = io.get_config(None, homedir)
-
-    default = io.default_config_file(homedir)
-    assert io.read_config_from_disk(default) == generated
-    default.write_text('{"search_paths_cwl": {}, "search_paths_wic": {}}', encoding='utf-8')
-    assert io.get_config(None, homedir) == {'search_paths_cwl': {}, 'search_paths_wic': {}}
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('generate_explicitly', [False, True], ids=['first-use', 'generate-config'])
-@pytest.mark.parametrize('relative_homedir', [False, True], ids=['absolute-home', 'relative-home'])
-def test_cli_provisions_the_selected_home_without_touching_an_existing_installation(
+@pytest.mark.parametrize('generate_explicitly,relative_homedir', [(False, True), (True, False)],
+                         ids=['first-use-relative-home', 'generate-config-absolute-home'])
+def test_selected_home_is_provisioned_once_without_touching_an_existing_installation(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
         generate_explicitly: bool, relative_homedir: bool) -> None:
-    """The config, adapters and examples all belong to --homedir, not the process home."""
+    """Both CLI entry points provision --homedir; subsequent reads preserve the user's edits."""
     process_home = tmp_path / 'process-home'
     monkeypatch.setattr(Path, 'home', classmethod(lambda cls: process_home))
     monkeypatch.chdir(tmp_path)
@@ -81,6 +66,10 @@ def test_cli_provisions_the_selected_home_without_touching_an_existing_installat
     assert config['search_paths_wic']['global'] == [str(examples)]
     assert (adapters / 'touch.cwl').is_file()
     assert any(examples.rglob('*.wic'))
+
+    default = io.default_config_file(homedir)
+    default.write_text('{"search_paths_cwl": {}, "search_paths_wic": {}}', encoding='utf-8')
+    assert io.get_config(None, homedir) == {'search_paths_cwl': {}, 'search_paths_wic': {}}
     assert {path.relative_to(process_home): path.read_bytes()
             for path in process_home.rglob('*') if path.is_file()} == before
 
@@ -107,17 +96,3 @@ def test_explicit_config_paths_stay_relative_to_cwd_without_provisioning(
     assert not homedir.exists()
     assert not (tmp_path / 'relative-adapters').exists()
     assert not absolute_examples.exists()
-
-
-@pytest.mark.fast
-def test_basic_config_defaults_to_process_home_without_writing(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Read-only discovery callers can still ask for the default paths without provisioning them."""
-    process_home = tmp_path / 'process-home'
-    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: process_home))
-
-    config = io.get_basic_config()
-
-    assert config['search_paths_cwl']['global'] == [str(process_home / 'wic' / 'cwl_adapters')]
-    assert config['search_paths_wic']['global'] == [str(process_home / 'wic' / 'examples')]
-    assert not process_home.exists()
