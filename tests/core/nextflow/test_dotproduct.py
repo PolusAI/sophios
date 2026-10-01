@@ -13,11 +13,10 @@ import pytest
 
 from sophios.input_output_nf import render_nextflow, write_nextflow_artifacts
 from sophios.nf_types import (
-    NfConnection,
-    NfInputReference,
     ExecutableNextflowWorkflow,
     NfCommand,
     NfConnection,
+    NfInputReference,
     NfLiteral,
     NfPort,
     NfProcess,
