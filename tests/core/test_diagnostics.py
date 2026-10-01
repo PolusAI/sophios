@@ -356,3 +356,13 @@ def test_passthrough_flags_need_a_command_that_runs_the_runner(cli_on_helloworld
         cli_on_helloworld('--generate_cwl_workflow', '--passthrough_flags', 'yes', '--debug')
     assert caught.value.code == 2
     assert '--run_local' in capsys.readouterr().err
+
+
+@pytest.mark.fast
+def test_run_local_exits_with_the_runners_exit_code(monkeypatch: pytest.MonkeyPatch,
+                                                    cli_on_helloworld: Callable[..., None]) -> None:
+    import sophios.run_local as rl
+    monkeypatch.setattr(rl, 'run_local', lambda *_a, **_k: 3)
+    with pytest.raises(SystemExit) as caught:
+        cli_on_helloworld('--run_local')
+    assert caught.value.code == 3

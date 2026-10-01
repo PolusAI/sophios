@@ -227,7 +227,7 @@ def _report_outcome(retval: int | None, cmd: list[str], basepath: str) -> None:
 def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
               passthrough_args: list[str], workflow_name: str,
               basepath: str, user_env_vars: dict[str, str] | None = None,
-              output_directories: Mapping[str, str] | None = None) -> int | None:
+              output_directories: Mapping[str, str] | None = None) -> int:
     """This function runs the compiled workflow locally.
 
     Args:
@@ -239,7 +239,7 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
         output_directories (Mapping[str, str] | None): Passed to `copy_output_files`.
 
     Returns:
-        retval (int | None): The return value indicating if run succeeded (0) or not
+        retval (int): 0 on success, else the runner's exit code
     """
     yaml_path = Path(basepath) / workflow_name
     cwl_runner = run_args_dict['cwl_runner']
