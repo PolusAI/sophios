@@ -12,11 +12,13 @@ Compiled, never executed; whether a runner can execute the result belongs to
 the workflow-running lane.
 """
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
 from sophios.python_cwl_adapter import import_python_file
 
@@ -144,3 +146,43 @@ def test_two_in_memory_tools_chain_and_keep_their_output_binding() -> None:
     emitted = compiled.cwl_workflow['outputs']['result']
     assert emitted['type'] == 'string'
     assert emitted['outputSource'] == f"{steps['read_text']['id']}/result"
+
+
+_INPUTS = {'input_dir': '/data/in', 'output_dir': '/data/out', 'model_file': '/data/sam3.pt'}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('script', ['ichnaea_compact', 'ichnaea_integrated'])
+def test_the_ichnaea_scripts_compile_their_hinted_tool(script: str, tmp_path: Path) -> None:
+    """Both scripts build a tool with a GPU hint and a Docker requirement, which
+    cwl_utils renders as lists. `Workflow.compile()` crashed on the list, and the
+    only test ran the tool through `validate()`, which never takes the compile path.
+
+    The script is imported from a copy: `ichnaea_integrated.workflow()` writes
+    `built-ichnaea-autosegmentation.cwl` next to its own file, which would leave
+    an untracked file in `examples/scripts/` after every run."""
+    source = tmp_path / f'{script}.py'
+    shutil.copyfile(REPO_ROOT / 'examples' / 'scripts' / f'{script}.py', source)
+    module = import_python_file(script, source)
+    compiled = module.workflow(dict(_INPUTS), 'autoseg_workflow').compile()
+    run = compiled.cwl_workflow['steps'][0]['run']
+    assert any(entry.get('class') == 'DockerRequirement' for entry in run['requirements'])
+    assert any(entry.get('class') == 'cwltool:CUDARequirement' for entry in run['hints'])
+
+
+@pytest.mark.fast
+def test_the_sam3_handoff_snippet_compiles_with_stdout_and_stderr_outputs() -> None:
+    """docs/tool_builder_sam3.md hands a built tool with `Output.stdout()` to the
+    workflow API. `stdout` and `stderr` are tool-only shorthands that cwltool
+    rejects at the workflow boundary, so each promoted output must be a `File`."""
+    tool = CommandLineTool('echo_tool', Inputs(message=Input(cwl.string, position=1)),
+                           Outputs(out=Output.stdout(), err=Output.stderr())
+                           ).base_command('echo').stdout('stdout.txt').stderr('stderr.txt')
+    step = Step(tool, step_name='say_hello')
+    step.inputs.message = 'hello'
+    compiled = Workflow([step], 'wf').compile().cwl_workflow
+    step_id = compiled['steps'][0]['id']
+    assert compiled['outputs'][f'{step_id}___out']['type'] == 'File'
+    assert compiled['outputs'][f'{step_id}___err']['type'] == 'File'
+    declared = {output['id']: output['type'] for output in compiled['steps'][0]['run']['outputs']}
+    assert declared == {'out': 'stdout', 'err': 'stderr'}, 'the tool keeps its own shorthand'
