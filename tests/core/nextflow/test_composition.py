@@ -87,6 +87,81 @@ def _composed(params: dict[str, Any]) -> Any:
     return compiled_source_to_nextflow(synthetic_source(workflow, _tools(), workflow_inputs=params))
 
 
+def _use_tool(file_ports: tuple[str, ...] = ("files",)) -> dict[str, Any]:
+    arrays = {
+        name: {"type": FILES, "inputBinding": {"position": position}}
+        for position, name in enumerate(file_ports, 1)
+    }
+    return tool(
+        "USE",
+        inputs={"x": {"type": "string"}, "y": {"type": "string"}, **arrays},
+        baseCommand="cat",
+        stdout="used.txt",
+        outputs={"used": {"type": "File", "outputBinding": {"glob": "used.txt"}}},
+    )
+
+
+def _pair_then_use(method: str, params: dict[str, Any]) -> ExecutableNextflowWorkflow:
+    """PAIR's gathered outputs feed the unscattered ``files`` port of the scattered USE."""
+    steps = [
+        step("PAIR", **{
+            "in": {"a": "as", "b": "bs", "n": "n"}, "out": ["out"],
+            "scatter": ["a", "b"], "scatterMethod": "dotproduct",
+        }),
+        step("USE", **{
+            "in": {"x": "xs", "y": "ys", "files": "PAIR/out"}, "out": ["used"],
+            "scatter": ["x", "y"], "scatterMethod": method,
+        }),
+    ]
+    workflow = workflow_doc(
+        steps,
+        inputs={
+            "as": {"type": STRINGS}, "bs": {"type": STRINGS}, "n": {"type": "int"},
+            "xs": {"type": STRINGS}, "ys": {"type": STRINGS},
+        },
+        outputs={"used": {"type": FILES, "outputSource": "USE/used"}},
+    )
+    return compiled_source_to_nextflow(synthetic_source(workflow, [_tools()[0], _use_tool()], workflow_inputs=params))
+
+
+_PAIR_THEN_USE_PARAMS = {"as": ["a", "b", "c"], "bs": ["x", "y", "z"], "n": 2, "xs": ["p", "q"], "ys": ["r", "s"]}
+
+
+def _two_gathered_arrays_into_use(second: str) -> ExecutableNextflowWorkflow:
+    """USE scatters x and y and takes two gathered File arrays of out.txt files.
+
+    ``files`` gathers PAIR; ``more`` gathers ``second``, which is PAIR again or
+    PAIR2, a second producer of out.txt over the swapped inputs.
+    """
+    pair = _tools()[0]
+    tools = [pair]
+    producers = [("PAIR", "as", "bs")]
+    if second == "PAIR2":
+        tools.append({**pair, "id": "PAIR2"})
+        producers.append(("PAIR2", "bs", "as"))
+    tools.append(_use_tool(("files", "more")))
+    steps = [
+        step(name, **{
+            "in": {"a": a, "b": b, "n": "n"}, "out": ["out"],
+            "scatter": ["a", "b"], "scatterMethod": "dotproduct",
+        })
+        for name, a, b in producers
+    ]
+    steps.append(step("USE", **{
+        "in": {"x": "xs", "y": "ys", "files": "PAIR/out", "more": f"{second}/out"}, "out": ["used"],
+        "scatter": ["x", "y"], "scatterMethod": "dotproduct",
+    }))
+    workflow = workflow_doc(
+        steps,
+        inputs={
+            "as": {"type": STRINGS}, "bs": {"type": STRINGS}, "n": {"type": "int"},
+            "xs": {"type": STRINGS}, "ys": {"type": STRINGS},
+        },
+        outputs={"used": {"type": FILES, "outputSource": "USE/used"}},
+    )
+    return compiled_source_to_nextflow(synthetic_source(workflow, tools, workflow_inputs=_PAIR_THEN_USE_PARAMS))
+
+
 @pytest.mark.nextflow
 @pytest.mark.serial
 def test_gathered_scatter_rescatters_and_gathers_again_in_order(tmp_path: Path) -> None:
@@ -103,6 +178,86 @@ def test_gathered_scatter_rescatters_and_gathers_again_in_order(tmp_path: Path) 
     assert result.returncode == 0, result.stdout + result.stderr
     [combined] = list((run / "work").glob("*/*/all.txt"))
     assert combined.read_text(encoding="utf-8") == "a x 20\n1\nb y 20\n2\nc z 20\n3\n"
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("method", ["dotproduct", "flat_crossproduct"])
+def test_a_gathered_array_on_a_scattered_steps_unscattered_port_stages_in_numbered_directories(method: str) -> None:
+    rendered = render_nextflow(_pair_then_use(method, _PAIR_THEN_USE_PARAMS))
+    assert (
+        "tuple val(__sophios_scatter_index_9f72e), val(x), val(y)\n    path files, stageAs: 'gather_files_*/*'\n"
+    ) in rendered
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+@pytest.mark.parametrize(("method", "tasks"), [("dotproduct", 2), ("flat_crossproduct", 4)])
+def test_every_task_of_a_scattered_step_stages_all_the_same_named_gathered_files(
+    tmp_path: Path, method: str, tasks: int
+) -> None:
+    run = tmp_path / "run"
+    write_nextflow_artifacts(_pair_then_use(method, _PAIR_THEN_USE_PARAMS), run)
+    result = execute_nextflow(run)
+    assert result.returncode == 0, result.stdout + result.stderr
+    used = list((run / "work").glob("*/*/used.txt"))
+    assert len(used) == tasks
+    assert {path.read_text(encoding="utf-8") for path in used} == {"a x 20\nb y 20\nc z 20\n"}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("second", ["PAIR", "PAIR2"])
+def test_two_gathered_arrays_on_a_scattered_step_stage_under_separate_prefixes(second: str) -> None:
+    rendered = render_nextflow(_two_gathered_arrays_into_use(second))
+    assert "    path files, stageAs: 'gather_files_*/*'\n    path more, stageAs: 'gather_more_*/*'\n" in rendered
+
+
+@pytest.mark.fast
+def test_two_gathered_arrays_on_an_unscattered_step_stage_under_separate_prefixes() -> None:
+    pair = NfProcess(
+        "PAIR",
+        [NfPort("a", "val"), NfPort("b", "val")],
+        [output_port("f", "out.txt"), output_port("h", "h.txt")],
+        command("true"),
+    )
+    following = NfProcess(
+        "NEXT",
+        [NfPort("x", "path", is_array=True), NfPort("y", "path", is_array=True)],
+        [output_port("g", "g.txt")],
+        command("true"),
+    )
+    workflow = ExecutableNextflowWorkflow(
+        "wf",
+        [pair, following],
+        [
+            NfWorkflowInputConnection("avals", "PAIR", "a", "dotproduct"),
+            NfWorkflowInputConnection("bvals", "PAIR", "b", "dotproduct"),
+            NfProcessConnection("PAIR", "f", "NEXT", "x", "gather"),
+            NfProcessConnection("PAIR", "h", "NEXT", "y", "gather"),
+            NfWorkflowOutputConnection("NEXT", "g", "result"),
+        ],
+        {"avals": ["x"], "bvals": ["y"]},
+    )
+    rendered = render_nextflow(workflow)
+    assert "    path x, stageAs: 'gather_x_*/*'\n    path y, stageAs: 'gather_y_*/*'\n" in rendered
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+@pytest.mark.parametrize(
+    ("second", "more"),
+    [("PAIR", "a x 20\nb y 20\nc z 20\n"), ("PAIR2", "x a 20\ny b 20\nz c 20\n")],
+    ids=["same_producer", "second_producer"],
+)
+def test_a_scattered_step_stages_two_gathered_arrays_of_same_named_files(
+    tmp_path: Path, second: str, more: str
+) -> None:
+    run = tmp_path / "run"
+    write_nextflow_artifacts(_two_gathered_arrays_into_use(second), run)
+    result = execute_nextflow(run)
+    assert result.returncode == 0, result.stdout + result.stderr
+    used = list((run / "work").glob("*/*/used.txt"))
+    assert len(used) == 2
+    assert {path.read_text(encoding="utf-8") for path in used} == {"a x 20\nb y 20\nc z 20\n" + more}
 
 
 @pytest.mark.nextflow
@@ -206,7 +361,7 @@ def test_one_output_of_a_scattered_step_gathers_into_a_step_while_another_reache
     rendered = render_nextflow(workflow)
     assert "NEXT(PAIR.out.h.toSortedList { it[0] }.map { it.collect { row -> row[1] } })" in rendered
     assert "pairs = PAIR.out.f.toSortedList { it[0] }.flatMap { it.collect { row -> row[1] } }" in rendered
-    assert "path x, stageAs: 'gather*/*'" in rendered
+    assert "path x, stageAs: 'gather_x_*/*'" in rendered
 
 
 @pytest.mark.fast
@@ -225,3 +380,4 @@ def test_gathering_a_single_input_scatter_is_rejected_by_name() -> None:
         compiled_source_to_nextflow(
             synthetic_source(workflow, tools[1:], workflow_inputs={"fs": ["/tmp/a"], "g": "/tmp/b"})
         )
+

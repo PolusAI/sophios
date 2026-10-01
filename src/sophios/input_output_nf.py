@@ -262,6 +262,16 @@ def _process_input(port: NfPort, *, tuple_element: bool = False) -> str:
     return f"{port.qualifier} {port.name}"
 
 
+def _unscattered_input(port: NfPort, gathered_ports: frozenset[str]) -> str:
+    # A gathered File array holds one file per invocation, usually all with the
+    # same basename; each is staged in its own numbered directory, as cwltool
+    # does, so the names cannot collide. Nextflow numbers the directories per
+    # port, so the port name in the pattern keeps two gathered ports apart.
+    if port.name in gathered_ports and port.qualifier == "path":
+        return f"{port.qualifier} {port.name}, stageAs: {_groovy_literal(f'gather_{port.name}_*/*')}"
+    return _process_input(port)
+
+
 def _render_process(
     process: NfProcess, multi_input_ports: tuple[str, ...] = (), gathered_ports: frozenset[str] = frozenset()
 ) -> str:
@@ -283,17 +293,9 @@ def _render_process(
                 + [_process_input(port, tuple_element=True) for port in scattered]
             )
             lines.append(f"    tuple {tuple_elements}")
-            lines.extend(f"    {_process_input(port)}" for port in other)
+            lines.extend(f"    {_unscattered_input(port, gathered_ports)}" for port in other)
         else:
-            # A gathered File array holds one file per invocation, usually all
-            # with the same basename; each is staged in its own numbered
-            # directory, as cwltool does, so the names cannot collide.
-            lines.extend(
-                f"    {port.qualifier} {port.name}, stageAs: 'gather*/*'"
-                if port.name in gathered_ports and port.qualifier == "path"
-                else f"    {_process_input(port)}"
-                for port in process.inputs
-            )
+            lines.extend(f"    {_unscattered_input(port, gathered_ports)}" for port in process.inputs)
     if process.outputs:
         lines.extend(["", "    output:"])
         if multi_input_ports:
