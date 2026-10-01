@@ -121,7 +121,7 @@ def test_every_reference_the_graph_holds_names_a_port_that_exists(document: Docu
     if result.graph is None:
         return
     known = {p.id for s in result.graph.steps for p in s.inputs + s.outputs}
-    for where, port_id in result.graph._references():  # pylint: disable=protected-access
+    for where, _name, port_id in result.graph._references():  # pylint: disable=protected-access
         assert port_id in known, f'{where} names {port_id}'
 
 
@@ -378,6 +378,55 @@ def test_a_malformed_graph_cannot_be_constructed(build: Any) -> None:
     """
     with pytest.raises(ValueError):
         build()
+
+
+_GHOST = PortId(StepId(Namespace(), 1, 'ghost'), Direction.INPUT, AuthoredName('p'))
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('build', 'where'), [
+    (lambda: WorkflowGraph(Namespace(), explicit_edge_defs=(('e', _GHOST),)), "mapping 'e'"),
+    (lambda: WorkflowGraph(Namespace(), explicit_edge_calls=(('e', _GHOST),)), "mapping 'e'"),
+    (lambda: WorkflowGraph(Namespace(), output_mapping=((AuthoredName('o'), _GHOST),)), 'an output mapping'),
+    (lambda: WorkflowGraph(Namespace(), input_mapping=((AuthoredName('i'), (_GHOST,)),)), "input mapping 'i'"),
+], ids=['edge defs', 'edge calls', 'output mapping', 'input mapping'])
+def test_a_reference_to_a_port_no_step_declares_is_reported_where_it_is_held(
+        build: Any, where: str) -> None:
+    """The report says which mapping holds the reference and, for the ones keyed
+    by a name, under what name."""
+    with pytest.raises(ValueError) as caught:
+        build()
+    assert str(caught.value) == f'{where} names a port no step declares: {_GHOST}'
+
+
+class _Spelling(str):
+    """A name that notes when it is written out."""
+
+    spelled = False
+
+    def __repr__(self) -> str:
+        self.spelled = True
+        return super().__repr__()
+
+
+@pytest.mark.fast
+def test_a_reference_is_not_spelled_unless_it_is_reported() -> None:
+    """A derived name written out prints every step id it was exposed through,
+    which is the cost that made nesting exponential, so the name a reference is
+    held under is written for the report and not for every graph."""
+    step = StepId(Namespace(), 1, 'step')
+    source = PortId(step, Direction.OUTPUT, AuthoredName('o'))
+    sink = PortId(step, Direction.INPUT, AuthoredName('i'))
+    name = _Spelling('e')
+
+    WorkflowGraph(
+        Namespace(),
+        steps=(StepNode(step, inputs=(Port(sink, PortType(None)),), outputs=(Port(source, PortType(None)),)),),
+        explicit_edge_defs=((name, source),),
+        explicit_edge_calls=((name, sink),),
+        input_mapping=((AuthoredName(name), (sink,)),))
+
+    assert not name.spelled
 
 
 @pytest.mark.fast

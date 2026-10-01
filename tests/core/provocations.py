@@ -155,7 +155,8 @@ def _provoke_literal_type_mismatch() -> None:
     # is not of that type.
     from sophios.ir.complete import coerce_job_value  # pylint: disable=import-outside-toplevel
     from sophios.ir.declarations import port_declaration  # pylint: disable=import-outside-toplevel
-    coerce_job_value('n', port_declaration({'type': 'int'}), '_')
+    from sophios.ir.types import AuthoredName  # pylint: disable=import-outside-toplevel
+    coerce_job_value(AuthoredName('n'), port_declaration({'type': 'int'}), '_')
 
 
 COMPILED.update({

@@ -28,6 +28,7 @@ import pytest
 from sophios import post_compile
 from sophios.ir.complete import coerce_job_value
 from sophios.ir.declarations import port_declaration
+from sophios.ir.types import AuthoredName
 from sophios.lang import InlineLiteral, parse
 from sophios.lang.diagnostics import Diagnostic, Severity, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
@@ -109,7 +110,7 @@ def test_literal_type_mismatch_reports() -> None:
     offending literal, since the user's next move is to fix one of them.
     """
     with pytest.raises(SophiosError) as caught:
-        coerce_job_value('n', port_declaration({'type': 'int'}), '_')
+        coerce_job_value(AuthoredName('n'), port_declaration({'type': 'int'}), '_')
 
     assert caught.value.diagnostics[0].code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
     message = caught.value.diagnostics[0].message
@@ -131,7 +132,7 @@ def test_literal_type_mismatch_reports_a_null_array_element() -> None:
     """
     with pytest.raises(SophiosError) as caught:
         coerce_job_value(
-            'xs', port_declaration({'type': {'type': 'array', 'items': 'int'}}),
+            AuthoredName('xs'), port_declaration({'type': {'type': 'array', 'items': 'int'}}),
             [1, None])
 
     assert len(caught.value.diagnostics) == 1

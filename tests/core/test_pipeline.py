@@ -20,7 +20,7 @@ from sophios.ir.complete import coerce_job_value, complete
 from sophios.ir.declarations import port_declaration
 from sophios.ir.emit import emit, surface
 from sophios.ir.names import Names
-from sophios.ir.types import WorkflowGraph
+from sophios.ir.types import AuthoredName, WorkflowGraph
 from sophios.ir.infer import infer
 from sophios.ir.link import link
 from sophios.ir.pipeline import front_end
@@ -103,8 +103,9 @@ def test_a_job_value_is_its_own_normal_form(raw: Any, fmt: Yaml, value: Any) -> 
     """Coercing a coerced job value changes nothing, which is what lets a
     child's job value be lifted a level and coerced against the outer port."""
     declaration = port_declaration({'type': raw, **fmt})
+    name = AuthoredName('x')
     try:
-        once = coerce_job_value('x', declaration, value)
+        once = coerce_job_value(name, declaration, value)
     except SophiosError:
         return
-    assert coerce_job_value('x', declaration, once) == once
+    assert coerce_job_value(name, declaration, once) == once

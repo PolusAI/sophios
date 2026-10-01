@@ -95,7 +95,7 @@ def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
             declaration = feeding_declaration(step, sink)
             _put(workflow_inputs, WorkflowPort(outer_name, declaration))
             _put(job_bindings, JobBinding(outer_name, coerce_job_value(
-                str(boundary.name), declaration, child_jobs[boundary.name])))
+                boundary.name, declaration, child_jobs[boundary.name])))
             _put_input_mapping(input_mapping, outer_name, sink.id)
             if outer_name not in shorthand_relays:
                 shorthand_relays.append(outer_name)
@@ -128,7 +128,7 @@ def _materialize_bindings(graph: WorkflowGraph) -> WorkflowGraph:
                     declaration = feeding_declaration(step, port)
                     _put(workflow_inputs, WorkflowPort(name, declaration))
                     _put(job_bindings, JobBinding(
-                        name, coerce_job_value(str(port.id.port), declaration, value)))
+                        name, coerce_job_value(port.id.port, declaration, value)))
                     _put_input_mapping(input_mapping, name, port.id)
                 case UnresolvedName(name=text):
                     authored = AuthoredName(text)
@@ -279,7 +279,7 @@ def _as_text(value: Any) -> Any:
     return '\n'.join(value) if isinstance(value, list) else value
 
 
-def coerce_job_value(name: str, declaration: PortDeclaration, value: Any) -> Any:
+def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Any) -> Any:
     """`value` in the one plain-JSON form a job document holds for `declaration`.
 
     A projection: a value already in that form (a lifted child job value, an
@@ -287,6 +287,11 @@ def coerce_job_value(name: str, declaration: PortDeclaration, value: Any) -> Any
     a scalar in a list and keeps a list. A scalar literal must already have the
     declared type: an int is also a float, and a scalar is also a `string`'s
     text, but nothing else is converted.
+
+    `name` is the input the value is for. It is spelled only if the value does
+    not convert and a message must name it: a derived name's text prints every
+    step id it was exposed through, so spelling it for every value is the cost
+    that made nesting exponential.
     """
     value = _plain(value)
     if value is None:
@@ -299,7 +304,7 @@ def coerce_job_value(name: str, declaration: PortDeclaration, value: Any) -> Any
                         declaration.format if declaration.has_format else None)
 
 
-def _coerce_type(name: str, raw: Any, value: Any, fmt: Any) -> Any:
+def _coerce_type(name: PortName, raw: Any, value: Any, fmt: Any) -> Any:
     if isinstance(raw, list):
         non_null = [item for item in raw if item != 'null']
         arrays = [item for item in non_null if isinstance(item, dict)
@@ -322,7 +327,7 @@ def _plain(value: Any) -> Any:
     return value
 
 
-def _coerce_scalar(name: str, raw: Any, value: Any, fmt: Any) -> Any:
+def _coerce_scalar(name: PortName, raw: Any, value: Any, fmt: Any) -> Any:
     if raw in ('File', 'Directory'):
         if isinstance(value, str):
             value = {'class': raw, 'location': value}
@@ -347,7 +352,7 @@ def _coerce_scalar(name: str, raw: Any, value: Any, fmt: Any) -> Any:
     return deepcopy(value)
 
 
-def _coerce_string(name: str, value: Any) -> str:
+def _coerce_string(name: PortName, value: Any) -> str:
     """The text of a scalar literal, or of a mapping or list as JSON.
 
     The one conversion kept besides an int into a float: `!ii 20` cannot be
@@ -366,7 +371,7 @@ def _coerce_string(name: str, value: Any) -> str:
     raise _mismatch(name, 'string', value)
 
 
-def _coerce_float(name: str, raw: Any, value: Any) -> float:
+def _coerce_float(name: PortName, raw: Any, value: Any) -> float:
     """A float as it is, or an int the float holds exactly."""
     if isinstance(value, float):
         return float(value)
@@ -392,10 +397,10 @@ _PYTHON_TYPE: Final = {'int': int, 'long': int, 'float': float, 'double': float,
                        'boolean': bool, 'string': str}
 
 
-def _mismatch(name: str, raw: Any, value: Any) -> SophiosError:
+def _mismatch(name: PortName, raw: Any, value: Any) -> SophiosError:
     return SophiosError.error(
         SophiosErrorCode.LITERAL_TYPE_MISMATCH,
-        f'Input {name!r} is declared type {raw!r} but its literal {value!r} {_what_is_wrong(raw, value)}')
+        f'Input {str(name)!r} is declared type {raw!r} but its literal {value!r} {_what_is_wrong(raw, value)}')
 
 
 def _what_is_wrong(raw: Any, value: Any) -> str:

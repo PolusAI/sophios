@@ -466,15 +466,19 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
 
         known = {port.id for step in self.steps for port in step.inputs + step.outputs}
         recursive_known = self.port_ids
-        recursive_wheres = {'an edge source', 'an output mapping'}
-        for where, port_id in self._references():
+        recursive_wheres = {'an edge source', 'an output mapping', 'input mapping'}
+        for where, name, port_id in self._references():
             # An input mapping may legitimately relay a boundary name to a
             # sink several levels below it, outside this graph's own steps,
             # the same way an output mapping already may.
-            recursive = where in recursive_wheres or where.startswith('input mapping ')
-            allowed = recursive_known if recursive else known
+            allowed = recursive_known if where in recursive_wheres else known
             if port_id not in allowed:
-                raise ValueError(f'{where} names a port no step declares: {port_id}')
+                # Spelled only on failure: a derived name's repr prints every
+                # step id it was exposed through, and each of those prints its
+                # own namespace, so writing it out for every reference is the
+                # cost that made nesting exponential.
+                label = where if name is None else f'{where} {name!r}'
+                raise ValueError(f'{label} names a port no step declares: {port_id}')
         for edge in self.linked_edges:
             if edge.source not in recursive_known or edge.sink not in recursive_known:
                 raise ValueError(f'a linked edge names a port outside this graph tree: {edge}')
@@ -485,22 +489,23 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
         if len(recursive_steps) != len(set(recursive_steps)):
             raise ValueError('step identities must be injective across a composed graph')
 
-    def _references(self) -> tuple[tuple[str, PortId], ...]:
-        """Every port identity this graph holds, with where it came from."""
-        found: list[tuple[str, PortId]] = []
+    def _references(self) -> tuple[tuple[str, str | PortName | None, PortId], ...]:
+        """Every port identity this graph holds, with where it came from and
+        the name it is held under there, when it is held under one."""
+        found: list[tuple[str, str | PortName | None, PortId]] = []
         for step in self.steps:
             for binding in step.bindings:
-                found.append(('a binding', binding.sink))
+                found.append(('a binding', None, binding.sink))
                 if isinstance(binding.resolution, Edge):
-                    found.append(('an edge source', binding.resolution.source))
+                    found.append(('an edge source', None, binding.resolution.source))
                 elif isinstance(binding.resolution, DeferredObligation):
-                    found.append(('an obligation', binding.resolution.sink))
+                    found.append(('an obligation', None, binding.resolution.sink))
         for name, port_id in (*self.explicit_edge_defs, *self.explicit_edge_calls):
-            found.append((f'mapping {name!r}', port_id))
+            found.append(('mapping', name, port_id))
         for _name, port_id in self.output_mapping:
-            found.append(('an output mapping', port_id))
+            found.append(('an output mapping', None, port_id))
         for boundary, port_ids in self.input_mapping:
-            found.extend((f'input mapping {boundary!r}', port_id) for port_id in port_ids)
+            found.extend(('input mapping', boundary, port_id) for port_id in port_ids)
         return tuple(found)
 
     @property
