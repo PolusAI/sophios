@@ -27,6 +27,7 @@ from sophios.nf_reader import (
 )
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
+    NfArrayBinding,
     NfBasenameReference,
     NfCommand,
     NfInputReference,
@@ -490,6 +491,40 @@ def test_an_arity_option_on_an_input_port_is_not_recognized() -> None:
 
     with pytest.raises(ValueError, match="MAKE supplies 1 inputs; the process declares 0"):
         parse_nf_text(source)
+
+
+def _array_of_paths_workflow() -> ExecutableNextflowWorkflow:
+    process = NfProcess(
+        "CAT",
+        [NfPort("sources", "path", is_array=True)],
+        [NfPort("result", "path", "result", NfTemplate((NfLiteral("out.txt"),)))],
+        NfCommand(
+            (NfTemplate((NfLiteral("cat"),)), NfArrayBinding("sources")),
+            stdout=NfTemplate((NfLiteral("out.txt"),)),
+        ),
+    )
+    return ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [process],
+        [
+            NfWorkflowInputConnection("sources", "CAT", "sources"),
+            NfWorkflowOutputConnection("CAT", "result", "result"),
+        ],
+        {"sources": ["a.txt"]},
+    )
+
+
+@pytest.mark.fast
+def test_array_of_paths_artifacts_parse_and_promote(tmp_path: Path) -> None:
+    """The arity declared on an array-typed path input must round-trip or promotion stops."""
+    expected = _array_of_paths_workflow()
+    write_nextflow_artifacts(expected, tmp_path)
+
+    parsed = parse_nf_file(tmp_path / "workflow.nf")
+
+    assert parsed.opaque_regions == ()
+    assert [(port.name, port.qualifier) for port in parsed.processes[0].inputs] == [("sources", "path")]
+    assert promote_nextflow_document(parsed) == expected
 
 
 def _text_capture_workflow() -> ExecutableNextflowWorkflow:

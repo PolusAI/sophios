@@ -144,11 +144,13 @@ inputs:
 An array input of `File`, `Directory`, `string`, `int`, `float`, or `boolean`
 items is supported. It carries the same qualifier its item type would carry
 alone (`path` for File/Directory, `val` for scalars); a `path` array stages
-every element for one process call rather than fanning the channel out. The
-one supported command-line binding shape (no `itemSeparator`) contributes its
-optional prefix once, followed by each element as its own argument, and
-contributes nothing at all when the array is empty. An empty array is a
-present, valid value — distinct from an absent optional value above.
+every element for one process call rather than fanning the channel out, and
+renders as `path <name>, arity: '0..*'` so the process always receives a list,
+whether the array holds no file, one, or many. The one supported command-line
+binding shape (no `itemSeparator`) contributes its optional prefix once,
+followed by each element as its own argument, and contributes nothing at all
+when the array is empty. An empty array is a present, valid value — distinct
+from an absent optional value above.
 
 `itemSeparator`, `separate: false`, and `valueFrom` on an array binding are
 not supported, nor are the shorthand `File[]` type form, nested arrays, a
@@ -270,7 +272,8 @@ Every scatter, single-input included, carries an invocation index, so its
 outputs keep input order at a workflow output and can also feed later steps.
 Into an unscattered array-typed input they are gathered once, as one array in
 invocation order; each gathered file is staged in its own numbered directory,
-so same-named files never collide. A gathered array may itself be a scatter
+so same-named files never collide, and the input receives a list even when a
+single file was gathered. A gathered array may itself be a scatter
 source. A scattered step may carry a `when`, evaluated per invocation; the
 gathered result keeps `null` at each skipped position, so a conditional
 scatter's outputs can only reach a workflow output. A scattered step's

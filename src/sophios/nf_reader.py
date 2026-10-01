@@ -26,6 +26,7 @@ from .nf_types import (
 from .nf_expr import NF_EXPRESSION_FUNCTIONS
 from .nf_types import NF_LOAD_CONTENTS_HELPER
 from .input_output_nf import (
+    NF_ARRAY_PATH_ARITY,
     NF_LOAD_CONTENTS_FUNCTION,
     NF_NEST_FUNCTION,
     NF_SHELL_QUOTE_FUNCTION,
@@ -47,6 +48,10 @@ _PORT = re.compile(
     r"(?:,\s*glob:\s*false)?"
     r"(?:,\s*arity:\s*'(?P<arity>1)')?"
     r"(?:,\s*emit:\s*(?P<emit>\S+))?$"
+)
+# The one generated input option: an array-typed path input declares its arity.
+_ARRAY_PATH_INPUT = re.compile(
+    rf"^path\s+(?P<target>[^\s,]+),\s*arity:\s*'{re.escape(NF_ARRAY_PATH_ARITY)}'$"
 )
 # The one generated val-output form: file-text capture over the emitted helper.
 _TEXT_CAPTURE_OUTPUT = re.compile(
@@ -219,6 +224,9 @@ def _parse_process(name: str, body: list[str]) -> tuple[NextflowProcess, tuple[s
             script.append(raw_line[4:] if raw_line.startswith("    ") else raw_line)
             continue
         if section == "input":
+            if array_path := _ARRAY_PATH_INPUT.match(stripped):
+                inputs.append(NextflowPort(array_path["target"], "path"))
+                continue
             match = _PORT.match(stripped)
             if match is None or match["emit"] is not None or match["arity"] is not None:
                 unparsed.append(stripped)

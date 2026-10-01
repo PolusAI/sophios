@@ -24,9 +24,9 @@ from sophios.nf_types import (
     NfWorkflowOutputConnection,
 )
 
-from .test_composition import _composed
+from .test_composition import _PAIR_THEN_USE_PARAMS, _composed, _pair_then_use
 from .test_conditions import _when_workflow
-from .test_dotproduct import _sleep_then_pair, _text_port
+from .test_dotproduct import _scatter_with_file_array, _sleep_then_pair, _text_port
 from .test_safe_subset import ARGUMENTS, _calc_workflow
 
 
@@ -57,6 +57,8 @@ BUILDERS: dict[str, Callable[[], ExecutableNextflowWorkflow]] = {
     "nested_crossproduct": lambda: _scattered("nested_crossproduct"),
     "per-invocation when": lambda: _scattered("dotproduct", condition="$(inputs.tag !== '1')"),
     "gather and rescatter": lambda: _composed({"as": ["a"], "bs": ["b"], "n": 1, "gs": ["/tmp/g.txt"]}),
+    "gather into a scattered step's array of paths": lambda: _pair_then_use("dotproduct", _PAIR_THEN_USE_PARAMS),
+    "array of paths beside a scatter": lambda: _scatter_with_file_array("flat_crossproduct", ["/tmp/s.txt"]),
 }
 
 

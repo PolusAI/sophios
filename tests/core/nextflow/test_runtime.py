@@ -696,12 +696,22 @@ def test_array_binding_renders_each_element_or_nothing_when_empty(
 
 @pytest.mark.nextflow
 @pytest.mark.serial
-def test_array_of_files_stages_every_element_for_one_process_call(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("contents", "expected"),
+    [(["alpha\n"], "alpha\n"), (["alpha\n", "beta\n"], "alpha\nbeta\n")],
+    ids=["one-element", "many-elements"],
+)
+def test_array_of_files_stages_every_element_for_one_process_call(
+    contents: list[str],
+    expected: str,
+    tmp_path: Path,
+) -> None:
     """R2.7: an array of File values stages every element for a single process invocation."""
-    source_a = tmp_path / "a.txt"
-    source_b = tmp_path / "b.txt"
-    source_a.write_text("alpha\n", encoding="utf-8")
-    source_b.write_text("beta\n", encoding="utf-8")
+    sources = []
+    for index, text in enumerate(contents):
+        source = tmp_path / f"source_{index}.txt"
+        source.write_text(text, encoding="utf-8")
+        sources.append(str(source))
     process = NfProcess(
         "CAT_FILES",
         [NfPort("sources", "path", is_array=True)],
@@ -711,15 +721,59 @@ def test_array_of_files_stages_every_element_for_one_process_call(tmp_path: Path
             stdout=template("combined.txt"),
         ),
     )
-    workflow = single_process_workflow(
-        process,
-        params={"sources": [str(source_a), str(source_b)]},
-        output_port_name="result",
-    )
+    workflow = single_process_workflow(process, params={"sources": sources}, output_port_name="result")
     result = run_nextflow(workflow, tmp_path / "run")
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "run" / "work").rglob("combined.txt"))
-    assert [path.read_text(encoding="utf-8") for path in outputs] == ["alpha\nbeta\n"]
+    assert [path.read_text(encoding="utf-8") for path in outputs] == [expected]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+@pytest.mark.parametrize("count", [1, 2], ids=["one-element", "many-elements"])
+def test_array_of_directories_stages_every_element_for_one_process_call(count: int, tmp_path: Path) -> None:
+    sources = []
+    for index in range(count):
+        source = tmp_path / f"source_{index}"
+        source.mkdir()
+        (source / "inner.txt").write_text("inner\n", encoding="utf-8")
+        sources.append(str(source))
+    process = NfProcess(
+        "LIST_DIRECTORIES",
+        [NfPort("sources", "path", path_kind="directory", is_array=True)],
+        [output_port("result", "names.txt")],
+        NfCommand(
+            (template("echo"), NfArrayBinding("sources")),
+            stdout=template("names.txt"),
+        ),
+    )
+    workflow = single_process_workflow(process, params={"sources": sources}, output_port_name="result")
+    result = run_nextflow(workflow, tmp_path / "run")
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "run" / "work").rglob("names.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == [
+        " ".join(f"source_{index}" for index in range(count)) + "\n"
+    ]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_empty_array_of_files_contributes_no_arguments(tmp_path: Path) -> None:
+    """R2.7: an empty array of File values renders nothing, as an empty array of strings does."""
+    process = NfProcess(
+        "ECHO_FILES",
+        [NfPort("sources", "path", is_array=True)],
+        [output_port("result", "names.txt")],
+        NfCommand(
+            (template("echo"), NfArrayBinding("sources")),
+            stdout=template("names.txt"),
+        ),
+    )
+    workflow = single_process_workflow(process, params={"sources": []}, output_port_name="result")
+    result = run_nextflow(workflow, tmp_path / "run")
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "run" / "work").rglob("names.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == ["\n"]
 
 
 @pytest.mark.nextflow

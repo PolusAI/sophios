@@ -1283,6 +1283,11 @@ class ExecutableNextflowWorkflow:
                             "into a port that is not array-typed"
                         )
                     if adapter in MULTI_INPUT_ADAPTERS:
+                        if destination.is_array:
+                            raise ValueError(
+                                f"channel adapter {adapter!r} cannot target the array-marked port "
+                                f"{to_process}.{to_port}"
+                            )
                         adapters_by_process.setdefault(to_process, set()).add(adapter)
                     # Cardinality is half the channel contract, so it is
                     # checked on a process edge too: a scalar output driving

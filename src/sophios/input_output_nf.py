@@ -38,6 +38,9 @@ NEXTFLOW_JSON = "nextflow_workflow.json"
 NEXTFLOW_SCRIPT = "workflow.nf"
 NEXTFLOW_CONFIG = "nextflow.config"
 NEXTFLOW_PARAMS = "nextflow_params.json"
+# The arity an array-typed path input declares: any number of files, none
+# included, always delivered to the script as a list.
+NF_ARRAY_PATH_ARITY = "0..*"
 NF_SHELL_QUOTE_FUNCTION = f'''def {NF_SHELL_QUOTE_HELPER}(value) {{
     return "'" + value.toString().replace("'", "'\\\"'\\\"'") + "'"
 }}'''
@@ -253,13 +256,26 @@ def _process_output(port: NfPort, *, tuple_element: bool = False) -> str:
     return f"path {_render_glob(port.glob)}{literal}{arity}, emit: {emit}"
 
 
+def _path_input(port: NfPort, stage_as: str | None) -> str:
+    """Declare a path input: an array's list arity, then the staging name.
+
+    Nextflow hands a path input holding exactly one file to the script as a
+    bare Path, which has no list operations. Declaring the arity makes zero,
+    one and many files all arrive as a list.
+    """
+    options = [f"arity: '{NF_ARRAY_PATH_ARITY}'"] if port.is_array else []
+    if stage_as is not None:
+        options.append(f"stageAs: {_groovy_literal(stage_as)}")
+    return f"path {port.name}" + "".join(f", {option}" for option in options)
+
+
 def _process_input(port: NfPort, *, tuple_element: bool = False) -> str:
     if tuple_element:
         if port.stage_as is not None:
             return f"{port.qualifier}({port.name}, stageAs: {_groovy_literal(port.stage_as)})"
         return f"{port.qualifier}({port.name})"
-    if port.stage_as is not None:
-        return f"{port.qualifier} {port.name}, stageAs: {_groovy_literal(port.stage_as)}"
+    if port.qualifier == "path":
+        return _path_input(port, port.stage_as)
     return f"{port.qualifier} {port.name}"
 
 
@@ -269,7 +285,7 @@ def _unscattered_input(port: NfPort, gathered_ports: frozenset[str]) -> str:
     # does, so the names cannot collide. Nextflow numbers the directories per
     # port, so the port name in the pattern keeps two gathered ports apart.
     if port.name in gathered_ports and port.qualifier == "path":
-        return f"{port.qualifier} {port.name}, stageAs: {_groovy_literal(f'gather_{port.name}_*/*')}"
+        return _path_input(port, f"gather_{port.name}_*/*")
     return _process_input(port)
 
 

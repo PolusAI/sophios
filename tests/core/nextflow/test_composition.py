@@ -181,12 +181,28 @@ def test_gathered_scatter_rescatters_and_gathers_again_in_order(tmp_path: Path) 
     assert combined.read_text(encoding="utf-8") == "a x 20\n1\nb y 20\n2\nc z 20\n3\n"
 
 
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_a_gathered_array_of_one_file_reaches_its_consumer_as_a_list(tmp_path: Path) -> None:
+    """A scatter of length one gathers one file, which Nextflow delivers as a bare Path unless the arity is declared."""
+    extra = tmp_path / "g1.txt"
+    extra.write_text("1\n", encoding="utf-8")
+    workflow = _composed({"as": ["a"], "bs": ["b"], "n": 1, "gs": [str(extra)]})
+    run = tmp_path / "run"
+    write_nextflow_artifacts(workflow, run)
+    result = execute_nextflow(run)
+    assert result.returncode == 0, result.stdout + result.stderr
+    [combined] = list((run / "work").glob("*/*/all.txt"))
+    assert combined.read_text(encoding="utf-8") == "a b 10\n1\n"
+
+
 @pytest.mark.fast
 @pytest.mark.parametrize("method", ["dotproduct", "flat_crossproduct"])
 def test_a_gathered_array_on_a_scattered_steps_unscattered_port_stages_in_numbered_directories(method: str) -> None:
     rendered = render_nextflow(_pair_then_use(method, _PAIR_THEN_USE_PARAMS))
     assert (
-        "tuple val(__sophios_scatter_index_9f72e), val(x), val(y)\n    path files, stageAs: 'gather_files_*/*'\n"
+        "tuple val(__sophios_scatter_index_9f72e), val(x), val(y)\n"
+        "    path files, arity: '0..*', stageAs: 'gather_files_*/*'\n"
     ) in rendered
 
 
@@ -205,11 +221,29 @@ def test_every_task_of_a_scattered_step_stages_all_the_same_named_gathered_files
     assert {path.read_text(encoding="utf-8") for path in used} == {"a x 20\nb y 20\nc z 20\n"}
 
 
+@pytest.mark.nextflow
+@pytest.mark.serial
+@pytest.mark.parametrize(("method", "tasks"), [("dotproduct", 2), ("flat_crossproduct", 4)])
+def test_a_gathered_array_of_one_file_reaches_every_task_of_a_scattered_step_as_a_list(
+    tmp_path: Path, method: str, tasks: int
+) -> None:
+    run = tmp_path / "run"
+    write_nextflow_artifacts(_pair_then_use(method, {**_PAIR_THEN_USE_PARAMS, "as": ["a"], "bs": ["x"]}), run)
+    result = execute_nextflow(run)
+    assert result.returncode == 0, result.stdout + result.stderr
+    used = list((run / "work").glob("*/*/used.txt"))
+    assert len(used) == tasks
+    assert {path.read_text(encoding="utf-8") for path in used} == {"a x 20\n"}
+
+
 @pytest.mark.fast
 @pytest.mark.parametrize("second", ["PAIR", "PAIR2"])
 def test_two_gathered_arrays_on_a_scattered_step_stage_under_separate_prefixes(second: str) -> None:
     rendered = render_nextflow(_two_gathered_arrays_into_use(second))
-    assert "    path files, stageAs: 'gather_files_*/*'\n    path more, stageAs: 'gather_more_*/*'\n" in rendered
+    assert (
+        "    path files, arity: '0..*', stageAs: 'gather_files_*/*'\n"
+        "    path more, arity: '0..*', stageAs: 'gather_more_*/*'\n"
+    ) in rendered
 
 
 @pytest.mark.fast
@@ -239,7 +273,10 @@ def test_two_gathered_arrays_on_an_unscattered_step_stage_under_separate_prefixe
         {"avals": ["x"], "bvals": ["y"]},
     )
     rendered = render_nextflow(workflow)
-    assert "    path x, stageAs: 'gather_x_*/*'\n    path y, stageAs: 'gather_y_*/*'\n" in rendered
+    assert (
+        "    path x, arity: '0..*', stageAs: 'gather_x_*/*'\n"
+        "    path y, arity: '0..*', stageAs: 'gather_y_*/*'\n"
+    ) in rendered
 
 
 @pytest.mark.nextflow
@@ -362,7 +399,7 @@ def test_one_output_of_a_scattered_step_gathers_into_a_step_while_another_reache
     rendered = render_nextflow(workflow)
     assert "NEXT(PAIR.out.h.toSortedList { it[0] }.map { it.collect { row -> row[1] } })" in rendered
     assert "pairs = PAIR.out.f.toSortedList { it[0] }.flatMap { it.collect { row -> row[1] } }" in rendered
-    assert "path x, stageAs: 'gather_x_*/*'" in rendered
+    assert "path x, arity: '0..*', stageAs: 'gather_x_*/*'" in rendered
 
 
 @pytest.mark.fast
@@ -387,5 +424,7 @@ def test_a_gathered_array_feeds_a_single_input_scatter_staged_in_numbered_direct
         compiled_source_to_nextflow(synthetic_source(workflow, [_tools()[0], _use_tool()], workflow_inputs=params))
     )
     assert (
-        "tuple val(__sophios_scatter_index_9f72e), val(x)\n    val y\n    path files, stageAs: 'gather_files_*/*'\n"
+        "tuple val(__sophios_scatter_index_9f72e), val(x)\n"
+        "    val y\n"
+        "    path files, arity: '0..*', stageAs: 'gather_files_*/*'\n"
     ) in rendered

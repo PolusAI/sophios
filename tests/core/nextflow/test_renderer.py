@@ -325,6 +325,34 @@ def test_renders_array_of_path_channel_construction_with_staging_per_element() -
 
 
 @pytest.mark.serial
+def test_renders_array_of_path_input_with_a_list_arity_and_array_of_val_without() -> None:
+    process = NfProcess(
+        "CAT",
+        [NfPort("sources", "path", is_array=True), NfPort("names", "val", is_array=True)],
+        [],
+        NfCommand((
+            NfTemplate((NfLiteral("cat"),)),
+            NfArrayBinding("sources"),
+            NfArrayBinding("names"),
+        )),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [
+            NfWorkflowInputConnection("sources", "CAT", "sources"),
+            NfWorkflowInputConnection("names", "CAT", "names"),
+        ],
+        {"sources": ["a.txt"], "names": ["alice"]},
+    ))
+
+    # A path input holding one file reaches the script as a bare Path, so the
+    # arity is what lets the array binding call list operations on it.
+    assert "    path sources, arity: '0..*'\n" in rendered
+    assert "    val names\n" in rendered
+
+
+@pytest.mark.serial
 def test_flag_workflow_artifacts_are_byte_stable(tmp_path: Path) -> None:
     workflow = flag_workflow()
     paths = write_nextflow_artifacts(workflow, tmp_path)

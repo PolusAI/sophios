@@ -14,6 +14,7 @@ import pytest
 from sophios.input_output_nf import render_nextflow, write_nextflow_artifacts
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
+    NfArrayBinding,
     NfCommand,
     NfConnection,
     NfInputReference,
@@ -282,3 +283,50 @@ def test_dotproduct_scatters_file_arrays_and_broadcasts_a_file(tmp_path: Path) -
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     gathered = (tmp_path / "gathered.txt").read_text(encoding="utf-8").split("\x01")
     assert gathered == ["firstA\nsecondA\nshared\n", "firstB\nsecondB\nshared\n"]
+
+
+def _scatter_with_file_array(method: str, sources: list[str]) -> ExecutableNextflowWorkflow:
+    """Two scattered inputs and a File array that stays outside the scattered tuple."""
+    process = NfProcess(
+        "PAIR",
+        [NfPort("item", "val"), NfPort("tag", "val"), NfPort("sources", "path", is_array=True)],
+        [_text_port("line", "combined.txt")],
+        NfCommand(
+            (template("echo"), template(ref("item")), template(ref("tag")), NfArrayBinding("sources")),
+            stdout=template("combined.txt"),
+        ),
+    )
+    connections: list[NfConnection] = [
+        NfWorkflowInputConnection("items", "PAIR", "item", method),
+        NfWorkflowInputConnection("tags", "PAIR", "tag", method),
+        NfWorkflowInputConnection("sources", "PAIR", "sources"),
+        NfWorkflowOutputConnection("PAIR", "line", "result"),
+    ]
+    params = {"items": ["a", "b"], "tags": ["x", "y"], "sources": sources}
+    return ExecutableNextflowWorkflow("PIPELINE", [process], connections, params)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("method", ["dotproduct", "flat_crossproduct", "nested_crossproduct"])
+def test_an_unscattered_file_array_declares_the_list_arity_beside_the_scattered_tuple(method: str) -> None:
+    rendered = render_nextflow(_scatter_with_file_array(method, ["source_0.txt"]))
+    assert (
+        "tuple val(__sophios_scatter_index_9f72e), val(item), val(tag)\n    path sources, arity: '0..*'\n"
+    ) in rendered
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+@pytest.mark.parametrize("names", [[], ["source_0.txt"]], ids=["empty", "one-element"])
+def test_dotproduct_broadcasts_an_unscattered_file_array_as_a_list(names: list[str], tmp_path: Path) -> None:
+    """An array port outside the scattered tuple still receives a list of zero or one files."""
+    for name in names:
+        (tmp_path / name).write_text("shared\n", encoding="utf-8")
+
+    workflow = _scatter_with_file_array("dotproduct", [str(tmp_path / name) for name in names])
+
+    result = _sink(workflow, tmp_path, emit_name="result")
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    gathered = (tmp_path / "gathered.txt").read_text(encoding="utf-8").split("\x01")
+    suffix = "".join(f" {name}" for name in names)
+    assert gathered == [f"a x{suffix}\n", f"b y{suffix}\n"]

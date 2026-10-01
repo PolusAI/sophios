@@ -442,8 +442,9 @@ def test_workflow_input_value_must_match_destination_cardinality() -> None:
 
 @pytest.mark.fast
 def test_process_connection_rejects_mismatched_cardinality() -> None:
-    # A scalar output driving an array-marked port compiled, then failed
-    # inside Nextflow with Path.isEmpty() rather than diagnosing here.
+    # A scalar output driving an array-marked port is a type error. The port's
+    # list arity would let Nextflow deliver it as a one-element list and hide
+    # the mismatch, so it is diagnosed here.
     producer = NfProcess(
         "PRODUCE", [], [output_port("out", "out.txt")], command("touch", "out.txt")
     )
@@ -928,6 +929,34 @@ def test_rejects_an_adapter_outside_the_approved_set(adapter: str) -> None:
 def test_rejects_an_adapter_targeting_an_array_marked_port() -> None:
     with pytest.raises(ValueError, match="cannot target the array-marked port SCATTER.item"):
         _adapted_workflow(port=NfPort("item", "val", is_array=True))
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("method", ["dotproduct", "flat_crossproduct", "nested_crossproduct"])
+def test_rejects_a_gathered_output_rescattered_into_an_array_marked_port(method: str) -> None:
+    """One element per invocation cannot fill an array-marked port, which would be bound to a bare Path."""
+    pair = NfProcess(
+        "PAIR", [NfPort("a", "val"), NfPort("b", "val")], [output_port("f", "out.txt")], command("true")
+    )
+    following = NfProcess(
+        "NEXT",
+        [NfPort("x", "path", is_array=True), NfPort("y", "val")],
+        [output_port("g", "g.txt")],
+        command("true"),
+    )
+    with pytest.raises(ValueError, match=f"channel adapter '{method}' cannot target the array-marked port NEXT.x"):
+        ExecutableNextflowWorkflow(
+            "wf",
+            [pair, following],
+            [
+                NfWorkflowInputConnection("avals", "PAIR", "a", "dotproduct"),
+                NfWorkflowInputConnection("bvals", "PAIR", "b", "dotproduct"),
+                NfProcessConnection("PAIR", "f", "NEXT", "x", method),
+                NfWorkflowInputConnection("ys", "NEXT", "y", method),
+                NfWorkflowOutputConnection("NEXT", "g", "result"),
+            ],
+            {"avals": ["x"], "bvals": ["y"], "ys": ["z"]},
+        )
 
 
 @pytest.mark.fast
