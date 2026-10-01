@@ -90,30 +90,49 @@ def write_config_to_disk(config: Json, config_file: Path) -> None:
         json.dump(config, f, indent=4, sort_keys=True)
 
 
-def get_config(config_file: Path, default_config_file: Path) -> Json:
-    """Returns the config json object from config_file with absolute paths
+def default_config_file(homedir: Path) -> Path:
+    """The config file Sophios uses when the user does not name one."""
+    return homedir / 'wic' / 'global_config.json'
+
+
+def generate_config(config_file: Path) -> Json:
+    """Writes the basic config to config_file and copies in the adapters and examples it searches
 
     Args:
-        config_file (Path): The path of the user specified config file
-        default_config_file (Path): The default path of the config file if user hasn't specified one
+        config_file (Path): Where to write the config
 
     Returns:
         Json: The config json object with absolute filepaths
     """
-    global_config: Json = {}
-    if not config_file.exists():
-        global_config = get_basic_config()
-        # write the basic config object to the 'global_config.json' file in user's ~/wic directory
-        # for user to inspect and or modify the config json file
-        write_config_to_disk(global_config, default_config_file)
-        move_adapters_and_examples(global_config)
-        print(f'default config file : {default_config_file} generated')
-    else:
-        # reading user specified config file only if it exists
-        # never overwrite user's config file or generate another file in user's non-default directory
-        # TODO : Validate the json inside 'read_config_from_disk' function
-        global_config = read_config_from_disk(config_file)
-    return global_config
+    config = get_basic_config()
+    write_config_to_disk(config, config_file)
+    move_adapters_and_examples(config)
+    return config
+
+
+def get_config(config_file: Path | None, homedir: Path) -> Json:
+    """Returns the config json object with absolute paths
+
+    A config file the user names is only ever read. Without one, the default
+    under homedir is used, and generated first if it does not exist yet.
+
+    Args:
+        config_file (Path | None): The user specified config file, if any
+        homedir (Path): The user's home directory
+
+    Raises:
+        FileNotFoundError: If config_file does not exist.
+
+    Returns:
+        Json: The config json object with absolute filepaths
+    """
+    if config_file is None:
+        config_file = default_config_file(homedir)
+        if not config_file.exists():
+            config = generate_config(config_file)
+            print(f'default config file : {config_file} generated')
+            return config
+    return read_config_from_disk(config_file)
 
 
 def move_adapters_and_examples(config: Json) -> None:

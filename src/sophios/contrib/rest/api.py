@@ -72,7 +72,7 @@ async def compile_wf(request: Request) -> Json:
     # Build a list of CLTs
     # The default list
     tools_cwl: Tools = {}
-    global_config = input_output.get_config(Path(args.config_file), Path(args.homedir)/'wic'/'global_config.json')
+    global_config = input_output.get_config(args.config_file, Path(args.homedir))
     tools_cwl = plugins.get_tools_cwl(global_config, args.validate_plugins, args.quiet)
     # Add to the default list if the tool is 'inline' in run tag
     # run tag will have the actual CommandLineTool

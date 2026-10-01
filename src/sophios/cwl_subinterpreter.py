@@ -233,9 +233,7 @@ def main() -> None:
 
     args_vals = json.loads(args.config)
     # In CWL all env variables are hidden by default so Path().home() doesn't work
-    # Also User may specify a different homedir
-    default_config_file = Path(args.homedir)/'wic'/'global_config.json'
-    global_config: Json = io.get_config(Path(args.config_file), default_config_file)
+    global_config: Json = io.get_config(None, Path(args.homedir))
 
     tools_cwl = get_tools_cwl(global_config, quiet=args.quiet)
     yml_paths = get_yml_paths(global_config)

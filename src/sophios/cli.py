@@ -5,6 +5,14 @@ from pathlib import Path
 from . import __version__
 from .wic_types import CompilerOptions, GraphSettings, YamlTagPaths
 
+
+def _config_file(path: str) -> Path:
+    """The `--config_file` argparse type: a file that exists, since it is only ever read."""
+    if not Path(path).is_file():
+        raise argparse.ArgumentTypeError(f'no config file at {path}')
+    return Path(path)
+
+
 parser = argparse.ArgumentParser(prog='main', description='Convert a high-level yaml workflow file to CWL.')
 
 # Not `required=`: whether `--yaml` is needed depends on whether one of the
@@ -25,8 +33,9 @@ group_gen.add_argument('--generate_config', default=False, action="store_true",
                        with default search_paths_wic and search_paths_cwl''')
 parser.add_argument('--inputs_file', type=str, required=False, default='',
                     help='Additional inputs Yaml file')
-parser.add_argument('--config_file', type=str, required=False, default=str(Path().home()/'wic'/'global_config.json'),
-                    help='User provided (JSON) config file')
+parser.add_argument('--config_file', type=_config_file, required=False, default=None,
+                    help='User provided (JSON) config file. Without it, <homedir>/wic/global_config.json '
+                    'is used, and generated the first time it is needed')
 # version action exits the parser
 # Ref : https://github.com/python/cpython/blob/1f515e8a109204f7399d85b7fd806135166422d9/Lib/argparse.py#L1167
 parser.add_argument('--version', action='version', version=__version__,

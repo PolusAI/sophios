@@ -146,22 +146,19 @@ def _main() -> None:
         print('Warning: --ignore_validation_errors is deprecated and does nothing; '
               'nothing validates a file against a schema any more.', file=sys.stderr)
 
-    # User may specify a different homedir
-    default_config_file = Path(args.homedir)/'wic'/'global_config.json'
     if args.generate_config:
+        default_config_file = io.default_config_file(Path(args.homedir))
         if default_config_file.exists():
             print(f'Config already exists. To overwrite delete {default_config_file.parent} directory. Exiting')
         else:
-            basic_config = io.get_basic_config()
-            io.write_config_to_disk(basic_config, default_config_file)
-            io.move_adapters_and_examples(basic_config)
+            io.generate_config(default_config_file)
             print('Finished generating config. Exiting.')
         sys.exit(0)
     if args.generate_schemas:
         _write_schema(SCHEMA_PATH)
         print('Finished generating schemas. Exiting.')
         sys.exit(0)
-    global_config: Json = io.get_config(Path(args.config_file), default_config_file)
+    global_config: Json = io.get_config(args.config_file, Path(args.homedir))
 
     tools_cwl = plugins.get_tools_cwl(global_config, args.validate_plugins, args.quiet)
     # pass around config object instead of reading from the disk!

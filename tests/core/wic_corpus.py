@@ -38,9 +38,10 @@ def _discover() -> tuple[Path, ...]:
     directly rather than provisioning the user's home to ask the config; CI
     always provisions a config first and remains the arbiter of full coverage.
     """
-    config_path = Path(get_args().config_file)
+    args = get_args()
+    config_path = args.config_file or io.default_config_file(Path(args.homedir))
     if config_path.exists():
-        config = io.get_config(config_path, config_path)  # read-only: the file exists
+        config = io.read_config_from_disk(config_path)
         return tuple(sorted(
             path
             for namespace in plugins.get_yml_paths(config).values()

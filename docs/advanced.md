@@ -102,8 +102,9 @@ The main keys are:
 }
 ```
 
-If you do not pass `--config_file`, Sophios uses `~/wic/global_config.json`.
-Generate a starter config with:
+If you do not pass `--config_file`, Sophios uses `~/wic/global_config.json`,
+and generates it the first time it is needed. A `--config_file` that does not
+exist is an error. Generate a starter config with:
 
 ```bash
 sophios --generate_config

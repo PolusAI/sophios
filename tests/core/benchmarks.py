@@ -76,8 +76,8 @@ def _get_corpus_env() -> _CorpusEnv:
     global _corpus_env  # pylint: disable=global-statement
     if _corpus_env is None:
         args = sophios.cli.get_args()
-        config_path = Path(args.config_file)
-        config = io.get_config(config_path, config_path) if config_path.exists() else io.get_basic_config()
+        config_path = args.config_file or io.default_config_file(Path(args.homedir))
+        config = io.read_config_from_disk(config_path) if config_path.exists() else io.get_basic_config()
         tools = sophios.plugins.get_tools_cwl(config, quiet=True)
         yml_paths = sophios.plugins.get_yml_paths(config)
         _corpus_env = _CorpusEnv(tools, yml_paths)

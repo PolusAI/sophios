@@ -27,8 +27,9 @@ class CorpusRegistry:
 def _config() -> tuple[Json, bool]:
     """Read configuration without provisioning a missing user config."""
     args = sophios.cli.get_args()
-    if Path(args.config_file).exists():
-        return io.get_config(Path(args.config_file), Path(args.config_file)), args.quiet
+    config_file = args.config_file or io.default_config_file(Path(args.homedir))
+    if config_file.exists():
+        return io.read_config_from_disk(config_file), args.quiet
     return io.get_basic_config(), args.quiet
 
 
