@@ -19,6 +19,8 @@ import pytest
 
 from sophios.ir.types import AuthoredName, DerivedName, Namespace, PortName, StepId
 
+from .hermetic import compile_hermetic, nested_workflow
+
 #: The most a cost may multiply by per nesting level. Polynomial growth in the
 #: depth stays under 1.2 over the depths used here; doubling per level is 2.
 MAX_GROWTH_PER_LEVEL: Final = 1.4
@@ -92,3 +94,11 @@ def test_hashing_a_derived_name_does_not_hash_what_it_was_derived_from_again() -
         hash(name)
 
     assert port.hashed <= 1
+
+
+@pytest.mark.fast
+def test_compile_time_does_not_double_per_nesting_level() -> None:
+    """Every phase names the steps of a nested workflow by identities that hold
+    their enclosing steps, so anything that writes them out, hashes them or
+    reports on them eagerly pays twice as much at each level down."""
+    _assert_growth_is_bounded(lambda depth: compile_hermetic(nested_workflow(depth)), range(6, 13, 2))

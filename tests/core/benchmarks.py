@@ -28,7 +28,7 @@ from typing import Callable, Final
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.hermetic import compile_hermetic, subworkflow_step
+from core.hermetic import compile_hermetic, nested_workflow
 from core.synthetic_tools import clt, SYNTHETIC_TOOLS
 from core.wic_corpus import CORPUS, corpus_id
 
@@ -146,15 +146,7 @@ def _run_speculative_insertion() -> None:
 # --------------------------------------------------------------------------
 # Case 3: deep nesting.
 
-def _deep_nesting_yml() -> Yaml:
-    """A leaf step wrapped five levels deep with `hermetic.subworkflow_step`."""
-    tree: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'leaf.txt'}}}]}
-    for level in range(5):
-        tree = {'steps': [subworkflow_step(f'level_{level}.wic', tree)]}
-    return tree
-
-
-_DEEP_NESTING_YML: Final = _deep_nesting_yml()
+_DEEP_NESTING_YML: Final = nested_workflow(15)
 
 
 # --------------------------------------------------------------------------
@@ -202,7 +194,7 @@ CASES: Final[tuple[Case, ...]] = tuple(
          "rather than with per-step cost.",
          run=_run_speculative_insertion),
     Case('deep_nesting',
-         "A workflow partitioned five levels deep with "
+         "A workflow partitioned fifteen levels deep with "
          "hermetic.subworkflow_step. Namespacing cost grows with depth and "
          "nothing else on this list has depth.",
          run=lambda: compile_hermetic(_DEEP_NESTING_YML, 'oracle', tools=SYNTHETIC_TOOLS)),

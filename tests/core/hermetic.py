@@ -121,6 +121,14 @@ def compile_hermetic_cwl(yml: Yaml, name: str = 'oracle', *,
     return compiled
 
 
+def nested_workflow(levels: int) -> Yaml:
+    """A leaf step wrapped `levels` deep, each level a `subworkflow_step` of its own."""
+    tree: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'leaf.txt'}}}]}
+    for level in range(levels):
+        tree = {'steps': [subworkflow_step(f'level_{level}.wic', tree)]}
+    return tree
+
+
 def subworkflow_step(stem: str, subtree: Yaml) -> Yaml:
     """A subworkflow step: its body in `subtree`, its own keys in `parentargs`.
 
