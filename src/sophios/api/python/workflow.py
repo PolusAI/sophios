@@ -177,13 +177,18 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
             input_port.set_bound_parameter_type(_infer_literal_parameter_type(value))
 
 
+def _boundary_type(parameter_type: Any) -> Any:
+    """A tool's `stdout`/`stderr` shorthand as the `File` a workflow output must declare."""
+    return 'File' if parameter_type in ('stdout', 'stderr') else parameter_type
+
+
 def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) -> None:
     output_parameter = workflow.add_output(output_name, implicit=True)
     match value:
         case OutputParameter(parent_obj=Step(process_name=process_name), name=name) as source:
             _resolve_parameter_type(
                 output_parameter,
-                source.parameter_type,
+                _boundary_type(source.parameter_type),
                 context=f"{workflow.process_name}.outputs.{output_name}",
             )
             output_parameter.bind_source(OutputSourceBinding(process_name, name), source_parameter=source)

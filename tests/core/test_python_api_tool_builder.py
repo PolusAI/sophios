@@ -19,7 +19,7 @@ from sophios.api.python.tool_builder import (
     cwl,
     secondary_file,
 )
-from sophios.api.python.workflow import Step
+from sophios.api.python.workflow import Step, Workflow
 from sophios.lang import InlineLiteral
 from sophios.lang.cwl import CWL_VERSION
 
@@ -454,3 +454,22 @@ def test_tool_builder_converts_to_in_memory_step() -> None:
     assert _by_id(step.yaml["inputs"])["message"]["type"] == "string"
     assert _by_id(step.yaml["outputs"])["out"]["type"] == "stdout"
     assert step._as_workflow_step(inline_subtrees=False).input("message") == InlineLiteral("hello")
+
+
+@pytest.mark.fast
+def test_a_workflow_output_bound_to_stdout_or_stderr_is_a_file() -> None:
+    """`stdout` and `stderr` are a CommandLineTool's own shorthands; the workflow outputs they feed must say `File`."""
+    tool = CommandLineTool(
+        "echo_tool",
+        Inputs(message=Input(cwl.string, position=1)),
+        Outputs(out=Output.stdout(), err=Output.stderr()),
+    ).stdout("stdout.txt").stderr("stderr.txt")
+    step = tool.to_step(step_name="say_hello")
+    step.inputs.message = "hello"
+    workflow = Workflow([step], "stdout_out")
+    workflow.outputs.log = step.outputs.out
+    workflow.outputs.errors = step.outputs.err
+
+    outputs = workflow.compile().cwl_workflow["outputs"]
+    assert outputs["log"]["type"] == "File"
+    assert outputs["errors"]["type"] == "File"
