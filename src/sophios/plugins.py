@@ -222,6 +222,25 @@ def cwl_update_outputs_optional_artifact(
     return replace(artifact, cwl=cwl, children=children)
 
 
+def _docker_requirement(cwl: Cwl, section: str) -> dict[str, Any] | None:
+    """The `DockerRequirement` under `cwl[section]`, in either CWL spelling.
+
+    A hand-written adapter spells `requirements`/`hints` as a mapping keyed by
+    class; cwl_utils (and so `tool_builder`) spells them as a list of
+    `{class: ...}` entries. The entry is returned, not copied, so a caller
+    holding a deep copy of `cwl` edits that copy in place.
+    """
+    entries = cwl.get(section)
+    if isinstance(entries, dict):
+        found = entries.get('DockerRequirement')
+        return found if isinstance(found, dict) else None
+    if isinstance(entries, list):
+        for entry in entries:
+            if isinstance(entry, dict) and entry.get('class') == 'DockerRequirement':
+                return entry
+    return None
+
+
 def dockerPull_append_noentrypoint(cwl: Cwl) -> Cwl:
     """Appends -noentrypoint to the dockerPull version tag (if any)
 
@@ -231,18 +250,18 @@ def dockerPull_append_noentrypoint(cwl: Cwl) -> Cwl:
     Returns:
         Cwl: A CWL CommandLineTool, with -noentrypoint appended to the dockerPull version tag (if any)
     """
-    docker_image: str = cwl.get('requirements', {}).get('DockerRequirement', {}).get('dockerPull', '')
+    cwl_noentrypoint = copy.deepcopy(cwl)
+    requirement = _docker_requirement(cwl_noentrypoint, 'requirements')
+    docker_image: str = requirement.get('dockerPull', '') if requirement is not None else ''
     if docker_image:
         print('docker_image', docker_image)
     if ':' in docker_image:
         repo, tag = docker_image.split(':')
     else:
         repo, tag = docker_image, 'latest'
-    if repo and tag and not tag.endswith('-noentrypoint'):
+    if requirement is not None and repo and tag and not tag.endswith('-noentrypoint'):
         print('repo, tag', repo, tag)
-        image_noentrypoint = repo + ':' + tag + '-noentrypoint'
-        cwl_noentrypoint = copy.deepcopy(cwl)
-        cwl_noentrypoint['requirements']['DockerRequirement']['dockerPull'] = image_noentrypoint
+        requirement['dockerPull'] = repo + ':' + tag + '-noentrypoint'
         return cwl_noentrypoint
     return cwl
 
@@ -268,13 +287,13 @@ def cwl_prepend_dockerFile_include_path(cwl: Cwl, cwl_path: str) -> Cwl:
         Cwl: A CWL CommandLineTool, with correct filepath prepended
     """
     cwl_mod = copy.deepcopy(cwl)
-    inc_path: str = cwl.get('hints', {}).get('DockerRequirement', {}).get('dockerFile', {}).get('$include', '')
-    if inc_path:
+    requirement = _docker_requirement(cwl_mod, 'hints')
+    docker_file = requirement.get('dockerFile') if requirement is not None else None
+    if isinstance(docker_file, dict) and docker_file.get('$include'):
         # cwl_path is an absolute path including (original) filename .cwl
         # we just need to prepend the dir of cwl_path to the inc_path.
         # An absolute inc_path is left as is, so applying this twice is harmless.
-        cwl_mod['hints']['DockerRequirement']['dockerFile']['$include'] = str(
-            Path(cwl_path).parent / inc_path)
+        docker_file['$include'] = str(Path(cwl_path).parent / docker_file['$include'])
     return cwl_mod
 
 
