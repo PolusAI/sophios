@@ -151,7 +151,7 @@ def _main() -> None:
         if default_config_file.exists():
             print(f'Config already exists. To overwrite delete {default_config_file.parent} directory. Exiting')
         else:
-            io.generate_config(default_config_file)
+            io.generate_config(Path(args.homedir))
             print('Finished generating config. Exiting.')
         sys.exit(0)
     if args.generate_schemas:

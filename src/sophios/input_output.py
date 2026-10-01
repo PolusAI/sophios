@@ -95,17 +95,17 @@ def default_config_file(homedir: Path) -> Path:
     return homedir / 'wic' / 'global_config.json'
 
 
-def generate_config(config_file: Path) -> Json:
-    """Writes the basic config to config_file and copies in the adapters and examples it searches
+def generate_config(homedir: Path) -> Json:
+    """Writes the default config, adapters and examples under the selected home directory.
 
     Args:
-        config_file (Path): Where to write the config
+        homedir (Path): The home directory whose wic directory will hold the config and resources
 
     Returns:
         Json: The config json object with absolute filepaths
     """
-    config = get_basic_config()
-    write_config_to_disk(config, config_file)
+    config = get_basic_config(homedir)
+    write_config_to_disk(config, default_config_file(homedir))
     move_adapters_and_examples(config)
     return config
 
@@ -129,7 +129,7 @@ def get_config(config_file: Path | None, homedir: Path) -> Json:
     if config_file is None:
         config_file = default_config_file(homedir)
         if not config_file.exists():
-            config = generate_config(config_file)
+            config = generate_config(homedir)
             print(f'default config file : {config_file} generated')
             return config
     return read_config_from_disk(config_file)
@@ -160,31 +160,33 @@ def move_adapters_and_examples(config: Json) -> None:
              ignore=ignore_patterns(*extlist))
 
 
-def read_config_from_disk(config_file: Path, abspath: bool = True) -> Json:
+def read_config_from_disk(config_file: Path, base_dir: Path | None = None) -> Json:
     """Returns the config json object from config_file with absolute paths
 
     Args:
         config_file (Path): The path of json file where it is to be read from
+        base_dir (Path | None): Base for relative search paths; defaults to the working directory
 
     Returns:
         Json: The config json object with absolute filepaths
     """
     # config_file can contain absolute or relative paths
     config: Json = json.loads(config_file.read_text(encoding='utf-8'))
+    base_dir = Path.cwd() if base_dir is None else base_dir.absolute()
     conf_tags = ['search_paths_cwl', 'search_paths_wic']
     for tag in conf_tags:
         sub_config = copy.deepcopy(config[tag])
         for ns in sub_config:
-            if abspath:
-                sub_config[ns] = [str(Path(path).absolute()) for path in sub_config[ns]]
-            else:  # this is a hacky way to fix global paths wrt ~/home/wic/
-                sub_config[ns] = [str(Path.home() / path) for path in sub_config[ns]]
+            sub_config[ns] = [str(base_dir / path) for path in sub_config[ns]]
         config[tag] = sub_config
     return config
 
 
-def get_basic_config() -> Json:
+def get_basic_config(homedir: Path | None = None) -> Json:
     """Returns the (default) basic config with absolute paths
+
+    Args:
+        homedir (Path | None): Base for the packaged search paths; defaults to the process home
 
     Returns:
         Json: The config json object with absolute filepaths
@@ -194,5 +196,6 @@ def get_basic_config() -> Json:
     src_dir = Path(__file__).parent
     basic_config: Json = {}
     # read_config_from_disk handles converting them to absolute paths
-    basic_config = read_config_from_disk(src_dir/'config_basic.json', False)
+    basic_config = read_config_from_disk(
+        src_dir/'config_basic.json', base_dir=Path.home() if homedir is None else homedir)
     return basic_config
