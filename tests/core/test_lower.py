@@ -35,13 +35,14 @@ from sophios.ir import (
 from sophios.ir.lower import lower
 from sophios.ir.declarations import port_declaration
 from sophios.ir.types import AuthoredName
+from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.nodes import Document, InlineLiteral, Step
 from sophios.lang.parser import parse
 from sophios.lang.spans import SourceSpan
 
 from . import ast_strategies as strat
-from .hermetic import COVERAGE, ORACLE
+from .hermetic import COVERAGE, ORACLE, compile_hermetic, subworkflow_step
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -400,3 +401,16 @@ def test_a_scatter_entry_that_is_not_a_name_is_wic032(scatter: str) -> None:
 
     codes = [diagnostic.code for diagnostic in result.diagnostics]
     assert SophiosErrorCode.UNKNOWN_SCATTER_PORT in codes, codes
+
+
+@pytest.mark.fast
+def test_an_anchor_on_an_undeclared_call_output_is_reported_not_raised() -> None:
+    """A call step anchoring a name its child never declares is wic028; the graph
+    is not built from a document the phase rejected, so no ValueError escapes."""
+    child = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}]}
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [
+            {**subworkflow_step('child.wic', child),
+             'parentargs': {'out': [{'child__step__1__mk_file___file': {'wic_anchor': 'e'}}]}},
+            {'id': 'sink', 'in': {'file': {'wic_alias': 'e'}, 'n': {'wic_inline_input': 1}}}]})
+    assert {d.code for d in caught.value.diagnostics} == {SophiosErrorCode.UNDECLARED_PORT}

@@ -143,6 +143,12 @@ def _lower_resolved(document: ResolvedDocument,
         reserved.add('requirements')
     opaque = tuple((key, value) for key, value in document.source.passthrough
                    if key not in reserved)
+    if diagnostics.has_errors:
+        # A graph is built only from a document the phase accepted: an edge
+        # definition registered for an output the process never declared
+        # (reported above as wic028) would otherwise trip the graph's own
+        # invariants with a ValueError instead of this report.
+        return Lowered(None, diagnostics)
     known_ports = {port.id for node in nodes for port in node.inputs + node.outputs}
     graph = WorkflowGraph(
         namespace=here,
@@ -167,7 +173,7 @@ def _lower_resolved(document: ResolvedDocument,
         schemas=schemas,
         children=tuple(children),
     )
-    return Lowered(graph if not diagnostics.has_errors else None, diagnostics)
+    return Lowered(graph, diagnostics)
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
