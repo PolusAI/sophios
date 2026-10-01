@@ -30,7 +30,7 @@ from sophios.utils import convert_args_dict_to_args_list
 from sophios.utils_graphs import get_graph_reps
 from sophios.wic_types import StepId, Tool, Tools
 
-from ._errors import InvalidCLTError, InvalidStepError
+from ._errors import InvalidCLTError, InvalidStepError, WorkflowRunError
 from ._compiled import CompiledWorkflow
 from ._ports import InputParameter, OutputParameter, ParameterStore
 from ._types import ScatterMethod
@@ -534,8 +534,8 @@ def run_workflow(
         basepath (str): Directory used for generated files and execution artifacts.
         tool_registry (Tools | None): Optional tool registry override.
 
-    Returns:
-        None: The workflow is executed as a side effect.
+    Raises:
+        WorkflowRunError: If the runner exits non-zero.
     """
     logger.info("Running %s", workflow.process_name)
     plugins.logging_filters()
@@ -564,7 +564,7 @@ def run_workflow(
     )
 
     _, unknown_args = get_known_and_unknown_args(workflow.process_name, user_args)
-    rl.run_local(
+    retval = rl.run_local(
         resolved_run_args,
         False,
         workflow_name=workflow.process_name,
@@ -573,3 +573,5 @@ def run_workflow(
         user_env_vars=dict(user_env_vars or {}),
         output_directories=rl.output_directories(result.graph),
     )
+    if retval != 0:
+        raise WorkflowRunError(workflow.process_name, retval)

@@ -311,11 +311,32 @@ def _provoke_invalid_tool() -> None:
     Step(clt_path='no_such_tool.cwl')
 
 
+def _provoke_workflow_run_failed() -> None:
+    """Run a workflow whose runner exits non-zero.
+
+    The runner, the container engine and the disk are replaced; the raise is `Workflow.run()`'s own.
+    """
+    from pathlib import Path  # pylint: disable=import-outside-toplevel
+    from unittest import mock  # pylint: disable=import-outside-toplevel
+
+    import sophios.api.python._workflow_runtime as runtime  # pylint: disable=import-outside-toplevel
+    from sophios.api.python.workflow import Step, Workflow  # pylint: disable=import-outside-toplevel
+
+    echo = Step(clt_path=Path(__file__).resolve().parents[2] / 'cwl_adapters' / 'echo.cwl')
+    echo.inputs.message = 'hello'
+    with mock.patch.object(runtime.pc, 'verify_container_engine_config'), \
+            mock.patch.object(runtime.pc, 'cwl_docker_extract'), \
+            mock.patch.object(runtime.input_output, 'write_artifacts_to_disk'), \
+            mock.patch.object(runtime.rl, 'run_local', return_value=1):
+        Workflow([echo], 'provoke').run()
+
+
 COMPILED.update({
     SophiosErrorCode.INVALID_INPUT_VALUE: _provoke_invalid_input_value,
     SophiosErrorCode.INVALID_STEP: _provoke_invalid_step,
     SophiosErrorCode.INVALID_LINK: _provoke_invalid_link,
     SophiosErrorCode.INVALID_TOOL: _provoke_invalid_tool,
+    SophiosErrorCode.WORKFLOW_RUN_FAILED: _provoke_workflow_run_failed,
     SophiosErrorCode.UNDEFINED_EDGE: _provoke_undefined_edge,
     SophiosErrorCode.DUPLICATE_EDGE_DEF: _provoke_duplicate_edge_def,
     SophiosErrorCode.EMPTY_NAME: _provoke_empty_name,

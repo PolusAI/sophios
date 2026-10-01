@@ -24,6 +24,7 @@ from ._errors import (
     InvalidInputValueError,
     InvalidLinkError,
     InvalidStepError,
+    WorkflowRunError,
 )
 from ._ports import (
     InputParameter,
@@ -77,6 +78,7 @@ __all__ = [
     "SophiosErrorCode",
     "Step",
     "Workflow",
+    "WorkflowRunError",
 ]
 
 
@@ -897,8 +899,8 @@ class Workflow(_ProcessBase):
             basepath (str): Directory used for generated files and execution artifacts.
             tool_registry (Tools | None): Optional tool registry override.
 
-        Returns:
-            None: The workflow is executed as a side effect.
+        Raises:
+            WorkflowRunError: If the runner exits non-zero. Its `exit_code` is the runner's.
         """
         _run_workflow(
             self,

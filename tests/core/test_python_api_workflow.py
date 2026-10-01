@@ -1,13 +1,15 @@
 from contextlib import contextmanager
 import asyncio
+import copy
 import dataclasses
 import importlib
 import json
 import os
+import pickle
 from pathlib import Path
 import traceback
 from types import SimpleNamespace
-from typing import Any, Iterator, cast
+from typing import Any, Callable, Iterator, cast
 from unittest.mock import patch
 
 from jsonschema import Draft202012Validator
@@ -1286,3 +1288,61 @@ def test_an_api_failure_carries_an_api_code_not_a_language_one(error: type[ApiEr
     raised = error('something the API could not do')
     code = raised.diagnostics[0].code
     assert code.value.startswith('api') and not code.is_language
+
+
+def _detach_run_from_the_container_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep a `Workflow.run()` call off the container engine and the disk."""
+    monkeypatch.setattr(python_runtime.pc, 'verify_container_engine_config', lambda *_a, **_k: None)
+    monkeypatch.setattr(python_runtime.pc, 'cwl_docker_extract', lambda *_a, **_k: None)
+    monkeypatch.setattr(python_runtime.input_output, 'write_artifacts_to_disk', lambda *_a, **_k: None)
+
+
+def _echo_workflow(name: str) -> Workflow:
+    echo = Step(clt_path=_adapter('echo'))
+    echo.inputs.message = 'hello'
+    return Workflow([echo], name)
+
+
+def _failed_run(monkeypatch: pytest.MonkeyPatch, exit_code: int) -> SophiosError:
+    """The error `Workflow.run()` raises when the runner ends with `exit_code`."""
+    _detach_run_from_the_container_engine(monkeypatch)
+    monkeypatch.setattr(python_runtime.rl, 'run_local', lambda *_a, **_k: exit_code)
+    with pytest.raises(SophiosError) as caught:
+        _echo_workflow('failing').run()
+    return caught.value
+
+
+@pytest.mark.fast
+def test_run_raises_workflow_run_error_on_a_failed_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`Workflow.run()` reports a failed run, with the runner's exit code, instead of returning."""
+    raised = _failed_run(monkeypatch, 7)
+    assert raised.diagnostics[0].code is SophiosErrorCode.WORKFLOW_RUN_FAILED
+    assert "'failing'" in str(raised)
+    from sophios.api.python.workflow import WorkflowRunError
+    assert isinstance(raised, WorkflowRunError)
+    assert raised.exit_code == 7
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('duplicate', [
+    lambda error: pickle.loads(pickle.dumps(error)),
+    copy.copy,
+    copy.deepcopy,
+], ids=['pickle', 'copy', 'deepcopy'])
+def test_a_failed_run_error_survives_being_duplicated(monkeypatch: pytest.MonkeyPatch,
+                                                      duplicate: Callable[[SophiosError], SophiosError]) -> None:
+    """So it can come back from a worker process or be re-raised elsewhere with its exit code."""
+    raised = _failed_run(monkeypatch, 7)
+    clone = duplicate(raised)
+    assert str(clone) == str(raised)
+    assert list(clone.diagnostics) == list(raised.diagnostics)
+    from sophios.api.python.workflow import WorkflowRunError
+    assert isinstance(clone, WorkflowRunError)
+    assert clone.exit_code == 7
+
+
+@pytest.mark.fast
+def test_run_does_not_raise_when_the_runner_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    _detach_run_from_the_container_engine(monkeypatch)
+    monkeypatch.setattr(python_runtime.rl, 'run_local', lambda *_a, **_k: 0)
+    _echo_workflow('passing').run()

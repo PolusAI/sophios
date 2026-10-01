@@ -70,6 +70,9 @@ class SophiosErrorCode(StrEnum):
     INVALID_STEP = 'api002'
     INVALID_LINK = 'api003'
     INVALID_TOOL = 'api004'
+    #: A local run that ended with a non-zero exit code. The document and the
+    #: call were fine; the runner was not.
+    WORKFLOW_RUN_FAILED = 'api005'
 
     @property
     def is_language(self) -> bool:

@@ -382,6 +382,10 @@ Run locally with:
 workflow.run()
 ```
 
+A run that finishes with a non-zero exit code raises `WorkflowRunError` (its
+`exit_code` is the runner's); the runner's log, printed above the error, says why.
+A successful run returns `None`.
+
 Sophios supports two local CWL runners through `Workflow.run()`:
 
 - `cwltool`, the default local runner,
