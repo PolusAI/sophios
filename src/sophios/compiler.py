@@ -18,7 +18,7 @@ from .ir.frontdoor import SourceBundle
 from .ir.pipeline import front_end
 from .ir.resolve import RegistrySnapshot
 from .ir.names import Names
-from .ir.types import AuthoredName, Binding, PortName, WorkflowGraph
+from .ir.types import AuthoredName, Binding, EdgeOrigin, PortName, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import SophiosError
 from .lang.nodes import InlineLiteral
@@ -203,7 +203,12 @@ def _project_graph(graph: WorkflowGraph, names: Names, settings: GraphSettings,
     for edge in graph.edges:
         source = names.qualified(edge.source.step)
         sink = names.qualified(edge.sink.step)
-        edge_attrs: dict[str, str] = {}
+        # Explicit edges are blue; an inferred one takes the theme's font
+        # colour, as docs/tutorials/multistep.md says, so a reader can tell
+        # what the document said from what the compiler decided.
+        edge_attrs: dict[str, str] = {'color': 'blue'}
+        if edge.origin is EdgeOrigin.INFERRED:
+            edge_attrs['color'] = 'black' if settings['graph_dark_theme'] else 'white'
         if settings['graph_label_edges']:
             edge_attrs['label'] = names.port(edge.source.port)
         if not reps.networkx.has_edge(source, sink) or settings['graph_label_edges']:

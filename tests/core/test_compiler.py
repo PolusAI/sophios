@@ -6,10 +6,12 @@ from typing import Any
 import pytest
 
 from sophios import compiler, cwl_subinterpreter, utils
+from sophios.cli import default_compilation_settings
 from sophios.lang import to_json
+from sophios.utils_graphs import get_graph_reps
 from sophios.wic_types import StepId, Yaml
 
-from .hermetic import compile_hermetic_cwl
+from .hermetic import bundle, compile_hermetic_cwl, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 
 
@@ -86,3 +88,36 @@ def test_a_referenced_input_merges_the_documentation_of_the_argument_it_binds(
     }
     compiled = compile_hermetic_cwl(document, 'docs', tools=tools)
     assert compiled['inputs']['wf_name'] == {'type': 'string', **expected}, claim
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('dark_theme', 'font_colour'), [(False, 'white'), (True, 'black')])
+def test_the_graph_draws_inferred_edges_in_the_font_colour_and_the_rest_in_blue(
+        dark_theme: bool, font_colour: str) -> None:
+    """An edge the document wrote is blue, whether it joins two steps of one
+    document or reaches into a subworkflow; an edge the compiler inferred takes
+    the theme's font colour, which is black on a dark theme and white otherwise.
+    """
+    document: Yaml = {'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}, 'out': [{'file': {'wic_anchor': 'f'}}]},
+        {'id': 'xform', 'in': {'file': {'wic_alias': 'f'}, 'name': {'wic_inline_input': 'b'}}},
+        subworkflow_step('sub.wic', {'steps': [
+            {'id': 'xform', 'in': {'file': {'wic_alias': 'f'}, 'name': {'wic_inline_input': 'c'}}},
+            {'id': 'count'},                                       # file inferred from xform
+        ]}),
+    ]}
+    compiler_options, graph_settings, yaml_tag_paths = default_compilation_settings()
+    graph_settings['graph_dark_theme'] = dark_theme
+    compiled = compiler.compile_source(
+        bundle(document, 'oracle', SYNTHETIC_TOOLS), compiler_options, graph_settings, yaml_tag_paths,
+        relative_run_path=True, testing=True, graph_target=get_graph_reps('oracle'))
+
+    root = compiled.artifact.graph_view.graphdata
+    (sub,) = root.subgraphs
+    colours = {(source, sink): attrs.get('color') for source, sink, attrs in root.edges + sub.edges}
+    assert colours == {
+        ('oracle__step__1__mk_file', 'oracle__step__2__xform'): 'blue',
+        ('oracle__step__1__mk_file', 'oracle__step__3__sub.wic___sub__step__1__xform'): 'blue',
+        ('oracle__step__3__sub.wic___sub__step__1__xform',
+         'oracle__step__3__sub.wic___sub__step__2__count'): font_colour,
+    }
