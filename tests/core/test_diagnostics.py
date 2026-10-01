@@ -200,8 +200,8 @@ def test_ignored_docker_process_check_stays_silent(monkeypatch: pytest.MonkeyPat
 @pytest.mark.fast
 def test_cli_converts_a_report_to_exit_1(monkeypatch: pytest.MonkeyPatch,
                                          capsys: pytest.CaptureFixture[str]) -> None:
-    """A reported failure leaves the CLI with the exact old behaviour: the
-    messages on stdout, exit code 1, no traceback."""
+    """A reported failure leaves the CLI with exit code 1 and no traceback, and
+    the messages on **stderr**, with their code."""
     from sophios import main as cli
 
     def reports(*_args: object, **_kwargs: object) -> None:
@@ -215,9 +215,57 @@ def test_cli_converts_a_report_to_exit_1(monkeypatch: pytest.MonkeyPatch,
         cli.main()
 
     assert caught.value.code == 1
-    printed = capsys.readouterr().out
+    printed = capsys.readouterr().err
     assert 'Did you forget to use !ii' in printed
     assert '--allow_raw_cwl' in printed
+    assert '[wic011]' in printed
+
+
+@pytest.mark.fast
+def test_cli_reports_a_workflow_that_does_not_compile_on_stderr_with_its_position(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The failure a scientist sees names the file, line, column and code, all on stderr."""
+    from sophios import main as cli
+    workflow = tmp_path / 'bad.wic'
+    workflow.write_text('steps:\n- id: ""\n', encoding='utf-8')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), '--generate_cwl_workflow'])
+
+    with pytest.raises(SystemExit) as caught:
+        cli.main()
+
+    assert caught.value.code == 1
+    captured = capsys.readouterr()
+    assert f'Failed to compile {workflow}' in captured.err
+    assert 'bad.wic:2:7: error [wic007]' in captured.err
+    assert 'Failed to compile' not in captured.out
+    assert 'wic007' not in captured.out
+
+
+@pytest.mark.fast
+def test_cli_points_a_compiler_crash_at_its_error_file_on_stderr(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A failure that is not a reported diagnostic keeps its traceback in `error_<stem>.txt` and says so on stderr."""
+    from sophios import main as cli
+    workflow = tmp_path / 'crash.wic'
+    workflow.write_text('steps:\n- id: touch\n', encoding='utf-8')
+
+    def crash(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError('boom')
+
+    monkeypatch.setattr(cli.compiler, 'compile_source', crash)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), '--generate_cwl_workflow'])
+
+    with pytest.raises(SystemExit) as caught:
+        cli.main()
+
+    assert caught.value.code == 1
+    captured = capsys.readouterr()
+    assert f'Failed to compile {workflow}' in captured.err
+    assert 'See error_crash.txt for detailed technical information.' in captured.err
+    assert 'Failed to compile' not in captured.out
+    assert 'boom' in (tmp_path / 'error_crash.txt').read_text(encoding='utf-8')
 
 
 @pytest.mark.fast

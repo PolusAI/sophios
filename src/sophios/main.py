@@ -97,9 +97,9 @@ def _compile_loaded_document(yaml_path: str, yaml_stem: str, bundle: SourceBundl
             # No traceback file, though: a reported failure is not a crash,
             # and error_<stem>.txt exists to hide stack traces users cannot
             # act on.
-            print('Failed to compile', yaml_path)
+            print('Failed to compile', yaml_path, file=sys.stderr)
             for diagnostic in e.diagnostics:
-                print(diagnostic.message)
+                print(diagnostic, file=sys.stderr)
             sys.exit(1)
         except Exception as e:
             # Certain constraints are conditionally dependent on values and are
@@ -107,8 +107,8 @@ def _compile_loaded_document(yaml_path: str, yaml_stem: str, bundle: SourceBundl
             # Moreover, although we check for the existence of input files in
             # stage_input_files, we cannot encode file existence in json schema
             # to check the python_script script: tag before compile time.
-            print('Failed to compile', yaml_path)
-            print(f'See error_{yaml_stem}.txt for detailed technical information.')
+            print('Failed to compile', yaml_path, file=sys.stderr)
+            print(f'See error_{yaml_stem}.txt for detailed technical information.', file=sys.stderr)
             # Do not display a nasty stack trace to the user; hide it in a file.
             with open(f'error_{yaml_stem}.txt', mode='w', encoding='utf-8') as f:
                 # https://mypy.readthedocs.io/en/stable/common_issues.html#python-version-and-system-platform-checks
@@ -127,7 +127,7 @@ def main() -> None:
         _main()
     except SophiosError as e:
         for diagnostic in e.diagnostics:
-            print(diagnostic.message)
+            print(diagnostic, file=sys.stderr)
         sys.exit(1)
 
 
