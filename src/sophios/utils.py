@@ -27,18 +27,6 @@ def require_step_id(step_dict: Yaml, context: str = "step") -> str:
     return step_id
 
 
-def flatten(lists: list[list[Any]]) -> list[Any]:
-    """Concatenates a list of lists into a single list.
-
-    Args:
-        lists (list[list[Any]]): A list of lists
-
-    Returns:
-        list[Any]: A single list
-    """
-    return [x for lst in lists for x in lst]
-
-
 def recursively_delete_dict_key(key: str, obj: Any) -> Any:
     """Recursively deletes any dict entries with the given key.
 

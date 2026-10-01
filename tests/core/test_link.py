@@ -22,18 +22,9 @@ from sophios.ir.complete import complete
 from sophios.ir.pipeline import FrontEndResult
 from sophios.ir.types import AuthoredName
 from sophios.lang import SophiosErrorCode, parse
-from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
+from sophios.wic_types import StepId as LegacyStepId, Tool, Tools
 
-from .hermetic import bundle
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
-
-
-def _front(workflow: Yaml) -> WorkflowGraph:
-    model = bundle(workflow, 'oracle', SYNTHETIC_TOOLS)
-    result = front_end(model.parsed, model.registry, name='oracle')
-    assert result.resolved is not None and result.resolved.document is not None
-    assert result.graph is not None, list(result.diagnostics)
-    return result.graph
 
 
 def _rooted(root: str, tools: Tools = SYNTHETIC_TOOLS, **children: str) -> FrontEndResult:
