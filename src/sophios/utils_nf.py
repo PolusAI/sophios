@@ -1705,6 +1705,11 @@ def _tool_capability_findings(
     findings: list[str] = []
     if "when" in step and "scatter" in step:
         findings.append(f"{path}.when: per-combination when is not supported yet")
+    if "when" in step and not tool.get("inputs"):
+        findings.append(
+            f"{path}.when: a conditional step needs at least one input to gate on, "
+            "and this step's tool declares none"
+        )
 
     match tool.get("class"):
         case "CommandLineTool":

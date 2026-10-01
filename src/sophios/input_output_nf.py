@@ -308,10 +308,6 @@ def _render_conditional_invocation(process: NfProcess, arguments: list[str]) -> 
     """
     assert process.condition is not None
     ports = process.inputs
-    if not ports:
-        raise ValueError(
-            f"process {process.name!r} condition requires at least one input to gate on"
-        )
     synthetic = [f"__w{index}" for index in range(len(ports))]
     params = ", ".join(synthetic)
     in_channel = f"ch_{process.name}_in"

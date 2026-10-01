@@ -813,6 +813,12 @@ class NfProcess:
         if self.condition is not None:
             if not isinstance(self.condition, Expr):
                 raise TypeError("process condition must be a typed Expr or None")
+            if not inputs:
+                raise ValueError(
+                    f"process {self.name!r} has a condition but no inputs: a conditional step "
+                    "is decided once per invocation of its inputs, so it needs at least one "
+                    "input to gate on"
+                )
             condition_names = references(self.condition)
             if invalid := {
                 name for name in condition_names

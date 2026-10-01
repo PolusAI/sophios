@@ -395,7 +395,9 @@ output of a conditional step outside scatter.
 `when` on a step whose `run` is a workflow is rejected, since skipping an
 inlined sub-DAG is not this lowering's single-process shape. `pickValue` is
 rejected everywhere. `when` on a scattered step is rejected too;
-per-combination `when` is deferred beyond this lowering.
+per-combination `when` is deferred beyond this lowering. A conditional step
+needs at least one input to gate on, so `when` on a tool that declares no
+inputs is rejected.
 
 ## Current limits
 

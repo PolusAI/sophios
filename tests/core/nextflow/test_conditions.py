@@ -8,10 +8,11 @@ from typing import Any
 import pytest
 
 from sophios.input_output_nf import render_nextflow
-from sophios.nf_types import ExecutableNextflowWorkflow
+from sophios.nf_expr import parse
+from sophios.nf_types import ExecutableNextflowWorkflow, NfProcess
 from sophios.utils_nf import compiled_source_to_nextflow
 
-from .testkit import execute_nextflow, step, synthetic_source, tool, workflow_doc
+from .testkit import command, execute_nextflow, output_port, step, synthetic_source, tool, workflow_doc
 
 
 def _when_workflow(
@@ -64,8 +65,8 @@ def _when_workflow(
 
 @pytest.mark.fast
 @pytest.mark.parametrize(("when", "inputs"), [
-    ("$(true)", {}),
-    ("$(false)", {}),
+    ("$(true)", {"a": "int"}),
+    ("$(false)", {"a": "int"}),
     ("$(inputs.flag)", {"flag": "boolean"}),
     ("$(inputs.a > 1)", {"a": "int"}),
     ("$(inputs.a == 2)", {"a": "int"}),
@@ -81,6 +82,31 @@ def test_admitted_when_cells_lower_to_a_process_condition(when: str, inputs: dic
     process = workflow.processes[0]
     assert process.condition is not None
     assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("when", ["$(true)", "$(false)"])
+def test_a_conditional_step_with_no_inputs_is_rejected_at_lowering(when: str) -> None:
+    with pytest.raises(ValueError, match=r"steps\[0\]\.when: a conditional step needs at least one input to gate on"):
+        _when_workflow(when, {})
+
+
+@pytest.mark.fast
+def test_a_conditional_process_with_no_inputs_is_rejected_at_the_ir_boundary() -> None:
+    with pytest.raises(ValueError, match="process 'PRODUCE' has a condition but no inputs"):
+        NfProcess(
+            "PRODUCE", [], [output_port("result", "out.txt")], command("echo", stdout="out.txt"),
+            condition=parse("$(true)"),
+        )
+
+
+@pytest.mark.fast
+def test_hydration_rejects_a_conditional_process_with_no_inputs() -> None:
+    payload = _when_workflow("$(true)", {"a": 1}, a="int").to_dict()
+    payload["processes"][0]["inputs"] = []
+    payload["connections"] = [item for item in payload["connections"] if item.get("to_process") != "PRODUCE"]
+    with pytest.raises(ValueError, match="process 'PRODUCE' has a condition but no inputs"):
+        ExecutableNextflowWorkflow.from_dict(payload)
 
 
 @pytest.mark.fast
@@ -263,7 +289,6 @@ def test_a_condition_inside_an_inlined_subworkflow_survives_inlining() -> None:
     # pylint: disable=import-outside-toplevel
     from sophios.api.python._workflow_runtime import compile_workflow_result
     from sophios.api.python.workflow import Step, Workflow
-    from sophios.nf_expr import parse
     from .test_capabilities import _copy_tool, _write_step
     write = _write_step()
     inner = Step(_copy_tool(), step_name="inner_copy")
