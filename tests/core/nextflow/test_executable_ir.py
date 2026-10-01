@@ -978,45 +978,55 @@ def test_hydration_rejects_an_adapter_field_older_than_schema_version_8() -> Non
         ExecutableNextflowWorkflow.from_dict(payload)
 
 
-def _dotproduct_workflow() -> ExecutableNextflowWorkflow:
+def _multi_input_workflow(method: str) -> ExecutableNextflowWorkflow:
     process = NfProcess("PAIR", [NfPort("first", "val"), NfPort("second", "val")], [], command("true"))
     return ExecutableNextflowWorkflow(
         "wf",
         [process],
         [
-            NfWorkflowInputConnection("firsts", "PAIR", "first", "dotproduct"),
-            NfWorkflowInputConnection("seconds", "PAIR", "second", "dotproduct"),
+            NfWorkflowInputConnection("firsts", "PAIR", "first", method),
+            NfWorkflowInputConnection("seconds", "PAIR", "second", method),
         ],
         {"firsts": ["a", "b"], "seconds": ["c", "d"]},
     )
 
 
 @pytest.mark.fast
-def test_dotproduct_adapter_survives_hydration() -> None:
-    payload = _dotproduct_workflow().to_dict()
-    assert ExecutableNextflowWorkflow.from_dict(payload) == _dotproduct_workflow()
-    assert {c["adapter"] for c in payload["connections"]} == {"dotproduct"}
+@pytest.mark.parametrize("method", ["dotproduct", "flat_crossproduct"])
+def test_multi_input_adapter_survives_hydration(method: str) -> None:
+    payload = _multi_input_workflow(method).to_dict()
+    assert ExecutableNextflowWorkflow.from_dict(payload) == _multi_input_workflow(method)
+    assert {c["adapter"] for c in payload["connections"]} == {method}
 
 
 @pytest.mark.fast
-def test_hydration_rejects_a_dotproduct_adapter_older_than_schema_version_12() -> None:
-    payload = _dotproduct_workflow().to_dict()
+@pytest.mark.parametrize(
+    ("method", "introduced"), [("dotproduct", 12), ("flat_crossproduct", 13)]
+)
+def test_hydration_rejects_a_multi_input_adapter_older_than_its_schema_version(
+    method: str, introduced: int
+) -> None:
+    payload = _multi_input_workflow(method).to_dict()
 
     assert ExecutableNextflowWorkflow.from_dict(payload).to_dict() == payload
 
-    payload["schema_version"] = 11
-    with pytest.raises(ValueError, match=r"adapter='dotproduct'.*schema version 12.*schema version 11"):
+    payload["schema_version"] = introduced - 1
+    with pytest.raises(
+        ValueError,
+        match=rf"adapter='{method}'.*schema version {introduced}.*schema version {introduced - 1}",
+    ):
         ExecutableNextflowWorkflow.from_dict(payload)
 
 
 @pytest.mark.fast
-def test_rejects_a_single_dotproduct_adapted_input() -> None:
+@pytest.mark.parametrize("method", ["dotproduct", "flat_crossproduct"])
+def test_rejects_a_single_multi_input_adapted_input(method: str) -> None:
     process = NfProcess("PAIR", [NfPort("first", "val")], [], command("true"))
-    with pytest.raises(ValueError, match="dotproduct and flat_crossproduct scatter require two or more"):
+    with pytest.raises(ValueError, match=f"{method} scatter requires two or more"):
         ExecutableNextflowWorkflow(
             "wf",
             [process],
-            [NfWorkflowInputConnection("firsts", "PAIR", "first", "dotproduct")],
+            [NfWorkflowInputConnection("firsts", "PAIR", "first", method)],
             {"firsts": ["a"]},
         )
 
@@ -1039,7 +1049,8 @@ def test_rejects_a_process_mixing_scatter_and_dotproduct_adapters() -> None:
 
 
 @pytest.mark.fast
-def test_rejects_a_conditional_process_with_dotproduct_adapted_inputs() -> None:
+@pytest.mark.parametrize("method", ["dotproduct", "flat_crossproduct"])
+def test_rejects_a_conditional_process_with_multi_input_adapted_inputs(method: str) -> None:
     process = NfProcess(
         "PAIR",
         [NfPort("a", "val"), NfPort("b", "val"), NfPort("c", "val")],
@@ -1047,13 +1058,13 @@ def test_rejects_a_conditional_process_with_dotproduct_adapted_inputs() -> None:
         command("true"),
         condition=parse("$(inputs.c == 'go')"),
     )
-    with pytest.raises(ValueError, match="process 'PAIR' has a condition and dotproduct-adapted inputs"):
+    with pytest.raises(ValueError, match=f"process 'PAIR' has a condition and {method}-adapted inputs"):
         ExecutableNextflowWorkflow(
             "wf",
             [process],
             [
-                NfWorkflowInputConnection("avals", "PAIR", "a", "dotproduct"),
-                NfWorkflowInputConnection("bvals", "PAIR", "b", "dotproduct"),
+                NfWorkflowInputConnection("avals", "PAIR", "a", method),
+                NfWorkflowInputConnection("bvals", "PAIR", "b", method),
                 NfWorkflowInputConnection("c", "PAIR", "c"),
                 NfWorkflowOutputConnection("PAIR", "f", "result"),
             ],
@@ -1062,19 +1073,22 @@ def test_rejects_a_conditional_process_with_dotproduct_adapted_inputs() -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize("method", ["dotproduct", "flat_crossproduct"])
 @pytest.mark.parametrize("process_connection_first", [False, True])
-def test_rejects_a_process_connection_out_of_a_dotproduct_scattered_process(process_connection_first: bool) -> None:
+def test_rejects_a_process_connection_out_of_a_multi_input_scattered_process(
+    method: str, process_connection_first: bool
+) -> None:
     pair = NfProcess(
         "PAIR", [NfPort("a", "val"), NfPort("b", "val")], [output_port("f", "out.txt")], command("true")
     )
     following = NfProcess("NEXT", [NfPort("x", "path")], [output_port("g", "g.txt")], command("true"))
     inputs: list[NfConnection] = [
-        NfWorkflowInputConnection("avals", "PAIR", "a", "dotproduct"),
-        NfWorkflowInputConnection("bvals", "PAIR", "b", "dotproduct"),
+        NfWorkflowInputConnection("avals", "PAIR", "a", method),
+        NfWorkflowInputConnection("bvals", "PAIR", "b", method),
     ]
     edge = NfProcessConnection("PAIR", "f", "NEXT", "x")
     connections = [edge, *inputs] if process_connection_first else [*inputs, edge]
-    with pytest.raises(ValueError, match=r"connection PAIR\.f -> NEXT\.x leaves dotproduct-scattered process 'PAIR'"):
+    with pytest.raises(ValueError, match=rf"connection PAIR\.f -> NEXT\.x leaves {method}-scattered process 'PAIR'"):
         ExecutableNextflowWorkflow(
             "wf",
             [pair, following],
