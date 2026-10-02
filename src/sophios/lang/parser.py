@@ -250,8 +250,10 @@ def _listed(key: str, node: yaml.nodes.Node, file: str, diags: Diagnostics) -> O
 
     CWL writes each as a mapping or as a list of entries named by `id:` (ports)
     or `class:` (requirements). The compiler acts on the mapping, so the list is
-    lifted here. An entry with no name, or a name already taken, cannot be a
-    mapping entry and is reported. A list holding an `$import` or `$include`
+    lifted here. A port's `id:` may be written as a fragment (`#name`); the key
+    is the name after the `#`. An entry with no name, a fragment with nothing
+    after the `#`, or a name already taken cannot be a mapping entry and is
+    reported. A list holding an `$import` or `$include`
     entry cannot be keyed, since that entry is named by a file only cwltool
     reads, so it is returned as written for cwltool to resolve.
     """
@@ -264,10 +266,18 @@ def _listed(key: str, node: yaml.nodes.Node, file: str, diags: Diagnostics) -> O
     mapping: dict[str, OpaqueCwl] = {}
     for entry_node, entry in zip(node.value, value, strict=True):
         span = SourceSpan.of(file, entry_node)
-        if not isinstance(entry, dict) or not isinstance(name := entry.get(named_by), str):
+        name = entry.get(named_by) if isinstance(entry, dict) else None
+        if not isinstance(entry, dict) or not isinstance(name, str):
             diags.error(SophiosErrorCode.EXPECTED_MAPPING,
                         f'a list-form {key}: entry must be a mapping with a string {named_by}:', span)
             continue
+        if named_by == 'id':
+            written, name = name, name.rsplit('#', 1)[-1]
+            if not name:
+                diags.error(SophiosErrorCode.EXPECTED_MAPPING,
+                            f'a list-form {key}: entry id: {written!r} names no port: '
+                            'the name is the part after the last #, and it must not be empty', span)
+                continue
         if name in mapping:
             diags.error(SophiosErrorCode.DUPLICATE_KEY, f'{key}: entry {name!r} is defined more than once', span)
             continue

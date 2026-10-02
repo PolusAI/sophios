@@ -1339,7 +1339,10 @@ def test_an_unknown_tag_and_a_misplaced_anchor_are_both_reported_in_both_positio
     ('requirements:\n- class: ScatterFeatureRequirement\n', 'requirements', {'ScatterFeatureRequirement': {}}),
     ('hints:\n- class: DockerRequirement\n  dockerPull: x\n', 'hints', {'DockerRequirement': {'dockerPull': 'x'}}),
     ('inputs: []\n', 'inputs', {}),
-], ids=['inputs', 'outputs', 'requirements', 'hints', 'empty'])
+    ("requirements:\n- class: ''\n", 'requirements', {'': {}}),
+    ("inputs:\n- id: '#nm'\n  type: string\n", 'inputs', {'nm': {'type': 'string'}}),
+    ("outputs:\n- id: 'wf.cwl#o'\n  type: File\n", 'outputs', {'o': {'type': 'File'}}),
+], ids=['inputs', 'outputs', 'requirements', 'hints', 'empty', 'empty-class', 'fragment-id', 'path-fragment-id'])
 def test_cwl_list_forms_are_read_as_mappings(source: str, key: str, expected: dict) -> None:
     """`inputs`, `outputs`, `requirements` and `hints` written as lists are keyed by `id` or `class`."""
     result = parse(source, 'list.wic')
@@ -1363,11 +1366,36 @@ def test_a_steps_list_form_requirements_and_hints_are_read_as_mappings(key: str)
     ('outputs:\n- just-a-name\n', SophiosErrorCode.EXPECTED_MAPPING),
     ('inputs:\n- id: [a]\n', SophiosErrorCode.EXPECTED_MAPPING),
     ('inputs:\n- {id: a, type: string}\n- {id: a, type: int}\n', SophiosErrorCode.DUPLICATE_KEY),
-], ids=['no-id', 'no-class', 'not-a-mapping', 'id-not-a-string', 'duplicate'])
+    ("inputs:\n- {id: a, type: string}\n- {id: '#a', type: int}\n", SophiosErrorCode.DUPLICATE_KEY),
+    ("inputs:\n- {id: '#', type: string}\n", SophiosErrorCode.EXPECTED_MAPPING),
+    ("outputs:\n- {id: 'wf.cwl#', type: string}\n", SophiosErrorCode.EXPECTED_MAPPING),
+    ("inputs:\n- {id: '', type: string}\n", SophiosErrorCode.EXPECTED_MAPPING),
+], ids=['no-id', 'no-class', 'not-a-mapping', 'id-not-a-string', 'duplicate', 'duplicate-after-fragment',
+        'bare-fragment', 'empty-after-file-fragment', 'empty-id'])
 def test_a_list_form_entry_that_cannot_be_keyed_is_reported(source: str, code: SophiosErrorCode) -> None:
     """An entry with no usable `id` or `class`, or a name taken twice, has no place in the mapping."""
     result = parse(source, 'list.wic')
     assert [d.code for d in result.diagnostics] == [code]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('source, message', [
+    ('inputs:\n- type: string\n', 'a list-form inputs: entry must be a mapping with a string id:'),
+    ('inputs:\n- just-a-name\n', 'a list-form inputs: entry must be a mapping with a string id:'),
+    ('inputs:\n- id: [a]\n', 'a list-form inputs: entry must be a mapping with a string id:'),
+    ('requirements:\n- coresMin: 1\n', 'a list-form requirements: entry must be a mapping with a string class:'),
+    ("inputs:\n- id: '#'\n", "a list-form inputs: entry id: '#' names no port: "
+     'the name is the part after the last #, and it must not be empty'),
+    ("outputs:\n- id: 'wf.cwl#'\n", "a list-form outputs: entry id: 'wf.cwl#' names no port: "
+     'the name is the part after the last #, and it must not be empty'),
+    ("inputs:\n- id: ''\n", "a list-form inputs: entry id: '' names no port: "
+     'the name is the part after the last #, and it must not be empty'),
+], ids=['no-id', 'not-a-mapping', 'id-not-a-string', 'no-class', 'bare-fragment', 'empty-after-file-fragment',
+        'empty-id'])
+def test_an_unkeyable_list_form_entry_states_the_rule_for_its_name(source: str, message: str) -> None:
+    """Each unkeyable entry is told the rule it broke: a string name, or an `id:` with a name after the last #."""
+    result = parse(source, 'list.wic')
+    assert [d.message for d in result.diagnostics] == [message]
 
 
 @pytest.mark.fast

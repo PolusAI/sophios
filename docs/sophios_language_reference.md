@@ -148,8 +148,10 @@ $namespaces:    # any other CWL key          (passthrough)
 `inputs`, `outputs`, `requirements` and `hints` may be written in CWL's list form
 (`- id: x` / `- class: X`), and a step's `requirements` and `hints` likewise. The
 parser reads the list as the mapping form, so what follows it sees the mapping.
-An entry without its `id:` or `class:`, and one naming the same `id:` or
-`class:` twice, are reported.
+A port's `id:` may be written as a fragment (`#name` or `file.cwl#name`); its
+mapping key is the name after the last `#`, so `a` and `#a` name the same port.
+An entry without its `id:` or `class:` (or whose `id:` has nothing after the
+`#`), and one naming the same key twice, are reported.
 
 A list holding an `$import` or `$include` entry is the exception. That entry
 names no `id:` or `class:` until cwltool has read its file, so the whole list is
