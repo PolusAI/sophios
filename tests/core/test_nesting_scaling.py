@@ -25,18 +25,31 @@ from .hermetic import compile_hermetic, nested_workflow
 #: depth stays under 1.2 over the depths used here; doubling per level is 2.
 MAX_GROWTH_PER_LEVEL: Final = 1.4
 
-#: Runs timed per depth; the fastest is kept, since a pause only adds time.
+#: Samples taken per depth; the fastest is kept, since a pause only adds time.
 REPEATS: Final = 3
+
+#: CPU seconds one sample runs the work for. The clock that counts them advances
+#: in ticks as coarse as 15.6 ms (Windows), so a sample must span many ticks or
+#: the work reads as taking no time at all.
+SAMPLE_SECONDS: Final = 0.05
 
 
 def _fastest(run: Callable[[], object]) -> float:
-    """The least CPU time of `REPEATS` runs: time the process spends running,
-    which a busy machine does not stretch the way it stretches the clock."""
+    """The least CPU time of one run over `REPEATS` samples: time the process
+    spends running, which a busy machine does not stretch the way it stretches
+    the clock. A sample repeats the run for `SAMPLE_SECONDS` and divides by the
+    count, so the tick of the clock is a small share of what is measured."""
     best = math.inf
     for _ in range(REPEATS):
+        runs = 0
         started = time.process_time()
-        run()
-        best = min(best, time.process_time() - started)
+        while True:
+            run()
+            runs += 1
+            elapsed = time.process_time() - started
+            if elapsed >= SAMPLE_SECONDS:
+                break
+        best = min(best, elapsed / runs)
     return best
 
 
