@@ -232,12 +232,15 @@ def test_an_untyped_output_of_a_called_workflow_is_typed_in_the_caller(
      ('`outputSource: mk_file/fiel` names no output of a step', "Did you mean 'mk_file/file'?")),
     ({'outputSource': 'kid/res'},
      ('`outputSource: kid/res` names no output of a step', "Did you mean 'kid.wic/res'?")),
+    ({'outputSource': ['mk_file/file']}, ('is written as a list', 'Add `type:`.')),
+    ({'outputSource': []}, ('is written as a list', 'Add `type:`.')),
+    ({'outputSource': ['mk_file/file', 'mk_file/file']}, ('is written as a list', 'Add `type:`.')),
     ({'outputSource': 'nothing/at_all'},
      ('names no output of a step', 'Check the step and output names.')),
     ({'outputSource': 'kid.wic/kid__step__1__mk_file___file'},
      ('names no output of a step', 'Check the step and output names.')),
-], ids=['no-source', 'misspelled-output', 'workflow-without-its-extension', 'nothing-close',
-        'name-the-compiler-derives'])
+], ids=['no-source', 'misspelled-output', 'workflow-without-its-extension', 'source-list', 'empty-source-list',
+        'two-sources', 'nothing-close', 'name-the-compiler-derives'])
 def test_an_untyped_output_with_nothing_to_take_a_type_from_is_wic036(
         output: Yaml, said: tuple[str, ...]) -> None:
     """The message says which half of the author's `outputSource:` to fix, not only to add a `type:`."""

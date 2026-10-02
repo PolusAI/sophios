@@ -77,7 +77,9 @@ broad enough to cover them would have to be weak enough to say nothing:
   `outputs:` is interpreted, not merely tolerated. An output with no `type:`
   takes the type of the step output its `outputSource:` names, as an array
   when that step scatters. One whose `outputSource:` names no step output of
-  the workflow, or that has none, has no type to take and is `wic036`.
+  the workflow, or that has none, has no type to take and is `wic036`. So is
+  one whose `outputSource:` is a list: a list never gives a type, even when
+  its one element names a real step output, so write `type:` there.
 - `cwlVersion` is **written by the compiler**: it is always the one declared
   substrate version, whatever the document says. Sophios generates constructs
   from that version — a workflow that declared `v1.0` and used `when:` used to
