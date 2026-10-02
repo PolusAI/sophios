@@ -473,3 +473,19 @@ def test_a_workflow_output_bound_to_stdout_or_stderr_is_a_file() -> None:
     outputs = workflow.compile().cwl_workflow["outputs"]
     assert outputs["log"]["type"] == "File"
     assert outputs["errors"]["type"] == "File"
+
+
+@pytest.mark.fast
+def test_an_unbound_stdin_input_is_promoted_as_a_file() -> None:
+    """`stdin` is a CommandLineTool's own shorthand; the workflow input promoted from it must say `File`."""
+    tool = CommandLineTool(
+        "cat_tool",
+        Inputs(src=Input("stdin")),
+        Outputs(out=Output.stdout()),
+    ).stdin("$(inputs.src.path)").stdout("stdout.txt")
+    step = tool.to_step(step_name="cat_it")
+    workflow = Workflow([step], "stdin_in")
+    workflow.outputs.log = step.outputs.out
+
+    inputs = workflow.compile().cwl_workflow["inputs"]
+    assert [spec["type"] for spec in inputs.values()] == ["File"]
