@@ -482,10 +482,26 @@ def test_an_unbound_stdin_input_is_promoted_as_a_file() -> None:
         "cat_tool",
         Inputs(src=Input("stdin")),
         Outputs(out=Output.stdout()),
-    ).stdin("$(inputs.src.path)").stdout("stdout.txt")
+    ).stdout("stdout.txt")
     step = tool.to_step(step_name="cat_it")
     workflow = Workflow([step], "stdin_in")
     workflow.outputs.log = step.outputs.out
 
     inputs = workflow.compile().cwl_workflow["inputs"]
     assert [spec["type"] for spec in inputs.values()] == ["File"]
+
+
+@pytest.mark.fast
+def test_a_bound_stdin_input_is_promoted_as_a_file() -> None:
+    """A `stdin` input bound to a workflow input must not leave `stdin` on the workflow."""
+    tool = CommandLineTool(
+        "cat_tool",
+        Inputs(src=Input("stdin")),
+        Outputs(out=Output.stdout()),
+    ).stdout("stdout.txt")
+    step = tool.to_step(step_name="cat_it")
+    workflow = Workflow([step], "stdin_bound")
+    step.inputs.src = workflow.inputs.data
+    workflow.outputs.log = step.outputs.out
+
+    assert workflow.compile().cwl_workflow["inputs"] == {"data": {"type": "File"}}

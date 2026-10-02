@@ -155,7 +155,8 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
     # - everything else is treated as a literal inline value
     match value:
         case WorkflowInputReference(workflow=workflow, name=name, implicit=implicit):
-            workflow_input = workflow._ensure_input(name, parameter_type=input_port.parameter_type, implicit=implicit)
+            workflow_input = workflow._ensure_input(
+                name, parameter_type=_boundary_type(input_port.parameter_type), implicit=implicit)
             input_port._set_binding(InputBinding("workflow", name))
             input_port.set_bound_parameter_type(workflow_input.parameter_type)
         case OutputParameter(parent_obj=Workflow(), name=name):
@@ -178,8 +179,8 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
 
 
 def _boundary_type(parameter_type: Any) -> Any:
-    """A tool's `stdout`/`stderr` shorthand as the `File` a workflow output must declare."""
-    return 'File' if parameter_type in ('stdout', 'stderr') else parameter_type
+    """A tool's `stdin`/`stdout`/`stderr` shorthand as the `File` a workflow boundary must declare."""
+    return 'File' if parameter_type in ('stdin', 'stdout', 'stderr') else parameter_type
 
 
 def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) -> None:
