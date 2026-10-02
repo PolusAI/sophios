@@ -351,11 +351,12 @@ def _coerce_string(name: str, value: Any) -> str:
     """The text of a scalar literal, or of a mapping or list as JSON.
 
     The one conversion kept besides an int into a float: `!ii 20` cannot be
-    spelled as the text "20" (the composer resolves it to a number), and
-    `str()` of a scalar loses nothing. YAML reads an unquoted 2024-01-15 as a
-    date; its text is what the author wrote.
+    spelled as the text "20" (the composer resolves it to a number). A boolean is
+    JSON's `true` or `false`, as inside a mapping; a number is Python's spelling
+    of it (`1.0e-5` is "1e-05"). YAML reads an unquoted 2024-01-15 as a date; its
+    text is what the author wrote.
     """
-    if isinstance(value, (dict, list)):
+    if isinstance(value, (dict, list, bool)):
         try:
             return json.dumps(value)
         except TypeError as exc:

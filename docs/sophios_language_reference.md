@@ -251,7 +251,9 @@ input is `wic020`, as is `!ii 1` on a `boolean` one, `!ii '007'` on an `int` one
 number written as text on a `float` one. Two conversions remain, because neither loses
 anything: an integer on a `float` port is that float (`!ii 1` is `1.0`; an integer a float
 cannot hold exactly is `wic020`), and a scalar on a `string` port is its text, because the
-tagged spelling cannot write the text `"20"` without it being read as the number.
+tagged spelling cannot write the text `"20"` without it being read as the number. A boolean
+is `true` or `false`, as inside a mapping; a number is written the way Python prints it
+(`!ii 1.0e-5` is `"1e-05"`).
 
 YAML reads `1e-5` and `1E3` as text, not as floats: a float needs a decimal point and a
 signed exponent. `!ii 1e-5` on a `float` port is therefore `wic020`; write `1.0e-5`.

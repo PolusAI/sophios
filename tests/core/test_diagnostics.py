@@ -174,7 +174,7 @@ def test_a_literal_of_the_wrong_type_is_wic020_not_converted(declared: object, l
 
 @pytest.mark.fast
 @pytest.mark.parametrize('declared, literal, expected', [
-    ('string', 20, '20'), ('string', 1.5, '1.5'), ('string', True, 'True'),
+    ('string', 20, '20'), ('string', 1.5, '1.5'), ('string', True, 'true'), ('string', False, 'false'),
     ('string', datetime.date(2024, 1, 15), '2024-01-15'),
     ('string', {'seen': 'a'}, '{"seen": "a"}'),
     ('float', 1, 1.0), ('double', 2**53, float(2**53)), ('float', 1.0e-5, 1.0e-5),
