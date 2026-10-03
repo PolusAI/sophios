@@ -541,3 +541,24 @@ def test_a_positional_output_source_compiles_in_a_fully_explicit_workflow() -> N
                                             'out': [{'file': {'wic_anchor': 'f'}}]},
                                            {'id': 'count', 'in': {'file': {'wic_alias': 'f'}}}]})
     assert compiled.artifact.cwl['outputs']['n']['outputSource'] == 'oracle__step__2__count/n'
+
+
+@pytest.mark.fast
+def test_naming_conventions_pick_the_name_matched_output_over_the_last_declared() -> None:
+    """With conventions on, `input_structure` takes `output_structure` although
+    `output_other` is declared last, which is the one taken with them off."""
+    producer = clt({}, {'output_structure': {'type': 'File', 'outputBinding': {'glob': 's'}},
+                        'output_other': {'type': 'File', 'outputBinding': {'glob': 'o'}}}, canonical=True)
+    consumer = clt({'input_structure': {'type': 'File', 'inputBinding': {'position': 1}}}, {}, canonical=True)
+    tools = {**SYNTHETIC_TOOLS,
+             LegacyStepId('producer', SYNTHETIC_NS): Tool('/synthetic/producer.cwl', producer),
+             LegacyStepId('consumer', SYNTHETIC_NS): Tool('/synthetic/consumer.cwl', consumer)}
+    workflow: Yaml = {'steps': [{'id': 'producer'}, {'id': 'consumer'}]}
+    chosen: dict[bool, PortName] = {}
+    for conventions in (True, False):
+        _, linked, _ = _typed(copy.deepcopy(workflow), tools)
+        result = infer(linked, InferencePolicy(use_naming_conventions=conventions))
+        assert result.graph is not None, list(result.diagnostics)
+        (edge,) = [edge for edge in result.graph.linked_edges if edge.sink.step.name == 'consumer']
+        chosen[conventions] = edge.source.port
+    assert chosen == {True: 'output_structure', False: 'output_other'}

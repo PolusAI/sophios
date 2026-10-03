@@ -700,3 +700,15 @@ def test_the_names_map_covers_every_emitted_step_and_boundary_port() -> None:
     lifted = found['ports']['oracle__step__1__child.wic___child__step__1__mk_file___name']
     assert lifted == {'workflow': 'oracle', 'steps': ['child.wic', 'mk_file'], 'port': 'name'}
 
+
+@pytest.mark.fast
+def test_emitted_inputs_list_authored_names_first_then_derived_in_step_order() -> None:
+    """Authored inputs keep the order written and come before the inputs
+    exposing a step's port, which follow the steps. `mk_file.name` is lifted by
+    inference, after `mk_text`'s literal already exposed its own input."""
+    compiled = compile_hermetic_cwl({
+        'inputs': {'zeta': 'string', 'alpha': 'string'},
+        'steps': [{'id': 'mk_file'},
+                  {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'a'}}}]})
+    assert list(compiled['inputs']) == ['zeta', 'alpha',
+                                        'oracle__step__1__mk_file___name', 'oracle__step__2__mk_text___name']
