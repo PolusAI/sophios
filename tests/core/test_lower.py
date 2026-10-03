@@ -42,7 +42,7 @@ from sophios.lang.parser import parse
 from sophios.lang.spans import SourceSpan
 
 from . import ast_strategies as strat
-from .hermetic import COVERAGE, ORACLE, compile_hermetic, subworkflow_step
+from .hermetic import COVERAGE, ORACLE, compile_hermetic, compile_hermetic_cwl, subworkflow_step
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -518,3 +518,14 @@ def test_a_record_binds_an_input_its_process_does_not_declare() -> None:
     with pytest.raises(SophiosError) as caught:
         compile_hermetic(workflow)
     assert SophiosErrorCode.UNDECLARED_PORT in {d.code for d in caught.value.diagnostics}
+
+
+@pytest.mark.fast
+def test_scatter_ports_keep_the_authored_order() -> None:
+    """`scatter: [name, file]` on xform is emitted in that order: under
+    `nested_crossproduct` the order is the nesting of the output arrays."""
+    compiled = compile_hermetic_cwl({'steps': [{'id': 'xform', 'scatter': ['name', 'file'],
+                                                'scatterMethod': 'nested_crossproduct',
+                                                'in': {'name': {'wic_inline_input': ['a']},
+                                                       'file': {'wic_inline_input': ['x.txt']}}}]})
+    assert compiled['steps'][0]['scatter'] == ['name', 'file']
