@@ -60,8 +60,8 @@ def test_both_surfaces_compile_to_the_same_cwl(stem: str) -> None:
     wic_path = COOKBOOK / f'{stem}.wic'
     workflows = {'global': {path.stem: path for path in COOKBOOK.glob('*.wic')}}
     bundle = bundle_from_disk(wic_path, workflows, load_test_registry().tools)
-    options, graph_settings, tag_paths = default_compilation_settings()
-    result = sophios.compiler.compile_source(bundle, options, graph_settings, tag_paths,
+    options, graph_settings = default_compilation_settings()
+    result = sophios.compiler.compile_source(bundle, options, graph_settings,
                                              relative_run_path=True, testing=True,
                                              graph_target=get_graph_reps(stem))
     artifact = inline_artifact_runs(result.artifact)

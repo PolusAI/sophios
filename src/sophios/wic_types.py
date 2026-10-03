@@ -97,13 +97,6 @@ class GraphSettings(TypedDict):
     graph_show_inputs: bool
 
 
-class YamlTagPaths(TypedDict):
-    """Paths that need to be included in (generated) yaml tags."""
-    cachedir: str
-    yaml: str
-    homedir: str
-
-
 class PluginNodeConfig(TypedDict):
     """The UI-derived input/output configuration for a single WFB plugin node."""
     ui: list[Json]

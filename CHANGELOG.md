@@ -40,6 +40,13 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   verbatim `!<tag:...>`) is reported (wic009), as an unknown `!` tag is; it
   used to pass the parser and then fail in the YAML loader. Remove the tag, or
   quote the text if it was meant literally.
+- A `cwl_subinterpreter` step declares a real-time analysis and is no longer
+  emitted as a CWL step. Every input is a literal, and a malformed
+  declaration is reported (wic044). The adapter's `cachedir_path`,
+  `root_workflow_yml_path` and `homedir` inputs and its `output_log_path`
+  output are gone: remove a binding of those inputs and any edge from
+  `output_log_path`. `max_times` is an `int`; a string integer such as `'20'`
+  is still accepted.
 
 ### Command line
 
@@ -72,6 +79,7 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   file. A call that carries anything besides `in` and `out` (such as
   `scatter:` or `when:`), or whose workflow says `wic: {inlineable: false}`,
   stays nested and is named on stderr.
+- The `cwl_subinterpreter` command is gone.
 
 ### Python API and embedding
 
@@ -124,6 +132,10 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   from it. Write a value as the runner should see it. A key that is not an
   environment variable name raises `ValueError` before the run starts, where
   it used to be dropped with a warning; rename or remove it.
+- `compile_source` no longer takes `yaml_tag_paths`, and
+  `sophios.cli.default_compilation_settings()` and `get_dicts_for_compilation()`
+  return `(compiler_options, graph_settings)`; drop the third item. The
+  `sophios.cwl_subinterpreter` module is gone.
 
 <!-- Breaking changes merged before 0.7.0 is released add their upgrade steps
      to the section above that they belong to. -->

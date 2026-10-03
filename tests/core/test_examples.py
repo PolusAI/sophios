@@ -244,11 +244,11 @@ def run_workflows(
     Path(basepath).mkdir(parents=True, exist_ok=True)
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, tools_cwl)
 
-    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
+    compiler_options, graph_settings = sophios.cli.get_dicts_for_compilation(args)
 
     graph = get_graph_reps(str(yml_path))
     result = sophios.compiler.compile_source(
-        bundle, compiler_options, graph_settings, yaml_tag_paths,
+        bundle, compiler_options, graph_settings,
         relative_run_path=True, testing=True, graph_target=graph)
     artifact = result.artifact
     artifact = apply_inline_options(artifact, subworkflows=args.cwl_inline_subworkflows,
@@ -342,11 +342,11 @@ def test_emitted_cwl_says_nothing_cwl_cannot_read(yml_path_str: str, yml_path: P
     still carry one anywhere else in the document.
     """
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, corpus_registry.tools)
-    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(
+    compiler_options, graph_settings = sophios.cli.get_dicts_for_compilation(
         get_args(str(yml_path)))
     try:
         result = sophios.compiler.compile_source(
-            bundle, compiler_options, graph_settings, yaml_tag_paths,
+            bundle, compiler_options, graph_settings,
             relative_run_path=True, testing=True, graph_target=get_graph_reps(str(yml_path)))
     except SophiosError as error:
         if _is_includer_fragment(error):
@@ -419,11 +419,11 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, tools_cwl)
 
     graph = get_graph_reps(str(yml_path))
-    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
+    compiler_options, graph_settings = sophios.cli.get_dicts_for_compilation(args)
 
     try:
         result = sophios.compiler.compile_source(
-            bundle, compiler_options, graph_settings, yaml_tag_paths,
+            bundle, compiler_options, graph_settings,
             relative_run_path=False, testing=True, graph_target=graph)
     except SophiosError as error:
         if _is_includer_fragment(error):
@@ -459,7 +459,7 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
         try:
             fake_result = sophios.compiler.compile_source(
                 frontdoor.bundle_from_disk(sub_path, yml_paths, tools_cwl),
-                compiler_options, graph_settings, yaml_tag_paths,
+                compiler_options, graph_settings,
                 relative_run_path=False, testing=True,
                 graph_target=graph_fakeroot)
         except SophiosError as error:
@@ -520,10 +520,10 @@ def _compile_corpus_workflow(yml_path_str: str, yml_path: Path, registry: Corpus
     """The artifact tree of one corpus workflow, skipping a fragment that has no standalone compile."""
     args = get_args(str(yml_path))
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, registry.tools)
-    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
+    compiler_options, graph_settings = sophios.cli.get_dicts_for_compilation(args)
     try:
         return sophios.compiler.compile_source(
-            bundle, compiler_options, graph_settings, yaml_tag_paths,
+            bundle, compiler_options, graph_settings,
             relative_run_path=True, testing=True, graph_target=get_graph_reps(str(yml_path))).artifact
     except SophiosError as error:
         if _is_includer_fragment(error):

@@ -77,17 +77,14 @@ async def compile_wf(request: Request) -> Json:
     graph = get_graph_reps(wkflw_name)
 
     # From the arguments this endpoint actually built, not a fresh default
-    # parse. Nothing observable changes here — `wkflw_name` is a name, not a
-    # path, and the sole consumer takes `Path(...).parent.absolute()`, which
-    # is the cwd for both `''` and `'workflow_'`. It is still the right shape:
-    # re-deriving configuration that is already in hand is how the two drift.
-    compiler_options, graph_settings, yaml_tag_paths = get_dicts_for_compilation(args)
+    # parse: re-deriving configuration that is already in hand is how the two drift.
+    compiler_options, graph_settings = get_dicts_for_compilation(args)
 
     # ========= COMPILE WORKFLOW ================
     bundle = frontdoor.bundle_from_source(
         yaml.safe_dump(workflow_can, sort_keys=False), wkflw_name, {}, tools_cwl)
     result = compiler.compile_source(
-        bundle, compiler_options, graph_settings, yaml_tag_paths,
+        bundle, compiler_options, graph_settings,
         relative_run_path=True, testing=False, graph_target=graph)
     # generating cwl inline within the 'run' tag is post compile
     # and always on when compiling and preparing REST return payload

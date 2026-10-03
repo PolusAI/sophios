@@ -1,58 +1,15 @@
 """Regression coverage for `sophios.compiler` bugs that have no home elsewhere."""
 import copy
-from pathlib import Path
-from typing import Any
 
 import pytest
 
-from sophios import compiler, cwl_subinterpreter, utils
+from sophios import compiler
 from sophios.cli import default_compilation_settings
-from sophios.lang import to_json
 from sophios.utils_graphs import get_graph_reps
 from sophios.wic_types import StepId, Yaml
 
 from .hermetic import bundle, compile_hermetic_cwl, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
-
-
-class _Captured(Exception):
-    """Raised by the stub to stop `rerun_cwltool` once it has built its document."""
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('cwl_tool', 'config'), [
-    ('tool', {'id': 'elsewhere', 'in': {}}),
-    ('tool.wic', {'in': {}}),
-])
-def test_rerun_cwltool_builds_an_id_form_step(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        cwl_tool: str, config: Yaml) -> None:
-    """`rerun_cwltool` builds a step whose `id` can be read back, on both branches.
-
-    Asserting on literals copied into the test proves nothing about the code:
-    the documents are built inside `rerun_cwltool`, so the test has to get them
-    from there. Each branch hands its document to exactly one function, which is
-    the seam to stub — the CWL runner is never reached, and the cache directory
-    is never touched. `_Captured` is not a `FileNotFoundError`, so the
-    function's own handler does not swallow it.
-
-    One row's config carries an `id` of its own, so the step the branch builds
-    is only named for the tool if the config cannot overwrite it.
-    """
-    seen: list[Yaml] = []
-
-    def capture(*args: Any, **_: Any) -> None:
-        # Both branches end at the same door, so the document the branch
-        # built is read back from the parse it bundled.
-        seen.append(to_json(args[0].parsed.document))
-        raise _Captured
-
-    monkeypatch.setattr(compiler, 'compile_source', capture)
-    with pytest.raises(_Captured):
-        cwl_subinterpreter.rerun_cwltool(
-            '', tmp_path, tmp_path, cwl_tool, config, {}, {}, tmp_path)
-
-    assert [utils.require_step_id(step) for step in seen[0]['steps']] == [cwl_tool]
 
 
 @pytest.mark.fast
@@ -106,10 +63,10 @@ def test_the_graph_draws_inferred_edges_in_the_font_colour_and_the_rest_in_blue(
             {'id': 'count'},                                       # file inferred from xform
         ]}),
     ]}
-    compiler_options, graph_settings, yaml_tag_paths = default_compilation_settings()
+    compiler_options, graph_settings = default_compilation_settings()
     graph_settings['graph_dark_theme'] = dark_theme
     compiled = compiler.compile_source(
-        bundle(document, 'oracle', SYNTHETIC_TOOLS), compiler_options, graph_settings, yaml_tag_paths,
+        bundle(document, 'oracle', SYNTHETIC_TOOLS), compiler_options, graph_settings,
         relative_run_path=True, testing=True, graph_target=get_graph_reps('oracle'))
 
     root = compiled.artifact.graph_view.graphdata
