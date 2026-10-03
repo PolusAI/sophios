@@ -325,6 +325,7 @@ def _workflow_ports(raw: object, *, output: bool, diagnostics: Diagnostics,
     return tuple(ports)
 
 
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def _output_port(workflow_name: str, nodes: list[StepNode], raw: object,
                  diagnostics: Diagnostics, span: SourceSpan | None,
                  output_name: str) -> tuple[PortId | None, bool]:
