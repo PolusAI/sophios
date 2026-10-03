@@ -810,8 +810,8 @@ def test_config_yaml_normalizes_cwl_file_and_directory_objects(tmp_path: Path) -
         encoding="utf-8",
     )
     subdirectory = Step(clt_path=_adapter("subdirectory"), config_path=subdirectory_cfg)
-    assert subdirectory._as_workflow_step().input("directory") == \
-        InlineLiteral(str(input_dir))
+    directory = subdirectory._as_workflow_step().input("directory")
+    assert isinstance(directory, InlineLiteral) and directory.value == str(input_dir)
 
     append_cfg = tmp_path / "append.yml"
     append_cfg.write_text(
@@ -825,7 +825,8 @@ def test_config_yaml_normalizes_cwl_file_and_directory_objects(tmp_path: Path) -
         encoding="utf-8",
     )
     append = Step(clt_path=_adapter("append"), config_path=append_cfg)
-    assert append._as_workflow_step().input("file") == InlineLiteral(str(input_file))
+    file = append._as_workflow_step().input("file")
+    assert isinstance(file, InlineLiteral) and file.value == str(input_file)
 
 
 @pytest.mark.fast
@@ -2021,3 +2022,53 @@ def test_a_workflow_input_only_a_transforming_record_reads_is_any() -> None:
     wf = Workflow([echo], 'transformed')
     echo.inputs.message = StepInput(source=wf.inputs.n, value_from='$(String(self))')
     assert wf.compile().cwl_workflow['inputs']['n']['type'] == 'Any'
+
+
+def _line_above() -> int:
+    """The line above the caller's current line: the statement a test just ran."""
+    frame = sys._getframe(1)  # pylint: disable=protected-access
+    return frame.f_lineno - 1
+
+
+@pytest.mark.fast
+def test_a_compile_diagnostic_names_the_python_line_of_the_binding() -> None:
+    """A literal of the wrong type bound in Python is reported at the line that bound it."""
+    scale = Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',
+                                    'inputs': {'n': 'int'}, 'outputs': {}}, process_name='scale')
+    scale.inputs.n = 'not an int'
+    expected_line = _line_above()
+    with pytest.raises(SophiosError) as caught:
+        Workflow([scale], 'wf').compile()
+    diagnostic = caught.value.diagnostics[0]
+    assert diagnostic.code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
+    assert diagnostic.span is not None
+    assert Path(diagnostic.span.file) == Path(__file__).resolve()
+    assert diagnostic.span.start_line == expected_line
+    assert str(diagnostic).startswith(f'{Path(__file__).resolve()}:{expected_line}:1: ')
+
+
+@pytest.mark.fast
+def test_a_script_diagnostic_names_its_module_level_line(tmp_path: Path) -> None:
+    """A workflow built at a script's top level is reported at the script's own line."""
+    script = tmp_path / 'build.py'
+    script.write_text(
+        'from sophios.api.python.workflow import SophiosError, Step, Workflow\n'
+        "scale = Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',\n"
+        "                                'inputs': {'n': 'int'}, 'outputs': {}}, process_name='scale')\n"
+        "scale.inputs.n = 'not an int'\n"
+        'try:\n'
+        "    Workflow([scale], 'wf').compile()\n"
+        'except SophiosError as error:\n'
+        '    print(error.diagnostics[0])\n',
+        encoding='utf-8')
+    run = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=True)
+    assert f'{script.resolve()}:4:1: error [wic020]' in run.stdout
+
+
+@pytest.mark.fast
+def test_the_written_wic_carries_no_python_paths(tmp_path: Path) -> None:
+    """Spans are internal: the written document never names the script that built it."""
+    echo = Step(clt_path=_adapter('echo'))
+    echo.inputs.message = 'hi'
+    root = Workflow([echo], 'wf').write_wic(tmp_path)
+    assert str(Path(__file__).resolve()) not in root.read_text(encoding='utf-8')

@@ -14,6 +14,7 @@ from sophios.lang import CwlRecord, EdgeRef, InputValue, OpaqueCwl, UnresolvedNa
 from sophios.lang.compatibility import TypeRelation, reference_relation
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
+from sophios.lang.spans import SourceSpan
 from sophios.lang.versions import KNOWN_VERSIONS
 from sophios.wic_types import Tools
 
@@ -37,6 +38,7 @@ from ._ports import (
     _record_type,
 )
 from ._utils import (
+    caller_span as _caller_span,
     get_value_from_cfg as _get_value_from_cfg,
     load_yaml as _load_yaml,
     serialize_value as _serialize_value,
@@ -219,6 +221,7 @@ class StepInput:  # pylint: disable=too-many-instance-attributes
 
 def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
     input_port = process_self._get_input(input_name)
+    span = _caller_span()
 
     # This is the central compatibility switchboard for the Python API:
     # - workflow.input_name means "formal workflow parameter"
@@ -228,9 +231,9 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
         case WorkflowInputReference(workflow=workflow, name=name, implicit=implicit):
             workflow_input = workflow._ensure_input(
                 name, parameter_type=_boundary_type(input_port.parameter_type), implicit=implicit)
-            input_port._set_binding(InputBinding("workflow", name, workflow_input))
+            input_port._set_binding(InputBinding("workflow", name, workflow_input, span))
         case StepInput() as record:
-            _bind_record(process_self, input_name, input_port, record)
+            _bind_record(process_self, input_name, input_port, record, span)
         case list() | tuple() | dict() if _holds_a_port(value):
             raise InvalidInputValueError(
                 f"{process_self.process_name}.{input_name}: a port object or a StepInput is never a literal; "
@@ -242,9 +245,9 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
                 context=f"{process_self.process_name}.{input_name}",
             )
             anchor_name = output.ensure_anchor(f"{input_name}{process_self.process_name}")
-            input_port._set_binding(InputBinding("alias", anchor_name, output))
+            input_port._set_binding(InputBinding("alias", anchor_name, output, span))
         case _:
-            input_port._set_binding(InputBinding("inline", value))
+            input_port._set_binding(InputBinding("inline", value, span=span))
 
 
 def _holds_a_port(value: Any) -> bool:
@@ -260,15 +263,17 @@ def _holds_a_port(value: Any) -> bool:
             return False
 
 
-def _bind_record(process_self: Any, input_name: str, input_port: InputParameter, record: StepInput) -> None:
-    """Bind `record` to `input_port`: the language's record, over the port objects it names."""
+def _bind_record(process_self: Any, input_name: str, input_port: InputParameter, record: StepInput,
+                 span: SourceSpan) -> None:
+    """Bind `record` to `input_port`, at the Python line `span`: the language's record, over the
+    port objects it names."""
     entries = record.sources()
     # Each source is its own edge, so each gets its own name. The `/` keeps it apart from
     # a plain link's `{input}{step}` name, such as that of the same input on a step `sink1`.
     built = CwlRecord(tuple(
-        UnresolvedName(entry.name) if isinstance(entry, WorkflowInputReference)
-        else EdgeRef(entry.ensure_anchor(f"{input_name}{process_self.process_name}/{position}"))
-        for position, entry in enumerate(entries, start=1)), record.fields())
+        UnresolvedName(entry.name, span) if isinstance(entry, WorkflowInputReference)
+        else EdgeRef(entry.ensure_anchor(f"{input_name}{process_self.process_name}/{position}"), span)
+        for position, entry in enumerate(entries, start=1)), record.fields(), span)
     # A workflow input the record delivers as it is to a declared input carries that input's type,
     # as a plain binding's does. Otherwise the record gives it no type: one that nothing else types is `Any`.
     delivered = (_boundary_type(input_port.parameter_type)
@@ -278,7 +283,7 @@ def _bind_record(process_self: Any, input_name: str, input_port: InputParameter,
     if record.value_from is None and input_port.declared:
         _check_declared_type(input_port, _record_type(built, ports),
                              context=f"{process_self.process_name}.{input_name}")
-    input_port._set_binding(InputBinding("record", built, ports))
+    input_port._set_binding(InputBinding("record", built, ports, span))
 
 
 def _boundary_type(parameter_type: Any) -> Any:
@@ -288,6 +293,7 @@ def _boundary_type(parameter_type: Any) -> Any:
 
 def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) -> None:
     output_parameter = workflow._add_output(output_name, implicit=True)
+    span = _caller_span()
     match value:
         case OutputParameter(parent_obj=Step(process_name=process_name) | Workflow(process_name=process_name),
                              name=name) as source:
@@ -296,7 +302,8 @@ def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) ->
                 source.effective_type(),
                 context=f"{workflow.process_name}.outputs.{output_name}",
             )
-            output_parameter.bind_source(OutputSourceBinding(process_name, name), source_parameter=source)
+            output_parameter.bind_source(OutputSourceBinding(process_name, name), source_parameter=source,
+                                         span=span)
             source.linked = True
         case WorkflowInputReference(workflow=source_workflow, name=name, implicit=implicit) \
                 if source_workflow is workflow:
@@ -306,7 +313,8 @@ def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) ->
                 input_parameter.cwl_type(),
                 context=f"{workflow.process_name}.outputs.{output_name}",
             )
-            output_parameter.bind_source(OutputSourceBinding(None, name), source_parameter=input_parameter)
+            output_parameter.bind_source(OutputSourceBinding(None, name), source_parameter=input_parameter,
+                                         span=span)
         case _:
             raise InvalidLinkError(
                 "workflow outputs must be bound to a step output or a workflow input reference"
@@ -350,6 +358,7 @@ class Step(_ProcessBase):
         "_tool_registry",
         "_inputs",
         "_outputs",
+        "_span",
         "inputs",
         "outputs",
         "scatter",
@@ -366,6 +375,7 @@ class Step(_ProcessBase):
     _tool_registry: Tools
     _inputs: ParameterStore[InputParameter]
     _outputs: ParameterStore[OutputParameter]
+    _span: SourceSpan
     inputs: ParameterNamespace[InputParameter, InputParameter]
     outputs: ParameterNamespace[OutputParameter, OutputParameter]
     scatter: list[InputParameter]
@@ -552,6 +562,7 @@ class Step(_ProcessBase):
         self.yaml = yaml_file
         self.cfg_yaml = dict(cfg_yaml)
         self._tool_registry = tool_registry
+        self._span = _caller_span()
         self._inputs = ParameterStore()
         self._outputs = ParameterStore()
         # This proxy is the main bit of API "magic": it supports both
@@ -708,13 +719,14 @@ class Step(_ProcessBase):
         return nodes.Step(
             id=self.process_name,
             inputs=self._bound_inputs(),
-            outputs=tuple(nodes.OutputBinding(port.name, nodes.EdgeDef(port._anchor_name))
+            outputs=tuple(nodes.OutputBinding(port.name, nodes.EdgeDef(port._anchor_name, self._span), self._span)
                           for port in self._outputs if port._anchor_name is not None),
             interpreted=tuple(interpreted),
+            span=self._span,
         )
 
 
-class Workflow(_ProcessBase):
+class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
     """A Sophios workflow composed from ``Step`` objects and nested ``Workflow`` objects."""
 
     _SYSTEM_ATTRS: ClassVar[set[str]] = {
@@ -722,6 +734,7 @@ class Workflow(_ProcessBase):
         "process_name",
         "_inputs",
         "_outputs",
+        "_span",
         "inputs",
         "outputs",
         "yml_path",
@@ -731,6 +744,7 @@ class Workflow(_ProcessBase):
     process_name: str
     _inputs: ParameterStore[InputParameter]
     _outputs: ParameterStore[OutputParameter]
+    _span: SourceSpan
     inputs: ParameterNamespace[InputParameter, WorkflowInputReference]
     outputs: ParameterNamespace[OutputParameter, OutputParameter]
     yml_path: Path | None
@@ -747,6 +761,7 @@ class Workflow(_ProcessBase):
         """
         self.steps = list(steps)
         self.process_name = _normalize_workflow_name(workflow_name)
+        self._span = _caller_span()
         self._inputs = ParameterStore()
         self._outputs = ParameterStore()
         self.inputs = ParameterNamespace(
@@ -1040,6 +1055,7 @@ class Workflow(_ProcessBase):
         return nodes.Step(
             id=f"{self.process_name}.wic",
             inputs=self._bound_inputs(),
-            outputs=tuple(nodes.OutputBinding(port.name, nodes.EdgeDef(port._anchor_name))
+            outputs=tuple(nodes.OutputBinding(port.name, nodes.EdgeDef(port._anchor_name, port._span), port._span)
                           for port in self._outputs if port._anchor_name is not None),
+            span=self._span,
         )
