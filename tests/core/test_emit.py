@@ -600,3 +600,23 @@ def test_a_record_source_from_an_includer_is_discharged_like_a_bare_reference() 
     workflow = next(child.cwl for child in compiled.artifact.children if child.cwl['class'] == 'Workflow')
     (inner,) = workflow['steps']
     assert inner['in']['file'] == {'source': 'child__step__1__sink___file'}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('body', [{'source': 'w', 'nope': 1}, {'source': {'wic_inline_input': 3}}, {'source': 3}])
+def test_a_desugared_record_under_wic_steps_is_checked_like_the_tagged_one(body: dict[str, Any]) -> None:
+    """`{wic_raw_cwl: {...}}` contributed through `wic: steps:` is the record
+    `!cwl {...}` spells, so a field it may not carry is refused, not dropped."""
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'inputs': {'w': 'File'}, 'steps': [{'id': 'count'}],
+                          'wic': {'steps': {'(1, count)': {'in': {'file': {'wic_raw_cwl': body}}}}}})
+    assert [d.code for d in caught.value.diagnostics] == [SophiosErrorCode.STEP_INPUT_RECORD]
+
+
+@pytest.mark.fast
+def test_a_desugared_record_under_wic_steps_binds_like_the_tagged_one() -> None:
+    """The same record under `wic: steps:` reaches the emitted step as it is written."""
+    record = {'source': 'w', 'loadContents': True}
+    compiled = compile_hermetic_cwl({'inputs': {'w': 'File'}, 'steps': [{'id': 'count'}],
+                                     'wic': {'steps': {'(1, count)': {'in': {'file': {'wic_raw_cwl': record}}}}}})
+    assert compiled['steps'][0]['in']['file'] == record
