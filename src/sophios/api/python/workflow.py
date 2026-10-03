@@ -264,8 +264,10 @@ def _bind_record(process_self: Any, input_name: str, input_port: InputParameter,
         UnresolvedName(entry.name) if isinstance(entry, WorkflowInputReference)
         else EdgeRef(entry.ensure_anchor(f"{input_name}{process_self.process_name}/{position}"))
         for position, entry in enumerate(entries, start=1)), record.fields())
-    # A workflow input the record delivers as it is carries the input's type, as a plain binding's does.
-    delivered = _boundary_type(input_port.parameter_type) if built.delivers_its_source else None
+    # A workflow input the record delivers as it is to a declared input carries that input's type,
+    # as a plain binding's does. Otherwise the record gives it no type: one that nothing else types is `Any`.
+    delivered = (_boundary_type(input_port.parameter_type)
+                 if built.delivers_its_source and input_port.declared else None)
     ports = tuple(entry.workflow._ensure_input(entry.name, parameter_type=delivered, implicit=entry.implicit)
                   if isinstance(entry, WorkflowInputReference) else entry for entry in entries)
     input_port._set_binding(InputBinding("record", built, ports))

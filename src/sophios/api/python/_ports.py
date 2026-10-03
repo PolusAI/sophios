@@ -208,13 +208,21 @@ class InputParameter(_ParameterBase):
         self._binding = binding
         self.linked = False if binding is None else binding.linked
 
+    def record_sources(self) -> tuple[Any, ...]:
+        """The port objects a record binding names; none for any other binding."""
+        match self._binding:
+            case InputBinding(kind="record", source=sources):
+                return tuple(sources)
+            case _:
+                return ()
+
     def source_outputs(self) -> "tuple[OutputParameter, ...]":
         """The upstream outputs this input is bound to: an alias's one, or a record's."""
         match self._binding:
             case InputBinding(kind="alias", source=source):
                 return (source,)
-            case InputBinding(kind="record", source=sources):
-                return tuple(source for source in sources if isinstance(source, OutputParameter))
+            case InputBinding(kind="record"):
+                return tuple(source for source in self.record_sources() if isinstance(source, OutputParameter))
             case _:
                 return ()
 
