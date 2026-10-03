@@ -84,7 +84,7 @@ step's tool is passthrough wholesale: Sophios does not classify
 | `label` | passthrough | | `test_step_passthrough_is_byte_identical` |
 | `out` | native | | `test_the_two_spellings_of_an_edge_definition_agree_on_an_output` (`test_lang_parser.py`) |
 | `requirements` | passthrough | | `test_step_passthrough_is_byte_identical` |
-| `run` | rejected | a stem is resolved from the registry; a path or an inline body is `wic013` | `test_a_run_that_is_not_a_registry_stem_is_reported` (`test_lang_parser.py`) |
+| `run` | native | a registry stem or an inline body | `test_an_inline_run_body_is_registered_and_emitted_as_its_own_tool` (`test_frontdoor.py`) |
 | `scatter` | native | | `test_every_declared_key_is_interpreted` |
 | `scatterMethod` | native | | `test_every_declared_key_is_interpreted` |
 | `when` | native | | `test_every_declared_key_is_interpreted` |
@@ -502,6 +502,10 @@ scatter    scatterMethod    when    run
 ```
 
 Everything else on a step is passthrough.
+
+`run:` names the process a step runs: a registry stem (the default, from the step id) or an
+inline CommandLineTool body. An inline body is emitted as its own tool file
+next to the workflow, exactly as a registry tool is.
 
 Each `scatter:` entry must name an input of its step. On a subworkflow call,
 those are exactly the inputs the subworkflow declares in its `inputs:`, the

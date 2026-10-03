@@ -1439,12 +1439,11 @@ def test_a_mapping_with_a_key_outside_the_record_is_still_a_literal() -> None:
 
 
 @pytest.mark.fast
-def test_a_run_that_is_not_a_registry_stem_is_reported() -> None:
-    """`run:` is resolved as a registry stem; a path or inline body is wic013."""
+def test_a_run_stem_nowhere_is_reported() -> None:
+    """A `run:` path with no file beside the document and no registry entry is wic013."""
     from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
     with pytest.raises(SophiosError) as caught:
-        compile_hermetic({'steps': [{'id': 's', 'run': {'class': 'CommandLineTool', 'baseCommand': 'true',
-                                                        'inputs': {}, 'outputs': {}}}]})
+        compile_hermetic({'steps': [{'id': 's', 'run': 'nowhere.cwl'}]})
     assert caught.value.diagnostics[0].code is SophiosErrorCode.SUBWORKFLOW_INVALID
 
 
