@@ -172,7 +172,7 @@ jobs:
       # Do the static analysis, type and style check first
       - name: MyPy Check Type Annotations
         if: runner.os == 'Linux'
-        run: cd sophios/ && mypy src/ examples/ tests/
+        run: cd sophios/ && mypy src/ examples/ tests/ docs/cookbook/
         # NOTE: Do not use `mypy .` because then mypy will check both src/ and build/ causing:
         # src/sophios/__init__.py: error: Duplicate module named "wic"
         # (also at "./build/lib/sophios/__init__.py")
