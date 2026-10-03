@@ -40,6 +40,7 @@ async def run_cwl_workflow(
         quiet=run_args.get("quiet", "yes") == "yes",
     )
     cmdline = " ".join(cmd)
+    exec_env = create_safe_env(dict(user_env))
 
     if run_args.get("generate_run_script", "no") == "yes":
         await asyncio.to_thread(generate_run_script, cmdline)
@@ -49,7 +50,6 @@ async def run_cwl_workflow(
     print("via async subprocess")
 
     try:
-        exec_env = create_safe_env(dict(user_env))
         log_dir = Path(basepath) / "LOGS"
         log_dir.mkdir(parents=True, exist_ok=True)
         stdout_log_path = log_dir / "stdout.txt"

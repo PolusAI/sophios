@@ -43,42 +43,34 @@ class _CompiledWorkflowForCompute:
     cwl_job_inputs: Json
 
 
-def _sanitize_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
-    """Drop keys that aren't valid Bash variable names and strip dangerous characters from values."""
-    sanitized = {}
+_ENV_VAR_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 
-    # Regex for a valid Bash variable name
-    valid_key_pattern = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
-    # Characters to remove from values to prevent command injection
-    dangerous_chars_pattern = re.compile(r'[;`\'"$()|<>&!\n\r]')
+def _check_env_var_names(env_vars: Mapping[str, str]) -> None:
+    """Raise ValueError naming each key that is not an environment variable name.
 
-    for key, value in env_vars.items():
-        # Step 1: Validate the key.
-        if not valid_key_pattern.fullmatch(key):
-            print(
-                f"Warning: Invalid environment variable key '{key}' skipped.")
-            continue
-
-        # Step 2: Sanitize the value.
-        sanitized_value = dangerous_chars_pattern.sub('', value)
-        sanitized[key] = sanitized_value
-
-    return sanitized
+    Values are not checked: they reach the runner through an environment mapping and never
+    through a shell, so every character in them is passed as given.
+    """
+    invalid = [key for key in env_vars if not _ENV_VAR_NAME.fullmatch(key)]
+    if invalid:
+        names = ', '.join(repr(key) for key in invalid)
+        raise ValueError(f'Not an environment variable name: {names}. A name is letters, digits '
+                         'and underscores, and does not start with a digit.')
 
 
 def create_safe_env(user_env: dict[str, str]) -> dict:
-    """Generate a sanitized environment dict without applying it"""
-    sanitized_user_env = _sanitize_env_vars(user_env)
-    return {**os.environ, **sanitized_user_env}
+    """Return the current environment with the user's variables added, without applying it."""
+    _check_env_var_names(user_env)
+    return {**os.environ, **user_env}
 
 
 @contextmanager
 def _temporary_env(user_env: dict[str, str]) -> Iterator[dict[str, str]]:
-    """Temporarily apply sanitized environment variables and restore them after use."""
-    sanitized_user_env = _sanitize_env_vars(user_env)
-    previous_values = {key: os.environ.get(key) for key in sanitized_user_env}
-    os.environ.update(sanitized_user_env)
+    """Temporarily apply the user's environment variables and restore them after use."""
+    _check_env_var_names(user_env)
+    previous_values = {key: os.environ.get(key) for key in user_env}
+    os.environ.update(user_env)
     try:
         yield {**os.environ}
     finally:
