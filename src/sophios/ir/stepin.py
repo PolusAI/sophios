@@ -54,6 +54,12 @@ def step_inputs(graph: WorkflowGraph) -> dict[StepId, tuple[tuple[PortName, Emit
             if target_step in ins:
                 ins[target_step].setdefault(target_port, Source(name, shorthand=name in shorthand_relays))
 
+    _spell_records(graph, ins)
+    return {step_id: tuple(values.items()) for step_id, values in ins.items()}
+
+
+def _spell_records(graph: WorkflowGraph, ins: dict[StepId, dict[PortName, EmittedValue]]) -> None:
+    """Replace each record-bound entry of `ins` by the record, spelled from its own sources."""
     for step in graph.steps:
         for binding in step.bindings:
             if isinstance(binding.value, CwlRecord) and isinstance(binding.resolution, SourceList):
@@ -62,8 +68,6 @@ def step_inputs(graph: WorkflowGraph) -> dict[StepId, tuple[tuple[PortName, Emit
                     tuple(_record_source(graph, source, item, relayed)
                           for source, item in zip(binding.value.sources, binding.resolution.items, strict=True)),
                     binding.value.fields)
-
-    return {step_id: tuple(values.items()) for step_id, values in ins.items()}
 
 
 def _record_source(graph: WorkflowGraph, source: EdgeRef | UnresolvedName,
