@@ -2,7 +2,8 @@
 
 The corpus is not the interesting input: documents a *user* wrote already have
 a parse property. What nothing checked is the documents the compiler *makes* —
-the Python API's output. Those
+the Python API's output and the one-step workflow a real-time analysis is
+compiled as. Those
 are built rather than parsed, so the grammar has no opinion about them unless
 asked, and three defects in a row lived exactly there: step ids spelled
 from the wrong stem, a producer still emitting a step form the grammar had
@@ -17,9 +18,13 @@ from typing import Any, Final
 import pytest
 import yaml
 
+from sophios import realtime
+from sophios.cli import default_compilation_settings
 from sophios.input_output import NoAliasDumper
+from sophios.ir.realtime import Declaration
 from sophios.lang import Document, parse, to_json
 from sophios.api.python.workflow import Step, Workflow
+from sophios.wic_types import StepId, Tool
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
@@ -35,6 +40,7 @@ CONTRIB: Final = 'CONTRIB'        # outside the core zone
 #: classified by hand.
 MANUFACTURING_SITES: Final[dict[str, str]] = {
     'sophios/api/python/_workflow_runtime.py::workflow_document': DOCUMENT,
+    'sophios/realtime.py::_wrapper': DOCUMENT,
     # Not documents.
     'sophios/ir/emit.py::emit': CWL,
     'sophios/lang/render.py::_Writer.document': RENDERER,
@@ -196,3 +202,14 @@ def _drive_everything() -> None:
     workflow = Workflow([touch, append], 'manufactured_py')
     workflow.outputs.result = append.outputs.file
     workflow.compile()
+    # A real-time analysis of each kind: a tool configured by its `in:`, and a
+    # `.wic` configured by its steps' sidecar, each with a file named by basename.
+    tools = {StepId(stem, 'global'): Tool(str(adapters / f'{stem}.cwl'),
+                                          yaml.safe_load((adapters / f'{stem}.cwl').read_text(encoding='utf-8')))
+             for stem in ('append', 'echo')}
+    options, graph_settings = default_compilation_settings()
+    realtime.compile_analyses((
+        Declaration('wf', 'append', '*.txt', 2, 60, {'in': {'file': 'empty.txt', 'str': 'Hello'}}),
+        Declaration('wf', 'helloworld.wic', '*.txt', 2, 60, {'(1, echo)': {'in': {'message': 'Hi'}}}),
+    ), {'global': {'helloworld': REPO_ROOT / 'docs' / 'tutorials' / 'helloworld.wic'}},
+        tools, options, graph_settings)
