@@ -41,6 +41,7 @@ _OUTPUT_MERGE: Final = 'test_link_merge_and_pick_value_on_an_output_are_wic038'
 _PROMOTED_INPUT: Final = 'test_a_promoted_input_keeps_the_fields_a_workflow_input_may_state'
 _PROMOTED_OUTPUT: Final = 'test_a_promoted_output_keeps_the_fields_a_workflow_output_may_state'
 _DOCUMENTED: Final = 'test_a_referenced_input_merges_the_documentation_of_the_argument_it_binds'
+_RECORD: Final = 'test_a_cwl_record_emits_the_fields_it_carries'
 
 WORKFLOW: Final[Mapping[str, Row]] = MappingProxyType({
     'class': Row(_N, _WRITTEN, 'written by the compiler'),
@@ -73,14 +74,15 @@ WORKFLOW_STEP: Final[Mapping[str, Row]] = MappingProxyType({
 
 WORKFLOW_STEP_INPUT: Final[Mapping[str, Row]] = MappingProxyType({
     'id': Row(_N, 'test_input_values_are_closed', 'the in: key'),
-    'source': Row(_N, 'test_input_values_are_closed', 'spelled !* or a bare workflow-input name'),
-    'default': Row(_R, 'test_an_untagged_step_input_record_is_wic038'),
-    'label': Row(_R, 'test_an_untagged_step_input_record_is_wic038'),
-    'linkMerge': Row(_R, 'test_an_untagged_step_input_record_is_wic038'),
-    'loadContents': Row(_R, 'test_an_untagged_step_input_record_is_wic038'),
-    'loadListing': Row(_R, 'test_an_untagged_step_input_record_is_wic038'),
-    'pickValue': Row(_R, 'test_an_untagged_step_input_record_is_wic038'),
-    'valueFrom': Row(_R, 'test_an_untagged_step_input_record_is_wic038'),
+    'source': Row(_N, 'test_input_values_are_closed',
+                  '!*, a bare workflow-input name, or a list of them inside !cwl {source: [...]}'),
+    'default': Row(_N, _RECORD, 'through !cwl {...}'),
+    'label': Row(_N, _RECORD, 'through !cwl {...}'),
+    'linkMerge': Row(_N, _RECORD, 'through !cwl {...}'),
+    'loadContents': Row(_N, _RECORD, 'through !cwl {...}'),
+    'loadListing': Row(_N, _RECORD, 'through !cwl {...}'),
+    'pickValue': Row(_N, _RECORD, 'through !cwl {...}'),
+    'valueFrom': Row(_N, _RECORD, 'through !cwl {...}'),
 })
 
 WORKFLOW_OUTPUT_PARAMETER: Final[Mapping[str, Row]] = MappingProxyType({

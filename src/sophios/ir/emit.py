@@ -22,7 +22,7 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
-from ..lang import versions
+from ..lang import CwlRecord, versions
 from ..lang.diagnostics import SophiosError
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.versions import ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
@@ -141,12 +141,19 @@ def surface(graph: WorkflowGraph, names: Names, *,
 
 
 def _implied_requirements(graph: WorkflowGraph, steps: list[StepNode]) -> tuple[str, ...]:
-    """The requirement classes `graph`'s calls, scatters and `when`s need."""
+    """The requirement classes `graph`'s calls, scatters, `when`s and step-input records need."""
+    records = [binding.value for step in steps for binding in step.bindings
+               if isinstance(binding.value, CwlRecord)]
+    value_from = [str(text) for record in records for key, text in record.fields if key == 'valueFrom']
     return tuple(requirement for requirement, needed in (
         ('SubworkflowFeatureRequirement', bool(graph.children)),
         ('ScatterFeatureRequirement', any(step.scatter_ports for step in steps)),
         ('InlineJavascriptRequirement',
-         any(dict(step.interpreted).get('when') is not None for step in steps)),
+         any(dict(step.interpreted).get('when') is not None for step in steps)
+         or any('$(' in text or '${' in text for text in value_from)),
+        ('MultipleInputFeatureRequirement',
+         any(len(record.sources) > 1 or 'linkMerge' in dict(record.fields) for record in records)),
+        ('StepInputExpressionRequirement', bool(value_from)),
     ) if needed)
 
 

@@ -545,6 +545,37 @@ def test_a_port_the_author_wrote_keeps_its_own_prefix_whatever_a_tool_binds() ->
 
 
 @pytest.mark.fast
+def test_a_cwl_record_emits_the_fields_it_carries() -> None:
+    """Two sources merged into `sink.extras` (File[]), a default on `n`, and the
+    requirements CWL demands for each."""
+    compiled = compile_hermetic_cwl({'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}, 'out': [{'file': {'wic_anchor': 'fa'}}]},
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'b'}}, 'out': [{'file': {'wic_anchor': 'fb'}}]},
+        {'id': 'sink', 'in': {
+            'file': {'wic_alias': 'fa'},
+            'n': {'wic_raw_cwl': {'default': 3, 'valueFrom': '$(self + 1)'}},
+            'extras': {'wic_raw_cwl': {'source': [{'wic_alias': 'fa'}, {'wic_alias': 'fb'}],
+                                       'linkMerge': 'merge_flattened'}}}}]})
+    sink = compiled['steps'][2]
+    assert sink['in']['extras'] == {'source': ['oracle__step__1__mk_file/file', 'oracle__step__2__mk_file/file'],
+                                    'linkMerge': 'merge_flattened'}
+    assert sink['in']['n'] == {'default': 3, 'valueFrom': '$(self + 1)'}
+    assert {'MultipleInputFeatureRequirement', 'StepInputExpressionRequirement',
+            'InlineJavascriptRequirement'} <= set(compiled['requirements'])
+
+
+@pytest.mark.fast
+def test_a_record_with_one_source_and_link_merge_keeps_its_source_a_list() -> None:
+    """CWL merges a list beside `linkMerge`; flattening `[x]` to `x` would change the value."""
+    compiled = compile_hermetic_cwl({'inputs': {'f': 'File'}, 'steps': [
+        {'id': 'sink', 'in': {'file': 'f', 'n': {'wic_inline_input': 1},
+                              'extras': {'wic_raw_cwl': {'source': ['f'], 'linkMerge': 'merge_nested'}}}}]})
+    assert compiled['steps'][0]['in']['extras'] == {'source': ['f'], 'linkMerge': 'merge_nested'}
+    assert 'MultipleInputFeatureRequirement' in compiled['requirements']
+    assert 'StepInputExpressionRequirement' not in compiled['requirements']
+
+
+@pytest.mark.fast
 def test_a_record_may_bind_an_input_the_process_does_not_declare_for_when(
         capsys: pytest.CaptureFixture[str]) -> None:
     """`go` is bound only so `when:` can read it; the step declares it, so no stderr line names it."""
