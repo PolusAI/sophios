@@ -259,7 +259,8 @@ step.inputs.go = StepInput(source=workflow.inputs.go)  # an input the tool does 
 ```
 
 A `StepInput` may bind a name the tool does not declare: that is how `when` and
-`value_from` read an extra value.
+`value_from` read an extra value. Several sources go through `StepInput`; a
+plain list of ports is not a value.
 
 ## What Bindings Become
 

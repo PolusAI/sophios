@@ -1846,6 +1846,19 @@ def test_a_string_is_never_a_step_input_source(source: Any) -> None:
 
 
 @pytest.mark.fast
+def test_a_list_of_ports_is_never_a_literal() -> None:
+    """A list of ports bound as a plain value was taken for a literal; it names `StepInput` instead."""
+    a = Step(clt_path=_adapter('touch'))
+    a.inputs.filename = 'a.txt'
+    cat = Step(clt_path=_adapter('cat'))
+    with pytest.raises(InvalidInputValueError, match='StepInput'):
+        cat.inputs.file = [a.outputs.file]
+    wf = Workflow([a, cat], 'listed')
+    with pytest.raises(InvalidInputValueError, match='StepInput'):
+        cat.inputs.file = (wf.inputs.f,)
+
+
+@pytest.mark.fast
 def test_a_merged_step_input_is_scatterable() -> None:
     """Merged sources arrive as one list, so the input they bind can be scattered."""
     wf = _merge()
