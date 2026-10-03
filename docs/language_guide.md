@@ -496,6 +496,13 @@ prints a line on stderr naming the spelling to write instead, and carries on:
 Warning! o_generated.wic: output 'made' names its step 'o_generated__step__1__touch', a name the compiler generates. Write 'touch/file' instead.
 ```
 
+A bare id that more than one step has resolves to the first of them. The compile says
+so on stderr, with the position that spells it:
+
+```text
+Warning! o_repeated.wic: output 'o' has outputSource 'touch/file', but 2 steps have the id 'touch' and it means the first. Write '(1, touch)/file' to say so.
+```
+
 An input or output you declare that is spelled like a name the compiler derives for
 another port is `wic031`, since the compiled CWL could not tell them apart. So is a
 `$namespaces` prefix that the document and the steps whose ports it promotes bind to

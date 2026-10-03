@@ -152,6 +152,19 @@ def test_a_generated_name_for_a_repeated_id_is_answered_with_its_position(
 
 
 @pytest.mark.fast
+def test_a_bare_id_shared_by_two_steps_is_named_on_stderr_and_still_means_the_first(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """`mk_file/file` with two `mk_file` steps resolves as before; the line gives `(index, id)`."""
+    compiled = compile_hermetic_cwl({
+        'outputs': {'o': {'type': 'File', 'outputSource': 'mk_file/file'}},
+        'steps': [_mk_file('x'), _mk_file('y')]})
+    assert compiled['outputs']['o']['outputSource'] == 'oracle__step__1__mk_file/file'
+    assert capsys.readouterr().err.splitlines() == [
+        "Warning! oracle.wic: output 'o' has outputSource 'mk_file/file', but 2 steps have the id "
+        "'mk_file' and it means the first. Write '(1, mk_file)/file' to say so."]
+
+
+@pytest.mark.fast
 def test_an_authored_output_source_prints_nothing(capsys: pytest.CaptureFixture[str]) -> None:
     """The line is for the generated spelling only."""
     compile_hermetic_cwl({'outputs': {'o': {'type': 'File', 'outputSource': 'mk_file/file'}},

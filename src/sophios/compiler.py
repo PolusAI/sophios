@@ -141,8 +141,9 @@ def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
     """One plain line for each place a document addresses a step by a name the compiler generates.
 
     Such a spelling still resolves, so nothing here fails the compile; each line says what to
-    write instead. Two places are checked: an `outputSource` that names its step as
-    `<workflow>__step__<n>__<id>`, and a `when:` that reads an input its step does not declare
+    write instead. Three places are checked: an `outputSource` that names its step as
+    `<workflow>__step__<n>__<id>`, an `outputSource` that names a step by an id more than one
+    step has (it means the first), and a `when:` that reads an input its step does not declare
     (a generated name, or one CWL evaluates as null).
     A document the Python API built names the script that built it.
     """
@@ -155,11 +156,17 @@ def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
     ids = [step.id.name for step in graph.steps]
     for name, source in graph.output_mapping:
         written = str(sources[name]).rsplit('/', 1)[0]
-        if Grammar.WIC_STEP_KEY.match(written) or written == source.step.name:
+        if Grammar.WIC_STEP_KEY.match(written):
             continue
         repeated = ids.count(source.step.name) > 1
         position = [step.id for step in graph.steps].index(source.step) + 1
         address = f'({position}, {source.step.name})' if repeated else source.step.name
+        if written == source.step.name:
+            if repeated:
+                notes.append(f"Warning! {file}: output {str(name)!r} has outputSource '{sources[name]}', but "
+                             f'{ids.count(source.step.name)} steps have the id {written!r} and it means the first. '
+                             f"Write '{address}/{source.port}' to say so.")
+            continue
         notes.append(f'Warning! {file}: output {str(name)!r} names its step {written!r}, a name the '
                      f"compiler generates. Write '{address}/{source.port}' instead.")
     for step in graph.steps:
