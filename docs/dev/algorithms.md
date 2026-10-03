@@ -117,8 +117,8 @@ effective array rank on both producing and consuming endpoints.
 
 ## Edge Inference
 
-The user-facing edge inference algorithm is described in
-[Advanced YAML and Operations](../advanced.md#edge-inference). Inference reads a
+The user-facing edge inference algorithm is described in the
+[language guide](../language_guide.md#8-what-inference-does-and-how-to-pin-it). Inference reads a
 complete graph and an explicit immutable policy. It preserves the historical
 candidate order, naming/format rules, defaults, ambiguity behavior, and
 converter catalog. `types_match()` remains a candidate-selection heuristic; it

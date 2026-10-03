@@ -17,6 +17,7 @@ User Documentation
    ichnaea_compact_compute.md
    python_api_reference.rst
    advanced.md
+   language_guide.md
    sophios_language_reference.md
    tutorials/tutorials.rst
    validation.md

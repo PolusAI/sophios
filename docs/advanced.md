@@ -179,34 +179,12 @@ Sophios workflow edges.
 
 ## Edge Inference
 
-Sophios can infer many edges by comparing input and output types and formats.
-The compiler only connects a step input to outputs that already exist from
-earlier steps.
-
-This is the same compiler mechanism used by `.wic` workflows and Python
-workflows. In Python, leaving a required step input unbound allows the compiler
-to infer that edge during compilation.
-
-At a high level:
-
-1. Look backward through previous step outputs.
-2. Compare CWL type and format.
-3. Prefer the most recent compatible output; within one step, the last declared one.
-4. When more than one candidate is compatible, Sophios still picks that one, and says so:
-   `wic042` (several outputs of the chosen step match) or `wic043` (an earlier step also
-   matched). These are notes; `--inference_strict` makes them errors. Pin the choice with
-   `!&`/`!*` and the note disappears. A port inside a subworkflow is named by the path of
-   steps down to the step that declares it (`steep.wic/mdrun/output_crd_path`), and its pin
-   goes on that inner step.
-
-Example: in a GROMACS chain `grompp.input_crd_path` after an `mdrun` that produces both
-`output_crd_path` and `output_dhdl_path` is inferred from `output_crd_path` only because it
-is declared last; `wic042` names `output_dhdl_path` as the alternative and the pin to write.
-In `min.wic`, which calls `steep.wic` and then `cg.wic`, that pin is
-`out: - output_crd_path: !& crd` on `steep.wic`'s `mdrun` step and
-`in: input_crd_path: !* crd` on `cg.wic`'s `grompp` step.
-
-A scattered input's literal is a list: `scatter: [name]` with `name: !ii a` is `wic020`.
+Sophios connects a step input that `in:` leaves unbound to a compatible output of an
+earlier step, comparing CWL type and format. How it chooses, the `wic042` and `wic043`
+notes it prints when several candidates match, `--inference_strict`, and how to pin a
+choice with `!&`/`!*` are described in the
+[language guide](language_guide.md#8-what-inference-does-and-how-to-pin-it). The two
+settings below refine matching from the configuration file.
 
 ### Naming Conventions
 
