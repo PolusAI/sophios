@@ -542,3 +542,30 @@ def test_a_port_the_author_wrote_keeps_its_own_prefix_whatever_a_tool_binds() ->
     compiled = compile_hermetic_cwl(workflow, tools=_tools_binding_myns(probe=_MYNS))
     assert compiled['inputs']['x']['format'] == 'myns:format_1'
     assert compiled['$namespaces']['myns'] == _OTHER_URI
+
+
+@pytest.mark.fast
+def test_a_record_may_bind_an_input_the_process_does_not_declare_for_when(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """`go` is bound only so `when:` can read it; the step declares it, so no stderr line names it."""
+    compiled = compile_hermetic_cwl({'inputs': {'go': 'boolean'}, 'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}, 'go': {'wic_raw_cwl': {'source': 'go'}}},
+         'when': '$(inputs.go)'}]})
+    assert compiled['steps'][0]['in']['go'] == {'source': 'go'}
+    assert compiled['steps'][0]['when'] == '$(inputs.go)'
+    assert 'Warning!' not in capsys.readouterr().err
+
+
+@pytest.mark.fast
+def test_a_record_source_from_an_includer_is_discharged_like_a_bare_reference() -> None:
+    """The child's record names the boundary input Link relays the parent's edge through."""
+    child = {'steps': [{'id': 'sink', 'in': {'file': {'wic_raw_cwl': {'source': {'wic_alias': 'f'}}},
+                                             'n': {'wic_inline_input': 1}}}]}
+    compiled = compile_hermetic({'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}, 'out': [{'file': {'wic_anchor': 'f'}}]},
+        subworkflow_step('child.wic', child)]})
+    (edge,) = compiled.graph.linked_edges
+    assert edge.sink.step.name == 'sink'
+    workflow = next(child.cwl for child in compiled.artifact.children if child.cwl['class'] == 'Workflow')
+    (inner,) = workflow['steps']
+    assert inner['in']['file'] == {'source': 'child__step__1__sink___file'}

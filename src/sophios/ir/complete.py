@@ -15,7 +15,7 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any, Final, TypeVar
 
-from ..lang.nodes import InlineLiteral, UnresolvedName
+from ..lang.nodes import CwlRecord, InlineLiteral, UnresolvedName
 from ..lang.diagnostics import SophiosError
 from ..lang.error_codes import SophiosErrorCode
 from .declarations import feeding_declaration, produced_declaration
@@ -131,10 +131,11 @@ def _materialize_bindings(graph: WorkflowGraph) -> WorkflowGraph:
                         name, coerce_job_value(port.id.port, declaration, value)))
                     _put_input_mapping(input_mapping, name, port.id)
                 case UnresolvedName(name=text):
-                    authored = AuthoredName(text)
-                    if authored in authored_inputs:
-                        _put_input_mapping(input_mapping, authored, port.id)
-                        _merge_boundary_documentation(workflow_inputs, authored, port.declaration)
+                    _relay(workflow_inputs, input_mapping, authored_inputs, AuthoredName(text), port)
+                case CwlRecord(sources=sources):
+                    for source in sources:
+                        if isinstance(source, UnresolvedName):
+                            _relay(workflow_inputs, input_mapping, authored_inputs, AuthoredName(source.name), port)
                 case _:
                     pass
     return replace(graph, workflow_inputs=tuple(workflow_inputs),
@@ -246,6 +247,14 @@ def _put_input_mapping(mappings: list[tuple[PortName, tuple[PortId, ...]]],
                 mappings[index] = (existing, (*sinks, sink))
             return
     mappings.append((name, (sink,)))
+
+
+def _relay(workflow_inputs: list[WorkflowPort], input_mapping: list[tuple[PortName, tuple[PortId, ...]]],
+           authored_inputs: set[PortName], name: AuthoredName, port: Port) -> None:
+    """Relay the workflow input `name` to `port`, when the document declares it."""
+    if name in authored_inputs:
+        _put_input_mapping(input_mapping, name, port.id)
+        _merge_boundary_documentation(workflow_inputs, name, port.declaration)
 
 
 def _merge_boundary_documentation(ports: list[WorkflowPort], name: PortName,

@@ -490,3 +490,31 @@ def test_an_authored_output_source_is_not_positional() -> None:
     """`s/f` addresses by id, so the port is not marked positional."""
     result = _lower('steps:\n- id: s\n  out: [f]\noutputs:\n  o:\n    type: File\n    outputSource: s/f\n')
     assert result.graph is not None and not result.graph.workflow_outputs[0].positional
+
+
+@pytest.mark.fast
+def test_a_record_source_before_its_definition_is_reported() -> None:
+    """A record's `!*` source resolves as a bare `!*` does: above its `!& e` it is `wic025`."""
+    result = _lower('steps:\n- id: use\n  in:\n    f: !cwl {source: !* e}\n- id: mk\n  out:\n  - file: !& e\n')
+    assert [d.code.value for d in result.diagnostics] == ['wic025']
+
+
+@pytest.mark.fast
+def test_a_record_with_several_sources_takes_none_from_outside_its_document() -> None:
+    """One input crosses a workflow boundary through one relay, so it cannot carry several outside sources."""
+    result = _lower('inputs:\n  w: string\nsteps:\n- id: use\n  in:\n    f: !cwl {source: [!* e, w]}\n')
+    assert [d.code.value for d in result.diagnostics] == ['wic025']
+
+
+@pytest.mark.fast
+def test_a_record_binds_an_input_its_process_does_not_declare() -> None:
+    """The input is a port of the step with no declaration; any other value there is `wic028`."""
+    workflow: dict[str, Any] = {'inputs': {'go': 'boolean'}, 'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}, 'go': {'wic_raw_cwl': {'source': 'go'}}}}]}
+    (step,) = compile_hermetic(workflow).graph.steps
+    (port,) = [port for port in step.inputs if port.id.port == 'go']
+    assert port.declaration is None
+    workflow['steps'][0]['in']['go'] = 'go'
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic(workflow)
+    assert SophiosErrorCode.UNDECLARED_PORT in {d.code for d in caught.value.diagnostics}
