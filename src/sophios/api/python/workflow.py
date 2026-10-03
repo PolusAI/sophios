@@ -127,7 +127,7 @@ def _resolve_parameter_type(
     *,
     context: str,
 ) -> None:
-    """Infer or validate a parameter type against a new candidate."""
+    """Infer or validate a parameter type against a new candidate, as it is bound."""
     if candidate_type is None:
         return
     if parameter.parameter_type is None:
@@ -147,7 +147,8 @@ def _check_declared_type(
     if parameter.parameter_type is not None and candidate_type is not None \
             and not _python_api_types_match(parameter.parameter_type, candidate_type):
         raise InvalidLinkError(
-            f"{context} has incompatible types: expected {parameter.parameter_type!r}, got {candidate_type!r}"
+            f"{context} has incompatible types: expected {parameter.parameter_type!r}, got {candidate_type!r}",
+            span=_caller_span(),
         )
 
 
@@ -206,7 +207,8 @@ class StepInput:  # pylint: disable=too-many-instance-attributes
         for entry in entries:
             if not isinstance(entry, (OutputParameter, WorkflowInputReference)):
                 raise InvalidInputValueError(
-                    f"StepInput.source entries are step outputs or workflow inputs, not {type(entry).__name__}")
+                    f"StepInput.source entries are step outputs or workflow inputs, not {type(entry).__name__}",
+                    span=_caller_span())
         return entries
 
     def fields(self) -> tuple[tuple[str, Any], ...]:
@@ -237,7 +239,7 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
         case list() | tuple() | dict() if _holds_a_port(value):
             raise InvalidInputValueError(
                 f"{process_self.process_name}.{input_name}: a port object or a StepInput is never a literal; "
-                "bind a port directly, or several sources with StepInput(source=[...])")
+                "bind a port directly, or several sources with StepInput(source=[...])", span=span)
         case OutputParameter() as output:
             _resolve_parameter_type(
                 input_port,
@@ -317,8 +319,7 @@ def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) ->
                                          span=span)
         case _:
             raise InvalidLinkError(
-                "workflow outputs must be bound to a step output or a workflow input reference"
-            )
+                "workflow outputs must be bound to a step output or a workflow input reference", span=span)
 
 
 class _ProcessBase:  # pylint: disable=too-few-public-methods
@@ -895,8 +896,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             if child.process_name in names:
                 raise InvalidStepError(
                     f"{self.process_name} has duplicate step name {child.process_name!r}; "
-                    "pass step_name=... when reusing the same tool in one workflow"
-                )
+                    "pass step_name=... when reusing the same tool in one workflow", span=child._span)
             names.add(child.process_name)
 
         prior_children: set[Step | Workflow] = set()
@@ -909,20 +909,18 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                         raise InvalidLinkError(
                             f"{child.process_name}.{input_parameter.name} is bound to "
                             f"{self.process_name}.outputs.{source_parameter.name}, this workflow's own output; "
-                            "a workflow cannot consume what it produces"
-                        )
+                            "a workflow cannot consume what it produces", span=child._span)
                     source_process = getattr(source_parent, "process_name", "<unknown>")
                     if source_parent not in children:
                         raise InvalidStepError(
                             f"{child.process_name}.{input_parameter.name} is linked to "
                             f"{source_process}.{source_parameter.name}, "
-                            f"but {source_process!r} is not a child of {self.process_name!r}"
-                        )
+                            f"but {source_process!r} is not a child of {self.process_name!r}", span=child._span)
                     if source_parent not in prior_children:
                         raise InvalidStepError(
                             f"{child.process_name}.{input_parameter.name} is linked to "
-                            f"{source_process!r}, which must appear earlier in the workflow step list"
-                        )
+                            f"{source_process!r}, which must appear earlier in the workflow step list",
+                            span=child._span)
             prior_children.add(child)
 
         for output_parameter in self._outputs:
@@ -930,13 +928,12 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 case OutputParameter(parent_obj=source_parent) if source_parent is self:
                     raise InvalidLinkError(
                         f"{self.process_name}.outputs.{output_parameter.name} is bound to one of this "
-                        "workflow's own outputs"
-                    )
+                        "workflow's own outputs", span=output_parameter._span)
                 case OutputParameter(parent_obj=source_parent) if source_parent not in children:
                     raise InvalidStepError(
                         f"{self.process_name}.outputs.{output_parameter.name} is linked to "
-                        f"{source_parent.process_name!r}, which is not a child of {self.process_name!r}"
-                    )
+                        f"{source_parent.process_name!r}, which is not a child of {self.process_name!r}",
+                        span=output_parameter._span)
                 case _:
                     pass
 
@@ -944,12 +941,13 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         self._validate_graph_shape()
         for output_parameter in self._outputs:
             if not output_parameter.has_source():
-                raise InvalidStepError(f"{self.process_name} has unbound output {output_parameter.name!r}")
+                raise InvalidStepError(f"{self.process_name} has unbound output {output_parameter.name!r}",
+                                       span=self._span)
         for step in self.steps:
             try:
                 step._validate()
             except Exception as exc:
-                raise InvalidStepError(f"{step.process_name} is invalid") from exc
+                raise InvalidStepError(f"{step.process_name} is invalid", span=step._span) from exc
 
     @property
     def yaml(self) -> dict[str, Any]:

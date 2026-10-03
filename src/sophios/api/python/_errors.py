@@ -12,6 +12,7 @@ from typing import ClassVar
 
 from ...lang.diagnostics import Diagnostic, Severity, SophiosError
 from ...lang.error_codes import SophiosErrorCode
+from ...lang.spans import SourceSpan
 
 
 class ApiError(SophiosError):
@@ -19,12 +20,13 @@ class ApiError(SophiosError):
 
     Subclasses name the code; the message is whatever the raise site says, in
     as many lines as it needs -- the same shape as `SophiosError.error`.
+    `span` is the line of the user's script the failed call came from.
     """
 
     code: ClassVar[SophiosErrorCode]
 
-    def __init__(self, *messages: str) -> None:
-        super().__init__(Diagnostic(Severity.ERROR, self.code, message) for message in messages)
+    def __init__(self, *messages: str, span: SourceSpan | None = None) -> None:
+        super().__init__(Diagnostic(Severity.ERROR, self.code, message, span) for message in messages)
 
 
 class InvalidInputValueError(ApiError):
