@@ -23,6 +23,7 @@ from types import ModuleType
 
 import pytest
 
+from sophios import main as cli
 from sophios import post_compile
 from sophios.ir.complete import coerce_job_value
 from sophios.ir.declarations import port_declaration
@@ -311,7 +312,6 @@ def test_cli_converts_a_report_to_exit_1(monkeypatch: pytest.MonkeyPatch,
                                          capsys: pytest.CaptureFixture[str]) -> None:
     """A reported failure leaves the CLI with exit code 1 and no traceback, and
     the messages on **stderr**, with their code."""
-    from sophios import main as cli
 
     def reports(*_args: object, **_kwargs: object) -> None:
         raise SophiosError.error(SophiosErrorCode.UNRESOLVED_INPUT,
@@ -334,7 +334,6 @@ def test_cli_converts_a_report_to_exit_1(monkeypatch: pytest.MonkeyPatch,
 def test_cli_reports_a_workflow_that_does_not_compile_on_stderr_with_its_position(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """The failure a scientist sees names the file, line, column and code, all on stderr."""
-    from sophios import main as cli
     workflow = tmp_path / 'bad.wic'
     workflow.write_text('steps:\n- id: ""\n', encoding='utf-8')
     monkeypatch.chdir(tmp_path)
@@ -355,7 +354,6 @@ def test_cli_reports_a_workflow_that_does_not_compile_on_stderr_with_its_positio
 def test_cli_points_a_compiler_crash_at_its_error_file_on_stderr(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A failure that is not a reported diagnostic keeps its traceback in `error_<stem>.txt` and says so on stderr."""
-    from sophios import main as cli
     workflow = tmp_path / 'crash.wic'
     workflow.write_text('steps:\n- id: touch\n', encoding='utf-8')
 
@@ -385,7 +383,6 @@ _TWO_TOUCHES = ('steps:\n- id: touch\n  in:\n    filename: !ii a.txt\n'
 def test_cli_prints_an_inference_note_on_stderr_and_succeeds(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A choice between equals is said, with its code, and the compile still succeeds."""
-    from sophios import main as cli
     workflow = tmp_path / 'two_touches.wic'
     workflow.write_text(_TWO_TOUCHES, encoding='utf-8')
     monkeypatch.chdir(tmp_path)
@@ -403,7 +400,6 @@ def test_cli_prints_an_inference_note_on_stderr_and_succeeds(
 def test_cli_with_inference_strict_refuses_a_choice_between_equals(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """`--inference_strict` makes the same note an error and the exit code says so."""
-    from sophios import main as cli
     workflow = tmp_path / 'two_touches.wic'
     workflow.write_text(_TWO_TOUCHES, encoding='utf-8')
     monkeypatch.chdir(tmp_path)
@@ -420,7 +416,6 @@ def test_cli_with_inference_strict_refuses_a_choice_between_equals(
 @pytest.mark.fast
 def test_cli_success_does_not_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     """A clean run returns instead of raising, exactly as before."""
-    from sophios import main as cli
     monkeypatch.setattr(cli, '_main', lambda: None)
     cli.main()  # returning, rather than raising SystemExit, is the assertion
 
@@ -464,7 +459,6 @@ def _cli_on_helloworld(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Calla
     What would reach for a container engine is replaced; compiling, argument handling and the
     exit code are the CLI's own.
     """
-    import sophios.main as cli
     import sophios.post_compile as pc
     monkeypatch.setattr(pc, 'verify_container_engine_config', lambda *_a, **_k: None)
     monkeypatch.setattr(pc, 'cwl_docker_extract', lambda *_a, **_k: None)
