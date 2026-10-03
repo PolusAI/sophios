@@ -27,7 +27,7 @@ from sophios.utils_yaml import wic_loader
 from sophios.wic_types import Yaml
 
 from .reference_model import may_reference
-from .synthetic_tools import STEMS, inputs_of, outputs_of, required_inputs_of
+from .synthetic_tools import SCHEMA_TYPES, STEMS, inputs_of, outputs_of, required_inputs_of
 
 #: A span the AST needs and the surface never shows. Generated nodes have no
 #: source, so they all carry the same one; nothing downstream reads it, and a
@@ -115,12 +115,22 @@ _SCATTER_METHODS: Final = ('dotproduct', 'flat_crossproduct', 'nested_crossprodu
 
 
 def _literal_for(declared: Any) -> SearchStrategy[Any]:
-    """Draw an ordinary well-typed literal while leaving hostile literals reachable elsewhere."""
+    """Draw a well-typed literal for `declared`, structured types included,
+    while leaving hostile literals reachable elsewhere."""
     members = declared if isinstance(declared, list) else [declared]
     for member in members:
         name = member[:-1] if isinstance(member, str) and member.endswith('?') else member
         while isinstance(name, str) and name.endswith('[]'):
             name = name[:-2]
+        if isinstance(name, str) and name in SCHEMA_TYPES:
+            name = SCHEMA_TYPES[name]
+        if isinstance(name, dict) and name.get('type') == 'record':
+            return st.fixed_dictionaries({field['name']: _literal_for(field['type'])
+                                          for field in name['fields']})
+        if isinstance(name, dict) and name.get('type') == 'enum':
+            return st.sampled_from(list(name['symbols']))
+        if isinstance(name, dict) and name.get('type') == 'array':
+            return st.lists(_literal_for(name['items']), max_size=2)
         if isinstance(name, str) and name in _LITERALS_BY_TYPE:
             return _LITERALS_BY_TYPE[name]
     return literals
@@ -162,10 +172,39 @@ declared_inputs: Final[tuple[tuple[str, Any], ...]] = (
 )
 
 
+def _structured(declared: Any) -> bool:
+    """Whether `declared` is, or holds, a record, an enum or a named schema type."""
+    members = declared if isinstance(declared, list) else [declared]
+    for member in members:
+        if isinstance(member, str) and member in SCHEMA_TYPES:
+            return True
+        if isinstance(member, dict) and (member.get('type') in ('record', 'enum') or _structured(member.get('items'))):
+            return True
+    return False
+
+
+def _may_feed(source_type: Any, sink_type: Any) -> bool:
+    """Whether a generated reference from `source_type` may feed `sink_type`.
+
+    The independent model is unsure about a structured sink, so the compiler
+    lets any source through to it; cwltool then rejects every one but `Any`.
+    A generated document is well typed, so only `Any` feeds a structured sink.
+    """
+    if _structured(sink_type):
+        return isinstance(source_type, str) and source_type == 'Any'
+    return may_reference(source_type, sink_type)
+
+
+def _carried(declared: Any) -> Any:
+    """What an edge from an output declared `declared` carries: `stdout` and
+    `stderr` are a tool's shorthand for the captured stream, a `File`."""
+    return 'File' if declared in ('stdout', 'stderr') else declared
+
+
 def _references_for(sink_type: Any) -> tuple[str, ...]:
-    """Inputs the independent model does not prove disjoint from this sink."""
+    """Inputs that may feed this sink."""
     return tuple(input_name for input_name, source_type in declared_inputs
-                 if may_reference(source_type, sink_type))
+                 if _may_feed(source_type, sink_type))
 
 
 @st.composite
@@ -239,7 +278,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
     # Infer lifts only a required input, so a scattered one that is not must be bound.
     chosen += [name for name in ports if name not in chosen and name not in required_inputs_of(stem)]
     connectable = [name for name in names
-                   if any(may_reference(carries, sink(name)) for _, carries in defined_edges)]
+                   if any(_may_feed(carries, sink(name)) for _, carries in defined_edges)]
     forced: str | None = None
     if bool(connectable) and draw(st.booleans()):
         forced = draw(st.sampled_from(connectable))
@@ -247,7 +286,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
 
     bindings: list[tuple[str, InputValue]] = []
     for name in chosen:
-        fits = [edge for edge, carries in defined_edges if may_reference(carries, sink(name))]
+        fits = [edge for edge, carries in defined_edges if _may_feed(carries, sink(name))]
         if name == forced:
             bindings.append((name, EdgeRef(draw(st.sampled_from(fits)), _SPAN)))
             continue
@@ -285,7 +324,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
         for out_name in draw(st.lists(st.sampled_from(sorted(outputs_of(stem))),
                                       unique=True, max_size=2)):
             if draw(st.booleans()):
-                carries = outputs_of(stem)[out_name].get('type')
+                carries = _carried(outputs_of(stem)[out_name].get('type'))
                 for _ in range(layers):
                     carries = {'type': 'array', 'items': carries}
                 edge = _fresh_edge(draw, defined_edges, carries)
