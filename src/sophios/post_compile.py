@@ -166,16 +166,17 @@ def _keeping_version_defaults(process: Cwl, origin: str) -> Cwl:
         origin (str): Where it came from, for the error.
 
     Raises:
-        SophiosError: `wic035` if the process declares no version Sophios embeds.
+        SophiosError: `wic035` if the process declares no `cwlVersion`, or one Sophios does not embed.
 
     Returns:
         Cwl: `process`, with `hints` extended when its version implied more.
     """
     version = process.get('cwlVersion')
     if version not in IMPLIED_BY_VERSION:
+        declared_version = 'declares no cwlVersion' if version is None else f'declares cwlVersion {version!r}'
         raise SophiosError.error(
             SophiosErrorCode.UNSUPPORTED_CWL_VERSION,
-            f'{origin} declares cwlVersion {version!r}, so it cannot be embedded; '
+            f'{origin} {declared_version}, so it cannot be embedded; '
             f'Sophios embeds {", ".join(IMPLIED_BY_VERSION)}.')
     declared = _classes(process.get('hints')) | _classes(process.get('requirements'))
     implied = {name: copy.deepcopy(body) for name, body in IMPLIED_BY_VERSION[version].items()

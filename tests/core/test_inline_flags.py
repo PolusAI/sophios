@@ -102,6 +102,16 @@ def test_embedding_a_tool_of_a_version_sophios_does_not_run_is_refused() -> None
     assert caught.value.diagnostics[0].code is SophiosErrorCode.UNSUPPORTED_CWL_VERSION
 
 
+@pytest.mark.fast
+def test_embedding_a_tool_without_a_version_says_it_declares_none() -> None:
+    """A tool that omits `cwlVersion` is refused, and the message does not claim it declared one."""
+    with pytest.raises(SophiosError) as caught:
+        post_compile._keeping_version_defaults({'class': 'CommandLineTool'}, 'tool.cwl')  # pylint: disable=protected-access
+    (diagnostic,) = caught.value.diagnostics
+    assert diagnostic.code is SophiosErrorCode.UNSUPPORTED_CWL_VERSION
+    assert 'declares no cwlVersion' in diagnostic.message
+
+
 def _cli(directory: Path, monkeypatch: pytest.MonkeyPatch, workflow: str, *flags: str) -> Path:
     """Run the CLI on a tutorial from a fresh `directory`; the directory it wrote."""
     directory.mkdir()
