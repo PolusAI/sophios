@@ -62,8 +62,7 @@ parser.add_argument('--cwl_inline_runtag', default=False, action="store_true",
 
 parser.add_argument('--parallel', default=False, action="store_true",
                     help='''When running locally, execute independent steps in parallel.
-                    \nThis is required for real-time analysis, but it may cause issues with
-                    \nhanging (particularly when scattering). See user guide for details.''')
+                    \nThis may cause issues with hanging (particularly when scattering).''')
 parser.add_argument('--quiet', default=False, action="store_true",
                     help='''Disable verbose output. This will not print out the commands used for each step,
                     and it will capture all stdout/stderr into log files for each step.

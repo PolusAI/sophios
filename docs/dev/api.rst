@@ -30,6 +30,10 @@ sophios.python_cwl_adapter
 ------------------------------------
 .. automodule:: sophios.python_cwl_adapter
 
+sophios.realtime
+------------------------------------
+.. automodule:: sophios.realtime
+
 sophios.run_local
 ------------------------------------
 .. automodule:: sophios.run_local

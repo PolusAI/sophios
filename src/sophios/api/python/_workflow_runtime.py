@@ -18,7 +18,7 @@ import yaml
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
-from sophios import compiler, input_output, plugins, post_compile as pc, run_local as rl
+from sophios import compiler, input_output, plugins, post_compile as pc, realtime, run_local as rl
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.resolve import RegistrySnapshot
@@ -517,6 +517,9 @@ def run_workflow(
 
     resolved_run_args = _run_args(run_args_dict)
     result = compile_workflow_result(workflow, tool_registry=tool_registry)
+    compiler_options, graph_settings = default_compilation_settings()
+    analyses = realtime.compile_analyses(result.realtime, {}, _merged_known_tools(workflow, tool_registry),
+                                         compiler_options, graph_settings)
     artifact = pc.inline_artifact_runs(result.artifact)
     pc.verify_container_engine_config(resolved_run_args["container_engine"], False)
     input_output.write_artifacts_to_disk(
@@ -525,14 +528,15 @@ def run_workflow(
         True,
         resolved_run_args.get("inputs_file", ""),
     )
-    pc.cwl_docker_extract(
-        resolved_run_args["container_engine"],
-        resolved_run_args["pull_dir"],
-        Path(basepath) / f"{workflow.process_name}.cwl",
-    )
+    plans = realtime.write(analyses, Path(basepath), workflow.process_name, Path.cwd())
+    for document in (Path(basepath) / f"{workflow.process_name}.cwl",
+                     *realtime.documents(analyses, Path(basepath))):
+        pc.cwl_docker_extract(resolved_run_args["container_engine"], resolved_run_args["pull_dir"], document)
     if _enabled(resolved_run_args.get("docker_remove_entrypoints")):
         artifact = pc.remove_artifact_entrypoints(
             resolved_run_args["container_engine"], artifact)
+        plans = realtime.write(realtime.without_entrypoints(analyses), Path(basepath), workflow.process_name,
+                               Path.cwd())
     user_args = convert_args_dict_to_args_list(
         resolved_run_args,
         boolean_flags=_RUN_ARG_BOOLEAN_FLAGS,
@@ -547,6 +551,7 @@ def run_workflow(
         passthrough_args=unknown_args,
         user_env_vars=dict(user_env_vars or {}),
         output_directories=rl.output_directories(result.graph),
+        realtime_plans=plans,
     )
     if retval != 0:
         raise WorkflowRunError(workflow.process_name, retval)

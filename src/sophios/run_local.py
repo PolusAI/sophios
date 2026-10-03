@@ -31,7 +31,7 @@ except ImportError as exc:
     else:
         raise exc
 
-from . import auto_gen_header
+from . import auto_gen_header, realtime
 from . import utils  # , utils_graphs
 from .plugins import AuthoredNamesFilter, logging_filters
 
@@ -105,6 +105,29 @@ def _runner_outdir(basepath: str, cwl_runner: str, date_time: str, outdir: str |
     return f'{basepath}/outdir_{runner_name}_{date_time}'
 
 
+def _container_flags(container_cmd: str) -> list[str]:
+    """The runner flags that select the container engine `container_cmd`."""
+    if container_cmd == 'docker':
+        return []
+    if container_cmd == 'singularity':
+        return ['--singularity']
+    return ['--user-space-docker-cmd', container_cmd]
+
+
+def _analysis_command(container_cmd: str) -> realtime.Command:
+    """How a real-time analysis is run: cwltool in a subprocess, with this run's container engine.
+
+    Its images were pulled with the workflow's, so it does not pull; it keeps no provenance.
+    This interpreter's cwltool, and not `python -m cwltool`, which exits 0 whatever happened.
+    """
+    def command(cwl: Path, job: Path, outdir: Path, cachedir: Path) -> list[str]:
+        return [sys.executable, '-c', 'import sys, cwltool.main; sys.exit(cwltool.main.run())',
+                '--disable-pull', '--skip-schemas', '--relax-path-checks', '--enable-ext',
+                *_container_flags(container_cmd), '--cachedir', str(cachedir), '--outdir', str(outdir),
+                str(cwl), str(job)]
+    return command
+
+
 def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
               container_cmd: str, passthrough_args: list[str], outdir: str | None = None,
               quiet: bool = True, documents: tuple[str, ...] | None = None,
@@ -140,13 +163,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
     # These ~30 second timeouts will eventually add up to >6 hours, which will cause github to terminate the CI Action!
     skip_schemas = ['--skip-schemas']
     provenance = ['--provenance', f'{basepath}/provenance/{workflow_name}']
-    container_cmd_: list[str] = []
-    if container_cmd == 'docker':
-        container_cmd_ = []
-    elif container_cmd == 'singularity':
-        container_cmd_ = ['--singularity']
-    else:
-        container_cmd_ = ['--user-space-docker-cmd', container_cmd]
+    container_cmd_ = _container_flags(container_cmd)
     write_summary = ['--write-summary',
                      f'{basepath}/output_{workflow_name}.json']
     path_check = ['--relax-path-checks']
@@ -240,6 +257,19 @@ def _execute_inprocess(cmd: list[str], cwl_runner: str, workflow_name: str,
     return retval
 
 
+def _runnable(plans: tuple[realtime.Plan, ...], run_args_dict: dict[str, str]) -> tuple[realtime.Plan, ...]:
+    """`plans`, if this run can run them; else a line saying why not."""
+    if plans and run_args_dict.get('generate_run_script', 'no') == 'yes':
+        print('Real-time analysis runs only with --run_local; run.sh runs the workflow without it.',
+              file=sys.stderr)
+        return ()
+    if plans and run_args_dict['cwl_runner'] != 'cwltool':
+        print(f'Real-time analysis needs cwltool; {run_args_dict["cwl_runner"]} runs the workflow without it.',
+              file=sys.stderr)
+        return ()
+    return plans
+
+
 def _names_map_path(basepath: Path, workflow_name: str) -> Path:
     """Where the compile wrote the map from emitted ids to authored names."""
     return basepath / f'{workflow_name}.names.json'
@@ -262,7 +292,8 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
               passthrough_args: list[str], workflow_name: str,
               basepath: str, user_env_vars: dict[str, str] | None = None,
               output_directories: Mapping[str, str] | None = None,
-              documents: tuple[str, ...] | None = None) -> int:
+              documents: tuple[str, ...] | None = None,
+              realtime_plans: tuple[realtime.Plan, ...] = ()) -> int:
     """This function runs the compiled workflow locally.
 
     Args:
@@ -275,6 +306,8 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
         user_env_vars (dict[str, str] | None): User supplied environment variables.
         output_directories (Mapping[str, str] | None): Passed to `copy_output_files`.
         documents (tuple[str, ...] | None): Passed to `build_cmd`.
+        realtime_plans (tuple[realtime.Plan, ...]): The real-time analyses to run beside the
+        workflow, as `realtime.write` returned them for it. With any, cwltool gets a `--cachedir`.
 
     Returns:
         retval (int): 0 on success, else the runner's exit code
@@ -287,6 +320,10 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
     cwl_runner = run_args_dict['cwl_runner']
     cachedir = run_args_dict.get('cachedir', '')
     container_engine = run_args_dict['container_engine']
+    plans = _runnable(realtime_plans, run_args_dict)
+    if plans and not cachedir:
+        cachedir = 'cachedir'
+        print(f'Real-time analysis watches the runner\'s cache, so cwltool caches in {cachedir}/')
 
     # build the runner command
     cmd = build_cmd(workflow_name, basepath, cwl_runner,
@@ -301,15 +338,17 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
         return 0  # Do not actually run
 
     print('Running ' + cmdline)
+    with realtime.watching(plans, Path(cachedir), _analysis_command(container_engine), env=exec_env):
+        if use_subprocess:
+            # To run in parallel (i.e. pytest ... --workers 8 ...), we need to
+            # use separate processes. Otherwise:
+            # "signal only works in main thread or with __pypy__.thread.enable_signals()"
+            retval = sub.run(cmd, check=False, env=exec_env).returncode
+        else:
+            retval = _execute_inprocess(cmd, cwl_runner, workflow_name, run_args_dict,
+                                        user_env_vars, yaml_path, cachedir, output_directories)
     if use_subprocess:
-        # To run in parallel (i.e. pytest ... --workers 8 ...), we need to
-        # use separate processes. Otherwise:
-        # "signal only works in main thread or with __pypy__.thread.enable_signals()"
-        proc = sub.run(cmd, check=False, env=exec_env)
-        return proc.returncode  # Skip copying files to outdir/ for CI
-
-    retval = _execute_inprocess(cmd, cwl_runner, workflow_name, run_args_dict,
-                                user_env_vars, yaml_path, cachedir, output_directories)
+        return retval  # Skip copying files to outdir/ for CI
 
     _report_outcome(retval, cmd, basepath, workflow_name)
 

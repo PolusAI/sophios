@@ -1227,8 +1227,10 @@ def test_workflow_run_uses_basepath_for_docker_extract(
         basepath: str,
         user_env_vars: dict[str, str] | None = None,
         output_directories: dict[str, str] | None = None,
+        realtime_plans: tuple[Any, ...] = (),
     ) -> int:
         del run_args_dict, use_subprocess, passthrough_args, workflow_name, basepath, user_env_vars, output_directories
+        del realtime_plans
         return 0
 
     monkeypatch.setattr(python_runtime.pc,
@@ -1274,6 +1276,7 @@ def test_workflow_run_does_not_forward_python_run_flags_to_runner(
         basepath: str,
         user_env_vars: dict[str, str] | None = None,
         output_directories: dict[str, str] | None = None,
+        realtime_plans: tuple[Any, ...] = (),
     ) -> int:
         captured["run_args_dict"] = run_args_dict
         captured["use_subprocess"] = use_subprocess
@@ -1319,7 +1322,7 @@ def test_workflow_run_writes_virtual_output_directories_without_orphans(
         python_runtime.rl,
         "run_local",
         lambda run_args_dict, use_subprocess, passthrough_args, workflow_name, basepath,
-        user_env_vars=None, output_directories=None: 0,
+        user_env_vars=None, output_directories=None, realtime_plans=(): 0,
     )
 
     workflow.run(basepath=str(tmp_path))
