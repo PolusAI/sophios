@@ -183,11 +183,17 @@ At a high level:
 
 1. Look backward through previous step outputs.
 2. Compare CWL type and format.
-3. Prefer the most recent compatible output.
-4. Use the first compatible match when multiple candidates remain.
+3. Prefer the most recent compatible output; within one step, the last declared one.
+4. When more than one candidate is compatible, Sophios still picks that one, and says so:
+   `wic042` (several outputs of the chosen step match) or `wic043` (an earlier step also
+   matched). These are notes; `--inference_strict` makes them errors. Pin the choice with
+   `!&`/`!*` and the note disappears.
 
-Inference reduces boilerplate, but it is not a substitute for review. Generated
-DAGs and generated CWL should be inspected when correctness matters.
+Example: in a GROMACS chain `grompp.input_crd_path` after an `mdrun` that produces both
+`output_crd_path` and `output_dhdl_path` is inferred from `output_crd_path` only because it
+is declared last; `wic042` names `output_dhdl_path` as the alternative and the pin to write.
+
+A scattered input's literal is a list: `scatter: [name]` with `name: !ii a` is `wic020`.
 
 ### Naming Conventions
 
