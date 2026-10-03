@@ -18,6 +18,7 @@ User Documentation
    python_api_reference.rst
    advanced.md
    language_guide.md
+   cookbook.md
    tutorials/tutorials.rst
    validation.md
 
