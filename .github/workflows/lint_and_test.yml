@@ -291,6 +291,14 @@ jobs:
         if: always()
         run: cd sophios/ && pytest tests/core/test_example_scripts.py
 
+      # A plain CWL workflow under --allow_raw_cwl is handed to the runner as
+      # it is. Twelve conformance workflows (tests/core/data/cwl-v1.2) and a
+      # two-step one run in-process with cwltool, about five seconds; the
+      # Windows leg skips those (needs_cwltool) and runs the rest.
+      - name: PyTest Plain CWL
+        if: always()
+        run: cd sophios/ && pytest tests/core/test_plain_cwl.py
+
       # The fast contracts for the
       # weekly benchmark harness. Its own step because importing it imports
       # tests/core/wic_corpus.py, which reads the config and walks

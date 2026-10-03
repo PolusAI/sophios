@@ -32,7 +32,8 @@ group_gen.add_argument('--generate_config', default=False, action="store_true",
                        help='''Generate default config in wic/global_config.json
                        with default search_paths_wic and search_paths_cwl''')
 parser.add_argument('--inputs_file', type=str, required=False, default='',
-                    help='Additional inputs Yaml file')
+                    help='Additional inputs Yaml file. For a plain CWL workflow under --allow_raw_cwl, '
+                    'its job file, given to the runner as it is')
 parser.add_argument('--config_file', type=_config_file, required=False, default=None,
                     help='User provided (JSON) config file. Without it, <homedir>/wic/global_config.json '
                     'is used, and generated the first time it is needed')
@@ -72,7 +73,9 @@ parser.add_argument('--lang_version', type=str, default=None,
                     help='Pin the Sophios language version for this compilation. '
                     'Defaults to inferring the newest version that accepts the source.')
 parser.add_argument('--allow_raw_cwl', default=False, action="store_true",
-                    help='Do not check whether the input to a workflow step refers to the workflow inputs: tag')
+                    help='''Do not check whether the input to a workflow step refers to the workflow inputs: tag.
+                    A --yaml file that is a plain CWL workflow (cwlVersion and class: Workflow, or a $graph
+                    whose main is a Workflow, and no Sophios syntax) is not compiled: it is used as it is''')
 parser.add_argument('--ignore_docker_install', default=False, action="store_true",
                     help='''Do not check whether docker is installed before running workflows.
                     \n--ignore_docker_install does NOT change whether or not any step in your workflow uses docker!''')
