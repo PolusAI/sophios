@@ -184,6 +184,12 @@ def _report_unknown_tag(node: yaml.nodes.Node, file: str, diags: Diagnostics) ->
         diags.error(SophiosErrorCode.UNKNOWN_TAG,
                     f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
                     SourceSpan.of(file, node))
+    elif not node.tag.startswith('!') and node.tag not in yaml.SafeLoader.yaml_constructors:
+        # `!!x` and `!<verbatim>` spellings: the loader has no constructor for
+        # the tag, so it raises; the parser must not accept what it rejects.
+        diags.error(SophiosErrorCode.UNKNOWN_TAG,
+                    f'unknown tag {node.tag!r}; YAML cannot construct it',
+                    SourceSpan.of(file, node))
 
 
 def _in_reading_order(diags: Diagnostics) -> Diagnostics:
