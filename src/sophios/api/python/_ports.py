@@ -289,7 +289,7 @@ class WorkflowInputReference:
 
     def as_type(self, parameter_type: Any) -> "WorkflowInputReference":
         """Declare this workflow input's type and return the reference."""
-        self.workflow.add_input(self.name, parameter_type)
+        self.workflow._ensure_input(self.name, parameter_type, implicit=False)  # pylint: disable=protected-access
         return self
 
 

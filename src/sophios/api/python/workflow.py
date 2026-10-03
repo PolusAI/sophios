@@ -140,8 +140,7 @@ def _warn_implicit_workflow_parameter(workflow: "Workflow", name: str, kind: str
     warnings.warn(
         (
             f"Implicitly declaring workflow {kind} {name!r} on {workflow.process_name!r}. "
-            f"Prefer explicit {kind}s via workflow.add_{kind}(...), workflow.{kind}s.{name}, "
-            f"or typed bindings so interface drift is easier to spot."
+            f"Prefer workflow.{kind}s.{name} = ... so interface drift is easier to spot."
         ),
         UserWarning,
         stacklevel=3,
@@ -186,7 +185,7 @@ def _boundary_type(parameter_type: Any) -> Any:
 
 
 def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) -> None:
-    output_parameter = workflow.add_output(output_name, implicit=True)
+    output_parameter = workflow._add_output(output_name, implicit=True)
     match value:
         case OutputParameter(parent_obj=Step(process_name=process_name), name=name) as source:
             _resolve_parameter_type(
@@ -228,8 +227,8 @@ class Step(_ProcessBase):
     """A workflow step backed by a CWL ``CommandLineTool``.
 
     The canonical binding surface is explicit: values enter through
-    ``step.inputs.*`` and leave through ``step.outputs.*``. Older shorthand
-    attribute reads/writes remain available for compatibility.
+    ``step.inputs.*`` and leave through ``step.outputs.*``. Attribute sugar
+    (``step.x = ...``) binds the input of that name; there is no string-keyed method.
     """
 
     _SYSTEM_ATTRS: ClassVar[set[str]] = {
@@ -449,10 +448,10 @@ class Step(_ProcessBase):
         # This proxy is the main bit of API "magic": it supports both
         # list-style access (`step.inputs[0]`) and named attribute access
         # (`step.inputs.message`) without duplicating wrapper classes.
-        self.inputs = ParameterNamespace(self._inputs, self._get_input, self.bind_input, read_only_error="")
+        self.inputs = ParameterNamespace(self._inputs, self._get_input, self._bind_input, read_only_error="")
         self.outputs = ParameterNamespace(
             self._outputs,
-            self.get_output,
+            self._get_output,
             None,
             read_only_error="Step outputs are read-only; cannot set {name!r}",
         )
@@ -478,7 +477,7 @@ class Step(_ProcessBase):
         # Legacy sugar is intentionally preserved: assigning to a known input
         # parameter name binds that input instead of setting a plain attribute.
         if "_inputs" in self.__dict__ and name in self._inputs:
-            self.bind_input(name, value)
+            self._bind_input(name, value)
             return
         if "_outputs" in self.__dict__ and name in self._outputs:
             raise AttributeError(f"Step outputs are read-only; cannot set {name!r}")
@@ -494,7 +493,7 @@ class Step(_ProcessBase):
             return self._outputs.get(name)
         raise AttributeError(f"{self.__class__.__name__!s} has no attribute {name!r}")
 
-    def bind_input(self, name: str, value: Any) -> None:
+    def _bind_input(self, name: str, value: Any) -> None:
         """Bind a value or upstream output to a named step input parameter.
 
         Args:
@@ -533,7 +532,7 @@ class Step(_ProcessBase):
         """Return a named input parameter from this step."""
         return self._lookup_input(name)
 
-    def get_output(self, name: str) -> OutputParameter:
+    def _get_output(self, name: str) -> OutputParameter:
         """Return a named output parameter from this step.
 
         Args:
@@ -629,7 +628,7 @@ class Workflow(_ProcessBase):
         )
         self.outputs = ParameterNamespace(
             self._outputs,
-            self.add_output,
+            self._add_output,
             self._bind_output_from_namespace,
             read_only_error="",
         )
@@ -645,9 +644,9 @@ class Workflow(_ProcessBase):
 
         if "_inputs" in self.__dict__:
             if name in self._outputs:
-                self.bind_output(name, value)
+                self._bind_output(name, value)
                 return
-            self.bind_input(name, value)
+            self._bind_input(name, value)
             return
 
         object.__setattr__(self, name, value)
@@ -675,19 +674,7 @@ class Workflow(_ProcessBase):
     def _input_reference(self, name: str, *, implicit: bool = False) -> WorkflowInputReference:
         return WorkflowInputReference(self, name, implicit=implicit)
 
-    def add_input(self, name: str, parameter_type: Any = None) -> InputParameter:
-        """Declare a workflow input explicitly.
-
-        Args:
-            name (str): The workflow input name.
-            parameter_type (Any): Optional CWL type expression for the input.
-
-        Returns:
-            InputParameter: The created or existing workflow input parameter.
-        """
-        return self._ensure_input(name, parameter_type=parameter_type, implicit=False)
-
-    def add_output(
+    def _add_output(
         self,
         name: str,
         source: Any = None,
@@ -718,10 +705,10 @@ class Workflow(_ProcessBase):
             context=f"{self.process_name}.outputs.{name}",
         )
         if source is not None:
-            self.bind_output(name, source)
+            self._bind_output(name, source)
         return output_parameter
 
-    def bind_input(self, name: str, value: Any) -> None:
+    def _bind_input(self, name: str, value: Any) -> None:
         """Bind a literal value or upstream output to a workflow input.
 
         Args:
@@ -738,7 +725,7 @@ class Workflow(_ProcessBase):
         self._ensure_input(name, implicit=False)
         _bind_process_input(self, name, value)
 
-    def bind_output(self, name: str, value: Any) -> None:
+    def _bind_output(self, name: str, value: Any) -> None:
         """Bind a named workflow output to a step output or workflow input.
 
         Args:
@@ -751,7 +738,7 @@ class Workflow(_ProcessBase):
         _bind_workflow_output(self, name, value)
 
     def _bind_output_from_namespace(self, name: str, value: Any) -> None:
-        self.add_output(name, implicit=False)
+        self._add_output(name, implicit=False)
         _bind_workflow_output(self, name, value)
 
     def _get_input(self, name: str) -> InputParameter:

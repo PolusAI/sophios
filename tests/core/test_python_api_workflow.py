@@ -680,15 +680,11 @@ def test_compiled_workflow_writes_cwl_and_job_inputs(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
-def test_workflow_port_names_reject_namespace_collisions() -> None:
+def test_port_names_reject_namespace_collisions() -> None:
     """A port may not shadow the port namespace's own API."""
-    workflow = Workflow([], "wf")
-
     with pytest.raises(ValueError, match="reserved by port namespaces"):
-        workflow.add_input("_store")
-
-    with pytest.raises(ValueError, match="reserved by port namespaces"):
-        workflow.add_output("_getter")
+        Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',
+                                'inputs': {'_store': 'string'}, 'outputs': {}}, process_name='bad')
 
 
 @pytest.mark.fast
@@ -1515,3 +1511,21 @@ def test_a_failed_in_process_run_names_authored_steps(monkeypatch: pytest.Monkey
     assert f"Emitted ids are mapped to authored names in {names_path}" in capsys.readouterr().out
     assert not [f for f in logging.getLogger("cwltool").filters
                 if isinstance(f, sophios.plugins.AuthoredNamesFilter)]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('name', ['add_input', 'bind_input', 'bind_output', 'add_output'])
+def test_the_string_keyed_workflow_methods_are_gone(name: str) -> None:
+    """Workflow ports are declared and bound as objects, never by a name passed as text.
+
+    The class is probed: on an instance, attribute sugar reads any name as a workflow input reference.
+    """
+    assert not hasattr(Workflow, name)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('name', ['bind_input', 'get_output'])
+def test_the_string_keyed_step_methods_are_gone(name: str) -> None:
+    """Step ports are bound and read as objects, never by a name passed as text."""
+    assert not hasattr(Step, name)
+    assert not hasattr(Step(clt_path=_adapter('echo')), name)
