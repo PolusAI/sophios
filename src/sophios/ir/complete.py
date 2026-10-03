@@ -315,6 +315,7 @@ def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Any, *
                         declaration.format if declaration.has_format else None, span=span, locator=locator)
 
 
+# pylint: disable-next=too-many-arguments
 def _coerce_type(name: PortName, raw: Any, value: Any, fmt: Any, *,
                  span: SourceSpan | None, locator: Locator | None) -> Any:
     if isinstance(raw, list):
@@ -339,6 +340,7 @@ def _plain(value: Any) -> Any:
     return value
 
 
+# pylint: disable-next=too-many-arguments
 def _coerce_scalar(name: PortName, raw: Any, value: Any, fmt: Any, *,
                    span: SourceSpan | None, locator: Locator | None) -> Any:
     if raw in ('File', 'Directory'):
