@@ -200,22 +200,23 @@ outputs:
 ```
 
 `when:` in a `.wic`, and `step.when` in Python, run the step only when the
-expression is true. The expression reads `loud`, which `echo.cwl` does not take,
-so a record binds it to the workflow input. A record that feeds an input the
-tool does not declare gives the workflow input no type, so Python declares
-`loud` as `Any`, and the `.wic` says the same. Sophios adds
-`InlineJavascriptRequirement`:
+expression is true. The expression reads `enabled`, which `echo.cwl` does not
+take, so a record binds it to the workflow input `loud`. A record that feeds an
+input the tool does not declare gives the workflow input no type, so the `.wic`
+declares `loud` under `inputs:`, and Python declares it with
+`.as_type('boolean')`.
+Sophios adds `InlineJavascriptRequirement`:
 
 ```yaml
 inputs:
   loud:
-    type: Any
+    type: boolean
 steps:
 - id: when__step__1__echo
   in:
-    loud:
+    enabled:
       source: loud
-  when: $(inputs.loud)
+  when: $(inputs.enabled)
 ```
 
 ## A nested workflow
