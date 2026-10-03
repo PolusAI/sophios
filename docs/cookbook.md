@@ -37,8 +37,10 @@ Three things about the compiled CWL hold for every example below:
 - A literal value is not written into the CWL. It becomes a workflow input named
   `<renamed step>___<port>`, and its value goes in the job inputs.
 - Every step output is also a workflow output, named `<renamed step>___<port>`,
-  unless the Python workflow names its outputs (see
-  [A named workflow output](#a-named-workflow-output)).
+  unless the Python workflow passed to `compile()` names its outputs (see
+  [A named workflow output](#a-named-workflow-output)). Named outputs on a
+  nested workflow do not change this: its step outputs are still exposed, by
+  it and by its parent.
 
 The excerpts show only the lines each construct changes.
 
