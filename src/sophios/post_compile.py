@@ -300,7 +300,7 @@ class _Call:
         if carried:
             raise _Stays('it carries ' + ', '.join(f'`{key}`' for key in carried))
         if self.inner.graph is not None and not self.inner.graph.inlineable:
-            raise _Stays('its workflow says `wic: inlineable: false`')
+            raise _Stays('it is marked `wic: inlineable: false`')
         for name, value in self.step.get('in', {}).items():
             if _source_of(value) is None or (isinstance(value, dict) and len(value) > 1):
                 raise _Stays(f"input '{name}' is bound to {value!r}, not to a single source")
@@ -431,7 +431,7 @@ def flatten_subworkflows(artifact: CompilationArtifact) -> CompilationArtifact:
 
     A call stays a nested subworkflow step, and one stderr line says why, when
     its author wrote anything on it besides `in` and `out` (`scatter`, `when`,
-    `requirements`...), when its workflow says `wic: inlineable: false`, or when
+    `requirements`...), when it is marked `wic: inlineable: false`, or when
     the boundary cannot be removed without guessing: an input bound to anything
     but one source, an input with a default, requirements or hints written as a
     list, a document feature declared differently from the caller's, a source
