@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from ..lang import (
+    CWL_VERSION,
     Document,
     EdgeRef,
     InlineLiteral,
@@ -183,7 +184,8 @@ def _register_run(step: Step, namespace: str, document_dir: Path,
                   script_dir: Path) -> bool:
     """Register what a step's ``run:`` names, when it names something here.
 
-    An inline mapping is a tool keyed by the step's id. A ``.cwl`` or ``.wic``
+    An inline mapping is a tool keyed by the step's id, written in
+    ``CWL_VERSION`` whatever ``cwlVersion`` it declares. A ``.cwl`` or ``.wic``
     path that exists relative to the document is read from there and keyed by
     its stem, shadowing a registry entry of that stem for this compilation.
     A path that does not exist here is left for Resolve, which looks the stem
@@ -197,7 +199,7 @@ def _register_run(step: Step, namespace: str, document_dir: Path,
         return False
     run = dict(step.interpreted)['run']
     if isinstance(run, dict):
-        body = desugar_into_canonical_normal_form(deepcopy(run))
+        body = desugar_into_canonical_normal_form({**deepcopy(run), 'cwlVersion': CWL_VERSION})
         generated[StepId(name, namespace)] = Tool(f'{name}.cwl', body)
         return True
     assert isinstance(run, str)
