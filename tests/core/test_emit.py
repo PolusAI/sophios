@@ -342,6 +342,26 @@ def test_a_promoted_port_leaves_a_secondary_files_expression_to_its_tool(declare
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize('declared, promoted', [
+    ('.bai', ['.bai']),
+    ({'pattern': '.bai', 'required': False}, [{'pattern': '.bai', 'required': False}]),
+    (['.bai'], ['.bai']),
+], ids=['bare-string', 'single-mapping', 'list'])
+def test_a_promoted_port_states_secondary_files_as_a_list(declared: Any, promoted: Any) -> None:
+    """A bare pattern or a single mapping is promoted as a one-element list.
+
+    cwltool's checker reads each workflow-level `secondaryFiles` entry as a
+    mapping, so the bare form crashes it; the list form is the same declaration.
+    """
+    tools = _tools_with_probe(
+        {'f': {'type': 'File', 'secondaryFiles': declared, 'inputBinding': {'position': 1}}},
+        {'o': {'type': 'File', 'secondaryFiles': declared, 'outputBinding': {'glob': 'o'}}})
+    compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
+    assert compiled['inputs']['oracle__step__1__probe___f'].get('secondaryFiles') == promoted
+    assert compiled['outputs']['oracle__step__1__probe___o'].get('secondaryFiles') == promoted
+
+
+@pytest.mark.fast
 def test_a_promoted_output_keeps_the_fields_a_workflow_output_may_state() -> None:
     """A tool output promoted to the boundary keeps what `WorkflowOutputParameter` allows, not its `outputBinding`."""
     tools = _tools_with_probe(
