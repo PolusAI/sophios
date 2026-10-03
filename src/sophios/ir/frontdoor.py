@@ -28,7 +28,7 @@ from ..lang import (
 from ..python_cwl_adapter import generate_CWL_CommandLineTool, get_module
 from ..utils_cwl import desugar_into_canonical_normal_form
 from ..wic_types import StepId, Tool, Tools
-from .resolve import RegistrySnapshot, generated_process_id, step_sidecar
+from .resolve import RegistrySnapshot, generated_process_id, run_process_name, step_sidecar
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,9 +149,8 @@ def _reach(document: Document,
     counts = Counter(step.id for step in document.steps)
     for index, step in enumerate(document.steps, start=1):
         namespace = _namespace(step_sidecar(document.sidecar, index, step.id, counts[step.id]))
-        run = dict(step.interpreted).get('run')
-        if run is not None and _register_run(step, run, namespace, document_dir, yml_paths,
-                                             workflows, generated, read, pins, script_dir):
+        if _register_run(step, namespace, document_dir, yml_paths,
+                         workflows, generated, read, pins, script_dir):
             continue
         if step.id == 'python_script':
             generated[StepId(generated_process_id(step), namespace)] = \
@@ -177,7 +176,7 @@ def _reach(document: Document,
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
-def _register_run(step: Step, run: object, namespace: str, document_dir: Path,
+def _register_run(step: Step, namespace: str, document_dir: Path,
                   yml_paths: dict[str, dict[str, Path]],
                   workflows: dict[tuple[str, str], ParseResult],
                   generated: Tools, read: dict[Path, ParseResult], pins: list[str],
@@ -193,26 +192,31 @@ def _register_run(step: Step, run: object, namespace: str, document_dir: Path,
     Returns:
         bool: Whether ``run`` was registered here.
     """
+    name = run_process_name(step)
+    if name is None:
+        return False
+    run = dict(step.interpreted)['run']
     if isinstance(run, dict):
         body = desugar_into_canonical_normal_form(deepcopy(run))
-        generated[StepId(_stem(step.id), namespace)] = Tool(f'{_stem(step.id)}.cwl', body)
+        generated[StepId(name, namespace)] = Tool(f'{name}.cwl', body)
         return True
-    if not isinstance(run, str) or not run.endswith(('.cwl', '.wic')):
-        return False
+    assert isinstance(run, str)
     target = (document_dir / run).resolve()
     if not target.is_file():
         return False
-    stem = target.stem
     if run.endswith('.cwl'):
+        known = generated.get(StepId(name, namespace))
+        if known is not None and known.run_path != str(target):
+            raise ValueError(f'run: {run} names both {known.run_path} and {target}')
         with open(target, mode='r', encoding='utf-8') as handle:
-            generated[StepId(stem, namespace)] = Tool(
+            generated[StepId(name, namespace)] = Tool(
                 str(target), desugar_into_canonical_normal_form(yaml.safe_load(handle.read())))
         return True
-    key = (namespace, stem)
-    if key not in workflows:
-        workflows[key] = read[target] if target in read else _visit(
-            target.read_text(encoding='utf-8'), stem, target, yml_paths, script_dir,
-            workflows, generated, read, pins)
+    parsed = read[target] if target in read else _visit(
+        target.read_text(encoding='utf-8'), target.stem, target, yml_paths, script_dir,
+        workflows, generated, read, pins)
+    if workflows.setdefault((namespace, name), parsed) is not parsed:
+        raise ValueError(f'run: {run} names two different workflows')
     return True
 
 
