@@ -506,7 +506,8 @@ Everything else on a step is passthrough.
 `run:` names the process a step runs: a registry stem (the default, from the step id), a
 `.cwl` or `.wic` path relative to the document that contains the step (when that file
 exists), or an inline CommandLineTool body. An inline body is emitted as its own tool file
-next to the workflow, exactly as a registry tool is.
+next to the workflow, exactly as a registry tool is. It is written as a tool of the workflow's
+CWL version; a `cwlVersion` inside it is ignored, as CWL requires.
 
 Each `scatter:` entry must name an input of its step. On a subworkflow call,
 those are exactly the inputs the subworkflow declares in its `inputs:`, the

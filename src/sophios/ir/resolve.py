@@ -16,6 +16,7 @@ import sys
 from typing import Any, Iterable, Mapping
 
 from ..lang import (
+    CWL_VERSION,
     Document,
     EdgeDef,
     EdgeRef,
@@ -259,11 +260,13 @@ def run_process_name(step: Step) -> str | None:
 
     An inline body or a ``.cwl``/``.wic`` path is identified by its content or
     its authored spelling, so two steps with the same id or the same stem but
-    different bodies or paths are different processes.
+    different bodies or paths are different processes. A body is identified as
+    it is registered, in ``CWL_VERSION``: a ``cwlVersion`` inside it is ignored.
     """
     run = dict(step.interpreted).get('run')
     if isinstance(run, dict):
-        stem, identity = _stem(step.id), json.dumps(run, sort_keys=True, default=str)
+        stem = _stem(step.id)
+        identity = json.dumps({**run, 'cwlVersion': CWL_VERSION}, sort_keys=True, default=str)
     elif isinstance(run, str) and run.endswith(('.cwl', '.wic')):
         stem, identity = _stem(run), run
     else:
