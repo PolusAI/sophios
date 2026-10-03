@@ -262,7 +262,7 @@ class ProcessRun:
     choice, not a tool identity.
     """
 
-    target: OpaqueCwl
+    target: str
     process_id: RegistryKey
     child: 'WorkflowGraph | None' = None
 

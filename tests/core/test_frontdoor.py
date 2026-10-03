@@ -283,7 +283,7 @@ def test_an_inline_run_body_is_registered_and_emitted_as_its_own_tool(tmp_path: 
         encoding='utf-8')
     result = _compile(bundle_from_disk(tmp_path / 'w.wic', {}, {}))
     step, = result.artifact.cwl['steps']
-    assert step['run'] == 'w__step__1__mytool/mytool.cwl'
+    assert step['run'].startswith('w__step__1__mytool/mytool_') and step['run'].endswith('.cwl')
     child, = result.artifact.children
     assert child.cwl['inputs'] == {'x': {'type': 'string'}}
 
@@ -318,4 +318,36 @@ def test_a_run_wic_path_is_read_from_beside_the_document(tmp_path: Path) -> None
     (tmp_path / 'sub' / 'child.wic').write_text('steps:\n  mk_file:\n    in:\n      name: !ii a\n', encoding='utf-8')
     (tmp_path / 'w.wic').write_text('steps:\n  call:\n    run: sub/child.wic\n', encoding='utf-8')
     result = _compile(bundle_from_disk(tmp_path / 'w.wic', {}, SYNTHETIC_TOOLS))
-    assert result.artifact.children[0].name == 'child'
+    assert result.artifact.children[0].name.startswith('child')
+
+
+_ECHO = ('{class: CommandLineTool, cwlVersion: v1.2, baseCommand: %s, '
+         'inputs: {a: string}, outputs: {}}')
+
+
+@pytest.mark.fast
+def test_inline_bodies_sharing_a_step_id_are_separate_tools(tmp_path: Path) -> None:
+    """Two steps with the same id and different inline bodies each run their own."""
+    (tmp_path / 'w.wic').write_text(
+        'steps:\n  - id: t\n    run: ' + _ECHO % 'echo' + '\n    in: {a: !ii x}\n'
+        '  - id: t\n    run: ' + _ECHO % 'rm' + '\n    in: {a: !ii y}\n', encoding='utf-8')
+    result = _compile(bundle_from_disk(tmp_path / 'w.wic', {}, SYNTHETIC_TOOLS))
+    assert [child.cwl['baseCommand'] for child in result.artifact.children] == ['echo', 'rm']
+
+
+@pytest.mark.fast
+def test_run_paths_sharing_a_stem_are_separate_tools(tmp_path: Path) -> None:
+    """`run: a/t.cwl` and `run: b/t.cwl` each run their own file, and a plain `mk_file` step keeps the registry's."""
+    for directory, command in (('a', 'echo'), ('b', 'rm')):
+        (tmp_path / directory).mkdir()
+        (tmp_path / directory / 't.cwl').write_text(
+            'cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: ' + command
+            + '\ninputs: {a: string}\noutputs: {}\n', encoding='utf-8')
+    (tmp_path / 'w.wic').write_text(
+        'steps:\n  - id: s\n    run: a/t.cwl\n    in: {a: !ii x}\n'
+        '  - id: s\n    run: b/t.cwl\n    in: {a: !ii y}\n'
+        '  - id: mk_file\n    in: {name: !ii z}\n', encoding='utf-8')
+    result = _compile(bundle_from_disk(tmp_path / 'w.wic', {}, SYNTHETIC_TOOLS))
+    first, second, plain = result.artifact.children
+    assert (first.cwl['baseCommand'], second.cwl['baseCommand']) == ('echo', 'rm')
+    assert plain.run_path == '/synthetic/mk_file.cwl'

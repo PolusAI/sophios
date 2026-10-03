@@ -103,7 +103,7 @@ class ResolvedProcess:
     """The process a step names, including a recursively resolved workflow."""
 
     key: RegistryKey
-    run_path: OpaqueCwl
+    run_path: str
     inputs: tuple[ResolvedPort, ...]
     outputs: tuple[ResolvedPort, ...]
     declaration: OpaqueCwl
@@ -186,6 +186,11 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
     generated = step.id == 'python_script'
     name = generated_process_id(step) if generated else authored_name
     key = RegistryKey(namespace, name)
+    own_name = run_process_name(step)
+    if own_name is not None:
+        own_key = RegistryKey(namespace, own_name)
+        if registry.tool(own_key) is not None or registry.workflow(own_key) is not None:
+            key = own_key
 
     # A tool and workflow may share a stem: an ordinary step prefers the tool,
     # falling back to a workflow only when no tool exists.
@@ -247,6 +252,23 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
         deepcopy(cwl),
         generated=generated,
     )
+
+
+def run_process_name(step: Step) -> str | None:
+    """The registry name of what a step's own ``run:`` carries, or None.
+
+    An inline body or a ``.cwl``/``.wic`` path is identified by its content or
+    its authored spelling, so two steps with the same id or the same stem but
+    different bodies or paths are different processes.
+    """
+    run = dict(step.interpreted).get('run')
+    if isinstance(run, dict):
+        stem, identity = _stem(step.id), json.dumps(run, sort_keys=True, default=str)
+    elif isinstance(run, str) and run.endswith(('.cwl', '.wic')):
+        stem, identity = _stem(run), run
+    else:
+        return None
+    return f'{stem}_{sha256(identity.encode("utf-8")).hexdigest()[:8]}'
 
 
 def generated_process_id(step: Step) -> str:
