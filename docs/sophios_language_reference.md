@@ -548,16 +548,20 @@ wic:
           label: extract structures
 ```
 
-Step keys inside `wic: steps:` have the form `(index, name)` — the index is
-1-based and matches the step's position. Sophios parses these into a structured
-key; you should never have to parse that string yourself.
+Step keys inside `wic: steps:` are `(index, name)` — the index is 1-based and
+the step at that position should be called `name` — or a bare `name`, for a step
+whose id occurs once in the document. When both address one step, the
+`(index, name)` entry applies. A key that addresses no step is ignored, and
+Sophios prints one line to stderr naming the file, the key and the step actually
+at that position. Sophios parses keys into a structured key; you should never
+have to parse that string yourself.
 
 The block is Sophios's own, not passthrough CWL, so it is closed, and each key
 declares the shape of its value:
 
 | Key | Value |
 |---|---|
-| `steps` | a mapping keyed `(index, name)` |
+| `steps` | a mapping keyed `(index, name)` or by a unique step id |
 | `graphviz` | a mapping of `label` (a non-empty string), `style` (Graphviz styles, comma separated) and `ranksame` (a list of `(index, name)` keys), each optional |
 | `implementation`, `default_implementation`, `version`, `lang_version`, `namespace` | a non-empty string |
 | `implementations` | a mapping |
