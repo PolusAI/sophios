@@ -160,8 +160,7 @@ _safe_text: Final = st.text('abcxyz_', max_size=8)
 @st.composite
 def _bundle_specs(draw: st.DrawFn) -> _BundleSpec:
     return _BundleSpec(draw(_safe_text), draw(_safe_text), draw(_safe_text), draw(st.booleans()),
-                       # A nested workflow's output as a sibling's source is 2.3's; until then no nesting.
-                       draw(st.just(False)))
+                       draw(st.booleans()))
 
 
 @pytest.mark.slow
@@ -182,7 +181,7 @@ def test_the_two_front_ends_compile_to_the_same_cwl(spec: _BundleSpec) -> None:
     BLIND SPOTS: one fixed topology (two File sources into one `join`, one
     workflow output) rather than the full grammar `ast_strategies.documents()`
     covers — see `_BundleSpec`'s docstring for why. No `scatter`/`when`, no
-    workflow-level input reference, and no nesting yet.
+    workflow-level input reference, and nesting only one level deep.
     """
     direct = _build_workflow(spec).compile(tool_registry=SYNTHETIC_TOOLS)
 
