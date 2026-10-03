@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 from sophios.ir.declarations import layered
 from sophios.ir.types import PortType
 from sophios.lang import CwlRecord, EdgeRef, InlineLiteral, InputValue, UnresolvedName
+from sophios.lang.spans import SourceSpan
 
 from ._errors import InvalidLinkError
 from ._utils import (contains_any_type,
@@ -31,11 +32,13 @@ class InputBinding:
 
     A `record` binding's `value` is the language's `CwlRecord` and its `source` the
     port objects the record names, each a step `OutputParameter` or a workflow `InputParameter`.
+    `span` is the Python line that bound it.
     """
 
     kind: str
     value: Any
     source: Any = None
+    span: SourceSpan | None = None
 
     @property
     def linked(self) -> bool:
@@ -52,13 +55,13 @@ class InputBinding:
         """Return this binding as the language's input construct."""
         match self.kind:
             case "inline":
-                return InlineLiteral(serialize_value(self.value))
+                return InlineLiteral(serialize_value(self.value), self.span)
             case "alias":
-                return EdgeRef(self.value)
+                return EdgeRef(self.value, self.span)
             case "record":
                 return cast(CwlRecord, self.value)
             case _:
-                return UnresolvedName(self.value)
+                return UnresolvedName(self.value, self.span)
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,11 +261,15 @@ class InputParameter(_ParameterBase):
 
 @dataclass(slots=True)
 class OutputParameter(_ParameterBase):
-    """Output parameter of a CWL `CommandLineTool` or `Workflow`."""
+    """Output parameter of a CWL `CommandLineTool` or `Workflow`.
+
+    `_span` is the Python line that bound a workflow output to its source.
+    """
 
     _anchor_name: str | None = field(default=None, init=False, repr=False)
     _source: OutputSourceBinding | None = field(default=None, init=False, repr=False)
     _source_parameter: Any = field(default=None, init=False, repr=False)
+    _span: SourceSpan | None = field(default=None, init=False, repr=False)
 
     @property
     def value(self) -> Any:
@@ -276,10 +283,12 @@ class OutputParameter(_ParameterBase):
         self.linked = True
         return self._anchor_name
 
-    def bind_source(self, source: OutputSourceBinding, source_parameter: Any = None) -> None:
-        """Bind this output to an upstream source and mark it as linked."""
+    def bind_source(self, source: OutputSourceBinding, source_parameter: Any = None,
+                    span: SourceSpan | None = None) -> None:
+        """Bind this output to an upstream source, at the Python line `span`, and mark it as linked."""
         self._source = source
         self._source_parameter = source_parameter
+        self._span = span
         self.linked = True
 
     def has_source(self) -> bool:

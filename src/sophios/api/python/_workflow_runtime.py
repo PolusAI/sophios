@@ -281,6 +281,7 @@ def workflow_document(workflow: "Workflow") -> Document:
         steps=tuple(step._as_workflow_step() for step in workflow.steps),
         passthrough=tuple((key, value) for key, value in
                           (("inputs", workflow_inputs), ("outputs", workflow_outputs)) if value),
+        span=workflow._span,
     )
 
 

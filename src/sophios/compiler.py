@@ -48,7 +48,7 @@ def compile_source(bundle: SourceBundle,
 
     The one door. A bundle read from files carries the spans of the text its
     author wrote, so a diagnostic names a position the reader can open; one
-    the Python API built carries none, and its diagnostics name a `Locator`.
+    the Python API built carries the span of the Python line that made each node.
     """
     if not testing:
         print(' starting compilation of', bundle.name)
@@ -161,8 +161,7 @@ def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
     write instead. Two places are checked: an `outputSource` that names its step as
     `<workflow>__step__<n>__<id>`, and a `when:` that reads an input its step does not declare
     (a generated name, or one CWL evaluates as null).
-    The Python API builds its documents without spans: nobody wrote that text,
-    so there is no author to tell.
+    A document the Python API built names the script that built it.
     """
     notes: list[str] = []
     spans = [step.span for step in graph.steps if step.span is not None]
