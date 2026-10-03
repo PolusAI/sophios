@@ -267,6 +267,8 @@ def workflow_document(workflow: "Workflow") -> Document:
     workflow_inputs: dict[str, Any] = {}
     for parameter in workflow._inputs:
         cwl_type = parameter.cwl_type()
+        if cwl_type is None and _read_by_a_record(workflow, parameter):
+            cwl_type = "Any"
         if cwl_type is None:
             raise InvalidStepError(
                 f"workflow input {workflow.process_name}.{parameter.name} has no resolved type"
@@ -280,6 +282,13 @@ def workflow_document(workflow: "Workflow") -> Document:
         passthrough=tuple((key, value) for key, value in
                           (("inputs", workflow_inputs), ("outputs", workflow_outputs)) if value),
     )
+
+
+def _read_by_a_record(workflow: "Workflow", parameter: InputParameter) -> bool:
+    """Whether a `StepInput` on one of `workflow`'s steps names `parameter` as a source."""
+    return any(source is parameter
+               for step in workflow.steps for step_input in step._inputs
+               for source in step_input.record_sources())
 
 
 def _wic_output_path(workflow: "Workflow", path: str | Path | None) -> Path:

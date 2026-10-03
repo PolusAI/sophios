@@ -1948,3 +1948,34 @@ def test_a_port_nested_in_a_literal_is_never_a_literal(nest: Any) -> None:
     cat = Step(clt_path=_adapter('cat'))
     with pytest.raises(InvalidInputValueError, match='StepInput'):
         cat.inputs.file = nest(a.outputs.file)
+
+
+def _guard_and_message(record_first: bool) -> dict[str, Any]:
+    """`wf.inputs.go` read by a record on an undeclared input and by a plain `string` input."""
+    e1 = Step(clt_path=_adapter('echo'), step_name='e1')
+    e1.inputs.message = 'hi'
+    e2 = Step(clt_path=_adapter('echo'), step_name='e2')
+    wf = Workflow([e1, e2], 'order')
+    if record_first:
+        e1.inputs.go = StepInput(source=wf.inputs.go)
+        e2.inputs.message = wf.inputs.go
+    else:
+        e2.inputs.message = wf.inputs.go
+        e1.inputs.go = StepInput(source=wf.inputs.go)
+    e1.when = '$(inputs.go)'
+    return cast(dict[str, Any], wf.compile().cwl_workflow['inputs'])
+
+
+@pytest.mark.fast
+def test_a_record_on_an_undeclared_input_does_not_type_the_workflow_input() -> None:
+    """The workflow input's type does not depend on which binding came first."""
+    assert _guard_and_message(True)['go']['type'] == _guard_and_message(False)['go']['type'] == 'string'
+
+
+@pytest.mark.fast
+def test_a_workflow_input_only_a_transforming_record_reads_is_any() -> None:
+    """A workflow input read only through a `valueFrom` has no type to borrow, so it is `Any`."""
+    echo = Step(clt_path=_adapter('echo'))
+    wf = Workflow([echo], 'transformed')
+    echo.inputs.message = StepInput(source=wf.inputs.n, value_from='$(String(self))')
+    assert wf.compile().cwl_workflow['inputs']['n']['type'] == 'Any'
