@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from ..lang.cwl import CWL_VERSION
 from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.error_codes import SophiosErrorCode
-from ..lang.nodes import Document, EdgeRef, InputValue, Step, UnresolvedName
+from ..lang.nodes import CwlRecord, Document, EdgeRef, InputValue, Step, UnresolvedName
 from ..lang.parser import Grammar
 from ..lang.spans import SourceSpan
 from ..lang.versions import (ANNOTATION_KEY, ANNOTATION_NAMESPACE,
@@ -35,8 +35,10 @@ from .types import (
     Port,
     PortId,
     PortName,
+    PortType,
     ProcessRun,
     Resolution,
+    SourceList,
     StepId,
     StepNode,
     WorkflowGraph,
@@ -120,7 +122,7 @@ def _lower_resolved(document: ResolvedDocument,
     workflow_input_names = {port.name for port in workflow_inputs}
     input_mapping = tuple(
         (name, tuple(binding.sink for node in nodes for binding in node.bindings
-                     if _unresolved_name(binding) == name))
+                     if name in _input_names(binding)))
         for name in (port.name for port in workflow_inputs)
     )
     output_mapping = []
@@ -163,9 +165,8 @@ def _lower_resolved(document: ResolvedDocument,
         explicit_edge_defs=tuple((name, port) for name, port in defined_anywhere.items()
                                  if port in known_ports),
         explicit_edge_calls=tuple((obligation.name, obligation.sink)
-                                  for node in nodes for obligation in (
-                                      binding.resolution for binding in node.bindings)
-                                  if isinstance(obligation, DeferredObligation)),
+                                  for node in nodes for binding in node.bindings
+                                  for obligation in _obligations(binding.resolution)),
         input_mapping=tuple((name, sinks) for name, sinks in input_mapping
                             if name in workflow_input_names and sinks),
         output_mapping=tuple(output_mapping),
@@ -198,8 +199,14 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep,
     # A generated process consumes `script`/`dockerPull` to build its tool;
     # neither survives into the tool's declared interface.
     consumed = _GENERATION_PARAMETERS if resolved.process.generated else ()
+    # A record may bind an input its process does not declare, which is how
+    # `when:` and `valueFrom` read a value; a subworkflow call's inputs are
+    # exactly the ones the subworkflow declares.
+    extra = () if resolved.process.child is not None else tuple(
+        name for name, value in source.inputs
+        if isinstance(value, CwlRecord) and AuthoredName(name) not in declared_inputs)
     for name, _ in source.inputs:
-        if name not in declared_inputs and name not in consumed:
+        if name not in declared_inputs and name not in consumed and name not in extra:
             diagnostics.error(
                 SophiosErrorCode.UNDECLARED_PORT,
                 f"step '{source.id}' binds '{name}', which its resolved process does not declare",
@@ -217,7 +224,9 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep,
             )
     inputs = tuple(Port(PortId(identity, Direction.INPUT, name), declaration.type,
                         declaration, source.span)
-                   for name, declaration in declared_inputs.items())
+                   for name, declaration in declared_inputs.items()) + tuple(
+        Port(PortId(identity, Direction.INPUT, AuthoredName(name)), PortType('Any'), None, source.span)
+        for name in extra)
     outputs = tuple(Port(PortId(identity, Direction.OUTPUT, name), declaration.type,
                          declaration, source.span)
                     for name, declaration in declared_outputs.items())
@@ -367,13 +376,21 @@ def _positional_output_port(nodes: list[StepNode], index: int, name: str, port_n
     return found
 
 
-def _unresolved_name(binding: Binding) -> str | None:
-    """Return a workflow-input reference without traversing opaque payloads."""
-    match binding:
-        case Binding(value=UnresolvedName(name=name)):
-            return name
+def _input_names(binding: Binding) -> tuple[str, ...]:
+    """The workflow inputs a binding names, without traversing opaque payloads."""
+    match binding.value:
+        case UnresolvedName(name=name):
+            return (name,)
+        case CwlRecord(sources=sources):
+            return tuple(source.name for source in sources if isinstance(source, UnresolvedName))
         case _:
-            return None
+            return ()
+
+
+def _obligations(resolution: Resolution) -> tuple[DeferredObligation, ...]:
+    """The obligations one binding resolved to."""
+    items = resolution.items if isinstance(resolution, SourceList) else (resolution,)
+    return tuple(item for item in items if isinstance(item, DeferredObligation))
 
 
 def _inference_rules(sidecar: object) -> tuple[tuple[str, str], ...]:
@@ -413,11 +430,13 @@ def _every_name_is_present(document: Document, diagnostics: Diagnostics) -> bool
                                   f"step '{step.id}' binds an input with no name", step.span,
                                   Locator(step=step.id, index=index))
                 found = True
-            if isinstance(value, EdgeRef) and not value.name:
-                diagnostics.error(SophiosErrorCode.EMPTY_NAME,
-                                  f"'!*' on '{step.id}.{name}' names no edge", value.span,
-                                  Locator(step=step.id, index=index, port=name))
-                found = True
+            references = value.sources if isinstance(value, CwlRecord) else (value,)
+            for reference in references:
+                if isinstance(reference, EdgeRef) and not reference.name:
+                    diagnostics.error(SophiosErrorCode.EMPTY_NAME,
+                                      f"'!*' on '{step.id}.{name}' names no edge", reference.span,
+                                      Locator(step=step.id, index=index, port=name))
+                    found = True
         for binding in step.outputs:
             if not binding.name:
                 diagnostics.error(SophiosErrorCode.EMPTY_NAME,
@@ -456,8 +475,31 @@ def _edge_definitions(identities: tuple[StepId, ...], document: Document,
 def _resolve(value: InputValue, port: Port, defined_so_far: dict[str, PortId],
              defined_anywhere: dict[str, PortId], diagnostics: Diagnostics) -> Resolution:
     """Where one bound input gets its value from, if it needs a producer."""
+    if isinstance(value, CwlRecord):
+        items = tuple(_resolve_reference(source, port, defined_so_far, defined_anywhere, diagnostics)
+                      if isinstance(source, EdgeRef) else None for source in value.sources)
+        if len(items) > 1:
+            for item in items:
+                if isinstance(item, DeferredObligation):
+                    # One step input has one relay across a workflow boundary,
+                    # so it cannot carry several sources from outside.
+                    diagnostics.error(
+                        SophiosErrorCode.UNDEFINED_EDGE,
+                        f"'!* {item.name}' is defined in no step of this document, and a record "
+                        'with several sources takes each from this document or its inputs. '
+                        'Declare it as an input of this workflow and name that input instead.',
+                        item.span,
+                        Locator(step=port.id.step.name, index=port.id.step.index, port=str(port.id.port)))
+        return SourceList(port.id, items)
     if not isinstance(value, EdgeRef):
         return None
+    return _resolve_reference(value, port, defined_so_far, defined_anywhere, diagnostics)
+
+
+def _resolve_reference(value: EdgeRef, port: Port, defined_so_far: dict[str, PortId],
+                       defined_anywhere: dict[str, PortId],
+                       diagnostics: Diagnostics) -> Edge | DeferredObligation | None:
+    """An edge to an earlier definition, or an obligation on one outside this document."""
     source = defined_so_far.get(value.name)
     if source is not None:
         return Edge(source, port.id, span=value.span)

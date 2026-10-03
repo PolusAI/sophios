@@ -1,7 +1,8 @@
 """A step's `in:` and `out:`, derived from the finished graph at Emit."""
-from ..lang.nodes import InlineLiteral, RawCwlRef, UnresolvedName
+from ..lang.nodes import CwlRecord, EdgeRef, InlineLiteral, RawCwlRef, UnresolvedName
 from .types import (
     AuthoredName,
+    DeferredObligation,
     DerivedName,
     Edge,
     EdgeOrigin,
@@ -9,7 +10,9 @@ from .types import (
     Expression,
     PortId,
     PortName,
+    Record,
     Source,
+    SourceList,
     StepId,
     StepNode,
     StepOutputRef,
@@ -18,7 +21,8 @@ from .types import (
 
 
 def step_inputs(graph: WorkflowGraph) -> dict[StepId, tuple[tuple[PortName, EmittedValue], ...]]:
-    """Every step's `in:` entries: bindings, then edges, then relays for sinks still unset."""
+    """Every step's `in:` entries: bindings, then edges, then relays for sinks still unset,
+    then records, each spelled from its own sources."""
     ins: dict[StepId, dict[PortName, EmittedValue]] = {step.id: {} for step in graph.steps}
 
     for step in graph.steps:
@@ -50,7 +54,28 @@ def step_inputs(graph: WorkflowGraph) -> dict[StepId, tuple[tuple[PortName, Emit
             if target_step in ins:
                 ins[target_step].setdefault(target_port, Source(name, shorthand=name in shorthand_relays))
 
+    for step in graph.steps:
+        for binding in step.bindings:
+            if isinstance(binding.value, CwlRecord) and isinstance(binding.resolution, SourceList):
+                relayed = ins[step.id].get(binding.sink.port)
+                ins[step.id][binding.sink.port] = Record(
+                    tuple(_record_source(graph, source, item, relayed)
+                          for source, item in zip(binding.value.sources, binding.resolution.items, strict=True)),
+                    binding.value.fields)
+
     return {step_id: tuple(values.items()) for step_id, values in ins.items()}
+
+
+def _record_source(graph: WorkflowGraph, source: EdgeRef | UnresolvedName,
+                   item: Edge | DeferredObligation | None, relayed: EmittedValue | None) -> PortName | StepOutputRef:
+    """How one record source is spelled: its edge's producer, the workflow input it
+    names, or, for an edge from outside this document, what Link bound the sink to."""
+    if isinstance(item, Edge):
+        return direct_source(graph, item.source)
+    if item is None:
+        return AuthoredName(source.name)
+    assert isinstance(relayed, Source), f'Link discharged {item.name!r} into {item.sink} without a source'
+    return relayed.ref
 
 
 def step_out(step: StepNode) -> tuple[PortName, ...]:

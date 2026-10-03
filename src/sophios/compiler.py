@@ -23,7 +23,7 @@ from .ir.names import Names
 from .ir.types import AuthoredName, Binding, EdgeOrigin, PortName, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import SophiosError
-from .lang.nodes import InlineLiteral
+from .lang.nodes import CwlRecord, InlineLiteral, UnresolvedName
 from .lang.parser import Grammar
 from .lang.spans import SourceSpan
 from .lang.error_codes import SophiosErrorCode
@@ -186,10 +186,10 @@ def _check_unresolved_names(graph: WorkflowGraph, allow_raw_cwl: bool,
     for step in graph.steps:
         for binding in step.bindings:
             value = binding.value
-            if value.__class__.__name__ != 'UnresolvedName':
-                continue
-            name = getattr(value, 'name')
-            if name not in declared and not allow_raw_cwl:
+            for reference in value.sources if isinstance(value, CwlRecord) else (value,):
+                if not isinstance(reference, UnresolvedName) or reference.name in declared or allow_raw_cwl:
+                    continue
+                name = reference.name
                 raise SophiosError.error(
                     SophiosErrorCode.UNRESOLVED_INPUT,
                     f'Warning! Did you forget to use !ii before {name} in {graph.name}.wic?',

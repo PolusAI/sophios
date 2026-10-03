@@ -30,7 +30,7 @@ from ..wic_types import Cwl
 from .declarations import required
 from .names import NAMESPACE_SEPARATOR, Names
 from .stepin import step_inputs, step_out
-from .types import (DerivedName, EmissionDocument, EmittedValue, Expression, PortName,
+from .types import (DerivedName, EmissionDocument, EmittedValue, Expression, PortName, Record,
                     Source, StepNode, StepOutputRef, WorkflowGraph, WorkflowPort)
 
 EDAM_NAMESPACE = ('edam', 'https://edamontology.org/')
@@ -229,10 +229,10 @@ def _emit_scatter(scatter: Any, ports: tuple[PortName, ...], names: Names) -> An
     return deepcopy(scatter)
 
 
-def _emit_binding(value: EmittedValue, names: Names) -> str | dict[str, str]:
+def _emit_binding(value: EmittedValue, names: Names) -> str | dict[str, Any]:
     """One `in:` entry, in the spelling its value asks for.
 
-    Returns `str | dict[str, str]` rather than `Any` so mypy checks this
+    Returns `str | dict[str, Any]` rather than `Any` so mypy checks this
     `match` covers the union instead of a missed arm silently falling through.
     """
     match value:
@@ -242,6 +242,14 @@ def _emit_binding(value: EmittedValue, names: Names) -> str | dict[str, str]:
             return {'source': names.source(ref)}
         case Expression(text=text):
             return text
+        case Record(sources=sources, fields=fields):
+            known: dict[str, Any] = {}
+            if sources:
+                spelled = [names.source(source) for source in sources]
+                # One source stays a list beside `linkMerge`, which merges a list.
+                known['source'] = spelled if len(spelled) > 1 or 'linkMerge' in dict(fields) else spelled[0]
+            known.update({key: deepcopy(field) for key, field in fields})
+            return known
 
 
 def _emit_port(port: WorkflowPort, names: Names) -> Any:
