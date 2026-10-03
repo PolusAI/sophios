@@ -89,7 +89,7 @@ def bundle_from_source(source: str, name: str,
     """
     here = Path('.').resolve()
     reading = _Reading(yml_paths, here, here)
-    return reading.bundle(_visit(source, name, None, reading), name, tools)
+    return reading.bundle(_visit(source, f'{name}.wic', None, reading), name, tools)
 
 
 def bundle_from_disk(yml_path: Path,
@@ -102,17 +102,17 @@ def bundle_from_disk(yml_path: Path,
     here, and whether their ports line up, is for the passes that follow.
     """
     reading = _Reading(yml_paths, yml_path.parent, yml_path.resolve().parent)
-    parsed = _visit(yml_path.read_text(encoding='utf-8'), yml_path.stem, yml_path.resolve(), reading)
+    parsed = _visit(yml_path.read_text(encoding='utf-8'), yml_path.name, yml_path.resolve(), reading)
     return reading.bundle(parsed, yml_path.stem, tools)
 
 
-def _visit(source: str, stem: str, path: Path | None, reading: _Reading) -> ParseResult:
+def _visit(source: str, file: str, path: Path | None, reading: _Reading) -> ParseResult:
     """Parse one file's text and register every workflow and generated tool it reaches.
 
     The parse is recorded under ``path`` before anything it reaches is read,
     so a file reached again -- a cycle, or a second namespace -- reuses it.
     """
-    parsed = parse(source, f'{stem}.wic')
+    parsed = parse(source, file)
     if path is not None:
         reading.read[path] = parsed
     document = parsed.document
@@ -175,7 +175,7 @@ def _register_workflow(key: tuple[str, str], path: Path, reading: _Reading) -> N
     if key in reading.workflows:
         return
     reading.workflows[key] = reading.read[path] if path in reading.read else _visit(
-        path.read_text(encoding='utf-8'), path.stem, path, reading)
+        path.read_text(encoding='utf-8'), path.name, path, reading)
     reading.directories[key] = path.parent
 
 
