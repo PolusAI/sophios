@@ -127,7 +127,19 @@ def _resolve_parameter_type(
     if parameter.parameter_type is None:
         parameter.set_parameter_type(candidate_type)
         return
-    if not _python_api_types_match(parameter.parameter_type, candidate_type):
+    _check_declared_type(parameter, candidate_type, context=context)
+
+
+def _check_declared_type(
+    parameter: InputParameter | OutputParameter,
+    candidate_type: Any,
+    *,
+    context: str,
+) -> None:
+    """Validate a parameter's declared type, if it has one, against a candidate. A workflow
+    output calls this alone: undeclared, it takes its source's type when read."""
+    if parameter.parameter_type is not None and candidate_type is not None \
+            and not _python_api_types_match(parameter.parameter_type, candidate_type):
         raise InvalidLinkError(
             f"{context} has incompatible types: expected {parameter.parameter_type!r}, got {candidate_type!r}"
         )
@@ -160,7 +172,7 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
         case OutputParameter() as output:
             _resolve_parameter_type(
                 input_port,
-                output.parameter_type,
+                output.effective_type(),
                 context=f"{process_self.process_name}.{input_name}",
             )
             anchor_name = output.ensure_anchor(f"{input_name}{process_self.process_name}")
@@ -179,18 +191,18 @@ def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) ->
     match value:
         case OutputParameter(parent_obj=Step(process_name=process_name) | Workflow(process_name=process_name),
                              name=name) as source:
-            _resolve_parameter_type(
+            _check_declared_type(
                 output_parameter,
-                _boundary_type(source.parameter_type),
+                source.effective_type(),
                 context=f"{workflow.process_name}.outputs.{output_name}",
             )
             output_parameter.bind_source(OutputSourceBinding(process_name, name), source_parameter=source)
             source.linked = True
         case WorkflowInputReference(workflow=source_workflow, name=name) if source_workflow is workflow:
             input_parameter = workflow._ensure_input(name)
-            _resolve_parameter_type(
+            _check_declared_type(
                 output_parameter,
-                input_parameter.parameter_type,
+                input_parameter.cwl_type(),
                 context=f"{workflow.process_name}.outputs.{output_name}",
             )
             output_parameter.bind_source(OutputSourceBinding(None, name), source_parameter=input_parameter)
@@ -214,7 +226,8 @@ class _ProcessBase:  # pylint: disable=too-few-public-methods
                      for port in self._inputs if port._binding is not None)
 
     def _output_rank(self) -> int:
-        """The array layers a scatter adds to each output: none, since only a `Step` scatters."""
+        """The array layers this process adds to each of its outputs: none for a `Workflow`,
+        whose outputs carry their sources' types, layers included."""
         return 0
 
 

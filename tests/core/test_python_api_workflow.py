@@ -1693,11 +1693,31 @@ def test_nested_crossproduct_lifts_one_level_per_scattered_port() -> None:
 
 @pytest.mark.fast
 def test_a_subworkflows_output_is_not_lifted() -> None:
-    """A nested workflow is never scattered from Python, so its outputs keep their declared type."""
+    """A nested workflow adds no array layer of its own: over an unscattered step its output stays `File`."""
     _inner, cat = _inner_and_sibling()
     assert cat.inputs.file.effective_source_type() == 'File'
     with pytest.raises(ValueError, match="array-valued data"):
         cat.scatter_on(cat.inputs.file)
+
+
+@pytest.mark.fast
+def test_a_scatter_inside_a_subworkflow_lifts_its_output() -> None:
+    """A subworkflow output typed at bind time stayed `File` once its step was scattered,
+    so a sibling could neither scatter over it nor consume it unscattered."""
+    echo = Step(clt_path=_adapter('echo'))
+    echo.inputs.message = ['a', 'b']
+    inner = Workflow([echo], 'inner')
+    inner.outputs.out = echo.outputs.stdout
+    cat = Step(clt_path=_adapter('cat'))
+    file = cat.inputs.file
+    cat.inputs.file = inner.outputs.out
+    echo.scatter_on(echo.inputs.message)
+    assert file.effective_source_type() == {'type': 'array', 'items': 'File'}
+    assert inner.yaml['outputs']['out']['type'] == {'type': 'array', 'items': 'File'}
+    cat.scatter_on(file)
+    compiled = Workflow([inner, cat], 'outer').compile()
+    steps = {s['id'].rsplit('__', 1)[-1]: s for s in compiled.cwl_workflow['steps']}
+    assert steps['cat']['scatter'] == ['file']
 
 
 @pytest.mark.fast

@@ -212,12 +212,7 @@ class InputParameter(_ParameterBase):
             case "inline":
                 return infer_literal_parameter_type(self._binding.value)
             case "alias":
-                source = self._binding.source
-                declared = source.cwl_type()
-                if declared is None:
-                    return None
-                rank = source.parent_obj._output_rank()  # pylint: disable=protected-access
-                return layered(PortType(declared), rank).canonical
+                return self._binding.source.effective_type()
             case _:
                 return self._binding.source.parameter_type
 
@@ -265,6 +260,23 @@ class OutputParameter(_ParameterBase):
         """Return whether this output is bound to a source."""
         return self._source is not None
 
+    def effective_type(self) -> Any:
+        """The type this output carries when the workflow runs, computed now, not at
+        bind time. A step's output is lifted an array level per layer of its step's
+        scatter. A workflow's output is its declared type, else its source's type,
+        read through the same rule, so a scatter inside a subworkflow lifts it too."""
+        if self._source_parameter is not None and self.parameter_type is None:
+            match self._source_parameter:
+                case OutputParameter() as source:
+                    return source.effective_type()
+                case source:
+                    return source.cwl_type()
+        declared = self.cwl_type()
+        if declared is None:
+            return None
+        rank = self.parent_obj._output_rank()  # pylint: disable=protected-access
+        return layered(PortType(declared), rank).canonical
+
     def to_workflow_output(self, steps: Sequence[Any]) -> dict[str, Any]:
         """Serialize this workflow output parameter to CWL.
 
@@ -279,7 +291,7 @@ class OutputParameter(_ParameterBase):
         """
         if self._source is None:
             raise ValueError(f"workflow output {self.name!r} has no source binding")
-        cwl_type = self.cwl_type()
+        cwl_type = self.effective_type()
         if cwl_type is None:
             raise ValueError(f"workflow output {self.name!r} has no resolved type")
         return {
