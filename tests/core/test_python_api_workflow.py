@@ -1923,3 +1923,17 @@ def test_all_non_null_still_delivers_a_list() -> None:
     wf, sink = _picked('all_non_null')
     sink.scatter_on(sink.inputs.files)
     assert wf.compile().cwl_workflow['steps'][2]['scatter'] == ['files']
+
+
+@pytest.mark.fast
+def test_a_step_input_and_a_plain_link_on_similarly_named_steps_compile() -> None:
+    """A record's edges on step `sink` never take the name of a plain link to step `sink1`."""
+    wf = _merge()
+    c = Step(clt_path=_adapter('touch'), step_name='c')
+    c.inputs.filename = 'c.txt'
+    sink1 = Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',
+                                    'inputs': {'files': {'type': 'File'}}, 'outputs': {}}, process_name='sink1')
+    sink1.inputs.files = c.outputs.file
+    wf = Workflow([*wf.steps, c, sink1], 'similar')
+    steps = wf.compile().cwl_workflow['steps']
+    assert steps[4]['in']['files'] == {'source': 'similar__step__4__c/file'}
