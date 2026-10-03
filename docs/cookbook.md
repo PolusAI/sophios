@@ -264,7 +264,7 @@ An input that nothing binds, here `cat`'s `file`, is connected by inference to
 the most recent earlier output of a matching type. Two earlier outputs match, so
 the compile takes `echo`'s and says so in a note. `sophios --yaml` prints it on
 stderr; in Python it is in `compiled.diagnostics`, positioned at the Python line
-that built the workflow:
+that made the step (`cat = Step(...)`):
 
 ```text
 inference.wic:8:3: note [wic043] step 'cat' input 'file' was inferred from the most recent match 'echo/stdout'; earlier steps also match: 'touch/file'; pin it: `out: - stdout: !& <name>` on step 'echo' and `in: file: !* <name>` here (step 3 'cat', port 'file')
