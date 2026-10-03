@@ -545,6 +545,24 @@ def test_ctrl_c_during_run_local_exits_130(monkeypatch: pytest.MonkeyPatch,
     assert caught.value.code == 130
 
 
+@pytest.mark.fast
+@pytest.mark.parametrize('flags', [[], ['--cachedir', 'mycache']])
+def test_a_runner_that_raises_says_why_with_or_without_a_cachedir(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+        cli_on_helloworld: Callable[..., None], flags: list[str]) -> None:
+    """The traceback goes to error_<name>.txt; the message itself is printed, whatever the cache."""
+    import sophios.run_local as rl
+
+    def broken(_args: list[str]) -> int:
+        raise RuntimeError('the runner broke')
+
+    monkeypatch.setattr(rl.cwltool.main, 'main', broken)
+    with pytest.raises(SystemExit) as caught:
+        cli_on_helloworld('--run_local', *flags)
+    assert caught.value.code == 1
+    assert 'the runner broke' in capsys.readouterr().out
+
+
 # --------------------------------------------------------------------------
 # Compile diagnostics name where the author wrote the problem
 # --------------------------------------------------------------------------
