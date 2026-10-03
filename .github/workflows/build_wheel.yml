@@ -22,8 +22,6 @@ jobs:
 
       - name: Verify version detection
         uses: ./.github/actions/verify-version
-        with:
-          allow-fallback: "true"
 
       - name: Install sophios 🔧
         run: |
