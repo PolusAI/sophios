@@ -27,19 +27,6 @@ the `wic:` block, the `!ii` / `!&` / `!*` tags, and the `wic_*` desugared keys.
 Those are concrete syntax that existing workflows depend on, so they stay as
 they are; they are not evidence that the language is called wic.
 
-## Implementation status
-
-This document specifies the language. One part is **not yet fully wired into
-the compiler**, and is marked where it appears:
-
-| Construct | Specified | Accepted by `sophios.lang` | Usable in a compiled workflow |
-|---|---|---|---|
-| `!cwl` raw CWL reference (§4.1) | Yes | Yes | Yes |
-| Undefined edge detection (`wic025`, §4.1.2) | Yes | Yes | **Partial** — root document only; nested references await Spec 3 Link |
-
-Everything else describes what Sophios does today. The remaining limitation on
-`wic025` is described in §4.1.2.
-
 ---
 
 ## 1. What kind of language this is
@@ -372,16 +359,6 @@ even though the definition is in the same document.
 A document included as a subworkflow may reference an edge its includer has
 already defined; the includer's definitions are in scope when the child is
 compiled.
-
-**Not yet enforced.** A reference that *no* enclosing document defines is
-reported only when it appears in the root document itself. One inside an
-included subworkflow is turned into an input of that subworkflow, and its edge
-name is not carried up, so the root has nothing left to check: the compilation
-succeeds and the reference surfaces as a generated workflow input that nothing
-produces. Closing this means carrying the unresolved name up and checking the
-aggregate once at the root, which is what the typed IR's deferred-obligation
-discharge does. Until then, treat `wic025` as covering the root document and
-not the whole compilation.
 
 #### A document needing a value from outside declares it
 
