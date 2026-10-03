@@ -1,4 +1,5 @@
 """The typed compiler boundary over the phase pipeline."""
+import sys
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -60,6 +61,8 @@ def compile_source(bundle: SourceBundle,
         raise SophiosError.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
                                  'workflows must define at least one step')
     _check_unresolved_names(front.graph, compiler_options['allow_raw_cwl'])
+    for note in dict.fromkeys(_authored_spelling_notes(front.graph)):
+        print(note, file=sys.stderr)
 
     prepared = complete(_bind_subinterpreter_locations(front.graph, yaml_tag_paths))
     linked = link(prepared)
@@ -114,6 +117,36 @@ def _bind_subinterpreter_locations(graph: WorkflowGraph,
         graph, steps=tuple(steps),
         children=tuple(_bind_subinterpreter_locations(child, yaml_tag_paths)
                        for child in graph.children))
+
+
+def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
+    """One plain line for each place a document addresses a step by a name the compiler generates.
+
+    Such a spelling still resolves, so nothing here fails the compile; each line says what to
+    write instead. The Python API builds its documents without spans: nobody wrote that text,
+    so there is no author to tell.
+    """
+    notes: list[str] = []
+    spans = [step.span for step in graph.steps if step.span is not None]
+    if not spans:
+        return [note for child in graph.children for note in _authored_spelling_notes(child)]
+    file = spans[0].file
+    sources = {port.name: port.output_source for port in graph.workflow_outputs}
+    positional = {port.name for port in graph.workflow_outputs if port.positional}
+    ids = [step.id.name for step in graph.steps]
+    for name, source in graph.output_mapping:
+        written = str(sources[name]).rsplit('/', 1)[0]
+        if name in positional or written == source.step.name:
+            continue
+        repeated = ids.count(source.step.name) > 1
+        position = [step.id for step in graph.steps].index(source.step) + 1
+        address = f'({position}, {source.step.name})' if repeated else source.step.name
+        caveat = ' (a position holds only while every edge in the workflow is explicit)' if repeated else ''
+        notes.append(f'Warning! {file}: output {str(name)!r} names its step {written!r}, a name the '
+                     f"compiler generates. Write '{address}/{source.port}' instead{caveat}.")
+    for child in graph.children:
+        notes.extend(_authored_spelling_notes(child))
+    return notes
 
 
 def _check_unresolved_names(graph: WorkflowGraph, allow_raw_cwl: bool,

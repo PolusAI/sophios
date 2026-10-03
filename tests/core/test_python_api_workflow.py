@@ -312,6 +312,21 @@ def test_tool_builder_step_bridge_supports_multistep_workflow() -> None:
 
 
 @pytest.mark.fast
+def test_a_workflow_output_prints_no_authored_spelling_line(capsys: pytest.CaptureFixture[str]) -> None:
+    """The Python API spells `outputSource` with generated names itself; nobody wrote that text."""
+    emit_step = Step(_emit_text_tool(), step_name="emit_text")
+    read_step = Step(clt_path=_adapter("cat"))
+    workflow = Workflow([emit_step, read_step], "output_line_demo")
+    emit_step.inputs.message = workflow.inputs.message.as_type(cwl.string)
+    read_step.inputs.file = emit_step.outputs.file
+    workflow.outputs.result = read_step.outputs.output
+
+    workflow.compile()
+
+    assert "Warning!" not in capsys.readouterr().err
+
+
+@pytest.mark.fast
 def test_output_target_directories_compile_as_runner_local_inputs(tmp_path: Path) -> None:
     """A declared output directory becomes a string input the runner fills.
 
