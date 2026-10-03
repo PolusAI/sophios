@@ -172,8 +172,9 @@ ways:
 
 A path is used when that file exists; otherwise the value is read as a registry stem.
 A stem nothing on the search paths provides is `wic013`. An inline body is written
-out as its own tool file next to the compiled workflow, like any other tool. A body
-that declares no `cwlVersion` takes the one of the document it is written in.
+out as its own tool file next to the compiled workflow, like any other tool, and is
+written at the workflow's CWL version: a `cwlVersion` inside the body is ignored, as
+CWL requires of a process embedded in a workflow.
 
 ## 3. Inputs
 
