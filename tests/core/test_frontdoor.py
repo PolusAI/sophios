@@ -12,7 +12,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from sophios.ir.frontdoor import bundle_from_disk
+from sophios.cli import default_compilation_settings
+from sophios.compiler import compile_source
+from sophios.ir.artifacts import CompilationResult
+from sophios.ir.frontdoor import SourceBundle, bundle_from_disk
 from sophios.ir.pipeline import front_end
 from sophios.ir.resolve import RegistryKey, RegistrySnapshot, generated_process_id
 from sophios.lang import (
@@ -26,6 +29,7 @@ from sophios.lang import (
     Step,
     parse,
 )
+from sophios.utils_graphs import get_graph_reps
 from sophios.utils_yaml import wic_loader
 
 from .synthetic_tools import SYNTHETIC_TOOLS
@@ -63,6 +67,13 @@ def _line_of(text: str, needle: str) -> int:
     """The 1-based line of `needle`, read out of the text itself."""
     return next(number for number, line in enumerate(text.splitlines(), start=1)
                 if needle in line)
+
+
+def _compile(bundle: SourceBundle) -> CompilationResult:
+    """Compile a bundle the file door built, with default settings."""
+    compiler_options, graph_settings, tag_paths = default_compilation_settings()
+    return compile_source(bundle, compiler_options, graph_settings, tag_paths,
+                          relative_run_path=True, testing=True, graph_target=get_graph_reps(bundle.name))
 
 
 def _redump(text: str) -> str:
@@ -261,3 +272,17 @@ def test_the_parser_is_the_gate_a_file_passes_as_it_is_read(tmp_path: Path) -> N
     diagnostics = bundle_from_disk(written, {'global': {}}, {}).parsed.diagnostics
     assert [(d.code, d.span.start_line if d.span else None) for d in diagnostics] == [
         (SophiosErrorCode.UNKNOWN_WIC_KEY, 2)]
+
+
+@pytest.mark.fast
+def test_an_inline_run_body_is_registered_and_emitted_as_its_own_tool(tmp_path: Path) -> None:
+    """An inline `run:` mapping is the step's tool, emitted as its own file."""
+    (tmp_path / 'w.wic').write_text(
+        'steps:\n  mytool:\n    run:\n      class: CommandLineTool\n      cwlVersion: v1.2\n'
+        '      baseCommand: true\n      inputs: {x: string}\n      outputs: {}\n    in:\n      x: !ii hi\n',
+        encoding='utf-8')
+    result = _compile(bundle_from_disk(tmp_path / 'w.wic', {}, {}))
+    step, = result.artifact.cwl['steps']
+    assert step['run'] == 'w__step__1__mytool/mytool.cwl'
+    child, = result.artifact.children
+    assert child.cwl['inputs'] == {'x': {'type': 'string'}}

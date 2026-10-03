@@ -241,7 +241,7 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
         return None
     return ResolvedProcess(
         tool.key,
-        deepcopy(run) if run is not None and not isinstance(run, str) else tool.run_path,
+        tool.run_path,
         _ports(cwl.get('inputs', {}), output=False),
         _ports(cwl.get('outputs', {}), output=True),
         deepcopy(cwl),

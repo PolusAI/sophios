@@ -257,8 +257,7 @@ EmittedValue: TypeAlias = Source | Expression
 
 @dataclass(frozen=True, slots=True)
 class ProcessRun:
-    """What a step executes: `target` is transported exactly as CWL (usually a
-    relative path, but an inline process object is legal), and `process_id` is
+    """What a step executes: `target` is a relative path, and `process_id` is
     the resolved logical identity, kept separate since a path is an embedding
     choice, not a tool identity.
     """

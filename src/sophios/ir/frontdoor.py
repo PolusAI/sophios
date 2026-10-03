@@ -6,9 +6,12 @@ the parse of its own file, so every span is a position in the file the user
 edited. Nothing here serialises YAML.
 """
 from collections import Counter
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from ..lang import (
     Document,
@@ -23,6 +26,7 @@ from ..lang import (
     parse,
 )
 from ..python_cwl_adapter import generate_CWL_CommandLineTool, get_module
+from ..utils_cwl import desugar_into_canonical_normal_form
 from ..wic_types import StepId, Tool, Tools
 from .resolve import RegistrySnapshot, generated_process_id, step_sidecar
 
@@ -103,7 +107,8 @@ def _visit(source: str, stem: str, path: Path | None,
     document = parsed.document
     if document is not None:
         _collect_pins(document, pins)
-        _reach(document, yml_paths, script_dir, workflows, generated, read, pins)
+        _reach(document, yml_paths, script_dir, path.parent if path is not None else script_dir,
+               workflows, generated, read, pins)
     return parsed
 
 
@@ -129,16 +134,25 @@ def _append_pin(document: Document, pins: list[str]) -> None:
 def _reach(document: Document,
            yml_paths: dict[str, dict[str, Path]],
            script_dir: Path,
+           document_dir: Path,
            workflows: dict[tuple[str, str], ParseResult],
            generated: Tools,
            read: dict[Path, ParseResult],
            pins: list[str]) -> None:
     """Follow every workflow and generated tool one document's steps reach,
     including its inline implementation bodies.
+
+    ``script_dir`` is where ``python_script`` files are, the root's directory;
+    ``document_dir`` is where this document is, which is what a ``run:`` path
+    is relative to.
     """
     counts = Counter(step.id for step in document.steps)
     for index, step in enumerate(document.steps, start=1):
         namespace = _namespace(step_sidecar(document.sidecar, index, step.id, counts[step.id]))
+        run = dict(step.interpreted).get('run')
+        if run is not None and _register_run(step, run, namespace, document_dir, yml_paths,
+                                             workflows, generated, read, pins, script_dir):
+            continue
         if step.id == 'python_script':
             generated[StepId(generated_process_id(step), namespace)] = \
                 _generated_tool(step, script_dir)
@@ -159,7 +173,31 @@ def _reach(document: Document,
                 child_path.read_text(encoding='utf-8'), child_path.stem, resolved,
                 yml_paths, script_dir, workflows, generated, read, pins)
     for _name, body in (document.sidecar.implementations if document.sidecar else ()):
-        _reach(body, yml_paths, script_dir, workflows, generated, read, pins)
+        _reach(body, yml_paths, script_dir, document_dir, workflows, generated, read, pins)
+
+
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def _register_run(step: Step, run: object, namespace: str, document_dir: Path,
+                  yml_paths: dict[str, dict[str, Path]],
+                  workflows: dict[tuple[str, str], ParseResult],
+                  generated: Tools, read: dict[Path, ParseResult], pins: list[str],
+                  script_dir: Path) -> bool:
+    """Register what a step's ``run:`` names, when it names something here.
+
+    An inline mapping is a tool keyed by the step's id.
+
+    Returns:
+        bool: Whether ``run`` was registered here.
+    """
+    if isinstance(run, dict):
+        body = desugar_into_canonical_normal_form(deepcopy(run))
+        generated[StepId(_stem(step.id), namespace)] = Tool(f'{_stem(step.id)}.cwl', body)
+        return True
+    return False
+
+
+def _stem(name: str) -> str:
+    return name[:-4] if name.endswith(('.wic', '.cwl')) else name
 
 
 def _namespace(sidecar: WicSidecar | None) -> str:
