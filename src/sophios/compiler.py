@@ -211,7 +211,7 @@ def _check_unresolved_names(graph: WorkflowGraph, allow_raw_cwl: bool,
                 name = reference.name
                 raise SophiosError.error(
                     SophiosErrorCode.UNRESOLVED_INPUT,
-                    f'Warning! Did you forget to use !ii before {name} in {graph.name}.wic?',
+                    f'Did you forget to use !ii before {name} in {graph.name}.wic?',
                     'If you want to compile the workflow anyway, use --allow_raw_cwl',
                     span=getattr(value, 'span', None),
                     locator=Locator(step=step.id.name, index=step.id.index, port=names.port(binding.sink.port)))

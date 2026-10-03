@@ -54,14 +54,14 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
             if permission_denied in output:
                 raise SophiosError.error(
                     SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
-                    'Warning! docker appears to be installed, but not configured as a non-root user.',
+                    'Docker appears to be installed, but not configured as a non-root user.',
                     'See https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user',
                     'TL;DR you probably just need to run the following command (and then restart your machine)',
                     'sudo usermod -aG docker $USER')
 
             raise SophiosError.error(
                 SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
-                f'Warning! The {container_cmd} command does not appear to be installed.',
+                f'The {container_cmd} command does not appear to be installed.',
                 f"""Most workflows require docker containers and
                   will fail at runtime if {container_cmd} is not installed.""",
                 'If you want to try running the workflow anyway, use --ignore_docker_install',
@@ -79,7 +79,7 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
             if too_many_processes and not ignore_container_processes:
                 raise SophiosError.error(
                     SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
-                    f'Warning! There are {num_processes} running docker processes.',
+                    f'There are {num_processes} running docker processes.',
                     f'More than {max_processes} may potentially cause intermittent hanging issues.',
                     'It is recommended to terminate the processes using the command',
                     '`sudo pkill com.docker && sudo pkill Docker`',
@@ -99,7 +99,7 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
         if not singularity_ok and not ignore_container_install:
             raise SophiosError.error(
                 SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
-                f'Warning! The {container_cmd} command does not appear to be installed.',
+                f'The {container_cmd} command does not appear to be installed.',
                 'If you want to try running the workflow anyway, use --ignore_docker_install',
                 'Note that --ignore_docker_install does NOT change whether or not',
                 'any step in your workflow uses docker or any other containers')
