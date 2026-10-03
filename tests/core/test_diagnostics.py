@@ -315,7 +315,7 @@ def test_cli_converts_a_report_to_exit_1(monkeypatch: pytest.MonkeyPatch,
 
     def reports(*_args: object, **_kwargs: object) -> None:
         raise SophiosError.error(SophiosErrorCode.UNRESOLVED_INPUT,
-                                 'Warning! Did you forget to use !ii before x in demo.wic?',
+                                 'Did you forget to use !ii before x in demo.wic?',
                                  'If you want to compile the workflow anyway, use --allow_raw_cwl')
 
     monkeypatch.setattr(cli, '_main', reports)
@@ -595,3 +595,30 @@ def test_a_duplicate_document_name_names_its_document() -> None:
     diagnostic = caught.value.diagnostics[0]
     assert diagnostic.code is SophiosErrorCode.DUPLICATE_DOCUMENT_NAME
     assert diagnostic.span is not None and diagnostic.span.file == 'provoke.wic'
+
+
+@pytest.mark.fast
+def test_an_unresolved_input_error_does_not_call_itself_a_warning() -> None:
+    """wic011 is an error: its message says what to write, with no `Warning!` in front."""
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': 'x'}}]})
+    first = caught.value.diagnostics[0]
+    assert first.code is SophiosErrorCode.UNRESOLVED_INPUT
+    assert first.message == 'Did you forget to use !ii before x in oracle.wic?'
+
+
+@pytest.mark.fast
+def test_a_container_engine_error_does_not_call_itself_a_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An error report states the problem; `Warning!` is for the stderr lines that do not stop the compile."""
+    _docker_with_processes(monkeypatch, 1001)
+    with pytest.raises(SophiosError) as caught:
+        post_compile.verify_container_engine_config('docker', False, ignore_container_processes=False)
+    assert caught.value.diagnostics[0].message == 'There are 1001 running docker processes.'
+
+    def command_not_found(*_args: object, **_kwargs: object) -> object:
+        raise FileNotFoundError('docker')
+
+    monkeypatch.setattr(post_compile.sub, 'run', command_not_found)
+    with pytest.raises(SophiosError) as caught:
+        post_compile.verify_container_engine_config('docker', False)
+    assert caught.value.diagnostics[0].message == 'The docker command does not appear to be installed.'
