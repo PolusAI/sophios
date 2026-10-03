@@ -151,9 +151,7 @@ def test_two_in_memory_tools_chain_and_keep_their_output_binding() -> None:
 _INPUTS = {'input_dir': '/data/in', 'output_dir': '/data/out', 'model_file': '/data/sam3.pt'}
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize('script', ['ichnaea_compact', 'ichnaea_integrated'])
-def test_the_ichnaea_scripts_compile_their_hinted_tool(script: str, tmp_path: Path) -> None:
+def _compile_ichnaea_script(script: str, tmp_path: Path) -> None:
     """Both scripts build a tool with a GPU hint and a Docker requirement, which
     cwl_utils renders as lists. `Workflow.compile()` crashed on the list, and the
     only test ran the tool through `validate()`, which never takes the compile path.
@@ -168,6 +166,20 @@ def test_the_ichnaea_scripts_compile_their_hinted_tool(script: str, tmp_path: Pa
     run = compiled.cwl_workflow['steps'][0]['run']
     assert any(entry.get('class') == 'DockerRequirement' for entry in run['requirements'])
     assert any(entry.get('class') == 'cwltool:CUDARequirement' for entry in run['hints'])
+
+
+@pytest.mark.fast
+def test_the_compact_ichnaea_script_compiles_its_hinted_tool(tmp_path: Path) -> None:
+    """The hinted tool compiles; see `_compile_ichnaea_script`."""
+    _compile_ichnaea_script('ichnaea_compact', tmp_path)
+
+
+@pytest.mark.fast
+@pytest.mark.needs_cwltool
+def test_the_integrated_ichnaea_script_compiles_its_hinted_tool(tmp_path: Path) -> None:
+    """The hinted tool compiles; see `_compile_ichnaea_script`. The script also
+    writes the tool with `validate=True`, which runs cwltool in-process."""
+    _compile_ichnaea_script('ichnaea_integrated', tmp_path)
 
 
 @pytest.mark.fast

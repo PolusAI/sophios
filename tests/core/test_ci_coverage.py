@@ -275,6 +275,10 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # synthesized path was ever validated, and the authored one emitted a
     # reference to a step the document does not contain.
     'tests/core/test_leak_boundary.py::test_an_authored_output_source_validates',
+    # The script validates the tool it writes through cwltool, so the import
+    # is the script's, not the test's. Its compact twin builds the same hinted
+    # tool without validating it and still runs on Windows.
+    'tests/core/test_example_scripts.py::test_the_integrated_ichnaea_script_compiles_its_hinted_tool',
 })
 
 
