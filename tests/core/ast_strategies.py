@@ -275,7 +275,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
 
 
 @st.composite
-def documents(draw: st.DrawFn) -> Document:
+def documents(draw: st.DrawFn) -> Document:  # pylint: disable=too-many-locals
     """A well-formed Sophios document, over every construct in `CONSTRUCTS`.
 
     CANNOT GENERATE (declared, and checked): the kinds in `NOT_GENERATED`.
