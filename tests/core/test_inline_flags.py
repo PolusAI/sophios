@@ -420,6 +420,18 @@ def test_every_level_of_nesting_is_dissolved_and_named_for_where_the_step_came_f
 
 
 @pytest.mark.fast
+def test_a_call_left_nested_inside_a_dissolved_workflow_keeps_the_subworkflow_requirement(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """The root still contains a Workflow step, so it still declares `SubworkflowFeatureRequirement`."""
+    middle = {'steps': [subworkflow_step('inner.wic', {'wic': {'inlineable': False}, 'steps': [XFORM]})]}
+    nested = compile_hermetic({'steps': [MK_FILE, subworkflow_step('middle.wic', middle)]}, 'wf').artifact
+    flat = post_compile.flatten_subworkflows(nested)
+    assert [child.cwl['class'] for child in flat.children] == ['CommandLineTool', 'Workflow']
+    assert flat.cwl['requirements']['SubworkflowFeatureRequirement'] == {}
+    assert 'it is marked `wic: inlineable: false`' in capsys.readouterr().err
+
+
+@pytest.mark.fast
 def test_a_workflow_with_no_subworkflow_is_returned_as_it_is() -> None:
     """Nothing to dissolve is nothing to copy."""
     artifact = compile_hermetic({'steps': [MK_FILE]}).artifact
