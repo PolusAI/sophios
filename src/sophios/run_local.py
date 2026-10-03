@@ -115,7 +115,7 @@ def _runner_outdir(basepath: str, cwl_runner: str, date_time: str, outdir: str |
 
 def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
               container_cmd: str, passthrough_args: list[str], outdir: str | None = None,
-              quiet: bool = True) -> list[str]:
+              quiet: bool = True, documents: tuple[str, ...] | None = None) -> list[str]:
     """Build the command to run the workflow in an environment
 
     Args:
@@ -125,10 +125,15 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
         container_cmd (str): The container engine command
         quiet (bool): Pass --quiet to cwltool. Turn it off so --debug and the runner's own log
         level reach it. toil-cwl-runner is never given --quiet.
+        documents (tuple[str, ...] | None): The workflow, then its job file if it has one, as
+        the runner is given them. By default `<basepath>/<workflow_name>.cwl` and
+        `<basepath>/<workflow_name>_inputs.yml`, the files Sophios wrote.
     Returns:
         cmd (list[str]): The command to run the workflow
     """
     basepath = str(Path(basepath).absolute().resolve())
+    if documents is None:
+        documents = (f'{basepath}/{workflow_name}.cwl', f'{basepath}/{workflow_name}_inputs.yml')
     quiet_flags = ['--quiet'] if quiet else []
     # NOTE: By default, cwltool will attempt to download schema files.
     # $schemas:
@@ -164,8 +169,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
         cmd += ['--move-outputs', '--enable-ext',
                 '--outdir', runner_outdir]
         cmd += passthrough_args
-        cmd += [f'{basepath}/{workflow_name}.cwl',
-                f'{basepath}/{workflow_name}_inputs.yml']
+        cmd += list(documents)
     elif cwl_runner == 'toil-cwl-runner':
         cmd = [script] + container_cmd_ + path_check
         if 'slurm' not in passthrough_args:
@@ -179,8 +183,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
                 '--disableProgress',  # disable the progress bar in the terminal, saves UI cycles
                 ]
         cmd += passthrough_args
-        cmd += [f'{basepath}/{workflow_name}.cwl',
-                f'{basepath}/{workflow_name}_inputs.yml']
+        cmd += list(documents)
     return cmd
 
 
@@ -260,7 +263,8 @@ def _report_outcome(retval: int | None, cmd: list[str], basepath: str, workflow_
 def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
               passthrough_args: list[str], workflow_name: str,
               basepath: str, user_env_vars: dict[str, str] | None = None,
-              output_directories: Mapping[str, str] | None = None) -> int:
+              output_directories: Mapping[str, str] | None = None,
+              documents: tuple[str, ...] | None = None) -> int:
     """This function runs the compiled workflow locally.
 
     Args:
@@ -271,6 +275,7 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
         basepath (str): The path at which the workflow to be executed
         user_env_vars (dict[str, str] | None): User supplied environment variables.
         output_directories (Mapping[str, str] | None): Passed to `copy_output_files`.
+        documents (tuple[str, ...] | None): Passed to `build_cmd`.
 
     Returns:
         retval (int): 0 on success, else the runner's exit code
@@ -288,7 +293,7 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
     # build the runner command
     cmd = build_cmd(workflow_name, basepath, cwl_runner,
                     container_engine, passthrough_args, run_args_dict.get('outdir') or None,
-                    quiet=run_args_dict.get('quiet', 'yes') == 'yes')
+                    quiet=run_args_dict.get('quiet', 'yes') == 'yes', documents=documents)
     cmdline = ' '.join(cmd)
     exec_env = create_safe_env(user_env_vars or {})
 
