@@ -450,7 +450,7 @@ def test_tool_builder_converts_to_in_memory_step() -> None:
     assert step.clt_path.name == "say_hello.cwl"
     assert _by_id(step.yaml["inputs"])["message"]["type"] == "string"
     assert _by_id(step.yaml["outputs"])["out"]["type"] == "stdout"
-    assert step._as_workflow_step(inline_subtrees=False).input("message") == InlineLiteral("hello")
+    assert step._as_workflow_step().input("message") == InlineLiteral("hello")
 
 
 @pytest.mark.fast

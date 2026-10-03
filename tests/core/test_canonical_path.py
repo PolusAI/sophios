@@ -293,26 +293,21 @@ def test_a_renamed_step_still_resolves_the_workflow_output_bound_to_it() -> None
     renamed.process_name = 'after'
     after = workflow.yaml['outputs']['result']['outputSource']
 
-    assert before.endswith('__join/file')
-    assert after.endswith('__after/file'), 'the output did not follow the step it is bound to'
+    assert before == 'join/file'
+    assert after == 'after/file', 'the output did not follow the step it is bound to'
 
 
 @pytest.mark.fast
 @pytest.mark.parametrize('stem', ['oracle', 'pipeline'])
-def test_a_written_document_spells_step_ids_for_the_name_it_is_saved_as(stem: str) -> None:
-    """The compiler takes the step-id prefix from the path it loads.
-
-    `write_wic` accepts any `*.wic` name, and an explicit `outputSource` is
-    consumed verbatim, so a document spelled from `process_name` but saved under
-    another name points its outputs at steps that do not exist. Path agreement cannot see
-    this: it always writes `f'{process_name}.wic'`, which is the one name for
-    which the two spellings agree.
-    """
+def test_a_written_document_compiles_under_any_file_name(stem: str) -> None:
+    """`write_wic` accepts any `*.wic` name, and nothing in the document depends
+    on it: outputs name their authored step, and the document compiles under
+    the name it was saved as."""
     workflow = _build_workflow(_PathSpec('a', 'b', 'c'))
     with tempfile.TemporaryDirectory() as workdir:
-        path = workflow.write_wic(Path(workdir) / f'{stem}.wic')
-        document = yaml.load(path.read_text(encoding='utf-8'), Loader=wic_loader())
+        root = workflow.write_wic(Path(workdir) / f'{stem}.wic')
+        document = yaml.load(root.read_text(encoding='utf-8'), Loader=wic_loader())
+    compiled = _compile_from_document(desugar_into_canonical_normal_form(document), stem).artifact.cwl
 
-    source = document['outputs']['result']['outputSource']
-    assert source.startswith(f'{stem}__step__'), source
-    assert source.endswith('__join/file'), source
+    assert document['outputs']['result']['outputSource'] == 'join/file'
+    assert compiled['outputs']['result']['outputSource'] == f'{stem}__step__3__join/file'

@@ -23,9 +23,9 @@ NAMESPACE_SEPARATOR = '___'
 def render_step_id(workflow: str, index: int, name: str) -> str:
     """The text a step occurrence carries at `index` in `workflow`.
 
-    Public for the two document readers that recognize a generated name by
-    comparing against it: an authored `outputSource` in Lower and generated
-    WIC in the Python API. Neither may parse the result.
+    Public for Lower, which recognizes a generated name in an authored
+    `outputSource` by comparing against it, and for tests that state the
+    spelling. Nothing may parse the result.
 
     Args:
         workflow (str): The name of the workflow the step belongs to.

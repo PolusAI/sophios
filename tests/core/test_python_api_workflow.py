@@ -579,12 +579,13 @@ def test_subworkflow_inputs_use_child_workflow_name_and_formal_parameters() -> N
         "file": {"wic_alias": "filechild"},
         "str": {"wic_inline_input": "Hello"},
     }
-    assert subworkflow_step["subtree"]["inputs"] == {
+    assert "subtree" not in subworkflow_step
+    assert subworkflow.yaml["inputs"] == {
         "file": {"type": "File"},
         "str": {"type": "string"},
     }
-    assert subworkflow_step["subtree"]["steps"][0]["in"]["file"] == "file"
-    assert subworkflow_step["subtree"]["steps"][0]["in"]["str"] == "str"
+    assert subworkflow.yaml["steps"][0]["in"]["file"] == "file"
+    assert subworkflow.yaml["steps"][0]["in"]["str"] == "str"
 
 
 @pytest.mark.fast
@@ -779,7 +780,7 @@ def test_workflow_outputs_are_serialized_with_type_and_source() -> None:
     workflow_yaml = workflow.yaml
 
     assert workflow_yaml["outputs"] == {
-        "file": {"type": "File", "outputSource": "wf__step__2__append/file"},
+        "file": {"type": "File", "outputSource": "append/file"},
     }
 
 
@@ -803,7 +804,7 @@ def test_config_yaml_normalizes_cwl_file_and_directory_objects(tmp_path: Path) -
         encoding="utf-8",
     )
     subdirectory = Step(clt_path=_adapter("subdirectory"), config_path=subdirectory_cfg)
-    assert subdirectory._as_workflow_step(inline_subtrees=False).input("directory") == \
+    assert subdirectory._as_workflow_step().input("directory") == \
         InlineLiteral(str(input_dir))
 
     append_cfg = tmp_path / "append.yml"
@@ -818,7 +819,7 @@ def test_config_yaml_normalizes_cwl_file_and_directory_objects(tmp_path: Path) -
         encoding="utf-8",
     )
     append = Step(clt_path=_adapter("append"), config_path=append_cfg)
-    assert append._as_workflow_step(inline_subtrees=False).input("file") == InlineLiteral(str(input_file))
+    assert append._as_workflow_step().input("file") == InlineLiteral(str(input_file))
 
 
 @pytest.mark.fast
@@ -1297,7 +1298,7 @@ def test_compile_python_workflows() -> None:
                 retval: workflow.Workflow = module.workflow()
 
             retval.compile()
-            retval.write_wic(path.parent, inline_subworkflows=False)
+            retval.write_wic(path.parent)
             generated_workflows.extend(
                 path.parent / f"{wf.process_name}.wic" for wf in retval._flatten_subworkflows())
 
@@ -1549,3 +1550,54 @@ def test_the_string_keyed_step_methods_are_gone(name: str) -> None:
     """Step ports are bound and read as objects, never by a name passed as text."""
     assert not hasattr(Step, name)
     assert not hasattr(Step(clt_path=_adapter('echo')), name)
+
+
+@pytest.mark.fast
+def test_a_renamed_step_writes_run_with_its_tool_stem(tmp_path: Path) -> None:
+    """A step named apart from its tool names the tool file the bundle writes beside it."""
+    first = Step(clt_path=_adapter('echo'), step_name='say_hi')
+    first.inputs.message = 'hi'
+    root = Workflow([first], 'renamed').write_wic(tmp_path)
+    document = parse(root.read_text(encoding='utf-8'), root.name).document
+    assert document is not None
+    assert dict(document.steps[0].interpreted)['run'] == 'echo.cwl'
+    assert (tmp_path / 'echo.cwl').is_file()
+    assert '__step__' not in root.read_text(encoding='utf-8')
+
+
+@pytest.mark.fast
+def test_a_step_named_for_its_tool_writes_no_run() -> None:
+    """`run:` appears only where the step name and the tool stem differ."""
+    echo = Step(clt_path=_adapter('echo'))
+    echo.inputs.message = 'hi'
+    assert 'run' not in Workflow([echo], 'plain').yaml['steps'][0]
+
+
+@pytest.mark.fast
+def test_workflow_outputs_are_addressed_by_authored_step() -> None:
+    """A workflow output names the step that produces it as the user named it."""
+    touch = Step(clt_path=_adapter('touch'))
+    touch.inputs.filename = 'empty.txt'
+    append = Step(clt_path=_adapter('append'), step_name='add')
+    append.inputs.file = touch.outputs.file
+    append.inputs.str = 'Hello'
+    wf = Workflow([touch, append], 'wf')
+    wf.outputs.file = append.outputs.file
+    assert wf.yaml['outputs']['file']['outputSource'] == 'add/file'
+
+
+@pytest.mark.fast
+def test_two_tools_sharing_a_file_stem_are_rejected(tmp_path: Path) -> None:
+    """A document names a tool by its file stem, so two different tools under one stem are ambiguous."""
+    def tool(command: str) -> dict[str, Any]:
+        return {'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': command,
+                'inputs': {}, 'outputs': {}}
+
+    first = Step.from_cwl_document(tool('true'), process_name='first', run_path='tool.cwl')
+    second = Step.from_cwl_document(tool('false'), process_name='second', run_path='tool.cwl')
+    workflow = Workflow([first, second], 'shared_stem')
+
+    with pytest.raises(InvalidStepError, match="share the file stem 'tool'"):
+        workflow.write_wic(tmp_path)
+    with pytest.raises(InvalidStepError, match="share the file stem 'tool'"):
+        workflow.compile()

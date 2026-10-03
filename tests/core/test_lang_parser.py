@@ -757,27 +757,17 @@ def _nested_api_workflow() -> Any:
 
 @pytest.mark.fast
 def test_python_api_writes_nested_workflows_this_parser_accepts(tmp_path: Path) -> None:
-    """Written with `inline_subworkflows=False`, every file of a nested workflow
-    parses: the parent calls the child by name, and the child's edge is an
-    ordinary `!&`/`!*` pair in its own document (reference §6.2)."""
-    root = _nested_api_workflow().write_wic(tmp_path, inline_subworkflows=False)
+    """Every `.wic` file of a written nested workflow parses: the parent calls
+    the child by name, and the child's edge is an ordinary `!&`/`!*` pair in
+    its own document (reference §6.2). Each tool is written beside them."""
+    root = _nested_api_workflow().write_wic(tmp_path)
 
     written = sorted(tmp_path.glob('*.wic'))
     assert root in written and len(written) == 2, written
+    assert [path.name for path in sorted(tmp_path.glob('*.cwl'))] == ['append.cwl', 'touch.cwl']
     for path in written:
         result = parse(path.read_text(), path.name)
         assert result.ok, (path.name, [str(d) for d in result.diagnostics])
-
-
-@pytest.mark.fast
-@pytest.mark.xfail(strict=True, reason="the inline form nests the child's to_json projection "
-                   "under `subtree:`, where its edge definitions are wic019 (reference §6.2)")
-def test_python_api_inline_nested_form_parses() -> None:
-    """The known exception to obligation 1. When the inline form becomes a
-    document the parser accepts, this starts passing and strict xfail says so."""
-    result = parse(_nested_api_workflow().to_wic_yaml(), 'api_inline_nested.wic')
-
-    assert result.ok, [str(d) for d in result.diagnostics]
 
 # --------------------------------------------------------------------------
 # The parser is never more permissive than the loader
