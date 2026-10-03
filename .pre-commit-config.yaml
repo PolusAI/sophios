@@ -19,6 +19,7 @@ repos:
     -   id: check-symlinks  # checks for symlinks which do not point to anything.
     -   id: check-toml  # checks toml files for parseable syntax.
     -   id: check-vcs-permalinks  # ensures that links to vcs websites are permalinks.
+        exclude: ^\.github/my_actions/[^/]+/dist/  # ncc bundles: rebuilt, never edited
     -   id: check-xml  # checks xml files for parseable syntax.
     # -   id: check-yaml  # checks yaml files for parseable syntax.
     # -   id: debug-statements  # checks for debugger imports and py37+ `breakpoint()` calls in python source.
@@ -40,6 +41,7 @@ repos:
     # NOTE: requirements-txt-fixer modifies requirements.txt in-place!
     # -   id: sort-simple-yaml  # sorts simple yaml files which consist only of top-level keys, preserving comments and blocks.
     -   id: trailing-whitespace  # trims trailing whitespace.
+        exclude: ^\.github/my_actions/[^/]+/dist/  # ncc bundles: rebuilt, never edited
 -   repo: https://github.com/hhatto/autopep8
     rev: v2.1.0
     hooks:
@@ -121,4 +123,4 @@ repos:
   rev: v2.2.6
   hooks:
   - id: codespell
-    exclude: ^src/sophios/edam_format_index\.json$
+    exclude: ^(src/sophios/edam_format_index\.json|\.github/my_actions/[^/]+/dist/.*)$
