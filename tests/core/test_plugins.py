@@ -354,3 +354,27 @@ def test_the_same_workflow_stem_in_two_namespaces_is_not_a_duplicate(tmp_path: P
                                                                 'other': [str(tmp_path / 'b')]}})
     assert sorted(found) == ['global', 'other']
     assert capsys.readouterr().err == ''
+
+
+@pytest.mark.fast
+def test_the_authored_names_filter_rewrites_emitted_ids_longest_first() -> None:
+    """A nested id is rewritten as itself, never as the shorter step id it starts with."""
+    import logging  # pylint: disable=import-outside-toplevel
+    names = {'steps': {'w__step__1__child.wic': {'id': 'w__step__1__child.wic', 'index': 1, 'name': 'child.wic'},
+                       'w__step__1__child.wic___child__step__1__mk_file': {'id': 'child__step__1__mk_file',
+                                                                           'index': 1, 'name': 'mk_file'}},
+             'ports': {'w__step__1__child.wic___child__step__1__mk_file___name': {
+                 'steps': ['child.wic', 'mk_file'], 'port': 'name'},
+                 'name': {'steps': [], 'port': 'name'}}}
+    names_filter = sophios.plugins.AuthoredNamesFilter(names)
+
+    def rewritten(message: str, *args: object) -> str:
+        record = logging.LogRecord('cwltool', logging.ERROR, __file__, 1, message, args, None)
+        assert names_filter.filter(record)
+        return record.getMessage()
+
+    assert rewritten('missing %s', 'w__step__1__child.wic___child__step__1__mk_file___name') == (
+        'missing child.wic/mk_file/name (w__step__1__child.wic___child__step__1__mk_file___name)')
+    assert rewritten('[step child__step__1__mk_file] failed; filename unset') == (
+        "[step step 1 'mk_file' (child__step__1__mk_file)] failed; filename unset")
+    assert rewritten('w__step__1__child.wic.') == "step 1 'child.wic' (w__step__1__child.wic)."
