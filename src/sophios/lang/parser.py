@@ -644,6 +644,11 @@ def _raw_cwl(node: yaml.nodes.Node, file: str, diags: Diagnostics, span: SourceS
             message = (f'!cwl record: {key!r} is not a WorkflowStepInput field Sophios writes; the fields '
                        f'are source, {", ".join(sorted(RECORD_FIELDS))}')
         diags.error(SophiosErrorCode.STEP_INPUT_RECORD, message, span)
+    if not bad and not record.sources and not {'default', 'valueFrom'} & dict(record.fields).keys():
+        diags.error(SophiosErrorCode.STEP_INPUT_RECORD,
+                    '!cwl record: with no source, default or valueFrom the step input receives no value; '
+                    'leave it unbound for Sophios to connect, or give it a source or a default',
+                    span)
     return record
 
 
