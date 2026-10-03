@@ -326,6 +326,9 @@ A workflow's own `outputs:` name their producer with `outputSource: <step>/<port
 named by its id. When the id repeats, address the occurrence as
 `(index, name)/port`, the same key `wic: steps:` uses; the step at that index must carry that
 name (`wic039`).
+The generated spelling `<workflow>__step__<n>__<id>` still resolves, but it is a name the compiler
+writes into emitted CWL and it changes when steps move; the compile prints a line on stderr naming
+the spelling to write instead.
 
 ---
 
@@ -540,6 +543,11 @@ steps:
 ```
 
 Any other name is `wic032`.
+
+`when:` is passed to CWL as written. CWL evaluates an `inputs.<name>` the step does not have as
+`null`, so the step never runs; the compile prints a line on stderr for a name the step's process
+does not declare, and for a generated name, which resolves only because of how the callee's ports
+are laid out. Declare the port in the callee's `inputs:` and read that name.
 
 ---
 
