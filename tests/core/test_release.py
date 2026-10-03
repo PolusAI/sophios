@@ -1,13 +1,64 @@
-"""The version Sophios reports is the version of the code that is running."""
+"""Every place that names a release names the same one.
+
+release-please tags a release on master, setuptools-scm reads the version from
+that tag, and the package reports what it was built as. None of this needs a
+tag to check: the rules are in the files that drive each step.
+"""
+import json
+import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
+from typing import Any, Final
 
 import pytest
 
 import sophios
 import sophios.cli
+
+REPO_ROOT: Final = Path(__file__).resolve().parents[2]
+
+
+def _json(name: str) -> Any:
+    return json.loads((REPO_ROOT / name).read_text(encoding='utf-8'))
+
+
+def _scm() -> dict[str, str]:
+    pyproject = tomllib.loads((REPO_ROOT / 'pyproject.toml').read_text(encoding='utf-8'))
+    scm: dict[str, str] = pyproject['tool']['setuptools_scm']
+    return scm
+
+
+@pytest.mark.fast
+def test_release_please_tags_a_release_as_setuptools_scm_reads_it() -> None:
+    """The next tag is vX.Y.Z after the manifest's release, which tag_regex reads."""
+    config, manifest = _json('release-please-config.json'), _json('.release-please-manifest.json')
+    assert config['packages'].keys() == manifest.keys() == {'.'}
+
+    package = config['packages']['.']
+    # A component would prefix the tag (sophios-vX.Y.Z, which tag_regex does not
+    # read) and name the release branch after the package.
+    assert 'package-name' not in package and 'component' not in package
+    assert package['include-component-in-tag'] is False
+    assert package['include-v-in-tag'] is True
+
+    assert re.fullmatch(_scm()['tag_regex'], f"v{manifest['.']}")
+
+
+@pytest.mark.fast
+def test_a_build_with_no_tag_in_reach_follows_the_last_release() -> None:
+    """A tagless build counts from the release the manifest names, and moves with it."""
+    config, manifest = _json('release-please-config.json'), _json('.release-please-manifest.json')
+    assert _scm()['fallback_version'] == f"{manifest['.']}.post0.dev0"
+
+    # release-please moves the base with each release through this marker.
+    lines = (REPO_ROOT / 'pyproject.toml').read_text(encoding='utf-8').splitlines()
+    assert [line for line in lines if 'x-release-please-version' in line] == [
+        f'fallback_version = "{manifest["."]}.post0.dev0"  # x-release-please-version'
+    ]
+    assert {'type': 'generic', 'path': 'pyproject.toml'} in config['packages']['.']['extra-files']
 
 
 def _import_copy(root: Path, built_as: str | None) -> subprocess.CompletedProcess[str]:
