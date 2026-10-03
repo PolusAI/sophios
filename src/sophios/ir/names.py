@@ -37,6 +37,26 @@ def render_step_id(workflow: str, index: int, name: str) -> str:
     return f'{workflow}__step__{index}__{name}'
 
 
+def authored_path(name: PortName) -> tuple[str, ...]:
+    """What `name` is called where it was written: the authored name of each
+    step it was exposed through, outermost first, then the port's own name.
+
+    Walks the identity, one level per step, so it stays linear in the depth a
+    derived name was exposed through.
+
+    Args:
+        name (PortName): A port or boundary name, written or derived.
+
+    Returns:
+        tuple[str, ...]: The step names, then the port name.
+    """
+    parts: list[str] = []
+    while isinstance(name, DerivedName):
+        parts.append(name.step.name)
+        name = name.port
+    return (*parts, name)
+
+
 @dataclass(frozen=True, slots=True)
 class Names:
     """The outward spelling of every step in a graph tree.
