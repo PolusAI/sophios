@@ -19,7 +19,7 @@ from ..lang.nodes import CwlRecord, InlineLiteral, UnresolvedName
 from ..lang.diagnostics import Locator, SophiosError
 from ..lang.spans import SourceSpan
 from ..lang.error_codes import SophiosErrorCode
-from .declarations import feeding_declaration, produced_declaration
+from .declarations import feeding_declaration, input_rank, produced_declaration
 from .names import Names, authored_path
 from .types import (
     AuthoredName,
@@ -96,7 +96,8 @@ def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
             declaration = feeding_declaration(step, sink)
             _put(workflow_inputs, WorkflowPort(outer_name, declaration))
             _put(job_bindings, JobBinding(outer_name, coerce_job_value(
-                boundary.name, declaration, child_jobs[boundary.name], span=step.span,
+                boundary.name, declaration, child_jobs[boundary.name],
+                scatter_rank=input_rank(step, sink.id.port), span=step.span,
                 locator=Locator(step.id.name, step.id.index, '/'.join(authored_path(boundary.name))))))
             _put_input_mapping(input_mapping, outer_name, sink.id)
             if outer_name not in shorthand_relays:
@@ -131,7 +132,8 @@ def _materialize_bindings(graph: WorkflowGraph) -> WorkflowGraph:
                     _put(workflow_inputs, WorkflowPort(name, declaration))
                     locator = Locator(step.id.name, step.id.index, '/'.join(authored_path(port.id.port)))
                     _put(job_bindings, JobBinding(name, coerce_job_value(
-                        port.id.port, declaration, value, span=span, locator=locator)))
+                        port.id.port, declaration, value, scatter_rank=input_rank(step, port.id.port),
+                        span=span, locator=locator)))
                     _put_input_mapping(input_mapping, name, port.id)
                 case UnresolvedName(name=text):
                     _relay(workflow_inputs, input_mapping, authored_inputs, AuthoredName(text), port)
@@ -288,7 +290,7 @@ def _as_text(value: Any) -> Any:
     return '\n'.join(value) if isinstance(value, list) else value
 
 
-def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Any, *,
+def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Any, *, scatter_rank: int = 0,
                      span: SourceSpan | None = None, locator: Locator | None = None) -> Any:
     """`value` in the one plain-JSON form a job document holds for `declaration`.
 
@@ -296,7 +298,9 @@ def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Any, *
     authored `File` object) passes through. Each array layer of the type wraps
     a scalar in a list and keeps a list. A scalar literal must already have the
     declared type: an int is also a float, and a scalar is also a `string`'s
-    text, but nothing else is converted.
+    text, but nothing else is converted. A scattered input (`scatter_rank`
+    above zero, the layers `scatter:` adds) takes a list and never wraps a
+    scalar: the scatter splits the value, so a scalar has nothing to split.
 
     `name` is the input the value is for. It is spelled only if the value does
     not convert and a message must name it: a derived name's text prints every
@@ -311,6 +315,12 @@ def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Any, *
         raise SophiosError.error(SophiosErrorCode.MISSING_REQUIRED_INPUT,
                                  f'Required input of type {declaration.type.declared} '
                                  'was not provided.', span=span, locator=locator)
+    if scatter_rank and not isinstance(value, list):
+        raise SophiosError.error(
+            SophiosErrorCode.LITERAL_TYPE_MISMATCH,
+            f'Input {str(name)!r} is scattered, so its literal must be a list of values to scatter over; '
+            f'{value!r} is a scalar. Write `!ii [...]`, or drop the port from `scatter:`.',
+            span=span, locator=locator)
     return _coerce_type(name, declaration.type.canonical, value,
                         declaration.format if declaration.has_format else None, span=span, locator=locator)
 
