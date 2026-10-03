@@ -4,12 +4,14 @@ import copy
 from dataclasses import replace
 import shutil
 import subprocess as sub
+from typing import Any, Final
 import docker
 import podman
 from podman.domain.images_build import BuildMixin
 from . import plugins
-from .wic_types import Yaml
+from .wic_types import Cwl, Yaml
 from .ir.artifacts import CompilationArtifact
+from .lang.cwl import CwlVersion
 from .lang.diagnostics import SophiosError
 from .lang.error_codes import SophiosErrorCode
 
@@ -130,6 +132,61 @@ def cwl_docker_extract(container_engine: str, pull_dir: str, cwl_path: str | Pat
 #: being dropped because that document already states it.
 DOCUMENT_FIELDS = ('$namespaces', '$schemas', 'cwlVersion')
 
+#: What a document written for an older CWL version is given by the runner that
+#: loads it as a file, and loses once it is embedded in a newer document:
+#: cwltool upgrades a v1.0 file by adding these two hints (`cwltool/update.py`,
+#: `v1_0to1_1`) and adds nothing for v1.1. Keyed by every `CwlVersion`, so
+#: admitting a new version means deciding what it implies.
+IMPLIED_BY_VERSION: Final[dict[str, Cwl]] = {
+    CwlVersion.V1_0.value: {'LoadListingRequirement': {'loadListing': 'deep_listing'},
+                            'NetworkAccess': {'networkAccess': True}},
+    CwlVersion.V1_1.value: {},
+    CwlVersion.V1_2.value: {},
+}
+
+
+def _classes(section: Any) -> set[str]:
+    """The requirement classes a `requirements:` or `hints:` section names, in either CWL form."""
+    match section:
+        case dict():
+            return set(section)
+        case list():
+            return {item['class'] for item in section if isinstance(item, dict) and 'class' in item}
+    return set()
+
+
+def _keeping_version_defaults(process: Cwl, origin: str) -> Cwl:
+    """`process` with the defaults its own `cwlVersion` implied, written out as hints.
+
+    Embedding drops `cwlVersion`, so the document it lands in decides what the
+    process means. A requirement or hint the process declares is left as it is.
+
+    Args:
+        process (Cwl): A process about to be embedded in a newer document.
+        origin (str): Where it came from, for the error.
+
+    Raises:
+        SophiosError: `wic035` if the process declares no version Sophios embeds.
+
+    Returns:
+        Cwl: `process`, with `hints` extended when its version implied more.
+    """
+    version = process.get('cwlVersion')
+    if version not in IMPLIED_BY_VERSION:
+        raise SophiosError.error(
+            SophiosErrorCode.UNSUPPORTED_CWL_VERSION,
+            f'{origin} declares cwlVersion {version!r}, so it cannot be embedded; '
+            f'Sophios embeds {", ".join(IMPLIED_BY_VERSION)}.')
+    declared = _classes(process.get('hints')) | _classes(process.get('requirements'))
+    implied = {name: copy.deepcopy(body) for name, body in IMPLIED_BY_VERSION[version].items()
+               if name not in declared}
+    if not implied:
+        return process
+    hints = process.get('hints')
+    if isinstance(hints, list):
+        return {**process, 'hints': [{'class': name, **body} for name, body in implied.items()] + hints}
+    return {**process, 'hints': {**implied, **(hints or {})}}
+
 
 def inline_artifact_runs(artifact: CompilationArtifact) -> CompilationArtifact:
     """Embed every emitted child in its parent's ``run`` field."""
@@ -141,7 +198,11 @@ def inline_artifact_runs(artifact: CompilationArtifact) -> CompilationArtifact:
             step = next(item for item in cwl['steps'] if item.get('id') == step_id)
             # An embedded process has no location of its own, so a relative
             # `$include` would resolve against whichever document embeds it.
-            step['run'] = plugins.cwl_prepend_dockerFile_include_path(child.cwl, child.run_path)
+            # Its own version's defaults are written out first, because
+            # dropping `cwlVersion` below takes the upgrade cwltool would have
+            # made with it.
+            step['run'] = _keeping_version_defaults(
+                plugins.cwl_prepend_dockerFile_include_path(child.cwl, child.run_path), child.run_path)
             # A prefix and an ontology must be declared in the document that
             # uses them, so these move up. `cwlVersion` is dropped instead:
             # the parent already names one, and a second on an embedded
