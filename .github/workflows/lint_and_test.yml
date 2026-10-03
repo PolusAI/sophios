@@ -233,7 +233,7 @@ jobs:
 
       - name: PyTest Inline Flags
         if: always()
-        run: cd sophios/ && pytest tests/core/test_examples.py -k "test_embedding_keeps" # --cov --cov-config=.coveragerc_serial
+        run: cd sophios/ && pytest tests/core/test_examples.py -k "test_embedding_keeps or test_flatten" # --cov --cov-config=.coveragerc_serial
         timeout-minutes: 20 # backup timeout for windows
 
       # Entry-point resolution and CI coverage. The core/contrib import boundary
