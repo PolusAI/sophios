@@ -163,8 +163,9 @@ def _artifact_tree(graph: WorkflowGraph, names: Names, registry: RegistrySnapsho
                 SophiosErrorCode.SUBWORKFLOW_INVALID,
                 f'process {key.namespace}/{key.name} disappeared after resolution')
         leaf_graph = utils_graphs.get_graph_reps(key.name)
+        # Named by the `run:` the parent emits, so the file written is the one it runs.
         children.append(CompilationArtifact(
-            (names.step(step.id),), Path(definition.run_path).stem,
+            (names.step(step.id),), Path(step.run.target).stem,
             definition.run_path, deepcopy(definition.cwl), {}, None,
             leaf_graph,
         ))
