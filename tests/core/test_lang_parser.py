@@ -805,6 +805,7 @@ def test_unknown_tags_report_wic009(source: str) -> None:
 @FAST
 @example('!: :')      # unknown tag on a mapping *key* — the position that was missed
 @example('!foo x: y')  # the same, spelled legibly
+@example('!!: :')     # a core tag with an empty suffix, which the loader cannot construct
 def test_parser_is_not_more_permissive_than_the_loader(text: str) -> None:
     """Any document the parser accepts without diagnostics, the loader loads.
 
@@ -820,6 +821,17 @@ def test_parser_is_not_more_permissive_than_the_loader(text: str) -> None:
     result = parse(text, 'agree.wic')
     if result.ok and result.document is not None:
         yaml.load(text, Loader=wic_loader())  # must not raise
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('source', ['!!: :', '!!foo: 1', 'k: !!foo 1', 'k: !<tag:example.com,2000:x> 1'])
+def test_a_yaml_tag_the_loader_cannot_construct_is_unknown_tag(source: str) -> None:
+    """`!!` spellings with no constructor are rejected by the loader, so by the parser too."""
+    with pytest.raises(yaml.YAMLError):
+        yaml.safe_load(source)
+    result = parse(source, 'x.wic')
+    assert any(d.code is SophiosErrorCode.UNKNOWN_TAG for d in result.diagnostics), source
+    assert not result.ok
 
 
 @pytest.mark.fast
