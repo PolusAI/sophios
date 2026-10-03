@@ -11,16 +11,6 @@ lattice law and makes every property that depends on it green and worthless;
 only a case built so that a too-permissive relation is *observably* wrong can
 see that. Inverse pairs and
 reflexive laws test agreement, not correctness.
-
-The same reasoning applies a second time, to the lattice property itself. The
-brief's sketch quantifies it over two *independently drawn* documents, which
-would have made it vacuous: two independent draws are essentially never
-IDENTICAL, so `if equivalent(left, right, stronger) is None` would guard a body
-that never runs, and the test would pass for a relation with no implications at
-all. `document_rewrites()` draws a document and a *rewrite of it* instead, one
-rewrite per lattice level, and `test_each_rewrite_lands_at_exactly_the_strength_
-it_claims` pins each level from both sides — so the antecedents demonstrably
-fire and each strength is shown to be strictly weaker than the one above it.
 """
 import copy
 from typing import Any, Final
@@ -216,11 +206,10 @@ def test_each_rewrite_lands_at_exactly_the_strength_it_claims(
         case: tuple[str, Yaml, Yaml, Strength | None]) -> None:
     """Each strength accepts its own rewrite and the one above it does not.
 
-    This is the property that makes `test_the_lattice_holds` mean something:
-    it shows the antecedent of every implication actually fires, and it shows
-    each strength is *strictly* weaker than the one above it. Checked in both
-    directions on purpose — "accepts" alone is satisfied by a relation that
-    accepts everything, and "rejects" alone by one that rejects everything.
+    It pins the exact set each strength accepts, so each strength is *strictly*
+    weaker than the one above it. Checked in both directions on purpose —
+    "accepts" alone is satisfied by a relation that accepts everything, and
+    "rejects" alone by one that rejects everything.
     """
     name, left, right, level = case
     for strength in Strength:
@@ -233,9 +222,9 @@ def test_each_rewrite_lands_at_exactly_the_strength_it_claims(
 
 @pytest.mark.fast
 def test_every_rewrite_is_actually_drawn() -> None:
-    """The companion for the two properties above.
+    """The companion for the property above.
 
-    Both quantify over `document_rewrites()`, and both are *weaker* in
+    It quantifies over `document_rewrites()` and is *weaker* in
     proportion to how many rewrites the strategy stops producing — a
     `sampled_from` that only ever yielded `identity` would leave them asserting
     reflexivity and nothing else, silently. Same argument as construct coverage for the
@@ -251,26 +240,6 @@ def test_every_rewrite_is_actually_drawn() -> None:
     _collect()  # pylint: disable=no-value-for-parameter  # @given supplies `case`
     missing = {name for name, _, _ in REWRITES} - seen
     assert not missing, f'rewrites never drawn, so nothing above tested them: {sorted(missing)}'
-
-
-@pytest.mark.fast
-@given(document_rewrites())
-@ORACLE
-def test_the_lattice_holds(case: tuple[str, Yaml, Yaml, Strength | None]) -> None:
-    """Stricter implies weaker: if two documents are IDENTICAL they are
-    equivalent at every lower strength.
-
-    Without this a caller cannot reason about the enum at all — asking for the
-    strongest relation a transformation preserves would say nothing about the
-    others, and `Strength` would be three unrelated functions wearing an
-    `IntEnum` as a costume.
-    """
-    _name, left, right, _level = case
-    for stronger in Strength:
-        for weaker in Strength:
-            if weaker < stronger and equivalent(left, right, stronger) is None:
-                assert equivalent(left, right, weaker) is None, (
-                    f'{stronger.name} held but {weaker.name} did not')
 
 
 @pytest.mark.fast

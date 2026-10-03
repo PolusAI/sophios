@@ -85,23 +85,9 @@ def _lower(source: str) -> Any:
 @pytest.mark.fast
 @given(strat.documents())
 @COVERAGE
-def test_every_parseable_document_lowers_or_diagnoses(document: Document) -> None:
-    """Lowering is total, in the sense `parse` is: what it cannot represent
-    comes back as a diagnostic, never as an exception."""
-    result = lower(_resolved(document))
-    assert result.graph is not None or result.diagnostics.has_errors
-
-
-@pytest.mark.fast
-@given(strat.documents())
-@COVERAGE
 def test_a_well_formed_document_actually_lowers(document: Document) -> None:
-    """Totality alone is satisfied by rejecting everything.
-
-    `documents()` draws only well-formed documents, so every one of them must
-    produce a graph. Without this, an implementation returning diagnostics for
-    all input passes the claim above.
-    """
+    """`documents()` draws only well-formed documents, so every one of them
+    must produce a graph, never a diagnostic or an exception."""
     result = lower(_resolved(document))
     assert result.graph is not None, [d.code.value for d in result.diagnostics]
     assert len(result.graph.steps) == len(document.steps)

@@ -9,8 +9,7 @@ without a reason is a place for a real difference to hide.
     UP_TO_EMBEDDING    `run:` paths are ignored.
     UP_TO_RENAMING     namespaced names are ignored; the DAG must match.
 
-A lattice, asserted by `test_the_lattice_holds`. What each strength forgives is
-declared on `equivalent`.
+A lattice. What each strength forgives is declared on `equivalent`.
 """
 from dataclasses import dataclass
 from enum import IntEnum
