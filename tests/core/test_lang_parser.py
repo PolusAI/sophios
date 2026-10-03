@@ -7,8 +7,6 @@ The claims under test, one property each: every AST node carries a resolvable
 source span; parsing never raises — it returns an AST or diagnostics;
 InputValue is closed, so no value escapes the five forms; every diagnostic
 span indexes real source text; and every corpus document parses.
-
-See design_docs/core-refactor-design.md, Spec 1.
 """
 import time
 from collections.abc import Callable

@@ -1,9 +1,8 @@
 """The CWL substrate version: one declared value, enforced at every emitting path.
 
-The design specifies `.wic` as an abstraction over a single declared CWL version
-(`design_docs/core-refactor-design.md` §5.2). At baseline three sites disagreed:
-the compiler emitted `v1.2`, a CommandLineTool generator emitted `v1.0`, and the
-schema accepted any non-empty string.
+`.wic` is an abstraction over a single declared CWL version. Three sites once
+disagreed: the compiler emitted `v1.2`, a CommandLineTool generator emitted
+`v1.0`, and the schema accepted any non-empty string.
 """
 from typing import Final
 
@@ -24,7 +23,7 @@ from sophios.python_cwl_adapter import generate_CWL_CommandLineTool
 
 @pytest.mark.fast
 def test_the_declared_version_is_v1_2() -> None:
-    """§5.2 pins the substrate to CWL v1.2."""
+    """The substrate is CWL v1.2."""
     assert CWL_VERSION == 'v1.2'
     assert CWL_VERSION == CwlVersion.V1_2
 

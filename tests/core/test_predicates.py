@@ -11,8 +11,6 @@ One claim lives here, **namespace injectivity**: distinct ports never
 collide after namespacing. Edge soundness is `cwltool --validate`'s, over the
 same generator (`test_emit.test_emit_validates_as_cwl_v1_2`); the fixed-point
 guard's is `test_infer_phase.test_iteration_exhaustion_is_exactly_wic022`'s.
-
-See design_docs/core-refactor-design.md §6.2.
 """
 import copy
 

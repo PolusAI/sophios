@@ -149,7 +149,7 @@ partially inserted source tree into another compilation.
 ## Compatibility contract
 
 The typed compiler promises behaviorally identical workflows, not byte-identical
-serialization relative to the retired implementation. The end-to-end P57
+serialization relative to the retired implementation. The end-to-end
 contract is `UP_TO_EMBEDDING`: generated `run:` paths may move when artifacts
 are embedded differently, while workflow structure, bindings, ports, types,
 requirements, and opaque payloads remain equivalent. Narrower phase properties

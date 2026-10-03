@@ -275,7 +275,7 @@ max-module-lines=750
 notes="FIXME,XXX,TODO"
 
 # The core/contrib boundary: contrib may import core, core may never import
-# contrib (design_docs/core-refactor-design.md). Static, so an import whose
+# contrib. Static, so an import whose
 # target is computed at runtime is not seen.
 [tool.importlinter]
 root_package = "sophios"

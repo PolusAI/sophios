@@ -21,8 +21,6 @@ properties generate only the mapping.
 A property broad enough to cover them would have to be weak enough to say
 nothing, so the properties quantify over the keys that really are untouched
 and the exceptions are pinned one at a time.
-
-See design_docs/core-refactor-design.md §5.4.
 """
 import copy
 import tempfile

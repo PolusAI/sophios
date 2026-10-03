@@ -3,7 +3,7 @@
 These properties are statements about the compiler. A property whose inputs
 come from `get_tools_cwl` is a statement about the compiler *and* about which
 plugin repositories the machine has checked out, and when it fails the two
-cannot be told apart. See design_docs/core-refactor-design.md §6.1.
+cannot be told apart.
 
 Checked by running the oracle suite in a subprocess with plugin discovery
 poisoned. CANNOT DETECT: a module the run does not execute, and any environment

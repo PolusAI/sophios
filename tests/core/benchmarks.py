@@ -105,10 +105,8 @@ def _compile_corpus_file(path: Path) -> None:
 
 def _speculative_insertion_registry() -> tuple[Yaml, Tools]:
     """Two branches, each needing exactly one whitelisted-format-converter
-    insertion. "Two or more whitelisted converter tools" is the design's own
-    phrase for what this path requires (design_docs/core-refactor-design.md
-    §6.2). Section 6.3 puts the path in benchmark coverage; §1 documents its
-    `O(2^n)` complexity.
+    insertion. Two or more whitelisted converter tools put a compilation on
+    this path, whose cost is `O(2^n)`.
 
     Formats may be written either way here: `inference.declared_formats`
     normalises a bare string to a one-element list at every point of entry, so
@@ -185,10 +183,9 @@ CASES: Final[tuple[Case, ...]] = tuple(
 ) + (
     Case('speculative_insertion',
          "A workflow with two branches, each needing one whitelisted-format-"
-         "converter insertion — the design's own phrase, 'two or more "
-         "whitelisted converter tools', for what puts a compilation on this "
-         "path. Section 6.3 puts it in benchmark coverage; §1 documents the "
-         "O(2^n) complexity. The corpus never reaches it. This case times "
+         "converter insertion. Two or more whitelisted converter tools put a "
+         "compilation on this path, whose cost is O(2^n). The corpus never "
+         "reaches it. This case times "
          "two real insertions and the fixed-point passes they force, so it is "
          "the one number on this list that moves with the insertion search "
          "rather than with per-step cost.",

@@ -14,8 +14,6 @@ So "accepts exactly what the AST accepts" is checked as two separate claims:
 agreement is exact on the structural shapes the parser itself diagnoses, and
 one-directional (schema accepts everything the parser does) elsewhere. Stating
 this here rather than asserting a stronger equivalence that is not true.
-
-See design_docs/core-refactor-design.md, Spec 1.
 """
 import json
 from dataclasses import dataclass, fields

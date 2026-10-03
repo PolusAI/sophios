@@ -5,8 +5,8 @@ There is no discovery mechanism here — Sophios already has one. The config's
 them (excluding generated `*_inputs*` files), and CI provisions the config to
 reach `docs/tutorials`, `mm-workflows/examples`, and
 `image-workflows/workflows` (`.github/update_sophios_config.py`). The corpus
-is exactly that reachable set — the same set §3 of the design promises still
-parses — so the corpus and the compiler can never disagree about what exists.
+is exactly that reachable set, so the corpus and the compiler can never
+disagree about what exists.
 
 Whatever the corpus repositories' `main` contains, those are the tests, for
 better or worse. Locally you test what your config reaches; CI reaches

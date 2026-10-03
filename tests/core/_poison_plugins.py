@@ -11,8 +11,7 @@ import sophios.plugins
 
 def _poisoned(*_args: Any, **_kwargs: Any) -> NoReturn:
     raise AssertionError(
-        'plugin discovery reached under the hermeticity run; '
-        'see design_docs/core-refactor-design.md §6.1')
+        'plugin discovery reached under the hermeticity run')
 
 
 sophios.plugins.get_tools_cwl = _poisoned

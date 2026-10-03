@@ -6,8 +6,6 @@ the two wrong about the language.
 
 Properties covered:
   parse(render(ast)) == ast
-
-See design_docs/core-refactor-design.md, Spec 1.
 """
 import math
 from pathlib import Path

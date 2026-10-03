@@ -12,8 +12,6 @@ process-killing path fails them; the weekly property lane runs them deep.
 The at-least-one-diagnostic claim holds by construction — `SophiosError`
 cannot be built with zero diagnostics — plus one test per converted site proving the site actually
 raises it with the messages it used to print.
-
-See design_docs/core-refactor-design.md §3, deliberate exception 1.
 """
 import datetime
 import math

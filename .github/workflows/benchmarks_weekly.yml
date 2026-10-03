@@ -1,10 +1,9 @@
 name: Benchmarks
 
 # Compile-cost cases, run weekly on the self-hosted runner. This is a trend,
-# not a gate: it never fails the build (see tests/core/benchmarks.py and
-# design_docs/core-refactor-design.md §6.3). It runs on a schedule rather than
-# on every push because the numbers only mean anything compared week over week
-# on one consistent runner.
+# not a gate: it never fails the build (see tests/core/benchmarks.py). It runs
+# on a schedule rather than on every push because the numbers only mean
+# anything compared week over week on one consistent runner.
 
 on:
   # push:  # Do NOT run benchmarks on every push!
