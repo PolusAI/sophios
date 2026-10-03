@@ -189,6 +189,36 @@ def _keeping_version_defaults(process: Cwl, origin: str) -> Cwl:
     return {**process, 'hints': {**implied, **(hints or {})}}
 
 
+def _parameter(parameter: Any) -> Any:
+    """`parameter`, with a single `secondaryFiles` pattern written as a one-element list."""
+    if not isinstance(parameter, dict) or isinstance(parameter.get('secondaryFiles', []), list):
+        return parameter
+    return {**parameter, 'secondaryFiles': [parameter['secondaryFiles']]}
+
+
+def _secondary_files_as_lists(process: Cwl) -> Cwl:
+    """`process`, with every input's and output's `secondaryFiles` written as a list.
+
+    A single pattern, a string or a mapping, means the same as a list holding it.
+    cwltool's v1.0 updater writes the list, but an embedded process is not updated:
+    the single pattern reaches cwltool's checker, which indexes it as a list.
+
+    Args:
+        process (Cwl): A process about to be embedded.
+
+    Returns:
+        Cwl: `process`, with its `inputs` and `outputs` rewritten where they held a single pattern.
+    """
+    sections: Cwl = {}
+    for name in ('inputs', 'outputs'):
+        match process.get(name):
+            case dict() as ports:
+                sections[name] = {port_id: _parameter(port) for port_id, port in ports.items()}
+            case list() as ports:
+                sections[name] = [_parameter(port) for port in ports]
+    return {**process, **sections}
+
+
 def inline_artifact_runs(artifact: CompilationArtifact) -> CompilationArtifact:
     """Embed every emitted child in its parent's ``run`` field."""
     children = tuple(inline_artifact_runs(child) for child in artifact.children)
@@ -199,11 +229,11 @@ def inline_artifact_runs(artifact: CompilationArtifact) -> CompilationArtifact:
             step = next(item for item in cwl['steps'] if item.get('id') == step_id)
             # An embedded process has no location of its own, so a relative
             # `$include` would resolve against whichever document embeds it.
-            # Its own version's defaults are written out first, because
-            # dropping `cwlVersion` below takes the upgrade cwltool would have
-            # made with it.
-            step['run'] = _keeping_version_defaults(
-                plugins.cwl_prepend_dockerFile_include_path(child.cwl, child.run_path), child.run_path)
+            # Its own version's defaults and the list form of its secondary
+            # files are written out first, because dropping `cwlVersion` below
+            # takes the upgrade cwltool would have made with it.
+            step['run'] = _secondary_files_as_lists(_keeping_version_defaults(
+                plugins.cwl_prepend_dockerFile_include_path(child.cwl, child.run_path), child.run_path))
             # A prefix and an ontology must be declared in the document that
             # uses them, so these move up. `cwlVersion` is dropped instead:
             # the parent already names one, and a second on an embedded

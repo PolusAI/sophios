@@ -95,6 +95,33 @@ def test_hints_written_as_a_list_are_extended_as_a_list() -> None:
 
 
 @pytest.mark.fast
+def test_a_single_secondary_files_pattern_is_embedded_as_a_list() -> None:
+    """cwltool's v1.0 updater lists a single pattern, and its checker indexes the list;
+    embedded, nothing updates the tool, so the list must already be written."""
+    embedded = _embedded(_one_tool(
+        cwlVersion='v1.0',
+        inputs={'name': {'type': 'File', 'secondaryFiles': {'pattern': '.fai'}},
+                'other': {'type': 'File', 'secondaryFiles': ['.crai', '.csi']},
+                'plain': 'string'},
+        outputs={'file': {'type': 'File', 'secondaryFiles': '.bai'}}))
+    assert embedded['inputs'] == {'name': {'type': 'File', 'secondaryFiles': [{'pattern': '.fai'}]},
+                                  'other': {'type': 'File', 'secondaryFiles': ['.crai', '.csi']},
+                                  'plain': 'string'}
+    assert embedded['outputs'] == {'file': {'type': 'File', 'secondaryFiles': ['.bai']}}
+
+
+@pytest.mark.fast
+def test_ports_written_as_a_list_have_their_secondary_files_listed() -> None:
+    """The same for a tool that writes `inputs` and `outputs` as lists of ports."""
+    embedded = _embedded(_one_tool(
+        cwlVersion='v1.0',
+        inputs=[{'id': 'name', 'type': 'File', 'secondaryFiles': '.fai'}],
+        outputs=[{'id': 'file', 'type': 'File', 'secondaryFiles': '.bai'}]))
+    assert embedded['inputs'] == [{'id': 'name', 'type': 'File', 'secondaryFiles': ['.fai']}]
+    assert embedded['outputs'] == [{'id': 'file', 'type': 'File', 'secondaryFiles': ['.bai']}]
+
+
+@pytest.mark.fast
 def test_embedding_a_tool_of_a_version_sophios_does_not_run_is_refused() -> None:
     """Embedding would otherwise guess what a version Sophios has never seen implied."""
     with pytest.raises(SophiosError) as caught:
