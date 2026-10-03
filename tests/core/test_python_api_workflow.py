@@ -107,13 +107,18 @@ def _load_global_config() -> Json:
 
 
 def _iter_python_workflow_paths(global_config: Json) -> list[tuple[str, Path]]:
-    """Every discovered Python workflow, minus the corpora with their own lanes."""
+    """Every discovered Python workflow, minus the corpora with their own lanes.
+
+    The cookbook's scripts are `tests/core/test_cookbook.py`'s: each is named for
+    the `.wic` beside it, which writing it out here would overwrite.
+    """
     paths = sophios.plugins.get_workflow_paths(global_config, 'py')
     return [
         (path_str, path)
         for _, paths_dict in paths.items()
         for path_str, path in paths_dict.items()
         if "mm-workflows" not in str(path) and "docs/tutorials/" not in str(path)
+        and "docs/cookbook/" not in path.as_posix()
     ]
 
 
