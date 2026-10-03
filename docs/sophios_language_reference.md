@@ -94,14 +94,14 @@ step's tool is passthrough wholesale: Sophios does not classify
 | Field | Support | Note | Pinned by |
 |---|---|---|---|
 | `id` | native | the `in:` key | `test_input_values_are_closed` (`test_lang_parser.py`) |
-| `source` | native | spelled `!*` or a bare workflow-input name | `test_input_values_are_closed` (`test_lang_parser.py`) |
-| `default` | rejected | `wic038` | `test_an_untagged_step_input_record_is_wic038` (`test_lang_parser.py`) |
-| `label` | rejected | `wic038` | `test_an_untagged_step_input_record_is_wic038` (`test_lang_parser.py`) |
-| `linkMerge` | rejected | `wic038` | `test_an_untagged_step_input_record_is_wic038` (`test_lang_parser.py`) |
-| `loadContents` | rejected | `wic038` | `test_an_untagged_step_input_record_is_wic038` (`test_lang_parser.py`) |
-| `loadListing` | rejected | `wic038` | `test_an_untagged_step_input_record_is_wic038` (`test_lang_parser.py`) |
-| `pickValue` | rejected | `wic038` | `test_an_untagged_step_input_record_is_wic038` (`test_lang_parser.py`) |
-| `valueFrom` | rejected | `wic038` | `test_an_untagged_step_input_record_is_wic038` (`test_lang_parser.py`) |
+| `source` | native | `!*`, a bare workflow-input name, or a list of them inside `!cwl {source: [...]}` | `test_input_values_are_closed` (`test_lang_parser.py`) |
+| `default` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
+| `label` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
+| `linkMerge` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
+| `loadContents` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
+| `loadListing` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
+| `pickValue` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
+| `valueFrom` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
 
 **`WorkflowOutputParameter`** (an entry of the workflow's `outputs:`)
 
@@ -334,9 +334,9 @@ the spelling to write instead.
 
 ## 4. Input values
 
-### 4.1 The four forms
+### 4.1 The five forms
 
-A step input is exactly one of these. There is no fifth form.
+A step input is exactly one of these. There is no sixth form.
 
 | Form | Written | Means |
 |---|---|---|
@@ -344,6 +344,7 @@ A step input is exactly one of these. There is no fifth form.
 | Edge reference | `f: !* name` | Consumes an edge defined elsewhere |
 | Raw CWL reference | `f: !cwl greeting` | Opaque to Sophios; passed through unresolved. |
 | Unresolved name | `f: some_input` | Must resolve to a workflow input |
+| Step-input record | `f: !cwl {source: [!* a, b], linkMerge: merge_flattened}` | CWL's WorkflowStepInput; sources resolved by Sophios |
 
 An untagged bare string is an **unresolved name**. If it does not name a
 workflow input, you get a diagnostic telling you which of the two remedies you
@@ -384,10 +385,45 @@ spelling: it states the intent instead of leaving it to be inferred. The one
 exception is a mapping whose keys are all fields of CWL's step input
 (`source`, `default`, `valueFrom`, `linkMerge`, `pickValue`, `loadContents`,
 `loadListing`, `label`): `{source: x}` or `{default: 20}` reads as CWL that
-Sophios does not interpret there, so it is `wic038`, not a literal. Write
-`!ii {default: 20}` for a literal of that shape.
+Sophios does not read untagged, so it is `wic038`, not a literal. Write
+`!cwl {default: 20}` for a CWL step input, `!ii {default: 20}` for a literal of
+that shape.
 
-A tag outside the four above is an error, not a fourth-and-a-half form, but
+`!cwl` on a mapping is a **step-input record**: CWL's WorkflowStepInput, written
+once, for what the other forms cannot say: several sources, a merge, a pick, a
+`valueFrom`, a default.
+
+```yaml
+in:
+  extras: !cwl
+    source: [!* first, !* second]
+    linkMerge: merge_flattened
+  n: !cwl {source: count, valueFrom: '$(self + 1)'}
+  threshold: !cwl {default: 20}
+```
+
+Its `source` is one entry or a list of them, and each entry is a Sophios
+reference: `!*` for an edge, or a bare workflow-input name. Sophios resolves
+them as it resolves the same reference written alone and writes each as the
+emitted name. One source stays a list when `linkMerge` is beside it. The other
+fields (`default`, `label`, `linkMerge`, `loadContents`, `loadListing`,
+`pickValue`, `valueFrom`) are CWL, written out as they are. Any other key, a
+`source` entry that is not a reference (`!ii`, `!cwl`), or a Sophios tag
+inside another field is `wic038`. A record with several sources takes each
+from its own document: an edge defined in no step of the document is `wic025`
+there, and is declared as a workflow input instead; a record with one source
+may take it from the including workflow as a bare `!*` does. The requirements
+the record needs are added to the emitted document: `MultipleInputFeatureRequirement`
+for several sources or a `linkMerge`, `StepInputExpressionRequirement` for a
+`valueFrom`, and `InlineJavascriptRequirement` when the `valueFrom` is an
+expression. A record may bind an input the step's process does not declare,
+which is how `when:` and `valueFrom` read an extra value. Any other form there
+is `wic028`, and so is a record that names an input a subworkflow call's
+subworkflow does not declare. A source that a merge, a pick or a `valueFrom`
+transforms is not judged against the input's type, since CWL types that input
+from the transformation.
+
+A tag outside the five above is an error, not a fifth-and-a-half form, but
 for two different reasons. An *unknown* tag (`!foo`) is `wic009`, and the
 loader has always rejected such documents too. `!&` is different: it is a
 known tag in the wrong position, so it is `wic019` (§4.1.1) and the loader
@@ -615,6 +651,7 @@ and a **desugared** form, and they are equivalent:
 | Edge definition (`out:` only — §4.1.1) | `!& name` | `{wic_anchor: name}` |
 | Edge reference | `!* name` | `{wic_alias: name}` |
 | Raw CWL reference | `!cwl expr` | `{wic_raw_cwl: expr}` |
+| Step-input record | `!cwl {source: [!* a, b]}` | `{wic_raw_cwl: {source: [{wic_alias: a}, b]}}` |
 
 The desugared form exists for a specific reason: a YAML constructor that
 re-emitted its own tag would fire again when the document is reloaded, so the
