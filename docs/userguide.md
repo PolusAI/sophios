@@ -473,6 +473,20 @@ through step-level settings:
 echo.scatter_on(echo.inputs.message, method="dotproduct")
 ```
 
+A scattered step's outputs are arrays when the workflow runs, so a later step
+can scatter over them. The order of the calls does not matter: the type of a
+bound value is read when it is needed, not when it is bound.
+
+```python
+echo.inputs.message = ["a", "b"]
+echo.scatter_on(echo.inputs.message)
+cat.inputs.file = echo.outputs.stdout   # an array of File when the workflow runs
+cat.scatter_on(cat.inputs.file)
+```
+
+Under `nested_crossproduct` each scattered port adds one array level; the other
+methods add one in all.
+
 ```python
 echo.when = "$(inputs.message != '')"
 ```
