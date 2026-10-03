@@ -74,7 +74,8 @@ Common Sophios local-run settings include:
   creates a timestamped output directory under `basepath`.
 - `copy_output_files`: cwltool-only compatibility option that copies primary
   outputs into the legacy `outdir/` layout after a successful local run.
-- `cachedir`: override the cache directory used by local execution.
+- `cachedir`: a directory where `cwltool` caches each step's outputs, so a
+  rerun reuses the steps whose tool and inputs are unchanged. No cache unless set.
 - `generate_run_script`: use `"yes"` to write `run.sh` for inspection instead
   of invoking the runner.
 - `quiet`: `"yes"` by default, which passes `--quiet` to `cwltool`. Use `"no"` to leave

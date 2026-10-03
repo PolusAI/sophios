@@ -132,8 +132,9 @@ parser.add_argument('--no_skip_dollar_schemas', default=False, action="store_tru
                     help='''Does not skip processing $schemas tags in CWL files for performance.
                     Skipping significantly improves initial validation performance, but is not always desired.
                     See https://github.com/common-workflow-language/cwltool/issues/623''')
-parser.add_argument('--cachedir', type=str, required=False, default='cachedir',
-                    help='The directory to save intermediate results; useful with RealtimePlots.py')
+parser.add_argument('--cachedir', type=str, required=False, default='',
+                    help='''With --run_local and cwltool, the directory cwltool caches each step's outputs in:
+                    a step whose tool and inputs are unchanged reuses them. No cache unless given.''')
 parser.add_argument('--outdir', type=str, required=False, default='',
                     help='Workflow output directory passed to the CWL runner.')
 

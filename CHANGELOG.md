@@ -77,6 +77,11 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   to exit 0. A script that checked the output instead of the exit code can
   check the exit code.
 - `--quiet` is passed to cwltool only when you give it.
+- `--cachedir` is passed to cwltool when you give it, so cwltool caches each
+  step there and reuses a step whose tool and inputs are unchanged. It used to
+  be accepted and ignored, and its default, `cachedir`, is now unset: a run
+  caches only when you ask. Give `--cachedir cachedir` to keep the old
+  directory.
 - `--write_intermediate_wic` is gone.
 - `--ignore_validation_errors` is still accepted but does nothing beyond a
   warning: there is no separate validation pass left to ignore. Remove it.
