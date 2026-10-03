@@ -289,9 +289,13 @@ steps:
 ```
 
 `source` is one entry or a list, and each entry is an edge reference (`!* name`) or
-a workflow-input name; Sophios resolves them as it would the same reference written
-alone. The other fields (`default`, `label`, `linkMerge`, `loadContents`,
-`loadListing`, `pickValue`, `valueFrom`) are CWL and are written out as they are.
+a workflow-input name. A record with one source resolves it as it would the same
+reference written alone, so it may take an edge its caller defined. A record with
+several sources takes each from its own document: an edge that no step of the
+document defines is `wic025` there, even when the caller defines it, and the value is
+declared in `inputs:` instead (section 4.1). The other fields (`default`, `label`,
+`linkMerge`, `loadContents`, `loadListing`, `pickValue`, `valueFrom`) are CWL and are
+written out as they are.
 Sophios adds the requirements the record needs: `MultipleInputFeatureRequirement`
 for several sources or a `linkMerge`, `StepInputExpressionRequirement` for a
 `valueFrom`, and `InlineJavascriptRequirement` when the `valueFrom` is an
@@ -378,7 +382,8 @@ The rules:
   outside the document.
 - Edge names are shared by the whole compilation. A subworkflow may use an edge its
   caller defined before calling it, and a step after a subworkflow call may use an
-  edge defined inside that subworkflow.
+  edge defined inside that subworkflow. A `!cwl` record with several sources is the
+  exception: it takes each source from its own document (section 3.5).
 - A reference that no document in the compilation defines is `wic025`, wherever it
   sits: a subworkflow's `!* name` is carried up as an obligation and reported at the
   root when nothing discharges it. A document that expects a value from its includer
