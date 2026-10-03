@@ -576,6 +576,14 @@ def _is_edge_def(node: yaml.nodes.Node) -> bool:
             and getattr(node.value[0][0], 'value', None) == Key.ANCHOR)
 
 
+def _is_desugared_record(node: yaml.nodes.Node) -> bool:
+    """Whether `node` spells a step-input record as `{wic_raw_cwl: {...}}`."""
+    return (isinstance(node, yaml.nodes.MappingNode)
+            and len(node.value) == 1
+            and getattr(node.value[0][0], 'value', None) == Key.RAW_CWL
+            and isinstance(node.value[0][1], yaml.nodes.MappingNode))
+
+
 def _desugared_form(
     node: yaml.nodes.Node,
     file: str,
@@ -951,10 +959,12 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
         return _input_value(node, file, diags)
 
     if node.tag in (Tag.ANCHOR, Tag.ALIAS, Tag.RAW_CWL) or (
-            node.tag == Tag.INLINE_INPUT and isinstance(node, yaml.nodes.ScalarNode)):
+            node.tag == Tag.INLINE_INPUT and isinstance(node, yaml.nodes.ScalarNode)) or _is_desugared_record(node):
         # Name-carrying tags route through the construct builder regardless
         # of node kind, so the tag is never silently stripped. Collection
-        # `!ii` is handled below instead, on the materialised content.
+        # `!ii` is handled below instead, on the materialised content. A
+        # record spelled `{wic_raw_cwl: {...}}` is `!cwl {...}` (§6.1), its
+        # body checked the same wherever it is written.
         return _input_value(node, file, diags)
 
     content: OpaqueCwl

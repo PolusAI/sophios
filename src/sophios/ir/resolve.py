@@ -32,7 +32,6 @@ from ..lang import (
     StepKey,
     UnresolvedName,
     WicSidecar,
-    cwl_record,
     resolve_lang_version,
 )
 from ..lang.diagnostics import Diagnostic, Diagnostics
@@ -464,12 +463,6 @@ def _contributed_input(value: OpaqueCwl, span: SourceSpan) -> InputValue:
             return InlineLiteral(literal, span)
         case {Key.ALIAS: name}:
             return EdgeRef(str(name), span)
-        case {Key.RAW_CWL: dict() as body}:
-            # The tagged `!cwl {...}` under `wic:` arrives typed, its bad keys
-            # reported by the parser; this desugared body keeps the fields a
-            # record may carry.
-            record, _bad = cwl_record(body, span)
-            return record
         case {Key.RAW_CWL: expression}:
             return RawCwlRef(str(expression), span)
         case dict() | list():
