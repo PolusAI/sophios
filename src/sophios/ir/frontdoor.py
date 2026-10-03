@@ -184,7 +184,11 @@ def _register_run(step: Step, run: object, namespace: str, document_dir: Path,
                   script_dir: Path) -> bool:
     """Register what a step's ``run:`` names, when it names something here.
 
-    An inline mapping is a tool keyed by the step's id.
+    An inline mapping is a tool keyed by the step's id. A ``.cwl`` or ``.wic``
+    path that exists relative to the document is read from there and keyed by
+    its stem, shadowing a registry entry of that stem for this compilation.
+    A path that does not exist here is left for Resolve, which looks the stem
+    up in the registry and reports it as absent if it is nowhere.
 
     Returns:
         bool: Whether ``run`` was registered here.
@@ -193,7 +197,23 @@ def _register_run(step: Step, run: object, namespace: str, document_dir: Path,
         body = desugar_into_canonical_normal_form(deepcopy(run))
         generated[StepId(_stem(step.id), namespace)] = Tool(f'{_stem(step.id)}.cwl', body)
         return True
-    return False
+    if not isinstance(run, str) or not run.endswith(('.cwl', '.wic')):
+        return False
+    target = (document_dir / run).resolve()
+    if not target.is_file():
+        return False
+    stem = target.stem
+    if run.endswith('.cwl'):
+        with open(target, mode='r', encoding='utf-8') as handle:
+            generated[StepId(stem, namespace)] = Tool(
+                str(target), desugar_into_canonical_normal_form(yaml.safe_load(handle.read())))
+        return True
+    key = (namespace, stem)
+    if key not in workflows:
+        workflows[key] = read[target] if target in read else _visit(
+            target.read_text(encoding='utf-8'), stem, target, yml_paths, script_dir,
+            workflows, generated, read, pins)
+    return True
 
 
 def _stem(name: str) -> str:
