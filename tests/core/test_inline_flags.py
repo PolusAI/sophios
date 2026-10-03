@@ -184,6 +184,96 @@ def test_inline_runtag_embeds_a_tool_with_the_defaults_it_was_written_for(
 # Flattening
 # --------------------------------------------------------------------------
 
+def _document(written: Path, name: str) -> Yaml:
+    """The root document the CLI wrote into `written`."""
+    loaded: Yaml = yaml.safe_load((written / f'{name}.cwl').read_text(encoding='utf-8'))
+    return loaded
+
+
+NESTED_IDS = ['multistep3__step__1__touch', 'multistep3__step__2__append_twice.wic', 'multistep3__step__3__cat']
+FLAT_IDS = ['multistep3__step__1__touch',
+            'multistep3__step__2__append_twice.wic___append_twice__step__1__append',
+            'multistep3__step__2__append_twice.wic___append_twice__step__2__append',
+            'multistep3__step__3__cat']
+
+
+@pytest.mark.fast
+def test_inline_subworkflows_writes_one_flat_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                      capsys: pytest.CaptureFixture[str]) -> None:
+    """Shape: no step runs a Workflow, tools stay files, and the root interface is the nested one's."""
+    nested = _cli(tmp_path / 'default', monkeypatch, 'multistep3')
+    flat = _cli(tmp_path / 'flat', monkeypatch, 'multistep3', '--cwl_inline_subworkflows')
+    document, default = _document(flat, 'multistep3'), _document(nested, 'multistep3')
+    assert [step['id'] for step in default['steps']] == NESTED_IDS
+    assert [step['id'] for step in document['steps']] == FLAT_IDS
+    assert all(isinstance(step['run'], str) for step in document['steps']), 'tools stay separate files'
+    assert document['steps'][1]['run'] == f'{FLAT_IDS[1]}/append.cwl'
+    assert (flat / FLAT_IDS[1] / 'append.cwl').is_file()
+    assert not list(flat.rglob('append_twice.cwl')), 'a dissolved call leaves no Workflow document'
+    assert 'SubworkflowFeatureRequirement' not in document.get('requirements', {})
+    assert document['steps'][2]['in']['file'] == f'{FLAT_IDS[1]}/file'
+    assert document['steps'][3]['in']['file'] == f'{FLAT_IDS[2]}/file'
+    for key in ('inputs', 'outputs'):
+        assert list(document[key]) == list(default[key]), f'the flat form keeps the root {key}'
+    last = 'multistep3__step__2__append_twice.wic___append_twice__step__2__append___file'
+    assert document['outputs'][last]['outputSource'] == f'{FLAT_IDS[2]}/file'
+    assert (flat / 'multistep3_inputs.yml').read_text() == (nested / 'multistep3_inputs.yml').read_text()
+    assert 'Warning!' not in capsys.readouterr().err, 'nothing stayed nested, so nothing is said'
+
+
+@pytest.mark.fast
+def test_inline_runtag_embeds_every_process_and_keeps_the_shape(tmp_path: Path,
+                                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    """Packaging: every `run:` carries its process, and a subworkflow step still runs a Workflow."""
+    embedded = _document(_cli(tmp_path / 'embedded', monkeypatch, 'multistep3', '--cwl_inline_runtag'),
+                         'multistep3')
+    assert [step['id'] for step in embedded['steps']] == NESTED_IDS
+    touch, call, cat = (step['run'] for step in embedded['steps'])
+    assert touch['class'] == cat['class'] == 'CommandLineTool'
+    assert call['class'] == 'Workflow', 'a subworkflow step embeds its Workflow'
+    assert [inner['run']['class'] for inner in call['steps']] == ['CommandLineTool', 'CommandLineTool']
+    assert embedded['requirements'] == {'SubworkflowFeatureRequirement': {}}
+
+
+@pytest.mark.fast
+def test_the_two_flags_together_write_one_flat_self_contained_file(tmp_path: Path,
+                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    """The flags are orthogonal: both give the flat shape with every process embedded."""
+    document = _document(_cli(tmp_path / 'both', monkeypatch, 'multistep3',
+                              '--cwl_inline_subworkflows', '--cwl_inline_runtag'), 'multistep3')
+    assert [step['id'] for step in document['steps']] == FLAT_IDS
+    assert [step['run']['class'] for step in document['steps']] == ['CommandLineTool'] * 4
+    assert 'SubworkflowFeatureRequirement' not in document.get('requirements', {})
+
+
+@pytest.mark.fast
+def test_a_scattered_call_stays_nested_and_the_compile_says_so(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                               capsys: pytest.CaptureFixture[str]) -> None:
+    """`test_rand_fail` scatters over `fail.wic`: the call keeps its place, and one line names it."""
+    written = _cli(tmp_path / 'kept', monkeypatch, 'test_rand_fail', '--cwl_inline_subworkflows')
+    document = _document(written, 'test_rand_fail')
+    kept = next(step for step in document['steps'] if step['id'].endswith('__fail.wic'))
+    assert kept['run'].endswith('fail.cwl') and 'scatter' in kept
+    assert (written / kept['run']).is_file(), 'the Workflow document it runs is still written'
+    assert document['requirements']['SubworkflowFeatureRequirement'] == {}
+    stderr = capsys.readouterr().err
+    assert "step 'fail.wic' stays a subworkflow under --cwl_inline_subworkflows: it carries `scatter`" in stderr
+    assert stderr.count('Warning!') == 1
+
+
+@pytest.mark.fast
+def test_the_when_partial_failure_adds_does_not_keep_a_call_nested(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                                   capsys: pytest.CaptureFixture[str]) -> None:
+    """Whether a call can be dissolved is decided on what the author wrote, not on what the compiler added."""
+    document = _document(_cli(tmp_path / 'both', monkeypatch, 'multistep3', '--cwl_inline_subworkflows',
+                              '--partial_failure_enable'), 'multistep3')
+    assert [step['id'] for step in document['steps']] == FLAT_IDS
+    assert all(step['when'].startswith('$(inputs[') for step in document['steps']), (
+        'each flat step keeps the condition the compiler gave it in the subworkflow')
+    assert document['requirements'] == {'InlineJavascriptRequirement': {}}
+    assert 'Warning!' not in capsys.readouterr().err
+
+
 XFORM: Yaml = {'id': 'xform', 'in': {'name': {'wic_inline_input': 'b'}}}
 
 

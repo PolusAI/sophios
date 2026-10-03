@@ -189,11 +189,8 @@ def _main() -> None:
             artifact, args.partial_failure_success_codes_range,
             args.partial_failure_success_codes)
 
-    # Source flattening used to reimplement workflow-call semantics before the
-    # compiler could judge them. Both public flags now embed the already-linked
-    # child graph, so Link remains the sole owner of call bindings and outputs.
-    if args.cwl_inline_runtag or args.cwl_inline_subworkflows:
-        artifact = pc.inline_artifact_runs(artifact)
+    artifact = pc.apply_inline_options(artifact, subworkflows=args.cwl_inline_subworkflows,
+                                       runtag=args.cwl_inline_runtag)
 
     if args.graphviz:
         if shutil.which('dot'):
