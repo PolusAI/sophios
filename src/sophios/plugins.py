@@ -44,6 +44,38 @@ class NoPartialFailureNullWarning(logging.Filter):
         return err_str not in record.getMessage()
 
 
+class AuthoredNamesFilter(logging.Filter):
+    """Rewrite each emitted id in a runner message as `authored (emitted)`.
+
+    Installed around an in-process run from the names map the compile wrote,
+    so a cwltool error names the step the user wrote. One pass, longest id
+    first, whole ids only: a nested id is rewritten as itself, never as the
+    step id it starts with, and a port the author named is left as written.
+    A step is matched by its id in the root document and by the id it carries
+    in its own document, which is the one cwltool prints for a nested step.
+    """
+    # pylint:disable=too-few-public-methods
+
+    def __init__(self, names: dict[str, Any]) -> None:
+        super().__init__()
+        spellings: dict[str, str] = {}
+        for emitted, entry in names.get('steps', {}).items():
+            for spelled in (emitted, entry.get('id', emitted)):
+                spellings[spelled] = f"step {entry['index']} '{entry['name']}' ({spelled})"
+        for emitted, entry in names.get('ports', {}).items():
+            if entry['steps']:
+                spellings[emitted] = f"{'/'.join([*entry['steps'], entry['port']])} ({emitted})"
+        self._spellings = spellings
+        alternatives = '|'.join(re.escape(emitted) for emitted in sorted(spellings, key=len, reverse=True))
+        self._pattern = re.compile(rf'(?<![\w-])(?:{alternatives})(?![\w-])') if spellings else None
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if self._pattern is not None:
+            record.msg = self._pattern.sub(lambda found: self._spellings[found.group(0)], record.getMessage())
+            record.args = ()
+        return True
+
+
 def logging_filters(allow_pf: bool = False) -> None:
     """Install logging filters that silence known-noisy cwltool/salad log messages.
 
