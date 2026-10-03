@@ -8,6 +8,7 @@ from .cwl import CWL_VERSION, CWL_VERSIONS, CwlVersion
 from .diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
 from .error_codes import SophiosErrorCode
 from .nodes import (
+    CwlRecord,
     Document,
     EdgeDef,
     EdgeRef,
@@ -20,6 +21,7 @@ from .nodes import (
     StepKey,
     UnresolvedName,
     WicSidecar,
+    cwl_record,
 )
 from ..utils_yaml import Key, Tag
 from .parser import Forms, Grammar, ParseResult, parse
@@ -40,6 +42,7 @@ __all__ = [
     'Diagnostic',
     'Diagnostics',
     'Locator',
+    'CwlRecord',
     'Document',
     'EdgeDef',
     'EdgeRef',
@@ -61,6 +64,7 @@ __all__ = [
     'Tag',
     'UnresolvedName',
     'WicSidecar',
+    'cwl_record',
     'parse',
     'render',
     'resolve_lang_version',

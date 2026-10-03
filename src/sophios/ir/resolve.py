@@ -18,6 +18,7 @@ from typing import Any, Iterable, Mapping
 
 from ..lang import (
     CWL_VERSION,
+    CwlRecord,
     Document,
     EdgeDef,
     EdgeRef,
@@ -31,6 +32,7 @@ from ..lang import (
     StepKey,
     UnresolvedName,
     WicSidecar,
+    cwl_record,
     resolve_lang_version,
 )
 from ..lang.diagnostics import Diagnostic, Diagnostics
@@ -362,6 +364,8 @@ def _input_identity(value: InputValue) -> Any:
             return ('cwl', expression)
         case UnresolvedName(name=name):
             return ('name', name)
+        case CwlRecord(sources=sources, fields=fields):
+            return ('record', [_input_identity(source) for source in sources], fields)
 
 
 def _ports(raw: Any, *, output: bool) -> tuple[ResolvedPort, ...]:
@@ -454,12 +458,18 @@ def _contributed_input(value: OpaqueCwl, span: SourceSpan) -> InputValue:
     spelling; both surfaces mean one thing (§4.1).
     """
     match value:
-        case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName():
+        case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName() | CwlRecord():
             return value
         case {Key.INLINE_INPUT: literal}:
             return InlineLiteral(literal, span)
         case {Key.ALIAS: name}:
             return EdgeRef(str(name), span)
+        case {Key.RAW_CWL: dict() as body}:
+            # The tagged `!cwl {...}` under `wic:` arrives typed, its bad keys
+            # reported by the parser; this desugared body keeps the fields a
+            # record may carry.
+            record, _bad = cwl_record(body, span)
+            return record
         case {Key.RAW_CWL: expression}:
             return RawCwlRef(str(expression), span)
         case dict() | list():

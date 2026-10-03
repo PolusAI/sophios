@@ -8,9 +8,12 @@ specification of anything) and slotted (allocated once per construct).
 from dataclasses import dataclass, field, fields
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Any, TypeAlias
+from collections.abc import Mapping
+from typing import Any, Final, TypeAlias
 
+from ..utils_yaml import Key
 from .spans import SourceSpan
+from .support import STEP_INPUT_RECORD_KEYS
 
 
 class Shape(StrEnum):
@@ -24,7 +27,7 @@ class Shape(StrEnum):
     INTERNAL = 'internal'
     #: The node's own name, carried by its position rather than a key.
     IDENTITY = 'identity'
-    #: `in:` — a mapping of input name to one of the four input forms.
+    #: `in:` — a mapping of input name to one of the five input forms.
     INPUT_BINDINGS = 'input_bindings'
     #: `out:` — a sequence of bare names or single-key edge bindings.
     OUTPUT_BINDINGS = 'output_bindings'
@@ -141,12 +144,33 @@ class UnresolvedName:
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
 
 
+@dataclass(frozen=True, slots=True)
+class CwlRecord:
+    """`!cwl {source: ..., linkMerge: ...}` — CWL's WorkflowStepInput, at an `in:` position.
+
+    `sources` are the Sophios references its `source` names, in order; each is
+    an edge (`!*`) or a workflow input (a bare name). `fields` are the other
+    WorkflowStepInput fields, verbatim. The record is the one place a step
+    input may say more than where its value comes from.
+    """
+
+    sources: tuple[EdgeRef | UnresolvedName, ...] = surface(Shape.IDENTITY, default=())
+    fields: tuple[tuple[str, 'OpaqueCwl'], ...] = surface(Shape.IDENTITY, default=())
+    span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
+
+    @property
+    def delivers_its_source(self) -> bool:
+        """Whether the step input receives its one source's value as it is:
+        no merge, no pick and no `valueFrom` stands between them."""
+        return len(self.sources) == 1 and not {'linkMerge', 'pickValue', 'valueFrom'} & dict(self.fields).keys()
+
+
 #: The complete set of forms a step input may take: a literal, an edge
-#: reference, a raw CWL reference, or an unresolved name. `EdgeDef` is
-#: deliberately not a member — an edge is defined on an output, reachable
-#: only through `OutputBinding.edge_def`. Closed by construction, so
-#: exhaustive `match` statements over it stay exhaustive.
-InputValue: TypeAlias = InlineLiteral | EdgeRef | RawCwlRef | UnresolvedName
+#: reference, a raw CWL reference, an unresolved name, or a step-input
+#: record. `EdgeDef` is deliberately not a member — an edge is defined on an
+#: output, reachable only through `OutputBinding.edge_def`. Closed by
+#: construction, so exhaustive `match` statements over it stay exhaustive.
+InputValue: TypeAlias = InlineLiteral | EdgeRef | RawCwlRef | UnresolvedName | CwlRecord
 
 #: CWL that Sophios does not interpret and passes through unchanged: a closed
 #: recursive union of what YAML's safe schema can produce, plus the Sophios
@@ -157,6 +181,48 @@ OpaqueCwl: TypeAlias = (
     None | bool | int | float | str | date | datetime
     | list['OpaqueCwl'] | dict[str, 'OpaqueCwl'] | InputValue
 )
+
+#: The WorkflowStepInput fields a record may carry, besides `source`.
+RECORD_FIELDS: Final = STEP_INPUT_RECORD_KEYS - {'source'}
+
+
+def _holds_construct(value: OpaqueCwl) -> bool:
+    """Whether a Sophios construct sits anywhere inside `value`."""
+    match value:
+        case dict():
+            return any(_holds_construct(item) for item in value.values())
+        case list():
+            return any(_holds_construct(item) for item in value)
+        case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName() | CwlRecord():
+            return True
+        case _:
+            return False
+
+
+def cwl_record(mapping: Mapping[str, OpaqueCwl], span: SourceSpan | None) -> tuple[CwlRecord, tuple[str, ...]]:
+    """Build a record from its desugared mapping; also return the keys it may not carry.
+
+    `source` entries are `!*` or `{wic_alias: name}` (an edge), a bare string
+    (a workflow input), or a list of those. Anything else in `source` is not a
+    reference, so `'source'` is returned among the bad keys, as is a field
+    holding a Sophios construct: every field but `source` is CWL, copied out.
+    """
+    sources: list[EdgeRef | UnresolvedName] = []
+    bad: list[str] = [key for key, value in mapping.items()
+                      if key != 'source' and (key not in RECORD_FIELDS or _holds_construct(value))]
+    raw = mapping.get('source', [])
+    for entry in raw if isinstance(raw, list) else [raw]:
+        match entry:
+            case EdgeRef() | UnresolvedName():
+                sources.append(entry)
+            case {Key.ALIAS: str() as name, **rest} if not rest:
+                sources.append(EdgeRef(name, span))
+            case str() as name:
+                sources.append(UnresolvedName(name, span))
+            case _:
+                bad.append('source')
+    carried = tuple((key, value) for key, value in mapping.items() if key in RECORD_FIELDS and key not in bad)
+    return CwlRecord(tuple(sources), carried, span), tuple(dict.fromkeys(bad))
 
 
 @dataclass(frozen=True, slots=True)

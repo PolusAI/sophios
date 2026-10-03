@@ -17,6 +17,7 @@ from ..utils_yaml import Key, Tag
 from .diagnostics import Diagnostics
 from .error_codes import SophiosErrorCode
 from .nodes import (
+    RECORD_FIELDS,
     Document,
     EdgeDef,
     EdgeRef,
@@ -29,6 +30,7 @@ from .nodes import (
     StepKey,
     UnresolvedName,
     WicSidecar,
+    cwl_record,
 )
 from .cwl import CWL_VERSIONS
 from .spans import SourceSpan
@@ -546,8 +548,8 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
             diags.error(
                 SophiosErrorCode.STEP_INPUT_RECORD,
                 'this mapping spells a CWL step input (' + ', '.join(sorted(keys)) + '), which '
-                "Sophios does not read here; write `!ii` for a literal of that shape, `!*` for an "
-                'edge, or a bare workflow-input name',
+                'Sophios does not read untagged; write `!cwl {source: ..., default: ...}` for a CWL '
+                'step input, `!ii` for a literal of that shape',
                 span)
     # A bare mapping or sequence cannot name a workflow input, so it is only
     # meaningful as a literal; a step-input record is kept as one for recovery.
@@ -614,6 +616,29 @@ def _report_misspelled_construct(key: str, key_node: yaml.nodes.Node,
         SourceSpan.of(file, key_node))
 
 
+def _raw_cwl(node: yaml.nodes.Node, file: str, diags: Diagnostics, span: SourceSpan) -> InputValue:
+    """`!cwl name` is a raw reference; `!cwl {source: ..., ...}` is a step-input record.
+
+    The record's entries are materialised one by one: materialising the tagged
+    node itself would route it back here.
+    """
+    if not isinstance(node, yaml.nodes.MappingNode):
+        return RawCwlRef(_name_text(node, file, diags), span)
+    body = {_key_text(key, file, diags): _opaque(value, file, diags) for key, value in node.value}
+    record, bad = cwl_record(body, span)
+    for key in bad:
+        if key == 'source':
+            message = '!cwl record: `source` names edges (!*) or workflow inputs, one or a list'
+        elif key in RECORD_FIELDS:
+            message = (f'!cwl record: {key!r} holds a Sophios construct; every field but source is CWL, '
+                       'written out as is')
+        else:
+            message = (f'!cwl record: {key!r} is not a WorkflowStepInput field Sophios writes; the fields '
+                       f'are source, {", ".join(sorted(RECORD_FIELDS))}')
+        diags.error(SophiosErrorCode.STEP_INPUT_RECORD, message, span)
+    return record
+
+
 #: One builder: a YAML node and its context in, one input node out.
 Builder: TypeAlias = Callable[[yaml.nodes.Node, str, Diagnostics, SourceSpan], InputValue]
 
@@ -628,7 +653,7 @@ class Forms:  # pylint: disable=too-few-public-methods  # a namespace, not a typ
     TAGGED: Final[Mapping[str, Builder]] = MappingProxyType({
         Tag.INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_literal(n, f, d), s, text=_literal_text(n)),
         Tag.ALIAS: lambda n, f, d, s: EdgeRef(_name_text(n, f, d), s),
-        Tag.RAW_CWL: lambda n, f, d, s: RawCwlRef(_name_text(n, f, d), s),
+        Tag.RAW_CWL: _raw_cwl,
     })
 
     #: Desugared spellings — what tooling emits. `wic_anchor` (`Key.ANCHOR`)
@@ -636,7 +661,7 @@ class Forms:  # pylint: disable=too-few-public-methods  # a namespace, not a typ
     DESUGARED: Final[Mapping[str, Builder]] = MappingProxyType({
         Key.INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_opaque(n, f, d), s),
         Key.ALIAS: lambda n, f, d, s: EdgeRef(_name_text(n, f, d), s),
-        Key.RAW_CWL: lambda n, f, d, s: RawCwlRef(_name_text(n, f, d), s),
+        Key.RAW_CWL: _raw_cwl,
     })
 
     #: The desugared construct keys, derived so a construct added above

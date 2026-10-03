@@ -27,6 +27,7 @@ from hypothesis import given
 
 from sophios.lang import SophiosErrorCode, Forms, Grammar, parse, to_json, wic_schema
 from sophios.lang.nodes import (
+    CwlRecord,
     Document,
     EdgeDef,
     EdgeRef,
@@ -266,7 +267,7 @@ def test_a_step_may_have_no_body() -> None:
 
 
 AST_NODES = [Document, Step, OutputBinding, WicSidecar, StepKey,
-             InlineLiteral, EdgeDef, EdgeRef, RawCwlRef, UnresolvedName]
+             InlineLiteral, EdgeDef, EdgeRef, RawCwlRef, UnresolvedName, CwlRecord]
 
 
 @pytest.mark.fast
