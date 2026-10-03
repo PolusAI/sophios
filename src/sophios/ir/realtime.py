@@ -13,6 +13,7 @@ from ..lang.diagnostics import Diagnostics, Locator, SophiosError
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.nodes import InlineLiteral, OpaqueCwl
 from ..lang.spans import SourceSpan
+from ..utils_yaml import Key
 from .types import StepNode, WorkflowGraph
 
 #: The registry name of the adapter whose steps are declarations.
@@ -124,10 +125,12 @@ def _declaration(document: str, step: StepNode, diagnostics: Diagnostics) -> Dec
 
 
 def _plain(value: OpaqueCwl) -> Any:
-    """`value` with every `!ii` inside it replaced by the value it carries."""
+    """`value` with every `!ii` inside it, tagged or desugared, replaced by the value it carries."""
     match value:
         case InlineLiteral(value=inner):
             return _plain(inner)
+        case dict() if set(value) == {Key.INLINE_INPUT}:
+            return _plain(value[Key.INLINE_INPUT])
         case dict():
             return {key: _plain(item) for key, item in value.items()}
         case list():

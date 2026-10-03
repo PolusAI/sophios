@@ -19,7 +19,7 @@ import sophios.run_local
 import sophios.utils
 from sophios.ir import frontdoor
 import sophios.plugins
-from sophios import post_compile
+from sophios import post_compile, realtime
 from sophios import auto_gen_header
 from sophios.cli import get_args
 from sophios.utils_yaml import Key, wic_loader
@@ -529,6 +529,34 @@ def _compile_corpus_workflow(yml_path_str: str, yml_path: Path, registry: Corpus
         if _is_includer_fragment(error):
             pytest.skip(f'{yml_path_str} consumes edges from an includer')
         raise
+
+
+#: The corpus documents that declare a real-time analysis, and the analysis each declares.
+_REALTIME_DECLARATIONS: Final = (
+    ('cwl_subinterpreter_protein', 'analysis_realtime_protein.wic'),
+    ('cwl_subinterpreter_complex', 'analysis_realtime_complex.wic'),
+    ('cwl_subinterpreter_ligand', 'analysis_realtime_ligand.wic'),
+    ('npt_amber', 'process_mdout'),
+)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("stem, analysis", _REALTIME_DECLARATIONS)
+def test_a_corpus_declaration_compiles_its_analysis(stem: str, analysis: str,
+                                                    corpus_registry: CorpusRegistry) -> None:
+    """Each analysis the corpus declares compiles, the file names in its `config: in:` read as literals."""
+    yml_path = _discover(corpus_registry.workflows, stem)
+    if yml_path is None:
+        pytest.skip(f'{stem}.wic is not reachable from search_paths_wic')
+    bundle = frontdoor.bundle_from_disk(yml_path, corpus_registry.workflows, corpus_registry.tools)
+    compiler_options, graph_settings = sophios.cli.get_dicts_for_compilation(get_args(str(yml_path)))
+    result = sophios.compiler.compile_source(bundle, compiler_options, graph_settings,
+                                             relative_run_path=True, testing=True)
+
+    analyses = realtime.compile_analyses(result.realtime, corpus_registry.workflows, corpus_registry.tools,
+                                         compiler_options, graph_settings)
+    assert [compiled.declaration.analysis for compiled in analyses] == [analysis]
+    assert analyses[0].artifact.cwl['steps']
 
 
 @pytest.mark.serial
