@@ -655,9 +655,10 @@ def flatten_model(artifact: CompilationArtifact) -> Yaml:
         if child.cwl.get('class') != 'Workflow':
             flat_steps.append(step)
             continue
-        if set(step) - {'id', 'in', 'run', 'out'}:
-            # The author wrote more on the call than `in` and `out` (a scatter, a `when`...):
-            # its boundary is not proved removable, so it stays a call.
+        if set(step) - {'id', 'in', 'run', 'out'} or (child.graph is not None and not child.graph.inlineable):
+            # The author wrote more on the call than `in` and `out` (a scatter, a `when`...), or the
+            # workflow it runs says `wic: inlineable: false`: its boundary is not proved removable,
+            # so it stays a call.
             kept_any = True
             flat_steps.append(step)
             continue
