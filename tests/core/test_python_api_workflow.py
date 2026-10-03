@@ -1937,3 +1937,14 @@ def test_a_step_input_and_a_plain_link_on_similarly_named_steps_compile() -> Non
     wf = Workflow([*wf.steps, c, sink1], 'similar')
     steps = wf.compile().cwl_workflow['steps']
     assert steps[4]['in']['files'] == {'source': 'similar__step__4__c/file'}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('nest', [lambda port: [[port]], lambda port: {'x': port}, lambda port: [{'x': [port]}]])
+def test_a_port_nested_in_a_literal_is_never_a_literal(nest: Any) -> None:
+    """A port anywhere inside a list or mapping is refused, not passed through as a literal."""
+    a = Step(clt_path=_adapter('touch'))
+    a.inputs.filename = 'a.txt'
+    cat = Step(clt_path=_adapter('cat'))
+    with pytest.raises(InvalidInputValueError, match='StepInput'):
+        cat.inputs.file = nest(a.outputs.file)

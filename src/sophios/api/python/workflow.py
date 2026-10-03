@@ -230,8 +230,7 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
             input_port._set_binding(InputBinding("workflow", name, workflow_input))
         case StepInput() as record:
             _bind_record(process_self, input_name, input_port, record)
-        case list() | tuple() as items if any(isinstance(item, (OutputParameter, WorkflowInputReference))
-                                              for item in items):
+        case list() | tuple() | dict() if _holds_a_port(value):
             raise InvalidInputValueError(
                 f"{process_self.process_name}.{input_name}: a port object is never a literal; "
                 "bind several sources with StepInput(source=[...])")
@@ -245,6 +244,19 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
             input_port._set_binding(InputBinding("alias", anchor_name, output))
         case _:
             input_port._set_binding(InputBinding("inline", value))
+
+
+def _holds_a_port(value: Any) -> bool:
+    """Whether a would-be literal holds a step output or workflow input at any depth."""
+    match value:
+        case OutputParameter() | WorkflowInputReference():
+            return True
+        case list() | tuple():
+            return any(_holds_a_port(item) for item in value)
+        case dict():
+            return any(_holds_a_port(item) for item in value.values())
+        case _:
+            return False
 
 
 def _bind_record(process_self: Any, input_name: str, input_port: InputParameter, record: StepInput) -> None:
