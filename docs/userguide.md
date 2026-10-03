@@ -292,34 +292,35 @@ in-memory view, inspect `workflow.yaml`:
 print(workflow.yaml)
 ```
 
-This shows the file representation Sophios can derive from the current Python
-workflow. It is useful when debugging surprising bindings before compilation or
-when you want to compare Python-authored workflows with `.wic` workflows.
+This is the document `write_wic()` writes for the workflow, as a Python dict.
+It is useful when debugging surprising bindings before compilation or when you
+want to compare Python-authored workflows with `.wic` workflows.
 
-When you want a real `.wic` file, use `write_wic()`:
+When you want real files, use `write_wic()` with a `.wic` path or a directory:
 
 ```python
 workflow.write_wic("hello_python.wic")
 ```
 
-This writes a source `.wic` workflow from the Python object. It does not compile
-the workflow and it does not write generated CWL. Literal bindings, named
-outputs, explicit edges, and intentionally unbound linear inputs are preserved
-in the `.wic` representation so the normal Sophios compiler can still apply
-edge inference later.
+This writes a bundle into one directory: the root `<name>.wic`, one
+`<child>.wic` per nested workflow, and one `<stem>.cwl` per distinct tool. It
+does not compile the workflow and it does not write generated CWL. Literal
+bindings, named outputs, explicit edges, and intentionally unbound linear
+inputs are preserved, so the normal Sophios compiler can still apply edge
+inference later. Steps and workflow outputs use the names you gave them: a
+workflow output reads `step/port`, and a step whose name differs from its
+tool's file stem (`Step(..., step_name="say_hi")` on `echo.cwl`) carries
+`run: echo.cwl`.
 
-If you need the text instead of a file:
+Compile the bundle with `sophios --yaml hello_python.wic`. A `run:` path
+resolves beside the document first; a step named for its tool, and a nested
+`<child>.wic`, come from the search paths, so put the bundle's directory on
+`search_paths_wic` when the workflow nests others.
+
+If you need the root document's text instead of files:
 
 ```python
 wic_text = workflow.to_wic_yaml()
-```
-
-For nested workflows, `write_wic()` embeds subworkflows in the root document by
-default. If you want a sibling-file tree instead, pass
-`inline_subworkflows=False`:
-
-```python
-workflow.write_wic("workflows", inline_subworkflows=False)
 ```
 
 ## Compile Paths
@@ -353,7 +354,7 @@ a test fixture, or inspected during debugging.
 emission is explicit on that object: `write_cwl(...)` writes the compiled
 workflow and `write_job_inputs(...)` writes the matching job inputs. Neither
 method writes intermediate `.wic` compiler trees by default. Use
-`workflow.write_wic(...)` when you want a source `.wic` file.
+`workflow.write_wic(...)` when you want the source `.wic` bundle.
 
 ### Keep Compiled CWL in Memory
 
