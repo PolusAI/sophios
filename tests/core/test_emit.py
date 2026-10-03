@@ -623,3 +623,24 @@ def test_a_desugared_record_under_wic_steps_binds_like_the_tagged_one() -> None:
     compiled = compile_hermetic_cwl({'inputs': {'w': 'File'}, 'steps': [{'id': 'count'}],
                                      'wic': {'steps': {'(1, count)': {'in': {'file': {'wic_raw_cwl': record}}}}}})
     assert compiled['steps'][0]['in']['file'] == record
+
+
+@pytest.mark.fast
+def test_the_names_map_covers_every_emitted_step_and_boundary_port() -> None:
+    """Every step id and boundary name the root document emits maps back to what the author wrote."""
+    from sophios.ir.names import names_map  # pylint: disable=import-outside-toplevel
+    child = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}]}
+    compiled = compile_hermetic({'steps': [subworkflow_step('child.wic', child), {'id': 'count'}]})
+    found = names_map(compiled.graph, Names.of(compiled.graph))
+    emitted_steps = {step['id'] for step in compiled.artifact.cwl['steps']}
+    assert emitted_steps <= set(found['steps'])
+    assert set(compiled.artifact.cwl['inputs']) <= set(found['ports'])
+    count = found['steps']['oracle__step__2__count']
+    assert count == {'id': 'oracle__step__2__count', 'workflow': 'oracle', 'index': 2, 'name': 'count',
+                     'file': 'oracle.wic', 'line': count['line']}
+    assert count['line'] > 0
+    nested = found['steps']['oracle__step__1__child.wic___child__step__1__mk_file']
+    assert (nested['id'], nested['workflow'], nested['index'], nested['name']) == (
+        'child__step__1__mk_file', 'child', 1, 'mk_file')
+    lifted = found['ports']['oracle__step__1__child.wic___child__step__1__mk_file___name']
+    assert lifted == {'workflow': 'oracle', 'steps': ['child.wic', 'mk_file'], 'port': 'name'}
