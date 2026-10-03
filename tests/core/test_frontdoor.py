@@ -286,3 +286,36 @@ def test_an_inline_run_body_is_registered_and_emitted_as_its_own_tool(tmp_path: 
     assert step['run'] == 'w__step__1__mytool/mytool.cwl'
     child, = result.artifact.children
     assert child.cwl['inputs'] == {'x': {'type': 'string'}}
+
+
+@pytest.mark.fast
+def test_a_run_path_resolves_relative_to_the_document_before_the_registry(tmp_path: Path) -> None:
+    """A `.cwl` beside the document shadows the registry tool of the same stem."""
+    (tmp_path / 'tools').mkdir()
+    (tmp_path / 'tools' / 'mk_file.cwl').write_text(
+        'cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: true\n'
+        'inputs: {label: string}\noutputs: {}\n', encoding='utf-8')
+    (tmp_path / 'w.wic').write_text('steps:\n  s:\n    run: tools/mk_file.cwl\n    in:\n      label: !ii a\n',
+                                    encoding='utf-8')
+    result = _compile(bundle_from_disk(tmp_path / 'w.wic', {}, SYNTHETIC_TOOLS))
+    child, = result.artifact.children
+    assert 'label' in child.cwl['inputs'] and 'name' not in child.cwl['inputs']
+
+
+@pytest.mark.fast
+def test_a_run_path_that_does_not_exist_falls_back_to_the_registry_stem(tmp_path: Path) -> None:
+    """A `run:` path with no file beside the document is looked up by its stem."""
+    (tmp_path / 'w.wic').write_text('steps:\n  s:\n    run: elsewhere/mk_file.cwl\n    in:\n      name: !ii a\n',
+                                    encoding='utf-8')
+    result = _compile(bundle_from_disk(tmp_path / 'w.wic', {}, SYNTHETIC_TOOLS))
+    assert result.artifact.children[0].run_path == '/synthetic/mk_file.cwl'
+
+
+@pytest.mark.fast
+def test_a_run_wic_path_is_read_from_beside_the_document(tmp_path: Path) -> None:
+    """A `run: x.wic` path is read from beside the document, not looked up in the search paths."""
+    (tmp_path / 'sub').mkdir()
+    (tmp_path / 'sub' / 'child.wic').write_text('steps:\n  mk_file:\n    in:\n      name: !ii a\n', encoding='utf-8')
+    (tmp_path / 'w.wic').write_text('steps:\n  call:\n    run: sub/child.wic\n', encoding='utf-8')
+    result = _compile(bundle_from_disk(tmp_path / 'w.wic', {}, SYNTHETIC_TOOLS))
+    assert result.artifact.children[0].name == 'child'
