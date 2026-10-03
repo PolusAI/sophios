@@ -275,7 +275,7 @@ ACCEPTED: Final[tuple[Accepted, ...]] = (
     Accepted('a bare name is an unresolved name',
              'steps:\n  s:\n    in:\n      e: plain\n',
              lambda d: isinstance(d.steps[0].input('e'), UnresolvedName)),
-    Accepted('an untagged mapping input is an inline literal (language guide §3.1)',
+    Accepted('an untagged mapping input is an inline literal (language guide §3.2)',
              'steps:\n- id: s\n  in:\n    a: {some: mapping}\n',
              lambda d: isinstance(d.steps[0].inputs[0][1], InlineLiteral)
              and d.steps[0].inputs[0][1].value == {'some': 'mapping'}),
