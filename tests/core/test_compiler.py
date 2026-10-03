@@ -121,3 +121,58 @@ def test_the_graph_draws_inferred_edges_in_the_font_colour_and_the_rest_in_blue(
         ('oracle__step__3__sub.wic___sub__step__1__xform',
          'oracle__step__3__sub.wic___sub__step__2__count'): font_colour,
     }
+
+
+def _mk_file(name: str = 'x') -> Yaml:
+    """A step of the synthetic registry that binds its one input."""
+    return {'id': 'mk_file', 'in': {'name': {'wic_inline_input': name}}}
+
+
+@pytest.mark.fast
+def test_a_generated_step_name_in_output_source_is_named_on_stderr_and_still_compiles(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """The line names the file, the output, the generated name and the spelling to write."""
+    compiled = compile_hermetic_cwl({
+        'outputs': {'o': {'type': 'File', 'outputSource': 'oracle__step__1__mk_file/file'}},
+        'steps': [_mk_file()]})
+    assert compiled['outputs']['o']['outputSource'] == 'oracle__step__1__mk_file/file'
+    assert capsys.readouterr().err.splitlines() == [
+        "Warning! oracle.wic: output 'o' names its step 'oracle__step__1__mk_file', a name the "
+        "compiler generates. Write 'mk_file/file' instead."]
+
+
+@pytest.mark.fast
+def test_a_generated_name_for_a_repeated_id_is_answered_with_its_position(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """`mk_file/file` would mean the first `mk_file`, so the line gives `(index, id)`."""
+    compile_hermetic_cwl({
+        'outputs': {'o': {'type': 'File', 'outputSource': 'oracle__step__2__mk_file/file'}},
+        'steps': [_mk_file('x'), _mk_file('y')]})
+    assert "Write '(2, mk_file)/file' instead" in capsys.readouterr().err
+
+
+@pytest.mark.fast
+def test_an_authored_output_source_prints_nothing(capsys: pytest.CaptureFixture[str]) -> None:
+    """The line is for the generated spelling only."""
+    compile_hermetic_cwl({'outputs': {'o': {'type': 'File', 'outputSource': 'mk_file/file'}},
+                          'steps': [_mk_file()]})
+    assert 'Warning!' not in capsys.readouterr().err
+
+
+@pytest.mark.fast
+def test_a_generated_name_in_a_child_document_is_named_once_however_often_it_is_called(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """Two calls lower the child twice; its line is still one line."""
+    child: Yaml = {'steps': [_mk_file()],
+                   'outputs': {'o': {'type': 'File', 'outputSource': 'child__step__1__mk_file/file'}}}
+    compile_hermetic_cwl({'steps': [subworkflow_step('child.wic', child), subworkflow_step('child.wic', child)]})
+    assert capsys.readouterr().err.count("Warning! child.wic: output 'o' names its step") == 1
+
+
+@pytest.mark.fast
+def test_a_positional_output_source_prints_no_authored_spelling_line(capsys: pytest.CaptureFixture[str]) -> None:
+    """The `(index, name)/port` spelling is what the line recommends; it must not be reported."""
+    compile_hermetic_cwl({'outputs': {'o': {'type': 'File', 'outputSource': '(2, mk_file)/file'}},
+                          'steps': [_mk_file('x'), _mk_file('y')]})
+
+    assert 'Warning!' not in capsys.readouterr().err
