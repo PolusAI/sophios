@@ -177,6 +177,11 @@ out as its own tool file next to the compiled workflow, like any other tool, and
 written at the workflow's CWL version: a `cwlVersion` inside the body is ignored, as
 CWL requires of a process embedded in a workflow.
 
+A step's process is a tool or a `.wic` subworkflow. A CWL file whose `class` is
+`Workflow`, whether a stem on `search_paths_cwl`, a `run:` path or an inline body, is
+`wic013`: Sophios cannot embed one as a step. Write it as a `.wic` subworkflow and
+call that, or run the CWL workflow on its own with `--allow_raw_cwl`.
+
 ## 3. Inputs
 
 ### 3.1 The five forms
@@ -752,7 +757,7 @@ call that is wrong although the document is fine.
 | `wic010` | A key bound twice: an input, a step, a `wic:` key, or a second `id:` (section 3.8). |
 | `wic011` | An untagged input value names no workflow input; did you mean `!ii`? (section 3.3) |
 | `wic012` | A required input gets no value, such as `!ii null` on an input that is not optional. |
-| `wic013` | A workflow or a step's process cannot be used: no steps, a tool or subworkflow not found, subworkflows that call each other in a cycle, `implementations` with none chosen, or ports only the CWL runner can read. |
+| `wic013` | A workflow or a step's process cannot be used: no steps, a tool or subworkflow not found, a CWL `Workflow` as a step (section 2.3), subworkflows that call each other in a cycle, `implementations` with none chosen, or ports only the CWL runner can read. |
 | `wic014` | The arguments given to a Python script step do not match its declared inputs. |
 | `wic015` | The container engine (`docker` by default) is not installed or not working. |
 | `wic016` | An input file named in the inputs does not exist. |

@@ -176,7 +176,7 @@ def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
     return ResolvedDocument(name, document, tuple(steps), version), diagnostics
 
 
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches
 def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistrySnapshot,
                      version: str, trail: tuple[RegistryKey, ...],
                      diagnostics: Diagnostics, reported: set[str]) -> ResolvedProcess | None:
@@ -246,6 +246,10 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
         diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
                           f'process {namespace}/{name} is not a CWL mapping', step.span)
         return None
+    if cwl.get('class') == 'Workflow':
+        diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
+                          _cwl_workflow_step(step, tool, own_name), step.span)
+        return None
     return ResolvedProcess(
         tool.key,
         tool.run_path,
@@ -254,6 +258,24 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
         deepcopy(cwl),
         generated=generated,
     )
+
+
+def _cwl_workflow_step(step: Step, tool: ToolDefinition, own_name: str | None) -> str:
+    """Why a step whose process is a CWL ``class: Workflow`` is refused, and what works.
+
+    The step would run a copy of the file without the files its own steps run,
+    and the calling workflow would lack ``SubworkflowFeatureRequirement``.
+    """
+    run = dict(step.interpreted).get('run')
+    if isinstance(run, dict):
+        where = 'an inline run: body that is a CWL Workflow'
+    elif tool.key.name == own_name:
+        where = f'run: {run}, a CWL Workflow'
+    else:
+        where = f'{tool.run_path}, a CWL Workflow from the tool search paths (search_paths_cwl)'
+    return (f'step {step.id!r} runs {where}. Sophios cannot embed a CWL Workflow as a step: '
+            'write it as a .wic subworkflow (on search_paths_wic, or beside this document as '
+            'run: <name>.wic), or run the CWL Workflow on its own with --allow_raw_cwl')
 
 
 def run_process_name(step: Step) -> str | None:

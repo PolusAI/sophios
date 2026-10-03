@@ -31,8 +31,11 @@ from sophios.lang import (
     Step,
     parse,
 )
+from sophios.lang.diagnostics import SophiosError
+from sophios.plugins import get_tools_cwl
 from sophios.utils_graphs import get_graph_reps
 from sophios.utils_yaml import wic_loader
+from sophios.wic_types import Tools
 
 from .synthetic_tools import SYNTHETIC_TOOLS
 
@@ -332,6 +335,54 @@ def test_a_run_wic_path_is_read_from_beside_the_document(tmp_path: Path) -> None
     (tmp_path / 'w.wic').write_text('steps:\n  call:\n    run: sub/child.wic\n', encoding='utf-8')
     result = _compile(bundle_from_disk(tmp_path / 'w.wic', {}, SYNTHETIC_TOOLS))
     assert result.artifact.children[0].name.startswith('child')
+
+
+#: A plain CWL Workflow whose one step runs a tool file beside it.
+_CWL_WORKFLOW = ('{class: Workflow, cwlVersion: v1.2, inputs: {text: string}, '
+                 'outputs: {said: {type: File, outputSource: echo/out}}, '
+                 'steps: {echo: {run: echo.cwl, in: {text: text}, out: [out]}}}')
+_ECHO_TOOL = ('cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: echo\n'
+              'inputs: {text: {type: string, inputBinding: {position: 1}}}\noutputs: {out: stdout}\n')
+_ADVICE = ('Sophios cannot embed a CWL Workflow as a step: write it as a .wic subworkflow '
+           '(on search_paths_wic, or beside this document as run: <name>.wic), '
+           'or run the CWL Workflow on its own with --allow_raw_cwl')
+
+
+def _cwl_workflow_step_diagnostic(tmp_path: Path, step: str, tools: Tools) -> str:
+    """Compile a root with `step` as its one step and return the error it is refused with."""
+    (tmp_path / 'w.wic').write_text('steps:\n' + step + '    in: {text: !ii hi}\n', encoding='utf-8')
+    with pytest.raises(SophiosError) as caught:
+        _compile(bundle_from_disk(tmp_path / 'w.wic', {}, tools))
+    diagnostic, = caught.value.diagnostics
+    assert diagnostic.code is SophiosErrorCode.SUBWORKFLOW_INVALID
+    assert diagnostic.message.endswith(_ADVICE)
+    return diagnostic.message
+
+
+@pytest.mark.fast
+def test_a_cwl_workflow_from_the_tool_search_paths_as_a_step_is_refused(tmp_path: Path) -> None:
+    """Its copy would lose the tool file beside it, so the step is refused instead of emitted broken."""
+    adapters = tmp_path / 'adapters'
+    adapters.mkdir()
+    (adapters / 'say.cwl').write_text(_CWL_WORKFLOW, encoding='utf-8')
+    (adapters / 'echo.cwl').write_text(_ECHO_TOOL, encoding='utf-8')
+    tools = get_tools_cwl({'search_paths_cwl': {'global': [str(adapters)]}}, quiet=True)
+    message = _cwl_workflow_step_diagnostic(tmp_path, '  - id: say\n', tools)
+    assert message.startswith(f"step 'say' runs {adapters / 'say.cwl'}, a CWL Workflow from the "
+                              'tool search paths (search_paths_cwl). ')
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('run', 'where'), [
+    ('say.cwl', 'run: say.cwl, a CWL Workflow'),
+    (_CWL_WORKFLOW, 'an inline run: body that is a CWL Workflow'),
+], ids=['run-path', 'inline-body'])
+def test_a_cwl_workflow_a_step_names_itself_is_refused(tmp_path: Path, run: str, where: str) -> None:
+    """A `run:` path beside the document, or an inline body, is refused the same way."""
+    (tmp_path / 'say.cwl').write_text(_CWL_WORKFLOW, encoding='utf-8')
+    (tmp_path / 'echo.cwl').write_text(_ECHO_TOOL, encoding='utf-8')
+    message = _cwl_workflow_step_diagnostic(tmp_path, f'  - id: s\n    run: {run}\n', SYNTHETIC_TOOLS)
+    assert message.startswith(f"step 's' runs {where}. ")
 
 
 _ECHO = ('{class: CommandLineTool, cwlVersion: v1.2, baseCommand: %s, '
