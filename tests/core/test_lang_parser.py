@@ -1490,3 +1490,20 @@ def test_a_record_with_a_field_cwl_has_no_name_for_is_wic038(body: str) -> None:
     Sophios construct inside a field CWL reads verbatim are each refused."""
     result = parse(f'steps:\n  s:\n    in:\n      f: !cwl {body}\n', 'r.wic')
     assert [d.code for d in result.diagnostics] == [SophiosErrorCode.STEP_INPUT_RECORD]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('body', ['{}', '{source: []}', '{loadContents: true}'])
+def test_a_record_that_gives_no_value_is_wic038(body: str) -> None:
+    """Without a source, a default or a valueFrom the input would be bound to nothing,
+    and the binding would stop Sophios connecting it."""
+    result = parse(f'steps:\n  s:\n    in:\n      f: !cwl {body}\n', 'r.wic')
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.STEP_INPUT_RECORD]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('body', ['{default: 3}', '{valueFrom: $(1)}'])
+def test_a_record_with_a_default_or_value_from_needs_no_source(body: str) -> None:
+    """Either gives the input a value, so the record stands without a source."""
+    result = parse(f'steps:\n  s:\n    in:\n      f: !cwl {body}\n', 'r.wic')
+    assert result.ok, [str(d) for d in result.diagnostics]

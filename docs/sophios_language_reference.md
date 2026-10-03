@@ -409,7 +409,8 @@ emitted name. One source stays a list when `linkMerge` is beside it. The other
 fields (`default`, `label`, `linkMerge`, `loadContents`, `loadListing`,
 `pickValue`, `valueFrom`) are CWL, written out as they are. Any other key, a
 `source` entry that is not a reference (`!ii`, `!cwl`), or a Sophios tag
-inside another field is `wic038`. A record with several sources takes each
+inside another field is `wic038`, and so is a record with no source, `default`
+or `valueFrom`: it gives the input no value. A record with several sources takes each
 from its own document: an edge defined in no step of the document is `wic025`
 there, and is declared as a workflow input instead; a record with one source
 may take it from the including workflow as a bare `!*` does. The requirements
