@@ -4,6 +4,10 @@ All notable changes to Sophios will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- `StepInput(source=, link_merge=, pick_value=, value_from=, default=, load_contents=, load_listing=)` binds a CWL step input whose sources are port objects.
+
 ### Breaking changes
 
 - `Workflow.add_input()` is gone; declare an input by binding it: `workflow.inputs.name = ...` or `step.inputs.x = workflow.inputs.name`.

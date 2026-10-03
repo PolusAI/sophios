@@ -2,11 +2,11 @@
 
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from sophios.ir.declarations import layered
 from sophios.ir.types import PortType
-from sophios.lang import EdgeRef, InlineLiteral, InputValue, UnresolvedName
+from sophios.lang import CwlRecord, EdgeRef, InlineLiteral, InputValue, UnresolvedName
 
 from ._errors import InvalidLinkError
 from ._utils import (contains_any_type,
@@ -27,7 +27,11 @@ ViewT = TypeVar("ViewT")
 
 @dataclass(frozen=True, slots=True)
 class InputBinding:
-    """Bound input value, upstream alias, or workflow input reference."""
+    """Bound input value, upstream alias, workflow input reference, or step-input record.
+
+    A `record` binding's `value` is the language's `CwlRecord` and its `source` the
+    port objects the record names, each a step `OutputParameter` or a workflow `InputParameter`.
+    """
 
     kind: str
     value: Any
@@ -51,6 +55,8 @@ class InputBinding:
                 return InlineLiteral(serialize_value(self.value))
             case "alias":
                 return EdgeRef(self.value)
+            case "record":
+                return cast(CwlRecord, self.value)
             case _:
                 return UnresolvedName(self.value)
 
@@ -184,8 +190,13 @@ class _ParameterBase:
 
 @dataclass(slots=True)
 class InputParameter(_ParameterBase):
-    """Input parameter of a CWL `CommandLineTool` or `Workflow`."""
+    """Input parameter of a CWL `CommandLineTool` or `Workflow`.
 
+    `declared` is False for a step input the tool does not declare, made by
+    binding a `StepInput` to it; only a `StepInput` may bind such an input.
+    """
+
+    declared: bool = field(default=True, init=False)
     _binding: InputBinding | None = field(default=None, init=False, repr=False)
 
     @property
@@ -197,10 +208,15 @@ class InputParameter(_ParameterBase):
         self._binding = binding
         self.linked = False if binding is None else binding.linked
 
-    @property
-    def source_parameter(self) -> Any:
-        """Return the upstream output parameter this input is aliased to, if any."""
-        return None if self._binding is None or self._binding.kind != "alias" else self._binding.source
+    def source_outputs(self) -> "tuple[OutputParameter, ...]":
+        """The upstream outputs this input is bound to: an alias's one, or a record's."""
+        match self._binding:
+            case InputBinding(kind="alias", source=source):
+                return (source,)
+            case InputBinding(kind="record", source=sources):
+                return tuple(source for source in sources if isinstance(source, OutputParameter))
+            case _:
+                return ()
 
     def effective_source_type(self) -> Any:
         """The type the bound value carries when the workflow runs, computed now, not
@@ -213,6 +229,8 @@ class InputParameter(_ParameterBase):
                 return infer_literal_parameter_type(self._binding.value)
             case "alias":
                 return self._binding.source.effective_type()
+            case "record":
+                return _record_type(self._binding.value, self._binding.source)
             case _:
                 return self._binding.source.parameter_type
 
@@ -298,6 +316,28 @@ class OutputParameter(_ParameterBase):
             "type": cwl_type,
             "outputSource": self._source.to_output_source(steps, self._source_parameter),
         }
+
+
+def _produced_type(source: Any) -> Any:
+    """The type `source`, a step or subworkflow output or a workflow input, carries when
+    the workflow runs."""
+    if isinstance(source, OutputParameter):
+        return source.effective_type()
+    return source.parameter_type
+
+
+def _record_type(record: CwlRecord, sources: tuple[Any, ...]) -> Any:
+    """The type a record delivers, from its first source: one source as it is, or,
+    when sources are merged, the list CWL's `linkMerge` makes of them."""
+    if not sources:
+        return None
+    first = _produced_type(sources[0])
+    link_merge = dict(record.fields).get("linkMerge")
+    if first is None or (len(sources) == 1 and link_merge is None):
+        return first
+    if link_merge == "merge_flattened" and is_array_type(first):
+        return first
+    return {"type": "array", "items": first}
 
 
 @dataclass(frozen=True, slots=True)

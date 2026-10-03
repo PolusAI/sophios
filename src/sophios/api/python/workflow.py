@@ -4,12 +4,13 @@
 import logging
 import warnings
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, cast, overload
+from typing import Any, ClassVar, Final, cast, overload
 
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
-from sophios.lang import InputValue, OpaqueCwl, nodes, to_json
+from sophios.lang import CwlRecord, EdgeRef, InputValue, OpaqueCwl, UnresolvedName, nodes, to_json
 from sophios.lang.compatibility import TypeRelation, reference_relation
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
@@ -37,6 +38,7 @@ from ._ports import (
 from ._utils import (
     get_value_from_cfg as _get_value_from_cfg,
     load_yaml as _load_yaml,
+    serialize_value as _serialize_value,
 )
 from ._types import ScatterMethod
 from ._workflow_runtime import (
@@ -75,6 +77,7 @@ __all__ = [
     "SophiosError",
     "SophiosErrorCode",
     "Step",
+    "StepInput",
     "Workflow",
     "WorkflowRunError",
 ]
@@ -157,6 +160,58 @@ def _warn_implicit_workflow_parameter(workflow: "Workflow", name: str, kind: str
     )
 
 
+_UNSET: Final = object()
+
+
+@dataclass(frozen=True, slots=True)
+class StepInput:  # pylint: disable=too-many-instance-attributes
+    """A step input written as CWL's ``WorkflowStepInput``: the Python twin of ``!cwl {...}``.
+
+    ``source`` is one step output or workflow input, or a list of them; the
+    other fields are written to the emitted step verbatim, in CWL spelling.
+    Bind it like any value:
+    ``step.inputs.x = StepInput(source=[a.outputs.f, b.outputs.f], link_merge='merge_flattened')``.
+    A ``StepInput`` may be bound to a name the tool does not declare, which is
+    how ``when`` and ``value_from`` read an extra input.
+
+    Raises:
+        InvalidInputValueError: If a ``source`` entry is not a step output or a
+            workflow input; a string is never a reference.
+    """
+
+    source: Any = None
+    link_merge: str | None = None
+    pick_value: str | None = None
+    value_from: str | None = None
+    default: Any = _UNSET
+    load_contents: bool | None = None
+    load_listing: str | None = None
+    label: str | None = None
+
+    def __post_init__(self) -> None:
+        self.sources()
+
+    def sources(self) -> tuple[OutputParameter | WorkflowInputReference, ...]:
+        """The source entries, each a step output or a workflow input."""
+        if self.source is None:
+            return ()
+        entries = tuple(self.source) if isinstance(self.source, (list, tuple)) else (self.source,)
+        for entry in entries:
+            if not isinstance(entry, (OutputParameter, WorkflowInputReference)):
+                raise InvalidInputValueError(
+                    f"StepInput.source entries are step outputs or workflow inputs, not {type(entry).__name__}")
+        return entries
+
+    def fields(self) -> tuple[tuple[str, Any], ...]:
+        """The ``WorkflowStepInput`` fields set, other than ``source``, in CWL spelling."""
+        found = (("linkMerge", self.link_merge), ("pickValue", self.pick_value), ("valueFrom", self.value_from),
+                 ("loadContents", self.load_contents), ("loadListing", self.load_listing), ("label", self.label))
+        fields = tuple((key, value) for key, value in found if value is not None)
+        if self.default is not _UNSET:
+            fields += (("default", _serialize_value(self.default)),)
+        return fields
+
+
 def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
     input_port = process_self._get_input(input_name)
 
@@ -169,6 +224,8 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
             workflow_input = workflow._ensure_input(
                 name, parameter_type=_boundary_type(input_port.parameter_type), implicit=implicit)
             input_port._set_binding(InputBinding("workflow", name, workflow_input))
+        case StepInput() as record:
+            _bind_record(process_self, input_name, input_port, record)
         case OutputParameter() as output:
             _resolve_parameter_type(
                 input_port,
@@ -179,6 +236,21 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
             input_port._set_binding(InputBinding("alias", anchor_name, output))
         case _:
             input_port._set_binding(InputBinding("inline", value))
+
+
+def _bind_record(process_self: Any, input_name: str, input_port: InputParameter, record: StepInput) -> None:
+    """Bind `record` to `input_port`: the language's record, over the port objects it names."""
+    entries = record.sources()
+    # Each source is its own edge, so each gets its own name.
+    built = CwlRecord(tuple(
+        UnresolvedName(entry.name) if isinstance(entry, WorkflowInputReference)
+        else EdgeRef(entry.ensure_anchor(f"{input_name}{process_self.process_name}{position}"))
+        for position, entry in enumerate(entries, start=1)), record.fields())
+    # A workflow input the record delivers as it is carries the input's type, as a plain binding's does.
+    delivered = _boundary_type(input_port.parameter_type) if built.delivers_its_source else None
+    ports = tuple(entry.workflow._ensure_input(entry.name, parameter_type=delivered, implicit=entry.implicit)
+                  if isinstance(entry, WorkflowInputReference) else entry for entry in entries)
+    input_port._set_binding(InputBinding("record", built, ports))
 
 
 def _boundary_type(parameter_type: Any) -> Any:
@@ -504,18 +576,31 @@ class Step(_ProcessBase):
     def _bind_input(self, name: str, value: Any) -> None:
         """Bind a value or upstream output to a named step input parameter.
 
+        A ``StepInput`` bound to a name the tool does not declare creates that
+        input, typed ``Any``, as a ``!cwl`` record does in a ``.wic`` step.
+
         Args:
             name (str): The input parameter name.
-            value (Any): A literal value, a workflow input reference, or a step output.
+            value (Any): A literal value, a workflow input reference, a step output, or a ``StepInput``.
 
         Raises:
-            AttributeError: If the named input does not exist on the step.
+            AttributeError: If the tool does not declare the input and ``value`` is not a ``StepInput``.
 
         Returns:
             None: The step is mutated in place.
         """
-        _lookup_parameter(self._inputs, name, owner_name=self.process_name, kind="input")
+        if isinstance(value, StepInput):
+            self._inputs.ensure(name, self._undeclared_input)
+        elif not _lookup_parameter(self._inputs, name, owner_name=self.process_name, kind="input").declared:
+            raise AttributeError(f"{self.process_name!r} has no input named {name!r}; "
+                                 "only a StepInput binds an input the tool does not declare")
         _bind_process_input(self, name, value)
+
+    def _undeclared_input(self, name: str) -> InputParameter:
+        """A step input the tool does not declare, for a ``StepInput`` to bind."""
+        port = InputParameter(name, "Any", parent_obj=self)
+        port.declared = False
+        return port
 
     def scatter_on(
         self,
@@ -776,28 +861,26 @@ class Workflow(_ProcessBase):
         children = set(self.steps)
         for child in self.steps:
             for input_parameter in child._inputs:
-                source_parameter = input_parameter.source_parameter
-                if not isinstance(source_parameter, OutputParameter):
-                    continue
-                source_parent = source_parameter.parent_obj
-                if source_parent is self:
-                    raise InvalidLinkError(
-                        f"{child.process_name}.{input_parameter.name} is bound to "
-                        f"{self.process_name}.outputs.{source_parameter.name}, this workflow's own output; "
-                        "a workflow cannot consume what it produces"
-                    )
-                source_process = getattr(source_parent, "process_name", "<unknown>")
-                if source_parent not in children:
-                    raise InvalidStepError(
-                        f"{child.process_name}.{input_parameter.name} is linked to "
-                        f"{source_process}.{source_parameter.name}, "
-                        f"but {source_process!r} is not a child of {self.process_name!r}"
-                    )
-                if source_parent not in prior_children:
-                    raise InvalidStepError(
-                        f"{child.process_name}.{input_parameter.name} is linked to "
-                        f"{source_process!r}, which must appear earlier in the workflow step list"
-                    )
+                for source_parameter in input_parameter.source_outputs():
+                    source_parent = source_parameter.parent_obj
+                    if source_parent is self:
+                        raise InvalidLinkError(
+                            f"{child.process_name}.{input_parameter.name} is bound to "
+                            f"{self.process_name}.outputs.{source_parameter.name}, this workflow's own output; "
+                            "a workflow cannot consume what it produces"
+                        )
+                    source_process = getattr(source_parent, "process_name", "<unknown>")
+                    if source_parent not in children:
+                        raise InvalidStepError(
+                            f"{child.process_name}.{input_parameter.name} is linked to "
+                            f"{source_process}.{source_parameter.name}, "
+                            f"but {source_process!r} is not a child of {self.process_name!r}"
+                        )
+                    if source_parent not in prior_children:
+                        raise InvalidStepError(
+                            f"{child.process_name}.{input_parameter.name} is linked to "
+                            f"{source_process!r}, which must appear earlier in the workflow step list"
+                        )
             prior_children.add(child)
 
         for output_parameter in self._outputs:

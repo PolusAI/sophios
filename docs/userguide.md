@@ -232,15 +232,34 @@ unambiguous without relying on generated artifacts.
 
 ## Binding Types
 
-There are two common input binding patterns.
+There are two common input binding patterns, and one for everything else a CWL
+step input can say.
 
 | Binding | Python shape | Meaning |
 | --- | --- | --- |
 | Literal value | `step.inputs.message = "hello"` | The value is known now. |
 | Step output | `cat.inputs.file = append.outputs.file` | The value comes from an earlier step. |
+| Step input record | `step.inputs.x = StepInput(source=..., link_merge=...)` | CWL's `WorkflowStepInput`, written out. |
 
 This table is one of the most important concepts in the Python API. Most
 workflow code is a readable sequence of these bindings.
+
+`StepInput` is the Python form of a `!cwl {...}` record in a `.wic` step. Its
+`source` is a step output or a workflow input, or a list of them, never a
+string; `link_merge`, `pick_value`, `value_from`, `default`, `load_contents`,
+`load_listing` and `label` are written to the emitted step as CWL's `linkMerge`,
+`pickValue`, `valueFrom` and so on:
+
+```python
+from sophios.api.python.workflow import StepInput
+
+step.inputs.extras = StepInput(source=[a.outputs.file, b.outputs.file], link_merge="merge_flattened")
+step.inputs.n = StepInput(default=3, value_from="$(self + 1)")
+step.inputs.go = StepInput(source=workflow.inputs.go)  # an input the tool does not declare, for `when`
+```
+
+A `StepInput` may bind a name the tool does not declare: that is how `when` and
+`value_from` read an extra value.
 
 ## What Bindings Become
 
