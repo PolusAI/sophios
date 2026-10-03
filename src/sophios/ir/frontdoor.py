@@ -63,7 +63,7 @@ def bundle_from_source(source: str, name: str,
     workflows: dict[tuple[str, str], ParseResult] = {}
     generated: Tools = {}
     pins: list[str] = []
-    parsed = _visit(source, name, None, yml_paths, Path('.'), workflows, generated, {}, pins)
+    parsed = _visit(source, f'{name}.wic', None, yml_paths, Path('.'), workflows, generated, {}, pins)
     return SourceBundle(parsed, name,
                         RegistrySnapshot.from_tools({**tools, **generated},
                                                     workflows=workflows),
@@ -82,7 +82,7 @@ def bundle_from_disk(yml_path: Path,
     workflows: dict[tuple[str, str], ParseResult] = {}
     generated: Tools = {}
     pins: list[str] = []
-    parsed = _visit(yml_path.read_text(encoding='utf-8'), yml_path.stem, yml_path.resolve(), yml_paths, yml_path.parent,
+    parsed = _visit(yml_path.read_text(encoding='utf-8'), yml_path.name, yml_path.resolve(), yml_paths, yml_path.parent,
                     workflows, generated, {}, pins)
     return SourceBundle(parsed, yml_path.stem,
                         RegistrySnapshot.from_tools({**tools, **generated},
@@ -91,7 +91,7 @@ def bundle_from_disk(yml_path: Path,
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
-def _visit(source: str, stem: str, path: Path | None,
+def _visit(source: str, file: str, path: Path | None,
            yml_paths: dict[str, dict[str, Path]],
            script_dir: Path,
            workflows: dict[tuple[str, str], ParseResult],
@@ -103,7 +103,7 @@ def _visit(source: str, stem: str, path: Path | None,
     The parse is recorded under ``path`` before anything it reaches is read,
     so a file reached again -- a cycle, or a second namespace -- reuses it.
     """
-    parsed = parse(source, f'{stem}.wic')
+    parsed = parse(source, file)
     if path is not None:
         read[path] = parsed
     document = parsed.document
@@ -171,7 +171,7 @@ def _reach(document: Document,
             # a file called under two namespaces still gets both registry entries.
             resolved = child_path.resolve()
             workflows[key] = read[resolved] if resolved in read else _visit(
-                child_path.read_text(encoding='utf-8'), child_path.stem, resolved,
+                child_path.read_text(encoding='utf-8'), child_path.name, resolved,
                 yml_paths, script_dir, workflows, generated, read, pins)
     for _name, body in (document.sidecar.implementations if document.sidecar else ()):
         _reach(body, yml_paths, script_dir, document_dir, workflows, generated, read, pins)
@@ -216,7 +216,7 @@ def _register_run(step: Step, namespace: str, document_dir: Path,
                 str(target), desugar_into_canonical_normal_form(yaml.safe_load(handle.read())))
         return True
     parsed = read[target] if target in read else _visit(
-        target.read_text(encoding='utf-8'), target.stem, target, yml_paths, script_dir,
+        target.read_text(encoding='utf-8'), target.name, target, yml_paths, script_dir,
         workflows, generated, read, pins)
     if workflows.setdefault((namespace, name), parsed) is not parsed:
         raise ValueError(f'run: {run} names two different workflows')

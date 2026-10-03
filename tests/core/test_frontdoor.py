@@ -277,6 +277,17 @@ def test_the_parser_is_the_gate_a_file_passes_as_it_is_read(tmp_path: Path) -> N
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize('name', ['probe.wic', 'probe.cwl', 'probe.yml'])
+def test_a_diagnostic_names_the_file_as_it_is_on_disk(tmp_path: Path, name: str) -> None:
+    """A diagnostic's file is the file's own name, whatever its extension."""
+    written = tmp_path / name
+    written.write_text('wic:\n  nonsense_key: 1\nsteps:\n- id: mk_file\n', encoding='utf-8')
+
+    diagnostics = bundle_from_disk(written, {'global': {}}, {}).parsed.diagnostics
+    assert [d.span.file for d in diagnostics if d.span] == [name]
+
+
+@pytest.mark.fast
 def test_an_inline_run_body_is_registered_and_emitted_as_its_own_tool(tmp_path: Path) -> None:
     """An inline `run:` mapping is the step's tool, emitted as its own file."""
     (tmp_path / 'w.wic').write_text(
