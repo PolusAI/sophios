@@ -118,14 +118,14 @@ def compile_hermetic(yml: Yaml, name: str = 'oracle', *,
     typo is a type error instead of a silently ignored setting — the same
     reasoning as `compile_harness.compile_info`.
     """
-    compiler_options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
+    compiler_options, graph_settings = sophios.cli.default_compilation_settings()
     compiler_options['insert_steps_automatically'] = insert_steps_automatically
     compiler_options['inference_strict'] = inference_strict
     graph = get_graph_reps(name)
     del is_root
     return sophios.compiler.compile_source(
         bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools),
-        compiler_options, graph_settings, tag_paths,
+        compiler_options, graph_settings,
         relative_run_path=True, testing=True, graph_target=graph)
 
 
@@ -133,11 +133,11 @@ def compile_production(yml: Yaml, name: str = 'binding', *,
                        tools: Tools | None = None,
                        is_root: bool = True) -> CompilationResult:
     """Compile with user-facing progress enabled (``testing=False``)."""
-    compiler_options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
+    compiler_options, graph_settings = sophios.cli.default_compilation_settings()
     del is_root
     return sophios.compiler.compile_source(
         bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools),
-        compiler_options, graph_settings, tag_paths,
+        compiler_options, graph_settings,
         relative_run_path=True, testing=False, graph_target=get_graph_reps(name))
 
 

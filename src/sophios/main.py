@@ -19,8 +19,7 @@ from . import post_compile as pc
 from . import cli, compiler, plugins, run_local
 from .ir import frontdoor
 from .ir.frontdoor import SourceBundle
-from .wic_types import (CompilerOptions, GraphData, GraphReps, GraphSettings, Json,
-                        Tools, YamlTagPaths)
+from .wic_types import CompilerOptions, GraphData, GraphReps, GraphSettings, Json, Tools
 
 #: Where `--generate_schemas` writes, relative to the working directory, and
 #: where editors are pointed at it (see `.vscode/settings.json`).
@@ -55,8 +54,8 @@ def _load_source_bundle(args: argparse.Namespace,
 
 
 def _compile_loaded_document(yaml_path: str, yaml_stem: str, bundle: SourceBundle, tools_cwl: Tools,
-                             compiler_options: CompilerOptions, graph_settings: GraphSettings,
-                             yaml_tag_paths: YamlTagPaths) -> tuple[graphviz.Digraph, CompilationResult]:
+                             compiler_options: CompilerOptions,
+                             graph_settings: GraphSettings) -> tuple[graphviz.Digraph, CompilationResult]:
     """Build the root graph view and compile to a graph-derived result."""
     rootgraph = graphviz.Digraph(name=yaml_path)
     # newrank='True' ranks nodes globally (rather than per-cluster), which is
@@ -88,7 +87,7 @@ def _compile_loaded_document(yaml_path: str, yaml_stem: str, bundle: SourceBundl
 
         try:
             result = compiler.compile_source(
-                bundle, compiler_options, graph_settings, yaml_tag_paths,
+                bundle, compiler_options, graph_settings,
                 relative_run_path=True, testing=False, graph_target=subgraph)
         except SophiosError as e:
             # The library reports; only this adapter is allowed to exit. The
@@ -316,12 +315,12 @@ def _main() -> None:
 
     # The one conversion from parsed arguments to settings, at the boundary.
     # Everything below this line takes values; no Namespace goes further.
-    compiler_options, graph_settings, yaml_tag_paths = cli.get_dicts_for_compilation(args)
+    compiler_options, graph_settings = cli.get_dicts_for_compilation(args)
     compiler_options['inference_rules'] = global_config.get('inference_rules', {})
     compiler_options['renaming_conventions'] = global_config.get('renaming_conventions', [])
     rootgraph, compilation = _compile_loaded_document(
         yaml_path, yaml_stem, bundle, tools_cwl,
-        compiler_options, graph_settings, yaml_tag_paths)
+        compiler_options, graph_settings)
     artifact = compilation.artifact
 
     artifact = plugins.cwl_prepend_dockerFile_include_path_artifact(artifact)

@@ -83,6 +83,10 @@ class SophiosErrorCode(StrEnum):
     INFERENCE_TIE = 'wic042'
     INFERENCE_RECENCY = 'wic043'
 
+    #: A real-time analysis declaration (a `cwl_subinterpreter` step) that is
+    #: not well formed, or whose analysis does not compile.
+    REALTIME_DECLARATION = 'wic044'
+
     #: --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = 'api001'
     INVALID_STEP = 'api002'

@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .wic_types import CompilerOptions, GraphSettings, YamlTagPaths
+from .wic_types import CompilerOptions, GraphSettings
 
 
 def _config_file(path: str) -> Path:
@@ -193,11 +193,11 @@ def get_known_and_unknown_args(
     return parser.parse_known_args(_argv(yaml_path, suppliedargs))
 
 
-def default_compilation_settings() -> tuple[CompilerOptions, GraphSettings, YamlTagPaths]:
+def default_compilation_settings() -> tuple[CompilerOptions, GraphSettings]:
     """The settings a compilation runs with when nobody has chosen otherwise.
 
     This is what a library caller wants — the Python API, the schema
-    generator, the subinterpreter — and it exists so that asking for defaults
+    generator, a real-time analysis — and it exists so that asking for defaults
     is a thing you can *say*. Previously the only way to obtain them was to
     fabricate a command line, so library code called a CLI helper and got its
     configuration from an argv that no user had typed. Defaults still come
@@ -207,8 +207,8 @@ def default_compilation_settings() -> tuple[CompilerOptions, GraphSettings, Yaml
     return get_dicts_for_compilation(get_args())
 
 
-def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions, GraphSettings, YamlTagPaths]:
-    """Split parsed command-line arguments into the three dicts compilation needs.
+def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions, GraphSettings]:
+    """Split parsed command-line arguments into the two dicts compilation needs.
 
     The adapter at the CLI boundary, and the only function here that takes an
     `argparse.Namespace`. Arguments are parsed once, converted here, and
@@ -246,11 +246,4 @@ def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions
         'graph_show_outputs': args.graph_show_outputs,
         'graph_show_inputs': args.graph_show_inputs,
     }
-
-    # to be given to io absolute_yaml_tags function
-    yaml_tag_paths: YamlTagPaths = {
-        'cachedir': args.cachedir,
-        'yaml': args.yaml,
-        'homedir': args.homedir,
-    }
-    return (compiler_options, graph_settings, yaml_tag_paths)
+    return (compiler_options, graph_settings)

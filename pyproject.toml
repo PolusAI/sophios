@@ -125,7 +125,6 @@ all = ["sophios[test,doc,plots,cyto,mypy-types]"]
 
 [project.scripts]
 sophios = "sophios.main:main"
-cwl_subinterpreter = "sophios.cwl_subinterpreter:main"
 cwltool_filterlog = "sophios.run_local:cwltool_main"
 # Need an extra entrypoint to avoid mixing up WIC cli flags with cwltool cli flags
 cwltool_filterlog_pf = "sophios.run_local:cwltool_main_pf"

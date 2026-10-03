@@ -254,11 +254,11 @@ def test_the_cli_flag_reaches_the_compiler() -> None:
     import sophios.cli
 
     supplied = sophios.cli.get_args('wf.wic', ['--lang_version', '9.9.9'])
-    options, _graph_settings, _tag_paths = sophios.cli.get_dicts_for_compilation(supplied)
+    options, _graph_settings = sophios.cli.get_dicts_for_compilation(supplied)
     assert options['lang_version'] == '9.9.9', 'the flag never reached the compiler'
 
     # And a library caller asking for defaults gets no pin, as it should.
-    defaults, _g, _t = sophios.cli.default_compilation_settings()
+    defaults, _g = sophios.cli.default_compilation_settings()
     assert defaults['lang_version'] is None
 
 

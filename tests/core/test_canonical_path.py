@@ -119,10 +119,10 @@ def _compile_bundle(root: Path) -> CompilationResult:
     two arms is where the document came from.
     """
     yml_paths = {'global': {path.stem: path for path in root.parent.glob('*.wic')}}
-    compiler_options, graph_settings, yaml_tag_paths = default_compilation_settings()
+    compiler_options, graph_settings = default_compilation_settings()
     return sophios.compiler.compile_source(
         bundle_from_disk(root, yml_paths, SYNTHETIC_TOOLS), compiler_options, graph_settings,
-        yaml_tag_paths, relative_run_path=True, testing=False,
+        relative_run_path=True, testing=False,
         graph_target=get_graph_reps(root.stem))
 
 

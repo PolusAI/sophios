@@ -421,3 +421,15 @@ def _provoke_no_python_spelling() -> None:
 
 
 COMPILED.update({SophiosErrorCode.NO_PYTHON_SPELLING: _provoke_no_python_spelling})
+
+
+def _provoke_realtime_declaration() -> None:
+    """A real-time analysis declaration whose `max_times` is not a number."""
+    _compile_minimal({'steps': [{'id': 'cwl_subinterpreter', 'in': {
+        'file_pattern': {'wic_inline_input': '*.txt'},
+        'cwl_tool': {'wic_inline_input': 'touch'},
+        'max_times': {'wic_inline_input': 'many'},
+        'config': {'wic_inline_input': {}}}}]})
+
+
+COMPILED.update({SophiosErrorCode.REALTIME_DECLARATION: _provoke_realtime_declaration})

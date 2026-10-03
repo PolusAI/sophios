@@ -79,9 +79,9 @@ def _long_form(spec: Any) -> Any:
 
 def _compile_file(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> CompilationResult:
     """`path` compiled as the CLI reads it, with the settings `Workflow.compile()` uses."""
-    compiler_options, graph_settings, yaml_tag_paths = default_compilation_settings()
+    compiler_options, graph_settings = default_compilation_settings()
     return sophios.compiler.compile_source(
-        bundle_from_disk(path, workflow_paths, tools), compiler_options, graph_settings, yaml_tag_paths,
+        bundle_from_disk(path, workflow_paths, tools), compiler_options, graph_settings,
         relative_run_path=True, testing=False, graph_target=get_graph_reps(path.stem))
 
 

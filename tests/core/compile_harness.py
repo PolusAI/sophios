@@ -32,7 +32,7 @@ def compile_info(yml: Yaml, name: str = 'harness', *,
     The two overrides are named rather than taken as `**options` so that a
     typo is a type error instead of a silently ignored setting.
     """
-    compiler_options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
+    compiler_options, graph_settings = sophios.cli.default_compilation_settings()
     if lang_version is not None:
         compiler_options['lang_version'] = lang_version
     if allow_raw_cwl is not None:
@@ -40,7 +40,7 @@ def compile_info(yml: Yaml, name: str = 'harness', *,
     graph = GraphReps(graphviz.Digraph(name=f'cluster_{name}'), nx.DiGraph(), GraphData(name))
     return sophios.compiler.compile_source(
         bundle(yml, name, load_test_registry().tools),
-        compiler_options, graph_settings, tag_paths,
+        compiler_options, graph_settings,
         relative_run_path=True, testing=True, graph_target=graph)
 
 

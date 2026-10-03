@@ -76,8 +76,8 @@ def _line_of(text: str, needle: str) -> int:
 
 def _compile(bundle: SourceBundle) -> CompilationResult:
     """Compile a bundle the file door built, with default settings."""
-    compiler_options, graph_settings, tag_paths = default_compilation_settings()
-    return compile_source(bundle, compiler_options, graph_settings, tag_paths,
+    compiler_options, graph_settings = default_compilation_settings()
+    return compile_source(bundle, compiler_options, graph_settings,
                           relative_run_path=True, testing=True, graph_target=get_graph_reps(bundle.name))
 
 

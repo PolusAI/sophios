@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from ..lang.diagnostics import Diagnostics
 from ..wic_types import Cwl, GraphReps
+from .realtime import Declaration
 from .types import WorkflowGraph
 
 
@@ -32,6 +33,8 @@ class CompilationResult:
     artifact: CompilationArtifact
     #: The notes the compile made; a result never holds an error.
     diagnostics: Diagnostics = field(default_factory=Diagnostics)
+    #: The real-time analyses the workflow declares, taken out of `graph`.
+    realtime: tuple[Declaration, ...] = ()
 
     @property
     def lang_version(self) -> str:

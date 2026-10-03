@@ -2,7 +2,7 @@
 
 The corpus is not the interesting input: documents a *user* wrote already have
 a parse property. What nothing checked is the documents the compiler *makes* —
-the Python API's output and the documents `rerun_cwltool` builds. Those
+the Python API's output. Those
 are built rather than parsed, so the grammar has no opinion about them unless
 asked, and three defects in a row lived exactly there: step ids spelled
 from the wrong stem, a producer still emitting a step form the grammar had
@@ -35,7 +35,6 @@ CONTRIB: Final = 'CONTRIB'        # outside the core zone
 #: classified by hand.
 MANUFACTURING_SITES: Final[dict[str, str]] = {
     'sophios/api/python/_workflow_runtime.py::workflow_document': DOCUMENT,
-    'sophios/cwl_subinterpreter.py::rerun_cwltool': DOCUMENT,
     # Not documents.
     'sophios/ir/emit.py::emit': CWL,
     'sophios/lang/render.py::_Writer.document': RENDERER,
@@ -48,10 +47,7 @@ MANUFACTURING_SITES: Final[dict[str, str]] = {
 
 #: Instrumented sites no driver below reaches, and why. Each is evidence not
 #: gathered, so each needs a reason that can be checked rather than a shrug.
-UNREACHED: Final[dict[str, str]] = {
-    'sophios/cwl_subinterpreter.py::rerun_cwltool': 'shells out to a CWL runner; its documents are '
-    'pinned directly by test_compiler.py',
-}
+UNREACHED: Final[dict[str, str]] = {}
 
 
 def _documents_in(value: Any, depth: int = 0) -> list[dict[str, Any]]:

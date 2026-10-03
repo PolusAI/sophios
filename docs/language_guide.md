@@ -782,5 +782,6 @@ call that is wrong although the document is fine.
 | `wic039` | A positional `(index, name)` `outputSource` that names the wrong step (section 5.2). |
 | `wic042` | Note: one step offered several matching outputs and inference took the last (section 8). |
 | `wic043` | Note: an earlier step also matched and inference took the most recent. |
+| `wic044` | A real-time analysis declaration (a `cwl_subinterpreter` step) with an input that is not a literal or has the wrong shape, or whose analysis does not compile (see Real-time analysis in the advanced guide). |
 
 `wic021`, `wic029`, `wic037`, `wic040` and `wic041` are not assigned.

@@ -2,7 +2,6 @@
 import re
 import sys
 from copy import deepcopy
-from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
@@ -18,21 +17,20 @@ from .ir.link import link
 from .ir.namespaces import declare_namespaces
 from .ir.frontdoor import SourceBundle
 from .ir.pipeline import front_end
+from .ir.realtime import extract
 from .ir.resolve import RegistrySnapshot
 from .ir.names import Names
-from .ir.types import AuthoredName, Binding, EdgeOrigin, PortName, WorkflowGraph
+from .ir.types import EdgeOrigin, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import Locator, SophiosError
-from .lang.nodes import CwlRecord, InlineLiteral, UnresolvedName
+from .lang.nodes import CwlRecord, UnresolvedName
 from .lang.parser import Grammar
-from .lang.spans import SourceSpan
 from .lang.error_codes import SophiosErrorCode
 from .wic_types import (
     CompilerOptions,
     GraphData,
     GraphReps,
     GraphSettings,
-    YamlTagPaths,
 )
 
 
@@ -40,7 +38,6 @@ from .wic_types import (
 def compile_source(bundle: SourceBundle,
                    compiler_options: CompilerOptions,
                    graph_settings: GraphSettings,
-                   yaml_tag_paths: YamlTagPaths,
                    *,
                    relative_run_path: bool,
                    testing: bool,
@@ -62,11 +59,12 @@ def compile_source(bundle: SourceBundle,
     if not front.graph.steps:
         raise SophiosError.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
                                  'workflows must define at least one step')
-    _check_unresolved_names(front.graph, compiler_options['allow_raw_cwl'])
-    for note in dict.fromkeys(_authored_spelling_notes(front.graph)):
+    authored, realtime = extract(front.graph)
+    _check_unresolved_names(authored, compiler_options['allow_raw_cwl'])
+    for note in dict.fromkeys(_authored_spelling_notes(authored)):
         print(note, file=sys.stderr)
 
-    prepared = complete(_bind_subinterpreter_locations(front.graph, yaml_tag_paths))
+    prepared = complete(authored)
     linked = link(prepared)
     if linked.graph is None:
         raise SophiosError(linked.diagnostics)
@@ -89,37 +87,7 @@ def compile_source(bundle: SourceBundle,
                               partial_failure=compiler_options['partial_failure_enable'])
     if not testing:
         print('finishing compilation of', bundle.name)
-    return CompilationResult(graph, artifact, inferred.diagnostics)
-
-
-#: The runtime adapter's own declared inputs, whose values come from the
-#: invocation rather than from the document.
-_LOCATION_SPAN: Final = SourceSpan('<subinterpreter locations>', 1, 1, 1, 1)
-
-
-def _bind_subinterpreter_locations(graph: WorkflowGraph,
-                                   yaml_tag_paths: YamlTagPaths) -> WorkflowGraph:
-    """Bind the three locations the runtime adapter declares as inputs, leaving any existing binding alone."""
-    values: dict[PortName, str] = {
-        AuthoredName('root_workflow_yml_path'): str(Path(yaml_tag_paths['yaml']).parent.absolute()),
-        AuthoredName('cachedir_path'): str(Path(yaml_tag_paths['cachedir']).absolute()),
-        AuthoredName('homedir'): yaml_tag_paths['homedir'],
-    }
-    steps = []
-    for step in graph.steps:
-        if Path(step.id.name).stem != 'cwl_subinterpreter':
-            steps.append(step)
-            continue
-        already = {binding.sink.port for binding in step.bindings}
-        supplied = tuple(
-            Binding(port.id, InlineLiteral(values[port.id.port], _LOCATION_SPAN))
-            for port in step.inputs
-            if port.id.port in values and port.id.port not in already)
-        steps.append(replace(step, bindings=step.bindings + supplied))
-    return replace(
-        graph, steps=tuple(steps),
-        children=tuple(_bind_subinterpreter_locations(child, yaml_tag_paths)
-                       for child in graph.children))
+    return CompilationResult(graph, artifact, inferred.diagnostics, realtime)
 
 
 #: The shape of a name only Emit writes, `<workflow>__step__<n>__<id>`. Recognised, never taken apart.

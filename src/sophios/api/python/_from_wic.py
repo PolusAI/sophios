@@ -99,8 +99,8 @@ def workflow_from_wic(path: Path, tool_registry: Tools,
     """
     bundle = bundle_from_disk(path, {namespace: dict(paths) for namespace, paths in workflow_paths.items()},
                               tool_registry)
-    compiler_options, graph_settings, yaml_tag_paths = default_compilation_settings()
-    compiler.compile_source(bundle, compiler_options, graph_settings, yaml_tag_paths,
+    compiler_options, graph_settings = default_compilation_settings()
+    compiler.compile_source(bundle, compiler_options, graph_settings,
                             relative_run_path=True, testing=False, graph_target=get_graph_reps(path.stem))
     assert bundle.parsed.document is not None  # the compile above raised otherwise
     version = resolve_lang_version(compiler_options.get('lang_version'), bundle.lang_version_pins)
