@@ -547,7 +547,10 @@ def test_a_port_the_author_wrote_keeps_its_own_prefix_whatever_a_tool_binds() ->
 @pytest.mark.fast
 def test_a_cwl_record_emits_the_fields_it_carries() -> None:
     """Two sources merged into `sink.extras` (File[]), a default on `n`, and the
-    requirements CWL demands for each."""
+    requirements CWL demands for each. Between them the records carry every
+    WorkflowStepInput field but `id`."""
+    carried = {'label': 'both files', 'loadContents': True, 'loadListing': 'no_listing',
+               'pickValue': 'all_non_null'}
     compiled = compile_hermetic_cwl({'steps': [
         {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}, 'out': [{'file': {'wic_anchor': 'fa'}}]},
         {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'b'}}, 'out': [{'file': {'wic_anchor': 'fb'}}]},
@@ -555,10 +558,10 @@ def test_a_cwl_record_emits_the_fields_it_carries() -> None:
             'file': {'wic_alias': 'fa'},
             'n': {'wic_raw_cwl': {'default': 3, 'valueFrom': '$(self + 1)'}},
             'extras': {'wic_raw_cwl': {'source': [{'wic_alias': 'fa'}, {'wic_alias': 'fb'}],
-                                       'linkMerge': 'merge_flattened'}}}}]})
+                                       'linkMerge': 'merge_flattened', **carried}}}}]})
     sink = compiled['steps'][2]
     assert sink['in']['extras'] == {'source': ['oracle__step__1__mk_file/file', 'oracle__step__2__mk_file/file'],
-                                    'linkMerge': 'merge_flattened'}
+                                    'linkMerge': 'merge_flattened', **carried}
     assert sink['in']['n'] == {'default': 3, 'valueFrom': '$(self + 1)'}
     assert {'MultipleInputFeatureRequirement', 'StepInputExpressionRequirement',
             'InlineJavascriptRequirement'} <= set(compiled['requirements'])
