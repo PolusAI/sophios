@@ -109,7 +109,10 @@ group_run.add_argument('--run_local', default=False, action="store_true",
 group_run.add_argument('--generate_cwl_workflow', required=False, default=False, action="store_true",
                        help='Compile the workflow without pulling the docker image')
 parser.add_argument('--cwl_inline_subworkflows', default=False, action="store_true",
-                    help='Embed linked subworkflows in the generated CWL run fields.')
+                    help='''Write one flat workflow: replace every step that runs a subworkflow by that
+                    subworkflow's own steps. Tools stay separate files. A subworkflow call that has
+                    scatter, when or any other key besides in and out, or whose workflow says
+                    inlineable: false, stays a subworkflow, and each one is named on stderr.''')
 parser.add_argument('--inference_disable', default=False, action="store_true",
                     help='Disables use of the inference algorithm when compiling.')
 parser.add_argument('--inference_use_naming_conventions', default=False, action="store_true",
