@@ -3,13 +3,16 @@
 Resolution does no discovery, performs no filesystem access, and parses
 nothing.  Parsed workflows and process definitions are values in
 ``RegistrySnapshot``; changing the environment cannot change the result of
-resolving the same two values.
+resolving the same two values.  It prints one stderr line for each
+``wic: steps:`` key that addresses no step; the key is ignored.
 """
 from collections import Counter
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
+import sys
 from typing import Any, Iterable, Mapping
 
 from ..lang import (
@@ -23,6 +26,7 @@ from ..lang import (
     RawCwlRef,
     SophiosErrorCode,
     SourceSpan,
+    StepKey,
     UnresolvedName,
     WicSidecar,
     resolve_lang_version,
@@ -146,14 +150,16 @@ def resolve(document: Document, registry: RegistrySnapshot, *, name: str = 'work
     if selected is None:
         return Resolved(None, selection_diagnostics)
     document = selected
+    reported: set[str] = set()
+    _report_stale_keys(document.sidecar, document, name, reported)
     version = resolve_lang_version(lang_version, _version_pins(document))
-    resolved, diagnostics = _resolve_document(document, registry, name, version, ())
+    resolved, diagnostics = _resolve_document(document, registry, name, version, (), reported)
     _copy_diagnostics(diagnostics, selection_diagnostics)
     return Resolved(resolved if not diagnostics.has_errors else None, diagnostics)
 
 
 def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
-                      version: str, trail: tuple[RegistryKey, ...]) \
+                      version: str, trail: tuple[RegistryKey, ...], reported: set[str]) \
         -> tuple[ResolvedDocument, Diagnostics]:
     diagnostics = Diagnostics()
     document = _apply_parameters(document)
@@ -161,7 +167,7 @@ def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
     counts = Counter(step.id for step in document.steps)
     for index, step in enumerate(document.steps, start=1):
         sidecar = step_sidecar(document.sidecar, index, step.id, counts[step.id])
-        process = _resolve_process(step, sidecar, registry, version, trail, diagnostics)
+        process = _resolve_process(step, sidecar, registry, version, trail, diagnostics, reported)
         if process is not None:
             steps.append(ResolvedStep(step, process, sidecar))
     return ResolvedDocument(name, document, tuple(steps), version), diagnostics
@@ -170,7 +176,7 @@ def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistrySnapshot,
                      version: str, trail: tuple[RegistryKey, ...],
-                     diagnostics: Diagnostics) -> ResolvedProcess | None:
+                     diagnostics: Diagnostics, reported: set[str]) -> ResolvedProcess | None:
     sidecar_entries = dict(sidecar.entries) if sidecar is not None else {}
     namespace = str(sidecar_entries.get('namespace', 'global'))
     interpreted = dict(step.interpreted)
@@ -207,8 +213,13 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
         _copy_diagnostics(diagnostics, selection)
         if child_source is None:
             return None
+        if child_source is inherited:
+            _report_stale_keys(parsed.document.sidecar, child_source, workflow_key.name, reported)
+            _report_stale_keys(sidecar, child_source, workflow_key.name, reported)
+        else:
+            _report_stale_keys(child_source.sidecar, child_source, workflow_key.name, reported)
         child, child_diagnostics = _resolve_document(
-            child_source, registry, workflow_key.name, version, trail + (workflow_key,))
+            child_source, registry, workflow_key.name, version, trail + (workflow_key,), reported)
         _copy_diagnostics(diagnostics, child_diagnostics)
         interface = _workflow_interface(child_source, workflow_key, diagnostics)
         if interface is None:
@@ -459,6 +470,43 @@ def step_sidecar(sidecar: WicSidecar | None, index: int, name: str,
         if key.index is None and key.name == name and occurrences == 1:
             by_id = child
     return by_id
+
+
+def _stale_key_reason(key: StepKey, ids: Sequence[str]) -> str | None:
+    """Why `key` addresses no step among `ids`, the step ids of one document; None if it does."""
+    if key.index is None:
+        count = ids.count(key.name)
+        if count == 1:
+            return None
+        if count == 0:
+            return f'no step is called {key.name!r}'
+        return f'{key.name!r} names {count} steps; write (index, {key.name})'
+    if not 1 <= key.index <= len(ids):
+        noun = 'step' if len(ids) == 1 else 'steps'
+        return f'there is no step {key.index}; the document has {len(ids)} {noun}'
+    actual = ids[key.index - 1]
+    if actual == key.name:
+        return None
+    return f'step {key.index} is {actual!r}; write ({key.index}, {actual})'
+
+
+def _report_stale_keys(sidecar: WicSidecar | None, document: Document, name: str,
+                       reported: set[str]) -> None:
+    """Print, once each, a line for every ``wic: steps:`` key of `sidecar` that addresses no
+    step of `document`. The keys are ignored, as they always were."""
+    if sidecar is None:
+        return
+    ids = [step.id for step in document.steps]
+    for key, child in sidecar.steps:
+        reason = _stale_key_reason(key, ids)
+        if reason is None:
+            continue
+        span = child.span or sidecar.span or _CONTRIBUTION_SPAN
+        line = (f'Warning! {span.file}: wic: steps: key {key} addresses no step of {name!r}: '
+                f'{reason}. The key is ignored.')
+        if line not in reported:
+            reported.add(line)
+            print(line, file=sys.stderr)
 
 
 def _version_pins(document: Document) -> tuple[str, ...]:

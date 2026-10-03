@@ -401,8 +401,10 @@ steps:
 
 
 @pytest.mark.fast
-def test_a_contribution_needs_both_the_index_and_the_name_to_agree() -> None:
-    """`(N, name)` addresses one occurrence, so half a match is no match."""
+def test_a_contribution_whose_key_does_not_match_its_step_is_named_on_stderr(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """`(N, name)` addresses one step, so half a match is no match: the key is
+    ignored, and each such key is named once on stderr."""
     document = _resolved('''
 wic:
   steps:
@@ -420,6 +422,11 @@ steps:
 ''', child='steps:\n- id: mk_file\n  in:\n    name: !ii its_own.txt\n')
     bound = _descend(document, 1).steps[0].source.input('name')
     assert isinstance(bound, InlineLiteral) and bound.value == 'its_own.txt'
+    assert capsys.readouterr().err.splitlines() == [
+        "Warning! root.wic: wic: steps: key (2, mk_file) addresses no step of 'child': "
+        'there is no step 2; the document has 1 step. The key is ignored.',
+        "Warning! root.wic: wic: steps: key (1, mk_text) addresses no step of 'child': "
+        "step 1 is 'mk_file'; write (1, mk_file). The key is ignored."]
 
 
 @pytest.mark.fast
@@ -553,7 +560,8 @@ steps:
 
 
 @pytest.mark.fast
-def test_an_id_keyed_contribution_reaches_the_one_step_with_that_id() -> None:
+def test_an_id_keyed_contribution_reaches_the_one_step_with_that_id(
+        capsys: pytest.CaptureFixture[str]) -> None:
     document = _resolved('''
 wic:
   steps:
@@ -568,13 +576,18 @@ steps:
 ''', child='steps:\n- id: mk_file\n')
     bound = _descend(document, 1).steps[0].source.input('name')
     assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
+    assert capsys.readouterr().err == ''
 
 
 @pytest.mark.fast
-def test_an_id_keyed_entry_for_a_repeated_id_is_ignored() -> None:
+def test_an_id_keyed_entry_for_a_repeated_id_is_named_on_stderr_and_ignored(
+        capsys: pytest.CaptureFixture[str]) -> None:
     document = _resolved('wic:\n  steps:\n    mk_file:\n      in:\n        name: !ii x.txt\n'
                          'steps:\n- id: mk_file\n- id: mk_file\n')
     assert all(step.source.input('name') is None for step in document.steps)
+    assert capsys.readouterr().err.splitlines() == [
+        "Warning! root.wic: wic: steps: key mk_file addresses no step of 'root': "
+        "'mk_file' names 2 steps; write (index, mk_file). The key is ignored."]
 
 
 @pytest.mark.fast
@@ -584,3 +597,11 @@ def test_a_positional_key_wins_over_an_id_key_for_the_same_step() -> None:
                          'steps:\n- id: mk_file\n')
     bound = document.steps[0].source.input('name')
     assert isinstance(bound, InlineLiteral) and bound.value == 'by_position.txt'
+
+
+@pytest.mark.fast
+def test_a_stale_key_is_named_once_however_many_steps_call_the_workflow(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    _resolved('steps:\n- id: child.wic\n- id: child.wic\n',
+              child='wic:\n  steps:\n    (2, mk_file): {}\nsteps:\n- id: mk_file\n')
+    assert len(capsys.readouterr().err.splitlines()) == 1
