@@ -204,8 +204,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
 
 def _execute_inprocess(cmd: list[str], cwl_runner: str, workflow_name: str,
                        run_args_dict: dict[str, str], user_env_vars: dict[str, str] | None,
-                       yaml_path: Path, cachedir: str,
-                       output_directories: Mapping[str, str] | None) -> int:
+                       yaml_path: Path, output_directories: Mapping[str, str] | None) -> int:
     """Execute the workflow in-process via the cwltool or toil python API, handling errors.
 
     While it runs, cwltool's messages name each emitted id as the author wrote it, read from
@@ -244,13 +243,12 @@ def _execute_inprocess(cmd: list[str], cwl_runner: str, workflow_name: str,
     except Exception as e:
         retval = 1
         print('Failed to execute', yaml_path)
+        print(e)
         print(
             f'See error_{workflow_name}.txt for detailed technical information.')
         # Do not display a nasty stack trace to the user; hide it in a file.
         with open(f'error_{workflow_name}.txt', mode='w', encoding='utf-8') as f:
             traceback.print_exception(type(e), value=e, tb=None, file=f)
-        if not cachedir:  # if running on CI
-            print(e)
     finally:
         if authored_names is not None:
             logger.removeFilter(authored_names)
@@ -346,7 +344,7 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
             retval = sub.run(cmd, check=False, env=exec_env).returncode
         else:
             retval = _execute_inprocess(cmd, cwl_runner, workflow_name, run_args_dict,
-                                        user_env_vars, yaml_path, cachedir, output_directories)
+                                        user_env_vars, yaml_path, output_directories)
     if use_subprocess:
         return retval  # Skip copying files to outdir/ for CI
 
