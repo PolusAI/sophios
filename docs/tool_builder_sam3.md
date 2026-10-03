@@ -152,6 +152,11 @@ Output.stdout()
 
 Again, the goal is to describe what the output means, not to hand-assemble `outputBinding` YAML.
 
+The runner still collects each output by CWL's rules: `glob` is matched in the
+tool's working directory after it exits, and a `File` output that matches nothing
+fails the step. [The CWL You Still Need](cwl_you_still_need.md#where-outputs-come-from)
+covers those rules and the rest of the CWL a tool author still meets.
+
 ## The SAM3 example
 
 ```python
