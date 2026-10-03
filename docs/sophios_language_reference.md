@@ -545,7 +545,7 @@ steps:
 Any other name is `wic032`.
 
 `when:` is passed to CWL as written. CWL evaluates an `inputs.<name>` the step does not have as
-`null`, so the step never runs; the compile prints a line on stderr for a name the step's process
+`null`, which usually keeps the step from running; the compile prints a line on stderr for a name the step's process
 does not declare, and for a generated name, which resolves only because of how the callee's ports
 are laid out. Declare the port in the callee's `inputs:` and read that name.
 
