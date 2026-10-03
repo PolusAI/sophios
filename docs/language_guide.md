@@ -41,7 +41,8 @@ A document that is not a mapping is `wic002`; a file that is not valid YAML is
 `wic001`. A key whose value has the wrong shape is reported where the value is:
 `steps: 3` is `wic003` (a mapping was expected), `out: 3` is `wic004` (a sequence
 was expected), and a mapping key that is itself a list or a mapping is `wic005`.
-A YAML alias that contains itself (`&a [*a]`) is `wic030`.
+A YAML alias that contains itself (`x: !ii &a [*a]`) is `wic030`, unless the key
+expects another shape and reports that first (`steps: &a [*a]` is `wic003`).
 
 `inputs`, `outputs`, `requirements` and `hints` may be written in CWL's list form
 (`- id: x`, `- class: X`), as may a step's `requirements` and `hints`. They mean
