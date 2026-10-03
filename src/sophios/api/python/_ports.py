@@ -1,6 +1,6 @@
 """Parameter and namespace helpers for the Python workflow API."""
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
@@ -59,19 +59,18 @@ class OutputSourceBinding:
     step_id: str | None
     source_name: str
 
-    def to_output_source(self, step_ids: Mapping[int, str], source_parameter: Any = None) -> str:
-        """Render the CWL `outputSource` string for a workflow output.
+    def to_output_source(self, steps: Sequence[Any], source_parameter: Any = None) -> str:
+        """Render the authored `outputSource`: `<owner step>/<port>`, or the input name.
 
         Resolution goes through the source parameter's live owner rather than
         `step_id`, which is a snapshot of a mutable display name: renaming a
         step after binding an output leaves the snapshot stale while the object
-        graph stays valid, so a name lookup would fail on a workflow that is not
-        actually malformed. `step_id` is retained because it is what the user
-        wrote, and it names the step in the error below.
+        graph stays valid. `step_id` is retained because it is what the user
+        wrote, and it names the step in the error below. Step names are unique
+        within a workflow, so the owner's name is its address.
 
         Args:
-            step_ids (Mapping[int, str]): Every sibling step, by object
-                identity, mapped to its compiler-assigned concrete step id.
+            steps (Sequence[Any]): The workflow's own steps.
             source_parameter (Any): The bound source parameter, whose
                 `parent_obj` is the owning step.
 
@@ -84,13 +83,13 @@ class OutputSourceBinding:
         if self.step_id is None:
             return self.source_name
         owner = getattr(source_parameter, "parent_obj", None)
-        concrete = step_ids.get(id(owner)) if owner is not None else None
-        if concrete is None:
+        if owner is None or not any(owner is step for step in steps):
             raise InvalidLinkError(
                 f"workflow output source {self.step_id}/{self.source_name} is not one of this "
                 "workflow's steps; bind it to a step the workflow was constructed with"
             )
-        return f"{concrete}/{self.source_name}"
+        step = f"{owner.process_name}.wic" if type(owner).__name__ == "Workflow" else owner.process_name
+        return f"{step}/{self.source_name}"
 
 
 @dataclass(slots=True)
@@ -251,16 +250,11 @@ class OutputParameter(_ParameterBase):
         """Return whether this output is bound to a source."""
         return self._source is not None
 
-    def to_workflow_output(
-        self,
-        *,
-        step_ids: Mapping[int, str],
-    ) -> dict[str, Any]:
+    def to_workflow_output(self, steps: Sequence[Any]) -> dict[str, Any]:
         """Serialize this workflow output parameter to CWL.
 
         Args:
-            step_ids (Mapping[int, str]): Every sibling step, by object
-                identity, mapped to its compiler-assigned concrete step id.
+            steps (Sequence[Any]): The workflow's own steps.
 
         Raises:
             ValueError: If the output has no source or no resolved type.
@@ -275,7 +269,7 @@ class OutputParameter(_ParameterBase):
             raise ValueError(f"workflow output {self.name!r} has no resolved type")
         return {
             "type": cwl_type,
-            "outputSource": self._source.to_output_source(step_ids, self._source_parameter),
+            "outputSource": self._source.to_output_source(steps, self._source_parameter),
         }
 
 

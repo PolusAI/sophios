@@ -4,7 +4,6 @@
 import logging
 import warnings
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, ClassVar, cast, overload
 
@@ -567,10 +566,11 @@ class Step(_ProcessBase):
         """Return an empty subworkflow list because steps do not nest workflows."""
         return []
 
-    def _as_workflow_step(self, *, inline_subtrees: bool, directory: Path | None = None) -> nodes.Step:
-        """Return this step as the language's step node."""
-        del inline_subtrees, directory
+    def _as_workflow_step(self) -> nodes.Step:
+        """Return this step as the language's step node, with `run:` when its name is not its tool's stem."""
         interpreted: list[tuple[str, OpaqueCwl]] = []
+        if self.clt_path.stem != self.process_name:
+            interpreted.append(("run", f"{self.clt_path.stem}.cwl"))
         if self.scatter:
             interpreted += [("scatter", [input_port.name for input_port in self.scatter]),
                             ("scatterMethod", self.scatterMethod or ScatterMethod.dotproduct.value)]
@@ -802,46 +802,43 @@ class Workflow(_ProcessBase):
     def yaml(self) -> dict[str, Any]:
         """Return the in-memory WIC YAML representation of this workflow.
 
-        This is the `sophios.lang.to_json` projection of the workflow's
-        document: the desugared spelling of what `to_wic_yaml` writes.
+        This is the `sophios.lang.to_json` projection of the document
+        `write_wic` writes for this workflow: the desugared spelling of
+        `to_wic_yaml`. Nested workflows are steps naming their own documents.
 
         Returns:
             dict[str, Any]: A WIC-compatible YAML tree represented as a Python dict.
         """
-        return to_json(_workflow_document(self, inline_subtrees=True))
+        return to_json(_workflow_document(self))
 
-    def to_wic_yaml(self, *, inline_subworkflows: bool = True) -> str:
-        """Return this workflow as ``.wic`` YAML text.
+    def to_wic_yaml(self) -> str:
+        """Return this workflow's root document as ``.wic`` YAML text.
 
-        Args:
-            inline_subworkflows (bool): Whether nested workflows should be
-                embedded in the returned document.
+        The text names nested workflows and renamed steps' tools by file;
+        ``write_wic`` writes those files beside it.
 
         Returns:
             str: The serialized ``.wic`` document.
         """
-        return _workflow_wic_yaml(self, inline_subworkflows=inline_subworkflows)
+        return _workflow_wic_yaml(self)
 
-    def write_wic(
-        self,
-        path: StrPath | None = None,
-        *,
-        inline_subworkflows: bool = True,
-    ) -> Path:
-        """Write this workflow as a ``.wic`` file.
+    def write_wic(self, path: StrPath | None = None) -> Path:
+        """Write this workflow as a self-contained bundle in one directory.
+
+        The bundle is the root ``<name>.wic``, one ``<child>.wic`` per nested
+        workflow and one ``<stem>.cwl`` per distinct tool. A step whose name
+        differs from its tool's stem carries ``run: <stem>.cwl``, and every
+        workflow output names its authored step.
 
         Args:
             path (StrPath | None): Destination ``.wic`` path or output
                 directory. When omitted, writes ``<workflow>.wic`` in the
                 current directory.
-            inline_subworkflows (bool): Whether nested workflows should be
-                embedded in the root file. When false, nested workflows are
-                written as sibling ``.wic`` files beside the root document.
 
         Returns:
             Path: The root ``.wic`` file that was written.
         """
-        return _write_workflow_wic(self, path, inline_subworkflows=inline_subworkflows)
+        return _write_workflow_wic(self, path)
 
     def _flatten_steps(self) -> list[Step]:
         """Return every concrete step in this workflow tree."""
@@ -898,13 +895,6 @@ class Workflow(_ProcessBase):
             tool_registry=tool_registry,
         )
 
-    def _as_workflow_step(self, *, inline_subtrees: bool, directory: Path | None = None) -> nodes.Step:
-        # A nested workflow's step names it; its body is shown inline under
-        # `subtree` in the inline views, written as a sibling `.wic` file into
-        # `directory`, or -- for compilation -- supplied by the registry.
-        step = nodes.Step(id=f"{self.process_name}.wic", inputs=self._bound_inputs())
-        if inline_subtrees:
-            return replace(step, passthrough=(("subtree", self.yaml),))
-        if directory is not None:
-            self.write_wic(directory, inline_subworkflows=False)
-        return step
+    def _as_workflow_step(self) -> nodes.Step:
+        """Return this workflow as a step naming its own ``.wic`` document."""
+        return nodes.Step(id=f"{self.process_name}.wic", inputs=self._bound_inputs())
