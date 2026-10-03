@@ -156,6 +156,24 @@ def test_a_tie_settled_by_naming_conventions_is_not_noted() -> None:
 
 
 @pytest.mark.fast
+def test_a_scalar_literal_under_scatter_is_wic020() -> None:
+    """A scatter splits its value; a scalar is not wrapped into a one-element list."""
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}},
+                                     'scatter': ['name']}]})
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
+    assert 'scattered' in caught.value.diagnostics[0].message
+
+
+@pytest.mark.fast
+def test_a_list_literal_under_scatter_is_scattered_over() -> None:
+    """The list form is unchanged: each element is one scattered value."""
+    result = compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': ['a', 'b']}},
+                                          'scatter': ['name']}]})
+    assert list(result.artifact.job_inputs.values()) == [['a', 'b']]
+
+
+@pytest.mark.fast
 def test_strict_compile_refuses_and_lenient_compile_carries_the_note() -> None:
     """The compiler forwards the strict flag and returns the notes with its result."""
     result = compile_hermetic(_TWO_PRODUCERS)

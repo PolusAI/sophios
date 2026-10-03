@@ -253,7 +253,7 @@ def test_user_requirements_are_merged_into_not_copied() -> None:
         'requirements': {'ResourceRequirement': {'coresMin': 4},
                          'InlineJavascriptRequirement': {'expressionLib': ['function f(){}']}},
         'steps': [{'id': 'touch',
-                   'in': {'filename': {'wic_inline_input': 'empty.txt'}},
+                   'in': {'filename': {'wic_inline_input': ['empty.txt']}},
                    'scatter': ['filename'],
                    'when': '$(true)'}],
     })
@@ -271,7 +271,7 @@ def test_an_authored_requirement_with_no_body_is_emitted_as_an_empty_one() -> No
     compiled = _compile({
         'requirements': {'ScatterFeatureRequirement': None, 'InlineJavascriptRequirement': None},
         'steps': [{'id': 'touch',
-                   'in': {'filename': {'wic_inline_input': 'empty.txt'}},
+                   'in': {'filename': {'wic_inline_input': ['empty.txt']}},
                    'scatter': ['filename'],
                    'when': '$(true)'}],
     })

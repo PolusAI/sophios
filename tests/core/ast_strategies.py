@@ -258,7 +258,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
         match draw(st.sampled_from(forms)):
             case 'literal':
                 literal = draw(_literal_for(inputs_of(stem)[name].get('type')))
-                if name in ports and draw(st.booleans()):
+                if name in ports:
                     literal = [literal]
                 bindings.append((name, InlineLiteral(literal, _SPAN)))
             case 'unresolved':
