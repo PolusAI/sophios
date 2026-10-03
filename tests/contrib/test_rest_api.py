@@ -191,3 +191,29 @@ def test_rest_core_blank_plugin_id_uses_node_name() -> None:
     res = prepare_call_rest_api(inp_path)
     assert int(res["retval"]) == 0
     assert "workflow___step__1__bbbcdownload" in res["steps"]
+
+
+def test_rest_compile_says_a_real_time_analysis_is_not_in_the_returned_workflow(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A declaration is taken out of the workflow; under REST nothing runs it, and one line says so.
+
+    The declaring node is the registered `cwl_subinterpreter` adapter, drawn after `touch`.
+    """
+    inp = json.loads((REST_OBJECTS / "multi_node_inline_cwl.json").read_text(encoding="utf-8"))
+    inp["state"]["nodes"].append({
+        "id": 99, "x": 0, "y": 0, "z": 9, "name": "cwl_subinterpreter", "pluginId": "cwl_subinterpreter",
+        "height": 50, "width": 250, "internal": False,
+        "settings": {"inputs": {"file_pattern": "empty.txt", "cwl_tool": "touch", "max_times": 2,
+                                "config": {"in": {"filename": "again.txt"}}}},
+    })
+    inp["state"]["links"].append({"sourceId": 7, "outletIndex": 0, "targetId": 99, "inletIndex": 0, "id": 6})
+    payload = tmp_path / "declaring.json"
+    payload.write_text(json.dumps(inp), encoding="utf-8")
+
+    res = prepare_call_rest_api(payload)
+
+    assert int(res["retval"]) == 0
+    assert list(res["steps"]) == ["workflow___step__1__touch", "workflow___step__2__append",
+                                  "workflow___step__3__append"]
+    assert ("Real-time analysis runs only with --run_local; the returned workflow has no step for touch"
+            in capsys.readouterr().err)
