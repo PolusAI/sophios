@@ -18,7 +18,7 @@ from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.wic_types import Yaml
 
-from .hermetic import compile_hermetic
+from .hermetic import compile_hermetic, subworkflow_step
 from .test_setup import workflow_paths
 
 MK_FILE: Yaml = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}
@@ -178,3 +178,173 @@ def test_inline_runtag_embeds_a_tool_with_the_defaults_it_was_written_for(
     loaded = yaml.safe_load((written / 'helloworld.cwl').read_text(encoding='utf-8'))
     (step,) = loaded['steps']
     assert step['run']['hints']['NetworkAccess'] == {'networkAccess': True}
+
+
+# --------------------------------------------------------------------------
+# Flattening
+# --------------------------------------------------------------------------
+
+XFORM: Yaml = {'id': 'xform', 'in': {'name': {'wic_inline_input': 'b'}}}
+
+
+def _called(subtree: Yaml | None = None, **call: Any) -> Yaml:
+    """A step that runs `child.wic` (one `xform` unless `subtree`), with `call` keys of its own."""
+    return {**subworkflow_step('child.wic', subtree or {'steps': [XFORM]}), 'parentargs': call}
+
+
+def _nested(**call: Any) -> CompilationArtifact:
+    return compile_hermetic({'steps': [MK_FILE, _called(**call)]}, 'wf').artifact
+
+
+def _stays(artifact: CompilationArtifact, capsys: pytest.CaptureFixture[str]) -> str:
+    """Flatten, assert the call kept its place as a Workflow, and return what was said on stderr."""
+    flat = post_compile.flatten_subworkflows(artifact)
+    assert [step['id'] for step in flat.cwl['steps']] == [step['id'] for step in artifact.cwl['steps']]
+    assert flat.children[1].cwl['class'] == 'Workflow'
+    assert flat.cwl['requirements']['SubworkflowFeatureRequirement'] == {}
+    said: str = capsys.readouterr().err
+    return said
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('call, carries', [({'when': '$(inputs.file != null)'}, '`when`'),
+                                           ({'requirements': {'ResourceRequirement': {'ramMin': 1}}},
+                                            '`requirements`'),
+                                           ({'label': 'a call'}, '`label`')],
+                         ids=['when', 'requirements', 'label'])
+def test_a_call_that_carries_anything_but_in_and_out_stays_nested(
+        call: Yaml, carries: str, capsys: pytest.CaptureFixture[str]) -> None:
+    """The call's boundary is proved removable only when the author wrote `in` and `out` and nothing else.
+
+    `scatter` is the same rule and is pinned end to end by `test_a_scattered_call_stays_nested...`.
+    """
+    said = _stays(_nested(**call), capsys)
+    assert f"step 'child.wic' stays a subworkflow under --cwl_inline_subworkflows: it carries {carries}" in said
+
+
+@pytest.mark.fast
+def test_a_child_that_opts_out_stays_nested(capsys: pytest.CaptureFixture[str]) -> None:
+    """`wic: inlineable: false` in the child's own file is honoured again."""
+    child = {'wic': {'inlineable': False}, 'steps': [XFORM]}
+    artifact = compile_hermetic({'steps': [MK_FILE, _called(child)]}, 'wf').artifact
+    assert "its workflow says `wic: inlineable: false`" in _stays(artifact, capsys)
+    opted_in = compile_hermetic({'steps': [MK_FILE, _called({'wic': {'inlineable': True}, 'steps': [XFORM]})]},
+                                'wf').artifact
+    assert all(child.cwl['class'] != 'Workflow' for child in post_compile.flatten_subworkflows(opted_in).children)
+
+
+@pytest.mark.fast
+def test_a_call_stays_nested_when_dissolving_it_would_have_to_guess(capsys: pytest.CaptureFixture[str]) -> None:
+    """Each boundary the flat form cannot remove without guessing keeps its call, with the reason."""
+    merged = _nested()
+    name = next(iter(merged.cwl['steps'][1]['in']))
+    merged.cwl['steps'][1]['in'][name] = {'source': 'a', 'valueFrom': '$(self)'}
+    assert f"input '{name}' is bound to" in _stays(merged, capsys)
+
+    defaulted = _nested()
+    (child,) = (c for c in defaulted.children if c.cwl['class'] == 'Workflow')
+    next(iter(child.cwl['inputs'].values()))['default'] = 'x'
+    assert 'has a default' in _stays(defaulted, capsys)
+
+    listed = _nested()
+    (child,) = (c for c in listed.children if c.cwl['class'] == 'Workflow')
+    child.cwl['requirements'] = [{'class': 'EnvVarRequirement', 'envDef': {'A': 'b'}}]
+    assert "its workflow's requirements are written as a list" in _stays(listed, capsys)
+
+
+@pytest.mark.fast
+def test_a_kept_call_does_not_stop_the_others_from_flattening(capsys: pytest.CaptureFixture[str]) -> None:
+    """Calls are judged one at a time; a reference to a dissolved call's output is rewired past a kept one."""
+    two = {'steps': [MK_FILE, _called({'wic': {'inlineable': False}, 'steps': [XFORM]}),
+                     subworkflow_step('other.wic', {'steps': [{**XFORM, 'id': 'xform'}]})]}
+    nested = compile_hermetic(two, 'wf').artifact
+    flat = post_compile.flatten_subworkflows(nested)
+    kinds = [(step['id'], child.cwl['class']) for step, child in zip(flat.cwl['steps'], flat.children)]
+    assert kinds == [('wf__step__1__mk_file', 'CommandLineTool'), ('wf__step__2__child.wic', 'Workflow'),
+                     ('wf__step__3__other.wic___other__step__1__xform', 'CommandLineTool')]
+    assert capsys.readouterr().err.count('Warning!') == 1
+
+
+@pytest.mark.fast
+def test_a_document_feature_declared_differently_keeps_the_call(capsys: pytest.CaptureFixture[str]) -> None:
+    """Two bodies cannot both be the root's, and nothing is half moved when the call stays."""
+    caller = {'requirements': {'InlineJavascriptRequirement': {'expressionLib': ['var a = 1;']}},
+              'steps': [MK_FILE, _called({
+                  'requirements': {'InlineJavascriptRequirement': {'expressionLib': ['var a = 2;']}},
+                  'steps': [XFORM]})]}
+    artifact = compile_hermetic(caller, 'wf').artifact
+    assert 'it declares a different InlineJavascriptRequirement from its caller' in _stays(artifact, capsys)
+    assert post_compile.flatten_subworkflows(artifact).cwl['requirements'][
+        'InlineJavascriptRequirement'] == {'expressionLib': ['var a = 1;']}
+
+
+@pytest.mark.fast
+def test_flattening_moves_what_the_subworkflow_required_onto_the_steps_that_ran_under_it() -> None:
+    """Requirements move with the steps they applied to; the engine's own features go to the root."""
+    child = {'requirements': {'EnvVarRequirement': {'envDef': {'FOO': 'bar'}}},
+             'steps': [{**XFORM, 'when': '$(inputs.name != null)'}]}
+    flat = post_compile.flatten_subworkflows(
+        compile_hermetic({'steps': [MK_FILE, _called(child)]}).artifact).cwl
+    mk_file, xform = flat['steps']
+    assert 'requirements' not in mk_file
+    assert xform['requirements'] == {'EnvVarRequirement': {'envDef': {'FOO': 'bar'}}}
+    assert flat['requirements'] == {'InlineJavascriptRequirement': {}}, (
+        'the engine reads `when` against the root, so the feature goes there, and the call is gone')
+
+
+@pytest.mark.fast
+def test_a_step_keeps_its_own_requirement_over_the_subworkflows() -> None:
+    """The most specific entry wins, as in CWL."""
+    nested = compile_hermetic({'steps': [MK_FILE, _called({
+        'requirements': {'ResourceRequirement': {'ramMin': 100}}, 'steps': [XFORM]})]}).artifact
+    inner = next(c for c in nested.children if c.cwl['class'] == 'Workflow')
+    inner.cwl['steps'][0]['requirements'] = {'ResourceRequirement': {'ramMin': 5}}
+    assert post_compile.flatten_subworkflows(nested).cwl['steps'][1]['requirements'] == {
+        'ResourceRequirement': {'ramMin': 5}}
+
+
+@pytest.mark.fast
+def test_an_input_the_call_leaves_unbound_keeps_what_else_the_inner_step_says_about_it() -> None:
+    """Unbound, a source yields null: the entry loses its source and keeps its `valueFrom`, or goes."""
+    nested = _nested()
+    call = nested.cwl['steps'][1]
+    inner = next(c for c in nested.children if c.cwl['class'] == 'Workflow')
+    formal = next(iter(call['in']))
+    del call['in'][formal]
+    (entry,) = (name for name, value in inner.cwl['steps'][0]['in'].items() if value == formal)
+    inner.cwl['steps'][0]['in'][entry] = {'source': formal, 'valueFrom': '$(self)'}
+    assert post_compile.flatten_subworkflows(nested).cwl['steps'][1]['in'][entry] == {'valueFrom': '$(self)'}
+
+
+@pytest.mark.fast
+def test_every_level_of_nesting_is_dissolved_and_named_for_where_the_step_came_from() -> None:
+    """A step in a subworkflow in a subworkflow carries both calls in its id."""
+    middle = {'steps': [subworkflow_step('inner.wic', {'steps': [XFORM]})]}
+    nested = compile_hermetic({'steps': [MK_FILE, subworkflow_step('middle.wic', middle)]}, 'wf').artifact
+    flat = post_compile.flatten_subworkflows(nested)
+    assert [step['id'] for step in flat.cwl['steps']] == [
+        'wf__step__1__mk_file', 'wf__step__2__middle.wic___middle__step__1__inner.wic___inner__step__1__xform']
+    assert [child.namespace for child in flat.children] == [(step['id'],) for step in flat.cwl['steps']]
+    assert all(child.cwl['class'] == 'CommandLineTool' for child in flat.children)
+    assert flat.job_inputs == nested.job_inputs
+
+
+@pytest.mark.fast
+def test_a_workflow_with_no_subworkflow_is_returned_as_it_is() -> None:
+    """Nothing to dissolve is nothing to copy."""
+    artifact = compile_hermetic({'steps': [MK_FILE]}).artifact
+    assert post_compile.flatten_subworkflows(artifact) is artifact
+
+
+@pytest.mark.fast
+def test_the_flags_apply_shape_first_and_do_not_depend_on_each_other() -> None:
+    """Each flag alone, and both, from one nested workflow."""
+    nested = _nested()
+    flat = post_compile.apply_inline_options(nested, subworkflows=True, runtag=False)
+    embedded = post_compile.apply_inline_options(nested, subworkflows=False, runtag=True)
+    both = post_compile.apply_inline_options(nested, subworkflows=True, runtag=True)
+    assert post_compile.apply_inline_options(nested, subworkflows=False, runtag=False) is nested
+    assert all(isinstance(step['run'], str) for step in flat.cwl['steps'])
+    assert embedded.cwl['steps'][1]['run']['class'] == 'Workflow'
+    assert [step['run']['class'] for step in both.cwl['steps']] == ['CommandLineTool'] * 2
+    assert [step['id'] for step in both.cwl['steps']] == [step['id'] for step in flat.cwl['steps']]

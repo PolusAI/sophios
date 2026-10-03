@@ -12,9 +12,11 @@ from typing import Final
 
 import pytest
 import yaml
-from hypothesis import given
+from hypothesis import given, reject
 from hypothesis import strategies as st
 
+from sophios import post_compile
+from sophios.ir.artifacts import CompilationArtifact
 from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
@@ -77,6 +79,51 @@ def test_a_meaning_preserving_rewrite_preserves_meaning(constant: Transformation
         f'{found}\n\n'
         f'--- before ---\n{yaml.safe_dump(yml, sort_keys=False)}\n'
         f'--- after ---\n{yaml.safe_dump(transformed, sort_keys=False)}')
+
+
+def _closed(artifact: CompilationArtifact) -> bool:
+    """Whether every source in every workflow of the tree is a declared input or a step's output.
+
+    A generated child can read a root input by a raw name it never declares. CWL
+    rejects that nested document, and flattening leaves such a call nested rather
+    than guess what scope the name was meant to be read in; the model dissolves it.
+    """
+    cwl = artifact.cwl
+    if cwl['class'] == 'Workflow':
+        known = set(cwl.get('inputs', {})) | {step['id'] for step in cwl['steps']}
+        for step in cwl['steps']:
+            for value in step.get('in', {}).values():
+                source = value.get('source') if isinstance(value, dict) else value
+                if isinstance(source, str) and source.partition('/')[0] not in known:
+                    return False
+    return all(_closed(child) for child in artifact.children)
+
+
+@pytest.mark.slow
+@given(st.data())
+@PARTITION
+def test_flattening_agrees_with_the_independent_model(data: st.DataObject) -> None:
+    """`flatten_subworkflows` and `flatten_model` dissolve a partitioned workflow to the same DAG.
+
+    The model is written separately, in this directory, and knows nothing of
+    step ids; those are pinned by `test_inline_flags.py`. What both must agree
+    on is the dataflow, and that the root's interface does not move.
+
+    CANNOT GENERATE (declared): a call that carries `scatter` or `when`, which
+    `strat.workflows()` cannot draw, so no draw leaves a call nested.
+    """
+    yml = data.draw(strat.workflows().filter(lambda w: len(w['steps']) >= 2))
+    nested = compile_hermetic(data.draw(split_transformations()).apply(yml), _COMPILE_NAME).artifact
+    if not _closed(nested):
+        reject()
+    flat = post_compile.flatten_subworkflows(nested)
+    found = equivalent(flatten_model(nested), flat.cwl, Strength.UP_TO_RENAMING)
+    assert found is None, found
+    assert all(isinstance(step['run'], str) for step in flat.cwl['steps'])
+    assert all(child.cwl['class'] != 'Workflow' for child in flat.children)
+    assert list(flat.cwl['inputs']) == list(nested.cwl['inputs'])
+    assert list(flat.cwl['outputs']) == list(nested.cwl['outputs'])
+    assert flat.job_inputs == nested.job_inputs
 
 
 def _nesting_depth(document: Yaml) -> int:
