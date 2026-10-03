@@ -8,18 +8,17 @@ two regression tests already in this tree ended up with two.
 """
 import copy
 from collections import Counter
-from typing import Any, Final
+from typing import Final
 
 import pytest
 import yaml
 from hypothesis import given
 from hypothesis import strategies as st
 
-from sophios.ir.artifacts import CompilationArtifact
 from sophios.wic_types import Yaml
 
 from . import ast_strategies as strat
-from .equivalence import Strength, equivalent
+from .equivalence import Strength, equivalent, flatten_model
 from .hermetic import PARTITION, compile_hermetic, subworkflow_step
 from .transformations import TRANSFORMATIONS, Transformation, split, split_transformations
 
@@ -33,118 +32,10 @@ from .transformations import TRANSFORMATIONS, Transformation, split, split_trans
 _COMPILE_NAME: Final = 'oracle'
 
 
-def _source_of(value: Any) -> str | None:
-    """The `source` one `in:` binding names, in whichever of the two surface
-    forms the compiler emitted (`{name: source}` or `{name: {source: ...}}`)."""
-    source = value.get('source') if isinstance(value, dict) else value
-    return source if isinstance(source, str) else None
-
-
-def _set_source(bindings: Yaml, name: str, source: str) -> None:
-    """Rewrites one binding's source in place, keeping its own surface form."""
-    value = bindings[name]
-    if isinstance(value, dict):
-        value['source'] = source
-    else:
-        bindings[name] = source
-
-
-def _flatten(artifact: CompilationArtifact) -> Yaml:
-    """The compiled document with every subworkflow step inlined, so a split
-    and an unsplit compilation of the same steps can be compared directly.
-
-    This is an independent test oracle, scoped to what `equivalent()` at
-    UP_TO_RENAMING actually forgives: it needs the DAG's topology and every
-    step's body right, and it does not need `run:` paths, `steps[].id`, or
-    workflow-level port *names* right at all, because those are exactly what
-    that strength already ignores (`equivalence.py`).
-
-    Recognising a subworkflow step by its own sub-tree's `class` (`Workflow`,
-    not `CommandLineTool`) rather than by an `id` suffix: `rose.sub_trees` has
-    one entry per step regardless of kind (verified directly — a flat,
-    two-`CommandLineTool` compile still has two leaf sub-trees, one per step),
-    so the id is not what marks a step as needing to be inlined here; its own
-    compiled class is.
-    """
-    document: Yaml = copy.deepcopy(artifact.cwl)
-    steps: list[Yaml] = document.get('steps', [])
-    children = artifact.children
-    flat_steps: list[Yaml] = []
-    #: `{wrapper_id}/{wrapper_out_port} -> real producer's own source string`,
-    #: for every subworkflow step this pass inlines away.
-    redirects: dict[str, str] = {}
-    #: Requirements the inlined subworkflows themselves declared (their own
-    #: `SubworkflowFeatureRequirement` already stripped, recursively, by the
-    #: nested `_flatten` call below) — e.g. `ScatterFeatureRequirement`, for a
-    #: `scatter:` that lived inside the subworkflow and is now a step directly
-    #: in *this* document. A CWL document declares only the features its own
-    #: `steps:` uses, so once a step moves in here, whatever requirement it
-    #: needed moves with it.
-    inherited_requirements: dict[str, Yaml] = {}
-    inlined_any = False
-
-    for step, child in zip(steps, children):
-        if child.cwl.get('class') != 'Workflow':
-            flat_steps.append(step)
-            continue
-        inlined_any = True
-        inner = _flatten(child)
-        inner_requirements = inner.get('requirements')
-        if isinstance(inner_requirements, dict):
-            inherited_requirements.update(inner_requirements)
-        # The wrapper's own `in:` maps the subworkflow's formal parameter
-        # names (its inner workflow-level `inputs:` keys) to the sources that
-        # actually feed them at *this* level.
-        formal_to_actual = {name: _source_of(value) for name, value in step.get('in', {}).items()}
-        for inner_step in inner.get('steps', []):
-            for name, value in inner_step.get('in', {}).items():
-                source = _source_of(value)
-                if source is not None and source in formal_to_actual:
-                    actual = formal_to_actual[source]
-                    if actual is not None:
-                        _set_source(inner_step['in'], name, actual)
-            flat_steps.append(inner_step)
-        wrapper_id = step['id']
-        # The subworkflow's own `outputs:` map its output port names to
-        # `outputSource: '<inner step>/<port>'`; anything outside referred to
-        # `{wrapper_id}/{that port name}`, so redirect that reference straight
-        # to the real producer, which is now itself one of `flat_steps`.
-        for out_name, out_value in inner.get('outputs', {}).items():
-            redirects[f'{wrapper_id}/{out_name}'] = out_value['outputSource']
-
-    for flat_step in flat_steps:
-        for name, value in flat_step.get('in', {}).items():
-            source = _source_of(value)
-            if source is not None and source in redirects:
-                _set_source(flat_step['in'], name, redirects[source])
-    document['steps'] = flat_steps
-
-    for out_value in document.get('outputs', {}).values():
-        out_source = out_value.get('outputSource')
-        if isinstance(out_source, str) and out_source in redirects:
-            out_value['outputSource'] = redirects[out_source]
-
-    if inlined_any:
-        # A flattened document contains no subworkflow step, so the
-        # requirement that declares one no longer applies — left in place, it
-        # would make `_requirement_names` (equivalence.py) diverge on every
-        # split for a reason that has nothing to do with the workflow's
-        # meaning. What each inlined subworkflow's *own* requirements needed
-        # does still apply, now that their steps are directly in `steps:`
-        # here, so those are merged in rather than dropped with the rest.
-        requirements = document.get('requirements')
-        merged = dict(requirements) if isinstance(requirements, dict) else {}
-        merged.pop('SubworkflowFeatureRequirement', None)
-        merged.update(inherited_requirements)
-        document['requirements'] = merged
-
-    return document
-
-
 def _compile_flat(yml: Yaml) -> Yaml:
     """Compile hermetically under the shared name and flatten the result."""
     info = compile_hermetic(yml, _COMPILE_NAME)
-    return _flatten(info.artifact)
+    return flatten_model(info.artifact)
 
 
 @pytest.mark.slow
