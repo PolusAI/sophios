@@ -28,7 +28,7 @@ from sophios.ir.complete import coerce_job_value
 from sophios.ir.declarations import port_declaration
 from sophios.ir.types import AuthoredName
 from sophios.lang import InlineLiteral, parse
-from sophios.lang.diagnostics import Diagnostic, Locator, Severity, SophiosError
+from sophios.lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.spans import SourceSpan
 from sophios.python_cwl_adapter import check_args_match_inputs
@@ -66,6 +66,15 @@ def test_spanless_diagnostics_print_without_a_location() -> None:
     invent one."""
     diagnostic = Diagnostic(Severity.ERROR, SophiosErrorCode.MISSING_INPUT_FILE, 'gone.txt missing')
     assert str(diagnostic) == 'error [wic016] gone.txt missing'
+
+
+@pytest.mark.fast
+def test_a_note_is_reported_without_being_an_error() -> None:
+    """A note says something the reader should know; it does not fail anything."""
+    diagnostics = Diagnostics()
+    diagnostics.note(SophiosErrorCode.UNRESOLVED_INPUT, 'worth knowing')
+    assert not diagnostics.has_errors
+    assert [str(d) for d in diagnostics] == ['note [wic011] worth knowing']
 
 
 # --- the converted sites, one by one ---------------------------------------
