@@ -317,7 +317,7 @@ def test_a_child_that_opts_out_stays_nested(capsys: pytest.CaptureFixture[str]) 
     """`wic: inlineable: false` in the child's own file is honoured again."""
     child = {'wic': {'inlineable': False}, 'steps': [XFORM]}
     artifact = compile_hermetic({'steps': [MK_FILE, _called(child)]}, 'wf').artifact
-    assert "its workflow says `wic: inlineable: false`" in _stays(artifact, capsys)
+    assert "it is marked `wic: inlineable: false`" in _stays(artifact, capsys)
     opted_in = compile_hermetic({'steps': [MK_FILE, _called({'wic': {'inlineable': True}, 'steps': [XFORM]})]},
                                 'wf').artifact
     assert all(child.cwl['class'] != 'Workflow' for child in post_compile.flatten_subworkflows(opted_in).children)
