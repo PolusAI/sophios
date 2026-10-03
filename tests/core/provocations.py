@@ -26,7 +26,7 @@ PARSE: Final[dict[SophiosErrorCode, str]] = {
     SophiosErrorCode.EXPECTED_SCALAR: 'steps:\n  ? [a, b]\n  : {}\n',
     SophiosErrorCode.MISSING_STEP_ID: 'steps:\n- {a: 1, b: 2}\n',
     SophiosErrorCode.EMPTY_STEP_ID: "steps:\n- id: ''\n",
-    SophiosErrorCode.MALFORMED_WIC_STEP_KEY: 'wic:\n  steps:\n    nope:\n      x: 1\n',
+    SophiosErrorCode.MALFORMED_WIC_STEP_KEY: 'wic:\n  steps:\n    "not a key":\n      x: 1\n',
     SophiosErrorCode.UNKNOWN_TAG: 'top: !foo bar\n',
     SophiosErrorCode.DUPLICATE_KEY: 'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
     SophiosErrorCode.RECURSIVE_ALIAS: 'top: &a [*a]\n',
