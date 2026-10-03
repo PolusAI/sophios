@@ -29,6 +29,7 @@ from sophios.ir.declarations import input_rank, layered, output_rank
 from sophios.ir.types import (DerivedName, EdgeOrigin, Port, PortDeclaration, PortId, PortName,
                               StepNode, WorkflowGraph)
 from sophios.lang import SophiosErrorCode
+from sophios.lang.diagnostics import Locator, Severity, SophiosError
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
@@ -83,6 +84,85 @@ def test_most_recent_step_and_last_declared_output_win() -> None:
                       if edge.origin is EdgeOrigin.INFERRED and edge.sink.step.name == 'count')
     assert count_edge.source.step.name == 'multi_file'
     assert count_edge.source.port == 'last'
+
+
+def _multi_file_tools() -> Tools:
+    """The synthetic registry plus a tool offering two `File` outputs."""
+    multi = clt({}, {'first': {'type': 'File', 'outputBinding': {'glob': 'first'}},
+                     'last': {'type': 'File', 'outputBinding': {'glob': 'last'}}})
+    return {**SYNTHETIC_TOOLS,
+            LegacyStepId('multi_file', SYNTHETIC_NS): Tool('/synthetic/multi_file.cwl', multi)}
+
+
+_TWO_PRODUCERS: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}},
+                                  {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'b'}}},
+                                  {'id': 'count'}]}
+
+
+@pytest.mark.fast
+def test_a_tie_within_one_producer_is_noted_with_the_alternatives() -> None:
+    """The losing output and the pin that would make the choice explicit are named."""
+    _, linked, _ = _typed({'steps': [{'id': 'multi_file'}, {'id': 'count'}]}, _multi_file_tools())
+    result = infer(linked)
+    assert result.graph is not None
+    (note,) = [d for d in result.diagnostics if d.severity is Severity.NOTE]
+    assert note.code is SophiosErrorCode.INFERENCE_TIE
+    assert "'first'" in note.message and '!&' in note.message
+    assert note.locator == Locator(step='count', index=2, port='file')
+
+
+@pytest.mark.fast
+def test_recency_between_producers_is_noted() -> None:
+    """An earlier producer that also matched is named; the choice itself is unchanged."""
+    _, linked, _ = _typed(_TWO_PRODUCERS)
+    result = infer(linked)
+    assert result.graph is not None
+    (note,) = [d for d in result.diagnostics if d.severity is Severity.NOTE]
+    assert note.code is SophiosErrorCode.INFERENCE_RECENCY
+    assert "'mk_file/file'" in note.message
+    edge = next(e for e in result.graph.linked_edges if e.sink.step.name == 'count')
+    assert edge.source.step.index == 2, 'the choice itself is unchanged'
+
+
+@pytest.mark.fast
+def test_strict_mode_turns_notes_into_errors() -> None:
+    """`InferencePolicy.strict` refuses a choice between equals."""
+    _, linked, _ = _typed(_TWO_PRODUCERS)
+    result = infer(linked, InferencePolicy(strict=True))
+    assert result.graph is None and result.diagnostics.has_errors
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.INFERENCE_RECENCY]
+
+
+@pytest.mark.fast
+def test_a_pinned_edge_is_not_noted() -> None:
+    """An explicit `!&`/`!*` edge is not a choice, so nothing is said."""
+    _, linked, _ = _typed({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}},
+                                     {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'b'}},
+                                      'out': [{'file': {'wic_anchor': 'f'}}]},
+                                     {'id': 'count', 'in': {'file': {'wic_alias': 'f'}}}]})
+    assert not list(infer(linked).diagnostics)
+
+
+@pytest.mark.fast
+def test_a_tie_settled_by_naming_conventions_is_not_noted() -> None:
+    """When the naming conventions single out one output, order did not decide."""
+    tool = clt({}, {'output_file': {'type': 'File', 'outputBinding': {'glob': 'a'}},
+                    'output_other': {'type': 'File', 'outputBinding': {'glob': 'b'}}})
+    tools = {**SYNTHETIC_TOOLS, LegacyStepId('named', SYNTHETIC_NS): Tool('/synthetic/named.cwl', tool)}
+    _, linked, _ = _typed({'steps': [{'id': 'named'}, {'id': 'count'}]}, tools)
+    result = infer(linked, InferencePolicy(use_naming_conventions=True))
+    assert result.graph is not None
+    assert not list(result.diagnostics)
+
+
+@pytest.mark.fast
+def test_strict_compile_refuses_and_lenient_compile_carries_the_note() -> None:
+    """The compiler forwards the strict flag and returns the notes with its result."""
+    result = compile_hermetic(_TWO_PRODUCERS)
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.INFERENCE_RECENCY]
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic(_TWO_PRODUCERS, inference_strict=True)
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.INFERENCE_RECENCY
 
 
 @pytest.mark.fast

@@ -117,6 +117,8 @@ parser.add_argument('--inference_disable', default=False, action="store_true",
                     help='Disables use of the inference algorithm when compiling.')
 parser.add_argument('--inference_use_naming_conventions', default=False, action="store_true",
                     help='Enables the use of naming conventions in the inference algorithm')
+parser.add_argument('--inference_strict', default=False, action="store_true",
+                    help='Treat an inference choice between equal candidates (wic042, wic043) as an error.')
 parser.add_argument('--validate_plugins', default=False, action="store_true",
                     help='Validate all CWL CommandLineTools')
 parser.add_argument('--ignore_validation_errors', default=False, action="store_true",
@@ -221,6 +223,7 @@ def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions
     compiler_options: CompilerOptions = {
         'partial_failure_enable': args.partial_failure_enable,
         'inference_use_naming_conventions': args.inference_use_naming_conventions,
+        'inference_strict': args.inference_strict,
         'insert_steps_automatically': args.insert_steps_automatically,
         'inference_disable': args.inference_disable,
         'allow_raw_cwl': args.allow_raw_cwl,

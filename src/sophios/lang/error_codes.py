@@ -78,6 +78,12 @@ class SophiosErrorCode(StrEnum):
     #: that step.
     POSITIONAL_OUTPUT_SOURCE = 'wic039'
 
+    #: Notes, not errors (errors under --inference_strict): inference chose
+    #: between equals. wic042: one producer offered several matching outputs.
+    #: wic043: an earlier producer also matched and recency decided.
+    INFERENCE_TIE = 'wic042'
+    INFERENCE_RECENCY = 'wic043'
+
     #: --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = 'api001'
     INVALID_STEP = 'api002'

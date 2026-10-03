@@ -76,6 +76,7 @@ class CompilerOptions(TypedDict):
     """Core compiler flags needed for compilation and transformation into CWL."""
     partial_failure_enable: bool
     inference_use_naming_conventions: bool
+    inference_strict: bool
     insert_steps_automatically: bool
     inference_disable: bool
     allow_raw_cwl: bool
