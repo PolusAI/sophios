@@ -30,6 +30,7 @@ from sophios.lang import (
     InputValue,
     RawCwlRef,
     Step,
+    StepKey,
     UnresolvedName,
     WicSidecar,
     parse,
@@ -1445,3 +1446,19 @@ def test_a_run_that_is_not_a_registry_stem_is_reported() -> None:
         compile_hermetic({'steps': [{'id': 's', 'run': {'class': 'CommandLineTool', 'baseCommand': 'true',
                                                         'inputs': {}, 'outputs': {}}}]})
     assert caught.value.diagnostics[0].code is SophiosErrorCode.SUBWORKFLOW_INVALID
+
+
+@pytest.mark.fast
+def test_a_bare_step_id_is_a_sidecar_key() -> None:
+    result = parse('wic:\n  steps:\n    echo:\n      wic:\n        graphviz:\n          label: x\n'
+                   'steps:\n  echo:\n', 'k.wic')
+    assert result.ok, [str(d) for d in result.diagnostics]
+    assert result.document is not None and result.document.sidecar is not None
+    (key, _child), = result.document.sidecar.steps
+    assert key == StepKey(None, 'echo') and str(key) == 'echo'
+
+
+@pytest.mark.fast
+def test_a_key_that_is_neither_form_is_still_wic008() -> None:
+    result = parse('wic:\n  steps:\n    "not a key": {}\n', 'k.wic')
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.MALFORMED_WIC_STEP_KEY]

@@ -335,7 +335,10 @@ def documents(draw: st.DrawFn) -> Document:
         entries: tuple[tuple[str, OpaqueCwl], ...] = (('graphviz', {'label': draw(edge_names)}),)
         nested: tuple[tuple[StepKey, WicSidecar], ...] = ()
         if bool(steps) and draw(st.booleans()):
-            nested = ((StepKey(1, steps[0].id),
+            first = steps[0].id
+            unique = [step.id for step in steps].count(first) == 1 and bool(Grammar.WIC_STEP_ID.match(first))
+            step_key = StepKey(None, first) if unique and draw(st.booleans()) else StepKey(1, first)
+            nested = ((step_key,
                        WicSidecar(entries=(('graphviz', {'label': draw(edge_names)}),), span=_SPAN)),)
         sidecar = WicSidecar(steps=nested, entries=entries, span=_SPAN)
 

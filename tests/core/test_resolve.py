@@ -550,3 +550,37 @@ steps:
     assert isinstance(contributed, InlineLiteral) and contributed.value == 'contributed.txt'
     assert [(binding.name, binding.edge_def and binding.edge_def.name)
             for binding in step.outputs] == [('file', 'its_own_edge')]
+
+
+@pytest.mark.fast
+def test_an_id_keyed_contribution_reaches_the_one_step_with_that_id() -> None:
+    document = _resolved('''
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+          mk_file:
+            in:
+              name: !ii from_root.txt
+steps:
+- id: child.wic
+''', child='steps:\n- id: mk_file\n')
+    bound = _descend(document, 1).steps[0].source.input('name')
+    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
+
+
+@pytest.mark.fast
+def test_an_id_keyed_entry_for_a_repeated_id_is_ignored() -> None:
+    document = _resolved('wic:\n  steps:\n    mk_file:\n      in:\n        name: !ii x.txt\n'
+                         'steps:\n- id: mk_file\n- id: mk_file\n')
+    assert all(step.source.input('name') is None for step in document.steps)
+
+
+@pytest.mark.fast
+def test_a_positional_key_wins_over_an_id_key_for_the_same_step() -> None:
+    document = _resolved('wic:\n  steps:\n    mk_file:\n      in:\n        name: !ii by_id.txt\n'
+                         '    (1, mk_file):\n      in:\n        name: !ii by_position.txt\n'
+                         'steps:\n- id: mk_file\n')
+    bound = document.steps[0].source.input('name')
+    assert isinstance(bound, InlineLiteral) and bound.value == 'by_position.txt'

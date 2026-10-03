@@ -5,6 +5,7 @@ nothing.  Parsed workflows and process definitions are values in
 ``RegistrySnapshot``; changing the environment cannot change the result of
 resolving the same two values.
 """
+from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from hashlib import sha256
@@ -157,8 +158,9 @@ def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
     diagnostics = Diagnostics()
     document = _apply_parameters(document)
     steps: list[ResolvedStep] = []
+    counts = Counter(step.id for step in document.steps)
     for index, step in enumerate(document.steps, start=1):
-        sidecar = _step_sidecar(document.sidecar, index, step.id)
+        sidecar = step_sidecar(document.sidecar, index, step.id, counts[step.id])
         process = _resolve_process(step, sidecar, registry, version, trail, diagnostics)
         if process is not None:
             steps.append(ResolvedStep(step, process, sidecar))
@@ -337,7 +339,8 @@ def _apply_parameters(document: Document) -> Document:
     """Contribute each `wic: steps: (N, name):` body to the step it names."""
     if document.sidecar is None:
         return document
-    steps = tuple(_contributed_step(step, _step_sidecar(document.sidecar, index, step.id))
+    counts = Counter(step.id for step in document.steps)
+    steps = tuple(_contributed_step(step, step_sidecar(document.sidecar, index, step.id, counts[step.id]))
                   for index, step in enumerate(document.steps, start=1))
     return document if steps == document.steps else replace(document, steps=steps)
 
@@ -443,11 +446,19 @@ def _merged_value(own: OpaqueCwl, contributed: OpaqueCwl) -> OpaqueCwl:
     return merged
 
 
-def _step_sidecar(sidecar: WicSidecar | None, index: int, name: str) -> WicSidecar | None:
+def step_sidecar(sidecar: WicSidecar | None, index: int, name: str,
+                 occurrences: int) -> WicSidecar | None:
+    """The sidecar entry addressing step `index` called `name`: its `(index, name)` key,
+    else its bare id when the id occurs once in the document. A positional key wins."""
     if sidecar is None:
         return None
-    return next((child for key, child in sidecar.steps
-                 if key.index == index and key.name == name), None)
+    by_id = None
+    for key, child in sidecar.steps:
+        if key.index == index and key.name == name:
+            return child
+        if key.index is None and key.name == name and occurrences == 1:
+            by_id = child
+    return by_id
 
 
 def _version_pins(document: Document) -> tuple[str, ...]:

@@ -125,6 +125,10 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     #: than apply it — the exported JSON Schema, principally.
     WIC_STEP_KEY_PATTERN: Final = WIC_STEP_KEY.pattern
 
+    #: The other spelling: a bare step id, for a step whose id is unique.
+    WIC_STEP_ID: Final = re.compile(r'^[A-Za-z0-9_.-]+$')
+    WIC_STEP_ID_PATTERN: Final = WIC_STEP_ID.pattern
+
     # No SCALAR_TAGS table here: scalar resolution is delegated to PyYAML's
     # SafeConstructor (see _resolved_scalar) to avoid diverging from it.
 
@@ -803,7 +807,7 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
             if parsed is None:
                 diags.error(
                     SophiosErrorCode.MALFORMED_WIC_STEP_KEY,
-                    f'wic: step key {key_text!r} must have the form "(index, name)"',
+                    f'wic: step key {key_text!r} must have the form "(index, name)" or be a step id',
                     SourceSpan.of(file, sub_key),
                 )
                 continue
@@ -849,11 +853,13 @@ def _sidecar_value(key: str, node: yaml.nodes.Node, shape: ValueShape,
 
 
 def _step_key(text: str) -> StepKey | None:
-    """Normalise a `"(1, name)"` sidecar key, or None if it is malformed."""
+    """Normalise a `"(1, name)"` or bare `"name"` sidecar key, or None if it is malformed."""
     match = Grammar.WIC_STEP_KEY.match(text)
-    if match is None:
-        return None
-    return StepKey(int(match.group(1)), match.group(2))
+    if match is not None:
+        return StepKey(int(match.group(1)), match.group(2))
+    if Grammar.WIC_STEP_ID.match(text):
+        return StepKey(None, text)
+    return None
 
 
 # --------------------------------------------------------------------------
