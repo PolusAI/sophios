@@ -204,6 +204,10 @@ class WorkflowPort:
     #: step id to a port name rather than written by hand. Recorded because the
     #: two halves are facts here and a guess once they are one string.
     origin: PortId | None = None
+    #: Whether the authored `outputSource` addressed its step as `(index, name)`.
+    #: A position is a fact only while nothing moves a step, so Compile refuses
+    #: it in a workflow where inference placed an edge.
+    positional: bool = False
 
     def __post_init__(self) -> None:
         if not self.name:

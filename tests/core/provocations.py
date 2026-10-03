@@ -360,3 +360,15 @@ def _provoke_untyped_output() -> None:
 COMPILED.update({
     SophiosErrorCode.UNTYPED_OUTPUT: _provoke_untyped_output,
 })
+
+
+def _provoke_positional_output_source() -> None:
+    """A positional outputSource whose index holds a different step."""
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+
+    compile_hermetic({'outputs': {'o': {'type': 'File', 'outputSource': '(1, xform)/file'}},
+                      'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]},
+                     'provoke')
+
+
+COMPILED.update({SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE: _provoke_positional_output_source})
