@@ -479,6 +479,7 @@ def test_a_positional_output_source_addresses_the_occurrence_at_that_index() -> 
 @pytest.mark.fast
 @pytest.mark.parametrize('address', ['(2, t)/f', '(3, s)/f'], ids=['wrong-name', 'out-of-range'])
 def test_a_positional_output_source_that_disagrees_with_the_document_is_wic039(address: str) -> None:
+    """A wrong name or an index past the last step is refused as wic039."""
     result = _lower('steps:\n- id: s\n  out: [f]\n- id: s\n  out: [f]\n'
                     f'outputs:\n  o:\n    type: File\n    outputSource: {address}\n')
     assert [d.code for d in result.diagnostics] == [SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE]
@@ -486,5 +487,6 @@ def test_a_positional_output_source_that_disagrees_with_the_document_is_wic039(a
 
 @pytest.mark.fast
 def test_an_authored_output_source_is_not_positional() -> None:
+    """`s/f` addresses by id, so the port is not marked positional."""
     result = _lower('steps:\n- id: s\n  out: [f]\noutputs:\n  o:\n    type: File\n    outputSource: s/f\n')
     assert result.graph is not None and not result.graph.workflow_outputs[0].positional
