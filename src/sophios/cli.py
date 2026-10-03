@@ -13,7 +13,8 @@ def _config_file(path: str) -> Path:
     return Path(path)
 
 
-parser = argparse.ArgumentParser(prog='main', description='Convert a high-level yaml workflow file to CWL.')
+parser = argparse.ArgumentParser(prog='main', description='Convert a high-level yaml workflow file to CWL.',
+                                 allow_abbrev=False)
 
 # Not `required=`: whether `--yaml` is needed depends on whether one of the
 # generate modes was asked for, and argparse cannot express that. The old
