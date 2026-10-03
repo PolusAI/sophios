@@ -20,7 +20,7 @@ from .ir.resolve import RegistrySnapshot
 from .ir.names import Names
 from .ir.types import AuthoredName, Binding, EdgeOrigin, PortName, WorkflowGraph
 from .lang import versions
-from .lang.diagnostics import SophiosError
+from .lang.diagnostics import Diagnostic, Severity, SophiosError
 from .lang.nodes import InlineLiteral
 from .lang.spans import SourceSpan
 from .lang.error_codes import SophiosErrorCode
@@ -75,6 +75,7 @@ def compile_source(bundle: SourceBundle,
     inferred = infer(linked.graph, policy, InsertionCatalog.from_registry(bundle.registry))
     if inferred.graph is None:
         raise SophiosError(inferred.diagnostics)
+    _check_positional_sources(inferred.graph)
     graph = declare_namespaces(complete(inferred.graph), bundle.registry)
     names = Names.of(graph)
     graph_reps = _project_graph(graph, names, graph_settings, graph_target)
@@ -84,6 +85,23 @@ def compile_source(bundle: SourceBundle,
     if not testing:
         print('finishing compilation of', bundle.name)
     return CompilationResult(graph, artifact)
+
+
+def _check_positional_sources(graph: WorkflowGraph) -> None:
+    """A positional `outputSource` is a claim about where a step sits, which holds
+    only in a document inference left alone; refuse it next to an inferred edge."""
+    inferred = [edge for edge in graph.linked_edges if edge.origin is EdgeOrigin.INFERRED]
+    positional = [port for port in graph.workflow_outputs if port.positional]
+    if inferred and positional:
+        names = ', '.join(repr(str(port.name)) for port in positional)
+        raise SophiosError([Diagnostic(
+            Severity.ERROR, SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE,
+            f'{graph.name}.wic names its outputs {names} by step position, but inference placed '
+            f'{len(inferred)} edge(s) in it; a position is reliable only in a fully explicit '
+            'workflow. Bind every input with !* or !ii, or address the step by its id.',
+            graph.span)])
+    for child in graph.children:
+        _check_positional_sources(child)
 
 
 #: The runtime adapter's own declared inputs, whose values come from the
