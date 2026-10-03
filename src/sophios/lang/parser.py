@@ -32,6 +32,7 @@ from .nodes import (
 )
 from .cwl import CWL_VERSIONS
 from .spans import SourceSpan
+from .support import STEP_INPUT_RECORD_KEYS
 from .values import Anything, AnyMapping, Flag, ListOf, OneOf, Record, Text, ValueShape
 
 #: A `graphviz: style:` value: one or more styles, comma separated.
@@ -535,8 +536,17 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
 
     if isinstance(node, yaml.nodes.ScalarNode):
         return UnresolvedName(node.value, span)
+    if isinstance(node, yaml.nodes.MappingNode):
+        keys = {str(key.value) for key, _ in node.value if isinstance(key, yaml.nodes.ScalarNode)}
+        if keys and keys <= STEP_INPUT_RECORD_KEYS:
+            diags.error(
+                SophiosErrorCode.STEP_INPUT_RECORD,
+                'this mapping spells a CWL step input (' + ', '.join(sorted(keys)) + '), which '
+                "Sophios does not read here; write `!ii` for a literal of that shape, `!*` for an "
+                'edge, or a bare workflow-input name',
+                span)
     # A bare mapping or sequence cannot name a workflow input, so it is only
-    # meaningful as a literal.
+    # meaningful as a literal; a step-input record is kept as one for recovery.
     return InlineLiteral(_opaque(node, file, diags), span)
 
 

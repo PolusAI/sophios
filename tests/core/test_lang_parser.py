@@ -1416,3 +1416,21 @@ def test_a_steps_list_form_holding_an_import_is_kept_as_written(key: str) -> Non
     result = parse(f'steps:\n  s:\n    {key}:\n    - $import: foo.yml\n    - class: X\n', 'list.wic')
     assert result.document is not None and result.ok, [str(d) for d in result.diagnostics]
     assert dict(result.document.steps[0].passthrough)[key] == [{'$import': 'foo.yml'}, {'class': 'X'}]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('body', ['{source: x}', '{default: 20}', '{source: x, linkMerge: merge_flattened}',
+                                  '{valueFrom: $(1)}'])
+def test_an_untagged_step_input_record_is_wic038(body: str) -> None:
+    """A mapping made of WorkflowStepInput fields is not a literal, whatever the
+    reference used to say; reading it as one sent `{"source": "x"}` to a tool."""
+    result = parse(f'steps:\n  mk_file:\n    in:\n      name: {body}\n', 'rec.wic')
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.STEP_INPUT_RECORD]
+
+
+@pytest.mark.fast
+def test_a_mapping_with_a_key_outside_the_record_is_still_a_literal() -> None:
+    """Only a mapping made of record fields alone is read as one; any other key keeps it a literal."""
+    result = parse('steps:\n  mk_file:\n    in:\n      name: {source: x, pdb_code: 1aki}\n', 'rec.wic')
+    assert result.ok and result.document is not None
+    assert isinstance(result.document.steps[0].input('name'), InlineLiteral)
