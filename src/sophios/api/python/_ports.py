@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
 from sophios.ir.declarations import layered
 from sophios.ir.types import PortType
@@ -326,18 +326,32 @@ def _produced_type(source: Any) -> Any:
     return source.parameter_type
 
 
+# The `pickValue` methods that deliver one value, not a list.
+_PICKS_ONE: Final = ("first_non_null", "the_only_non_null")
+
+
 def _record_type(record: CwlRecord, sources: tuple[Any, ...]) -> Any:
     """The type a record delivers, from its first source: one source as it is, or,
-    when sources are merged, the list CWL's `linkMerge` makes of them."""
+    when sources are merged, the list CWL's `linkMerge` makes of them; a `pickValue`
+    that picks one value then delivers one element of that list."""
     if not sources:
         return None
     first = _produced_type(sources[0])
-    link_merge = dict(record.fields).get("linkMerge")
-    if first is None or (len(sources) == 1 and link_merge is None):
-        return first
-    if link_merge == "merge_flattened" and is_array_type(first):
-        return first
-    return {"type": "array", "items": first}
+    if first is None:
+        return None
+    fields = dict(record.fields)
+    link_merge = fields.get("linkMerge")
+    if len(sources) == 1 and link_merge is None:
+        merged = first
+    elif link_merge == "merge_flattened" and is_array_type(first):
+        merged = first
+    else:
+        merged = {"type": "array", "items": first}
+    match merged:
+        case {"type": "array", "items": items} if fields.get("pickValue") in _PICKS_ONE:
+            return items
+        case _:
+            return merged
 
 
 @dataclass(frozen=True, slots=True)
