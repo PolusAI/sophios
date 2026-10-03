@@ -443,8 +443,17 @@ A workflow can contain another workflow:
 
 ```python
 preprocess = Workflow([touch, append], "preprocess")
+preprocess.outputs.file = append.outputs.file
+
+cat.inputs.file = preprocess.outputs.file
 report = Workflow([preprocess, cat], "report")
+report.outputs.greeting = preprocess.outputs.file
 ```
+
+A subworkflow's outputs are sources like a step's: a later sibling step can
+consume `preprocess.outputs.file`, and the parent can re-export it as one of its
+own outputs. A workflow's own output cannot feed one of its own steps; that is
+a cycle, and `compile()` rejects it.
 
 Nested workflows are how large pipelines are split into named components. A
 subworkflow can have its own inputs, outputs, tests, and documentation.
