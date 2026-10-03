@@ -67,6 +67,7 @@ understand, debug, and review.
 
    advanced.md
    language_guide.md
+   cookbook.md
    tutorials/tutorials.rst
    validation.md
 

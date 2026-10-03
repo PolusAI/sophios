@@ -1,0 +1,9 @@
+inputs:
+  loud:
+    type: Any
+steps:
+  echo:
+    when: $(inputs.loud)
+    in:
+      message: !ii Hello
+      loud: !cwl {source: loud}

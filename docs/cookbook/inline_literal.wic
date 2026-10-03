@@ -1,0 +1,4 @@
+steps:
+  touch:
+    in:
+      filename: !ii empty.txt
