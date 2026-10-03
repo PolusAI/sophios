@@ -19,6 +19,7 @@ from hypothesis import example, given
 from hypothesis import strategies as st
 
 from sophios.lang import (
+    SophiosError,
     SophiosErrorCode,
     Diagnostics,
     Document,
@@ -1434,3 +1435,13 @@ def test_a_mapping_with_a_key_outside_the_record_is_still_a_literal() -> None:
     result = parse('steps:\n  mk_file:\n    in:\n      name: {source: x, pdb_code: 1aki}\n', 'rec.wic')
     assert result.ok and result.document is not None
     assert isinstance(result.document.steps[0].input('name'), InlineLiteral)
+
+
+@pytest.mark.fast
+def test_a_run_that_is_not_a_registry_stem_is_reported() -> None:
+    """`run:` is resolved as a registry stem; a path or inline body is wic013."""
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [{'id': 's', 'run': {'class': 'CommandLineTool', 'baseCommand': 'true',
+                                                        'inputs': {}, 'outputs': {}}}]})
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.SUBWORKFLOW_INVALID
