@@ -476,8 +476,10 @@ echo.scatter_on(echo.inputs.message, method="dotproduct")
 ```
 
 A scattered step's outputs are arrays when the workflow runs, so a later step
-can scatter over them. The order of the calls does not matter: the type of a
-bound value is read when it is needed, not when it is bound.
+can scatter over them, also through a subworkflow's output. A step can be
+scattered before or after its outputs are bound, but `scatter_on` checks that
+its own inputs are array-valued when it is called, so scatter a producer before
+the step that scatters over its outputs.
 
 ```python
 echo.inputs.message = ["a", "b"]
