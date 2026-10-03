@@ -34,9 +34,9 @@ from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outp
 from sophios.api.python.workflow import (_python_api_types_match, ApiError, CompiledWorkflow,
                                          InvalidCLTError, InvalidInputValueError, InvalidLinkError,
                                          InvalidStepError, SophiosError, SophiosErrorCode, Step,
-                                         Workflow)
+                                         StepInput, Workflow)
 from sophios.cli import default_compilation_settings
-from sophios.lang import InlineLiteral, parse, to_json, wic_schema
+from sophios.lang import CwlRecord, InlineLiteral, parse, to_json, wic_schema
 from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest, ComputeSubmission
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.post_compile import inline_artifact_runs
@@ -1779,4 +1779,105 @@ def test_the_chained_scatter_agrees_with_the_dsl(tmp_path: Path) -> None:
     result = sophios.compiler.compile_source(bundle, options, graph_settings, tag_paths,
                                              relative_run_path=True, testing=True,
                                              graph_target=get_graph_reps('chain'))
+    assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct
+
+
+def _merge() -> Workflow:
+    """`a` and `b` each touch a file; `sink` takes both, merged into one list."""
+    a = Step(clt_path=_adapter('touch'), step_name='a')
+    a.inputs.filename = 'a.txt'
+    b = Step(clt_path=_adapter('touch'), step_name='b')
+    b.inputs.filename = 'b.txt'
+    sink = Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',
+                                   'inputs': {'files': {'type': 'File[]'}}, 'outputs': {}}, process_name='sink')
+    sink.inputs.files = StepInput(source=[a.outputs.file, b.outputs.file], link_merge='merge_flattened')
+    return Workflow([a, b, sink], 'merge')
+
+
+@pytest.mark.fast
+def test_step_input_merges_two_sources() -> None:
+    """Several sources and `linkMerge` on one step input, written from Python as objects."""
+    compiled = _merge().compile()
+    step = compiled.cwl_workflow['steps'][2]
+    assert step['in']['files'] == {'source': ['merge__step__1__a/file', 'merge__step__2__b/file'],
+                                   'linkMerge': 'merge_flattened'}
+    assert 'MultipleInputFeatureRequirement' in compiled.cwl_workflow['requirements']
+
+
+@pytest.mark.fast
+def test_step_input_binds_an_undeclared_input_for_when() -> None:
+    """A record may bind an input the tool does not declare, which `when:` then reads."""
+    echo = Step(clt_path=_adapter('echo'))
+    echo.inputs.message = 'hi'
+    wf = Workflow([echo], 'guarded')
+    echo.inputs.go = StepInput(source=wf.inputs.go)
+    echo.when = '$(inputs.go)'
+    compiled = wf.compile()
+    assert compiled.cwl_workflow['steps'][0]['in']['go'] == {'source': 'go'}
+
+
+@pytest.mark.fast
+def test_only_a_step_input_binds_an_undeclared_input() -> None:
+    """A plain value on a name the tool does not declare is still an unknown input."""
+    echo = Step(clt_path=_adapter('echo'))
+    with pytest.raises(AttributeError, match="no input named 'go'"):
+        echo.inputs.go = True
+    echo.inputs.go = StepInput(default=True)
+    with pytest.raises(AttributeError, match="no input named 'go'"):
+        echo.inputs.go = True
+
+
+@pytest.mark.fast
+def test_step_input_fields_are_written_in_cwl_spelling() -> None:
+    """Every field but `source` is copied to the emitted step input as CWL spells it."""
+    echo = Step(clt_path=_adapter('echo'))
+    echo.inputs.message = StepInput(default=3, value_from='$(String(self + 1))', label='n')
+    compiled = Workflow([echo], 'fields').compile()
+    assert compiled.cwl_workflow['steps'][0]['in']['message'] == {
+        'default': 3, 'valueFrom': '$(String(self + 1))', 'label': 'n'}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('source', ['go', ['go']])
+def test_a_string_is_never_a_step_input_source(source: Any) -> None:
+    """A bare string is never a reference: sources are port objects."""
+    with pytest.raises(InvalidInputValueError, match='str'):
+        StepInput(source=source)
+
+
+@pytest.mark.fast
+def test_a_merged_step_input_is_scatterable() -> None:
+    """Merged sources arrive as one list, so the input they bind can be scattered."""
+    wf = _merge()
+    sink = cast(Step, wf.steps[2])
+    sink.scatter_on(sink.inputs.files)
+    assert wf.compile().cwl_workflow['steps'][2]['scatter'] == ['files']
+
+
+@pytest.mark.fast
+def test_a_step_input_is_checked_like_a_link() -> None:
+    """A record's source must come from an earlier step, as a plain link's must."""
+    a = Step(clt_path=_adapter('touch'))
+    a.inputs.filename = 'a.txt'
+    cat = Step(clt_path=_adapter('cat'))
+    cat.inputs.file = StepInput(source=[a.outputs.file], pick_value='first_non_null')
+    with pytest.raises(InvalidStepError, match='earlier in the workflow step list'):
+        Workflow([cat, a], 'backwards').compile()
+
+
+@pytest.mark.fast
+def test_step_input_round_trips_through_write_wic(tmp_path: Path) -> None:
+    """The written bundle carries the record and compiles to what the API compiles."""
+    wf = _merge()
+    direct = wf.compile().cwl_workflow
+    root = wf.write_wic(tmp_path)
+    parsed = parse(root.read_text(encoding='utf-8'), root.name)
+    assert parsed.document is not None
+    assert isinstance(parsed.document.steps[2].input('files'), CwlRecord)
+    bundle = bundle_from_disk(root, {'global': {path.stem: path for path in tmp_path.glob('*.wic')}},
+                              sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}}))
+    options, graph_settings, tag_paths = default_compilation_settings()
+    result = sophios.compiler.compile_source(bundle, options, graph_settings, tag_paths,
+                                             relative_run_path=True, testing=True,
+                                             graph_target=get_graph_reps('merge'))
     assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct
