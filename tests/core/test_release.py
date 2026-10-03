@@ -14,11 +14,13 @@ from pathlib import Path
 from typing import Any, Final
 
 import pytest
+import yaml
 
 import sophios
 import sophios.cli
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
+WORKFLOWS: Final = REPO_ROOT / '.github' / 'workflows'
 
 
 def _json(name: str) -> Any:
@@ -59,6 +61,44 @@ def test_a_build_with_no_tag_in_reach_follows_the_last_release() -> None:
         f'fallback_version = "{manifest["."]}.post0.dev0"  # x-release-please-version'
     ]
     assert {'type': 'generic', 'path': 'pyproject.toml'} in config['packages']['.']['extra-files']
+
+
+def _workflow(name: str) -> Any:
+    return yaml.safe_load((WORKFLOWS / name).read_text(encoding='utf-8'))
+
+
+@pytest.mark.fast
+def test_every_publish_runs_on_the_tag_release_please_cut() -> None:
+    """PyPI and Docker Hub publish one tag, checked against the version it resolves to."""
+    publish = _workflow('release-please.yml')['jobs']['trigger-publish']
+    dispatched = publish['strategy']['matrix']['workflow']
+    assert sorted(dispatched) == ['publish_rest_docker.yml', 'test_and_publish_pypi.yml']
+
+    tag = '${{ github.event.inputs.ref }}'
+    for name in dispatched:
+        workflow = _workflow(name)
+        # PyYAML reads the key `on` as True. Only the dispatch starts a publish:
+        # a second trigger could publish one artifact without the other.
+        assert list(workflow[True]) == ['workflow_dispatch'], name
+        assert workflow[True]['workflow_dispatch']['inputs']['ref']['required'] is True, name
+
+        steps = [step for job in workflow['jobs'].values() for step in job['steps']]
+        checkout = next(step for step in steps if step.get('uses', '').startswith('actions/checkout'))
+        assert checkout['with']['ref'] == tag, name
+        verify = next(step for step in steps if step.get('uses') == './.github/actions/verify-version')
+        assert verify['with']['expected-ref'] == tag, name
+
+
+@pytest.mark.fast
+def test_the_image_reports_the_version_read_from_its_tag() -> None:
+    """The image has no git, so it is given the version read from the tag."""
+    steps = _workflow('publish_rest_docker.yml')['jobs']['build']['steps']
+    verify = next(step for step in steps if step.get('uses') == './.github/actions/verify-version')
+    build = next(step for step in steps if step.get('uses', '').startswith('docker/build-push-action'))
+
+    assert f"SOPHIOS_VERSION=${{{{ steps.{verify['id']}.outputs.version }}}}" in build['with']['build-args']
+    dockerfile = (REPO_ROOT / build['with']['file']).read_text(encoding='utf-8')
+    assert 'SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SOPHIOS="$SOPHIOS_VERSION"' in dockerfile
 
 
 def _import_copy(root: Path, built_as: str | None) -> subprocess.CompletedProcess[str]:
