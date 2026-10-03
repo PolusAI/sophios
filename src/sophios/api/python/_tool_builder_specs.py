@@ -547,7 +547,6 @@ class OutputSpec(_CommonSpecMixin, _IOFacetMixin):
         type_: Any,
         *,
         glob: Any = None,
-        from_input: Any = None,
         required: bool = True,
         load_contents: bool | None = None,
         output_eval: str | None = None,
@@ -561,18 +560,11 @@ class OutputSpec(_CommonSpecMixin, _IOFacetMixin):
         extra: dict[str, Any] | None = None,
         name: str | None = None,
     ) -> None:
-        if glob is not None and from_input is not None:
-            raise ValueError("Specify either glob= or from_input=, not both")
-        glob_value = (
-            _basename_expression(_named_parameter(from_input, kind="input"))
-            if from_input is not None
-            else glob
-        )
         _set_frozen_attrs(
             self,
             type_=type_,
             required=required,
-            glob=glob_value,
+            glob=glob,
             load_contents_value=load_contents,
             output_eval=output_eval,
             label_text=label,

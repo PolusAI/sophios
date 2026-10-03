@@ -162,9 +162,6 @@ def test_structured_port_references_do_not_accept_raw_strings() -> None:
     A string cannot be checked against the tool it came from, so a typo would
     survive to the emitted document and fail at runtime. The type is the check.
     """
-    with pytest.raises(TypeError, match="named Input/Output object"):
-        Output(cwl.file, from_input="output")
-
     tool = CommandLineTool(
         "demo",
         Inputs(input=Input(cwl.file)),
@@ -290,7 +287,7 @@ def test_tool_builder_high_level_helpers_hide_cwl_plumbing() -> None:
         tile_size=Input(cwl.int, flag="--tile-size", required=False).label("Tile size"),
         iou_threshold=Input(cwl.float, flag="--iou-threshold", required=False).label("IoU threshold"),
     )
-    outputs = Outputs(output=Output(cwl.directory, from_input=inputs.output).label("Output segmentation Zarr"))
+    outputs = Outputs(output=Output(cwl.directory, glob="$(inputs.output.basename)").label("Output segmentation Zarr"))
     tool = (
         CommandLineTool("sam3", inputs, outputs)
         .describe("SAM3 OME Zarr autosegmentation", "Run SAM3 autosegmentation on a zarr volume.")
@@ -505,3 +502,11 @@ def test_a_bound_stdin_input_is_promoted_as_a_file() -> None:
     workflow.outputs.log = step.outputs.out
 
     assert workflow.compile().cwl_workflow["inputs"] == {"data": {"type": "File"}}
+
+
+@pytest.mark.fast
+def test_output_has_no_from_input() -> None:
+    """An output's glob is written as a CWL expression; there is no input-derived shortcut."""
+    inputs = Inputs(output=Input(cwl.string))
+    with pytest.raises(TypeError, match="unexpected keyword argument 'from_input'"):
+        cast(Any, Output)(cwl.directory, from_input=inputs.output)  # pylint: disable=unexpected-keyword-arg
