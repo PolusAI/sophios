@@ -39,8 +39,7 @@ def link(graph: WorkflowGraph) -> Linked:
     """Compose ``graph`` and discharge every obligation it can prove."""
     diagnostics = Diagnostics()
     attached = _attach_children(graph)
-    normalized = _normalize_explicit_edges(attached, attached, diagnostics)
-    attached = _attach_children(normalized)
+    attached = _attach_children(_normalize_explicit_edges(attached, attached, diagnostics))
     _check_workflow_inputs(attached, diagnostics)
     definitions = _definitions(attached)
     unjudged = _merging_sinks(attached)
@@ -80,10 +79,7 @@ def link(graph: WorkflowGraph) -> Linked:
             edges.append(edge)
         discharged.append(obligation.sink)
 
-    for sink, edge in _workflow_call_edges(attached):
-        if sink not in unjudged and _reject_if_disjoint(attached, edge, diagnostics):
-            continue
-        edges.append(edge)
+    edges.extend(_judged_call_edges(attached, unjudged, diagnostics))
     unique_edges = tuple(dict.fromkeys(edges))
     linked = _place_edges(attached, unique_edges, tuple(discharged))
     linked = _expose_cross_scope_inputs(linked, unique_edges)
@@ -254,6 +250,13 @@ def _concrete_input_sinks(graph: WorkflowGraph, port: PortId) -> tuple[PortId, .
         return (port,)
     mapped = dict(step.run.child.input_mapping).get(port.port, ())
     return tuple(mapped) if mapped else (port,)
+
+
+def _judged_call_edges(graph: WorkflowGraph, unjudged: frozenset[PortId],
+                       diagnostics: Diagnostics) -> tuple[Edge, ...]:
+    """Each call edge but those proved disjoint; one into a merging record is not judged."""
+    return tuple(edge for sink, edge in _workflow_call_edges(graph)
+                 if sink in unjudged or not _reject_if_disjoint(graph, edge, diagnostics))
 
 
 def _workflow_call_edges(graph: WorkflowGraph) -> tuple[tuple[PortId, Edge], ...]:

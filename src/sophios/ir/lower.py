@@ -10,7 +10,7 @@ Resolving a step's tool against the environment is `Resolve`'s job, so a port's
 type is what the document declared and inference has not run.
 """
 import difflib
-from typing import Final
+from typing import Final, Mapping
 from dataclasses import dataclass
 
 from ..lang.cwl import CWL_VERSION
@@ -190,6 +190,19 @@ def _lower_resolved(document: ResolvedDocument,
 _GENERATION_PARAMETERS: Final = ('script', 'dockerPull')
 
 
+def _record_only_inputs(resolved: ResolvedStep, declared: Mapping[AuthoredName, object]) -> tuple[str, ...]:
+    """The inputs a step binds by record that its process does not declare.
+
+    A record may bind such an input, which is how `when:` and `valueFrom` read
+    a value; a subworkflow call's inputs are exactly the ones the subworkflow
+    declares, so a call has none.
+    """
+    if resolved.process.child is not None:
+        return ()
+    return tuple(name for name, value in resolved.source.inputs
+                 if isinstance(value, CwlRecord) and AuthoredName(name) not in declared)
+
+
 def _resolved_step_node(identity: StepId, resolved: ResolvedStep,
                         defined_so_far: dict[str, PortId], defined_anywhere: dict[str, PortId],
                         diagnostics: Diagnostics) -> StepNode:
@@ -199,12 +212,7 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep,
     # A generated process consumes `script`/`dockerPull` to build its tool;
     # neither survives into the tool's declared interface.
     consumed = _GENERATION_PARAMETERS if resolved.process.generated else ()
-    # A record may bind an input its process does not declare, which is how
-    # `when:` and `valueFrom` read a value; a subworkflow call's inputs are
-    # exactly the ones the subworkflow declares.
-    extra = () if resolved.process.child is not None else tuple(
-        name for name, value in source.inputs
-        if isinstance(value, CwlRecord) and AuthoredName(name) not in declared_inputs)
+    extra = _record_only_inputs(resolved, declared_inputs)
     for name, _ in source.inputs:
         if name not in declared_inputs and name not in consumed and name not in extra:
             diagnostics.error(
@@ -235,7 +243,6 @@ def _resolved_step_node(identity: StepId, resolved: ResolvedStep,
                              _resolve(value, port, defined_so_far, defined_anywhere, diagnostics))
                      for name, value in source.inputs
                      if (port := by_input.get(AuthoredName(name))) is not None)
-    interpreted = dict(source.interpreted)
     run = ProcessRun(resolved.process.run_path, resolved.process.key)
     scatter_ports = _scatter_ports(source, identity, inputs, diagnostics,
                                    calls_workflow=resolved.process.child is not None)
