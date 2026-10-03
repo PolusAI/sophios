@@ -35,7 +35,6 @@ from ._ports import (
     WorkflowInputReference,
 )
 from ._utils import (
-    infer_literal_parameter_type as _infer_literal_parameter_type,
     get_value_from_cfg as _get_value_from_cfg,
     load_yaml as _load_yaml,
 )
@@ -157,8 +156,7 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
         case WorkflowInputReference(workflow=workflow, name=name, implicit=implicit):
             workflow_input = workflow._ensure_input(
                 name, parameter_type=_boundary_type(input_port.parameter_type), implicit=implicit)
-            input_port._set_binding(InputBinding("workflow", name))
-            input_port.set_bound_parameter_type(workflow_input.parameter_type)
+            input_port._set_binding(InputBinding("workflow", name, workflow_input))
         case OutputParameter() as output:
             _resolve_parameter_type(
                 input_port,
@@ -167,10 +165,8 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
             )
             anchor_name = output.ensure_anchor(f"{input_name}{process_self.process_name}")
             input_port._set_binding(InputBinding("alias", anchor_name, output))
-            input_port.set_bound_parameter_type(output.parameter_type)
         case _:
             input_port._set_binding(InputBinding("inline", value))
-            input_port.set_bound_parameter_type(_infer_literal_parameter_type(value))
 
 
 def _boundary_type(parameter_type: Any) -> Any:
@@ -216,6 +212,10 @@ class _ProcessBase:  # pylint: disable=too-few-public-methods
     def _bound_inputs(self) -> tuple[tuple[str, InputValue], ...]:
         return tuple((port.name, port._binding.to_input_value())
                      for port in self._inputs if port._binding is not None)
+
+    def _output_rank(self) -> int:
+        """The array layers a scatter adds to each output: none, since only a `Step` scatters."""
+        return 0
 
 
 class Step(_ProcessBase):
@@ -522,6 +522,14 @@ class Step(_ProcessBase):
         self.scatter = list(inputs)
         self.scatterMethod = scatter_method
         return self
+
+    def _output_rank(self) -> int:
+        """The array layers this step's scatter adds to each of its outputs: none without
+        a scatter, one per scattered port under `nested_crossproduct`, else one.
+        The Python-side twin of `sophios.ir.declarations.output_rank`."""
+        if not self.scatter:
+            return 0
+        return len(self.scatter) if self.scatterMethod == ScatterMethod.nested_crossproduct.value else 1
 
     def _get_input(self, name: str) -> InputParameter:
         """Return a named input parameter from this step."""

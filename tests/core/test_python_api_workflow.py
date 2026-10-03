@@ -1646,3 +1646,73 @@ def test_the_written_bundle_of_a_nested_workflow_compiles_to_the_same_cwl(tmp_pa
                                              relative_run_path=True, testing=True,
                                              graph_target=get_graph_reps('outer'))
     assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct
+
+
+def _chain() -> tuple[Step, Step]:
+    """`echo` over two messages feeding `cat`, bound before `echo` is scattered."""
+    echo = Step(clt_path=_adapter('echo'))
+    echo.inputs.message = ['a', 'b']
+    cat = Step(clt_path=_adapter('cat'))
+    cat.inputs.file = echo.outputs.stdout
+    echo.scatter_on(echo.inputs.message)
+    return echo, cat
+
+
+@pytest.mark.fast
+def test_a_step_scattered_after_binding_lifts_its_consumers_input() -> None:
+    """The DSL compiles a chained scatter; the Python API refused it because the
+    bound type was captured before `scatter_on` ran."""
+    echo, cat = _chain()
+    assert cat.inputs.file.effective_source_type() == {'type': 'array', 'items': 'File'}
+    cat.scatter_on(cat.inputs.file)
+    compiled = Workflow([echo, cat], 'chain').compile()
+    steps = {s['id'].rsplit('__', 1)[-1]: s for s in compiled.cwl_workflow['steps']}
+    assert steps['echo']['scatter'] == ['message'] and steps['cat']['scatter'] == ['file']
+
+
+@pytest.mark.fast
+def test_nested_crossproduct_lifts_one_level_per_scattered_port() -> None:
+    """`nested_crossproduct` nests one array per scattered port; any other method adds one."""
+    echo = Step(clt_path=_adapter('echo'))
+    echo.inputs.message = 'a'
+    first = Step(clt_path=_adapter('append'))
+    first.inputs.file = echo.outputs.stdout
+    first.inputs.str = ['x', 'y']
+    sink = Step(clt_path=_adapter('cat'), step_name='sink')
+    lifted = sink.inputs.file
+    sink.inputs.file = first.outputs.file
+    first.scatter_on(first.inputs.str, method='nested_crossproduct')
+    assert lifted.effective_source_type() == {'type': 'array', 'items': 'File'}
+    first.inputs.file = [{'class': 'File', 'location': 'p.txt'}, {'class': 'File', 'location': 'q.txt'}]
+    first.scatter_on(first.inputs.file, first.inputs.str, method='nested_crossproduct')
+    assert lifted.effective_source_type() == {
+        'type': 'array', 'items': {'type': 'array', 'items': 'File'}}
+    first.scatter_on(first.inputs.file, first.inputs.str, method='flat_crossproduct')
+    assert lifted.effective_source_type() == {'type': 'array', 'items': 'File'}
+
+
+@pytest.mark.fast
+def test_a_subworkflows_output_is_not_lifted() -> None:
+    """A nested workflow is never scattered from Python, so its outputs keep their declared type."""
+    _inner, cat = _inner_and_sibling()
+    assert cat.inputs.file.effective_source_type() == 'File'
+    with pytest.raises(ValueError, match="array-valued data"):
+        cat.scatter_on(cat.inputs.file)
+
+
+@pytest.mark.fast
+def test_the_chained_scatter_agrees_with_the_dsl(tmp_path: Path) -> None:
+    """The written bundle of a chained scatter compiles to what the API compiles."""
+    echo, cat = _chain()
+    cat.scatter_on(cat.inputs.file)
+    wf = Workflow([echo, cat], 'chain')
+    direct = wf.compile().cwl_workflow
+    root = wf.write_wic(tmp_path)
+    assert parse(root.read_text(encoding='utf-8'), root.name).ok
+    bundle = bundle_from_disk(root, {'global': {path.stem: path for path in tmp_path.glob('*.wic')}},
+                              sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}}))
+    options, graph_settings, tag_paths = default_compilation_settings()
+    result = sophios.compiler.compile_source(bundle, options, graph_settings, tag_paths,
+                                             relative_run_path=True, testing=True,
+                                             graph_target=get_graph_reps('chain'))
+    assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct

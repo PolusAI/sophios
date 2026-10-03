@@ -4,10 +4,13 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
+from sophios.ir.declarations import layered
+from sophios.ir.types import PortType
 from sophios.lang import EdgeRef, InlineLiteral, InputValue, UnresolvedName
 
 from ._errors import InvalidLinkError
 from ._utils import (contains_any_type,
+                     infer_literal_parameter_type,
                      is_array_type,
                      normalize_parameter_name,
                      normalize_parameter_type,
@@ -184,7 +187,6 @@ class InputParameter(_ParameterBase):
     """Input parameter of a CWL `CommandLineTool` or `Workflow`."""
 
     _binding: InputBinding | None = field(default=None, init=False, repr=False)
-    _bound_parameter_type: Any = field(default=None, init=False, repr=False)
 
     @property
     def value(self) -> Any:
@@ -200,20 +202,33 @@ class InputParameter(_ParameterBase):
         """Return the upstream output parameter this input is aliased to, if any."""
         return None if self._binding is None or self._binding.kind != "alias" else self._binding.source
 
-    def set_bound_parameter_type(self, value: Any) -> None:
-        """Record the type of the bound value when it is known."""
-        normalized, _required = normalize_parameter_type(value)
-        self._bound_parameter_type = normalized
+    def effective_source_type(self) -> Any:
+        """The type the bound value carries when the workflow runs, computed now, not
+        at bind time: a source step scattered after the bind lifts it an array level
+        per layer, as its owner's `_output_rank()` says."""
+        if self._binding is None:
+            return None
+        match self._binding.kind:
+            case "inline":
+                return infer_literal_parameter_type(self._binding.value)
+            case "alias":
+                source = self._binding.source
+                declared = source.cwl_type()
+                if declared is None:
+                    return None
+                rank = source.parent_obj._output_rank()  # pylint: disable=protected-access
+                return layered(PortType(declared), rank).canonical
+            case _:
+                return self._binding.source.parameter_type
 
     def is_scatterable(self) -> bool:
-        """Return whether the current binding can be scattered safely."""
+        """Whether the bound value is array-valued when the workflow runs."""
         if self._binding is None:
             return False
-        return (
-            (self._binding.kind == "inline" and isinstance(self._binding.value, (list, tuple)))
-            or is_array_type(self._bound_parameter_type)
-            or contains_any_type(self._bound_parameter_type)
-        )
+        if self._binding.kind == "inline" and isinstance(self._binding.value, (list, tuple)):
+            return True
+        effective = self.effective_source_type()
+        return is_array_type(effective) or contains_any_type(effective)
 
     def is_bound(self) -> bool:
         """Return whether this input currently has a bound value."""
