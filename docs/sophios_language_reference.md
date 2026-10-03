@@ -322,6 +322,12 @@ out:
 comes into being, and that is an output; §4.1.1 says why, and what to write
 instead if you meant to consume an edge.
 
+A workflow's own `outputs:` name their producer with `outputSource: <step>/<port>`. The step is
+named by its id. When the id repeats, address the occurrence as
+`(index, name)/port`, the same key `wic: steps:` uses; the step at that index must carry that
+name (`wic039`). A positional address is accepted only in a workflow with no inferred edge:
+a position is a fact about the document, and inference may change the document.
+
 ---
 
 ## 4. Input values
