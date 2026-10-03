@@ -1,4 +1,5 @@
 """The typed compiler boundary over the phase pipeline."""
+import re
 import sys
 from copy import deepcopy
 from dataclasses import replace
@@ -137,11 +138,28 @@ def _bind_subinterpreter_locations(graph: WorkflowGraph,
                        for child in graph.children))
 
 
+#: The shape of a name only Emit writes, `<workflow>__step__<n>__<id>`. Recognised, never taken apart.
+_GENERATED_NAME: Final = re.compile(r'__step__\d+__')
+
+#: `inputs.name` and `inputs["name"]` inside a `when:` expression.
+_EXPRESSION_INPUT: Final = re.compile(r'inputs(?:\.([A-Za-z_][\w-]*)|\[\s*["\']([^"\']+)["\']\s*\])')
+
+
+def _expression_inputs(expression: object) -> tuple[str, ...]:
+    """Every step input a CWL expression reads, in order of first mention."""
+    if not isinstance(expression, str):
+        return ()
+    return tuple(dict.fromkeys(a or b for a, b in _EXPRESSION_INPUT.findall(expression)))
+
+
 def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
     """One plain line for each place a document addresses a step by a name the compiler generates.
 
     Such a spelling still resolves, so nothing here fails the compile; each line says what to
-    write instead. The Python API builds its documents without spans: nobody wrote that text,
+    write instead. Two places are checked: an `outputSource` that names its step as
+    `<workflow>__step__<n>__<id>`, and a `when:` that reads an input its step does not declare
+    (a generated name, or one CWL evaluates as null so the step never runs).
+    The Python API builds its documents without spans: nobody wrote that text,
     so there is no author to tell.
     """
     notes: list[str] = []
@@ -162,6 +180,15 @@ def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
         caveat = ' (a position holds only while every edge in the workflow is explicit)' if repeated else ''
         notes.append(f'Warning! {file}: output {str(name)!r} names its step {written!r}, a name the '
                      f"compiler generates. Write '{address}/{source.port}' instead{caveat}.")
+    for step in graph.steps:
+        declared = {str(port.id.port) for port in step.inputs}
+        for read in _expression_inputs(dict(step.interpreted).get('when')):
+            if _GENERATED_NAME.search(read):
+                notes.append(f"Warning! {file}: step {step.id.name!r} reads inputs.{read} in `when:`, a name "
+                             "the compiler generates. Declare the port in the callee's `inputs:` and read that name.")
+            elif read not in declared:
+                notes.append(f"Warning! {file}: step {step.id.name!r} reads inputs.{read} in `when:`, which "
+                             'its process does not declare; CWL evaluates it as null, so the step never runs.')
     for child in graph.children:
         notes.extend(_authored_spelling_notes(child))
     return notes
