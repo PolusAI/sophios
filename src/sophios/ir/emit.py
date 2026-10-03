@@ -25,6 +25,7 @@ from typing import Any
 from ..lang import CwlRecord, versions
 from ..lang.diagnostics import SophiosError
 from ..lang.error_codes import SophiosErrorCode
+from ..lang.spans import SourceSpan
 from ..lang.versions import ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
 from ..wic_types import Cwl
 from .declarations import required
@@ -100,7 +101,7 @@ def surface(graph: WorkflowGraph, names: Names, *,
         raise ValueError('every step in an emission graph needs a run')
 
     for ports in (graph.workflow_inputs, graph.workflow_outputs):
-        _refuse_colliding_names(tuple(port.name for port in ports), names)
+        _refuse_colliding_names(tuple(port.name for port in ports), names, graph.span)
     steps = [_step_spelling(step, names, relative_run_path, partial_failure)
              for step in graph.steps]
 
@@ -157,15 +158,15 @@ def _implied_requirements(graph: WorkflowGraph, steps: list[StepNode]) -> tuple[
     ) if needed)
 
 
-def _refuse_colliding_names(declared: tuple[PortName, ...], names: Names) -> None:
-    """Raise `wic031` when two distinct names in one namespace render alike."""
+def _refuse_colliding_names(declared: tuple[PortName, ...], names: Names, span: SourceSpan | None) -> None:
+    """Raise `wic031`, at the document's `span`, when two distinct names in one namespace render alike."""
     spelled: dict[str, PortName] = {}
     for name in declared:
         text = names.port(name)
         if text in spelled and spelled[text] != name:
             raise SophiosError.error(
                 SophiosErrorCode.DUPLICATE_DOCUMENT_NAME,
-                f'{text!r} names two different ports in the emitted document')
+                f'{text!r} names two different ports in the emitted document', span=span)
         spelled[text] = name
 
 
