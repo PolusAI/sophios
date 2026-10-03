@@ -300,7 +300,8 @@ def test_an_untyped_output_of_a_called_workflow_is_typed_in_the_caller(
 @pytest.mark.parametrize('output, said', [
     ({'label': 'no type here'}, ('has no `outputSource:` to take one from',)),
     ({'outputSource': 'mk_file/fiel'},
-     ('`outputSource: mk_file/fiel` names no output of a step', "Did you mean 'mk_file/file'?")),
+     ('`outputSource: mk_file/fiel` names no output of a step',  # codespell:ignore fiel
+      "Did you mean 'mk_file/file'?")),
     ({'outputSource': 'kid/res'},
      ('`outputSource: kid/res` names no output of a step', "Did you mean 'kid.wic/res'?")),
     ({'outputSource': 'nothing/at_all'},
