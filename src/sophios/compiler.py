@@ -152,13 +152,14 @@ def _expression_inputs(expression: object) -> tuple[str, ...]:
     return tuple(dict.fromkeys(a or b for a, b in _EXPRESSION_INPUT.findall(expression)))
 
 
+# pylint: disable-next=too-many-locals
 def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
     """One plain line for each place a document addresses a step by a name the compiler generates.
 
     Such a spelling still resolves, so nothing here fails the compile; each line says what to
     write instead. Two places are checked: an `outputSource` that names its step as
     `<workflow>__step__<n>__<id>`, and a `when:` that reads an input its step does not declare
-    (a generated name, or one CWL evaluates as null so the step never runs).
+    (a generated name, or one CWL evaluates as null).
     The Python API builds its documents without spans: nobody wrote that text,
     so there is no author to tell.
     """
@@ -188,7 +189,7 @@ def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
                              "the compiler generates. Declare the port in the callee's `inputs:` and read that name.")
             elif read not in declared:
                 notes.append(f"Warning! {file}: step {step.id.name!r} reads inputs.{read} in `when:`, which "
-                             'its process does not declare; CWL evaluates it as null, so the step never runs.')
+                             'its process does not declare; CWL evaluates it as null.')
     for child in graph.children:
         notes.extend(_authored_spelling_notes(child))
     return notes
