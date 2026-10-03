@@ -55,13 +55,14 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   it as a `.wic` subworkflow and call that, or run a CWL Workflow file on its
   own with `--allow_raw_cwl`. In Python, a `Step` whose `clt_path` is a CWL
   Workflow is refused the same way: build it as a nested `Workflow` of `Step`s.
-- A `cwl_subinterpreter` step declares a real-time analysis and is no longer
-  emitted as a CWL step. Every input is a literal, and a malformed
-  declaration is reported (wic044). The adapter's `cachedir_path`,
-  `root_workflow_yml_path` and `homedir` inputs and its `output_log_path`
-  output are gone: remove a binding of those inputs and any edge from
-  `output_log_path`. `max_times` is an `int`; a string integer such as `'20'`
-  is still accepted.
+- A `cwl_subinterpreter` step declares a real-time analysis, which Sophios
+  runs beside the workflow under `--run_local` (see Real-time Analysis in
+  `docs/advanced.md`); it is no longer emitted as a CWL step. Every input is a
+  literal, and a malformed declaration is reported (wic044). The adapter's
+  `cachedir_path`, `root_workflow_yml_path` and `homedir` inputs and its
+  `output_log_path` output are gone: remove a binding of those inputs and any
+  edge from `output_log_path`. `max_times` is an `int`; a string integer such
+  as `'20'` is still accepted.
 
 ### Command line
 
@@ -87,8 +88,8 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
 - `--cachedir` is passed to cwltool when you give it, so cwltool caches each
   step there and reuses a step whose tool and inputs are unchanged. It used to
   be accepted and ignored, and its default, `cachedir`, is now unset: a run
-  caches only when you ask. Give `--cachedir cachedir` to keep the old
-  directory.
+  caches only when you ask, or in `cachedir/` when it runs a real-time
+  analysis. Give `--cachedir cachedir` to keep the old directory.
 - `--write_intermediate_wic` is gone.
 - `--ignore_validation_errors` is still accepted but does nothing beyond a
   warning: there is no separate validation pass left to ignore. Remove it.
@@ -100,7 +101,8 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   file. A call that carries anything besides `in` and `out` (such as
   `scatter:` or `when:`), or whose workflow says `wic: {inlineable: false}`,
   stays nested and is named on stderr.
-- The `cwl_subinterpreter` command is gone.
+- The `cwl_subinterpreter` command is gone; `--run_local` runs a declared
+  real-time analysis itself.
 
 ### Python API and embedding
 
