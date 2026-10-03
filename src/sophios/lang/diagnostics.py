@@ -16,11 +16,13 @@ from .spans import SourceSpan
 class Severity(StrEnum):
     """How much a diagnostic matters.
 
-    One member today: nothing in the library emits a warning, and a severity
-    no code path can produce is a claim no test can provoke.
+    Two members: a note is reported and does not fail a compile; an error
+    does. There is no warning: a severity no code path can produce is a claim
+    no test can provoke.
     """
 
     ERROR = 'error'
+    NOTE = 'note'
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +87,12 @@ class Diagnostics(Sequence[Diagnostic]):
         better than an exception.
         """
         self._append(Diagnostic(Severity.ERROR, code, message, span, locator))
+
+    def note(self, code: _error_codes.SophiosErrorCode,
+             message: str, span: SourceSpan | None = None,
+             locator: Locator | None = None) -> None:
+        """Record a note: something the reader should know that is not wrong."""
+        self._append(Diagnostic(Severity.NOTE, code, message, span, locator))
 
     def _append(self, diagnostic: Diagnostic) -> None:
         """Append, dropping exact duplicates."""
