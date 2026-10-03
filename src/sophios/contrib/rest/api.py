@@ -1,5 +1,6 @@
 from pathlib import Path
 import copy
+import sys
 
 
 import uvicorn
@@ -86,6 +87,10 @@ async def compile_wf(request: Request) -> Json:
     result = compiler.compile_source(
         bundle, compiler_options, graph_settings,
         relative_run_path=True, testing=False, graph_target=graph)
+    if result.realtime:
+        analyses = ', '.join(declaration.analysis for declaration in result.realtime)
+        print(f'Real-time analysis runs only with --run_local; the returned workflow has no step for {analyses}',
+              file=sys.stderr)
     # generating cwl inline within the 'run' tag is post compile
     # and always on when compiling and preparing REST return payload
     artifact = inline_artifact_runs(result.artifact)
