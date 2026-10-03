@@ -246,10 +246,11 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
 def _bind_record(process_self: Any, input_name: str, input_port: InputParameter, record: StepInput) -> None:
     """Bind `record` to `input_port`: the language's record, over the port objects it names."""
     entries = record.sources()
-    # Each source is its own edge, so each gets its own name.
+    # Each source is its own edge, so each gets its own name. The `/` keeps it apart from
+    # a plain link's `{input}{step}` name, such as that of the same input on a step `sink1`.
     built = CwlRecord(tuple(
         UnresolvedName(entry.name) if isinstance(entry, WorkflowInputReference)
-        else EdgeRef(entry.ensure_anchor(f"{input_name}{process_self.process_name}{position}"))
+        else EdgeRef(entry.ensure_anchor(f"{input_name}{process_self.process_name}/{position}"))
         for position, entry in enumerate(entries, start=1)), record.fields())
     # A workflow input the record delivers as it is carries the input's type, as a plain binding's does.
     delivered = _boundary_type(input_port.parameter_type) if built.delivers_its_source else None
