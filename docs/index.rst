@@ -78,6 +78,7 @@ understand, debug, and review.
    dev/installguide.md
    dev/devguide.md
    dev/algorithms.md
+   dev/language_spec.md
    dev/codingstandards.md
    dev/gitetiquette.md
    dev/api.rst

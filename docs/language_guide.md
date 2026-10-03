@@ -8,7 +8,9 @@ lists them all.
 
 The Python API (`Workflow`, `Step`) builds the same documents, so every rule here
 holds for a workflow built in Python too; see the [Python Workflow API](userguide.md)
-guide.
+guide. For the rules an implementation of the language must follow (the CWL support
+matrix, the two spellings of each construct, versioning), see the
+[language specification](dev/language_spec.md).
 
 Compile a document without running it:
 
@@ -31,7 +33,9 @@ requirements:   # CWL, and any other CWL key, is copied to the output
 Sophios reads `steps`, `inputs`, `outputs` and the `wic:` block. Everything else is
 CWL and is carried into the compiled workflow as you wrote it. Sophios adds the
 requirements the workflow needs (for example `ScatterFeatureRequirement` for a
-step that scatters) to a `requirements:` you wrote, and keeps what you wrote.
+step that scatters) to a `requirements:` you wrote, and keeps what you wrote. The
+[specification](dev/language_spec.md#1-what-sophios-does-with-cwl) lists what Sophios
+does with each CWL field.
 
 A document that is not a mapping is `wic002`; a file that is not valid YAML is
 `wic001`. A key whose value has the wrong shape is reported where the value is:
@@ -642,7 +646,8 @@ reported at the value.
 
 A bare `wic:` with nothing under it is an empty block, not an error.
 
-`lang_version` pins the language version the document is read as. A version Sophios does not
+`lang_version` pins the language version the document is read as (see the
+[specification](dev/language_spec.md#6-versioning)). A version Sophios does not
 know is `wic017`; two pins that disagree within one compilation are `wic018`. A
 `cwlVersion:` Sophios cannot run (anything but `v1.0`, `v1.1` or `v1.2`) is
 `wic035`. The compiled workflow always says `v1.2`.
