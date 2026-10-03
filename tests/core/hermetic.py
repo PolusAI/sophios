@@ -9,9 +9,13 @@ The two are deliberately separate files rather than one file with a `tools=`
 parameter. A shared module would have to import `test_setup` for one of its two
 callers, and the import is the thing being forbidden.
 """
+import socket
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
+import pytest
 import yaml
 
 import sophios.cli
@@ -32,6 +36,30 @@ from .synthetic_tools import SYNTHETIC_TOOLS
 COVERAGE: Final = budget(500)
 ORACLE: Final = budget(100)
 PARTITION: Final = budget(50)
+
+
+@contextmanager
+def network_refused() -> Iterator[list[str]]:
+    """Refuse every name lookup and outgoing connection, recording each attempt.
+
+    The attempts are yielded so the caller can assert there were none: a
+    library that downgrades a failed fetch to a warning would otherwise pass
+    unnoticed. A context manager rather than a fixture, because Hypothesis
+    rejects function-scoped fixtures under `@given`.
+    """
+    attempts: list[str] = []
+
+    def refuse(kind: str) -> Any:
+        def refused(*args: Any, **_kwargs: Any) -> Any:
+            attempts.append(f'{kind} {args[1:] if kind != "lookup" else args[:1]}')
+            raise OSError(f'network refused: {kind}')
+        return refused
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(socket, 'getaddrinfo', refuse('lookup'))
+        patch.setattr(socket.socket, 'connect', refuse('connect'))
+        patch.setattr(socket.socket, 'connect_ex', refuse('connect_ex'))
+        yield attempts
 
 
 def _documents(*results: ParseResult) -> tuple[Document, ...]:
