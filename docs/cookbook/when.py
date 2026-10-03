@@ -11,6 +11,6 @@ def workflow() -> Workflow:
     echo = Step(clt_path=ADAPTERS / 'echo.cwl')
     echo.inputs.message = 'Hello'
     flow = Workflow([echo], 'when')
-    echo.inputs.loud = StepInput(source=flow.inputs.loud)
-    echo.when = '$(inputs.loud)'
+    echo.inputs.enabled = StepInput(source=flow.inputs.loud.as_type('boolean'))
+    echo.when = '$(inputs.enabled)'
     return flow
