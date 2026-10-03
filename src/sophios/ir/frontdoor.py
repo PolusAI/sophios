@@ -125,7 +125,7 @@ def _append_pin(document: Document, pins: list[str]) -> None:
         pins.append(pinned if isinstance(pinned, str) else str(pinned))
 
 
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _reach(document: Document,
            yml_paths: dict[str, dict[str, Path]],
            script_dir: Path,

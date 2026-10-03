@@ -158,6 +158,7 @@ def resolve(document: Document, registry: RegistrySnapshot, *, name: str = 'work
     return Resolved(resolved if not diagnostics.has_errors else None, diagnostics)
 
 
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
                       version: str, trail: tuple[RegistryKey, ...], reported: set[str]) \
         -> tuple[ResolvedDocument, Diagnostics]:
@@ -437,7 +438,7 @@ def _merged_sidecar(own: WicSidecar | None, contributed: WicSidecar) -> WicSidec
         return contributed
     steps = dict(own.steps)
     for key, child in contributed.steps:
-        inherited = steps.get(key)
+        key, inherited = _inherited_step(steps, key)
         steps[key] = child if inherited is None else _merged_sidecar(inherited, child)
     entries = dict(own.entries)
     for name, value in contributed.entries:
@@ -445,6 +446,21 @@ def _merged_sidecar(own: WicSidecar | None, contributed: WicSidecar) -> WicSidec
     return WicSidecar(tuple(steps.items()), tuple(entries.items()),
                       implementations=own.implementations or contributed.implementations,
                       span=own.span)
+
+
+def _inherited_step(steps: dict[StepKey, WicSidecar],
+                    key: StepKey) -> tuple[StepKey, WicSidecar | None]:
+    """The key `key` is merged under and the entry of `steps` it is merged over.
+    A bare id and an `(index, id)` key of the same name address the same step, so a
+    bare id merges into the one positional entry, and a positional key absorbs the bare one.
+    """
+    if key in steps:
+        return key, steps[key]
+    if key.index is None:
+        positional = [other for other in steps if other.index is not None and other.name == key.name]
+        return (positional[0], steps[positional[0]]) if len(positional) == 1 else (key, None)
+    bare = StepKey(None, key.name)
+    return key, steps.pop(bare, None)
 
 
 def _merged_value(own: OpaqueCwl, contributed: OpaqueCwl) -> OpaqueCwl:
