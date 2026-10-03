@@ -1850,3 +1850,32 @@ def test_step_input_round_trips_through_write_wic(tmp_path: Path) -> None:
                                              relative_run_path=True, testing=True,
                                              graph_target=get_graph_reps('merge'))
     assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct
+
+
+def _picked(pick_value: str) -> tuple[Workflow, Step]:
+    """`a` and `b` each touch a file; `sink`, which takes one `File`, gets them through `pick_value`."""
+    a = Step(clt_path=_adapter('touch'), step_name='a')
+    a.inputs.filename = 'a.txt'
+    b = Step(clt_path=_adapter('touch'), step_name='b')
+    b.inputs.filename = 'b.txt'
+    sink = Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',
+                                   'inputs': {'files': {'type': 'File'}}, 'outputs': {}}, process_name='sink')
+    sink.inputs.files = StepInput(source=[a.outputs.file, b.outputs.file], pick_value=pick_value)
+    return Workflow([a, b, sink], 'pick'), sink
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('pick_value', ['first_non_null', 'the_only_non_null'])
+def test_a_picked_step_input_delivers_one_value(pick_value: str) -> None:
+    """A `pickValue` that picks one of the sources delivers that one value, not a list to scatter."""
+    _, sink = _picked(pick_value)
+    with pytest.raises(ValueError, match='array-valued'):
+        sink.scatter_on(sink.inputs.files)
+
+
+@pytest.mark.fast
+def test_all_non_null_still_delivers_a_list() -> None:
+    """`all_non_null` keeps the list the sources make, so its input can be scattered."""
+    wf, sink = _picked('all_non_null')
+    sink.scatter_on(sink.inputs.files)
+    assert wf.compile().cwl_workflow['steps'][2]['scatter'] == ['files']
