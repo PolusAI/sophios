@@ -268,6 +268,10 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 WINDOWS_EXCLUDED: Final = frozenset({
     'tests/core/test_emit.py::test_emit_validates_as_cwl_v1_2',
     'tests/core/test_emit.py::test_validator_rejects_the_independent_invalid_control',
+    # A strict xfail on one cwltool validation of a `schemed` workflow, under a
+    # second. It states the SchemaDefRequirement gap the generators exclude,
+    # which only cwltool's validator can show, so it runs where the pair does.
+    'tests/core/test_emit.py::test_a_schema_def_typed_input_validates',
     'tests/core/test_leak_boundary.py::test_residue_validates_as_cwl_v1_2',
     # One compile and one `--validate` of a four-line workflow, under a second.
     # It buys the authored `outputSource` path, which the residue property
