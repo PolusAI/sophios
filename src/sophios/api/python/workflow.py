@@ -226,6 +226,11 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
             input_port._set_binding(InputBinding("workflow", name, workflow_input))
         case StepInput() as record:
             _bind_record(process_self, input_name, input_port, record)
+        case list() | tuple() as items if any(isinstance(item, (OutputParameter, WorkflowInputReference))
+                                              for item in items):
+            raise InvalidInputValueError(
+                f"{process_self.process_name}.{input_name}: a port object is never a literal; "
+                "bind several sources with StepInput(source=[...])")
         case OutputParameter() as output:
             _resolve_parameter_type(
                 input_port,
