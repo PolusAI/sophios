@@ -1986,3 +1986,32 @@ def test_the_written_wic_carries_no_python_paths(tmp_path: Path) -> None:
     echo.inputs.message = 'hi'
     root = Workflow([echo], 'wf').write_wic(tmp_path)
     assert str(Path(__file__).resolve()) not in root.read_text(encoding='utf-8')
+
+
+@pytest.mark.fast
+def test_an_api_error_names_the_python_line_of_the_bind() -> None:
+    """An error raised while binding names the line of the bind, not a line inside Sophios."""
+    touch = Step(clt_path=_adapter('touch'))
+    touch.inputs.filename = 'a.txt'
+    cat = Step(clt_path=_adapter('cat'))
+    with pytest.raises(InvalidInputValueError) as caught:
+        cat.inputs.file = [touch.outputs.file]
+    expected_line = _line_above()
+    span = caught.value.diagnostics[0].span
+    assert span is not None
+    assert (Path(span.file), span.start_line) == (Path(__file__).resolve(), expected_line)
+
+
+@pytest.mark.fast
+def test_a_misordered_step_is_reported_at_the_line_that_made_it() -> None:
+    """A step listed before the step it reads from is reported where that step was made."""
+    touch = Step(clt_path=_adapter('touch'))
+    touch.inputs.filename = 'a.txt'
+    cat = Step(clt_path=_adapter('cat'))
+    expected_line = _line_above()
+    cat.inputs.file = touch.outputs.file
+    with pytest.raises(InvalidStepError) as caught:
+        Workflow([cat, touch], 'backwards').compile()
+    span = caught.value.diagnostics[0].span
+    assert span is not None
+    assert (Path(span.file), span.start_line) == (Path(__file__).resolve(), expected_line)
