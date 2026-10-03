@@ -103,18 +103,9 @@ mypy-types = [
     "types-urllib3",
     "types-aiofiles"
 ]
-# NOTE: toil and cwltool have a somewhat continuous release model. However,
-# there can be updates and bugfixes in main that have not yet been released.
-# If you need to install from source, simply run `pip install .[runners-src]`
-# This will overwrite the existing release versions, so if you want to revert
-# to the release versions, `pip uninstall toil cwltool` and then `pip install .`
-# toml language has problem with underscore in array name
 runners = [
     "toil[cwl]",
     "cwl-utils>=0.32",
-]
-runners-src = [
-    "cwl-utils @ git+https://github.com/sameeul/cwl-utils.git",
 ]
 # See docs/requirements.txt
 doc = [
@@ -125,7 +116,7 @@ doc = [
 plots = ["matplotlib"]
 cyto = ["ipycytoscape"] # only for DAG visualization
 all_except_runner_src = ["sophios[test,doc,plots,cyto,mypy-types]"]
-all = ["sophios[test,doc,plots,cyto,runners-src,mypy-types]"]
+all = ["sophios[test,doc,plots,cyto,mypy-types]"]
 
 [project.scripts]
 sophios = "sophios.main:main"
