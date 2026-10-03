@@ -21,6 +21,7 @@ from hypothesis import strategies as st
 from sophios.lang import (
     SophiosError,
     SophiosErrorCode,
+    CwlRecord,
     Diagnostics,
     Document,
     EdgeDef,
@@ -1463,3 +1464,29 @@ def test_a_key_that_is_neither_form_is_still_wic008() -> None:
     """A key that is neither a bare id nor (index, id) is still wic008."""
     result = parse('wic:\n  steps:\n    "not a key": {}\n', 'k.wic')
     assert [d.code for d in result.diagnostics] == [SophiosErrorCode.MALFORMED_WIC_STEP_KEY]
+
+
+@pytest.mark.fast
+def test_a_cwl_record_parses_in_both_spellings() -> None:
+    """`!cwl {...}` and `wic_raw_cwl: {...}` build one record: typed sources, verbatim fields."""
+    tagged = parse('steps:\n  s:\n    in:\n      f: !cwl {source: [!* a, wf_in], linkMerge: merge_flattened}\n',
+                   'r.wic')
+    desugared = parse('steps:\n  s:\n    in:\n      f:\n        wic_raw_cwl:\n'
+                      '          source: [{wic_alias: a}, wf_in]\n          linkMerge: merge_flattened\n', 'r.wic')
+    for result in (tagged, desugared):
+        assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
+        record = result.document.steps[0].input('f')
+        assert isinstance(record, CwlRecord)
+        assert [type(source).__name__ for source in record.sources] == ['EdgeRef', 'UnresolvedName']
+        assert [source.name for source in record.sources] == ['a', 'wf_in']
+        assert dict(record.fields) == {'linkMerge': 'merge_flattened'}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('body', ['{source: a, nope: 1}', '{source: !ii 3}', '{source: [a, !cwl x]}',
+                                  '{default: !ii 3}', '{valueFrom: !* e}'])
+def test_a_record_with_a_field_cwl_has_no_name_for_is_wic038(body: str) -> None:
+    """A key outside WorkflowStepInput, a source that is not a reference, and a
+    Sophios construct inside a field CWL reads verbatim are each refused."""
+    result = parse(f'steps:\n  s:\n    in:\n      f: !cwl {body}\n', 'r.wic')
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.STEP_INPUT_RECORD]

@@ -15,6 +15,7 @@ import yaml
 
 from ..lang import (
     CWL_VERSION,
+    CwlRecord,
     Document,
     EdgeRef,
     InlineLiteral,
@@ -255,5 +256,5 @@ def _text(value: InputValue | None) -> str:
             return name
         case RawCwlRef(expression=expression):
             return expression
-        case None:
+        case CwlRecord() | None:
             return ''

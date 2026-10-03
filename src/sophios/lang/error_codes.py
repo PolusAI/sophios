@@ -68,9 +68,10 @@ class SophiosErrorCode(StrEnum):
     UNSUPPORTED_CWL_VERSION = 'wic035'
     #: An authored workflow output with no `type` and no producer to take one from.
     UNTYPED_OUTPUT = 'wic036'
-    #: CWL's WorkflowStepInput written where Sophios reads a literal: an
+    #: CWL's WorkflowStepInput written where Sophios does not read it: an
     #: untagged mapping in `in:` carrying `source`, `default`, `linkMerge`,
-    #: ..., or `linkMerge`/`pickValue`/a list `outputSource` on a workflow output.
+    #: ..., a `!cwl {...}` record carrying a key or a `source` it may not, or
+    #: `linkMerge`/`pickValue`/a list `outputSource` on a workflow output.
     STEP_INPUT_RECORD = 'wic038'
 
     #: A positional `(index, name)/port` outputSource whose index does not hold

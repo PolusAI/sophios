@@ -205,14 +205,14 @@ def _wic_step_entry() -> dict[str, Any]:
 
 
 def _input_value() -> dict[str, Any]:
-    """One of the four input forms (§4.1).
+    """One of the five input forms (§4.1).
 
     Unconstrained on purpose; `construct` is referenced only so editors can
     offer construct keys as completions.
     """
     return {
-        'description': 'An inline literal, edge reference, '
-                       'raw CWL reference, or unresolved name (§4.1).',
+        'description': 'An inline literal, edge reference, raw CWL reference, '
+                       'unresolved name, or step-input record (§4.1).',
         'anyOf': [{'$ref': '#/$defs/construct'}, {}],
     }
 
