@@ -159,11 +159,6 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
                 name, parameter_type=_boundary_type(input_port.parameter_type), implicit=implicit)
             input_port._set_binding(InputBinding("workflow", name))
             input_port.set_bound_parameter_type(workflow_input.parameter_type)
-        case OutputParameter(parent_obj=Workflow(), name=name):
-            raise InvalidLinkError(
-                f"Workflow output {name!r} cannot be bound as an input. "
-                f"Use workflow.inputs.{name} for formal inputs or workflow.outputs.{name} = ... for outputs."
-            )
         case OutputParameter() as output:
             _resolve_parameter_type(
                 input_port,
@@ -186,7 +181,8 @@ def _boundary_type(parameter_type: Any) -> Any:
 def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) -> None:
     output_parameter = workflow._add_output(output_name, implicit=True)
     match value:
-        case OutputParameter(parent_obj=Step(process_name=process_name), name=name) as source:
+        case OutputParameter(parent_obj=Step(process_name=process_name) | Workflow(process_name=process_name),
+                             name=name) as source:
             _resolve_parameter_type(
                 output_parameter,
                 _boundary_type(source.parameter_type),
@@ -763,6 +759,12 @@ class Workflow(_ProcessBase):
                 if not isinstance(source_parameter, OutputParameter):
                     continue
                 source_parent = source_parameter.parent_obj
+                if source_parent is self:
+                    raise InvalidLinkError(
+                        f"{child.process_name}.{input_parameter.name} is bound to "
+                        f"{self.process_name}.outputs.{source_parameter.name}, this workflow's own output; "
+                        "a workflow cannot consume what it produces"
+                    )
                 source_process = getattr(source_parent, "process_name", "<unknown>")
                 if source_parent not in children:
                     raise InvalidStepError(
@@ -779,6 +781,11 @@ class Workflow(_ProcessBase):
 
         for output_parameter in self._outputs:
             match output_parameter._source_parameter:
+                case OutputParameter(parent_obj=source_parent) if source_parent is self:
+                    raise InvalidLinkError(
+                        f"{self.process_name}.outputs.{output_parameter.name} is bound to one of this "
+                        "workflow's own outputs"
+                    )
                 case OutputParameter(parent_obj=source_parent) if source_parent not in children:
                     raise InvalidStepError(
                         f"{self.process_name}.outputs.{output_parameter.name} is linked to "
@@ -896,5 +903,10 @@ class Workflow(_ProcessBase):
         )
 
     def _as_workflow_step(self) -> nodes.Step:
-        """Return this workflow as a step naming its own ``.wic`` document."""
-        return nodes.Step(id=f"{self.process_name}.wic", inputs=self._bound_inputs())
+        """Return this workflow as a step naming its own ``.wic`` document, with its anchored outputs."""
+        return nodes.Step(
+            id=f"{self.process_name}.wic",
+            inputs=self._bound_inputs(),
+            outputs=tuple(nodes.OutputBinding(port.name, nodes.EdgeDef(port._anchor_name))
+                          for port in self._outputs if port._anchor_name is not None),
+        )

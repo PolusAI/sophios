@@ -23,6 +23,7 @@ import yaml
 import sophios
 import sophios.api.python as python_api_package
 import sophios.api.python._workflow_runtime as python_runtime
+import sophios.compiler
 import sophios.compute_request as compute_request_module
 import sophios.plugins
 from sophios import input_output as io
@@ -33,9 +34,14 @@ from sophios.api.python.workflow import (_python_api_types_match, ApiError, Comp
                                          InvalidCLTError, InvalidInputValueError, InvalidLinkError,
                                          InvalidStepError, SophiosError, SophiosErrorCode, Step,
                                          Workflow)
+from sophios.cli import default_compilation_settings
 from sophios.lang import InlineLiteral, parse, to_json, wic_schema
 from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest, ComputeSubmission
+from sophios.ir.frontdoor import bundle_from_disk
+from sophios.post_compile import inline_artifact_runs
 from sophios.python_cwl_adapter import import_python_file
+from sophios.runtime_inputs import normalize_artifact_cwl
+from sophios.utils_graphs import get_graph_reps
 from sophios.utils_yaml import wic_loader
 from sophios.wic_types import Json, Tools
 
@@ -1581,3 +1587,62 @@ def test_two_tools_sharing_a_file_stem_are_rejected(tmp_path: Path) -> None:
         workflow.write_wic(tmp_path)
     with pytest.raises(InvalidStepError, match="share the file stem 'tool'"):
         workflow.compile()
+
+
+def _inner_and_sibling() -> tuple[Workflow, Step]:
+    touch = Step(clt_path=_adapter('touch'))
+    touch.inputs.filename = 'empty.txt'
+    inner = Workflow([touch], 'inner')
+    inner.outputs.made = touch.outputs.file
+    cat = Step(clt_path=_adapter('cat'))
+    cat.inputs.file = inner.outputs.made
+    return inner, cat
+
+
+@pytest.mark.fast
+def test_a_sibling_step_consumes_a_subworkflows_output() -> None:
+    """A nested workflow's output feeds a later sibling step, as a step's output does."""
+    inner, cat = _inner_and_sibling()
+    compiled = Workflow([inner, cat], 'outer').compile()
+    cat_step = compiled.cwl_workflow['steps'][1]
+    assert cat_step['in']['file'] == {'source': 'outer__step__1__inner.wic/made'}
+
+
+@pytest.mark.fast
+def test_a_parent_re_exports_a_subworkflows_output() -> None:
+    """A parent workflow output may be backed by a nested workflow's output."""
+    inner, cat = _inner_and_sibling()
+    outer = Workflow([inner, cat], 'outer')
+    outer.outputs.made = inner.outputs.made
+    compiled = outer.compile()
+    assert compiled.cwl_workflow['outputs']['made']['outputSource'] == 'outer__step__1__inner.wic/made'
+
+
+@pytest.mark.fast
+def test_a_workflow_cannot_consume_its_own_output() -> None:
+    """One of a workflow's own steps reading that workflow's output is a cycle, refused by name."""
+    touch = Step(clt_path=_adapter('touch'))
+    touch.inputs.filename = 'empty.txt'
+    cat = Step(clt_path=_adapter('cat'))
+    wf = Workflow([touch, cat], 'loop')
+    wf.outputs.made = touch.outputs.file
+    cat.inputs.file = wf.outputs.made
+    with pytest.raises(InvalidLinkError, match="own output"):
+        wf.compile()
+
+
+@pytest.mark.fast
+def test_the_written_bundle_of_a_nested_workflow_compiles_to_the_same_cwl(tmp_path: Path) -> None:
+    """The bundle `write_wic` writes for a nested workflow compiles to what the API compiles."""
+    inner, cat = _inner_and_sibling()
+    outer = Workflow([inner, cat], 'outer')
+    direct = outer.compile().cwl_workflow
+    root = outer.write_wic(tmp_path)
+    assert parse(root.read_text(encoding='utf-8'), root.name).ok
+    bundle = bundle_from_disk(root, {'global': {path.stem: path for path in tmp_path.glob('*.wic')}},
+                              sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}}))
+    options, graph_settings, tag_paths = default_compilation_settings()
+    result = sophios.compiler.compile_source(bundle, options, graph_settings, tag_paths,
+                                             relative_run_path=True, testing=True,
+                                             graph_target=get_graph_reps('outer'))
+    assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct
