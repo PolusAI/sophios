@@ -27,6 +27,7 @@ from .render import render, to_json
 from .versions import KNOWN_VERSIONS, LANG_VERSION, resolve as resolve_lang_version
 from .schema import wic_schema
 from .spans import SourceSpan
+from .support import SUPPORT_MATRIX, Support
 
 __all__ = [
     'CWL_VERSION',
@@ -34,6 +35,7 @@ __all__ = [
     'CwlVersion',
     'KNOWN_VERSIONS',
     'LANG_VERSION',
+    'SUPPORT_MATRIX',
     'SophiosErrorCode',
     'Diagnostic',
     'Diagnostics',
@@ -55,6 +57,7 @@ __all__ = [
     'SourceSpan',
     'Step',
     'StepKey',
+    'Support',
     'Tag',
     'UnresolvedName',
     'WicSidecar',
