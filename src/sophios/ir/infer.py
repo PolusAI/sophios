@@ -287,25 +287,43 @@ def _named(matches: list[Port], sink: Port, policy: InferencePolicy) -> list[Por
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def _note_choice(diagnostics: Diagnostics, policy: InferencePolicy, step: StepNode, port: Port,
                  chosen: PortId, ties: tuple[PortId, ...], earlier: tuple[PortId, ...]) -> None:
-    """Say which equal candidates lost, and how to pin the choice."""
-    sink = _parts(port.id.port)[-1]
-    source = _parts(chosen.port)[-1]
+    """Say which equal candidates lost, and how to pin the choice.
+
+    A subworkflow call exposes its steps' ports under derived names that an
+    author cannot write, so each port is shown by the path of steps down to
+    the one that declares it, and the pin goes on that step.
+    """
+    sink_step, sink = _declared_at(step.id.name, port.id.port)
+    source_step, source = _declared_at(chosen.step.name, chosen.port)
     locator = Locator(step=step.id.name, index=step.id.index, port=sink)
-    pin = (f"pin it: `out: - {source}: !& <name>` on step '{chosen.step.name}' and "
-           f"`in: {sink}: !* <name>` here")
+    sink_at = 'here' if sink_step == step.id.name else f"on step '{sink_step}'"
+    pin = (f"pin it: `out: - {source}: !& <name>` on step '{source_step}' and "
+           f"`in: {sink}: !* <name>` {sink_at}")
     report = diagnostics.error if policy.strict else diagnostics.note
     if ties:
         report(SophiosErrorCode.INFERENCE_TIE,
-               f"step '{step.id.name}' input '{sink}' was inferred from "
-               f"'{chosen.step.name}/{source}', but that step also offers "
-               + ', '.join(f"'{_parts(alt.port)[-1]}'" for alt in ties) + '; ' + pin,
+               f"step '{step.id.name}' input '{_below(port.id.port)}' was inferred from "
+               f"'{chosen.step.name}/{_below(chosen.port)}', but that step also offers "
+               + ', '.join(f"'{_below(alt.port)}'" for alt in ties) + '; ' + pin,
                port.span, locator)
     if earlier:
         report(SophiosErrorCode.INFERENCE_RECENCY,
-               f"step '{step.id.name}' input '{sink}' was inferred from the most recent match "
-               f"'{chosen.step.name}/{source}'; earlier steps also match: "
-               + ', '.join(f"'{alt.step.name}/{_parts(alt.port)[-1]}'" for alt in earlier) + '; ' + pin,
+               f"step '{step.id.name}' input '{_below(port.id.port)}' was inferred from the most recent "
+               f"match '{chosen.step.name}/{_below(chosen.port)}'; earlier steps also match: "
+               + ', '.join(f"'{alt.step.name}/{_below(alt.port)}'" for alt in earlier) + '; ' + pin,
                port.span, locator)
+
+
+def _declared_at(step: str, name: PortName) -> tuple[str, str]:
+    """The path of steps from `step` down to the one that declares `name`,
+    and the name that step declares it under."""
+    *inner, declared = _parts(name)
+    return '/'.join((step, *inner)), declared
+
+
+def _below(name: PortName) -> str:
+    """`name` as the path of steps it was exposed through, then the port."""
+    return '/'.join(_parts(name))
 
 
 def _authored(port: Port) -> str:

@@ -124,6 +124,35 @@ def test_recency_between_producers_is_noted() -> None:
     assert edge.source.step.index == 2, 'the choice itself is unchanged'
 
 
+def _across_calls(pinned: bool) -> Yaml:
+    """`multi_file` inside `make.wic` feeds `count` inside `use.wic`; pinned, the
+    edge is written on those two inner steps."""
+    producer: Yaml = {'id': 'multi_file'}
+    consumer: Yaml = {'id': 'count'}
+    if pinned:
+        producer['out'] = [{'last': {'wic_anchor': 'f'}}]
+        consumer['in'] = {'file': {'wic_alias': 'f'}}
+    return {'steps': [subworkflow_step('make.wic', {'steps': [producer]}),
+                      subworkflow_step('use.wic', {'steps': [consumer]})]}
+
+
+@pytest.mark.fast
+def test_a_note_across_subworkflow_calls_names_the_steps_an_author_can_pin() -> None:
+    """A call exposes inner ports under names nobody can write, so the note
+    points at the inner steps, and writing exactly the pin it gives compiles
+    without a note."""
+    result = compile_hermetic(_across_calls(pinned=False), tools=_multi_file_tools())
+    (note,) = list(result.diagnostics)
+    assert note.code is SophiosErrorCode.INFERENCE_TIE
+    assert "inferred from 'make.wic/multi_file/last'" in note.message
+    assert "also offers 'multi_file/first'" in note.message
+    assert ("`out: - last: !& <name>` on step 'make.wic/multi_file' and "
+            "`in: file: !* <name>` on step 'use.wic/count'") in note.message
+
+    pinned = compile_hermetic(_across_calls(pinned=True), tools=_multi_file_tools())
+    assert not list(pinned.diagnostics)
+
+
 @pytest.mark.fast
 def test_strict_mode_turns_notes_into_errors() -> None:
     """`InferencePolicy.strict` refuses a choice between equals."""
