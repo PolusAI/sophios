@@ -377,6 +377,46 @@ def test_cli_points_a_compiler_crash_at_its_error_file_on_stderr(
     assert 'boom' in (tmp_path / 'error_crash.txt').read_text(encoding='utf-8')
 
 
+_TWO_TOUCHES = ('steps:\n- id: touch\n  in:\n    filename: !ii a.txt\n'
+                '- id: touch\n  in:\n    filename: !ii b.txt\n- id: cat\n')
+
+
+@pytest.mark.fast
+def test_cli_prints_an_inference_note_on_stderr_and_succeeds(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A choice between equals is said, with its code, and the compile still succeeds."""
+    from sophios import main as cli
+    workflow = tmp_path / 'two_touches.wic'
+    workflow.write_text(_TWO_TOUCHES, encoding='utf-8')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), '--generate_cwl_workflow'])
+
+    cli.main()  # returning, rather than raising SystemExit, is the first assertion
+
+    captured = capsys.readouterr()
+    assert 'note [wic043]' in captured.err
+    assert "'touch/file'" in captured.err
+    assert 'wic043' not in captured.out
+
+
+@pytest.mark.fast
+def test_cli_with_inference_strict_refuses_a_choice_between_equals(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """`--inference_strict` makes the same note an error and the exit code says so."""
+    from sophios import main as cli
+    workflow = tmp_path / 'two_touches.wic'
+    workflow.write_text(_TWO_TOUCHES, encoding='utf-8')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), '--generate_cwl_workflow',
+                                     '--inference_strict'])
+
+    with pytest.raises(SystemExit) as caught:
+        cli.main()
+
+    assert caught.value.code == 1
+    assert 'error [wic043]' in capsys.readouterr().err
+
+
 @pytest.mark.fast
 def test_cli_success_does_not_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     """A clean run returns instead of raising, exactly as before."""

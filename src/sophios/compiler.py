@@ -75,6 +75,7 @@ def compile_source(bundle: SourceBundle,
         renaming_conventions=tuple(compiler_options.get('renaming_conventions', ())),
         insert_steps_automatically=compiler_options['insert_steps_automatically'],
         format_rules=tuple(compiler_options.get('inference_rules', {}).items()),
+        strict=compiler_options['inference_strict'],
     )
     inferred = infer(linked.graph, policy, InsertionCatalog.from_registry(bundle.registry))
     if inferred.graph is None:
@@ -88,7 +89,7 @@ def compile_source(bundle: SourceBundle,
                               partial_failure=compiler_options['partial_failure_enable'])
     if not testing:
         print('finishing compilation of', bundle.name)
-    return CompilationResult(graph, artifact)
+    return CompilationResult(graph, artifact, inferred.diagnostics)
 
 
 def _check_positional_sources(graph: WorkflowGraph) -> None:

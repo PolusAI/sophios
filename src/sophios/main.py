@@ -118,6 +118,8 @@ def _compile_loaded_document(yaml_path: str, yaml_stem: str, bundle: SourceBundl
         # only on failure — nobody should have to guess which language their
         # file was read as.
         print('Sophios lang_version:', result.lang_version)
+        for diagnostic in result.diagnostics:
+            print(diagnostic, file=sys.stderr)
     return rootgraph, result
 
 

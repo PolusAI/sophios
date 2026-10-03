@@ -372,3 +372,34 @@ def _provoke_positional_output_source() -> None:
 
 
 COMPILED.update({SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE: _provoke_positional_output_source})
+
+
+def _provoke_inference_tie() -> None:
+    """Under strict inference, one producer offering two matching outputs."""
+    from sophios.wic_types import StepId, Tool  # pylint: disable=import-outside-toplevel
+
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+    from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt  # pylint: disable=import-outside-toplevel
+
+    multi = clt({}, {'first': {'type': 'File', 'outputBinding': {'glob': 'first'}},
+                     'last': {'type': 'File', 'outputBinding': {'glob': 'last'}}})
+    tools = {**SYNTHETIC_TOOLS,
+             StepId('multi_file', SYNTHETIC_NS): Tool('/synthetic/multi_file.cwl', multi)}
+    compile_hermetic({'steps': [{'id': 'multi_file'}, {'id': 'count'}]}, 'provoke',
+                     tools=tools, inference_strict=True)
+
+
+def _provoke_inference_recency() -> None:
+    """Under strict inference, an earlier producer that also matched."""
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+
+    compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}},
+                                {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'b'}}},
+                                {'id': 'count'}]},
+                     'provoke', inference_strict=True)
+
+
+COMPILED.update({
+    SophiosErrorCode.INFERENCE_TIE: _provoke_inference_tie,
+    SophiosErrorCode.INFERENCE_RECENCY: _provoke_inference_recency,
+})

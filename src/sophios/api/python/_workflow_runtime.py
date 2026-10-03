@@ -473,6 +473,7 @@ def compiled_workflow_from_result(
         cwl_workflow=cwl_workflow,
         cwl_job_inputs=normalize_artifact_job_inputs(artifact, artifact.job_inputs),
         lang_version=result.lang_version,
+        diagnostics=tuple(str(diagnostic) for diagnostic in result.diagnostics),
     )
 
 

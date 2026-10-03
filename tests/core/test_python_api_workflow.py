@@ -191,6 +191,22 @@ def test_linear_python_workflow_reuses_compiler_edge_inference() -> None:
 
 
 @pytest.mark.fast
+def test_compiled_workflow_carries_the_inference_notes() -> None:
+    """A choice between equal producers is on the compiled object, not a warning."""
+    first = Step(clt_path=_adapter("touch"), step_name="first")
+    first.inputs.filename = "a.txt"
+    second = Step(clt_path=_adapter("touch"), step_name="second")
+    second.inputs.filename = "b.txt"
+    cat = Step(clt_path=_adapter("cat"))
+
+    compiled = Workflow([first, second, cat], "wf").compile()
+
+    (note,) = compiled.diagnostics
+    assert "note [wic043]" in note
+    assert "'cat'" in note and "'first/file'" in note
+
+
+@pytest.mark.fast
 def test_in_memory_cwl_step_compiles_through_workflow_api() -> None:
     """A tool given as a document compiles without ever being written to disk."""
     tool = (
@@ -503,7 +519,7 @@ def test_workflow_compile_boundary_hides_compiler_info() -> None:
     assert isinstance(compiled, CompiledWorkflow)
     assert compiled.cwl_workflow["class"] == "Workflow"
     exposed = {field.name for field in dataclasses.fields(compiled)}
-    assert exposed == {'name', 'cwl_workflow', 'cwl_job_inputs', 'lang_version'}, exposed
+    assert exposed == {'name', 'cwl_workflow', 'cwl_job_inputs', 'lang_version', 'diagnostics'}, exposed
 
 
 @pytest.mark.fast

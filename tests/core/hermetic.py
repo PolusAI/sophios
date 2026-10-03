@@ -110,15 +110,17 @@ def bundle(yml: Yaml, name: str, tools: Tools) -> SourceBundle:
 def compile_hermetic(yml: Yaml, name: str = 'oracle', *,
                      tools: Tools | None = None,
                      insert_steps_automatically: bool = False,
+                     inference_strict: bool = False,
                      is_root: bool = True) -> CompilationResult:
     """Compile one in-memory workflow against the synthetic registry.
 
-    `insert_steps_automatically` is named rather than taken as `**options` so a
+    `insert_steps_automatically` and `inference_strict` are named rather than taken as `**options` so a
     typo is a type error instead of a silently ignored setting — the same
     reasoning as `compile_harness.compile_info`.
     """
     compiler_options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
     compiler_options['insert_steps_automatically'] = insert_steps_automatically
+    compiler_options['inference_strict'] = inference_strict
     graph = get_graph_reps(name)
     del is_root
     return sophios.compiler.compile_source(
