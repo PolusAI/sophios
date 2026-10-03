@@ -1093,6 +1093,28 @@ def test_run_local_is_quiet_unless_told_otherwise(
     assert ("--quiet" in cmdlines[0].split()) is expected
 
 
+@pytest.mark.fast
+@pytest.mark.parametrize(("run_args", "cached"), [({}, False), ({"cachedir": ""}, False), ({"cachedir": "cache"}, True)])
+def test_run_local_gives_cwltool_the_cachedir_it_was_given(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    run_args: dict[str, str],
+    cached: bool,
+) -> None:
+    """A `cachedir` reaches cwltool as an absolute `--cachedir`; without one there is no cache."""
+    monkeypatch.chdir(tmp_path)
+    cmdlines: list[str] = []
+    monkeypatch.setattr(run_local, "generate_run_script", cmdlines.append)
+    run_local.run_local(
+        {"cwl_runner": "cwltool", "container_engine": "docker", "generate_run_script": "yes", **run_args},
+        False, passthrough_args=[], workflow_name="wf", basepath=str(tmp_path))
+    cmd = cmdlines[0].split()
+    if cached:
+        assert cmd[cmd.index("--cachedir") + 1] == str(tmp_path / "cache")
+    else:
+        assert "--cachedir" not in cmd
+
+
 def _api_run_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, run_args: dict[str, Any]) -> list[str]:
     """The runner command `Workflow.run()` builds for `run_args`, captured instead of executed."""
     touch = Step(clt_path=_adapter("touch"))

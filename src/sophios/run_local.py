@@ -107,7 +107,8 @@ def _runner_outdir(basepath: str, cwl_runner: str, date_time: str, outdir: str |
 
 def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
               container_cmd: str, passthrough_args: list[str], outdir: str | None = None,
-              quiet: bool = True, documents: tuple[str, ...] | None = None) -> list[str]:
+              quiet: bool = True, documents: tuple[str, ...] | None = None,
+              cachedir: str | None = None) -> list[str]:
     """Build the command to run the workflow in an environment
 
     Args:
@@ -120,6 +121,9 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
         documents (tuple[str, ...] | None): The workflow, then its job file if it has one, as
         the runner is given them. By default `<basepath>/<workflow_name>.cwl` and
         `<basepath>/<workflow_name>_inputs.yml`, the files Sophios wrote.
+        cachedir (str | None): Give cwltool this directory as `--cachedir`, so a job whose tool
+        and inputs are unchanged reuses its cached outputs. None: no cache. Toil keeps its own
+        job store and is not given it.
     Returns:
         cmd (list[str]): The command to run the workflow
     """
@@ -160,6 +164,8 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
     if cwl_runner == 'cwltool':
         cmd += ['--move-outputs', '--enable-ext',
                 '--outdir', runner_outdir]
+        if cachedir:
+            cmd += ['--cachedir', str(Path(cachedir).absolute())]
         cmd += passthrough_args
         cmd += list(documents)
     elif cwl_runner == 'toil-cwl-runner':
@@ -261,7 +267,8 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
 
     Args:
         run_args_dict (dict[str,str]): The command line arguments dict for run_local.
-        Its 'quiet' is 'yes' (the default) or 'no'.
+        Its 'quiet' is 'yes' (the default) or 'no'. Its 'cachedir', when not empty, is
+        passed to cwltool as `--cachedir`.
         use_subprocess (bool): When using cwltool, determines whether to use subprocess.run(...)
         or use the cwltool python api.
         basepath (str): The path at which the workflow to be executed
@@ -278,14 +285,14 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
     """
     yaml_path = Path(basepath) / workflow_name
     cwl_runner = run_args_dict['cwl_runner']
-    # 'cachedir' is the default value
-    cachedir = run_args_dict.get('cachedir', 'cachedir')
+    cachedir = run_args_dict.get('cachedir', '')
     container_engine = run_args_dict['container_engine']
 
     # build the runner command
     cmd = build_cmd(workflow_name, basepath, cwl_runner,
                     container_engine, passthrough_args, run_args_dict.get('outdir') or None,
-                    quiet=run_args_dict.get('quiet', 'yes') == 'yes', documents=documents)
+                    quiet=run_args_dict.get('quiet', 'yes') == 'yes', documents=documents,
+                    cachedir=cachedir or None)
     cmdline = ' '.join(cmd)
     exec_env = create_safe_env(user_env_vars or {})
 
