@@ -19,6 +19,7 @@ User Documentation
    advanced.md
    language_guide.md
    cookbook.md
+   cwl_you_still_need.md
    tutorials/tutorials.rst
    validation.md
 
