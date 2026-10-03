@@ -284,6 +284,9 @@ through untouched.
 `sophios.lang.parse`, which accepts both spellings above, and written by
 `sophios.lang.render`, which emits the tagged one. The two are inverses, a claim
 that lives as the round-trip property in `tests/core/test_lang_render.py`.
+A nested step entry keeps its `wic:` wrapper through a render, since every consumer
+reads through it, and an empty `wic:` block renders as `{}`, never as a null
+(`test_empty_sidecar_renders_as_mapping_not_null`).
 
 **The Python API** (`Workflow`, `Step`) is the second surface of the same language.
 It builds a `sophios.lang.Document` directly, compiles it through the same door as a
