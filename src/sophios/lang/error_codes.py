@@ -73,6 +73,10 @@ class SophiosErrorCode(StrEnum):
     #: ..., or `linkMerge`/`pickValue`/a list `outputSource` on a workflow output.
     STEP_INPUT_RECORD = 'wic038'
 
+    #: A positional `(index, name)/port` outputSource whose index does not hold
+    #: that step, or written in a workflow with an inferred edge.
+    POSITIONAL_OUTPUT_SOURCE = 'wic039'
+
     #: --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = 'api001'
     INVALID_STEP = 'api002'
