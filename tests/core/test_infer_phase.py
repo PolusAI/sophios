@@ -29,6 +29,7 @@ from sophios.ir.declarations import input_rank, layered, output_rank
 from sophios.ir.types import (DerivedName, EdgeOrigin, Port, PortDeclaration, PortId, PortName,
                               StepNode, WorkflowGraph)
 from sophios.lang import SophiosErrorCode
+from sophios.lang.diagnostics import SophiosError
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
@@ -376,3 +377,22 @@ def _insertion_registry() -> tuple[Yaml, Tools]:
     tools = {LegacyStepId(name, SYNTHETIC_NS): Tool(f'/synthetic/{name}.cwl', cwl)
              for name, cwl in specs.items()}
     return {'steps': steps}, tools
+
+
+@pytest.mark.fast
+def test_a_positional_output_source_is_refused_beside_an_inferred_edge() -> None:
+    """`count` leaves `file` to inference, so the document is not fully explicit."""
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'outputs': {'n': {'type': 'int', 'outputSource': '(2, count)/n'}},
+                          'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}},
+                                    {'id': 'count'}]})
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE
+
+
+@pytest.mark.fast
+def test_a_positional_output_source_compiles_in_a_fully_explicit_workflow() -> None:
+    compiled = compile_hermetic({'outputs': {'n': {'type': 'int', 'outputSource': '(2, count)/n'}},
+                                 'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}},
+                                            'out': [{'file': {'wic_anchor': 'f'}}]},
+                                           {'id': 'count', 'in': {'file': {'wic_alias': 'f'}}}]})
+    assert compiled.artifact.cwl['outputs']['n']['outputSource'] == 'oracle__step__2__count/n'
