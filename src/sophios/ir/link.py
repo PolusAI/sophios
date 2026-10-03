@@ -56,7 +56,7 @@ def link(graph: WorkflowGraph) -> Linked:
             )
             continue
         if _position(attached, source.step) >= _position(attached, obligation.sink.step):
-            # Reference §4.1.2: a call does not exempt a document from resolving
+            # Language guide §4: a call does not exempt a document from resolving
             # against definitions seen so far, or splitting it would legalize the error.
             diagnostics.error(
                 SophiosErrorCode.UNDEFINED_EDGE,

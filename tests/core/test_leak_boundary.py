@@ -8,10 +8,10 @@ and the stripped residue validates as CWL v1.2 under cwltool.
 These run the actual `compile_workflow`, not the syntax layer, because the
 boundary being specified is the compiler's behaviour. The syntax layer's
 partition is checked exhaustively over the declared set as well, since
-that is what the schema and the reference derive from.
+that is what the schema and the language spec derive from.
 
 The keys the compiler owns are the documented exceptions. Their normative
-statement lives in the reference's §1 footnote — the single home — and each is
+statement lives in language spec §1.2 — the single home — and each is
 enforced by a named test below rather than by a property: `requirements`,
 `inputs` and `outputs` are merged into, `$schemas` is append-only,
 `$namespaces` reserves the `edam` and `sophios` prefixes, and `class` and

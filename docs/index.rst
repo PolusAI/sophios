@@ -67,7 +67,6 @@ understand, debug, and review.
 
    advanced.md
    language_guide.md
-   sophios_language_reference.md
    tutorials/tutorials.rst
    validation.md
 

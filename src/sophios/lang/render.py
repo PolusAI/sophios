@@ -72,7 +72,7 @@ class _Writer:
     mode: Literal['tagged', 'json']
 
     def document(self, document: Document) -> dict[str, Any]:
-        """Key order follows the reference: `wic:`, then `steps:`, then the rest."""
+        """Key order follows the language guide: `wic:`, then `steps:`, then the rest."""
         body: dict[str, Any] = {}
 
         if document.sidecar is not None:
@@ -114,7 +114,7 @@ class _Writer:
         return {binding.name: self.edge_def(binding.edge_def)}
 
     def edge_def(self, edge: EdgeDef) -> Any:
-        """Spell an `!&` edge definition — legal only on an `out:` entry (§4.1.1)."""
+        """Spell an `!&` edge definition — legal only on an `out:` entry (language guide §3.6)."""
         return _Tagged(Tag.ANCHOR, edge.name) if self.mode == 'tagged' else {Key.ANCHOR: edge.name}
 
     def sidecar(self, sidecar: WicSidecar) -> Any:

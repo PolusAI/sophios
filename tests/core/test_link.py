@@ -115,7 +115,7 @@ def test_cross_scope_obligation_discharged_two_levels_below_the_definition() -> 
 def test_a_call_does_not_exempt_an_edge_from_document_order(definition_first: bool) -> None:
     """The order rule is one rule, whether the reference is flat or in a call.
 
-    Reference §4.1.2: a reference resolves against the definitions before it,
+    Language guide §4: a reference resolves against the definitions before it,
     and a child may consume what its includer has *already* defined. Lower
     applies that within one scope. If Link ignored it across a call, the same
     program would be `wic025` written flat and legal once split into a

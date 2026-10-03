@@ -108,7 +108,7 @@ def _parses(document: dict[str, Any]) -> tuple[bool, list[str]]:
     Dumping and re-parsing is a fair test rather than a round-trip through a
     lossy form, because the tags desugar on load -- `!& e` becomes
     `{'wic_anchor': 'e'}` -- so a manufactured document is already in the
-    desugared spelling, which the language reference (§6.1) says the parser
+    desugared spelling, which the language spec (§2) says the parser
     accepts equally.
 
     The desugared spelling carries no tags, but every construct position is
@@ -117,7 +117,7 @@ def _parses(document: dict[str, Any]) -> tuple[bool, list[str]]:
     misspelled construct and a correctly spelled `wic_anchor` as a misplaced
     one; in `out:`, a mapping value must be an edge definition and every other
     shape is reported. A `wic_`-prefixed key anywhere else stays ordinary
-    passthrough by design -- §1 makes that vocabulary open -- and is not read
+    passthrough by design -- language spec §1 makes that vocabulary open -- and is not read
     as a failed construct.
     """
     text = yaml.dump(document, sort_keys=False, line_break='\n', indent=2, Dumper=NoAliasDumper)

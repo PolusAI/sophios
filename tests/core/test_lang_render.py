@@ -223,7 +223,7 @@ def test_corpus_round_trips(path: Path) -> None:
 
 @pytest.mark.fast
 def test_render_emits_the_tagged_spelling() -> None:
-    """Output uses the spelling the language reference tells people to write."""
+    """Output uses the spelling the language guide tells people to write."""
     document = parse('steps:\n- id: s\n  in:\n    f:\n      wic_inline_input: x\n', 'a.wic').document
     assert document is not None
     text = render(document)

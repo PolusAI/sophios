@@ -1451,7 +1451,7 @@ def test_every_api_failure_is_catchable_as_one_type() -> None:
 def test_an_api_failure_carries_an_api_code_not_a_language_one(error: type[ApiError]) -> None:
     """`api0NN`, because the document is not what is wrong -- the call is.
 
-    A `wic0NN` here would send a reader to a section of the language reference
+    A `wic0NN` here would send a reader to a section of the language guide
     that does not describe their problem. `is_language` is the distinction, so
     a caller can route on it rather than on the string prefix.
     """

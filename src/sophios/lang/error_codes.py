@@ -7,7 +7,7 @@ without importing the reporting plumbing.
 Two ranges, one enum: `wic0NN` is the language (a document said something
 the language does not accept); `api0NN` is the Python API (the document is
 fine, the call was not). One type so a caller matches on one `except`;
-separate ranges so an API code does not point at the language reference.
+separate ranges so an API code does not point at the language guide.
 """
 from enum import StrEnum
 
@@ -60,11 +60,11 @@ class SophiosErrorCode(StrEnum):
     #: inference is done. On a subworkflow call the inputs are the ones the
     #: subworkflow declares.
     UNKNOWN_SCATTER_PORT = 'wic032'
-    #: A key in a ``wic:`` block that the block does not have (§5).
+    #: A key in a ``wic:`` block that the block does not have (language guide §7).
     UNKNOWN_WIC_KEY = 'wic033'
-    #: A ``wic:`` key whose value does not have the shape the key declares (§5).
+    #: A ``wic:`` key whose value does not have the shape the key declares (language guide §7).
     MALFORMED_WIC_VALUE = 'wic034'
-    #: An authored `cwlVersion` the substrate toolchain does not run (§1).
+    #: An authored `cwlVersion` the substrate toolchain does not run (language spec §1).
     UNSUPPORTED_CWL_VERSION = 'wic035'
     #: An authored workflow output with no `type` and no producer to take one from.
     UNTYPED_OUTPUT = 'wic036'

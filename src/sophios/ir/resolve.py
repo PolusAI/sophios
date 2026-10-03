@@ -413,7 +413,7 @@ def _contributed_input(value: OpaqueCwl, span: SourceSpan) -> InputValue:
     """Read one contributed `in:` value back into the closed input union.
 
     Accepts either an already-typed tagged construct or its desugared mapping
-    spelling; both surfaces mean one thing (§4.1).
+    spelling; both surfaces mean one thing (language guide §3.1).
     """
     match value:
         case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName() | CwlRecord():

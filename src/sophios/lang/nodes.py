@@ -40,7 +40,7 @@ class Shape(StrEnum):
     #: A fixed set of CWL keys Sophios reads and acts upon.
     INTERPRETED = 'interpreted'
     #: The `wic:` block's value keys: a closed set, each with a declared
-    #: value shape (`Grammar.SIDECAR_VALUES`, §5).
+    #: value shape (`Grammar.SIDECAR_VALUES`, language guide §7).
     SIDECAR_ENTRIES = 'sidecar_entries'
     #: Any key not claimed above: CWL, copied through untouched.
     PASSTHROUGH = 'passthrough'

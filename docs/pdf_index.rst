@@ -18,7 +18,6 @@ User Documentation
    python_api_reference.rst
    advanced.md
    language_guide.md
-   sophios_language_reference.md
    tutorials/tutorials.rst
    validation.md
 

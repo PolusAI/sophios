@@ -253,7 +253,7 @@ def test_a_union_member_written_either_way_parses_the_same() -> None:
 
 @pytest.mark.fast
 def test_a_reference_before_its_definition_is_reported() -> None:
-    """`!* e` above its `!& e` is `wic025`, as the reference and compiler say.
+    """`!* e` above its `!& e` is `wic025`, as the language guide and compiler say.
 
     Resolving it by pre-scanning every definition would make Lower accept a
     document the compiler refuses, and silently change an ordering rule.
@@ -272,7 +272,7 @@ def test_a_name_defined_twice_is_reported() -> None:
 
 @pytest.mark.fast
 def test_a_sidecar_out_mentioning_the_name_does_not_mask_a_real_duplicate() -> None:
-    """A `wic:` sidecar `out:` entry (§4.1.1, accepted since `wic019` no
+    """A `wic:` sidecar `out:` entry (language guide §3.6, accepted since `wic019` no
     longer rejects it there) is inert passthrough, never itself a second
     definition — `basic.wic` relies on exactly this to place `min.tpr`'s one
     definition at a distance without it colliding with anything. A real

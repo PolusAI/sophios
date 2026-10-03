@@ -34,9 +34,9 @@ from .synthetic_tools import SCHEMA_TYPES, STEMS, inputs_of, outputs_of, require
 #: property about spans belongs to the parser, where real positions exist.
 _SPAN: Final = SourceSpan('<generated>', 1, 1, 1, 1)
 
-#: The construct kinds the coverage property enumerates. Derived from the reference's tables
-#: (§3.1 surface forms, §3.3 outputs, §4.1 input forms, §4.3 interpreted keys,
-#: §5 the sidecar) rather than from the strategy below, so a construct the
+#: The construct kinds the coverage property enumerates. Derived from the language guide's tables
+#: (§2.1 surface forms, §5 outputs, §3.1 input forms, §2.2 interpreted keys,
+#: §7 the sidecar) rather than from the strategy below, so a construct the
 #: strategy stops producing is a failure instead of a silent narrowing.
 #: Construct kinds the generator cannot draw, each with the reason. The design
 #: requires every AST construct kind to appear within a bounded sample, so a kind
@@ -354,7 +354,7 @@ def documents(draw: st.DrawFn) -> Document:  # pylint: disable=too-many-locals
 
     Both step surface forms, because mapping form and sequence form were once
     two languages to a generator that only spelled one. Mapping form cannot
-    repeat a step name (reference §3.1), so its stems are drawn **unique and up
+    repeat a step name (language guide §2.1), so its stems are drawn **unique and up
     front** — that is the language's constraint, not a convenience, and
     generating a document the language forbids would make every property
     downstream quantify over documents that fail before reaching the compiler.
@@ -626,7 +626,7 @@ _HOSTILE: Final = (
     ('steps:\n  s:\n    in:\n      f: !ii a\n      f: !ii b\n', SophiosErrorCode.DUPLICATE_KEY),
     ('steps:\n- id: s\n  in:\n    f: !foo bar\n', SophiosErrorCode.UNKNOWN_TAG),
     ('steps:\n- id: ""\n', SophiosErrorCode.EMPTY_STEP_ID),
-    # A sequence step carries its name in `id:` (reference §3.1), so an entry
+    # A sequence step carries its name in `id:` (language guide §2.1), so an entry
     # without one earns MISSING_STEP_ID whatever else it has — here, nothing.
     ('steps:\n- {}\n', SophiosErrorCode.MISSING_STEP_ID),
     ('steps:\n- id: s\n  out: {a: b}\n', SophiosErrorCode.EXPECTED_SEQUENCE),
