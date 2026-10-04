@@ -76,6 +76,7 @@ class CompilerOptions(TypedDict):
     """Core compiler flags needed for compilation and transformation into CWL."""
     partial_failure_enable: bool
     inference_use_naming_conventions: bool
+    inference_strict: bool
     insert_steps_automatically: bool
     inference_disable: bool
     allow_raw_cwl: bool
@@ -94,13 +95,6 @@ class GraphSettings(TypedDict):
     graph_label_stepname: bool
     graph_show_outputs: bool
     graph_show_inputs: bool
-
-
-class YamlTagPaths(TypedDict):
-    """Paths that need to be included in (generated) yaml tags."""
-    cachedir: str
-    yaml: str
-    homedir: str
 
 
 class PluginNodeConfig(TypedDict):

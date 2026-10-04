@@ -268,6 +268,10 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 WINDOWS_EXCLUDED: Final = frozenset({
     'tests/core/test_emit.py::test_emit_validates_as_cwl_v1_2',
     'tests/core/test_emit.py::test_validator_rejects_the_independent_invalid_control',
+    # A strict xfail on one cwltool validation of a `schemed` workflow, under a
+    # second. It states the SchemaDefRequirement gap the generators exclude,
+    # which only cwltool's validator can show, so it runs where the pair does.
+    'tests/core/test_emit.py::test_a_schema_def_typed_input_validates',
     'tests/core/test_leak_boundary.py::test_residue_validates_as_cwl_v1_2',
     # One compile and one `--validate` of a four-line workflow, under a second.
     # It buys the authored `outputSource` path, which the residue property
@@ -279,6 +283,23 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # is the script's, not the test's. Its compact twin builds the same hinted
     # tool without validating it and still runs on Windows.
     'tests/core/test_example_scripts.py::test_the_integrated_ichnaea_script_compiles_its_hinted_tool',
+    # Loads the corpus into cwltool, to ask it what an embedded document means. Its
+    # platform-neutral sibling `test_embedding_keeps_meaning` runs on every leg.
+    'tests/core/test_examples.py::test_embedding_keeps_runtime_defaults',
+    # Loads the flat and flat-embedded corpus documents into cwltool to validate
+    # them. Its platform-neutral sibling `test_flatten_keeps_meaning` runs on
+    # every leg.
+    'tests/core/test_examples.py::test_flatten_validates_as_cwl',
+    # Plain CWL workflows run by cwltool through --run_local: a two-step one,
+    # and twelve conformance workflows, each also run by cwltool directly, in
+    # about four seconds. The file's other tests check what the runner is
+    # given and run on Windows.
+    'tests/core/test_plain_cwl.py::test_a_plain_cwl_workflow_runs_as_it_is',
+    'tests/core/test_plain_cwl.py::test_a_conformance_workflow_runs_through_sophios_as_cwltool_runs_it',
+    # A workflow run by cwltool through --run_local, with a real-time analysis
+    # run by cwltool beside it, twice, about ten seconds each. The watcher's
+    # own tests use a stand-in for cwltool and run on every leg.
+    'tests/core/test_realtime.py::test_the_analysis_runs_beside_the_workflow_and_never_changes_its_outcome',
 })
 
 

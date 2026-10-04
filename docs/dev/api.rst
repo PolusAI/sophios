@@ -14,10 +14,6 @@ sophios.compute_request
 .. automodule:: sophios.compute_request
    :no-index:
 
-sophios.cwl_subinterpreter
-------------------------------------
-.. automodule:: sophios.cwl_subinterpreter
-
 sophios.input_output
 ------------------------------------
 .. automodule:: sophios.input_output
@@ -33,6 +29,10 @@ sophios.plugins
 sophios.python_cwl_adapter
 ------------------------------------
 .. automodule:: sophios.python_cwl_adapter
+
+sophios.realtime
+------------------------------------
+.. automodule:: sophios.realtime
 
 sophios.run_local
 ------------------------------------

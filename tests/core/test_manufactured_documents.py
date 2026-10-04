@@ -2,7 +2,8 @@
 
 The corpus is not the interesting input: documents a *user* wrote already have
 a parse property. What nothing checked is the documents the compiler *makes* —
-the Python API's output and the documents `rerun_cwltool` builds. Those
+the Python API's output and the one-step workflow a real-time analysis is
+compiled as. Those
 are built rather than parsed, so the grammar has no opinion about them unless
 asked, and three defects in a row lived exactly there: step ids spelled
 from the wrong stem, a producer still emitting a step form the grammar had
@@ -17,9 +18,13 @@ from typing import Any, Final
 import pytest
 import yaml
 
+from sophios import realtime
+from sophios.cli import default_compilation_settings
 from sophios.input_output import NoAliasDumper
+from sophios.ir.realtime import Declaration
 from sophios.lang import Document, parse, to_json
 from sophios.api.python.workflow import Step, Workflow
+from sophios.wic_types import StepId, Tool
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
@@ -35,7 +40,7 @@ CONTRIB: Final = 'CONTRIB'        # outside the core zone
 #: classified by hand.
 MANUFACTURING_SITES: Final[dict[str, str]] = {
     'sophios/api/python/_workflow_runtime.py::workflow_document': DOCUMENT,
-    'sophios/cwl_subinterpreter.py::rerun_cwltool': DOCUMENT,
+    'sophios/realtime.py::_wrapper': DOCUMENT,
     # Not documents.
     'sophios/ir/emit.py::emit': CWL,
     'sophios/lang/render.py::_Writer.document': RENDERER,
@@ -48,10 +53,7 @@ MANUFACTURING_SITES: Final[dict[str, str]] = {
 
 #: Instrumented sites no driver below reaches, and why. Each is evidence not
 #: gathered, so each needs a reason that can be checked rather than a shrug.
-UNREACHED: Final[dict[str, str]] = {
-    'sophios/cwl_subinterpreter.py::rerun_cwltool': 'shells out to a CWL runner; its documents are '
-    'pinned directly by test_compiler.py',
-}
+UNREACHED: Final[dict[str, str]] = {}
 
 
 def _documents_in(value: Any, depth: int = 0) -> list[dict[str, Any]]:
@@ -108,7 +110,7 @@ def _parses(document: dict[str, Any]) -> tuple[bool, list[str]]:
     Dumping and re-parsing is a fair test rather than a round-trip through a
     lossy form, because the tags desugar on load -- `!& e` becomes
     `{'wic_anchor': 'e'}` -- so a manufactured document is already in the
-    desugared spelling, which the language reference (§6.1) says the parser
+    desugared spelling, which the language spec (§2) says the parser
     accepts equally.
 
     The desugared spelling carries no tags, but every construct position is
@@ -117,7 +119,7 @@ def _parses(document: dict[str, Any]) -> tuple[bool, list[str]]:
     misspelled construct and a correctly spelled `wic_anchor` as a misplaced
     one; in `out:`, a mapping value must be an edge definition and every other
     shape is reported. A `wic_`-prefixed key anywhere else stays ordinary
-    passthrough by design -- §1 makes that vocabulary open -- and is not read
+    passthrough by design -- language spec §1 makes that vocabulary open -- and is not read
     as a failed construct.
     """
     text = yaml.dump(document, sort_keys=False, line_break='\n', indent=2, Dumper=NoAliasDumper)
@@ -203,3 +205,14 @@ def _drive_everything() -> None:
     # Exercise the direct Python API serialization entry point as well as its
     # compile path.
     workflow.to_wic_yaml()
+    # A real-time analysis of each kind: a tool configured by its `in:`, and a
+    # `.wic` configured by its steps' sidecar, each with a file named by basename.
+    tools = {StepId(stem, 'global'): Tool(str(adapters / f'{stem}.cwl'),
+                                          yaml.safe_load((adapters / f'{stem}.cwl').read_text(encoding='utf-8')))
+             for stem in ('append', 'echo')}
+    options, graph_settings = default_compilation_settings()
+    realtime.compile_analyses((
+        Declaration('wf', 'append', '*.txt', 2, 60, {'in': {'file': 'empty.txt', 'str': 'Hello'}}),
+        Declaration('wf', 'helloworld.wic', '*.txt', 2, 60, {'(1, echo)': {'in': {'message': 'Hi'}}}),
+    ), {'global': {'helloworld': REPO_ROOT / 'docs' / 'tutorials' / 'helloworld.wic'}},
+        tools, options, graph_settings)

@@ -17,7 +17,9 @@ User Documentation
    ichnaea_compact_compute.md
    python_api_reference.rst
    advanced.md
-   sophios_language_reference.md
+   language_guide.md
+   cookbook.md
+   cwl_you_still_need.md
    tutorials/tutorials.rst
    validation.md
 
@@ -30,6 +32,7 @@ Developer Documentation
    dev/installguide.md
    dev/devguide.md
    dev/algorithms.md
+   dev/language_spec.md
    dev/codingstandards.md
    dev/gitetiquette.md
    dev/api.rst

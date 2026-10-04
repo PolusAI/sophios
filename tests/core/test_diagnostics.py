@@ -23,17 +23,20 @@ from types import ModuleType
 
 import pytest
 
+from sophios import main as cli
 from sophios import post_compile
 from sophios.ir.complete import coerce_job_value
 from sophios.ir.declarations import port_declaration
 from sophios.ir.types import AuthoredName
 from sophios.lang import InlineLiteral, parse
-from sophios.lang.diagnostics import Diagnostic, Severity, SophiosError
+from sophios.lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
+from sophios.lang.spans import SourceSpan
 from sophios.python_cwl_adapter import check_args_match_inputs
 from sophios.wic_types import StepId, Tool
 
 from .hermetic import compile_hermetic
+from .provocations import _provoke_duplicate_document_name
 from .synthetic_tools import SYNTHETIC_NS, clt
 
 
@@ -64,6 +67,15 @@ def test_spanless_diagnostics_print_without_a_location() -> None:
     invent one."""
     diagnostic = Diagnostic(Severity.ERROR, SophiosErrorCode.MISSING_INPUT_FILE, 'gone.txt missing')
     assert str(diagnostic) == 'error [wic016] gone.txt missing'
+
+
+@pytest.mark.fast
+def test_a_note_is_reported_without_being_an_error() -> None:
+    """A note says something the reader should know; it does not fail anything."""
+    diagnostics = Diagnostics()
+    diagnostics.note(SophiosErrorCode.UNRESOLVED_INPUT, 'worth knowing')
+    assert not diagnostics.has_errors
+    assert [str(d) for d in diagnostics] == ['note [wic011] worth knowing']
 
 
 # --- the converted sites, one by one ---------------------------------------
@@ -300,11 +312,10 @@ def test_cli_converts_a_report_to_exit_1(monkeypatch: pytest.MonkeyPatch,
                                          capsys: pytest.CaptureFixture[str]) -> None:
     """A reported failure leaves the CLI with exit code 1 and no traceback, and
     the messages on **stderr**, with their code."""
-    from sophios import main as cli
 
     def reports(*_args: object, **_kwargs: object) -> None:
         raise SophiosError.error(SophiosErrorCode.UNRESOLVED_INPUT,
-                                 'Warning! Did you forget to use !ii before x in demo.wic?',
+                                 'Did you forget to use !ii before x in demo.wic?',
                                  'If you want to compile the workflow anyway, use --allow_raw_cwl')
 
     monkeypatch.setattr(cli, '_main', reports)
@@ -323,7 +334,6 @@ def test_cli_converts_a_report_to_exit_1(monkeypatch: pytest.MonkeyPatch,
 def test_cli_reports_a_workflow_that_does_not_compile_on_stderr_with_its_position(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """The failure a scientist sees names the file, line, column and code, all on stderr."""
-    from sophios import main as cli
     workflow = tmp_path / 'bad.wic'
     workflow.write_text('steps:\n- id: ""\n', encoding='utf-8')
     monkeypatch.chdir(tmp_path)
@@ -344,7 +354,6 @@ def test_cli_reports_a_workflow_that_does_not_compile_on_stderr_with_its_positio
 def test_cli_points_a_compiler_crash_at_its_error_file_on_stderr(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A failure that is not a reported diagnostic keeps its traceback in `error_<stem>.txt` and says so on stderr."""
-    from sophios import main as cli
     workflow = tmp_path / 'crash.wic'
     workflow.write_text('steps:\n- id: touch\n', encoding='utf-8')
 
@@ -366,10 +375,47 @@ def test_cli_points_a_compiler_crash_at_its_error_file_on_stderr(
     assert 'boom' in (tmp_path / 'error_crash.txt').read_text(encoding='utf-8')
 
 
+_TWO_TOUCHES = ('steps:\n- id: touch\n  in:\n    filename: !ii a.txt\n'
+                '- id: touch\n  in:\n    filename: !ii b.txt\n- id: cat\n')
+
+
+@pytest.mark.fast
+def test_cli_prints_an_inference_note_on_stderr_and_succeeds(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A choice between equals is said, with its code, and the compile still succeeds."""
+    workflow = tmp_path / 'two_touches.wic'
+    workflow.write_text(_TWO_TOUCHES, encoding='utf-8')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), '--generate_cwl_workflow'])
+
+    cli.main()  # returning, rather than raising SystemExit, is the first assertion
+
+    captured = capsys.readouterr()
+    assert 'note [wic043]' in captured.err
+    assert "'touch/file'" in captured.err
+    assert 'wic043' not in captured.out
+
+
+@pytest.mark.fast
+def test_cli_with_inference_strict_refuses_a_choice_between_equals(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """`--inference_strict` makes the same note an error and the exit code says so."""
+    workflow = tmp_path / 'two_touches.wic'
+    workflow.write_text(_TWO_TOUCHES, encoding='utf-8')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), '--generate_cwl_workflow',
+                                     '--inference_strict'])
+
+    with pytest.raises(SystemExit) as caught:
+        cli.main()
+
+    assert caught.value.code == 1
+    assert 'error [wic043]' in capsys.readouterr().err
+
+
 @pytest.mark.fast
 def test_cli_success_does_not_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     """A clean run returns instead of raising, exactly as before."""
-    from sophios import main as cli
     monkeypatch.setattr(cli, '_main', lambda: None)
     cli.main()  # returning, rather than raising SystemExit, is the assertion
 
@@ -413,7 +459,6 @@ def _cli_on_helloworld(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Calla
     What would reach for a container engine is replaced; compiling, argument handling and the
     exit code are the CLI's own.
     """
-    import sophios.main as cli
     import sophios.post_compile as pc
     monkeypatch.setattr(pc, 'verify_container_engine_config', lambda *_a, **_k: None)
     monkeypatch.setattr(pc, 'cwl_docker_extract', lambda *_a, **_k: None)
@@ -443,6 +488,13 @@ def test_passthrough_flags_yes_sends_unrecognised_arguments_to_the_runner(
         cli_on_helloworld: Callable[..., None]) -> None:
     cli_on_helloworld('--generate_run_script', '--passthrough_flags', 'yes', '--debug')
     assert '--debug' in Path('run.sh').read_text(encoding='utf-8').split()
+
+
+@pytest.mark.fast
+def test_a_runner_flag_is_not_read_as_an_abbreviated_sophios_flag(cli_on_helloworld: Callable[..., None]) -> None:
+    """cwltool's `--validate` reaches the runner; it is not a prefix of `--validate_plugins`."""
+    cli_on_helloworld('--generate_run_script', '--passthrough_flags', 'yes', '--validate')
+    assert '--validate' in Path('run.sh').read_text(encoding='utf-8').split()
 
 
 @pytest.mark.fast
@@ -491,3 +543,100 @@ def test_ctrl_c_during_run_local_exits_130(monkeypatch: pytest.MonkeyPatch,
         cli_on_helloworld('--run_local', '--cwl_runner', cwl_runner)
     assert isinstance(caught.value, SystemExit)
     assert caught.value.code == 130
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('flags', [[], ['--cachedir', 'mycache']])
+def test_a_runner_that_raises_says_why_with_or_without_a_cachedir(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+        cli_on_helloworld: Callable[..., None], flags: list[str]) -> None:
+    """The traceback goes to error_<name>.txt; the message itself is printed, whatever the cache."""
+    import sophios.run_local as rl
+
+    def broken(_args: list[str]) -> int:
+        raise RuntimeError('the runner broke')
+
+    monkeypatch.setattr(rl.cwltool.main, 'main', broken)
+    with pytest.raises(SystemExit) as caught:
+        cli_on_helloworld('--run_local', *flags)
+    assert caught.value.code == 1
+    assert 'the runner broke' in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# Compile diagnostics name where the author wrote the problem
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_an_unresolved_input_names_its_line_and_step() -> None:
+    """wic011 carried a message and nothing else; the parser had the span all along."""
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': 'undeclared'}}]})
+    diagnostic = caught.value.diagnostics[0]
+    assert diagnostic.code is SophiosErrorCode.UNRESOLVED_INPUT
+    assert diagnostic.span is not None and diagnostic.span.file == 'oracle.wic'
+    assert diagnostic.locator == Locator(step='mk_file', index=1, port='name')
+
+
+@pytest.mark.fast
+def test_a_literal_type_mismatch_names_its_line_and_port() -> None:
+    """wic020 names the line of the `!ii` literal and the step and port it binds."""
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [{'id': 'scale', 'in': {'n': {'wic_inline_input': 'x'}}}]})
+    diagnostic = caught.value.diagnostics[0]
+    assert diagnostic.code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
+    assert diagnostic.span is not None and diagnostic.span.file == 'oracle.wic'
+    assert diagnostic.span.start_line > 0
+    assert diagnostic.locator == Locator(step='scale', index=1, port='n')
+
+
+@pytest.mark.fast
+def test_a_missing_required_job_value_carries_its_position() -> None:
+    """wic012 is raised where the value is coerced, at the span and step its caller names."""
+    span = SourceSpan('x.wic', 3, 1, 3, 1)
+    locator = Locator(step='scale', index=2, port='n')
+    with pytest.raises(SophiosError) as caught:
+        coerce_job_value(AuthoredName('n'), port_declaration({'type': 'int'}), None,
+                         span=span, locator=locator)
+    diagnostic = caught.value.diagnostics[0]
+    assert diagnostic.code is SophiosErrorCode.MISSING_REQUIRED_INPUT
+    assert (diagnostic.span, diagnostic.locator) == (span, locator)
+    assert str(diagnostic).startswith('x.wic:3:1: ')
+
+
+@pytest.mark.fast
+def test_a_duplicate_document_name_names_its_document() -> None:
+    """wic031 has no port to point at, so it points at the document that spells two ports alike."""
+    with pytest.raises(SophiosError) as caught:
+        _provoke_duplicate_document_name()
+    diagnostic = caught.value.diagnostics[0]
+    assert diagnostic.code is SophiosErrorCode.DUPLICATE_DOCUMENT_NAME
+    assert diagnostic.span is not None and diagnostic.span.file == 'provoke.wic'
+
+
+@pytest.mark.fast
+def test_an_unresolved_input_error_does_not_call_itself_a_warning() -> None:
+    """wic011 is an error: its message says what to write, with no `Warning!` in front."""
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': 'x'}}]})
+    first = caught.value.diagnostics[0]
+    assert first.code is SophiosErrorCode.UNRESOLVED_INPUT
+    assert first.message == 'Did you forget to use !ii before x in oracle.wic?'
+
+
+@pytest.mark.fast
+def test_a_container_engine_error_does_not_call_itself_a_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An error report states the problem; `Warning!` is for the stderr lines that do not stop the compile."""
+    _docker_with_processes(monkeypatch, 1001)
+    with pytest.raises(SophiosError) as caught:
+        post_compile.verify_container_engine_config('docker', False, ignore_container_processes=False)
+    assert caught.value.diagnostics[0].message == 'There are 1001 running docker processes.'
+
+    def command_not_found(*_args: object, **_kwargs: object) -> object:
+        raise FileNotFoundError('docker')
+
+    monkeypatch.setattr(post_compile.sub, 'run', command_not_found)
+    with pytest.raises(SophiosError) as caught:
+        post_compile.verify_container_engine_config('docker', False)
+    assert caught.value.diagnostics[0].message == 'The docker command does not appear to be installed.'
