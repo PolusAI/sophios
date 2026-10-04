@@ -3,7 +3,7 @@
 There is no discovery mechanism here — Sophios already has one. The config's
 `search_paths_wic` defines where workflows live, `plugins.get_yml_paths` finds
 them (excluding generated `*_inputs*` files), and CI provisions the config to
-reach `docs/tutorials`, `mm-workflows/examples`, and
+reach `docs/tutorials`, `docs/cookbook`, `mm-workflows/examples`, and
 `image-workflows/workflows` (`.github/update_sophios_config.py`). The corpus
 is exactly that reachable set, so the corpus and the compiler can never
 disagree about what exists.
@@ -25,6 +25,7 @@ from sophios.cli import get_args
 #: `pytest --collect-only` provision the environment it is meant to inspect.
 _IN_REPO_DIRS: Final = (
     Path(__file__).resolve().parents[2] / 'docs' / 'tutorials',
+    Path(__file__).resolve().parents[2] / 'docs' / 'cookbook',
     Path(__file__).resolve().parents[2] / 'examples',
 )
 

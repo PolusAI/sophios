@@ -1,0 +1,7 @@
+steps:
+- id: make_greeting.wic
+  out:
+  - greeting: !& made
+- id: cat
+  in:
+    file: !* made

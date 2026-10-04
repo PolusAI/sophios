@@ -91,10 +91,6 @@ For a lighter install that is enough for most API tests and docs work:
 python -m pip install -e ".[test,doc,mypy-types]"
 ```
 
-Use `.[all]` only when you intentionally want the source-runner extra declared
-in `pyproject.toml`. That extra installs `cwl-utils` from a Git source instead
-of using only released runner packages.
-
 Install the pre-commit hooks after the editable install:
 
 ```bash

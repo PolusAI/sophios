@@ -1,0 +1,8 @@
+steps:
+  echo_3:
+    scatter: [message1, message2]
+    scatterMethod: flat_crossproduct
+    in:
+      message1: !ii [Hello, Goodbye]
+      message2: !ii [sun, moon]
+      message3: !ii and stars

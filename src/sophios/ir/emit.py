@@ -22,15 +22,16 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
-from ..lang import versions
+from ..lang import CwlRecord, versions
 from ..lang.diagnostics import SophiosError
 from ..lang.error_codes import SophiosErrorCode
+from ..lang.spans import SourceSpan
 from ..lang.versions import ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
 from ..wic_types import Cwl
 from .declarations import required
 from .names import NAMESPACE_SEPARATOR, Names
 from .stepin import step_inputs, step_out
-from .types import (DerivedName, EmissionDocument, EmittedValue, Expression, PortName,
+from .types import (DerivedName, EmissionDocument, EmittedValue, Expression, PortName, Record,
                     Source, StepNode, StepOutputRef, WorkflowGraph, WorkflowPort)
 
 EDAM_NAMESPACE = ('edam', 'https://edamontology.org/')
@@ -52,17 +53,15 @@ def _step_spelling(step: StepNode, names: Names, relative_run_path: bool,
         if needed:
             interpreted['when'] = '$(' + ' && '.join(
                 f'inputs["{name}"] != null' for name in needed) + ')'
-    target = run.target
-    if isinstance(target, str):
-        # From the resolved identity: `target` is this function's own output,
-        # so a leaf read back out of it would compound.
-        leaf = f'{run.process_id.name}.cwl'
-        if relative_run_path:
-            target = f'{names.step(step.id)}/{leaf}'
-        elif run.child is not None:
-            target = f'{names.qualified(step.id)}{NAMESPACE_SEPARATOR}{leaf}'
-        else:
-            target = f'../{leaf}'
+    # From the resolved identity: `target` is this function's own output,
+    # so a leaf read back out of it would compound.
+    leaf = f'{run.process_id.name}.cwl'
+    if relative_run_path:
+        target = f'{names.step(step.id)}/{leaf}'
+    elif run.child is not None:
+        target = f'{names.qualified(step.id)}{NAMESPACE_SEPARATOR}{leaf}'
+    else:
+        target = f'../{leaf}'
     return replace(step, interpreted=tuple(interpreted.items()), run=replace(run, target=target))
 
 
@@ -102,7 +101,7 @@ def surface(graph: WorkflowGraph, names: Names, *,
         raise ValueError('every step in an emission graph needs a run')
 
     for ports in (graph.workflow_inputs, graph.workflow_outputs):
-        _refuse_colliding_names(tuple(port.name for port in ports), names)
+        _refuse_colliding_names(tuple(port.name for port in ports), names, graph.span)
     steps = [_step_spelling(step, names, relative_run_path, partial_failure)
              for step in graph.steps]
 
@@ -143,24 +142,31 @@ def surface(graph: WorkflowGraph, names: Names, *,
 
 
 def _implied_requirements(graph: WorkflowGraph, steps: list[StepNode]) -> tuple[str, ...]:
-    """The requirement classes `graph`'s calls, scatters and `when`s need."""
+    """The requirement classes `graph`'s calls, scatters, `when`s and step-input records need."""
+    records = [binding.value for step in steps for binding in step.bindings
+               if isinstance(binding.value, CwlRecord)]
+    value_from = [str(text) for record in records for key, text in record.fields if key == 'valueFrom']
     return tuple(requirement for requirement, needed in (
         ('SubworkflowFeatureRequirement', bool(graph.children)),
         ('ScatterFeatureRequirement', any(step.scatter_ports for step in steps)),
         ('InlineJavascriptRequirement',
-         any(dict(step.interpreted).get('when') is not None for step in steps)),
+         any(dict(step.interpreted).get('when') is not None for step in steps)
+         or any('$(' in text or '${' in text for text in value_from)),
+        ('MultipleInputFeatureRequirement',
+         any(len(record.sources) > 1 or 'linkMerge' in dict(record.fields) for record in records)),
+        ('StepInputExpressionRequirement', bool(value_from)),
     ) if needed)
 
 
-def _refuse_colliding_names(declared: tuple[PortName, ...], names: Names) -> None:
-    """Raise `wic031` when two distinct names in one namespace render alike."""
+def _refuse_colliding_names(declared: tuple[PortName, ...], names: Names, span: SourceSpan | None) -> None:
+    """Raise `wic031`, at the document's `span`, when two distinct names in one namespace render alike."""
     spelled: dict[str, PortName] = {}
     for name in declared:
         text = names.port(name)
         if text in spelled and spelled[text] != name:
             raise SophiosError.error(
                 SophiosErrorCode.DUPLICATE_DOCUMENT_NAME,
-                f'{text!r} names two different ports in the emitted document')
+                f'{text!r} names two different ports in the emitted document', span=span)
         spelled[text] = name
 
 
@@ -231,10 +237,10 @@ def _emit_scatter(scatter: Any, ports: tuple[PortName, ...], names: Names) -> An
     return deepcopy(scatter)
 
 
-def _emit_binding(value: EmittedValue, names: Names) -> str | dict[str, str]:
+def _emit_binding(value: EmittedValue, names: Names) -> str | dict[str, Any]:
     """One `in:` entry, in the spelling its value asks for.
 
-    Returns `str | dict[str, str]` rather than `Any` so mypy checks this
+    Returns `str | dict[str, Any]` rather than `Any` so mypy checks this
     `match` covers the union instead of a missed arm silently falling through.
     """
     match value:
@@ -244,6 +250,14 @@ def _emit_binding(value: EmittedValue, names: Names) -> str | dict[str, str]:
             return {'source': names.source(ref)}
         case Expression(text=text):
             return text
+        case Record(sources=sources, fields=fields):
+            known: dict[str, Any] = {}
+            if sources:
+                spelled = [names.source(source) for source in sources]
+                # One source stays a list beside `linkMerge`, which merges a list.
+                known['source'] = spelled if len(spelled) > 1 or 'linkMerge' in dict(fields) else spelled[0]
+            known.update({key: deepcopy(field) for key, field in fields})
+            return known
 
 
 def _emit_port(port: WorkflowPort, names: Names) -> Any:

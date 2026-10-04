@@ -44,6 +44,45 @@ class NoPartialFailureNullWarning(logging.Filter):
         return err_str not in record.getMessage()
 
 
+class AuthoredNamesFilter(logging.Filter):
+    """Rewrite each emitted id in a runner message as `authored (emitted)`.
+
+    Installed around an in-process run from the names map the compile wrote,
+    so a cwltool error names the step the user wrote. One pass, longest id
+    first, whole ids only: a nested id is rewritten as itself, never as the
+    step id it starts with, and a port the author named is left as written.
+    A step is matched by its id in the root document and by the id it carries
+    in its own document, which is the one cwltool prints for a nested step.
+    An id right after a `/` is a directory of the emitted tree and stays as is,
+    so a printed path still opens; the `_<n>` cwltool appends to a repeated
+    job stays with its id.
+    """
+    # pylint:disable=too-few-public-methods
+
+    def __init__(self, names: dict[str, Any]) -> None:
+        super().__init__()
+        authored: dict[str, str] = {}
+        for emitted, entry in names.get('steps', {}).items():
+            for spelled in (emitted, entry.get('id', emitted)):
+                authored[spelled] = f"step {entry['index']} '{entry['name']}'"
+        for emitted, entry in names.get('ports', {}).items():
+            if entry['steps']:
+                authored[emitted] = '/'.join([*entry['steps'], entry['port']])
+        self._authored = authored
+        alternatives = '|'.join(re.escape(emitted) for emitted in sorted(authored, key=len, reverse=True))
+        self._pattern = (re.compile(rf'(?<![\w/-])(?P<id>{alternatives})(?P<job>_\d+)?(?![\w-])')
+                         if authored else None)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if self._pattern is not None:
+            record.msg = self._pattern.sub(self._spelled, record.getMessage())
+            record.args = ()
+        return True
+
+    def _spelled(self, found: re.Match[str]) -> str:
+        return f"{self._authored[found['id']]} ({found['id']}{found['job'] or ''})"
+
+
 def logging_filters(allow_pf: bool = False) -> None:
     """Install logging filters that silence known-noisy cwltool/salad log messages.
 

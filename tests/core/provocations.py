@@ -26,7 +26,7 @@ PARSE: Final[dict[SophiosErrorCode, str]] = {
     SophiosErrorCode.EXPECTED_SCALAR: 'steps:\n  ? [a, b]\n  : {}\n',
     SophiosErrorCode.MISSING_STEP_ID: 'steps:\n- {a: 1, b: 2}\n',
     SophiosErrorCode.EMPTY_STEP_ID: "steps:\n- id: ''\n",
-    SophiosErrorCode.MALFORMED_WIC_STEP_KEY: 'wic:\n  steps:\n    nope:\n      x: 1\n',
+    SophiosErrorCode.MALFORMED_WIC_STEP_KEY: 'wic:\n  steps:\n    "not a key":\n      x: 1\n',
     SophiosErrorCode.UNKNOWN_TAG: 'top: !foo bar\n',
     SophiosErrorCode.DUPLICATE_KEY: 'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
     SophiosErrorCode.RECURSIVE_ALIAS: 'top: &a [*a]\n',
@@ -35,6 +35,7 @@ PARSE: Final[dict[SophiosErrorCode, str]] = {
     SophiosErrorCode.UNKNOWN_WIC_KEY: 'wic:\n  nonsense_key: 1\n',
     SophiosErrorCode.MALFORMED_WIC_VALUE: 'wic:\n  inlineable: sometimes\n',
     SophiosErrorCode.UNSUPPORTED_CWL_VERSION: 'cwlVersion: draft-3\n',
+    SophiosErrorCode.STEP_INPUT_RECORD: 'steps:\n- id: s\n  in:\n    f: {source: x}\n',
 }
 
 #: Codes provoked through the compiler or its helpers. Callables raise
@@ -358,4 +359,47 @@ def _provoke_untyped_output() -> None:
 
 COMPILED.update({
     SophiosErrorCode.UNTYPED_OUTPUT: _provoke_untyped_output,
+})
+
+
+def _provoke_positional_output_source() -> None:
+    """A positional outputSource whose index holds a different step."""
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+
+    compile_hermetic({'outputs': {'o': {'type': 'File', 'outputSource': '(1, xform)/file'}},
+                      'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]},
+                     'provoke')
+
+
+COMPILED.update({SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE: _provoke_positional_output_source})
+
+
+def _provoke_inference_tie() -> None:
+    """Under strict inference, one producer offering two matching outputs."""
+    from sophios.wic_types import StepId, Tool  # pylint: disable=import-outside-toplevel
+
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+    from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt  # pylint: disable=import-outside-toplevel
+
+    multi = clt({}, {'first': {'type': 'File', 'outputBinding': {'glob': 'first'}},
+                     'last': {'type': 'File', 'outputBinding': {'glob': 'last'}}})
+    tools = {**SYNTHETIC_TOOLS,
+             StepId('multi_file', SYNTHETIC_NS): Tool('/synthetic/multi_file.cwl', multi)}
+    compile_hermetic({'steps': [{'id': 'multi_file'}, {'id': 'count'}]}, 'provoke',
+                     tools=tools, inference_strict=True)
+
+
+def _provoke_inference_recency() -> None:
+    """Under strict inference, an earlier producer that also matched."""
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+
+    compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}},
+                                {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'b'}}},
+                                {'id': 'count'}]},
+                     'provoke', inference_strict=True)
+
+
+COMPILED.update({
+    SophiosErrorCode.INFERENCE_TIE: _provoke_inference_tie,
+    SophiosErrorCode.INFERENCE_RECENCY: _provoke_inference_recency,
 })
