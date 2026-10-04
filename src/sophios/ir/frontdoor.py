@@ -5,6 +5,7 @@ root's own text is the source, and each reachable workflow is registered as
 the parse of its own file, so every span is a position in the file the user
 edited. Nothing here serialises YAML.
 """
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,7 @@ from ..lang import (
 )
 from ..python_cwl_adapter import generate_CWL_CommandLineTool, get_module
 from ..wic_types import StepId, Tool, Tools
-from .resolve import RegistrySnapshot, generated_process_id
+from .resolve import RegistrySnapshot, generated_process_id, step_sidecar
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,7 +125,7 @@ def _append_pin(document: Document, pins: list[str]) -> None:
         pins.append(pinned if isinstance(pinned, str) else str(pinned))
 
 
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _reach(document: Document,
            yml_paths: dict[str, dict[str, Path]],
            script_dir: Path,
@@ -135,8 +136,9 @@ def _reach(document: Document,
     """Follow every workflow and generated tool one document's steps reach,
     including its inline implementation bodies.
     """
+    counts = Counter(step.id for step in document.steps)
     for index, step in enumerate(document.steps, start=1):
-        namespace = _namespace(_step_sidecar(document.sidecar, index, step.id))
+        namespace = _namespace(step_sidecar(document.sidecar, index, step.id, counts[step.id]))
         if step.id == 'python_script':
             generated[StepId(generated_process_id(step), namespace)] = \
                 _generated_tool(step, script_dir)
@@ -165,13 +167,6 @@ def _namespace(sidecar: WicSidecar | None) -> str:
     if sidecar is None:
         return 'global'
     return str(dict(sidecar.entries).get('namespace', 'global'))
-
-
-def _step_sidecar(sidecar: WicSidecar | None, index: int, name: str) -> WicSidecar | None:
-    if sidecar is None:
-        return None
-    return next((child for key, child in sidecar.steps
-                 if key.index == index and key.name == name), None)
 
 
 def _generated_tool(step: Step, script_dir: Path) -> Tool:
