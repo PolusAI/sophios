@@ -17,6 +17,7 @@ from hypothesis import example, given
 from hypothesis import strategies as st
 
 from sophios.lang import (
+    CwlRecord,
     Document,
     EdgeDef,
     EdgeRef,
@@ -55,7 +56,7 @@ unquoted_spellings = scalar_payload_texts.filter(lambda text: not text.startswit
 # structure, and comparison strips spans rather than pretending they survive.
 
 
-def _shape(node: Any) -> Any:  # pylint: disable=too-many-return-statements
+def _shape(node: Any) -> Any:  # pylint: disable=too-many-return-statements,too-many-branches
     """Reduce an AST to its structure, discarding source positions.
 
     One return per node kind. Collapsing them into a lookup would hide which
@@ -89,6 +90,9 @@ def _shape(node: Any) -> Any:  # pylint: disable=too-many-return-statements
             return ('raw', node.expression)
         case UnresolvedName():
             return ('name', node.name)
+        case CwlRecord():
+            return ('record', tuple(_shape(source) for source in node.sources),
+                    tuple((k, _shape(v)) for k, v in node.fields))
         case dict():
             return tuple((k, _shape(v)) for k, v in node.items())
         case list():
@@ -158,6 +162,9 @@ def awkward_literal_documents(draw: st.DrawFn) -> str:
 @example('steps:\n- id: t\n  in:\n    f: !ii 1.0e+300\n')       # exponent float
 @example('steps:\n- id: t\n  in:\n    f: !ii .inf\n')           # YAML float special
 @example('steps:\n- id: t\n  in:\n    f: !ii .nan\n')           # NaN, comparator-normalised
+@example('steps:\n- id: t\n  in:\n    f: !cwl {source: [!* a, b], linkMerge: merge_flattened, default: [1]}\n')
+@example('steps:\n- id: t\n  in:\n    f: !cwl {source: [a], linkMerge: merge_nested}\n')  # one source, still a list
+@example('steps:\n- id: t\n  in:\n    f: {wic_raw_cwl: {source: {wic_alias: a}, valueFrom: $(self)}}\n')
 @example('wic:\n  steps:\n    (1, o):\n      wic:\n        namespace: dna\n')  # nested wrapper
 @example('wic:\n  steps:\n    (1, o):\n      wic: {}\n')          # empty child sidecar: {} not null
 @FAST
@@ -216,7 +223,7 @@ def test_corpus_round_trips(path: Path) -> None:
 
 @pytest.mark.fast
 def test_render_emits_the_tagged_spelling() -> None:
-    """Output uses the spelling the language reference tells people to write."""
+    """Output uses the spelling the language guide tells people to write."""
     document = parse('steps:\n- id: s\n  in:\n    f:\n      wic_inline_input: x\n', 'a.wic').document
     assert document is not None
     text = render(document)

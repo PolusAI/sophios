@@ -19,7 +19,9 @@ from hypothesis import example, given
 from hypothesis import strategies as st
 
 from sophios.lang import (
+    SophiosError,
     SophiosErrorCode,
+    CwlRecord,
     Diagnostics,
     Document,
     EdgeDef,
@@ -29,6 +31,7 @@ from sophios.lang import (
     InputValue,
     RawCwlRef,
     Step,
+    StepKey,
     UnresolvedName,
     WicSidecar,
     parse,
@@ -220,7 +223,7 @@ def test_surface_forms_are_equivalent(form: tuple[str, str, type], payload: str)
 @FAST
 def test_the_two_spellings_of_an_edge_definition_agree_on_an_output(payload: str) -> None:
     """`!&` has the same two spellings as its siblings, in the one position it
-    is legal (§4.1.1). Tested separately rather than as a fourth row above,
+    is legal (language guide §3.6). Tested separately rather than as a fourth row above,
     because that table quantifies over *input* position and an anchor there is
     now `wic019` — the case does not disappear, it moves to where it belongs.
     """
@@ -272,7 +275,7 @@ ACCEPTED: Final[tuple[Accepted, ...]] = (
     Accepted('a bare name is an unresolved name',
              'steps:\n  s:\n    in:\n      e: plain\n',
              lambda d: isinstance(d.steps[0].input('e'), UnresolvedName)),
-    Accepted('an untagged mapping input is an inline literal (§4.1)',
+    Accepted('an untagged mapping input is an inline literal (language guide §3.2)',
              'steps:\n- id: s\n  in:\n    a: {some: mapping}\n',
              lambda d: isinstance(d.steps[0].inputs[0][1], InlineLiteral)
              and d.steps[0].inputs[0][1].value == {'some': 'mapping'}),
@@ -315,13 +318,13 @@ class Reported(NamedTuple):
 
 
 REPORTED: Final[tuple[Reported, ...]] = (
-    Reported('a sequence step without an id: names both forms that exist (§3.1)',
+    Reported('a sequence step without an id: names both forms that exist (language guide §2.1)',
              'steps:\n- touch:\n    in: {f: !ii x}\n',
              SophiosErrorCode.MISSING_STEP_ID, 2, message_contains="- id: touch"),
     Reported('and with no body either, which is the shape insertion used to write',
              'steps:\n- sub.wic:\n', SophiosErrorCode.MISSING_STEP_ID, 2,
              message_contains='- id: sub.wic'),
-    Reported('an edge definition in input position names the position (§4.1.1)',
+    Reported('an edge definition in input position names the position (language guide §3.6)',
              'steps:\n- id: s\n  in:\n    f: !& e\n',
              SophiosErrorCode.MISPLACED_EDGE_DEF, 4, message_contains='out:'),
     Reported('the desugared spelling is reported the same way',
@@ -335,7 +338,7 @@ REPORTED: Final[tuple[Reported, ...]] = (
     Reported('and inside the wic: block, which is not a step at all',
              'wic:\n  graphviz:\n    label: !& e\n',
              SophiosErrorCode.MISPLACED_EDGE_DEF, 3, message_contains='out:'),
-    Reported('the desugared spelling is reported in the same positions (§6.1)',
+    Reported('the desugared spelling is reported in the same positions (language spec §2)',
              'top: {wic_anchor: e}\n', SophiosErrorCode.MISPLACED_EDGE_DEF, 1, message_contains='out:'),
     Reported('a malformed name does not earn spelling advice for a construct '
              'that may not appear here at all',
@@ -344,7 +347,7 @@ REPORTED: Final[tuple[Reported, ...]] = (
     Reported('a collection step key is reported, not stringified',
              'steps:\n  ? [a, b]\n  : {}\n', SophiosErrorCode.EXPECTED_SCALAR, 2,
              message_contains='mapping keys must be scalars'),
-    Reported('an input bound twice names the input (§4.2)',
+    Reported('an input bound twice names the input (language guide §3.8)',
              'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
              SophiosErrorCode.DUPLICATE_KEY, 5, message_contains="'f'"),
     Reported('a step that is not a mapping is reported',
@@ -572,7 +575,7 @@ MISSPELLED_CONSTRUCTS: Final = (
 )
 
 #: Keys that carry the prefix somewhere it names nothing. Each must survive:
-#: the rule claims construct position only, and passthrough is open (§1).
+#: the rule claims construct position only, and passthrough is open (language spec §1).
 UNCLAIMED_BY_THE_PREFIX: Final = (
     ('an input port called wic_', 'steps:\n  s:\n    in:\n      wic_: !* e\n'),
     ('a port whose name has the prefix', 'steps:\n- id: s\n  in: {wic_port: {wic_inline_input: 1}}\n'),
@@ -609,7 +612,7 @@ def test_the_prefix_is_claimed_in_construct_position_only(claim: str, source: st
     prefix everywhere, which made `in: {wic_: !* e}` — a port someone may
     legitimately call `wic_` — an error. The generators found it immediately.
     Reserving a prefix in *name* position narrows the language well past the
-    defect being closed, and passthrough must stay open (§1).
+    defect being closed, and passthrough must stay open (language spec §1).
     """
     result = parse(source, 'unclaimed.wic')
     assert SophiosErrorCode.RESERVED_KEY not in [d.code for d in result.diagnostics], claim
@@ -668,7 +671,7 @@ def test_one_code_carries_both_step_without_id_messages() -> None:
     assert single[0].message == (
         "a step in a sequence carries its name in an id: key — write '- id: touch' if 'touch' "
         "is the step's name; add the '- id:' line above if 'touch' is one of the step's own "
-        'keys. Keying the whole steps: block by name is the other form (§3.1)')
+        'keys. Keying the whole steps: block by name is the other form (language guide §2.1)')
     assert multi[0].message == 'a step in a sequence needs an id:'
 
 
@@ -711,8 +714,8 @@ def test_python_api_emits_documents_this_parser_accepts() -> None:
     """The Python API is the second surface of the same language.
 
     Whatever it emits must parse, or the two surfaces have diverged and the
-    language reference is describing something that does not exist. See
-    docs/sophios_language_reference.md, section 6.
+    language spec is describing something that does not exist. See
+    docs/dev/language_spec.md, section 3.
     """
     # Imported here: the API pulls in the whole compiler, which the syntax
     # layer deliberately does not depend on.
@@ -754,27 +757,17 @@ def _nested_api_workflow() -> Any:
 
 @pytest.mark.fast
 def test_python_api_writes_nested_workflows_this_parser_accepts(tmp_path: Path) -> None:
-    """Written with `inline_subworkflows=False`, every file of a nested workflow
-    parses: the parent calls the child by name, and the child's edge is an
-    ordinary `!&`/`!*` pair in its own document (reference §6.2)."""
-    root = _nested_api_workflow().write_wic(tmp_path, inline_subworkflows=False)
+    """Every `.wic` file of a written nested workflow parses: the parent calls
+    the child by name, and the child's edge is an ordinary `!&`/`!*` pair in
+    its own document (language spec §3). Each tool is written beside them."""
+    root = _nested_api_workflow().write_wic(tmp_path)
 
     written = sorted(tmp_path.glob('*.wic'))
     assert root in written and len(written) == 2, written
+    assert [path.name for path in sorted(tmp_path.glob('*.cwl'))] == ['append.cwl', 'touch.cwl']
     for path in written:
         result = parse(path.read_text(), path.name)
         assert result.ok, (path.name, [str(d) for d in result.diagnostics])
-
-
-@pytest.mark.fast
-@pytest.mark.xfail(strict=True, reason="the inline form nests the child's to_json projection "
-                   "under `subtree:`, where its edge definitions are wic019 (reference §6.2)")
-def test_python_api_inline_nested_form_parses() -> None:
-    """The known exception to obligation 1. When the inline form becomes a
-    document the parser accepts, this starts passing and strict xfail says so."""
-    result = parse(_nested_api_workflow().to_wic_yaml(), 'api_inline_nested.wic')
-
-    assert result.ok, [str(d) for d in result.diagnostics]
 
 # --------------------------------------------------------------------------
 # The parser is never more permissive than the loader
@@ -800,7 +793,7 @@ def test_unknown_tags_report_wic009(source: str) -> None:
     """The code contract: an unknown tag reports wic009, in every position.
 
     *Detection* is the adversarial property's job (with @example pins for
-    determinism); this asserts only the stable code the reference documents.
+    determinism); this asserts only the stable code the language guide documents.
     """
     result = parse(source, 'x.wic')
     assert any(d.code is SophiosErrorCode.UNKNOWN_TAG for d in result.diagnostics), source
@@ -812,6 +805,7 @@ def test_unknown_tags_report_wic009(source: str) -> None:
 @FAST
 @example('!: :')      # unknown tag on a mapping *key* — the position that was missed
 @example('!foo x: y')  # the same, spelled legibly
+@example('!!: :')     # a core tag with an empty suffix, which the loader cannot construct
 def test_parser_is_not_more_permissive_than_the_loader(text: str) -> None:
     """Any document the parser accepts without diagnostics, the loader loads.
 
@@ -827,6 +821,17 @@ def test_parser_is_not_more_permissive_than_the_loader(text: str) -> None:
     result = parse(text, 'agree.wic')
     if result.ok and result.document is not None:
         yaml.load(text, Loader=wic_loader())  # must not raise
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('source', ['!!: :', '!!foo: 1', 'k: !!foo 1', 'k: !<tag:example.com,2000:x> 1'])
+def test_a_yaml_tag_the_loader_cannot_construct_is_unknown_tag(source: str) -> None:
+    """`!!` spellings with no constructor are rejected by the loader, so by the parser too."""
+    with pytest.raises(yaml.YAMLError):
+        yaml.safe_load(source)
+    result = parse(source, 'x.wic')
+    assert any(d.code is SophiosErrorCode.UNKNOWN_TAG for d in result.diagnostics), source
+    assert not result.ok
 
 
 @pytest.mark.fast
@@ -882,7 +887,7 @@ def test_sidecar_nesting_is_normalised_at_every_depth() -> None:
 @pytest.mark.fast
 def test_a_sidecar_steps_out_accepts_an_edge_definition() -> None:
     """`!&` is legal under `wic.steps.(N, name).out`, exactly as on a step's
-    own `out:` (§4.1.1) — a sidecar `(N, name): out:` block *is* a step's
+    own `out:` (language guide §3.6) — a sidecar `(N, name): out:` block *is* a step's
     `out:` entry, just written at a distance (see `basic.wic`, which places
     the corpus's only definition of `min.tpr` here rather than in the nested
     file, precisely to avoid a `wic026 DUPLICATE_EDGE_DEF`).
@@ -1017,7 +1022,7 @@ def test_alias_cycles_are_reported(source: str) -> None:
     """The contract: a cycle is a diagnosed error, never a quiet success.
 
     Totality (no raise) is the adversarial property's job, with these shapes
-    pinned on it as @example; this asserts the report the reference promises.
+    pinned on it as @example; this asserts the report the language guide promises.
 
     The sidecar shape has to actually recurse through `_sidecar` to test that
     contract — a self-referential `steps:` value one level up hits an
@@ -1416,3 +1421,91 @@ def test_a_steps_list_form_holding_an_import_is_kept_as_written(key: str) -> Non
     result = parse(f'steps:\n  s:\n    {key}:\n    - $import: foo.yml\n    - class: X\n', 'list.wic')
     assert result.document is not None and result.ok, [str(d) for d in result.diagnostics]
     assert dict(result.document.steps[0].passthrough)[key] == [{'$import': 'foo.yml'}, {'class': 'X'}]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('body', ['{source: x}', '{default: 20}', '{source: x, linkMerge: merge_flattened}',
+                                  '{valueFrom: $(1)}'])
+def test_an_untagged_step_input_record_is_wic038(body: str) -> None:
+    """A mapping made of WorkflowStepInput fields is not a literal, whatever the
+    reference used to say; reading it as one sent `{"source": "x"}` to a tool."""
+    result = parse(f'steps:\n  mk_file:\n    in:\n      name: {body}\n', 'rec.wic')
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.STEP_INPUT_RECORD]
+
+
+@pytest.mark.fast
+def test_a_mapping_with_a_key_outside_the_record_is_still_a_literal() -> None:
+    """Only a mapping made of record fields alone is read as one; any other key keeps it a literal."""
+    result = parse('steps:\n  mk_file:\n    in:\n      name: {source: x, pdb_code: 1aki}\n', 'rec.wic')
+    assert result.ok and result.document is not None
+    assert isinstance(result.document.steps[0].input('name'), InlineLiteral)
+
+
+@pytest.mark.fast
+def test_a_run_stem_nowhere_is_reported() -> None:
+    """A `run:` path with no file beside the document and no registry entry is wic013."""
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [{'id': 's', 'run': 'nowhere.cwl'}]})
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.SUBWORKFLOW_INVALID
+
+
+@pytest.mark.fast
+def test_a_bare_step_id_is_a_sidecar_key() -> None:
+    """A bare step id parses as a sidecar step key with no index."""
+    result = parse('wic:\n  steps:\n    echo:\n      wic:\n        graphviz:\n          label: x\n'
+                   'steps:\n  echo:\n', 'k.wic')
+    assert result.ok, [str(d) for d in result.diagnostics]
+    assert result.document is not None and result.document.sidecar is not None
+    (key, _child), = result.document.sidecar.steps
+    assert key == StepKey(None, 'echo') and str(key) == 'echo'
+
+
+@pytest.mark.fast
+def test_a_key_that_is_neither_form_is_still_wic008() -> None:
+    """A key that is neither a bare id nor (index, id) is still wic008."""
+    result = parse('wic:\n  steps:\n    "not a key": {}\n', 'k.wic')
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.MALFORMED_WIC_STEP_KEY]
+
+
+@pytest.mark.fast
+def test_a_cwl_record_parses_in_both_spellings() -> None:
+    """`!cwl {...}` and `wic_raw_cwl: {...}` build one record: typed sources, verbatim fields."""
+    tagged = parse('steps:\n  s:\n    in:\n      f: !cwl {source: [!* a, wf_in], linkMerge: merge_flattened}\n',
+                   'r.wic')
+    desugared = parse('steps:\n  s:\n    in:\n      f:\n        wic_raw_cwl:\n'
+                      '          source: [{wic_alias: a}, wf_in]\n          linkMerge: merge_flattened\n', 'r.wic')
+    for result in (tagged, desugared):
+        assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
+        record = result.document.steps[0].input('f')
+        assert isinstance(record, CwlRecord)
+        assert [type(source).__name__ for source in record.sources] == ['EdgeRef', 'UnresolvedName']
+        assert [source.name for source in record.sources] == ['a', 'wf_in']
+        assert dict(record.fields) == {'linkMerge': 'merge_flattened'}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('body', ['{source: a, nope: 1}', '{source: !ii 3}', '{source: [a, !cwl x]}',
+                                  '{default: !ii 3}', '{valueFrom: !* e}'])
+def test_a_record_with_a_field_cwl_has_no_name_for_is_wic038(body: str) -> None:
+    """A key outside WorkflowStepInput, a source that is not a reference, and a
+    Sophios construct inside a field CWL reads verbatim are each refused."""
+    result = parse(f'steps:\n  s:\n    in:\n      f: !cwl {body}\n', 'r.wic')
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.STEP_INPUT_RECORD]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('body', ['{}', '{source: []}', '{loadContents: true}'])
+def test_a_record_that_gives_no_value_is_wic038(body: str) -> None:
+    """Without a source, a default or a valueFrom the input would be bound to nothing,
+    and the binding would stop Sophios connecting it."""
+    result = parse(f'steps:\n  s:\n    in:\n      f: !cwl {body}\n', 'r.wic')
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.STEP_INPUT_RECORD]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('body', ['{default: 3}', '{valueFrom: $(1)}'])
+def test_a_record_with_a_default_or_value_from_needs_no_source(body: str) -> None:
+    """Either gives the input a value, so the record stands without a source."""
+    result = parse(f'steps:\n  s:\n    in:\n      f: !cwl {body}\n', 'r.wic')
+    assert result.ok, [str(d) for d in result.diagnostics]

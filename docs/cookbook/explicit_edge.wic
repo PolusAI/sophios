@@ -1,0 +1,10 @@
+steps:
+- id: touch
+  in:
+    filename: !ii hello.txt
+  out:
+  - file: !& created
+- id: append
+  in:
+    file: !* created
+    str: !ii Hello
