@@ -231,9 +231,9 @@ jobs:
         run: cd sophios/ && pytest -k test_emitted_cwl_says_nothing_cwl_cannot_read
         timeout-minutes: 20 # backup timeout for windows
 
-      - name: PyTest Inline Subworkflows
+      - name: PyTest Inline Flags
         if: always()
-        run: cd sophios/ && pytest -k test_inline_subworkflows # --cov --cov-config=.coveragerc_serial
+        run: cd sophios/ && pytest tests/core/test_examples.py -k "test_embedding_keeps" # --cov --cov-config=.coveragerc_serial
         timeout-minutes: 20 # backup timeout for windows
 
       # Entry-point resolution and CI coverage. The core/contrib import boundary
