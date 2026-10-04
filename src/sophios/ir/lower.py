@@ -11,12 +11,14 @@ type is what the document declared and inference has not run.
 """
 import difflib
 from typing import Final
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..lang.cwl import CWL_VERSION
 from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.nodes import Document, EdgeRef, InputValue, Step, UnresolvedName
+from ..lang.parser import Grammar
+from ..lang.spans import SourceSpan
 from ..lang.versions import (ANNOTATION_KEY, ANNOTATION_NAMESPACE,
                              ANNOTATION_NAMESPACE_URI)
 from .declarations import port_declaration
@@ -111,20 +113,27 @@ def _lower_resolved(document: ResolvedDocument,
                 diagnostics._append(diagnostic)  # pylint: disable=protected-access
 
     passthrough = dict(document.source.passthrough)
-    workflow_inputs = _workflow_ports(passthrough.get('inputs', {}), output=False)
-    workflow_outputs = _workflow_ports(passthrough.get('outputs', {}), output=True)
+    workflow_inputs = _workflow_ports(passthrough.get('inputs', {}), output=False,
+                                      diagnostics=diagnostics, document_span=document.source.span)
+    workflow_outputs = _workflow_ports(passthrough.get('outputs', {}), output=True,
+                                       diagnostics=diagnostics, document_span=document.source.span)
     workflow_input_names = {port.name for port in workflow_inputs}
     input_mapping = tuple(
         (name, tuple(binding.sink for node in nodes for binding in node.bindings
                      if _unresolved_name(binding) == name))
         for name in (port.name for port in workflow_inputs)
     )
-    output_mapping = tuple(
-        (port.name, source)
-        for port in workflow_outputs
-        for source in [_output_port(document.name, nodes, port.output_source)]
-        if source is not None
-    )
+    output_mapping = []
+    positional_names: set[PortName] = set()
+    for port in workflow_outputs:
+        source, positional = _output_port(document.name, nodes, port.output_source,
+                                          diagnostics, document.source.span, str(port.name))
+        if positional:
+            positional_names.add(port.name)
+        if source is not None:
+            output_mapping.append((port.name, source))
+    workflow_outputs = tuple(replace(port, positional=True) if port.name in positional_names else port
+                             for port in workflow_outputs)
     namespaces_raw = passthrough.get('$namespaces', {})
     namespaces = tuple(namespaces_raw.items()) if isinstance(namespaces_raw, dict) else ()
     namespaces = tuple((str(key), value) for key, value in namespaces
@@ -151,6 +160,8 @@ def _lower_resolved(document: ResolvedDocument,
         # invariants with a ValueError instead of this report.
         return Lowered(None, diagnostics)
     known_ports = {port.id for node in nodes for port in node.inputs + node.outputs}
+    sidecar = document.source.sidecar
+    inlineable = bool(dict(sidecar.entries).get('inlineable', True)) if sidecar is not None else True
     graph = WorkflowGraph(
         namespace=here,
         steps=tuple(nodes),
@@ -162,7 +173,7 @@ def _lower_resolved(document: ResolvedDocument,
                                   if isinstance(obligation, DeferredObligation)),
         input_mapping=tuple((name, sinks) for name, sinks in input_mapping
                             if name in workflow_input_names and sinks),
-        output_mapping=output_mapping,
+        output_mapping=tuple(output_mapping),
         passthrough=opaque,
         name=document.name,
         lang_version=document.lang_version,
@@ -173,6 +184,7 @@ def _lower_resolved(document: ResolvedDocument,
         namespaces=namespaces,
         schemas=schemas,
         children=tuple(children),
+        inlineable=inlineable,
     )
     return Lowered(graph, diagnostics)
 
@@ -286,11 +298,22 @@ def _unknown_scatter(step: str, text: str, ports: list[str], calls_workflow: boo
 _SHOWN_NAMES: Final = 8
 
 
-def _workflow_ports(raw: object, *, output: bool) -> tuple[WorkflowPort, ...]:
+def _workflow_ports(raw: object, *, output: bool, diagnostics: Diagnostics,
+                    document_span: SourceSpan | None) -> tuple[WorkflowPort, ...]:
     if not isinstance(raw, dict):
         return ()
     ports: list[WorkflowPort] = []
     for name, declaration_raw in raw.items():
+        if output and isinstance(declaration_raw, dict):
+            rejected = sorted(key for key in ('linkMerge', 'pickValue') if key in declaration_raw)
+            if isinstance(declaration_raw.get('outputSource'), list):
+                rejected.append('a list outputSource')
+            if rejected:
+                diagnostics.error(
+                    SophiosErrorCode.STEP_INPUT_RECORD,
+                    f"workflow output {str(name)!r} uses {', '.join(rejected)}, which Sophios does not "
+                    'read; an output names one step/port',
+                    document_span)
         # Asserted, not reduced via `boundary_declaration`: it is already a
         # boundary declaration by where it's written, and reducing it would
         # discard fields the author wrote at the boundary on purpose.
@@ -302,16 +325,36 @@ def _workflow_ports(raw: object, *, output: bool) -> tuple[WorkflowPort, ...]:
     return tuple(ports)
 
 
-def _output_port(workflow_name: str, nodes: list[StepNode], raw: object) -> PortId | None:
-    """The step output an authored `outputSource: <step>/<port>` names, if any."""
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def _output_port(workflow_name: str, nodes: list[StepNode], raw: object,
+                 diagnostics: Diagnostics, span: SourceSpan | None,
+                 output_name: str) -> tuple[PortId | None, bool]:
+    """The step output an authored `outputSource: <step>/<port>` names, if any,
+    and whether `<step>` was written positionally as `(index, name)`.
+
+    `<step>` is the authored id (its first occurrence), `(index, name)` (that
+    occurrence, which must carry that name), or the generated id.
+    """
     if not isinstance(raw, str) or '/' not in raw:
-        return None
-    step_name, port_name = raw.rsplit('/', 1)
+        return None, False
+    step_text, port_name = raw.rsplit('/', 1)
+    key = Grammar.WIC_STEP_KEY.match(step_text)
+    if key is not None:
+        index, name = int(key.group(1)), key.group(2)
+        if not 1 <= index <= len(nodes) or nodes[index - 1].id.name != name:
+            actual = nodes[index - 1].id.name if 1 <= index <= len(nodes) else 'no step'
+            diagnostics.error(
+                SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE,
+                f"output {output_name!r} names step {index} as {name!r}, but step {index} is {actual}",
+                span, Locator(step=name, index=index, port=port_name))
+            return None, True
+        return next((port.id for port in nodes[index - 1].outputs
+                     if port.id.port == AuthoredName(port_name)), None), True
     for position, node in enumerate(nodes, start=1):
-        if step_name in {render_step_id(workflow_name, position, node.id.name), node.id.name}:
+        if step_text in {render_step_id(workflow_name, position, node.id.name), node.id.name}:
             return next((port.id for port in node.outputs
-                         if port.id.port == AuthoredName(port_name)), None)
-    return None
+                         if port.id.port == AuthoredName(port_name)), None), False
+    return None, False
 
 
 def _unresolved_name(binding: Binding) -> str | None:
