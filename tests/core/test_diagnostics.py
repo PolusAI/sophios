@@ -490,12 +490,12 @@ def test_passthrough_flags_yes_sends_unrecognised_arguments_to_the_runner(
     assert '--debug' in Path('run.sh').read_text(encoding='utf-8').split()
 
 
-
 @pytest.mark.fast
 def test_a_runner_flag_is_not_read_as_an_abbreviated_sophios_flag(cli_on_helloworld: Callable[..., None]) -> None:
     """cwltool's `--validate` reaches the runner; it is not a prefix of `--validate_plugins`."""
     cli_on_helloworld('--generate_run_script', '--passthrough_flags', 'yes', '--validate')
     assert '--validate' in Path('run.sh').read_text(encoding='utf-8').split()
+
 
 @pytest.mark.fast
 def test_passthrough_flags_need_a_command_that_runs_the_runner(cli_on_helloworld: Callable[..., None],
