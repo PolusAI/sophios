@@ -29,7 +29,7 @@ scalar_payload_texts = st.sampled_from([
 
 #: Construct leaves that may appear nested inside an `!ii` payload.
 #: Neither spelling of an edge definition appears here. An edge is defined on
-#: an `out:` entry and nowhere else (reference §4.1.1), so `!& d` and
+#: an `out:` entry and nowhere else (language guide §3.6), so `!& d` and
 #: `{wic_anchor: n}` both earn wic019 in a payload — `_out_lines` below
 #: generates both spellings in the one position they are legal.
 construct_payload_texts = st.sampled_from(['!* e', '!cwl a/b', '{wic_alias: n}'])
@@ -67,7 +67,7 @@ def input_lines(draw: st.DrawFn, name: str | None = None, indent: str = '      '
     # pylint: disable=too-many-return-statements  # one return per surface form
     name = draw(identifiers) if name is None else name
     # No 'anchor' form: `!&` defines an edge and is legal only on an `out:`
-    # entry (reference §4.1.1), so an input carrying one is not a well-formed
+    # entry (language guide §3.6), so an input carrying one is not a well-formed
     # document. `_out_lines` below still generates both of its spellings, so
     # edge definitions stay covered where they belong.
     form = draw(st.sampled_from(['ii', 'alias', 'cwl', 'bare',
@@ -141,7 +141,7 @@ def documents(draw: st.DrawFn) -> str:
         if draw(st.booleans()):
             lines.extend(draw(_out_lines(body_indent)))
     if draw(st.booleans()):
-        # Quoted: a label is a string (§5), and `null`, `no` or `on` would
+        # Quoted: a label is a string (language guide §7), and `null`, `no` or `on` would
         # load as something else.
         lines += ['wic:', '  graphviz:', f"    label: '{draw(identifiers)}'"]
         if draw(st.booleans()):

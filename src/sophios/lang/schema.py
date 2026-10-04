@@ -3,7 +3,7 @@
 The AST is the source of truth: every key comes from a field's `Surface`
 declaration in `nodes.py` and every construct from the parser's dispatch
 tables, so nothing here can disagree with the parser about the shape of a
-document. The schema describes the desugared projection (§6.1), since JSON
+document. The schema describes the desugared projection (language spec §2), since JSON
 has no YAML tags, and is a deliberate over-approximation — an editor aid, not
 a second implementation of the language.
 """
@@ -34,7 +34,7 @@ class Json:  # pylint: disable=too-few-public-methods  # a namespace, not a type
 #: reference to.
 _SHAPE_SCHEMA: Final[Mapping[Shape, Callable[[], dict[str, Any]]]] = MappingProxyType({
     Shape.INPUT_BINDINGS: lambda: {
-        'description': 'Input bindings. Each input may be bound only once (§4.2).',
+        'description': 'Input bindings. Each input may be bound only once (language guide §3.8).',
         'type': 'object',
         'additionalProperties': {'$ref': '#/$defs/inputValue'},
     },
@@ -45,9 +45,10 @@ _SHAPE_SCHEMA: Final[Mapping[Shape, Callable[[], dict[str, Any]]]] = MappingProx
     Shape.STEPS: lambda: {'$ref': '#/$defs/steps'},
     Shape.SIDECAR: lambda: {'$ref': '#/$defs/wicBlock'},
     Shape.SIDECAR_STEPS: lambda: {
-        'description': 'Per-step metadata, keyed "(index, name)".',
+        'description': 'Per-step metadata, keyed "(index, name)" or by a unique step id.',
         'type': 'object',
-        'patternProperties': {Grammar.WIC_STEP_KEY_PATTERN: {'$ref': '#/$defs/wicStepEntry'}},
+        'patternProperties': {Grammar.WIC_STEP_KEY_PATTERN: {'$ref': '#/$defs/wicStepEntry'},
+                              Grammar.WIC_STEP_ID_PATTERN: {'$ref': '#/$defs/wicStepEntry'}},
         'additionalProperties': False,
     },
     #: Structure only; a field's own constraints (e.g. non-empty step id)
@@ -66,14 +67,15 @@ def wic_schema() -> dict[str, Any]:
     document = _object_schema(Document)
     document['properties']['cwlVersion'] = {
         **Grammar.CWL_VERSION_VALUE.json(),
-        'description': 'Ignored in favour of the substrate version, but must be one the toolchain runs (§1).',
+        'description': 'Ignored in favour of the substrate version, '
+                       'but must be one the toolchain runs (language spec §1).',
     }
     return {
         '$schema': Json.DIALECT,
         '$id': Json.SCHEMA_ID,
         'title': 'Sophios workflow',
         'description': 'Desugared projection of a Sophios document. '
-                       'See docs/sophios_language_reference.md.',
+                       'See docs/language_guide.md.',
         **document,
         '$defs': _defs(),
     }
@@ -100,7 +102,7 @@ def _object_schema(node_type: type, *, omit: frozenset[str] = frozenset()) -> di
                 # A closed set of CWL keys, listed for editor completion but
                 # left unconstrained — Sophios reads them, CWL owns their shapes.
                 for key in sorted(Grammar.INTERPRETED_STEP_KEYS):
-                    properties[key] = {'description': f'Interpreted by Sophios: {key} (§4.3).'}
+                    properties[key] = {'description': f'Interpreted by Sophios: {key} (language guide §2.2).'}
             case Shape.SIDECAR_ENTRIES:
                 # Closed, and each value's shape is the one the parser checks.
                 properties.update(_values_schema(Grammar.SIDECAR_VALUES))
@@ -136,7 +138,7 @@ def _defs() -> dict[str, Any]:
 
 
 def _step_body() -> dict[str, Any]:
-    """A step keyed by name. Null is legal: a step may have no body (§3.1)."""
+    """A step keyed by name. Null is legal: a step may have no body (language guide §2.1)."""
     # `id` is omitted: in this form the step's name is the mapping key.
     body = _object_schema(Step, omit=frozenset({'id'}))
     return {**body, 'type': ['object', 'null']}
@@ -172,11 +174,11 @@ def _values_schema(values: Mapping[str, ValueShape]) -> dict[str, Any]:
 
 
 def _wic_block() -> dict[str, Any]:
-    """The `wic:` sidecar. Null is legal: a bare `wic:` is empty (§5)."""
+    """The `wic:` sidecar. Null is legal: a bare `wic:` is empty (language guide §7)."""
     body = _object_schema(WicSidecar)
     return {
         **body,
-        'description': 'Compiler metadata. Never emitted to CWL (§5).',
+        'description': 'Compiler metadata. Never emitted to CWL (language guide §7).',
         'type': ['object', 'null'],
     }
 
@@ -187,7 +189,7 @@ def _wic_step_block() -> dict[str, Any]:
     body = _wic_block()
     return {
         **body,
-        'description': 'Metadata for the step this entry names (§5).',
+        'description': 'Metadata for the step this entry names (language guide §7).',
         'properties': {'steps': body['properties']['steps'],
                        **_values_schema(Grammar.SIDECAR_STEP_VALUES)},
     }
@@ -204,14 +206,14 @@ def _wic_step_entry() -> dict[str, Any]:
 
 
 def _input_value() -> dict[str, Any]:
-    """One of the four input forms (§4.1).
+    """One of the five input forms (language guide §3.1).
 
     Unconstrained on purpose; `construct` is referenced only so editors can
     offer construct keys as completions.
     """
     return {
-        'description': 'An inline literal, edge reference, '
-                       'raw CWL reference, or unresolved name (§4.1).',
+        'description': 'An inline literal, edge reference, raw CWL reference, '
+                       'unresolved name, or step-input record (language guide §3.1).',
         'anyOf': [{'$ref': '#/$defs/construct'}, {}],
     }
 

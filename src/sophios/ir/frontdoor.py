@@ -5,11 +5,17 @@ root's own text is the source, and each reachable workflow is registered as
 the parse of its own file, so every span is a position in the file the user
 edited. Nothing here serialises YAML.
 """
+from collections import Counter
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from ..lang import (
+    CWL_VERSION,
+    CwlRecord,
     Document,
     EdgeRef,
     InlineLiteral,
@@ -22,8 +28,9 @@ from ..lang import (
     parse,
 )
 from ..python_cwl_adapter import generate_CWL_CommandLineTool, get_module
+from ..utils_cwl import desugar_into_canonical_normal_form
 from ..wic_types import StepId, Tool, Tools
-from .resolve import RegistrySnapshot, generated_process_id
+from .resolve import RegistrySnapshot, generated_process_id, run_process_name, step_sidecar
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +63,7 @@ def bundle_from_source(source: str, name: str,
     workflows: dict[tuple[str, str], ParseResult] = {}
     generated: Tools = {}
     pins: list[str] = []
-    parsed = _visit(source, name, None, yml_paths, Path('.'), workflows, generated, {}, pins)
+    parsed = _visit(source, f'{name}.wic', None, yml_paths, Path('.'), workflows, generated, {}, pins)
     return SourceBundle(parsed, name,
                         RegistrySnapshot.from_tools({**tools, **generated},
                                                     workflows=workflows),
@@ -75,7 +82,7 @@ def bundle_from_disk(yml_path: Path,
     workflows: dict[tuple[str, str], ParseResult] = {}
     generated: Tools = {}
     pins: list[str] = []
-    parsed = _visit(yml_path.read_text(encoding='utf-8'), yml_path.stem, yml_path.resolve(), yml_paths, yml_path.parent,
+    parsed = _visit(yml_path.read_text(encoding='utf-8'), yml_path.name, yml_path.resolve(), yml_paths, yml_path.parent,
                     workflows, generated, {}, pins)
     return SourceBundle(parsed, yml_path.stem,
                         RegistrySnapshot.from_tools({**tools, **generated},
@@ -84,7 +91,7 @@ def bundle_from_disk(yml_path: Path,
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
-def _visit(source: str, stem: str, path: Path | None,
+def _visit(source: str, file: str, path: Path | None,
            yml_paths: dict[str, dict[str, Path]],
            script_dir: Path,
            workflows: dict[tuple[str, str], ParseResult],
@@ -96,13 +103,14 @@ def _visit(source: str, stem: str, path: Path | None,
     The parse is recorded under ``path`` before anything it reaches is read,
     so a file reached again -- a cycle, or a second namespace -- reuses it.
     """
-    parsed = parse(source, f'{stem}.wic')
+    parsed = parse(source, file)
     if path is not None:
         read[path] = parsed
     document = parsed.document
     if document is not None:
         _collect_pins(document, pins)
-        _reach(document, yml_paths, script_dir, workflows, generated, read, pins)
+        _reach(document, yml_paths, script_dir, path.parent if path is not None else script_dir,
+               workflows, generated, read, pins)
     return parsed
 
 
@@ -124,19 +132,28 @@ def _append_pin(document: Document, pins: list[str]) -> None:
         pins.append(pinned if isinstance(pinned, str) else str(pinned))
 
 
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _reach(document: Document,
            yml_paths: dict[str, dict[str, Path]],
            script_dir: Path,
+           document_dir: Path,
            workflows: dict[tuple[str, str], ParseResult],
            generated: Tools,
            read: dict[Path, ParseResult],
            pins: list[str]) -> None:
     """Follow every workflow and generated tool one document's steps reach,
     including its inline implementation bodies.
+
+    ``script_dir`` is where ``python_script`` files are, the root's directory;
+    ``document_dir`` is where this document is, which is what a ``run:`` path
+    is relative to.
     """
+    counts = Counter(step.id for step in document.steps)
     for index, step in enumerate(document.steps, start=1):
-        namespace = _namespace(_step_sidecar(document.sidecar, index, step.id))
+        namespace = _namespace(step_sidecar(document.sidecar, index, step.id, counts[step.id]))
+        if _register_run(step, namespace, document_dir, yml_paths,
+                         workflows, generated, read, pins, script_dir):
+            continue
         if step.id == 'python_script':
             generated[StepId(generated_process_id(step), namespace)] = \
                 _generated_tool(step, script_dir)
@@ -154,10 +171,60 @@ def _reach(document: Document,
             # a file called under two namespaces still gets both registry entries.
             resolved = child_path.resolve()
             workflows[key] = read[resolved] if resolved in read else _visit(
-                child_path.read_text(encoding='utf-8'), child_path.stem, resolved,
+                child_path.read_text(encoding='utf-8'), child_path.name, resolved,
                 yml_paths, script_dir, workflows, generated, read, pins)
     for _name, body in (document.sidecar.implementations if document.sidecar else ()):
-        _reach(body, yml_paths, script_dir, workflows, generated, read, pins)
+        _reach(body, yml_paths, script_dir, document_dir, workflows, generated, read, pins)
+
+
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def _register_run(step: Step, namespace: str, document_dir: Path,
+                  yml_paths: dict[str, dict[str, Path]],
+                  workflows: dict[tuple[str, str], ParseResult],
+                  generated: Tools, read: dict[Path, ParseResult], pins: list[str],
+                  script_dir: Path) -> bool:
+    """Register what a step's ``run:`` names, when it names something here.
+
+    An inline mapping is a tool keyed by the step's id, written in
+    ``CWL_VERSION`` whatever ``cwlVersion`` it declares. A ``.cwl`` or ``.wic``
+    path that exists relative to the document is read from there and keyed by
+    its stem, shadowing a registry entry of that stem for this compilation.
+    A path that does not exist here is left for Resolve, which looks the stem
+    up in the registry and reports it as absent if it is nowhere.
+
+    Returns:
+        bool: Whether ``run`` was registered here.
+    """
+    name = run_process_name(step)
+    if name is None:
+        return False
+    run = dict(step.interpreted)['run']
+    if isinstance(run, dict):
+        body = desugar_into_canonical_normal_form({**deepcopy(run), 'cwlVersion': CWL_VERSION})
+        generated[StepId(name, namespace)] = Tool(f'{name}.cwl', body)
+        return True
+    assert isinstance(run, str)
+    target = (document_dir / run).resolve()
+    if not target.is_file():
+        return False
+    if run.endswith('.cwl'):
+        known = generated.get(StepId(name, namespace))
+        if known is not None and known.run_path != str(target):
+            raise ValueError(f'run: {run} names both {known.run_path} and {target}')
+        with open(target, mode='r', encoding='utf-8') as handle:
+            generated[StepId(name, namespace)] = Tool(
+                str(target), desugar_into_canonical_normal_form(yaml.safe_load(handle.read())))
+        return True
+    parsed = read[target] if target in read else _visit(
+        target.read_text(encoding='utf-8'), target.name, target, yml_paths, script_dir,
+        workflows, generated, read, pins)
+    if workflows.setdefault((namespace, name), parsed) is not parsed:
+        raise ValueError(f'run: {run} names two different workflows')
+    return True
+
+
+def _stem(name: str) -> str:
+    return name[:-4] if name.endswith(('.wic', '.cwl')) else name
 
 
 def _namespace(sidecar: WicSidecar | None) -> str:
@@ -165,13 +232,6 @@ def _namespace(sidecar: WicSidecar | None) -> str:
     if sidecar is None:
         return 'global'
     return str(dict(sidecar.entries).get('namespace', 'global'))
-
-
-def _step_sidecar(sidecar: WicSidecar | None, index: int, name: str) -> WicSidecar | None:
-    if sidecar is None:
-        return None
-    return next((child for key, child in sidecar.steps
-                 if key.index == index and key.name == name), None)
 
 
 def _generated_tool(step: Step, script_dir: Path) -> Tool:
@@ -196,5 +256,5 @@ def _text(value: InputValue | None) -> str:
             return name
         case RawCwlRef(expression=expression):
             return expression
-        case None:
+        case CwlRecord() | None:
             return ''

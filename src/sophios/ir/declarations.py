@@ -92,10 +92,13 @@ def _statable_secondary_files(value: OpaqueCwl) -> OpaqueCwl:
     `inputs` and `expressionLib`. The boundary has neither, so it would
     evaluate the expression differently or fail on it at run time; the tool
     still declares the entry and keeps evaluating it.
+
+    A bare pattern or a single mapping is stated as a one-element list: it is
+    the same declaration, and cwltool's checker reads every entry as a mapping
+    at workflow level, so it fails on the bare form.
     """
-    if isinstance(value, list):
-        return [entry for entry in value if not _evaluated(entry)]
-    return [] if _evaluated(value) else value
+    entries = value if isinstance(value, list) else [value]
+    return [entry for entry in entries if not _evaluated(entry)]
 
 
 def boundary_declaration(port: Port, rank: int) -> BoundaryDeclaration:
