@@ -19,7 +19,7 @@ from typing import Any, Final
 
 import pytest
 
-from .synthetic_tools import STEMS, inputs_of, outputs_of, required_inputs_of
+from .synthetic_tools import SCHEMA_TYPES, STEMS, SYNTHETIC_TOOLS, inputs_of, outputs_of, required_inputs_of
 
 TESTS_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = TESTS_ROOT.parent
@@ -65,6 +65,19 @@ def test_the_registry_reaches_the_branches_it_claims_to() -> None:
     assert any(len(outputs_of(s)) > 1 for s in STEMS), 'no tool promotes several outputs'
     assert any(i.get('type') == 'Directory' for s in STEMS for i in inputs_of(s).values()), \
         'no Directory input: its job value is never coerced'
+    declared = [i for s in STEMS for i in inputs_of(s).values()]
+    structured = {i['type'].get('type') for i in declared if isinstance(i['type'], dict)}
+    assert 'record' in structured, 'no record input: a record type never reaches a port'
+    assert 'enum' in structured, 'no enum input: enum symbols never reach a port'
+    assert any(isinstance(i['type'], str) and i['type'] in SCHEMA_TYPES for i in declared), \
+        'no input names a SchemaDefRequirement type'
+    assert any('secondaryFiles' in i and 'loadContents' in i for i in declared), \
+        'no input with secondaryFiles and loadContents: a promoted boundary never carries them'
+    assert any(o.get('type') == 'stdout' for s in STEMS for o in outputs_of(s).values()), \
+        'no stdout output: the tool-only type never reaches a workflow'
+    assert any(isinstance(t.cwl.get('requirements'), list) and isinstance(t.cwl.get('hints'), list)
+               for t in SYNTHETIC_TOOLS.values()), \
+        'no list-form requirements and hints: only the mapping form is ever read'
 
 
 #: Test files whose passing constitutes "the oracle suite ran with plugin

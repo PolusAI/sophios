@@ -286,3 +286,16 @@ type = "forbidden"
 source_modules = ["sophios", "sophios.*"]
 forbidden_modules = ["sophios.contrib"]
 ignore_imports = ["sophios.contrib.** -> sophios.contrib.**"]
+
+[[tool.importlinter.contracts]]
+name = "The compiler is layered: api over compiler over ir over lang"
+type = "layers"
+layers = ["sophios.api", "sophios.compiler", "sophios.ir", "sophios.lang"]
+
+[[tool.importlinter.contracts]]
+name = "The public Python API reaches the compiler only through its runtime adapter"
+type = "forbidden"
+source_modules = ["sophios.api.python.workflow", "sophios.api.python.tool_builder"]
+forbidden_modules = ["sophios.compiler", "sophios.ir", "sophios.plugins", "sophios.run_local",
+                     "sophios.input_output", "sophios.main", "sophios.cli", "sophios.post_compile"]
+allow_indirect_imports = true

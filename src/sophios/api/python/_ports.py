@@ -1,13 +1,16 @@
 """Parameter and namespace helpers for the Python workflow API."""
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
-from sophios.lang import EdgeRef, InlineLiteral, InputValue, UnresolvedName
+from sophios.ir.declarations import layered
+from sophios.ir.types import PortType
+from sophios.lang import CwlRecord, EdgeRef, InlineLiteral, InputValue, UnresolvedName
 
 from ._errors import InvalidLinkError
 from ._utils import (contains_any_type,
+                     infer_literal_parameter_type,
                      is_array_type,
                      normalize_parameter_name,
                      normalize_parameter_type,
@@ -24,7 +27,11 @@ ViewT = TypeVar("ViewT")
 
 @dataclass(frozen=True, slots=True)
 class InputBinding:
-    """Bound input value, upstream alias, or workflow input reference."""
+    """Bound input value, upstream alias, workflow input reference, or step-input record.
+
+    A `record` binding's `value` is the language's `CwlRecord` and its `source` the
+    port objects the record names, each a step `OutputParameter` or a workflow `InputParameter`.
+    """
 
     kind: str
     value: Any
@@ -48,6 +55,8 @@ class InputBinding:
                 return InlineLiteral(serialize_value(self.value))
             case "alias":
                 return EdgeRef(self.value)
+            case "record":
+                return cast(CwlRecord, self.value)
             case _:
                 return UnresolvedName(self.value)
 
@@ -59,19 +68,18 @@ class OutputSourceBinding:
     step_id: str | None
     source_name: str
 
-    def to_output_source(self, step_ids: Mapping[int, str], source_parameter: Any = None) -> str:
-        """Render the CWL `outputSource` string for a workflow output.
+    def to_output_source(self, steps: Sequence[Any], source_parameter: Any = None) -> str:
+        """Render the authored `outputSource`: `<owner step>/<port>`, or the input name.
 
         Resolution goes through the source parameter's live owner rather than
         `step_id`, which is a snapshot of a mutable display name: renaming a
         step after binding an output leaves the snapshot stale while the object
-        graph stays valid, so a name lookup would fail on a workflow that is not
-        actually malformed. `step_id` is retained because it is what the user
-        wrote, and it names the step in the error below.
+        graph stays valid. `step_id` is retained because it is what the user
+        wrote, and it names the step in the error below. Step names are unique
+        within a workflow, so the owner's name is its address.
 
         Args:
-            step_ids (Mapping[int, str]): Every sibling step, by object
-                identity, mapped to its compiler-assigned concrete step id.
+            steps (Sequence[Any]): The workflow's own steps.
             source_parameter (Any): The bound source parameter, whose
                 `parent_obj` is the owning step.
 
@@ -84,13 +92,13 @@ class OutputSourceBinding:
         if self.step_id is None:
             return self.source_name
         owner = getattr(source_parameter, "parent_obj", None)
-        concrete = step_ids.get(id(owner)) if owner is not None else None
-        if concrete is None:
+        if owner is None or not any(owner is step for step in steps):
             raise InvalidLinkError(
                 f"workflow output source {self.step_id}/{self.source_name} is not one of this "
                 "workflow's steps; bind it to a step the workflow was constructed with"
             )
-        return f"{concrete}/{self.source_name}"
+        step = f"{owner.process_name}.wic" if type(owner).__name__ == "Workflow" else owner.process_name
+        return f"{step}/{self.source_name}"
 
 
 @dataclass(slots=True)
@@ -182,10 +190,14 @@ class _ParameterBase:
 
 @dataclass(slots=True)
 class InputParameter(_ParameterBase):
-    """Input parameter of a CWL `CommandLineTool` or `Workflow`."""
+    """Input parameter of a CWL `CommandLineTool` or `Workflow`.
 
+    `declared` is False for a step input the tool does not declare, made by
+    binding a `StepInput` to it; only a `StepInput` may bind such an input.
+    """
+
+    declared: bool = field(default=True, init=False)
     _binding: InputBinding | None = field(default=None, init=False, repr=False)
-    _bound_parameter_type: Any = field(default=None, init=False, repr=False)
 
     @property
     def value(self) -> Any:
@@ -196,25 +208,48 @@ class InputParameter(_ParameterBase):
         self._binding = binding
         self.linked = False if binding is None else binding.linked
 
-    @property
-    def source_parameter(self) -> Any:
-        """Return the upstream output parameter this input is aliased to, if any."""
-        return None if self._binding is None or self._binding.kind != "alias" else self._binding.source
+    def record_sources(self) -> tuple[Any, ...]:
+        """The port objects a record binding names; none for any other binding."""
+        match self._binding:
+            case InputBinding(kind="record", source=sources):
+                return tuple(sources)
+            case _:
+                return ()
 
-    def set_bound_parameter_type(self, value: Any) -> None:
-        """Record the type of the bound value when it is known."""
-        normalized, _required = normalize_parameter_type(value)
-        self._bound_parameter_type = normalized
+    def source_outputs(self) -> "tuple[OutputParameter, ...]":
+        """The upstream outputs this input is bound to: an alias's one, or a record's."""
+        match self._binding:
+            case InputBinding(kind="alias", source=source):
+                return (source,)
+            case InputBinding(kind="record"):
+                return tuple(source for source in self.record_sources() if isinstance(source, OutputParameter))
+            case _:
+                return ()
+
+    def effective_source_type(self) -> Any:
+        """The type the bound value carries when the workflow runs, computed now, not
+        at bind time: a source step scattered after the bind lifts it an array level
+        per layer, as its owner's `_output_rank()` says."""
+        if self._binding is None:
+            return None
+        match self._binding.kind:
+            case "inline":
+                return infer_literal_parameter_type(self._binding.value)
+            case "alias":
+                return self._binding.source.effective_type()
+            case "record":
+                return _record_type(self._binding.value, self._binding.source)
+            case _:
+                return self._binding.source.parameter_type
 
     def is_scatterable(self) -> bool:
-        """Return whether the current binding can be scattered safely."""
+        """Whether the bound value is array-valued when the workflow runs."""
         if self._binding is None:
             return False
-        return (
-            (self._binding.kind == "inline" and isinstance(self._binding.value, (list, tuple)))
-            or is_array_type(self._bound_parameter_type)
-            or contains_any_type(self._bound_parameter_type)
-        )
+        if self._binding.kind == "inline" and isinstance(self._binding.value, (list, tuple)):
+            return True
+        effective = self.effective_source_type()
+        return is_array_type(effective) or contains_any_type(effective)
 
     def is_bound(self) -> bool:
         """Return whether this input currently has a bound value."""
@@ -251,16 +286,28 @@ class OutputParameter(_ParameterBase):
         """Return whether this output is bound to a source."""
         return self._source is not None
 
-    def to_workflow_output(
-        self,
-        *,
-        step_ids: Mapping[int, str],
-    ) -> dict[str, Any]:
+    def effective_type(self) -> Any:
+        """The type this output carries when the workflow runs, computed now, not at
+        bind time. A step's output is lifted an array level per layer of its step's
+        scatter. A workflow's output is its declared type, else its source's type,
+        read through the same rule, so a scatter inside a subworkflow lifts it too."""
+        if self._source_parameter is not None and self.parameter_type is None:
+            match self._source_parameter:
+                case OutputParameter() as source:
+                    return source.effective_type()
+                case source:
+                    return source.cwl_type()
+        declared = self.cwl_type()
+        if declared is None:
+            return None
+        rank = self.parent_obj._output_rank()  # pylint: disable=protected-access
+        return layered(PortType(declared), rank).canonical
+
+    def to_workflow_output(self, steps: Sequence[Any]) -> dict[str, Any]:
         """Serialize this workflow output parameter to CWL.
 
         Args:
-            step_ids (Mapping[int, str]): Every sibling step, by object
-                identity, mapped to its compiler-assigned concrete step id.
+            steps (Sequence[Any]): The workflow's own steps.
 
         Raises:
             ValueError: If the output has no source or no resolved type.
@@ -270,13 +317,49 @@ class OutputParameter(_ParameterBase):
         """
         if self._source is None:
             raise ValueError(f"workflow output {self.name!r} has no source binding")
-        cwl_type = self.cwl_type()
+        cwl_type = self.effective_type()
         if cwl_type is None:
             raise ValueError(f"workflow output {self.name!r} has no resolved type")
         return {
             "type": cwl_type,
-            "outputSource": self._source.to_output_source(step_ids, self._source_parameter),
+            "outputSource": self._source.to_output_source(steps, self._source_parameter),
         }
+
+
+def _produced_type(source: Any) -> Any:
+    """The type `source`, a step or subworkflow output or a workflow input, carries when
+    the workflow runs."""
+    if isinstance(source, OutputParameter):
+        return source.effective_type()
+    return source.parameter_type
+
+
+# The `pickValue` methods that deliver one value, not a list.
+_PICKS_ONE: Final = ("first_non_null", "the_only_non_null")
+
+
+def _record_type(record: CwlRecord, sources: tuple[Any, ...]) -> Any:
+    """The type a record delivers, from its first source: one source as it is, or,
+    when sources are merged, the list CWL's `linkMerge` makes of them; a `pickValue`
+    that picks one value then delivers one element of that list."""
+    if not sources:
+        return None
+    first = _produced_type(sources[0])
+    if first is None:
+        return None
+    fields = dict(record.fields)
+    link_merge = fields.get("linkMerge")
+    if len(sources) == 1 and link_merge is None:
+        merged = first
+    elif link_merge == "merge_flattened" and is_array_type(first):
+        merged = first
+    else:
+        merged = {"type": "array", "items": first}
+    match merged:
+        case {"type": "array", "items": items} if fields.get("pickValue") in _PICKS_ONE:
+            return items
+        case _:
+            return merged
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,7 +372,7 @@ class WorkflowInputReference:
 
     def as_type(self, parameter_type: Any) -> "WorkflowInputReference":
         """Declare this workflow input's type and return the reference."""
-        self.workflow.add_input(self.name, parameter_type)
+        self.workflow._ensure_input(self.name, parameter_type, implicit=False)  # pylint: disable=protected-access
         return self
 
 
