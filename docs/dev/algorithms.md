@@ -75,9 +75,17 @@ environment and result tree no longer exist.
 Compilation remains independent of how the root workflow is partitioned into
 subworkflows. The property suite flattens final graph-derived artifacts with an
 independent test model and compares their observable behavior at
-`UP_TO_EMBEDDING`. Embedding a linked child directly in a CWL `run:` field is a
-placement choice; it does not invoke a second source-level implementation of
-workflow-call semantics.
+`UP_TO_RENAMING`.
+
+Both CWL output options rewrite the emitted artifact tree after compilation.
+`flatten_subworkflows` (`--cwl_inline_subworkflows`) changes the shape: it
+replaces a subworkflow call by that workflow's steps only when the call's
+author wrote nothing on it but `in` and `out` and the workflow allows it, and
+it leaves the root's inputs, outputs and job inputs alone.
+`inline_artifact_runs` (`--cwl_inline_runtag`) changes the packaging: every
+`run:` carries its process, which keeps the defaults of its own `cwlVersion`.
+Neither is a second source-level implementation of workflow-call semantics.
+The Python API and the REST endpoint use the second.
 
 ## Deferred obligations
 

@@ -204,6 +204,10 @@ class WorkflowPort:
     #: step id to a port name rather than written by hand. Recorded because the
     #: two halves are facts here and a guess once they are one string.
     origin: PortId | None = None
+    #: Whether the authored `outputSource` addressed its step as `(index, name)`.
+    #: A position is a fact only while nothing moves a step, so Compile refuses
+    #: it in a workflow where inference placed an edge.
+    positional: bool = False
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -257,13 +261,12 @@ EmittedValue: TypeAlias = Source | Expression
 
 @dataclass(frozen=True, slots=True)
 class ProcessRun:
-    """What a step executes: `target` is transported exactly as CWL (usually a
-    relative path, but an inline process object is legal), and `process_id` is
+    """What a step executes: `target` is a relative path, and `process_id` is
     the resolved logical identity, kept separate since a path is an embedding
     choice, not a tool identity.
     """
 
-    target: OpaqueCwl
+    target: str
     process_id: RegistryKey
     child: 'WorkflowGraph | None' = None
 
@@ -450,6 +453,10 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     #: `input_mapping` names emitted in shorthand: a step's own lifted input,
     #: recorded where Complete or Infer creates it (a name cannot tell).
     shorthand_relays: tuple[PortName, ...] = ()
+    #: False when the workflow is marked `wic: inlineable: false`, in its own file or
+    #: at the call site (read from the child's sidecar once call-site keys are folded
+    #: in): a caller asking to flatten its calls keeps this one nested.
+    inlineable: bool = True
 
     def __post_init__(self) -> None:
         """Reject a graph naming a port no step declares, checked over every

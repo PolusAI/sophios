@@ -32,6 +32,7 @@ from .nodes import (
 )
 from .cwl import CWL_VERSIONS
 from .spans import SourceSpan
+from .support import STEP_INPUT_RECORD_KEYS
 from .values import Anything, AnyMapping, Flag, ListOf, OneOf, Record, Text, ValueShape
 
 #: A `graphviz: style:` value: one or more styles, comma separated.
@@ -123,6 +124,10 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     #: The same rule as a string, for consumers that need to state it rather
     #: than apply it — the exported JSON Schema, principally.
     WIC_STEP_KEY_PATTERN: Final = WIC_STEP_KEY.pattern
+
+    #: The other spelling: a bare step id, for a step whose id is unique.
+    WIC_STEP_ID: Final = re.compile(r'^[A-Za-z0-9_.-]+$')
+    WIC_STEP_ID_PATTERN: Final = WIC_STEP_ID.pattern
 
     # No SCALAR_TAGS table here: scalar resolution is delegated to PyYAML's
     # SafeConstructor (see _resolved_scalar) to avoid diverging from it.
@@ -535,8 +540,17 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
 
     if isinstance(node, yaml.nodes.ScalarNode):
         return UnresolvedName(node.value, span)
+    if isinstance(node, yaml.nodes.MappingNode):
+        keys = {str(key.value) for key, _ in node.value if isinstance(key, yaml.nodes.ScalarNode)}
+        if keys and keys <= STEP_INPUT_RECORD_KEYS:
+            diags.error(
+                SophiosErrorCode.STEP_INPUT_RECORD,
+                'this mapping spells a CWL step input (' + ', '.join(sorted(keys)) + '), which '
+                "Sophios does not read here; write `!ii` for a literal of that shape, `!*` for an "
+                'edge, or a bare workflow-input name',
+                span)
     # A bare mapping or sequence cannot name a workflow input, so it is only
-    # meaningful as a literal.
+    # meaningful as a literal; a step-input record is kept as one for recovery.
     return InlineLiteral(_opaque(node, file, diags), span)
 
 
@@ -793,7 +807,7 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
             if parsed is None:
                 diags.error(
                     SophiosErrorCode.MALFORMED_WIC_STEP_KEY,
-                    f'wic: step key {key_text!r} must have the form "(index, name)"',
+                    f'wic: step key {key_text!r} must have the form "(index, name)" or be a step id',
                     SourceSpan.of(file, sub_key),
                 )
                 continue
@@ -839,11 +853,13 @@ def _sidecar_value(key: str, node: yaml.nodes.Node, shape: ValueShape,
 
 
 def _step_key(text: str) -> StepKey | None:
-    """Normalise a `"(1, name)"` sidecar key, or None if it is malformed."""
+    """Normalise a `"(1, name)"` or bare `"name"` sidecar key, or None if it is malformed."""
     match = Grammar.WIC_STEP_KEY.match(text)
-    if match is None:
-        return None
-    return StepKey(int(match.group(1)), match.group(2))
+    if match is not None:
+        return StepKey(int(match.group(1)), match.group(2))
+    if Grammar.WIC_STEP_ID.match(text):
+        return StepKey(None, text)
+    return None
 
 
 # --------------------------------------------------------------------------

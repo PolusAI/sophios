@@ -29,6 +29,7 @@ from sophios.ir.declarations import input_rank, layered, output_rank
 from sophios.ir.types import (DerivedName, EdgeOrigin, Port, PortDeclaration, PortId, PortName,
                               StepNode, WorkflowGraph)
 from sophios.lang import SophiosErrorCode
+from sophios.lang.diagnostics import SophiosError
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
@@ -376,3 +377,43 @@ def _insertion_registry() -> tuple[Yaml, Tools]:
     tools = {LegacyStepId(name, SYNTHETIC_NS): Tool(f'/synthetic/{name}.cwl', cwl)
              for name, cwl in specs.items()}
     return {'steps': steps}, tools
+
+
+@pytest.mark.fast
+def test_a_positional_output_source_is_refused_beside_an_inferred_edge() -> None:
+    """`count` leaves `file` to inference, so the document is not fully explicit."""
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'outputs': {'n': {'type': 'int', 'outputSource': '(2, count)/n'}},
+                          'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}},
+                                    {'id': 'count'}]})
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE
+
+
+@pytest.mark.fast
+def test_a_positional_output_source_is_refused_in_a_subworkflow_beside_an_inferred_edge() -> None:
+    """The check descends into child workflows."""
+    sub = {'outputs': {'n': {'type': 'int', 'outputSource': '(2, count)/n'}},
+           'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}, {'id': 'count'}]}
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [subworkflow_step('sub.wic', sub)]})
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE
+
+
+@pytest.mark.fast
+def test_a_positional_output_source_compiles_in_a_fully_explicit_workflow() -> None:
+    """With every input bound explicitly, the position is reliable and compiles."""
+    compiled = compile_hermetic({'outputs': {'n': {'type': 'int', 'outputSource': '(2, count)/n'}},
+                                 'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}},
+                                            'out': [{'file': {'wic_anchor': 'f'}}]},
+                                           {'id': 'count', 'in': {'file': {'wic_alias': 'f'}}}]})
+    assert compiled.artifact.cwl['outputs']['n']['outputSource'] == 'oracle__step__2__count/n'
+
+
+@pytest.mark.fast
+def test_an_untyped_positional_output_source_suggests_the_positional_spelling() -> None:
+    """A repeated id is addressed by position, so the hint must keep the position."""
+    step = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'outputs': {'o': {'outputSource': '(2, mk_file)/nope'}},
+                          'steps': [step, step]})
+    assert "Did you mean '(2, mk_file)/file'?" in caught.value.diagnostics[0].message

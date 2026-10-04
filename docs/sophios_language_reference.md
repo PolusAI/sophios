@@ -36,59 +36,139 @@ for the common case and drop into raw CWL for anything the shorthand does not
 cover. Sealing the abstraction would mean re-inventing CWL one feature at a
 time and asking users to wait.
 
-The abstraction leaks in three ways, and knowing which is which is the whole
-point of this document:
+Sophios-owned syntax (`!ii`, `!&`, `!*`, `!cwl`, the `wic:` block) is consumed
+and never appears in the output. Everything else is CWL, and what Sophios does
+with each field of the five workflow-level CWL v1.2 classes is declared in one
+place: `sophios.lang.SUPPORT_MATRIX` (`src/sophios/lang/support.py`). Each
+field is one of
 
-| Category | What Sophios does | Examples |
-|---|---|---|
-| **Sophios-owned** | Consumes it; never appears in the output | `!ii`, `!&`, `!*`, `!cwl`, the `wic:` block |
-| **Interpreted CWL** | Reads it *and acts on it* | `scatter`, `scatterMethod`, `when`, inline `run` |
-| **Compiler-owned** | Writes or extends it at the workflow level¹ | `class`, `cwlVersion`, `inputs`, `outputs`, `requirements`, `$namespaces`, `$schemas` |
-| **Passthrough CWL** | Copies it out unchanged² | `hints`, `label`, `doc`, everything else |
+- **native**: Sophios reads it and acts on it, or writes it;
+- **passthrough**: copied out unchanged;
+- **rejected**: reported with a positioned diagnostic, never silently dropped
+  or coerced.
 
-The interpreted set is closed and listed in §4.3. **Anything not interpreted
-and not compiler-owned is passthrough, by definition.** That rule is what makes
-the leak a contract rather than a surprise.
+The matrix is generated from the schema, not from this page:
+`tests/core/test_support_matrix.py` reads the fields of each class from
+`cwl_utils.parser.cwl_v1_2`, so a field the schema has and the matrix lacks
+fails the build, and so does a row whose pinning test does not exist. The
+tables below are the matrix at the time of writing; where they disagree,
+`support.py` wins. A test named without a file is in
+`tests/core/test_leak_boundary.py`. A field outside these five classes on a
+step's tool is passthrough wholesale: Sophios does not classify
+`CommandLineTool` fields.
 
-¹ The compiler-owned row exists because "unchanged" has to mean unchanged.
-Each key in it is treated differently, and each is pinned by a named test, in
-`tests/core/test_leak_boundary.py` unless a bullet names another file, rather
-than by a property — a property broad enough to cover them would have to be
-weak enough to say nothing:
+**`Workflow`**
+
+| Field | Support | Note | Pinned by |
+|---|---|---|---|
+| `class` | native | written by the compiler | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
+| `cwlVersion` | native | written; `wic035` for an unrunnable value | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
+| `doc` | passthrough | | `test_top_level_passthrough_is_byte_identical` |
+| `hints` | passthrough | | `test_top_level_passthrough_is_byte_identical` |
+| `id` | passthrough | | `test_top_level_passthrough_is_byte_identical` |
+| `inputs` | native | merged into; the compiler wins on a collision | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
+| `intent` | passthrough | | `test_top_level_passthrough_is_byte_identical` |
+| `label` | passthrough | | `test_top_level_passthrough_is_byte_identical` |
+| `outputs` | native | read: `outputSource` is resolved; merged into | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
+| `requirements` | native | merged into | `test_user_requirements_are_merged_into_not_copied` |
+| `steps` | native | | `test_well_formed_documents_parse` (`test_lang_parser.py`) |
+
+**`WorkflowStep`**
+
+| Field | Support | Note | Pinned by |
+|---|---|---|---|
+| `doc` | passthrough | | `test_step_passthrough_is_byte_identical` |
+| `hints` | passthrough | | `test_step_passthrough_is_byte_identical` |
+| `id` | native | | `test_sequence_and_mapping_steps_agree` (`test_lang_parser.py`) |
+| `in` | native | | `test_input_values_are_closed` (`test_lang_parser.py`) |
+| `label` | passthrough | | `test_step_passthrough_is_byte_identical` |
+| `out` | native | | `test_the_two_spellings_of_an_edge_definition_agree_on_an_output` (`test_lang_parser.py`) |
+| `requirements` | passthrough | | `test_step_passthrough_is_byte_identical` |
+| `run` | native | a registry stem, a path relative to the document, or an inline body | `test_an_inline_run_body_is_registered_and_emitted_as_its_own_tool` (`test_frontdoor.py`) |
+| `scatter` | native | | `test_every_declared_key_is_interpreted` |
+| `scatterMethod` | native | | `test_every_declared_key_is_interpreted` |
+| `when` | native | | `test_every_declared_key_is_interpreted` |
+
+**`WorkflowStepInput`** (an entry of a step's `in:`)
+
+| Field | Support | Note | Pinned by |
+|---|---|---|---|
+| `id` | native | the `in:` key | `test_input_values_are_closed` (`test_lang_parser.py`) |
+| `source` | native | spelled `!*` or a bare workflow-input name | `test_input_values_are_closed` (`test_lang_parser.py`) |
+| `default` | rejected | `wic038` | `test_an_untagged_step_input_record_is_wic038` (`test_lang_parser.py`) |
+| `label` | rejected | `wic038` | `test_an_untagged_step_input_record_is_wic038` (`test_lang_parser.py`) |
+| `linkMerge` | rejected | `wic038` | `test_an_untagged_step_input_record_is_wic038` (`test_lang_parser.py`) |
+| `loadContents` | rejected | `wic038` | `test_an_untagged_step_input_record_is_wic038` (`test_lang_parser.py`) |
+| `loadListing` | rejected | `wic038` | `test_an_untagged_step_input_record_is_wic038` (`test_lang_parser.py`) |
+| `pickValue` | rejected | `wic038` | `test_an_untagged_step_input_record_is_wic038` (`test_lang_parser.py`) |
+| `valueFrom` | rejected | `wic038` | `test_an_untagged_step_input_record_is_wic038` (`test_lang_parser.py`) |
+
+**`WorkflowOutputParameter`** (an entry of the workflow's `outputs:`)
+
+| Field | Support | Note | Pinned by |
+|---|---|---|---|
+| `id` | native | | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
+| `type` | native | | `test_an_untyped_authored_output_takes_its_producers_type` (`test_emit.py`) |
+| `outputSource` | native | one step/port reference; a list is `wic038` | `test_an_authored_output_source_validates` |
+| `format` | passthrough | | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
+| `doc` | passthrough | | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
+| `label` | passthrough | | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
+| `secondaryFiles` | passthrough | | `test_a_promoted_output_keeps_the_fields_a_workflow_output_may_state` (`test_emit.py`) |
+| `streamable` | passthrough | | `test_a_promoted_output_keeps_the_fields_a_workflow_output_may_state` (`test_emit.py`) |
+| `linkMerge` | rejected | `wic038` | `test_link_merge_and_pick_value_on_an_output_are_wic038` (`test_lower.py`) |
+| `pickValue` | rejected | `wic038` | `test_link_merge_and_pick_value_on_an_output_are_wic038` (`test_lower.py`) |
+
+**`WorkflowInputParameter`** (an entry of the workflow's `inputs:`)
+
+| Field | Support | Note | Pinned by |
+|---|---|---|---|
+| `id` | native | | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
+| `type` | native | read for the reference judgment | `test_only_proven_disjoint_cross_scope_types_are_rejected` (`test_link.py`) |
+| `format` | native | read by inference | `test_promoted_input_preserves_a_cwl_format_expression` (`test_infer_phase.py`) |
+| `default` | passthrough | | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
+| `doc` | passthrough | | `test_a_referenced_input_merges_the_documentation_of_the_argument_it_binds` (`test_compiler.py`) |
+| `label` | passthrough | | `test_a_referenced_input_merges_the_documentation_of_the_argument_it_binds` (`test_compiler.py`) |
+| `inputBinding` | passthrough | | `test_class_is_written_while_inputs_outputs_and_version_are_not` |
+| `loadContents` | passthrough | | `test_a_promoted_input_keeps_the_fields_a_workflow_input_may_state` (`test_emit.py`) |
+| `loadListing` | passthrough | | `test_a_promoted_input_keeps_the_fields_a_workflow_input_may_state` (`test_emit.py`) |
+| `secondaryFiles` | passthrough | | `test_a_promoted_input_keeps_the_fields_a_workflow_input_may_state` (`test_emit.py`) |
+| `streamable` | passthrough | | `test_a_promoted_input_keeps_the_fields_a_workflow_input_may_state` (`test_emit.py`) |
+
+What the native rows of `Workflow` do, in more detail:
 
 - `class` is **written by the compiler**: a workflow-level value you supply
   does not survive.
 - `inputs` and `outputs` are **merged into**, with the compiler winning on a
   collision: entries you write survive unless the compiler generates one of
-  the same name. `outputs` is additionally *read* — each entry's
-  `outputSource` feeds the compiler's output mapping — so a workflow-level
-  `outputs:` is interpreted, not merely tolerated. An output with no `type:`
-  takes the type of the step output its `outputSource:` names, as an array
-  when that step scatters. One whose `outputSource:` names no step output of
-  the workflow, or that has none, has no type to take and is `wic036`. So is
-  one whose `outputSource:` is a list: a list never gives a type, even when
-  its one element names a real step output, so write `type:` there. A list
-  of `inputs` or `outputs` holding an `$import` or `$include` is the exception
-  (§2): the compiler models only the mapping form, so it is neither merged
-  into nor carried into the output.
+  the same name. `outputs` is additionally *read*: each entry's
+  `outputSource` names one step output, which feeds the compiler's output
+  mapping. An output with no `type:` takes the type of the step output its
+  `outputSource:` names, as an array when that step scatters. One whose
+  `outputSource:` names no step output of the workflow, or that has none, has
+  no type to take and is `wic036`. A list `outputSource:`, `linkMerge` or
+  `pickValue` on an output is `wic038`. A list of `inputs` or `outputs`
+  holding an `$import` or `$include` is the exception (§2): the compiler
+  models only the mapping form, so it is neither merged into nor carried into
+  the output.
 - `cwlVersion` is **written by the compiler**: it is always the one declared
-  substrate version, whatever the document says. Sophios generates constructs
-  from that version — a workflow that declared `v1.0` and used `when:` used to
-  keep the declaration and emit CWL that is invalid against it. Supplying
-  `v1.0`, `v1.1` or `v1.2` is not an error; it is ignored, with a warning
-  naming the version that was used instead. Any other value is `wic035`,
-  reported by the parser at the value: accepting a version is a promise to
-  process it, and the toolchain processes no other.
-- `requirements` is **merged into**: your entries survive, and Sophios adds
-  what the workflow needs — `ScatterFeatureRequirement` for a scattering step,
-  `InlineJavascriptRequirement` for `when`,
-  `SubworkflowFeatureRequirement` for a `.wic` step. The mapping you wrote is
-  extended, not replaced, and not copied out byte-identically. A class you
-  wrote keeps its body: your `InlineJavascriptRequirement: {expressionLib: [...]}`
-  survives a `when`. A `requirements:` list holding an `$import` or `$include`
-  is the exception (§2): it is emitted as written, Sophios adds nothing to it,
-  and the imported file has to supply what the workflow needs, such as the
-  `ScatterFeatureRequirement` of a scattering step.
+  substrate version, whatever the document says. Supplying `v1.0`, `v1.1` or
+  `v1.2` is not an error, and the emitted document says the substrate version.
+  Any other value is `wic035`, reported by the parser at the value: accepting
+  a version is a promise to process it, and the toolchain processes no other.
+- `requirements` is **merged into**: the compiler adds what the workflow needs
+  with `setdefault`, so an authored body survives. It adds
+  `ScatterFeatureRequirement` for a scattering step,
+  `InlineJavascriptRequirement` for `when`, and
+  `SubworkflowFeatureRequirement` for a `.wic` step, each only when the class
+  is not already there: your `InlineJavascriptRequirement: {expressionLib: [...]}`
+  survives a `when`. A `requirements:` list holding an `$import` or
+  `$include` is the exception (§2): it is emitted as written, Sophios adds
+  nothing to it, and the imported file has to supply what the workflow needs,
+  such as the `ScatterFeatureRequirement` of a scattering step.
+
+Two document keys are not schema fields of `Workflow` but are written by the
+compiler too:
+
 - `$schemas` is **append-only**: your entries survive and the EDAM entry is
   added once.
 - `$namespaces` is **merged, with two reserved prefixes**: every binding you
@@ -111,12 +191,12 @@ weak enough to say nothing:
   `test_a_clash_on_a_prefix_no_promoted_format_uses_is_no_error` and
   `test_a_step_promoting_no_format_with_a_prefix_is_no_source_for_it_wherever_it_sits`.
 
-² Everything outside the compiler-owned row survives byte-identically, which
-is the statement the properties in that file quantify over. The exception is
-the list form of `hints:` (on the document or on a step) and of a step's
-`requirements:`, which the parser reads as the mapping form (§2) and which is
-written out as one, unless the list holds an `$import` or `$include` entry:
-that list is not read and survives as written.
+Any other top-level or step key is passthrough and survives byte-identically,
+which is the statement the properties in `tests/core/test_leak_boundary.py`
+quantify over. The exception is the list form of `hints:` (on the document or
+on a step) and of a step's `requirements:`, which the parser reads as the
+mapping form (§2) and which is written out as one, unless the list holds an
+`$import` or `$include` entry: that list is not read and survives as written.
 
 ---
 
@@ -241,6 +321,12 @@ out:
 comes into being, and that is an output; §4.1.1 says why, and what to write
 instead if you meant to consume an edge.
 
+A workflow's own `outputs:` name their producer with `outputSource: <step>/<port>`. The step is
+named by its id. When the id repeats, address the occurrence as
+`(index, name)/port`, the same key `wic: steps:` uses; the step at that index must carry that
+name (`wic039`). A positional address is accepted only in a workflow with no inferred edge:
+a position is a fact about the document, and inference may change the document.
+
 ---
 
 ## 4. Input values
@@ -291,7 +377,12 @@ signed exponent. `!ii 1e-5` on a `float` port is therefore `wic020`; write `1.0e
 An **untagged mapping or sequence** in input position is an inline literal —
 the same as writing `!ii` — because a collection cannot name a workflow input,
 so a literal is its only possible meaning. The tag is still the recommended
-spelling: it states the intent instead of leaving it to be inferred.
+spelling: it states the intent instead of leaving it to be inferred. The one
+exception is a mapping whose keys are all fields of CWL's step input
+(`source`, `default`, `valueFrom`, `linkMerge`, `pickValue`, `loadContents`,
+`loadListing`, `label`): `{source: x}` or `{default: 20}` reads as CWL that
+Sophios does not interpret there, so it is `wic038`, not a literal. Write
+`!ii {default: 20}` for a literal of that shape.
 
 A tag outside the four above is an error, not a fourth-and-a-half form, but
 for two different reasons. An *unknown* tag (`!foo`) is `wic009`, and the
@@ -418,6 +509,12 @@ scatter    scatterMethod    when    run
 
 Everything else on a step is passthrough.
 
+`run:` names the process a step runs: a registry stem (the default, from the step id), a
+`.cwl` or `.wic` path relative to the document that contains the step (when that file
+exists), or an inline CommandLineTool body. An inline body is emitted as its own tool file
+next to the workflow, exactly as a registry tool is. It is written as a tool of the workflow's
+CWL version; a `cwlVersion` inside it is ignored, as CWL requires.
+
 Each `scatter:` entry must name an input of its step. On a subworkflow call,
 those are exactly the inputs the subworkflow declares in its `inputs:`, the
 same names its caller's `in:` may bind. A name the compiler generates for a
@@ -462,16 +559,20 @@ wic:
           label: extract structures
 ```
 
-Step keys inside `wic: steps:` have the form `(index, name)` — the index is
-1-based and matches the step's position. Sophios parses these into a structured
-key; you should never have to parse that string yourself.
+Step keys inside `wic: steps:` are `(index, name)` — the index is 1-based and
+the step at that position should be called `name` — or a bare `name`, for a step
+whose id occurs once in the document. When both address one step, the
+`(index, name)` entry applies. A key that addresses no step is ignored, and
+Sophios prints one line to stderr naming the file, the key and the step actually
+at that position. Sophios parses keys into a structured key; you should never
+have to parse that string yourself.
 
 The block is Sophios's own, not passthrough CWL, so it is closed, and each key
 declares the shape of its value:
 
 | Key | Value |
 |---|---|
-| `steps` | a mapping keyed `(index, name)` |
+| `steps` | a mapping keyed `(index, name)` or by a unique step id |
 | `graphviz` | a mapping of `label` (a non-empty string), `style` (Graphviz styles, comma separated) and `ranksame` (a list of `(index, name)` keys), each optional |
 | `implementation`, `default_implementation`, `version`, `lang_version`, `namespace` | a non-empty string |
 | `implementations` | a mapping |
@@ -611,8 +712,8 @@ itself rather than from any shortcut:
 - **JSON has no YAML tags.** A validator sees the document after loading, so
   `!ii x` is invisible to it. The schema therefore describes the *desugared*
   projection of §6.1 — what `sophios.lang.to_json` produces.
-- **Passthrough is open by definition.** Since §1 says anything outside the
-  interpreted set is copied through untouched, the schema cannot close any
+- **Passthrough is open by definition.** Since §1 says any key outside the
+  support matrix is copied through untouched, the schema cannot close any
   object that might carry passthrough CWL.
 
 So the schema catches structural mistakes — `steps:` that is a string, `in:`

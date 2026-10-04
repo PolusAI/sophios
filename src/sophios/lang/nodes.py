@@ -197,13 +197,14 @@ class Step:
 
 @dataclass(frozen=True, slots=True)
 class StepKey:
-    """A `wic:` sidecar step key, normalised from its `"(1, name)"` form."""
+    """A `wic:` sidecar step key: `"(1, name)"` for the step at position 1,
+    or a bare `"name"` for the one step with that id (`index` is None)."""
 
-    index: int = surface(Shape.IDENTITY)
+    index: int | None = surface(Shape.IDENTITY)
     name: str = surface(Shape.IDENTITY)
 
     def __str__(self) -> str:
-        return f'({self.index}, {self.name})'
+        return self.name if self.index is None else f'({self.index}, {self.name})'
 
 
 @dataclass(frozen=True, slots=True)
