@@ -25,12 +25,12 @@ over all four rather than drawing one, so each gets the whole budget.
 import copy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Final
+from typing import Any, Callable, Final
 
 import yaml
 from hypothesis.strategies import SearchStrategy
 
-from sophios.utils_yaml import wic_loader
+from sophios.utils_yaml import Key, wic_loader
 from sophios.wic_types import Yaml
 
 from .ast_strategies import partitionings
@@ -87,6 +87,16 @@ def _text_roundtrip(document: Yaml) -> Yaml:
     return loaded
 
 
+def _record_of(value: Any) -> Yaml | None:
+    """The fields of a step-input record (`!cwl {source: ..., ...}`), or None.
+
+    A record's single `source` may be a bare declared name, which resolves
+    exactly like a bare-name binding and so moves with its step the same way.
+    """
+    record = value.get(Key.RAW_CWL) if isinstance(value, dict) else None
+    return record if isinstance(record, dict) else None
+
+
 def _declared_input_references(document: Yaml, steps: list[Yaml]) -> set[str]:
     """The declared `inputs:` names `steps` reference by bare name."""
     declared = document.get('inputs')
@@ -95,7 +105,11 @@ def _declared_input_references(document: Yaml, steps: list[Yaml]) -> set[str]:
     referenced: set[str] = set()
     for step in steps:
         for value in step.get('in', {}).values():
-            source = value.get('source') if isinstance(value, dict) else value
+            record = _record_of(value)
+            if record is not None:
+                source = record.get('source')
+            else:
+                source = value.get('source') if isinstance(value, dict) else value
             if isinstance(source, str) and source in declared:
                 referenced.add(source)
     return referenced
@@ -116,8 +130,11 @@ def _rewrite_workflow_input_references(steps: list[Yaml], formals: dict[str, str
             if not isinstance(inputs, dict):
                 continue
             for name, value in inputs.items():
+                record = _record_of(value)
                 if isinstance(value, str) and value in formals:
                     inputs[name] = formals[value]
+                elif record is not None and isinstance(record.get('source'), str) and record['source'] in formals:
+                    record['source'] = formals[record['source']]
 
 
 def _subtree_for(document: Yaml, steps: list[Yaml], formals: dict[str, str]) -> Yaml:

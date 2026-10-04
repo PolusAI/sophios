@@ -68,6 +68,21 @@ class SophiosErrorCode(StrEnum):
     UNSUPPORTED_CWL_VERSION = 'wic035'
     #: An authored workflow output with no `type` and no producer to take one from.
     UNTYPED_OUTPUT = 'wic036'
+    #: CWL's WorkflowStepInput written where Sophios does not read it: an
+    #: untagged mapping in `in:` carrying `source`, `default`, `linkMerge`,
+    #: ..., a `!cwl {...}` record carrying a key or a `source` it may not, or
+    #: `linkMerge`/`pickValue`/a list `outputSource` on a workflow output.
+    STEP_INPUT_RECORD = 'wic038'
+
+    #: A positional `(index, name)/port` outputSource whose index does not hold
+    #: that step, or written in a workflow with an inferred edge.
+    POSITIONAL_OUTPUT_SOURCE = 'wic039'
+
+    #: Notes, not errors (errors under --inference_strict): inference chose
+    #: between equals. wic042: one producer offered several matching outputs.
+    #: wic043: an earlier producer also matched and recency decided.
+    INFERENCE_TIE = 'wic042'
+    INFERENCE_RECENCY = 'wic043'
 
     #: --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = 'api001'
