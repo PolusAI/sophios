@@ -28,12 +28,14 @@ from sophios.ir.complete import coerce_job_value
 from sophios.ir.declarations import port_declaration
 from sophios.ir.types import AuthoredName
 from sophios.lang import InlineLiteral, parse
-from sophios.lang.diagnostics import Diagnostic, Severity, SophiosError
+from sophios.lang.diagnostics import Diagnostic, Locator, Severity, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
+from sophios.lang.spans import SourceSpan
 from sophios.python_cwl_adapter import check_args_match_inputs
 from sophios.wic_types import StepId, Tool
 
 from .hermetic import compile_hermetic
+from .provocations import _provoke_duplicate_document_name
 from .synthetic_tools import SYNTHETIC_NS, clt
 
 
@@ -491,3 +493,55 @@ def test_ctrl_c_during_run_local_exits_130(monkeypatch: pytest.MonkeyPatch,
         cli_on_helloworld('--run_local', '--cwl_runner', cwl_runner)
     assert isinstance(caught.value, SystemExit)
     assert caught.value.code == 130
+
+
+# --------------------------------------------------------------------------
+# Compile diagnostics name where the author wrote the problem
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_an_unresolved_input_names_its_line_and_step() -> None:
+    """wic011 carried a message and nothing else; the parser had the span all along."""
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': 'undeclared'}}]})
+    diagnostic = caught.value.diagnostics[0]
+    assert diagnostic.code is SophiosErrorCode.UNRESOLVED_INPUT
+    assert diagnostic.span is not None and diagnostic.span.file == 'oracle.wic'
+    assert diagnostic.locator == Locator(step='mk_file', index=1, port='name')
+
+
+@pytest.mark.fast
+def test_a_literal_type_mismatch_names_its_line_and_port() -> None:
+    """wic020 names the line of the `!ii` literal and the step and port it binds."""
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [{'id': 'scale', 'in': {'n': {'wic_inline_input': 'x'}}}]})
+    diagnostic = caught.value.diagnostics[0]
+    assert diagnostic.code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
+    assert diagnostic.span is not None and diagnostic.span.file == 'oracle.wic'
+    assert diagnostic.span.start_line > 0
+    assert diagnostic.locator == Locator(step='scale', index=1, port='n')
+
+
+@pytest.mark.fast
+def test_a_missing_required_job_value_carries_its_position() -> None:
+    """wic012 is raised where the value is coerced, at the span and step its caller names."""
+    span = SourceSpan('x.wic', 3, 1, 3, 1)
+    locator = Locator(step='scale', index=2, port='n')
+    with pytest.raises(SophiosError) as caught:
+        coerce_job_value(AuthoredName('n'), port_declaration({'type': 'int'}), None,
+                         span=span, locator=locator)
+    diagnostic = caught.value.diagnostics[0]
+    assert diagnostic.code is SophiosErrorCode.MISSING_REQUIRED_INPUT
+    assert (diagnostic.span, diagnostic.locator) == (span, locator)
+    assert str(diagnostic).startswith('x.wic:3:1: ')
+
+
+@pytest.mark.fast
+def test_a_duplicate_document_name_names_its_document() -> None:
+    """wic031 has no port to point at, so it points at the document that spells two ports alike."""
+    with pytest.raises(SophiosError) as caught:
+        _provoke_duplicate_document_name()
+    diagnostic = caught.value.diagnostics[0]
+    assert diagnostic.code is SophiosErrorCode.DUPLICATE_DOCUMENT_NAME
+    assert diagnostic.span is not None and diagnostic.span.file == 'provoke.wic'

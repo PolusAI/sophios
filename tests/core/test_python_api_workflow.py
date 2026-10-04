@@ -312,6 +312,21 @@ def test_tool_builder_step_bridge_supports_multistep_workflow() -> None:
 
 
 @pytest.mark.fast
+def test_a_workflow_output_prints_no_authored_spelling_line(capsys: pytest.CaptureFixture[str]) -> None:
+    """The Python API spells `outputSource` with generated names itself; nobody wrote that text."""
+    emit_step = Step(_emit_text_tool(), step_name="emit_text")
+    read_step = Step(clt_path=_adapter("cat"))
+    workflow = Workflow([emit_step, read_step], "output_line_demo")
+    emit_step.inputs.message = workflow.inputs.message.as_type(cwl.string)
+    read_step.inputs.file = emit_step.outputs.file
+    workflow.outputs.result = read_step.outputs.output
+
+    workflow.compile()
+
+    assert "Warning!" not in capsys.readouterr().err
+
+
+@pytest.mark.fast
 def test_output_target_directories_compile_as_runner_local_inputs(tmp_path: Path) -> None:
     """A declared output directory becomes a string input the runner fills.
 
@@ -1454,3 +1469,33 @@ def test_ctrl_c_during_run_is_not_reported_as_a_failed_run(monkeypatch: pytest.M
     monkeypatch.setattr(run_local.cwltool.main, 'main', _interrupted)
     with pytest.raises(KeyboardInterrupt):
         _echo_workflow('interrupted').run()
+
+
+@pytest.mark.fast
+def test_a_failed_in_process_run_names_authored_steps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                      caplog: pytest.LogCaptureFixture,
+                                                      capsys: pytest.CaptureFixture[str]) -> None:
+    """cwltool names emitted ids; during the run they read as authored, and the failure points at the map."""
+    import logging  # pylint: disable=import-outside-toplevel
+    emitted = "wf__step__2__append"
+    names_path = tmp_path / "wf.names.json"
+    entry = {"id": emitted, "workflow": "wf", "index": 2, "name": "append", "file": "wf.wic", "line": 7}
+    names_path.write_text(json.dumps({"steps": {emitted: entry}, "ports": {}}), encoding="utf-8")
+
+    def failing_main(args: list[str]) -> int:
+        del args
+        logging.getLogger("cwltool").error("[step %s] completed permanentFail", emitted)
+        return 1
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(run_local.cwltool.main, "main", failing_main)
+    caplog.set_level(logging.ERROR, logger="cwltool")
+
+    retval = run_local.run_local({"container_engine": "docker", "cwl_runner": "cwltool"}, False,
+                                 passthrough_args=[], workflow_name="wf", basepath=str(tmp_path))
+
+    assert retval == 1
+    assert f"[step step 2 'append' ({emitted})] completed permanentFail" in caplog.messages
+    assert f"Emitted ids are mapped to authored names in {names_path}" in capsys.readouterr().out
+    assert not [f for f in logging.getLogger("cwltool").filters
+                if isinstance(f, sophios.plugins.AuthoredNamesFilter)]

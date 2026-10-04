@@ -8,6 +8,7 @@ from .cwl import CWL_VERSION, CWL_VERSIONS, CwlVersion
 from .diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
 from .error_codes import SophiosErrorCode
 from .nodes import (
+    CwlRecord,
     Document,
     EdgeDef,
     EdgeRef,
@@ -20,6 +21,7 @@ from .nodes import (
     StepKey,
     UnresolvedName,
     WicSidecar,
+    cwl_record,
 )
 from ..utils_yaml import Key, Tag
 from .parser import Forms, Grammar, ParseResult, parse
@@ -27,6 +29,7 @@ from .render import render, to_json
 from .versions import KNOWN_VERSIONS, LANG_VERSION, resolve as resolve_lang_version
 from .schema import wic_schema
 from .spans import SourceSpan
+from .support import SUPPORT_MATRIX, Support
 
 __all__ = [
     'CWL_VERSION',
@@ -34,10 +37,12 @@ __all__ = [
     'CwlVersion',
     'KNOWN_VERSIONS',
     'LANG_VERSION',
+    'SUPPORT_MATRIX',
     'SophiosErrorCode',
     'Diagnostic',
     'Diagnostics',
     'Locator',
+    'CwlRecord',
     'Document',
     'EdgeDef',
     'EdgeRef',
@@ -55,9 +60,11 @@ __all__ = [
     'SourceSpan',
     'Step',
     'StepKey',
+    'Support',
     'Tag',
     'UnresolvedName',
     'WicSidecar',
+    'cwl_record',
     'parse',
     'render',
     'resolve_lang_version',

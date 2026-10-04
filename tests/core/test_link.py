@@ -403,3 +403,32 @@ def test_a_wrapper_scatters_a_declared_input_threaded_to_another_name() -> None:
 
     linked = link(complete(typed.graph))
     assert linked.graph is not None, [str(item) for item in linked.diagnostics]
+
+
+@pytest.mark.fast
+def test_a_record_source_whose_type_is_provably_disjoint_is_wic023() -> None:
+    """A record that hands its one source on unchanged is judged as a bare `!*` is."""
+    tools = copy.deepcopy(SYNTHETIC_TOOLS)
+    tools[LegacyStepId('int_source', SYNTHETIC_NS)] = Tool(
+        '/synthetic/int_source.cwl', clt({}, {'value': {'type': 'int'}}))
+    root = ('steps:\n- id: int_source\n  out:\n  - value: !& v\n'
+            '- id: mk_file\n  in:\n    name: !cwl {source: !* v}\n')
+    typed = _rooted(root, tools)
+    assert typed.graph is not None, list(typed.diagnostics)
+    linked = link(typed.graph)
+    assert [diagnostic.code for diagnostic in linked.diagnostics] == [
+        SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE]
+
+
+@pytest.mark.fast
+def test_a_record_that_transforms_its_source_is_not_judged_by_its_sinks_type() -> None:
+    """`valueFrom` makes the value the step receives, so the source's type is not the input's."""
+    tools = copy.deepcopy(SYNTHETIC_TOOLS)
+    tools[LegacyStepId('int_source', SYNTHETIC_NS)] = Tool(
+        '/synthetic/int_source.cwl', clt({}, {'value': {'type': 'int'}}))
+    root = ('steps:\n- id: int_source\n  out:\n  - value: !& v\n'
+            "- id: mk_file\n  in:\n    name: !cwl {source: !* v, valueFrom: '$(String(self))'}\n")
+    typed = _rooted(root, tools)
+    assert typed.graph is not None, list(typed.diagnostics)
+    linked = link(typed.graph)
+    assert linked.graph is not None, [str(item) for item in linked.diagnostics]

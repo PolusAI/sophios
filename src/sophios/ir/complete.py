@@ -15,11 +15,12 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any, Final, TypeVar
 
-from ..lang.nodes import InlineLiteral, UnresolvedName
-from ..lang.diagnostics import SophiosError
+from ..lang.nodes import CwlRecord, InlineLiteral, UnresolvedName
+from ..lang.diagnostics import Locator, SophiosError
+from ..lang.spans import SourceSpan
 from ..lang.error_codes import SophiosErrorCode
 from .declarations import feeding_declaration, produced_declaration
-from .names import Names
+from .names import Names, authored_path
 from .types import (
     AuthoredName,
     BoundaryDeclaration,
@@ -95,7 +96,8 @@ def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
             declaration = feeding_declaration(step, sink)
             _put(workflow_inputs, WorkflowPort(outer_name, declaration))
             _put(job_bindings, JobBinding(outer_name, coerce_job_value(
-                boundary.name, declaration, child_jobs[boundary.name])))
+                boundary.name, declaration, child_jobs[boundary.name], span=step.span,
+                locator=Locator(step.id.name, step.id.index, '/'.join(authored_path(boundary.name))))))
             _put_input_mapping(input_mapping, outer_name, sink.id)
             if outer_name not in shorthand_relays:
                 shorthand_relays.append(outer_name)
@@ -123,18 +125,20 @@ def _materialize_bindings(graph: WorkflowGraph) -> WorkflowGraph:
         for binding in step.bindings:
             port = next(port for port in step.inputs if port.id == binding.sink)
             match binding.value:
-                case InlineLiteral(value=value):
+                case InlineLiteral(value=value, span=span):
                     name = DerivedName(step.id, port.id.port)
                     declaration = feeding_declaration(step, port)
                     _put(workflow_inputs, WorkflowPort(name, declaration))
-                    _put(job_bindings, JobBinding(
-                        name, coerce_job_value(port.id.port, declaration, value)))
+                    locator = Locator(step.id.name, step.id.index, '/'.join(authored_path(port.id.port)))
+                    _put(job_bindings, JobBinding(name, coerce_job_value(
+                        port.id.port, declaration, value, span=span, locator=locator)))
                     _put_input_mapping(input_mapping, name, port.id)
                 case UnresolvedName(name=text):
-                    authored = AuthoredName(text)
-                    if authored in authored_inputs:
-                        _put_input_mapping(input_mapping, authored, port.id)
-                        _merge_boundary_documentation(workflow_inputs, authored, port.declaration)
+                    _relay(workflow_inputs, input_mapping, authored_inputs, AuthoredName(text), port)
+                case CwlRecord(sources=sources):
+                    for source in sources:
+                        if isinstance(source, UnresolvedName):
+                            _relay(workflow_inputs, input_mapping, authored_inputs, AuthoredName(source.name), port)
                 case _:
                     pass
     return replace(graph, workflow_inputs=tuple(workflow_inputs),
@@ -183,14 +187,11 @@ def _untyped_output(graph: WorkflowGraph, output: WorkflowPort) -> SophiosError:
             SophiosErrorCode.UNTYPED_OUTPUT,
             f'{where} and has no `outputSource:` to take one from; '
             'add `type:`, or an `outputSource: <step>/<output>`.')
-    if isinstance(output.output_source, list):
-        return SophiosError.error(
-            SophiosErrorCode.UNTYPED_OUTPUT,
-            f'{where}, and its `outputSource:` is written as a list, which takes no type from its '
-            'sources. Add `type:`.')
     # What an `outputSource:` can name: not a name the compiler derives for a
     # call's lifted outputs.
-    sources = [f'{step.id.name}/{names.port(port.id.port)}' for step in graph.steps
+    sources = [f'({position}, {step.id.name})/{names.port(port.id.port)}' if output.positional
+               else f'{step.id.name}/{names.port(port.id.port)}'
+               for position, step in enumerate(graph.steps, start=1)
                for port in step.outputs if not isinstance(port.id.port, DerivedName)]
     close = difflib.get_close_matches(str(output.output_source), sources, n=1)
     check = f"Did you mean '{close[0]}'?" if close else 'Check the step and output names.'
@@ -251,6 +252,14 @@ def _put_input_mapping(mappings: list[tuple[PortName, tuple[PortId, ...]]],
     mappings.append((name, (sink,)))
 
 
+def _relay(workflow_inputs: list[WorkflowPort], input_mapping: list[tuple[PortName, tuple[PortId, ...]]],
+           authored_inputs: set[PortName], name: AuthoredName, port: Port) -> None:
+    """Relay the workflow input `name` to `port`, when the document declares it."""
+    if name in authored_inputs:
+        _put_input_mapping(input_mapping, name, port.id)
+        _merge_boundary_documentation(workflow_inputs, name, port.declaration)
+
+
 def _merge_boundary_documentation(ports: list[WorkflowPort], name: PortName,
                                   source: PortDeclaration | None) -> None:
     if source is None:
@@ -279,7 +288,8 @@ def _as_text(value: Any) -> Any:
     return '\n'.join(value) if isinstance(value, list) else value
 
 
-def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Any) -> Any:
+def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Any, *,
+                     span: SourceSpan | None = None, locator: Locator | None = None) -> Any:
     """`value` in the one plain-JSON form a job document holds for `declaration`.
 
     A projection: a value already in that form (a lifted child job value, an
@@ -291,7 +301,8 @@ def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Any) -
     `name` is the input the value is for. It is spelled only if the value does
     not convert and a message must name it: a derived name's text prints every
     step id it was exposed through, so spelling it for every value is the cost
-    that made nesting exponential.
+    that made nesting exponential. `span` and `locator` say where the value was
+    written, for the diagnostic.
     """
     value = _plain(value)
     if value is None:
@@ -299,12 +310,14 @@ def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Any) -
             return None
         raise SophiosError.error(SophiosErrorCode.MISSING_REQUIRED_INPUT,
                                  f'Required input of type {declaration.type.declared} '
-                                 'was not provided.')
+                                 'was not provided.', span=span, locator=locator)
     return _coerce_type(name, declaration.type.canonical, value,
-                        declaration.format if declaration.has_format else None)
+                        declaration.format if declaration.has_format else None, span=span, locator=locator)
 
 
-def _coerce_type(name: PortName, raw: Any, value: Any, fmt: Any) -> Any:
+# pylint: disable-next=too-many-arguments
+def _coerce_type(name: PortName, raw: Any, value: Any, fmt: Any, *,
+                 span: SourceSpan | None, locator: Locator | None) -> Any:
     if isinstance(raw, list):
         non_null = [item for item in raw if item != 'null']
         arrays = [item for item in non_null if isinstance(item, dict)
@@ -312,8 +325,8 @@ def _coerce_type(name: PortName, raw: Any, value: Any, fmt: Any) -> Any:
         raw = arrays[0] if arrays else (non_null[0] if len(non_null) == 1 else non_null)
     if isinstance(raw, dict) and raw.get('type') == 'array':
         values = value if isinstance(value, list) else [value]
-        return [_coerce_type(name, raw.get('items'), item, fmt) for item in values]
-    return _coerce_scalar(name, raw, value, fmt)
+        return [_coerce_type(name, raw.get('items'), item, fmt, span=span, locator=locator) for item in values]
+    return _coerce_scalar(name, raw, value, fmt, span=span, locator=locator)
 
 
 def _plain(value: Any) -> Any:
@@ -327,32 +340,34 @@ def _plain(value: Any) -> Any:
     return value
 
 
-def _coerce_scalar(name: PortName, raw: Any, value: Any, fmt: Any) -> Any:
+# pylint: disable-next=too-many-arguments
+def _coerce_scalar(name: PortName, raw: Any, value: Any, fmt: Any, *,
+                   span: SourceSpan | None, locator: Locator | None) -> Any:
     if raw in ('File', 'Directory'):
         if isinstance(value, str):
             value = {'class': raw, 'location': value}
         elif not isinstance(value, dict) or value.get('class') != raw:
-            raise _mismatch(name, raw, value)
+            raise _mismatch(name, raw, value, span, locator)
         result = deepcopy(value)
         if raw == 'File' and fmt and 'format' not in result:
             result['format'] = fmt
         return result
     if raw == 'string':
-        return _coerce_string(name, value)
+        return _coerce_string(name, value, span=span, locator=locator)
     if raw in ('int', 'long'):
         if isinstance(value, int) and not isinstance(value, bool):
             return value
-        raise _mismatch(name, raw, value)
+        raise _mismatch(name, raw, value, span, locator)
     if raw in ('float', 'double'):
-        return _coerce_float(name, raw, value)
+        return _coerce_float(name, raw, value, span=span, locator=locator)
     if raw == 'boolean':
         if isinstance(value, bool):
             return value
-        raise _mismatch(name, raw, value)
+        raise _mismatch(name, raw, value, span, locator)
     return deepcopy(value)
 
 
-def _coerce_string(name: PortName, value: Any) -> str:
+def _coerce_string(name: PortName, value: Any, *, span: SourceSpan | None, locator: Locator | None) -> str:
     """The text of a scalar literal, or of a mapping or list as JSON.
 
     The one conversion kept besides an int into a float: `!ii 20` cannot be
@@ -365,13 +380,14 @@ def _coerce_string(name: PortName, value: Any) -> str:
         try:
             return json.dumps(value)
         except TypeError as exc:
-            raise _mismatch(name, 'string', value) from exc
+            raise _mismatch(name, 'string', value, span, locator) from exc
     if isinstance(value, (str, int, float, datetime.date)):
         return str(value)
-    raise _mismatch(name, 'string', value)
+    raise _mismatch(name, 'string', value, span, locator)
 
 
-def _coerce_float(name: PortName, raw: Any, value: Any) -> float:
+def _coerce_float(name: PortName, raw: Any, value: Any, *,
+                  span: SourceSpan | None, locator: Locator | None) -> float:
     """A float as it is, or an int the float holds exactly."""
     if isinstance(value, float):
         return float(value)
@@ -379,10 +395,10 @@ def _coerce_float(name: PortName, raw: Any, value: Any) -> float:
         try:
             as_float = float(value)
         except OverflowError as exc:
-            raise _mismatch(name, raw, value) from exc
+            raise _mismatch(name, raw, value, span, locator) from exc
         if int(as_float) == value:
             return as_float
-    raise _mismatch(name, raw, value)
+    raise _mismatch(name, raw, value, span, locator)
 
 
 #: A number written in scientific notation that YAML 1.1 reads as text: PyYAML
@@ -397,10 +413,12 @@ _PYTHON_TYPE: Final = {'int': int, 'long': int, 'float': float, 'double': float,
                        'boolean': bool, 'string': str}
 
 
-def _mismatch(name: PortName, raw: Any, value: Any) -> SophiosError:
+def _mismatch(name: PortName, raw: Any, value: Any, span: SourceSpan | None,
+              locator: Locator | None) -> SophiosError:
     return SophiosError.error(
         SophiosErrorCode.LITERAL_TYPE_MISMATCH,
-        f'Input {str(name)!r} is declared type {raw!r} but its literal {value!r} {_what_is_wrong(raw, value)}')
+        f'Input {str(name)!r} is declared type {raw!r} but its literal {value!r} {_what_is_wrong(raw, value)}',
+        span=span, locator=locator)
 
 
 def _what_is_wrong(raw: Any, value: Any) -> str:

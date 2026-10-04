@@ -132,9 +132,10 @@ class SophiosError(Exception):
         self.diagnostics: Diagnostics = items
 
     @classmethod
-    def error(cls, code: _error_codes.SophiosErrorCode, *messages: str) -> 'SophiosError':
-        """Build from one error, spelled as one or more message lines.
+    def error(cls, code: _error_codes.SophiosErrorCode, *messages: str,
+              span: SourceSpan | None = None, locator: Locator | None = None) -> 'SophiosError':
+        """Build from one error, spelled as one or more message lines, at `span` and `locator`.
 
-        Multiple lines become multiple diagnostics under the same code.
+        Multiple lines become multiple diagnostics under the same code and position.
         """
-        return cls(Diagnostic(Severity.ERROR, code, message) for message in messages)
+        return cls(Diagnostic(Severity.ERROR, code, message, span, locator) for message in messages)
