@@ -11,6 +11,7 @@ without a reason is a place for a real difference to hide.
 
 A lattice. What each strength forgives is declared on `equivalent`.
 """
+import copy
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import PurePosixPath
@@ -19,6 +20,7 @@ from typing import Any, Final, Iterator
 import networkx as nx
 from networkx.algorithms import isomorphism
 
+from sophios.ir.artifacts import CompilationArtifact
 from sophios.utils import recursively_delete_dict_key
 from sophios.wic_types import Yaml
 
@@ -595,3 +597,130 @@ def _same_dag(left: Yaml, right: Yaml) -> Divergence | None:
         return Divergence(Strength.UP_TO_RENAMING, '<dag>',
                           sorted(one.nodes), sorted(two.nodes))
     return None
+
+
+def _source_of(value: Any) -> str | None:
+    """The `source` one `in:` binding names, in whichever of the two surface
+    forms the compiler emitted (`{name: source}` or `{name: {source: ...}}`)."""
+    source = value.get('source') if isinstance(value, dict) else value
+    return source if isinstance(source, str) else None
+
+
+def _set_source(bindings: Yaml, name: str, source: str) -> None:
+    """Rewrites one binding's source in place, keeping its own surface form."""
+    value = bindings[name]
+    if isinstance(value, dict):
+        value['source'] = source
+    else:
+        bindings[name] = source
+
+
+def flatten_model(artifact: CompilationArtifact) -> Yaml:
+    """The compiled document with every subworkflow step inlined whose boundary
+    is proved removable, so a split and an unsplit compilation of the same
+    steps can be compared directly.
+
+    This is an independent test oracle, scoped to what `equivalent()` at
+    UP_TO_RENAMING actually forgives: it needs the DAG's topology and every
+    step's body right, and it does not need `run:` paths, `steps[].id`, or
+    workflow-level port *names* right at all, because those are exactly what
+    that strength already ignores (`equivalence.py`).
+
+    Recognising a subworkflow step by its own sub-tree's `class` (`Workflow`,
+    not `CommandLineTool`) rather than by an `id` suffix: `rose.sub_trees` has
+    one entry per step regardless of kind (verified directly — a flat,
+    two-`CommandLineTool` compile still has two leaf sub-trees, one per step),
+    so the id is not what marks a step as needing to be inlined here; its own
+    compiled class is.
+    """
+    document: Yaml = copy.deepcopy(artifact.cwl)
+    steps: list[Yaml] = document.get('steps', [])
+    children = artifact.children
+    flat_steps: list[Yaml] = []
+    #: `{wrapper_id}/{wrapper_out_port} -> real producer's own source string`,
+    #: for every subworkflow step this pass inlines away.
+    redirects: dict[str, str] = {}
+    #: Requirements the inlined subworkflows themselves declared (their own
+    #: `SubworkflowFeatureRequirement` already stripped, recursively, by the
+    #: nested `flatten_model` call below) — e.g. `ScatterFeatureRequirement`, for a
+    #: `scatter:` that lived inside the subworkflow and is now a step directly
+    #: in *this* document. A CWL document declares only the features its own
+    #: `steps:` uses, so once a step moves in here, whatever requirement it
+    #: needed moves with it.
+    inherited_requirements: dict[str, Yaml] = {}
+    inlined_any = False
+    kept_any = False
+
+    for step, child in zip(steps, children):
+        if child.cwl.get('class') != 'Workflow':
+            flat_steps.append(step)
+            continue
+        if set(step) - {'id', 'in', 'run', 'out'} or (child.graph is not None and not child.graph.inlineable):
+            # The author wrote more on the call than `in` and `out` (a scatter, a `when`...), or the
+            # workflow it runs says `wic: inlineable: false`: its boundary is not proved removable,
+            # so it stays a call.
+            kept_any = True
+            flat_steps.append(step)
+            continue
+        inlined_any = True
+        inner = flatten_model(child)
+        kept_any = kept_any or 'SubworkflowFeatureRequirement' in (inner.get('requirements') or {})
+        # What the subworkflow required applied to every step under it. The few the workflow engine
+        # reads against the document move to this one; the rest go onto each step, the step's own
+        # entry winning.
+        declared = dict(inner.get('requirements') or {})
+        declared.pop('SubworkflowFeatureRequirement', None)
+        document_features = ('InlineJavascriptRequirement', 'ScatterFeatureRequirement',
+                             'StepInputExpressionRequirement', 'MultipleInputFeatureRequirement')
+        inherited_requirements.update({k: v for k, v in declared.items() if k in document_features})
+        step_requirements = {k: v for k, v in declared.items() if k not in document_features}
+        # The wrapper's own `in:` maps the subworkflow's formal parameter
+        # names (its inner workflow-level `inputs:` keys) to the sources that
+        # actually feed them at *this* level.
+        formal_to_actual = {name: _source_of(value) for name, value in step.get('in', {}).items()}
+        for inner_step in inner.get('steps', []):
+            for name, value in inner_step.get('in', {}).items():
+                source = _source_of(value)
+                if source is not None and source in formal_to_actual:
+                    actual = formal_to_actual[source]
+                    if actual is not None:
+                        _set_source(inner_step['in'], name, actual)
+            if step_requirements:
+                inner_step['requirements'] = {**step_requirements, **(inner_step.get('requirements') or {})}
+            flat_steps.append(inner_step)
+        wrapper_id = step['id']
+        # The subworkflow's own `outputs:` map its output port names to
+        # `outputSource: '<inner step>/<port>'`; anything outside referred to
+        # `{wrapper_id}/{that port name}`, so redirect that reference straight
+        # to the real producer, which is now itself one of `flat_steps`.
+        for out_name, out_value in inner.get('outputs', {}).items():
+            redirects[f'{wrapper_id}/{out_name}'] = out_value['outputSource']
+
+    for flat_step in flat_steps:
+        for name, value in flat_step.get('in', {}).items():
+            source = _source_of(value)
+            if source is not None and source in redirects:
+                _set_source(flat_step['in'], name, redirects[source])
+    document['steps'] = flat_steps
+
+    for out_value in document.get('outputs', {}).values():
+        out_source = out_value.get('outputSource')
+        if isinstance(out_source, str) and out_source in redirects:
+            out_value['outputSource'] = redirects[out_source]
+
+    if inlined_any:
+        # Unless a call stayed, a flattened document contains no subworkflow
+        # step, so the requirement that declares one no longer applies — left in place, it
+        # would make `_requirement_names` (equivalence.py) diverge on every
+        # split for a reason that has nothing to do with the workflow's
+        # meaning. What each inlined subworkflow's *own* requirements needed
+        # does still apply, now that their steps are directly in `steps:`
+        # here, so those are merged in rather than dropped with the rest.
+        requirements = document.get('requirements')
+        merged = dict(requirements) if isinstance(requirements, dict) else {}
+        if not kept_any:
+            merged.pop('SubworkflowFeatureRequirement', None)
+        merged.update(inherited_requirements)
+        document['requirements'] = merged
+
+    return document
