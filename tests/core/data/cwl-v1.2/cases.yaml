@@ -1,0 +1,14 @@
+# Plain CWL v1.2 Workflows from the conformance suite, one for each way Sophios used to
+# reject or rewrite them. Paths are relative to this file; see README.md.
+- {id: wf_wc_parseInt, tool: tests/count-lines1-wf.cwl, job: tests/wc-job.json}
+- {id: nested_workflow, tool: tests/count-lines8-wf.cwl, job: tests/wc-job.json}
+- {id: embedded_subworkflow, tool: tests/count-lines10-wf.cwl, job: tests/wc-job.json}
+- {id: step_input_default_value, tool: tests/count-lines9-wf.cwl, job: tests/empty.json}
+- {id: step_input_default_value_overriden_2nd_step_null, tool: tests/count-lines11-null-step-wf.cwl, job: tests/empty.json}
+- {id: wf_step_connect_undeclared_param, tool: tests/pass-unconnected.cwl, job: tests/empty.json}
+- {id: any_outputSource_compatibility, tool: tests/any-type-compat.cwl, job: tests/any-type-job.json}
+- {id: schemadef_types_with_import, tool: tests/schemadef_types_with_import-wf.cwl, job: tests/schemadef_types_with_import-job.json}
+- {id: wf_scatter_oneparam_valuefrom, tool: tests/scatter-valuefrom-wf1.cwl, job: tests/scatter-valuefrom-job1.json}
+- {id: wf_scatter_two_dotproduct, tool: tests/scatter-wf4.cwl, job: tests/scatter-job2.json}
+- {id: wf_input_default_missing, tool: tests/count-lines5-wf.cwl, job: tests/empty.json}
+- {id: wf_scatter_twopar_oneinput_flattenedmerge, tool: tests/count-lines12-wf.cwl, job: tests/count-lines6-job.json}

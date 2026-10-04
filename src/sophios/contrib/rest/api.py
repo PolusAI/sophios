@@ -14,7 +14,7 @@ from sophios import utils_cwl
 from sophios.post_compile import inline_artifact_runs
 from sophios.cli import get_args, get_dicts_for_compilation
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
-from sophios.wic_types import Json, Tool, Tools, StepId
+from sophios.wic_types import Json, Tools
 from sophios.contrib import converter
 from sophios import plugins
 from sophios.ir import frontdoor
@@ -74,12 +74,6 @@ async def compile_wf(request: Request) -> Json:
     tools_cwl: Tools = {}
     global_config = input_output.get_config(args.config_file, Path(args.homedir))
     tools_cwl = plugins.get_tools_cwl(global_config, args.validate_plugins, args.quiet)
-    # Add to the default list if the tool is 'inline' in run tag
-    # run tag will have the actual CommandLineTool
-    for can_step in workflow_can["steps"]:
-        if can_step.get("run", None):
-            # add a new tool
-            tools_cwl[StepId(can_step["id"], "global")] = Tool(".", can_step["run"])
     graph = get_graph_reps(wkflw_name)
 
     # From the arguments this endpoint actually built, not a fresh default

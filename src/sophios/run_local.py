@@ -1,4 +1,5 @@
 import json
+import logging
 import subprocess as sub
 import sys
 import os
@@ -32,7 +33,7 @@ except ImportError as exc:
 
 from . import auto_gen_header
 from . import utils  # , utils_graphs
-from .plugins import logging_filters
+from .plugins import AuthoredNamesFilter, logging_filters
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,42 +43,34 @@ class _CompiledWorkflowForCompute:
     cwl_job_inputs: Json
 
 
-def _sanitize_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
-    """Drop keys that aren't valid Bash variable names and strip dangerous characters from values."""
-    sanitized = {}
+_ENV_VAR_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 
-    # Regex for a valid Bash variable name
-    valid_key_pattern = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
-    # Characters to remove from values to prevent command injection
-    dangerous_chars_pattern = re.compile(r'[;`\'"$()|<>&!\n\r]')
+def _check_env_var_names(env_vars: Mapping[str, str]) -> None:
+    """Raise ValueError naming each key that is not an environment variable name.
 
-    for key, value in env_vars.items():
-        # Step 1: Validate the key.
-        if not valid_key_pattern.fullmatch(key):
-            print(
-                f"Warning: Invalid environment variable key '{key}' skipped.")
-            continue
-
-        # Step 2: Sanitize the value.
-        sanitized_value = dangerous_chars_pattern.sub('', value)
-        sanitized[key] = sanitized_value
-
-    return sanitized
+    Values are not checked: they reach the runner through an environment mapping and never
+    through a shell, so every character in them is passed as given.
+    """
+    invalid = [key for key in env_vars if not _ENV_VAR_NAME.fullmatch(key)]
+    if invalid:
+        names = ', '.join(repr(key) for key in invalid)
+        raise ValueError(f'Not an environment variable name: {names}. A name is letters, digits '
+                         'and underscores, and does not start with a digit.')
 
 
 def create_safe_env(user_env: dict[str, str]) -> dict:
-    """Generate a sanitized environment dict without applying it"""
-    sanitized_user_env = _sanitize_env_vars(user_env)
-    return {**os.environ, **sanitized_user_env}
+    """Return the current environment with the user's variables added, without applying it."""
+    _check_env_var_names(user_env)
+    return {**os.environ, **user_env}
 
 
 @contextmanager
 def _temporary_env(user_env: dict[str, str]) -> Iterator[dict[str, str]]:
-    """Temporarily apply sanitized environment variables and restore them after use."""
-    sanitized_user_env = _sanitize_env_vars(user_env)
-    previous_values = {key: os.environ.get(key) for key in sanitized_user_env}
-    os.environ.update(sanitized_user_env)
+    """Temporarily apply the user's environment variables and restore them after use."""
+    _check_env_var_names(user_env)
+    previous_values = {key: os.environ.get(key) for key in user_env}
+    os.environ.update(user_env)
     try:
         yield {**os.environ}
     finally:
@@ -114,7 +107,7 @@ def _runner_outdir(basepath: str, cwl_runner: str, date_time: str, outdir: str |
 
 def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
               container_cmd: str, passthrough_args: list[str], outdir: str | None = None,
-              quiet: bool = True) -> list[str]:
+              quiet: bool = True, documents: tuple[str, ...] | None = None) -> list[str]:
     """Build the command to run the workflow in an environment
 
     Args:
@@ -124,10 +117,15 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
         container_cmd (str): The container engine command
         quiet (bool): Pass --quiet to cwltool. Turn it off so --debug and the runner's own log
         level reach it. toil-cwl-runner is never given --quiet.
+        documents (tuple[str, ...] | None): The workflow, then its job file if it has one, as
+        the runner is given them. By default `<basepath>/<workflow_name>.cwl` and
+        `<basepath>/<workflow_name>_inputs.yml`, the files Sophios wrote.
     Returns:
         cmd (list[str]): The command to run the workflow
     """
     basepath = str(Path(basepath).absolute().resolve())
+    if documents is None:
+        documents = (f'{basepath}/{workflow_name}.cwl', f'{basepath}/{workflow_name}_inputs.yml')
     quiet_flags = ['--quiet'] if quiet else []
     # NOTE: By default, cwltool will attempt to download schema files.
     # $schemas:
@@ -163,8 +161,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
         cmd += ['--move-outputs', '--enable-ext',
                 '--outdir', runner_outdir]
         cmd += passthrough_args
-        cmd += [f'{basepath}/{workflow_name}.cwl',
-                f'{basepath}/{workflow_name}_inputs.yml']
+        cmd += list(documents)
     elif cwl_runner == 'toil-cwl-runner':
         cmd = [script] + container_cmd_ + path_check
         if 'slurm' not in passthrough_args:
@@ -178,8 +175,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
                 '--disableProgress',  # disable the progress bar in the terminal, saves UI cycles
                 ]
         cmd += passthrough_args
-        cmd += [f'{basepath}/{workflow_name}.cwl',
-                f'{basepath}/{workflow_name}_inputs.yml']
+        cmd += list(documents)
     return cmd
 
 
@@ -187,8 +183,18 @@ def _execute_inprocess(cmd: list[str], cwl_runner: str, workflow_name: str,
                        run_args_dict: dict[str, str], user_env_vars: dict[str, str] | None,
                        yaml_path: Path, cachedir: str,
                        output_directories: Mapping[str, str] | None) -> int:
-    """Execute the workflow in-process via the cwltool or toil python API, handling errors."""
+    """Execute the workflow in-process via the cwltool or toil python API, handling errors.
+
+    While it runs, cwltool's messages name each emitted id as the author wrote it, read from
+    the names map the compile wrote beside the root CWL.
+    """
     retval = 1
+    logger = logging.getLogger('cwltool')
+    names_path = _names_map_path(yaml_path.parent, workflow_name)
+    authored_names = (AuthoredNamesFilter(json.loads(names_path.read_text(encoding='utf-8')))
+                      if names_path.exists() else None)
+    if authored_names is not None:
+        logger.addFilter(authored_names)
     try:
         with _temporary_env(user_env_vars or {}):
             if cwl_runner == 'cwltool':
@@ -222,10 +228,18 @@ def _execute_inprocess(cmd: list[str], cwl_runner: str, workflow_name: str,
             traceback.print_exception(type(e), value=e, tb=None, file=f)
         if not cachedir:  # if running on CI
             print(e)
+    finally:
+        if authored_names is not None:
+            logger.removeFilter(authored_names)
     return retval
 
 
-def _report_outcome(retval: int | None, cmd: list[str], basepath: str) -> None:
+def _names_map_path(basepath: Path, workflow_name: str) -> Path:
+    """Where the compile wrote the map from emitted ids to authored names."""
+    return basepath / f'{workflow_name}.names.json'
+
+
+def _report_outcome(retval: int | None, cmd: list[str], basepath: str, workflow_name: str) -> None:
     """Print the success/failure summary message after execution."""
     if retval == 0:
         output_location = cmd[cmd.index('--outdir') + 1] if '--outdir' in cmd else basepath
@@ -233,12 +247,16 @@ def _report_outcome(retval: int | None, cmd: list[str], basepath: str) -> None:
     else:
         print('Failure! Please scroll up and find the FIRST error message.')
         print('(You may have to scroll up A LOT.)')
+        names_path = _names_map_path(Path(basepath), workflow_name)
+        if names_path.exists():
+            print(f'Emitted ids are mapped to authored names in {names_path}')
 
 
 def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
               passthrough_args: list[str], workflow_name: str,
               basepath: str, user_env_vars: dict[str, str] | None = None,
-              output_directories: Mapping[str, str] | None = None) -> int:
+              output_directories: Mapping[str, str] | None = None,
+              documents: tuple[str, ...] | None = None) -> int:
     """This function runs the compiled workflow locally.
 
     Args:
@@ -249,6 +267,7 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
         basepath (str): The path at which the workflow to be executed
         user_env_vars (dict[str, str] | None): User supplied environment variables.
         output_directories (Mapping[str, str] | None): Passed to `copy_output_files`.
+        documents (tuple[str, ...] | None): Passed to `build_cmd`.
 
     Returns:
         retval (int): 0 on success, else the runner's exit code
@@ -266,7 +285,7 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
     # build the runner command
     cmd = build_cmd(workflow_name, basepath, cwl_runner,
                     container_engine, passthrough_args, run_args_dict.get('outdir') or None,
-                    quiet=run_args_dict.get('quiet', 'yes') == 'yes')
+                    quiet=run_args_dict.get('quiet', 'yes') == 'yes', documents=documents)
     cmdline = ' '.join(cmd)
     exec_env = create_safe_env(user_env_vars or {})
 
@@ -285,7 +304,7 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
     retval = _execute_inprocess(cmd, cwl_runner, workflow_name, run_args_dict,
                                 user_env_vars, yaml_path, cachedir, output_directories)
 
-    _report_outcome(retval, cmd, basepath)
+    _report_outcome(retval, cmd, basepath, workflow_name)
 
     return retval
 

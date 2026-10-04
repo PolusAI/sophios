@@ -112,14 +112,17 @@ class WicLoader(yaml.SafeLoader):  # pylint: disable=too-many-ancestors  # SafeL
     """
 
 
-def rawcwl_constructor(loader: yaml.SafeLoader, node: yaml.nodes.ScalarNode) -> dict[str, Any]:
-    """PyYAML constructor for the custom `!cwl` (raw CWL reference) tag.
+def rawcwl_constructor(loader: yaml.SafeLoader,
+                       node: yaml.nodes.ScalarNode | yaml.nodes.MappingNode) -> dict[str, Any]:
+    """PyYAML constructor for the custom `!cwl` tag: a raw CWL reference, or a
+    step-input record when it tags a mapping.
 
     The expression is opaque to Sophios and handed to CWL unresolved; like the
     other three constructors, the tag desugars to a key so the loader stays
     idempotent (see NOTE above).
     """
-    val = loader.construct_scalar(node)
+    val = loader.construct_mapping(node) if isinstance(node, yaml.nodes.MappingNode) \
+        else loader.construct_scalar(node)
     return {Key.RAW_CWL: val}
 
 

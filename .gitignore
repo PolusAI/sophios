@@ -33,3 +33,6 @@ examples/workflows/config_ci.json
 
 # import-linter graph cache (lint-imports, pre-commit)
 .import_linter_cache/
+
+# setuptools-scm writes the built version here; see [tool.setuptools_scm].
+src/sophios/_version.py

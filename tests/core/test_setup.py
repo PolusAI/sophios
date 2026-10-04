@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from functools import lru_cache
-from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 
 import pytest
@@ -77,14 +76,3 @@ def load_test_registry() -> CorpusRegistry:
 def corpus_registry() -> CorpusRegistry:
     """Explicit registry fixture for tests that exercise the discovered corpus."""
     return load_test_registry()
-
-
-def test_version_resolution_warns_when_package_metadata_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An uninstalled package warns rather than resolving to a wrong version."""
-    def missing_version(distribution_name: str) -> str:
-        raise PackageNotFoundError(distribution_name)
-
-    monkeypatch.setattr(sophios, "version", missing_version)
-
-    with pytest.warns(RuntimeWarning, match="sophios is not installed"):
-        assert sophios._resolve_version() == "unknown"

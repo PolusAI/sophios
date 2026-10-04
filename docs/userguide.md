@@ -232,15 +232,35 @@ unambiguous without relying on generated artifacts.
 
 ## Binding Types
 
-There are two common input binding patterns.
+There are two common input binding patterns, and one for everything else a CWL
+step input can say.
 
 | Binding | Python shape | Meaning |
 | --- | --- | --- |
 | Literal value | `step.inputs.message = "hello"` | The value is known now. |
 | Step output | `cat.inputs.file = append.outputs.file` | The value comes from an earlier step. |
+| Step input record | `step.inputs.x = StepInput(source=..., link_merge=...)` | CWL's `WorkflowStepInput`, written out. |
 
 This table is one of the most important concepts in the Python API. Most
 workflow code is a readable sequence of these bindings.
+
+`StepInput` is the Python form of a `!cwl {...}` record in a `.wic` step. Its
+`source` is a step output or a workflow input, or a list of them, never a
+string; `link_merge`, `pick_value`, `value_from`, `default`, `load_contents`,
+`load_listing` and `label` are written to the emitted step as CWL's `linkMerge`,
+`pickValue`, `valueFrom` and so on:
+
+```python
+from sophios.api.python.workflow import StepInput
+
+step.inputs.extras = StepInput(source=[a.outputs.file, b.outputs.file], link_merge="merge_flattened")
+step.inputs.n = StepInput(default=3, value_from="$(self + 1)")
+step.inputs.go = StepInput(source=workflow.inputs.go)  # an input the tool does not declare, for `when`
+```
+
+A `StepInput` may bind a name the tool does not declare: that is how `when` and
+`value_from` read an extra value. Several sources go through `StepInput`; a
+plain list of ports is not a value.
 
 ## What Bindings Become
 
@@ -292,34 +312,35 @@ in-memory view, inspect `workflow.yaml`:
 print(workflow.yaml)
 ```
 
-This shows the file representation Sophios can derive from the current Python
-workflow. It is useful when debugging surprising bindings before compilation or
-when you want to compare Python-authored workflows with `.wic` workflows.
+This is the document `write_wic()` writes for the workflow, as a Python dict.
+It is useful when debugging surprising bindings before compilation or when you
+want to compare Python-authored workflows with `.wic` workflows.
 
-When you want a real `.wic` file, use `write_wic()`:
+When you want real files, use `write_wic()` with a `.wic` path or a directory:
 
 ```python
 workflow.write_wic("hello_python.wic")
 ```
 
-This writes a source `.wic` workflow from the Python object. It does not compile
-the workflow and it does not write generated CWL. Literal bindings, named
-outputs, explicit edges, and intentionally unbound linear inputs are preserved
-in the `.wic` representation so the normal Sophios compiler can still apply
-edge inference later.
+This writes a bundle into one directory: the root `<name>.wic`, one
+`<child>.wic` per nested workflow, and one `<stem>.cwl` per distinct tool. It
+does not compile the workflow and it does not write generated CWL. Literal
+bindings, named outputs, explicit edges, and intentionally unbound linear
+inputs are preserved, so the normal Sophios compiler can still apply edge
+inference later. Steps and workflow outputs use the names you gave them: a
+workflow output reads `step/port`, and a step whose name differs from its
+tool's file stem (`Step(..., step_name="say_hi")` on `echo.cwl`) carries
+`run: echo.cwl`.
 
-If you need the text instead of a file:
+Compile the bundle with `sophios --yaml hello_python.wic`. A `run:` path
+resolves beside the document first; a step named for its tool, and a nested
+`<child>.wic`, come from the search paths, so put the bundle's directory on
+`search_paths_wic` when the workflow nests others.
+
+If you need the root document's text instead of files:
 
 ```python
 wic_text = workflow.to_wic_yaml()
-```
-
-For nested workflows, `write_wic()` embeds subworkflows in the root document by
-default. If you want a sibling-file tree instead, pass
-`inline_subworkflows=False`:
-
-```python
-workflow.write_wic("workflows", inline_subworkflows=False)
 ```
 
 ## Compile Paths
@@ -353,7 +374,7 @@ a test fixture, or inspected during debugging.
 emission is explicit on that object: `write_cwl(...)` writes the compiled
 workflow and `write_job_inputs(...)` writes the matching job inputs. Neither
 method writes intermediate `.wic` compiler trees by default. Use
-`workflow.write_wic(...)` when you want a source `.wic` file.
+`workflow.write_wic(...)` when you want the source `.wic` bundle.
 
 ### Keep Compiled CWL in Memory
 
@@ -440,8 +461,17 @@ A workflow can contain another workflow:
 
 ```python
 preprocess = Workflow([touch, append], "preprocess")
+preprocess.outputs.file = append.outputs.file
+
+cat.inputs.file = preprocess.outputs.file
 report = Workflow([preprocess, cat], "report")
+report.outputs.greeting = preprocess.outputs.file
 ```
+
+A subworkflow's outputs are sources like a step's: a later sibling step can
+consume `preprocess.outputs.file`, and the parent can re-export it as one of its
+own outputs. A workflow's own output cannot feed one of its own steps; that is
+a cycle, and `compile()` rejects it.
 
 Nested workflows are how large pipelines are split into named components. A
 subworkflow can have its own inputs, outputs, tests, and documentation.
@@ -462,6 +492,22 @@ through step-level settings:
 ```python
 echo.scatter_on(echo.inputs.message, method="dotproduct")
 ```
+
+A scattered step's outputs are arrays when the workflow runs, so a later step
+can scatter over them, also through a subworkflow's output. A step can be
+scattered before or after its outputs are bound, but `scatter_on` checks that
+its own inputs are array-valued when it is called, so scatter a producer before
+the step that scatters over its outputs.
+
+```python
+echo.inputs.message = ["a", "b"]
+echo.scatter_on(echo.inputs.message)
+cat.inputs.file = echo.outputs.stdout   # an array of File when the workflow runs
+cat.scatter_on(cat.inputs.file)
+```
+
+Under `nested_crossproduct` each scattered port adds one array level; the other
+methods add one in all.
 
 ```python
 echo.when = "$(inputs.message != '')"
@@ -491,6 +537,13 @@ artifacts:
 
 - `autogenerated/<workflow>.cwl`: compiled root CWL workflow.
 - `autogenerated/<workflow>_inputs.yml`: generated job inputs.
+- `autogenerated/<workflow>.names.json`: the step ids and port names the compiler
+  generated, mapped back to what you wrote. `steps` maps each emitted step id
+  (`<workflow>__step__<n>__<id>`, nested ids joined with `___`) to the authored
+  step: its workflow, position, name, file and line. `ports` maps each emitted
+  workflow input and output name to the steps it was exposed through and the
+  port as you wrote it. During an in-process run, runner messages show these
+  ids as `authored (emitted)`.
 - `autogenerated/schemas/wic.json`: the language's JSON Schema, for editors (`--generate_schemas`).
 - `cachedir*`: CWL runner caches and intermediate files.
 - `provenance/`: CWL provenance data unless disabled.
