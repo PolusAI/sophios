@@ -17,6 +17,7 @@ from ..lang.cwl import CWL_VERSION
 from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.error_codes import SophiosErrorCode
 from ..lang.nodes import Document, EdgeRef, InputValue, Step, UnresolvedName
+from ..lang.spans import SourceSpan
 from ..lang.versions import (ANNOTATION_KEY, ANNOTATION_NAMESPACE,
                              ANNOTATION_NAMESPACE_URI)
 from .declarations import port_declaration
@@ -111,8 +112,10 @@ def _lower_resolved(document: ResolvedDocument,
                 diagnostics._append(diagnostic)  # pylint: disable=protected-access
 
     passthrough = dict(document.source.passthrough)
-    workflow_inputs = _workflow_ports(passthrough.get('inputs', {}), output=False)
-    workflow_outputs = _workflow_ports(passthrough.get('outputs', {}), output=True)
+    workflow_inputs = _workflow_ports(passthrough.get('inputs', {}), output=False,
+                                      diagnostics=diagnostics, document_span=document.source.span)
+    workflow_outputs = _workflow_ports(passthrough.get('outputs', {}), output=True,
+                                       diagnostics=diagnostics, document_span=document.source.span)
     workflow_input_names = {port.name for port in workflow_inputs}
     input_mapping = tuple(
         (name, tuple(binding.sink for node in nodes for binding in node.bindings
@@ -151,6 +154,8 @@ def _lower_resolved(document: ResolvedDocument,
         # invariants with a ValueError instead of this report.
         return Lowered(None, diagnostics)
     known_ports = {port.id for node in nodes for port in node.inputs + node.outputs}
+    sidecar = document.source.sidecar
+    inlineable = bool(dict(sidecar.entries).get('inlineable', True)) if sidecar is not None else True
     graph = WorkflowGraph(
         namespace=here,
         steps=tuple(nodes),
@@ -173,6 +178,7 @@ def _lower_resolved(document: ResolvedDocument,
         namespaces=namespaces,
         schemas=schemas,
         children=tuple(children),
+        inlineable=inlineable,
     )
     return Lowered(graph, diagnostics)
 
@@ -286,11 +292,22 @@ def _unknown_scatter(step: str, text: str, ports: list[str], calls_workflow: boo
 _SHOWN_NAMES: Final = 8
 
 
-def _workflow_ports(raw: object, *, output: bool) -> tuple[WorkflowPort, ...]:
+def _workflow_ports(raw: object, *, output: bool, diagnostics: Diagnostics,
+                    document_span: SourceSpan | None) -> tuple[WorkflowPort, ...]:
     if not isinstance(raw, dict):
         return ()
     ports: list[WorkflowPort] = []
     for name, declaration_raw in raw.items():
+        if output and isinstance(declaration_raw, dict):
+            rejected = sorted(key for key in ('linkMerge', 'pickValue') if key in declaration_raw)
+            if isinstance(declaration_raw.get('outputSource'), list):
+                rejected.append('a list outputSource')
+            if rejected:
+                diagnostics.error(
+                    SophiosErrorCode.STEP_INPUT_RECORD,
+                    f"workflow output {str(name)!r} uses {', '.join(rejected)}, which Sophios does not "
+                    'read; an output names one step/port',
+                    document_span)
         # Asserted, not reduced via `boundary_declaration`: it is already a
         # boundary declaration by where it's written, and reducing it would
         # discard fields the author wrote at the boundary on purpose.

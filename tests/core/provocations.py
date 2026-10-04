@@ -35,6 +35,7 @@ PARSE: Final[dict[SophiosErrorCode, str]] = {
     SophiosErrorCode.UNKNOWN_WIC_KEY: 'wic:\n  nonsense_key: 1\n',
     SophiosErrorCode.MALFORMED_WIC_VALUE: 'wic:\n  inlineable: sometimes\n',
     SophiosErrorCode.UNSUPPORTED_CWL_VERSION: 'cwlVersion: draft-3\n',
+    SophiosErrorCode.STEP_INPUT_RECORD: 'steps:\n- id: s\n  in:\n    f: {source: x}\n',
 }
 
 #: Codes provoked through the compiler or its helpers. Callables raise

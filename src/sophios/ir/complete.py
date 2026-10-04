@@ -183,11 +183,6 @@ def _untyped_output(graph: WorkflowGraph, output: WorkflowPort) -> SophiosError:
             SophiosErrorCode.UNTYPED_OUTPUT,
             f'{where} and has no `outputSource:` to take one from; '
             'add `type:`, or an `outputSource: <step>/<output>`.')
-    if isinstance(output.output_source, list):
-        return SophiosError.error(
-            SophiosErrorCode.UNTYPED_OUTPUT,
-            f'{where}, and its `outputSource:` is written as a list, which takes no type from its '
-            'sources. Add `type:`.')
     # What an `outputSource:` can name: not a name the compiler derives for a
     # call's lifted outputs.
     sources = [f'{step.id.name}/{names.port(port.id.port)}' for step in graph.steps
