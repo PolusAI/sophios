@@ -18,10 +18,18 @@ RUN apt-get update && \
 COPY . /sophios
 WORKDIR /sophios
 
+# The image has no git, so setuptools-scm cannot read the release tag here. The
+# publish workflow passes the version it read from the tag; a local build
+# without it reports the post-release dev version from pyproject.toml.
+ARG SOPHIOS_VERSION=""
+
 # PEP 668 marks the distro interpreter externally managed. Inside a container
 # there is no other consumer of site-packages, so installing into it directly
 # is what we want.
-RUN pip3 install --no-cache-dir --break-system-packages /sophios
+RUN if [ -n "$SOPHIOS_VERSION" ]; then \
+        export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SOPHIOS="$SOPHIOS_VERSION"; \
+    fi && \
+    pip3 install --no-cache-dir --break-system-packages /sophios
 
 # Then run the sophios REST API through port 3000
 EXPOSE 3000

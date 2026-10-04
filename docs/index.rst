@@ -66,7 +66,7 @@ understand, debug, and review.
    :caption: Advanced YAML and Operations
 
    advanced.md
-   sophios_language_reference.md
+   language_guide.md
    tutorials/tutorials.rst
    validation.md
 
@@ -77,6 +77,7 @@ understand, debug, and review.
    dev/installguide.md
    dev/devguide.md
    dev/algorithms.md
+   dev/language_spec.md
    dev/codingstandards.md
    dev/gitetiquette.md
    dev/api.rst

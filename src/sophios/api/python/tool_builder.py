@@ -4,7 +4,7 @@ The required core is intentionally small:
 
 ```python
 inputs = Inputs(input=Input(cwl.directory, position=1))
-outputs = Outputs(output=Output(cwl.directory, from_input=inputs.input))
+outputs = Outputs(output=Output(cwl.directory, glob="$(inputs.input.basename)"))
 tool = CommandLineTool("example", inputs, outputs)
 ```
 
