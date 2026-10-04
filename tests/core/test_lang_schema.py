@@ -27,6 +27,7 @@ from hypothesis import given
 
 from sophios.lang import SophiosErrorCode, Forms, Grammar, parse, to_json, wic_schema
 from sophios.lang.nodes import (
+    CwlRecord,
     Document,
     EdgeDef,
     EdgeRef,
@@ -84,7 +85,7 @@ def test_schema_is_derived_from_the_parser() -> None:
     assert Grammar.INTERPRETED_STEP_KEYS <= step_keys
 
     steps = SCHEMA['$defs']['wicBlock']['properties']['steps']
-    assert set(steps['patternProperties']) == {Grammar.WIC_STEP_KEY_PATTERN}
+    assert set(steps['patternProperties']) == {Grammar.WIC_STEP_KEY_PATTERN, Grammar.WIC_STEP_ID_PATTERN}
 
 
 @pytest.mark.fast
@@ -182,8 +183,8 @@ STRUCTURAL_VIOLATIONS: list[tuple[str, str, Any]] = [
     ('out must be a sequence', 'steps:\n  s:\n    out: 3\n', {'steps': {'s': {'out': 3}}}),
     ('wic must be a mapping', 'wic: 3\n', {'wic': 3}),
     ('wic steps must be a mapping', 'wic:\n  steps: 3\n', {'wic': {'steps': 3}}),
-    ('wic step keys have the form (index, name)',
-     'wic:\n  steps:\n    nope:\n      x: 1\n', {'wic': {'steps': {'nope': {'x': 1}}}}),
+    ('wic step keys have the form (index, name) or are a step id',
+     'wic:\n  steps:\n    "not a key":\n      x: 1\n', {'wic': {'steps': {'not a key': {'x': 1}}}}),
     ('a sequence step carries its name in an id: key',
      'steps:\n- touch:\n    in:\n      f: x\n', {'steps': [{'touch': {'in': {'f': 'x'}}}]}),
     ('a sequence step with a null body still needs an id:',
@@ -266,7 +267,7 @@ def test_a_step_may_have_no_body() -> None:
 
 
 AST_NODES = [Document, Step, OutputBinding, WicSidecar, StepKey,
-             InlineLiteral, EdgeDef, EdgeRef, RawCwlRef, UnresolvedName]
+             InlineLiteral, EdgeDef, EdgeRef, RawCwlRef, UnresolvedName, CwlRecord]
 
 
 @pytest.mark.fast
