@@ -133,7 +133,8 @@ def test_embedding_a_tool_of_a_version_sophios_does_not_run_is_refused() -> None
 def test_embedding_a_tool_without_a_version_says_it_declares_none() -> None:
     """A tool that omits `cwlVersion` is refused, and the message does not claim it declared one."""
     with pytest.raises(SophiosError) as caught:
-        post_compile._keeping_version_defaults({'class': 'CommandLineTool'}, 'tool.cwl')  # pylint: disable=protected-access
+        post_compile._keeping_version_defaults({'class': 'CommandLineTool'},  # pylint: disable=protected-access
+                                               'tool.cwl')
     (diagnostic,) = caught.value.diagnostics
     assert diagnostic.code is SophiosErrorCode.UNSUPPORTED_CWL_VERSION
     assert 'declares no cwlVersion' in diagnostic.message
