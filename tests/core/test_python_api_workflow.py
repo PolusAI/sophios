@@ -191,6 +191,22 @@ def test_linear_python_workflow_reuses_compiler_edge_inference() -> None:
 
 
 @pytest.mark.fast
+def test_compiled_workflow_carries_the_inference_notes() -> None:
+    """A choice between equal producers is on the compiled object, not a warning."""
+    first = Step(clt_path=_adapter("touch"), step_name="first")
+    first.inputs.filename = "a.txt"
+    second = Step(clt_path=_adapter("touch"), step_name="second")
+    second.inputs.filename = "b.txt"
+    cat = Step(clt_path=_adapter("cat"))
+
+    compiled = Workflow([first, second, cat], "wf").compile()
+
+    (note,) = compiled.diagnostics
+    assert "note [wic043]" in note
+    assert "'cat'" in note and "'first/file'" in note
+
+
+@pytest.mark.fast
 def test_in_memory_cwl_step_compiles_through_workflow_api() -> None:
     """A tool given as a document compiles without ever being written to disk."""
     tool = (
@@ -309,6 +325,21 @@ def test_tool_builder_step_bridge_supports_multistep_workflow() -> None:
     assert step_ids[1].endswith("cat")
     assert list(compiled.cwl_workflow["outputs"]) == ["result"]
     assert compiled.cwl_workflow["outputs"]["result"]["outputSource"] == f"{step_ids[1]}/output"
+
+
+@pytest.mark.fast
+def test_a_workflow_output_prints_no_authored_spelling_line(capsys: pytest.CaptureFixture[str]) -> None:
+    """The Python API spells `outputSource` with generated names itself; nobody wrote that text."""
+    emit_step = Step(_emit_text_tool(), step_name="emit_text")
+    read_step = Step(clt_path=_adapter("cat"))
+    workflow = Workflow([emit_step, read_step], "output_line_demo")
+    emit_step.inputs.message = workflow.inputs.message.as_type(cwl.string)
+    read_step.inputs.file = emit_step.outputs.file
+    workflow.outputs.result = read_step.outputs.output
+
+    workflow.compile()
+
+    assert "Warning!" not in capsys.readouterr().err
 
 
 @pytest.mark.fast
@@ -488,7 +519,7 @@ def test_workflow_compile_boundary_hides_compiler_info() -> None:
     assert isinstance(compiled, CompiledWorkflow)
     assert compiled.cwl_workflow["class"] == "Workflow"
     exposed = {field.name for field in dataclasses.fields(compiled)}
-    assert exposed == {'name', 'cwl_workflow', 'cwl_job_inputs', 'lang_version'}, exposed
+    assert exposed == {'name', 'cwl_workflow', 'cwl_job_inputs', 'lang_version', 'diagnostics'}, exposed
 
 
 @pytest.mark.fast
@@ -649,15 +680,11 @@ def test_compiled_workflow_writes_cwl_and_job_inputs(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
-def test_workflow_port_names_reject_namespace_collisions() -> None:
+def test_port_names_reject_namespace_collisions() -> None:
     """A port may not shadow the port namespace's own API."""
-    workflow = Workflow([], "wf")
-
     with pytest.raises(ValueError, match="reserved by port namespaces"):
-        workflow.add_input("_store")
-
-    with pytest.raises(ValueError, match="reserved by port namespaces"):
-        workflow.add_output("_getter")
+        Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',
+                                'inputs': {'_store': 'string'}, 'outputs': {}}, process_name='bad')
 
 
 @pytest.mark.fast
@@ -1454,3 +1481,51 @@ def test_ctrl_c_during_run_is_not_reported_as_a_failed_run(monkeypatch: pytest.M
     monkeypatch.setattr(run_local.cwltool.main, 'main', _interrupted)
     with pytest.raises(KeyboardInterrupt):
         _echo_workflow('interrupted').run()
+
+
+@pytest.mark.fast
+def test_a_failed_in_process_run_names_authored_steps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                      caplog: pytest.LogCaptureFixture,
+                                                      capsys: pytest.CaptureFixture[str]) -> None:
+    """cwltool names emitted ids; during the run they read as authored, and the failure points at the map."""
+    import logging  # pylint: disable=import-outside-toplevel
+    emitted = "wf__step__2__append"
+    names_path = tmp_path / "wf.names.json"
+    entry = {"id": emitted, "workflow": "wf", "index": 2, "name": "append", "file": "wf.wic", "line": 7}
+    names_path.write_text(json.dumps({"steps": {emitted: entry}, "ports": {}}), encoding="utf-8")
+
+    def failing_main(args: list[str]) -> int:
+        del args
+        logging.getLogger("cwltool").error("[step %s] completed permanentFail", emitted)
+        return 1
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(run_local.cwltool.main, "main", failing_main)
+    caplog.set_level(logging.ERROR, logger="cwltool")
+
+    retval = run_local.run_local({"container_engine": "docker", "cwl_runner": "cwltool"}, False,
+                                 passthrough_args=[], workflow_name="wf", basepath=str(tmp_path))
+
+    assert retval == 1
+    assert f"[step step 2 'append' ({emitted})] completed permanentFail" in caplog.messages
+    assert f"Emitted ids are mapped to authored names in {names_path}" in capsys.readouterr().out
+    assert not [f for f in logging.getLogger("cwltool").filters
+                if isinstance(f, sophios.plugins.AuthoredNamesFilter)]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('name', ['add_input', 'bind_input', 'bind_output', 'add_output'])
+def test_the_string_keyed_workflow_methods_are_gone(name: str) -> None:
+    """Workflow ports are declared and bound as objects, never by a name passed as text.
+
+    The class is probed: on an instance, attribute sugar reads any name as a workflow input reference.
+    """
+    assert not hasattr(Workflow, name)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('name', ['bind_input', 'get_output'])
+def test_the_string_keyed_step_methods_are_gone(name: str) -> None:
+    """Step ports are bound and read as objects, never by a name passed as text."""
+    assert not hasattr(Step, name)
+    assert not hasattr(Step(clt_path=_adapter('echo')), name)
