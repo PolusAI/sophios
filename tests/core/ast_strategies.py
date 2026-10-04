@@ -19,7 +19,7 @@ from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
 from sophios import utils_cwl
-from sophios.lang import (SophiosErrorCode, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
+from sophios.lang import (SophiosErrorCode, CwlRecord, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
                           OpaqueCwl, OutputBinding, RawCwlRef, Step, StepKey, UnresolvedName, WicSidecar,
                           render)
 from sophios.lang.spans import SourceSpan
@@ -47,7 +47,7 @@ NOT_GENERATED: Final[dict[str, str]] = {}
 
 CONSTRUCTS: Final[tuple[str, ...]] = (
     'steps_mapping', 'steps_sequence',
-    'inline_literal', 'edge_ref', 'raw_cwl_ref', 'unresolved_name',
+    'inline_literal', 'edge_ref', 'raw_cwl_ref', 'unresolved_name', 'cwl_record',
     'output_bare', 'output_edge',
     'interpreted_scatter', 'interpreted_scatterMethod', 'interpreted_when',
     'step_passthrough', 'top_passthrough',
@@ -85,6 +85,8 @@ def constructs_in(document: Document) -> frozenset[str]:
                     found.add('edge_ref')
                 case RawCwlRef():
                     found.add('raw_cwl_ref')
+                case CwlRecord():
+                    found.add('cwl_record')
                 case _:
                     found.add('unresolved_name')
         if not step.id.endswith('.wic') and set(required_inputs_of(step.id)) - bound:
@@ -167,6 +169,28 @@ def _references_for(sink_type: Any) -> tuple[str, ...]:
 
 
 @st.composite
+def _record(draw: st.DrawFn, sink: Any, fits: list[str], references: tuple[str, ...],
+            referenced_inputs: set[str]) -> CwlRecord:
+    """A step-input record: one source with a default, or, into an array, two merged.
+
+    Two sources each fit the array sink, so `merge_flattened` keeps it one.
+    """
+    array = isinstance(sink, dict) and sink.get('type') == 'array'
+    if len(fits) > 1 and array and draw(st.booleans()):
+        pair = draw(st.permutations(fits))[:2]
+        return CwlRecord(tuple(EdgeRef(edge, _SPAN) for edge in pair), (('linkMerge', 'merge_flattened'),), _SPAN)
+    source: EdgeRef | UnresolvedName
+    if fits and (not references or draw(st.booleans())):
+        source = EdgeRef(draw(st.sampled_from(fits)), _SPAN)
+    else:
+        declared = draw(st.sampled_from(references))
+        referenced_inputs.add(declared)
+        source = UnresolvedName(declared, _SPAN)
+    default = draw(_literal_for(sink['items'] if array else sink))
+    return CwlRecord((source,), (('default', [default] if array else default),), _SPAN)
+
+
+@st.composite
 def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
           referenced_inputs: set[str]) -> Step:
     """One tool step: real stem, real input names, a subset of them bound.
@@ -183,7 +207,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
     a bare name is only well-formed once the document declares it, so both are
     facts about the document being built and not about this step.
     """
-    # pylint: disable=too-many-branches,too-many-locals  # one branch per input/output construct
+    # pylint: disable=too-many-branches,too-many-locals,too-many-statements  # one branch per construct
     names = sorted(inputs_of(stem))
 
     # Drawn first, because a scattered input consumes an array: a reference
@@ -229,11 +253,12 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
             continue
 
         references = _references_for(sink(name))
-        forms = ['literal'] + (['unresolved', 'raw'] if references else []) + (['ref'] if fits else [])
+        forms = ['literal'] + (['unresolved', 'raw'] if references else []) + (['ref'] if fits else []) \
+            + (['record'] if references or fits else [])
         match draw(st.sampled_from(forms)):
             case 'literal':
                 literal = draw(_literal_for(inputs_of(stem)[name].get('type')))
-                if name in ports and draw(st.booleans()):
+                if name in ports:
                     literal = [literal]
                 bindings.append((name, InlineLiteral(literal, _SPAN)))
             case 'unresolved':
@@ -244,6 +269,8 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
                 declared = draw(st.sampled_from(references))
                 referenced_inputs.add(declared)
                 bindings.append((name, RawCwlRef(declared, _SPAN)))
+            case 'record':
+                bindings.append((name, draw(_record(sink(name), fits, references, referenced_inputs))))
             case _:
                 bindings.append((name, EdgeRef(draw(st.sampled_from(fits)), _SPAN)))
 
@@ -275,7 +302,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
 
 
 @st.composite
-def documents(draw: st.DrawFn) -> Document:
+def documents(draw: st.DrawFn) -> Document:  # pylint: disable=too-many-locals
     """A well-formed Sophios document, over every construct in `CONSTRUCTS`.
 
     CANNOT GENERATE (declared, and checked): the kinds in `NOT_GENERATED`.
@@ -335,7 +362,10 @@ def documents(draw: st.DrawFn) -> Document:
         entries: tuple[tuple[str, OpaqueCwl], ...] = (('graphviz', {'label': draw(edge_names)}),)
         nested: tuple[tuple[StepKey, WicSidecar], ...] = ()
         if bool(steps) and draw(st.booleans()):
-            nested = ((StepKey(1, steps[0].id),
+            first = steps[0].id
+            unique = [step.id for step in steps].count(first) == 1 and bool(Grammar.WIC_STEP_ID.match(first))
+            step_key = StepKey(None, first) if unique and draw(st.booleans()) else StepKey(1, first)
+            nested = ((step_key,
                        WicSidecar(entries=(('graphviz', {'label': draw(edge_names)}),), span=_SPAN)),)
         sidecar = WicSidecar(steps=nested, entries=entries, span=_SPAN)
 

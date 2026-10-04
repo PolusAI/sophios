@@ -12,6 +12,7 @@ Rendering is one-way. Nothing here takes text apart, and nothing may: a
 consumer that needs to know what a name came from is given the identity.
 """
 from dataclasses import dataclass
+from typing import Any
 
 from .types import DerivedName, Namespace, PortName, StepId, StepOutputRef, WorkflowGraph
 
@@ -35,6 +36,26 @@ def render_step_id(workflow: str, index: int, name: str) -> str:
         str: The rendered step id.
     """
     return f'{workflow}__step__{index}__{name}'
+
+
+def authored_path(name: PortName) -> tuple[str, ...]:
+    """What `name` is called where it was written: the authored name of each
+    step it was exposed through, outermost first, then the port's own name.
+
+    Walks the identity, one level per step, so it stays linear in the depth a
+    derived name was exposed through.
+
+    Args:
+        name (PortName): A port or boundary name, written or derived.
+
+    Returns:
+        tuple[str, ...]: The step names, then the port name.
+    """
+    parts: list[str] = []
+    while isinstance(name, DerivedName):
+        parts.append(name.step.name)
+        name = name.port
+    return (*parts, name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,3 +127,40 @@ class Names:
                 return f'{self.step(step)}/{self.port(port)}'
             case _:
                 return self.port(ref)
+
+
+def names_map(graph: WorkflowGraph, names: Names) -> dict[str, Any]:
+    """Every emitted id in `graph`'s tree, mapped back to what the author wrote.
+
+    Written beside the root CWL so a run-time message naming
+    `w__step__2__append___file` can be read as step 2 `append`, port `file`,
+    at `w.wic:7`. `steps` is keyed by the emitted step id, prefixed by every
+    step it is nested in; each entry's `id` is the id the step carries in its
+    own document. `ports` is keyed by the emitted boundary name of every
+    workflow input and output.
+
+    Args:
+        graph (WorkflowGraph): The compiled root graph.
+        names (Names): The spelling table `graph` was emitted with.
+
+    Returns:
+        dict[str, Any]: `{'steps': {...}, 'ports': {...}}`, ready for JSON.
+    """
+    steps: dict[str, Any] = {}
+    ports: dict[str, Any] = {}
+
+    def visit(node: WorkflowGraph) -> None:
+        for step in node.steps:
+            steps[names.qualified(step.id)] = {
+                'id': names.step(step.id), 'workflow': node.name,
+                'index': names.position(step.id), 'name': step.id.name,
+                'file': step.span.file if step.span else None,
+                'line': step.span.start_line if step.span else None}
+        for port in (*node.workflow_inputs, *node.workflow_outputs):
+            *parts, written = authored_path(port.name)
+            ports[names.port(port.name)] = {'workflow': node.name, 'steps': parts, 'port': written}
+        for child in node.children:
+            visit(child)
+
+    visit(graph)
+    return {'steps': steps, 'ports': ports}

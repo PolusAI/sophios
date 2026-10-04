@@ -29,6 +29,7 @@ from sophios.ir.declarations import input_rank, layered, output_rank
 from sophios.ir.types import (DerivedName, EdgeOrigin, Port, PortDeclaration, PortId, PortName,
                               StepNode, WorkflowGraph)
 from sophios.lang import SophiosErrorCode
+from sophios.lang.diagnostics import Locator, Severity, SophiosError
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
@@ -83,6 +84,132 @@ def test_most_recent_step_and_last_declared_output_win() -> None:
                       if edge.origin is EdgeOrigin.INFERRED and edge.sink.step.name == 'count')
     assert count_edge.source.step.name == 'multi_file'
     assert count_edge.source.port == 'last'
+
+
+def _multi_file_tools() -> Tools:
+    """The synthetic registry plus a tool offering two `File` outputs."""
+    multi = clt({}, {'first': {'type': 'File', 'outputBinding': {'glob': 'first'}},
+                     'last': {'type': 'File', 'outputBinding': {'glob': 'last'}}})
+    return {**SYNTHETIC_TOOLS,
+            LegacyStepId('multi_file', SYNTHETIC_NS): Tool('/synthetic/multi_file.cwl', multi)}
+
+
+_TWO_PRODUCERS: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}},
+                                  {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'b'}}},
+                                  {'id': 'count'}]}
+
+
+@pytest.mark.fast
+def test_a_tie_within_one_producer_is_noted_with_the_alternatives() -> None:
+    """The losing output and the pin that would make the choice explicit are named."""
+    _, linked, _ = _typed({'steps': [{'id': 'multi_file'}, {'id': 'count'}]}, _multi_file_tools())
+    result = infer(linked)
+    assert result.graph is not None
+    (note,) = [d for d in result.diagnostics if d.severity is Severity.NOTE]
+    assert note.code is SophiosErrorCode.INFERENCE_TIE
+    assert "'first'" in note.message and '!&' in note.message
+    assert note.locator == Locator(step='count', index=2, port='file')
+
+
+@pytest.mark.fast
+def test_recency_between_producers_is_noted() -> None:
+    """An earlier producer that also matched is named; the choice itself is unchanged."""
+    _, linked, _ = _typed(_TWO_PRODUCERS)
+    result = infer(linked)
+    assert result.graph is not None
+    (note,) = [d for d in result.diagnostics if d.severity is Severity.NOTE]
+    assert note.code is SophiosErrorCode.INFERENCE_RECENCY
+    assert "'mk_file/file'" in note.message
+    edge = next(e for e in result.graph.linked_edges if e.sink.step.name == 'count')
+    assert edge.source.step.index == 2, 'the choice itself is unchanged'
+
+
+def _across_calls(pinned: bool) -> Yaml:
+    """`multi_file` inside `make.wic` feeds `count` inside `use.wic`; pinned, the
+    edge is written on those two inner steps."""
+    producer: Yaml = {'id': 'multi_file'}
+    consumer: Yaml = {'id': 'count'}
+    if pinned:
+        producer['out'] = [{'last': {'wic_anchor': 'f'}}]
+        consumer['in'] = {'file': {'wic_alias': 'f'}}
+    return {'steps': [subworkflow_step('make.wic', {'steps': [producer]}),
+                      subworkflow_step('use.wic', {'steps': [consumer]})]}
+
+
+@pytest.mark.fast
+def test_a_note_across_subworkflow_calls_names_the_steps_an_author_can_pin() -> None:
+    """A call exposes inner ports under names nobody can write, so the note
+    points at the inner steps, and writing exactly the pin it gives compiles
+    without a note."""
+    result = compile_hermetic(_across_calls(pinned=False), tools=_multi_file_tools())
+    (note,) = list(result.diagnostics)
+    assert note.code is SophiosErrorCode.INFERENCE_TIE
+    assert "inferred from 'make.wic/multi_file/last'" in note.message
+    assert "also offers 'multi_file/first'" in note.message
+    assert ("`out: - last: !& <name>` on step 'make.wic/multi_file' and "
+            "`in: file: !* <name>` on step 'use.wic/count'") in note.message
+
+    pinned = compile_hermetic(_across_calls(pinned=True), tools=_multi_file_tools())
+    assert not list(pinned.diagnostics)
+
+
+@pytest.mark.fast
+def test_strict_mode_turns_notes_into_errors() -> None:
+    """`InferencePolicy.strict` refuses a choice between equals."""
+    _, linked, _ = _typed(_TWO_PRODUCERS)
+    result = infer(linked, InferencePolicy(strict=True))
+    assert result.graph is None and result.diagnostics.has_errors
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.INFERENCE_RECENCY]
+
+
+@pytest.mark.fast
+def test_a_pinned_edge_is_not_noted() -> None:
+    """An explicit `!&`/`!*` edge is not a choice, so nothing is said."""
+    _, linked, _ = _typed({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}},
+                                     {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'b'}},
+                                      'out': [{'file': {'wic_anchor': 'f'}}]},
+                                     {'id': 'count', 'in': {'file': {'wic_alias': 'f'}}}]})
+    assert not list(infer(linked).diagnostics)
+
+
+@pytest.mark.fast
+def test_a_tie_settled_by_naming_conventions_is_not_noted() -> None:
+    """When the naming conventions single out one output, order did not decide."""
+    tool = clt({}, {'output_file': {'type': 'File', 'outputBinding': {'glob': 'a'}},
+                    'output_other': {'type': 'File', 'outputBinding': {'glob': 'b'}}})
+    tools = {**SYNTHETIC_TOOLS, LegacyStepId('named', SYNTHETIC_NS): Tool('/synthetic/named.cwl', tool)}
+    _, linked, _ = _typed({'steps': [{'id': 'named'}, {'id': 'count'}]}, tools)
+    result = infer(linked, InferencePolicy(use_naming_conventions=True))
+    assert result.graph is not None
+    assert not list(result.diagnostics)
+
+
+@pytest.mark.fast
+def test_a_scalar_literal_under_scatter_is_wic020() -> None:
+    """A scatter splits its value; a scalar is not wrapped into a one-element list."""
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}},
+                                     'scatter': ['name']}]})
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
+    assert 'scattered' in caught.value.diagnostics[0].message
+
+
+@pytest.mark.fast
+def test_a_list_literal_under_scatter_is_scattered_over() -> None:
+    """The list form is unchanged: each element is one scattered value."""
+    result = compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': ['a', 'b']}},
+                                          'scatter': ['name']}]})
+    assert list(result.artifact.job_inputs.values()) == [['a', 'b']]
+
+
+@pytest.mark.fast
+def test_strict_compile_refuses_and_lenient_compile_carries_the_note() -> None:
+    """The compiler forwards the strict flag and returns the notes with its result."""
+    result = compile_hermetic(_TWO_PRODUCERS)
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.INFERENCE_RECENCY]
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic(_TWO_PRODUCERS, inference_strict=True)
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.INFERENCE_RECENCY
 
 
 @pytest.mark.fast
@@ -376,3 +503,43 @@ def _insertion_registry() -> tuple[Yaml, Tools]:
     tools = {LegacyStepId(name, SYNTHETIC_NS): Tool(f'/synthetic/{name}.cwl', cwl)
              for name, cwl in specs.items()}
     return {'steps': steps}, tools
+
+
+@pytest.mark.fast
+def test_a_positional_output_source_is_refused_beside_an_inferred_edge() -> None:
+    """`count` leaves `file` to inference, so the document is not fully explicit."""
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'outputs': {'n': {'type': 'int', 'outputSource': '(2, count)/n'}},
+                          'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}},
+                                    {'id': 'count'}]})
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE
+
+
+@pytest.mark.fast
+def test_a_positional_output_source_is_refused_in_a_subworkflow_beside_an_inferred_edge() -> None:
+    """The check descends into child workflows."""
+    sub = {'outputs': {'n': {'type': 'int', 'outputSource': '(2, count)/n'}},
+           'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}, {'id': 'count'}]}
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [subworkflow_step('sub.wic', sub)]})
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE
+
+
+@pytest.mark.fast
+def test_a_positional_output_source_compiles_in_a_fully_explicit_workflow() -> None:
+    """With every input bound explicitly, the position is reliable and compiles."""
+    compiled = compile_hermetic({'outputs': {'n': {'type': 'int', 'outputSource': '(2, count)/n'}},
+                                 'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}},
+                                            'out': [{'file': {'wic_anchor': 'f'}}]},
+                                           {'id': 'count', 'in': {'file': {'wic_alias': 'f'}}}]})
+    assert compiled.artifact.cwl['outputs']['n']['outputSource'] == 'oracle__step__2__count/n'
+
+
+@pytest.mark.fast
+def test_an_untyped_positional_output_source_suggests_the_positional_spelling() -> None:
+    """A repeated id is addressed by position, so the hint must keep the position."""
+    step = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'outputs': {'o': {'outputSource': '(2, mk_file)/nope'}},
+                          'steps': [step, step]})
+    assert "Did you mean '(2, mk_file)/file'?" in caught.value.diagnostics[0].message
