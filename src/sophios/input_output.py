@@ -8,7 +8,7 @@ import yaml
 
 from . import auto_gen_header
 from .runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
-from .ir.names import NAMESPACE_SEPARATOR
+from .ir.names import NAMESPACE_SEPARATOR, Names, names_map
 from .ir.artifacts import CompilationArtifact
 from .wic_types import Yaml, Json
 
@@ -70,6 +70,10 @@ def _write_artifacts_to_disk(artifact: CompilationArtifact, path: Path,
         f'#!/usr/bin/env cwl-runner\n{auto_gen_header}{dump_wic_yaml(cwl)}', encoding='utf-8')
     (path / filename_yml).write_text(
         f'{auto_gen_header}{dump_wic_yaml(job)}', encoding='utf-8')
+    if artifact.graph is not None and artifact.namespace == ():
+        # The root carries the whole tree: one map names every emitted id in it.
+        (path / f'{artifact.name}.names.json').write_text(
+            json.dumps(names_map(artifact.graph, Names.of(artifact.graph)), indent=2), encoding='utf-8')
 
     for child in artifact.children:
         subpath = path / child.namespace[-1] if relative_run_path else path

@@ -1,5 +1,10 @@
 name: Release Please
 
+# release-please keeps a release pull request open on master. Merging it tags
+# that merge commit vX.Y.Z on master, creates the GitHub release, and then
+# publishes the same tag to PyPI and Docker Hub below. A tag pushed with
+# GITHUB_TOKEN starts no other workflow, so both publishes are dispatched here.
+
 on:
   push:
     branches:
@@ -8,6 +13,8 @@ on:
 
 jobs:
   release-please:
+    # Forks have no release tags and publish nothing.
+    if: github.repository == 'PolusAI/sophios'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -29,15 +36,18 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: write
+    strategy:
+      matrix:
+        workflow: [test_and_publish_pypi.yml, publish_rest_docker.yml]
     steps:
-      - name: Trigger PyPI publish
+      - name: Publish the release tag
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
-            github.rest.actions.createWorkflowDispatch({
+            await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'test_and_publish_pypi.yml',
+              workflow_id: '${{ matrix.workflow }}',
               ref: '${{ needs.release-please.outputs.tag_name }}',
               inputs: {
                 ref: '${{ needs.release-please.outputs.tag_name }}'

@@ -7,7 +7,7 @@ WHAT THE CLAIM CAN AND CANNOT SAY. The schema is a deliberate over-approximation
 for two reasons that come from the language rather than from this test:
 
   * JSON has no YAML tags, so the schema describes the desugared projection.
-  * Passthrough CWL is open by definition (reference §1), so the schema cannot
+  * Passthrough CWL is open by definition (language spec §1), so the schema cannot
     close any object that might carry it.
 
 So "accepts exactly what the AST accepts" is checked as two separate claims:
@@ -27,6 +27,7 @@ from hypothesis import given
 
 from sophios.lang import SophiosErrorCode, Forms, Grammar, parse, to_json, wic_schema
 from sophios.lang.nodes import (
+    CwlRecord,
     Document,
     EdgeDef,
     EdgeRef,
@@ -84,7 +85,7 @@ def test_schema_is_derived_from_the_parser() -> None:
     assert Grammar.INTERPRETED_STEP_KEYS <= step_keys
 
     steps = SCHEMA['$defs']['wicBlock']['properties']['steps']
-    assert set(steps['patternProperties']) == {Grammar.WIC_STEP_KEY_PATTERN}
+    assert set(steps['patternProperties']) == {Grammar.WIC_STEP_KEY_PATTERN, Grammar.WIC_STEP_ID_PATTERN}
 
 
 @pytest.mark.fast
@@ -182,8 +183,8 @@ STRUCTURAL_VIOLATIONS: list[tuple[str, str, Any]] = [
     ('out must be a sequence', 'steps:\n  s:\n    out: 3\n', {'steps': {'s': {'out': 3}}}),
     ('wic must be a mapping', 'wic: 3\n', {'wic': 3}),
     ('wic steps must be a mapping', 'wic:\n  steps: 3\n', {'wic': {'steps': 3}}),
-    ('wic step keys have the form (index, name)',
-     'wic:\n  steps:\n    nope:\n      x: 1\n', {'wic': {'steps': {'nope': {'x': 1}}}}),
+    ('wic step keys have the form (index, name) or are a step id',
+     'wic:\n  steps:\n    "not a key":\n      x: 1\n', {'wic': {'steps': {'not a key': {'x': 1}}}}),
     ('a sequence step carries its name in an id: key',
      'steps:\n- touch:\n    in:\n      f: x\n', {'steps': [{'touch': {'in': {'f': 'x'}}}]}),
     ('a sequence step with a null body still needs an id:',
@@ -214,7 +215,7 @@ def test_rejects_every_wic_value_the_parser_reports(source: str, _line: int, _co
 @pytest.mark.fast
 def test_the_wic_block_is_closed_and_complete_for_editors() -> None:
     """Each `wic:` form offers exactly the keys the parser admits there, and
-    no other, so an editor completes them and flags the rest (§5)."""
+    no other, so an editor completes them and flags the rest (language guide §7)."""
     forms = {'wicBlock': Grammar.SIDECAR_KEYS, 'wicStepBlock': Grammar.SIDECAR_STEP_KEYS,
              'wicStepEntry': Grammar.SIDECAR_STEP_KEYS | {'wic'}}
     for form, keys in forms.items():
@@ -243,7 +244,7 @@ def test_each_construct_validates(key: str) -> None:
 
 @pytest.mark.fast
 def test_passthrough_is_admitted_everywhere() -> None:
-    """Unknown keys are passthrough CWL, not errors (§1)."""
+    """Unknown keys are passthrough CWL, not errors (language spec §1)."""
     assert _accepts({
         '$namespaces': {'edam': 'http://edamontology.org/'},
         'steps': {'s': {'in': {'f': 'name'}, 'hints': [{'class': 'X'}]}},
@@ -252,7 +253,7 @@ def test_passthrough_is_admitted_everywhere() -> None:
 
 @pytest.mark.fast
 def test_a_step_may_have_no_body() -> None:
-    """`some_subworkflow.wic:` with nothing under it is well-formed (§3.1)."""
+    """`some_subworkflow.wic:` with nothing under it is well-formed (language guide §2.1)."""
     assert _accepts({'steps': {'sub.wic': None}})
     assert _accepts({'wic': None})
 
@@ -266,7 +267,7 @@ def test_a_step_may_have_no_body() -> None:
 
 
 AST_NODES = [Document, Step, OutputBinding, WicSidecar, StepKey,
-             InlineLiteral, EdgeDef, EdgeRef, RawCwlRef, UnresolvedName]
+             InlineLiteral, EdgeDef, EdgeRef, RawCwlRef, UnresolvedName, CwlRecord]
 
 
 @pytest.mark.fast
@@ -275,7 +276,7 @@ def test_every_ast_field_declares_its_surface(node_type: type) -> None:
     """Every field says how it is written, or `surface_of` raises.
 
     A field with no declaration is a hole in the specification: the AST would
-    carry something the schema cannot describe and the reference does not
+    carry something the schema cannot describe and the language guide does not
     mention.
     """
     for declared in fields(node_type):

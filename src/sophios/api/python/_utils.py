@@ -1,16 +1,20 @@
 """Internal helpers for the Python API."""
 
+import inspect
 import keyword
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import yaml
 
 from sophios import utils_cwl
+from sophios.lang.spans import SourceSpan
 
 from ._errors import InvalidInputValueError
 from ._types import CWLAtomicType
+
+_PACKAGE_ROOT: Final = Path(__file__).resolve().parents[2]
 
 
 def normalize_parameter_name(cwl_id: str) -> str:
@@ -184,3 +188,21 @@ def load_yaml(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as file_handle:
         loaded = yaml.safe_load(file_handle)
     return loaded or {}
+
+
+def caller_span() -> SourceSpan:
+    """The user's own line: the innermost frame outside the `sophios` package.
+
+    A workflow built in Python has no `.wic` text, but it has a file and a
+    line where each step was made and each port bound, which is what a
+    diagnostic names. Frames inside `sophios/` (the API, the compiler) are
+    skipped; frames inside site-packages too, so a test harness or notebook
+    wrapper does not become the location.
+    """
+    frame = inspect.currentframe()
+    while frame is not None:
+        path = Path(frame.f_code.co_filename).resolve()
+        if _PACKAGE_ROOT not in path.parents and 'site-packages' not in path.parts:
+            return SourceSpan(str(path), frame.f_lineno, 1, frame.f_lineno, 1)
+        frame = frame.f_back
+    return SourceSpan('<python>', 1, 1, 1, 1)
