@@ -19,7 +19,7 @@ from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
 from sophios import utils_cwl
-from sophios.lang import (SophiosErrorCode, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
+from sophios.lang import (SophiosErrorCode, CwlRecord, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
                           OpaqueCwl, OutputBinding, RawCwlRef, Step, StepKey, UnresolvedName, WicSidecar,
                           render)
 from sophios.lang.spans import SourceSpan
@@ -27,7 +27,7 @@ from sophios.utils_yaml import wic_loader
 from sophios.wic_types import Yaml
 
 from .reference_model import may_reference
-from .synthetic_tools import STEMS, inputs_of, outputs_of, required_inputs_of
+from .synthetic_tools import SCHEMA_TYPES, STEMS, inputs_of, outputs_of, required_inputs_of
 
 #: A span the AST needs and the surface never shows. Generated nodes have no
 #: source, so they all carry the same one; nothing downstream reads it, and a
@@ -47,7 +47,7 @@ NOT_GENERATED: Final[dict[str, str]] = {}
 
 CONSTRUCTS: Final[tuple[str, ...]] = (
     'steps_mapping', 'steps_sequence',
-    'inline_literal', 'edge_ref', 'raw_cwl_ref', 'unresolved_name',
+    'inline_literal', 'edge_ref', 'raw_cwl_ref', 'unresolved_name', 'cwl_record',
     'output_bare', 'output_edge',
     'interpreted_scatter', 'interpreted_scatterMethod', 'interpreted_when',
     'step_passthrough', 'top_passthrough',
@@ -85,6 +85,8 @@ def constructs_in(document: Document) -> frozenset[str]:
                     found.add('edge_ref')
                 case RawCwlRef():
                     found.add('raw_cwl_ref')
+                case CwlRecord():
+                    found.add('cwl_record')
                 case _:
                     found.add('unresolved_name')
         if not step.id.endswith('.wic') and set(required_inputs_of(step.id)) - bound:
@@ -113,12 +115,22 @@ _SCATTER_METHODS: Final = ('dotproduct', 'flat_crossproduct', 'nested_crossprodu
 
 
 def _literal_for(declared: Any) -> SearchStrategy[Any]:
-    """Draw an ordinary well-typed literal while leaving hostile literals reachable elsewhere."""
+    """Draw a well-typed literal for `declared`, structured types included,
+    while leaving hostile literals reachable elsewhere."""
     members = declared if isinstance(declared, list) else [declared]
     for member in members:
         name = member[:-1] if isinstance(member, str) and member.endswith('?') else member
         while isinstance(name, str) and name.endswith('[]'):
             name = name[:-2]
+        if isinstance(name, str) and name in SCHEMA_TYPES:
+            name = SCHEMA_TYPES[name]
+        if isinstance(name, dict) and name.get('type') == 'record':
+            return st.fixed_dictionaries({field['name']: _literal_for(field['type'])
+                                          for field in name['fields']})
+        if isinstance(name, dict) and name.get('type') == 'enum':
+            return st.sampled_from(list(name['symbols']))
+        if isinstance(name, dict) and name.get('type') == 'array':
+            return st.lists(_literal_for(name['items']), max_size=2)
         if isinstance(name, str) and name in _LITERALS_BY_TYPE:
             return _LITERALS_BY_TYPE[name]
     return literals
@@ -160,10 +172,61 @@ declared_inputs: Final[tuple[tuple[str, Any], ...]] = (
 )
 
 
+def _structured(declared: Any) -> bool:
+    """Whether `declared` is, or holds, a record, an enum or a named schema type."""
+    members = declared if isinstance(declared, list) else [declared]
+    for member in members:
+        if isinstance(member, str) and member in SCHEMA_TYPES:
+            return True
+        if isinstance(member, dict) and (member.get('type') in ('record', 'enum') or _structured(member.get('items'))):
+            return True
+    return False
+
+
+def _may_feed(source_type: Any, sink_type: Any) -> bool:
+    """Whether a generated reference from `source_type` may feed `sink_type`.
+
+    The independent model is unsure about a structured sink, so the compiler
+    lets any source through to it; cwltool then rejects every one but `Any`.
+    A generated document is well typed, so only `Any` feeds a structured sink.
+    """
+    if _structured(sink_type):
+        return isinstance(source_type, str) and source_type == 'Any'
+    return may_reference(source_type, sink_type)
+
+
+def _carried(declared: Any) -> Any:
+    """What an edge from an output declared `declared` carries: `stdout` and
+    `stderr` are a tool's shorthand for the captured stream, a `File`."""
+    return 'File' if declared in ('stdout', 'stderr') else declared
+
+
 def _references_for(sink_type: Any) -> tuple[str, ...]:
-    """Inputs the independent model does not prove disjoint from this sink."""
+    """Inputs that may feed this sink."""
     return tuple(input_name for input_name, source_type in declared_inputs
-                 if may_reference(source_type, sink_type))
+                 if _may_feed(source_type, sink_type))
+
+
+@st.composite
+def _record(draw: st.DrawFn, sink: Any, fits: list[str], references: tuple[str, ...],
+            referenced_inputs: set[str]) -> CwlRecord:
+    """A step-input record: one source with a default, or, into an array, two merged.
+
+    Two sources each fit the array sink, so `merge_flattened` keeps it one.
+    """
+    array = isinstance(sink, dict) and sink.get('type') == 'array'
+    if len(fits) > 1 and array and draw(st.booleans()):
+        pair = draw(st.permutations(fits))[:2]
+        return CwlRecord(tuple(EdgeRef(edge, _SPAN) for edge in pair), (('linkMerge', 'merge_flattened'),), _SPAN)
+    source: EdgeRef | UnresolvedName
+    if fits and (not references or draw(st.booleans())):
+        source = EdgeRef(draw(st.sampled_from(fits)), _SPAN)
+    else:
+        declared = draw(st.sampled_from(references))
+        referenced_inputs.add(declared)
+        source = UnresolvedName(declared, _SPAN)
+    default = draw(_literal_for(sink['items'] if array else sink))
+    return CwlRecord((source,), (('default', [default] if array else default),), _SPAN)
 
 
 @st.composite
@@ -183,7 +246,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
     a bare name is only well-formed once the document declares it, so both are
     facts about the document being built and not about this step.
     """
-    # pylint: disable=too-many-branches,too-many-locals  # one branch per input/output construct
+    # pylint: disable=too-many-branches,too-many-locals,too-many-statements  # one branch per construct
     names = sorted(inputs_of(stem))
 
     # Drawn first, because a scattered input consumes an array: a reference
@@ -215,7 +278,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
     # Infer lifts only a required input, so a scattered one that is not must be bound.
     chosen += [name for name in ports if name not in chosen and name not in required_inputs_of(stem)]
     connectable = [name for name in names
-                   if any(may_reference(carries, sink(name)) for _, carries in defined_edges)]
+                   if any(_may_feed(carries, sink(name)) for _, carries in defined_edges)]
     forced: str | None = None
     if bool(connectable) and draw(st.booleans()):
         forced = draw(st.sampled_from(connectable))
@@ -223,17 +286,18 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
 
     bindings: list[tuple[str, InputValue]] = []
     for name in chosen:
-        fits = [edge for edge, carries in defined_edges if may_reference(carries, sink(name))]
+        fits = [edge for edge, carries in defined_edges if _may_feed(carries, sink(name))]
         if name == forced:
             bindings.append((name, EdgeRef(draw(st.sampled_from(fits)), _SPAN)))
             continue
 
         references = _references_for(sink(name))
-        forms = ['literal'] + (['unresolved', 'raw'] if references else []) + (['ref'] if fits else [])
+        forms = ['literal'] + (['unresolved', 'raw'] if references else []) + (['ref'] if fits else []) \
+            + (['record'] if references or fits else [])
         match draw(st.sampled_from(forms)):
             case 'literal':
                 literal = draw(_literal_for(inputs_of(stem)[name].get('type')))
-                if name in ports and draw(st.booleans()):
+                if name in ports:
                     literal = [literal]
                 bindings.append((name, InlineLiteral(literal, _SPAN)))
             case 'unresolved':
@@ -244,6 +308,8 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
                 declared = draw(st.sampled_from(references))
                 referenced_inputs.add(declared)
                 bindings.append((name, RawCwlRef(declared, _SPAN)))
+            case 'record':
+                bindings.append((name, draw(_record(sink(name), fits, references, referenced_inputs))))
             case _:
                 bindings.append((name, EdgeRef(draw(st.sampled_from(fits)), _SPAN)))
 
@@ -258,7 +324,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
         for out_name in draw(st.lists(st.sampled_from(sorted(outputs_of(stem))),
                                       unique=True, max_size=2)):
             if draw(st.booleans()):
-                carries = outputs_of(stem)[out_name].get('type')
+                carries = _carried(outputs_of(stem)[out_name].get('type'))
                 for _ in range(layers):
                     carries = {'type': 'array', 'items': carries}
                 edge = _fresh_edge(draw, defined_edges, carries)
@@ -275,7 +341,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
 
 
 @st.composite
-def documents(draw: st.DrawFn) -> Document:
+def documents(draw: st.DrawFn) -> Document:  # pylint: disable=too-many-locals
     """A well-formed Sophios document, over every construct in `CONSTRUCTS`.
 
     CANNOT GENERATE (declared, and checked): the kinds in `NOT_GENERATED`.
@@ -335,7 +401,10 @@ def documents(draw: st.DrawFn) -> Document:
         entries: tuple[tuple[str, OpaqueCwl], ...] = (('graphviz', {'label': draw(edge_names)}),)
         nested: tuple[tuple[StepKey, WicSidecar], ...] = ()
         if bool(steps) and draw(st.booleans()):
-            nested = ((StepKey(1, steps[0].id),
+            first = steps[0].id
+            unique = [step.id for step in steps].count(first) == 1 and bool(Grammar.WIC_STEP_ID.match(first))
+            step_key = StepKey(None, first) if unique and draw(st.booleans()) else StepKey(1, first)
+            nested = ((step_key,
                        WicSidecar(entries=(('graphviz', {'label': draw(edge_names)}),), span=_SPAN)),)
         sidecar = WicSidecar(steps=nested, entries=entries, span=_SPAN)
 
