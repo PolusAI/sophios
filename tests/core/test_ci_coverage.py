@@ -279,6 +279,13 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # is the script's, not the test's. Its compact twin builds the same hinted
     # tool without validating it and still runs on Windows.
     'tests/core/test_example_scripts.py::test_the_integrated_ichnaea_script_compiles_its_hinted_tool',
+    # Loads the corpus into cwltool, to ask it what an embedded document means. Its
+    # platform-neutral sibling `test_embedding_keeps_meaning` runs on every leg.
+    'tests/core/test_examples.py::test_embedding_keeps_runtime_defaults',
+    # Loads the flat and flat-embedded corpus documents into cwltool to validate
+    # them. Its platform-neutral sibling `test_flatten_keeps_meaning` runs on
+    # every leg.
+    'tests/core/test_examples.py::test_flatten_validates_as_cwl',
 })
 
 

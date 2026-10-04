@@ -151,6 +151,8 @@ def _lower_resolved(document: ResolvedDocument,
         # invariants with a ValueError instead of this report.
         return Lowered(None, diagnostics)
     known_ports = {port.id for node in nodes for port in node.inputs + node.outputs}
+    sidecar = document.source.sidecar
+    inlineable = bool(dict(sidecar.entries).get('inlineable', True)) if sidecar is not None else True
     graph = WorkflowGraph(
         namespace=here,
         steps=tuple(nodes),
@@ -173,6 +175,7 @@ def _lower_resolved(document: ResolvedDocument,
         namespaces=namespaces,
         schemas=schemas,
         children=tuple(children),
+        inlineable=inlineable,
     )
     return Lowered(graph, diagnostics)
 

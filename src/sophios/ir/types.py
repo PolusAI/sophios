@@ -450,6 +450,10 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     #: `input_mapping` names emitted in shorthand: a step's own lifted input,
     #: recorded where Complete or Infer creates it (a name cannot tell).
     shorthand_relays: tuple[PortName, ...] = ()
+    #: False when the workflow is marked `wic: inlineable: false`, in its own file or
+    #: at the call site (read from the child's sidecar once call-site keys are folded
+    #: in): a caller asking to flatten its calls keeps this one nested.
+    inlineable: bool = True
 
     def __post_init__(self) -> None:
         """Reject a graph naming a port no step declares, checked over every
