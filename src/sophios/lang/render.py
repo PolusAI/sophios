@@ -19,6 +19,7 @@ import yaml
 
 from ..utils_yaml import Key, Tag
 from .nodes import (
+    CwlRecord,
     Document,
     EdgeDef,
     EdgeRef,
@@ -71,7 +72,7 @@ class _Writer:
     mode: Literal['tagged', 'json']
 
     def document(self, document: Document) -> dict[str, Any]:
-        """Key order follows the reference: `wic:`, then `steps:`, then the rest."""
+        """Key order follows the language guide: `wic:`, then `steps:`, then the rest."""
         body: dict[str, Any] = {}
 
         if document.sidecar is not None:
@@ -113,7 +114,7 @@ class _Writer:
         return {binding.name: self.edge_def(binding.edge_def)}
 
     def edge_def(self, edge: EdgeDef) -> Any:
-        """Spell an `!&` edge definition — legal only on an `out:` entry (§4.1.1)."""
+        """Spell an `!&` edge definition — legal only on an `out:` entry (language guide §3.6)."""
         return _Tagged(Tag.ANCHOR, edge.name) if self.mode == 'tagged' else {Key.ANCHOR: edge.name}
 
     def sidecar(self, sidecar: WicSidecar) -> Any:
@@ -140,6 +141,15 @@ class _Writer:
                 return _Tagged(Tag.RAW_CWL, expression) if self.mode == 'tagged' else {Key.RAW_CWL: expression}
             case UnresolvedName(name=name):
                 return name
+            case CwlRecord(sources=sources, fields=fields):
+                body: dict[str, Any] = {}
+                if sources:
+                    spelled = [self.input_value(source) for source in sources]
+                    # One source stays a list beside `linkMerge`, which CWL reads as a merge of a list.
+                    body['source'] = spelled[0] if len(spelled) == 1 and 'linkMerge' not in dict(fields) \
+                        else spelled
+                body.update({key: self.plain(value) for key, value in fields})
+                return _Tagged(Tag.RAW_CWL, body) if self.mode == 'tagged' else {Key.RAW_CWL: body}
 
     def _literal(self, literal: InlineLiteral) -> Any:
         """Spell an `!ii` literal: transcribed from source text when parsed, else serialised."""
@@ -152,7 +162,7 @@ class _Writer:
         if isinstance(literal.value, (list, dict)):
             return _Tagged(Tag.INLINE_INPUT, self.plain(literal.value))
 
-        if isinstance(literal.value, (InlineLiteral, EdgeRef, RawCwlRef, UnresolvedName)):
+        if isinstance(literal.value, (InlineLiteral, EdgeRef, RawCwlRef, UnresolvedName, CwlRecord)):
             # A construct as the direct payload has no tagged spelling — two
             # tags cannot share a node — so the desugared form carries it.
             return {Key.INLINE_INPUT: self.plain(literal.value)}
@@ -168,7 +178,7 @@ class _Writer:
     def plain(self, value: OpaqueCwl) -> Any:
         """Spell passthrough content, exhaustively over the closed `OpaqueCwl` union."""
         match value:
-            case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName():
+            case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName() | CwlRecord():
                 return self.input_value(value)
             case dict():
                 return {k: self.plain(v) for k, v in value.items()}

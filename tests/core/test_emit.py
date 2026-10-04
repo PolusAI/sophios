@@ -48,7 +48,7 @@ from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
 from .equivalence import Strength, equivalent
-from .hermetic import ORACLE, compile_hermetic, compile_hermetic_cwl, subworkflow_step
+from .hermetic import ORACLE, compile_hermetic, compile_hermetic_cwl, network_refused, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
 
 
@@ -146,19 +146,63 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
     assert emit_job_inputs(document, names) == {'message': 'hello'}
 
 
-@pytest.mark.needs_cwltool
-@pytest.mark.skip_pypi_ci
-@pytest.mark.slow
-@given(strat.workflows())
-@ORACLE
-def test_emit_validates_as_cwl_v1_2(workflow: Yaml) -> None:
-    """CWL's external validator accepts each emitted workflow and its job inputs.
+def _file_locations(value: Any) -> list[str]:
+    """Every `location` of a `File` object anywhere in a job value."""
+    if isinstance(value, list):
+        return [location for item in value for location in _file_locations(item)]
+    if not isinstance(value, dict):
+        return []
+    if value.get('class') == 'File':
+        return [value['location']]
+    return [location for item in value.values() for location in _file_locations(item)]
 
-    `cwltool --validate` type-checks every link, scatter included, and every
-    job value against its input's declared type. It does not open the files a
-    job names. A required input the job leaves unset is one the user supplies
-    at run time, so it is made optional first: cwltool then still rejects a
-    link that no member of the widened type fits.
+
+def _secondary(location: str, pattern: Any) -> str:
+    """The secondary file a `secondaryFiles` pattern names beside `location`."""
+    text = str(pattern['pattern'] if isinstance(pattern, dict) else pattern)
+    suffix = text.lstrip('^')
+    for _ in range(len(text) - len(suffix)):
+        location = location.rsplit('.', 1)[0]
+    return location + suffix
+
+
+def _job_files(declared: Yaml, job: Yaml) -> list[str]:
+    """Every file a job names, each with the secondary files its input declares."""
+    found: list[str] = []
+    for name, value in job.items():
+        patterns = declared.get(name, {}).get('secondaryFiles', [])
+        for location in _file_locations(value):
+            found.append(location)
+            found.extend(_secondary(location, pattern)
+                         for pattern in (patterns if isinstance(patterns, list) else [patterns]))
+    return found
+
+
+#: Stems whose emitted workflow cwltool rejects today, each with the reason,
+#: and kept out of the validation property below. Every other property still
+#: draws them. `test_a_schema_def_typed_input_validates` is a strict xfail, so
+#: the exclusion cannot outlive the gap.
+NOT_YET_VALID: Final[dict[str, str]] = {
+    'schemed': ('its input names a SchemaDefRequirement type, and the promoted workflow input carries '
+                'that bare name without the requirement that defines it'),
+}
+
+
+def _cwltool_validates(workflow: Yaml) -> bool:
+    """`cwltool --validate` accepts the emitted workflow and its job inputs.
+
+    It type-checks every link, scatter included, and every job value against
+    its input's declared type. It reads a file the job names for an input with
+    `loadContents`, and looks for the secondary files its `secondaryFiles`
+    name, so each is created empty beside the job. A required input the job
+    leaves unset is one the user supplies at run time, so it is made optional
+    first: cwltool then still rejects a link that no member of the widened type
+    fits.
+
+    The document is validated without its `$schemas`, which cwltool would
+    fetch (an opaque host, and EDAM from GitHub) even under `--skip-schemas`:
+    it link-checks each entry. That `$schemas` survives emission is pinned in
+    `test_leak_boundary`. The run must attempt no connection.
     """
     import cwltool.main  # pylint: disable=import-outside-toplevel
 
@@ -169,11 +213,35 @@ def test_emit_validates_as_cwl_v1_2(workflow: Yaml) -> None:
         if name not in job and 'default' not in declared:
             members = declared['type'] if isinstance(declared['type'], list) else [declared['type']]
             declared['type'] = members if 'null' in members else ['null', *members]
-    with tempfile.TemporaryDirectory() as workdir:
+    inlined.pop('$schemas', None)
+    with tempfile.TemporaryDirectory() as workdir, network_refused() as attempts:
         target, values = Path(workdir) / 'workflow.cwl', Path(workdir) / 'job.yml'
         target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
         values.write_text(yaml.safe_dump(job, sort_keys=False), encoding='utf-8')
-        assert cwltool.main.main(['--validate', '--quiet', str(target), str(values)]) == 0
+        for location in _job_files(inlined['inputs'], job):
+            (Path(workdir) / location).touch()
+        valid = cwltool.main.main(['--validate', '--quiet', '--skip-schemas', str(target), str(values)]) == 0
+    assert not attempts
+    return bool(valid)
+
+
+@pytest.mark.needs_cwltool
+@pytest.mark.skip_pypi_ci
+@pytest.mark.slow
+@given(strat.workflows().filter(lambda w: not {s['id'] for s in w['steps']} & NOT_YET_VALID.keys()))
+@ORACLE
+def test_emit_validates_as_cwl_v1_2(workflow: Yaml) -> None:
+    """CWL's external validator accepts each emitted workflow and its job inputs."""
+    assert _cwltool_validates(workflow)
+
+
+@pytest.mark.needs_cwltool
+@pytest.mark.fast
+@pytest.mark.xfail(strict=True, reason=NOT_YET_VALID['schemed'])
+def test_a_schema_def_typed_input_validates() -> None:
+    """A workflow whose step input is typed by a SchemaDefRequirement name is valid CWL."""
+    assert _cwltool_validates({'steps': [
+        {'id': 'schemed', 'in': {'coords': {'wic_inline_input': {'x': 1.0, 'y': 2.0}}}}]})
 
 
 @pytest.mark.needs_cwltool
@@ -184,7 +252,9 @@ def test_validator_rejects_the_independent_invalid_control(tmp_path: Path) -> No
 
     target = tmp_path / 'invalid.cwl'
     target.write_text('class: Workflow\nsteps: []\n', encoding='utf-8')
-    assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 1
+    with network_refused() as attempts:
+        assert cwltool.main.main(['--validate', '--quiet', '--skip-schemas', str(target)]) == 1
+    assert not attempts
 
 
 @pytest.mark.fast
@@ -230,18 +300,16 @@ def test_an_untyped_output_of_a_called_workflow_is_typed_in_the_caller(
 @pytest.mark.parametrize('output, said', [
     ({'label': 'no type here'}, ('has no `outputSource:` to take one from',)),
     ({'outputSource': 'mk_file/fiel'},
-     ('`outputSource: mk_file/fiel` names no output of a step', "Did you mean 'mk_file/file'?")),
+     ('`outputSource: mk_file/fiel` names no output of a step',  # codespell:ignore fiel
+      "Did you mean 'mk_file/file'?")),
     ({'outputSource': 'kid/res'},
      ('`outputSource: kid/res` names no output of a step', "Did you mean 'kid.wic/res'?")),
-    ({'outputSource': ['mk_file/file']}, ('is written as a list', 'Add `type:`.')),
-    ({'outputSource': []}, ('is written as a list', 'Add `type:`.')),
-    ({'outputSource': ['mk_file/file', 'mk_file/file']}, ('is written as a list', 'Add `type:`.')),
     ({'outputSource': 'nothing/at_all'},
      ('names no output of a step', 'Check the step and output names.')),
     ({'outputSource': 'kid.wic/kid__step__1__mk_file___file'},
      ('names no output of a step', 'Check the step and output names.')),
-], ids=['no-source', 'misspelled-output', 'workflow-without-its-extension', 'source-list', 'empty-source-list',
-        'two-sources', 'nothing-close', 'name-the-compiler-derives'])
+], ids=['no-source', 'misspelled-output', 'workflow-without-its-extension', 'nothing-close',
+        'name-the-compiler-derives'])
 def test_an_untyped_output_with_nothing_to_take_a_type_from_is_wic036(
         output: Yaml, said: tuple[str, ...]) -> None:
     """The message says which half of the author's `outputSource:` to fix, not only to add a `type:`."""
@@ -330,6 +398,26 @@ def test_a_promoted_port_leaves_a_secondary_files_expression_to_its_tool(declare
     assert inputs['oracle__step__1__probe___f'].get('secondaryFiles') == promoted
     assert outputs['oracle__step__1__probe___o'].get('secondaryFiles') == promoted
     assert 'InlineJavascriptRequirement' not in (compiled.get('requirements') or {})
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('declared, promoted', [
+    ('.bai', ['.bai']),
+    ({'pattern': '.bai', 'required': False}, [{'pattern': '.bai', 'required': False}]),
+    (['.bai'], ['.bai']),
+], ids=['bare-string', 'single-mapping', 'list'])
+def test_a_promoted_port_states_secondary_files_as_a_list(declared: Any, promoted: Any) -> None:
+    """A bare pattern or a single mapping is promoted as a one-element list.
+
+    cwltool's checker reads each workflow-level `secondaryFiles` entry as a
+    mapping, so the bare form crashes it; the list form is the same declaration.
+    """
+    tools = _tools_with_probe(
+        {'f': {'type': 'File', 'secondaryFiles': declared, 'inputBinding': {'position': 1}}},
+        {'o': {'type': 'File', 'secondaryFiles': declared, 'outputBinding': {'glob': 'o'}}})
+    compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
+    assert compiled['inputs']['oracle__step__1__probe___f'].get('secondaryFiles') == promoted
+    assert compiled['outputs']['oracle__step__1__probe___o'].get('secondaryFiles') == promoted
 
 
 @pytest.mark.fast
@@ -516,3 +604,118 @@ def test_a_port_the_author_wrote_keeps_its_own_prefix_whatever_a_tool_binds() ->
     compiled = compile_hermetic_cwl(workflow, tools=_tools_binding_myns(probe=_MYNS))
     assert compiled['inputs']['x']['format'] == 'myns:format_1'
     assert compiled['$namespaces']['myns'] == _OTHER_URI
+
+
+@pytest.mark.fast
+def test_a_cwl_record_emits_the_fields_it_carries() -> None:
+    """Two sources merged into `sink.extras` (File[]), a default on `n`, and the
+    requirements CWL demands for each. Between them the records carry every
+    WorkflowStepInput field but `id`."""
+    carried = {'label': 'both files', 'loadContents': True, 'loadListing': 'no_listing',
+               'pickValue': 'all_non_null'}
+    compiled = compile_hermetic_cwl({'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}, 'out': [{'file': {'wic_anchor': 'fa'}}]},
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'b'}}, 'out': [{'file': {'wic_anchor': 'fb'}}]},
+        {'id': 'sink', 'in': {
+            'file': {'wic_alias': 'fa'},
+            'n': {'wic_raw_cwl': {'default': 3, 'valueFrom': '$(self + 1)'}},
+            'extras': {'wic_raw_cwl': {'source': [{'wic_alias': 'fa'}, {'wic_alias': 'fb'}],
+                                       'linkMerge': 'merge_flattened', **carried}}}}]})
+    sink = compiled['steps'][2]
+    assert sink['in']['extras'] == {'source': ['oracle__step__1__mk_file/file', 'oracle__step__2__mk_file/file'],
+                                    'linkMerge': 'merge_flattened', **carried}
+    assert sink['in']['n'] == {'default': 3, 'valueFrom': '$(self + 1)'}
+    assert {'MultipleInputFeatureRequirement', 'StepInputExpressionRequirement',
+            'InlineJavascriptRequirement'} <= set(compiled['requirements'])
+
+
+@pytest.mark.fast
+def test_a_record_with_one_source_and_link_merge_keeps_its_source_a_list() -> None:
+    """CWL merges a list beside `linkMerge`; flattening `[x]` to `x` would change the value."""
+    compiled = compile_hermetic_cwl({'inputs': {'f': 'File'}, 'steps': [
+        {'id': 'sink', 'in': {'file': 'f', 'n': {'wic_inline_input': 1},
+                              'extras': {'wic_raw_cwl': {'source': ['f'], 'linkMerge': 'merge_nested'}}}}]})
+    assert compiled['steps'][0]['in']['extras'] == {'source': ['f'], 'linkMerge': 'merge_nested'}
+    assert 'MultipleInputFeatureRequirement' in compiled['requirements']
+    assert 'StepInputExpressionRequirement' not in compiled['requirements']
+
+
+@pytest.mark.fast
+def test_a_record_may_bind_an_input_the_process_does_not_declare_for_when(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """`go` is bound only so `when:` can read it; the step declares it, so no stderr line names it."""
+    compiled = compile_hermetic_cwl({'inputs': {'go': 'boolean'}, 'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}, 'go': {'wic_raw_cwl': {'source': 'go'}}},
+         'when': '$(inputs.go)'}]})
+    assert compiled['steps'][0]['in']['go'] == {'source': 'go'}
+    assert compiled['steps'][0]['when'] == '$(inputs.go)'
+    assert 'Warning!' not in capsys.readouterr().err
+
+
+@pytest.mark.fast
+def test_a_record_source_from_an_includer_is_discharged_like_a_bare_reference() -> None:
+    """The child's record names the boundary input Link relays the parent's edge through."""
+    child = {'steps': [{'id': 'sink', 'in': {'file': {'wic_raw_cwl': {'source': {'wic_alias': 'f'}}},
+                                             'n': {'wic_inline_input': 1}}}]}
+    compiled = compile_hermetic({'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}, 'out': [{'file': {'wic_anchor': 'f'}}]},
+        subworkflow_step('child.wic', child)]})
+    (edge,) = compiled.graph.linked_edges
+    assert edge.sink.step.name == 'sink'
+    workflow = next(child.cwl for child in compiled.artifact.children if child.cwl['class'] == 'Workflow')
+    (inner,) = workflow['steps']
+    assert inner['in']['file'] == {'source': 'child__step__1__sink___file'}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('body', [{'source': 'w', 'nope': 1}, {'source': {'wic_inline_input': 3}}, {'source': 3}])
+def test_a_desugared_record_under_wic_steps_is_checked_like_the_tagged_one(body: dict[str, Any]) -> None:
+    """`{wic_raw_cwl: {...}}` contributed through `wic: steps:` is the record
+    `!cwl {...}` spells, so a field it may not carry is refused, not dropped."""
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'inputs': {'w': 'File'}, 'steps': [{'id': 'count'}],
+                          'wic': {'steps': {'(1, count)': {'in': {'file': {'wic_raw_cwl': body}}}}}})
+    assert [d.code for d in caught.value.diagnostics] == [SophiosErrorCode.STEP_INPUT_RECORD]
+
+
+@pytest.mark.fast
+def test_a_desugared_record_under_wic_steps_binds_like_the_tagged_one() -> None:
+    """The same record under `wic: steps:` reaches the emitted step as it is written."""
+    record = {'source': 'w', 'loadContents': True}
+    compiled = compile_hermetic_cwl({'inputs': {'w': 'File'}, 'steps': [{'id': 'count'}],
+                                     'wic': {'steps': {'(1, count)': {'in': {'file': {'wic_raw_cwl': record}}}}}})
+    assert compiled['steps'][0]['in']['file'] == record
+
+
+@pytest.mark.fast
+def test_the_names_map_covers_every_emitted_step_and_boundary_port() -> None:
+    """Every step id and boundary name the root document emits maps back to what the author wrote."""
+    from sophios.ir.names import names_map  # pylint: disable=import-outside-toplevel
+    child = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}]}
+    compiled = compile_hermetic({'steps': [subworkflow_step('child.wic', child), {'id': 'count'}]})
+    found = names_map(compiled.graph, Names.of(compiled.graph))
+    emitted_steps = {step['id'] for step in compiled.artifact.cwl['steps']}
+    assert emitted_steps <= set(found['steps'])
+    assert set(compiled.artifact.cwl['inputs']) <= set(found['ports'])
+    count = found['steps']['oracle__step__2__count']
+    assert count == {'id': 'oracle__step__2__count', 'workflow': 'oracle', 'index': 2, 'name': 'count',
+                     'file': 'oracle.wic', 'line': count['line']}
+    assert count['line'] > 0
+    nested = found['steps']['oracle__step__1__child.wic___child__step__1__mk_file']
+    assert (nested['id'], nested['workflow'], nested['index'], nested['name']) == (
+        'child__step__1__mk_file', 'child', 1, 'mk_file')
+    lifted = found['ports']['oracle__step__1__child.wic___child__step__1__mk_file___name']
+    assert lifted == {'workflow': 'oracle', 'steps': ['child.wic', 'mk_file'], 'port': 'name'}
+
+
+@pytest.mark.fast
+def test_emitted_inputs_list_authored_names_first_then_derived_in_step_order() -> None:
+    """Authored inputs keep the order written and come before the inputs
+    exposing a step's port, which follow the steps. `mk_file.name` is lifted by
+    inference, after `mk_text`'s literal already exposed its own input."""
+    compiled = compile_hermetic_cwl({
+        'inputs': {'zeta': 'string', 'alpha': 'string'},
+        'steps': [{'id': 'mk_file'},
+                  {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'a'}}}]})
+    assert list(compiled['inputs']) == ['zeta', 'alpha',
+                                        'oracle__step__1__mk_file___name', 'oracle__step__2__mk_text___name']

@@ -130,7 +130,7 @@ jobs:
 
       - name: MyPy Check Type Annotations
         if: always()
-        run: cd sophios/ && mypy src/ examples/ tests/
+        run: cd sophios/ && mypy src/ examples/ tests/ docs/cookbook/
         # NOTE: Do not use `mypy .` because then mypy will check both src/ and build/ causing:
         # src/sophios/__init__.py: error: Duplicate module named "wic"
         # (also at "./build/lib/sophios/__init__.py")
@@ -165,7 +165,7 @@ jobs:
         run: cd sophios/ && pytest -k test_emitted_cwl_says_nothing_cwl_cannot_read
         timeout-minutes: 20 # backup timeout for windows
 
-      - name: PyTest Inline Subworkflows
+      - name: PyTest Inline Flags
         if: always()
-        run: cd sophios/ && pytest -k test_inline_subworkflows # --cov --cov-config=.coveragerc_serial
+        run: cd sophios/ && pytest tests/core/test_examples.py -k "test_embedding_keeps or test_flatten" # --cov --cov-config=.coveragerc_serial
         timeout-minutes: 20 # backup timeout for windows

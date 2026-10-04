@@ -1,6 +1,8 @@
 # Based on https://packaging.python.org/en/latest/tutorials/packaging-projects/
 [build-system]
-requires = ["setuptools>=64", "setuptools-scm>=8", "wheel"]
+# setuptools-scm 10.1 is the first release that both counts a tagless history
+# from fallback_version and takes write_to_source; see [tool.setuptools_scm].
+requires = ["setuptools>=64", "setuptools-scm>=10.1", "wheel"]
 
 build-backend = "setuptools.build_meta"
 
@@ -103,18 +105,9 @@ mypy-types = [
     "types-urllib3",
     "types-aiofiles"
 ]
-# NOTE: toil and cwltool have a somewhat continuous release model. However,
-# there can be updates and bugfixes in main that have not yet been released.
-# If you need to install from source, simply run `pip install .[runners-src]`
-# This will overwrite the existing release versions, so if you want to revert
-# to the release versions, `pip uninstall toil cwltool` and then `pip install .`
-# toml language has problem with underscore in array name
 runners = [
     "toil[cwl]",
     "cwl-utils>=0.32",
-]
-runners-src = [
-    "cwl-utils @ git+https://github.com/sameeul/cwl-utils.git",
 ]
 # See docs/requirements.txt
 doc = [
@@ -125,7 +118,7 @@ doc = [
 plots = ["matplotlib"]
 cyto = ["ipycytoscape"] # only for DAG visualization
 all_except_runner_src = ["sophios[test,doc,plots,cyto,mypy-types]"]
-all = ["sophios[test,doc,plots,cyto,runners-src,mypy-types]"]
+all = ["sophios[test,doc,plots,cyto,mypy-types]"]
 
 [project.scripts]
 sophios = "sophios.main:main"
@@ -150,10 +143,22 @@ namespaces = true
 test = "pytest --workers 8"
 
 [tool.setuptools_scm]
-fallback_version = "0.0.0.dev0"
+# A release is the tag vX.Y.Z that release-please puts on master.
+tag_regex = "^v(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+(?:[.-]dev[0-9]+)?)$"
 version_scheme = "no-guess-dev"
 local_scheme = "no-local-version"
-tag_regex = "^v(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+(?:[.-]dev[0-9]+)?)$"
+# With no release tag in reach (a fork, a shallow clone, or master before its
+# first tag), git builds count from this base: 0.6.0.post0.devN after 0.6.0.
+# Without git at all it is the version itself. release-please moves it to each
+# new release through the marker below, so it always names the last release.
+fallback_version = "0.6.0.post0.dev0"  # x-release-please-version
+# The version is also written beside the code, so sophios.__version__ describes
+# the files that are running rather than whichever install the metadata names.
+version_file = "src/sophios/_version.py"
+version_file_template = """\"\"\"The version setuptools-scm resolved when this copy of Sophios was built.\"\"\"
+__version__ = "{version}"
+"""
+write_to_source = true
 
 [tool.build_sphinx]
 source_dir = "docs"
@@ -286,3 +291,16 @@ type = "forbidden"
 source_modules = ["sophios", "sophios.*"]
 forbidden_modules = ["sophios.contrib"]
 ignore_imports = ["sophios.contrib.** -> sophios.contrib.**"]
+
+[[tool.importlinter.contracts]]
+name = "The compiler is layered: api over compiler over ir over lang"
+type = "layers"
+layers = ["sophios.api", "sophios.compiler", "sophios.ir", "sophios.lang"]
+
+[[tool.importlinter.contracts]]
+name = "The public Python API reaches the compiler only through its runtime adapter"
+type = "forbidden"
+source_modules = ["sophios.api.python.workflow", "sophios.api.python.tool_builder"]
+forbidden_modules = ["sophios.compiler", "sophios.ir", "sophios.plugins", "sophios.run_local",
+                     "sophios.input_output", "sophios.main", "sophios.cli", "sophios.post_compile"]
+allow_indirect_imports = true

@@ -9,7 +9,7 @@ exactly one version, tree-wide.
 
 The mechanism is exercised against fabricated version histories as well as the
 real single-entry list — `sophios.lang.versions` states why, once. The claims
-under test have their normative home in the reference, §7.
+under test have their normative home in the language spec, §6.
 """
 from pathlib import Path
 import pytest
@@ -182,7 +182,7 @@ def test_the_python_api_surfaces_the_version() -> None:
 @pytest.mark.fast
 def test_the_sophios_namespace_prefix_is_reserved() -> None:
     """A user binding of the `sophios` prefix is replaced by the canonical
-    one, exactly like `edam` (reference §1, footnote): the annotation's
+    one, exactly like `edam` (language spec §1.2): the annotation's
     meaning cannot be redirected by rebinding its namespace. Every other
     binding survives. Pinned as the actual behaviour."""
     compiled = _compile({'$namespaces': {'sophios': 'https://not-sophios/', 'mine': 'https://mine/'},
@@ -199,7 +199,7 @@ def test_the_sophios_namespace_prefix_is_reserved() -> None:
 @pytest.mark.fast
 def test_exactly_one_version_exists_today() -> None:
     """When this fails, versions.py has grown a second entry — go make sure
-    the resolution table in the reference (§7) still tells the truth."""
+    the resolution table in the language spec (§6) still tells the truth."""
     assert KNOWN_VERSIONS == ('0.0.1',)
     assert LANG_VERSION == '0.0.1'
 
@@ -211,7 +211,7 @@ def test_a_file_tag_reaches_the_compiler_from_its_own_text(tmp_path: Path) -> No
     Every other test here hands a document straight to the compiler. This one
     writes a file and compiles that file, because a key can be specified,
     parsed, resolved and surfaced and still be dead on arrival for anyone
-    writing one -- which is what happened when `lang_version` reached §7, the
+    writing one -- which is what happened when `lang_version` reached the language spec, the
     resolver and the compiler but not the vocabulary that admits it.
 
     The gate used to be the generated jsonschema, applied by the file loader.
