@@ -4,7 +4,6 @@
 import logging
 import warnings
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, ClassVar, cast, overload
 
@@ -140,8 +139,7 @@ def _warn_implicit_workflow_parameter(workflow: "Workflow", name: str, kind: str
     warnings.warn(
         (
             f"Implicitly declaring workflow {kind} {name!r} on {workflow.process_name!r}. "
-            f"Prefer explicit {kind}s via workflow.add_{kind}(...), workflow.{kind}s.{name}, "
-            f"or typed bindings so interface drift is easier to spot."
+            f"Prefer workflow.{kind}s.{name} = ... so interface drift is easier to spot."
         ),
         UserWarning,
         stacklevel=3,
@@ -186,7 +184,7 @@ def _boundary_type(parameter_type: Any) -> Any:
 
 
 def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) -> None:
-    output_parameter = workflow.add_output(output_name, implicit=True)
+    output_parameter = workflow._add_output(output_name, implicit=True)
     match value:
         case OutputParameter(parent_obj=Step(process_name=process_name), name=name) as source:
             _resolve_parameter_type(
@@ -228,8 +226,8 @@ class Step(_ProcessBase):
     """A workflow step backed by a CWL ``CommandLineTool``.
 
     The canonical binding surface is explicit: values enter through
-    ``step.inputs.*`` and leave through ``step.outputs.*``. Older shorthand
-    attribute reads/writes remain available for compatibility.
+    ``step.inputs.*`` and leave through ``step.outputs.*``. Attribute sugar
+    (``step.x = ...``) binds the input of that name; there is no string-keyed method.
     """
 
     _SYSTEM_ATTRS: ClassVar[set[str]] = {
@@ -449,10 +447,10 @@ class Step(_ProcessBase):
         # This proxy is the main bit of API "magic": it supports both
         # list-style access (`step.inputs[0]`) and named attribute access
         # (`step.inputs.message`) without duplicating wrapper classes.
-        self.inputs = ParameterNamespace(self._inputs, self._get_input, self.bind_input, read_only_error="")
+        self.inputs = ParameterNamespace(self._inputs, self._get_input, self._bind_input, read_only_error="")
         self.outputs = ParameterNamespace(
             self._outputs,
-            self.get_output,
+            self._get_output,
             None,
             read_only_error="Step outputs are read-only; cannot set {name!r}",
         )
@@ -478,7 +476,7 @@ class Step(_ProcessBase):
         # Legacy sugar is intentionally preserved: assigning to a known input
         # parameter name binds that input instead of setting a plain attribute.
         if "_inputs" in self.__dict__ and name in self._inputs:
-            self.bind_input(name, value)
+            self._bind_input(name, value)
             return
         if "_outputs" in self.__dict__ and name in self._outputs:
             raise AttributeError(f"Step outputs are read-only; cannot set {name!r}")
@@ -494,7 +492,7 @@ class Step(_ProcessBase):
             return self._outputs.get(name)
         raise AttributeError(f"{self.__class__.__name__!s} has no attribute {name!r}")
 
-    def bind_input(self, name: str, value: Any) -> None:
+    def _bind_input(self, name: str, value: Any) -> None:
         """Bind a value or upstream output to a named step input parameter.
 
         Args:
@@ -533,7 +531,7 @@ class Step(_ProcessBase):
         """Return a named input parameter from this step."""
         return self._lookup_input(name)
 
-    def get_output(self, name: str) -> OutputParameter:
+    def _get_output(self, name: str) -> OutputParameter:
         """Return a named output parameter from this step.
 
         Args:
@@ -568,10 +566,11 @@ class Step(_ProcessBase):
         """Return an empty subworkflow list because steps do not nest workflows."""
         return []
 
-    def _as_workflow_step(self, *, inline_subtrees: bool, directory: Path | None = None) -> nodes.Step:
-        """Return this step as the language's step node."""
-        del inline_subtrees, directory
+    def _as_workflow_step(self) -> nodes.Step:
+        """Return this step as the language's step node, with `run:` when its name is not its tool's stem."""
         interpreted: list[tuple[str, OpaqueCwl]] = []
+        if self.clt_path.stem != self.process_name:
+            interpreted.append(("run", f"{self.clt_path.stem}.cwl"))
         if self.scatter:
             interpreted += [("scatter", [input_port.name for input_port in self.scatter]),
                             ("scatterMethod", self.scatterMethod or ScatterMethod.dotproduct.value)]
@@ -629,7 +628,7 @@ class Workflow(_ProcessBase):
         )
         self.outputs = ParameterNamespace(
             self._outputs,
-            self.add_output,
+            self._add_output,
             self._bind_output_from_namespace,
             read_only_error="",
         )
@@ -645,9 +644,9 @@ class Workflow(_ProcessBase):
 
         if "_inputs" in self.__dict__:
             if name in self._outputs:
-                self.bind_output(name, value)
+                self._bind_output(name, value)
                 return
-            self.bind_input(name, value)
+            self._bind_input(name, value)
             return
 
         object.__setattr__(self, name, value)
@@ -675,19 +674,7 @@ class Workflow(_ProcessBase):
     def _input_reference(self, name: str, *, implicit: bool = False) -> WorkflowInputReference:
         return WorkflowInputReference(self, name, implicit=implicit)
 
-    def add_input(self, name: str, parameter_type: Any = None) -> InputParameter:
-        """Declare a workflow input explicitly.
-
-        Args:
-            name (str): The workflow input name.
-            parameter_type (Any): Optional CWL type expression for the input.
-
-        Returns:
-            InputParameter: The created or existing workflow input parameter.
-        """
-        return self._ensure_input(name, parameter_type=parameter_type, implicit=False)
-
-    def add_output(
+    def _add_output(
         self,
         name: str,
         source: Any = None,
@@ -718,10 +705,10 @@ class Workflow(_ProcessBase):
             context=f"{self.process_name}.outputs.{name}",
         )
         if source is not None:
-            self.bind_output(name, source)
+            self._bind_output(name, source)
         return output_parameter
 
-    def bind_input(self, name: str, value: Any) -> None:
+    def _bind_input(self, name: str, value: Any) -> None:
         """Bind a literal value or upstream output to a workflow input.
 
         Args:
@@ -738,7 +725,7 @@ class Workflow(_ProcessBase):
         self._ensure_input(name, implicit=False)
         _bind_process_input(self, name, value)
 
-    def bind_output(self, name: str, value: Any) -> None:
+    def _bind_output(self, name: str, value: Any) -> None:
         """Bind a named workflow output to a step output or workflow input.
 
         Args:
@@ -751,7 +738,7 @@ class Workflow(_ProcessBase):
         _bind_workflow_output(self, name, value)
 
     def _bind_output_from_namespace(self, name: str, value: Any) -> None:
-        self.add_output(name, implicit=False)
+        self._add_output(name, implicit=False)
         _bind_workflow_output(self, name, value)
 
     def _get_input(self, name: str) -> InputParameter:
@@ -815,46 +802,43 @@ class Workflow(_ProcessBase):
     def yaml(self) -> dict[str, Any]:
         """Return the in-memory WIC YAML representation of this workflow.
 
-        This is the `sophios.lang.to_json` projection of the workflow's
-        document: the desugared spelling of what `to_wic_yaml` writes.
+        This is the `sophios.lang.to_json` projection of the document
+        `write_wic` writes for this workflow: the desugared spelling of
+        `to_wic_yaml`. Nested workflows are steps naming their own documents.
 
         Returns:
             dict[str, Any]: A WIC-compatible YAML tree represented as a Python dict.
         """
-        return to_json(_workflow_document(self, inline_subtrees=True))
+        return to_json(_workflow_document(self))
 
-    def to_wic_yaml(self, *, inline_subworkflows: bool = True) -> str:
-        """Return this workflow as ``.wic`` YAML text.
+    def to_wic_yaml(self) -> str:
+        """Return this workflow's root document as ``.wic`` YAML text.
 
-        Args:
-            inline_subworkflows (bool): Whether nested workflows should be
-                embedded in the returned document.
+        The text names nested workflows and renamed steps' tools by file;
+        ``write_wic`` writes those files beside it.
 
         Returns:
             str: The serialized ``.wic`` document.
         """
-        return _workflow_wic_yaml(self, inline_subworkflows=inline_subworkflows)
+        return _workflow_wic_yaml(self)
 
-    def write_wic(
-        self,
-        path: StrPath | None = None,
-        *,
-        inline_subworkflows: bool = True,
-    ) -> Path:
-        """Write this workflow as a ``.wic`` file.
+    def write_wic(self, path: StrPath | None = None) -> Path:
+        """Write this workflow as a self-contained bundle in one directory.
+
+        The bundle is the root ``<name>.wic``, one ``<child>.wic`` per nested
+        workflow and one ``<stem>.cwl`` per distinct tool. A step whose name
+        differs from its tool's stem carries ``run: <stem>.cwl``, and every
+        workflow output names its authored step.
 
         Args:
             path (StrPath | None): Destination ``.wic`` path or output
                 directory. When omitted, writes ``<workflow>.wic`` in the
                 current directory.
-            inline_subworkflows (bool): Whether nested workflows should be
-                embedded in the root file. When false, nested workflows are
-                written as sibling ``.wic`` files beside the root document.
 
         Returns:
             Path: The root ``.wic`` file that was written.
         """
-        return _write_workflow_wic(self, path, inline_subworkflows=inline_subworkflows)
+        return _write_workflow_wic(self, path)
 
     def _flatten_steps(self) -> list[Step]:
         """Return every concrete step in this workflow tree."""
@@ -911,13 +895,6 @@ class Workflow(_ProcessBase):
             tool_registry=tool_registry,
         )
 
-    def _as_workflow_step(self, *, inline_subtrees: bool, directory: Path | None = None) -> nodes.Step:
-        # A nested workflow's step names it; its body is shown inline under
-        # `subtree` in the inline views, written as a sibling `.wic` file into
-        # `directory`, or -- for compilation -- supplied by the registry.
-        step = nodes.Step(id=f"{self.process_name}.wic", inputs=self._bound_inputs())
-        if inline_subtrees:
-            return replace(step, passthrough=(("subtree", self.yaml),))
-        if directory is not None:
-            self.write_wic(directory, inline_subworkflows=False)
-        return step
+    def _as_workflow_step(self) -> nodes.Step:
+        """Return this workflow as a step naming its own ``.wic`` document."""
+        return nodes.Step(id=f"{self.process_name}.wic", inputs=self._bound_inputs())

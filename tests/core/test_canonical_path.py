@@ -32,7 +32,7 @@ from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
 from sophios.cli import default_compilation_settings
 from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest
 from sophios.ir.artifacts import CompilationResult
-from sophios.utils_cwl import desugar_into_canonical_normal_form
+from sophios.ir.frontdoor import bundle_from_disk
 from sophios.utils_graphs import get_graph_reps
 from sophios.utils_yaml import wic_loader
 from sophios.wic_types import StepId, Yaml
@@ -40,7 +40,7 @@ from sophios.wic_types import StepId, Yaml
 from . import ast_strategies as strat
 from .ast_strategies import passthrough_keys, passthrough_values
 from .equivalence import Strength, equivalent
-from .hermetic import ORACLE, PARTITION, bundle, compile_hermetic, compile_hermetic_cwl
+from .hermetic import ORACLE, PARTITION, compile_hermetic, compile_hermetic_cwl
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 
 # --------------------------------------------------------------------------
@@ -54,10 +54,12 @@ def _tool_document(stem: str) -> Yaml:
 
 
 @dataclass(frozen=True, slots=True)
-class _PathSpec:
+class _BundleSpec:
     """Enough to build one small, Python-API-buildable workflow twice: two
     independent File sources feeding one `join` step, exposed as a single
-    workflow output.
+    workflow output. `rename` names the `join` step apart from its tool, so
+    the written document carries `run: join.cwl`; `nest` calls `mk_text`
+    through a nested workflow.
 
     Not `ast_strategies.documents()`: the Python API is a *stricter* front
     end than the `.wic` language — `Workflow._validate_graph_shape` rejects
@@ -71,9 +73,11 @@ class _PathSpec:
     file_name: str
     text_name: str
     join_name: str
+    rename: bool
+    nest: bool
 
 
-def _build_workflow(spec: _PathSpec) -> Workflow:
+def _build_workflow(spec: _BundleSpec) -> Workflow:
     """Build one fresh `Workflow` from `spec`.
 
     Called twice per example, once per arm, rather than once and reused:
@@ -86,32 +90,40 @@ def _build_workflow(spec: _PathSpec) -> Workflow:
     mk_text = Step.from_cwl_document(_tool_document('mk_text'), process_name='mk_text',
                                      tool_registry=SYNTHETIC_TOOLS)
     mk_text.inputs.name = spec.text_name
-    join = Step.from_cwl_document(_tool_document('join'), process_name='join',
-                                  tool_registry=SYNTHETIC_TOOLS)
+    join = Step.from_cwl_document(_tool_document('join'), process_name='joined' if spec.rename else 'join',
+                                  run_path='join.cwl', tool_registry=SYNTHETIC_TOOLS)
     join.inputs.left = mk_file.outputs.file
-    join.inputs.right = mk_text.outputs.text
     join.inputs.name = spec.join_name
 
-    workflow = Workflow([mk_file, mk_text, join], 'oracle')
+    text_step: Step | Workflow = mk_text
+    if spec.nest:
+        inner = Workflow([mk_text], 'inner')
+        inner.outputs.text = mk_text.outputs.text
+        join.inputs.right = inner.outputs.text
+        text_step = inner
+    else:
+        join.inputs.right = mk_text.outputs.text
+
+    workflow = Workflow([mk_file, text_step, join], 'oracle')
     workflow.outputs.result = join.outputs.file
     return workflow
 
 
-def _compile_from_document(document: Yaml, name: str) -> CompilationResult:
-    """Compile a plain YAML document via the same compiler entry point and
-    options `sophios.api.python._workflow_runtime.compile_workflow_result` uses for
-    the direct path — built from a document already loaded off disk, rather
-    than from `workflow_document(workflow)`.
+def _compile_bundle(root: Path) -> CompilationResult:
+    """Compile a written bundle through the file door, as the CLI reads it.
 
-    Mirrors that call's arguments exactly, `testing=False` included, so the
-    only variable between the two arms is the one this property is actually
-    about: where the document came from.
+    `run:` paths resolve beside the document; nested `.wic` documents are found
+    the way the CLI finds them, with the bundle's directory on the search
+    paths. Mirrors the compiler call `compile_workflow_result` makes for the
+    direct path, `testing=False` included, so the only variable between the
+    two arms is where the document came from.
     """
+    yml_paths = {'global': {path.stem: path for path in root.parent.glob('*.wic')}}
     compiler_options, graph_settings, yaml_tag_paths = default_compilation_settings()
     return sophios.compiler.compile_source(
-        bundle(document, name, SYNTHETIC_TOOLS), compiler_options, graph_settings,
+        bundle_from_disk(root, yml_paths, SYNTHETIC_TOOLS), compiler_options, graph_settings,
         yaml_tag_paths, relative_run_path=True, testing=False,
-        graph_target=get_graph_reps(name))
+        graph_target=get_graph_reps(root.stem))
 
 
 @pytest.mark.fast
@@ -126,7 +138,7 @@ def test_the_written_wic_file_is_a_real_independent_document() -> None:
     under a different name. Proves the file exists, is text, and round-trips
     through the loader into a distinct object.
     """
-    workflow = _build_workflow(_PathSpec('a', 'b', 'c'))
+    workflow = _build_workflow(_BundleSpec('a', 'b', 'c', rename=True, nest=False))
     with tempfile.TemporaryDirectory() as workdir:
         path = workflow.write_wic(Path(workdir) / 'oracle.wic')
         assert path.exists(), 'write_wic did not write a file'
@@ -140,49 +152,50 @@ def test_the_written_wic_file_is_a_real_independent_document() -> None:
         'agreement downstream would prove nothing about the file-based path')
 
 
-#: The three string-typed literals `_PathSpec` carries, restricted to keep
+#: The three string-typed literals `_BundleSpec` carries, restricted to keep
 #: this property about path agreement rather than YAML's exotic corners.
 _safe_text: Final = st.text('abcxyz_', max_size=8)
 
 
 @st.composite
-def _path_specs(draw: st.DrawFn) -> _PathSpec:
-    return _PathSpec(draw(_safe_text), draw(_safe_text), draw(_safe_text))
+def _bundle_specs(draw: st.DrawFn) -> _BundleSpec:
+    return _BundleSpec(draw(_safe_text), draw(_safe_text), draw(_safe_text), draw(st.booleans()),
+                       # A nested workflow's output as a sibling's source is 2.3's; until then no nesting.
+                       draw(st.just(False)))
 
 
 @pytest.mark.slow
-@given(_path_specs())
+@given(_bundle_specs())
 @PARTITION
-def test_the_two_front_ends_compile_to_the_same_cwl(spec: _PathSpec) -> None:
+def test_the_two_front_ends_compile_to_the_same_cwl(spec: _BundleSpec) -> None:
     """Path agreement.
 
-    `f` is "write the workflow to a `.wic` file and read it back"; the claim
-    is that compiling directly and compiling `f(workflow)` are the same
-    compilation. Checked at `Strength.IDENTICAL`, not a bare `==`, so a
-    divergence reports *where* the two front ends disagree.
+    `f` is "write the workflow's bundle to disk and read it back through the
+    file door"; the claim is that compiling directly and compiling
+    `f(workflow)` are the same compilation. Checked at `Strength.IDENTICAL`,
+    not a bare `==`, so a divergence reports *where* the two front ends
+    disagree.
 
     Built twice from one drawn `spec` (see `_build_workflow`'s own docstring
     for why sharing one object would weaken the claim).
 
     BLIND SPOTS: one fixed topology (two File sources into one `join`, one
     workflow output) rather than the full grammar `ast_strategies.documents()`
-    covers — see `_PathSpec`'s docstring for why. No subworkflow
-    (Workflow-of-Workflow) step, no `scatter`/`when`, no workflow-level input
-    reference — the Python API's own richer surface is not exercised here.
+    covers — see `_BundleSpec`'s docstring for why. No `scatter`/`when`, no
+    workflow-level input reference, and no nesting yet.
     """
     direct = _build_workflow(spec).compile(tool_registry=SYNTHETIC_TOOLS)
 
     via_file_workflow = _build_workflow(spec)
     with tempfile.TemporaryDirectory() as workdir:
-        path = via_file_workflow.write_wic(Path(workdir) / f'{via_file_workflow.process_name}.wic')
-        written_text = path.read_text(encoding='utf-8')
-    document = desugar_into_canonical_normal_form(yaml.load(written_text, Loader=wic_loader()))
-    info = _compile_from_document(document, via_file_workflow.process_name)
+        root = via_file_workflow.write_wic(workdir)
+        written_text = root.read_text(encoding='utf-8')
+        info = _compile_bundle(root)
     via_file = _workflow_runtime.compiled_workflow_from_result(via_file_workflow, info)
 
     found = equivalent(direct.cwl_workflow, via_file.cwl_workflow, Strength.IDENTICAL)
     assert found is None, (
-        'the Python API and the .wic file it writes disagree about what this workflow compiles to.\n'
+        'the Python API and the bundle it writes disagree about what this workflow compiles to.\n'
         f'{found}\n\n--- written .wic ---\n{written_text}')
 
     inputs_found = equivalent(direct.cwl_job_inputs, via_file.cwl_job_inputs, Strength.IDENTICAL)
@@ -286,33 +299,28 @@ def test_a_renamed_step_still_resolves_the_workflow_output_bound_to_it() -> None
     the same child object it always was. Resolution goes through the source
     parameter's live owner now.
     """
-    workflow = _build_workflow(_PathSpec('a', 'b', 'c'))
+    workflow = _build_workflow(_BundleSpec('a', 'b', 'c', rename=False, nest=False))
     before = workflow.yaml['outputs']['result']['outputSource']
 
     renamed = next(step for step in workflow.steps if step.process_name == 'join')
     renamed.process_name = 'after'
     after = workflow.yaml['outputs']['result']['outputSource']
 
-    assert before.endswith('__join/file')
-    assert after.endswith('__after/file'), 'the output did not follow the step it is bound to'
+    assert before == 'join/file'
+    assert after == 'after/file', 'the output did not follow the step it is bound to'
 
 
 @pytest.mark.fast
 @pytest.mark.parametrize('stem', ['oracle', 'pipeline'])
-def test_a_written_document_spells_step_ids_for_the_name_it_is_saved_as(stem: str) -> None:
-    """The compiler takes the step-id prefix from the path it loads.
-
-    `write_wic` accepts any `*.wic` name, and an explicit `outputSource` is
-    consumed verbatim, so a document spelled from `process_name` but saved under
-    another name points its outputs at steps that do not exist. Path agreement cannot see
-    this: it always writes `f'{process_name}.wic'`, which is the one name for
-    which the two spellings agree.
-    """
-    workflow = _build_workflow(_PathSpec('a', 'b', 'c'))
+def test_a_written_document_compiles_under_any_file_name(stem: str) -> None:
+    """`write_wic` accepts any `*.wic` name, and nothing in the document depends
+    on it: outputs name their authored step, and the bundle compiles from disk
+    under the name it was saved as."""
+    workflow = _build_workflow(_BundleSpec('a', 'b', 'c', rename=True, nest=False))
     with tempfile.TemporaryDirectory() as workdir:
-        path = workflow.write_wic(Path(workdir) / f'{stem}.wic')
-        document = yaml.load(path.read_text(encoding='utf-8'), Loader=wic_loader())
+        root = workflow.write_wic(Path(workdir) / f'{stem}.wic')
+        document = yaml.load(root.read_text(encoding='utf-8'), Loader=wic_loader())
+        compiled = _compile_bundle(root).artifact.cwl
 
-    source = document['outputs']['result']['outputSource']
-    assert source.startswith(f'{stem}__step__'), source
-    assert source.endswith('__join/file'), source
+    assert document['outputs']['result']['outputSource'] == 'joined/file'
+    assert compiled['outputs']['result']['outputSource'] == f'{stem}__step__3__joined/file'
