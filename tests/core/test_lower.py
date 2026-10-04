@@ -449,3 +449,17 @@ def test_an_anchor_on_an_undeclared_call_output_is_reported_not_raised() -> None
              'parentargs': {'out': [{'child__step__1__mk_file___file': {'wic_anchor': 'e'}}]}},
             {'id': 'sink', 'in': {'file': {'wic_alias': 'e'}, 'n': {'wic_inline_input': 1}}}]})
     assert {d.code for d in caught.value.diagnostics} == {SophiosErrorCode.UNDECLARED_PORT}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('extra', [{'linkMerge': 'merge_flattened'}, {'pickValue': 'first_non_null'},
+                                   {'outputSource': ['a/f', 'b/f']}, {'outputSource': ['s/f']},
+                                   {'outputSource': []}])
+def test_link_merge_and_pick_value_on_an_output_are_wic038(extra: dict[str, Any]) -> None:
+    """CWL's merge fields on a workflow output were copied out unread, and a list
+    `outputSource` was emitted naming steps by their authored ids, which cwltool cannot resolve."""
+    source = 'steps:\n- id: s\n  out: [f]\noutputs:\n  o:\n    type: File\n'
+    for key, value in {'outputSource': 's/f', **extra}.items():
+        source += f'    {key}: {value}\n'
+    result = _lower(source)
+    assert SophiosErrorCode.STEP_INPUT_RECORD in {d.code for d in result.diagnostics}

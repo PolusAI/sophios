@@ -52,17 +52,15 @@ def _step_spelling(step: StepNode, names: Names, relative_run_path: bool,
         if needed:
             interpreted['when'] = '$(' + ' && '.join(
                 f'inputs["{name}"] != null' for name in needed) + ')'
-    target = run.target
-    if isinstance(target, str):
-        # From the resolved identity: `target` is this function's own output,
-        # so a leaf read back out of it would compound.
-        leaf = f'{run.process_id.name}.cwl'
-        if relative_run_path:
-            target = f'{names.step(step.id)}/{leaf}'
-        elif run.child is not None:
-            target = f'{names.qualified(step.id)}{NAMESPACE_SEPARATOR}{leaf}'
-        else:
-            target = f'../{leaf}'
+    # From the resolved identity: `target` is this function's own output,
+    # so a leaf read back out of it would compound.
+    leaf = f'{run.process_id.name}.cwl'
+    if relative_run_path:
+        target = f'{names.step(step.id)}/{leaf}'
+    elif run.child is not None:
+        target = f'{names.qualified(step.id)}{NAMESPACE_SEPARATOR}{leaf}'
+    else:
+        target = f'../{leaf}'
     return replace(step, interpreted=tuple(interpreted.items()), run=replace(run, target=target))
 
 

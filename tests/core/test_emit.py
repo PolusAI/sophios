@@ -48,7 +48,7 @@ from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
 from .equivalence import Strength, equivalent
-from .hermetic import ORACLE, compile_hermetic, compile_hermetic_cwl, subworkflow_step
+from .hermetic import ORACLE, compile_hermetic, compile_hermetic_cwl, network_refused, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
 
 
@@ -159,6 +159,11 @@ def test_emit_validates_as_cwl_v1_2(workflow: Yaml) -> None:
     job names. A required input the job leaves unset is one the user supplies
     at run time, so it is made optional first: cwltool then still rejects a
     link that no member of the widened type fits.
+
+    The document is validated without its `$schemas`, which cwltool would
+    fetch (an opaque host, and EDAM from GitHub) even under `--skip-schemas`:
+    it link-checks each entry. That `$schemas` survives emission is pinned in
+    `test_leak_boundary`. The run attempts no connection.
     """
     import cwltool.main  # pylint: disable=import-outside-toplevel
 
@@ -169,11 +174,13 @@ def test_emit_validates_as_cwl_v1_2(workflow: Yaml) -> None:
         if name not in job and 'default' not in declared:
             members = declared['type'] if isinstance(declared['type'], list) else [declared['type']]
             declared['type'] = members if 'null' in members else ['null', *members]
-    with tempfile.TemporaryDirectory() as workdir:
+    inlined.pop('$schemas', None)
+    with tempfile.TemporaryDirectory() as workdir, network_refused() as attempts:
         target, values = Path(workdir) / 'workflow.cwl', Path(workdir) / 'job.yml'
         target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
         values.write_text(yaml.safe_dump(job, sort_keys=False), encoding='utf-8')
-        assert cwltool.main.main(['--validate', '--quiet', str(target), str(values)]) == 0
+        assert cwltool.main.main(['--validate', '--quiet', '--skip-schemas', str(target), str(values)]) == 0
+    assert not attempts
 
 
 @pytest.mark.needs_cwltool
@@ -184,7 +191,9 @@ def test_validator_rejects_the_independent_invalid_control(tmp_path: Path) -> No
 
     target = tmp_path / 'invalid.cwl'
     target.write_text('class: Workflow\nsteps: []\n', encoding='utf-8')
-    assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 1
+    with network_refused() as attempts:
+        assert cwltool.main.main(['--validate', '--quiet', '--skip-schemas', str(target)]) == 1
+    assert not attempts
 
 
 @pytest.mark.fast
@@ -233,15 +242,12 @@ def test_an_untyped_output_of_a_called_workflow_is_typed_in_the_caller(
      ('`outputSource: mk_file/fiel` names no output of a step', "Did you mean 'mk_file/file'?")),
     ({'outputSource': 'kid/res'},
      ('`outputSource: kid/res` names no output of a step', "Did you mean 'kid.wic/res'?")),
-    ({'outputSource': ['mk_file/file']}, ('is written as a list', 'Add `type:`.')),
-    ({'outputSource': []}, ('is written as a list', 'Add `type:`.')),
-    ({'outputSource': ['mk_file/file', 'mk_file/file']}, ('is written as a list', 'Add `type:`.')),
     ({'outputSource': 'nothing/at_all'},
      ('names no output of a step', 'Check the step and output names.')),
     ({'outputSource': 'kid.wic/kid__step__1__mk_file___file'},
      ('names no output of a step', 'Check the step and output names.')),
-], ids=['no-source', 'misspelled-output', 'workflow-without-its-extension', 'source-list', 'empty-source-list',
-        'two-sources', 'nothing-close', 'name-the-compiler-derives'])
+], ids=['no-source', 'misspelled-output', 'workflow-without-its-extension', 'nothing-close',
+        'name-the-compiler-derives'])
 def test_an_untyped_output_with_nothing_to_take_a_type_from_is_wic036(
         output: Yaml, said: tuple[str, ...]) -> None:
     """The message says which half of the author's `outputSource:` to fix, not only to add a `type:`."""
@@ -330,6 +336,26 @@ def test_a_promoted_port_leaves_a_secondary_files_expression_to_its_tool(declare
     assert inputs['oracle__step__1__probe___f'].get('secondaryFiles') == promoted
     assert outputs['oracle__step__1__probe___o'].get('secondaryFiles') == promoted
     assert 'InlineJavascriptRequirement' not in (compiled.get('requirements') or {})
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('declared, promoted', [
+    ('.bai', ['.bai']),
+    ({'pattern': '.bai', 'required': False}, [{'pattern': '.bai', 'required': False}]),
+    (['.bai'], ['.bai']),
+], ids=['bare-string', 'single-mapping', 'list'])
+def test_a_promoted_port_states_secondary_files_as_a_list(declared: Any, promoted: Any) -> None:
+    """A bare pattern or a single mapping is promoted as a one-element list.
+
+    cwltool's checker reads each workflow-level `secondaryFiles` entry as a
+    mapping, so the bare form crashes it; the list form is the same declaration.
+    """
+    tools = _tools_with_probe(
+        {'f': {'type': 'File', 'secondaryFiles': declared, 'inputBinding': {'position': 1}}},
+        {'o': {'type': 'File', 'secondaryFiles': declared, 'outputBinding': {'glob': 'o'}}})
+    compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
+    assert compiled['inputs']['oracle__step__1__probe___f'].get('secondaryFiles') == promoted
+    assert compiled['outputs']['oracle__step__1__probe___o'].get('secondaryFiles') == promoted
 
 
 @pytest.mark.fast
