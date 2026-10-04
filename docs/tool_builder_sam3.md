@@ -29,7 +29,7 @@ inputs = Inputs(
 )
 
 outputs = Outputs(
-    output=Output(cwl.directory, from_input=inputs.output),
+    output=Output(cwl.directory, glob="$(inputs.output.basename)"),
 )
 
 tool = CommandLineTool("example", inputs, outputs)
@@ -94,11 +94,11 @@ The same thing applies to outputs:
 
 ```python
 outputs = Outputs(
-    output=Output(cwl.directory, from_input=inputs.output),
+    output=Output(cwl.directory, glob="$(inputs.output.basename)"),
 )
 ```
 
-Notice that `from_input=inputs.output` uses a real named input reference, not a raw string like `"output"`.
+`glob="$(inputs.output.basename)"` is a CWL expression over the input's value: the output is the directory the tool wrote under the staged input's name.
 
 The other important convention is that CWL types live under the `cwl` namespace:
 
@@ -145,7 +145,7 @@ That is the intended use of chaining in this API: optional polish on top of a co
 Outputs follow the same pattern:
 
 ```python
-Output(cwl.directory, from_input=inputs.output)
+Output(cwl.directory, glob="$(inputs.output.basename)")
 Output(cwl.file, glob="results.json")
 Output.stdout()
 ```
@@ -192,7 +192,7 @@ inputs = Inputs(
 )
 
 outputs = Outputs(
-    output=Output(cwl.directory, from_input=inputs.output).label("Output segmentation Zarr"),
+    output=Output(cwl.directory, glob="$(inputs.output.basename)").label("Output segmentation Zarr"),
 )
 
 tool = (
