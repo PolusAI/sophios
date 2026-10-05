@@ -108,26 +108,36 @@ def test_to_nextflow_writes_artifacts_for_adapter_workflows(tmp_path: Path) -> N
     ]
 
 
+_OPTION_GROUPS = {"every target": cli.neutral, **cli.target_options}
+
+
 @pytest.mark.fast
-def test_nextflow_cli_target_is_standalone_and_rejects_cwl_modes(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    assert cli.get_args("workflow.wic", ["--target", "nextflow"]).target == "nextflow"
+def test_every_cli_option_belongs_to_exactly_one_group() -> None:
+    declared = [action for action in cli.parser._actions if action.dest != "help"]
+    grouped = [action for group in _OPTION_GROUPS.values() for action in group._group_actions]
+    assert sorted(map(id, declared)) == sorted(map(id, grouped))
+
+
+@pytest.mark.fast
+def test_parsing_applies_the_target_check() -> None:
     assert cli.get_args("workflow.wic").target == "cwl"
-    assert cli.get_args("workflow.wic", ["--generate_cwl_workflow"]).target == "cwl"
+    with pytest.raises(SystemExit, match="2"):
+        cli.get_args("workflow.wic", ["--target", "nextflow", "--inputs_file", "inputs.yml"])
 
-    incompatible = (
-        ("--generate_cwl_workflow",),
-        ("--run_local",),
-        ("--generate_run_script",),
-        ("--inputs_file", "inputs.yml"),
-    )
-    for supplied_args in incompatible:
-        with pytest.raises(SystemExit, match="2"):
-            cli.get_args("workflow.wic", ["--target", "nextflow", *supplied_args])
-        assert "--target nextflow cannot be combined" in capsys.readouterr().err
 
-    assert cli.get_args("workflow.wic", ["--inputs_file", "inputs.yml"]).inputs_file == "inputs.yml"
+@pytest.mark.fast
+@pytest.mark.parametrize("target", cli.target_options)
+def test_an_option_set_for_another_target_is_rejected(target: str, capsys: pytest.CaptureFixture[str]) -> None:
+    for owner, group in _OPTION_GROUPS.items():
+        for action in group._group_actions:
+            args = cli.get_args("workflow.wic", ["--target", target])
+            setattr(args, action.dest, object())
+            if owner in {"every target", target}:
+                cli.validate_target_args(args)
+                continue
+            with pytest.raises(SystemExit, match="2"):
+                cli.validate_target_args(args)
+            assert f"{action.option_strings[0]} (--target {owner})" in capsys.readouterr().err
 
 
 @pytest.mark.fast
