@@ -10,7 +10,7 @@ from typing import Any, ClassVar, Final, cast, overload
 
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
-from sophios.lang import CwlRecord, EdgeRef, InputValue, OpaqueCwl, UnresolvedName, nodes, to_json
+from sophios.lang import CwlRecord, EdgeRef, InputValue, OpaqueCwl, UnresolvedName, nodes
 from sophios.lang.compatibility import TypeRelation, reference_relation
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
@@ -55,8 +55,6 @@ from ._workflow_runtime import (
     run_workflow as _run_workflow,
     silence_autodiscovery_logging as _silence_autodiscovery_logging,
     validate_step_assignment as _validate_step_assignment,
-    workflow_document as _workflow_document,
-    workflow_wic_yaml as _workflow_wic_yaml,
     write_workflow_wic as _write_workflow_wic,
 )
 
@@ -949,32 +947,8 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             except Exception as exc:
                 raise InvalidStepError(f"{step.process_name} is invalid", span=step._span) from exc
 
-    @property
-    def yaml(self) -> dict[str, Any]:
-        """Return the in-memory WIC YAML representation of this workflow.
-
-        This is the `sophios.lang.to_json` projection of the document
-        `write_wic` writes for this workflow: the desugared spelling of
-        `to_wic_yaml`. Nested workflows are steps naming their own documents.
-
-        Returns:
-            dict[str, Any]: A WIC-compatible YAML tree represented as a Python dict.
-        """
-        return to_json(_workflow_document(self))
-
-    def to_wic_yaml(self) -> str:
-        """Return this workflow's root document as ``.wic`` YAML text.
-
-        The text names nested workflows and every step's tool by file;
-        ``write_wic`` writes those files beside it.
-
-        Returns:
-            str: The serialized ``.wic`` document.
-        """
-        return _workflow_wic_yaml(self)
-
     def write_wic(self, path: StrPath | None = None) -> Path:
-        """Write this workflow as a self-contained bundle in one directory.
+        """Write this workflow as ``.wic``: the one way the Python API writes it.
 
         The bundle is the root ``<name>.wic``, one ``<child>.wic`` per nested
         workflow and one ``<stem>.cwl`` per distinct tool. Every step carries

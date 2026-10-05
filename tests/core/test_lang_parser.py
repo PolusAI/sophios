@@ -710,7 +710,7 @@ def test_step_keys_is_exactly_the_set_step_body_acts_on() -> None:
 
 
 @pytest.mark.fast
-def test_python_api_emits_documents_this_parser_accepts() -> None:
+def test_python_api_emits_documents_this_parser_accepts(tmp_path: Path) -> None:
     """The Python API is the second surface of the same language.
 
     Whatever it emits must parse, or the two surfaces have diverged and the
@@ -729,7 +729,7 @@ def test_python_api_emits_documents_this_parser_accepts() -> None:
     touch.inputs.filename = 'empty.txt'
     workflow = Workflow([touch], 'adherence')
 
-    result = parse(workflow.to_wic_yaml(), 'api_emitted.wic')
+    result = parse(workflow.write_wic(tmp_path).read_text(encoding='utf-8'), 'api_emitted.wic')
 
     assert result.ok, [str(d) for d in result.diagnostics]
     assert result.document is not None

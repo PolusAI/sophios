@@ -305,23 +305,6 @@ def _wic_output_path(workflow: "Workflow", path: str | Path | None) -> Path:
     return output_path / f"{workflow.process_name}.wic"
 
 
-def workflow_wic_yaml(workflow: "Workflow") -> str:
-    """Render the root document of a workflow as `.wic` YAML text.
-
-    The text compiles beside the files `write_workflow_wic` writes with it: each
-    nested workflow's `.wic` and each tool's `.cwl` that the search paths do not
-    already supply.
-
-    Args:
-        workflow (Workflow): Workflow to serialize.
-
-    Returns:
-        str: The serialized `.wic` YAML text.
-    """
-    workflow._validate()
-    return render(workflow_document(workflow))
-
-
 def _bundle_tools(workflow: "Workflow") -> dict[str, "Step"]:
     """Every tool the workflow tree runs, by the file stem a document names it with."""
     tools: dict[str, "Step"] = {}

@@ -58,6 +58,13 @@ def _adapter(name: str) -> Path:
     return ADAPTERS / f"{name}.cwl"
 
 
+def _written(workflow: Workflow, directory: Path, name: str | None = None) -> dict[str, Any]:
+    """The document `write_wic` writes for `workflow` (or its nested workflow `name`), as the wic loader reads it."""
+    root = workflow.write_wic(directory)
+    target = root if name is None else directory / f"{name}.wic"
+    return cast(dict[str, Any], yaml.load(target.read_text(encoding="utf-8"), Loader=wic_loader()))
+
+
 def _emit_text_tool() -> CommandLineTool:
     """A minimal built tool that writes its message to a file."""
     return (
@@ -143,7 +150,7 @@ def _write_manifest(workflow_paths: list[Path]) -> None:
 
 
 @pytest.mark.fast
-def test_explicit_ports_and_attribute_sugar_produce_one_document() -> None:
+def test_explicit_ports_and_attribute_sugar_produce_one_document(tmp_path: Path) -> None:
     """`step.inputs.x` and the bare `step.x` sugar are the same binding.
 
     Both spellings are the Python API's -- this compares them to each other,
@@ -162,14 +169,14 @@ def test_explicit_ports_and_attribute_sugar_produce_one_document() -> None:
     append_explicit.inputs.file = touch_explicit.outputs.file
     append_explicit.inputs.str = "Hello"
 
-    legacy_yaml = Workflow([touch_legacy, append_legacy], "wf").yaml
-    explicit_yaml = Workflow([touch_explicit, append_explicit], "wf").yaml
+    legacy_yaml = _written(Workflow([touch_legacy, append_legacy], "wf"), tmp_path / "a")
+    explicit_yaml = _written(Workflow([touch_explicit, append_explicit], "wf"), tmp_path / "b")
 
     assert legacy_yaml == explicit_yaml
 
 
 @pytest.mark.fast
-def test_linear_python_workflow_reuses_compiler_edge_inference() -> None:
+def test_linear_python_workflow_reuses_compiler_edge_inference(tmp_path: Path) -> None:
     """An unbound input is left for inference, not guessed by the API.
 
     The exported document omits `file` entirely and the compiled one names the
@@ -183,7 +190,7 @@ def test_linear_python_workflow_reuses_compiler_edge_inference() -> None:
     cat = Step(clt_path=_adapter("cat"))
 
     workflow = Workflow([touch, append, cat], "wf")
-    workflow_yaml = workflow.yaml
+    workflow_yaml = _written(workflow, tmp_path)
     assert "file" not in workflow_yaml["steps"][1]["in"]
     assert "file" not in workflow_yaml["steps"][2].get("in", {})
 
@@ -548,20 +555,20 @@ def test_workflow_compile_boundary_hides_compiler_info() -> None:
 
 
 @pytest.mark.fast
-def test_falsey_inline_values_are_preserved() -> None:
+def test_falsey_inline_values_are_preserved(tmp_path: Path) -> None:
     """An empty string is a value, not an absent one.
 
     A truthiness test anywhere on this path would drop it silently."""
     echo = Step(clt_path=_adapter("echo"))
     echo.inputs.message = ""
 
-    workflow_yaml = Workflow([echo], "wf").yaml
+    workflow_yaml = _written(Workflow([echo], "wf"), tmp_path)
     assert workflow_yaml["steps"][0]["in"]["message"] == {
         "wic_inline_input": ""}
 
 
 @pytest.mark.fast
-def test_subworkflow_inputs_use_child_workflow_name_and_formal_parameters() -> None:
+def test_subworkflow_inputs_use_child_workflow_name_and_formal_parameters(tmp_path: Path) -> None:
     """A subworkflow step names the child and passes its formal parameters.
 
     The child's own `inputs:` are declared, and the parent binds them by name,
@@ -577,7 +584,9 @@ def test_subworkflow_inputs_use_child_workflow_name_and_formal_parameters() -> N
     subworkflow.inputs.file = touch.outputs.file
     subworkflow.inputs.str = "Hello"
 
-    root_yaml = Workflow([touch, subworkflow], "root").yaml
+    root = Workflow([touch, subworkflow], "root")
+    root_yaml = _written(root, tmp_path)
+    child_yaml = _written(root, tmp_path, "child")
     subworkflow_step = root_yaml["steps"][1]
 
     assert subworkflow_step["id"] == "child.wic"
@@ -586,12 +595,12 @@ def test_subworkflow_inputs_use_child_workflow_name_and_formal_parameters() -> N
         "str": {"wic_inline_input": "Hello"},
     }
     assert "subtree" not in subworkflow_step
-    assert subworkflow.yaml["inputs"] == {
+    assert child_yaml["inputs"] == {
         "file": {"type": "File"},
         "str": {"type": "string"},
     }
-    assert subworkflow.yaml["steps"][0]["in"]["file"] == "file"
-    assert subworkflow.yaml["steps"][0]["in"]["str"] == "str"
+    assert child_yaml["steps"][0]["in"]["file"] == "file"
+    assert child_yaml["steps"][0]["in"]["str"] == "str"
 
 
 @pytest.mark.fast
@@ -660,7 +669,7 @@ def test_explicit_links_must_point_to_workflow_children() -> None:
 
 
 @pytest.mark.fast
-def test_scattering_over_two_ports_records_both_and_the_method() -> None:
+def test_scattering_over_two_ports_records_both_and_the_method(tmp_path: Path) -> None:
     """`scatter_on` records every port it is given, and the method beside them.
 
     Named for what it asserts. `echo_3`'s ports are `string`, so nothing here
@@ -680,7 +689,7 @@ def test_scattering_over_two_ports_records_both_and_the_method() -> None:
         method="flat_crossproduct",
     )
 
-    workflow_yaml = Workflow([array_indices, echo], "wf").yaml
+    workflow_yaml = _written(Workflow([array_indices, echo], "wf"), tmp_path)
     assert workflow_yaml["steps"][1]["scatter"] == ["message1", "message2"]
     assert workflow_yaml["steps"][1]["scatterMethod"] == "flat_crossproduct"
 
@@ -727,21 +736,13 @@ def test_workflow_write_wic_exports_source_workflow_with_inferred_edges(tmp_path
 
     assert output_path == tmp_path / "linear_export.wic"
     exported = yaml.load(output_path.read_text(encoding="utf-8"), Loader=wic_loader())
-    assert exported == workflow.yaml
     assert "file" not in exported["steps"][1]["in"]
 
 
 @pytest.mark.fast
-def test_workflow_to_wic_yaml_matches_export_text(tmp_path: Path) -> None:
-    """The text written to disk is the text `to_wic_yaml` returns."""
-    echo = Step(clt_path=_adapter("echo"))
-    echo.inputs.message = "hello"
-    workflow = Workflow([echo], "hello_export")
-
-    output_path = workflow.write_wic(tmp_path)
-
-    assert output_path == tmp_path / "hello_export.wic"
-    assert output_path.read_text(encoding="utf-8") == workflow.to_wic_yaml()
+def test_write_wic_is_the_one_wic_writer() -> None:
+    """A Workflow writes `.wic` one way; nothing else returns `.wic` text or a `.wic` document."""
+    assert {name for name in dir(Workflow) if not name.startswith("_")} == {"compile", "run", "write_wic"}
 
 
 @pytest.mark.fast
@@ -771,7 +772,7 @@ def test_compiled_artifact_writers_do_not_emit_intermediate_wic_files(
 
 
 @pytest.mark.fast
-def test_workflow_outputs_are_serialized_with_type_and_source() -> None:
+def test_workflow_outputs_are_serialized_with_type_and_source(tmp_path: Path) -> None:
     """A workflow output carries its type and the step that produces it."""
     touch = Step(clt_path=_adapter("touch"))
     touch.inputs.filename = "empty.txt"
@@ -783,7 +784,7 @@ def test_workflow_outputs_are_serialized_with_type_and_source() -> None:
     workflow = Workflow([touch, append], "wf")
     workflow.outputs.file = append.outputs.file
 
-    workflow_yaml = workflow.yaml
+    workflow_yaml = _written(workflow, tmp_path)
 
     assert workflow_yaml["outputs"] == {
         "file": {"type": "File", "outputSource": "append/file"},
@@ -1573,11 +1574,11 @@ def test_a_renamed_step_writes_run_with_its_tool_stem(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
-def test_a_step_named_for_its_tool_writes_run_too() -> None:
+def test_a_step_named_for_its_tool_writes_run_too(tmp_path: Path) -> None:
     """Every step names its tool file, so the bundle compiles without the tool on a search path."""
     echo = Step(clt_path=_adapter('echo'))
     echo.inputs.message = 'hi'
-    assert Workflow([echo], 'plain').yaml['steps'][0]['run'] == 'echo.cwl'
+    assert _written(Workflow([echo], 'plain'), tmp_path)['steps'][0]['run'] == 'echo.cwl'
 
 
 @pytest.mark.fast
@@ -1605,7 +1606,7 @@ def test_write_wic_rejects_a_different_tool_under_the_same_stem(tmp_path: Path) 
 
 
 @pytest.mark.fast
-def test_workflow_outputs_are_addressed_by_authored_step() -> None:
+def test_workflow_outputs_are_addressed_by_authored_step(tmp_path: Path) -> None:
     """A workflow output names the step that produces it as the user named it."""
     touch = Step(clt_path=_adapter('touch'))
     touch.inputs.filename = 'empty.txt'
@@ -1614,7 +1615,7 @@ def test_workflow_outputs_are_addressed_by_authored_step() -> None:
     append.inputs.str = 'Hello'
     wf = Workflow([touch, append], 'wf')
     wf.outputs.file = append.outputs.file
-    assert wf.yaml['outputs']['file']['outputSource'] == 'add/file'
+    assert _written(wf, tmp_path)['outputs']['file']['outputSource'] == 'add/file'
 
 
 @pytest.mark.fast
@@ -1746,7 +1747,7 @@ def test_a_subworkflows_output_is_not_lifted() -> None:
 
 
 @pytest.mark.fast
-def test_a_scatter_inside_a_subworkflow_lifts_its_output() -> None:
+def test_a_scatter_inside_a_subworkflow_lifts_its_output(tmp_path: Path) -> None:
     """A subworkflow output typed at bind time stayed `File` once its step was scattered,
     so a sibling could neither scatter over it nor consume it unscattered."""
     echo = Step(clt_path=_adapter('echo'))
@@ -1758,7 +1759,7 @@ def test_a_scatter_inside_a_subworkflow_lifts_its_output() -> None:
     cat.inputs.file = inner.outputs.out
     echo.scatter_on(echo.inputs.message)
     assert file.effective_source_type() == {'type': 'array', 'items': 'File'}
-    assert inner.yaml['outputs']['out']['type'] == {'type': 'array', 'items': 'File'}
+    assert _written(inner, tmp_path)['outputs']['out']['type'] == {'type': 'array', 'items': 'File'}
     cat.scatter_on(file)
     compiled = Workflow([inner, cat], 'outer').compile()
     steps = {s['id'].rsplit('__', 1)[-1]: s for s in compiled.cwl_workflow['steps']}

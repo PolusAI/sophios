@@ -135,8 +135,8 @@ def test_the_written_wic_file_is_a_real_independent_document() -> None:
     could hold for free — if `write_wic` did not really produce an
     independent, reloadable document, comparing "compiled directly" against
     "compiled from the file" would just be comparing a workflow with itself
-    under a different name. Proves the file exists, is text, and round-trips
-    through the loader into a distinct object.
+    under a different name. Proves the file exists, is text, and loads into
+    the document of the workflow that wrote it.
     """
     workflow = _build_workflow(_BundleSpec('a', 'b', 'c', rename=True, nest=False))
     with tempfile.TemporaryDirectory() as workdir:
@@ -146,10 +146,11 @@ def test_the_written_wic_file_is_a_real_independent_document() -> None:
 
     assert isinstance(text, str) and 'steps:' in text, 'the written file is not .wic text'
     loaded = yaml.load(text, Loader=wic_loader())
-    assert loaded is not workflow.yaml, 'the reloaded document is the very object write_wic held in memory'
-    assert loaded == workflow.yaml, (
+    assert [step['id'] for step in loaded['steps']] == ['mk_file', 'mk_text', 'joined'], (
         'the file on disk does not even reflect the workflow that wrote it, so any '
         'agreement downstream would prove nothing about the file-based path')
+    assert loaded['steps'][2]['run'] == 'join.cwl'
+    assert loaded['outputs']['result']['outputSource'] == 'joined/file'
 
 
 #: The three string-typed literals `_BundleSpec` carries, restricted to keep
@@ -286,8 +287,14 @@ def test_passthrough_survives_a_scatter_in_a_multi_step_workflow(data: st.DataOb
         assert step[key] == value, f'{key} was altered by compilation'
 
 
+def _written_output_source(workflow: Workflow, directory: Path) -> str:
+    """The `outputSource` of `result` in the document `write_wic` writes for `workflow`."""
+    document = yaml.load(workflow.write_wic(directory).read_text(encoding='utf-8'), Loader=wic_loader())
+    return str(document['outputs']['result']['outputSource'])
+
+
 @pytest.mark.fast
-def test_a_renamed_step_still_resolves_the_workflow_output_bound_to_it() -> None:
+def test_a_renamed_step_still_resolves_the_workflow_output_bound_to_it(tmp_path: Path) -> None:
     """`process_name` is a mutable public attribute, so a bound output may not
     cache it.
 
@@ -299,11 +306,11 @@ def test_a_renamed_step_still_resolves_the_workflow_output_bound_to_it() -> None
     parameter's live owner now.
     """
     workflow = _build_workflow(_BundleSpec('a', 'b', 'c', rename=False, nest=False))
-    before = workflow.yaml['outputs']['result']['outputSource']
+    before = _written_output_source(workflow, tmp_path / 'before')
 
     renamed = next(step for step in workflow.steps if step.process_name == 'join')
     renamed.process_name = 'after'
-    after = workflow.yaml['outputs']['result']['outputSource']
+    after = _written_output_source(workflow, tmp_path / 'after')
 
     assert before == 'join/file'
     assert after == 'after/file', 'the output did not follow the step it is bound to'

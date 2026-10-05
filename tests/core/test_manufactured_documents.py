@@ -200,6 +200,3 @@ def _drive_everything() -> None:
     workflow = Workflow([touch, append], 'manufactured_py')
     workflow.outputs.result = append.outputs.file
     workflow.compile()
-    # Exercise the direct Python API serialization entry point as well as its
-    # compile path.
-    workflow.to_wic_yaml()

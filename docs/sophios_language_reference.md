@@ -656,8 +656,10 @@ and a **desugared** form, and they are equivalent:
 
 The desugared form exists for a specific reason: a YAML constructor that
 re-emitted its own tag would fire again when the document is reloaded, so the
-loader would not be idempotent. Machine-generated documents therefore use the
-desugared spelling — the Python API emits it, and skips the sugar entirely.
+loader would not be idempotent. The JSON projection of a document
+(`sophios.lang.render.to_json`, which the JSON Schema describes) therefore uses
+the desugared spelling throughout, and the YAML writer falls back to it for the
+few literals the tagged form cannot carry.
 
 **Both spellings are written by hand.** Every layer Sophios exposes is meant to
 be one a person can read and edit, and that includes the document a tool just
@@ -695,9 +697,8 @@ shows up as a test failure rather than as three subtly different sentences.
 **The Python API** (`Workflow`, `Step`) is the second surface of the same
 language. It builds a `sophios.lang.Document` directly, compiles it through
 the same door as a `.wic` file, and writes it with `sophios.lang.render`:
-`Workflow.write_wic()` and `.to_wic_yaml()` emit the tagged spelling with
-sequence-form steps and explicit `id:`, and `Workflow.yaml` is the same
-document's `to_json` projection.
+`Workflow.write_wic()` emits the tagged spelling with sequence-form steps and
+explicit `id:`.
 
 A workflow that contains a nested `Workflow` is written as a bundle: each
 nested workflow is its own `.wic` file and the parent calls it by name, like
