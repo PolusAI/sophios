@@ -429,16 +429,20 @@ def _inherit_parameters(document: Document, sidecar: WicSidecar | None) -> Docum
     return replace(document, sidecar=_merged_sidecar(
         document.sidecar, WicSidecar(sidecar.steps, entries,
                                      implementations=sidecar.implementations,
-                                     span=sidecar.span)))
+                                     span=sidecar.span),
+        [step.id for step in document.steps]))
 
 
-def _merged_sidecar(own: WicSidecar | None, contributed: WicSidecar) -> WicSidecar:
-    """`own` with `contributed` merged over it, key by key and step by step."""
+def _merged_sidecar(own: WicSidecar | None, contributed: WicSidecar,
+                    ids: Sequence[str] | None = None) -> WicSidecar:
+    """`own` with `contributed` merged over it, key by key and step by step. `ids` are the
+    step ids of the document both address, when known: a bare id and an `(index, id)` key
+    are paired only when each addresses a step of it."""
     if own is None:
         return contributed
     steps = dict(own.steps)
     for key, child in contributed.steps:
-        key, inherited = _inherited_step(steps, key)
+        key, inherited = _inherited_step(steps, key, ids)
         steps[key] = child if inherited is None else _merged_sidecar(inherited, child)
     entries = dict(own.entries)
     for name, value in contributed.entries:
@@ -448,18 +452,24 @@ def _merged_sidecar(own: WicSidecar | None, contributed: WicSidecar) -> WicSidec
                       span=own.span)
 
 
-def _inherited_step(steps: dict[StepKey, WicSidecar],
-                    key: StepKey) -> tuple[StepKey, WicSidecar | None]:
+def _inherited_step(steps: dict[StepKey, WicSidecar], key: StepKey,
+                    ids: Sequence[str] | None) -> tuple[StepKey, WicSidecar | None]:
     """The key `key` is merged under and the entry of `steps` it is merged over.
     A bare id and an `(index, id)` key of the same name address the same step, so a
-    bare id merges into the one positional entry, and a positional key absorbs the bare one.
+    bare id merges into the one positional entry, and a positional key absorbs the bare one,
+    provided both address a step of `ids`; a stale key is left where it is.
     """
     if key in steps:
         return key, steps[key]
+    if ids is not None and _stale_key_reason(key, ids) is not None:
+        return key, None
     if key.index is None:
-        positional = [other for other in steps if other.index is not None and other.name == key.name]
+        positional = [other for other in steps if other.index is not None and other.name == key.name
+                      and (ids is None or _stale_key_reason(other, ids) is None)]
         return (positional[0], steps[positional[0]]) if len(positional) == 1 else (key, None)
     bare = StepKey(None, key.name)
+    if ids is not None and _stale_key_reason(bare, ids) is not None:
+        return key, None
     return key, steps.pop(bare, None)
 
 
@@ -476,16 +486,19 @@ def _merged_value(own: OpaqueCwl, contributed: OpaqueCwl) -> OpaqueCwl:
 def step_sidecar(sidecar: WicSidecar | None, index: int, name: str,
                  occurrences: int) -> WicSidecar | None:
     """The sidecar entry addressing step `index` called `name`: its `(index, name)` key,
-    else its bare id when the id occurs once in the document. A positional key wins."""
+    else its bare id when the id occurs once in the document. When both are present they
+    merge, the positional key winning."""
     if sidecar is None:
         return None
-    by_id = None
+    by_id = positional = None
     for key, child in sidecar.steps:
         if key.index == index and key.name == name:
-            return child
+            positional = child
         if key.index is None and key.name == name and occurrences == 1:
             by_id = child
-    return by_id
+    if positional is None or by_id is None:
+        return positional or by_id
+    return _merged_sidecar(by_id, positional)
 
 
 def _stale_key_reason(key: StepKey, ids: Sequence[str]) -> str | None:

@@ -666,3 +666,65 @@ steps:
 ''')
     bound = _descend(document, 1).steps[0].source.input('name')
     assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
+
+
+_PARENT_CONTRIBUTING = '''
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+{contribution}
+steps:
+- id: child.wic
+'''
+
+
+@pytest.mark.fast
+def test_a_stale_positional_key_from_the_parent_does_not_swallow_the_childs_id_entry() -> None:
+    """A parent key that addresses no step leaves the child's valid bare-id entry alone."""
+    document = _resolved(
+        _PARENT_CONTRIBUTING.format(contribution='          (2, mk_file):\n            in:\n'
+                                                 '              name: !ii from_root.txt'),
+        child='wic:\n  steps:\n    mk_file:\n      in:\n        name: !ii child_own.txt\n'
+              'steps:\n- id: mk_file\n')
+    bound = _descend(document, 1).steps[0].source.input('name')
+    assert isinstance(bound, InlineLiteral) and bound.value == 'child_own.txt'
+
+
+@pytest.mark.fast
+def test_a_stale_positional_key_in_the_child_does_not_swallow_the_parents_id_contribution() -> None:
+    """A child key that addresses no step leaves the parent's valid bare-id contribution alone."""
+    document = _resolved(
+        _PARENT_CONTRIBUTING.format(contribution='          mk_file:\n            in:\n'
+                                                 '              name: !ii from_root.txt'),
+        child='wic:\n  steps:\n    (2, mk_file):\n      in:\n        name: !ii child_stale.txt\n'
+              'steps:\n- id: mk_file\n')
+    bound = _descend(document, 1).steps[0].source.input('name')
+    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
+
+
+@pytest.mark.fast
+def test_an_id_key_and_a_positional_key_for_the_same_step_merge_in_one_sidecar() -> None:
+    """Fields only the bare entry sets survive; the positional entry wins where both set one."""
+    document = _resolved('wic:\n  steps:\n    mk_file:\n      in:\n        a: !ii x.txt\n'
+                         '    (1, mk_file):\n      in:\n        b: !ii y.txt\n'
+                         'steps:\n- id: mk_file\n')
+    step = document.steps[0].source
+    a, b = step.input('a'), step.input('b')
+    assert isinstance(a, InlineLiteral) and a.value == 'x.txt'
+    assert isinstance(b, InlineLiteral) and b.value == 'y.txt'
+
+
+@pytest.mark.fast
+def test_a_stale_child_id_entry_does_not_pair_with_the_parents_positional_key() -> None:
+    """A child bare id naming two steps addresses none, so it is not merged under the parent's (1, id) key."""
+    document = _resolved(
+        _PARENT_CONTRIBUTING.format(contribution='          (1, mk_file):\n            in:\n'
+                                                 '              name: !ii from_root.txt'),
+        child='wic:\n  steps:\n    mk_file:\n      in:\n        extra: !ii stale_child.txt\n'
+              'steps:\n- id: mk_file\n- id: mk_file\n')
+    step = _descend(document, 1).steps[0].source
+    assert not isinstance(step.input('extra'), InlineLiteral)
+    bound = step.input('name')
+    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
