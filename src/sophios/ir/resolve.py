@@ -456,17 +456,20 @@ def _inherited_step(steps: dict[StepKey, WicSidecar], key: StepKey,
                     ids: Sequence[str] | None) -> tuple[StepKey, WicSidecar | None]:
     """The key `key` is merged under and the entry of `steps` it is merged over.
     A bare id and an `(index, id)` key of the same name address the same step, so a
-    bare id merges into the one positional entry, and a positional key absorbs the bare one,
-    provided both address a step of `ids`; a stale key is left where it is.
+    bare id merges into the one positional entry, even when a bare entry exists too, and a
+    positional key absorbs the bare one, provided both address a step of `ids`; a stale key is left where it is.
     """
+    if key.index is None:
+        positional = [other for other in steps if other.index is not None and other.name == key.name
+                      and (ids is None or _stale_key_reason(other, ids) is None)]
+        if len(positional) == 1 and (ids is None or _stale_key_reason(key, ids) is None):
+            return positional[0], steps[positional[0]]
     if key in steps:
         return key, steps[key]
     if ids is not None and _stale_key_reason(key, ids) is not None:
         return key, None
     if key.index is None:
-        positional = [other for other in steps if other.index is not None and other.name == key.name
-                      and (ids is None or _stale_key_reason(other, ids) is None)]
-        return (positional[0], steps[positional[0]]) if len(positional) == 1 else (key, None)
+        return key, None
     bare = StepKey(None, key.name)
     if ids is not None and _stale_key_reason(bare, ids) is not None:
         return key, None

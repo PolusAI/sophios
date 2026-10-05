@@ -642,6 +642,22 @@ steps:
 
 
 @pytest.mark.fast
+def test_an_id_key_from_the_parent_wins_when_the_child_has_both_spellings() -> None:
+    """The contribution wins over a child that spells the same step both ways."""
+    document = _resolved(
+        _PARENT_CONTRIBUTING.format(contribution='          mk_file:\n            in:\n'
+                                                 '              name: !ii from_root.txt'),
+        child='wic:\n  steps:\n    mk_file:\n      in:\n        other: !ii o\n'
+              '    (1, mk_file):\n      in:\n        name: !ii child_pos.txt\n'
+              'steps:\n- id: mk_file\n')
+    step = _descend(document, 1).steps[0].source
+    bound = step.input('name')
+    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
+    other = step.input('other')
+    assert isinstance(other, InlineLiteral) and other.value == 'o'
+
+
+@pytest.mark.fast
 def test_a_positional_key_from_the_parent_merges_over_the_childs_id_entry() -> None:
     """The parent's (index, id) contribution overrides the child's own bare-id entry."""
     document = _resolved('''
