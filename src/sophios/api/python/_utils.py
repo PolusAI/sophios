@@ -3,7 +3,9 @@
 import functools
 import inspect
 import keyword
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Final
 
@@ -207,6 +209,20 @@ def _user_file(code_filename: str) -> str | None:
     return str(path)
 
 
+#: The `.wic` position objects are being built from, while `Workflow.from_wic` builds them.
+_AUTHORED: Final[ContextVar[SourceSpan | None]] = ContextVar('_AUTHORED', default=None)
+
+
+@contextmanager
+def authored_at(span: SourceSpan | None) -> Iterator[None]:
+    """Make `caller_span` answer `span` while objects are built from that place in a `.wic` file."""
+    token = _AUTHORED.set(span)
+    try:
+        yield
+    finally:
+        _AUTHORED.reset(token)
+
+
 def caller_span() -> SourceSpan:
     """The user's own line: the innermost frame outside the `sophios` package.
 
@@ -214,8 +230,12 @@ def caller_span() -> SourceSpan:
     line where each step was made and each port bound, which is what a
     diagnostic names. Frames inside `sophios/` (the API, the compiler) are
     skipped; frames inside site-packages too, so a test harness or notebook
-    wrapper does not become the location.
+    wrapper does not become the location. Objects `Workflow.from_wic` builds
+    carry the `.wic` position they were read from instead (`authored_at`).
     """
+    authored = _AUTHORED.get()
+    if authored is not None:
+        return authored
     frame = inspect.currentframe()
     while frame is not None:
         file = _user_file(frame.f_code.co_filename)

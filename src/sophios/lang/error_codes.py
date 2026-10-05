@@ -92,6 +92,10 @@ class SophiosErrorCode(StrEnum):
     #: A local run that ended with a non-zero exit code. The document and the
     #: call were fine; the runner was not.
     WORKFLOW_RUN_FAILED = 'api005'
+    #: A `.wic` construct the Python API has no spelling for, met by
+    #: `Workflow.from_wic`. The document is valid and compiles; the API cannot
+    #: hold it. The message names the construct and what to write instead.
+    NO_PYTHON_SPELLING = 'api006'
 
     @property
     def is_language(self) -> bool:

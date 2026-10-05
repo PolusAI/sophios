@@ -43,6 +43,7 @@ from ._utils import (
     load_yaml as _load_yaml,
     serialize_value as _serialize_value,
 )
+from ._from_wic import workflow_from_wic as _workflow_from_wic
 from ._types import ScatterMethod
 from ._workflow_runtime import (
     coerce_path as _coerce_path,
@@ -976,6 +977,52 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             Path: The root ``.wic`` file that was written.
         """
         return _write_workflow_wic(self, path)
+
+    @classmethod
+    def from_wic(
+        cls,
+        path: StrPath,
+        *,
+        tool_registry: Tools | None = None,
+        workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
+    ) -> "Workflow":
+        """Build ``Workflow`` and ``Step`` objects from a ``.wic`` file.
+
+        The file is read the way ``sophios --yaml`` reads it. A step's tool
+        comes from ``tool_registry`` by name, or from what its ``run:`` names;
+        a nested ``<child>.wic`` comes from ``workflow_paths``, shaped
+        ``{namespace: {stem: path}}`` like ``sophios.plugins.get_yml_paths``.
+        Nothing else is read: no config, and nothing beside the document that
+        ``run:`` does not name.
+
+        The file is compiled first, and its compile errors are raised as they
+        are. Then each step becomes a ``Step`` holding its tool, or a nested
+        ``Workflow``; ``!ii`` becomes a literal, ``!*`` a step output, a bare
+        name a workflow input and ``!cwl {...}`` a ``StepInput``. An input the
+        file leaves to inference stays unbound, and ``compile()`` infers it.
+        Every object carries the ``.wic`` line it was read from.
+
+        A construct the Python API has no spelling for, such as a repeated
+        step id, an edge from another document or a ``wic:`` namespace, is
+        refused with ``api006``; every one in the file is reported at once.
+        ``wic: graphviz`` and ``wic: inlineable`` change nothing a Python
+        workflow compiles or runs: they are dropped with a ``UserWarning``.
+
+        Args:
+            path (StrPath): The root ``.wic`` file.
+            tool_registry (Tools | None): The tools a step may name.
+            workflow_paths (Mapping[str, Mapping[str, Path]] | None): The
+                ``.wic`` files a step may call.
+
+        Raises:
+            SophiosError: The file's compile errors, or ``api006``.
+
+        Returns:
+            Workflow: The workflow the file describes.
+        """
+        root = _coerce_path(path, field_name="path")
+        assert root is not None
+        return _workflow_from_wic(root, tool_registry or {}, workflow_paths or {})
 
     def _flatten_steps(self) -> list[Step]:
         """Return every concrete step in this workflow tree."""

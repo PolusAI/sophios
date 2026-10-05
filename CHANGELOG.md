@@ -7,6 +7,7 @@ All notable changes to Sophios will be documented in this file.
 ### Added
 
 - `StepInput(source=, link_merge=, pick_value=, value_from=, default=, load_contents=, load_listing=)` binds a CWL step input whose sources are port objects; a list of ports bound directly is an error.
+- `Workflow.from_wic(path, tool_registry=, workflow_paths=)` builds `Workflow` and `Step` objects from a `.wic` file; what the Python API cannot express is refused with `api006`.
 
 ### Breaking changes
 

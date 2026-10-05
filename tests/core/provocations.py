@@ -403,3 +403,21 @@ COMPILED.update({
     SophiosErrorCode.INFERENCE_TIE: _provoke_inference_tie,
     SophiosErrorCode.INFERENCE_RECENCY: _provoke_inference_recency,
 })
+
+
+def _provoke_no_python_spelling() -> None:
+    """Read into Python objects a `.wic` that declares top-level `hints:`, which no Python `Workflow` carries."""
+    import tempfile  # pylint: disable=import-outside-toplevel
+    from pathlib import Path  # pylint: disable=import-outside-toplevel
+
+    from sophios.api.python.workflow import Workflow  # pylint: disable=import-outside-toplevel
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory) / 'provoke.wic'
+        root.write_text('hints:\n  ResourceRequirement:\n    coresMin: 1\n'
+                        'steps:\n- id: say\n  run:\n    class: CommandLineTool\n    baseCommand: "true"\n'
+                        '    inputs: {}\n    outputs: {}\n', encoding='utf-8')
+        Workflow.from_wic(root)
+
+
+COMPILED.update({SophiosErrorCode.NO_PYTHON_SPELLING: _provoke_no_python_spelling})
