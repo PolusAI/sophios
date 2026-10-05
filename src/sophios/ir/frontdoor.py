@@ -7,7 +7,8 @@ edited. Nothing here serialises YAML.
 """
 from collections import Counter
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,8 @@ from ..lang import (
 from ..python_cwl_adapter import generate_CWL_CommandLineTool, get_module
 from ..utils_cwl import desugar_into_canonical_normal_form
 from ..wic_types import StepId, Tool, Tools
-from .resolve import RegistrySnapshot, generated_process_id, run_process_name, step_sidecar
+from .resolve import (RegistrySnapshot, generated_process_id, inline_run_name, is_run_path, run_path_name,
+                      step_sidecar)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +51,31 @@ class SourceBundle:
     lang_version_pins: tuple[str, ...] = ()
 
 
+@dataclass(slots=True)
+# pylint: disable-next=too-many-instance-attributes
+class _Reading:
+    """What one bundle accumulates as it follows the steps from its root."""
+
+    yml_paths: dict[str, dict[str, Path]]
+    #: Where ``python_script`` files are: the root's directory.
+    script_dir: Path
+    root_directory: Path
+    workflows: dict[tuple[str, str], ParseResult] = field(default_factory=dict)
+    directories: dict[tuple[str, str], Path] = field(default_factory=dict)
+    generated: Tools = field(default_factory=dict)
+    #: Keyed by path: a cycle is a cycle regardless of namespace.
+    read: dict[Path, ParseResult] = field(default_factory=dict)
+    run_names: dict[tuple[Path, str], str] = field(default_factory=dict)
+    pins: list[str] = field(default_factory=list)
+
+    def bundle(self, parsed: ParseResult, name: str, tools: Tools) -> SourceBundle:
+        """Freeze what was read into the bundle."""
+        registry = RegistrySnapshot.from_tools(
+            {**tools, **self.generated}, workflows=self.workflows, directories=self.directories,
+            run_names=self.run_names, root_directory=self.root_directory)
+        return SourceBundle(parsed, name, registry, tuple(self.pins))
+
+
 def bundle_from_source(source: str, name: str,
                        yml_paths: dict[str, dict[str, Path]],
                        tools: Tools) -> SourceBundle:
@@ -59,14 +86,9 @@ def bundle_from_source(source: str, name: str,
     no spans worth keeping, but the documents it reaches are ordinary files,
     and they keep theirs.
     """
-    workflows: dict[tuple[str, str], ParseResult] = {}
-    generated: Tools = {}
-    pins: list[str] = []
-    parsed = _visit(source, name, None, yml_paths, Path('.'), workflows, generated, {}, pins)
-    return SourceBundle(parsed, name,
-                        RegistrySnapshot.from_tools({**tools, **generated},
-                                                    workflows=workflows),
-                        tuple(pins))
+    here = Path('.').resolve()
+    reading = _Reading(yml_paths, here, here)
+    return reading.bundle(_visit(source, name, None, reading), name, tools)
 
 
 def bundle_from_disk(yml_path: Path,
@@ -78,25 +100,12 @@ def bundle_from_disk(yml_path: Path,
     well-formed is syntax, reported with positions. Whether its steps exist
     here, and whether their ports line up, is for the passes that follow.
     """
-    workflows: dict[tuple[str, str], ParseResult] = {}
-    generated: Tools = {}
-    pins: list[str] = []
-    parsed = _visit(yml_path.read_text(encoding='utf-8'), yml_path.stem, yml_path.resolve(), yml_paths, yml_path.parent,
-                    workflows, generated, {}, pins)
-    return SourceBundle(parsed, yml_path.stem,
-                        RegistrySnapshot.from_tools({**tools, **generated},
-                                                    workflows=workflows),
-                        tuple(pins))
+    reading = _Reading(yml_paths, yml_path.parent, yml_path.resolve().parent)
+    parsed = _visit(yml_path.read_text(encoding='utf-8'), yml_path.stem, yml_path.resolve(), reading)
+    return reading.bundle(parsed, yml_path.stem, tools)
 
 
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments
-def _visit(source: str, stem: str, path: Path | None,
-           yml_paths: dict[str, dict[str, Path]],
-           script_dir: Path,
-           workflows: dict[tuple[str, str], ParseResult],
-           generated: Tools,
-           read: dict[Path, ParseResult],
-           pins: list[str]) -> ParseResult:
+def _visit(source: str, stem: str, path: Path | None, reading: _Reading) -> ParseResult:
     """Parse one file's text and register every workflow and generated tool it reaches.
 
     The parse is recorded under ``path`` before anything it reaches is read,
@@ -104,12 +113,11 @@ def _visit(source: str, stem: str, path: Path | None,
     """
     parsed = parse(source, f'{stem}.wic')
     if path is not None:
-        read[path] = parsed
+        reading.read[path] = parsed
     document = parsed.document
     if document is not None:
-        _collect_pins(document, pins)
-        _reach(document, yml_paths, script_dir, path.parent if path is not None else script_dir,
-               workflows, generated, read, pins)
+        _collect_pins(document, reading.pins)
+        _reach(document, path.parent if path is not None else reading.script_dir, reading)
     return parsed
 
 
@@ -131,99 +139,80 @@ def _append_pin(document: Document, pins: list[str]) -> None:
         pins.append(pinned if isinstance(pinned, str) else str(pinned))
 
 
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
-def _reach(document: Document,
-           yml_paths: dict[str, dict[str, Path]],
-           script_dir: Path,
-           document_dir: Path,
-           workflows: dict[tuple[str, str], ParseResult],
-           generated: Tools,
-           read: dict[Path, ParseResult],
-           pins: list[str]) -> None:
+def _reach(document: Document, document_dir: Path, reading: _Reading) -> None:
     """Follow every workflow and generated tool one document's steps reach,
     including its inline implementation bodies.
 
-    ``script_dir`` is where ``python_script`` files are, the root's directory;
     ``document_dir`` is where this document is, which is what a ``run:`` path
     is relative to.
     """
     counts = Counter(step.id for step in document.steps)
     for index, step in enumerate(document.steps, start=1):
         namespace = _namespace(step_sidecar(document.sidecar, index, step.id, counts[step.id]))
-        if _register_run(step, namespace, document_dir, yml_paths,
-                         workflows, generated, read, pins, script_dir):
+        if _register_run(step, namespace, document_dir, reading):
             continue
         if step.id == 'python_script':
-            generated[StepId(generated_process_id(step), namespace)] = \
-                _generated_tool(step, script_dir)
+            reading.generated[StepId(generated_process_id(step), namespace)] = \
+                _generated_tool(step, reading.script_dir)
         elif step.id.endswith('.wic'):
             # Left unregistered rather than raising: Resolve reports it as
             # absent, a diagnostic the reader can act on.
-            child_path = yml_paths.get(namespace, {}).get(Path(step.id).stem)
+            child_path = reading.yml_paths.get(namespace, {}).get(Path(step.id).stem)
             if child_path is None:
                 continue
             # Keyed by the call site's namespace, matching how `_resolve_process` builds its `RegistryKey`.
-            key = (namespace, child_path.stem)
-            if key in workflows:
-                continue
-            # `read` is keyed by path (a cycle is a cycle regardless of namespace);
-            # a file called under two namespaces still gets both registry entries.
-            resolved = child_path.resolve()
-            workflows[key] = read[resolved] if resolved in read else _visit(
-                child_path.read_text(encoding='utf-8'), child_path.stem, resolved,
-                yml_paths, script_dir, workflows, generated, read, pins)
+            _register_workflow((namespace, child_path.stem), child_path.resolve(), reading)
     for _name, body in (document.sidecar.implementations if document.sidecar else ()):
-        _reach(body, yml_paths, script_dir, document_dir, workflows, generated, read, pins)
+        _reach(body, document_dir, reading)
 
 
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments
-def _register_run(step: Step, namespace: str, document_dir: Path,
-                  yml_paths: dict[str, dict[str, Path]],
-                  workflows: dict[tuple[str, str], ParseResult],
-                  generated: Tools, read: dict[Path, ParseResult], pins: list[str],
-                  script_dir: Path) -> bool:
+def _register_workflow(key: tuple[str, str], path: Path, reading: _Reading) -> None:
+    """Register the workflow at ``path`` under ``key``, parsing the file only if nothing has.
+
+    A file called under two namespaces still gets both registry entries.
+    """
+    if key in reading.workflows:
+        return
+    reading.workflows[key] = reading.read[path] if path in reading.read else _visit(
+        path.read_text(encoding='utf-8'), path.stem, path, reading)
+    reading.directories[key] = path.parent
+
+
+def _register_run(step: Step, namespace: str, document_dir: Path, reading: _Reading) -> bool:
     """Register what a step's ``run:`` names, when it names something here.
 
     An inline mapping is a tool keyed by the step's id, written in
     ``CWL_VERSION`` whatever ``cwlVersion`` it declares. A ``.cwl`` or ``.wic``
     path that exists relative to the document is read from there and keyed by
-    its stem, shadowing a registry entry of that stem for this compilation.
-    A path that does not exist here is left for Resolve, which looks the stem
-    up in the registry and reports it as absent if it is nowhere.
+    the file it is, shadowing a registry entry of that stem for this
+    compilation. A path that does not exist here is left for Resolve, which
+    looks the stem up in the registry and reports it as absent if it is
+    nowhere.
 
     Returns:
         bool: Whether ``run`` was registered here.
     """
-    name = run_process_name(step)
-    if name is None:
-        return False
-    run = dict(step.interpreted)['run']
+    run = dict(step.interpreted).get('run')
     if isinstance(run, dict):
+        name = inline_run_name(step)
+        assert name is not None
         body = desugar_into_canonical_normal_form({**deepcopy(run), 'cwlVersion': CWL_VERSION})
-        generated[StepId(name, namespace)] = Tool(f'{name}.cwl', body)
+        reading.generated[StepId(name, namespace)] = Tool(f'{name}.cwl', body)
         return True
-    assert isinstance(run, str)
+    if not isinstance(run, str) or not is_run_path(run):
+        return False
     target = (document_dir / run).resolve()
     if not target.is_file():
         return False
+    name = run_path_name(run, os.path.relpath(target, reading.root_directory))
+    reading.run_names[(document_dir, run)] = name
     if run.endswith('.cwl'):
-        known = generated.get(StepId(name, namespace))
-        if known is not None and known.run_path != str(target):
-            raise ValueError(f'run: {run} names both {known.run_path} and {target}')
         with open(target, mode='r', encoding='utf-8') as handle:
-            generated[StepId(name, namespace)] = Tool(
+            reading.generated[StepId(name, namespace)] = Tool(
                 str(target), desugar_into_canonical_normal_form(yaml.safe_load(handle.read())))
-        return True
-    parsed = read[target] if target in read else _visit(
-        target.read_text(encoding='utf-8'), target.stem, target, yml_paths, script_dir,
-        workflows, generated, read, pins)
-    if workflows.setdefault((namespace, name), parsed) is not parsed:
-        raise ValueError(f'run: {run} names two different workflows')
+    else:
+        _register_workflow((namespace, name), target, reading)
     return True
-
-
-def _stem(name: str) -> str:
-    return name[:-4] if name.endswith(('.wic', '.cwl')) else name
 
 
 def _namespace(sidecar: WicSidecar | None) -> str:

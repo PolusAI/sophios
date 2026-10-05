@@ -12,6 +12,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
+from pathlib import Path
 import sys
 from typing import Any, Iterable, Mapping
 
@@ -58,6 +59,8 @@ class WorkflowSource:
 
     key: RegistryKey
     parsed: ParseResult
+    #: Where the file is, which its own ``run:`` paths are relative to.
+    directory: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,10 +69,19 @@ class RegistrySnapshot:
 
     tools: tuple[ToolDefinition, ...] = ()
     workflows: tuple[WorkflowSource, ...] = ()
+    #: The name each ``run:`` path was registered under, by the directory of
+    #: the document that wrote it: the same spelling beside two documents is
+    #: two files. A path with no entry names no file beside its document.
+    run_names: tuple[tuple[Path, str, str], ...] = ()
+    #: Where the root document is, for the ``run:`` paths it writes.
+    root_directory: Path | None = None
 
     @classmethod
     def from_tools(cls, tools: Tools, *,
-                   workflows: Mapping[tuple[str, str], ParseResult] | None = None) -> 'RegistrySnapshot':
+                   workflows: Mapping[tuple[str, str], ParseResult] | None = None,
+                   directories: Mapping[tuple[str, str], Path] | None = None,
+                   run_names: Mapping[tuple[Path, str], str] | None = None,
+                   root_directory: Path | None = None) -> 'RegistrySnapshot':
         """Own a deterministic snapshot of the legacy public registry."""
         definitions = tuple(sorted((
             ToolDefinition(RegistryKey(step_id.plugin_ns, step_id.stem),
@@ -77,10 +89,11 @@ class RegistrySnapshot:
             for step_id, tool in tools.items()
         ), key=lambda item: item.key))
         sources = tuple(sorted((
-            WorkflowSource(RegistryKey(namespace, name), parsed)
+            WorkflowSource(RegistryKey(namespace, name), parsed, (directories or {}).get((namespace, name)))
             for (namespace, name), parsed in (workflows or {}).items()
         ), key=lambda item: item.key))
-        return cls(definitions, sources)
+        named = tuple(sorted((directory, run, name) for (directory, run), name in (run_names or {}).items()))
+        return cls(definitions, sources, named, root_directory)
 
     def tool(self, key: RegistryKey) -> ToolDefinition | None:
         """Look up a tool without exposing a mutable mapping."""
@@ -89,6 +102,11 @@ class RegistrySnapshot:
     def workflow(self, key: RegistryKey) -> WorkflowSource | None:
         """Look up a parsed workflow without touching a path."""
         return next((workflow for workflow in self.workflows if workflow.key == key), None)
+
+    def run_name(self, directory: Path | None, run: str) -> str | None:
+        """The name ``run`` was registered under beside ``directory``, if it named a file."""
+        return next((name for where, spelled, name in self.run_names
+                     if where == directory and spelled == run), None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,14 +172,16 @@ def resolve(document: Document, registry: RegistrySnapshot, *, name: str = 'work
     reported: set[str] = set()
     _report_stale_keys(document.sidecar, document, name, reported)
     version = resolve_lang_version(lang_version, _version_pins(document))
-    resolved, diagnostics = _resolve_document(document, registry, name, version, (), reported)
+    resolved, diagnostics = _resolve_document(document, registry, name, version, (), reported,
+                                              registry.root_directory)
     _copy_diagnostics(diagnostics, selection_diagnostics)
     return Resolved(resolved if not diagnostics.has_errors else None, diagnostics)
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
-                      version: str, trail: tuple[RegistryKey, ...], reported: set[str]) \
+                      version: str, trail: tuple[RegistryKey, ...], reported: set[str],
+                      directory: Path | None) \
         -> tuple[ResolvedDocument, Diagnostics]:
     diagnostics = Diagnostics()
     document = _apply_parameters(document)
@@ -169,7 +189,8 @@ def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
     counts = Counter(step.id for step in document.steps)
     for index, step in enumerate(document.steps, start=1):
         sidecar = step_sidecar(document.sidecar, index, step.id, counts[step.id])
-        process = _resolve_process(step, sidecar, registry, version, trail, diagnostics, reported)
+        process = _resolve_process(step, sidecar, registry, version, trail, diagnostics, reported,
+                                   directory)
         if process is not None:
             steps.append(ResolvedStep(step, process, sidecar))
     return ResolvedDocument(name, document, tuple(steps), version), diagnostics
@@ -178,7 +199,8 @@ def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistrySnapshot,
                      version: str, trail: tuple[RegistryKey, ...],
-                     diagnostics: Diagnostics, reported: set[str]) -> ResolvedProcess | None:
+                     diagnostics: Diagnostics, reported: set[str],
+                     directory: Path | None) -> ResolvedProcess | None:
     sidecar_entries = dict(sidecar.entries) if sidecar is not None else {}
     namespace = str(sidecar_entries.get('namespace', 'global'))
     interpreted = dict(step.interpreted)
@@ -187,7 +209,7 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
     generated = step.id == 'python_script'
     name = generated_process_id(step) if generated else authored_name
     key = RegistryKey(namespace, name)
-    own_name = run_process_name(step)
+    own_name = _own_run_name(step, registry, directory)
     if own_name is not None:
         own_key = RegistryKey(namespace, own_name)
         if registry.tool(own_key) is not None or registry.workflow(own_key) is not None:
@@ -226,7 +248,8 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
         else:
             _report_stale_keys(child_source.sidecar, child_source, workflow_key.name, reported)
         child, child_diagnostics = _resolve_document(
-            child_source, registry, workflow_key.name, version, trail + (workflow_key,), reported)
+            child_source, registry, workflow_key.name, version, trail + (workflow_key,), reported,
+            workflow.directory)
         _copy_diagnostics(diagnostics, child_diagnostics)
         interface = _workflow_interface(child_source, workflow_key, diagnostics)
         if interface is None:
@@ -255,22 +278,44 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
     )
 
 
-def run_process_name(step: Step) -> str | None:
-    """The registry name of what a step's own ``run:`` carries, or None.
-
-    An inline body or a ``.cwl``/``.wic`` path is identified by its content or
-    its authored spelling, so two steps with the same id or the same stem but
-    different bodies or paths are different processes. A body is identified as
-    it is registered, in ``CWL_VERSION``: a ``cwlVersion`` inside it is ignored.
-    """
+def _own_run_name(step: Step, registry: RegistrySnapshot, directory: Path | None) -> str | None:
+    """The name the front door registered a step's own ``run:`` under, if it registered one."""
     run = dict(step.interpreted).get('run')
     if isinstance(run, dict):
-        stem = _stem(step.id)
-        identity = json.dumps({**run, 'cwlVersion': CWL_VERSION}, sort_keys=True, default=str)
-    elif isinstance(run, str) and run.endswith(('.cwl', '.wic')):
-        stem, identity = _stem(run), run
-    else:
+        return inline_run_name(step)
+    return registry.run_name(directory, run) if isinstance(run, str) else None
+
+
+def inline_run_name(step: Step) -> str | None:
+    """The registry name of an inline ``run:`` body, or None for any other step.
+
+    A body is identified by its content, so two steps with the same id but
+    different bodies are different processes. It is identified as it is
+    registered, in ``CWL_VERSION``: a ``cwlVersion`` inside it is ignored.
+    """
+    run = dict(step.interpreted).get('run')
+    if not isinstance(run, dict):
         return None
+    identity = json.dumps({**run, 'cwlVersion': CWL_VERSION}, sort_keys=True, default=str)
+    return _hashed(_stem(step.id), identity)
+
+
+def is_run_path(run: str) -> bool:
+    """Whether a ``run:`` string names a ``.cwl`` or ``.wic`` file rather than a registry entry."""
+    return run.endswith(('.cwl', '.wic'))
+
+
+def run_path_name(run: str, root_relative: str) -> str:
+    """The registry name of the file a ``run:`` path resolved to.
+
+    ``root_relative`` is that file's path from the root document's directory,
+    so the name does not depend on where the checkout is, and two files with
+    one stem are two names.
+    """
+    return _hashed(_stem(run), root_relative)
+
+
+def _hashed(stem: str, identity: str) -> str:
     return f'{stem}_{sha256(identity.encode("utf-8")).hexdigest()[:8]}'
 
 

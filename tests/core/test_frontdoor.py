@@ -16,7 +16,7 @@ from sophios.cli import default_compilation_settings
 from sophios.compiler import compile_source
 from sophios.input_output import write_artifacts_to_disk
 from sophios.ir.artifacts import CompilationResult
-from sophios.ir.frontdoor import SourceBundle, bundle_from_disk
+from sophios.ir.frontdoor import SourceBundle, bundle_from_disk, bundle_from_source
 from sophios.ir.pipeline import front_end
 from sophios.ir.resolve import RegistryKey, RegistrySnapshot, generated_process_id
 from sophios.lang import (
@@ -402,3 +402,50 @@ def test_each_written_run_path_tool_is_the_file_its_step_runs(tmp_path: Path) ->
     commands = [yaml.safe_load((out / step['run']).read_text(encoding='utf-8'))['baseCommand']
                 for step in written['steps']]
     assert commands == ['echo', 'rm']
+
+
+def _tool_file(path: Path, command: str) -> None:
+    path.parent.mkdir(exist_ok=True)
+    path.write_text('cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: ' + command
+                    + '\ninputs: {a: string}\noutputs: {}\n', encoding='utf-8')
+
+
+@pytest.mark.fast
+def test_the_same_run_path_beside_two_documents_is_two_tools(tmp_path: Path) -> None:
+    """Each document's `run: t.cwl` is the file beside it, so a root `t.cwl` and a `sub/t.cwl` coexist."""
+    _tool_file(tmp_path / 't.cwl', 'echo')
+    _tool_file(tmp_path / 'sub' / 't.cwl', 'rm')
+    (tmp_path / 'sub' / 'child.wic').write_text('steps:\n  - id: s\n    run: t.cwl\n    in: {a: !ii x}\n',
+                                                encoding='utf-8')
+    (tmp_path / 'w.wic').write_text(
+        'steps:\n  - id: s\n    run: t.cwl\n    in: {a: !ii x}\n  - id: c\n    run: sub/child.wic\n',
+        encoding='utf-8')
+    result = _compile(bundle_from_disk(tmp_path / 'w.wic', {}, SYNTHETIC_TOOLS))
+    root_tool, child = result.artifact.children
+    assert root_tool.cwl['baseCommand'] == 'echo'
+    assert child.children[0].cwl['baseCommand'] == 'rm'
+
+
+@pytest.mark.fast
+def test_a_run_path_with_no_file_beside_its_document_ignores_another_documents_file(tmp_path: Path) -> None:
+    """A child's `sub/mk_file.cwl` is not what a root's unresolved `run: mk_file.cwl` runs: it is the registry's."""
+    _tool_file(tmp_path / 'sub' / 'mk_file.cwl', 'rm')
+    (tmp_path / 'sub' / 'child.wic').write_text('steps:\n  - id: s\n    run: mk_file.cwl\n    in: {a: !ii x}\n',
+                                                encoding='utf-8')
+    (tmp_path / 'w.wic').write_text(
+        'steps:\n  - id: s\n    run: mk_file.cwl\n    in: {name: !ii x}\n  - id: c\n    run: sub/child.wic\n',
+        encoding='utf-8')
+    result = _compile(bundle_from_disk(tmp_path / 'w.wic', {}, SYNTHETIC_TOOLS))
+    assert result.artifact.children[0].run_path == '/synthetic/mk_file.cwl'
+
+
+@pytest.mark.fast
+def test_a_run_path_in_a_source_root_resolves_beside_the_working_directory(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A root with no file of its own reads its `run:` paths from the working directory."""
+    (tmp_path / 't.cwl').write_text(_ECHO % 'echo', encoding='utf-8')
+    monkeypatch.chdir(tmp_path)
+    result = _compile(bundle_from_source('steps:\n  - id: s\n    run: t.cwl\n    in: {a: !ii x}\n',
+                                         'w', {}, SYNTHETIC_TOOLS))
+    child, = result.artifact.children
+    assert child.cwl['baseCommand'] == 'echo'
