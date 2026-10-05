@@ -145,6 +145,31 @@ IMPLIED_BY_VERSION: Final[dict[str, Cwl]] = {
 }
 
 
+#: The classes cwltool's v1.0 updater (`rewrite` in `cwltool/update.py`) renames to a plain name when
+#: a document declares them under cwltool's namespace, in the two spellings a document can use. Only the
+#: two that `IMPLIED_BY_VERSION` adds are listed.
+CWLTOOL_RENAMES: Final[dict[str, str]] = {
+    f'{namespace}{name}': name
+    for namespace in ('cwltool:', 'http://commonwl.org/cwltool#')
+    for name in ('LoadListingRequirement', 'NetworkAccess')
+}
+
+
+def _renamed(section: Any) -> Any:
+    """A `requirements:` or `hints:` section, in either CWL form, with `CWLTOOL_RENAMES` applied.
+
+    Embedded, nothing updates the tool, and the plain class is the only one the runner of the
+    newer document looks for.
+    """
+    match section:
+        case dict():
+            return {CWLTOOL_RENAMES.get(name, name): body for name, body in section.items()}
+        case list():
+            return [{**item, 'class': CWLTOOL_RENAMES.get(item['class'], item['class'])}
+                    if isinstance(item, dict) and 'class' in item else item for item in section]
+    return section
+
+
 def _classes(section: Any) -> set[str]:
     """The requirement classes a `requirements:` or `hints:` section names, in either CWL form."""
     match section:
@@ -159,7 +184,9 @@ def _keeping_version_defaults(process: Cwl, origin: str) -> Cwl:
     """`process` with the defaults its own `cwlVersion` implied, written out as hints.
 
     Embedding drops `cwlVersion`, so the document it lands in decides what the
-    process means. A requirement or hint the process declares is left as it is.
+    process means. A requirement or hint the process declares is left as it is,
+    except that a v1.0 process's cwltool-namespaced spelling of an implied class
+    is renamed to the plain one, as cwltool does when it loads the file.
 
     Args:
         process (Cwl): A process about to be embedded in a newer document.
@@ -178,6 +205,9 @@ def _keeping_version_defaults(process: Cwl, origin: str) -> Cwl:
             SophiosErrorCode.UNSUPPORTED_CWL_VERSION,
             f'{origin} {declared_version}, so it cannot be embedded; '
             f'Sophios embeds {", ".join(IMPLIED_BY_VERSION)}.')
+    if version == CwlVersion.V1_0.value:
+        process = {**process, **{section: _renamed(process[section])
+                                 for section in ('hints', 'requirements') if section in process}}
     declared = _classes(process.get('hints')) | _classes(process.get('requirements'))
     implied = {name: copy.deepcopy(body) for name, body in IMPLIED_BY_VERSION[version].items()
                if name not in declared}

@@ -75,6 +75,25 @@ def test_what_a_v1_0_tool_declares_itself_is_not_overridden() -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize('namespace', ['cwltool:', 'http://commonwl.org/cwltool#'])
+def test_a_namespaced_declaration_is_renamed_to_the_class_cwltool_looks_for(namespace: str) -> None:
+    """cwltool renames the namespaced class when it loads a v1.0 file; embedded, nothing does,
+    so the tool's own value, whatever it is, must be written under the plain name and no default added."""
+    hinted = _embedded(_one_tool(cwlVersion='v1.0', hints={f'{namespace}LoadListingRequirement':
+                                                           {'loadListing': 'shallow_listing'},
+                                                           f'{namespace}NetworkAccess':
+                                                           {'networkAccess': False}}))
+    assert hinted['hints'] == {'LoadListingRequirement': {'loadListing': 'shallow_listing'},
+                               'NetworkAccess': {'networkAccess': False}}
+    listed = _embedded(_one_tool(cwlVersion='v1.0',
+                                 hints=[{'class': f'{namespace}LoadListingRequirement',
+                                         'loadListing': 'no_listing'}],
+                                 requirements=[{'class': f'{namespace}NetworkAccess', 'networkAccess': True}]))
+    assert listed['hints'] == [{'class': 'LoadListingRequirement', 'loadListing': 'no_listing'}]
+    assert listed['requirements'] == [{'class': 'NetworkAccess', 'networkAccess': True}]
+
+
+@pytest.mark.fast
 def test_a_v1_0_tool_with_no_hints_at_all_gets_them() -> None:
     """No `hints` key is the usual case, not an exception."""
     artifact = _one_tool(cwlVersion='v1.0')
