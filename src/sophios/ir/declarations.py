@@ -97,7 +97,7 @@ def _statable_secondary_files(value: OpaqueCwl) -> OpaqueCwl:
     the same declaration, and cwltool's checker reads every entry as a mapping
     at workflow level, so it fails on the bare form.
     """
-    entries = value if isinstance(value, list) else [value]
+    entries = value if isinstance(value, list) else [] if value is None else [value]
     return [entry for entry in entries if not _evaluated(entry)]
 
 

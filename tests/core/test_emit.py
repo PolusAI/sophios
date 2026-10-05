@@ -346,7 +346,8 @@ def test_a_promoted_port_leaves_a_secondary_files_expression_to_its_tool(declare
     ('.bai', ['.bai']),
     ({'pattern': '.bai', 'required': False}, [{'pattern': '.bai', 'required': False}]),
     (['.bai'], ['.bai']),
-], ids=['bare-string', 'single-mapping', 'list'])
+    (None, None),
+], ids=['bare-string', 'single-mapping', 'list', 'null'])
 def test_a_promoted_port_states_secondary_files_as_a_list(declared: Any, promoted: Any) -> None:
     """A bare pattern or a single mapping is promoted as a one-element list.
 
