@@ -32,7 +32,7 @@ from sophios.ir import (
     StepNode,
     WorkflowGraph,
 )
-from sophios.ir.lower import lower
+from sophios.ir.lower import lower, output_step
 from sophios.ir.declarations import port_declaration
 from sophios.ir.types import AuthoredName
 from sophios.lang.diagnostics import SophiosError
@@ -491,6 +491,16 @@ def test_a_positional_output_source_naming_a_port_the_step_lacks_is_wic028() -> 
                     'outputs:\n  o:\n    type: File\n    outputSource: (2, s)/nope\n')
     assert [d.code for d in result.diagnostics] == [SophiosErrorCode.UNDECLARED_PORT]
     assert all("'nope'" in d.message and 'its outputs are: f' in d.message for d in result.diagnostics)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('step_text, found', [
+    ('s', (1, None)), ('wf__step__2__s', (2, None)), ('wf__step__3__t', (3, None)),
+    ('(2, s)', (2, 's')), ('(9, x)', (9, 'x')), ('u', None), ('wf__step__1__t', None)])
+def test_output_step_reads_the_step_an_output_source_names(step_text: str, found: Any) -> None:
+    """An id names its first occurrence, written as authored or as generated; a
+    positional key names its index whatever is there, and keeps the name it wrote."""
+    assert output_step('wf', ['s', 's', 't'], step_text) == found
 
 
 @pytest.mark.fast

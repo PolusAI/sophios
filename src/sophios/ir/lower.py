@@ -10,7 +10,8 @@ Resolving a step's tool against the environment is `Resolve`'s job, so a port's
 type is what the document declared and inference has not run.
 """
 import difflib
-from typing import Final, Mapping
+from collections.abc import Mapping, Sequence
+from typing import Final
 from dataclasses import dataclass
 
 from ..lang.cwl import CWL_VERSION
@@ -337,6 +338,24 @@ def _workflow_ports(raw: object, *, output: bool, diagnostics: Diagnostics,
     return tuple(ports)
 
 
+def output_step(workflow_name: str, step_ids: Sequence[str], step_text: str) -> tuple[int, str | None] | None:
+    """The step `step_text`, an `outputSource` up to its last `/`, names in a
+    workflow whose steps are `step_ids`: its 1-based position, and the name a
+    positional `(index, name)` key wrote, None when it named the step by id.
+
+    A positional key names its position whatever step is there, and the caller
+    checks the name; an id names its first occurrence, written as authored or
+    as generated. None when `step_text` names no step.
+    """
+    key = Grammar.WIC_STEP_KEY.match(step_text)
+    if key is not None:
+        return int(key.group(1)), key.group(2)
+    for position, step_id in enumerate(step_ids, start=1):
+        if step_text in {render_step_id(workflow_name, position, step_id), step_id}:
+            return position, None
+    return None
+
+
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def _output_port(workflow_name: str, nodes: list[StepNode], raw: object,
                  diagnostics: Diagnostics, span: SourceSpan | None,
@@ -349,15 +368,15 @@ def _output_port(workflow_name: str, nodes: list[StepNode], raw: object,
     if not isinstance(raw, str) or '/' not in raw:
         return None
     step_text, port_name = raw.rsplit('/', 1)
-    key = Grammar.WIC_STEP_KEY.match(step_text)
-    if key is not None:
-        return _positional_output_port(nodes, int(key.group(1)), key.group(2), port_name,
+    found = output_step(workflow_name, [node.id.name for node in nodes], step_text)
+    if found is None:
+        return None
+    index, positional_name = found
+    if positional_name is not None:
+        return _positional_output_port(nodes, index, positional_name, port_name,
                                        diagnostics, span, output_name)
-    for position, node in enumerate(nodes, start=1):
-        if step_text in {render_step_id(workflow_name, position, node.id.name), node.id.name}:
-            return next((port.id for port in node.outputs
-                         if port.id.port == AuthoredName(port_name)), None)
-    return None
+    return next((port.id for port in nodes[index - 1].outputs
+                 if port.id.port == AuthoredName(port_name)), None)
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
