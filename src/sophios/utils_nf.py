@@ -12,7 +12,9 @@ from typing import Any
 from .ir.artifacts import CompilationArtifact, CompilationResult
 from .ir.names import Names
 from .ir.types import Direction, Edge, PortId, StepNode, WorkflowGraph
-from .nf_expr import Expr, check as check_safe_subset, is_safe_subset_text, parse as parse_safe_subset
+from .nf_expr import (
+    Expr, check as check_safe_subset, is_safe_subset_text, parse as parse_safe_subset, references,
+)
 from .nf_symbols import normalize_nextflow_identifier
 from .nf_types import (
     ExecutableNextflowWorkflow,
@@ -2704,22 +2706,31 @@ def _raise_capability_findings(findings: list[str]) -> None:
         raise ValueError(f"Nextflow Phase 1 capability analysis failed:\n{details}")
 
 
-def _condition_value(when: Any, *, tool: Mapping[str, Any]) -> Expr:
-    """Parse and boolean-type a step's ``when`` against its tool's input types.
+def _condition_value(step: Mapping[str, Any], tool: Mapping[str, Any]) -> Expr:
+    """Parse and boolean-type a step's ``when`` over the inputs the step binds, as CWL does.
 
     Mirrors ``_computed_value``'s reuse of the safe-subset parser and
     checker; a step's when is evaluated once per invocation, after inputs
     are bound, so it is typed exactly like any other safe-subset expression.
     """
+    when = step["when"]
     if not isinstance(when, str) or not is_safe_subset_text(when):
         raise ValueError(f"step when {when!r} must be a safe JavaScript subset $( … ) expression")
+    bound = _as_mapping(step.get("in", {}), error="compiled step inputs must be a mapping")
     inputs = _as_mapping(tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
     input_types = {
         str(raw_name): definition.get("type") if isinstance(definition, Mapping) else definition
         for raw_name, definition in inputs.items()
+        if str(raw_name) in bound
     }
     try:
         expression = parse_safe_subset(when)
+    except ValueError as exc:
+        raise ValueError(f"step when {when!r} is outside the safe JavaScript subset: {exc}") from exc
+    if unbound := sorted(references(expression) - input_types.keys()):
+        names = ", ".join(f"inputs.{name}" for name in unbound)
+        raise ValueError(f"step when {when!r} reads {names}, which the step does not bind")
+    try:
         result = check_safe_subset(expression, input_types)
     except ValueError as exc:
         raise ValueError(f"step when {when!r} is outside the safe JavaScript subset: {exc}") from exc
@@ -2742,7 +2753,7 @@ def _process(step: Mapping[str, Any], tool: Mapping[str, Any]) -> NfProcess:
         command=_command(tool),
         container=_container(tool),
         resources=_resources(tool),
-        condition=_condition_value(when, tool=tool) if when is not None else None,
+        condition=_condition_value(step, tool) if when is not None else None,
     )
 
 

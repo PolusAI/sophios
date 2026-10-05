@@ -148,6 +148,31 @@ def test_shell_quote_false_literal_enables_a_real_shell_redirect(tmp_path: Path)
 
 @pytest.mark.nextflow
 @pytest.mark.serial
+def test_stdout_captures_every_command_a_shell_literal_starts(tmp_path: Path) -> None:
+    """CWL redirects stdout for the whole shell command, not its last part."""
+    two_commands = (
+        CommandLineTool("two_commands", Inputs(), Outputs(result=Output(cwl.file, glob="out.txt")))
+        .base_command("echo")
+        .argument("first", position=1)
+        .argument(";", shell_quote=False, position=2)
+        .argument("echo", position=3)
+        .argument("second", position=4)
+        .stdout("out.txt")
+        .shell_command()
+    )
+    two_commands_step = Step(two_commands, step_name="two_commands")
+    workflow = Workflow([two_commands_step], "nextflow_shell_stdout")
+    workflow.outputs.result = two_commands_step.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("out.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == ["first\nsecond\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
 def test_large_memory_directive_is_valid_nextflow_syntax(tmp_path: Path) -> None:
     workflow = ExecutableNextflowWorkflow(
         "WF",

@@ -124,6 +124,21 @@ def test_a_null_check_renders_as_a_test_for_the_absent_sentinel(when: str, predi
 
 
 @pytest.mark.fast
+def test_when_cannot_read_a_tool_default_the_step_does_not_bind() -> None:
+    gated = tool(
+        "GATED",
+        inputs={"a": {"type": "int"}, "n": {"type": "int", "default": 5}},
+        baseCommand="true",
+    )
+    workflow = workflow_doc(
+        [step("GATED", **{"in": {"a": "a"}, "when": "$(inputs.n > 3)"})],
+        inputs={"a": "int"},
+    )
+    with pytest.raises(ValueError, match=r"reads inputs\.n, which the step does not bind"):
+        compiled_source_to_nextflow(synthetic_source(workflow, [gated], workflow_inputs={"a": 1}))
+
+
+@pytest.mark.fast
 def test_when_requires_a_boolean_result() -> None:
     with pytest.raises(ValueError, match="must compute a boolean, not a number"):
         _when_workflow("$(inputs.a + 1)", {"a": 3}, a="int")
@@ -265,6 +280,23 @@ def test_a_false_condition_runs_no_task_and_downstream_completes(tmp_path: Path)
     assert code == 0, log
     # A zero exit with exactly one task means CONSUME ran and PRODUCE was skipped.
     assert len(_tasks(tmp_path)) == 1
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+@pytest.mark.parametrize(("when", "params", "types", "runs"), [
+    # Each left side is -0 in JavaScript, which == and != treat as 0.
+    pytest.param("$(inputs.n % 2 == 0)", {"n": -4}, {"n": "int"}, True, id="remainder"),
+    pytest.param("$(inputs.n * -1 != 0)", {"n": 0}, {"n": "int"}, False, id="product"),
+    pytest.param("$(Math.ceil(inputs.x) == 0)", {"x": -0.5}, {"x": "float"}, True, id="ceil"),
+])
+def test_negative_zero_equals_zero_as_in_javascript(
+    tmp_path: Path, when: str, params: dict[str, Any], types: dict[str, Any], runs: bool,
+) -> None:
+    workflow = _when_workflow(when, params, **types)
+    code, log = _run(workflow, tmp_path)
+    assert code == 0, log
+    assert len(_tasks(tmp_path)) == int(runs)
 
 
 @pytest.mark.nextflow

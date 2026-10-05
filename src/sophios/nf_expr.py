@@ -376,8 +376,13 @@ def source_text(node: Expr) -> str:
     return f"({source_text(node.args[0])} {node.op} {source_text(node.args[1])})"
 
 
-def _groovy_string(value: str) -> str:
-    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+CONTROL_ESCAPES = {code: f"\\u{code:04x}" for code in (*range(32), 127)}
+_GROOVY_LITERAL_TABLE = {ord("\\"): "\\\\", ord("'"): "\\'", **CONTROL_ESCAPES}
+
+
+def groovy_literal(value: str) -> str:
+    """``value`` as a single-quoted Groovy string: the one escaper for that literal."""
+    return f"'{value.translate(_GROOVY_LITERAL_TABLE)}'"
 
 
 def render_groovy(node: Expr, *, where: str, inputs: str) -> str:
@@ -389,17 +394,17 @@ def render_groovy(node: Expr, *, where: str, inputs: str) -> str:
     """
     def numeric(expression: str, child: Expr) -> str:
         return (
-            f"{NF_FINITE_HELPER}({expression}, {_groovy_string(where)}, "
-            f"{_groovy_string(source_text(child))}, {inputs})"
+            f"{NF_FINITE_HELPER}({expression}, {groovy_literal(where)}, "
+            f"{groovy_literal(source_text(child))}, {inputs})"
         )
 
     def go(child: Expr) -> str:
         args = [go(arg) for arg in child.args]
         match child.op:
             case "number":
-                return f"Double.valueOf({_groovy_string(str(child.value))})"
+                return f"Double.valueOf({groovy_literal(str(child.value))})"
             case "string":
-                return _groovy_string(child.value)
+                return groovy_literal(child.value)
             case "boolean":
                 return "true" if child.value else "false"
             case "null":
@@ -467,7 +472,8 @@ NF_EXPRESSION_FUNCTIONS = f'''def {NF_FINITE_HELPER}(double value, String where,
     if( Double.isNaN(value) || Double.isInfinite(value) )
         throw new IllegalStateException("Sophios expression " + where + ": " + part \
 + " is " + value + " with inputs " + inputs)
-    return value
+    // + 0.0d turns -0.0 into 0.0: JavaScript never tells them apart, Groovy == does.
+    return value + 0.0d
 }}
 def {NF_ROUND_HELPER}(double value) {{
     double floor = Math.floor(value)

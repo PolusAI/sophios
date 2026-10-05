@@ -143,15 +143,13 @@ PREDICATES = {
     "$(inputs.s == 'y')": False,                             # W4
     "$(inputs.flag && !(inputs.n < 0) || false)": True,      # W5
     "$(Math.round(inputs.n / 2) >= 2)": True,                # W6
-    "$(inputs.maybe === null)": True,                        # W7
-    "$(inputs.maybe !== null)": False,                       # W7
 }
+# W7 (null checks) needs an optional input bound and absent, which these steps
+# cannot express; test_phase3_conformance runs it.
 
 
 def _when_tool(name: str) -> CommandLineTool:
-    ports = Inputs(
-        flag=Input(cwl.boolean), s=Input(cwl.string), n=Input(cwl.int), maybe=Input(cwl.int, required=False)
-    )
+    ports = Inputs(flag=Input(cwl.boolean), s=Input(cwl.string), n=Input(cwl.int))
     tool = CommandLineTool(name, ports, Outputs(out=Output(cwl.file, glob=f"{name}.txt")))
     return tool.base_command("touch").argument(f"{name}.txt", position=1)
 
@@ -159,7 +157,7 @@ def _when_tool(name: str) -> CommandLineTool:
 @pytest.mark.nextflow
 @pytest.mark.serial
 def test_predicates(tmp_path: Path) -> None:
-    """W1-W7: every predicate kind decides the step, without truthiness."""
+    """W1-W6: every predicate kind decides the step, without truthiness."""
     steps = []
     for index, predicate in enumerate(PREDICATES):
         step = Step(_when_tool(f"p{index}"), step_name=f"p{index}")

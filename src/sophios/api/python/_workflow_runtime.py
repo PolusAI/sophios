@@ -24,7 +24,7 @@ from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.resolve import RegistrySnapshot
 from sophios.lang import Diagnostics, Document, ParseResult, render
 from sophios.ir.names import render_step_id
-from sophios.input_output_nf import write_nextflow_artifacts
+from sophios.input_output_nf import remove_nextflow_artifacts, write_nextflow_artifacts
 from sophios.nf_types import ExecutableNextflowWorkflow
 from sophios.cli import default_compilation_settings, get_known_and_unknown_args
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
@@ -526,6 +526,7 @@ def write_nextflow_workflow(
     lang_version: str | None = None,
 ) -> tuple[Path, Path, Path, Path]:
     """Compile once and write the versioned IR plus executable artifacts."""
+    remove_nextflow_artifacts(outdir)
     return write_nextflow_artifacts(
         nextflow_workflow(
             workflow,

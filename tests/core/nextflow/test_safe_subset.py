@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from sophios.nf_expr import Expr, check, parse
+from sophios.nf_expr import Expr, check, parse, render_groovy
 from sophios.nf_types import ExecutableNextflowWorkflow, NfComputed, NfTemplate
 from sophios.utils_nf import compiled_source_to_nextflow
 
@@ -90,6 +90,13 @@ def test_precedence_follows_javascript() -> None:
     assert node.args[0].op == "<"
     assert node.args[0].args[0].op == "-"
     assert node.args[1].op == "&&"
+
+
+@pytest.mark.fast
+def test_a_control_character_in_where_never_reaches_the_groovy_source() -> None:
+    rendered = render_groovy(parse("$(inputs.a * 2)"), where="CALC\narguments[0]\t", inputs="[a: a]")
+    assert "\n" not in rendered and "\t" not in rendered
+    assert "'CALC\\u000aarguments[0]\\u0009'" in rendered
 
 
 @pytest.mark.fast

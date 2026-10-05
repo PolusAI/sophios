@@ -7,7 +7,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .nf_expr import Expr, NF_EXPRESSION_FUNCTIONS, NF_NUMBER_TEXT_HELPER, references, render_groovy, source_text
+from .nf_expr import (
+    CONTROL_ESCAPES, Expr, NF_EXPRESSION_FUNCTIONS, NF_NUMBER_TEXT_HELPER, groovy_literal, references,
+    render_groovy, source_text,
+)
 from .nf_types import (
     NF_NEST_HELPER,
     MULTI_INPUT_ADAPTERS,
@@ -76,13 +79,7 @@ def _write_text(path: Path, value: str) -> Path:
     return path
 
 
-_CONTROL_ESCAPES = {code: f"\\u{code:04x}" for code in (*range(32), 127)}
-_GROOVY_LITERAL_TABLE = {ord("\\"): "\\\\", ord("'"): "\\'", **_CONTROL_ESCAPES}
-_GSTRING_FRAGMENT_TABLE = {ord("\\"): "\\\\", ord('"'): '\\"', ord("$"): "\\$", **_CONTROL_ESCAPES}
-
-
-def _groovy_literal(value: str) -> str:
-    return f"'{value.translate(_GROOVY_LITERAL_TABLE)}'"
+_GSTRING_FRAGMENT_TABLE = {ord("\\"): "\\\\", ord('"'): '\\"', ord("$"): "\\$", **CONTROL_ESCAPES}
 
 
 def _groovy_gstring_fragment(value: str) -> str:
@@ -97,7 +94,7 @@ def _segment_expression(segment: Any) -> str:
         case NfBasenameReference():
             return f"{segment.name}.name.toString()"
         case _:
-            return _groovy_literal(segment.value)
+            return groovy_literal(segment.value)
 
 
 def _template_expression(template: Any) -> str:
@@ -118,7 +115,7 @@ def _render_array_binding(token: NfArrayBinding) -> str:
     """Render an array binding: nothing when empty, else prefix once plus each item."""
     items_expression = f"{token.name}.collect{{ {NF_SHELL_QUOTE_HELPER}(it.toString()) }}"
     if token.prefix is not None:
-        quoted_prefix = f"{NF_SHELL_QUOTE_HELPER}({_groovy_literal(token.prefix)})"
+        quoted_prefix = f"{NF_SHELL_QUOTE_HELPER}({groovy_literal(token.prefix)})"
         joined = f"([{quoted_prefix}] + {items_expression}).join(' ')"
     else:
         joined = f"{items_expression}.join(' ')"
@@ -140,7 +137,7 @@ def _render_computed(token: NfComputed) -> str:
     inputs = "[" + ", ".join(f"{name}: {name}" for name in sorted(token.names)) + "]"
     if inputs == "[]":
         inputs = "[:]"
-    where = _groovy_literal(token.where)
+    where = groovy_literal(token.where)
     expression = render_groovy(token.expression, where=token.where, inputs=inputs)
     integral = "true" if token.integral else "false"
     text = f"{NF_NUMBER_TEXT_HELPER}({expression}, {integral}, {where}, {inputs})"
@@ -152,7 +149,7 @@ def _render_command_token(token: Any) -> str:
     if isinstance(token, NfComputed):
         return _render_computed(token)
     if isinstance(token, NfFlag):
-        quoted = f"{NF_SHELL_QUOTE_HELPER}({_groovy_literal(token.prefix)})"
+        quoted = f"{NF_SHELL_QUOTE_HELPER}({groovy_literal(token.prefix)})"
         return f"${{{token.name} ? {quoted} : ''}}"
     if isinstance(token, NfArrayBinding):
         return _render_array_binding(token)
@@ -163,7 +160,7 @@ def _render_command_token(token: Any) -> str:
 
 def _render_glob(template: Any) -> str:
     if all(isinstance(segment, NfLiteral) for segment in template.segments):
-        return _groovy_literal("".join(segment.value for segment in template.segments))
+        return groovy_literal("".join(segment.value for segment in template.segments))
     rendered: list[str] = []
     for segment in template.segments:
         match segment:
@@ -223,7 +220,7 @@ def _capture_literal(port: NfPort) -> str:
     assert port.glob is not None
     segment = port.glob.segments[0]
     assert isinstance(segment, NfLiteral)
-    return _groovy_literal(segment.value)
+    return groovy_literal(segment.value)
 
 
 def _process_output(port: NfPort, *, tuple_element: bool = False) -> str:
@@ -265,14 +262,14 @@ def _path_input(port: NfPort, stage_as: str | None) -> str:
     """
     options = [f"arity: '{NF_ARRAY_PATH_ARITY}'"] if port.is_array else []
     if stage_as is not None:
-        options.append(f"stageAs: {_groovy_literal(stage_as)}")
+        options.append(f"stageAs: {groovy_literal(stage_as)}")
     return f"path {port.name}" + "".join(f", {option}" for option in options)
 
 
 def _process_input(port: NfPort, *, tuple_element: bool = False) -> str:
     if tuple_element:
         if port.stage_as is not None:
-            return f"{port.qualifier}({port.name}, stageAs: {_groovy_literal(port.stage_as)})"
+            return f"{port.qualifier}({port.name}, stageAs: {groovy_literal(port.stage_as)})"
         return f"{port.qualifier}({port.name})"
     if port.qualifier == "path":
         return _path_input(port, port.stage_as)
@@ -294,7 +291,7 @@ def _render_process(
 ) -> str:
     lines = [f"process {process.name} {{"]
     if process.container is not None:
-        lines.append(f"    container {_groovy_literal(process.container)}")
+        lines.append(f"    container {groovy_literal(process.container)}")
     if process.resources.cpus is not None:
         lines.append(f"    cpus {process.resources.cpus}")
     if process.resources.memory_mb is not None:
@@ -331,11 +328,16 @@ def _render_process(
         (">", process.command.stdout),
         ("2>", process.command.stderr),
     )
-    for operator, stream in streams:
-        if stream is not None:
-            command += f" {operator} {_render_template(stream)}"
+    redirects = "".join(
+        f" {operator} {_render_template(stream)}" for operator, stream in streams if stream is not None
+    )
     lines.extend(["", "    script:", '    \"\"\"'])
-    lines.append(f"    {command}")
+    if redirects and any(isinstance(token, NfShellLiteral) for token in process.command.tokens):
+        # CWL redirects the whole command, not just the last one a shell literal starts;
+        # on separate lines, a trailing `&` or `#` in the literal cannot swallow the `)`.
+        lines.extend(["    (", f"    {command}", f"    ){redirects}"])
+    else:
+        lines.append(f"    {command}{redirects}")
     lines.extend(['    \"\"\"', "}"])
     return "\n".join(lines)
 
@@ -872,6 +874,12 @@ def render_nextflow_params(workflow: ExecutableNextflowWorkflow) -> str:
         ensure_ascii=False,
         allow_nan=False,
     ) + "\n"
+
+
+def remove_nextflow_artifacts(outdir: str | Path) -> None:
+    """Remove the four fixed-name artifacts, so a rejected workflow leaves none (design §8)."""
+    for name in (NEXTFLOW_JSON, NEXTFLOW_SCRIPT, NEXTFLOW_CONFIG, NEXTFLOW_PARAMS):
+        (Path(outdir) / name).unlink(missing_ok=True)
 
 
 def write_nextflow_artifacts(
