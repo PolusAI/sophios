@@ -549,7 +549,7 @@ def _kept_calls(artifact: CompilationArtifact) -> list[str]:
     Decided here from the nested document, not read back from the code under
     test: these are the calls `--cwl_inline_subworkflows` is expected to leave
     nested. (No corpus workflow is compiled with `--partial_failure_enable`,
-    which would add a `when` to every call.)
+    which would keep every call nested with its `when`.)
     """
     return [step['id'] for document in _artifacts(artifact)
             for step, child in zip(document.cwl.get('steps', []), document.children)

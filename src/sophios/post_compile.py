@@ -312,17 +312,13 @@ class _Call:
               file=sys.stderr)
 
     def written_keys(self) -> list[str]:
-        """The keys its author put on the call besides `in` and `out`.
+        """The keys on the emitted call besides `in` and `out`.
 
-        Read from the emitted step, minus a `when` the compiler added: under
-        `--partial_failure_enable` every step gets one, and the graph the
-        document was emitted from still says whether the author wrote it.
+        A `when` counts whoever wrote it: under `--partial_failure_enable` the
+        compiler's own is the call's gate over all its inputs, which the steps
+        inside do not carry between them.
         """
-        extra = set(self.step) - _PLAIN_CALL_KEYS
-        graph = self.document.graph
-        if graph is not None and 'when' not in dict(graph.steps[self.index].interpreted):
-            extra.discard('when')
-        return sorted(extra)
+        return sorted(set(self.step) - _PLAIN_CALL_KEYS)
 
     def dissolvable(self) -> None:
         """Raise `_Stays` unless the call's boundary can be removed without changing meaning."""
@@ -460,8 +456,8 @@ def flatten_subworkflows(artifact: CompilationArtifact) -> CompilationArtifact:
     rest onto each step, where the step's own entry wins.
 
     A call stays a nested subworkflow step, and one stderr line says why, when
-    its author wrote anything on it besides `in` and `out` (`scatter`, `when`,
-    `requirements`...), when it is marked `wic: inlineable: false`, or when
+    it carries anything besides `in` and `out` (`scatter`, `when`, even the
+    one `--partial_failure_enable` adds, `requirements`...), when it is marked `wic: inlineable: false`, or when
     the boundary cannot be removed without guessing: an input bound to anything
     but one source, an input with a default, requirements or hints written as a
     list, a document feature declared differently from the caller's, a source

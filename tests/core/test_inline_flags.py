@@ -262,16 +262,16 @@ def test_a_scattered_call_stays_nested_and_the_compile_says_so(tmp_path: Path, m
 
 
 @pytest.mark.fast
-def test_the_when_partial_failure_adds_does_not_keep_a_call_nested(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                                                   capsys: pytest.CaptureFixture[str]) -> None:
-    """Whether a call can be dissolved is decided on what the author wrote, not on what the compiler added."""
-    document = _document(_cli(tmp_path / 'both', monkeypatch, 'multistep3', '--cwl_inline_subworkflows',
-                              '--partial_failure_enable'), 'multistep3')
-    assert [step['id'] for step in document['steps']] == FLAT_IDS
-    assert all(step['when'].startswith('$(inputs[') for step in document['steps']), (
-        'each flat step keeps the condition the compiler gave it in the subworkflow')
-    assert document['requirements'] == {'InlineJavascriptRequirement': {}}
-    assert 'Warning!' not in capsys.readouterr().err
+def test_the_when_partial_failure_adds_keeps_a_call_nested(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                           capsys: pytest.CaptureFixture[str]) -> None:
+    """The `when` partial failure gives a call gates all its inputs, so dissolving the call would drop it."""
+    written = _cli(tmp_path / 'both', monkeypatch, 'multistep3', '--cwl_inline_subworkflows',
+                   '--partial_failure_enable')
+    document = _document(written, 'multistep3')
+    assert [step['id'] for step in document['steps']] == NESTED_IDS
+    assert document['requirements']['SubworkflowFeatureRequirement'] == {}
+    stderr = capsys.readouterr().err
+    assert "stays a subworkflow under --cwl_inline_subworkflows: it carries `when`" in stderr
 
 
 XFORM: Yaml = {'id': 'xform', 'in': {'name': {'wic_inline_input': 'b'}}}
