@@ -1213,8 +1213,12 @@ def test_accepts_inert_workflow_level_scatter_requirement(requirements: Any) -> 
             "ScatterFeatureRequirement",
             "workflow.requirements: CWL Workflow requirements must be a mapping or list",
         ),
+        (
+            [{"directive": "${System.exit(3)}"}],
+            "workflow.requirements.0: a requirement or hint needs a string `class`",
+        ),
     ],
-    ids=["unconsumed-field", "unsupported-class", "wrong-shape"],
+    ids=["unconsumed-field", "unsupported-class", "wrong-shape", "no-class"],
 )
 def test_rejects_unsupported_workflow_level_requirements(
     requirements: Any,
@@ -1224,6 +1228,18 @@ def test_rejects_unsupported_workflow_level_requirements(
     cast(dict[str, Any], rose.workflow)["requirements"] = requirements
 
     assert _findings(rose) == [diagnostic]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("section", ["requirements", "hints"])
+def test_rejects_tool_requirement_without_class(section: str) -> None:
+    classless = tool("CLASSLESS")
+    classless[section] = [{"directive": "${System.exit(3)}"}]
+    rose = synthetic_source(workflow_doc([step("CLASSLESS")]), [classless])
+
+    assert _findings(rose) == [
+        f"steps[0].run.{section}.0: a requirement or hint needs a string `class`"
+    ]
 
 
 @pytest.mark.fast

@@ -555,8 +555,19 @@ def test_maps_cpu_and_memory_requirements() -> None:
             }
         },
     )
-    rose = synthetic_source(workflow_doc([step("RESOURCES")]), [resources])
-    assert compiled_source_to_nextflow(rose).processes[0].resources == NfResources(2, 1024)
+    ceiling_only = tool(
+        "CEILING_ONLY",
+        requirements={"ResourceRequirement": {"coresMax": 2, "ramMax": 1024}},
+    )
+    rose = synthetic_source(
+        workflow_doc([step("RESOURCES"), step("CEILING_ONLY")]),
+        [resources, ceiling_only],
+    )
+    # CWL reserves the minimum; a maximum alone is all there is to request.
+    assert [process.resources for process in compiled_source_to_nextflow(rose).processes] == [
+        NfResources(1, 512),
+        NfResources(2, 1024),
+    ]
 
 
 @pytest.mark.fast

@@ -62,6 +62,12 @@ _TEXT_CAPTURE_OUTPUT = re.compile(
 _CALL = re.compile(r"^(\S+)\((.*)\)$")
 _PROCESS_OUTPUT = re.compile(r"^(\S+)\.out\.(\S+)$")
 _STATIC_CPUS = re.compile(r"[1-9][0-9]*")
+_STRING_LITERAL = re.compile(r"'(?:\\.|[^'\\])*'" r'|"(?:\\.|[^"\\])*"')
+# A literal that interpolates nothing and uses only the escapes _unquote decodes.
+_STATIC_STRING = re.compile(
+    r"'(?:[^'\\]|\\[\\']|\\u[0-9A-Fa-f]{4})*'"
+    r'|"(?:[^"\\$]|\\[\\"$]|\\u[0-9A-Fa-f]{4})*"'
+)
 _STATIC_MEMORY_MB = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)? MB")
 
 
@@ -118,6 +124,17 @@ class NextflowDocument:
             )
 
 
+def _renders(executable: ExecutableNextflowWorkflow, text: str) -> bool:
+    """Whether ``text`` is ``executable``'s rendering; line endings carry no meaning in Groovy."""
+    return render_nextflow(executable) == re.sub(r"\r\n?", "\n", text)
+
+
+def _lines(text: str) -> list[str]:
+    """``text`` split where Groovy ends a line; ``splitlines`` also splits at U+0085, U+2028, U+2029."""
+    lines = re.split(r"\r\n|\r|\n", text)
+    return lines[:-1] if lines[-1] == "" else lines
+
+
 def _blocks(lines: list[str], opener: re.Pattern[str]) -> list[tuple[str | None, int, int]]:
     blocks: list[tuple[str | None, int, int]] = []
     inside_script = False
@@ -138,7 +155,8 @@ def _blocks(lines: list[str], opener: re.Pattern[str]) -> list[tuple[str | None,
                 in_script = not in_script
                 continue
             if not in_script:
-                depth += current.count("{") - current.count("}")
+                code = _STRING_LITERAL.sub("", current)  # a brace in a string is data
+                depth += code.count("{") - code.count("}")
             if depth == 0:
                 blocks.append((match.group(1), start, end))
                 break
@@ -256,7 +274,11 @@ def _parse_process(name: str, body: list[str]) -> tuple[NextflowProcess, tuple[s
             ))
             continue
         if stripped.startswith("container "):
-            container = _unquote(stripped.removeprefix("container "))
+            literal = stripped.removeprefix("container ").strip()
+            if _STATIC_STRING.fullmatch(literal):
+                container = _unquote(literal)
+            else:
+                unparsed.append(stripped)
         elif stripped.startswith("cpus "):
             candidate = stripped.removeprefix("cpus ").strip()
             if _static_cpu_value(candidate) is None:
@@ -410,7 +432,7 @@ def parse_nf_text(text: str, *, params: Mapping[str, Any] | None = None) -> Next
     Returns:
         NextflowDocument: The loss-aware structural representation.
     """
-    lines = text.splitlines()
+    lines = _lines(text)
     process_blocks = _blocks(lines, _PROCESS)
     parsed_processes = [
         _parse_process(name or "", lines[start + 1:end])
@@ -436,7 +458,7 @@ def parse_nf_text(text: str, *, params: Mapping[str, Any] | None = None) -> Next
     for _name, block_start, block_end in [*process_blocks, *workflow_blocks]:
         covered.update(range(block_start, block_end + 1))
     for helper in (NF_SHELL_QUOTE_FUNCTION, NF_LOAD_CONTENTS_FUNCTION, NF_EXPRESSION_FUNCTIONS, NF_NEST_FUNCTION):
-        helper_lines = helper.splitlines()
+        helper_lines = _lines(helper)
         for helper_start in range(len(lines) - len(helper_lines) + 1):
             if lines[helper_start:helper_start + len(helper_lines)] == helper_lines:
                 covered.update(range(helper_start, helper_start + len(helper_lines)))
@@ -493,12 +515,12 @@ def parse_nf_file(path: str | Path) -> NextflowDocument:
         if not isinstance(loaded, Mapping):
             raise ValueError("nextflow_params.json must contain a JSON object")
         params = loaded
-    source_text = source.read_text(encoding="utf-8")
+    source_text = source.read_bytes().decode("utf-8")
     ir_path = source.with_name("nextflow_workflow.json")
     if not ir_path.exists():
         return parse_nf_text(source_text, params=params)
     executable = ExecutableNextflowWorkflow.from_json(ir_path.read_text(encoding="utf-8"))
-    if render_nextflow(executable) != source_text:
+    if not _renders(executable, source_text):
         raise ValueError("generated Nextflow source does not match its executable IR artifact")
     if executable.params != params:
         raise ValueError("generated Nextflow parameters do not match its executable IR artifact")
@@ -525,7 +547,7 @@ def _glob_text(template: Any) -> str:
 
 def _process_scripts(source_text: str) -> dict[str, str]:
     """Each process block's script text; the script block parses on its own."""
-    lines = source_text.splitlines()
+    lines = _lines(source_text)
     scripts: dict[str, str] = {}
     for name, start, end in _blocks(lines, _PROCESS):
         try:
@@ -601,7 +623,7 @@ def promote_nextflow_document(
         raise ValueError(
             "cannot promote parsed source without a matching validated executable IR artifact"
         )
-    if render_nextflow(document.verified_executable) != document.source_text:
+    if not _renders(document.verified_executable, document.source_text):
         raise ValueError(
             "cannot promote a NextflowDocument whose source does not match its "
             "validated executable IR artifact"

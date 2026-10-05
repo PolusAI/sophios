@@ -870,7 +870,7 @@ def _container(tool: Mapping[str, Any]) -> str | None:
 
 
 def _resource_value(resource: Mapping[str, Any], minimum: str, maximum: str) -> Any:
-    return resource.get(maximum, resource.get(minimum))
+    return resource.get(minimum, resource.get(maximum))
 
 
 def _resource_number(value: Any, *, name: str) -> int | float:
@@ -1302,8 +1302,11 @@ def _requirement_definition(
     return definition if isinstance(definition, Mapping) else None
 
 
+_CLASSLESS_REQUIREMENT = "a requirement or hint needs a string `class`"
+
+
 def _requirement_names(section: Any) -> list[tuple[str, str]]:
-    """Return requirement names and stable path suffixes for capability analysis."""
+    """Return requirement names and stable path suffixes; a list item without a class gets ``""``."""
     match section:
         case None:
             return []
@@ -1316,7 +1319,7 @@ def _requirement_names(section: Any) -> list[tuple[str, str]]:
                     case Mapping() if isinstance(requirement.get("class"), str):
                         names.append((requirement["class"], str(index)))
                     case _:
-                        continue
+                        names.append(("", str(index)))
             return names
         case _:
             return []
@@ -1757,7 +1760,9 @@ def _tool_capability_findings(
         section = tool.get(section_name)
         for class_name, suffix in _requirement_names(section):
             requirement_path = f"{path}.run.{section_name}.{suffix}"
-            if class_name in _DEFERRED_REQUIREMENTS:
+            if not class_name:
+                findings.append(f"{requirement_path}: {_CLASSLESS_REQUIREMENT}")
+            elif class_name in _DEFERRED_REQUIREMENTS:
                 findings.append(f"{requirement_path}: {_DEFERRED_REQUIREMENTS[class_name]}")
             elif class_name not in _SUPPORTED_REQUIREMENTS:
                 findings.append(
@@ -2068,7 +2073,9 @@ def _workflow_requirement_findings(
     findings: list[str] = []
     for class_name, suffix in _requirement_names(section):
         requirement_path = f"{path}.requirements.{suffix}"
-        if class_name not in _SUPPORTED_WORKFLOW_REQUIREMENTS:
+        if not class_name:
+            findings.append(f"{requirement_path}: {_CLASSLESS_REQUIREMENT}")
+        elif class_name not in _SUPPORTED_WORKFLOW_REQUIREMENTS:
             findings.append(
                 f"{requirement_path}: {class_name} is not supported at the Nextflow workflow level"
             )

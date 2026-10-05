@@ -4,6 +4,7 @@
 
 from dataclasses import replace
 import json
+import random
 from pathlib import Path
 from typing import Any, cast
 
@@ -266,6 +267,72 @@ def test_reader_extracts_ports_container_and_resources() -> None:
     assert process.outputs == (
         NextflowPort("result", "path", "result", "result.txt"),
     )
+
+
+def _container_workflow(container: str) -> ExecutableNextflowWorkflow:
+    return ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [NfProcess(
+            "TASK",
+            [NfPort("source", "path")],
+            [output_port("result", "result.txt")],
+            command("cp", template(ref("source")), "result.txt"),
+            container=container,
+        )],
+        [
+            NfWorkflowInputConnection("source", "TASK", "source"),
+            NfWorkflowOutputConnection("TASK", "result", "result"),
+        ],
+        {"source": "input.txt"},
+    )
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("directive", [
+    'container "${params.img}"',
+    "container params.img",
+    "container 'ubuntu' + ':24.04'",
+    "container 'a\\tb'",
+    "container 'abc\\'",
+])
+def test_reader_keeps_a_dynamic_container_opaque(directive: str) -> None:
+    source = render_nextflow(_container_workflow("ubuntu:24.04")).replace("container 'ubuntu:24.04'", directive)
+    parsed = parse_nf_text(source, params={"source": "input.txt"})
+    assert (parsed.processes[0].container, parsed.opaque_regions) == (None, (f"process TASK: {directive}",))
+
+
+@pytest.mark.fast
+def test_reader_reads_back_every_container_the_renderer_writes() -> None:
+    # Braces inside a string literal, and line separators Groovy does not end a line at.
+    awkward = ["reg/img:{1}", "a}b{", "it's {", 'q"x}', "img\u2028x", "img\u0085x", "img\u2029x"]
+    sample = random.Random(5)
+    alphabet = "a:/.{}'\"\\$\t\n\u0085\u2028\u2029x"
+    awkward += ["".join(sample.choice(alphabet) for _ in range(sample.randint(1, 12))) for _ in range(300)]
+    for image in (image for image in awkward if image.strip()):  # the IR refuses a blank container
+        parsed = parse_nf_text(render_nextflow(_container_workflow(image)), params={"source": "input.txt"})
+        assert (parsed.processes[0].container, parsed.opaque_regions) == (image, ()), repr(image)
+
+
+@pytest.mark.fast
+def test_reader_returns_the_bytes_of_a_crlf_file(tmp_path: Path) -> None:
+    source = render_nextflow(runtime_workflow()).replace("\n", "\r\n").encode("utf-8")
+    script = tmp_path / "workflow.nf"
+    script.write_bytes(source)
+
+    assert render_nextflow_document(parse_nf_file(script)).encode("utf-8") == source
+
+
+@pytest.mark.fast
+def test_a_generated_pair_with_crlf_line_endings_verifies(tmp_path: Path) -> None:
+    # A text-mode write on Windows, an autocrlf checkout or an editor save gives the .nf CRLF.
+    workflow = runtime_workflow()
+    script = write_nextflow_artifacts(workflow, tmp_path)[1]
+    crlf = render_nextflow(workflow).replace("\n", "\r\n").encode("utf-8")
+    script.write_bytes(crlf)
+
+    parsed = parse_nf_file(script)
+    assert promote_nextflow_document(parsed) == workflow
+    assert render_nextflow_document(parsed).encode("utf-8") == crlf
 
 
 @pytest.mark.fast
