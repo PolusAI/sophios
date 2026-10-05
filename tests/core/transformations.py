@@ -25,12 +25,12 @@ over all four rather than drawing one, so each gets the whole budget.
 import copy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Final
+from typing import Any, Callable, Final
 
 import yaml
 from hypothesis.strategies import SearchStrategy
 
-from sophios.utils_yaml import wic_loader
+from sophios.utils_yaml import Key, wic_loader
 from sophios.wic_types import Yaml
 
 from .ast_strategies import partitionings
@@ -87,6 +87,27 @@ def _text_roundtrip(document: Yaml) -> Yaml:
     return loaded
 
 
+def _bare_sources(inputs: Yaml, name: str) -> list[tuple[Any, Any]]:
+    """The bare-name references `inputs[name]` spells, as (container, key) slots.
+
+    A bare string is one, held by `inputs` itself; a step-input record
+    (`{wic_raw_cwl: {source: ...}}`) names its sources in `source`, as one
+    string or a list of them.
+    """
+    value = inputs[name]
+    if isinstance(value, str):
+        return [(inputs, name)]
+    record = value.get(Key.RAW_CWL) if isinstance(value, dict) else None
+    if not isinstance(record, dict):
+        return []
+    source = record.get('source')
+    if isinstance(source, str):
+        return [(record, 'source')]
+    if isinstance(source, list):
+        return [(source, index) for index, item in enumerate(source) if isinstance(item, str)]
+    return []
+
+
 def _declared_input_references(document: Yaml, steps: list[Yaml]) -> set[str]:
     """The declared `inputs:` names `steps` reference by bare name."""
     declared = document.get('inputs')
@@ -94,10 +115,11 @@ def _declared_input_references(document: Yaml, steps: list[Yaml]) -> set[str]:
         return set()
     referenced: set[str] = set()
     for step in steps:
-        for value in step.get('in', {}).values():
-            source = value.get('source') if isinstance(value, dict) else value
-            if isinstance(source, str) and source in declared:
-                referenced.add(source)
+        inputs = step.get('in', {})
+        for name in inputs:
+            for container, key in _bare_sources(inputs, name):
+                if container[key] in declared:
+                    referenced.add(container[key])
     return referenced
 
 
@@ -115,9 +137,10 @@ def _rewrite_workflow_input_references(steps: list[Yaml], formals: dict[str, str
         for inputs in candidates:
             if not isinstance(inputs, dict):
                 continue
-            for name, value in inputs.items():
-                if isinstance(value, str) and value in formals:
-                    inputs[name] = formals[value]
+            for name in inputs:
+                for container, key in _bare_sources(inputs, name):
+                    if container[key] in formals:
+                        container[key] = formals[container[key]]
 
 
 def _subtree_for(document: Yaml, steps: list[Yaml], formals: dict[str, str]) -> Yaml:
