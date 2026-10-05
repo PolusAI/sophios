@@ -229,8 +229,16 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
     # - everything else is treated as a literal inline value
     match value:
         case WorkflowInputReference(workflow=workflow, name=name, implicit=implicit):
-            workflow_input = workflow._ensure_input(
-                name, parameter_type=_boundary_type(input_port.parameter_type), implicit=implicit)
+            workflow_input = workflow._ensure_input(name, implicit=implicit)
+            port_type = _boundary_type(input_port.parameter_type)
+            if workflow_input.parameter_type is None:
+                workflow_input.set_parameter_type(port_type)
+            elif port_type is not None and not _python_api_types_match(port_type, workflow_input.parameter_type):
+                # The workflow input is the source and the port the sink, which a scatter may lift.
+                raise InvalidLinkError(
+                    f"{process_self.process_name}.{input_name} has incompatible types: expected {port_type!r}, "
+                    f"got {workflow.process_name}.inputs.{name} of type {workflow_input.parameter_type!r}",
+                    span=span)
             input_port._set_binding(InputBinding("workflow", name, workflow_input, span))
         case StepInput() as record:
             _bind_record(process_self, input_name, input_port, record, span)

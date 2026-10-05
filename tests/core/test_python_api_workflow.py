@@ -695,6 +695,33 @@ def test_scattering_over_two_ports_records_both_and_the_method(tmp_path: Path) -
 
 
 @pytest.mark.fast
+def test_a_declared_array_workflow_input_scatters_over_a_scalar_port() -> None:
+    """A workflow input is the source of its binding: a `string[]` input binds to a `string`
+    port its step then scatters over, and the CWL scatters that port over the array input."""
+    touch = Step(clt_path=_adapter("touch"))
+    workflow = Workflow([touch], "scatter_names")
+    touch.inputs.filename = workflow.inputs.names.as_type("string[]")
+    touch.scatter_on(touch.inputs.filename)
+
+    compiled = workflow.compile()
+
+    assert compiled.cwl_workflow["inputs"]["names"]["type"] == {"type": "array", "items": "string"}
+    (step,) = compiled.cwl_workflow["steps"]
+    assert step["scatter"] == ["filename"] and step["in"]["filename"] == "names"
+
+
+@pytest.mark.fast
+def test_a_declared_workflow_input_no_scatter_can_fit_its_port_is_refused() -> None:
+    """A `string` input cannot feed a `File` port, scattered or not: refused where it is bound."""
+    append = Step(clt_path=_adapter("append"))
+    workflow = Workflow([append], "wrong_input")
+    workflow.inputs.text.as_type("string")
+
+    with pytest.raises(InvalidLinkError, match="append.file has incompatible types"):
+        append.inputs.file = workflow.inputs.text
+
+
+@pytest.mark.fast
 def test_compiled_workflow_writes_cwl_and_job_inputs(tmp_path: Path) -> None:
     """Writing produces two files, and their text matches the in-memory document."""
     compiled = CompiledWorkflow(
