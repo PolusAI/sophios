@@ -2,7 +2,19 @@
 
 The unit tests build small documents beside each other in `tmp_path`, over the
 synthetic tools, and say what each construct becomes, or why it is refused.
+Then two properties over every workflow the corpus holds, and the in-repo table:
+
+  * **From the file.** A `.wic` the file door compiles is either refused with
+    `api006` and nothing else, or its objects compile to the CWL the file
+    compiles to, with equal job inputs and diagnostic codes. Equal up to key
+    order and CWL's shorthand for a port type: the Python API writes a step's
+    `in:` in its tool's port order and a port's type in CWL's long form.
+  * **Round trip.** The bundle `write_wic` writes for those objects compiles,
+    through the file door, to exactly what the objects compile to, and reading
+    that bundle back gives the same compilation again.
 """
+# pylint: disable=redefined-outer-name  # `corpus_registry` is a pytest fixture
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final
 
@@ -10,6 +22,7 @@ import pytest
 import yaml
 
 import sophios.compiler
+import sophios.plugins
 from sophios.api.python import _workflow_runtime
 from sophios.api.python.workflow import SophiosError, SophiosErrorCode, Step, Workflow
 from sophios.cli import default_compilation_settings
@@ -25,7 +38,12 @@ from sophios.wic_types import Json, StepId, Tools
 
 from .equivalence import Strength, equivalent
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
+from .test_examples import _is_includer_fragment, yml_paths_tuples_not_large
 from .test_frontdoor import PYTHON_SCRIPT
+# pylint: disable-next=unused-import  # `corpus_registry` is a pytest fixture
+from .test_setup import CorpusRegistry, corpus_registry
+
+REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
 WorkflowPaths = dict[str, dict[str, Path]]
 
@@ -365,3 +383,97 @@ def test_a_document_that_does_not_compile_raises_its_compile_error(tmp_path: Pat
     with pytest.raises(SophiosError) as caught:
         _from_wic(tmp_path, root='steps:\n- id: count\n  in:\n    file: !* nowhere\n')
     assert {item.code for item in caught.value.diagnostics} == {SophiosErrorCode.UNDEFINED_EDGE}
+
+
+# --------------------------------------------------------------------------
+# The two properties, over the corpus, and the in-repo table
+# --------------------------------------------------------------------------
+
+
+def _loaded(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> Workflow | None:
+    """`Workflow.from_wic(path)`, or None when every construct it refused is `api006`."""
+    try:
+        return Workflow.from_wic(path, tool_registry=tools, workflow_paths=workflow_paths)
+    except SophiosError as error:
+        codes = {diagnostic.code for diagnostic in error.diagnostics}
+        assert codes == {SophiosErrorCode.NO_PYTHON_SPELLING}, str(error)
+        return None
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('yml_path_str, yml_path', yml_paths_tuples_not_large)
+def test_a_wic_file_and_its_python_objects_compile_alike(yml_path_str: str, yml_path: Path,
+                                                         corpus_registry: CorpusRegistry) -> None:
+    """Property 1: refused with `api006` alone, or the same CWL, job inputs and diagnostic codes."""
+    try:
+        cwl, job_inputs, codes = _file_door(Path(yml_path), corpus_registry.workflows, corpus_registry.tools)
+    except SophiosError as error:
+        if _is_includer_fragment(error):
+            pytest.skip(f'{yml_path_str} consumes edges from an includer')
+        raise
+    workflow = _loaded(Path(yml_path), corpus_registry.workflows, corpus_registry.tools)
+    if workflow is None:
+        return
+    python_cwl, python_job_inputs, python_codes = _objects(workflow)
+    found = equivalent(_canonical_ports(cwl), _canonical_ports(python_cwl), Strength.UP_TO_ORDER)
+    assert found is None, f'{yml_path_str}: the file and its Python objects compile apart\n{found}'
+    assert python_job_inputs == job_inputs
+    assert python_codes == codes
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('yml_path_str, yml_path', yml_paths_tuples_not_large)
+def test_write_wic_of_a_loaded_workflow_compiles_identically(yml_path_str: str, yml_path: Path,
+                                                             corpus_registry: CorpusRegistry,
+                                                             tmp_path: Path) -> None:
+    """Property 2: the bundle `write_wic` writes for the objects, through the file door, is the
+    objects' own compilation, byte for byte; and reading that bundle back compiles the same."""
+    try:
+        _compile_file(Path(yml_path), corpus_registry.workflows, corpus_registry.tools)
+    except SophiosError as error:
+        if _is_includer_fragment(error):
+            pytest.skip(f'{yml_path_str} consumes edges from an includer')
+        raise
+    workflow = _loaded(Path(yml_path), corpus_registry.workflows, corpus_registry.tools)
+    if workflow is None:
+        return
+    direct = workflow.compile()
+    root = workflow.write_wic(tmp_path)
+    written: WorkflowPaths = {'global': {path.stem: path for path in tmp_path.glob('*.wic')}}
+    via_file = _workflow_runtime.compiled_workflow_from_result(
+        workflow, _compile_file(root, written, corpus_registry.tools))
+    assert equivalent(direct.cwl_workflow, via_file.cwl_workflow, Strength.IDENTICAL) is None
+    assert equivalent(direct.cwl_job_inputs, via_file.cwl_job_inputs, Strength.IDENTICAL) is None
+
+    reloaded = Workflow.from_wic(root, tool_registry=corpus_registry.tools, workflow_paths=written).compile()
+    assert equivalent(direct.cwl_workflow, reloaded.cwl_workflow, Strength.IDENTICAL) is None
+    assert equivalent(direct.cwl_job_inputs, reloaded.cwl_job_inputs, Strength.IDENTICAL) is None
+
+
+#: The in-repo workflows the Python API cannot hold, each refused with `api006`:
+#: six repeat a step id, `test_rand_fail` scatters a `.wic` call and reads an
+#: edge across documents, and `secrets_echo` declares `$namespaces`, `hints` and
+#: an input `default`.
+REFUSED: Final = frozenset({'append_twice', 'multistep1', 'multistep2', 'multistep3', 'naming_conventions',
+                            'naming_conventions_explicit', 'test_rand_fail', 'secrets_echo'})
+
+#: The directories of `.wic` files shipped in this repository.
+IN_REPO: Final = (REPO_ROOT / 'docs' / 'tutorials', REPO_ROOT / 'examples')
+
+
+@lru_cache(maxsize=1)
+def _in_repo_registry() -> tuple[WorkflowPaths, Tools]:
+    """The `.wic` files this repository ships and the tools it ships, read from nothing else."""
+    workflow_paths = {'global': {path.stem: path for directory in IN_REPO for path in directory.glob('*.wic')}}
+    tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(REPO_ROOT / 'cwl_adapters')]}},
+                                          quiet=True)
+    return workflow_paths, tools
+
+
+@pytest.mark.fast
+def test_the_in_repo_workflows_that_python_cannot_hold_are_these() -> None:
+    """Every `.wic` this repository ships compiles; those in `REFUSED` are `api006`, every other one builds."""
+    workflow_paths, tools = _in_repo_registry()
+    refused = {stem for stem, path in workflow_paths['global'].items()
+               if _loaded(path, workflow_paths, tools) is None}
+    assert refused == REFUSED
