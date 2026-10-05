@@ -44,8 +44,9 @@ field is one of
 
 - **native**: Sophios reads it and acts on it, or writes it;
 - **passthrough**: copied out unchanged;
-- **rejected**: reported with a positioned diagnostic, never silently dropped
-  or coerced.
+- **rejected**: reported with a diagnostic, never silently dropped or coerced.
+  It is positioned at the value; a step's `run` is positioned at the step, and
+  a workflow output at the document.
 
 The matrix is generated from the schema, not from this page:
 `tests/core/test_support_matrix.py` reads the fields of each class from

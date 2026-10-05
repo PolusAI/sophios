@@ -6,7 +6,8 @@ so a field the schema has and this table lacks fails the build
 
 NATIVE: Sophios reads it and acts on it, or writes it.
 PASSTHROUGH: copied out unchanged.
-REJECTED: reported with a positioned diagnostic, never silently dropped or coerced.
+REJECTED: reported with a diagnostic, never silently dropped or coerced. It is positioned at the
+value; a step's `run` is positioned at the step, and a workflow output at the document.
 """
 from dataclasses import dataclass
 from enum import StrEnum
