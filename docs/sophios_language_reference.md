@@ -699,6 +699,8 @@ language. It builds a `sophios.lang.Document` directly, compiles it through
 the same door as a `.wic` file, and writes it with `sophios.lang.render`:
 `Workflow.write_wic()` emits the tagged spelling with sequence-form steps and
 explicit `id:`.
+`Workflow.from_wic()` reads a document back into objects; a construct the
+Python API cannot hold is `api006`.
 
 A workflow that contains a nested `Workflow` is written as a bundle: each
 nested workflow is its own `.wic` file and the parent calls it by name, like

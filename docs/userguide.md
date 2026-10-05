@@ -331,6 +331,58 @@ resolves beside the document first; a nested `<child>.wic` comes from the
 search paths, so put the bundle's directory on
 `search_paths_wic` when the workflow nests others.
 
+## Load `.wic` Into Python
+
+`Workflow.from_wic()` reads a `.wic` file into the same `Workflow` and `Step`
+objects you would build by hand, so a workflow written in either surface can be
+inspected, extended and compiled in Python:
+
+```python
+from sophios import plugins
+from sophios.api.python.workflow import Workflow
+
+config = {"search_paths_cwl": {"global": ["cwl_adapters"]}}
+workflow = Workflow.from_wic("docs/tutorials/helloworld.wic",
+                             tool_registry=plugins.get_tools_cwl(config))
+
+(echo,) = workflow.steps
+print(echo.process_name, echo.inputs.message.value)  # echo Hello World
+compiled = workflow.compile()
+```
+
+It reads the file the way `sophios --yaml` does, and nothing else: a step's
+tool comes from `tool_registry` or from what its `run:` names, and a nested
+`<child>.wic` from `workflow_paths`, shaped `{namespace: {stem: path}}` like
+`sophios.plugins.get_yml_paths(config)`. It reads no config of its own. The
+file is compiled first, and a file that does not compile raises the same
+errors the CLI gives. `!ii` becomes a literal, `!*` the producing step's
+output object, a bare name a workflow input and `!cwl {...}` a `StepInput`;
+an input the file leaves to edge inference stays unbound, and `compile()`
+infers it. The objects compile to the CWL the file compiles to, and
+`write_wic()` of them writes a bundle that compiles to the same.
+
+Some `.wic` constructs have no Python spelling. `from_wic()` refuses them with
+`api006`, all at once, each with the line it is on and what to write instead:
+
+- a step id used twice in one document: give one step its own `id:` and
+  `run: <tool>.cwl`, since a Python workflow names each step once;
+- a `!*` reading an edge defined in another document, or on a later step;
+- a top-level key other than `inputs:`, `outputs:` and `steps:`, and a port
+  field other than `type` (and an output's `outputSource`), such as `format`;
+- a port name that is not a Python identifier, such as `ref-t`;
+- step keys Sophios passes through (`label:`, `hints:`, ...), `scatter:`
+  without `scatterMethod:`, and `scatter:` or `when:` on a `.wic` call;
+- `python_script` steps (build the tool with `tool_builder`), `run:` naming a
+  `.wic`, and `!cwl` text that is not a declared input;
+- one `.wic` called from two places whose `wic: steps:` give it different
+  bodies: a nested Python workflow is named after its file, so copy the file
+  for one of the calls;
+- `wic:` plugin namespaces, `implementations`, `inference` rules and
+  `lang_version` pins (pass `compile(lang_version=...)` instead).
+
+`wic: graphviz` and `wic: inlineable` change nothing a Python workflow
+compiles or runs; they are dropped with a warning.
+
 ## Compile Paths
 
 Sophios gives you two common compile paths.
