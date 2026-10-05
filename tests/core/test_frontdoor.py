@@ -427,6 +427,21 @@ def test_the_same_run_path_beside_two_documents_is_two_tools(tmp_path: Path) -> 
 
 
 @pytest.mark.fast
+def test_a_run_path_on_another_drive_than_the_root_still_compiles(tmp_path: Path,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    """`os.path.relpath` raises across Windows drives; the tool is then named by its absolute path."""
+    _tool_file(tmp_path / 't.cwl', 'echo')
+    (tmp_path / 'w.wic').write_text('steps:\n  - id: s\n    run: t.cwl\n    in: {a: !ii x}\n', encoding='utf-8')
+
+    def across_drives(path: object, start: object = None) -> str:
+        raise ValueError("path is on mount 'C:', start on mount 'D:'")
+
+    monkeypatch.setattr('os.path.relpath', across_drives)
+    result = _compile(bundle_from_disk(tmp_path / 'w.wic', {}, SYNTHETIC_TOOLS))
+    assert result.artifact.children[0].cwl['baseCommand'] == 'echo'
+
+
+@pytest.mark.fast
 def test_a_run_path_with_no_file_beside_its_document_ignores_another_documents_file(tmp_path: Path) -> None:
     """A child's `sub/mk_file.cwl` is not what a root's unresolved `run: mk_file.cwl` runs: it is the registry's."""
     _tool_file(tmp_path / 'sub' / 'mk_file.cwl', 'rm')

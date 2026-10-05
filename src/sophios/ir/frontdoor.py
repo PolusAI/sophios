@@ -204,7 +204,11 @@ def _register_run(step: Step, namespace: str, document_dir: Path, reading: _Read
     target = (document_dir / run).resolve()
     if not target.is_file():
         return False
-    name = run_path_name(run, os.path.relpath(target, reading.root_directory))
+    try:
+        identity = os.path.relpath(target, reading.root_directory)
+    except ValueError:  # Windows: the file and the root directory are on different drives
+        identity = target.as_posix()
+    name = run_path_name(run, identity)
     reading.run_names[(document_dir, run)] = name
     if run.endswith('.cwl'):
         with open(target, mode='r', encoding='utf-8') as handle:
