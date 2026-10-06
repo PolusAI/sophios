@@ -10,6 +10,7 @@ User Documentation
    overview.md
    installguide.md
    userguide.md
+   error_codes.md
    multistep_runner.md
    tool_builder_sam3.md
    tool_builder_workflow.md

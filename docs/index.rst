@@ -49,6 +49,7 @@ understand, debug, and review.
    overview.md
    installguide.md
    userguide.md
+   error_codes.md
 
 .. toctree::
    :maxdepth: 2

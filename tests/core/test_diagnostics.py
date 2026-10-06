@@ -677,3 +677,15 @@ def test_explain_names_a_code_that_does_not_exist(monkeypatch: pytest.MonkeyPatc
         cli.main()
     assert caught.value.code == 2
     assert 'wic999 is not a Sophios error code' in capsys.readouterr().err
+
+
+_ROW = re.compile(r'^\| `(?P<code>[a-z]{3}\d{3})` \| (?P<kind>[a-z]+) \| (?P<meaning>.+) \| (?P<fix>.+) \|$')
+
+
+@pytest.mark.fast
+def test_the_error_codes_page_says_what_the_code_says() -> None:
+    """docs/error_codes.md is the catalog, written out."""
+    page = Path(__file__).resolve().parents[2] / 'docs' / 'error_codes.md'
+    rows = {found['code']: (found['kind'], found['meaning'], found['fix'])
+            for found in map(_ROW.match, page.read_text(encoding='utf-8').splitlines()) if found}
+    assert rows == {str(code): (str(e.kind), e.meaning, e.fix) for code, e in EXPLANATIONS.items()}

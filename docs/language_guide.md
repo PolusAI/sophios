@@ -742,46 +742,5 @@ Errors stop the compile; notes (`wic042`, `wic043`) do not, unless
 `--inference_strict` is given. The Python API adds its own `api0NN` codes, for a
 call that is wrong although the document is fine.
 
-| Code | Meaning |
-|---|---|
-| `wic001` | The file is not valid YAML. |
-| `wic002` | The document is not a mapping. |
-| `wic003` | A mapping was expected here (`steps: 3`). |
-| `wic004` | A sequence was expected here (`out: 3`). |
-| `wic005` | A scalar was expected here, such as a mapping key that is itself a list. |
-| `wic006` | A step in a sequence has no `id:` (section 2.1). |
-| `wic007` | A step's `id:` is empty. |
-| `wic008` | A `wic: steps:` key is neither `(index, name)` nor a step id (section 7). |
-| `wic009` | An unknown YAML tag; the Sophios tags are `!ii`, `!&`, `!*` and `!cwl`. |
-| `wic010` | A key bound twice: an input, a step, a `wic:` key, or a second `id:` (section 3.8). |
-| `wic011` | An untagged input value names no workflow input; did you mean `!ii`? (section 3.3) |
-| `wic012` | A required input gets no value, such as `!ii null` on an input that is not optional. |
-| `wic013` | A workflow or a step's process cannot be used: no steps, a tool or subworkflow not found, a CWL `Workflow` as a step (section 2.3), subworkflows that call each other in a cycle, `implementations` with none chosen, or ports only the CWL runner can read. |
-| `wic014` | The arguments given to a Python script step do not match its declared inputs. |
-| `wic015` | The container engine (`docker` by default) is not installed or not working. |
-| `wic016` | An input file named in the inputs does not exist. |
-| `wic017` | An unknown `lang_version`. |
-| `wic018` | Two `lang_version` pins in one compilation disagree. |
-| `wic019` | `!&` outside a step's `out:` entry (section 3.6). |
-| `wic020` | A literal does not have the type of its input, or a scattered input's literal is not a list (sections 3.2, 6.1). |
-| `wic022` | Inference did not settle within its iteration limit. |
-| `wic023` | A reference whose type can never feed the input it binds (`string` into `File`). |
-| `wic024` | A `wic_` mapping in an input position that is not a Sophios construct (section 3.7). |
-| `wic025` | An edge reference with no definition before it, anywhere in the compilation (section 4). |
-| `wic026` | An edge name defined twice. |
-| `wic027` | An input, `out:` entry or edge with an empty name. |
-| `wic028` | An input or output name the step's process does not declare. |
-| `wic030` | A YAML alias that contains itself. |
-| `wic031` | Two ports the compiled CWL would spell the same way, or a namespace prefix bound to two URIs (section 5.2). |
-| `wic032` | A `scatter:` entry that is not an input of its step (section 6.1). |
-| `wic033` | A key the `wic:` block does not have (section 7). |
-| `wic034` | A `wic:` value of the wrong shape. |
-| `wic035` | A `cwlVersion` other than `v1.0`, `v1.1` or `v1.2`. |
-| `wic036` | A workflow output with no `type:` and no producer to take it from (section 5.2). |
-| `wic038` | CWL's step input written where Sophios does not read it: an untagged mapping of step-input fields, a malformed `!cwl {...}` record, or a list `outputSource`, `linkMerge` or `pickValue` on a workflow output (sections 3.5, 5.2). |
-| `wic039` | A positional `(index, name)` `outputSource` that names the wrong step (section 5.2). |
-| `wic042` | Note: one step offered several matching outputs and inference took the last (section 8). |
-| `wic043` | Note: an earlier step also matched and inference took the most recent. |
-| `wic044` | A real-time analysis declaration (a `cwl_subinterpreter` step) with an input that is not a literal or has the wrong shape, or whose analysis does not compile ([Real-time Analysis](advanced.md#real-time-analysis)). |
-
-`wic021`, `wic029`, `wic037`, `wic040` and `wic041` are not assigned.
+[Error codes](error_codes.md) lists every code with what it means and how to fix it;
+`sophios --explain <code>` prints one.

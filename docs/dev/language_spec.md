@@ -414,8 +414,10 @@ Every member is provoked in `tests/core/provocations.py`, in one of two tiers:
 the compiler or its helpers). `test_every_code_has_a_registered_provocation` in
 `tests/core/test_lang_parser.py` fails for a member with no provocation, so a new
 code lands with its provocation in the same commit. The
-[guide](../language_guide.md#9-error-codes-you-will-meet) says what each `wic0NN`
-means to a user.
+[error codes page](../error_codes.md) says what each code means and how to fix it:
+every member has an `Explanation` in `EXPLANATIONS` (kind, meaning, fix);
+`test_every_code_is_explained` fails for one without, and
+`test_the_error_codes_page_says_what_the_code_says` keeps the page equal to it.
 
 | Code | Member | Provoked in |
 |---|---|---|

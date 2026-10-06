@@ -605,6 +605,8 @@ reviewed through its generated artifacts, not only through the Python code.
 
 When a workflow fails:
 
+- Every error carries a code, such as `wic011`. `sophios --explain wic011` and
+  [Error codes](error_codes.md) say what it means and what to change.
 - Compile before running. If compilation fails, the issue is in the workflow
   structure or tool contract.
 - Write the workflow with `write_wic()` and read it to check bindings before
