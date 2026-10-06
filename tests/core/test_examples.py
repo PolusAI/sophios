@@ -35,6 +35,7 @@ from sophios.utils_graphs import get_graph_reps
 # pylint: disable-next=unused-import  # `corpus_registry` is a pytest fixture
 from .test_setup import (CorpusRegistry, corpus_registry, workflow_paths,
                          yml_path_is_workflow)
+from .cwl_validation import validate_cwl
 from .equivalence import Strength, equivalent, flatten_model
 
 yml_paths = workflow_paths()
@@ -589,14 +590,12 @@ def test_flatten_keeps_meaning(yml_path_str: str, yml_path: Path, corpus_registr
 def test_flatten_validates_as_cwl(yml_path_str: str, yml_path: Path, tmp_path: Path,
                                   corpus_registry: CorpusRegistry) -> None:
     """The flat form, and the flat form embedded, are documents cwltool accepts."""
-    import cwltool.main  # pylint: disable=import-outside-toplevel
-
     nested = sophios.plugins.cwl_prepend_dockerFile_include_path_artifact(
         _compile_corpus_workflow(yml_path_str, yml_path, corpus_registry))
     flat = post_compile.flatten_subworkflows(nested)
     for form, artifact in (('flat', flat), ('flat_embedded', inline_artifact_runs(flat))):
         sophios.input_output.write_artifacts_to_disk(artifact, tmp_path / form, True)
-        assert cwltool.main.main(['--validate', '--quiet', str(tmp_path / form / f'{nested.name}.cwl')]) == 0
+        assert validate_cwl(str(tmp_path / form / f'{nested.name}.cwl')) == 0
 
 
 def _tool_defaults(path: Path) -> Counter[tuple[str, str, Any, Any]]:
