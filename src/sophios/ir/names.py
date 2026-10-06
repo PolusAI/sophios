@@ -136,8 +136,9 @@ def names_map(graph: WorkflowGraph, names: Names) -> dict[str, Any]:
     `w__step__2__append___file` can be read as step 2 `append`, port `file`,
     at `w.wic:7`. `steps` is keyed by the emitted step id, prefixed by every
     step it is nested in; each entry's `id` is the id the step carries in its
-    own document. `ports` is keyed by the emitted boundary name of every
-    workflow input and output.
+    own document, `index` is the position the author wrote the step at (the
+    one a compile diagnostic counts), and `inserted` marks a step Infer added. `ports` is keyed by the emitted
+    boundary name of every workflow input and output.
 
     Args:
         graph (WorkflowGraph): The compiled root graph.
@@ -153,7 +154,7 @@ def names_map(graph: WorkflowGraph, names: Names) -> dict[str, Any]:
         for step in node.steps:
             steps[names.qualified(step.id)] = {
                 'id': names.step(step.id), 'workflow': node.name,
-                'index': names.position(step.id), 'name': step.id.name,
+                'index': step.id.index, 'name': step.id.name, 'inserted': step.synthesized,
                 'file': step.span.file if step.span else None,
                 'line': step.span.start_line if step.span else None}
         for port in (*node.workflow_inputs, *node.workflow_outputs):

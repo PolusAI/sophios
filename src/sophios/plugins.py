@@ -55,7 +55,9 @@ class AuthoredNamesFilter(logging.Filter):
     in its own document, which is the one cwltool prints for a nested step.
     An id right after a `/` is a directory of the emitted tree and stays as is,
     so a printed path still opens; the `_<n>` cwltool appends to a repeated
-    job stays with its id.
+    job stays with its id. A step is spelled `step <index> '<name>'` and one
+    Infer inserted `inserted step '<name>'`; a `step` the message already has
+    in front of the id is replaced by that spelling, not repeated.
     """
     # pylint:disable=too-few-public-methods
 
@@ -64,13 +66,15 @@ class AuthoredNamesFilter(logging.Filter):
         authored: dict[str, str] = {}
         for emitted, entry in names.get('steps', {}).items():
             for spelled in (emitted, entry.get('id', emitted)):
-                authored[spelled] = f"step {entry['index']} '{entry['name']}'"
+                authored[spelled] = (f"inserted step '{entry['name']}'" if entry['inserted']
+                                     else f"step {entry['index']} '{entry['name']}'")
         for emitted, entry in names.get('ports', {}).items():
             if entry['steps']:
                 authored[emitted] = '/'.join([*entry['steps'], entry['port']])
         self._authored = authored
         alternatives = '|'.join(re.escape(emitted) for emitted in sorted(authored, key=len, reverse=True))
-        self._pattern = (re.compile(rf'(?<![\w/-])(?P<id>{alternatives})(?P<job>_\d+)?(?![\w-])')
+        self._pattern = (re.compile(rf'(?:(?P<lead>(?<![\w/-])step )|(?<![\w/-]))'
+                                    rf'(?P<id>{alternatives})(?P<job>_\d+)?(?![\w-])')
                          if authored else None)
 
     def filter(self, record: logging.LogRecord) -> bool:

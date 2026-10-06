@@ -637,7 +637,7 @@ def test_the_names_map_covers_every_emitted_step_and_boundary_port() -> None:
     assert set(compiled.artifact.cwl['inputs']) <= set(found['ports'])
     count = found['steps']['oracle__step__2__count']
     assert count == {'id': 'oracle__step__2__count', 'workflow': 'oracle', 'index': 2, 'name': 'count',
-                     'file': 'oracle.wic', 'line': count['line']}
+                     'inserted': False, 'file': 'oracle.wic', 'line': count['line']}
     assert count['line'] > 0
     nested = found['steps']['oracle__step__1__child.wic___child__step__1__mk_file']
     assert (nested['id'], nested['workflow'], nested['index'], nested['name']) == (

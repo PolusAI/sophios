@@ -360,9 +360,13 @@ def test_the_same_workflow_stem_in_two_namespaces_is_not_a_duplicate(tmp_path: P
 def test_the_authored_names_filter_rewrites_emitted_ids_longest_first() -> None:
     """A nested id is rewritten as itself, never as the shorter step id it starts with."""
     import logging  # pylint: disable=import-outside-toplevel
-    names = {'steps': {'w__step__1__child.wic': {'id': 'w__step__1__child.wic', 'index': 1, 'name': 'child.wic'},
+    names = {'steps': {'w__step__1__child.wic': {'id': 'w__step__1__child.wic', 'index': 1, 'name': 'child.wic',
+                                                 'inserted': False},
                        'w__step__1__child.wic___child__step__1__mk_file': {'id': 'child__step__1__mk_file',
-                                                                           'index': 1, 'name': 'mk_file'}},
+                                                                           'index': 1, 'name': 'mk_file',
+                                                                           'inserted': False},
+                       'w__step__2__conv': {'id': 'w__step__2__conv', 'index': 3, 'name': 'conv',
+                                            'inserted': True}},
              'ports': {'w__step__1__child.wic___child__step__1__mk_file___name': {
                  'steps': ['child.wic', 'mk_file'], 'port': 'name'},
                  'name': {'steps': [], 'port': 'name'}}}
@@ -376,7 +380,8 @@ def test_the_authored_names_filter_rewrites_emitted_ids_longest_first() -> None:
     assert rewritten('missing %s', 'w__step__1__child.wic___child__step__1__mk_file___name') == (
         'missing child.wic/mk_file/name (w__step__1__child.wic___child__step__1__mk_file___name)')
     assert rewritten('[step child__step__1__mk_file] failed; filename unset') == (
-        "[step step 1 'mk_file' (child__step__1__mk_file)] failed; filename unset")
+        "[step 1 'mk_file' (child__step__1__mk_file)] failed; filename unset")
+    assert rewritten('[step w__step__2__conv] failed') == "[inserted step 'conv' (w__step__2__conv)] failed"
     assert rewritten('w__step__1__child.wic.') == "step 1 'child.wic' (w__step__1__child.wic)."
     assert rewritten('[job child__step__1__mk_file_2] failed') == (
         "[job step 1 'mk_file' (child__step__1__mk_file_2)] failed")

@@ -160,6 +160,20 @@ def test_converter_insertion_reaches_the_same_fixed_point() -> None:
 
 
 @pytest.mark.fast
+def test_the_names_map_counts_authored_steps_and_flags_inserted_converters() -> None:
+    """An inserted converter shifts rendered positions, not the index the author wrote."""
+    from sophios.ir.names import names_map  # pylint: disable=import-outside-toplevel
+    workflow, tools = _insertion_registry()
+    compiled = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
+                                insert_steps_automatically=True)
+    found = names_map(compiled.graph, Names.of(compiled.graph))['steps']
+    authored = {entry['name']: entry['index'] for entry in found.values() if not entry['inserted']}
+    assert authored == {'mk_1': 1, 'use_1': 2, 'mk_2': 3, 'use_2': 4}
+    inserted = [entry['name'] for entry in found.values() if entry['inserted']]
+    assert sorted(inserted) == ['insert_steps_automatically_conv_1', 'insert_steps_automatically_conv_2']
+
+
+@pytest.mark.fast
 def test_workflow_call_outputs_are_inference_candidates() -> None:
     """A child output remains visible to a later tool in its parent."""
     child = {'steps': [

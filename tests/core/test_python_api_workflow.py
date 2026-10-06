@@ -1479,7 +1479,8 @@ def test_a_failed_in_process_run_names_authored_steps(monkeypatch: pytest.Monkey
     import logging  # pylint: disable=import-outside-toplevel
     emitted = "wf__step__2__append"
     names_path = tmp_path / "wf.names.json"
-    entry = {"id": emitted, "workflow": "wf", "index": 2, "name": "append", "file": "wf.wic", "line": 7}
+    entry = {"id": emitted, "workflow": "wf", "index": 2,
+             "name": "append", "inserted": False, "file": "wf.wic", "line": 7}
     names_path.write_text(json.dumps({"steps": {emitted: entry}, "ports": {}}), encoding="utf-8")
 
     def failing_main(args: list[str]) -> int:
@@ -1495,7 +1496,7 @@ def test_a_failed_in_process_run_names_authored_steps(monkeypatch: pytest.Monkey
                                  passthrough_args=[], workflow_name="wf", basepath=str(tmp_path))
 
     assert retval == 1
-    assert f"[step step 2 'append' ({emitted})] completed permanentFail" in caplog.messages
+    assert f"[step 2 'append' ({emitted})] completed permanentFail" in caplog.messages
     assert f"Emitted ids are mapped to authored names in {names_path}" in capsys.readouterr().out
     assert not [f for f in logging.getLogger("cwltool").filters
                 if isinstance(f, sophios.plugins.AuthoredNamesFilter)]
