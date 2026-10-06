@@ -11,7 +11,7 @@ type is what the document declared and inference has not run.
 """
 import difflib
 from typing import Final
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from ..lang.cwl import CWL_VERSION
 from ..lang.diagnostics import Diagnostics, Locator
@@ -124,16 +124,11 @@ def _lower_resolved(document: ResolvedDocument,
         for name in (port.name for port in workflow_inputs)
     )
     output_mapping = []
-    positional_names: set[PortName] = set()
     for port in workflow_outputs:
-        source, positional = _output_port(document.name, nodes, port.output_source,
-                                          diagnostics, document.source.span, str(port.name))
-        if positional:
-            positional_names.add(port.name)
+        source = _output_port(document.name, nodes, port.output_source,
+                              diagnostics, document.source.span, str(port.name))
         if source is not None:
             output_mapping.append((port.name, source))
-    workflow_outputs = tuple(replace(port, positional=True) if port.name in positional_names else port
-                             for port in workflow_outputs)
     namespaces_raw = passthrough.get('$namespaces', {})
     namespaces = tuple(namespaces_raw.items()) if isinstance(namespaces_raw, dict) else ()
     namespaces = tuple((str(key), value) for key, value in namespaces
@@ -328,33 +323,48 @@ def _workflow_ports(raw: object, *, output: bool, diagnostics: Diagnostics,
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def _output_port(workflow_name: str, nodes: list[StepNode], raw: object,
                  diagnostics: Diagnostics, span: SourceSpan | None,
-                 output_name: str) -> tuple[PortId | None, bool]:
-    """The step output an authored `outputSource: <step>/<port>` names, if any,
-    and whether `<step>` was written positionally as `(index, name)`.
+                 output_name: str) -> PortId | None:
+    """The step output an authored `outputSource: <step>/<port>` names, if any.
 
     `<step>` is the authored id (its first occurrence), `(index, name)` (that
     occurrence, which must carry that name), or the generated id.
     """
     if not isinstance(raw, str) or '/' not in raw:
-        return None, False
+        return None
     step_text, port_name = raw.rsplit('/', 1)
     key = Grammar.WIC_STEP_KEY.match(step_text)
     if key is not None:
-        index, name = int(key.group(1)), key.group(2)
-        if not 1 <= index <= len(nodes) or nodes[index - 1].id.name != name:
-            actual = nodes[index - 1].id.name if 1 <= index <= len(nodes) else 'no step'
-            diagnostics.error(
-                SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE,
-                f"output {output_name!r} names step {index} as {name!r}, but step {index} is {actual}",
-                span, Locator(step=name, index=index, port=port_name))
-            return None, True
-        return next((port.id for port in nodes[index - 1].outputs
-                     if port.id.port == AuthoredName(port_name)), None), True
+        return _positional_output_port(nodes, int(key.group(1)), key.group(2), port_name,
+                                       diagnostics, span, output_name)
     for position, node in enumerate(nodes, start=1):
         if step_text in {render_step_id(workflow_name, position, node.id.name), node.id.name}:
             return next((port.id for port in node.outputs
-                         if port.id.port == AuthoredName(port_name)), None), False
-    return None, False
+                         if port.id.port == AuthoredName(port_name)), None)
+    return None
+
+
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def _positional_output_port(nodes: list[StepNode], index: int, name: str, port_name: str,
+                            diagnostics: Diagnostics, span: SourceSpan | None,
+                            output_name: str) -> PortId | None:
+    """The output `port_name` of step `index`, which must carry `name`; else a diagnostic."""
+    if not 1 <= index <= len(nodes) or nodes[index - 1].id.name != name:
+        actual = nodes[index - 1].id.name if 1 <= index <= len(nodes) else 'no step'
+        diagnostics.error(
+            SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE,
+            f"output {output_name!r} names step {index} as {name!r}, but step {index} is {actual}",
+            span, Locator(step=name, index=index, port=port_name))
+        return None
+    outputs = nodes[index - 1].outputs
+    found = next((port.id for port in outputs if port.id.port == AuthoredName(port_name)), None)
+    if found is None:
+        declared = ', '.join(str(port.id.port) for port in outputs) or 'none'
+        diagnostics.error(
+            SophiosErrorCode.UNDECLARED_PORT,
+            f"output {output_name!r} names '{port_name}' of step {index} ({name!r}), which has "
+            f'no such output; its outputs are: {declared}',
+            span, Locator(step=name, index=index, port=port_name))
+    return found
 
 
 def _unresolved_name(binding: Binding) -> str | None:

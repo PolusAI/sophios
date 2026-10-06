@@ -29,7 +29,6 @@ from sophios.ir.declarations import input_rank, layered, output_rank
 from sophios.ir.types import (DerivedName, EdgeOrigin, Port, PortDeclaration, PortId, PortName,
                               StepNode, WorkflowGraph)
 from sophios.lang import SophiosErrorCode
-from sophios.lang.diagnostics import SophiosError
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
@@ -399,13 +398,3 @@ def test_a_positional_output_source_compiles_in_a_fully_explicit_workflow() -> N
                                             'out': [{'file': {'wic_anchor': 'f'}}]},
                                            {'id': 'count', 'in': {'file': {'wic_alias': 'f'}}}]})
     assert compiled.artifact.cwl['outputs']['n']['outputSource'] == 'oracle__step__2__count/n'
-
-
-@pytest.mark.fast
-def test_an_untyped_positional_output_source_suggests_the_positional_spelling() -> None:
-    """A repeated id is addressed by position, so the hint must keep the position."""
-    step = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}
-    with pytest.raises(SophiosError) as caught:
-        compile_hermetic({'outputs': {'o': {'outputSource': '(2, mk_file)/nope'}},
-                          'steps': [step, step]})
-    assert "Did you mean '(2, mk_file)/file'?" in caught.value.diagnostics[0].message

@@ -185,9 +185,7 @@ def _untyped_output(graph: WorkflowGraph, output: WorkflowPort) -> SophiosError:
             'add `type:`, or an `outputSource: <step>/<output>`.')
     # What an `outputSource:` can name: not a name the compiler derives for a
     # call's lifted outputs.
-    sources = [f'({position}, {step.id.name})/{names.port(port.id.port)}' if output.positional
-               else f'{step.id.name}/{names.port(port.id.port)}'
-               for position, step in enumerate(graph.steps, start=1)
+    sources = [f'{step.id.name}/{names.port(port.id.port)}' for step in graph.steps
                for port in step.outputs if not isinstance(port.id.port, DerivedName)]
     close = difflib.get_close_matches(str(output.output_source), sources, n=1)
     check = f"Did you mean '{close[0]}'?" if close else 'Check the step and output names.'

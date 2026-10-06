@@ -473,7 +473,6 @@ def test_a_positional_output_source_addresses_the_occurrence_at_that_index() -> 
     assert result.graph is not None, list(result.diagnostics)
     (_name, source), = result.graph.output_mapping
     assert source.step.index == 2
-    assert result.graph.workflow_outputs[0].positional
 
 
 @pytest.mark.fast
@@ -486,7 +485,9 @@ def test_a_positional_output_source_that_disagrees_with_the_document_is_wic039(a
 
 
 @pytest.mark.fast
-def test_an_authored_output_source_is_not_positional() -> None:
-    """`s/f` addresses by id, so the port is not marked positional."""
-    result = _lower('steps:\n- id: s\n  out: [f]\noutputs:\n  o:\n    type: File\n    outputSource: s/f\n')
-    assert result.graph is not None and not result.graph.workflow_outputs[0].positional
+def test_a_positional_output_source_naming_a_port_the_step_lacks_is_wic028() -> None:
+    """The step is known, so the missing port is reported with the step's outputs."""
+    result = _lower('steps:\n- id: s\n  out: [f]\n- id: s\n  out: [f]\n'
+                    'outputs:\n  o:\n    type: File\n    outputSource: (2, s)/nope\n')
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.UNDECLARED_PORT]
+    assert all("'nope'" in d.message and 'its outputs are: f' in d.message for d in result.diagnostics)
