@@ -203,7 +203,7 @@ def test_compiled_workflow_carries_the_inference_notes() -> None:
 
     (note,) = compiled.diagnostics
     assert "note [wic043]" in note
-    assert "'cat'" in note and "'first/file'" in note
+    assert "'cat'" in note and "step 1 'first' output 'file'" in note
 
 
 @pytest.mark.fast

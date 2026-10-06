@@ -119,7 +119,9 @@ def test_recency_between_producers_is_noted() -> None:
     assert result.graph is not None
     (note,) = [d for d in result.diagnostics if d.severity is Severity.NOTE]
     assert note.code is SophiosErrorCode.INFERENCE_RECENCY
-    assert "'mk_file/file'" in note.message
+    assert ("most recent match step 2 'mk_file' output 'file'; earlier steps also match: "
+            "step 1 'mk_file' output 'file'; pin it: `out: - file: !& <name>` on step 2 'mk_file'"
+            in note.message)
     edge = next(e for e in result.graph.linked_edges if e.sink.step.name == 'count')
     assert edge.source.step.index == 2, 'the choice itself is unchanged'
 
@@ -144,10 +146,10 @@ def test_a_note_across_subworkflow_calls_names_the_steps_an_author_can_pin() -> 
     result = compile_hermetic(_across_calls(pinned=False), tools=_multi_file_tools())
     (note,) = list(result.diagnostics)
     assert note.code is SophiosErrorCode.INFERENCE_TIE
-    assert "inferred from 'make.wic/multi_file/last'" in note.message
-    assert "also offers 'multi_file/first'" in note.message
-    assert ("`out: - last: !& <name>` on step 'make.wic/multi_file' and "
-            "`in: file: !* <name>` on step 'use.wic/count'") in note.message
+    assert "inferred from step 1 'make.wic' > step 1 'multi_file' output 'last'" in note.message
+    assert "also offers step 1 'make.wic' > step 1 'multi_file' output 'first'" in note.message
+    assert ("`out: - last: !& <name>` on step 1 'make.wic' > step 1 'multi_file' and "
+            "`in: file: !* <name>` on step 2 'use.wic' > step 1 'count'") in note.message
 
     pinned = compile_hermetic(_across_calls(pinned=True), tools=_multi_file_tools())
     assert not list(pinned.diagnostics)

@@ -253,7 +253,8 @@ def _candidate(steps: list[StepNode], position: int, sink: Port, policy: Inferen
             output_formats = _formats(output.declaration)
             if (types_match(sink_type, output_type)
                     and _formats_match(sink_formats, output_formats, output_type)
-                    and not any('_log_' in part for part in _parts(output.id.port))):
+                    and not any('_log_' in part
+                                for part in (*(s.name for s in _steps(output.id.port)), _leaf(output.id.port)))):
                 matches.append(output)
             if _rule(producer, output.id.port) == 'break':
                 break_inference = True
@@ -293,50 +294,64 @@ def _note_choice(diagnostics: Diagnostics, policy: InferencePolicy, step: StepNo
     author cannot write, so each port is shown by the path of steps down to
     the one that declares it, and the pin goes on that step.
     """
-    sink_step, sink = _declared_at(step.id.name, port.id.port)
-    source_step, source = _declared_at(chosen.step.name, chosen.port)
+    sink_step, sink = _declared_at(step.id, port.id.port)
+    source_step, source = _declared_at(chosen.step, chosen.port)
     locator = Locator(step=step.id.name, index=step.id.index, port=sink)
-    sink_at = 'here' if sink_step == step.id.name else f"on step '{sink_step}'"
-    pin = (f"pin it: `out: - {source}: !& <name>` on step '{source_step}' and "
+    sink_at = 'here' if sink_step == _label(step.id) else f'on {sink_step}'
+    pin = (f"pin it: `out: - {source}: !& <name>` on {source_step} and "
            f"`in: {sink}: !* <name>` {sink_at}")
     report = diagnostics.error if policy.strict else diagnostics.note
     if ties:
         report(SophiosErrorCode.INFERENCE_TIE,
                f"step '{step.id.name}' input '{_below(port.id.port)}' was inferred from "
-               f"'{chosen.step.name}/{_below(chosen.port)}', but that step also offers "
-               + ', '.join(f"'{_below(alt.port)}'" for alt in ties) + '; ' + pin,
+               f"{_where(chosen.step, chosen.port)}, but that step also offers "
+               + ', '.join(_where(chosen.step, alt.port) for alt in ties) + '; ' + pin,
                port.span, locator)
     if earlier:
         report(SophiosErrorCode.INFERENCE_RECENCY,
                f"step '{step.id.name}' input '{_below(port.id.port)}' was inferred from the most recent "
-               f"match '{chosen.step.name}/{_below(chosen.port)}'; earlier steps also match: "
-               + ', '.join(f"'{alt.step.name}/{_below(alt.port)}'" for alt in earlier) + '; ' + pin,
+               f"match {_where(chosen.step, chosen.port)}; earlier steps also match: "
+               + ', '.join(_where(alt.step, alt.port) for alt in earlier) + '; ' + pin,
                port.span, locator)
 
 
-def _declared_at(step: str, name: PortName) -> tuple[str, str]:
+def _label(step: StepId) -> str:
+    """A step as its position and id: an id may repeat, the position does not."""
+    return f"step {step.index} '{step.name}'"
+
+
+def _declared_at(step: StepId, name: PortName) -> tuple[str, str]:
     """The path of steps from `step` down to the one that declares `name`,
     and the name that step declares it under."""
-    *inner, declared = _parts(name)
-    return '/'.join((step, *inner)), declared
+    return ' > '.join(_label(s) for s in (step, *_steps(name))), _leaf(name)
+
+
+def _where(step: StepId, name: PortName) -> str:
+    """The step that declares `name`, reached from `step`, and its port."""
+    declaring, declared = _declared_at(step, name)
+    return f"{declaring} output '{declared}'"
 
 
 def _below(name: PortName) -> str:
     """`name` as the path of steps it was exposed through, then the port."""
-    return '/'.join(_parts(name))
+    return '/'.join((*(s.name for s in _steps(name)), _leaf(name)))
 
 
 def _authored(port: Port) -> str:
     """The name the port was written under, wherever that was."""
-    return _parts(port.origin.port if port.origin is not None else port.id.port)[-1]
+    return _leaf(port.origin.port if port.origin is not None else port.id.port)
 
 
-def _parts(name: PortName) -> tuple[str, ...]:
-    """The authored names `name` is made of: each step it was exposed
-    through, outermost first, then the port a tool or author declared."""
+def _steps(name: PortName) -> tuple[StepId, ...]:
+    """The steps `name` was exposed through, outermost first."""
     if isinstance(name, DerivedName):
-        return (name.step.name, *_parts(name.port))
-    return (name,)
+        return (name.step, *_steps(name.port))
+    return ()
+
+
+def _leaf(name: PortName) -> str:
+    """The port a tool or author declared, under the steps `name` runs through."""
+    return _leaf(name.port) if isinstance(name, DerivedName) else name
 
 
 def _rule(step: StepNode, port: PortName) -> str:

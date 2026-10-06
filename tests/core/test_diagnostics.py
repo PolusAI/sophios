@@ -392,7 +392,7 @@ def test_cli_prints_an_inference_note_on_stderr_and_succeeds(
 
     captured = capsys.readouterr()
     assert 'note [wic043]' in captured.err
-    assert "'touch/file'" in captured.err
+    assert "step 1 'touch' output 'file'" in captured.err
     assert 'wic043' not in captured.out
 
 
