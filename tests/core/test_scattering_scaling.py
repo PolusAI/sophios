@@ -86,6 +86,7 @@ def test_scattering_scaling(tmp_path: Path) -> None:
         _run_command([
             "cwltool",
             "--quiet",
+            "--skip-schemas",
             "--parallel",
             "--outdir",
             str(outdir),
