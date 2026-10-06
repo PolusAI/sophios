@@ -380,23 +380,15 @@ def _insertion_registry() -> tuple[Yaml, Tools]:
 
 
 @pytest.mark.fast
-def test_a_positional_output_source_is_refused_beside_an_inferred_edge() -> None:
-    """`count` leaves `file` to inference, so the document is not fully explicit."""
-    with pytest.raises(SophiosError) as caught:
-        compile_hermetic({'outputs': {'n': {'type': 'int', 'outputSource': '(2, count)/n'}},
-                          'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}},
-                                    {'id': 'count'}]})
-    assert caught.value.diagnostics[0].code is SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE
-
-
-@pytest.mark.fast
-def test_a_positional_output_source_is_refused_in_a_subworkflow_beside_an_inferred_edge() -> None:
-    """The check descends into child workflows."""
-    sub = {'outputs': {'n': {'type': 'int', 'outputSource': '(2, count)/n'}},
-           'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}, {'id': 'count'}]}
-    with pytest.raises(SophiosError) as caught:
-        compile_hermetic({'steps': [subworkflow_step('sub.wic', sub)]})
-    assert caught.value.diagnostics[0].code is SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE
+def test_a_positional_output_source_compiles_beside_an_inferred_edge() -> None:
+    """Inference moves no step, so `(4, count)` still names the fourth step."""
+    mk = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}
+    compiled = compile_hermetic({'outputs': {'n': {'type': 'int', 'outputSource': '(4, count)/n'}},
+                                 'steps': [mk, {'id': 'count'}, mk, {'id': 'count'}]})
+    cwl = compiled.artifact.cwl
+    assert cwl['outputs']['n']['outputSource'] == 'oracle__step__4__count/n'
+    fourth = next(step for step in cwl['steps'] if step['id'] == 'oracle__step__4__count')
+    assert fourth['in']['file'] == 'oracle__step__3__mk_file/file'
 
 
 @pytest.mark.fast

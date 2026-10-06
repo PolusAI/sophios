@@ -74,7 +74,7 @@ class SophiosErrorCode(StrEnum):
     STEP_INPUT_RECORD = 'wic038'
 
     #: A positional `(index, name)/port` outputSource whose index does not hold
-    #: that step, or written in a workflow with an inferred edge.
+    #: that step.
     POSITIONAL_OUTPUT_SOURCE = 'wic039'
 
     #: --- Python API. The document is valid; the call was not. ---
