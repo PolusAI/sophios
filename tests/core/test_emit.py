@@ -184,8 +184,9 @@ def _job_files(declared: Yaml, job: Yaml) -> list[str]:
 #: draws them. `test_a_schema_def_typed_input_validates` is a strict xfail, so
 #: the exclusion cannot outlive the gap.
 NOT_YET_VALID: Final[dict[str, str]] = {
-    'schemed': ('its input names a SchemaDefRequirement type, and the promoted workflow input carries '
-                'that bare name without the requirement that defines it'),
+    'schemed': ('its input names a SchemaDefRequirement type, and two references to it break: the promoted '
+                'workflow input carries the bare name without the requirement that defines it, and the '
+                "embedded tool's own bare reference no longer resolves to its SDR once the run is inlined"),
 }
 
 
