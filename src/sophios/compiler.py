@@ -24,6 +24,7 @@ from .ir.types import AuthoredName, Binding, EdgeOrigin, PortName, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import SophiosError
 from .lang.nodes import InlineLiteral
+from .lang.parser import Grammar
 from .lang.spans import SourceSpan
 from .lang.error_codes import SophiosErrorCode
 from .wic_types import (
@@ -151,18 +152,16 @@ def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
         return [note for child in graph.children for note in _authored_spelling_notes(child)]
     file = spans[0].file
     sources = {port.name: port.output_source for port in graph.workflow_outputs}
-    positional = {port.name for port in graph.workflow_outputs if port.positional}
     ids = [step.id.name for step in graph.steps]
     for name, source in graph.output_mapping:
         written = str(sources[name]).rsplit('/', 1)[0]
-        if name in positional or written == source.step.name:
+        if Grammar.WIC_STEP_KEY.match(written) or written == source.step.name:
             continue
         repeated = ids.count(source.step.name) > 1
         position = [step.id for step in graph.steps].index(source.step) + 1
         address = f'({position}, {source.step.name})' if repeated else source.step.name
-        caveat = ' (a position holds only while every edge in the workflow is explicit)' if repeated else ''
         notes.append(f'Warning! {file}: output {str(name)!r} names its step {written!r}, a name the '
-                     f"compiler generates. Write '{address}/{source.port}' instead{caveat}.")
+                     f"compiler generates. Write '{address}/{source.port}' instead.")
     for step in graph.steps:
         declared = {str(port.id.port) for port in step.inputs}
         for read in _expression_inputs(dict(step.interpreted).get('when')):
