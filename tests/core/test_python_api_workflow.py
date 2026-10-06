@@ -2304,3 +2304,18 @@ def test_code_without_a_file_keeps_its_pseudo_name_in_the_span() -> None:
     exec(compile("\nstep = Step(clt_path=clt_path)\n", '<string>', 'exec'), namespace)  # pylint: disable=exec-used
     span = namespace['step']._span  # pylint: disable=protected-access
     assert (span.file, span.start_line) == ('<string>', 2)
+
+
+@pytest.mark.fast
+def test_a_runner_crash_keeps_its_whole_traceback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The file a runner crash is written to has the stack frames, not only the exception line."""
+    def crashing_main(args: list[str]) -> int:
+        raise RuntimeError(f"boom {len(args)}")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(run_local.cwltool.main, "main", crashing_main)
+    retval = run_local.run_local({"container_engine": "docker", "cwl_runner": "cwltool"}, False,
+                                 passthrough_args=[], workflow_name="wf", basepath=str(tmp_path))
+    assert retval == 1
+    kept = (tmp_path / "error_wf.txt").read_text(encoding="utf-8")
+    assert "Traceback (most recent call last)" in kept and "in crashing_main" in kept

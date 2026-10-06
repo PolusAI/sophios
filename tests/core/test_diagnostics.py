@@ -355,9 +355,9 @@ def test_cli_reports_a_workflow_that_does_not_compile_on_stderr_with_its_positio
 
 
 @pytest.mark.fast
-def test_cli_points_a_compiler_crash_at_its_error_file_on_stderr(
+def test_cli_reports_a_crash_in_one_line_and_keeps_the_whole_traceback(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """A failure that is not a reported diagnostic keeps its traceback in `error_<stem>.txt` and says so on stderr."""
+    """A failure Sophios did not expect says so in one line; the file holds the traceback with its frames."""
     workflow = tmp_path / 'crash.wic'
     workflow.write_text('steps:\n- id: touch\n', encoding='utf-8')
 
@@ -373,10 +373,10 @@ def test_cli_points_a_compiler_crash_at_its_error_file_on_stderr(
 
     assert caught.value.code == 1
     captured = capsys.readouterr()
-    assert f'Failed to compile {workflow}' in captured.err
-    assert 'See error_crash.txt for detailed technical information.' in captured.err
-    assert 'Failed to compile' not in captured.out
-    assert 'boom' in (tmp_path / 'error_crash.txt').read_text(encoding='utf-8')
+    assert 'Sophios stopped on an unexpected RuntimeError: boom. The traceback is in error_crash.txt' in captured.err
+    assert 'Traceback' not in captured.err and 'boom' not in captured.out
+    kept = (tmp_path / 'error_crash.txt').read_text(encoding='utf-8')
+    assert 'Traceback (most recent call last)' in kept and 'in crash' in kept
 
 
 _TWO_TOUCHES = ('steps:\n- id: touch\n  in:\n    filename: !ii a.txt\n'

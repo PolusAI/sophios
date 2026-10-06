@@ -106,8 +106,11 @@ LIST_STEPS = PLAIN.replace('''steps:
 ''')
 
 
-class _Compiled(Exception):
-    """Raised where the compile path starts: reading the config."""
+class _Compiled(BaseException):
+    """Raised where the compile path starts: reading the config.
+
+    Not an `Exception`, so that `main()`'s arm for unexpected failures lets it through.
+    """
 
 
 @pytest.fixture(name='compile_path')

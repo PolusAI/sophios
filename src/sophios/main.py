@@ -7,7 +7,7 @@ import traceback
 import json
 from dataclasses import replace
 from collections.abc import Iterable
-from typing import Iterator
+from typing import Final, Iterator
 
 import graphviz
 import networkx as nx
@@ -58,7 +58,7 @@ def _load_source_bundle(args: argparse.Namespace,
     return yaml_path, yaml_stem, bundle
 
 
-def _compile_loaded_document(yaml_path: str, yaml_stem: str, bundle: SourceBundle,
+def _compile_loaded_document(yaml_path: str, bundle: SourceBundle,
                              yml_paths: dict[str, dict[str, Path]], tools_cwl: Tools,
                              compiler_options: CompilerOptions, graph_settings: GraphSettings
                              ) -> tuple[graphviz.Digraph, CompilationResult, tuple[realtime.Analysis, ...]]:
@@ -103,23 +103,9 @@ def _compile_loaded_document(yaml_path: str, yaml_stem: str, bundle: SourceBundl
             # reach the handler below, and a message naming neither the
             # workflow nor the file is a worse error than the one it replaced.
             # `main()` prints the diagnostics, in the form asked for. No
-            # traceback file, though: a reported failure is not a crash, and
-            # error_<stem>.txt exists to hide stack traces users cannot act on.
+            # traceback file, though: a reported failure is not a crash.
             print('Failed to compile', yaml_path, file=sys.stderr)
             raise
-        except Exception as e:
-            # Certain constraints are conditionally dependent on values and are
-            # not easily encoded in the schema, so catch them here.
-            # Moreover, although we check for the existence of input files in
-            # stage_input_files, we cannot encode file existence in json schema
-            # to check the python_script script: tag before compile time.
-            print('Failed to compile', yaml_path, file=sys.stderr)
-            print(f'See error_{yaml_stem}.txt for detailed technical information.', file=sys.stderr)
-            # Do not display a nasty stack trace to the user; hide it in a file.
-            with open(f'error_{yaml_stem}.txt', mode='w', encoding='utf-8') as f:
-                # https://mypy.readthedocs.io/en/stable/common_issues.html#python-version-and-system-platform-checks
-                traceback.print_exception(type(e), value=e, tb=None, file=f)
-            sys.exit(1)
         # The resolved language version is reported on every compile, not
         # only on failure — nobody should have to guess which language their
         # file was read as.
@@ -269,6 +255,27 @@ def _report(diagnostics: Iterable[Diagnostic], form: str) -> None:
         print(json.dumps(diagnostic.to_json()) if form == 'json' else diagnostic, file=sys.stderr)
 
 
+#: Where a failure Sophios did not expect is reported.
+ISSUES: Final = 'https://github.com/PolusAI/sophios/issues'
+
+
+def _report_crash(error: Exception, stem: str) -> None:
+    """Say in one line that Sophios stopped on something it did not expect, and keep the whole traceback.
+
+    The traceback goes to `error_<stem>.txt`, or to stderr when that file cannot be written.
+    """
+    trace = ''.join(traceback.format_exception(error))
+    path = Path(f'error_{stem}.txt')
+    try:
+        path.write_text(trace, encoding='utf-8')
+        where = f'is in {path}'
+    except OSError:
+        print(trace, file=sys.stderr)
+        where = 'is above'
+    print(f'Sophios stopped on an unexpected {type(error).__name__}: {error}. The traceback {where}; if this '
+          f'line does not say what to change, please report it at {ISSUES} with the traceback.', file=sys.stderr)
+
+
 def main() -> None:
     """CLI entry point: run, and convert a reported failure to its diagnostics and exit code 1."""
     args, unknown_args = cli.parser.parse_known_args()
@@ -276,6 +283,9 @@ def main() -> None:
         _main(args, unknown_args)
     except SophiosError as e:
         _report(e.diagnostics, args.diagnostics)
+        sys.exit(1)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        _report_crash(e, Path(args.yaml).stem if args.yaml else 'sophios')
         sys.exit(1)
 
 
@@ -338,7 +348,7 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     compiler_options['inference_rules'] = global_config.get('inference_rules', {})
     compiler_options['renaming_conventions'] = global_config.get('renaming_conventions', [])
     rootgraph, compilation, analyses = _compile_loaded_document(
-        yaml_path, yaml_stem, bundle, yml_paths, tools_cwl,
+        yaml_path, bundle, yml_paths, tools_cwl,
         compiler_options, graph_settings)
     _report(compilation.diagnostics, args.diagnostics)
     root_dir = Path(args.yaml).parent.absolute()

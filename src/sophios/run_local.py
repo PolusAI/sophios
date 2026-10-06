@@ -253,7 +253,7 @@ def _execute_inprocess(cmd: list[str], cwl_runner: str, workflow_name: str,
             f'See error_{workflow_name}.txt for detailed technical information.')
         # Do not display a nasty stack trace to the user; hide it in a file.
         with open(f'error_{workflow_name}.txt', mode='w', encoding='utf-8') as f:
-            traceback.print_exception(type(e), value=e, tb=None, file=f)
+            traceback.print_exception(e, file=f)
     finally:
         if authored_names is not None:
             logger.removeFilter(authored_names)
