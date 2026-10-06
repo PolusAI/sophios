@@ -13,10 +13,12 @@ FAST"` read as selecting every `@pytest.mark.fast` test where pytest deselects
 all of them. Asking pytest cannot disagree with pytest.
 """
 import ast
+import json
 import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Final
 
@@ -74,32 +76,33 @@ def _invocations(workflow: Path) -> list[list[str]]:
     return found
 
 
-def _collect(argv: list[str]) -> set[str]:
-    """The tests pytest selects for `argv`, as `path::name` without parameters.
+def _collect_all(argvs: list[list[str]]) -> list[set[str]]:
+    """The tests pytest selects for each of `argvs`, as `path::name` without parameters.
+
+    `lane_collector` asks pytest about all of them in one interpreter, so the
+    imports every collection needs are paid for once.
 
     Raises:
-        AssertionError: If pytest cannot collect the invocation at all, which
+        AssertionError: If pytest cannot collect an invocation at all, which
             is what a lane naming a file that no longer exists looks like.
     """
-    result = subprocess.run(
-        [sys.executable, '-m', 'pytest', '--collect-only', '-q', '--no-header',
-         '-p', 'no:randomly', '-p', 'no:cacheprovider', *argv],
-        capture_output=True, text=True, cwd=REPO_ROOT, check=False)
-    assert result.returncode in (0, 5), (
-        f'pytest could not collect `pytest {" ".join(argv)}`:\n{result.stdout[-2000:]}')
-    return {line.split('[')[0] for line in result.stdout.splitlines() if '::' in line}
+    with tempfile.TemporaryDirectory() as scratch:
+        report = Path(scratch) / 'report.json'
+        run = subprocess.run([sys.executable, '-m', 'tests.core.lane_collector', str(report)],
+                             input=json.dumps(argvs), capture_output=True, text=True, cwd=REPO_ROOT, check=False)
+        assert report.exists(), f'the collector failed:\n{run.stderr[-2000:]}'
+        results = json.loads(report.read_text(encoding='utf-8'))
+    selected = []
+    for argv, (code, ids, output) in zip(argvs, results):
+        assert code in (0, 5), f'pytest could not collect `pytest {" ".join(argv)}`:\n{output}'
+        selected.append({node.split('[')[0] for node in ids})
+    return selected
 
 
-def _covered() -> set[str]:
-    """Every test any configured invocation collects."""
-    argvs = sorted({tuple(argv) for lane in sorted(WORKFLOWS.glob('*.yml'))
-                    for argv in _invocations(lane)})
-    covered: set[str] = set()
-    for argv in argvs:
-        # Collection imports test_setup, which writes the generated schema.
-        # Concurrent collectors can observe another process's truncated file.
-        covered.update(_collect(list(argv)))
-    return covered
+def _lane_argvs() -> list[list[str]]:
+    """Every distinct pytest invocation the lanes make."""
+    return [list(argv) for argv in sorted({tuple(argv) for lane in sorted(WORKFLOWS.glob('*.yml'))
+                                           for argv in _invocations(lane)})]
 
 
 @pytest.mark.fast
@@ -140,10 +143,8 @@ def test_the_weekly_property_lane_runs_the_whole_oracle_suite() -> None:
     """
     from .test_hermeticity import ORACLE_FILES  # pylint: disable=import-outside-toplevel
 
-    weekly: set[str] = set()
-    for argv in _invocations(WORKFLOWS / 'property_weekly.yml'):
-        weekly |= _collect(argv)
-    missing = sorted(_collect(list(ORACLE_FILES)) - weekly)
+    *lanes, oracle = _collect_all([*_invocations(WORKFLOWS / 'property_weekly.yml'), list(ORACLE_FILES)])
+    missing = sorted(oracle - set().union(*lanes))
     assert not missing, 'the weekly property lane does not run:\n  ' + '\n  '.join(missing)
 
 
@@ -157,14 +158,15 @@ def test_the_census_sees_the_repo() -> None:
 def test_collection_is_pytests_answer_and_not_ours() -> None:
     """The helper really asks pytest, and pytest really narrows.
 
-    If `_collect` returned everything whatever its arguments, the census below
-    would pass no matter which lanes existed.
+    If `_collect_all` returned everything whatever its arguments, the census
+    below would pass no matter which lanes existed.
     """
-    everything = _collect([])
-    one_file = _collect(['tests/core/test_ci_coverage.py'])
+    # pylint: disable-next=unbalanced-tuple-unpacking  # one result per invocation asked
+    everything, one_file, none = _collect_all([[], ['tests/core/test_ci_coverage.py'],
+                                               ['tests/core/test_ci_coverage.py', '-k', 'no_such_test_name_exists']])
     assert one_file and one_file < everything
     assert all(node.startswith('tests/core/test_ci_coverage.py::') for node in one_file)
-    assert not _collect(['tests/core/test_ci_coverage.py', '-k', 'no_such_test_name_exists'])
+    assert not none
 
 
 @pytest.mark.slow
@@ -172,11 +174,11 @@ def test_no_test_is_collected_by_nothing() -> None:
     """Every test the repository defines is selected by some lane.
 
     Slow because it asks pytest once per distinct invocation -- about thirty
-    sequential collections. They cannot run concurrently while test_setup
-    writes the shared generated schema. That is the price of the answer being
+    collections, in one interpreter. That is the price of the answer being
     pytest's rather than a model's, and a model is what this file used to be.
     """
-    orphans = sorted(_collect([]) - _covered())
+    everything, *lanes = _collect_all([[], *_lane_argvs()])
+    orphans = sorted(everything - set().union(*lanes))
     assert not orphans, (
         'these tests are collected by no configured lane, so they never run:\n  '
         + '\n  '.join(orphans)
