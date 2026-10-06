@@ -288,6 +288,7 @@ def _as_text(value: Any) -> Any:
     return '\n'.join(value) if isinstance(value, list) else value
 
 
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Any, *, scatter_rank: int = 0,
                      span: SourceSpan | None = None, locator: Locator | None = None) -> Any:
     """`value` in the one plain-JSON form a job document holds for `declaration`.
