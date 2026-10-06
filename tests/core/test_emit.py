@@ -47,6 +47,7 @@ from sophios.lang.versions import ANNOTATION_KEY, ANNOTATION_NAMESPACE, ANNOTATI
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
+from .cwl_validation import validate_cwl
 from .equivalence import Strength, equivalent
 from .hermetic import ORACLE, compile_hermetic, compile_hermetic_cwl, network_refused, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
@@ -165,8 +166,6 @@ def test_emit_validates_as_cwl_v1_2(workflow: Yaml) -> None:
     it link-checks each entry. That `$schemas` survives emission is pinned in
     `test_leak_boundary`. The run attempts no connection.
     """
-    import cwltool.main  # pylint: disable=import-outside-toplevel
-
     info = compile_hermetic(workflow)
     inlined = sophios.post_compile.inline_artifact_runs(info.artifact).cwl
     job = info.artifact.job_inputs
@@ -179,7 +178,7 @@ def test_emit_validates_as_cwl_v1_2(workflow: Yaml) -> None:
         target, values = Path(workdir) / 'workflow.cwl', Path(workdir) / 'job.yml'
         target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
         values.write_text(yaml.safe_dump(job, sort_keys=False), encoding='utf-8')
-        assert cwltool.main.main(['--validate', '--quiet', '--skip-schemas', str(target), str(values)]) == 0
+        assert validate_cwl(str(target), str(values)) == 0
     assert not attempts
 
 

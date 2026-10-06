@@ -41,6 +41,7 @@ from sophios.wic_types import Yaml
 
 from .ast_strategies import hints_values, passthrough_keys, passthrough_values
 from .compile_harness import COMPILED, FAST, compile_cwl, compile_info
+from .cwl_validation import validate_cwl
 
 #: Top-level keys the *compiler* owns, which is a larger set than the syntax
 #: layer's. `_document` claims only `steps` and `wic`; `compile_workflow` also
@@ -373,8 +374,6 @@ cwl_passthrough = st.fixed_dictionaries(
 def test_residue_validates_as_cwl_v1_2(freight: dict[str, Any]) -> None:
     """Strip the Sophios syntax, inline the tools, and cwltool agrees the
     residue is CWL v1.2."""
-    import cwltool.main  # pylint: disable=import-outside-toplevel  # expensive; slow lane only
-
     info = compile_info(_touch_workflow(freight, {}), 'leak')
     inlined = sophios.post_compile.inline_artifact_runs(info.artifact).cwl
 
@@ -384,7 +383,7 @@ def test_residue_validates_as_cwl_v1_2(freight: dict[str, Any]) -> None:
     with tempfile.TemporaryDirectory() as workdir:
         target = Path(workdir) / 'residue.cwl'
         target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
-        assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 0
+        assert validate_cwl(str(target)) == 0
     assert inlined['cwlVersion'] == CWL_VERSION
 
 
@@ -400,8 +399,6 @@ def test_an_authored_output_source_validates() -> None:
     authored path carried the document's own spelling through to a document
     whose steps are all renamed, and nothing looked until a runner did.
     """
-    import cwltool.main  # pylint: disable=import-outside-toplevel  # expensive
-
     info = compile_info({
         'outputs': {'mine': {'type': 'File', 'outputSource': 'touch/file'}},
         **_touch_workflow({}, {}),
@@ -411,7 +408,7 @@ def test_an_authored_output_source_validates() -> None:
     with tempfile.TemporaryDirectory() as workdir:
         target = Path(workdir) / 'authored_output_source.cwl'
         target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
-        assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 0
+        assert validate_cwl(str(target)) == 0
 
 
 # --------------------------------------------------------------------------
