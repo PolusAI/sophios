@@ -104,6 +104,7 @@ Useful flags:
 - `--passthrough_flags yes`: send arguments Sophios does not recognise (for example `--debug`) to the CWL runner,
   which needs `--run_local` or `--generate_run_script`. Without it an unrecognised argument is an error.
 - `--quiet`: also passes `--quiet` to `cwltool`. `toil-cwl-runner` is not given `--quiet`.
+- `--diagnostics json`: print each diagnostic as one JSON object per stderr line (see [Error codes](error_codes.md)).
 
 ## Configuration and Discovery
 

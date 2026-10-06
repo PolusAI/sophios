@@ -57,3 +57,20 @@ readable or writable here) or `run` (nothing in Sophios: a tool failed while it 
 | `api004` | call | A CWL tool that could not be loaded or parsed. | Point the step at a valid CWL CommandLineTool; the message says what is wrong with it. |
 | `api005` | run | A local run that finished with a non-zero exit code. | Read the failed step's messages, printed before the error. |
 | `api006` | call | A `.wic` construct the Python API has no spelling for, met by `Workflow.from_wic`. | Write the workflow in the Python API in the way the message names, or keep it as a `.wic` file. |
+
+## For programs and agents
+
+With `--diagnostics json`, each diagnostic is printed as one JSON object on one line of stderr. Every key is
+always present; a value Sophios does not know is `null`.
+
+| Key | Value |
+|---|---|
+| `severity` | `error` or `note` |
+| `code`, `kind`, `fix` | the code, and its row in the table above |
+| `message` | what happened, in this instance |
+| `file`, `line`, `column`, `end_line`, `end_column` | where in the source, 1-based |
+| `step`, `index`, `port` | the authored step, its 1-based position and the port |
+
+Other lines on stderr are not diagnostics: the runner's output, `Failed to compile <file>`, and the lines
+that start with `Warning`. From Python, `Diagnostic.to_json()` returns the same object for each entry of
+`SophiosError.diagnostics`.
