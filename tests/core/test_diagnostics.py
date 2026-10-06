@@ -14,6 +14,7 @@ cannot be built with zero diagnostics — plus one test per converted site provi
 raises it with the messages it used to print.
 """
 import datetime
+import json
 import math
 import re
 import subprocess
@@ -318,6 +319,7 @@ def test_cli_converts_a_report_to_exit_1(monkeypatch: pytest.MonkeyPatch,
                                  'Did you forget to use !ii before x?',
                                  'If you want to compile the workflow anyway, use --allow_raw_cwl')
 
+    monkeypatch.setattr('sys.argv', ['sophios'])
     monkeypatch.setattr(cli, '_main', reports)
 
     with pytest.raises(SystemExit) as caught:
@@ -416,7 +418,8 @@ def test_cli_with_inference_strict_refuses_a_choice_between_equals(
 @pytest.mark.fast
 def test_cli_success_does_not_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     """A clean run returns instead of raising, exactly as before."""
-    monkeypatch.setattr(cli, '_main', lambda: None)
+    monkeypatch.setattr('sys.argv', ['sophios'])
+    monkeypatch.setattr(cli, '_main', lambda *_args: None)
     cli.main()  # returning, rather than raising SystemExit, is the assertion
 
 
@@ -710,3 +713,37 @@ def test_to_json_carries_the_position_the_step_and_the_catalog_fix() -> None:
             found['end_line'], found['end_column'], found['step'], found['index'], found['port']) == (
         'note', 'wic043', 'w.wic', 2, 7, 2, 9, 'cat', 3, 'file')
     assert found['fix'] == SophiosErrorCode.INFERENCE_RECENCY.explanation.fix
+
+
+@pytest.mark.fast
+def test_json_diagnostics_are_one_object_per_line_with_position_kind_and_fix(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A compile error is one JSON line on stderr."""
+    workflow = tmp_path / 'bad.wic'
+    workflow.write_text('steps:\n- id: ""\n', encoding='utf-8')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), '--generate_cwl_workflow',
+                                     '--diagnostics', 'json'])
+    with pytest.raises(SystemExit) as caught:
+        cli.main()
+    assert caught.value.code == 1
+    objects = [json.loads(line) for line in capsys.readouterr().err.splitlines() if line.startswith('{')]
+    assert [(o['severity'], o['code'], o['kind'], o['line'], o['column']) for o in objects] == [
+        ('error', 'wic007', 'document', 2, 7)]
+    assert objects[0]['file'].endswith('bad.wic')
+    assert objects[0]['fix'] == SophiosErrorCode.EMPTY_STEP_ID.explanation.fix
+
+
+@pytest.mark.fast
+def test_a_json_note_names_its_step_and_port_and_the_compile_succeeds(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A note is a JSON line too, and the compile still succeeds."""
+    workflow = tmp_path / 'two_touches.wic'
+    workflow.write_text(_TWO_TOUCHES, encoding='utf-8')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), '--generate_cwl_workflow',
+                                     '--diagnostics', 'json'])
+    cli.main()
+    note, = [json.loads(line) for line in capsys.readouterr().err.splitlines() if line.startswith('{')]
+    assert (note['severity'], note['code'], note['step'], note['index'], note['port']) == (
+        'note', 'wic043', 'cat', 3, 'file')

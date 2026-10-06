@@ -168,6 +168,9 @@ parser.add_argument('--custom_net', type=str, required=False,
 parser.add_argument('--passthrough_flags', type=str, default='no', choices=['yes', 'no'], required=False,
                     help='''With 'yes', arguments sophios does not recognise are sent to the cwl_runner
                     backend unchecked. With 'no' (the default) an unrecognised argument is an error.''')
+parser.add_argument('--diagnostics', choices=['text', 'json'], default='text',
+                    help='''How diagnostics are printed on stderr: text, or one JSON object per line
+                    for programs and agents (see docs/error_codes.md)''')
 
 
 def _argv(yaml_path: str = '', suppliedargs: list[str] | None = None) -> list[str]:

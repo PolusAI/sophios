@@ -111,7 +111,7 @@ def _settings_from_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Calla
         monkeypatch.setattr(sophios.compiler, 'compile_source', capture)
         monkeypatch.setattr(sys, 'argv', ['sophios', '--yaml', str(workflow), *flags])
         try:
-            sophios.main._main()
+            sophios.main._main(*sophios.cli.parser.parse_known_args())
         except _Delivered as delivered:
             return delivered.settings
         raise AssertionError('the compiler was never reached')

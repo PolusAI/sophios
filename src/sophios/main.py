@@ -6,6 +6,7 @@ import subprocess as sub
 import traceback
 import json
 from dataclasses import replace
+from collections.abc import Iterable
 from typing import Iterator
 
 import graphviz
@@ -13,7 +14,7 @@ import networkx as nx
 import yaml
 
 from sophios.lang import wic_schema
-from sophios.lang.diagnostics import SophiosError
+from sophios.lang.diagnostics import Diagnostic, SophiosError
 from sophios.ir.artifacts import CompilationResult
 from . import input_output as io
 from . import post_compile as pc
@@ -93,19 +94,16 @@ def _compile_loaded_document(yaml_path: str, yaml_stem: str, bundle: SourceBundl
                 relative_run_path=True, testing=False, graph_target=subgraph)
             analyses = realtime.compile_analyses(result.realtime, yml_paths, tools_cwl,
                                                  compiler_options, graph_settings)
-        except SophiosError as e:
+        except SophiosError:
             # The library reports; only this adapter is allowed to exit. The
-            # messages are the same ones the old exit sites printed — but the
             # banner has to stay: this arm intercepts failures that used to
             # reach the handler below, and a message naming neither the
             # workflow nor the file is a worse error than the one it replaced.
-            # No traceback file, though: a reported failure is not a crash,
-            # and error_<stem>.txt exists to hide stack traces users cannot
-            # act on.
+            # `main()` prints the diagnostics, in the form asked for. No
+            # traceback file, though: a reported failure is not a crash, and
+            # error_<stem>.txt exists to hide stack traces users cannot act on.
             print('Failed to compile', yaml_path, file=sys.stderr)
-            for diagnostic in e.diagnostics:
-                print(diagnostic, file=sys.stderr)
-            sys.exit(1)
+            raise
         except Exception as e:
             # Certain constraints are conditionally dependent on values and are
             # not easily encoded in the schema, so catch them here.
@@ -123,8 +121,6 @@ def _compile_loaded_document(yaml_path: str, yaml_stem: str, bundle: SourceBundl
         # only on failure — nobody should have to guess which language their
         # file was read as.
         print('Sophios lang_version:', result.lang_version)
-        for diagnostic in result.diagnostics:
-            print(diagnostic, file=sys.stderr)
     return rootgraph, result, analyses
 
 
@@ -264,19 +260,24 @@ def _pass_through(args: argparse.Namespace, unknown_args: list[str]) -> None:
         sys.exit(1)
 
 
+def _report(diagnostics: Iterable[Diagnostic], form: str) -> None:
+    """Print diagnostics on stderr, as text or as one JSON object per line."""
+    for diagnostic in diagnostics:
+        print(json.dumps(diagnostic.to_json()) if form == 'json' else diagnostic, file=sys.stderr)
+
+
 def main() -> None:
-    """CLI entry point: run, and convert reported failures to exit codes."""
+    """CLI entry point: run, and convert a reported failure to its diagnostics and exit code 1."""
+    args, unknown_args = cli.parser.parse_known_args()
     try:
-        _main()
+        _main(args, unknown_args)
     except SophiosError as e:
-        for diagnostic in e.diagnostics:
-            print(diagnostic, file=sys.stderr)
+        _report(e.diagnostics, args.diagnostics)
         sys.exit(1)
 
 
-def _main() -> None:
+def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     """See docs/userguide.md"""
-    args, unknown_args = cli.parser.parse_known_args()
     if unknown_args and args.passthrough_flags != 'yes':
         cli.parser.error(f'unrecognized arguments: {" ".join(unknown_args)}. '
                          'Flags for the CWL runner need --passthrough_flags yes')
@@ -332,6 +333,7 @@ def _main() -> None:
     rootgraph, compilation, analyses = _compile_loaded_document(
         yaml_path, yaml_stem, bundle, yml_paths, tools_cwl,
         compiler_options, graph_settings)
+    _report(compilation.diagnostics, args.diagnostics)
     root_dir = Path(args.yaml).parent.absolute()
     artifact = compilation.artifact
 
