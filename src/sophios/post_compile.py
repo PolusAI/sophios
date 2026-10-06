@@ -434,9 +434,13 @@ def _redirect(cwl: Yaml, redirects: dict[str, str]) -> None:
     """Point each source and `outputSource` in `cwl` that named a dissolved call's output at the flat step."""
     for step in cwl['steps']:
         for name, value in step.get('in', {}).items():
-            source = _source_of(value)
-            if source in redirects:
-                step['in'][name] = _with_source(value, redirects[source])
+            match value:
+                case {'source': [*sources]}:
+                    step['in'][name] = {**value, 'source': [redirects.get(source, source) for source in sources]}
+                case _:
+                    source = _source_of(value)
+                    if source in redirects:
+                        step['in'][name] = _with_source(value, redirects[source])
     for output in cwl.get('outputs', {}).values():
         if output.get('outputSource') in redirects:
             output['outputSource'] = redirects[output['outputSource']]

@@ -407,6 +407,20 @@ def test_an_input_the_call_leaves_unbound_keeps_what_else_the_inner_step_says_ab
 
 
 @pytest.mark.fast
+def test_a_list_of_sources_that_names_a_dissolved_call_follows_its_steps() -> None:
+    """A merged input lists the call's output among its sources; the flat step is named instead."""
+    nested = _nested()
+    call = nested.cwl['steps'][1]
+    produced = f"{call['id']}/{call['out'][0]}"
+    nested.cwl['steps'][0]['in']['merged'] = {'source': ['elsewhere', produced], 'linkMerge': 'merge_flattened'}
+    flat = post_compile.flatten_subworkflows(nested)
+    sources = flat.cwl['steps'][0]['in']['merged']['source']
+    assert sources[0] == 'elsewhere'
+    assert sources[1] != produced
+    assert sources[1].split('/')[0] in {step['id'] for step in flat.cwl['steps']}
+
+
+@pytest.mark.fast
 def test_every_level_of_nesting_is_dissolved_and_named_for_where_the_step_came_from() -> None:
     """A step in a subworkflow in a subworkflow carries both calls in its id."""
     middle = {'steps': [subworkflow_step('inner.wic', {'steps': [XFORM]})]}
