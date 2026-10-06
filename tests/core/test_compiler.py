@@ -192,11 +192,12 @@ def test_a_when_that_reads_a_generated_name_is_named_and_still_compiles(
 
 @pytest.mark.fast
 @pytest.mark.parametrize('expression, prints', [
-    ('$(inputs.nope != null)', True), ('$(inputs["nope"] != null)', True), ('$(inputs.name != null)', False)],
-    ids=['dot', 'bracket', 'declared'])
+    ('$(inputs.nope != null)', True), ('$(inputs["nope"] != null)', True), ('$(inputs.name != null)', False),
+    ('$(inputs.name-1 > 0)', False)],
+    ids=['dot', 'bracket', 'declared', 'minus'])
 def test_a_when_that_reads_an_input_the_step_lacks_is_named_and_still_compiles(
         capsys: pytest.CaptureFixture[str], expression: str, prints: bool) -> None:
     """CWL evaluates `inputs.nope` as null, so the step never ran and nothing said so."""
     compiled = compile_hermetic_cwl({'steps': [{**_mk_file(), 'when': expression}]})
     assert compiled['steps'][0]['when'] == expression
-    assert ('reads inputs.nope in `when:`, which its process does not declare' in capsys.readouterr().err) is prints
+    assert ('in `when:`, which its process does not declare' in capsys.readouterr().err) is prints

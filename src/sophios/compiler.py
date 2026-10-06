@@ -124,7 +124,7 @@ def _bind_subinterpreter_locations(graph: WorkflowGraph,
 _GENERATED_NAME: Final = re.compile(r'__step__\d+__')
 
 #: `inputs.name` and `inputs["name"]` inside a `when:` expression.
-_EXPRESSION_INPUT: Final = re.compile(r'inputs(?:\.([A-Za-z_][\w-]*)|\[\s*["\']([^"\']+)["\']\s*\])')
+_EXPRESSION_INPUT: Final = re.compile(r'inputs(?:\.([A-Za-z_]\w*)|\[\s*["\']([^"\']+)["\']\s*\])')
 
 
 def _expression_inputs(expression: object) -> tuple[str, ...]:
