@@ -30,7 +30,7 @@ from sophios.ir.declarations import port_declaration
 from sophios.ir.types import AuthoredName
 from sophios.lang import InlineLiteral, parse
 from sophios.lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
-from sophios.lang.error_codes import SophiosErrorCode
+from sophios.lang.error_codes import EXPLANATIONS, SophiosErrorCode
 from sophios.lang.spans import SourceSpan
 from sophios.python_cwl_adapter import check_args_match_inputs
 from sophios.wic_types import StepId, Tool
@@ -640,3 +640,17 @@ def test_a_container_engine_error_does_not_call_itself_a_warning(monkeypatch: py
     with pytest.raises(SophiosError) as caught:
         post_compile.verify_container_engine_config('docker', False)
     assert caught.value.diagnostics[0].message == 'The docker command does not appear to be installed.'
+
+
+# --------------------------------------------------------------------------
+# Every code says what it means and what to do
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_every_code_is_explained() -> None:
+    """A code an agent cannot look up is a code it cannot act on."""
+    assert set(EXPLANATIONS) == set(SophiosErrorCode)
+    for code, explanation in EXPLANATIONS.items():
+        text = explanation.meaning + explanation.fix
+        assert explanation.meaning and explanation.fix and '|' not in text and '\n' not in text, code
