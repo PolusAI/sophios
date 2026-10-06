@@ -201,62 +201,28 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
                      version: str, trail: tuple[RegistryKey, ...],
                      diagnostics: Diagnostics, reported: set[str],
                      directory: Path | None) -> ResolvedProcess | None:
-    sidecar_entries = dict(sidecar.entries) if sidecar is not None else {}
-    namespace = str(sidecar_entries.get('namespace', 'global'))
-    interpreted = dict(step.interpreted)
-    run = interpreted.get('run')
-    authored_name = _stem(run) if isinstance(run, str) else _stem(step.id)
+    namespace = str(dict(sidecar.entries).get('namespace', 'global')) if sidecar is not None else 'global'
+    run = dict(step.interpreted).get('run')
     generated = step.id == 'python_script'
-    name = generated_process_id(step) if generated else authored_name
-    key = RegistryKey(namespace, name)
+    name = generated_process_id(step) if generated else _stem(run if isinstance(run, str) else step.id)
     own_name = _own_run_name(step, registry, directory)
-    if own_name is not None:
-        own_key = RegistryKey(namespace, own_name)
-        if registry.tool(own_key) is not None or registry.workflow(own_key) is not None:
-            key = own_key
+    own_key = RegistryKey(namespace, own_name or name)
+    key = own_key if registry.tool(own_key) is not None or registry.workflow(own_key) is not None \
+        else RegistryKey(namespace, name)
 
     # A tool and workflow may share a stem: an ordinary step prefers the tool,
     # falling back to a workflow only when no tool exists.
     explicit_workflow = step.id.endswith('.wic') \
         or (isinstance(run, str) and run.endswith('.wic'))
     tool = registry.tool(key)
-    if tool is None and run is not None and isinstance(run, str):
+    if tool is None and isinstance(run, str):
         tool = registry.tool(RegistryKey(namespace, _stem(run)))
     workflow = registry.workflow(key) if explicit_workflow or tool is None else None
     if workflow is None and explicit_workflow:
         workflow = registry.workflow(RegistryKey(namespace, _stem(step.id)))
     if workflow is not None:
-        workflow_key = workflow.key
-        if workflow_key in trail:
-            diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
-                              f'workflow cycle reaches {workflow_key.namespace}/{workflow_key.name}',
-                              step.span)
-            return None
-        parsed = workflow.parsed
-        _copy_diagnostics(diagnostics, parsed.diagnostics)
-        if parsed.document is None:
-            return None
-        inherited = _inherit_parameters(parsed.document, sidecar)
-        # A called workflow selects its implementation exactly as a root one does.
-        child_source, selection = _select_implementation(inherited, registry)
-        _copy_diagnostics(diagnostics, selection)
-        if child_source is None:
-            return None
-        if child_source is inherited:
-            _report_stale_keys(parsed.document.sidecar, child_source, workflow_key.name, reported)
-            _report_stale_keys(sidecar, child_source, workflow_key.name, reported)
-        else:
-            _report_stale_keys(child_source.sidecar, child_source, workflow_key.name, reported)
-        child, child_diagnostics = _resolve_document(
-            child_source, registry, workflow_key.name, version, trail + (workflow_key,), reported,
-            workflow.directory)
-        _copy_diagnostics(diagnostics, child_diagnostics)
-        interface = _workflow_interface(child_source, workflow_key, diagnostics)
-        if interface is None:
-            return None
-        inputs, outputs = interface
-        return ResolvedProcess(workflow_key, f'{workflow_key.name}.cwl', inputs, outputs,
-                               {'class': 'Workflow'}, child)
+        return _resolve_workflow(step, sidecar, workflow, registry, version, trail, diagnostics,
+                                 reported)
 
     if tool is None:
         diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
@@ -276,6 +242,36 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
         deepcopy(cwl),
         generated=generated,
     )
+
+
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
+def _resolve_workflow(step: Step, sidecar: WicSidecar | None, workflow: WorkflowSource,
+                      registry: RegistrySnapshot, version: str, trail: tuple[RegistryKey, ...],
+                      diagnostics: Diagnostics, reported: set[str]) -> ResolvedProcess | None:
+    key = workflow.key
+    if key in trail:
+        diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
+                          f'workflow cycle reaches {key.namespace}/{key.name}', step.span)
+        return None
+    parsed = workflow.parsed
+    _copy_diagnostics(diagnostics, parsed.diagnostics)
+    if parsed.document is None:
+        return None
+    inherited = _inherit_parameters(parsed.document, sidecar)
+    # A called workflow selects its implementation exactly as a root one does.
+    source, selection = _select_implementation(inherited, registry)
+    _copy_diagnostics(diagnostics, selection)
+    if source is None:
+        return None
+    for stale in (parsed.document.sidecar, sidecar) if source is inherited else (source.sidecar,):
+        _report_stale_keys(stale, source, key.name, reported)
+    child, child_diagnostics = _resolve_document(source, registry, key.name, version,
+                                                 trail + (key,), reported, workflow.directory)
+    _copy_diagnostics(diagnostics, child_diagnostics)
+    interface = _workflow_interface(source, key, diagnostics)
+    if interface is None:
+        return None
+    return ResolvedProcess(key, f'{key.name}.cwl', *interface, {'class': 'Workflow'}, child)
 
 
 def _own_run_name(step: Step, registry: RegistrySnapshot, directory: Path | None) -> str | None:
