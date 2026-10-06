@@ -7,7 +7,7 @@ errors in one pass instead of one per run.
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import overload
+from typing import Any, overload
 
 from . import error_codes as _error_codes
 from .spans import SourceSpan
@@ -67,6 +67,26 @@ class Diagnostic:
         prefix = f'{self.span}: ' if self.span is not None else ''
         suffix = f' ({self.locator})' if self.locator is not None else ''
         return f'{prefix}{self.severity} [{self.code}] {self.message}{suffix}'
+
+    def to_json(self) -> dict[str, Any]:
+        """This diagnostic as the object `--diagnostics json` prints.
+
+        Every key is always present, None where Sophios does not know the value, so a reader
+        never tests for a key. `kind` and `fix` are the code's explanation.
+        """
+        span, locator, explanation = self.span, self.locator, self.code.explanation
+        return {
+            'severity': str(self.severity), 'code': str(self.code), 'kind': str(explanation.kind),
+            'message': self.message, 'fix': explanation.fix,
+            'file': span.file if span else None,
+            'line': span.start_line if span else None,
+            'column': span.start_column if span else None,
+            'end_line': span.end_line if span else None,
+            'end_column': span.end_column if span else None,
+            'step': locator.step if locator else None,
+            'index': locator.index if locator else None,
+            'port': locator.port if locator else None,
+        }
 
 
 class Diagnostics(Sequence[Diagnostic]):

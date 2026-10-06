@@ -689,3 +689,24 @@ def test_the_error_codes_page_says_what_the_code_says() -> None:
     rows = {found['code']: (found['kind'], found['meaning'], found['fix'])
             for found in map(_ROW.match, page.read_text(encoding='utf-8').splitlines()) if found}
     assert rows == {str(code): (str(e.kind), e.meaning, e.fix) for code, e in EXPLANATIONS.items()}
+
+
+@pytest.mark.fast
+def test_to_json_has_every_key_when_nothing_is_known() -> None:
+    """A reader never tests for a key: an unknown value is null."""
+    found = Diagnostic(Severity.ERROR, SophiosErrorCode.MISSING_INPUT_FILE, 'gone.txt').to_json()
+    assert set(found) == {'severity', 'code', 'kind', 'message', 'fix', 'file', 'line', 'column',
+                          'end_line', 'end_column', 'step', 'index', 'port'}
+    assert found['kind'] == 'machine' and found['file'] is None and found['step'] is None
+
+
+@pytest.mark.fast
+def test_to_json_carries_the_position_the_step_and_the_catalog_fix() -> None:
+    """The object holds where, which step and port, and what to do."""
+    span = SourceSpan('w.wic', 2, 7, 2, 9)
+    found = Diagnostic(Severity.NOTE, SophiosErrorCode.INFERENCE_RECENCY, 'took the latest', span,
+                       Locator(step='cat', index=3, port='file')).to_json()
+    assert (found['severity'], found['code'], found['file'], found['line'], found['column'],
+            found['end_line'], found['end_column'], found['step'], found['index'], found['port']) == (
+        'note', 'wic043', 'w.wic', 2, 7, 2, 9, 'cat', 3, 'file')
+    assert found['fix'] == SophiosErrorCode.INFERENCE_RECENCY.explanation.fix
