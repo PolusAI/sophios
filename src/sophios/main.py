@@ -289,11 +289,17 @@ def _main() -> None:
     # Checked here rather than by argparse: the requirement is conditional on
     # another flag, which argparse cannot express without reading `sys.argv`
     # at import time — see the note in cli.py.
-    if not args.yaml and not (args.generate_config or args.generate_schemas):
+    if not args.yaml and not (args.generate_config or args.generate_schemas or args.explain):
         cli.parser.error('the following arguments are required: --yaml')
     if args.ignore_validation_errors:
         print('Warning: --ignore_validation_errors is deprecated and does nothing; '
               'nothing validates a file against a schema any more.', file=sys.stderr)
+
+    if args.explain:
+        explanation = args.explain.explanation
+        print(f'{args.explain} ({explanation.kind}): {explanation.meaning}')
+        print(f'Fix: {explanation.fix}')
+        sys.exit(0)
 
     if args.generate_config:
         default_config_file = io.default_config_file(Path(args.homedir))

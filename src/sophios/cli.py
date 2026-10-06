@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .lang.error_codes import SophiosErrorCode
 from .wic_types import CompilerOptions, GraphSettings
 
 
@@ -11,6 +12,15 @@ def _config_file(path: str) -> Path:
     if not Path(path).is_file():
         raise argparse.ArgumentTypeError(f'no config file at {path}')
     return Path(path)
+
+
+def _error_code(text: str) -> SophiosErrorCode:
+    """The `--explain` argparse type: a code Sophios reports."""
+    try:
+        return SophiosErrorCode(text.lower())
+    except ValueError:
+        raise argparse.ArgumentTypeError(f'{text} is not a Sophios error code; '
+                                         'docs/error_codes.md lists them') from None
 
 
 parser = argparse.ArgumentParser(prog='main', description='Convert a high-level yaml workflow file to CWL.',
@@ -32,6 +42,8 @@ group_gen.add_argument('--generate_schemas', default=False, action="store_true",
 group_gen.add_argument('--generate_config', default=False, action="store_true",
                        help='''Generate default config in wic/global_config.json
                        with default search_paths_wic and search_paths_cwl''')
+group_gen.add_argument('--explain', type=_error_code, default=None, metavar='CODE',
+                       help='Print what an error code (wic011, api002, ...) means and how to fix it')
 parser.add_argument('--inputs_file', type=str, required=False, default='',
                     help='Additional inputs Yaml file. For a plain CWL workflow under --allow_raw_cwl, '
                     'its job file, given to the runner as it is')

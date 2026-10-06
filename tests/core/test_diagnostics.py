@@ -654,3 +654,26 @@ def test_every_code_is_explained() -> None:
     for code, explanation in EXPLANATIONS.items():
         text = explanation.meaning + explanation.fix
         assert explanation.meaning and explanation.fix and '|' not in text and '\n' not in text, code
+
+
+@pytest.mark.fast
+def test_explain_prints_what_a_code_means_and_the_fix(monkeypatch: pytest.MonkeyPatch,
+                                                      capsys: pytest.CaptureFixture[str]) -> None:
+    """`--explain` answers from the catalog, with no workflow, and exits 0."""
+    monkeypatch.setattr('sys.argv', ['sophios', '--explain', 'WIC011'])
+    with pytest.raises(SystemExit) as caught:
+        cli.main()
+    assert caught.value.code == 0
+    printed = capsys.readouterr().out
+    assert printed.startswith('wic011 (document): ') and '\nFix: ' in printed and '!ii' in printed
+
+
+@pytest.mark.fast
+def test_explain_names_a_code_that_does_not_exist(monkeypatch: pytest.MonkeyPatch,
+                                                  capsys: pytest.CaptureFixture[str]) -> None:
+    """A code Sophios does not report is a usage error that names it."""
+    monkeypatch.setattr('sys.argv', ['sophios', '--explain', 'wic999'])
+    with pytest.raises(SystemExit) as caught:
+        cli.main()
+    assert caught.value.code == 2
+    assert 'wic999 is not a Sophios error code' in capsys.readouterr().err
