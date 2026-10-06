@@ -747,3 +747,21 @@ def test_a_json_note_names_its_step_and_port_and_the_compile_succeeds(
     note, = [json.loads(line) for line in capsys.readouterr().err.splitlines() if line.startswith('{')]
     assert (note['severity'], note['code'], note['step'], note['index'], note['port']) == (
         'note', 'wic043', 'cat', 3, 'file')
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('flag, message', [('--yaml', 'no workflow file at'), ('--inputs_file', 'no inputs file at')])
+def test_a_named_file_that_does_not_exist_is_a_usage_error(
+        flag: str, message: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """A mistyped `--yaml` or `--inputs_file` is one usage line and exit 2, not a traceback."""
+    workflow = Path(__file__).resolve().parents[2] / 'docs' / 'tutorials' / 'helloworld.wic'
+    argv = {'--yaml': ['--yaml', str(tmp_path / 'nope.wic')],
+            '--inputs_file': ['--yaml', str(workflow), '--inputs_file', str(tmp_path / 'nope.yml')]}[flag]
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('sys.argv', ['sophios', *argv, '--generate_cwl_workflow'])
+    with pytest.raises(SystemExit) as caught:
+        cli.main()
+    assert caught.value.code == 2
+    printed = capsys.readouterr().err
+    assert message in printed and 'Traceback' not in printed

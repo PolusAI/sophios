@@ -314,6 +314,10 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
         _write_schema(SCHEMA_PATH)
         print('Finished generating schemas. Exiting.')
         sys.exit(0)
+    if not Path(args.yaml).is_file():
+        cli.parser.error(f'no workflow file at {args.yaml}')
+    if args.inputs_file and not Path(args.inputs_file).is_file():
+        cli.parser.error(f'no inputs file at {args.inputs_file}')
     if args.allow_raw_cwl and _is_plain_cwl_workflow(Path(args.yaml)):
         _pass_through(args, unknown_args)
         return
