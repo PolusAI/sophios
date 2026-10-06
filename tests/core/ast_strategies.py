@@ -281,7 +281,7 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
     # is checked as if `draw` had to return `dict[str, Cwl]`. A `bool()` around
     # a value already used only for truthiness costs nothing at runtime.
     outs: list[OutputBinding] = []
-    if bool(outputs_of(stem)) and draw(st.booleans()):
+    if bool(outputs_of(stem)):
         for out_name in draw(st.lists(st.sampled_from(sorted(outputs_of(stem))),
                                       unique=True, max_size=2)):
             if draw(st.booleans()):
