@@ -402,11 +402,12 @@ compilation resolves to exactly one version tree-wide. An unknown version is
 
 Codes are contract: a caller matches on `SophiosErrorCode`, suppresses a code, or
 reads it out of a log, while message wording is free to improve. The enum is
-`sophios.lang.error_codes.SophiosErrorCode`, in two ranges: `wic0NN` for the
-language (a document said something the language does not accept) and `api0NN` for
+`sophios.lang.error_codes.SophiosErrorCode`, in two ranges: `wic0NN` for a
+document (it said something the language does not accept) or what running it needs from the machine (kind
+`machine`, such as `wic015`, `wic016` and `wic021`) and `api0NN` for
 the Python API (the document is fine, the call was not). A code is never renumbered,
 and a code that shipped in a release is never reused; a number that never shipped is
-free. `wic021`, `wic029`, `wic037`, `wic040` and `wic041` are unassigned. `wic042` and `wic043` are notes, which report without failing the
+free. `wic029`, `wic037`, `wic040` and `wic041` are unassigned. `wic042` and `wic043` are notes, which report without failing the
 compile, and errors under `--inference_strict`.
 
 Every member is provoked in `tests/core/provocations.py`, in one of two tiers:
@@ -441,6 +442,7 @@ every member has an `Explanation` in `EXPLANATIONS` (kind, meaning, fix);
 | `wic018` | `LANG_VERSION_CONFLICT` | `COMPILED` |
 | `wic019` | `MISPLACED_EDGE_DEF` | `PARSE` |
 | `wic020` | `LITERAL_TYPE_MISMATCH` | `COMPILED` |
+| `wic021` | `DIRECTORY_NOT_WRITABLE` | `COMPILED` |
 | `wic022` | `FIXED_POINT_NOT_REACHED` | `COMPILED` |
 | `wic023` | `INCOMPATIBLE_INPUT_REFERENCE` | `COMPILED` |
 | `wic024` | `RESERVED_KEY` | `PARSE` |

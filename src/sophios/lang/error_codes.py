@@ -4,8 +4,9 @@ Its own module because a code is contract: a caller matches on
 `SophiosErrorCode.UNDEFINED_EDGE`, suppresses it, or reads it out of a log,
 without importing the reporting plumbing.
 
-Two ranges, one enum: `wic0NN` is the language (a document said something
-the language does not accept); `api0NN` is the Python API (the document is
+Two ranges, one enum: `wic0NN` is a document (it said something the language
+does not accept) or what running it needs from the machine (kind `machine`,
+such as wic015, wic016 and wic021); `api0NN` is the Python API (the document is
 fine, the call was not). One type so a caller matches on one `except`;
 separate ranges so an API code does not point at the language guide.
 
@@ -45,6 +46,8 @@ class SophiosErrorCode(StrEnum):
     LANG_VERSION_CONFLICT = 'wic018'
     MISPLACED_EDGE_DEF = 'wic019'
     LITERAL_TYPE_MISMATCH = 'wic020'
+    #: A directory a compile or a run writes into that this user cannot write.
+    DIRECTORY_NOT_WRITABLE = 'wic021'
     FIXED_POINT_NOT_REACHED = 'wic022'
     INCOMPATIBLE_INPUT_REFERENCE = 'wic023'
     RESERVED_KEY = 'wic024'
@@ -225,6 +228,10 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         "A literal does not have the type of its input, or a scattered input's literal is not a list.",
         "Write a value of the input's type, quoting a string YAML would read as something else, and give a scattered"
         " input a list (language guide §3.2, §6.1)."),
+    SophiosErrorCode.DIRECTORY_NOT_WRITABLE: Explanation(
+        Kind.MACHINE,
+        'A directory Sophios writes into cannot be written.',
+        'Run Sophios from a directory you can write to; from Python, `run(basepath=...)` takes another.'),
     SophiosErrorCode.FIXED_POINT_NOT_REACHED: Explanation(
         Kind.DOCUMENT,
         'Inference did not settle within its iteration limit.',

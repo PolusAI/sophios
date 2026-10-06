@@ -8,7 +8,7 @@ when Sophios knows them. A note reports a choice Sophios made and does not stop 
 `.wic` file or the Python workflow), `call` (the Python API call), `machine` (what is installed, running,
 readable or writable here) or `run` (nothing in Sophios: a tool failed while it ran).
 
-`wic021`, `wic029`, `wic037`, `wic040` and `wic041` are not assigned.
+`wic029`, `wic037`, `wic040` and `wic041` are not assigned.
 
 | Code | Kind | Meaning | Fix |
 |---|---|---|---|
@@ -32,6 +32,7 @@ readable or writable here) or `run` (nothing in Sophios: a tool failed while it 
 | `wic018` | document | Two `lang_version` pins in one compilation disagree. | Make the pins agree, or set one version for the whole compilation with `--lang_version`. |
 | `wic019` | document | `!&` outside a step's `out:` entry. | Name the output with `!&` on the producing step's `out:` entry, and read it with `!*` (language guide §3.6). |
 | `wic020` | document | A literal does not have the type of its input, or a scattered input's literal is not a list. | Write a value of the input's type, quoting a string YAML would read as something else, and give a scattered input a list (language guide §3.2, §6.1). |
+| `wic021` | machine | A directory Sophios writes into cannot be written. | Run Sophios from a directory you can write to; from Python, `run(basepath=...)` takes another. |
 | `wic022` | document | Inference did not settle within its iteration limit. | Bind the inputs explicitly with `!&` and `!*` or workflow inputs, or drop `--insert_steps_automatically`. |
 | `wic023` | document | A reference whose type can never feed the input it binds, such as a `string` into a `File`. | Bind the input to a source of a matching type. |
 | `wic024` | document | A `wic_` mapping in an input position that is not a Sophios construct. | Correct the spelling to a construct of language guide §3.7, or rename the key. |
