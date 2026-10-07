@@ -34,6 +34,7 @@ from ._ports import (
     ParameterNamespace,
     ParameterStore,
     WorkflowInputReference,
+    _record_type,
 )
 from ._utils import (
     get_value_from_cfg as _get_value_from_cfg,
@@ -232,8 +233,8 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
             _bind_record(process_self, input_name, input_port, record)
         case list() | tuple() | dict() if _holds_a_port(value):
             raise InvalidInputValueError(
-                f"{process_self.process_name}.{input_name}: a port object is never a literal; "
-                "bind several sources with StepInput(source=[...])")
+                f"{process_self.process_name}.{input_name}: a port object or a StepInput is never a literal; "
+                "bind a port directly, or several sources with StepInput(source=[...])")
         case OutputParameter() as output:
             _resolve_parameter_type(
                 input_port,
@@ -247,9 +248,9 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
 
 
 def _holds_a_port(value: Any) -> bool:
-    """Whether a would-be literal holds a step output or workflow input at any depth."""
+    """Whether a would-be literal holds a step output, workflow input or `StepInput` at any depth."""
     match value:
-        case OutputParameter() | WorkflowInputReference():
+        case OutputParameter() | WorkflowInputReference() | StepInput():
             return True
         case list() | tuple():
             return any(_holds_a_port(item) for item in value)
@@ -274,6 +275,9 @@ def _bind_record(process_self: Any, input_name: str, input_port: InputParameter,
                  if built.delivers_its_source and input_port.declared else None)
     ports = tuple(entry.workflow._ensure_input(entry.name, parameter_type=delivered, implicit=entry.implicit)
                   if isinstance(entry, WorkflowInputReference) else entry for entry in entries)
+    if record.value_from is None and input_port.declared:
+        _check_declared_type(input_port, _record_type(built, ports),
+                             context=f"{process_self.process_name}.{input_name}")
     input_port._set_binding(InputBinding("record", built, ports))
 
 

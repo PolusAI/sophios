@@ -1782,14 +1782,14 @@ def test_the_chained_scatter_agrees_with_the_dsl(tmp_path: Path) -> None:
     assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct
 
 
-def _merge() -> Workflow:
-    """`a` and `b` each touch a file; `sink` takes both, merged into one list."""
+def _merge(declared: str = 'File[]') -> Workflow:
+    """`a` and `b` each touch a file; `sink` takes both, merged into one list, as `declared`."""
     a = Step(clt_path=_adapter('touch'), step_name='a')
     a.inputs.filename = 'a.txt'
     b = Step(clt_path=_adapter('touch'), step_name='b')
     b.inputs.filename = 'b.txt'
     sink = Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',
-                                   'inputs': {'files': {'type': 'File[]'}}, 'outputs': {}}, process_name='sink')
+                                   'inputs': {'files': {'type': declared}}, 'outputs': {}}, process_name='sink')
     sink.inputs.files = StepInput(source=[a.outputs.file, b.outputs.file], link_merge='merge_flattened')
     return Workflow([a, b, sink], 'merge')
 
@@ -1860,8 +1860,8 @@ def test_a_list_of_ports_is_never_a_literal() -> None:
 
 @pytest.mark.fast
 def test_a_merged_step_input_is_scatterable() -> None:
-    """Merged sources arrive as one list, so the input they bind can be scattered."""
-    wf = _merge()
+    """Merged sources arrive as one list, so an input of their element type can be scattered over it."""
+    wf = _merge('File')
     sink = cast(Step, wf.steps[2])
     sink.scatter_on(sink.inputs.files)
     assert wf.compile().cwl_workflow['steps'][2]['scatter'] == ['files']
@@ -1948,6 +1948,48 @@ def test_a_port_nested_in_a_literal_is_never_a_literal(nest: Any) -> None:
     cat = Step(clt_path=_adapter('cat'))
     with pytest.raises(InvalidInputValueError, match='StepInput'):
         cat.inputs.file = nest(a.outputs.file)
+
+
+@pytest.mark.fast
+def test_a_step_input_nested_in_a_literal_is_never_a_literal() -> None:
+    """A `StepInput` inside a list is refused at bind time, naming `StepInput`, not left to the compiler."""
+    a = Step(clt_path=_adapter('touch'))
+    a.inputs.filename = 'a.txt'
+    cat = Step(clt_path=_adapter('cat'))
+    with pytest.raises(InvalidInputValueError, match='a StepInput is never a literal'):
+        cat.inputs.file = [StepInput(source=a.outputs.file)]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('declared, record', [
+    ('int', dict(link_merge='merge_flattened')),
+    ('int', dict(pick_value='first_non_null')),
+])
+def test_a_multi_source_step_input_is_type_checked(declared: str, record: dict[str, Any]) -> None:
+    """Two `File` outputs merged into an input of an incompatible type fail at bind time."""
+    a = Step(clt_path=_adapter('touch'), step_name='a')
+    a.inputs.filename = 'a.txt'
+    b = Step(clt_path=_adapter('touch'), step_name='b')
+    b.inputs.filename = 'b.txt'
+    sink = Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',
+                                   'inputs': {'x': {'type': declared}}, 'outputs': {}}, process_name='sink')
+    with pytest.raises(InvalidLinkError, match='incompatible types'):
+        sink.inputs.x = StepInput(source=[a.outputs.file, b.outputs.file], **record)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('declared', ['File', 'int[]'])
+def test_a_merged_step_input_the_bind_cannot_judge_is_wic023_at_compile(declared: str) -> None:
+    """A merge into an unscattered `File`, or into an `int[]` a CWL document declares, is the compiler's to refuse."""
+    a = Step(clt_path=_adapter('touch'), step_name='a')
+    a.inputs.filename = 'a.txt'
+    b = Step(clt_path=_adapter('touch'), step_name='b')
+    b.inputs.filename = 'b.txt'
+    sink = Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',
+                                   'inputs': {'x': {'type': declared}}, 'outputs': {}}, process_name='sink')
+    sink.inputs.x = StepInput(source=[a.outputs.file, b.outputs.file], link_merge='merge_flattened')
+    with pytest.raises(SophiosError, match='wic023'):
+        Workflow([a, b, sink], 'w').compile()
 
 
 def _guard_and_message(record_first: bool) -> dict[str, Any]:
