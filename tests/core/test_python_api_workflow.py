@@ -2101,3 +2101,12 @@ def test_a_misordered_step_is_reported_at_the_line_that_made_it() -> None:
     span = caught.value.diagnostics[0].span
     assert span is not None
     assert (Path(span.file), span.start_line) == (Path(__file__).resolve(), expected_line)
+
+
+@pytest.mark.fast
+def test_code_without_a_file_keeps_its_pseudo_name_in_the_span() -> None:
+    """A step made by `exec` is placed at `<string>`, not at a path under the working directory."""
+    namespace: dict[str, Any] = {'Step': Step, 'clt_path': _adapter('touch')}
+    exec(compile("\nstep = Step(clt_path=clt_path)\n", '<string>', 'exec'), namespace)  # pylint: disable=exec-used
+    span = namespace['step']._span  # pylint: disable=protected-access
+    assert (span.file, span.start_line) == ('<string>', 2)

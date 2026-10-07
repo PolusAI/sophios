@@ -1,5 +1,6 @@
 """Internal helpers for the Python API."""
 
+import functools
 import inspect
 import keyword
 from collections.abc import Sequence
@@ -190,6 +191,22 @@ def load_yaml(path: Path) -> dict[str, Any]:
     return loaded or {}
 
 
+@functools.lru_cache(maxsize=None)
+def _user_file(code_filename: str) -> str | None:
+    """The name a diagnostic gives `code_filename`, or None for a frame to skip.
+
+    A name like `<stdin>`, `<string>` or `<ipython-input-3-abc>` is not a path
+    and is kept as it is. Resolving a path costs a filesystem call, so the
+    decision is made once per file.
+    """
+    if code_filename.startswith('<'):
+        return code_filename
+    path = Path(code_filename).resolve()
+    if _PACKAGE_ROOT in path.parents or 'site-packages' in path.parts:
+        return None
+    return str(path)
+
+
 def caller_span() -> SourceSpan:
     """The user's own line: the innermost frame outside the `sophios` package.
 
@@ -201,8 +218,8 @@ def caller_span() -> SourceSpan:
     """
     frame = inspect.currentframe()
     while frame is not None:
-        path = Path(frame.f_code.co_filename).resolve()
-        if _PACKAGE_ROOT not in path.parents and 'site-packages' not in path.parts:
-            return SourceSpan(str(path), frame.f_lineno, 1, frame.f_lineno, 1)
+        file = _user_file(frame.f_code.co_filename)
+        if file is not None:
+            return SourceSpan(file, frame.f_lineno, 1, frame.f_lineno, 1)
         frame = frame.f_back
     return SourceSpan('<python>', 1, 1, 1, 1)
