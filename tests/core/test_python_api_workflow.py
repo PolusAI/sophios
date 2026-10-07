@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import traceback
+import warnings
 from types import SimpleNamespace
 from typing import Any, Callable, Iterator, cast
 from unittest.mock import patch
@@ -340,6 +341,24 @@ def test_a_workflow_output_prints_no_authored_spelling_line(capsys: pytest.Captu
     workflow.compile()
 
     assert "Warning!" not in capsys.readouterr().err
+
+
+@pytest.mark.fast
+def test_attribute_sugar_input_warning_points_at_the_reference_and_the_typed_declaration() -> None:
+    step = Step(_emit_text_tool(), step_name="emit_text")
+    workflow = Workflow([step], "sugar_demo")
+
+    with pytest.warns(UserWarning, match=r"Prefer workflow\.inputs\.message, or workflow\.inputs\.message\.as_type"):
+        step.inputs.message = workflow.message
+
+
+@pytest.mark.fast
+def test_binding_an_input_reference_to_a_workflow_output_does_not_warn() -> None:
+    workflow = Workflow([], "passthrough_demo")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        workflow.outputs.o = workflow.inputs.x
 
 
 @pytest.mark.fast

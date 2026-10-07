@@ -137,10 +137,14 @@ def _resolve_parameter_type(
 
 def _warn_implicit_workflow_parameter(workflow: "Workflow", name: str, kind: str) -> None:
     """Warn when compatibility syntax implicitly declares workflow interface."""
+    prefer = (
+        f"workflow.inputs.{name}, or workflow.inputs.{name}.as_type(...) to declare it"
+        if kind == "input" else f"workflow.outputs.{name} = ..."
+    )
     warnings.warn(
         (
             f"Implicitly declaring workflow {kind} {name!r} on {workflow.process_name!r}. "
-            f"Prefer workflow.{kind}s.{name} = ... so interface drift is easier to spot."
+            f"Prefer {prefer} so interface drift is easier to spot."
         ),
         UserWarning,
         stacklevel=3,
@@ -195,8 +199,9 @@ def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) ->
             )
             output_parameter.bind_source(OutputSourceBinding(process_name, name), source_parameter=source)
             source.linked = True
-        case WorkflowInputReference(workflow=source_workflow, name=name) if source_workflow is workflow:
-            input_parameter = workflow._ensure_input(name)
+        case WorkflowInputReference(workflow=source_workflow, name=name, implicit=implicit) \
+                if source_workflow is workflow:
+            input_parameter = workflow._ensure_input(name, implicit=implicit)
             _resolve_parameter_type(
                 output_parameter,
                 input_parameter.parameter_type,
