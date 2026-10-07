@@ -1566,11 +1566,35 @@ def test_a_renamed_step_writes_run_with_its_tool_stem(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
-def test_a_step_named_for_its_tool_writes_no_run() -> None:
-    """`run:` appears only where the step name and the tool stem differ."""
+def test_a_step_named_for_its_tool_writes_run_too() -> None:
+    """Every step names its tool file, so the bundle compiles without the tool on a search path."""
     echo = Step(clt_path=_adapter('echo'))
     echo.inputs.message = 'hi'
-    assert 'run' not in Workflow([echo], 'plain').yaml['steps'][0]
+    assert Workflow([echo], 'plain').yaml['steps'][0]['run'] == 'echo.cwl'
+
+
+@pytest.mark.fast
+def test_write_wic_leaves_the_tool_it_is_written_beside(tmp_path: Path) -> None:
+    """Writing into the directory a step's own tool lives in does not rewrite that file."""
+    source = tmp_path / 'echo.cwl'
+    source.write_text(_adapter('echo').read_text(encoding='utf-8'), encoding='utf-8')
+    before = source.read_bytes()
+    echo = Step(clt_path=source)
+    echo.inputs.message = 'hi'
+    Workflow([echo], 'wf').write_wic(tmp_path)
+    assert source.read_bytes() == before
+
+
+@pytest.mark.fast
+def test_write_wic_rejects_a_different_tool_under_the_same_stem(tmp_path: Path) -> None:
+    """A different file already named `<stem>.cwl` is neither replaced nor trusted."""
+    (tmp_path / 'echo.cwl').write_text('cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: false\n'
+                                       'inputs: {}\noutputs: {}\n', encoding='utf-8')
+    echo = Step(clt_path=_adapter('echo'))
+    echo.inputs.message = 'hi'
+    with pytest.raises(InvalidStepError, match='already exists'):
+        Workflow([echo], 'wf').write_wic(tmp_path)
+    assert not (tmp_path / 'wf.wic').exists()
 
 
 @pytest.mark.fast

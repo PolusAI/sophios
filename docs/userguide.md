@@ -308,13 +308,15 @@ does not compile the workflow and it does not write generated CWL. Literal
 bindings, named outputs, explicit edges, and intentionally unbound linear
 inputs are preserved, so the normal Sophios compiler can still apply edge
 inference later. Steps and workflow outputs use the names you gave them: a
-workflow output reads `step/port`, and a step whose name differs from its
-tool's file stem (`Step(..., step_name="say_hi")` on `echo.cwl`) carries
-`run: echo.cwl`.
+workflow output reads `step/port`, and every step carries `run: <stem>.cwl`
+(`Step(..., step_name="say_hi")` on `echo.cwl` reads `run: echo.cwl`). Only the
+tool's own document is written; files it imports by relative path are not
+copied. Writing into a directory that already holds a different `<stem>.cwl`
+is an error.
 
 Compile the bundle with `sophios --yaml hello_python.wic`. A `run:` path
-resolves beside the document first; a step named for its tool, and a nested
-`<child>.wic`, come from the search paths, so put the bundle's directory on
+resolves beside the document first; a nested `<child>.wic` comes from the
+search paths, so put the bundle's directory on
 `search_paths_wic` when the workflow nests others.
 
 If you need the root document's text instead of files:

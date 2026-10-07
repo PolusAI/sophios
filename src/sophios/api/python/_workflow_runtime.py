@@ -329,7 +329,10 @@ def write_workflow_wic(workflow: "Workflow", path: str | Path | None = None) -> 
     """Write a workflow as a self-contained bundle in one directory.
 
     The bundle is the root `.wic`, one `<name>.wic` per nested workflow and one
-    `<stem>.cwl` per distinct tool.
+    `<stem>.cwl` per distinct tool. Only a tool's own document is written: files
+    it refers to by relative path (such as a `$import`) are not copied. A tool
+    already on disk as its target is left alone, and a different file there is
+    an error.
 
     Args:
         workflow (Workflow): Workflow to serialize.
@@ -341,12 +344,19 @@ def write_workflow_wic(workflow: "Workflow", path: str | Path | None = None) -> 
     """
     workflow._validate()
     root = _wic_output_path(workflow, path)
+    missing_tools: dict[Path, "Step"] = {}
+    for stem, step in _bundle_tools(workflow).items():
+        target = root.parent / f"{stem}.cwl"
+        if not target.exists():
+            missing_tools[target] = step
+        elif _load_yaml(target) != step.yaml:
+            raise InvalidStepError(f"{target} already exists and is not the tool of step {step.process_name!r}")
     root.parent.mkdir(exist_ok=True, parents=True)
     for nested in workflow._flatten_subworkflows():
         target = root if nested is workflow else root.parent / f"{nested.process_name}.wic"
         target.write_text(render(workflow_document(nested)), encoding="utf-8")
-    for stem, step in _bundle_tools(workflow).items():
-        (root.parent / f"{stem}.cwl").write_text(input_output.dump_wic_yaml(step.yaml), encoding="utf-8")
+    for target, step in missing_tools.items():
+        target.write_text(input_output.dump_wic_yaml(step.yaml), encoding="utf-8")
     return root
 
 

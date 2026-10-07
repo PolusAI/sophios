@@ -572,10 +572,8 @@ class Step(_ProcessBase):
         return []
 
     def _as_workflow_step(self) -> nodes.Step:
-        """Return this step as the language's step node, with `run:` when its name is not its tool's stem."""
-        interpreted: list[tuple[str, OpaqueCwl]] = []
-        if self.clt_path.stem != self.process_name:
-            interpreted.append(("run", f"{self.clt_path.stem}.cwl"))
+        """Return this step as the language's step node, with `run:` naming its tool's file."""
+        interpreted: list[tuple[str, OpaqueCwl]] = [("run", f"{self.clt_path.stem}.cwl")]
         if self.scatter:
             interpreted += [("scatter", [input_port.name for input_port in self.scatter]),
                             ("scatterMethod", self.scatterMethod or ScatterMethod.dotproduct.value)]
@@ -819,7 +817,7 @@ class Workflow(_ProcessBase):
     def to_wic_yaml(self) -> str:
         """Return this workflow's root document as ``.wic`` YAML text.
 
-        The text names nested workflows and renamed steps' tools by file;
+        The text names nested workflows and every step's tool by file;
         ``write_wic`` writes those files beside it.
 
         Returns:
@@ -831,9 +829,11 @@ class Workflow(_ProcessBase):
         """Write this workflow as a self-contained bundle in one directory.
 
         The bundle is the root ``<name>.wic``, one ``<child>.wic`` per nested
-        workflow and one ``<stem>.cwl`` per distinct tool. A step whose name
-        differs from its tool's stem carries ``run: <stem>.cwl``, and every
-        workflow output names its authored step.
+        workflow and one ``<stem>.cwl`` per distinct tool. Every step carries
+        ``run: <stem>.cwl`` and every workflow output names its authored step.
+        Only the tool document is written: files it refers to by relative path
+        (such as a ``$import``) are not copied. Raises if ``<stem>.cwl`` already
+        exists in the directory with a different tool.
 
         Args:
             path (StrPath | None): Destination ``.wic`` path or output
