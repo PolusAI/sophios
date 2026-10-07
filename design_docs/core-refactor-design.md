@@ -330,6 +330,12 @@ warning naming every file and line where it was load-bearing. Because source
 spans exist, a `--migrate` mode can insert the `!cwl` tags mechanically. Adding
 `!cwl` is purely additive.
 
+The flag has a second, separate meaning: when the source file is itself a plain
+CWL `Workflow` (a conformant `.cwl` document with no Sophios syntax), it is run
+as it is and not compiled. The deprecation and `--migrate` above concern only
+the first meaning; retiring the flag would need another way to ask for
+pass-through.
+
 **The `wic:` sidecar** is unchanged on the surface, including its
 `"(1, step_name)"` string keys. The AST normalises them to an `(index, name)`
 pair on the way in.
