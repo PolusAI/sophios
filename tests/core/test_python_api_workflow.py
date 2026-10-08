@@ -740,9 +740,13 @@ def test_workflow_write_wic_exports_source_workflow_with_inferred_edges(tmp_path
 
 
 @pytest.mark.fast
-def test_write_wic_is_the_one_wic_writer() -> None:
-    """A Workflow writes `.wic` one way; nothing else returns `.wic` text or a `.wic` document."""
-    assert {name for name in dir(Workflow) if not name.startswith("_")} == {"compile", "run", "write_wic"}
+@pytest.mark.parametrize("removed", ["yaml", "to_wic_yaml"])
+def test_removed_wic_accessors_point_at_write_wic(removed: str) -> None:
+    """The removed `.wic` accessors fail loudly instead of resolving to a workflow input."""
+    workflow = Workflow([], "wf")
+
+    with pytest.raises(AttributeError, match=r"write_wic"):
+        getattr(workflow, removed)
 
 
 @pytest.mark.fast

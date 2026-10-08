@@ -797,6 +797,8 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
     def __getattr__(self, name: str) -> Any:
         if name.startswith("__"):
             raise AttributeError(name)
+        if name in ("yaml", "to_wic_yaml"):
+            raise AttributeError(f"Workflow.{name} was removed; use Workflow.write_wic() to write a .wic file")
         return self._input_reference(name, implicit=True)
 
     def _ensure_input(self, name: str, parameter_type: Any = None, *, implicit: bool = True) -> InputParameter:
