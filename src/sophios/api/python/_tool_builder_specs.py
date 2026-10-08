@@ -786,10 +786,10 @@ class InputSpec(_CommonSpecMixin, _DefaultSpecMixin, _IOFacetMixin):
     ) -> None:
         """Make a tool input.
 
-        `position`, `flag`, `separate`, `item_separator`, `value_from` and
-        `shell_quote` are written under `inputBinding`; without any of them the
-        input is not put on the command line, and the tool reads it through
-        expressions or staging.
+        `position`, `flag`, `separate`, `item_separator`, `value_from`,
+        `shell_quote` and `binding_extra` are written under `inputBinding`;
+        without any of them the input is not put on the command line, and the
+        tool reads it through expressions or staging.
 
         Args:
             type_ (Any): The input's `type`, such as `cwl.file`, `cwl.array(cwl.string)`
