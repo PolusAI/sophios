@@ -235,7 +235,7 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
         diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
                           f'process {namespace}/{name} is not a CWL mapping', step.span)
         return None
-    if cwl.get('class') == 'Workflow':
+    if _is_cwl_workflow(cwl):
         diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
                           _cwl_workflow_step(step, tool, own_name), step.span)
         return None
@@ -277,6 +277,16 @@ def _resolve_workflow(step: Step, sidecar: WicSidecar | None, workflow: Workflow
     if interface is None:
         return None
     return ResolvedProcess(key, f'{key.name}.cwl', *interface, {'class': 'Workflow'}, child)
+
+
+def _is_cwl_workflow(cwl: dict[str, Any]) -> bool:
+    """Whether a CWL document is a Workflow: ``class: Workflow``, or a packed ``$graph`` whose ``main`` is one."""
+    if cwl.get('class') == 'Workflow':
+        return True
+    graph = cwl.get('$graph')
+    return isinstance(graph, list) and any(
+        isinstance(entry, dict) and entry.get('id') in ('main', '#main') and entry.get('class') == 'Workflow'
+        for entry in graph)
 
 
 def _cwl_workflow_step(step: Step, tool: ToolDefinition, own_name: str | None) -> str:

@@ -373,6 +373,24 @@ def test_a_cwl_workflow_from_the_tool_search_paths_as_a_step_is_refused(tmp_path
 
 
 @pytest.mark.fast
+def test_a_packed_cwl_workflow_from_the_tool_search_paths_as_a_step_is_refused(tmp_path: Path) -> None:
+    """A `$graph` whose `main` is a Workflow has no top-level class, and is refused like any CWL Workflow."""
+    adapters = tmp_path / 'adapters'
+    adapters.mkdir()
+    (adapters / 'packed.cwl').write_text(
+        'cwlVersion: v1.2\n$graph:\n'
+        '  - {id: main, class: Workflow, inputs: {text: string}, '
+        'outputs: {said: {type: File, outputSource: echo/out}}, '
+        'steps: {echo: {run: "#echo", in: {text: text}, out: [out]}}}\n'
+        '  - {id: echo, class: CommandLineTool, baseCommand: echo, '
+        'inputs: {text: string}, outputs: {out: stdout}}\n', encoding='utf-8')
+    tools = get_tools_cwl({'search_paths_cwl': {'global': [str(adapters)]}}, quiet=True)
+    message = _cwl_workflow_step_diagnostic(tmp_path, '  - id: packed\n', tools)
+    assert message.startswith(f"step 'packed' runs {adapters / 'packed.cwl'}, a CWL Workflow from the "
+                              'tool search paths (search_paths_cwl). ')
+
+
+@pytest.mark.fast
 @pytest.mark.parametrize(('run', 'where'), [
     ('say.cwl', 'run: say.cwl, a CWL Workflow'),
     (_CWL_WORKFLOW, 'an inline run: body that is a CWL Workflow'),
