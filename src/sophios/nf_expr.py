@@ -385,12 +385,13 @@ def groovy_literal(value: str) -> str:
     return f"'{value.translate(_GROOVY_LITERAL_TABLE)}'"
 
 
-def render_groovy(node: Expr, *, where: str, inputs: str) -> str:
+def render_groovy(node: Expr, *, where: str, inputs: str, variables: Mapping[str, str] | None = None) -> str:
     """Render the fixed Groovy idiom for a typed tree.
 
     Every numeric node passes through the finite check, so NaN or ±Infinity
     anywhere fails with a diagnostic naming ``where``, the subexpression,
-    and the ``inputs`` map expression.
+    and the ``inputs`` map expression. ``variables`` maps an input to the
+    Groovy variable that holds it, when that is not the input's own name.
     """
     def numeric(expression: str, child: Expr) -> str:
         return (
@@ -410,7 +411,8 @@ def render_groovy(node: Expr, *, where: str, inputs: str) -> str:
             case "null":
                 return "null"
             case "ref":
-                return f"(({child.value}) as double)" if child in _numeric_refs else str(child.value)
+                name = (variables or {}).get(child.value, child.value)
+                return f"(({name}) as double)" if child in _numeric_refs else name
             case "u!":
                 return f"(!{args[0]})"
             case "u-":
