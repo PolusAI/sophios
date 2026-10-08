@@ -315,7 +315,7 @@ def test_cli_converts_a_report_to_exit_1(monkeypatch: pytest.MonkeyPatch,
 
     def reports(*_args: object, **_kwargs: object) -> None:
         raise SophiosError.error(SophiosErrorCode.UNRESOLVED_INPUT,
-                                 'Did you forget to use !ii before x in demo.wic?',
+                                 'Did you forget to use !ii before x?',
                                  'If you want to compile the workflow anyway, use --allow_raw_cwl')
 
     monkeypatch.setattr(cli, '_main', reports)
@@ -604,7 +604,7 @@ def test_an_unresolved_input_error_does_not_call_itself_a_warning() -> None:
         compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': 'x'}}]})
     first = caught.value.diagnostics[0]
     assert first.code is SophiosErrorCode.UNRESOLVED_INPUT
-    assert first.message == 'Did you forget to use !ii before x in oracle.wic?'
+    assert first.message == 'Did you forget to use !ii before x?'
 
 
 @pytest.mark.fast
