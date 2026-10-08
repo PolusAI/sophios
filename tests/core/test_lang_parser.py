@@ -806,6 +806,9 @@ def test_unknown_tags_report_wic009(source: str) -> None:
 @example('!: :')      # unknown tag on a mapping *key* — the position that was missed
 @example('!foo x: y')  # the same, spelled legibly
 @example('!!: :')     # a core tag with an empty suffix, which the loader cannot construct
+@example('a: !!str [a]')  # a core tag on the wrong node kind
+@example('a: !!int')  # a core number tag over an empty value, which raises IndexError
+@example('a: !!int abc')  # a core tag over a value its constructor cannot read
 def test_parser_is_not_more_permissive_than_the_loader(text: str) -> None:
     """Any document the parser accepts without diagnostics, the loader loads.
 
@@ -832,6 +835,21 @@ def test_a_yaml_tag_the_loader_cannot_construct_is_unknown_tag(source: str) -> N
     result = parse(source, 'x.wic')
     assert any(d.code is SophiosErrorCode.UNKNOWN_TAG for d in result.diagnostics), source
     assert not result.ok
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('source', [
+    'a: !!str [a]', 'a: !!map b', 'a: !!seq b', 'a: !!set [a]', '!!int a: b',
+    'a: !!int abc', 'a: !!float x', 'a: !!bool x', 'a: !!timestamp x',
+    'a: !!int', 'a: !!int ""', 'a: !!float ""',
+    'a: !!omap [{b: !!int x}]', 'a: !!pairs [{b: {c: !!bool x}}]', 'a: !!set {x: [!!int y]}',
+])
+def test_a_core_tag_the_loader_cannot_build_is_reported(source: str) -> None:
+    """A tag the loader knows can still fail on its node; the parser reports it, never raises."""
+    with pytest.raises((yaml.YAMLError, ValueError, KeyError, AttributeError, IndexError)):
+        yaml.load(source, Loader=wic_loader())
+    result = parse(source, 'x.wic')
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.UNKNOWN_TAG], source
 
 
 @pytest.mark.fast

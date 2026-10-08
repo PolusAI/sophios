@@ -173,23 +173,65 @@ def _every_node(root: yaml.nodes.Node) -> list[yaml.nodes.Node]:
     return order
 
 
-def _report_unknown_tag(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> None:
-    """Report a tag the language does not own, wherever it appears.
+#: What PyYAML's constructors raise on a node they cannot build: the wrong node
+#: kind for the tag, or a scalar the tag's constructor cannot read.
+_CONSTRUCTION_FAILURES: Final = (yaml.YAMLError, ValueError, KeyError, AttributeError, IndexError)
+
+
+class _CoreConstructor(yaml.constructor.SafeConstructor):
+    """`SafeConstructor` that leaves every `!`-tagged node unbuilt.
+
+    Those tags are checked on their own, so a core node holding one is judged
+    on the rest of its content.
+    """
+
+
+_CoreConstructor.add_multi_constructor('!', lambda _loader, _suffix, _node: None)
+
+
+#: The tag each collection kind resolves to when none is written. Such a node's
+#: own failure (a collection used as a key) is reported where the key is read,
+#: so only a tag that disagrees with the node's kind is checked here.
+_DEFAULT_TAGS: Final[dict[type[yaml.nodes.Node], str]] = {yaml.nodes.MappingNode: 'tag:yaml.org,2002:map',
+                                                          yaml.nodes.SequenceNode: 'tag:yaml.org,2002:seq'}
+
+
+def _unconstructible(node: yaml.nodes.Node) -> bool:
+    """Whether the loader's `SafeConstructor` cannot build this YAML-core node."""
+    if _DEFAULT_TAGS.get(type(node)) == node.tag:
+        return False
+    try:
+        _CoreConstructor().construct_object(node, deep=True)
+    except _CONSTRUCTION_FAILURES:
+        return True
+    return False
+
+
+def _report_unknown_tags(root: yaml.nodes.Node, file: str, diags: Diagnostics) -> None:
+    """Report a tag the language does not own, or cannot construct, wherever it appears.
 
     Applied to every node rather than called at each consuming position, so a
     position added later is covered by default. The payload is kept,
-    untagged, for recovery.
+    untagged, for recovery. A node whose tag does not start with `!` is built
+    with the loader's own constructor, so the parser agrees with the loader
+    by construction: `!!foo`, `!<verbatim>`, `!!str [a]`, `!!int abc` are all
+    rejected. A node is reported only when it is the innermost failure, not
+    once more for each ancestor that holds it.
     """
-    if node.tag.startswith('!') and node.tag not in Tag.ALL:
-        diags.error(SophiosErrorCode.UNKNOWN_TAG,
-                    f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
-                    SourceSpan.of(file, node))
-    elif not node.tag.startswith('!') and node.tag not in yaml.SafeLoader.yaml_constructors:
-        # `!!x` and `!<verbatim>` spellings: the loader has no constructor for
-        # the tag, so it raises; the parser must not accept what it rejects.
-        diags.error(SophiosErrorCode.UNKNOWN_TAG,
-                    f'unknown tag {node.tag!r}; YAML cannot construct it',
-                    SourceSpan.of(file, node))
+    nodes = _every_node(root)
+    failing = {id(node) for node in nodes
+               if not node.tag.startswith('!') and _unconstructible(node)}
+    for node in nodes:
+        if node.tag.startswith('!'):
+            if node.tag not in Tag.ALL:
+                diags.error(SophiosErrorCode.UNKNOWN_TAG,
+                            f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
+                            SourceSpan.of(file, node))
+        elif id(node) in failing:
+            if not any(id(inner) in failing and inner is not node for inner in _every_node(node)):
+                diags.error(SophiosErrorCode.UNKNOWN_TAG,
+                            f'tag {node.tag!r} cannot construct this value; YAML rejects it',
+                            SourceSpan.of(file, node))
 
 
 def _in_reading_order(diags: Diagnostics) -> Diagnostics:
@@ -217,8 +259,7 @@ def parse(text: str, filename: str = '<string>') -> ParseResult:
     if root is None:  # An empty document is well-formed and carries nothing.
         return ParseResult(Document(span=whole), diagnostics)
 
-    for node in _every_node(root):
-        _report_unknown_tag(node, filename, diagnostics)
+    _report_unknown_tags(root, filename, diagnostics)
 
     if not isinstance(root, yaml.nodes.MappingNode):
         diagnostics.error(
@@ -1008,7 +1049,7 @@ def _resolved_scalar(node: yaml.nodes.ScalarNode) -> Any:
     """
     try:
         return yaml.constructor.SafeConstructor().construct_object(node)
-    except yaml.constructor.ConstructorError:
+    except _CONSTRUCTION_FAILURES:  # reported by _report_unknown_tags
         return node.value
 
 
