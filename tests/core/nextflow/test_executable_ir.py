@@ -2,13 +2,16 @@
 
 # pylint: disable=missing-function-docstring
 
+import json
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
+from sophios.input_output_nf import render_nextflow
 from sophios.nf_expr import parse
-from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
+from sophios.nf_reader import parse_nf_text
+from sophios.nf_symbols import NEXTFLOW_SCRIPT_NAMES, is_nextflow_identifier, normalize_nextflow_identifier
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
     NfArrayBinding,
@@ -29,7 +32,7 @@ from sophios.nf_types import (
     NfWorkflowOutputConnection,
 )
 
-from .testkit import command, output_port
+from .testkit import command, output_port, template
 
 
 @pytest.mark.fast
@@ -75,14 +78,14 @@ def test_executable_schema_declares_version_and_kind() -> None:
     workflow = ExecutableNextflowWorkflow("wf", [], [], {})
     payload = workflow.to_dict()
 
-    assert payload["schema_version"] == 15
+    assert payload["schema_version"] == 16
     assert payload["representation_kind"] == "executable"
 
     payload["schema_version"] = 1
     with pytest.raises(ValueError, match="schema version"):
         ExecutableNextflowWorkflow.from_dict(payload)
 
-    payload["schema_version"] = 15
+    payload["schema_version"] = 16
     payload["representation_kind"] = "structural"
     with pytest.raises(ValueError, match="representation kind"):
         ExecutableNextflowWorkflow.from_dict(payload)
@@ -700,13 +703,13 @@ def test_hydration_accepts_earlier_subset_schema_versions() -> None:
     payload = ExecutableNextflowWorkflow(
         "wf", [NfProcess("P", [], [], command("true"))], [], {}
     ).to_dict()
-    assert payload["schema_version"] == 15
+    assert payload["schema_version"] == 16
 
-    for earlier in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14):
+    for earlier in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15):
         payload["schema_version"] = earlier
-        assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 15
+        assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 16
 
-    for unsupported in (1, 16):
+    for unsupported in (1, 17):
         payload["schema_version"] = unsupported
         with pytest.raises(ValueError, match="schema version"):
             ExecutableNextflowWorkflow.from_dict(payload)
@@ -1268,3 +1271,70 @@ def test_a_captured_value_reaches_a_workflow_output() -> None:
     )
 
     assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow
+
+
+def _conditional_payload() -> dict[str, Any]:
+    process = NfProcess(
+        "TASK",
+        [NfPort("a", "val")],
+        [output_port("result", "out.txt")],
+        command("true"),
+        condition=parse("$(inputs.a > 1)"),
+    )
+    workflow = ExecutableNextflowWorkflow("WF", [process], [NfWorkflowInputConnection("a", "TASK", "a")], {"a": 2})
+    assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow
+    return cast(dict[str, Any], json.loads(workflow.to_json()))
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("field", "value"), [
+    ("condition", {}),
+    ("condition", False),
+    ("condition", {"op": "string", "value": "false"}),
+    ("condition", {"op": "bogus"}),
+    ("condition", {"op": ">", "args": [{"op": "ref", "value": "a"}]}),
+    ("is_array", "false"),
+    ("is_array", 0),
+], ids=["empty-condition", "false-condition", "string-condition", "unknown-op", "wrong-arity", "string-is-array", "zero-is-array"])
+def test_hydration_refuses_a_malformed_condition_or_port(field: str, value: Any) -> None:
+    payload = _conditional_payload()
+    target = payload["processes"][0] if field == "condition" else payload["processes"][0]["inputs"][0]
+    target[field] = value
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        ExecutableNextflowWorkflow.from_json(json.dumps(payload))
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("name", sorted(NEXTFLOW_SCRIPT_NAMES) + ["Math", "Élan"])
+def test_a_script_variable_never_takes_a_name_the_script_resolves(name: str) -> None:
+    assert normalize_nextflow_identifier(name) == f"_{name}"
+    assert normalize_nextflow_identifier(name, variable=False) == name
+
+
+def _optional_producer() -> NfProcess:
+    return NfProcess("MAYBE", [NfPort("x", "val")], [NfPort("o", "path", "o", template("maybe.txt"), optional=True)],
+                     command("true"))
+
+
+@pytest.mark.fast
+def test_an_optional_output_round_trips_and_reads_back() -> None:
+    workflow = ExecutableNextflowWorkflow(
+        "WF",
+        [_optional_producer()],
+        [NfWorkflowInputConnection("x", "MAYBE", "x"), NfWorkflowOutputConnection("MAYBE", "o", "o")],
+        {"x": 1},
+    )
+    assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow
+    assert parse_nf_text(render_nextflow(workflow), params={"x": 1}).processes[0].outputs[0].optional
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("adapter", [None, "dotproduct"], ids=["consumed", "scattered"])
+def test_an_optional_output_reaches_only_an_unscattered_workflow_output(adapter: str | None) -> None:
+    consume = NfProcess("CONSUME", [NfPort("source", "path")], [], command("true"))
+    connections: list[Any] = [NfWorkflowInputConnection("xs" if adapter else "x", "MAYBE", "x", adapter)]
+    connections.append(NfProcessConnection("MAYBE", "o", "CONSUME", "source") if adapter is None
+                       else NfWorkflowOutputConnection("MAYBE", "o", "o"))
+    with pytest.raises(ValueError, match="optional output"):
+        ExecutableNextflowWorkflow("WF", [_optional_producer(), consume], connections,
+                                   {"xs": [1]} if adapter else {"x": 1})

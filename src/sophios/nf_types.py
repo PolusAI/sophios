@@ -547,6 +547,9 @@ GLOB_WILDCARDS = frozenset("*?[")
 class NfPort:
     """A typed Nextflow process port.
 
+    ``optional`` marks a File or Directory output CWL declares optional: no
+    match yields null rather than failing the task.
+
     ``capture`` names the approved output-capture declarations an
     ``outputBinding`` may carry. The approved set is closed data: ``"single"``
     declares that the port carries one value rather than a list, and ``"text"``
@@ -571,6 +574,7 @@ class NfPort:
     is_array: bool = False
     stage_as: str | None = None
     capture: str | None = None
+    optional: bool = False
 
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.name, field_name="port name")
@@ -590,6 +594,10 @@ class NfPort:
             raise TypeError("port glob must be an NfTemplate or None")
         if not isinstance(self.is_array, bool):
             raise TypeError("port is_array must be a bool")
+        if not isinstance(self.optional, bool):
+            raise TypeError("port optional must be a bool")
+        if self.optional and (self.qualifier != "path" or self.glob is None):
+            raise ValueError("only a path output may be optional")
         if self.stage_as is not None:
             if self.qualifier != "path":
                 raise ValueError("only path ports may declare a stage_as rename")
@@ -639,7 +647,8 @@ class NfPort:
 
         Returns:
             dict[str, Any]: The port's name, qualifier, emit, glob, path
-                kind, array marker, staged-name override, and capture marker.
+                kind, array marker, staged-name override, capture marker,
+                and optional marker.
         """
         return {
             "name": self.name,
@@ -650,13 +659,14 @@ class NfPort:
             "is_array": self.is_array,
             "stage_as": self.stage_as,
             "capture": self.capture,
+            "optional": self.optional,
         }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
         """Hydrate and validate a port from a mapping.
 
-        ``is_array``, ``stage_as``, and ``capture`` are optional on
+        ``is_array``, ``stage_as``, ``capture`` and ``optional`` are optional on
         hydration: every schema version before each was introduced never
         wrote it, and its absence there always means False/None, so
         accepting a missing key keeps those payloads hydrating unchanged.
@@ -677,7 +687,7 @@ class NfPort:
             item,
             type_name=cls.__name__,
             required={"name", "qualifier", "emit", "glob", "path_kind"},
-            optional={"is_array", "stage_as", "capture"},
+            optional={"is_array", "stage_as", "capture", "optional"},
         )
         glob = None if item["glob"] is None else NfTemplate.from_dict(item["glob"])
         return cls(
@@ -686,10 +696,15 @@ class NfPort:
             emit=item["emit"],
             glob=glob,
             path_kind=item["path_kind"],
-            is_array=bool(item.get("is_array", False)),
+            is_array=item.get("is_array", False),
             stage_as=item.get("stage_as"),
             capture=item.get("capture"),
+            optional=item.get("optional", False),
         )
+
+
+# The tree roots that compute a boolean: logic, comparison, negation, a boolean literal or input.
+_BOOLEAN_ROOTS = frozenset({"||", "&&", "==", "!=", "===", "!==", "<", "<=", ">", ">=", "u!", "boolean", "ref"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -816,6 +831,9 @@ class NfProcess:
         if self.condition is not None:
             if not isinstance(self.condition, Expr):
                 raise TypeError("process condition must be a typed Expr or None")
+            validate(self.condition)
+            if self.condition.op not in _BOOLEAN_ROOTS:
+                raise ValueError(f"process {self.name!r} condition must compute a boolean, not {self.condition.op!r}")
             if not inputs:
                 raise ValueError(
                     f"process {self.name!r} has a condition but no inputs: a conditional step "
@@ -882,7 +900,7 @@ class NfProcess:
                     command=NfCommand.from_dict(item["command"]),
                     container=item["container"],
                     resources=NfResources.from_dict(item["resources"]),
-                    condition=Expr.from_dict(item["condition"]) if item.get("condition") else None,
+                    condition=Expr.from_dict(item["condition"]) if "condition" in item else None,
                 )
             case _:
                 raise TypeError("NfProcess inputs and outputs must be lists")
@@ -1118,10 +1136,10 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow."""
 
-    SCHEMA_VERSION: ClassVar[int] = 15
+    SCHEMA_VERSION: ClassVar[int] = 16
     # Earlier versions whose value space is a strict subset of the current
     # model hydrate unchanged; serialization always writes SCHEMA_VERSION.
-    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
+    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset(range(2, 17))
     # Each additive token or segment kind declares the version that
     # introduced it, so the subset property is enforced rather than assumed.
     KIND_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
@@ -1133,7 +1151,7 @@ class ExecutableNextflowWorkflow:
     # connection kind, so each needs its own gate alongside
     # KIND_SCHEMA_VERSIONS.
     FIELD_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
-        {"is_array": 5, "stage_as": 7, "adapter": 8, "capture": 9, "condition": 11}
+        {"is_array": 5, "stage_as": 7, "adapter": 8, "capture": 9, "condition": 11, "optional": 16}
     )
     # A specific field VALUE introduced after the field itself: "dotproduct",
     # "flat_crossproduct", "gather" and "nested_crossproduct" are values of the
@@ -1214,6 +1232,17 @@ class ExecutableNextflowWorkflow:
             if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
             and connection.adapter in MULTI_INPUT_ADAPTERS
         }
+
+        scattered = {
+            connection.to_process
+            for connection in self.connections
+            if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
+            and connection.adapter in ("scatter", *MULTI_INPUT_ADAPTERS)
+        }
+        for name in scattered:
+            if optional := [port.name for port in process_by_name[name].outputs if port.optional]:
+                # A gather would drop the absent positions instead of keeping null there.
+                raise ValueError(f"scattered process {name!r} cannot have the optional outputs {', '.join(optional)}")
 
         for connection in self.connections:
             match connection:
@@ -1298,6 +1327,13 @@ class ExecutableNextflowWorkflow:
                         raise ValueError(
                             f"connection {from_process}.{from_port} -> {to_process}.{to_port} "
                             "joins incompatible channel cardinalities"
+                        )
+                    if source.optional:
+                        # Null has one representation, the [] sentinel, and no path port
+                        # has an approved lowering of it; a workflow output reports it.
+                        raise ValueError(
+                            f"connection {from_process}.{from_port} -> {to_process}.{to_port} consumes an "
+                            "optional output, which may be null; only a workflow output can take it"
                         )
                     if source.capture == "text" and process_by_name[from_process].condition is None:
                         # The qualifier axis still has no general agreement

@@ -500,9 +500,9 @@ def test_applies_unwired_scalar_default_before_lowering() -> None:
         [default_tool],
     )
     workflow = compiled_source_to_nextflow(rose)
-    assert workflow.params == {"DEFAULT___message": "hello default"}
-    assert NfWorkflowInputConnection("DEFAULT___message", "DEFAULT", "message") in workflow.connections
-    assert "Channel.value(params.DEFAULT___message)" in render_nextflow(workflow)
+    assert workflow.params == {"_DEFAULT___message": "hello default"}
+    assert NfWorkflowInputConnection("_DEFAULT___message", "DEFAULT", "message") in workflow.connections
+    assert "Channel.value(params._DEFAULT___message)" in render_nextflow(workflow)
 
 
 @pytest.mark.fast
@@ -527,7 +527,7 @@ def test_rejects_collisions_between_source_and_default_params() -> None:
     )
     with pytest.raises(
         ValueError,
-        match="lowered workflow parameter names collide: DEFAULT___message",
+        match="lowered workflow parameter names collide: _DEFAULT___message",
     ):
         compiled_source_to_nextflow(rose)
 
@@ -720,3 +720,55 @@ def test_subworkflow_io_binds_to_the_outer_step_endpoints(
         "result",
         "root__step__2__child_wic___child__step__1__inner_copy___result",
     ) in connections
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("base_command", ["pre$(inputs.s)", ["pre$(inputs.s)"]], ids=["string", "list"])
+def test_base_command_and_prefix_are_literals(base_command: Any) -> None:
+    literal = tool(
+        "LITERAL",
+        inputs={"s": {"type": "string", "inputBinding": {"prefix": "-$(inputs.s)"}}},
+        baseCommand=base_command,
+    )
+    rose = synthetic_source(
+        workflow_doc([step("LITERAL", **{"in": {"s": "s"}})], inputs={"s": "string"}),
+        [literal],
+        workflow_inputs={"s": "x"},
+    )
+    tokens = compiled_source_to_nextflow(rose).processes[0].command.tokens
+    assert tokens == (
+        NfTemplate((NfLiteral("pre$(inputs.s)"),)),
+        NfTemplate((NfLiteral("-$(inputs.s)"),)),
+        NfTemplate((NfInputReference("s"),)),
+    )
+
+
+def _boolean_valuefrom_tokens(binding: dict[str, Any], *, owner: dict[str, Any] | None = None) -> tuple[Any, ...]:
+    inputs: dict[str, Any] = {"b": {"type": "boolean"}}
+    arguments: list[Any] = []
+    if owner is None:
+        arguments.append({"valueFrom": "$(inputs.b)", **binding})
+    else:
+        inputs["s"] = {**owner, "inputBinding": {"valueFrom": "$(inputs.b)", **binding}}
+    rose = synthetic_source(
+        workflow_doc(
+            [step("FLAG", **{"in": {name: name for name in inputs}})],
+            inputs={name: definition["type"] for name, definition in inputs.items()},
+        ),
+        [tool("FLAG", inputs=inputs, baseCommand="echo", arguments=arguments)],
+        workflow_inputs={name: {"b": True, "s": "x"}[name] for name in inputs},
+    )
+    return tuple(compiled_source_to_nextflow(rose).processes[0].command.tokens[1:])
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("owner", [None, {"type": "string"}], ids=["argument", "string-input-binding"])
+def test_a_whole_boolean_valuefrom_is_a_flag(owner: dict[str, Any] | None) -> None:
+    assert _boolean_valuefrom_tokens({"prefix": "--flag"}, owner=owner) == (NfFlag("b", "--flag"),)
+    assert _boolean_valuefrom_tokens({}, owner=owner) == ()
+
+
+@pytest.mark.fast
+def test_a_boolean_valuefrom_on_an_optional_input_is_rejected() -> None:
+    with pytest.raises(ValueError, match="a boolean valueFrom on optional input 's' is not supported"):
+        _boolean_valuefrom_tokens({"prefix": "--flag"}, owner={"type": "string?"})
