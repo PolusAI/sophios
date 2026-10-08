@@ -276,7 +276,7 @@ def test_literal_dollar_and_mixed_backtick_globs_execute(tmp_path: Path) -> None
     rendered = render_nextflow(workflow)
     assert "path 'out$name.txt', emit: result" in rendered
     # A plain input reference can carry a pattern, so globbing stays on.
-    assert 'path "`${name}.txt", emit: result' in rendered
+    assert "path \"`${name}.txt\", arity: '1', emit: result" in rendered
     result = run_nextflow(workflow, tmp_path)
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     assert len(list((tmp_path / "work").rglob("out$name.txt"))) == 1
@@ -734,7 +734,7 @@ def test_array_of_files_stages_every_element_for_one_process_call(
     """R2.7: an array of File values stages every element for a single process invocation."""
     sources = []
     for index, text in enumerate(contents):
-        source = tmp_path / f"source_{index}.txt"
+        source = tmp_path / f"source[{index}]*.txt"  # a metacharacter names a file, not a pattern
         source.write_text(text, encoding="utf-8")
         sources.append(str(source))
     process = NfProcess(
@@ -1248,7 +1248,7 @@ def test_a_scattered_step_broadcasts_its_unscattered_inputs(tmp_path: Path) -> N
 @pytest.mark.serial
 def test_a_scattered_step_broadcasts_an_unscattered_file_input(tmp_path: Path) -> None:
     """R2.17 File variant: one staged path value reaches every scatter task."""
-    reference = tmp_path / "reference.txt"
+    reference = tmp_path / "reference[1]*.txt"  # a metacharacter names a file, not a pattern
     reference.write_text("shared file\n", encoding="utf-8")
     process = NfProcess(
         "COPY",
@@ -1494,3 +1494,13 @@ def test_file_text_capture_fails_on_malformed_utf8(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "is not valid UTF-8" in result.stdout + result.stderr
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+@pytest.mark.parametrize(("names", "succeeds"), [(["a.txt"], True), (["a.txt", "b.txt"], False)], ids=["one", "several"])
+def test_a_wildcard_file_output_names_exactly_one_file(names: list[str], succeeds: bool, tmp_path: Path) -> None:
+    """A scalar File output whose glob matches several files fails, as cwltool does."""
+    process = NfProcess("MAKE", [], [output_port("result", "*.txt")], command("touch", *names))
+    result = run_nextflow(single_process_workflow(process, params={}, output_port_name="result"), tmp_path)
+    assert (result.returncode == 0) is succeeds, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"

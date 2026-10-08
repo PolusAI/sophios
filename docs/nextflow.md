@@ -1,9 +1,14 @@
 # Nextflow DSL2 target
 
-Sophios can compile supported flat workflows to a validated Nextflow
-intermediate representation and deterministic DSL2 artifacts. CWL remains the
-canonical compiler representation; the Nextflow target converts the compiler's
+Sophios can compile supported workflows to a validated Nextflow intermediate
+representation and deterministic DSL2 artifacts. CWL remains the canonical
+compiler representation; the Nextflow target converts the compiler's
 already-inferred workflow graph without running inference a second time.
+
+The target fails closed: a CWL field, type, requirement or hint it does not
+consume is rejected by name, before any artifact is written, never dropped.
+`target="nextflow"` accepts no user-written Groovy; every string you write is
+rendered as data.
 
 ## Python API
 
@@ -94,6 +99,11 @@ A `valueFrom` on a boolean binding is supported only as a bare
 but legal CWL form that lowers to the same flag. Any other `valueFrom` shape
 on a boolean binding is rejected.
 
+The same rule applies wherever a `valueFrom` is exactly `$(inputs.<name>)` of a
+boolean input — an `arguments` entry or another input's binding: the flag uses
+that entry's prefix. On an optional input's binding it is rejected, since CWL
+omits the whole binding when that input is absent.
+
 ## Absent optional values
 
 An absent optional `val` input (string/int/float/boolean) lowers to a
@@ -121,18 +131,21 @@ outputs:
 
 The reference must target a `File` or `Directory` input. Nextflow stages an
 input under its original file name, so the staged name is exactly the CWL
-`basename`.
+`basename`. `$(inputs.<name>.path)` is the same reference as `$(inputs.<name>)`
+and is likewise admitted only on a `File` or `Directory` input.
+
+A string holding a `$(…)` reference is interpolated as cwltool does: it is
+stripped of surrounding whitespace, `\$(` writes a literal `$(`, and `\\`
+writes one backslash. A string with no reference is used exactly as written.
 
 The `.copy` suffix above is load-bearing: a basename glob must derive a **new**
 name. A Nextflow output declaration does not capture staged inputs, so a glob
 naming only the input itself compiles cleanly and then fails at run time with
 `Missing output file(s)`.
 
-Two further limits apply to a rendered glob. It stays a Nextflow glob pattern,
-so a staged name containing `*`, `?`, `[`, `{` or `}` is interpreted as a
-pattern rather than matched literally, and the process fails to find the file
-it wrote. Rendering such a name literally is a separate change, because it
-alters emitted bytes and the generated-subset reader with them.
+A glob built only from basename references is matched literally, so a staged
+name containing `*`, `?`, `[`, `{` or `}` still finds the file. A metacharacter
+written into the literal part of a glob stays a pattern.
 
 ## Array-typed inputs
 
@@ -229,8 +242,8 @@ input, and two inputs staged under the same literal name are all rejected.
 
 ## Scatter
 
-A step that scatters over exactly one input runs once per element of an
-array-typed workflow input:
+A step that scatters over exactly one input runs once per element of its
+array-typed source, a workflow input or a gathered scatter output:
 
 ```python
 echo = Step(echo_tool, step_name="echo_item")
@@ -238,10 +251,9 @@ echo.inputs.item = ["alpha", "beta", "gamma"]
 echo.scatter_on(echo.inputs.item)
 ```
 
-The scattered parameter is carried as one channel holding the whole list and
-adapted with Nextflow's `flatten` at each consumption site, so the process
-takes one element per task while the step's other inputs stay value channels
-and broadcast to every task. Scattering over an empty array runs zero tasks:
+The scattered list is split into one indexed invocation per element, so the
+process takes one element per task while the step's other inputs stay value
+channels and broadcast to every task. Scattering over an empty array runs zero tasks:
 the run still terminates and the workflow output is simply empty.
 
 With exactly one scattered input all three CWL methods coincide, so
@@ -249,8 +261,7 @@ With exactly one scattered input all three CWL methods coincide, so
 accepted as inert restatements; any other value is rejected.
 
 Scattering two or more inputs requires an explicit `scatterMethod`:
-`dotproduct`, `flat_crossproduct`, or `nested_crossproduct`. Each scattered
-input is still sourced from its own array-typed workflow input. The whole
+`dotproduct`, `flat_crossproduct`, or `nested_crossproduct`. The whole
 arrays are combined into one invocation per index or per combination — never
 by pairing per-element channels, whose pairing would depend on arrival order.
 
@@ -317,8 +328,7 @@ unbound subworkflow inputs and outputs that do not resolve to a child step.
 The backend separately rejects executable semantics that would be lost when a
 resolved boundary is removed. In particular, `scatter` on a subworkflow call
 is not supported. A scattered leaf step *inside* a subworkflow is not a
-special case: after projection it follows the scatter rules above, so its
-source must be an array-typed workflow input.
+special case: after projection it follows the scatter rules above.
 
 Workflow-level `ScatterFeatureRequirement`, `SubworkflowFeatureRequirement`,
 and `InlineJavascriptRequirement` (which Sophios adds for `when`) are accepted
@@ -340,9 +350,11 @@ outputs:
       outputEval: $(self[0])
 ```
 
-It renders as `path 'out.txt', arity: '1'`, so the generated pipeline states
+It renders as `path 'out.txt', glob: false, arity: '1'`, so the generated pipeline states
 the declaration instead of dropping it, emits a single path, and fails the
-task when nothing matches.
+task when nothing matches. A `File` or `Directory` output whose glob is a
+pattern renders `arity: '1'` as well, so several matches fail the task as
+they fail in cwltool.
 
 The paired `glob` must be one literal with no `*`, `?`, or `[` and no
 `$(inputs...)` reference. `self[0]` is the first of the matched list, which is
@@ -408,13 +420,15 @@ A NaN or ±Infinity anywhere in the computation, such as division by zero,
 fails the task with the step, field, expression, subexpression, and input
 values; CWL would instead carry the value on. The result is printed as cwltool
 prints it; a result that would need exponent notation, or a non-integral
-result bound to an `int` or `long` input, fails the task. A computed
+result bound to an `int` input, fails the task. A computed
 `valueFrom` on an optional input, or beside `separate: false`, is rejected.
 
 ## Conditional steps
 
 A `CommandLineTool` step's `when` may be a boolean-typed safe-subset
-expression over that step's own bound inputs. A true condition runs the
+expression over that step's own bound inputs. Beside the numeric subset it may
+compare (`== != === !== < <= > >=`), combine (`! && ||`), and use string,
+boolean and `null` literals; ordered comparisons take numbers. A true condition runs the
 process; a false condition runs no task, and the step's outputs are `null`,
 carried by the same `[]` sentinel the absent-optional lowering uses, so a
 skipped invocation still emits exactly one element per output and downstream
@@ -428,13 +442,12 @@ That possibly-null value is admitted only where the sentinel is sound: at a
 workflow output (which reports `null`), or at an optional `val` input of a
 later step whose use the absent-optional lowering already admits (never
 referenced, or referenced only as a boolean flag). Every other consumer is
-rejected by name — a non-optional port, a `path` consumer, or an array-typed
-output of a conditional step outside scatter.
+rejected by name — a non-optional port, a `path` consumer, an array-typed
+port, or an array-typed output of a conditional step outside scatter.
 
 `when` on a step whose `run` is a workflow is rejected, since skipping an
 inlined sub-DAG is not this lowering's single-process shape. `pickValue` is
-rejected everywhere. `when` on a scattered step is rejected too;
-per-combination `when` is deferred beyond this lowering. A conditional step
+rejected everywhere. A conditional step
 needs at least one input to gate on, so `when` on a tool that declares no
 inputs is rejected.
 
@@ -443,9 +456,8 @@ inputs is rejected.
 - Processes must be `CommandLineTool`-equivalent.
 - Fractional CPU requirements reject before lowering; they are not silently
   rounded.
-- Arbitrary Groovy, channel operators beyond the one supported adapter,
-  `when` on a scattered or nested-workflow step, and `exec` blocks are not
-  interpreted.
+- The reader does not interpret arbitrary Groovy, channel operators, or `exec`
+  blocks in a script; they stay opaque regions.
 - Read beside its generated `nextflow_workflow.json`, every generated workflow
   — scatter, conditions, gather — reads back exactly and promotes to the model
   that produced it. Read alone, the reader recognizes only the plain call

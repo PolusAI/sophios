@@ -80,7 +80,7 @@ def test_renders_real_compiled_source_with_typed_glob(
     real_supported_result: CompilationResult,
 ) -> None:
     rendered = render_nextflow(compiled_source_to_nextflow(real_supported_result))
-    assert 'path "${filename}", emit: result' in rendered
+    assert "path \"${filename}\", arity: '1', emit: result" in rendered
     assert "wf__step__2__copy(wf__step__1__touch.out.result)" in rendered
 
 
@@ -193,7 +193,7 @@ def test_scalar_path_parameter_broadcasts_to_every_scatter_task() -> None:
 
     assert (
         "Channel.value(file(params.source instanceof Map ? params.source.path : "
-        "params.source, checkIfExists: true, type: 'file'))"
+        "params.source, checkIfExists: true, type: 'file', glob: false))"
     ) in rendered
     assert "Channel.fromPath(params.source" not in rendered
 
@@ -320,7 +320,7 @@ def test_renders_array_of_path_channel_construction_with_staging_per_element() -
     assert (
         "Channel.value(params.sources.collect { entry -> file("
         "entry instanceof Map ? entry.path : entry, "
-        "checkIfExists: true, type: 'file') })"
+        "checkIfExists: true, type: 'file', glob: false) })"
     ) in rendered
 
 
@@ -396,7 +396,7 @@ def test_all_literal_output_name_keeps_globbing_on() -> None:
 
     # The exact declaration pins the absence of the option: with it, the
     # rendered line would read ", glob: false, emit: result" instead.
-    assert "path 'out*.txt', emit: result" in rendered
+    assert "path 'out*.txt', arity: '1', emit: result" in rendered
 
 
 @pytest.mark.fast
@@ -417,7 +417,7 @@ def test_assembled_name_with_an_author_written_metacharacter_keeps_globbing_on()
         {"source": "lines.txt"},
     ))
 
-    assert 'path "${source.name}*.txt", emit: result' in rendered
+    assert "path \"${source.name}*.txt\", arity: '1', emit: result" in rendered
 
 
 @pytest.mark.fast
@@ -439,7 +439,7 @@ def test_pattern_valued_input_glob_keeps_globbing_on() -> None:
         {"pattern": "*.txt"},
     ))
 
-    assert 'path "${pattern}", emit: matched' in rendered
+    assert "path \"${pattern}\", arity: '1', emit: matched" in rendered
 
 
 @pytest.mark.fast
@@ -472,7 +472,7 @@ def test_config_uses_validated_workflow_container_policy() -> None:
             NfPort("item", "path"),
             "Channel.value(params.items.collect { entry -> file("
             "entry instanceof Map ? entry.path : entry, "
-            "checkIfExists: true, type: 'file') })",
+            "checkIfExists: true, type: 'file', glob: false) })",
         ),
     ],
     ids=["val", "path"],
