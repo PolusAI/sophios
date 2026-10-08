@@ -17,6 +17,7 @@ All notable changes to Sophios will be documented in this file.
 - `Workflow.write_wic()` writes a self-contained bundle (the root `.wic`, each nested workflow's `.wic` and each tool's `.cwl`) and no longer takes `inline_subworkflows`; the inline `subtree:` form is gone.
 - `Workflow.to_wic_yaml()` and `Workflow.yaml` are gone: `Workflow.write_wic()` is the one way to write `.wic` from Python; read the file it writes.
 - A written workflow output names its authored step (`step/port`), and every step carries `run: <stem>.cwl`; two different tools sharing one file stem in a workflow are rejected, and so is a different `<stem>.cwl` already in the target directory, which `write_wic` used to overwrite silently (a file holding the same tool is left untouched, and a tool's relative imports such as `$import` are not copied).
+- `Workflow.run(user_env_vars=...)` raises `ValueError` for a key that is not a valid environment variable name (e.g. `MY-TOKEN`) before the runner starts; it used to print a warning and drop the variable.
 - (since 0.6.0) `Fields.to_list()` is gone and `SecondaryFile.to_dict()` returns a mapping: the tool builder renders through cwl_utils.
 - (since 0.6.0) `sophios.api.rest` and `sophios.api.utils` moved to `sophios.contrib.rest` and `sophios.contrib.converter` / `sophios.contrib.ict`.
 - (since 0.6.0) library code raises `SophiosError` instead of calling `sys.exit(1)`; `!&` is legal only on an `out:` entry; a sequence step carries its name in `id:`; `wic021` folded into `wic006`.
@@ -26,3 +27,4 @@ All notable changes to Sophios will be documented in this file.
 
 - A document the YAML loader cannot load (`!!int abc`, `!!str [a]`, an impossible date such as `2020-13-45`, an unknown `!!` tag, a `<<` that merges a scalar) is reported as `wic009` at the loader's position, with the loader's own message. The parser used to accept it or crash on it. Correct the value at that position.
 - A Sophios tag used as a mapping key (`!ii a: b`) is `wic009`; put the tag on the value: `a: !ii b`.
+- `Workflow.run(user_env_vars=...)` passes values to the runner unchanged; characters such as `$`, `!` and quotes were stripped before.
