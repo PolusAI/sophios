@@ -1527,3 +1527,57 @@ def test_a_record_with_a_default_or_value_from_needs_no_source(body: str) -> Non
     """Either gives the input a value, so the record stands without a source."""
     result = parse(f'steps:\n  s:\n    in:\n      f: !cwl {body}\n', 'r.wic')
     assert result.ok, [str(d) for d in result.diagnostics]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('source', [
+    'x: &m {p: 1}\na: {<<: *m, q: 2}\n',
+    'x: &m {p: 1}\na:\n  <<: *m\n  q: 2\n',
+    'x: &m {p: 1}\na: {<<: [*m], q: 2}\n',
+    'x: &m {p: 1}\na: !cwl {<<: *m, q: 2}\n',
+], ids=['flow', 'block', 'sequence', 'cwl'])
+def test_yaml_merge_keys_are_not_wic009(source: str) -> None:
+    """A merge key is valid YAML, and the loader builds it; the parser agrees."""
+    assert not any(d.code is SophiosErrorCode.UNKNOWN_TAG for d in parse(source, 'm.wic').diagnostics)
+    yaml.load(source, Loader=wic_loader())
+
+
+@pytest.mark.fast
+def test_a_record_applies_its_merge_keys() -> None:
+    """The loader merges `<<` in a `!cwl` record, so the record has the merged field, not a field called `<<`."""
+    source = 'd: &d {default: 1}\nsteps:\n  s:\n    in:\n      f: !cwl {<<: *d}\n'
+    result = parse(source, 'm.wic')
+    assert result.ok, [str(d) for d in result.diagnostics]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('source', [
+    'x: &m {p: 1}\na: {<<: b}\n',
+    'a: {<<: [b]}\n',
+    'a: {<<: !!str s}\n',
+], ids=['scalar', 'sequence', 'str'])
+def test_bad_yaml_merge_is_one_wic009(source: str) -> None:
+    """A merge the loader rejects is reported once, on its mapping."""
+    codes = [d.code for d in parse(source, 'm.wic').diagnostics]
+    assert codes.count(SophiosErrorCode.UNKNOWN_TAG) == 1
+
+
+@pytest.mark.fast
+def test_unreadable_timestamp_names_the_value_not_a_tag() -> None:
+    """The author never wrote the tag an implicit scalar resolves to."""
+    messages = [d.message for d in parse('a: 2020-13-45\n', 't.wic').diagnostics]
+    assert messages == ['YAML cannot read this value as timestamp']
+
+
+@pytest.mark.parametrize('src', [
+    'a: !!merge x\n',
+    'a: [!!merge x]\n',
+    'steps:\n  s:\n    in:\n      f: !ii {<<: b}\n',
+    'steps:\n  s:\n    in:\n      f: !ii [!!merge x]\n',
+    'steps:\n  s:\n    in:\n      f: !cwl {<<: b}\n',
+])
+def test_a_merge_the_loader_cannot_build_is_reported(src: str) -> None:
+    """A merge key or merge scalar the loader cannot build is a wic009."""
+    result = parse(src, 'p.wic')
+    assert not result.ok
+    assert SophiosErrorCode.UNKNOWN_TAG in [d.code for d in result.diagnostics]

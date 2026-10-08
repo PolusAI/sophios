@@ -5,6 +5,7 @@ Python objects, because composition preserves the source marks that make
 diagnostics worth reading. Nothing here raises: a caller always receives a
 result carrying whatever was parsed plus whatever went wrong.
 """
+import copy
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -196,15 +197,41 @@ _DEFAULT_TAGS: Final[dict[type[yaml.nodes.Node], str]] = {yaml.nodes.MappingNode
                                                           yaml.nodes.SequenceNode: 'tag:yaml.org,2002:seq'}
 
 
-def _unconstructible(node: yaml.nodes.Node) -> bool:
-    """Whether the loader's `SafeConstructor` cannot build this YAML-core node."""
-    if _DEFAULT_TAGS.get(type(node)) == node.tag:
+_MERGE_TAG: Final = 'tag:yaml.org,2002:merge'
+
+
+def _holds_merge_key(node: yaml.nodes.Node) -> bool:
+    return isinstance(node, yaml.nodes.MappingNode) and any(key.tag == _MERGE_TAG for key, _ in node.value)
+
+
+def _unconstructible(node: yaml.nodes.Node, merge_keys: set[int]) -> bool:
+    """Whether the loader's `SafeConstructor` cannot build this node.
+
+    A `!`-tagged node is built by its own tag's check, but a mapping holding a
+    `<<` key is still checked for the merge the loader applies to it.
+    """
+    if node.tag == _MERGE_TAG:
+        # No constructor of its own: the mapping holding `<<` consumes it, so only a key is safe.
+        return id(node) not in merge_keys
+    if node.tag.startswith('!'):
+        if not _holds_merge_key(node):
+            return False
+        node = copy.copy(node)
+        node.tag = _DEFAULT_TAGS[yaml.nodes.MappingNode]
+    elif _DEFAULT_TAGS.get(type(node)) == node.tag and not _holds_merge_key(node):
         return False
     try:
-        _CoreConstructor().construct_object(node, deep=True)
+        # Building a mapping flattens its merge keys in place; a copy keeps the tree intact.
+        _CoreConstructor().construct_object(copy.deepcopy(node), deep=True)
     except _CONSTRUCTION_FAILURES:
         return True
     return False
+
+
+def _tag_name(tag: str) -> str:
+    """A core tag as its short name (`timestamp`), any other as written."""
+    prefix = 'tag:yaml.org,2002:'
+    return tag.removeprefix(prefix) if tag.startswith(prefix) and len(tag) > len(prefix) else repr(tag)
 
 
 def _report_unknown_tags(root: yaml.nodes.Node, file: str, diags: Diagnostics) -> None:
@@ -219,19 +246,20 @@ def _report_unknown_tags(root: yaml.nodes.Node, file: str, diags: Diagnostics) -
     once more for each ancestor that holds it.
     """
     nodes = _every_node(root)
-    failing = {id(node) for node in nodes
-               if not node.tag.startswith('!') and _unconstructible(node)}
+    merge_keys = {id(key) for node in nodes if isinstance(node, yaml.nodes.MappingNode)
+                  for key, _ in node.value if key.tag == _MERGE_TAG}
+    failing = {id(node) for node in nodes if _unconstructible(node, merge_keys)}
     for node in nodes:
-        if node.tag.startswith('!'):
-            if node.tag not in Tag.ALL:
-                diags.error(SophiosErrorCode.UNKNOWN_TAG,
-                            f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
-                            SourceSpan.of(file, node))
-        elif id(node) in failing:
-            if not any(id(inner) in failing and inner is not node for inner in _every_node(node)):
-                diags.error(SophiosErrorCode.UNKNOWN_TAG,
-                            f'tag {node.tag!r} cannot construct this value; YAML rejects it',
-                            SourceSpan.of(file, node))
+        if node.tag.startswith('!') and node.tag not in Tag.ALL:
+            diags.error(SophiosErrorCode.UNKNOWN_TAG,
+                        f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
+                        SourceSpan.of(file, node))
+        if id(node) in failing and not any(
+                id(inner) in failing and inner is not node for inner in _every_node(node)):
+            message = ('YAML cannot merge into this mapping; `<<` takes a mapping or a list of mappings'
+                       if node.tag.startswith('!')
+                       else f'YAML cannot read this value as {_tag_name(node.tag)}')
+            diags.error(SophiosErrorCode.UNKNOWN_TAG, message, SourceSpan.of(file, node))
 
 
 def _in_reading_order(diags: Diagnostics) -> Diagnostics:
@@ -671,6 +699,19 @@ def _report_misspelled_construct(key: str, key_node: yaml.nodes.Node,
         SourceSpan.of(file, key_node))
 
 
+def _merged_entries(node: yaml.nodes.MappingNode) -> list[tuple[yaml.nodes.Node, yaml.nodes.Node]]:
+    """The entries of `node` with its `<<` merge keys applied, as the loader builds them.
+
+    A merge the loader cannot flatten is reported by the tag check; its entries are read as written.
+    """
+    merged = copy.deepcopy(node)
+    try:
+        _CoreConstructor().flatten_mapping(merged)
+    except _CONSTRUCTION_FAILURES:
+        return list(node.value)
+    return list(merged.value)
+
+
 def _raw_cwl(node: yaml.nodes.Node, file: str, diags: Diagnostics, span: SourceSpan) -> InputValue:
     """`!cwl name` is a raw reference; `!cwl {source: ..., ...}` is a step-input record.
 
@@ -679,7 +720,7 @@ def _raw_cwl(node: yaml.nodes.Node, file: str, diags: Diagnostics, span: SourceS
     """
     if not isinstance(node, yaml.nodes.MappingNode):
         return RawCwlRef(_name_text(node, file, diags), span)
-    body = {_key_text(key, file, diags): _opaque(value, file, diags) for key, value in node.value}
+    body = {_key_text(key, file, diags): _opaque(value, file, diags) for key, value in _merged_entries(node)}
     record, bad = cwl_record(body, span)
     for key in bad:
         if key == 'source':
