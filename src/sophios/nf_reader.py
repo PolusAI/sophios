@@ -26,6 +26,9 @@ from .nf_types import (
 from .nf_expr import NF_EXPRESSION_FUNCTIONS
 from .nf_types import NF_LOAD_CONTENTS_HELPER
 from .input_output_nf import (
+    NEXTFLOW_JSON,
+    NEXTFLOW_PARAMS,
+    NEXTFLOW_SCRIPT,
     NF_ARRAY_PATH_ARITY,
     NF_LOAD_CONTENTS_FUNCTION,
     NF_NEST_FUNCTION,
@@ -490,11 +493,11 @@ def parse_nf_text(text: str, *, params: Mapping[str, Any] | None = None) -> Next
 
 
 def parse_nf_file(path: str | Path) -> NextflowDocument:
-    """Read a Nextflow file and its adjacent generated parameter file when present.
+    """Read a Nextflow file, with its generated sidecar files when it is the generated ``workflow.nf``.
 
-    When an adjacent ``nextflow_workflow.json`` IR artifact exists, it is
-    strictly hydrated and bound to the document only if the source and
-    parameters match it exactly.
+    Any other file name is read as text alone. Beside ``workflow.nf``, an
+    adjacent ``nextflow_workflow.json`` IR artifact is strictly hydrated and
+    bound to the document only if the source and parameters match it exactly.
 
     Args:
         path (str | Path): Path to the ``.nf`` source file.
@@ -508,15 +511,17 @@ def parse_nf_file(path: str | Path) -> NextflowDocument:
             ``verified_executable`` set when provenance matches.
     """
     source = Path(path)
-    params_path = source.with_name("nextflow_params.json")
+    source_text = source.read_bytes().decode("utf-8")
+    if source.name != NEXTFLOW_SCRIPT:
+        return parse_nf_text(source_text)
+    params_path = source.with_name(NEXTFLOW_PARAMS)
     params: Mapping[str, Any] = {}
     if params_path.exists():
         loaded = json.loads(params_path.read_text(encoding="utf-8"))
         if not isinstance(loaded, Mapping):
             raise ValueError("nextflow_params.json must contain a JSON object")
         params = loaded
-    source_text = source.read_bytes().decode("utf-8")
-    ir_path = source.with_name("nextflow_workflow.json")
+    ir_path = source.with_name(NEXTFLOW_JSON)
     if not ir_path.exists():
         return parse_nf_text(source_text, params=params)
     executable = ExecutableNextflowWorkflow.from_json(ir_path.read_text(encoding="utf-8"))
