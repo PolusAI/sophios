@@ -139,6 +139,35 @@ def test_when_cannot_read_a_tool_default_the_step_does_not_bind() -> None:
 
 
 @pytest.mark.fast
+def test_an_array_typed_port_cannot_consume_a_conditional_scatter() -> None:
+    produce = tool(
+        "PRODUCE",
+        inputs={"x": {"type": "string"}},
+        baseCommand="echo",
+        stdout="out.txt",
+        outputs={"r": {"type": "string", "outputBinding": {
+            "glob": "out.txt", "loadContents": True, "outputEval": "$(self[0].contents)"}}},
+    )
+    consume = tool("CONSUME", inputs={"rs": {"type": {"type": "array", "items": "string"}}}, baseCommand="true")
+    workflow = workflow_doc(
+        [
+            step("PRODUCE", **{"in": {"x": "xs"}, "out": ["r"], "scatter": ["x"], "when": "$(inputs.x == 'a')"}),
+            step("CONSUME", **{"in": {"rs": "PRODUCE/r"}}),
+        ],
+        inputs={"xs": {"type": "array", "items": "string"}},
+    )
+    with pytest.raises(ValueError, match=r"in\.rs: an array-typed port cannot consume a conditional step's output"):
+        compiled_source_to_nextflow(synthetic_source(workflow, [produce, consume], workflow_inputs={"xs": ["a"]}))
+
+
+@pytest.mark.fast
+def test_a_when_diagnostic_names_the_authored_inputs() -> None:
+    rendered = render_nextflow(_when_workflow("$(inputs.n / inputs.d > 1)", {"n": 4, "d": 2}, n="int", d="int"))
+    assert "'(inputs.n / inputs.d)', [d: __w1, n: __w0]" in rendered
+    assert "inputs.__w" not in rendered
+
+
+@pytest.mark.fast
 def test_when_requires_a_boolean_result() -> None:
     with pytest.raises(ValueError, match="must compute a boolean, not a number"):
         _when_workflow("$(inputs.a + 1)", {"a": 3}, a="int")

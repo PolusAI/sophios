@@ -2,6 +2,7 @@
 
 # pylint: disable=missing-function-docstring
 
+import json
 from pathlib import Path
 from typing import Any, cast
 
@@ -1268,3 +1269,34 @@ def test_a_captured_value_reaches_a_workflow_output() -> None:
     )
 
     assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow
+
+
+def _conditional_payload() -> dict[str, Any]:
+    process = NfProcess(
+        "TASK",
+        [NfPort("a", "val")],
+        [output_port("result", "out.txt")],
+        command("true"),
+        condition=parse("$(inputs.a > 1)"),
+    )
+    workflow = ExecutableNextflowWorkflow("WF", [process], [NfWorkflowInputConnection("a", "TASK", "a")], {"a": 2})
+    assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow
+    return cast(dict[str, Any], json.loads(workflow.to_json()))
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("field", "value"), [
+    ("condition", {}),
+    ("condition", False),
+    ("condition", {"op": "string", "value": "false"}),
+    ("condition", {"op": "bogus"}),
+    ("condition", {"op": ">", "args": [{"op": "ref", "value": "a"}]}),
+    ("is_array", "false"),
+    ("is_array", 0),
+], ids=["empty-condition", "false-condition", "string-condition", "unknown-op", "wrong-arity", "string-is-array", "zero-is-array"])
+def test_hydration_refuses_a_malformed_condition_or_port(field: str, value: Any) -> None:
+    payload = _conditional_payload()
+    target = payload["processes"][0] if field == "condition" else payload["processes"][0]["inputs"][0]
+    target[field] = value
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        ExecutableNextflowWorkflow.from_json(json.dumps(payload))

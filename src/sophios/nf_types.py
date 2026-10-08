@@ -686,10 +686,14 @@ class NfPort:
             emit=item["emit"],
             glob=glob,
             path_kind=item["path_kind"],
-            is_array=bool(item.get("is_array", False)),
+            is_array=item.get("is_array", False),
             stage_as=item.get("stage_as"),
             capture=item.get("capture"),
         )
+
+
+# The tree roots that compute a boolean: logic, comparison, negation, a boolean literal or input.
+_BOOLEAN_ROOTS = frozenset({"||", "&&", "==", "!=", "===", "!==", "<", "<=", ">", ">=", "u!", "boolean", "ref"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -816,6 +820,9 @@ class NfProcess:
         if self.condition is not None:
             if not isinstance(self.condition, Expr):
                 raise TypeError("process condition must be a typed Expr or None")
+            validate(self.condition)
+            if self.condition.op not in _BOOLEAN_ROOTS:
+                raise ValueError(f"process {self.name!r} condition must compute a boolean, not {self.condition.op!r}")
             if not inputs:
                 raise ValueError(
                     f"process {self.name!r} has a condition but no inputs: a conditional step "
@@ -882,7 +889,7 @@ class NfProcess:
                     command=NfCommand.from_dict(item["command"]),
                     container=item["container"],
                     resources=NfResources.from_dict(item["resources"]),
-                    condition=Expr.from_dict(item["condition"]) if item.get("condition") else None,
+                    condition=Expr.from_dict(item["condition"]) if "condition" in item else None,
                 )
             case _:
                 raise TypeError("NfProcess inputs and outputs must be lists")

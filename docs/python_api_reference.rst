@@ -35,6 +35,12 @@ sophios.api.python.tool_builder
 .. automodule:: sophios.api.python.tool_builder
    :members:
 
+sophios.api.python.nextflow
+---------------------------
+
+.. automodule:: sophios.api.python.nextflow
+   :members:
+
 sophios.compute_request
 -----------------------
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .nf_expr import (
-    CONTROL_ESCAPES, Expr, NF_EXPRESSION_FUNCTIONS, NF_NUMBER_TEXT_HELPER, groovy_literal, references,
+    CONTROL_ESCAPES, NF_EXPRESSION_FUNCTIONS, NF_NUMBER_TEXT_HELPER, groovy_literal, references,
     render_groovy, source_text,
 )
 from .nf_types import (
@@ -30,6 +30,7 @@ from .nf_types import (
     NfProcessConnection,
     NfShellLiteral,
     NfComputed,
+    NfTemplate,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
     process_dependencies,
@@ -180,7 +181,9 @@ def render_number(value: int | float) -> str:
     return format(Decimal(str(value)), "f")
 
 
-_GLOB_METACHARACTERS = frozenset("*?[]{}")
+# CWL glob metacharacters; a CWL glob has no brace expansion, so a brace is escaped for Nextflow.
+_GLOB_METACHARACTERS = frozenset("*?[]")
+_BRACE_ESCAPES = str.maketrans({"{": "\\{", "}": "\\}"})
 
 
 def _glob_names_one_file(template: Any) -> bool:
@@ -241,16 +244,25 @@ def _process_output(port: NfPort, *, tuple_element: bool = False) -> str:
         else ""
     )
     # A "single" capture marker is the CWL author's own cardinality
-    # declaration, so it is stated in the generated pipeline rather than
-    # dropped: arity: '1' emits one path value and fails on no match.
-    arity = ", arity: '1'" if port.capture == "single" else ""
+    # declaration, and a scalar output whose pattern can match several files
+    # names one file as cwltool enforces: either way arity: '1' emits one
+    # path value and fails on no match or on several.
+    pattern = not literal and any(
+        not isinstance(segment, NfLiteral) or _GLOB_METACHARACTERS & set(segment.value)
+        for segment in port.glob.segments
+    )
+    arity = ", arity: '1'" if port.capture == "single" or pattern else ""
+    glob = port.glob if literal else NfTemplate(tuple(
+        NfLiteral(segment.value.translate(_BRACE_ESCAPES)) if isinstance(segment, NfLiteral) else segment
+        for segment in port.glob.segments
+    ))
     if tuple_element:
         # A multi-input-scattered process re-emits the hidden invocation
         # index alongside every output, one tuple line per output port
         # (design §6, Topology), so the "path ..." spelling used inside a
         # standalone output line becomes a parenthesized tuple element here.
-        return f"path({_render_glob(port.glob)}{literal}{arity})"
-    return f"path {_render_glob(port.glob)}{literal}{arity}, emit: {emit}"
+        return f"path({_render_glob(glob)}{literal}{arity})"
+    return f"path {_render_glob(glob)}{literal}{arity}, emit: {emit}"
 
 
 def _path_input(port: NfPort, stage_as: str | None) -> str:
@@ -346,15 +358,6 @@ def _conditional_channel_name(process_name: str, port_name: str) -> str:
     return f"ch_{process_name}_{port_name}"
 
 
-def _rename_refs(node: Expr, mapping: dict[str, str]) -> Expr:
-    """Rebuild a typed tree with every ``ref`` renamed through ``mapping``."""
-    if node.op == "ref":
-        return Expr("ref", (), mapping.get(node.value, node.value))
-    if node.args:
-        return Expr(node.op, tuple(_rename_refs(arg, mapping) for arg in node.args), node.value)
-    return node
-
-
 def _render_conditional_invocation(process: NfProcess, arguments: list[str]) -> list[str]:
     """Lower a conditional process call: branch on the predicate, mix in the sentinel.
 
@@ -394,12 +397,13 @@ def _render_conditional_invocation(process: NfProcess, arguments: list[str]) -> 
                 f"{{ __merged, {synthetic[index]} -> tuple({carried}, {synthetic[index]}) }}"
             )
     rename = dict(zip((port.name for port in ports), synthetic, strict=True))
-    condition = _rename_refs(process.condition, rename)
-    inputs_map = "[" + ", ".join(f"{name}: {name}" for name in sorted(references(condition))) + "]"
-    if inputs_map == "[]":
-        inputs_map = "[:]"
-    where = f"{process.name} when {source_text(process.condition)}"
-    predicate = render_groovy(condition, where=where, inputs=inputs_map)
+    inputs_map = "[" + ", ".join(f"{name}: {rename[name]}" for name in sorted(references(process.condition))) + "]"
+    predicate = render_groovy(
+        process.condition,
+        where=f"{process.name} when {source_text(process.condition)}",
+        inputs=inputs_map if inputs_map != "[]" else "[:]",
+        variables=rename,
+    )
     lines.append(f"    {branch_channel} = {in_channel}.branch {{ {params} ->")
     lines.append(f"        run: {predicate}")
     lines.append("        skip: true")
@@ -436,12 +440,12 @@ def _render_conditional_scatter(
     params = ", ".join([index, *elements, *broadcasts])
     combined = scatter_channel + "".join(f".combine({arg}.map {{ [it] }})" for arg in other_args)
     rename = dict(zip([*scattered, *(port.name for port in others)], [*elements, *broadcasts], strict=True))
-    condition = _rename_refs(process.condition, rename)
-    inputs_map = "[" + ", ".join(f"{name}: {name}" for name in sorted(references(condition))) + "]"
+    inputs_map = "[" + ", ".join(f"{name}: {rename[name]}" for name in sorted(references(process.condition))) + "]"
     predicate = render_groovy(
-        condition,
+        process.condition,
         where=f"{process.name} when {source_text(process.condition)}",
         inputs=inputs_map if inputs_map != "[]" else "[:]",
+        variables=rename,
     )
     branch = f"ch_{process.name}_branch"
     lines = [
@@ -738,18 +742,6 @@ def _workflow_input_sink(
 
 def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> str:
     connection, port = _workflow_input_sink(workflow, name)
-    scattered_processes = {
-        candidate.to_process
-        for candidate in workflow.connections
-        if isinstance(candidate, NfWorkflowInputConnection)
-        and candidate.adapter in ("scatter", *MULTI_INPUT_ADAPTERS)
-    }
-    feeds_scattered_process = any(
-        isinstance(candidate, NfWorkflowInputConnection)
-        and candidate.from_port == name
-        and candidate.to_process in scattered_processes
-        for candidate in workflow.connections
-    )
     # A scatter- or multi-input-adapted parameter carries the whole source
     # array; the graph validator keeps every sink of one parameter in
     # agreement, so one sink decides the construction for all of them.
@@ -763,18 +755,13 @@ def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> st
             return (
                 f"Channel.value(params.{name}.collect {{ entry -> file("
                 f"entry instanceof Map ? entry.path : entry, "
-                f"checkIfExists: true, type: '{path_type}') }})"
+                f"checkIfExists: true, type: '{path_type}', glob: false) }})"
             )
-        if feeds_scattered_process:
-            # A one-element queue pairs with only the first scatter task. A
-            # value channel broadcasts the same staged path to every task.
-            return (
-                f"Channel.value(file(params.{name} instanceof Map ? params.{name}.path : "
-                f"params.{name}, checkIfExists: true, type: '{path_type}'))"
-            )
+        # A workflow input is one value, which CWL passes unchanged to every
+        # job of a scattered step: a value channel, as for every other input.
         return (
-            f"Channel.fromPath(params.{name} instanceof Map ? params.{name}.path : "
-            f"params.{name}, checkIfExists: true, type: '{path_type}', glob: false)"
+            f"Channel.value(file(params.{name} instanceof Map ? params.{name}.path : "
+            f"params.{name}, checkIfExists: true, type: '{path_type}', glob: false))"
         )
     return f"Channel.value(params.{name})"
 
