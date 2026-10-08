@@ -218,6 +218,14 @@ def test_a_scatter_over_an_array_workflow_input_is_kept(tmp_path: Path) -> None:
     _assert_compiles_alike(tmp_path, workflow)
 
 
+@pytest.mark.fast
+def test_an_input_declared_with_an_empty_mapping_is_left_untyped(tmp_path: Path) -> None:
+    """`name: {}` declares no type, as a null spec does: the call builds the workflow instead of raising."""
+    root = 'inputs:\n  name: {}\nsteps:\n- id: mk_file\n  in:\n    name: name\n'
+    workflow = _from_wic(tmp_path, root=root)
+    assert [port.name for port in workflow.inputs] == ['name']
+
+
 def _calling_child(name: str) -> str:
     """A document that calls `child.wic` and binds its `mk_file` step's `name` to `!ii {name}`."""
     return ('wic:\n  steps:\n    (1, child.wic):\n      wic:\n        steps:\n          (1, mk_file):\n'

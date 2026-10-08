@@ -359,7 +359,7 @@ def _build_workflow(document: ResolvedDocument) -> "Workflow":
         workflow = Workflow(processes, document.name)
     for name, spec in _ports(source, 'inputs').items():
         with authored_at(source.span):
-            getattr(workflow.inputs, name).as_type(spec['type'] if isinstance(spec, dict) else spec)
+            getattr(workflow.inputs, name).as_type(spec.get('type') if isinstance(spec, dict) else spec)
     edges: dict[str, OutputParameter] = {}
     for resolved, process in zip(document.steps, processes):
         _bind_step(resolved, process, workflow, edges)
