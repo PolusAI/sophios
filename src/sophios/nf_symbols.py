@@ -145,6 +145,11 @@ NEXTFLOW_RESERVED_WORDS = (
     | {"true", "false", "null", "_"}
 ) - NEXTFLOW_IDENTIFIER_KEYWORDS
 
+# Names a process script resolves before a declared input of the same name: the task
+# context, the logger and the channel factory. A capitalized name resolves to a
+# default-imported class (Math, String, Map...), so it is renamed as well.
+NEXTFLOW_SCRIPT_NAMES = frozenset({"task", "log", "channel"})
+
 # ScriptLexer.JavaLetter delegates to Character.isJavaIdentifierStart and
 # excludes identifier-ignorable characters. These Unicode general categories
 # are the corresponding Java identifier categories.
@@ -210,15 +215,19 @@ def validate_nextflow_identifier(value: object, *, field_name: str) -> str:
             )
 
 
-def normalize_nextflow_identifier(value: str) -> str:
+def normalize_nextflow_identifier(value: str, *, variable: bool = True) -> str:
     """Normalize text to a callable identifier using Nextflow grammar symbols.
 
     Characters outside the grammar's letter/digit categories become ``_``,
     and a leading ``_`` is added when the first character cannot start an
-    identifier or the result is a reserved word.
+    identifier or the result is a reserved word, and for a ``variable`` also
+    when a script resolves the name to something else (``NEXTFLOW_SCRIPT_NAMES``,
+    or a capitalized name).
 
     Args:
         value (str): Non-empty source text to normalize.
+        variable (bool): Whether the name is a script variable, such as a
+            port or parameter, rather than a process or workflow name.
 
     Raises:
         ValueError: If the value is empty or, at runtime, not a string.
@@ -235,6 +244,8 @@ def normalize_nextflow_identifier(value: str) -> str:
     )
     if not _is_java_letter(identifier[0]):
         identifier = f"_{identifier}"
-    if identifier in NEXTFLOW_RESERVED_WORDS:
+    if identifier in NEXTFLOW_RESERVED_WORDS or variable and (
+        identifier in NEXTFLOW_SCRIPT_NAMES or identifier[0].isupper()
+    ):
         identifier = f"_{identifier}"
     return validate_nextflow_identifier(identifier, field_name="normalized identifier")

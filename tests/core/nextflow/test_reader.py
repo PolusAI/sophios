@@ -171,6 +171,15 @@ def test_array_params_preserve_generated_provenance(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
+def test_only_the_generated_script_is_bound_to_its_sidecars(tmp_path: Path) -> None:
+    write_nextflow_artifacts(runtime_workflow(), tmp_path)
+    other = tmp_path / "other.nf"
+    other.write_text(render_nextflow(_container_workflow("ubuntu:24.04")), encoding="utf-8")
+
+    assert parse_nf_file(other) == parse_nf_text(other.read_text(encoding="utf-8"))
+
+
+@pytest.mark.fast
 def test_reader_rejects_invalid_or_stale_ir_artifact(tmp_path: Path) -> None:
     write_nextflow_artifacts(runtime_workflow(), tmp_path)
     ir_path = tmp_path / "nextflow_workflow.json"
@@ -336,8 +345,8 @@ def test_a_generated_pair_with_crlf_line_endings_verifies(tmp_path: Path) -> Non
 
 
 @pytest.mark.fast
-def test_reader_decodes_generated_literal_glob_escapes() -> None:
-    target = "out$name`\\'s.txt"
+@pytest.mark.parametrize("target", ["out$name`\\'s.txt", "a{b,c}.txt"], ids=["quotes", "braces"])
+def test_reader_decodes_generated_literal_glob_escapes(target: str) -> None:
     workflow = ExecutableNextflowWorkflow(
         "PIPELINE",
         [NfProcess("TASK", [], [output_port("result", target)], command("touch", target))],

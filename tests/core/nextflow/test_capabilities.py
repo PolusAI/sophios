@@ -596,7 +596,7 @@ def test_aggregates_workflow_input_collisions_with_other_findings() -> None:
         compiled_source_to_nextflow(rose)
 
     diagnostic = str(exc_info.value)
-    assert diagnostic.startswith("Nextflow Phase 1 capability analysis failed:\n")
+    assert diagnostic.startswith("Nextflow capability analysis failed:\n")
     assert "workflow.inputs: workflow input identifiers" in diagnostic
     assert "steps[0].unknown_field" in diagnostic
 
@@ -790,43 +790,30 @@ def test_rejects_basename_against_a_value_input() -> None:
     )
     assert _findings(rose) == [
         "steps[0].run.outputs.result.outputBinding.glob: $(inputs.label.basename) "
-        "requires a File or Directory input; label lowers to a val channel"
+        "requires a File or Directory input, and label is declared 'string'"
     ]
 
 
 @pytest.mark.fast
-def test_reports_every_basename_against_a_value_input_by_path() -> None:
-    basename = tool(
-        "BASENAME",
-        inputs={"label": {"type": "string"}, "tag": {"type": "string"}},
-        outputs={
-            "result": {
-                "type": "File",
-                "outputBinding": {"glob": "$(inputs.label.basename).txt"},
-            }
-        },
-        stdout="$(inputs.tag.basename).log",
+@pytest.mark.parametrize("suffix", ["path", "basename"])
+@pytest.mark.parametrize(("cwl_type", "value"), [("string", "x"), ("int", 1), ("float", 1.5), ("boolean", True)])
+def test_path_and_basename_require_a_file_or_directory_input(suffix: str, cwl_type: str, value: Any) -> None:
+    reference = f"$(inputs.value.{suffix})"
+    suffixed = tool(
+        "SUFFIXED",
+        inputs={"value": {"type": cwl_type, "inputBinding": {"prefix": "-v", "valueFrom": reference}}},
+        stdout=f"{reference}.log",
     )
     rose = synthetic_source(
-        workflow_doc(
-            [
-                step(
-                    "BASENAME",
-                    **{"in": {"label": "label", "tag": "tag"}, "out": ["result"]},
-                )
-            ],
-            inputs={"label": {"type": "string"}, "tag": {"type": "string"}},
-            outputs={"result": {"type": "File", "outputSource": "BASENAME/result"}},
-        ),
-        [basename],
-        workflow_inputs={"label": "input", "tag": "name"},
+        workflow_doc([step("SUFFIXED", **{"in": {"value": "value"}})], inputs={"value": cwl_type}),
+        [suffixed],
+        workflow_inputs={"value": value},
     )
-    assert _findings(rose) == [
-        "steps[0].run.stdout: $(inputs.tag.basename) requires a File or Directory "
-        "input; tag lowers to a val channel",
-        "steps[0].run.outputs.result.outputBinding.glob: $(inputs.label.basename) "
-        "requires a File or Directory input; label lowers to a val channel",
-    ]
+    reason = f"{reference} requires a File or Directory input, and value is declared {cwl_type!r}"
+    assert {
+        f"steps[0].run.inputs.value.inputBinding.valueFrom: {reason}",
+        f"steps[0].run.stdout: {reason}",
+    } <= set(_findings(rose))
 
 
 @pytest.mark.fast
@@ -850,7 +837,7 @@ def _findings(rose: CompiledNextflowSource) -> list[str]:
     with pytest.raises(ValueError) as error:
         compiled_source_to_nextflow(rose)
     header, *lines = str(error.value).splitlines()
-    assert header == "Nextflow Phase 1 capability analysis failed:"
+    assert header == "Nextflow capability analysis failed:"
     return [line.removeprefix("- ") for line in lines]
 
 
@@ -1007,8 +994,7 @@ def test_rejects_scatter_over_a_non_array_workflow_input() -> None:
     )
 
     assert _findings(rose) == [
-        "steps[0].in.item: a scattered input must be sourced from an array-typed "
-        "workflow input; 'items' declares 'string'"
+        "steps[0].in.item: a scattered input needs an array-typed source; 'items' declares 'string'"
     ]
 
 
@@ -1047,8 +1033,8 @@ def test_rejects_an_unwired_scattered_input() -> None:
     )
 
     assert _findings(rose) == [
-        "steps[0].scatter: scattered input 'item' has no source; a scattered input must "
-        "be wired to an array-typed workflow input"
+        "steps[0].scatter: scattered input 'item' has no source; wire it to an "
+        "array-typed workflow input or a scattered step's output"
     ]
 
 
@@ -1074,8 +1060,8 @@ def test_rejects_scatter_over_a_process_output() -> None:
     )
 
     assert _findings(rose) == [
-        "steps[1].in.item: a scattered step's inputs must come from workflow inputs; the "
-        "process output 'PRODUCER/out' would truncate the scatter to one task"
+        "steps[1].in.item: a scattered step takes inputs from workflow inputs or scattered steps; "
+        "'PRODUCER/out', from a step that is not scattered, would truncate the scatter to one task"
     ]
 
 
@@ -1104,8 +1090,8 @@ def test_rejects_a_process_output_source_on_a_scattered_steps_other_input() -> N
     )
 
     assert _findings(rose) == [
-        "steps[1].in.extra: a scattered step's inputs must come from workflow inputs; the "
-        "process output 'PRODUCER/out' would truncate the scatter to one task"
+        "steps[1].in.extra: a scattered step takes inputs from workflow inputs or scattered steps; "
+        "'PRODUCER/out', from a step that is not scattered, would truncate the scatter to one task"
     ]
 
 
@@ -1202,7 +1188,7 @@ def test_accepts_inert_workflow_level_scatter_requirement(requirements: Any) -> 
         (
             {"ScatterFeatureRequirement": {"method": "dotproduct"}},
             "workflow.requirements.ScatterFeatureRequirement.method: method is not "
-            "consumed by Nextflow Phase 1 lowering",
+            "consumed by the Nextflow lowering",
         ),
         (
             {"StepInputExpressionRequirement": {}},
@@ -1551,7 +1537,7 @@ def test_rejects_value_from_on_an_array_binding() -> None:
 @pytest.mark.fast
 def test_rejects_item_separator_on_an_array_binding() -> None:
     rose = _array_rose("string", ["a", "b"], itemSeparator=",")
-    with pytest.raises(ValueError, match=r"itemSeparator.*not consumed by Nextflow Phase 1"):
+    with pytest.raises(ValueError, match=r"itemSeparator.*not consumed by the Nextflow lowering"):
         compiled_source_to_nextflow(rose)
 
 
@@ -1574,7 +1560,7 @@ def test_rejects_array_typed_outputs() -> None:
         },
     )
     rose = synthetic_source(workflow_doc([step("MAKE", out=["results"])]), [array_output])
-    with pytest.raises(ValueError, match=r"results\.type: primitive and non-path output capture"):
+    with pytest.raises(ValueError, match=r"results\.type: an output is collected by glob as a File or Directory"):
         compiled_source_to_nextflow(rose)
 
 
@@ -2086,7 +2072,7 @@ def test_rejects_scatter_on_a_resolved_subworkflow_call() -> None:
 @pytest.mark.fast
 def test_rejects_when_on_a_resolved_subworkflow_call() -> None:
     result = _with_wrapper_semantic(_nested_result(), when="$(true)")
-    with pytest.raises(ValueError, match="when conditions are not supported"):
+    with pytest.raises(ValueError, match="a when on a nested-workflow step is not supported"):
         compiled_source_to_nextflow(result)
 
 
@@ -2639,4 +2625,124 @@ def test_a_captured_value_cannot_feed_another_process() -> None:
         "steps[1].in.text: 'produce/text' captures file text; its only approved sink is "
         "a workflow output, because the executable graph has no qualifier agreement "
         "check for process edges"
+    ]
+
+
+@pytest.mark.fast
+def test_lowering_rejections_aggregate_with_every_other_finding_by_step() -> None:
+    gated = tool("GATED", inputs={"a": {"type": "int"}}, baseCommand="true")
+    unsupported = tool("UNSUPPORTED", requirements={"NetworkAccess": {"networkAccess": True}})
+    rose = synthetic_source(
+        workflow_doc(
+            [
+                step("GATED", **{"in": {"a": "a"}, "when": "$(inputs.a ** 2 > 1)"}),
+                step("GATED", **{"in": {"a": "a"}, "when": "$(inputs.a + 1)"}),
+                step("UNSUPPORTED"),
+            ],
+            inputs={"a": "int"},
+        ),
+        [gated, gated, unsupported],
+        workflow_inputs={"a": 1},
+    )
+    findings = _findings(rose)
+    assert [finding.split(":", 1)[0] for finding in findings] == [
+        "steps[0]", "steps[1]", "steps[2].run.requirements.NetworkAccess",
+    ]
+    assert "must compute a boolean" in findings[1]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("inputs", "message"), [
+    ({"b": {"type": "boolean", "inputBinding": {"prefix": ""}}}, "prefix for 'b' must be a non-empty string"),
+    ({"s": {"type": "string", "inputBinding": {"separate": False}}}, "separate cannot be specified without a prefix"),
+    ({"xs": {"type": {"type": "array", "items": "string"}, "inputBinding": {"valueFrom": "$(self)"}}}, "valueFrom"),
+], ids=["empty-boolean-prefix", "separate-without-prefix", "array-valuefrom"])
+def test_a_lowering_only_rejection_is_a_finding_at_its_step(inputs: Any, message: str) -> None:
+    values = {"b": True, "s": "x", "xs": ["x"]}
+    rose = synthetic_source(
+        workflow_doc(
+            [step("REJECTED", **{"in": {name: name for name in inputs}})],
+            inputs={name: {"type": definition["type"]} for name, definition in inputs.items()},
+        ),
+        [tool("REJECTED", inputs=inputs)],
+        workflow_inputs={name: values[name] for name in inputs},
+    )
+    [finding] = _findings(rose)
+    assert finding.startswith("steps[0]: ") and message in finding
+
+
+@pytest.mark.fast
+def test_a_workflow_output_forwarding_an_input_is_a_workflow_finding() -> None:
+    rose = synthetic_source(
+        workflow_doc(
+            [step("ECHO")],
+            inputs={"a": "string"},
+            outputs={"a_out": {"type": "string", "outputSource": "a"}},
+        ),
+        [tool("ECHO")],
+        workflow_inputs={"a": "x"},
+    )
+    assert _findings(rose) == [
+        "workflow: workflow output 'a_out' directly forwards a workflow input; "
+        "boundary passthrough is not executable on the Nextflow target"
+    ]
+
+
+@pytest.mark.fast
+def test_a_command_error_is_reported_instead_of_a_wrong_cause_absence_finding() -> None:
+    produce = tool(
+        "PRODUCE",
+        inputs={"x": {"type": "int"}},
+        baseCommand="echo",
+        stdout="out.txt",
+        outputs={"r": {"type": "string", "outputBinding": {
+            "glob": "out.txt", "loadContents": True, "outputEval": "$(self[0].contents)"}}},
+    )
+    consume = tool("CONSUME", inputs={"v": {"type": "string?"}}, arguments=["$(runtime.cores)"])
+    rose = synthetic_source(
+        workflow_doc(
+            [
+                step("PRODUCE", **{"in": {"x": "x"}, "out": ["r"], "when": "$(inputs.x > 1)"}),
+                step("CONSUME", **{"in": {"v": "PRODUCE/r"}}),
+            ],
+            inputs={"x": "int"},
+        ),
+        [produce, consume],
+        workflow_inputs={"x": 2},
+    )
+    [finding] = _findings(rose)
+    assert finding.startswith("steps[1]: CWL argument contains an unsupported CWL expression")
+
+
+@pytest.mark.fast
+def test_a_command_error_is_reported_instead_of_an_absent_optional_finding() -> None:
+    rose = synthetic_source(
+        workflow_doc([step("ABSENT", **{"in": {"v": "v"}})], inputs={"v": "string?"}),
+        [tool("ABSENT", inputs={"v": {"type": "string?", "inputBinding": {}}}, arguments=["$(runtime.cores)"])],
+    )
+    [finding] = _findings(rose)
+    assert finding.startswith("steps[0]: CWL argument contains an unsupported CWL expression")
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("argument", "admitted"), [
+    ("--input=$(inputs.f)", False),
+    ("$(inputs.f)", True),
+    ("--input=$(inputs.f.path)", True),
+    ("--input=$(inputs.f.basename)", True),
+    ("--name=$(inputs.s)", True),
+], ids=["embedded-file", "whole-file", "embedded-path", "embedded-basename", "embedded-string"])
+def test_a_file_reference_embedded_in_text_is_rejected(argument: str, admitted: bool) -> None:
+    embedded = tool("EMBEDDED", inputs={"f": {"type": "File"}, "s": {"type": "string"}}, arguments=[argument])
+    rose = synthetic_source(
+        workflow_doc([step("EMBEDDED", **{"in": {"f": "f", "s": "s"}})], inputs={"f": "File", "s": "string"}),
+        [embedded],
+        workflow_inputs={"f": {"class": "File", "path": "in.txt"}, "s": "x"},
+    )
+    if admitted:
+        compiled_source_to_nextflow(rose)
+        return
+    assert _findings(rose) == [
+        "steps[0].run.arguments[0]: $(inputs.f) embedded in other text renders a File object as JSON in CWL; "
+        "use $(inputs.f.path) or $(inputs.f.basename), or the reference alone"
     ]
