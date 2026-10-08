@@ -167,7 +167,7 @@ def _required_type(cwl_type: Any) -> Any:
 
 
 def cwl_type_to_nf_qualifier(cwl_type: Any) -> str:
-    """Map the documented Phase 1 CWL type subset to a Nextflow qualifier.
+    """Map the documented CWL type subset to a Nextflow qualifier.
 
     Args:
         cwl_type (Any): A CWL type expression; optional forms (``"File?"``,
@@ -176,7 +176,7 @@ def cwl_type_to_nf_qualifier(cwl_type: Any) -> str:
             :func:`_array_item_type` first.
 
     Raises:
-        ValueError: If the type is outside the supported Phase 1 subset.
+        ValueError: If the type is outside the supported subset.
 
     Returns:
         str: ``"path"`` for File/Directory, ``"val"`` for supported scalars.
@@ -187,7 +187,7 @@ def cwl_type_to_nf_qualifier(cwl_type: Any) -> str:
         case "string" | "int" | "float" | "boolean":
             return "val"
         case _:
-            raise ValueError(f"unsupported CWL type for Nextflow Phase 1: {cwl_type!r}")
+            raise ValueError(f"unsupported CWL type for the Nextflow target: {cwl_type!r}")
 
 
 _PATH_KINDS = {"File": "file", "Directory": "directory"}
@@ -305,8 +305,8 @@ def _template(value: Any, *, context: str) -> NfTemplate:
     residual = _INPUT_EXPRESSION.sub("", text)
     if "$" in residual:
         raise ValueError(
-            f"{context} contains an unsupported CWL expression; the supported form is "
-            "$(inputs.<name>), optionally followed by .path or .basename"
+            f"{context} contains an unsupported CWL expression; the supported forms are $(inputs.<name>) "
+            "and, on a File or Directory input, $(inputs.<name>.path) and $(inputs.<name>.basename)"
         )
     return NfTemplate(tuple(segments or [NfLiteral(text)]))
 
@@ -912,7 +912,7 @@ def _resource_requirement_findings(
     *,
     path: str,
 ) -> list[str]:
-    """Validate every resource value consumed by the Phase 1 lowering."""
+    """Validate every resource value the lowering consumes."""
     findings: list[str] = []
     for field_name in ("coresMin", "coresMax"):
         if field_name not in requirement:
@@ -949,7 +949,7 @@ def _output_template(raw_name: Any, definition: Any) -> NfTemplate:
             raise ValueError(f"CWL output glob for {raw_name!r} cannot be empty")
         case list():
             raise ValueError(
-                f"CWL output glob lists for {raw_name!r} are deferred beyond Nextflow Phase 1"
+                f"CWL output glob lists for {raw_name!r} are not supported by the Nextflow target"
             )
         case _:
             raise ValueError(f"CWL output glob for {raw_name!r} must be a string or list")
@@ -1108,7 +1108,6 @@ _SUPPORTED_REQUIREMENTS = frozenset({
     "ResourceRequirement",
     "ShellCommandRequirement",
 })
-_DEFERRED_REQUIREMENTS: dict[str, str] = {}
 
 _INERT_DOCUMENTATION_FIELDS = frozenset({"doc", "label"})
 _TOOL_CONSUMED_FIELDS = frozenset({
@@ -1212,12 +1211,12 @@ _STEP_INPUT_CONSUMED_FIELDS = frozenset({"source"})
 
 
 def _default_value_findings(definition: Mapping[str, Any], *, path: str) -> list[str]:
-    """Validate a declared scalar default against the Phase 1 value subset."""
+    """Validate a declared scalar default against the supported value subset."""
     if "default" not in definition:
         return []
     default = definition["default"]
     if default is None or isinstance(default, (Mapping, list)):
-        return [f"{path}.default: Phase 1 supports JSON scalar defaults only"]
+        return [f"{path}.default: the Nextflow target supports JSON scalar defaults only"]
     if not _phase1_value_matches(definition.get("type"), default):
         return [f"{path}.default: value does not match its supported CWL type"]
     return []
@@ -1229,9 +1228,9 @@ def _unconsumed_field_findings(
     consumed: frozenset[str],
     path: str,
 ) -> list[str]:
-    """Reject source fields that the Phase 1 lowering does not consume."""
+    """Reject source fields that the lowering does not consume."""
     return [
-        f"{path}.{field_name}: {field_name} is not consumed by Nextflow Phase 1 lowering"
+        f"{path}.{field_name}: {field_name} is not consumed by the Nextflow lowering"
         for field_name in sorted(set(value) - consumed)
     ]
 
@@ -1327,17 +1326,12 @@ def _requirement_names(section: Any) -> list[tuple[str, str]]:
             return []
 
 
-def _basename_template_positions(
+def _template_positions(
     tool: Mapping[str, Any],
     *,
     path: str,
 ) -> list[tuple[Any, str]]:
-    """Pair every templated tool value with the CWL path it was written at.
-
-    A basename reference is legal in any template position, so the
-    source-level requirement has to look everywhere one can appear rather
-    than only in output globs.
-    """
+    """Pair every templated tool value with the CWL path it was written at."""
     positions: list[tuple[Any, str]] = []
     match tool.get("baseCommand"):
         case str() as command:
@@ -1399,53 +1393,29 @@ def _basename_template_positions(
     return positions
 
 
-def _basename_source_findings(tool: Mapping[str, Any], *, path: str) -> list[str]:
-    """Require a File or Directory source for every basename reference.
+def _path_suffix_findings(tool: Mapping[str, Any], *, path: str) -> list[str]:
+    """Require a File or Directory input for every ``.path`` and ``.basename`` reference (design §6).
 
-    A basename reference renders the staged path's ``name`` property, which
-    equals the CWL ``basename`` only because Nextflow stages a path input
-    under its original file name; a val-qualified input is never staged, so
-    the reference has nothing to read. ``NfProcess`` rejects the same shape
-    as a model invariant, but that raise names normalized identifiers,
-    carries no source location, and stops at the first offender, so the
-    source-level requirement is reported here by CWL path and aggregates
-    with every other finding.
+    Read from the authored text, because ``_template`` lowers ``.path`` to a
+    plain reference and the model could no longer tell the two apart.
     """
-    raw_inputs = tool.get("inputs", {})
-    if not isinstance(raw_inputs, Mapping):
+    inputs = tool.get("inputs", {})
+    if not isinstance(inputs, Mapping):
         return []
-    declared: dict[str, Any] = {}
-    for raw_name, definition in raw_inputs.items():
-        if not isinstance(definition, Mapping):
-            continue
-        try:
-            declared[_identifier(raw_name, context="tool input")] = definition.get("type")
-        except ValueError:
-            continue
     findings: list[str] = []
-    seen: set[tuple[str, str]] = set()
-    for value, position in _basename_template_positions(tool, path=path):
-        try:
-            template = _template(value, context="basename source")
-        except ValueError:
-            # An unsupported expression form is reported by the pass that
-            # owns it; this one only judges the references it can read.
-            continue
-        for segment in template.segments:
-            if not isinstance(segment, NfBasenameReference):
-                continue
-            if segment.name not in declared or (position, segment.name) in seen:
+    for value, position in _template_positions(tool, path=path):
+        for name, suffix in dict.fromkeys(match.groups() for match in _INPUT_EXPRESSION.finditer(str(value))):
+            definition = inputs.get(name)
+            if suffix is None or not isinstance(definition, Mapping):
                 continue
             try:
-                qualifier = cwl_type_to_nf_qualifier(declared[segment.name])
+                if cwl_type_to_nf_qualifier(definition.get("type")) == "path":
+                    continue
             except ValueError:
-                continue
-            if qualifier == "path":
-                continue
-            seen.add((position, segment.name))
+                continue  # the input pass reports a type the backend does not lower
             findings.append(
-                f"{position}: $(inputs.{segment.name}.basename) requires a File or "
-                f"Directory input; {segment.name} lowers to a {qualifier} channel"
+                f"{position}: $(inputs.{name}.{suffix}) requires a File or Directory input, "
+                f"and {name} is declared {definition.get('type')!r}"
             )
     return findings
 
@@ -1653,8 +1623,8 @@ def _nested_workflow_capability_findings(
         step_path = f"{path}.steps[{index}]"
         if emitted.get("when") is not None:
             findings.append(
-                f"{step_path}.when: CWL step when conditions are not supported in "
-                "Nextflow Phase 1"
+                f"{step_path}.when: a when on a nested-workflow step is not supported; "
+                "put it on a tool step"
             )
         if emitted.get("scatter") is not None:
             findings.append(
@@ -1756,7 +1726,7 @@ def _tool_capability_findings(
             path=f"{path}.run",
         )
     )
-    findings.extend(_basename_source_findings(tool, path=path))
+    findings.extend(_path_suffix_findings(tool, path=path))
 
     for section_name in ("requirements", "hints"):
         section = tool.get(section_name)
@@ -1764,11 +1734,9 @@ def _tool_capability_findings(
             requirement_path = f"{path}.run.{section_name}.{suffix}"
             if not class_name:
                 findings.append(f"{requirement_path}: {_CLASSLESS_REQUIREMENT}")
-            elif class_name in _DEFERRED_REQUIREMENTS:
-                findings.append(f"{requirement_path}: {_DEFERRED_REQUIREMENTS[class_name]}")
             elif class_name not in _SUPPORTED_REQUIREMENTS:
                 findings.append(
-                    f"{requirement_path}: {class_name} is not supported by Nextflow Phase 1"
+                    f"{requirement_path}: {class_name} is not supported by the Nextflow target"
                 )
             elif definition := _requirement_definition(
                 section,
@@ -1921,7 +1889,8 @@ def _tool_capability_findings(
                     qualifier = "unsupported"
                 if qualifier != "path" and not declares_capture:
                     findings.append(
-                        f"{output_path}.type: primitive and non-path output capture is deferred to Phase 2"
+                        f"{output_path}.type: an output is collected by glob as a File or Directory, "
+                        "or captured as text with loadContents and outputEval"
                     )
                 if not isinstance(binding, Mapping):
                     continue
@@ -2176,8 +2145,7 @@ def _scatter_source_findings(
     required = _required_type(declared)
     if not _is_array_type(required):
         return [
-            f"{path}: a scattered input must be sourced from an array-typed workflow "
-            f"input; {source!r} declares {declared!r}"
+            f"{path}: a scattered input needs an array-typed source; {source!r} declares {declared!r}"
         ]
     try:
         element = _channel_shape(_array_item_type(required))
@@ -2244,8 +2212,8 @@ def _scatter_findings(
                 continue
             if raw_name not in step_inputs:
                 findings.append(
-                    f"{path}.scatter: scattered input {raw_name!r} has no source; a "
-                    "scattered input must be wired to an array-typed workflow input"
+                    f"{path}.scatter: scattered input {raw_name!r} has no source; wire it to an "
+                    "array-typed workflow input or a scattered step's output"
                 )
                 continue
             findings.extend(
@@ -2305,9 +2273,9 @@ def _scatter_edge_findings(steps: list[Mapping[str, Any]]) -> list[str]:
                         )
                 elif step_index in scattered:
                     findings.append(
-                        f"steps[{step_index}].in.{raw_name}: a scattered step's inputs must "
-                        f"come from workflow inputs; the process output {source!r} would "
-                        "truncate the scatter to one task"
+                        f"steps[{step_index}].in.{raw_name}: a scattered step takes inputs from "
+                        f"workflow inputs or scattered steps; {source!r}, from a step that is not "
+                        "scattered, would truncate the scatter to one task"
                     )
     return findings
 
@@ -2333,7 +2301,7 @@ def _safe_absence_names(tool: Mapping[str, Any]) -> set[str] | None:
     not own a shell-literal binding that CWL would omit, or it is referenced
     solely as the boolean-flag token it drives (a flag tests its value, never
     calls ``.toString()`` on it). Returns None when the tool's command or
-    outputs cannot be analyzed — absence is then never treated as safe.
+    outputs cannot be analyzed; lowering reports why, so absence is not judged.
     """
     try:
         command = _command(tool)
@@ -2394,6 +2362,8 @@ def _absent_optional_findings(
         if not isinstance(tool_inputs, Mapping) or not isinstance(step_inputs, Mapping):
             continue
         safe_names = _safe_absence_names(tool)
+        if safe_names is None:
+            continue
         for raw_name, raw_definition in tool_inputs.items():
             if not isinstance(raw_definition, Mapping):
                 continue
@@ -2427,7 +2397,7 @@ def _absent_optional_findings(
                     qualifier = cwl_type_to_nf_qualifier(raw_definition.get("type"))
                 except ValueError:
                     name, qualifier = None, None
-                if safe_names is not None and qualifier == "val" and name in safe_names:
+                if qualifier == "val" and name in safe_names:
                     continue
                 detail = (
                     "absent optional values are supported only for a val input "
@@ -2500,8 +2470,8 @@ def _conditional_consumer_findings(
             cwl_type = definition.get("type")
             if _is_array_type(_required_type(cwl_type)):
                 findings.append(
-                    f"{path}: array-typed output of a conditional step is not "
-                    "supported outside scatter"
+                    f"{path}: an array-typed port cannot consume a conditional step's output; "
+                    "[] already stands for a skipped step"
                 )
                 continue
             try:
@@ -2521,11 +2491,13 @@ def _conditional_consumer_findings(
                 )
                 continue
             safe_names = _safe_absence_names(tool)
+            if safe_names is None:
+                continue
             try:
                 name = _identifier(raw_name, context="input reference")
             except ValueError:
                 name = None
-            if safe_names is None or name not in safe_names:
+            if name not in safe_names:
                 findings.append(
                     f"{path}: this input's use of a possibly-null conditional step "
                     "output is not one the absent-optional lowering admits"
@@ -2700,10 +2672,14 @@ def _text_capture_sink_findings(
     return findings
 
 
+def _capability_error(findings: list[str]) -> ValueError:
+    details = "\n".join(f"- {finding}" for finding in findings)
+    return ValueError(f"Nextflow capability analysis failed:\n{details}")
+
+
 def _raise_capability_findings(findings: list[str]) -> None:
     if findings:
-        details = "\n".join(f"- {finding}" for finding in findings)
-        raise ValueError(f"Nextflow Phase 1 capability analysis failed:\n{details}")
+        raise _capability_error(findings)
 
 
 def _condition_value(step: Mapping[str, Any], tool: Mapping[str, Any]) -> Expr:
@@ -2882,7 +2858,7 @@ def _workflow_output_connections(
                     if source_process is None:
                         raise ValueError(
                             f"workflow output {destination_port!r} directly forwards a workflow input; "
-                            "boundary passthrough is not executable in Nextflow Phase 1"
+                            "boundary passthrough is not executable on the Nextflow target"
                         )
                     connections.append(
                         NfWorkflowOutputConnection(source_process, source_port, destination_port)
@@ -3032,8 +3008,9 @@ def compiled_source_to_nextflow(
 ) -> ExecutableNextflowWorkflow:
     """Lower a completed Sophios compilation without repeating core semantics.
 
-    Runs closed-world capability analysis first; every unsupported source
-    semantic is aggregated and rejected before any lowering happens.
+    Every unsupported source semantic, including one that only lowering or
+    model validation detects, is reported with its source path and
+    aggregated with the rest before the workflow is assembled.
 
     Args:
         source (CompilationResult | CompiledNextflowSource): The production
@@ -3063,14 +3040,16 @@ def compiled_source_to_nextflow(
     workflow = compiled.workflow
     tools = compiled.tools
     steps = _workflow_steps(workflow, child_count=len(tools))
-    findings = [
-        *nested_findings,
-        *(
-            finding
-            for step_index, (step, tool) in enumerate(zip(steps, tools, strict=True))
-            for finding in _tool_capability_findings(step, tool, step_index=step_index)
-        ),
-    ]
+    findings = list(nested_findings)
+    processes: list[NfProcess] = []
+    for step_index, (step, tool) in enumerate(zip(steps, tools, strict=True)):
+        if step_findings := _tool_capability_findings(step, tool, step_index=step_index):
+            findings.extend(step_findings)
+            continue
+        try:
+            processes.append(_process(step, tool))
+        except ValueError as error:  # lowering and the model reject what no source pass can see
+            findings.append(f"steps[{step_index}]: {error}")
     findings.extend(_workflow_capability_findings(workflow, compiled.params, steps))
     findings.extend(_absent_optional_findings(workflow, compiled.params, steps, tools))
     findings.extend(_conditional_consumer_findings(list(steps), tools))
@@ -3079,21 +3058,20 @@ def compiled_source_to_nextflow(
     findings.extend(_text_capture_sink_findings(steps, tools))
     findings.extend(_container_policy_findings(tools))
     _raise_capability_findings(findings)
-    processes = [
-        _process(step, tool)
-        for step, tool in zip(steps, tools, strict=True)
-    ]
-    default_connections, default_params = _default_bindings(steps, tools, processes)
-    params = _workflow_params(workflow, compiled.params)
-    if collisions := sorted(set(params) & set(default_params)):
-        raise ValueError(
-            "lowered workflow parameter names collide: "
-            f"{', '.join(collisions)}"
+    try:
+        default_connections, default_params = _default_bindings(steps, tools, processes)
+        params = _workflow_params(workflow, compiled.params)
+        if collisions := sorted(set(params) & set(default_params)):
+            raise ValueError(
+                "lowered workflow parameter names collide: "
+                f"{', '.join(collisions)}"
+            )
+        params.update(default_params)
+        return ExecutableNextflowWorkflow(
+            name=_identifier(compiled.name, context="workflow name"),
+            processes=processes,
+            connections=[*_connections(workflow, list(steps), processes), *default_connections],
+            params=_apply_absent_sentinel(params),
         )
-    params.update(default_params)
-    return ExecutableNextflowWorkflow(
-        name=_identifier(compiled.name, context="workflow name"),
-        processes=processes,
-        connections=[*_connections(workflow, list(steps), processes), *default_connections],
-        params=_apply_absent_sentinel(params),
-    )
+    except ValueError as error:
+        raise _capability_error([f"workflow: {error}"]) from None
