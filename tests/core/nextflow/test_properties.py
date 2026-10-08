@@ -7,7 +7,8 @@ import json
 import shlex
 from typing import Any, Literal, cast
 
-from hypothesis import given, settings, strategies as st
+from cwl_utils.expression import interpolate
+from hypothesis import assume, given, settings, strategies as st
 import pytest
 
 from sophios.input_output_nf import (
@@ -16,11 +17,13 @@ from sophios.input_output_nf import (
     _shell_quote,
     render_nextflow,
 )
+from sophios.nf_expr import Expr, groovy_literal, parse
 from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
 from sophios.nf_reader import parse_nf_text, promote_nextflow_document
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
     NfCommand,
+    NfComputed,
     NfInputReference,
     NfLiteral,
     NfPort,
@@ -31,10 +34,12 @@ from sophios.nf_types import (
     NfWorkflowInputConnection,
 )
 from sophios.utils_nf import _command as lower_command
+from sophios.utils_nf import _template as lower_template
 from sophios.utils_nf import _normalized_identifiers
 
 
 SURROGATE_CATEGORIES: tuple[Literal["Cs"], ...] = ("Cs",)
+INTERPOLATION_PIECES = ["a", " ", "\\", "$", "(", "{", "}", "$(inputs.x)", "\\$(", "\\${"]
 SAFE_TEXT = st.text(
     alphabet=st.characters(
         blacklist_categories=SURROGATE_CATEGORIES,
@@ -128,6 +133,42 @@ def test_interpolated_glob_literals_use_only_valid_gstring_escapes(value: str) -
             prefix = body[:index]
             assert (len(prefix) - len(prefix.rstrip("\\"))) % 2 == 0
     assert "${name}" in rendered
+
+
+@settings(max_examples=150, deadline=None)
+@given(st.text(alphabet=st.characters(blacklist_categories=SURROGATE_CATEGORIES)).filter(str.strip))
+def test_every_single_quoted_groovy_position_uses_the_one_escaper(value: str) -> None:
+    staged = value.translate(str.maketrans("/*?\x00", "____"))  # a stageAs name is one literal component
+    process = NfProcess(
+        "TASK",
+        [NfPort("n", "val"), NfPort("s", "val"), NfPort("src", "path", stage_as=staged)],
+        [],
+        NfCommand((NfComputed(parse("$(inputs.n * 2)"), value),)),
+        container=value,
+        condition=Expr("==", (Expr("ref", (), "s"), Expr("string", (), value))),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [process],
+        [NfWorkflowInputConnection(name, "TASK", name) for name in ("n", "s", "src")],
+        {"n": 1, "s": "x", "src": "in.txt"},
+    ))
+    for literal in (groovy_literal(value), groovy_literal(staged)):
+        assert literal in rendered
+    assert not any(ord(char) < 32 and char != "\n" or ord(char) == 127 for char in rendered)
+
+
+@settings(max_examples=300, deadline=None)
+@given(st.lists(st.sampled_from(INTERPOLATION_PIECES), max_size=8).map("".join))
+def test_template_interpolation_agrees_with_cwltool(text: str) -> None:
+    try:
+        template = lower_template(text, context="property")
+    except ValueError:
+        assume(False)  # outside the lowering's subset, which rejects it by name
+    lowered = "".join(segment.value if isinstance(segment, NfLiteral) else "VALUE" for segment in template.segments)
+    # cwltool interpolates a string only when it contains an expression.
+    expected = interpolate(text, {"inputs": {"x": "VALUE"}}) if "$(" in text or "${" in text else text
+    assert lowered == expected
 
 
 @settings(max_examples=150, deadline=None)
@@ -309,7 +350,7 @@ def test_linear_graph_accepts_exactly_until_a_cycle_is_added(size: int) -> None:
         ExecutableNextflowWorkflow(
             "wf",
             processes,
-            [*connections, NfProcessConnection(f"P{size - 1}", "result", "P0", "source")],
+            [*connections, NfProcessConnection(f"P{size - 1}", "result", first.name, "source")],
             {},
         )
 
