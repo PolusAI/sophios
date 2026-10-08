@@ -18,5 +18,5 @@ def _use_standard_schemas() -> None:
 def validate_cwl(*paths: str) -> int:
     """The exit status of `cwltool --validate --skip-schemas` on `paths` (a document, then optionally its job)."""
     import cwltool.main  # pylint: disable=import-outside-toplevel  # pulls in spython, which needs `pwd` (no Windows)
-    return cwltool.main.main(['--validate', '--quiet', '--skip-schemas', *paths],
-                             custom_schema_callback=_use_standard_schemas)
+    return int(cwltool.main.main(['--validate', '--quiet', '--skip-schemas', *paths],
+                                 custom_schema_callback=_use_standard_schemas))
