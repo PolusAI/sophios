@@ -269,7 +269,7 @@ stderr; in Python it is in `compiled.diagnostics`, positioned at the Python line
 that made the step (`cat = Step(...)`):
 
 ```text
-inference.wic:8:3: note [wic043] step 'cat' input 'file' was inferred from the most recent match 'echo/stdout'; earlier steps also match: 'touch/file'; pin it: `out: - stdout: !& <name>` on step 'echo' and `in: file: !* <name>` here (step 3 'cat', port 'file')
+inference.wic:8:3: note [wic043] step 'cat' input 'file' was inferred from the most recent match step 2 'echo' output 'stdout'; earlier steps also match: step 1 'touch' output 'file'; pin it: `out: - stdout: !& <name>` on step 2 'echo' and `in: file: !* <name>` here (step 3 'cat', port 'file')
 ```
 
 ```yaml

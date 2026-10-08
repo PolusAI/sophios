@@ -85,3 +85,12 @@ def test_the_inference_pair_prints_its_note() -> None:
     """The inference entry shows a note; a pair that stopped making one would show nothing."""
     module = import_python_file('cookbook_inference', COOKBOOK / 'inference.py')
     assert _codes(module.workflow().compile().diagnostics) == ['wic043']
+
+
+@pytest.mark.fast
+def test_the_note_the_cookbook_quotes_is_the_one_the_compiler_prints() -> None:
+    """`docs/cookbook.md` quotes the inference note; the quote must be the compiler's text."""
+    module = import_python_file('cookbook_inference', COOKBOOK / 'inference.py')
+    (note,) = map(str, module.workflow().compile().diagnostics)
+    message = note.split(' note ', 1)[1]
+    assert f'note {message}' in (COOKBOOK.parent / 'cookbook.md').read_text(encoding='utf-8')

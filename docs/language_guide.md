@@ -692,7 +692,7 @@ steps:
 ```
 
 ```text
-i_tie.wic:8:3: note [wic043] step 'append' input 'file' was inferred from the most recent match 'append/file'; earlier steps also match: 'touch/file'; pin it: `out: - file: !& <name>` on step 'append' and `in: file: !* <name>` here (step 3 'append', port 'file')
+i_tie.wic:8:3: note [wic043] step 'append' input 'file' was inferred from the most recent match step 2 'append' output 'file'; earlier steps also match: step 1 'touch' output 'file'; pin it: `out: - file: !& <name>` on step 2 'append' and `in: file: !* <name>` here (step 3 'append', port 'file')
 ```
 
 Pin the choice with an edge and the note goes away:
