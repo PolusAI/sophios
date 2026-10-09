@@ -20,3 +20,9 @@ All notable changes to Sophios will be documented in this file.
 - (since 0.6.0) `Fields.to_list()` is gone and `SecondaryFile.to_dict()` returns a mapping: the tool builder renders through cwl_utils.
 - (since 0.6.0) `sophios.api.rest` and `sophios.api.utils` moved to `sophios.contrib.rest` and `sophios.contrib.converter` / `sophios.contrib.ict`.
 - (since 0.6.0) library code raises `SophiosError` instead of calling `sys.exit(1)`; `!&` is legal only on an `out:` entry; a sequence step carries its name in `id:`; `wic021` folded into `wic006`.
+- `<<` merge keys apply everywhere, as YAML defines them: in `!ii` values, in `in:` and in plain CWL passed through, which used to carry a literal `<<` key or make an input named `<<`. A merged mapping keeps the key order the YAML loader gives it, so steps merged into `steps:` run in that order. To keep a key named `<<`, quote it: `"<<": value`.
+
+### Fixed
+
+- A document the YAML loader cannot load (`!!int abc`, `!!str [a]`, an impossible date such as `2020-13-45`, an unknown `!!` tag, a `<<` that merges a scalar) is reported as `wic009` at the loader's position, with the loader's own message. The parser used to accept it or crash on it. Correct the value at that position.
+- A Sophios tag used as a mapping key (`!ii a: b`) is `wic009`; put the tag on the value: `a: !ii b`.
