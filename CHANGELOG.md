@@ -48,6 +48,13 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   or make an input named `<<`. A merged mapping keeps the key order the YAML
   loader gives it, so steps merged into `steps:` run in that order. To keep a
   key named `<<`, quote it: `"<<": value`.
+- A step whose run is a CWL Workflow (a top-level `class: Workflow`, or a packed
+  `$graph` whose `main` is a Workflow) is refused (wic013), whether it is a
+  stem on `search_paths_cwl`, a `run:` path or an inline `run:` body. It used
+  to compile with exit 0 and then fail in cwltool, or fail with wic028. Write
+  it as a `.wic` subworkflow and call that, or run a CWL Workflow file on its
+  own with `--allow_raw_cwl`. In Python, a `Step` whose `clt_path` is a CWL
+  Workflow is refused the same way: build it as a nested `Workflow` of `Step`s.
 
 ### Command line
 
