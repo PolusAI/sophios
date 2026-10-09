@@ -141,6 +141,10 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
 - The `runners-src` extra is gone; PyPI does not accept a dependency on a Git
   URL. Install `cwl-utils` from Git yourself if you need an unreleased
   version.
+- cwltool 3.1.20241217163858 or newer is required. From that release cwltool
+  names a singularity image with no tag as `cwl-docker-extract` pulls it
+  (`<name>_latest`); with an older cwltool, a singularity run of such an
+  image cannot find it. `pip install -U cwltool` if pip reports a conflict.
 
 ### New diagnostics that do not fail a compile
 

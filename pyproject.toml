@@ -23,7 +23,10 @@ dependencies = [
     # install separately using either `conda install graphviz` or `sudo apt install graphviz`.
     # This 'graphviz' is equivalent to `conda install python-graphviz` or
     # `sudo apt install python3-graphviz` ONLY.
-    "cwltool",
+    # 3.1.20241217163858 names a singularity image with no tag `<name>_latest`, as
+    # cwl-docker-extract does (it pulls `<name>:latest`); before it, the pulled
+    # image is not found and a run with --disable-pull fails.
+    "cwltool>=3.1.20241217163858",
     "graphviz",
     "jsonschema",
     "pyyaml",
