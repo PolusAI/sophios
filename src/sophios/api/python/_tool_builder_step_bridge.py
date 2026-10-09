@@ -28,7 +28,7 @@ def _command_line_tool_to_step(
     *,
     step_name: str | None = None,
     run_path: str | Path | None = None,
-    config: dict[str, Any] | None = None,
+    step_inputs: dict[str, Any] | None = None,
     tool_registry: Tools | None = None,
 ) -> "Step":
     """Convert a built CLT into a workflow `Step` without touching disk."""
@@ -40,6 +40,6 @@ def _command_line_tool_to_step(
         tool.to_cwl_document(),
         process_name=resolved_name,
         run_path=resolved_run_path,
-        config=config,
+        step_inputs=step_inputs,
         tool_registry=tool_registry,
     )

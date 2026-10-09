@@ -610,6 +610,8 @@ When a workflow fails:
 - A line that says Sophios stopped on an unexpected failure is not about your
   workflow: it names the exception and the `error_<workflow>.txt` that holds the
   whole traceback. If the line does not say what to change, report it with that file.
+- A failed run names each failed step and its exit status; 127 means the command
+  is not in the image, 137 that it ran out of memory.
 - Compile before running. If compilation fails, the issue is in the workflow
   structure or tool contract.
 - Write the workflow with `write_wic()` and read it to check bindings before

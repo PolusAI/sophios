@@ -73,8 +73,17 @@ no intermediate tree left to inspect.
 
 Useful flags:
 
+- `--check`: compile the workflow and check that this machine can run it, then stop. It runs the
+  checks a local run makes (the container engine when a step runs in a container, the input paths,
+  the directories Sophios writes, the programs it calls) and pulls and runs nothing.
+  `--generate_run_script` keeps its own meaning: it writes `run.sh` and the compiled output, after the
+  same checks and the image pulls. Only local runs are checked: a compute submission never looks at this
+  machine's engine, paths or programs.
 - `--graphviz`: write Graphviz sources and rendered diagrams when `dot` is available.
-- `--inputs_file <file>`: merge extra job inputs into generated CWL inputs.
+- `--inputs_file <file>`: merge extra job inputs into generated CWL inputs. A relative `location` or
+  `path` of a File or Directory in it, at any depth, is read from the inputs file's own directory.
+  Before a run, every such path and every `!ii` File or Directory is checked, and one that is missing,
+  of the other kind or unreadable is a `wic016` line naming the input.
 - `--allow_raw_cwl`: with a `--yaml` file that is a plain CWL workflow (its top level has
   `cwlVersion` and `class: Workflow`, or a packed `$graph` whose `main` is a Workflow, and it uses
   no Sophios syntax: no `!ii`, `!&`, `!*`, `!cwl` and no `wic:`), Sophios does not compile it.
@@ -98,7 +107,8 @@ Useful flags:
   tools and subworkflows alike, and the shape of the workflow is unchanged. A tool written for
   CWL v1.0 keeps the network access and directory listing it had as a file.
 - `--cwl_runner toil-cwl-runner`: run locally with Toil instead of `cwltool`.
-- `--container_engine podman`: use Podman instead of Docker.
+- `--container_engine podman`: use Podman instead of Docker. Before the run, podman pulls the images
+  with podman, and images a tool ships (`dockerLoad`, `dockerImport`) are loaded into it.
 - `--inference_use_naming_conventions`: refine edge inference with naming rules.
 - `--insert_steps_automatically`: attempt limited automatic insertion when inference fails.
 - `--passthrough_flags yes`: send arguments Sophios does not recognise (for example `--debug`) to the CWL runner,
