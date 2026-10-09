@@ -1669,3 +1669,19 @@ def test_an_inline_input_the_loader_reads_as_text_stays_text() -> None:
     literal = result.document.steps[0].input('f')
     assert isinstance(literal, InlineLiteral) and literal.value == '2020-13-45'
 
+
+@pytest.mark.fast
+@pytest.mark.parametrize('value', [
+    '&x !cwl {q: *x}',
+    '&x !cwl {<<: {q: *x}}',
+    '&x !cwl {q: *x, <<: {r: 1}}',
+    '&x !cwl {q: !cwl {r: *x}}',
+    '&x {wic_raw_cwl: {q: *x}}',
+], ids=['direct', 'through-merge', 'beside-merge', 'nested', 'desugared'])
+@pytest.mark.parametrize('where', ['passthrough', 'step-input'])
+def test_a_raw_cwl_record_that_contains_itself_is_an_alias_cycle(value: str, where: str) -> None:
+    """A `!cwl` record reached through its own alias is the cycle every other alias cycle is."""
+    source = f'a: {value}\n' if where == 'passthrough' else f'steps:\n  s:\n    in:\n      a: {value}\n'
+    result = parse(source, 'c.wic')
+    cycles = [d.message for d in result.diagnostics if d.code is SophiosErrorCode.RECURSIVE_ALIAS]
+    assert cycles == ['alias cycle: a node contains itself'], [str(d) for d in result.diagnostics]

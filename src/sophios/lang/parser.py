@@ -696,6 +696,13 @@ def _is_desugared_record(node: yaml.nodes.Node) -> bool:
             and isinstance(node.value[0][1], yaml.nodes.MappingNode))
 
 
+def _record_body(node: yaml.nodes.Node) -> yaml.nodes.MappingNode | None:
+    """The body of a step-input record, `!cwl {...}` or `{wic_raw_cwl: {...}}`, or None for anything else."""
+    if node.tag == Tag.RAW_CWL and isinstance(node, yaml.nodes.MappingNode):
+        return node
+    return node.value[0][1] if _is_desugared_record(node) else None
+
+
 def _desugared_form(
     node: yaml.nodes.Node,
     file: str,
@@ -736,15 +743,18 @@ def _report_misspelled_construct(key: str, key_node: yaml.nodes.Node,
         SourceSpan.of(file, key_node))
 
 
-def _raw_cwl(node: yaml.nodes.Node, file: str, diags: Diagnostics, span: SourceSpan) -> InputValue:
+def _raw_cwl(node: yaml.nodes.Node, file: str, diags: Diagnostics, span: SourceSpan,
+             _path: frozenset[int] = frozenset(), _spent: list[int] | None = None) -> InputValue:
     """`!cwl name` is a raw reference; `!cwl {source: ..., ...}` is a step-input record.
 
     The record's entries are materialised one by one: materialising the tagged
-    node itself would route it back here.
+    node itself would route it back here. They are materialised on the path
+    that reached the record, so a record holding itself is an alias cycle.
     """
     if not isinstance(node, yaml.nodes.MappingNode):
         return RawCwlRef(_name_text(node, file, diags), span)
-    body = {_key_text(key, file, diags): _opaque(value, file, diags) for key, value in node.value}
+    path, spent = _path | {id(node)}, _spent if _spent is not None else [0]
+    body = {_key_text(key, file, diags): _opaque(value, file, diags, path, spent) for key, value in node.value}
     record, bad = cwl_record(body, span)
     for key in bad:
         if key == 'source':
@@ -1082,8 +1092,10 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
         # of node kind, so the tag is never silently stripped. Collection
         # `!ii` is handled below instead, on the materialised content. A
         # record spelled `{wic_raw_cwl: {...}}` is `!cwl {...}` (§6.1), its
-        # body checked the same wherever it is written.
-        return _input_value(node, file, diags)
+        # body checked the same wherever it is written, on this path.
+        body = _record_body(node)
+        return (_input_value(node, file, diags) if body is None
+                else _raw_cwl(body, file, diags, SourceSpan.of(file, node), path, spent))
 
     content: OpaqueCwl
     match node:
