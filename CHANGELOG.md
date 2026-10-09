@@ -62,7 +62,8 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   `cachedir_path`, `root_workflow_yml_path` and `homedir` inputs and its
   `output_log_path` output are gone: remove a binding of those inputs and any
   edge from `output_log_path`. `max_times` is an `int`; a string integer such
-  as `'20'` is still accepted.
+  as `'20'` is still accepted. From Python, a `.wic` analysis is found through
+  `Workflow.run(workflow_paths=...)`, shaped like `Workflow.from_wic`'s.
 
 ### Command line
 
