@@ -236,17 +236,17 @@ def test_a_plain_cwl_workflow_does_not_run_the_analyses_of_a_workflow_of_the_sam
         'name': 'plain', 'analysis': 'count', 'file_pattern': '*.txt', 'max_times': 2, 'interval': 60,
         'cwl': 'realtime/plain/count_only.cwl', 'inputs': 'realtime/plain/count_only_inputs.yml',
         'root_dir': str(Path.cwd()), 'declared_at': 'plain.wic:3:3'}]), encoding='utf-8')
-    given: list[list[str]] = []
+    given: list[tuple[Any, ...]] = []
 
-    def cwltool_main(args: list[str]) -> int:
-        given.append(args)
+    def run_local(run_args_dict: dict[str, str], *_args: Any, realtime_plans: tuple[Any, ...] = (),
+                  **_kwargs: Any) -> int:
+        given.append((run_args_dict['cachedir'], realtime_plans))
         return 0
-    monkeypatch.setattr(cli.run_local.cwltool.main, 'main', cwltool_main)
+    monkeypatch.setattr(cli.run_local, 'run_local', run_local)
 
     sophios(PLAIN, '--allow_raw_cwl', '--run_local')
 
-    assert '--cachedir' not in given[0]
-    assert not Path('cachedir').exists()
+    assert given == [('', ())]
     assert 'eal-time analysis' not in capsys.readouterr().out
 
 
