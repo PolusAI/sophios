@@ -258,7 +258,7 @@ def test_the_cli_flag_reaches_the_compiler() -> None:
     assert options['lang_version'] == '9.9.9', 'the flag never reached the compiler'
 
     # And a library caller asking for defaults gets no pin, as it should.
-    defaults, _g = sophios.cli.default_compilation_settings()
+    defaults = sophios.cli.default_compilation_settings()
     assert defaults['lang_version'] is None
 
 

@@ -21,7 +21,6 @@ import yaml
 import sophios.cli
 import sophios.compiler
 from sophios.input_output import NoAliasDumper
-from sophios.utils_graphs import get_graph_reps
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.resolve import RegistrySnapshot
@@ -118,27 +117,35 @@ def compile_hermetic(yml: Yaml, name: str = 'oracle', *,
     typo is a type error instead of a silently ignored setting — the same
     reasoning as `compile_harness.compile_info`.
     """
-    compiler_options, graph_settings = sophios.cli.default_compilation_settings()
+    compiler_options = sophios.cli.default_compilation_settings()
     compiler_options['insert_steps_automatically'] = insert_steps_automatically
     compiler_options['inference_strict'] = inference_strict
-    graph = get_graph_reps(name)
     del is_root
     return sophios.compiler.compile_source(
-        bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools),
-        compiler_options, graph_settings,
-        relative_run_path=True, testing=True, graph_target=graph)
+        bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools), compiler_options,
+        relative_run_path=True, testing=True)
+
+
+def compile_hermetic_source(source: str, name: str = 'oracle', *, tools: Tools | None = None) -> CompilationResult:
+    """Compile one `.wic` text against the synthetic registry, as `compile_hermetic` compiles a document.
+
+    For what only the text can say, such as whether an `!ii` scalar is quoted: `bundle` writes a document
+    out with `yaml.dump`, which chooses the quoting itself.
+    """
+    parsed = parse(source, f'{name}.wic')
+    return sophios.compiler.compile_source(
+        SourceBundle(parsed, name, RegistrySnapshot.from_tools(SYNTHETIC_TOOLS if tools is None else tools), ()),
+        sophios.cli.default_compilation_settings(), relative_run_path=True, testing=True)
 
 
 def compile_production(yml: Yaml, name: str = 'binding', *,
                        tools: Tools | None = None,
                        is_root: bool = True) -> CompilationResult:
     """Compile with user-facing progress enabled (``testing=False``)."""
-    compiler_options, graph_settings = sophios.cli.default_compilation_settings()
     del is_root
     return sophios.compiler.compile_source(
         bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools),
-        compiler_options, graph_settings,
-        relative_run_path=True, testing=False, graph_target=get_graph_reps(name))
+        sophios.cli.default_compilation_settings(), relative_run_path=True, testing=False)
 
 
 def compile_hermetic_cwl(yml: Yaml, name: str = 'oracle', *,

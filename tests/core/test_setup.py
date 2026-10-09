@@ -3,7 +3,6 @@ from functools import lru_cache
 from pathlib import Path
 
 import pytest
-import yaml
 
 import sophios
 import sophios.cli
@@ -11,8 +10,8 @@ import sophios.input_output as io
 import sophios.plugins
 import sophios.api
 import sophios.api.python.workflow
+from sophios.lang import parse
 from sophios.wic_types import Json, Tools
-from sophios.utils_yaml import wic_loader
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,15 +48,15 @@ def yml_path_is_workflow(yml_path: Path) -> bool:
     Returns:
         bool: True when the file declares steps or workflow implementations.
     """
-    with open(yml_path, mode='r', encoding='utf-8') as yml_file:
-        yml = yaml.load(yml_file.read(), Loader=wic_loader())
-    if not isinstance(yml, dict):
+    # parse() rather than read_wic(): a corpus file may carry diagnostics and
+    # still be a document whose shape answers the question.
+    document = parse(yml_path.read_text(encoding='utf-8'), str(yml_path)).document
+    if document is None:
         return False
-    wic_tag = yml.get('wic', {})
     return (
-        'steps' in yml
-        or 'implementations' in yml
-        or (isinstance(wic_tag, dict) and 'implementations' in wic_tag)
+        bool(document.steps) or document.steps_as_mapping
+        or 'implementations' in dict(document.passthrough)
+        or (document.sidecar is not None and 'implementations' in dict(document.sidecar.entries))
     )
 
 

@@ -101,6 +101,62 @@ def test_the_image_reports_the_version_read_from_its_tag() -> None:
     assert 'SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SOPHIOS="$SOPHIOS_VERSION"' in dockerfile
 
 
+def _check_artifacts_job(workflow: Any) -> tuple[str, Any, Any]:
+    """The job that runs check-artifacts, with the step that does: (job name, job, step)."""
+    for name, job in workflow['jobs'].items():
+        for step in job['steps']:
+            if step.get('uses') == './.github/actions/check-artifacts':
+                return name, job, step
+    raise AssertionError('no job uses ./.github/actions/check-artifacts')
+
+
+@pytest.mark.parametrize('name', ['test_and_publish_pypi.yml', 'build_wheel.yml'])
+@pytest.mark.fast
+def test_the_built_artifacts_are_installed_and_used_in_a_job_of_their_own(name: str) -> None:
+    """After the build, a fresh job installs what it uploaded and expects the version the build resolved."""
+    workflow = _workflow(name)
+    check_name, check, step = _check_artifacts_job(workflow)
+    assert check['needs'] == 'package', name
+
+    package = workflow['jobs']['package']
+    verify = next(s for s in package['steps'] if s.get('uses') == './.github/actions/verify-version')
+    assert package['outputs']['version'] == f"${{{{ steps.{verify['id']}.outputs.version }}}}", name
+    assert step['with']['version'] == '${{ needs.package.outputs.version }}', name
+
+    upload = next(s for s in package['steps'] if s.get('uses', '').startswith('actions/upload-artifact'))
+    download = next(s for s in check['steps'] if s.get('uses', '').startswith('actions/download-artifact'))
+    assert download['with']['name'] == upload['with']['name'], name
+    assert step['with']['dist'] == download['with']['path'], name
+    assert check_name == 'check-artifacts'
+
+
+@pytest.mark.fast
+def test_nothing_is_published_before_the_artifacts_pass() -> None:
+    """The only upload to PyPI is in a job that needs check-artifacts, and nothing else uploads."""
+    jobs = _workflow('test_and_publish_pypi.yml')['jobs']
+    check_name, _, _ = _check_artifacts_job(_workflow('test_and_publish_pypi.yml'))
+    uploading = [name for name, job in jobs.items()
+                 if any('twine upload' in step.get('run', '') for step in job['steps'])]
+    assert uploading == ['publish']
+    assert jobs['publish']['needs'] == check_name
+    assert not any('twine' in step.get('run', '') for step in jobs['package']['steps'])
+
+
+@pytest.mark.fast
+def test_the_check_installs_the_wheel_and_the_sdist_each_on_its_own() -> None:
+    """Both artifacts go through the same install and use, each in a fresh environment."""
+    script = (REPO_ROOT / '.github' / 'actions' / 'check-artifacts' / 'check.sh').read_text(encoding='utf-8')
+    assert "wheel=$(one_file wheel 'sophios-*.whl')" in script
+    assert "sdist=$(one_file sdist 'sophios-*.tar.gz')" in script
+    assert 'for artifact in "$wheel" "$sdist"; do' in script
+    assert 'python -m venv "$work/venv"' in script
+    assert 'pip install --quiet "$artifact"' in script
+    assert 'unset PYTHONPATH' in script
+    for command in ['sophios --version', 'sophios --help', 'import sophios, sophios.api.python.workflow, sophios.lang',
+                    'sophios --explain wic016', 'sophios --generate_config', '--generate_cwl_workflow']:
+        assert command in script, command
+
+
 def _import_copy(root: Path, built_as: str | None) -> subprocess.CompletedProcess[str]:
     """Import a copy of the package from `root`, built as `built_as` if given.
 

@@ -14,6 +14,7 @@ Then two properties over every workflow the corpus holds, and the in-repo table:
     that bundle back gives the same compilation again.
 """
 # pylint: disable=redefined-outer-name  # `corpus_registry` is a pytest fixture
+from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final
@@ -32,9 +33,7 @@ from sophios.lang import LANG_VERSION
 from sophios.post_compile import inline_artifact_runs
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
 from sophios.utils_cwl import canonicalize_type
-from sophios.utils_graphs import get_graph_reps
-from sophios.utils_yaml import wic_loader
-from sophios.wic_types import Json, StepId, Tools
+from sophios.wic_types import Json, StepId, Tool, Tools
 
 from .equivalence import Strength, equivalent
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
@@ -42,6 +41,7 @@ from .test_examples import _is_includer_fragment, yml_paths_tuples_not_large
 from .test_frontdoor import PYTHON_SCRIPT
 # pylint: disable-next=unused-import  # `corpus_registry` is a pytest fixture
 from .test_setup import CorpusRegistry, corpus_registry
+from .wic_reading import read_wic
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
@@ -79,10 +79,9 @@ def _long_form(spec: Any) -> Any:
 
 def _compile_file(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> CompilationResult:
     """`path` compiled as the CLI reads it, with the settings `Workflow.compile()` uses."""
-    compiler_options, graph_settings = default_compilation_settings()
     return sophios.compiler.compile_source(
-        bundle_from_disk(path, workflow_paths, tools), compiler_options, graph_settings,
-        relative_run_path=True, testing=False, graph_target=get_graph_reps(path.stem))
+        bundle_from_disk(path, workflow_paths, tools), default_compilation_settings(),
+        relative_run_path=True, testing=False)
 
 
 def _file_door(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> tuple[Json, Json, list[str]]:
@@ -100,8 +99,7 @@ def _file_door(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> tuple
 
 def _named_outputs(path: Path) -> list[str]:
     """The outputs `path` declares, which `Workflow.compile()` narrows its CWL to."""
-    document = yaml.load(path.read_text(encoding='utf-8'), Loader=wic_loader())
-    outputs = document.get('outputs') if isinstance(document, dict) else None
+    outputs = read_wic(path.read_text(encoding='utf-8'), path.name).get('outputs')
     return list(outputs) if isinstance(outputs, dict) else []
 
 
@@ -267,7 +265,7 @@ def test_positional_and_generated_output_sources_become_object_references(
             f'outputs:\n  o:\n    type: File\n    outputSource: {output_source}\n')
     workflow = _from_wic(tmp_path, root=root)
     written = workflow.write_wic(tmp_path / 'written')
-    document = yaml.load(written.read_text(encoding='utf-8'), Loader=wic_loader())
+    document = read_wic(written.read_text(encoding='utf-8'))
     assert document['outputs']['o']['outputSource'] == 'xform/file'
     capsys.readouterr()
     workflow.compile()
@@ -283,6 +281,33 @@ def test_a_note_from_a_loaded_workflow_names_the_wic_line(tmp_path: Path) -> Non
     workflow = _from_wic(tmp_path, root=root)
     (note,) = workflow.compile().diagnostics
     assert note.startswith('root.wic:8:3: note [wic043]'), note
+
+
+@pytest.mark.fast
+def test_a_real_time_declaration_written_back_stays_a_declaration(tmp_path: Path) -> None:
+    """`write_wic` names the adapter as the registry does, so the bundle declares the same analysis
+    the objects do, `max_times: !ii '20'` included, and emits no step for it."""
+    adapter = REPO_ROOT / 'cwl_adapters' / 'file_watchers' / 'cwl_subinterpreter.cwl'
+    tools = {**TOOLS, StepId(adapter.stem, SYNTHETIC_NS): Tool(str(adapter), yaml.safe_load(adapter.read_text()))}
+    root = ("steps:\n- id: mk_file\n  in:\n    name: !ii a.txt\n"
+            "- id: cwl_subinterpreter\n  in:\n    file_pattern: !ii '*.txt'\n    cwl_tool: !ii count\n"
+            "    max_times: !ii '20'\n    config: !ii {in: {file: a.txt}}\n")
+    workflow = Workflow.from_wic(tmp_path / 'root.wic', tool_registry=tools,
+                                 workflow_paths=_documents(tmp_path, root=root))
+    direct = _workflow_runtime.compile_workflow_result(workflow, tool_registry=tools)
+
+    bundle = tmp_path / 'bundle'
+    written_root = workflow.write_wic(bundle)
+    written: WorkflowPaths = {'global': {path.stem: path for path in bundle.glob('*.wic')}}
+    via_file = _compile_file(written_root, written, tools)
+
+    (declared,) = direct.realtime
+    assert declared.max_times == 20
+    assert [replace(item, span=None) for item in via_file.realtime] == [replace(declared, span=None)]
+    direct_cwl = _workflow_runtime.compiled_workflow_from_result(workflow, direct).cwl_workflow
+    via_file_cwl = _workflow_runtime.compiled_workflow_from_result(workflow, via_file).cwl_workflow
+    assert [step['id'] for step in direct_cwl['steps']] == ['root__step__1__mk_file']
+    assert equivalent(direct_cwl, via_file_cwl, Strength.IDENTICAL) is None
 
 
 # --------------------------------------------------------------------------

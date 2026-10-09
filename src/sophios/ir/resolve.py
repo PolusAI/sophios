@@ -33,6 +33,7 @@ from ..lang import (
     UnresolvedName,
     WicSidecar,
     resolve_lang_version,
+    step_key,
 )
 from ..lang.diagnostics import Diagnostic, Diagnostics
 from ..lang.nodes import InputValue, OpaqueCwl, Step
@@ -541,6 +542,14 @@ def _inherit_parameters(document: Document, sidecar: WicSidecar | None) -> Docum
         [step.id for step in document.steps]))
 
 
+def called_document(document: Document, call_site: WicSidecar | None,
+                    registry: RegistrySnapshot) -> Document | None:
+    """What a step runs when it calls `document`, as Resolve reads it: `call_site`, the step's
+    own `wic:` entry, merged into the document's `wic:` block, then its implementation selected.
+    None when no implementation can be selected."""
+    return _select_implementation(_inherit_parameters(document, call_site), registry)[0]
+
+
 def _merged_sidecar(own: WicSidecar | None, contributed: WicSidecar,
                     ids: Sequence[str] | None = None) -> WicSidecar:
     """`own` with `contributed` merged over it, key by key and step by step. `ids` are the
@@ -630,20 +639,33 @@ def _stale_key_reason(key: StepKey, ids: Sequence[str]) -> str | None:
     return f'step {key.index} is {actual!r}; write ({key.index}, {actual})'
 
 
+def graphviz_entry(sidecar: WicSidecar | None) -> dict[str, Any]:
+    """`sidecar`'s `graphviz:` entry, or nothing."""
+    drawn = dict(sidecar.entries).get('graphviz') if sidecar is not None else None
+    return drawn if isinstance(drawn, dict) else {}
+
+
+def ranksame(sidecar: WicSidecar | None) -> tuple[StepKey, ...]:
+    """The steps `sidecar`'s `graphviz: ranksame:` list names; the parser checked each is a step key."""
+    return tuple(key for key in map(step_key, graphviz_entry(sidecar).get('ranksame', ())) if key is not None)
+
+
 def _report_stale_keys(sidecar: WicSidecar | None, document: Document, name: str,
                        reported: set[str]) -> None:
-    """Print, once each, a line for every ``wic: steps:`` key of `sidecar` that addresses no
-    step of `document`. The keys are ignored, as they always were."""
+    """Print, once each, a line for every ``wic: steps:`` key and ``graphviz: ranksame:`` entry
+    of `sidecar` that addresses no step of `document`. They are ignored, as they always were."""
     if sidecar is None:
         return
     ids = [step.id for step in document.steps]
-    for key, child in sidecar.steps:
+    addresses = [('wic: steps:', 'key', key, child.span) for key, child in sidecar.steps]
+    addresses += [('wic: graphviz: ranksame', 'entry', key, None) for key in ranksame(sidecar)]
+    for where, noun, key, span in addresses:
         reason = _stale_key_reason(key, ids)
         if reason is None:
             continue
-        span = child.span or sidecar.span or _CONTRIBUTION_SPAN
-        line = (f'Warning! {span.file}: wic: steps: key {key} addresses no step of {name!r}: '
-                f'{reason}. The key is ignored.')
+        file = (span or sidecar.span or _CONTRIBUTION_SPAN).file
+        line = (f'Warning! {file}: {where} {noun} {key} addresses no step of {name!r}: '
+                f'{reason}. The {noun} is ignored.')
         if line not in reported:
             reported.add(line)
             print(line, file=sys.stderr)
