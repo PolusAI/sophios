@@ -1658,3 +1658,14 @@ def test_merged_steps_run_in_the_loaders_order() -> None:
     assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
     assert [step.id for step in result.document.steps] == list(yaml.load(source, Loader=wic_loader())['steps'])
 
+
+@pytest.mark.fast
+def test_an_inline_input_the_loader_reads_as_text_stays_text() -> None:
+    """`!ii 2020-13-45` is no date; the loader keeps the text, and so does the parser."""
+    source = 'steps:\n  s:\n    in:\n      f: !ii 2020-13-45\n'
+    assert yaml.load(source, Loader=wic_loader())['steps']['s']['in']['f'] == {Key.INLINE_INPUT: '2020-13-45'}
+    result = parse(source, 'd.wic')
+    assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
+    literal = result.document.steps[0].input('f')
+    assert isinstance(literal, InlineLiteral) and literal.value == '2020-13-45'
+

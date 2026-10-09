@@ -1035,8 +1035,9 @@ def _literal(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Any:
         return ''
     try:
         return yaml.safe_load(node.value)
-    except yaml.YAMLError:
-        # Not a primitive; the literal text is the honest interpretation.
+    except (yaml.YAMLError, *_UNREADABLE):
+        # Not a primitive, or one YAML cannot read (`2020-13-45`); the loader
+        # keeps the text, and so does this.
         return node.value
 
 
