@@ -343,9 +343,10 @@ _CWL_WORKFLOW = ('{class: Workflow, cwlVersion: v1.2, inputs: {text: string}, '
                  'steps: {echo: {run: echo.cwl, in: {text: text}, out: [out]}}}')
 _ECHO_TOOL = ('cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: echo\n'
               'inputs: {text: {type: string, inputBinding: {position: 1}}}\noutputs: {out: stdout}\n')
-_ADVICE = ('Sophios cannot embed a CWL Workflow as a step: write it as a .wic subworkflow '
-           '(on search_paths_wic, or beside this document as run: <name>.wic), '
-           'or run the CWL Workflow on its own with --allow_raw_cwl')
+_AS_WIC = ('Sophios cannot embed a CWL Workflow as a step: write it as a .wic subworkflow '
+           '(on search_paths_wic, or beside this document as run: <name>.wic)')
+#: The advice for a CWL Workflow in a file, which --allow_raw_cwl can run on its own.
+_ADVICE = _AS_WIC + ', or run the CWL Workflow on its own with --allow_raw_cwl'
 
 
 def _cwl_workflow_step_diagnostic(tmp_path: Path, step: str, tools: Tools) -> str:
@@ -355,7 +356,6 @@ def _cwl_workflow_step_diagnostic(tmp_path: Path, step: str, tools: Tools) -> st
         _compile(bundle_from_disk(tmp_path / 'w.wic', {}, tools))
     diagnostic, = caught.value.diagnostics
     assert diagnostic.code is SophiosErrorCode.SUBWORKFLOW_INVALID
-    assert diagnostic.message.endswith(_ADVICE)
     return diagnostic.message
 
 
@@ -368,8 +368,8 @@ def test_a_cwl_workflow_from_the_tool_search_paths_as_a_step_is_refused(tmp_path
     (adapters / 'echo.cwl').write_text(_ECHO_TOOL, encoding='utf-8')
     tools = get_tools_cwl({'search_paths_cwl': {'global': [str(adapters)]}}, quiet=True)
     message = _cwl_workflow_step_diagnostic(tmp_path, '  - id: say\n', tools)
-    assert message.startswith(f"step 'say' runs {adapters / 'say.cwl'}, a CWL Workflow from the "
-                              'tool search paths (search_paths_cwl). ')
+    assert message == (f"step 'say' runs {adapters / 'say.cwl'}, a CWL Workflow from the "
+                       f'tool search paths (search_paths_cwl). {_ADVICE}')
 
 
 @pytest.mark.fast
@@ -386,21 +386,22 @@ def test_a_packed_cwl_workflow_from_the_tool_search_paths_as_a_step_is_refused(t
         'inputs: {text: string}, outputs: {out: stdout}}\n', encoding='utf-8')
     tools = get_tools_cwl({'search_paths_cwl': {'global': [str(adapters)]}}, quiet=True)
     message = _cwl_workflow_step_diagnostic(tmp_path, '  - id: packed\n', tools)
-    assert message.startswith(f"step 'packed' runs {adapters / 'packed.cwl'}, a CWL Workflow from the "
-                              'tool search paths (search_paths_cwl). ')
+    assert message == (f"step 'packed' runs {adapters / 'packed.cwl'}, a CWL Workflow from the "
+                       f'tool search paths (search_paths_cwl). {_ADVICE}')
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(('run', 'where'), [
-    ('say.cwl', 'run: say.cwl, a CWL Workflow'),
-    (_CWL_WORKFLOW, 'an inline run: body that is a CWL Workflow'),
+@pytest.mark.parametrize(('run', 'expected'), [
+    ('say.cwl', f'run: say.cwl, a CWL Workflow. {_ADVICE}'),
+    (_CWL_WORKFLOW, f'an inline run: body that is a CWL Workflow. {_AS_WIC}'),
 ], ids=['run-path', 'inline-body'])
-def test_a_cwl_workflow_a_step_names_itself_is_refused(tmp_path: Path, run: str, where: str) -> None:
-    """A `run:` path beside the document, or an inline body, is refused the same way."""
+def test_a_cwl_workflow_a_step_names_itself_is_refused(tmp_path: Path, run: str, expected: str) -> None:
+    """A `run:` path beside the document, or an inline body, is refused the same way; an inline
+    body is no file --allow_raw_cwl could run on its own."""
     (tmp_path / 'say.cwl').write_text(_CWL_WORKFLOW, encoding='utf-8')
     (tmp_path / 'echo.cwl').write_text(_ECHO_TOOL, encoding='utf-8')
     message = _cwl_workflow_step_diagnostic(tmp_path, f'  - id: s\n    run: {run}\n', SYNTHETIC_TOOLS)
-    assert message.startswith(f"step 's' runs {where}. ")
+    assert message == f"step 's' runs {expected}"
 
 
 _ECHO = ('{class: CommandLineTool, cwlVersion: v1.2, baseCommand: %s, '

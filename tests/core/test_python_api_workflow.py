@@ -2196,6 +2196,27 @@ def test_a_compile_diagnostic_names_the_python_line_of_the_binding() -> None:
 
 
 @pytest.mark.fast
+def test_a_cwl_workflow_as_a_step_clt_path_is_refused_with_python_advice(tmp_path: Path) -> None:
+    """A CWL Workflow given as a Step's `clt_path` is refused, naming that file and the Python fix."""
+    say = tmp_path / 'say.cwl'
+    say.write_text('{class: Workflow, cwlVersion: v1.2, inputs: {text: string}, '
+                   'outputs: {said: {type: File, outputSource: echo/out}}, '
+                   'steps: {echo: {run: echo.cwl, in: {text: text}, out: [out]}}}', encoding='utf-8')
+    (tmp_path / 'echo.cwl').write_text('{class: CommandLineTool, cwlVersion: v1.2, baseCommand: echo, '
+                                       'inputs: {text: string}, outputs: {out: stdout}}', encoding='utf-8')
+    step = Step(clt_path=say)
+    step.inputs.text = 'hi'
+    with pytest.raises(SophiosError) as caught:
+        Workflow([step], 'wsay').compile()
+    diagnostic, = caught.value.diagnostics
+    assert diagnostic.code is SophiosErrorCode.SUBWORKFLOW_INVALID
+    assert diagnostic.message == (
+        f"step 'say' runs {say}, a CWL Workflow given in Python as its clt_path. Sophios cannot embed "
+        'a CWL Workflow as a step: build it in Python as a nested Workflow of Steps, or run the CWL '
+        f'Workflow on its own with sophios --yaml {say} --allow_raw_cwl')
+
+
+@pytest.mark.fast
 def test_a_script_diagnostic_names_its_module_level_line(tmp_path: Path) -> None:
     """A workflow built at a script's top level is reported at the script's own line."""
     script = tmp_path / 'build.py'

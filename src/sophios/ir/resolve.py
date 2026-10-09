@@ -237,7 +237,7 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
         return None
     if _is_cwl_workflow(cwl):
         diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
-                          _cwl_workflow_step(step, tool, own_name), step.span)
+                          _cwl_workflow_step(step, tool, own_name, directory), step.span)
         return None
     return ResolvedProcess(
         tool.key,
@@ -289,22 +289,29 @@ def _is_cwl_workflow(cwl: dict[str, Any]) -> bool:
         for entry in graph)
 
 
-def _cwl_workflow_step(step: Step, tool: ToolDefinition, own_name: str | None) -> str:
+def _cwl_workflow_step(step: Step, tool: ToolDefinition, own_name: str | None, directory: Path | None) -> str:
     """Why a step whose process is a CWL ``class: Workflow`` is refused, and what works.
 
     The step would run a copy of the file without the files its own steps run,
     and the calling workflow would lack ``SubworkflowFeatureRequirement``.
+    A document with no ``directory`` was not read from a file: the Python API
+    built it, and its steps' files are the ``clt_path`` each ``Step`` was given.
+    ``--allow_raw_cwl`` runs a CWL Workflow file on its own, so it is offered
+    for a file and not for an inline body.
     """
+    step_runs = f'step {step.id!r} runs'
+    cannot = 'Sophios cannot embed a CWL Workflow as a step'
+    if directory is None:
+        return (f'{step_runs} {tool.run_path}, a CWL Workflow given in Python as its clt_path. {cannot}: '
+                'build it in Python as a nested Workflow of Steps, or run the CWL Workflow on its own '
+                f'with sophios --yaml {tool.run_path} --allow_raw_cwl')
+    as_wic = 'write it as a .wic subworkflow (on search_paths_wic, or beside this document as run: <name>.wic)'
     run = dict(step.interpreted).get('run')
     if isinstance(run, dict):
-        where = 'an inline run: body that is a CWL Workflow'
-    elif tool.key.name == own_name:
-        where = f'run: {run}, a CWL Workflow'
-    else:
-        where = f'{tool.run_path}, a CWL Workflow from the tool search paths (search_paths_cwl)'
-    return (f'step {step.id!r} runs {where}. Sophios cannot embed a CWL Workflow as a step: '
-            'write it as a .wic subworkflow (on search_paths_wic, or beside this document as '
-            'run: <name>.wic), or run the CWL Workflow on its own with --allow_raw_cwl')
+        return f'{step_runs} an inline run: body that is a CWL Workflow. {cannot}: {as_wic}'
+    where = (f'run: {run}, a CWL Workflow' if tool.key.name == own_name
+             else f'{tool.run_path}, a CWL Workflow from the tool search paths (search_paths_cwl)')
+    return f'{step_runs} {where}. {cannot}: {as_wic}, or run the CWL Workflow on its own with --allow_raw_cwl'
 
 
 def _own_run_name(step: Step, registry: RegistrySnapshot, directory: Path | None) -> str | None:

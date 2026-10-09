@@ -180,7 +180,7 @@ CWL requires of a process embedded in a workflow.
 A step's process is a tool or a `.wic` subworkflow. A CWL file whose `class` is
 `Workflow`, whether a stem on `search_paths_cwl`, a `run:` path or an inline body, is
 `wic013`: Sophios cannot embed one as a step. Write it as a `.wic` subworkflow and
-call that, or run the CWL workflow on its own with `--allow_raw_cwl`.
+call that, or run a CWL workflow file on its own with `--allow_raw_cwl`.
 
 ## 3. Inputs
 
