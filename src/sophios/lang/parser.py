@@ -963,7 +963,7 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
                             SourceSpan.of(file, sub_key))
                 continue
             seen_steps.add(key_text)
-            parsed = _step_key(key_text)
+            parsed = step_key(key_text)
             if parsed is None:
                 diags.error(
                     SophiosErrorCode.MALFORMED_WIC_STEP_KEY,
@@ -1012,7 +1012,7 @@ def _sidecar_value(key: str, node: yaml.nodes.Node, shape: ValueShape,
     return value
 
 
-def _step_key(text: str) -> StepKey | None:
+def step_key(text: str) -> StepKey | None:
     """Normalise a `"(1, name)"` or bare `"name"` sidecar key, or None if it is malformed."""
     match = Grammar.WIC_STEP_KEY.match(text)
     if match is not None:

@@ -6,9 +6,11 @@ from pathlib import Path
 import signal
 import sys
 import argparse
+from dataclasses import replace
 from typing import Any, Final
 
 import pytest
+import networkx as nx
 import yaml
 from networkx.algorithms import isomorphism
 from mergedeep import merge, Strategy
@@ -19,18 +21,17 @@ import sophios.run_local
 import sophios.utils
 from sophios.ir import frontdoor
 import sophios.plugins
-from sophios import post_compile, realtime
+from sophios import post_compile, preflight, realtime
 from sophios import auto_gen_header
 from sophios.cli import get_args
 from sophios.utils_yaml import Key, wic_loader
-from sophios.post_compile import (apply_inline_options, cwl_docker_extract, inline_artifact_runs,
-                                  remove_artifact_entrypoints, stage_input_files)
+from sophios.post_compile import apply_inline_options, inline_artifact_runs, remove_artifact_entrypoints
+from sophios.runtime_inputs import normalize_artifact_job_inputs
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.post_compile import verify_container_engine_config
 from sophios.ir.artifacts import CompilationArtifact
+from sophios.ir.types import WorkflowGraph
 from sophios.wic_types import Json
-from sophios.utils_graphs import get_graph_reps
 
 # pylint: disable-next=unused-import  # `corpus_registry` is a pytest fixture
 from .test_setup import (CorpusRegistry, corpus_registry, workflow_paths,
@@ -249,10 +250,8 @@ def test_cwl_docker_extract(yml_path_str: str, yml_path: Path,
 def _compiled_for_run(yml_path: Path, args: argparse.Namespace, registry: CorpusRegistry) -> CompilationArtifact:
     """The artifact tree `run_workflows` writes and runs for `yml_path`: compiled, then shaped by the inline flags."""
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, registry.tools)
-    compiler_options, graph_settings = sophios.cli.get_dicts_for_compilation(args)
-    result = sophios.compiler.compile_source(
-        bundle, compiler_options, graph_settings,
-        relative_run_path=True, testing=True, graph_target=get_graph_reps(str(yml_path)))
+    compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
+    result = sophios.compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=True)
     return apply_inline_options(result.artifact, subworkflows=args.cwl_inline_subworkflows,
                                 runtag=args.cwl_inline_runtag)
 
@@ -284,16 +283,21 @@ def run_workflows(
     yaml_stem = artifact.name
 
     artifact = sophios.plugins.cwl_prepend_dockerFile_include_path_artifact(artifact)
+    # As the CLI writes them: a relative path is read beside the workflow.
+    artifact = replace(artifact, job_inputs=sophios.input_output.absolute_paths(
+        normalize_artifact_job_inputs(artifact, artifact.job_inputs), Path(args.yaml).parent.absolute()))
     sophios.input_output.write_artifacts_to_disk(
         artifact, Path(basepath), True, args.inputs_file)
 
-    # verify container_engine install and config
-    verify_container_engine_config(args.container_engine, args.ignore_docker_install,
-                                   ignore_container_processes=args.ignore_docker_processes)
-
+    settings = preflight.RunSettings(args.container_engine, args.pull_dir, ignore_install=args.ignore_docker_install,
+                                     ignore_processes=args.ignore_docker_processes)
+    root_cwl = Path(basepath) / f'{Path(yml_path).stem}.cwl'
     if docker_pull_only:
-        cwl_docker_extract(args.container_engine, args.pull_dir, Path(basepath) / f'{Path(yml_path).stem}.cwl')
+        preflight.prepare([root_cwl], settings)
         return
+    # The run lane does not pull again.
+    job = preflight.Job(artifact.job_inputs, Path(args.yaml).parent.absolute(), 'the workflow')
+    preflight.check(preflight.needs([root_cwl], [job]), settings)
 
     if args.docker_remove_entrypoints:
         artifact = remove_artifact_entrypoints(args.container_engine, artifact)
@@ -307,8 +311,6 @@ def run_workflows(
         sophios.input_output.write_artifacts_to_disk(
             artifact, Path(basepath), True, args.inputs_file)
     # NOTE: Do not use --cachedir; we want to actually test everything.
-    # stage input files for run
-    stage_input_files(artifact.job_inputs, Path(args.yaml).parent.absolute(), basepath)
     run_args_dict = {}
     run_args_dict['container_engine'] = args.container_engine
     run_args_dict['cwl_runner'] = cwl_runner
@@ -370,12 +372,9 @@ def test_emitted_cwl_says_nothing_cwl_cannot_read(yml_path_str: str, yml_path: P
     still carry one anywhere else in the document.
     """
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, corpus_registry.tools)
-    compiler_options, graph_settings = sophios.cli.get_dicts_for_compilation(
-        get_args(str(yml_path)))
+    compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(get_args(str(yml_path)))
     try:
-        result = sophios.compiler.compile_source(
-            bundle, compiler_options, graph_settings,
-            relative_run_path=True, testing=True, graph_target=get_graph_reps(str(yml_path)))
+        result = sophios.compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=True)
     except SophiosError as error:
         if _is_includer_fragment(error):
             pytest.skip(f'{yml_path_str} consumes edges from an includer')
@@ -428,6 +427,15 @@ def test_emitted_cwl_says_nothing_cwl_cannot_read(yml_path_str: str, yml_path: P
     embedded(post_compile.inline_artifact_runs(result.artifact).cwl)
 
 
+def _dependencies(graph: WorkflowGraph) -> nx.DiGraph:
+    """The steps of `graph`'s tree, and an edge from each step to every step that reads its output."""
+    dependencies = nx.DiGraph([(edge.source.step, edge.sink.step) for edge in graph.edges])
+    dependencies.add_nodes_from(step.id for step in graph.steps)
+    for child in graph.children:
+        dependencies.update(_dependencies(child))
+    return dependencies
+
+
 @pytest.mark.fast
 @pytest.mark.serial
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_large)
@@ -446,13 +454,10 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
     Path('autogenerated/').mkdir(parents=True, exist_ok=True)
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, tools_cwl)
 
-    graph = get_graph_reps(str(yml_path))
-    compiler_options, graph_settings = sophios.cli.get_dicts_for_compilation(args)
+    compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
 
     try:
-        result = sophios.compiler.compile_source(
-            bundle, compiler_options, graph_settings,
-            relative_run_path=False, testing=True, graph_target=graph)
+        result = sophios.compiler.compile_source(bundle, compiler_options, relative_run_path=False, testing=True)
     except SophiosError as error:
         if _is_includer_fragment(error):
             pytest.skip(f'{yml_path_str} consumes edges from an includer')
@@ -483,13 +488,10 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
         # If so, we will need to patch testargs depending on len(sub_node_data.namespaces)
         # (due to the various instances of `if len(namespaces) < args.graph_inline_depth`)
 
-        graph_fakeroot = get_graph_reps(str(sub_name))
         try:
             fake_result = sophios.compiler.compile_source(
-                frontdoor.bundle_from_disk(sub_path, yml_paths, tools_cwl),
-                compiler_options, graph_settings,
-                relative_run_path=False, testing=True,
-                graph_target=graph_fakeroot)
+                frontdoor.bundle_from_disk(sub_path, yml_paths, tools_cwl), compiler_options,
+                relative_run_path=False, testing=True)
         except SophiosError as error:
             if _is_includer_fragment(error):
                 continue
@@ -528,9 +530,8 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
         assert sub_cwl_embedded == sub_cwl_fakeroot
 
         # Check that the subgraphs are isomorphic.
-        sub_graph_nx = embedded_artifact.graph_view.networkx
-        sub_graph_fakeroot_nx = fake_result.artifact.graph_view.networkx
-        g_m = isomorphism.DiGraphMatcher(sub_graph_nx, sub_graph_fakeroot_nx)
+        assert embedded_artifact.graph is not None
+        g_m = isomorphism.DiGraphMatcher(_dependencies(embedded_artifact.graph), _dependencies(fake_result.graph))
         is_isomorphic_with_timeout(g_m, yml_path_str)
         compared += 1
 
@@ -548,11 +549,10 @@ def _compile_corpus_workflow(yml_path_str: str, yml_path: Path, registry: Corpus
     """The artifact tree of one corpus workflow, skipping a fragment that has no standalone compile."""
     args = get_args(str(yml_path))
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, registry.tools)
-    compiler_options, graph_settings = sophios.cli.get_dicts_for_compilation(args)
+    compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
     try:
-        return sophios.compiler.compile_source(
-            bundle, compiler_options, graph_settings,
-            relative_run_path=True, testing=True, graph_target=get_graph_reps(str(yml_path))).artifact
+        return sophios.compiler.compile_source(bundle, compiler_options, relative_run_path=True,
+                                               testing=True).artifact
     except SophiosError as error:
         if _is_includer_fragment(error):
             pytest.skip(f'{yml_path_str} consumes edges from an includer')
@@ -577,12 +577,11 @@ def test_a_corpus_declaration_compiles_its_analysis(stem: str, analysis: str,
     if yml_path is None:
         pytest.skip(f'{stem}.wic is not reachable from search_paths_wic')
     bundle = frontdoor.bundle_from_disk(yml_path, corpus_registry.workflows, corpus_registry.tools)
-    compiler_options, graph_settings = sophios.cli.get_dicts_for_compilation(get_args(str(yml_path)))
-    result = sophios.compiler.compile_source(bundle, compiler_options, graph_settings,
-                                             relative_run_path=True, testing=True)
+    compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(get_args(str(yml_path)))
+    result = sophios.compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=True)
 
     analyses = realtime.compile_analyses(result.realtime, corpus_registry.workflows, corpus_registry.tools,
-                                         compiler_options, graph_settings)
+                                         compiler_options)
     assert [compiled.declaration.analysis for compiled in analyses] == [analysis]
     assert analyses[0].artifact.cwl['steps']
 

@@ -33,7 +33,6 @@ from sophios.cli import default_compilation_settings
 from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import bundle_from_disk
-from sophios.utils_graphs import get_graph_reps
 from sophios.utils_yaml import wic_loader
 from sophios.wic_types import StepId, Yaml
 
@@ -119,11 +118,9 @@ def _compile_bundle(root: Path) -> CompilationResult:
     two arms is where the document came from.
     """
     yml_paths = {'global': {path.stem: path for path in root.parent.glob('*.wic')}}
-    compiler_options, graph_settings = default_compilation_settings()
     return sophios.compiler.compile_source(
-        bundle_from_disk(root, yml_paths, SYNTHETIC_TOOLS), compiler_options, graph_settings,
-        relative_run_path=True, testing=False,
-        graph_target=get_graph_reps(root.stem))
+        bundle_from_disk(root, yml_paths, SYNTHETIC_TOOLS), default_compilation_settings(),
+        relative_run_path=True, testing=False)
 
 
 @pytest.mark.fast

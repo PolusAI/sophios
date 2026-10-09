@@ -32,7 +32,6 @@ from sophios.lang import LANG_VERSION
 from sophios.post_compile import inline_artifact_runs
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
 from sophios.utils_cwl import canonicalize_type
-from sophios.utils_graphs import get_graph_reps
 from sophios.utils_yaml import wic_loader
 from sophios.wic_types import Json, StepId, Tools
 
@@ -79,10 +78,9 @@ def _long_form(spec: Any) -> Any:
 
 def _compile_file(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> CompilationResult:
     """`path` compiled as the CLI reads it, with the settings `Workflow.compile()` uses."""
-    compiler_options, graph_settings = default_compilation_settings()
     return sophios.compiler.compile_source(
-        bundle_from_disk(path, workflow_paths, tools), compiler_options, graph_settings,
-        relative_run_path=True, testing=False, graph_target=get_graph_reps(path.stem))
+        bundle_from_disk(path, workflow_paths, tools), default_compilation_settings(),
+        relative_run_path=True, testing=False)
 
 
 def _file_door(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> tuple[Json, Json, list[str]]:

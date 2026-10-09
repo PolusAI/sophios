@@ -5,10 +5,6 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Final
 
-import graphviz
-import networkx as nx
-
-from . import utils_graphs
 from .ir.complete import complete
 from .ir.artifacts import CompilationArtifact, CompilationResult
 from .ir.emit import emit, emit_job_inputs, surface
@@ -20,28 +16,21 @@ from .ir.pipeline import front_end
 from .ir.realtime import extract
 from .ir.resolve import RegistrySnapshot
 from .ir.names import Names
-from .ir.types import EdgeOrigin, WorkflowGraph
+from .ir.types import WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import Locator, SophiosError
 from .lang.nodes import CwlRecord, UnresolvedName
 from .lang.parser import Grammar
 from .lang.error_codes import SophiosErrorCode
-from .wic_types import (
-    CompilerOptions,
-    GraphData,
-    GraphReps,
-    GraphSettings,
-)
+from .wic_types import CompilerOptions
 
 
 # pylint: disable-next=too-many-locals
 def compile_source(bundle: SourceBundle,
                    compiler_options: CompilerOptions,
-                   graph_settings: GraphSettings,
                    *,
                    relative_run_path: bool,
-                   testing: bool,
-                   graph_target: GraphReps | None = None) -> CompilationResult:
+                   testing: bool) -> CompilationResult:
     """Compile a parsed root workflow and every workflow it reaches.
 
     The one door. A bundle read from files carries the spans of the text its
@@ -80,9 +69,7 @@ def compile_source(bundle: SourceBundle,
     if inferred.graph is None:
         raise SophiosError(inferred.diagnostics)
     graph = declare_namespaces(complete(inferred.graph), bundle.registry)
-    names = Names.of(graph)
-    graph_reps = _project_graph(graph, names, graph_settings, graph_target)
-    artifact = _artifact_tree(graph, names, bundle.registry, graph_settings, graph_reps,
+    artifact = _artifact_tree(graph, Names.of(graph), bundle.registry,
                               relative_run_path=relative_run_path,
                               partial_failure=compiler_options['partial_failure_enable'])
     if not testing:
@@ -175,11 +162,8 @@ def _check_unresolved_names(graph: WorkflowGraph, allow_raw_cwl: bool,
         _check_unresolved_names(child, allow_raw_cwl, names)
 
 
-def _artifact_tree(graph: WorkflowGraph, names: Names, registry: RegistrySnapshot,
-                   graph_settings: GraphSettings,
-                   graph_reps: GraphReps | None = None,
-                   *, relative_run_path: bool = True,
-                   partial_failure: bool = False) -> CompilationArtifact:
+def _artifact_tree(graph: WorkflowGraph, names: Names, registry: RegistrySnapshot, *,
+                   relative_run_path: bool, partial_failure: bool) -> CompilationArtifact:
     """One artifact per emitted document, each surfaced exactly once."""
     document = surface(graph, names, relative_run_path=relative_run_path,
                        partial_failure=partial_failure)
@@ -188,8 +172,7 @@ def _artifact_tree(graph: WorkflowGraph, names: Names, registry: RegistrySnapsho
         assert step.run is not None
         child = step.run.child
         if child is not None:
-            child_reps = _project_graph(child, names, graph_settings)
-            children.append(_artifact_tree(child, names, registry, graph_settings, child_reps,
+            children.append(_artifact_tree(child, names, registry,
                                            relative_run_path=relative_run_path,
                                            partial_failure=partial_failure))
             continue
@@ -199,15 +182,12 @@ def _artifact_tree(graph: WorkflowGraph, names: Names, registry: RegistrySnapsho
             raise SophiosError.error(
                 SophiosErrorCode.SUBWORKFLOW_INVALID,
                 f'process {key.namespace}/{key.name} disappeared after resolution')
-        leaf_graph = utils_graphs.get_graph_reps(key.name)
         # Named by the `run:` the parent emits, so the file written is the one it runs.
         children.append(CompilationArtifact(
             (names.step(step.id),), Path(step.run.target).stem,
             definition.run_path, deepcopy(definition.cwl), {}, None,
-            leaf_graph,
         ))
 
-    reps = graph_reps or _project_graph(graph, names, graph_settings)
     return CompilationArtifact(
         tuple(names.step(part) for part in graph.namespace.parts),
         graph.name,
@@ -215,50 +195,5 @@ def _artifact_tree(graph: WorkflowGraph, names: Names, registry: RegistrySnapsho
         emit(document, names),
         emit_job_inputs(document, names),
         graph,
-        reps,
         tuple(children),
     )
-
-
-def _project_graph(graph: WorkflowGraph, names: Names, settings: GraphSettings,
-                   target: GraphReps | None = None) -> GraphReps:
-    reps = target or GraphReps(graphviz.Digraph(name=f'cluster_{graph.name}'),
-                               nx.DiGraph(), GraphData(graph.name))
-    reps.networkx.clear()
-    reps.graphdata.name = graph.name
-    reps.graphdata.nodes = []
-    reps.graphdata.edges = []
-    reps.graphdata.subgraphs = []
-    for step in graph.steps:
-        assert step.run is not None
-        name = names.qualified(step.id)
-        label = names.step(step.id) if settings['graph_label_stepname'] else step.id.name
-        attrs = {'label': label, 'shape': 'box', 'style': 'rounded, filled',
-                 'fillcolor': 'lightblue'}
-        reps.graphviz.node(name, **attrs)
-        reps.networkx.add_node(name)
-        reps.graphdata.nodes.append((name, attrs))
-    for edge in graph.edges:
-        source = names.qualified(edge.source.step)
-        sink = names.qualified(edge.sink.step)
-        # Explicit edges are blue; an inferred one takes the theme's font
-        # colour, as docs/tutorials/multistep.md says, so a reader can tell
-        # what the document said from what the compiler decided.
-        edge_attrs: dict[str, str] = {'color': 'blue'}
-        if edge.origin is EdgeOrigin.INFERRED:
-            edge_attrs['color'] = 'black' if settings['graph_dark_theme'] else 'white'
-        if settings['graph_label_edges']:
-            edge_attrs['label'] = names.port(edge.source.port)
-        if not reps.networkx.has_edge(source, sink) or settings['graph_label_edges']:
-            if source != sink:
-                reps.graphviz.edge(source, sink, **edge_attrs)
-            reps.networkx.add_edge(source, sink)
-            reps.graphdata.edges.append((source, sink, edge_attrs))
-    for child in graph.children:
-        child_reps = _project_graph(child, names, settings)
-        reps.graphdata.subgraphs.append(child_reps.graphdata)
-        reps.networkx.add_nodes_from(child_reps.networkx.nodes)
-        reps.networkx.add_edges_from(child_reps.networkx.edges)
-        if len(graph.namespace.parts) < settings['graph_inline_depth']:
-            reps.graphviz.subgraph(child_reps.graphviz)
-    return reps

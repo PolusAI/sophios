@@ -670,6 +670,21 @@ know is `wic017`; two pins that disagree within one compilation are `wic018`. A
 `cwlVersion:` Sophios cannot run (anything but `v1.0`, `v1.1` or `v1.2`) is
 `wic035`. The compiled workflow always says `v1.2`.
 
+`graphviz` changes only the drawing `--graphviz` writes:
+
+- `label` on a step replaces the step's id as the label of its box. Write `\n`
+  for a line break. With `--graph_label_stepname` every box shows its generated
+  step name instead, a `label` included.
+- `label` on a workflow, or on the `wic: steps:` entry that calls it, titles the
+  workflow's cluster. A subworkflow without one is titled with the id it is
+  called by (`setup.wic`).
+- `style` on a step is appended to the box's own `rounded, filled`. On a
+  workflow it styles the cluster; `invis` hides the cluster and the box of the
+  step that calls it.
+- `ranksame` lists steps of this document, as `(index, name)`, to draw on one
+  rank. An entry that addresses no step is ignored, with a line on stderr like
+  the one for a stale `wic: steps:` key.
+
 ## 8. What inference does and how to pin it
 
 An input that no `in:` entry binds is connected by inference: Sophios compares CWL

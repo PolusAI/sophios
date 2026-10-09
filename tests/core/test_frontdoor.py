@@ -33,7 +33,6 @@ from sophios.lang import (
 )
 from sophios.lang.diagnostics import SophiosError
 from sophios.plugins import get_tools_cwl
-from sophios.utils_graphs import get_graph_reps
 from sophios.utils_yaml import wic_loader
 from sophios.wic_types import Tools
 
@@ -76,9 +75,7 @@ def _line_of(text: str, needle: str) -> int:
 
 def _compile(bundle: SourceBundle) -> CompilationResult:
     """Compile a bundle the file door built, with default settings."""
-    compiler_options, graph_settings = default_compilation_settings()
-    return compile_source(bundle, compiler_options, graph_settings,
-                          relative_run_path=True, testing=True, graph_target=get_graph_reps(bundle.name))
+    return compile_source(bundle, default_compilation_settings(), relative_run_path=True, testing=True)
 
 
 def _redump(text: str) -> str:

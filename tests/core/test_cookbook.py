@@ -20,7 +20,6 @@ from sophios.ir.frontdoor import bundle_from_disk
 from sophios.post_compile import inline_artifact_runs
 from sophios.python_cwl_adapter import import_python_file
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
-from sophios.utils_graphs import get_graph_reps
 from sophios.utils_yaml import wic_loader
 from sophios.wic_types import Json
 
@@ -60,10 +59,8 @@ def test_both_surfaces_compile_to_the_same_cwl(stem: str) -> None:
     wic_path = COOKBOOK / f'{stem}.wic'
     workflows = {'global': {path.stem: path for path in COOKBOOK.glob('*.wic')}}
     bundle = bundle_from_disk(wic_path, workflows, load_test_registry().tools)
-    options, graph_settings = default_compilation_settings()
-    result = sophios.compiler.compile_source(bundle, options, graph_settings,
-                                             relative_run_path=True, testing=True,
-                                             graph_target=get_graph_reps(stem))
+    result = sophios.compiler.compile_source(bundle, default_compilation_settings(),
+                                             relative_run_path=True, testing=True)
     artifact = inline_artifact_runs(result.artifact)
 
     assert _as_compile_returns(normalize_artifact_cwl(artifact), wic_path) == python_side.cwl_workflow

@@ -39,7 +39,6 @@ import sophios.input_output as io
 import sophios.plugins
 from sophios.lang import parse
 from sophios.utils_cwl import desugar_into_canonical_normal_form
-from sophios.utils_graphs import get_graph_reps
 from sophios.wic_types import Cwl, StepId, Tool, Tools, Yaml
 
 
@@ -92,11 +91,8 @@ def _compile_corpus_file(path: Path) -> None:
     env = _get_corpus_env()
     args = sophios.cli.get_args(str(path))
     bundle = frontdoor.bundle_from_disk(path, env.yml_paths, env.tools)
-    compiler_options, graph_settings = sophios.cli.get_dicts_for_compilation(args)
-    graph = get_graph_reps(str(path))
-    sophios.compiler.compile_source(
-        bundle, compiler_options, graph_settings,
-        relative_run_path=True, testing=True, graph_target=graph)
+    compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
+    sophios.compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=True)
 
 
 # --------------------------------------------------------------------------
