@@ -10,18 +10,19 @@ from collections.abc import Iterable
 from typing import Final, Iterator
 
 import graphviz
-import networkx as nx
 import yaml
 
 from sophios.lang import wic_schema
-from sophios.lang.diagnostics import Diagnostic, SophiosError
+from sophios.lang.diagnostics import Diagnostic, Diagnostics, SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
 from sophios.ir.artifacts import CompilationResult
+from sophios.runtime_inputs import normalize_artifact_job_inputs
 from . import input_output as io
 from . import post_compile as pc
-from . import cli, compiler, plugins, preflight, realtime, run_local
+from . import cli, compiler, drawing, plugins, preflight, realtime, run_local
 from .ir import frontdoor
 from .ir.frontdoor import SourceBundle
-from .wic_types import CompilerOptions, GraphData, GraphReps, GraphSettings, Json, Tools
+from .wic_types import CompilerOptions, Json, Tools
 
 #: Where `--generate_schemas` writes, relative to the working directory, and
 #: where editors are pointed at it (see `.vscode/settings.json`).
@@ -60,57 +61,26 @@ def _load_source_bundle(args: argparse.Namespace,
 
 def _compile_loaded_document(yaml_path: str, bundle: SourceBundle,
                              yml_paths: dict[str, dict[str, Path]], tools_cwl: Tools,
-                             compiler_options: CompilerOptions, graph_settings: GraphSettings
-                             ) -> tuple[graphviz.Digraph, CompilationResult, tuple[realtime.Analysis, ...]]:
-    """Build the root graph view and compile to a graph-derived result, and each real-time analysis it declares."""
-    rootgraph = graphviz.Digraph(name=yaml_path)
-    # newrank='True' ranks nodes globally (rather than per-cluster), which is
-    # required for GraphData.ranksame constraints to work across subgraphs/clusters.
-    rootgraph.attr(newrank='True')
-    rootgraph.attr(bgcolor="transparent")  # Useful for making slides
-    font_edge_color = 'black' if graph_settings['graph_dark_theme'] else 'white'
-    rootgraph.attr(fontcolor=font_edge_color)
-
-    # This can be used to visually 'inline' all subworkflows (but NOT the CWL).
-    # rootgraph.attr(style='invis')
-    # Note that since invisible objects still affect the graphviz layout (by design),
-    # this can be used to control the layout of the individual nodes, even if
-    # you don't necessarily want subworkflows.
-
-    # rootgraph.attr(rankdir='LR') # When --graph_inline_depth 1, this usually looks better.
-    with rootgraph.subgraph(name=f'cluster_{yaml_path}') as subgraph_gv:
-        # get the label (if any) from the workflow
-        # The root's own `wic: graphviz:` label, read from the document that
-        # is compiled.
-        root = bundle.parsed.document
-        drawn = dict(root.sidecar.entries).get('graphviz') if root and root.sidecar else None
-        label = drawn.get('label', yaml_path) if isinstance(drawn, dict) else yaml_path
-        subgraph_gv.attr(label=label)
-        subgraph_gv.attr(color='lightblue')  # color of cluster subgraph outline
-        subgraph_nx = nx.DiGraph()
-        graphdata = GraphData(yaml_path)
-        subgraph = GraphReps(subgraph_gv, subgraph_nx, graphdata)
-
-        try:
-            result = compiler.compile_source(
-                bundle, compiler_options, graph_settings,
-                relative_run_path=True, testing=False, graph_target=subgraph)
-            analyses = realtime.compile_analyses(result.realtime, yml_paths, tools_cwl,
-                                                 compiler_options, graph_settings)
-        except SophiosError:
-            # The library reports; only this adapter is allowed to exit. The
-            # banner has to stay: this arm intercepts failures that used to
-            # reach the handler below, and a message naming neither the
-            # workflow nor the file is a worse error than the one it replaced.
-            # `main()` prints the diagnostics, in the form asked for. No
-            # traceback file, though: a reported failure is not a crash.
-            print('Failed to compile', yaml_path, file=sys.stderr)
-            raise
-        # The resolved language version is reported on every compile, not
-        # only on failure — nobody should have to guess which language their
-        # file was read as.
-        print('Sophios lang_version:', result.lang_version)
-    return rootgraph, result, analyses
+                             compiler_options: CompilerOptions
+                             ) -> tuple[CompilationResult, tuple[realtime.Analysis, ...]]:
+    """Compile to a graph-derived result, and each real-time analysis it declares."""
+    try:
+        result = compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=False)
+        analyses = realtime.compile_analyses(result.realtime, yml_paths, tools_cwl, compiler_options)
+    except SophiosError:
+        # The library reports; only this adapter is allowed to exit. The
+        # banner has to stay: this arm intercepts failures that used to
+        # reach the handler below, and a message naming neither the
+        # workflow nor the file is a worse error than the one it replaced.
+        # `main()` prints the diagnostics, in the form asked for. No
+        # traceback file, though: a reported failure is not a crash.
+        print('Failed to compile', yaml_path, file=sys.stderr)
+        raise
+    # The resolved language version is reported on every compile, not
+    # only on failure — nobody should have to guess which language their
+    # file was read as.
+    print('Sophios lang_version:', result.lang_version)
+    return result, analyses
 
 
 #: Flags that rewrite the CWL Sophios compiled. A plain CWL workflow is not
@@ -173,13 +143,18 @@ def _is_plain_cwl_workflow(path: Path) -> bool:
     return not any(tag.startswith('!') for tag in _tags(root))
 
 
-def _draw(rootgraph: graphviz.Digraph | None, cwl_path: str, yaml_stem: str) -> None:
-    """`--graphviz`: Sophios's drawing of the graph it compiled, if it compiled one, and cwltool's of `cwl_path`."""
+def _draw(rootgraph: graphviz.Digraph | None, cwl_path: str, yaml_stem: str) -> Diagnostics:
+    """`--graphviz`: Sophios's drawing of the graph it compiled, if it compiled one, and cwltool's of `cwl_path`.
+
+    Returns:
+        Diagnostics: A note when `dot` is not installed and nothing was drawn.
+    """
     if not shutil.which('dot'):
-        print("Warning: Cannot generate graphviz diagrams because the `dot` executable was not found.")
-        print("(This may happen if you installed the graphviz python package")
-        print("but not the graphviz system package.)")
-        return
+        notes = Diagnostics()
+        notes.note(SophiosErrorCode.PROGRAM_MISSING,
+                   '--graphviz needs the dot program, which is not on PATH: install Graphviz '
+                   '(conda install -c conda-forge graphviz); the workflow is compiled without the drawing.')
+        return notes
     if rootgraph is not None:
         # Not rootgraph.render(): it saves the png beside the original yaml_path.
         rootgraph.save(f'autogenerated/{yaml_stem}.wic.gv')
@@ -189,6 +164,42 @@ def _draw(rootgraph: graphviz.Digraph | None, cwl_path: str, yaml_stem: str) -> 
     # For comparison, the built-in cwltool graphiz support generates a visual abomination:
     cmdline = f'cwltool_filterlog --print-dot {cwl_path} | dot -Tsvg > autogenerated/{yaml_stem}.svg'
     sub.run(cmdline, shell=True, capture_output=True, check=False)
+    return Diagnostics()
+
+
+def _is_local_run(args: argparse.Namespace) -> bool:
+    """Whether the command runs the workflow on this machine, or prepares to: `--run_local`,
+    `--generate_run_script` and `--check`.
+
+    The one place that decides who gets the pre-flight. It asks what this machine has (a container
+    engine, paths, programs), so a compute submission, which runs elsewhere, never gets it.
+    """
+    return bool(args.run_local or args.generate_run_script or args.check)
+
+
+def _preflight(args: argparse.Namespace, documents: list[Path], jobs: tuple[preflight.Job, ...]) -> bool:
+    """Check what a local run of `documents` needs from this machine, and pull its images.
+
+    Returns:
+        bool: Whether the run goes on. `--check` stops after the checks, having pulled nothing.
+    """
+    settings = _run_settings(args)
+    if not args.check:
+        preflight.prepare(documents, settings, jobs)
+        return True
+    preflight.check(preflight.needs(documents, jobs), settings)
+    print(f'Checked {documents[0]}: nothing in the way of a local run on this machine. '
+          'Nothing was pulled or run.')
+    return False
+
+
+def _run_settings(args: argparse.Namespace) -> preflight.RunSettings:
+    """The pre-flight's view of the run the arguments ask for."""
+    writes = ((Path(args.outdir), "the run's outputs", 'give --outdir a directory you can write to'),) \
+        if args.outdir else ()
+    return preflight.RunSettings(args.container_engine, args.pull_dir, ignore_install=args.ignore_docker_install,
+                                 ignore_processes=args.ignore_docker_processes, runner=args.cwl_runner,
+                                 run_script=args.generate_run_script, writes=writes)
 
 
 def _run(args: argparse.Namespace, unknown_args: list[str], workflow_name: str,
@@ -235,17 +246,18 @@ def _pass_through(args: argparse.Namespace, unknown_args: list[str]) -> None:
     job = (str(Path(args.inputs_file).absolute()),) if args.inputs_file else ()
     if args.graphviz:
         Path('autogenerated').mkdir(parents=True, exist_ok=True)
-        _draw(None, str(workflow), workflow.stem)
-    if args.run_local or args.generate_run_script:
-        pc.verify_container_engine_config(args.container_engine, args.ignore_docker_install,
-                                          ignore_container_processes=args.ignore_docker_processes)
-        pc.cwl_docker_extract(args.container_engine, args.pull_dir, workflow)
+        _report(_draw(None, str(workflow), workflow.stem), args.diagnostics)
+    if _is_local_run(args):
+        jobs = (preflight.Job(io.read_inputs_file(args.inputs_file), Path(args.inputs_file).parent.absolute(),
+                              '--inputs_file'),) if args.inputs_file else ()
+        if not _preflight(args, [workflow], jobs):
+            return
         Path('autogenerated').mkdir(parents=True, exist_ok=True)
         _run(args, unknown_args, workflow.stem, documents=(str(workflow), *job))
     elif args.generate_cwl_workflow:
         print(f'{args.yaml} is a CWL workflow; with --allow_raw_cwl it is used as it is, and nothing is written')
     else:
-        print('Please specify either --generate_cwl_workflow (compile) or --run_local (run)')
+        print('Please specify either --generate_cwl_workflow (compile), --check or --run_local (run)')
         sys.exit(1)
 
 
@@ -347,9 +359,7 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     compiler_options, graph_settings = cli.get_dicts_for_compilation(args)
     compiler_options['inference_rules'] = global_config.get('inference_rules', {})
     compiler_options['renaming_conventions'] = global_config.get('renaming_conventions', [])
-    rootgraph, compilation, analyses = _compile_loaded_document(
-        yaml_path, bundle, yml_paths, tools_cwl,
-        compiler_options, graph_settings)
+    compilation, analyses = _compile_loaded_document(yaml_path, bundle, yml_paths, tools_cwl, compiler_options)
     _report(compilation.diagnostics, args.diagnostics)
     root_dir = Path(args.yaml).parent.absolute()
     artifact = compilation.artifact
@@ -367,25 +377,31 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
                                        runtag=args.cwl_inline_runtag)
 
     if args.graphviz:
-        _draw(rootgraph, f'autogenerated/{yaml_stem}.cwl', yaml_stem)
+        _report(_draw(drawing.draw(compilation, bundle, graph_settings, yaml_path),
+                      f'autogenerated/{yaml_stem}.cwl', yaml_stem), args.diagnostics)
 
-    if args.run_local or args.generate_run_script:
-        # verify container_engine install and config
-        pc.verify_container_engine_config(args.container_engine, args.ignore_docker_install,
-                                          ignore_container_processes=args.ignore_docker_processes)
-        # Only now we need to write the final cwl for docker-extract
-        # and then for actually running using a cwl_runner
+    if _is_local_run(args):
+        # The pre-flight reads the CWL the runner will get, so it is written first.
         basepath = 'autogenerated'
+        # As the runner gets them, in which an output-target Directory is a name for the run to create.
+        bound = normalize_artifact_job_inputs(artifact, artifact.job_inputs)
+        # The runner reads the job from `basepath`, so a relative path is written absolute: read beside the workflow.
+        artifact = replace(artifact, job_inputs=io.absolute_paths(bound, root_dir))
         io.write_artifacts_to_disk(artifact, Path(basepath), True, args.inputs_file)
         plans = realtime.write(analyses, Path(basepath), artifact.name, root_dir)
-        # extract the container images, the real-time analyses' too: they run with --disable-pull
-        for document in (Path(basepath) / f'{yaml_stem}.cwl', *realtime.documents(analyses, Path(basepath))):
-            pc.cwl_docker_extract(args.container_engine, args.pull_dir, document)
+        # Check the machine, then pull the container images, the real-time analyses' too: they run with --disable-pull
+        extra = io.read_inputs_file(args.inputs_file) if args.inputs_file else {}
+        # --inputs_file wins over a `!ii` value of the same input when the job is written.
+        jobs = (preflight.Job({key: value for key, value in bound.items() if key not in extra},
+                              root_dir, 'the workflow'),
+                *((preflight.Job(extra, Path(args.inputs_file).parent.absolute(), '--inputs_file'),)
+                  if args.inputs_file else ()))
+        if not _preflight(args, [Path(basepath) / f'{yaml_stem}.cwl', *realtime.documents(analyses, Path(basepath))],
+                          jobs):
+            return
         if args.docker_remove_entrypoints:
             artifact = pc.remove_artifact_entrypoints(args.container_engine, artifact)
             plans = realtime.write(realtime.without_entrypoints(analyses), Path(basepath), artifact.name, root_dir)
-        # stage input files for run
-        pc.stage_input_files(artifact.job_inputs, root_dir, basepath)
         # No need to re-write to disk as nothing of the cwl or yaml_inputs has changed!
         _run(args, unknown_args, artifact.name, run_local.output_directories(compilation.graph),
              realtime_plans=plans)
@@ -394,7 +410,7 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
         io.write_artifacts_to_disk(artifact, Path('autogenerated/'), True, args.inputs_file)
         realtime.write(analyses, Path('autogenerated'), artifact.name, root_dir)
     else:
-        print('Please specify either --generate_cwl_workflow (compile) or --run_local (run)')
+        print('Please specify either --generate_cwl_workflow (compile), --check or --run_local (run)')
         sys.exit(1)
 
 

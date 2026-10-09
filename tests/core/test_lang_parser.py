@@ -37,12 +37,13 @@ from sophios.lang import (
     parse,
 )
 from sophios.lang.spans import SourceSpan
-from sophios.utils_yaml import Key, wic_loader
+from sophios.utils_yaml import Key
 
 from . import provocations
 from .budgets import budget
 from .wic_corpus import CORPUS, corpus_id
 from .strategies import documents, identifiers
+from .wic_reading import YamlWithSophiosTagsOpaque
 
 FAST = budget(200)
 
@@ -504,8 +505,8 @@ def test_a_named_entry_reports_what_the_mapping_form_reports(claim: str, source:
 
 
 #: A tag on a node that makes up the document's *structure*, rather than on a
-#: key or an input value. The loader rejects every one, so accepting them is the
-#: specification being more permissive than the thing it specifies.
+#: key or an input value. `yaml.SafeLoader` rejects every one, so accepting them
+#: is the specification being more permissive than the YAML it is written in.
 STRUCTURAL_TAGS: Final = (
     ('the root document', '--- !foo\nsteps: []\n'),
     ('the steps: node', 'steps: !foo {}\n'),
@@ -531,14 +532,14 @@ def test_an_unknown_tag_on_a_structural_node_is_reported(claim: str, source: str
     each pass over that form found positions the previous one had left
     uncovered. One walk over the composed graph has no positions to track, so a
     shape added later is covered by default. Each case asserts both halves — the
-    parser reports and the loader raises — since the failure here is the parser
-    being more permissive than the thing it specifies.
+    parser reports and `yaml.SafeLoader` raises — since the failure here is the
+    parser being more permissive than the YAML it is written in.
     """
     result = parse(source, 'tagged.wic')
     assert not result.ok, claim
     assert SophiosErrorCode.UNKNOWN_TAG in [d.code for d in result.diagnostics], claim
     with pytest.raises(yaml.YAMLError):
-        yaml.load(source, Loader=wic_loader())
+        yaml.load(source, Loader=YamlWithSophiosTagsOpaque)
 
 
 @pytest.mark.fast
@@ -770,11 +771,11 @@ def test_python_api_writes_nested_workflows_this_parser_accepts(tmp_path: Path) 
         assert result.ok, (path.name, [str(d) for d in result.diagnostics])
 
 # --------------------------------------------------------------------------
-# The parser is never more permissive than the loader
+# The parser is never more permissive than YAML
 # --------------------------------------------------------------------------
 #
-# The loader rejects unknown tags with ConstructorError; a syntax layer that
-# silently accepted them would specify a superset of the language. Both
+# `yaml.SafeLoader` rejects unknown tags with ConstructorError; a syntax layer
+# that silently accepted them would specify a superset of the language. Both
 # escapes found so far are pinned, plus the agreement property.
 
 
@@ -805,15 +806,17 @@ def test_unknown_tags_report_wic009(source: str) -> None:
 @FAST
 @example('!: :')      # unknown tag on a mapping *key* — the position that was missed
 @example('!foo x: y')  # the same, spelled legibly
-@example('!!: :')     # a core tag with an empty suffix, which the loader cannot construct
+@example('!!: :')     # a core tag with an empty suffix, which YAML cannot construct
 @example('a: !!str [a]')  # a core tag on the wrong node kind
 @example('a: !!int')  # a core number tag over an empty value, which raises IndexError
 @example('a: !!int abc')  # a core tag over a value its constructor cannot read
-def test_parser_is_not_more_permissive_than_the_loader(text: str) -> None:
-    """Any document the parser accepts without diagnostics, the loader loads.
+def test_parser_is_not_more_permissive_than_yaml(text: str) -> None:
+    """Any document the parser accepts without diagnostics, `yaml.SafeLoader`
+    loads with the Sophios tags opaque.
 
-    The reverse is allowed — the parser recovers where the loader raises — but
-    this direction is the specification's half of the bargain.
+    The reverse is allowed — the parser reports what YAML accepts as an opaque
+    tag's text (`!ii 2020-13-45` is wic009) — but this direction is the
+    specification's half of the bargain.
 
     The pinned cases are tags in key position. The property found `!: :` on
     its own, months after the tag rule was written, because the alphabet only
@@ -823,13 +826,13 @@ def test_parser_is_not_more_permissive_than_the_loader(text: str) -> None:
     """
     result = parse(text, 'agree.wic')
     if result.ok and result.document is not None:
-        yaml.load(text, Loader=wic_loader())  # must not raise
+        yaml.load(text, Loader=YamlWithSophiosTagsOpaque)  # must not raise
 
 
 @pytest.mark.fast
 @pytest.mark.parametrize('source', ['!!: :', '!!foo: 1', 'k: !!foo 1', 'k: !<tag:example.com,2000:x> 1'])
-def test_a_yaml_tag_the_loader_cannot_construct_is_unknown_tag(source: str) -> None:
-    """`!!` spellings with no constructor are rejected by the loader, so by the parser too."""
+def test_a_yaml_tag_yaml_cannot_construct_is_unknown_tag(source: str) -> None:
+    """`!!` spellings with no constructor are rejected by `yaml.SafeLoader`, so by the parser too."""
     with pytest.raises(yaml.YAMLError):
         yaml.safe_load(source)
     result = parse(source, 'x.wic')
@@ -844,17 +847,17 @@ def test_a_yaml_tag_the_loader_cannot_construct_is_unknown_tag(source: str) -> N
     'a: !!int', 'a: !!int ""', 'a: !!float ""',
     'a: !!omap [{b: !!int x}]', 'a: !!pairs [{b: {c: !!bool x}}]', 'a: !!set {x: [!!int y]}',
 ])
-def test_a_core_tag_the_loader_cannot_build_is_reported(source: str) -> None:
-    """A tag the loader knows can still fail on its node; the parser reports it, never raises."""
+def test_a_core_tag_yaml_cannot_build_is_reported(source: str) -> None:
+    """A tag YAML knows can still fail on its node; the parser reports it, never raises."""
     with pytest.raises((yaml.YAMLError, ValueError, KeyError, AttributeError, IndexError)):
-        yaml.load(source, Loader=wic_loader())
+        yaml.safe_load(source)
     result = parse(source, 'x.wic')
     assert [d.code for d in result.diagnostics] == [SophiosErrorCode.UNKNOWN_TAG], source
 
 
 @pytest.mark.fast
 @given(st.sampled_from(['010', '0x1A', '2020-01-01', '.inf', '12:30', 'true', 'null', '3.14', 'plain']))
-def test_passthrough_scalars_resolve_exactly_as_the_loader(text: str) -> None:
+def test_passthrough_scalars_resolve_exactly_as_yaml(text: str) -> None:
     """Scalar resolution is delegated to PyYAML, not re-implemented.
 
     A hand-written table diverged on every one of these; delegation makes the
@@ -1021,17 +1024,6 @@ def test_an_empty_sidecar_wrapper_beside_siblings_is_an_empty_mapping() -> None:
 
 
 @pytest.mark.fast
-def test_the_loader_accepts_every_owned_tag() -> None:
-    """`!cwl` is registered with the loader like its three siblings.
-
-    The agreement property below quantifies over this; the targeted case is
-    pinned so a regression names itself instead of surfacing as a fuzz flake.
-    """
-    loaded = yaml.load('a: !cwl step/out\n', Loader=wic_loader())
-    assert loaded == {'a': {'wic_raw_cwl': 'step/out'}}
-
-
-@pytest.mark.fast
 @pytest.mark.parametrize('source', ['top: &a [*a]\n',
                                     'steps: &a\n- id: s\n  in:\n    x: *a\n',
                                     'wic: &w\n  steps:\n    (1, a):\n      wic: *w\n'],
@@ -1147,14 +1139,14 @@ def adversarial_yaml(draw: st.DrawFn) -> str:
 @example('wic: &w\n  steps:\n    (1, a):\n      wic: *w\n')  # cycle via sidecar
 @example('_: !& []\n')                                    # name tag on a collection
 @example('_: !foo bar\n')                                 # unknown tag, passthrough
-@example('a: !cwl b\n')                                   # the once-missing loader constructor
+@example('a: !cwl b\n')                                   # an owned tag on passthrough
 @example('_: !ii {k: v}\n')                               # collection literal, single wrap
 @FAST
 def test_parsing_is_total_for_adversarial_structure(text: str) -> None:
     """The other half of totality: over real YAML structure — aliases, cycles,
     unknown tags, nesting — and not over text alone.
 
-    Never raises; never accepts silently what the loader rejects; and never
+    Never raises; never accepts silently what YAML rejects; and never
     reports the same problem twice — several parse paths legitimately visit
     the same node, and duplicate (code, span, message) reports were a
     measured regression once already.
@@ -1166,7 +1158,7 @@ def test_parsing_is_total_for_adversarial_structure(text: str) -> None:
     assert len(reports) == len(set(reports)), f'duplicate diagnostics: {reports}'
 
     if result.ok and result.document is not None:
-        yaml.load(text, Loader=wic_loader())  # agreement holds here too
+        yaml.load(text, Loader=YamlWithSophiosTagsOpaque)  # agreement holds here too
 
 
 @pytest.mark.fast
@@ -1537,14 +1529,14 @@ def test_a_record_with_a_default_or_value_from_needs_no_source(body: str) -> Non
     'x: &m {p: 1}\na: !cwl {<<: *m, q: 2}\n',
 ], ids=['flow', 'block', 'sequence', 'cwl'])
 def test_yaml_merge_keys_are_not_wic009(source: str) -> None:
-    """A merge key is valid YAML, and the loader builds it; the parser agrees."""
+    """A merge key is valid YAML, and `yaml.SafeLoader` builds it; the parser agrees."""
     assert not any(d.code is SophiosErrorCode.UNKNOWN_TAG for d in parse(source, 'm.wic').diagnostics)
-    yaml.load(source, Loader=wic_loader())
+    yaml.load(source, Loader=YamlWithSophiosTagsOpaque)
 
 
 @pytest.mark.fast
 def test_a_record_applies_its_merge_keys() -> None:
-    """The loader merges `<<` in a `!cwl` record, so the record has the merged field, not a field called `<<`."""
+    """YAML merges `<<` in a `!cwl` record, so the record has the merged field, not a field called `<<`."""
     source = 'd: &d {default: 1}\nsteps:\n  s:\n    in:\n      f: !cwl {<<: *d}\n'
     result = parse(source, 'm.wic')
     assert result.ok, [str(d) for d in result.diagnostics]
@@ -1557,7 +1549,7 @@ def test_a_record_applies_its_merge_keys() -> None:
     'a: {<<: !!str s}\n',
 ], ids=['scalar', 'sequence', 'str'])
 def test_bad_yaml_merge_is_one_wic009(source: str) -> None:
-    """A merge the loader rejects is reported once, at the value it cannot merge, as a merge."""
+    """A merge YAML rejects is reported once, at the value it cannot merge, as a merge."""
     messages = [d.message for d in parse(source, 'm.wic').diagnostics if d.code is SophiosErrorCode.UNKNOWN_TAG]
     assert len(messages) == 1 and 'merg' in messages[0], messages
 
@@ -1584,8 +1576,8 @@ def test_an_undefined_core_tag_is_named_as_unknown() -> None:
     'steps:\n  s:\n    in:\n      f: !ii [!!merge x]\n',
     'steps:\n  s:\n    in:\n      f: !cwl {<<: b}\n',
 ])
-def test_a_merge_the_loader_cannot_build_is_reported(src: str) -> None:
-    """A merge key or merge scalar the loader cannot build is one wic009, worded as a merge."""
+def test_a_merge_yaml_cannot_build_is_reported(src: str) -> None:
+    """A merge key or merge scalar YAML cannot build is one wic009, worded as a merge."""
     result = parse(src, 'p.wic')
     messages = [d.message for d in result.diagnostics if d.code is SophiosErrorCode.UNKNOWN_TAG]
     assert len(messages) == 1 and 'merg' in messages[0], messages
@@ -1598,16 +1590,16 @@ def test_a_merge_the_loader_cannot_build_is_reported(src: str) -> None:
     'x: &m {p: 1}\ny: &n {p: 3, r: 4}\na: {<<: [*m, *n]}\n',
     'x: &m {p: 1, r: 2}\ny: &n {<<: *m, r: 3}\na: {<<: *n, s: 4}\n',
 ], ids=['merge', 'override', 'earlier-wins', 'nested'])
-def test_a_merge_builds_what_the_loader_builds(source: str) -> None:
-    """Passthrough holds the merged mapping, as the loader builds it, and no `<<` key."""
+def test_a_merge_builds_what_yaml_builds(source: str) -> None:
+    """Passthrough holds the merged mapping, as YAML builds it, and no `<<` key."""
     result = parse(source, 'm.wic')
     assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
-    assert dict(result.document.passthrough)['a'] == yaml.load(source, Loader=wic_loader())['a']
+    assert dict(result.document.passthrough)['a'] == yaml.safe_load(source)['a']
 
 
 @pytest.mark.fast
 def test_an_inline_input_applies_its_merge_keys() -> None:
-    """`!ii {<<: *d, q: 2}` is the merged mapping the loader builds, not one with a `<<` key."""
+    """`!ii {<<: *d, q: 2}` is the merged mapping YAML builds, not one with a `<<` key."""
     result = parse('d: &d {p: 1}\nsteps:\n  s:\n    in:\n      f: !ii {<<: *d, q: 2}\n', 'm.wic')
     assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
     literal = result.document.steps[0].input('f')
@@ -1627,12 +1619,18 @@ def test_a_step_in_applies_its_merge_keys(body: str, names: list[str]) -> None:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('source', ['!ii a: b\n', 'steps:\n  s:\n    in:\n      !* e: x\n'])
-def test_a_sophios_tag_the_loader_cannot_use_as_a_key_is_wic009(source: str) -> None:
-    """The loader builds a Sophios tag to a mapping, which cannot be a key."""
-    with pytest.raises(yaml.YAMLError):
-        yaml.load(source, Loader=wic_loader())
-    assert [d.code for d in parse(source, 'k.wic').diagnostics] == [SophiosErrorCode.UNKNOWN_TAG]
+@pytest.mark.parametrize('source, tag', [
+    ('!ii a: b\n', '!ii'),
+    ('steps:\n  s:\n    in:\n      !ii a: b\n', '!ii'),
+    ('steps:\n  s:\n    in:\n      !* a: x\n', '!*'),
+    ('requirements:\n  !cwl a: b\n', '!cwl'),
+], ids=['top', 'input', 'edge', 'passthrough'])
+def test_a_sophios_tag_on_a_key_is_wic005(source: str, tag: str) -> None:
+    """YAML admits a tagged key; a key in the language is a name, so the tag belongs on the value."""
+    yaml.compose(source, Loader=yaml.SafeLoader)  # valid YAML
+    assert [(d.code, d.message) for d in parse(source, 'k.wic').diagnostics] == [
+        (SophiosErrorCode.EXPECTED_SCALAR,
+         f'a mapping key is a name and takes no tag; {tag} belongs on the value, as in `a: {tag} <value>`')]
 
 
 @pytest.mark.fast
@@ -1640,31 +1638,40 @@ def test_a_sophios_tag_the_loader_cannot_use_as_a_key_is_wic009(source: str) -> 
     'd: &d {p: 1, r: 2}\na: {<<: *d, z: 0, p: 3}\n',
     'd: &d {p: 1}\ne: &e {r: 2, p: 4}\na: {z: 0, <<: [*d, *e], r: 5}\n',
 ], ids=['override', 'list'])
-def test_a_merged_mapping_keeps_the_loaders_key_order(source: str) -> None:
-    """A key merged in and then overridden keeps its merged place, as in the loader's dict."""
+def test_a_merged_mapping_keeps_yamls_key_order(source: str) -> None:
+    """A key merged in and then overridden keeps its merged place, as in the dict YAML builds."""
     result = parse(source, 'm.wic')
     assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
     built = dict(result.document.passthrough)['a']
-    loaded = yaml.load(source, Loader=wic_loader())['a']
+    loaded = yaml.safe_load(source)['a']
     assert isinstance(built, dict) and list(built.items()) == list(loaded.items())
 
 
 @pytest.mark.fast
-def test_merged_steps_run_in_the_loaders_order() -> None:
-    """`steps:` built with `<<` lists its steps in the order the loader gives them."""
+def test_merged_steps_run_in_yamls_order() -> None:
+    """`steps:` built with `<<` lists its steps in the order YAML gives them."""
     source = ('d: &d {p: {in: {x: !ii 1}}, r: {in: {x: !ii 2}}}\n'
               'steps: {<<: *d, a: {in: {x: !ii 0}}, p: {in: {x: !ii 3}}}\n')
     result = parse(source, 'm.wic')
     assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
-    assert [step.id for step in result.document.steps] == list(yaml.load(source, Loader=wic_loader())['steps'])
+    assert [step.id for step in result.document.steps] == list(
+        yaml.load(source, Loader=YamlWithSophiosTagsOpaque)['steps'])
 
 
 @pytest.mark.fast
-def test_an_inline_input_the_loader_reads_as_text_stays_text() -> None:
-    """`!ii 2020-13-45` is no date; the loader keeps the text, and so does the parser."""
-    source = 'steps:\n  s:\n    in:\n      f: !ii 2020-13-45\n'
-    assert yaml.load(source, Loader=wic_loader())['steps']['s']['in']['f'] == {Key.INLINE_INPUT: '2020-13-45'}
-    result = parse(source, 'd.wic')
+@pytest.mark.parametrize('value', ['2020-13-45', '!ii 2020-13-45'], ids=['plain', 'inline'])
+def test_an_inline_input_yaml_cannot_read_is_what_the_plain_value_is(value: str) -> None:
+    """`!ii 2020-13-45` is read as YAML reads `2020-13-45`, which is no date."""
+    diagnostics = parse(f'steps:\n  s:\n    in:\n      f: {value}\n', 'd.wic').diagnostics
+    assert [(d.code, d.message, d.span.start_line if d.span else None) for d in diagnostics] == [
+        (SophiosErrorCode.UNKNOWN_TAG, 'YAML cannot read this value as timestamp', 4)]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('value', ["!ii '2020-13-45'", '!ii "2020-13-45"'], ids=['single', 'double'])
+def test_a_quoted_inline_input_yaml_cannot_read_is_its_text(value: str) -> None:
+    """Quoting is how a literal says it is text, so a quoted `!ii` YAML cannot read stays text."""
+    result = parse(f'steps:\n  s:\n    in:\n      f: {value}\n', 'd.wic')
     assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
     literal = result.document.steps[0].input('f')
     assert isinstance(literal, InlineLiteral) and literal.value == '2020-13-45'

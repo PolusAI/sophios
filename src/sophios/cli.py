@@ -119,6 +119,10 @@ parser.add_argument('--partial_failure_success_codes_range', nargs=2, type=int, 
 group_run = parser.add_mutually_exclusive_group()
 group_run.add_argument('--generate_run_script', default=False, action="store_true",
                        help='Just generates run.sh and exits. Does not actually invoke ./run.sh')
+group_run.add_argument('--check', default=False, action="store_true",
+                       help='''Compile the workflow and check that this machine can run it (the container engine
+                       when a step uses a container, the input paths, the directories Sophios writes, the programs
+                       it calls), then stop: nothing is pulled and nothing is run.''')
 group_run.add_argument('--run_local', default=False, action="store_true",
                        help='After generating the cwl file(s), run it on your local machine.')
 group_run.add_argument('--generate_cwl_workflow', required=False, default=False, action="store_true",
@@ -154,7 +158,8 @@ parser.add_argument('--graphviz', default=False, action="store_true",
 parser.add_argument('--graph_label_edges', default=False, action="store_true",
                     help='Label the graph edges with the name of the intermediate input/output.')
 parser.add_argument('--graph_label_stepname', default=False, action="store_true",
-                    help='Prepend the step name to each step node.')
+                    help='Label each step node with its generated step name instead of its id '
+                    'or its wic: graphviz: label.')
 parser.add_argument('--graph_show_inputs', default=False, action="store_true",
                     help='Add nodes to the graph representing the workflow inputs.')
 parser.add_argument('--graph_show_outputs', default=False, action="store_true",
@@ -207,8 +212,8 @@ def get_known_and_unknown_args(
     return parser.parse_known_args(_argv(yaml_path, suppliedargs))
 
 
-def default_compilation_settings() -> tuple[CompilerOptions, GraphSettings]:
-    """The settings a compilation runs with when nobody has chosen otherwise.
+def default_compilation_settings() -> CompilerOptions:
+    """The options a compilation runs with when nobody has chosen otherwise.
 
     This is what a library caller wants — the Python API, the schema
     generator, a real-time analysis — and it exists so that asking for defaults
@@ -218,11 +223,11 @@ def default_compilation_settings() -> tuple[CompilerOptions, GraphSettings]:
     from one place, the parser's own `default=` values; only the fiction is
     gone.
     """
-    return get_dicts_for_compilation(get_args())
+    return get_dicts_for_compilation(get_args())[0]
 
 
 def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions, GraphSettings]:
-    """Split parsed command-line arguments into the two dicts compilation needs.
+    """Split parsed command-line arguments into the compiler's options and the drawing's settings.
 
     The adapter at the CLI boundary, and the only function here that takes an
     `argparse.Namespace`. Arguments are parsed once, converted here, and
@@ -251,7 +256,7 @@ def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions
         'renaming_conventions': [],
     }
 
-    # to be given to graph util functions
+    # for drawing.draw, after the compile
     graph_settings: GraphSettings = {
         'graph_dark_theme': args.graph_dark_theme,
         'graph_inline_depth': args.graph_inline_depth,

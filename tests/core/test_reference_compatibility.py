@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, Final
 
 import pytest
-import yaml
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -16,13 +15,13 @@ from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.versions import KNOWN_VERSIONS
 from sophios.utils_cwl import desugar_into_canonical_normal_form
-from sophios.utils_yaml import wic_loader
 from sophios.wic_types import StepId, Tool, Tools, Yaml
 
 from .synthetic_tools import clt
 
 from .hermetic import ORACLE, compile_hermetic
 from .reference_model import ReferenceExpectation, reference_expectation
+from .wic_reading import read_wic
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
@@ -269,7 +268,7 @@ def test_echo_multi_scatter_keeps_any_at_the_cwl_boundary() -> None:
     """The exact tutorial that exposed the old matcher's Any false positive."""
     path = REPO_ROOT / 'docs/tutorials/echo_multi_scatter.wic'
     document = desugar_into_canonical_normal_form(
-        yaml.load(path.read_text(encoding='utf-8'), Loader=wic_loader()))
+        read_wic(path.read_text(encoding='utf-8'), path.name))
     tools: Tools = {
         StepId('array_indices', 'global'): Tool(
             '/synthetic/array_indices.cwl',

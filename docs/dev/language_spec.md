@@ -247,20 +247,19 @@ Within the YAML surface, every Sophios-owned construct has a **tagged** form and
 | Raw CWL reference | `!cwl expr` | `{wic_raw_cwl: expr}` |
 | Step-input record | `!cwl {source: [!* a, b]}` | `{wic_raw_cwl: {source: [{wic_alias: a}, b]}}` |
 
-The desugared form exists for a specific reason: a YAML constructor that re-emitted
-its own tag would fire again when the document is reloaded, so the loader would not
-be idempotent. `sophios.lang.to_json` produces the desugared spelling, and the
-editor schema (section 4) describes it.
+The desugared form is plain YAML, with no tags, so a tool that cannot write YAML
+tags, or a JSON consumer, can still spell every construct. `sophios.lang.to_json`
+produces the desugared spelling, and the editor schema (section 4) describes it.
 
 **Both spellings are written by hand.** Every layer Sophios exposes is meant to be
 one a person can read and edit, and that includes the document a tool just emitted.
 Neither spelling is a lesser citizen.
 
-The syntax layer is stricter than the YAML loader, and may never be more permissive.
-An unknown tag (`!foo`) is `wic009`, which the loader has always rejected too. `!&`
-in any position other than an `out:` entry is `wic019`, although the loader accepts
-it (`anchor_constructor` is registered unconditionally): it is a known tag in a
-position with no meaning.
+The syntax layer reads YAML with `yaml.SafeLoader`, and may never be more permissive
+than it: what YAML cannot read is an error here too. The Sophios tags mean what this
+specification says, and nothing else decides them. An unknown tag (`!foo`) is
+`wic009`. `!&` in any position other than an `out:` entry is `wic019`: it is a known
+tag in a position with no meaning.
 
 ### 2.1 `wic_` in construct position
 
@@ -404,10 +403,10 @@ Codes are contract: a caller matches on `SophiosErrorCode`, suppresses a code, o
 reads it out of a log, while message wording is free to improve. The enum is
 `sophios.lang.error_codes.SophiosErrorCode`, in two ranges: `wic0NN` for a
 document (it said something the language does not accept) or what running it needs from the machine (kind
-`machine`, such as `wic015`, `wic016` and `wic021`) and `api0NN` for
+`machine`, such as `wic015`, `wic016`, `wic021`, `wic029` and `wic037`) and `api0NN` for
 the Python API (the document is fine, the call was not). A code is never renumbered,
 and a code that shipped in a release is never reused; a number that never shipped is
-free. `wic029`, `wic037`, `wic040` and `wic041` are unassigned. `wic042` and `wic043` are notes, which report without failing the
+free. `wic040` and `wic041` are unassigned. `wic042` and `wic043` are notes, which report without failing the
 compile, and errors under `--inference_strict`.
 
 Every member is provoked in `tests/core/provocations.py`, in one of two tiers:
@@ -450,6 +449,7 @@ every member has an `Explanation` in `EXPLANATIONS` (kind, meaning, fix);
 | `wic026` | `DUPLICATE_EDGE_DEF` | `COMPILED` |
 | `wic027` | `EMPTY_NAME` | `COMPILED` |
 | `wic028` | `UNDECLARED_PORT` | `COMPILED` |
+| `wic029` | `PROGRAM_MISSING` | `COMPILED` |
 | `wic030` | `RECURSIVE_ALIAS` | `PARSE` |
 | `wic031` | `DUPLICATE_DOCUMENT_NAME` | `COMPILED` |
 | `wic032` | `UNKNOWN_SCATTER_PORT` | `COMPILED` |
@@ -457,6 +457,7 @@ every member has an `Explanation` in `EXPLANATIONS` (kind, meaning, fix);
 | `wic034` | `MALFORMED_WIC_VALUE` | `PARSE` |
 | `wic035` | `UNSUPPORTED_CWL_VERSION` | `PARSE` |
 | `wic036` | `UNTYPED_OUTPUT` | `COMPILED` |
+| `wic037` | `IMAGE_UNAVAILABLE` | `COMPILED` |
 | `wic038` | `STEP_INPUT_RECORD` | `PARSE` |
 | `wic039` | `POSITIONAL_OUTPUT_SOURCE` | `COMPILED` |
 | `wic042` | `INFERENCE_TIE` | `COMPILED` |

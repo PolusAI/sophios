@@ -30,7 +30,7 @@ from typing import Any, Callable, Final
 import yaml
 from hypothesis.strategies import SearchStrategy
 
-from sophios.utils_yaml import Key, wic_loader
+from sophios.utils_yaml import Key
 from sophios.wic_types import Yaml
 
 from .ast_strategies import partitionings
@@ -67,12 +67,11 @@ def _identity(document: Yaml) -> Yaml:
 
 
 def _text_roundtrip(document: Yaml) -> Yaml:
-    """Serialise, then parse through the compiler's own loader.
+    """Serialise, then read back with `yaml.SafeLoader`.
 
     This is what every user does between writing a `.wic` file and running
-    `sophios --graph`, and it is the mechanism `to_yml` itself relies on
-    (`ast_strategies.py`) — so a divergence here would mean the generator's own
-    round trip is unsound, not just this rewrite.
+    `sophios --graph`. The document is in the desugared spelling, which is
+    plain YAML with no tags, so YAML alone reads it back.
 
     `sort_keys=False`: `yaml.safe_dump`'s default sorts mapping keys
     alphabetically, which is a real reordering — the IDENTICAL strength this
@@ -83,7 +82,7 @@ def _text_roundtrip(document: Yaml) -> Yaml:
     (`test_hermeticity.py`'s `yaml.safe_dump(_cwl(stem), sort_keys=False)`).
     """
     dumped = yaml.safe_dump(document, sort_keys=False)
-    loaded: Yaml = yaml.load(dumped, Loader=wic_loader())
+    loaded: Yaml = yaml.safe_load(dumped)
     return loaded
 
 
@@ -233,7 +232,7 @@ TRANSFORMATIONS: Final[tuple[Transformation, ...]] = (
     Transformation(
         name='text_roundtrip', preserves=Strength.IDENTICAL, apply=_text_roundtrip,
         rationale=(
-            'yaml.safe_dump then load through wic_loader. Serialising a workflow and reading it '
+            'yaml.safe_dump then yaml.safe_load. Serialising a workflow and reading it '
             'back is what every user does between writing a file and compiling it.')),
     Transformation(
         name='rename_workflow', preserves=Strength.UP_TO_RENAMING, apply=_rename_workflow,

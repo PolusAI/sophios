@@ -31,12 +31,12 @@ from sophios.lang import (
 )
 from sophios.lang.render import render
 from sophios.lang.spans import SourceSpan
-from sophios.utils_yaml import wic_loader
 
 from .budgets import budget
 from .strategies import documents, scalar_payload_texts
 
 from .wic_corpus import CORPUS, corpus_id
+from .wic_reading import YamlWithSophiosTagsOpaque
 
 FAST = budget(200)
 
@@ -173,9 +173,10 @@ def test_round_trip_preserves_structure(source: str) -> None:
 
     Quantified over the shared full-language generator (both step forms,
     both spellings, outputs, nested sidecars) plus the quoting-hostile
-    literals — and the rendered text must also load through `wic_loader`,
-    since a renderer that emits what the loader rejects would be writing a
-    dialect — a differential oracle, not self-consistency.
+    literals — and the rendered text must also be YAML that `yaml.SafeLoader`
+    loads with the Sophios tags opaque, since a renderer that emits what YAML
+    rejects would be writing a dialect — a differential oracle, not
+    self-consistency.
     """
     first = parse(source, 'a.wic')
     assert first.ok and first.document is not None
@@ -187,7 +188,7 @@ def test_round_trip_preserves_structure(source: str) -> None:
 
     assert _shape(second.document) == _shape(first.document)
     if rendered:
-        yaml.load(rendered, Loader=wic_loader())  # the loader agrees too
+        yaml.load(rendered, Loader=YamlWithSophiosTagsOpaque)  # YAML agrees too
 
 
 @pytest.mark.fast
@@ -389,6 +390,6 @@ def test_a_literal_with_no_tagged_spelling_renders_desugared(literal: str) -> No
 
     rendered = render(document)
 
-    # Round-trips: the desugared spelling carries what the tag cannot.
-    reloaded = yaml.load(rendered, Loader=wic_loader())
+    # Round-trips: the desugared spelling, plain YAML, carries what the tag cannot.
+    reloaded = yaml.safe_load(rendered)
     assert reloaded['steps'][0]['in']['message'] == {'wic_inline_input': literal}
