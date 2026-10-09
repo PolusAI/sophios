@@ -3,13 +3,10 @@
 The split below is the only distinction call sites need: some want the typed
 result and most want only emitted CWL.
 """
-import graphviz
-import networkx as nx
-
 import sophios.cli
 import sophios.compiler
 from sophios.ir.artifacts import CompilationResult
-from sophios.wic_types import GraphData, GraphReps, Yaml
+from sophios.wic_types import Yaml
 
 from .budgets import budget
 from .hermetic import bundle
@@ -32,16 +29,14 @@ def compile_info(yml: Yaml, name: str = 'harness', *,
     The two overrides are named rather than taken as `**options` so that a
     typo is a type error instead of a silently ignored setting.
     """
-    compiler_options, graph_settings = sophios.cli.default_compilation_settings()
+    compiler_options = sophios.cli.default_compilation_settings()
     if lang_version is not None:
         compiler_options['lang_version'] = lang_version
     if allow_raw_cwl is not None:
         compiler_options['allow_raw_cwl'] = allow_raw_cwl
-    graph = GraphReps(graphviz.Digraph(name=f'cluster_{name}'), nx.DiGraph(), GraphData(name))
     return sophios.compiler.compile_source(
-        bundle(yml, name, load_test_registry().tools),
-        compiler_options, graph_settings,
-        relative_run_path=True, testing=True, graph_target=graph)
+        bundle(yml, name, load_test_registry().tools), compiler_options,
+        relative_run_path=True, testing=True)
 
 
 def compile_cwl(yml: Yaml, name: str = 'harness', *,

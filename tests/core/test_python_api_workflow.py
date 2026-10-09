@@ -28,6 +28,7 @@ import sophios.compiler
 import sophios.compute_request as compute_request_module
 import sophios.plugins
 from sophios import input_output as io
+from sophios import preflight
 from sophios import run_local
 from sophios import run_local_async
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
@@ -42,9 +43,9 @@ from sophios.ir.frontdoor import bundle_from_disk
 from sophios.post_compile import inline_artifact_runs
 from sophios.python_cwl_adapter import import_python_file
 from sophios.runtime_inputs import normalize_artifact_cwl
-from sophios.utils_graphs import get_graph_reps
-from sophios.utils_yaml import wic_loader
 from sophios.wic_types import Json, Tools
+
+from .wic_reading import read_wic
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -59,10 +60,10 @@ def _adapter(name: str) -> Path:
 
 
 def _written(workflow: Workflow, directory: Path, name: str | None = None) -> dict[str, Any]:
-    """The document `write_wic` writes for `workflow` (or its nested workflow `name`), as the wic loader reads it."""
+    """The document `write_wic` writes for `workflow` (or its nested workflow `name`), as `parse` reads it."""
     root = workflow.write_wic(directory)
     target = root if name is None else directory / f"{name}.wic"
-    return cast(dict[str, Any], yaml.load(target.read_text(encoding="utf-8"), Loader=wic_loader()))
+    return read_wic(target.read_text(encoding="utf-8"))
 
 
 def _emit_text_tool() -> CommandLineTool:
@@ -249,6 +250,24 @@ def test_in_memory_cwl_step_compiles_through_workflow_api() -> None:
 
 
 @pytest.mark.fast
+def test_step_inputs_bind_values_on_a_tool_given_in_memory() -> None:
+    """`step_inputs=` binds input values by name, on a document and on a built tool alike; `config=` is gone."""
+    tool = (
+        CommandLineTool("echo_tool", Inputs(message=Input(cwl.string, position=1)), Outputs(out=Output.stdout()))
+        .base_command("echo")
+        .stdout("stdout.txt")
+    )
+
+    from_document = Step.from_cwl_document(tool.to_cwl_document(), process_name="say", step_inputs={"message": "hi"})
+    from_tool = tool.to_step(step_name="say", step_inputs={"message": "hi"})
+
+    for step in (from_document, from_tool):
+        assert Workflow([step], "wf").compile().cwl_job_inputs == {"wf__step__1__say___message": "hi"}
+    with pytest.raises(TypeError, match="config"):
+        tool.to_step(config={"message": "hi"})  # type: ignore[call-arg]  # pylint: disable=unexpected-keyword-arg
+
+
+@pytest.mark.fast
 def test_a_numpy_float_reaches_the_job_as_a_plain_float() -> None:
     """numpy's float64 is a float, and a job file holds plain numbers."""
     numpy = pytest.importorskip("numpy")
@@ -318,11 +337,11 @@ def test_step_constructor_accepts_tool_builder_command_line_tool() -> None:
 
 
 @pytest.mark.fast
-def test_step_constructor_rejects_config_path_for_in_memory_tool() -> None:
-    """`config_path` belongs to a tool on disk; an in-memory tool has no file to configure."""
+def test_step_constructor_rejects_a_step_inputs_file_for_in_memory_tool() -> None:
+    """`step_inputs_file` belongs to a tool on disk; an in-memory tool has no file to configure."""
     tool = cast(Any, _emit_text_tool())
-    with pytest.raises(TypeError, match="config_path is only supported"):
-        Step(tool, "config.yml")
+    with pytest.raises(TypeError, match="step_inputs_file is only supported"):
+        Step(tool, step_inputs_file="inputs.yml")
 
 
 @pytest.mark.fast
@@ -767,7 +786,7 @@ def test_workflow_write_wic_exports_source_workflow_with_inferred_edges(tmp_path
     output_path = workflow.write_wic(tmp_path / "linear_export.wic")
 
     assert output_path == tmp_path / "linear_export.wic"
-    exported = yaml.load(output_path.read_text(encoding="utf-8"), Loader=wic_loader())
+    exported = read_wic(output_path.read_text(encoding="utf-8"))
     assert "file" not in exported["steps"][1]["in"]
 
 
@@ -834,58 +853,16 @@ def test_workflow_outputs_are_serialized_with_type_and_source(tmp_path: Path) ->
 
 
 @pytest.mark.fast
-def test_config_yaml_normalizes_cwl_file_and_directory_objects(tmp_path: Path) -> None:
-    """A `File` or `Directory` given as a config object reaches the step as its path."""
-    input_dir = tmp_path / "input-dir"
-    input_dir.mkdir()
-    input_file = tmp_path / "input.txt"
-    input_file.write_text("hello", encoding="utf-8")
-
-    subdirectory_cfg = tmp_path / "subdirectory.yml"
-    subdirectory_cfg.write_text(
-        yaml.safe_dump(
-            {
-                "directory": {"class": "Directory", "location": str(input_dir)},
-                "glob_pattern": ".",
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    subdirectory = Step(clt_path=_adapter("subdirectory"), config_path=subdirectory_cfg)
-    directory = subdirectory._as_workflow_step().input("directory")
-    assert isinstance(directory, InlineLiteral) and directory.value == str(input_dir)
-
-    append_cfg = tmp_path / "append.yml"
-    append_cfg.write_text(
-        yaml.safe_dump(
-            {
-                "file": {"class": "File", "location": str(input_file)},
-                "str": "Hello",
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    append = Step(clt_path=_adapter("append"), config_path=append_cfg)
-    file = append._as_workflow_step().input("file")
-    assert isinstance(file, InlineLiteral) and file.value == str(input_file)
-
-
-@pytest.mark.fast
-def test_config_file_without_location_is_a_structured_api_failure(tmp_path: Path) -> None:
-    """A malformed CWL file value stays inside the one structured error family."""
+def test_a_step_inputs_file_binds_each_value_as_written(tmp_path: Path) -> None:
+    """Nothing is checked when the step is built: a path may name a file on the machine that runs it."""
     config = tmp_path / "append.yml"
-    config.write_text("file:\n  class: File\n", encoding="utf-8")
-
-    with pytest.raises(SophiosError) as caught:
-        Step(clt_path=_adapter("append"), config_path=config)
-
-    assert isinstance(caught.value, InvalidInputValueError)
-    assert [diagnostic.code for diagnostic in caught.value.diagnostics] == [
-        SophiosErrorCode.INVALID_INPUT_VALUE
-    ]
-    assert caught.value.diagnostics[0].message == "File value has no location or path"
+    config.write_text(
+        yaml.safe_dump({"file": {"class": "File", "location": "/cluster/project/in.txt"}, "str": "Hello"}),
+        encoding="utf-8")
+    append = Step(clt_path=_adapter("append"), step_inputs_file=config)
+    file = append._as_workflow_step().input("file")
+    assert isinstance(file, InlineLiteral)
+    assert file.value == {"class": "File", "location": "/cluster/project/in.txt"}
 
 
 @pytest.mark.fast
@@ -1200,8 +1177,7 @@ def _api_run_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, run_args: 
     touch.inputs.filename = "empty.txt"
     workflow = Workflow([touch], "quiet_demo")
     cmdlines: list[str] = []
-    monkeypatch.setattr(python_runtime.pc, "verify_container_engine_config", lambda container, ignore: None)
-    monkeypatch.setattr(python_runtime.pc, "cwl_docker_extract", lambda container, pull_dir, cwl_path: None)
+    monkeypatch.setattr(python_runtime.preflight, "prepare", lambda documents, settings, jobs=(): None)
     monkeypatch.setattr(python_runtime.rl, "generate_run_script", cmdlines.append)
     workflow.run(basepath=str(tmp_path), run_args_dict={"generate_run_script": "yes", **run_args})
     return cmdlines[0].split()
@@ -1282,21 +1258,15 @@ def test_run_compute_does_not_apply_local_env(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.fast
-def test_workflow_run_uses_basepath_for_docker_extract(
+def test_workflow_run_prepares_the_cwl_in_its_basepath(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Container extraction is pointed at the basepath, not at the current directory."""
+    """The pre-flight is given the CWL in the basepath, not one in the current directory."""
     example_path = REPO_ROOT / "examples" / "scripts" / "tool_builder_workflow.py"
     module = import_python_file(example_path.stem, example_path.resolve())
     workflow = module.build_workflow("hello from test")
-    calls: dict[str, list[tuple[Any, ...]]] = {"verify": [], "extract": []}
-
-    def fake_verify(container_engine: str, ignore_install: bool) -> None:
-        calls["verify"].append((container_engine, ignore_install))
-
-    def fake_extract(container_engine: str, pull_dir: str, cwl_path: Path) -> None:
-        calls["extract"].append((container_engine, pull_dir, cwl_path))
+    prepared: list[tuple[list[Path], preflight.RunSettings]] = []
 
     def fake_run_local(
         run_args_dict: dict[str, str],
@@ -1312,16 +1282,17 @@ def test_workflow_run_uses_basepath_for_docker_extract(
         del realtime_plans
         return 0
 
-    monkeypatch.setattr(python_runtime.pc,
-                        "verify_container_engine_config", fake_verify)
-    monkeypatch.setattr(python_runtime.pc, "cwl_docker_extract", fake_extract)
+    monkeypatch.setattr(python_runtime.preflight, "prepare",
+                        lambda documents, settings, jobs=(): prepared.append((documents, settings)))
     monkeypatch.setattr(python_runtime.rl, "run_local", fake_run_local)
 
     workflow.run(basepath=str(tmp_path))
 
-    assert calls["verify"] == [("docker", False)]
-    assert calls["extract"] == [
-        ("docker", str(Path.cwd()), tmp_path / "tool_builder_workflow_demo.cwl")]
+    (documents, settings), = prepared
+    assert documents == [tmp_path / "tool_builder_workflow_demo.cwl"]
+    assert settings.container_engine == "docker"
+    assert settings.pull_dir == str(Path.cwd())
+    assert not settings.ignore_install
 
 
 @pytest.mark.fast
@@ -1336,16 +1307,7 @@ def test_workflow_run_does_not_forward_python_run_flags_to_runner(
 
     captured: dict[str, Any] = {}
 
-    monkeypatch.setattr(
-        python_runtime.pc,
-        "verify_container_engine_config",
-        lambda container, ignore: None,
-    )
-    monkeypatch.setattr(
-        python_runtime.pc,
-        "cwl_docker_extract",
-        lambda container, pull_dir, cwl_path: None,
-    )
+    monkeypatch.setattr(python_runtime.preflight, "prepare", lambda documents, settings, jobs=(): None)
 
     def fake_run_local(
         run_args_dict: dict[str, str],
@@ -1395,8 +1357,7 @@ def test_workflow_run_writes_virtual_output_directories_without_orphans(
     step.inputs.outDir = Path("result.outDir")
     workflow = Workflow([step], "virtual_run_demo")
 
-    monkeypatch.setattr(python_runtime.pc, "verify_container_engine_config", lambda container, ignore: None)
-    monkeypatch.setattr(python_runtime.pc, "cwl_docker_extract", lambda container, pull_dir, cwl_path: None)
+    monkeypatch.setattr(python_runtime.preflight, "prepare", lambda documents, settings, jobs=(): None)
     monkeypatch.setattr(
         python_runtime.rl,
         "run_local",
@@ -1409,6 +1370,28 @@ def test_workflow_run_writes_virtual_output_directories_without_orphans(
     inputs = yaml.safe_load((tmp_path / "virtual_run_demo_inputs.yml").read_text(encoding="utf-8"))
     assert inputs["virtual_run_demo__step__1__write_dir___outDir"] == "result.outDir"
     assert not (tmp_path / "result.outDir").exists()
+
+
+@pytest.mark.fast
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0,
+                    reason="directory modes do not stop Windows or root")
+def test_workflow_run_reports_an_unwritable_basepath_as_wic021(monkeypatch: pytest.MonkeyPatch,
+                                                               tmp_path: Path) -> None:
+    """A `basepath` that cannot be created is one `wic021` before the run, not a PermissionError."""
+    step = Step(clt_path=_output_directory_tool(tmp_path / "write_dir.cwl"))
+    step.inputs.outDir = Path("result.outDir")
+    workflow = Workflow([step], "locked_run_demo")
+    monkeypatch.setattr(python_runtime.rl, "run_local", lambda *_args, **_kwargs: pytest.fail("ran"))
+    locked = tmp_path / "locked"
+    locked.mkdir(mode=0o555)
+
+    with pytest.raises(SophiosError) as caught:
+        workflow.run(basepath=str(locked / "autogenerated"))
+
+    (problem,) = caught.value.diagnostics
+    assert problem.code is SophiosErrorCode.DIRECTORY_NOT_WRITABLE
+    assert problem.message == (f"Sophios writes the workflow and its run to {locked / 'autogenerated'}, "
+                               f"but {locked} is not writable by you: pass run() a basepath you can write to.")
 
 
 @pytest.mark.fast
@@ -1571,8 +1554,7 @@ def test_an_api_failure_carries_an_api_code_not_a_language_one(error: type[ApiEr
 
 def _detach_run_from_the_container_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep a `Workflow.run()` call off the container engine and the disk."""
-    monkeypatch.setattr(python_runtime.pc, 'verify_container_engine_config', lambda *_a, **_k: None)
-    monkeypatch.setattr(python_runtime.pc, 'cwl_docker_extract', lambda *_a, **_k: None)
+    monkeypatch.setattr(python_runtime.preflight, 'prepare', lambda *_a, **_k: None)
     monkeypatch.setattr(python_runtime.input_output, 'write_artifacts_to_disk', lambda *_a, **_k: None)
 
 
@@ -1625,6 +1607,170 @@ def test_run_does_not_raise_when_the_runner_succeeds(monkeypatch: pytest.MonkeyP
     _detach_run_from_the_container_engine(monkeypatch)
     monkeypatch.setattr(python_runtime.rl, 'run_local', lambda *_a, **_k: 0)
     _echo_workflow('passing').run()
+
+
+def _fresh_python(script: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    """`script` run by a new interpreter that imports this checkout's Sophios.
+
+    A new one, because pytest has put handlers on the root logger before any test
+    imports Sophios, which hides a module that configures logging when it is imported.
+    """
+    env = {**os.environ, 'PYTHONPATH': str(REPO_ROOT / 'src')}
+    return subprocess.run([sys.executable, '-c', script], cwd=cwd, env=env,
+                          capture_output=True, text=True, check=False)
+
+
+@pytest.mark.fast
+def test_importing_sophios_leaves_the_root_logger_alone(tmp_path: Path) -> None:
+    """A handler on the root logger makes cwltool's in-process run fail before it starts."""
+    run = _fresh_python('import logging\nimport sophios.main\nimport sophios.api.python.workflow\n'
+                        'print(logging.getLogger().handlers)\n', tmp_path)
+    assert run.returncode == 0, run.stderr
+    assert run.stdout.strip() == '[]'
+
+
+@pytest.mark.needs_cwltool
+def test_workflow_run_runs_cwltool_in_the_callers_process(tmp_path: Path) -> None:
+    """A real run, as a user's script makes it: cwltool runs in the process that called `run()`."""
+    script = '''
+import json
+from pathlib import Path
+from sophios.api.python.workflow import Step, Workflow
+echo = Step.from_cwl_document({"cwlVersion": "v1.2", "class": "CommandLineTool", "baseCommand": "echo",
+                               "inputs": {"message": {"type": "string", "inputBinding": {"position": 1}}},
+                               "outputs": {"said": "stdout"}, "stdout": "said.txt"}, process_name="echo")
+echo.inputs.message = "hello"
+Workflow([echo], "say").run()
+summary = json.loads(Path("autogenerated/output_say.json").read_text(encoding="utf-8"))
+print(Path(next(iter(summary.values()))["path"]).read_text(encoding="utf-8"), end="")
+'''
+    run = _fresh_python(script, tmp_path)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert run.stdout.endswith('hello\n')
+
+
+#: A tool that reads one File, and runs in no container.
+_CAT_TOOL = {'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'cat',
+             'inputs': {'f': {'type': 'File', 'inputBinding': {'position': 1}}}, 'outputs': {'out': 'stdout'}}
+
+
+def _cat() -> Step:
+    return Step.from_cwl_document(_CAT_TOOL, process_name='cat')
+
+
+def _cat_tool(directory: Path) -> Path:
+    """`_CAT_TOOL`, written to `directory`, for a step built from a file."""
+    path = directory / 'cat.cwl'
+    path.write_text(yaml.safe_dump(_CAT_TOOL), encoding='utf-8')
+    return path
+
+
+def _job_written_by_run(monkeypatch: pytest.MonkeyPatch, workflow: Workflow) -> dict[str, Any]:
+    """The job `workflow.run()` writes for the runner, with the machine and the runner left out."""
+    monkeypatch.setattr(python_runtime.preflight, 'prepare', lambda *_a, **_k: None)
+    monkeypatch.setattr(python_runtime.rl, 'run_local', lambda *_a, **_k: 0)
+    workflow.run()
+    job = Path('autogenerated') / f'{workflow.process_name}_inputs.yml'
+    return cast(dict[str, Any], yaml.safe_load(job.read_text(encoding='utf-8')))
+
+
+@pytest.mark.fast
+def test_a_relative_path_bound_in_python_is_read_from_the_working_directory(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The job names it absolute: the runner reads the job from the basepath, not from here."""
+    monkeypatch.chdir(tmp_path)
+    Path('data.txt').write_text('hello\n', encoding='utf-8')
+    cat = _cat()
+    cat.inputs.f = 'data.txt'
+    job = _job_written_by_run(monkeypatch, Workflow([cat], 'wf'))
+    assert job['wf__step__1__cat___f'] == {'class': 'File', 'location': str(Path.cwd() / 'data.txt')}
+
+
+def _missing_paths(monkeypatch: pytest.MonkeyPatch, workflow: Workflow) -> list[str]:
+    """The `wic016` lines `workflow.run()` raises, which it must raise before the runner starts."""
+    ran: list[bool] = []
+
+    def runner(*_args: Any, **_kwargs: Any) -> int:
+        ran.append(True)
+        return 0
+    monkeypatch.setattr(python_runtime.rl, 'run_local', runner)
+    with pytest.raises(SophiosError) as caught:
+        workflow.run()
+    assert not ran
+    return [str(diagnostic) for diagnostic in caught.value.diagnostics
+            if diagnostic.code is SophiosErrorCode.MISSING_INPUT_FILE]
+
+
+@pytest.mark.fast
+def test_a_missing_path_bound_in_python_is_named_before_the_run(monkeypatch: pytest.MonkeyPatch,
+                                                                tmp_path: Path) -> None:
+    """The pre-flight checks the values bound in Python, as it checks an inputs file's."""
+    monkeypatch.chdir(tmp_path)
+    cat = _cat()
+    cat.inputs.f = str(tmp_path / 'gone.txt')
+    line, = _missing_paths(monkeypatch, Workflow([cat], 'wf'))
+    assert line.startswith("error [wic016] input 'cat/f' (from the workflow, ")
+    assert f"names {str(tmp_path / 'gone.txt')!r}, which does not exist" in line
+
+
+@pytest.mark.fast
+def test_a_missing_relative_path_bound_in_python_says_where_it_was_looked_for(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """It was looked for in the working directory, where the run reads it from."""
+    monkeypatch.chdir(tmp_path)
+    cat = _cat()
+    cat.inputs.f = 'gone.txt'
+    line, = _missing_paths(monkeypatch, Workflow([cat], 'wf'))
+    assert f"whose relative paths are read from {Path.cwd()}) names 'gone.txt'" in line
+    assert f"does not exist at {Path.cwd() / 'gone.txt'}" in line
+
+
+@pytest.mark.fast
+def test_an_inputs_file_value_is_checked_instead_of_the_one_bound_in_python(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The inputs file's value is the one the runner gets, so the one it replaces is not checked."""
+    monkeypatch.chdir(tmp_path)
+    Path('data.txt').write_text('hello\n', encoding='utf-8')
+    Path('in.yml').write_text('wf__step__1__cat___f: {class: File, location: data.txt}\n', encoding='utf-8')
+    cat = _cat()
+    cat.inputs.f = 'gone.txt'
+    monkeypatch.setattr(python_runtime.rl, 'run_local', lambda *_a, **_k: 0)
+    Workflow([cat], 'wf').run(run_args_dict={'inputs_file': 'in.yml'})
+
+
+@pytest.mark.fast
+def test_an_output_target_directory_bound_in_python_is_not_looked_for(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The runner gets it as the name of a directory the step creates, which does not exist yet."""
+    monkeypatch.chdir(tmp_path)
+    step = Step(clt_path=_output_directory_tool(tmp_path / 'write_dir.cwl'))
+    step.inputs.outDir = Path('result.outDir')
+    monkeypatch.setattr(python_runtime.rl, 'run_local', lambda *_a, **_k: 0)
+    Workflow([step], 'wf').run()
+
+
+@pytest.mark.fast
+def test_a_missing_path_in_a_step_inputs_file_is_named_before_the_run(monkeypatch: pytest.MonkeyPatch,
+                                                                      tmp_path: Path) -> None:
+    """The step is built; the pre-flight of the local run names the path."""
+    monkeypatch.chdir(tmp_path)
+    Path('cat.yml').write_text('f: {class: File, location: gone.txt}\n', encoding='utf-8')
+    cat = Step(clt_path=_cat_tool(tmp_path), step_inputs_file='cat.yml')
+    line, = _missing_paths(monkeypatch, Workflow([cat], 'wf'))
+    assert "input 'cat/f' (from the workflow, " in line and "names 'gone.txt'" in line
+
+
+@pytest.mark.fast
+def test_a_relative_path_in_a_step_inputs_file_is_read_from_the_working_directory(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """As a path bound in Python is, not from the file's directory: the file binds values as written."""
+    monkeypatch.chdir(tmp_path)
+    Path('data.txt').write_text('hello\n', encoding='utf-8')
+    Path('inputs').mkdir()
+    Path('inputs/cat.yml').write_text('f: {class: File, location: data.txt}\n', encoding='utf-8')
+    cat = Step(clt_path=_cat_tool(tmp_path), step_inputs_file='inputs/cat.yml')
+    job = _job_written_by_run(monkeypatch, Workflow([cat], 'wf'))
+    assert job['wf__step__1__cat___f'] == {'class': 'File', 'location': str(Path.cwd() / 'data.txt')}
 
 
 def _interrupted(_args: list[str]) -> int:
@@ -1709,9 +1855,87 @@ def test_a_failed_in_process_run_names_authored_steps(monkeypatch: pytest.Monkey
 
     assert retval == 1
     assert f"[step 2 'append' ({emitted})] completed permanentFail" in caplog.messages
-    assert f"Emitted ids are mapped to authored names in {names_path}" in capsys.readouterr().out
+    assert f"Emitted ids are mapped to authored names in {names_path}" in capsys.readouterr().err
     assert not [f for f in logging.getLogger("cwltool").filters
-                if isinstance(f, sophios.plugins.AuthoredNamesFilter)]
+                if isinstance(f, (sophios.plugins.AuthoredNamesFilter, sophios.plugins.FailedJobs))]
+
+
+@pytest.mark.fast
+def test_a_failed_run_names_the_step_its_status_and_what_127_means(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    import logging  # pylint: disable=import-outside-toplevel
+    emitted = "wf__step__2__append"
+    entry = {"id": emitted, "workflow": "wf", "index": 2, "name": "append", "inserted": False,
+             "file": "wf.wic", "line": 7}
+    (tmp_path / "wf.names.json").write_text(json.dumps({"steps": {emitted: entry}, "ports": {}}), encoding="utf-8")
+
+    def failing_main(args: list[str]) -> int:
+        del args
+        log = logging.getLogger("cwltool")
+        log.warning("[job %s] exited with status: %d", f"{emitted}_2", 127)
+        log.warning("[job %s] completed %s", f"{emitted}_2", "permanentFail")
+        return 1
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(run_local.cwltool.main, "main", failing_main)
+    retval = run_local.run_local({"container_engine": "docker", "cwl_runner": "cwltool"}, False,
+                                 passthrough_args=[], workflow_name="wf", basepath=str(tmp_path))
+    assert retval == 1
+    captured = capsys.readouterr()
+    assert (f"Failure! step 2 'append' ({emitted}_2) exited with status 127, which means its command was not "
+            "found") in captured.err
+    assert "scroll up" not in captured.out + captured.err
+
+
+@pytest.mark.fast
+def test_a_run_that_failed_with_no_failed_step_says_where_to_look(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(run_local.cwltool.main, "main", lambda args: 1)
+    run_local.run_local({"container_engine": "docker", "cwl_runner": "cwltool"}, False,
+                        passthrough_args=[], workflow_name="wf", basepath=str(tmp_path))
+    assert ("Failure! Above, the first ERROR line, or the error the runner itself raised, says why the run failed."
+            in capsys.readouterr().err)
+
+
+@pytest.mark.fast
+def test_a_run_whose_runner_raised_does_not_point_at_an_error_line_that_is_not_there(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def raising_main(args: list[str]) -> int:
+        del args
+        raise RuntimeError("the runner blew up")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(run_local.cwltool.main, "main", raising_main)
+    retval = run_local.run_local({"container_engine": "docker", "cwl_runner": "cwltool"}, False,
+                                 passthrough_args=[], workflow_name="wf", basepath=str(tmp_path))
+    captured = capsys.readouterr()
+    assert retval == 1
+    assert "the runner blew up" in captured.out
+    assert "See error_wf.txt for detailed technical information." in captured.out
+    assert "The first ERROR line above says" not in captured.err
+    assert "or the error the runner itself raised" in captured.err
+
+
+@pytest.mark.needs_cwltool
+def test_a_real_failed_step_is_named_with_its_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                     capfd: pytest.CaptureFixture[str]) -> None:
+    """Pins cwltool's own wording: if a cwltool upgrade changes it, this fails, not a user's summary.
+
+    capfd, not capsys: cwltool hands the real stderr's file descriptor to the step.
+    """
+    from sophios.api.python.workflow import WorkflowRunError  # pylint: disable=import-outside-toplevel
+    tool = tmp_path / "exits_3.cwl"
+    tool.write_text("cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: [sh, -c, 'exit 3']\n"
+                    "inputs:\n  message: string\noutputs: {}\n", encoding="utf-8")
+    step = Step(clt_path=tool)
+    step.inputs.message = "x"
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(WorkflowRunError):
+        Workflow([step], "exits").run(basepath=str(tmp_path / "autogenerated"))
+    err = capfd.readouterr().err
+    assert "Failure! step 1 'exits_3' (" in err
+    assert "exited with status 3." in err
 
 
 @pytest.mark.fast
@@ -1859,10 +2083,8 @@ def test_the_written_bundle_of_a_nested_workflow_compiles_to_the_same_cwl(tmp_pa
     assert parse(root.read_text(encoding='utf-8'), root.name).ok
     bundle = bundle_from_disk(root, {'global': {path.stem: path for path in tmp_path.glob('*.wic')}},
                               sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}}))
-    options, graph_settings = default_compilation_settings()
-    result = sophios.compiler.compile_source(bundle, options, graph_settings,
-                                             relative_run_path=True, testing=True,
-                                             graph_target=get_graph_reps('outer'))
+    result = sophios.compiler.compile_source(bundle, default_compilation_settings(),
+                                             relative_run_path=True, testing=True)
     assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct
 
 
@@ -1919,6 +2141,18 @@ def test_a_subworkflows_output_is_not_lifted() -> None:
 
 
 @pytest.mark.fast
+def test_binding_a_path_reads_nothing_from_the_disk(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A path is bound as written; it may name a place on another machine, such as a cluster."""
+    monkeypatch.chdir(tmp_path)
+    Path('images.ome.zarr').mkdir()
+    here, elsewhere = _cat(), _cat()
+    local, remote = here.inputs.f, elsewhere.inputs.f
+    here.inputs.f = Path('images.ome.zarr')
+    elsewhere.inputs.f = Path('/cluster/images.ome.zarr')
+    assert local.effective_source_type() == remote.effective_source_type()  # pylint: disable=no-member
+
+
+@pytest.mark.fast
 def test_a_scatter_inside_a_subworkflow_lifts_its_output(tmp_path: Path) -> None:
     """A subworkflow output typed at bind time stayed `File` once its step was scattered,
     so a sibling could neither scatter over it nor consume it unscattered."""
@@ -1949,10 +2183,8 @@ def test_the_chained_scatter_agrees_with_the_dsl(tmp_path: Path) -> None:
     assert parse(root.read_text(encoding='utf-8'), root.name).ok
     bundle = bundle_from_disk(root, {'global': {path.stem: path for path in tmp_path.glob('*.wic')}},
                               sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}}))
-    options, graph_settings = default_compilation_settings()
-    result = sophios.compiler.compile_source(bundle, options, graph_settings,
-                                             relative_run_path=True, testing=True,
-                                             graph_target=get_graph_reps('chain'))
+    result = sophios.compiler.compile_source(bundle, default_compilation_settings(),
+                                             relative_run_path=True, testing=True)
     assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct
 
 
@@ -2063,10 +2295,8 @@ def test_step_input_round_trips_through_write_wic(tmp_path: Path) -> None:
     assert isinstance(parsed.document.steps[2].input('files'), CwlRecord)
     bundle = bundle_from_disk(root, {'global': {path.stem: path for path in tmp_path.glob('*.wic')}},
                               sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}}))
-    options, graph_settings = default_compilation_settings()
-    result = sophios.compiler.compile_source(bundle, options, graph_settings,
-                                             relative_run_path=True, testing=True,
-                                             graph_target=get_graph_reps('merge'))
+    result = sophios.compiler.compile_source(bundle, default_compilation_settings(),
+                                             relative_run_path=True, testing=True)
     assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct
 
 
@@ -2239,6 +2469,75 @@ def test_a_cwl_workflow_as_a_step_clt_path_is_refused_with_python_advice(tmp_pat
         f"step 'say' runs {say}, a CWL Workflow given in Python as its clt_path. Sophios cannot embed "
         'a CWL Workflow as a step: build it in Python as a nested Workflow of Steps, or run the CWL '
         f'Workflow on its own with sophios --yaml {say} --allow_raw_cwl')
+
+
+#: A packed document whose main is a tool, beside a process nothing runs.
+_PACKED_TOOL: dict[str, Any] = {
+    'cwlVersion': 'v1.2', '$namespaces': {'edam': 'https://edamontology.org/'},
+    '$graph': [
+        {'id': 'main', 'class': 'CommandLineTool', 'baseCommand': 'echo',
+         'inputs': {'text': {'type': 'string', 'inputBinding': {'position': 1}}},
+         'outputs': {'out': {'type': 'stdout', 'format': 'edam:format_1964'}}},
+        {'id': 'other', 'class': 'CommandLineTool', 'baseCommand': 'true', 'inputs': {}, 'outputs': {}},
+    ]}
+
+_NO_MAIN = ('is a packed CWL document ($graph) with no main process; it holds: say, other. CWL runs a packed '
+            'document through its main, so name the process to run main, or unpack it into a file of its own')
+
+
+def _packed_tool(directory: Path, main: str = 'main') -> Path:
+    """`_PACKED_TOOL` written to `directory`, its main's id spelled `main`."""
+    path = directory / 'packed.cwl'
+    document = {**_PACKED_TOOL, '$graph': [{**_PACKED_TOOL['$graph'][0], 'id': main}, _PACKED_TOOL['$graph'][1]]}
+    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding='utf-8')
+    return path
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('main', ['main', '#main'])
+def test_a_packed_tool_as_a_clt_path_is_its_main(tmp_path: Path, main: str) -> None:
+    """A `Step` whose `clt_path` packs a CommandLineTool as `main` is that tool: main's ports, and main alone as
+    the step's CWL, with the document's `cwlVersion` and `$namespaces`."""
+    step = Step(clt_path=_packed_tool(tmp_path, main))
+    assert ([p.name for p in step.inputs], [p.name for p in step.outputs]) == (['text'], ['out'])
+    assert step.yaml['class'] == 'CommandLineTool' and '$graph' not in step.yaml and 'id' not in step.yaml
+    assert (step.yaml['cwlVersion'], step.yaml['$namespaces']) == ('v1.2', {'edam': 'https://edamontology.org/'})
+    step.inputs.text = 'hi'
+    compiled, = Workflow([step], 'w').compile().cwl_workflow['steps']
+    assert (list(compiled['in']), compiled['out']) == (['text'], ['out'])
+
+
+@pytest.mark.fast
+def test_a_packed_document_as_a_cwl_document_is_its_main() -> None:
+    """`Step.from_cwl_document` reads a packed document the same way as a file: through its main."""
+    step = Step.from_cwl_document(_PACKED_TOOL, process_name='packed')
+    assert ([p.name for p in step.inputs], [p.name for p in step.outputs]) == (['text'], ['out'])
+    assert step.yaml['baseCommand'] == 'echo' and '$graph' not in step.yaml
+    step.inputs.text = 'hi'
+    compiled, = Workflow([step], 'w').compile().cwl_workflow['steps']
+    assert compiled['out'] == ['out']
+
+
+@pytest.mark.fast
+def test_a_packed_clt_path_with_no_main_is_refused(tmp_path: Path) -> None:
+    """A `$graph` with no `main` names no process to run: the file and its processes are named, with the fix."""
+    packed = _packed_tool(tmp_path, 'say')
+    with pytest.raises(SophiosError) as caught:
+        Step(clt_path=packed)
+    diagnostic, = caught.value.diagnostics
+    assert diagnostic.code is SophiosErrorCode.SUBWORKFLOW_INVALID
+    assert diagnostic.message == f'{packed} {_NO_MAIN}'
+
+
+@pytest.mark.fast
+def test_a_packed_cwl_document_with_no_main_is_refused() -> None:
+    """The same refusal for a packed document given to `Step.from_cwl_document`, named by its process name."""
+    document = {**_PACKED_TOOL, '$graph': [{**_PACKED_TOOL['$graph'][0], 'id': 'say'}, _PACKED_TOOL['$graph'][1]]}
+    with pytest.raises(SophiosError) as caught:
+        Step.from_cwl_document(document, process_name='packed')
+    diagnostic, = caught.value.diagnostics
+    assert diagnostic.code is SophiosErrorCode.SUBWORKFLOW_INVALID
+    assert diagnostic.message == f'packed.cwl {_NO_MAIN}'
 
 
 @pytest.mark.fast

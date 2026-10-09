@@ -29,7 +29,7 @@ does not allow arbitrary extra tags in the places Sophios needs them. The Galaxy
 workflow platform uses a similar encoded-string scheme, although its indexing
 starts at zero.
 
-On the other hand, GraphViz and NetworkX require all names to be globally unique, so by default we do not truncate the namespaces when constructing graphs. However, --graph_inline_depth allows users to hide irrelevant details by collapsing all subgraphs below the given depth to a single node. This is implemented by simply truncating the *trailing* namespaces. Thus, keeping track of namespaces allows us to trivially implement two key features.
+On the other hand, Graphviz requires every node name to be unique, so the drawing names each step by its whole namespace. --graph_inline_depth N hides detail: the steps of subworkflows nested deeper than N are left out of the drawing, and the step that calls such a subworkflow is still drawn as one box.
 
 ## Compilation Algorithm
 

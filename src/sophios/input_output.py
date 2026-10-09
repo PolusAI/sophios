@@ -1,15 +1,21 @@
 import copy
+from collections.abc import Iterator
 from shutil import copytree, ignore_patterns
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
+from ruamel.yaml import YAML as _RuamelYAML
+from ruamel.yaml.nodes import ScalarNode as _RuamelScalarNode
 
 from . import auto_gen_header
 from .runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
 from .ir.names import NAMESPACE_SEPARATOR, Names, names_map
 from .ir.artifacts import CompilationArtifact
+from .lang.diagnostics import SophiosError
+from .lang.error_codes import SophiosErrorCode
 from .wic_types import Yaml, Json
 
 
@@ -20,9 +26,28 @@ from .wic_types import Yaml, Json
 # See https://ttl255.com/yaml-anchors-and-aliases-and-how-to-disable-them/#override
 
 
+# cwltool reads job files and documents with ruamel (YAML 1.2 rules), PyYAML
+# writes them with YAML 1.1 rules, and the two disagree on what is a number:
+# PyYAML leaves `1e3`, `0o17` and `._5` plain, which ruamel reads as a float, an
+# int and a float (`._` as a float it then cannot convert). Every string is
+# written quoted when either reader would type it as anything else.
+_YAML12_RESOLVER = _RuamelYAML(typ='rt').resolver
+_STR_TAG = 'tag:yaml.org,2002:str'
+
+
 class NoAliasDumper(yaml.SafeDumper):
     def ignore_aliases(self, data: Any) -> bool:
         return True
+
+
+def _represent_str(dumper: yaml.SafeDumper, data: str) -> yaml.ScalarNode:
+    plain = dumper.represent_str(data)
+    if plain.style is None and _YAML12_RESOLVER.resolve(_RuamelScalarNode, data, (True, False)) != _STR_TAG:
+        return dumper.represent_scalar(_STR_TAG, data, style="'")
+    return plain
+
+
+NoAliasDumper.add_representer(str, _represent_str)
 
 
 def dump_wic_yaml(document: Json) -> str:
@@ -41,16 +66,84 @@ def dump_wic_yaml(document: Json) -> str:
     return yaml.dump(document, sort_keys=False, line_break='\n', indent=2, Dumper=NoAliasDumper)
 
 
+def names_map_path(directory: Path, name: str) -> Path:
+    """Where the compile writes, and run-time messages read, the map from emitted ids to authored names."""
+    return directory / f'{name}.names.json'
+
+
+def read_inputs_file(path: str) -> Yaml:
+    """The job values in an `--inputs_file`; empty for an empty file.
+
+    Raises:
+        SophiosError: The file is not YAML, or its top level is not a mapping of input names to values.
+    """
+    try:
+        with open(path, mode='r', encoding='utf-8') as stream:
+            values = yaml.safe_load(stream.read())
+    except yaml.YAMLError as error:
+        raise SophiosError.error(SophiosErrorCode.INVALID_YAML,
+                                 f'The inputs file {path} is not valid YAML: {" ".join(str(error).split())}') from error
+    if values is None:
+        return {}
+    if not isinstance(values, dict):
+        raise SophiosError.error(
+            SophiosErrorCode.NOT_A_MAPPING,
+            f'The inputs file {path} must be a mapping of input names to values, not a {type(values).__name__}: '
+            'write one `name: value` entry per input.')
+    return values
+
+
+def relative_local_path(written: Any) -> str | None:
+    """`written` when it names a local file or directory by a relative path; None for anything else.
+
+    Not relative: a non-string, a URI (`file:`, `https:`, ...) and an absolute path. A one-letter scheme
+    is a Windows drive.
+    """
+    if not isinstance(written, str) or len(urlparse(written).scheme) > 1 or Path(written).is_absolute():
+        return None
+    return written
+
+
+def input_paths(values: Yaml) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Every File and Directory object in a job, with the input it is under, in written order.
+
+    Found in lists, in records, in a File's `secondaryFiles` and in a Directory's `listing`.
+    """
+    for name, value in values.items():
+        stack = [value]
+        while stack:
+            match stack.pop():
+                case list() as items:
+                    stack.extend(reversed(items))
+                case {'class': 'File' | 'Directory'} as found:
+                    yield name, found
+                    stack.extend(reversed(found.get('secondaryFiles') or []))
+                    stack.extend(reversed(found.get('listing') or []))
+                case dict() as record:
+                    stack.extend(reversed(list(record.values())))
+
+
+def absolute_paths(values: Yaml, base: Path) -> Yaml:
+    """A copy of `values` in which each relative `location` or `path` of a File or Directory, at any
+    depth, is resolved against `base` and written absolute, so it names the same place wherever the
+    run reads it from."""
+    absolute = copy.deepcopy(values)
+    for _name, found in input_paths(absolute):
+        for key in ('location', 'path'):
+            if (written := relative_local_path(found.get(key))) is not None:
+                found[key] = str(base / written)
+    return absolute
+
+
 def write_artifacts_to_disk(artifact: CompilationArtifact, path: Path,
                             relative_run_path: bool, inputs_file: str = '') -> None:
-    """Write a graph-derived artifact tree and its job-input documents."""
-    inputs: Yaml = {}
-    if inputs_file:
-        with open(inputs_file, mode='r', encoding='utf-8') as stream:
-            inputs = yaml.safe_load(stream.read())
-        for value in inputs.values():
-            if 'location' in value and not Path(value['location']).is_absolute():
-                value['location'] = '../' + value['location']
+    """Write a graph-derived artifact tree and its job-input documents.
+
+    A relative `location` or `path` of a File or Directory in `inputs_file`, at any depth, is
+    resolved against the inputs file's own directory (CWL v1.2 section 5.1.5: the base IRI of the
+    document) and written absolute.
+    """
+    inputs = absolute_paths(read_inputs_file(inputs_file), Path(inputs_file).absolute().parent) if inputs_file else {}
     _write_artifacts_to_disk(artifact, path, relative_run_path, inputs)
 
 
@@ -72,7 +165,7 @@ def _write_artifacts_to_disk(artifact: CompilationArtifact, path: Path,
         f'{auto_gen_header}{dump_wic_yaml(job)}', encoding='utf-8')
     if artifact.graph is not None and artifact.namespace == ():
         # The root carries the whole tree: one map names every emitted id in it.
-        (path / f'{artifact.name}.names.json').write_text(
+        names_map_path(path, artifact.name).write_text(
             json.dumps(names_map(artifact.graph, Names.of(artifact.graph)), indent=2), encoding='utf-8')
 
     for child in artifact.children:

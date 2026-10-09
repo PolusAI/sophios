@@ -2,6 +2,8 @@ from typing import Any
 import yaml
 
 from . import utils
+from .lang.diagnostics import SophiosError
+from .lang.error_codes import SophiosErrorCode
 from .wic_types import Yaml
 
 
@@ -109,6 +111,39 @@ def canonicalize_outputs_dict(outputs: Yaml) -> dict[str, Yaml]:
             outputs, 'Error! If outputs: tag is a list then all its elements should be dictionaries!')
         return remove_id_tags(outputs)
     return outputs_canon
+
+
+def tool_process(cwl: Yaml, source: str) -> Yaml:
+    """The process a tool document defines: the document itself, or the ``main`` of a packed ``$graph``.
+
+    A CWL runner runs a packed document through its ``main`` process and
+    refuses one without; Sophios reads a tool the same way, once, where the
+    document is loaded, so every reader of a tool's CWL sees one process.
+    ``main`` is written out as a file of its own, so it takes the
+    ``cwlVersion``, ``$namespaces`` and ``$schemas`` the packed document
+    declares once at its top, and drops the ``id`` that placed it in the graph.
+
+    Args:
+        cwl (Yaml): A loaded CWL document.
+        source (str): Where it came from, for the diagnostic.
+
+    Raises:
+        SophiosError: ``SUBWORKFLOW_INVALID`` for a ``$graph`` with no ``main``.
+    """
+    graph = cwl.get('$graph')
+    if not isinstance(graph, list):
+        return cwl
+    processes = [entry for entry in graph if isinstance(entry, dict)]
+    main = next((entry for entry in processes if entry.get('id') in ('main', '#main')), None)
+    if main is None:
+        ids = ', '.join(str(entry.get('id')) for entry in processes)
+        raise SophiosError.error(
+            SophiosErrorCode.SUBWORKFLOW_INVALID,
+            f'{source} is a packed CWL document ($graph) with no main process; it holds: {ids}. '
+            'CWL runs a packed document through its main, so name the process to run main, '
+            'or unpack it into a file of its own')
+    shared = {key: cwl[key] for key in ('cwlVersion', '$namespaces', '$schemas') if key in cwl}
+    return {**shared, **{key: value for key, value in main.items() if key != 'id'}}
 
 
 def desugar_into_canonical_normal_form(cwl: Yaml) -> Yaml:

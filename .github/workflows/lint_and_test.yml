@@ -49,7 +49,10 @@ on:
 
 # See https://github.com/orgs/community/discussions/15690
 # For workflow_dispatch, the commit message, repo, and branch name are not displayed by default.
-run-name: "${{ inputs.commit_message}} - ${{ inputs.sender_repo }} - ${{ inputs.wic_ref }}"
+# A dispatched run is not attached to the branch it tests, so its name says which
+# sophios, mm-workflows and image-workflows refs ran together. The inputs carry refs,
+# not commits: the "Name what this run tests" step below adds the commits to the summary.
+run-name: "${{ inputs.commit_message || 'unknown' }} - ${{ inputs.sender_repo || 'unknown' }} - sophios ${{ inputs.wic_owner || 'unknown' }}/${{ inputs.wic_ref || 'unknown' }} - mm-workflows ${{ inputs.mm-workflows_owner || 'unknown' }}/${{ inputs.mm-workflows_ref || 'unknown' }} - image-workflows ${{ inputs.image-workflows_owner || 'unknown' }}/${{ inputs.image-workflows_ref || 'unknown' }}"
 
 defaults:
   run:
@@ -123,6 +126,26 @@ jobs:
           repository: ${{ inputs.image-workflows_owner }}/image-workflows
           ref: ${{ inputs.image-workflows_ref }}
           path: image-workflows
+
+      # The run page shows the dispatched sha, which may be master's; the summary
+      # names what was checked out. Inputs go through env, never into the script.
+      - name: Name what this run tests
+        if: always()
+        env:
+          SOPHIOS: ${{ inputs.wic_owner || 'unknown' }}/sophios@${{ inputs.wic_ref || 'unknown' }}
+          MM_WORKFLOWS: ${{ inputs.mm-workflows_owner || 'unknown' }}/mm-workflows@${{ inputs.mm-workflows_ref || 'unknown' }}
+          IMAGE_WORKFLOWS: ${{ inputs.image-workflows_owner || 'unknown' }}/image-workflows@${{ inputs.image-workflows_ref || 'unknown' }}
+        run: |
+          sophios_sha=$(git -C sophios rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
+          mm_workflows_sha=$(git -C mm-workflows rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
+          image_workflows_sha=$(git -C image-workflows rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
+          {
+            echo '| checked out | commit |'
+            echo '|---|---|'
+            echo "| $SOPHIOS | $sophios_sha |"
+            echo "| $MM_WORKFLOWS | $mm_workflows_sha |"
+            echo "| $IMAGE_WORKFLOWS | $image_workflows_sha |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Completely moving away from pypy
       - name: Setup miniforge (linux, macos)

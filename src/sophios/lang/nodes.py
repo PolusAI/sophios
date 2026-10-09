@@ -88,10 +88,12 @@ def surface_of(node_type: type, field_name: str) -> Surface:
 class InlineLiteral:
     """`!ii value` — a literal, never an edge.
 
-    `text` is the literal's source spelling when parsed from tagged YAML,
-    and None when built from the desugared form or the Python API.
-    Rendering a parsed literal transcribes `text` rather than
-    re-serialising `value`, since reconstruction is lossy by nature.
+    `text` is the literal's source spelling when parsed from a plain tagged
+    scalar (`!ii 0777`, whose value 511 knows nothing of its spelling), and
+    None when parsed from a quoted or block scalar, whose value is its text,
+    or built from the desugared form or the Python API. Rendering a parsed
+    literal transcribes `text` rather than re-serialising `value`, since
+    reconstruction is lossy by nature.
     """
 
     value: 'OpaqueCwl' = surface(Shape.IDENTITY)

@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from cwl_utils.parser import cwl_v1_2 as _cwl
-import yaml
 from sophios.wic_types import Tools
 
 from ._tool_builder_step_bridge import _command_line_tool_to_step
@@ -61,6 +60,7 @@ from ._tool_builder_support import (
     _warn_raw_escape_hatch,
     ToolBuilderValidationError,
     ValidationResult,
+    dump_wic_yaml,
     validate_cwl_document,
 )
 from ...lang.cwl import CWL_VERSION
@@ -898,7 +898,7 @@ class CommandLineTool:
         *,
         step_name: str | None = None,
         run_path: str | Path | None = None,
-        config: dict[str, Any] | None = None,
+        step_inputs: dict[str, Any] | None = None,
         tool_registry: Tools | None = None,
     ) -> "Step":
         """Make a workflow `Step` that runs this tool, without writing a `.cwl` file.
@@ -907,7 +907,8 @@ class CommandLineTool:
             step_name (str | None): The step's name; the tool's `name` by default.
             run_path (str | Path | None): The `.cwl` path the compiler records for the
                 tool; `<step_name>.cwl` by default. Nothing is written there.
-            config (dict[str, Any] | None): Input values to bind on the step, by input name.
+            step_inputs (dict[str, Any] | None): Input values to bind on the step, by input
+                name, as written.
             tool_registry (Tools | None): A tool registry to keep on the step.
 
         Returns:
@@ -917,7 +918,7 @@ class CommandLineTool:
             self,
             step_name=step_name,
             run_path=run_path,
-            config=config,
+            step_inputs=step_inputs,
             tool_registry=tool_registry,
         )
 
@@ -977,7 +978,7 @@ class CommandLineTool:
         Returns:
             str: The YAML text.
         """
-        return yaml.safe_dump(self.to_cwl_document(), sort_keys=False, line_break="\n")
+        return dump_wic_yaml(self.to_cwl_document())
 
     def write_cwl(self, path: str | Path, *, validate: bool = False, skip_schemas: bool = False) -> Path:
         """Write the tool as a `.cwl` file, creating its parent directories.

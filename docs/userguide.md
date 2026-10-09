@@ -66,7 +66,8 @@ echo = Step(clt_path=Path("cwl_adapters") / "echo.cwl")
 ```
 
 At this point, Sophios has loaded the tool contract. It knows the tool has an
-input named `message` and an output named `stdout`.
+input named `message` and an output named `stdout`. A packed `.cwl` file (a `$graph`)
+is loaded through its `main`, as a CWL runner would run it.
 
 You can inspect the ports:
 
@@ -321,7 +322,9 @@ bindings, named outputs, explicit edges, and intentionally unbound linear
 inputs are preserved, so the normal Sophios compiler can still apply edge
 inference later. Steps and workflow outputs use the names you gave them: a
 workflow output reads `step/port`, and every step carries `run: <stem>.cwl`
-(`Step(..., step_name="say_hi")` on `echo.cwl` reads `run: echo.cwl`). Only the
+(`Step(..., step_name="say_hi")` on `echo.cwl` reads `run: echo.cwl`). A
+real-time analysis declaration carries `run: cwl_subinterpreter` instead: the
+adapter is found on the search paths, as a declaration's must be. Only the
 tool's own document is written; files it imports by relative path are not
 copied. Writing into a directory that already holds a different `<stem>.cwl`
 is an error.
@@ -610,6 +613,8 @@ When a workflow fails:
 - A line that says Sophios stopped on an unexpected failure is not about your
   workflow: it names the exception and the `error_<workflow>.txt` that holds the
   whole traceback. If the line does not say what to change, report it with that file.
+- A failed run names each failed step and its exit status; 127 means the command
+  is not in the image, 137 that it ran out of memory.
 - Compile before running. If compilation fails, the issue is in the workflow
   structure or tool contract.
 - Write the workflow with `write_wic()` and read it to check bindings before

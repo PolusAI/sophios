@@ -16,9 +16,11 @@ from typing import Any, Final
 
 import pytest
 import yaml
-from hypothesis import given
+from hypothesis import example, given
+from schema_salad.utils import yaml_no_ts  # pylint: disable=no-name-in-module
 
 import sophios.post_compile
+from sophios.input_output import dump_wic_yaml
 from sophios.ir import (
     BoundaryDeclaration,
     Direction,
@@ -216,8 +218,8 @@ def _cwltool_validates(workflow: Yaml) -> bool:
     inlined.pop('$schemas', None)
     with tempfile.TemporaryDirectory() as workdir, network_refused() as attempts:
         target, values = Path(workdir) / 'workflow.cwl', Path(workdir) / 'job.yml'
-        target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
-        values.write_text(yaml.safe_dump(job, sort_keys=False), encoding='utf-8')
+        target.write_text(dump_wic_yaml(inlined), encoding='utf-8')
+        values.write_text(dump_wic_yaml(job), encoding='utf-8')
         for location in _job_files(inlined['inputs'], job):
             (Path(workdir) / location).touch()
         valid = validate_cwl(str(target), str(values)) == 0
@@ -229,10 +231,39 @@ def _cwltool_validates(workflow: Yaml) -> bool:
 @pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @given(strat.workflows().filter(lambda w: not {s['id'] for s in w['steps']} & NOT_YET_VALID.keys()))
+@example({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': '._'}}}]})
 @ORACLE
 def test_emit_validates_as_cwl_v1_2(workflow: Yaml) -> None:
     """CWL's external validator accepts each emitted workflow and its job inputs."""
     assert _cwltool_validates(workflow)
+
+
+#: Strings YAML 1.1 reads as strings and a YAML 1.2 reader, cwltool's, reads as another type.
+_STRINGS_CWLTOOL_RETYPES: Final[list[str]] = ['._', '._5', '1e3', '1E3', '0o17', '0o7']
+#: Strings both readers agree to type, so the writer must already quote them.
+_STRINGS_YAML_RETYPES: Final[list[str]] = [
+    '1_000', 'yes', 'no', 'on', 'off', 'Yes', 'NO', 'True', '.5', '0x1F', '~', 'null', '1.', '.inf', '.nan',
+    '+1', '1:30', '0b1', '2001-12-14', '2001-12-14t21:59:43.10-05:00', '', ' padded', '=', '<<']
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('text', _STRINGS_CWLTOOL_RETYPES + _STRINGS_YAML_RETYPES)
+def test_a_string_job_value_is_a_string_to_cwltool(text: str) -> None:
+    """A job file keeps each string a string when read the way cwltool reads it."""
+    for document in ({'x': text}, {'x': [text]}, {text: text}):
+        read = yaml_no_ts().load(dump_wic_yaml(document))
+        assert read == document
+        assert all(isinstance(key, str) for key in read)
+        assert all(isinstance(member, str) for value in read.values()
+                   for member in (value if isinstance(value, list) else [value]))
+
+
+@pytest.mark.needs_cwltool
+@pytest.mark.fast
+@pytest.mark.parametrize('text', _STRINGS_CWLTOOL_RETYPES)
+def test_a_compiled_string_job_input_validates(text: str) -> None:
+    """A string input bound to a value YAML 1.2 would retype still validates as a string."""
+    assert _cwltool_validates({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': text}}}]})
 
 
 @pytest.mark.needs_cwltool

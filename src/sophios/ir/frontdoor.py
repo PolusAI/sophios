@@ -29,7 +29,7 @@ from ..lang import (
     parse,
 )
 from ..python_cwl_adapter import generate_CWL_CommandLineTool, get_module
-from ..utils_cwl import desugar_into_canonical_normal_form
+from ..utils_cwl import desugar_into_canonical_normal_form, tool_process
 from ..wic_types import StepId, Tool, Tools
 from .resolve import (RegistrySnapshot, generated_process_id, inline_run_name, is_run_path, run_path_name,
                       step_sidecar)
@@ -214,7 +214,8 @@ def _register_run(step: Step, namespace: str, document_dir: Path, reading: _Read
     if run.endswith('.cwl'):
         with open(target, mode='r', encoding='utf-8') as handle:
             reading.generated[StepId(name, namespace)] = Tool(
-                str(target), desugar_into_canonical_normal_form(yaml.safe_load(handle.read())))
+                str(target), desugar_into_canonical_normal_form(tool_process(yaml.safe_load(handle.read()),
+                                                                             str(target))))
     else:
         _register_workflow((namespace, name), target, reading)
     return True
