@@ -4,6 +4,7 @@ from typing import Any, cast
 
 import pytest
 import yaml
+from schema_salad.utils import yaml_no_ts  # pylint: disable=no-name-in-module
 
 import sophios.api.python._tool_builder_support as tool_builder_support
 from sophios.api.python.tool_builder import (
@@ -348,6 +349,19 @@ def test_tool_builder_write_cwl_round_trips_yaml(tmp_path: Path) -> None:
 
     assert saved_path == output_path
     assert yaml.safe_load(output_path.read_text(encoding="utf-8")) == tool.to_cwl_document()
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("text", ["._", "._5", "1e3", "0o17"])
+def test_tool_builder_string_default_is_a_string_to_cwltool(text: str) -> None:
+    """A string `default` is written so that cwltool, which reads YAML 1.2, reads a string."""
+    tool = CommandLineTool(
+        "echoer",
+        Inputs(message=Input(cwl.string, default=text)),
+        Outputs(out=Output.stdout()),
+    )
+
+    assert yaml_no_ts().load(tool.to_cwl_yaml())["inputs"][0]["default"] == text
 
 
 @pytest.mark.fast

@@ -119,6 +119,10 @@ parser.add_argument('--partial_failure_success_codes_range', nargs=2, type=int, 
 group_run = parser.add_mutually_exclusive_group()
 group_run.add_argument('--generate_run_script', default=False, action="store_true",
                        help='Just generates run.sh and exits. Does not actually invoke ./run.sh')
+group_run.add_argument('--check', default=False, action="store_true",
+                       help='''Compile the workflow and check that this machine can run it (the container engine
+                       when a step uses a container, the input paths, the directories Sophios writes, the programs
+                       it calls), then stop: nothing is pulled and nothing is run.''')
 group_run.add_argument('--run_local', default=False, action="store_true",
                        help='After generating the cwl file(s), run it on your local machine.')
 group_run.add_argument('--generate_cwl_workflow', required=False, default=False, action="store_true",
