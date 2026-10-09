@@ -5,10 +5,11 @@ name: Release Please
 # publishes the same tag to PyPI and Docker Hub below. A tag pushed with
 # GITHUB_TOKEN starts no other workflow, so both publishes are dispatched here.
 
+# Started by hand until 0.7.0 is cut (the cut waits for compute), so no
+# release pull request is opened before then. At the cut: dispatch it to
+# open the release pull request, merge that, and dispatch it again to tag
+# and publish; the push trigger on master comes back with the cut.
 on:
-  push:
-    branches:
-      - master
   workflow_dispatch:
 
 jobs:
