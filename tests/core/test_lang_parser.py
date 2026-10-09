@@ -8,7 +8,6 @@ source span; parsing never raises — it returns an AST or diagnostics;
 InputValue is closed, so no value escapes the five forms; every diagnostic
 span indexes real source text; and every corpus document parses.
 """
-import copy
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -1558,9 +1557,9 @@ def test_a_record_applies_its_merge_keys() -> None:
     'a: {<<: !!str s}\n',
 ], ids=['scalar', 'sequence', 'str'])
 def test_bad_yaml_merge_is_one_wic009(source: str) -> None:
-    """A merge the loader rejects is reported once, on its mapping."""
-    codes = [d.code for d in parse(source, 'm.wic').diagnostics]
-    assert codes.count(SophiosErrorCode.UNKNOWN_TAG) == 1
+    """A merge the loader rejects is reported once, at the value it cannot merge, as a merge."""
+    messages = [d.message for d in parse(source, 'm.wic').diagnostics if d.code is SophiosErrorCode.UNKNOWN_TAG]
+    assert len(messages) == 1 and 'merg' in messages[0], messages
 
 
 @pytest.mark.fast
@@ -1578,21 +1577,6 @@ def test_an_undefined_core_tag_is_named_as_unknown() -> None:
 
 
 @pytest.mark.fast
-def test_plain_scalars_are_not_copied(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Only a collection can be changed by a merge, so a scalar is built as it is."""
-    copied: list[Any] = []
-    real = copy.deepcopy
-
-    def recording(node: Any, *args: Any) -> Any:
-        copied.append(node)
-        return real(node, *args)
-
-    monkeypatch.setattr(copy, 'deepcopy', recording)
-    assert parse('a: [1, x, 2020-01-02]\nb: !!str s\n', 't.wic').ok
-    assert not [n for n in copied if isinstance(n, yaml.nodes.ScalarNode)]
-
-
-@pytest.mark.fast
 @pytest.mark.parametrize('src', [
     'a: !!merge x\n',
     'a: [!!merge x]\n',
@@ -1601,7 +1585,76 @@ def test_plain_scalars_are_not_copied(monkeypatch: pytest.MonkeyPatch) -> None:
     'steps:\n  s:\n    in:\n      f: !cwl {<<: b}\n',
 ])
 def test_a_merge_the_loader_cannot_build_is_reported(src: str) -> None:
-    """A merge key or merge scalar the loader cannot build is a wic009."""
+    """A merge key or merge scalar the loader cannot build is one wic009, worded as a merge."""
     result = parse(src, 'p.wic')
-    assert not result.ok
-    assert SophiosErrorCode.UNKNOWN_TAG in [d.code for d in result.diagnostics]
+    messages = [d.message for d in result.diagnostics if d.code is SophiosErrorCode.UNKNOWN_TAG]
+    assert len(messages) == 1 and 'merg' in messages[0], messages
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('source', [
+    'x: &m {p: 1}\na: {<<: *m, q: 2}\n',
+    'x: &m {p: 1}\na: {<<: *m, p: 2}\n',
+    'x: &m {p: 1}\ny: &n {p: 3, r: 4}\na: {<<: [*m, *n]}\n',
+    'x: &m {p: 1, r: 2}\ny: &n {<<: *m, r: 3}\na: {<<: *n, s: 4}\n',
+], ids=['merge', 'override', 'earlier-wins', 'nested'])
+def test_a_merge_builds_what_the_loader_builds(source: str) -> None:
+    """Passthrough holds the merged mapping, as the loader builds it, and no `<<` key."""
+    result = parse(source, 'm.wic')
+    assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
+    assert dict(result.document.passthrough)['a'] == yaml.load(source, Loader=wic_loader())['a']
+
+
+@pytest.mark.fast
+def test_an_inline_input_applies_its_merge_keys() -> None:
+    """`!ii {<<: *d, q: 2}` is the merged mapping the loader builds, not one with a `<<` key."""
+    result = parse('d: &d {p: 1}\nsteps:\n  s:\n    in:\n      f: !ii {<<: *d, q: 2}\n', 'm.wic')
+    assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
+    literal = result.document.steps[0].input('f')
+    assert isinstance(literal, InlineLiteral) and literal.value == {'p': 1, 'q': 2}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('body, names', [
+    ('{<<: *d, g: !ii 2}', ['p', 'g']),
+    ('{<<: *d, p: !ii 3}', ['p']),
+], ids=['merge', 'override'])
+def test_a_step_in_applies_its_merge_keys(body: str, names: list[str]) -> None:
+    """A merged `in:` binds the merged inputs; an input it overrides is bound once, not twice."""
+    result = parse(f'd: &d {{p: 1}}\nsteps:\n  s:\n    in: {body}\n', 'm.wic')
+    assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
+    assert [name for name, _ in result.document.steps[0].inputs] == names
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('source', ['!ii a: b\n', 'steps:\n  s:\n    in:\n      !* e: x\n'])
+def test_a_sophios_tag_the_loader_cannot_use_as_a_key_is_wic009(source: str) -> None:
+    """The loader builds a Sophios tag to a mapping, which cannot be a key."""
+    with pytest.raises(yaml.YAMLError):
+        yaml.load(source, Loader=wic_loader())
+    assert [d.code for d in parse(source, 'k.wic').diagnostics] == [SophiosErrorCode.UNKNOWN_TAG]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('source', [
+    'd: &d {p: 1, r: 2}\na: {<<: *d, z: 0, p: 3}\n',
+    'd: &d {p: 1}\ne: &e {r: 2, p: 4}\na: {z: 0, <<: [*d, *e], r: 5}\n',
+], ids=['override', 'list'])
+def test_a_merged_mapping_keeps_the_loaders_key_order(source: str) -> None:
+    """A key merged in and then overridden keeps its merged place, as in the loader's dict."""
+    result = parse(source, 'm.wic')
+    assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
+    built = dict(result.document.passthrough)['a']
+    loaded = yaml.load(source, Loader=wic_loader())['a']
+    assert isinstance(built, dict) and list(built.items()) == list(loaded.items())
+
+
+@pytest.mark.fast
+def test_merged_steps_run_in_the_loaders_order() -> None:
+    """`steps:` built with `<<` lists its steps in the order the loader gives them."""
+    source = ('d: &d {p: {in: {x: !ii 1}}, r: {in: {x: !ii 2}}}\n'
+              'steps: {<<: *d, a: {in: {x: !ii 0}}, p: {in: {x: !ii 3}}}\n')
+    result = parse(source, 'm.wic')
+    assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
+    assert [step.id for step in result.document.steps] == list(yaml.load(source, Loader=wic_loader())['steps'])
+

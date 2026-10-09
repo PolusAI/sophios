@@ -5,16 +5,15 @@ Python objects, because composition preserves the source marks that make
 diagnostics worth reading. Nothing here raises: a caller always receives a
 result carrying whatever was parsed plus whatever went wrong.
 """
-import copy
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final, Mapping, TypeAlias, final
+from typing import Any, Final, Mapping, NoReturn, TypeAlias, final
 
 import yaml
 
-from ..utils_yaml import Key, Tag
+from ..utils_yaml import Key, Tag, wic_loader
 from .diagnostics import Diagnostics
 from .error_codes import SophiosErrorCode
 from .nodes import (
@@ -174,60 +173,45 @@ def _every_node(root: yaml.nodes.Node) -> list[yaml.nodes.Node]:
     return order
 
 
-#: What PyYAML's constructors raise on a node they cannot build: the wrong node
-#: kind for the tag, or a scalar the tag's constructor cannot read.
-_CONSTRUCTION_FAILURES: Final = (yaml.YAMLError, ValueError, KeyError, AttributeError, IndexError)
-
-
-class _CoreConstructor(yaml.constructor.SafeConstructor):
-    """`SafeConstructor` that leaves every `!`-tagged node unbuilt.
-
-    Those tags are checked on their own, so a core node holding one is judged
-    on the rest of its content.
-    """
-
-
-_CoreConstructor.add_multi_constructor('!', lambda _loader, _suffix, _node: None)
-
-
-#: The tag each collection kind resolves to when none is written. Such a node's
-#: own failure (a collection used as a key) is reported where the key is read,
-#: so only a tag that disagrees with the node's kind is checked here.
-_DEFAULT_TAGS: Final[dict[type[yaml.nodes.Node], str]] = {yaml.nodes.MappingNode: 'tag:yaml.org,2002:map',
-                                                          yaml.nodes.SequenceNode: 'tag:yaml.org,2002:seq'}
-
+#: What the loader's scalar constructors raise, with no mark, on a value they
+#: cannot read: `!!int abc`, `!!bool x`, an empty `!!float`, `2020-13-45`.
+_UNREADABLE: Final = (ValueError, KeyError, AttributeError, IndexError)
 
 _MERGE_TAG: Final = 'tag:yaml.org,2002:merge'
 
 
-def _holds_merge_key(node: yaml.nodes.Node) -> bool:
-    return isinstance(node, yaml.nodes.MappingNode) and any(key.tag == _MERGE_TAG for key, _ in node.value)
+class _Unbuildable(yaml.constructor.ConstructorError):
+    """A node the loader cannot build, already worded for `wic009`."""
 
 
-def _unconstructible(node: yaml.nodes.Node, merge_keys: set[int]) -> bool:
-    """Whether the loader's `SafeConstructor` cannot build this node.
+class _Loader(yaml.SafeLoader):  # pylint: disable=too-many-ancestors  # SafeLoader's own depth
+    """`wic_loader()`, run over an already composed tree.
 
-    A `!`-tagged node is built by its own tag's check, but a mapping holding a
-    `<<` key is still checked for the merge the loader applies to it.
+    The constructors are the loader's own, so whatever it builds or rejects,
+    this does too. Two things differ, neither in what is built: a `!` tag
+    with no constructor builds nothing, since the parser reports each one
+    itself, so the check goes on past it; and a failure the loader raises
+    with no mark is raised at the node that failed.
     """
-    if node.tag == _MERGE_TAG:
-        # No constructor of its own: the mapping holding `<<` consumes it, so only a key is safe.
-        return id(node) not in merge_keys
-    if node.tag.startswith('!'):
-        if not _holds_merge_key(node):
-            return False
-        node = copy.copy(node)
-        node.tag = _DEFAULT_TAGS[yaml.nodes.MappingNode]
-    elif _DEFAULT_TAGS.get(type(node)) == node.tag and not _holds_merge_key(node):
-        return False
-    try:
-        # Building a mapping flattens its merge keys in place; a copy keeps the tree intact.
-        # A scalar has no merge to flatten, so only a collection needs the copy.
-        built = node if isinstance(node, yaml.nodes.ScalarNode) else copy.deepcopy(node)
-        _CoreConstructor().construct_object(built, deep=True)
-    except _CONSTRUCTION_FAILURES:
-        return True
-    return False
+
+    yaml_constructors = dict(wic_loader().yaml_constructors)
+    yaml_multi_constructors = dict(wic_loader().yaml_multi_constructors)
+
+    def construct_object(self, node: yaml.nodes.Node, deep: bool = False) -> Any:
+        try:
+            return super().construct_object(node, deep)
+        except _UNREADABLE as exc:
+            raise _Unbuildable(None, None, f'YAML cannot read this value as {_tag_name(node.tag)}',
+                               node.start_mark) from exc
+
+    def construct_undefined(self, node: yaml.nodes.Node) -> NoReturn:
+        problem = ('`!!merge` belongs on a `<<` key; YAML cannot construct it as a value'
+                   if node.tag == _MERGE_TAG else f'unknown tag {node.tag!r}; YAML cannot construct it')
+        raise _Unbuildable(None, None, problem, node.start_mark)
+
+
+_Loader.yaml_constructors[None] = _Loader.construct_undefined  # what a tag with no constructor gets
+_Loader.add_multi_constructor('!', lambda _loader, _suffix, _node: None)
 
 
 def _tag_name(tag: str) -> str:
@@ -236,35 +220,77 @@ def _tag_name(tag: str) -> str:
     return tag.removeprefix(prefix) if tag.startswith(prefix) and len(tag) > len(prefix) else repr(tag)
 
 
-def _report_unknown_tags(root: yaml.nodes.Node, file: str, diags: Diagnostics) -> None:
-    """Report a tag the language does not own, or cannot construct, wherever it appears.
+def _load(root: yaml.nodes.Node, nodes: list[yaml.nodes.Node], file: str) -> tuple[str, SourceSpan] | None:
+    """Build the composed tree with the loader, and return the first thing it cannot build.
+
+    Only the first failure is known, since the loader stops there. Building a
+    mapping applies its `<<` merges to the tree in place, and the tree is left
+    so, for the parser to read the entries the loader reads; a mapping the
+    loader did not reach before it stopped is merged the same way after.
+    """
+    merging = [(node, sum(key.tag != _MERGE_TAG for key, _ in node.value)) for node in nodes
+               if isinstance(node, yaml.nodes.MappingNode) and any(key.tag == _MERGE_TAG for key, _ in node.value)]
+    loader = _Loader('')
+    failure = None
+    try:
+        loader.construct_document(root)
+    except yaml.MarkedYAMLError as exc:
+        problem = exc.problem if isinstance(exc, _Unbuildable) else f'YAML cannot load this: {exc.problem}'
+        failure = str(problem), _yaml_error_span(file, exc, SourceSpan.of(file, root))
+    for node, written in merging:
+        try:
+            loader.flatten_mapping(node)  # nothing left to merge, unless the loader stopped first
+        except yaml.YAMLError:
+            continue  # a merge the loader cannot apply; the mapping is read as it is left
+        _drop_overridden(node, written)
+    return failure
+
+
+def _drop_overridden(node: yaml.nodes.MappingNode, written: int) -> None:
+    """Keep each key once, in the place and with the entry the loader's dict gives it.
+
+    The loader has put the merged entries first and the mapping's own
+    `written` entries after them. A dict keeps a key where it first comes and
+    takes its last value, so a merged key stays in its merged place and holds
+    the mapping's own entry when the mapping overrides it. A key the parser
+    then finds twice is one the author wrote twice.
+    """
+    merged, own = node.value[:len(node.value) - written], node.value[len(node.value) - written:]
+    first_own: dict[str, int] = {}
+    for index, (key, _) in enumerate(own):
+        first_own.setdefault(str(key.value), index)
+    winners = {str(key.value): (key, value) for key, value in merged}  # the last wins, first place kept
+    moved = {first_own[name] for name in winners if name in first_own}
+    node.value = ([own[first_own[name]] if name in first_own else entry for name, entry in winners.items()]
+                  + [entry for index, entry in enumerate(own) if index not in moved])
+
+
+def _report_unbuildable(failure: tuple[str, SourceSpan] | None, diags: Diagnostics) -> None:
+    """Report what the loader cannot build, unless the parser has reported an error at that place.
+
+    Both can trip over one node -- a collection used as a key or as a name, a
+    misplaced `!&` -- and one mistake earns one diagnostic. Either way the
+    document carries an error, so the parser never accepts what the loader rejects.
+    """
+    if failure is None:
+        return
+    problem, span = failure
+    if not any(d.span is not None and (d.span.start_line, d.span.start_column) == (span.start_line, span.start_column)
+               for d in diags):
+        diags.error(SophiosErrorCode.UNKNOWN_TAG, problem, span)
+
+
+def _report_unknown_tag(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> None:
+    """Report a tag the language does not own, wherever it appears.
 
     Applied to every node rather than called at each consuming position, so a
     position added later is covered by default. The payload is kept,
-    untagged, for recovery. A node whose tag does not start with `!` is built
-    with the loader's own constructor, so the parser agrees with the loader
-    by construction: `!!foo`, `!<verbatim>`, `!!str [a]`, `!!int abc` are all
-    rejected. A node is reported only when it is the innermost failure, not
-    once more for each ancestor that holds it.
+    untagged, for recovery.
     """
-    nodes = _every_node(root)
-    merge_keys = {id(key) for node in nodes if isinstance(node, yaml.nodes.MappingNode)
-                  for key, _ in node.value if key.tag == _MERGE_TAG}
-    failing = {id(node) for node in nodes if _unconstructible(node, merge_keys)}
-    for node in nodes:
-        if node.tag.startswith('!') and node.tag not in Tag.ALL:
-            diags.error(SophiosErrorCode.UNKNOWN_TAG,
-                        f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
-                        SourceSpan.of(file, node))
-        if id(node) in failing and not any(
-                id(inner) in failing and inner is not node for inner in _every_node(node)):
-            if node.tag.startswith('!'):
-                message = 'YAML cannot merge into this mapping; `<<` takes a mapping or a list of mappings'
-            elif node.tag not in yaml.SafeLoader.yaml_constructors:
-                message = f'unknown tag {node.tag!r}; YAML cannot construct it'
-            else:
-                message = f'YAML cannot read this value as {_tag_name(node.tag)}'
-            diags.error(SophiosErrorCode.UNKNOWN_TAG, message, SourceSpan.of(file, node))
+    if node.tag.startswith('!') and node.tag not in Tag.ALL:
+        diags.error(SophiosErrorCode.UNKNOWN_TAG,
+                    f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
+                    SourceSpan.of(file, node))
 
 
 def _in_reading_order(diags: Diagnostics) -> Diagnostics:
@@ -292,7 +318,10 @@ def parse(text: str, filename: str = '<string>') -> ParseResult:
     if root is None:  # An empty document is well-formed and carries nothing.
         return ParseResult(Document(span=whole), diagnostics)
 
-    _report_unknown_tags(root, filename, diagnostics)
+    nodes = _every_node(root)
+    for node in nodes:
+        _report_unknown_tag(node, filename, diagnostics)
+    unbuildable = _load(root, nodes, filename)
 
     if not isinstance(root, yaml.nodes.MappingNode):
         diagnostics.error(
@@ -300,9 +329,12 @@ def parse(text: str, filename: str = '<string>') -> ParseResult:
             f'a Sophios document must be a mapping, found {_kind(root)}',
             SourceSpan.of(filename, root),
         )
+        if unbuildable is not None:  # the root's kind is no reason to keep quiet about its content
+            diagnostics.error(SophiosErrorCode.UNKNOWN_TAG, *unbuildable)
         return ParseResult(None, _in_reading_order(diagnostics))
 
     document = _document(root, filename, diagnostics)
+    _report_unbuildable(unbuildable, diagnostics)
     return ParseResult(document, _in_reading_order(diagnostics))
 
 
@@ -704,19 +736,6 @@ def _report_misspelled_construct(key: str, key_node: yaml.nodes.Node,
         SourceSpan.of(file, key_node))
 
 
-def _merged_entries(node: yaml.nodes.MappingNode) -> list[tuple[yaml.nodes.Node, yaml.nodes.Node]]:
-    """The entries of `node` with its `<<` merge keys applied, as the loader builds them.
-
-    A merge the loader cannot flatten is reported by the tag check; its entries are read as written.
-    """
-    merged = copy.deepcopy(node)
-    try:
-        _CoreConstructor().flatten_mapping(merged)
-    except _CONSTRUCTION_FAILURES:
-        return list(node.value)
-    return list(merged.value)
-
-
 def _raw_cwl(node: yaml.nodes.Node, file: str, diags: Diagnostics, span: SourceSpan) -> InputValue:
     """`!cwl name` is a raw reference; `!cwl {source: ..., ...}` is a step-input record.
 
@@ -725,7 +744,7 @@ def _raw_cwl(node: yaml.nodes.Node, file: str, diags: Diagnostics, span: SourceS
     """
     if not isinstance(node, yaml.nodes.MappingNode):
         return RawCwlRef(_name_text(node, file, diags), span)
-    body = {_key_text(key, file, diags): _opaque(value, file, diags) for key, value in _merged_entries(node)}
+    body = {_key_text(key, file, diags): _opaque(value, file, diags) for key, value in node.value}
     record, bad = cwl_record(body, span)
     for key in bad:
         if key == 'source':
@@ -1095,7 +1114,7 @@ def _resolved_scalar(node: yaml.nodes.ScalarNode) -> Any:
     """
     try:
         return yaml.constructor.SafeConstructor().construct_object(node)
-    except _CONSTRUCTION_FAILURES:  # reported by _report_unknown_tags
+    except (yaml.YAMLError, *_UNREADABLE):  # reported by `_load`
         return node.value
 
 
