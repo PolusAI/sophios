@@ -30,6 +30,7 @@ dependencies = [
     "graphviz",
     "jsonschema",
     "pyyaml",
+    "ruamel.yaml",
     "requests",
     "mergedeep",
     "networkx",
@@ -304,5 +305,6 @@ name = "The public Python API reaches the compiler only through its runtime adap
 type = "forbidden"
 source_modules = ["sophios.api.python.workflow", "sophios.api.python.tool_builder"]
 forbidden_modules = ["sophios.compiler", "sophios.ir", "sophios.plugins", "sophios.run_local",
-                     "sophios.input_output", "sophios.main", "sophios.cli", "sophios.post_compile"]
+                     "sophios.input_output", "sophios.main", "sophios.cli", "sophios.post_compile",
+                     "sophios.preflight"]
 allow_indirect_imports = true

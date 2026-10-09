@@ -10,30 +10,26 @@ from pathlib import Path
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterator, Mapping
+from typing import Callable, Final, Iterator, Mapping
 from sophios.ir.names import Names
 from sophios.ir.types import DerivedName, WorkflowGraph
 from sophios.wic_types import Json
+from . import auto_gen_header, realtime
+from . import utils  # , utils_graphs
 from .compute_request import ComputeRequest
+from .input_output import names_map_path
+from .plugins import AuthoredNamesFilter, FailedJobs, logging_filters
 
+#: Why cwltool and Toil cannot run in this process, or None. Windows has no `pwd`, which they import
+#: (transitively, in cwltool.provenance); the pre-flight says so when a run is asked for.
+RUNNER_UNAVAILABLE: str | None = None
 try:
     import cwltool.main
     import toil.cwl.cwltoil  # transitively imports cwltool
-except ImportError as exc:
-    print('Could not import cwltool.main and/or toil.cwl.cwltoil')
-    # (pwd is imported transitively in cwltool.provenance)
-    print(exc)
-    if exc.msg == "No module named 'pwd'":
-        print('Windows does not have a pwd module')
-        print('If you want to run on windows, you need to install')
-        print('Windows Subsystem for Linux')
-        print('See https://pypi.org/project/cwltool/#ms-windows-users')
-    else:
-        raise exc
-
-from . import auto_gen_header, realtime
-from . import utils  # , utils_graphs
-from .plugins import AuthoredNamesFilter, logging_filters
+except ModuleNotFoundError as exc:
+    if exc.name != 'pwd':
+        raise
+    RUNNER_UNAVAILABLE = 'cwltool and Toil need the pwd module, which Windows does not have'
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,17 +205,20 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
 
 def _execute_inprocess(cmd: list[str], cwl_runner: str, workflow_name: str,
                        run_args_dict: dict[str, str], user_env_vars: dict[str, str] | None,
-                       yaml_path: Path, output_directories: Mapping[str, str] | None) -> int:
+                       yaml_path: Path, output_directories: Mapping[str, str] | None,
+                       failed: FailedJobs) -> int:
     """Execute the workflow in-process via the cwltool or toil python API, handling errors.
 
     While it runs, cwltool's messages name each emitted id as the author wrote it, read from
-    the names map the compile wrote beside the root CWL.
+    the names map the compile wrote beside the root CWL. `failed` collects the jobs cwltool
+    reports as not successful.
     """
     retval = 1
     logger = logging.getLogger('cwltool')
-    names_path = _names_map_path(yaml_path.parent, workflow_name)
+    names_path = names_map_path(yaml_path.parent, workflow_name)
     authored_names = (AuthoredNamesFilter(json.loads(names_path.read_text(encoding='utf-8')))
                       if names_path.exists() else None)
+    logger.addFilter(failed)  # before the rewrite: it reads cwltool's record, not its text
     if authored_names is not None:
         logger.addFilter(authored_names)
     try:
@@ -255,6 +254,7 @@ def _execute_inprocess(cmd: list[str], cwl_runner: str, workflow_name: str,
         with open(f'error_{workflow_name}.txt', mode='w', encoding='utf-8') as f:
             traceback.print_exception(e, file=f)
     finally:
+        logger.removeFilter(failed)
         if authored_names is not None:
             logger.removeFilter(authored_names)
     return retval
@@ -273,22 +273,48 @@ def _runnable(plans: tuple[realtime.Plan, ...], run_args_dict: dict[str, str]) -
     return plans
 
 
-def _names_map_path(basepath: Path, workflow_name: str) -> Path:
-    """Where the compile wrote the map from emitted ids to authored names."""
-    return basepath / f'{workflow_name}.names.json'
+#: What an exit status means on its own (shell conventions), said after it.
+_STATUS_MEANS: Final = {
+    126: 'its command could not be executed (not executable, or built for another platform)',
+    127: "its command was not found: the tool's baseCommand is not installed in its container image, "
+         'or on this machine for a tool with none',
+    137: 'it was killed, usually for running out of memory: give the container engine more memory '
+         '(Docker Desktop: Settings, Resources), or the step less input',
+}
 
 
-def _report_outcome(retval: int | None, cmd: list[str], basepath: str, workflow_name: str) -> None:
+def _failure_lines(failed: Mapping[str, int | str | None], spelled: Callable[[str], str]) -> list[str]:
+    """One line per failed step: who, how it ended, what that means, where its messages are."""
+    if not failed:
+        return ['Failure! Above, the first ERROR line, or the error the runner itself raised, says why the run failed.']
+    lines = []
+    for job, ended in failed.items():
+        means: str | None
+        if isinstance(ended, int):
+            how, means = f'exited with status {ended}', _STATUS_MEANS.get(ended)
+        elif ended is not None:
+            how, means = f'was ended by {ended}', _STATUS_MEANS[137] if ended == 'SIGKILL' else None
+        else:
+            how, means = 'could not run, or its outputs could not be collected', None
+        lines.append(f'Failure! {spelled(job)} {how}' + (f', which means {means}' if means else '')
+                     + '. Its own messages are above, under its name.')
+    return lines
+
+
+def _report_outcome(retval: int | None, cmd: list[str], basepath: str, workflow_name: str,
+                    failed: FailedJobs) -> None:
     """Print the success/failure summary message after execution."""
     if retval == 0:
         output_location = cmd[cmd.index('--outdir') + 1] if '--outdir' in cmd else basepath
         print(f'Success! Runner outputs are under {output_location}/')
     else:
-        print('Failure! Please scroll up and find the FIRST error message.')
-        print('(You may have to scroll up A LOT.)')
-        names_path = _names_map_path(Path(basepath), workflow_name)
+        names_path = names_map_path(Path(basepath), workflow_name)
+        spelled = (AuthoredNamesFilter(json.loads(names_path.read_text(encoding='utf-8'))).spelled
+                   if names_path.exists() else str)
+        for line in _failure_lines(failed.failed, spelled):
+            print(line, file=sys.stderr)
         if names_path.exists():
-            print(f'Emitted ids are mapped to authored names in {names_path}')
+            print(f'Emitted ids are mapped to authored names in {names_path}', file=sys.stderr)
 
 
 def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
@@ -341,6 +367,7 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
         return 0  # Do not actually run
 
     print('Running ' + cmdline)
+    failed = FailedJobs()
     with realtime.watching(plans, Path(cachedir), _analysis_command(container_engine), env=exec_env):
         if use_subprocess:
             # To run in parallel (i.e. pytest ... --workers 8 ...), we need to
@@ -349,11 +376,11 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
             retval = sub.run(cmd, check=False, env=exec_env).returncode
         else:
             retval = _execute_inprocess(cmd, cwl_runner, workflow_name, run_args_dict,
-                                        user_env_vars, yaml_path, output_directories)
+                                        user_env_vars, yaml_path, output_directories, failed)
     if use_subprocess:
         return retval  # Skip copying files to outdir/ for CI
 
-    _report_outcome(retval, cmd, basepath, workflow_name)
+    _report_outcome(retval, cmd, basepath, workflow_name, failed)
 
     return retval
 
