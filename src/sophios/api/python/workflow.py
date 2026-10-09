@@ -1068,6 +1068,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             tool_registry (Tools | None): Optional tool registry override.
 
         Raises:
+            ValueError: If a `user_env_vars` key is not an environment variable name.
             WorkflowRunError: If the runner exits non-zero. Its `exit_code` is the runner's.
             KeyboardInterrupt: On Ctrl-C. With cwltool, the runner's child processes are terminated first.
         """
