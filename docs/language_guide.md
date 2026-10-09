@@ -3,8 +3,8 @@
 This guide is for writing Sophios workflows as `.wic` files: what a document may
 contain, what each piece means, and what the compiler says when something is
 wrong. Every mistake the compiler reports carries a code such as `wic025`; this
-guide names the code next to each rule, and [section 9](#9-error-codes-you-will-meet)
-lists them all.
+guide names the code next to each rule, [Error codes](error_codes.md) lists them
+all, and `sophios --explain <code>` prints one.
 
 The Python API (`Workflow`, `Step`) builds the same documents, so every rule here
 holds for a workflow built in Python too; see the [Python Workflow API](userguide.md)
