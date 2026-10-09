@@ -222,7 +222,9 @@ def _unconstructible(node: yaml.nodes.Node, merge_keys: set[int]) -> bool:
         return False
     try:
         # Building a mapping flattens its merge keys in place; a copy keeps the tree intact.
-        _CoreConstructor().construct_object(copy.deepcopy(node), deep=True)
+        # A scalar has no merge to flatten, so only a collection needs the copy.
+        built = node if isinstance(node, yaml.nodes.ScalarNode) else copy.deepcopy(node)
+        _CoreConstructor().construct_object(built, deep=True)
     except _CONSTRUCTION_FAILURES:
         return True
     return False
@@ -256,9 +258,12 @@ def _report_unknown_tags(root: yaml.nodes.Node, file: str, diags: Diagnostics) -
                         SourceSpan.of(file, node))
         if id(node) in failing and not any(
                 id(inner) in failing and inner is not node for inner in _every_node(node)):
-            message = ('YAML cannot merge into this mapping; `<<` takes a mapping or a list of mappings'
-                       if node.tag.startswith('!')
-                       else f'YAML cannot read this value as {_tag_name(node.tag)}')
+            if node.tag.startswith('!'):
+                message = 'YAML cannot merge into this mapping; `<<` takes a mapping or a list of mappings'
+            elif node.tag not in yaml.SafeLoader.yaml_constructors:
+                message = f'unknown tag {node.tag!r}; YAML cannot construct it'
+            else:
+                message = f'YAML cannot read this value as {_tag_name(node.tag)}'
             diags.error(SophiosErrorCode.UNKNOWN_TAG, message, SourceSpan.of(file, node))
 
 

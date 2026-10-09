@@ -8,6 +8,7 @@ source span; parsing never raises — it returns an AST or diagnostics;
 InputValue is closed, so no value escapes the five forms; every diagnostic
 span indexes real source text; and every corpus document parses.
 """
+import copy
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -1569,6 +1570,29 @@ def test_unreadable_timestamp_names_the_value_not_a_tag() -> None:
     assert messages == ['YAML cannot read this value as timestamp']
 
 
+@pytest.mark.fast
+def test_an_undefined_core_tag_is_named_as_unknown() -> None:
+    """A tag YAML does not define is reported as the tag, not as a bad value."""
+    messages = [d.message for d in parse('a: !!foo 1\n', 't.wic').diagnostics]
+    assert messages == ["unknown tag 'tag:yaml.org,2002:foo'; YAML cannot construct it"]
+
+
+@pytest.mark.fast
+def test_plain_scalars_are_not_copied(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only a collection can be changed by a merge, so a scalar is built as it is."""
+    copied: list[Any] = []
+    real = copy.deepcopy
+
+    def recording(node: Any, *args: Any) -> Any:
+        copied.append(node)
+        return real(node, *args)
+
+    monkeypatch.setattr(copy, 'deepcopy', recording)
+    assert parse('a: [1, x, 2020-01-02]\nb: !!str s\n', 't.wic').ok
+    assert not [n for n in copied if isinstance(n, yaml.nodes.ScalarNode)]
+
+
+@pytest.mark.fast
 @pytest.mark.parametrize('src', [
     'a: !!merge x\n',
     'a: [!!merge x]\n',
