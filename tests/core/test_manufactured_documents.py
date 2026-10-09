@@ -207,9 +207,8 @@ def _drive_everything() -> None:
     tools = {StepId(stem, 'global'): Tool(str(adapters / f'{stem}.cwl'),
                                           yaml.safe_load((adapters / f'{stem}.cwl').read_text(encoding='utf-8')))
              for stem in ('append', 'echo')}
-    options, graph_settings = default_compilation_settings()
     realtime.compile_analyses((
         Declaration('wf', 'append', '*.txt', 2, 60, {'in': {'file': 'empty.txt', 'str': 'Hello'}}),
         Declaration('wf', 'helloworld.wic', '*.txt', 2, 60, {'(1, echo)': {'in': {'message': 'Hi'}}}),
     ), {'global': {'helloworld': REPO_ROOT / 'docs' / 'tutorials' / 'helloworld.wic'}},
-        tools, options, graph_settings)
+        tools, default_compilation_settings())

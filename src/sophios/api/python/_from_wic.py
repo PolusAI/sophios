@@ -30,7 +30,6 @@ from sophios.ir.resolve import ResolvedDocument, ResolvedStep, resolve
 from sophios.lang import (CwlRecord, Diagnostic, Document, EdgeRef, InlineLiteral, InputValue, RawCwlRef,
                           Severity, SophiosError, SophiosErrorCode, SourceSpan, UnresolvedName, WicSidecar,
                           resolve_lang_version, to_json)
-from sophios.utils_graphs import get_graph_reps
 from sophios.wic_types import Tools
 
 from ._ports import OutputParameter, _validate_namespace_name
@@ -99,9 +98,8 @@ def workflow_from_wic(path: Path, tool_registry: Tools,
     """
     bundle = bundle_from_disk(path, {namespace: dict(paths) for namespace, paths in workflow_paths.items()},
                               tool_registry)
-    compiler_options, graph_settings = default_compilation_settings()
-    compiler.compile_source(bundle, compiler_options, graph_settings,
-                            relative_run_path=True, testing=False, graph_target=get_graph_reps(path.stem))
+    compiler_options = default_compilation_settings()
+    compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=False)
     assert bundle.parsed.document is not None  # the compile above raised otherwise
     version = resolve_lang_version(compiler_options.get('lang_version'), bundle.lang_version_pins)
     resolved = resolve(bundle.parsed.document, bundle.registry, name=bundle.name, lang_version=version)

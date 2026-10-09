@@ -39,7 +39,6 @@ from ._ports import (
 )
 from ._utils import (
     caller_span as _caller_span,
-    get_value_from_cfg as _get_value_from_cfg,
     load_yaml as _load_yaml,
     serialize_value as _serialize_value,
 )
@@ -55,6 +54,7 @@ from ._workflow_runtime import (
     populate_parameters as _populate_parameters,
     run_workflow as _run_workflow,
     silence_autodiscovery_logging as _silence_autodiscovery_logging,
+    step_run as _step_run,
     validate_step_assignment as _validate_step_assignment,
     write_workflow_wic as _write_workflow_wic,
 )
@@ -394,7 +394,7 @@ class Step(_ProcessBase):
     def __init__(
         self,
         source: StrPath,
-        config_path: StrPath | None = None,
+        step_inputs_file: StrPath | None = None,
         *,
         clt_path: None = None,
         step_name: str | None = None,
@@ -406,7 +406,7 @@ class Step(_ProcessBase):
     def __init__(
         self,
         source: None = None,
-        config_path: StrPath | None = None,
+        step_inputs_file: StrPath | None = None,
         *,
         clt_path: StrPath,
         step_name: str | None = None,
@@ -418,7 +418,7 @@ class Step(_ProcessBase):
     def __init__(
         self,
         source: Any,
-        config_path: None = None,
+        step_inputs_file: None = None,
         *,
         clt_path: None = None,
         step_name: str | None = None,
@@ -429,7 +429,7 @@ class Step(_ProcessBase):
     def __init__(
         self,
         source: Any | None = None,
-        config_path: StrPath | None = None,
+        step_inputs_file: StrPath | None = None,
         *,
         clt_path: StrPath | None = None,
         step_name: str | None = None,
@@ -442,8 +442,10 @@ class Step(_ProcessBase):
                 CWL path retained for compatibility.
             clt_path (StrPath | None): Explicit path to a CWL tool definition.
                 This is the preferred file-backed constructor spelling.
-            config_path (StrPath | None): Optional YAML config used to pre-bind
-                file-backed step inputs.
+            step_inputs_file (StrPath | None): A YAML file that maps this step's input
+                names to values, each bound as it is written. For a local run, a
+                relative path in it is read from the working directory, as a path
+                bound in Python is.
             step_name (str | None): Optional workflow step name override.
             tool_registry (Tools | None): Optional fallback registry for known tools.
                 CommandLineTool-like objects must expose ``name`` and
@@ -451,7 +453,7 @@ class Step(_ProcessBase):
                 ``tool_builder.CommandLineTool``.
 
         Raises:
-            TypeError: If the source or config uses an unsupported type.
+            TypeError: If the source or step_inputs_file uses an unsupported type.
             InvalidCLTError: If the CWL tool cannot be loaded from disk or the registry.
 
         Returns:
@@ -466,10 +468,10 @@ class Step(_ProcessBase):
         match source:
             case str() | Path() as path:
                 clt_path_ = _coerce_path(path, field_name="clt_path")
-                config_path_ = _coerce_path(config_path, field_name="config_path", allow_none=True)
+                step_inputs_file_ = _coerce_path(step_inputs_file, field_name="step_inputs_file", allow_none=True)
                 assert clt_path_ is not None
                 clt, yaml_file = _load_clt(clt_path_, resolved_registry)
-                cfg_yaml = _load_yaml(config_path_) if config_path_ is not None else {}
+                cfg_yaml = _load_yaml(step_inputs_file_) if step_inputs_file_ is not None else {}
 
                 self._initialize_loaded_tool(
                     clt=clt,
@@ -480,8 +482,8 @@ class Step(_ProcessBase):
                     process_name=step_name,
                 )
             case _ if (tool_name := _tool_builder_source_name(source)) is not None:
-                if config_path is not None:
-                    raise TypeError("config_path is only supported when Step is created from a CWL file path")
+                if step_inputs_file is not None:
+                    raise TypeError("step_inputs_file is only supported when Step is created from a CWL file path")
                 assert source is not None
                 resolved_name = step_name or tool_name
                 run_path = Path(f"{resolved_name}.cwl")
@@ -511,7 +513,7 @@ class Step(_ProcessBase):
         *,
         process_name: str | None = None,
         run_path: StrPath | None = None,
-        config: Mapping[str, Any] | None = None,
+        step_inputs: Mapping[str, Any] | None = None,
         tool_registry: Tools | None = None,
     ) -> "Step":
         # pylint: disable=too-many-arguments
@@ -521,7 +523,8 @@ class Step(_ProcessBase):
             document (Mapping[str, Any]): Parsed CWL CommandLineTool fields.
             process_name (str | None): Optional step name override.
             run_path (StrPath | None): Optional virtual ``.cwl`` path for compiler bookkeeping.
-            config (Mapping[str, Any] | None): Optional input values to pre-bind.
+            step_inputs (Mapping[str, Any] | None): Input values to bind on the step, by input
+                name, as written.
             tool_registry (Tools | None): Optional tool registry retained on the step.
 
         Raises:
@@ -543,7 +546,7 @@ class Step(_ProcessBase):
             clt=clt,
             yaml_file=yaml_file,
             clt_path=clt_path,
-            cfg_yaml=dict(config or {}),
+            cfg_yaml=dict(step_inputs or {}),
             tool_registry=resolved_registry,
             process_name=process_name,
         )
@@ -560,7 +563,7 @@ class Step(_ProcessBase):
         process_name: str | None = None,
     ) -> None:
         # pylint: disable=too-many-arguments
-        """Populate a step from an already parsed CLT and optional config."""
+        """Populate a step from an already parsed CLT and optional step inputs."""
         resolved_name = process_name or clt_path.stem
 
         self.clt = clt
@@ -696,8 +699,9 @@ class Step(_ProcessBase):
         return _lookup_parameter(self._outputs, name, owner_name=self.process_name, kind="output")
 
     def _set_from_io_cfg(self) -> None:
+        """Bind each value as it is written: whatever runs the workflow checks the paths it names."""
         for name, value in self.cfg_yaml.items():
-            setattr(self, name, _get_value_from_cfg(value))
+            setattr(self, name, value)
 
     def _validate(self) -> None:
         """Validate step-local settings before compilation.
@@ -717,8 +721,8 @@ class Step(_ProcessBase):
         return []
 
     def _as_workflow_step(self) -> nodes.Step:
-        """Return this step as the language's step node, with `run:` naming its tool's file."""
-        interpreted: list[tuple[str, OpaqueCwl]] = [("run", f"{self.clt_path.stem}.cwl")]
+        """Return this step as the language's step node, with `run:` naming its tool."""
+        interpreted: list[tuple[str, OpaqueCwl]] = [("run", _step_run(self.clt_path))]
         if self.scatter:
             interpreted += [("scatter", [input_port.name for input_port in self.scatter]),
                             ("scatterMethod", self.scatterMethod or ScatterMethod.dotproduct.value)]
@@ -964,9 +968,12 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         The bundle is the root ``<name>.wic``, one ``<child>.wic`` per nested
         workflow and one ``<stem>.cwl`` per distinct tool. Every step carries
         ``run: <stem>.cwl`` and every workflow output names its authored step.
-        Only the tool document is written: files it refers to by relative path
-        (such as a ``$import``) are not copied. Raises if ``<stem>.cwl`` already
-        exists in the directory with a different tool.
+        A real-time analysis declaration is the exception: it carries
+        ``run: cwl_subinterpreter``, the registry's adapter, which is not
+        written, so the bundle still declares the analysis. Only the tool
+        document is written: files it refers to by relative path (such as a
+        ``$import``) are not copied. Raises if ``<stem>.cwl`` already exists in
+        the directory with a different tool.
 
         Args:
             path (StrPath | None): Destination ``.wic`` path or output
@@ -1065,6 +1072,9 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
 
         A real-time analysis that is a ``.wic`` file comes from ``workflow_paths``,
         shaped ``{namespace: {stem: path}}`` like ``sophios.plugins.get_yml_paths``.
+
+        A relative File or Directory path bound in Python is read from the working
+        directory, as Python reads one.
 
         Args:
             run_args_dict (dict[str, str] | None): Runtime CLI options for local execution.

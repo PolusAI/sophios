@@ -20,7 +20,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import pytest
 import yaml
@@ -105,7 +105,51 @@ def _lane_argvs() -> list[list[str]]:
                                            for argv in _invocations(lane)})]
 
 
+#: The refs a branch dispatch hands a lane: one per repository it pairs.
+DISPATCHED_REFS: Final = ('wic_ref', 'mm-workflows_ref', 'image-workflows_ref')
+
+
+def _dispatched_workflows() -> dict[str, Any]:
+    """Each workflow a branch dispatch starts, by name: those taking the paired refs as inputs."""
+    found = {}
+    for workflow in sorted(WORKFLOWS.glob('*.yml')):
+        script = yaml.safe_load(workflow.read_text(encoding='utf-8'))
+        # YAML 1.1 reads the bare key `on` as the boolean True.
+        triggers = script.get('on') or script.get(True) or {}
+        inputs = (triggers.get('workflow_dispatch') or {}).get('inputs') or {}
+        if all(ref in inputs for ref in DISPATCHED_REFS):
+            found[workflow.name] = script
+    return found
+
+
 @pytest.mark.fast
+def test_every_dispatched_run_names_the_refs_it_tests() -> None:
+    """A dispatched run's name and its summary say which three refs ran together.
+
+    A branch dispatch starts the lanes on the fork, attached to whatever sha
+    the dispatch itself ran on, and pairs same-named branches of sophios,
+    mm-workflows and image-workflows. The run page therefore does not say which
+    three refs were tested, and the inputs only carry refs, never commits. So
+    the run name must spell the three refs, and some step must write the three
+    commits it checked out to the job summary, so a green run can be read back
+    to what it ran.
+    """
+    dispatched = _dispatched_workflows()
+    assert {'lint_and_test.yml', 'run_workflows.yml'} <= dispatched.keys()
+    for name, script in dispatched.items():
+        run_name = str(script.get('run-name') or '')
+        unnamed = [ref for ref in DISPATCHED_REFS if f'inputs.{ref}' not in run_name]
+        assert not unnamed, f'{name}: run-name does not name {unnamed}'
+
+        summaries = [
+            step for job in (script.get('jobs') or {}).values() for step in (job.get('steps') or [])
+            if 'GITHUB_STEP_SUMMARY' in str(step.get('run') or '')
+            and all(f'inputs.{ref}' in ' '.join(map(str, (step.get('env') or {}).values()))
+                    for ref in DISPATCHED_REFS)
+        ]
+        assert summaries, f'{name}: no step writes the three checked-out refs to the job summary'
+
+
 @pytest.mark.fast
 def test_no_lane_checks_our_own_repo_out_at_a_literal_ref() -> None:
     """A lane tests the ref it was triggered on, or it tests nothing it claims.
@@ -146,6 +190,25 @@ def test_the_weekly_property_lane_runs_the_whole_oracle_suite() -> None:
     *lanes, oracle = _collect_all([*_invocations(WORKFLOWS / 'property_weekly.yml'), list(ORACLE_FILES)])
     missing = sorted(oracle - set().union(*lanes))
     assert not missing, 'the weekly property lane does not run:\n  ' + '\n  '.join(missing)
+
+
+@pytest.mark.fast
+def test_the_corpus_lane_round_trips_every_wic_root_through_the_python_api() -> None:
+    """The lane whose config reaches the external corpora runs the from_wic properties.
+
+    `test_python_api_from_wic.py` parametrizes its two properties over every
+    `.wic` root `search_paths_wic` reaches. Only `run_workflows.yml` writes a
+    config that reaches the mm-workflows and image-workflows roots; the
+    packaging lane also selects the file, but checks out neither corpus, so
+    there the properties see the repository's own roots and nothing else.
+    """
+    properties = {
+        'tests/core/test_python_api_from_wic.py::test_a_wic_file_and_its_python_objects_compile_alike',
+        'tests/core/test_python_api_from_wic.py::test_write_wic_of_a_loaded_workflow_compiles_identically',
+    }
+    selected = set().union(*_collect_all(_invocations(WORKFLOWS / 'run_workflows.yml')))
+    missing = sorted(properties - selected)
+    assert not missing, 'run_workflows.yml does not run:\n  ' + '\n  '.join(missing)
 
 
 def test_the_census_sees_the_repo() -> None:
@@ -261,8 +324,8 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 #: named its file, so none has ever executed on Windows. Measured on the
 #: `Lint And Test` Windows job, where they fail on `import pwd`.
 #:
-#: `test_emit.py`'s validator pair exercise cwltool itself; the phase lane
-#: collects their platform-neutral siblings on Windows and these two run on
+#: `test_emit.py`'s validator tests exercise cwltool itself; the phase lane
+#: collects their platform-neutral siblings on Windows and these run on
 #: the POSIX matrix legs where cwltool's `pwd` dependency is available.
 #:
 #: The list is the claim. Growing it is a deliberate edit here, not a marker
@@ -270,6 +333,7 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 WINDOWS_EXCLUDED: Final = frozenset({
     'tests/core/test_emit.py::test_emit_validates_as_cwl_v1_2',
     'tests/core/test_emit.py::test_validator_rejects_the_independent_invalid_control',
+    'tests/core/test_emit.py::test_a_compiled_string_job_input_validates',
     # A strict xfail on one cwltool validation of a `schemed` workflow, under a
     # second. It states the SchemaDefRequirement gap the generators exclude,
     # which only cwltool's validator can show, so it runs where the pair does.
@@ -298,11 +362,20 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # given and run on Windows.
     'tests/core/test_plain_cwl.py::test_a_plain_cwl_workflow_runs_as_it_is',
     'tests/core/test_plain_cwl.py::test_a_conformance_workflow_runs_through_sophios_as_cwltool_runs_it',
+    # One `Workflow.run()` of a one-step echo, by cwltool in a new interpreter, under
+    # a second. Only a new interpreter shows a root-logger handler added by an
+    # import, which stops cwltool's in-process run; the import check itself runs
+    # on every leg.
+    'tests/core/test_python_api_workflow.py::test_workflow_run_runs_cwltool_in_the_callers_process',
     # A workflow run by cwltool through --run_local, with two real-time analyses
     # run by cwltool beside it, one of them failing, in one run of about eight
     # seconds. The watcher's own tests use a stand-in for cwltool and run on
     # every leg.
     'tests/core/test_realtime.py::test_the_analysis_runs_beside_the_workflow_and_never_changes_its_outcome',
+    # One real cwltool run of a failing one-line tool, under a second. It pins the
+    # wording of cwltool's job-failure record, which the summary reads; the other
+    # tests of the summary use a stand-in for cwltool and run on every leg.
+    'tests/core/test_python_api_workflow.py::test_a_real_failed_step_is_named_with_its_status',
 })
 
 

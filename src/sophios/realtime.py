@@ -33,7 +33,7 @@ from .ir.realtime import Declaration
 from .lang.diagnostics import Diagnostic, Severity, SophiosError
 from .lang.error_codes import SophiosErrorCode
 from .utils_yaml import Key
-from .wic_types import CompilerOptions, GraphSettings, Tools, Yaml
+from .wic_types import CompilerOptions, Tools, Yaml
 
 #: The directory, under the base path and under the cachedir, that holds each analysis's files.
 DIRECTORY: Final = 'realtime'
@@ -50,8 +50,7 @@ class Analysis:
 
 def compile_analyses(declarations: tuple[Declaration, ...],
                      yml_paths: dict[str, dict[str, Path]], tools: Tools,
-                     compiler_options: CompilerOptions,
-                     graph_settings: GraphSettings) -> tuple[Analysis, ...]:
+                     compiler_options: CompilerOptions) -> tuple[Analysis, ...]:
     """Compile each declaration's analysis once, as a one-step workflow.
 
     Raises:
@@ -69,8 +68,7 @@ def compile_analyses(declarations: tuple[Declaration, ...],
         source = yaml.dump(_wrapper(declaration), Dumper=io.NoAliasDumper, sort_keys=False, line_break='\n')
         try:
             bundle = frontdoor.bundle_from_source(source, f'{Path(declaration.analysis).stem}_only', yml_paths, tools)
-            result = compiler.compile_source(bundle, compiler_options, graph_settings,
-                                             relative_run_path=True, testing=True)
+            result = compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=True)
         except SophiosError as e:
             raise SophiosError(Diagnostic(
                 Severity.ERROR, SophiosErrorCode.REALTIME_DECLARATION,

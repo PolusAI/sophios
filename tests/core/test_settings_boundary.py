@@ -28,6 +28,7 @@ import yaml
 
 import sophios.cli
 import sophios.compiler
+import sophios.drawing
 import sophios.main
 from sophios.wic_types import CompilerOptions, GraphSettings
 
@@ -42,9 +43,8 @@ def test_defaults_are_available_without_a_command_line() -> None:
     take, and therefore the one the corpus workflows compile through. Deleting
     it as "subsumed" was wrong: the property never names this function.
     """
-    options, graph = sophios.cli.default_compilation_settings()
+    options = sophios.cli.default_compilation_settings()
     assert options['allow_raw_cwl'] is False
-    assert graph['graph_dark_theme'] is False
 
 
 @pytest.mark.fast
@@ -63,11 +63,11 @@ def test_the_converter_requires_arguments() -> None:
 
 
 # --------------------------------------------------------------------------
-# Every setting the user chooses is the setting the compiler is handed
+# Every setting the user chooses is the setting the compiler or the drawing is handed
 # --------------------------------------------------------------------------
 
-#: A minimal workflow: enough to reach the compiler, cheap enough to run once
-#: per setting. Compilation is intercepted before it does any work.
+#: A minimal workflow: enough to reach the compiler and the drawing, cheap enough to run once
+#: per setting. The compiler's options are caught before it does any work.
 PROBE_WORKFLOW: Final = {'steps': [{'id': 'touch', 'in': {'filename': {'wic_inline_input': 'empty.txt'}}}]}
 
 
@@ -79,14 +79,19 @@ class _Delivered(BaseException):
     write an error file.
     """
 
-    def __init__(self, settings: tuple[Any, Any]) -> None:
+    def __init__(self, settings: Any) -> None:
         super().__init__('settings captured')
         self.settings = settings
 
 
+#: Where each settings dict is handed over, by its index in `_settings_fields`: the function, and
+#: the position of the dict among its arguments. The drawing is made only with `--graphviz`.
+_RECEIVERS: Final = ((sophios.compiler, 'compile_source', 1, ()), (sophios.drawing, 'draw', 2, ('--graphviz',)))
+
+
 @pytest.fixture(name='settings_from_cli')
-def _settings_from_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., tuple[Any, Any]]:
-    """Run the real CLI and return the two settings dicts the compiler got.
+def _settings_from_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., Any]:
+    """Run the real CLI and return the settings dict the compiler (index 0) or the drawing (index 1) got.
 
     Deliberately driven through `main._main()` with a real argv rather than by
     calling the converter: the bug this guards was never in the conversion, it
@@ -94,27 +99,25 @@ def _settings_from_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Calla
     anyway. A test of the converter alone passed throughout.
 
     That makes these integration tests, and `fast` is a claim about cost
-    rather than about layer: compilation is intercepted before it does any
-    work, so a case runs in well under a second. They stay in the fast lane
-    because a delivery bug is exactly the kind one wants to hear about on the
-    first run, not the nightly one.
+    rather than about layer: a one-step workflow compiles in well under a
+    second. They stay in the fast lane because a delivery bug is exactly the
+    kind one wants to hear about on the first run, not the nightly one.
     """
-    def run(*flags: str) -> tuple[Any, Any]:
+    def run(index: int, *flags: str) -> Any:
         workflow = tmp_path / 'probe.wic'
         workflow.write_text(yaml.safe_dump(PROBE_WORKFLOW), encoding='utf-8')
+        module, receiver, position, needs = _RECEIVERS[index]
 
-        def capture(_bundle: Any, compiler_options: Any, graph_settings: Any,
-                    *_args: Any, **_kwargs: Any) -> None:
-            raise _Delivered((compiler_options, graph_settings))
+        def capture(*args: Any, **_kwargs: Any) -> None:
+            raise _Delivered(args[position])
 
-        # The CLI reads files, so it enters through the source door.
-        monkeypatch.setattr(sophios.compiler, 'compile_source', capture)
-        monkeypatch.setattr(sys, 'argv', ['sophios', '--yaml', str(workflow), *flags])
+        monkeypatch.setattr(module, receiver, capture)
+        monkeypatch.setattr(sys, 'argv', ['sophios', '--yaml', str(workflow), *needs, *flags])
         try:
             sophios.main._main(*sophios.cli.parser.parse_known_args())
         except _Delivered as delivered:
             return delivered.settings
-        raise AssertionError('the compiler was never reached')
+        raise AssertionError(f'{receiver} was never reached')
     return run
 
 
@@ -156,9 +159,9 @@ _DELIVERABLE: Final = [field for field in _settings_fields()
 @pytest.mark.fast
 @pytest.mark.parametrize('index,name,annotation', _DELIVERABLE,
                          ids=[name for _index, name, _annotation in _DELIVERABLE])
-def test_every_setting_reaches_the_compiler(settings_from_cli: Callable[..., tuple[Any, Any]],
+def test_every_setting_reaches_the_compiler(settings_from_cli: Callable[..., Any],
                                             index: int, name: str, annotation: type) -> None:
-    """A setting chosen on the command line is the setting the compiler gets.
+    """A setting chosen on the command line is the setting the compiler, or the drawing, gets.
 
     One property instead of a test per flag, and derived from the settings
     types instead of a list someone maintains. Every delivery bug found so far
@@ -167,8 +170,8 @@ def test_every_setting_reaches_the_compiler(settings_from_cli: Callable[..., tup
     defaults at once.
     """
     flags, expected = _non_default(name, annotation)
-    settings = settings_from_cli(*flags)
-    assert settings[index][name] == expected, (
-        f'--{name} was set on the command line but the compiler received '
-        f'{settings[index][name]!r} instead of {expected!r}'
+    settings = settings_from_cli(index, *flags)
+    assert settings[name] == expected, (
+        f'--{name} was set on the command line but {_RECEIVERS[index][1]} received '
+        f'{settings[name]!r} instead of {expected!r}'
     )

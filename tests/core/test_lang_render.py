@@ -31,19 +31,19 @@ from sophios.lang import (
 )
 from sophios.lang.render import render
 from sophios.lang.spans import SourceSpan
-from sophios.utils_yaml import wic_loader
 
 from .budgets import budget
 from .strategies import documents, scalar_payload_texts
 
 from .wic_corpus import CORPUS, corpus_id
+from .wic_reading import YamlWithSophiosTagsOpaque
 
 FAST = budget(200)
 
 #: The spellings whose source text IS the scalar's content — every payload
 #: above except the quoted ones, where the quotes belong to the YAML syntax
-#: rather than to the scalar, and the tagged form cannot carry them at all
-#: (the string '0' is the standing example; it renders desugared).
+#: rather than to the scalar: `!ii '0'` is the text 0, which the writer
+#: spells from the value, quotes and all.
 unquoted_spellings = scalar_payload_texts.filter(lambda text: not text.startswith("'"))
 
 
@@ -173,9 +173,10 @@ def test_round_trip_preserves_structure(source: str) -> None:
 
     Quantified over the shared full-language generator (both step forms,
     both spellings, outputs, nested sidecars) plus the quoting-hostile
-    literals — and the rendered text must also load through `wic_loader`,
-    since a renderer that emits what the loader rejects would be writing a
-    dialect — a differential oracle, not self-consistency.
+    literals — and the rendered text must also be YAML that `yaml.SafeLoader`
+    loads with the Sophios tags opaque, since a renderer that emits what YAML
+    rejects would be writing a dialect — a differential oracle, not
+    self-consistency.
     """
     first = parse(source, 'a.wic')
     assert first.ok and first.document is not None
@@ -187,7 +188,7 @@ def test_round_trip_preserves_structure(source: str) -> None:
 
     assert _shape(second.document) == _shape(first.document)
     if rendered:
-        yaml.load(rendered, Loader=wic_loader())  # the loader agrees too
+        yaml.load(rendered, Loader=YamlWithSophiosTagsOpaque)  # YAML agrees too
 
 
 @pytest.mark.fast
@@ -231,29 +232,29 @@ def test_render_emits_the_tagged_spelling() -> None:
     assert 'wic_inline_input' not in text
 
 
-#: A value, and whether the renderer can spell it as an `!ii` payload.
+#: A value the renderer must spell as an `!ii` payload.
 #:
 #: These reach the renderer with no source text behind them, which is the
 #: state every document built through the Python API is in. A parsed literal
 #: remembers how it was written and is transcribed verbatim, so the
 #: round-trip properties — `@example('!ii .nan')` included — never reach the
 #: code that has to *choose* a spelling.
-SYNTHESIZED: Final[tuple[tuple[str, Any, bool], ...]] = (
-    ('a NaN is tagged; it is the one value not equal to itself', float('nan'), True),
-    ('an infinity is tagged', float('inf'), True),
-    ("the string '0' desugars; a tag would re-type it to an int", '0', False),
-    ('an ordinary string is tagged', 'plain', True),
+SYNTHESIZED: Final[tuple[tuple[str, Any], ...]] = (
+    ('a NaN is the one value not equal to itself', float('nan')),
+    ('an infinity', float('inf')),
+    ("the string '0', which a plain spelling would re-type to an int", '0'),
+    ('an ordinary string', 'plain'),
 )
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('claim,value,tagged', SYNTHESIZED, ids=[c for c, _, _ in SYNTHESIZED])
-def test_a_synthesized_literal_gets_a_spelling_that_survives(claim: str, value: Any, tagged: bool) -> None:
-    """The renderer picks a spelling, and reparsing it returns the value."""
+@pytest.mark.parametrize('claim,value', SYNTHESIZED, ids=[c for c, _ in SYNTHESIZED])
+def test_a_synthesized_literal_gets_a_spelling_that_survives(claim: str, value: Any) -> None:
+    """The renderer picks a tagged spelling, and reparsing it returns the value."""
     span = SourceSpan('synth.wic', 1, 1, 1, 1)
     document = Document(steps=(Step(id='s', inputs=(('a', InlineLiteral(value, span)),)),))
     text = render(document)
-    assert ('!ii' in text) is tagged, f'{claim}: {text!r}'
+    assert '!ii' in text, f'{claim}: {text!r}'
 
     result = parse(text, 'synth.wic')
     assert result.ok, [str(d) for d in result.diagnostics]
@@ -343,12 +344,9 @@ def test_a_tagged_literal_keeps_its_source_spelling(spelling: str) -> None:
     assert result.document is not None
 
     payload = render(result.document).split('!ii ', 1)[1].rstrip('\n')
-    # Up to quoting, which the emitter adds when a plain scalar would be
-    # unsafe (`1:30` carries a colon). Quoting a tagged payload changes
-    # nothing: the composer strips the quotes before the content is
-    # re-resolved, which is why `!ii '1:30'` and `!ii 1:30` mean the same
-    # thing and why neither can be confused with the reconstructed `!ii 90`.
-    assert payload in (spelling, f"'{spelling}'"), f'{spelling!r} came back as {payload!r}'
+    # Exactly, quotes included: a plain spelling must come back plain, since
+    # `!ii '1:30'` is the text 1:30 where `!ii 1:30` is the number 90.
+    assert payload == spelling, f'{spelling!r} came back as {payload!r}'
 
 
 @pytest.mark.fast
@@ -366,29 +364,29 @@ def test_a_parsed_literal_records_the_text_it_came_from(spelling: str) -> None:
     assert literal.text == spelling
 
 
-#: Scalars whose `yaml.safe_dump` spelling the parser refuses to read back.
-#: The first four open a scalar it will not scan; the rest start a structure
-#: it will not close.
-UNSPELLABLE: Final = ('@', '*', '%', '&', ',', ':', '...', '{', '[')
+#: Strings a plain `!ii` spelling would not read back as themselves. The first
+#: row YAML types; the second it cannot scan plain, as a scalar or at all; the
+#: third it would read as a structure.
+NOT_PLAIN: Final = ('0', '007', '1:30', 'true', 'null', '~', '',
+                    '@', '*', '%', '&', ',', ':', '...', '#x', 'a: b',
+                    '{', '[')
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('literal', UNSPELLABLE)
-def test_a_literal_with_no_tagged_spelling_renders_desugared(literal: str) -> None:
-    """Deciding whether a spelling round-trips must not raise on its own probe.
+@pytest.mark.parametrize('literal', NOT_PLAIN, ids=repr)
+def test_a_string_yaml_would_not_read_as_itself_is_written_quoted(literal: str) -> None:
+    """A quoted `!ii` scalar is its text, so quoting is how the writer keeps a string a string.
 
-    `_spell_scalar` re-parses its candidate to see whether the value survives.
-    For these the re-parse raises instead of disagreeing, which is the same
-    answer -- no faithful tagged spelling -- and must be reported as one. It
-    escaped as a `ScannerError` or `ParserError` from whichever generated
-    property happened to draw such a literal, reading as a failure of that
-    property rather than of the renderer.
+    `!ii 0` is the number 0; `!ii '0'` is the text. The writer spells the
+    string `'0'` the second way, and the parser reads it back as the string.
     """
     span = SourceSpan('probe.wic', 1, 1, 1, 1)
     document = Document(steps=(Step('echo', inputs=(('message', InlineLiteral(literal, span)),)),))
 
     rendered = render(document)
 
-    # Round-trips: the desugared spelling carries what the tag cannot.
-    reloaded = yaml.load(rendered, Loader=wic_loader())
-    assert reloaded['steps'][0]['in']['message'] == {'wic_inline_input': literal}
+    assert f"message: !ii '{literal}'\n" in rendered, rendered
+    result = parse(rendered, 'probe.wic')
+    assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
+    reparsed = result.document.steps[0].input('message')
+    assert isinstance(reparsed, InlineLiteral) and reparsed.value == literal

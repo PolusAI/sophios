@@ -40,7 +40,8 @@ does with each CWL field.
 A document that is not a mapping is `wic002`; a file that is not valid YAML is
 `wic001`. A key whose value has the wrong shape is reported where the value is:
 `steps: 3` is `wic003` (a mapping was expected), `out: 3` is `wic004` (a sequence
-was expected), and a mapping key that is itself a list or a mapping is `wic005`.
+was expected), and a mapping key that is itself a list or a mapping is `wic005`. So
+is a key carrying a Sophios tag: a key is a name, and `!ii a: b` is written `a: !ii b`.
 A YAML alias that contains itself (`x: !ii &a [*a]`) is `wic030`, unless the key
 expects another shape and reports that first (`steps: &a [*a]` is `wic003`).
 
@@ -219,10 +220,13 @@ input. Two conversions remain, because neither loses anything:
 - an integer on a `float` input is that float (`!ii 1` is `1.0`);
 - a number or a boolean on a `string` input is its text, so `!ii 20` binds `"20"`.
 
-Under `!ii` a scalar is read by what it says, whatever its quotes: `!ii '20'` is the
-number 20, which is why the second conversion exists. The desugared spelling
-(section 3.7) keeps the quotes: `{wic_inline_input: '007'}` is the text `007`, and
-on an `int` input it is `wic020`.
+Under `!ii` a scalar is read as YAML reads the same scalar. Unquoted, it is read by
+what it says: `!ii 20` is the number 20 and `!ii 007` is the number 7. Quoted, with
+either kind of quote, it is its text: `!ii '20'` is the text `20`, `!ii '007'` is the
+text `007`, and on an `int` input each is `wic020`. Quote a literal to keep it text;
+leave it unquoted for a number, a boolean or a date. The desugared spelling (section
+3.7) is plain YAML and reads the same way: `{wic_inline_input: '007'}` is the text
+`007`.
 
 YAML reads `1e-5` as text, not as a number: a float needs a decimal point and a
 signed exponent. `!ii 1e-5` on a `float` input is `wic020`; write `!ii 1.0e-5`.
@@ -669,6 +673,21 @@ A bare `wic:` with nothing under it is an empty block, not an error.
 know is `wic017`; two pins that disagree within one compilation are `wic018`. A
 `cwlVersion:` Sophios cannot run (anything but `v1.0`, `v1.1` or `v1.2`) is
 `wic035`. The compiled workflow always says `v1.2`.
+
+`graphviz` changes only the drawing `--graphviz` writes:
+
+- `label` on a step replaces the step's id as the label of its box. Write `\n`
+  for a line break. With `--graph_label_stepname` every box shows its generated
+  step name instead, a `label` included.
+- `label` on a workflow, or on the `wic: steps:` entry that calls it, titles the
+  workflow's cluster. A subworkflow without one is titled with the id it is
+  called by (`setup.wic`).
+- `style` on a step is appended to the box's own `rounded, filled`. On a
+  workflow it styles the cluster; `invis` hides the cluster and the box of the
+  step that calls it.
+- `ranksame` lists steps of this document, as `(index, name)`, to draw on one
+  rank. An entry that addresses no step is ignored, with a line on stderr like
+  the one for a stale `wic: steps:` key.
 
 ## 8. What inference does and how to pin it
 
