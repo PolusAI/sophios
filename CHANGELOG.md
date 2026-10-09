@@ -51,6 +51,12 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
 
 ### Command line
 
+- The runner's default output directory is named after the workflow too,
+  `outdir_<runner>_<workflow>_<timestamp>`, like the provenance, summary and
+  job-store paths beside it. Two different workflows started in the same
+  second from one directory no longer share it, where cwltool could fail with
+  `File exists` or merge their outputs. Two runs of the same workflow started
+  in the same second from one directory still share every path the run writes.
 - Diagnostics are printed on stderr, each with its `file:line:col` and code, and
   so are the compile-failure banners. A script that read them from stdout must
   read stderr.

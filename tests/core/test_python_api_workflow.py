@@ -1119,6 +1119,28 @@ def test_build_cmd_uses_user_outdir(tmp_path: Path, cwl_runner: str) -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize("cwl_runner,runner", [("cwltool", "cwltool"), ("toil-cwl-runner", "toil")])
+def test_two_workflows_started_in_the_same_second_get_their_own_outdirs(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cwl_runner: str, runner: str) -> None:
+    """The default output directory is named after the workflow, as provenance, the summary and the
+    job store are, so two workflows started in the same second from one basepath never share it."""
+    class Frozen(run_local.datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> "Frozen":
+            return cls(2026, 10, 9, 12, 2, 16)
+
+    monkeypatch.setattr(run_local, "datetime", Frozen)
+    base = tmp_path.resolve()
+    outdirs = []
+    for name in ("bbbc", "python_script_demo"):
+        cmd = run_local.build_cmd(name, str(base), cwl_runner, "docker", passthrough_args=[])
+        outdirs.append(cmd[cmd.index("--outdir") + 1])
+
+    assert outdirs == [f"{base}/outdir_{runner}_bbbc_2026_10_09_12.02.16",
+                       f"{base}/outdir_{runner}_python_script_demo_2026_10_09_12.02.16"]
+
+
+@pytest.mark.fast
 def test_build_cmd_is_quiet_unless_told_otherwise(tmp_path: Path) -> None:
     """`--quiet` is on for callers that say nothing and off when `quiet=False`, so `--debug` can be heard."""
     base = str(tmp_path / "exec")

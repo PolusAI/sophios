@@ -97,12 +97,17 @@ def generate_run_script(cmdline: str) -> None:
     os.chmod('run.sh', st.st_mode | stat.S_IEXEC)
 
 
-def _runner_outdir(basepath: str, cwl_runner: str, date_time: str, outdir: str | None) -> str:
-    """Return the explicit or default output directory for a CWL runner."""
+def _runner_outdir(basepath: str, workflow_name: str, cwl_runner: str, date_time: str, outdir: str | None) -> str:
+    """Return the explicit output directory, else the default one.
+
+    The default is named after the workflow, like every other path a run writes (provenance, the
+    summary, the job store), so two workflows started in the same second from one basepath never
+    share it.
+    """
     if outdir:
         return str(Path(outdir).absolute().resolve())
     runner_name = 'cwltool' if cwl_runner == 'cwltool' else 'toil'
-    return f'{basepath}/outdir_{runner_name}_{date_time}'
+    return f'{basepath}/outdir_{runner_name}_{workflow_name}_{date_time}'
 
 
 def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
@@ -148,7 +153,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
     path_check = ['--relax-path-checks']
     now = datetime.now()
     date_time = now.strftime("%Y_%m_%d_%H.%M.%S")
-    runner_outdir = _runner_outdir(basepath, cwl_runner, date_time, outdir)
+    runner_outdir = _runner_outdir(basepath, workflow_name, cwl_runner, date_time, outdir)
     # NOTE: Using --leave-outputs to disable --outdir
     # See https://github.com/dnanexus/dx-cwl/issues/20
     # --outdir has one or more bugs which will cause workflows to fail!!!
