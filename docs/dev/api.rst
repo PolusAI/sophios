@@ -14,6 +14,10 @@ sophios.compute_request
 .. automodule:: sophios.compute_request
    :no-index:
 
+sophios.drawing
+------------------------------------
+.. automodule:: sophios.drawing
+
 sophios.input_output
 ------------------------------------
 .. automodule:: sophios.input_output
@@ -49,10 +53,6 @@ sophios.utils
 sophios.utils_cwl
 ------------------------------------
 .. automodule:: sophios.utils_cwl
-
-sophios.utils_graphs
-------------------------------------
-.. automodule:: sophios.utils_graphs
 
 sophios.utils_yaml
 ------------------------------------

@@ -5,25 +5,23 @@ the space the properties quantify over is the space the types admit rather than
 the space a dict builder imagined. Hypothesis shrinks the AST, so a
 counterexample arrives as a minimal document instead of a minimal string.
 
-The projection runs `render` then `yaml.load(..., Loader=wic_loader())` — the
-compiler's own loader, not a third path — so the two front ends disagreeing is
-a failure rather than a blind spot. Step ids name `synthetic_tools` stems and
-bindings name that tool's real inputs, so what is drawn is a workflow the
-compiler can resolve.
+The projection runs `render` then `parse` — the compiler's own reader, not a
+third path — and hands the compiler `to_json`'s spelling of what it read, so the
+writer and the reader disagreeing is a failure rather than a blind spot. Step
+ids name `synthetic_tools` stems and bindings name that tool's real inputs, so
+what is drawn is a workflow the compiler can resolve.
 """
 import copy
 from typing import Any, Callable, Final, cast
 
-import yaml
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
 from sophios import utils_cwl
 from sophios.lang import (SophiosErrorCode, CwlRecord, Document, EdgeDef, EdgeRef, Grammar, InlineLiteral, InputValue,
                           OpaqueCwl, OutputBinding, RawCwlRef, Step, StepKey, UnresolvedName, WicSidecar,
-                          render)
+                          parse, render, to_json)
 from sophios.lang.spans import SourceSpan
-from sophios.utils_yaml import wic_loader
 from sophios.wic_types import Yaml
 
 from .reference_model import may_reference
@@ -539,8 +537,9 @@ def to_yml(document: Document) -> Yaml:
     runs after desugaring so the attachment loop sees canonical list-form steps
     regardless of which surface form the document used.
     """
-    loaded: Yaml = utils_cwl.desugar_into_canonical_normal_form(
-        yaml.load(render(document), Loader=wic_loader()))
+    reread = parse(render(document), 'generated.wic')
+    assert reread.ok and reread.document is not None, [str(d) for d in reread.diagnostics]
+    loaded: Yaml = utils_cwl.desugar_into_canonical_normal_form(to_json(reread.document))
     for step in loaded.get('steps', []):
         if isinstance(step, dict) and str(step.get('id', '')).endswith('.wic'):
             body = str(step['id']).removesuffix('.wic').rstrip('0123456789')

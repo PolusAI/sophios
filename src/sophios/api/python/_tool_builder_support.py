@@ -15,7 +15,7 @@ from types import MappingProxyType
 import warnings
 from typing import Any
 
-import yaml
+from sophios.input_output import dump_wic_yaml
 
 from ._utils import validate_python_identifier_name
 
@@ -303,7 +303,7 @@ def validate_cwl_document(
     with tempfile.TemporaryDirectory(prefix="sophios-tool-builder-") as tmpdir:
         temp_path = Path(tmpdir) / filename
         temp_path.write_text(
-            yaml.safe_dump(_render(document), sort_keys=False, line_break="\n"),
+            dump_wic_yaml(_render(document)),
             encoding="utf-8",
         )
         return _validate_path(temp_path, skip_schemas=skip_schemas)

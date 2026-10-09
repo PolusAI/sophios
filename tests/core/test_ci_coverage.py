@@ -261,8 +261,8 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 #: named its file, so none has ever executed on Windows. Measured on the
 #: `Lint And Test` Windows job, where they fail on `import pwd`.
 #:
-#: `test_emit.py`'s validator pair exercise cwltool itself; the phase lane
-#: collects their platform-neutral siblings on Windows and these two run on
+#: `test_emit.py`'s validator tests exercise cwltool itself; the phase lane
+#: collects their platform-neutral siblings on Windows and these run on
 #: the POSIX matrix legs where cwltool's `pwd` dependency is available.
 #:
 #: The list is the claim. Growing it is a deliberate edit here, not a marker
@@ -270,6 +270,7 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 WINDOWS_EXCLUDED: Final = frozenset({
     'tests/core/test_emit.py::test_emit_validates_as_cwl_v1_2',
     'tests/core/test_emit.py::test_validator_rejects_the_independent_invalid_control',
+    'tests/core/test_emit.py::test_a_compiled_string_job_input_validates',
     # A strict xfail on one cwltool validation of a `schemed` workflow, under a
     # second. It states the SchemaDefRequirement gap the generators exclude,
     # which only cwltool's validator can show, so it runs where the pair does.
@@ -298,11 +299,20 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # given and run on Windows.
     'tests/core/test_plain_cwl.py::test_a_plain_cwl_workflow_runs_as_it_is',
     'tests/core/test_plain_cwl.py::test_a_conformance_workflow_runs_through_sophios_as_cwltool_runs_it',
+    # One `Workflow.run()` of a one-step echo, by cwltool in a new interpreter, under
+    # a second. Only a new interpreter shows a root-logger handler added by an
+    # import, which stops cwltool's in-process run; the import check itself runs
+    # on every leg.
+    'tests/core/test_python_api_workflow.py::test_workflow_run_runs_cwltool_in_the_callers_process',
     # A workflow run by cwltool through --run_local, with two real-time analyses
     # run by cwltool beside it, one of them failing, in one run of about eight
     # seconds. The watcher's own tests use a stand-in for cwltool and run on
     # every leg.
     'tests/core/test_realtime.py::test_the_analysis_runs_beside_the_workflow_and_never_changes_its_outcome',
+    # One real cwltool run of a failing one-line tool, under a second. It pins the
+    # wording of cwltool's job-failure record, which the summary reads; the other
+    # tests of the summary use a stand-in for cwltool and run on every leg.
+    'tests/core/test_python_api_workflow.py::test_a_real_failed_step_is_named_with_its_status',
 })
 
 

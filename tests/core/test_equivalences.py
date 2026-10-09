@@ -197,7 +197,7 @@ def test_every_transformation_actually_transforms(rewrite: Transformation) -> No
 
     IDENTICAL-claiming rewrites need a different check than the rest, and that
     is not a loophole: `text_roundtrip` is, by construction, value-preserving
-    (checked directly — `yaml.safe_dump` then `wic_loader` round-trips this
+    (checked directly — `yaml.safe_dump` then `yaml.safe_load` round-trips this
     fixture to something `==` its input), so `apply(yml) != yml` would fail
     for a *correct* implementation just as loudly as for a broken one, and
     could never tell them apart. What a no-op could fake there is skipping the

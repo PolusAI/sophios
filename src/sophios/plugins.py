@@ -65,9 +65,9 @@ class AuthoredNamesFilter(logging.Filter):
         super().__init__()
         authored: dict[str, str] = {}
         for emitted, entry in names.get('steps', {}).items():
-            for spelled in (emitted, entry.get('id', emitted)):
-                authored[spelled] = (f"inserted step '{entry['name']}'" if entry['inserted']
-                                     else f"step {entry['index']} '{entry['name']}'")
+            for known in (emitted, entry.get('id', emitted)):
+                authored[known] = (f"inserted step '{entry['name']}'" if entry['inserted']
+                                   else f"step {entry['index']} '{entry['name']}'")
         for emitted, entry in names.get('ports', {}).items():
             if entry['steps']:
                 authored[emitted] = '/'.join([*entry['steps'], entry['port']])
@@ -79,12 +79,46 @@ class AuthoredNamesFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         if self._pattern is not None:
-            record.msg = self._pattern.sub(self._spelled, record.getMessage())
+            record.msg = self.spelled(record.getMessage())
             record.args = ()
         return True
 
-    def _spelled(self, found: re.Match[str]) -> str:
+    def spelled(self, text: str) -> str:
+        """`text` with each emitted id written as `authored (emitted)`."""
+        return self._pattern.sub(self._one, text) if self._pattern is not None else text
+
+    def _one(self, found: re.Match[str]) -> str:
         return f"{self._authored[found['id']]} ({found['id']}{found['job'] or ''})"
+
+
+class FailedJobs(logging.Filter):
+    """Collect each job an in-process cwltool run reports as not successful.
+
+    Reads cwltool's own record, whose first argument is the job's emitted name,
+    so it is installed before `AuthoredNamesFilter` rewrites the text. `failed`
+    maps each failed job to its exit status, the signal that ended it, or None
+    when cwltool gave neither, in the order the jobs failed.
+    """
+    # pylint:disable=too-few-public-methods
+
+    #: cwltool's messages for a job that did not succeed (cwltool/job.py).
+    EXITED: Final = '[job %s] exited with status: %d'
+    SIGNALLED: Final = '[job %s] was terminated by signal: %s'
+    COMPLETED: Final = '[job %s] completed %s'
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._ended: dict[str, int | str] = {}
+        self.failed: dict[str, int | str | None] = {}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple) and len(record.args) == 2:
+            job, detail = str(record.args[0]), record.args[1]
+            if record.msg in (self.EXITED, self.SIGNALLED) and isinstance(detail, (int, str)):
+                self._ended[job] = detail
+            elif record.msg == self.COMPLETED and detail != 'success':
+                self.failed[job] = self._ended.get(job)
+        return True
 
 
 def logging_filters(allow_pf: bool = False) -> None:

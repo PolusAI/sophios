@@ -6,7 +6,7 @@ immutable tree, and the typed graph is the compilation's sole authority.
 from dataclasses import dataclass, field
 
 from ..lang.diagnostics import Diagnostics
-from ..wic_types import Cwl, GraphReps
+from ..wic_types import Cwl
 from .realtime import Declaration
 from .types import WorkflowGraph
 
@@ -21,7 +21,6 @@ class CompilationArtifact:
     cwl: Cwl
     job_inputs: Cwl
     graph: WorkflowGraph | None
-    graph_view: GraphReps
     children: tuple['CompilationArtifact', ...] = ()
 
 
