@@ -14,7 +14,6 @@ import yaml
 from sophios import utils_cwl
 from sophios.lang.spans import SourceSpan
 
-from ._errors import InvalidInputValueError
 from ._types import CWLAtomicType
 
 _PACKAGE_ROOT: Final = Path(__file__).resolve().parents[2]
@@ -89,15 +88,6 @@ def serialize_value(value: Any) -> Any:
             return value
 
 
-def _infer_fs_object_type(path: Path) -> str:
-    """Infer whether a `Path` literal denotes a CWL `File` or `Directory`."""
-    if path.exists():
-        return CWLAtomicType.DIRECTORY.value if path.is_dir() else CWLAtomicType.FILE.value
-    if path.suffix:
-        return CWLAtomicType.FILE.value
-    return CWLAtomicType.DIRECTORY.value
-
-
 def _infer_array_parameter_type(items: Sequence[Any]) -> Any:
     """Infer a CWL array type from a homogeneous list/tuple literal, or `None` if it isn't one."""
     if not items:
@@ -120,6 +110,9 @@ def _infer_array_parameter_type(items: Sequence[Any]) -> Any:
 def infer_literal_parameter_type(value: Any) -> Any:  # pylint: disable=too-many-return-statements
     """Infer a CWL type expression from a Python literal when practical.
 
+    Not from a `Path`: whether it names a File or a Directory is for the input's declared type to say,
+    not the disk this runs on.
+
     One `return` per atomic CWL type keeps this dispatch table-like and easy
     to scan; collapsing cases to reduce the count would hurt readability.
     """
@@ -134,56 +127,12 @@ def infer_literal_parameter_type(value: Any) -> Any:  # pylint: disable=too-many
             return CWLAtomicType.FLOAT.value
         case str():
             return CWLAtomicType.STRING.value
-        case Path() as path:
-            return _infer_fs_object_type(path)
         case list() | tuple() as items:
             return _infer_array_parameter_type(items)
         case {"class": "File" | "Directory" as class_name}:
             return class_name
         case _:
             return None
-
-
-def _validate_fs_object(path_value: Path, *, class_name: str) -> Path:
-    if class_name == "Directory":
-        if not path_value.is_dir():
-            raise InvalidInputValueError(f"{str(path_value)} is not a directory")
-        return path_value
-    if class_name == "File":
-        if not path_value.is_file():
-            raise InvalidInputValueError(f"{str(path_value)} is not a file")
-        return path_value
-    raise InvalidInputValueError(f"Unsupported CWL object class {class_name!r}")
-
-
-def get_value_from_cfg(value: Any) -> Any:
-    """Normalize config values into Python values accepted by the DSL.
-
-    This supports the common CWL input-object shapes users put in YAML config
-    files, notably `File`, `Directory`, and arrays/records containing them.
-    """
-    match value:
-        case list() as items:
-            return [get_value_from_cfg(item) for item in items]
-        case tuple() as items:
-            return [get_value_from_cfg(item) for item in items]
-        case dict() as data if data.get("class") in {"Directory", "File"}:
-            path_text = data.get("location", data.get("path"))
-            if path_text is None:
-                raise InvalidInputValueError(
-                    f"{data['class']} value has no location or path"
-                )
-            try:
-                path_value = Path(path_text)
-            except (TypeError, ValueError) as exc:
-                raise InvalidInputValueError(
-                    f"{data['class']} path must be a string or path-like value: {path_text!r}"
-                ) from exc
-            return _validate_fs_object(path_value, class_name=str(data["class"]))
-        case dict() as data:
-            return {key: get_value_from_cfg(item) for key, item in data.items()}
-        case _:
-            return value
 
 
 def load_yaml(path: Path) -> dict[str, Any]:

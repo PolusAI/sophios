@@ -105,23 +105,30 @@ def _provoke_script_argument_mismatch() -> None:
 
 
 def _provoke_container_engine_unavailable() -> None:
+    import tempfile  # pylint: disable=import-outside-toplevel
+    from pathlib import Path  # pylint: disable=import-outside-toplevel
     from unittest import mock  # pylint: disable=import-outside-toplevel
 
-    from sophios import post_compile  # pylint: disable=import-outside-toplevel
+    from sophios import preflight  # pylint: disable=import-outside-toplevel
 
-    with mock.patch.object(post_compile.sub, 'run', side_effect=FileNotFoundError('docker')):
-        post_compile.verify_container_engine_config('docker', False)
+    with tempfile.TemporaryDirectory() as root:
+        tool = Path(root) / 'tool.cwl'
+        tool.write_text('cwlVersion: v1.2\nclass: CommandLineTool\nrequirements:\n  DockerRequirement:\n'
+                        '    dockerPull: docker.io/bash:4.4\nbaseCommand: [echo]\ninputs: {}\noutputs: {}\n',
+                        encoding='utf-8')
+        with mock.patch.object(preflight.sub, 'run', side_effect=FileNotFoundError('docker')):
+            preflight.check(preflight.needs([tool]), preflight.RunSettings('docker', root))
 
 
 def _provoke_missing_input_file() -> None:
     import tempfile  # pylint: disable=import-outside-toplevel
     from pathlib import Path  # pylint: disable=import-outside-toplevel
 
-    from sophios import post_compile  # pylint: disable=import-outside-toplevel
+    from sophios import preflight  # pylint: disable=import-outside-toplevel
 
     with tempfile.TemporaryDirectory() as root:
-        post_compile.stage_input_files({'f': {'class': 'File', 'location': 'definitely_absent.txt'}},
-                                       Path(root), root, throw=True)
+        job = preflight.Job({'f': {'class': 'File', 'location': 'definitely_absent.txt'}}, Path(root), 'the workflow')
+        preflight.check(preflight.Needs((Path(root) / 'none.cwl',), (), (job,)), preflight.RunSettings('docker', root))
 
 
 COMPILED.update({
@@ -263,17 +270,14 @@ def _provoke_undeclared_port() -> None:
 
 
 def _provoke_invalid_input_value() -> None:
-    """Load a config `File` value that names neither a location nor a path."""
+    """Bind a list holding a step output, which is a port and never a literal."""
     from pathlib import Path  # pylint: disable=import-outside-toplevel
-    from tempfile import TemporaryDirectory  # pylint: disable=import-outside-toplevel
 
     from sophios.api.python.workflow import Step  # pylint: disable=import-outside-toplevel
 
-    adapter = Path(__file__).resolve().parents[2] / 'cwl_adapters' / 'append.cwl'
-    with TemporaryDirectory() as directory:
-        config = Path(directory) / 'inputs.yml'
-        config.write_text('file:\n  class: File\n', encoding='utf-8')
-        Step(clt_path=adapter, config_path=config)
+    adapters = Path(__file__).resolve().parents[2] / 'cwl_adapters'
+    touch = Step(clt_path=adapters / 'touch.cwl')
+    Step(clt_path=adapters / 'append.cwl').inputs.file = [touch.outputs.file]
 
 
 def _provoke_invalid_step() -> None:
@@ -343,8 +347,7 @@ def _provoke_workflow_run_failed() -> None:
 
     echo = Step(clt_path=Path(__file__).resolve().parents[2] / 'cwl_adapters' / 'echo.cwl')
     echo.inputs.message = 'hello'
-    with mock.patch.object(runtime.pc, 'verify_container_engine_config'), \
-            mock.patch.object(runtime.pc, 'cwl_docker_extract'), \
+    with mock.patch.object(runtime.preflight, 'prepare'), \
             mock.patch.object(runtime.input_output, 'write_artifacts_to_disk'), \
             mock.patch.object(runtime.rl, 'run_local', return_value=1):
         Workflow([echo], 'provoke').run()
@@ -450,3 +453,18 @@ def _provoke_realtime_declaration() -> None:
 
 
 COMPILED.update({SophiosErrorCode.REALTIME_DECLARATION: _provoke_realtime_declaration})
+
+
+def _provoke_program_missing() -> None:
+    import tempfile  # pylint: disable=import-outside-toplevel
+    from pathlib import Path  # pylint: disable=import-outside-toplevel
+    from unittest import mock  # pylint: disable=import-outside-toplevel
+
+    from sophios import preflight  # pylint: disable=import-outside-toplevel
+
+    with tempfile.TemporaryDirectory() as root, mock.patch.object(preflight.shutil, 'which', return_value=None):
+        preflight.check(preflight.Needs((Path(root) / 'none.cwl',), ()),
+                        preflight.RunSettings('docker', root, run_script=True))
+
+
+COMPILED.update({SophiosErrorCode.PROGRAM_MISSING: _provoke_program_missing})

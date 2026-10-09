@@ -18,6 +18,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -25,9 +26,10 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+import yaml
 
 from sophios import main as cli
-from sophios import post_compile
+from sophios import preflight, run_local
 from sophios.ir.complete import coerce_job_value
 from sophios.ir.declarations import port_declaration
 from sophios.ir.types import AuthoredName
@@ -97,18 +99,6 @@ def test_script_argument_mismatch_reports(tmp_path: Path) -> None:
     assert any('unexpected_arg' in m for m in messages)
     assert any('expected_arg' in m for m in messages)
     assert all(d.code is SophiosErrorCode.SCRIPT_ARGUMENT_MISMATCH for d in caught.value.diagnostics)
-
-
-@pytest.mark.fast
-def test_missing_input_file_reports(tmp_path: Path) -> None:
-    """`stage_input_files` reports the absent file instead of exiting."""
-    inputs = {'in_file': {'class': 'File', 'location': 'does_not_exist.txt'}}
-
-    with pytest.raises(SophiosError) as caught:
-        post_compile.stage_input_files(inputs, tmp_path, str(tmp_path / 'out'), throw=True)
-
-    assert caught.value.diagnostics[0].code is SophiosErrorCode.MISSING_INPUT_FILE
-    assert 'does_not_exist.txt' in caught.value.diagnostics[0].message
 
 
 @pytest.mark.fast
@@ -244,65 +234,6 @@ def test_a_float_the_literal_cannot_hold_exactly_says_so() -> None:
     with pytest.raises(SophiosError) as caught:
         _job_value('float', 2**53 + 1)
     assert 'cannot hold exactly' in caught.value.diagnostics[0].message
-
-
-@pytest.mark.fast
-def test_missing_container_engine_reports(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The docker check reports the same installation advice it printed."""
-    def command_not_found(*_args: object, **_kwargs: object) -> object:
-        raise FileNotFoundError('docker')
-
-    monkeypatch.setattr(post_compile.sub, 'run', command_not_found)
-
-    with pytest.raises(SophiosError) as caught:
-        post_compile.verify_container_engine_config('docker', False)
-
-    assert caught.value.diagnostics[0].code is SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE
-    assert any('--ignore_docker_install' in d.message for d in caught.value.diagnostics)
-
-
-@pytest.mark.fast
-def test_ignored_container_check_stays_silent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The escape hatch still works: --ignore_docker_install means no report."""
-    def command_not_found(*_args: object, **_kwargs: object) -> object:
-        raise FileNotFoundError('docker')
-
-    monkeypatch.setattr(post_compile.sub, 'run', command_not_found)
-    post_compile.verify_container_engine_config('docker', True)  # must not raise
-
-
-def _docker_with_processes(monkeypatch: pytest.MonkeyPatch, count: int) -> None:
-    """A working docker engine that reports `count` running docker processes."""
-    def probe(cmd: str | list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
-        if isinstance(cmd, list):
-            return subprocess.CompletedProcess(cmd, 0, stdout=b'Hello from Docker!')
-        return subprocess.CompletedProcess(cmd, 0, stdout=f'{count}\n'.encode())
-
-    monkeypatch.setattr(post_compile.sub, 'run', probe)
-    monkeypatch.setattr(post_compile.sys, 'platform', 'linux')
-
-
-@pytest.mark.fast
-def test_too_many_docker_processes_reports(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The process-count check fires unless --ignore_docker_processes is given."""
-    _docker_with_processes(monkeypatch, 1001)
-
-    with pytest.raises(SophiosError) as caught:
-        post_compile.verify_container_engine_config('docker', False, ignore_container_processes=False)
-
-    assert caught.value.diagnostics[0].code is SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE
-    assert any('--ignore_docker_processes' in d.message for d in caught.value.diagnostics)
-
-
-@pytest.mark.fast
-def test_ignored_docker_process_check_stays_silent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """--ignore_docker_processes alone silences the process-count check, and
-    --ignore_docker_install does not."""
-    _docker_with_processes(monkeypatch, 1001)
-    post_compile.verify_container_engine_config('docker', False, ignore_container_processes=True)  # must not raise
-
-    with pytest.raises(SophiosError):
-        post_compile.verify_container_engine_config('docker', True, ignore_container_processes=False)
 
 
 # --------------------------------------------------------------------------
@@ -464,10 +395,7 @@ def _cli_on_helloworld(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Calla
     What would reach for a container engine is replaced; compiling, argument handling and the
     exit code are the CLI's own.
     """
-    import sophios.post_compile as pc
-    monkeypatch.setattr(pc, 'verify_container_engine_config', lambda *_a, **_k: None)
-    monkeypatch.setattr(pc, 'cwl_docker_extract', lambda *_a, **_k: None)
-    monkeypatch.setattr(pc, 'stage_input_files', lambda *_a, **_k: None)
+    monkeypatch.setattr(preflight, 'prepare', lambda *_a, **_k: None)
     monkeypatch.chdir(tmp_path)
     workflow = Path(__file__).resolve().parents[2] / 'docs' / 'tutorials' / 'helloworld.wic'
 
@@ -630,23 +558,6 @@ def test_an_unresolved_input_error_does_not_call_itself_a_warning() -> None:
     assert first.message == 'Did you forget to use !ii before x?'
 
 
-@pytest.mark.fast
-def test_a_container_engine_error_does_not_call_itself_a_warning(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An error report states the problem; `Warning!` is for the stderr lines that do not stop the compile."""
-    _docker_with_processes(monkeypatch, 1001)
-    with pytest.raises(SophiosError) as caught:
-        post_compile.verify_container_engine_config('docker', False, ignore_container_processes=False)
-    assert caught.value.diagnostics[0].message == 'There are 1001 running docker processes.'
-
-    def command_not_found(*_args: object, **_kwargs: object) -> object:
-        raise FileNotFoundError('docker')
-
-    monkeypatch.setattr(post_compile.sub, 'run', command_not_found)
-    with pytest.raises(SophiosError) as caught:
-        post_compile.verify_container_engine_config('docker', False)
-    assert caught.value.diagnostics[0].message == 'The docker command does not appear to be installed.'
-
-
 # --------------------------------------------------------------------------
 # Every code says what it means and what to do
 # --------------------------------------------------------------------------
@@ -786,3 +697,405 @@ def test_a_directory_sophios_cannot_write_is_wic021(monkeypatch: pytest.MonkeyPa
     printed = capsys.readouterr().err
     assert 'error [wic021] Sophios writes the compiled workflow to' in printed
     assert 'run Sophios from a directory you can write to' in printed
+
+
+# --------------------------------------------------------------------------
+# The container engine is checked when a step runs in a container, and the line says why it cannot be used
+# --------------------------------------------------------------------------
+
+_TOUCH = 'steps:\n- id: touch\n  in:\n    filename: !ii a.txt\n'   # touch.cwl runs in docker.io/bash:4.4
+
+
+@pytest.fixture(name='machine')
+def _machine(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[object]]:
+    """Replace `subprocess.run` with a machine whose `docker` is 'running', 'missing' or answers an exit status,
+    with `processes` Docker Desktop processes, and on which the programs in `missing` are not on PATH.
+    Returns the list of commands it was given."""
+    def install(engine: str = 'running', processes: int = 0, said: bytes = b'',
+                missing: tuple[str, ...] = ()) -> list[object]:
+        calls: list[object] = []
+
+        def run(cmd: list[str], *_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            calls.append(cmd)
+            if cmd[0] == 'pgrep':
+                return subprocess.CompletedProcess(cmd, 0, stdout=b'1\n' * processes, stderr=b'')
+            if cmd[0] == 'docker' and engine == 'missing':
+                raise FileNotFoundError('docker')
+            if cmd[0] == 'docker' and engine == 'fails':
+                return subprocess.CompletedProcess(cmd, 1, stdout=b'', stderr=said)
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+        monkeypatch.setattr(subprocess, 'run', run)
+        monkeypatch.setattr(sys, 'platform', 'linux')
+        which = shutil.which
+        monkeypatch.setattr(shutil, 'which', lambda name, *a, **k: None if name in missing else which(name, *a, **k))
+        return calls
+    return install
+
+
+def _pulled(calls: list[object]) -> bool:
+    return any(isinstance(cmd, list) and cmd[0] == 'cwl-docker-extract' for cmd in calls)
+
+
+def _cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, source: str | None, *flags: str,
+         mode: str = '--generate_run_script') -> None:
+    """`sophios --yaml <source> <mode> <flags>` from tmp_path; helloworld when source is None."""
+    if source is None:
+        workflow = Path(__file__).resolve().parents[2] / 'docs' / 'tutorials' / 'helloworld.wic'
+    else:
+        workflow = tmp_path / 'w.wic'
+        workflow.write_text(source, encoding='utf-8')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), mode, *flags])
+    cli.main()
+
+
+def _wic015(err: str) -> list[str]:
+    return [line for line in err.splitlines() if '[wic015]' in line]
+
+
+@pytest.mark.fast
+def test_a_workflow_without_containers_needs_no_engine(machine: Callable[..., list[object]],
+                                                       monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls = machine('missing')
+    _cli(monkeypatch, tmp_path, None)          # returning is the assertion: helloworld runs echo on the host
+    assert (tmp_path / 'run.sh').exists()
+    assert ['docker', 'info'] not in calls
+
+
+@pytest.mark.fast
+def test_a_missing_engine_names_the_image_that_needs_it(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    calls = machine('missing')
+    with pytest.raises(SystemExit) as caught:
+        _cli(monkeypatch, tmp_path, _TOUCH)
+    assert caught.value.code == 1
+    line, = _wic015(capsys.readouterr().err)
+    assert ('docker is not installed (it is not on PATH), and this workflow runs tools in containers '
+            '(docker.io/bash:4.4): install docker') in line
+    assert not _pulled(calls)
+
+
+@pytest.mark.fast
+def test_an_engine_whose_socket_is_missing_says_so_and_quotes_the_engine(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    calls = machine('fails', said=b'failed to connect to the docker API\nsecond line')
+    monkeypatch.setenv('DOCKER_HOST', 'unix:///nonexistent/sophios.sock')
+    with pytest.raises(SystemExit):
+        _cli(monkeypatch, tmp_path, _TOUCH)
+    line, = _wic015(capsys.readouterr().err)
+    assert 'its engine is not reachable: the socket /nonexistent/sophios.sock does not exist ' in line
+    assert '(failed to connect to the docker API): start the engine' in line
+    assert not _pulled(calls)
+
+
+@pytest.mark.fast
+def test_a_stopped_engine_with_no_default_socket_is_not_blamed_on_permissions(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    machine('fails', said=b'Is the docker daemon running?')
+    monkeypatch.delenv('DOCKER_HOST', raising=False)
+    monkeypatch.setattr(preflight, 'DEFAULT_DOCKER_SOCKET', tmp_path / 'absent.sock')
+    with pytest.raises(SystemExit):
+        _cli(monkeypatch, tmp_path, _TOUCH)
+    line, = _wic015(capsys.readouterr().err)
+    assert 'usermod' not in line
+    assert '`docker info` exited with status 1 (Is the docker daemon running?)' in line
+
+
+@pytest.mark.fast
+def test_a_file_uri_in_the_inputs_file_is_read_as_this_platforms_path(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A `file:` location names the file in this platform's own spelling: on Windows a drive path, not `/C:/...`."""
+    machine('running')
+    monkeypatch.setattr(run_local, 'RUNNER_UNAVAILABLE', None)
+    data = tmp_path / 'in x.txt'
+    data.write_text('x', encoding='utf-8')
+    (tmp_path / 'job.yml').write_text(f"file:\n  class: File\n  location: '{data.as_uri()}'\n", encoding='utf-8')
+    _cli(monkeypatch, tmp_path, _CAT_INPUT, '--inputs_file', str(tmp_path / 'job.yml'),
+         mode='--check')   # returns: the file is found where the URI names it
+
+
+@pytest.mark.fast
+@pytest.mark.skipif(sys.platform == 'win32' or os.geteuid() == 0, reason='file modes do not stop Windows or root')
+def test_an_engine_whose_socket_is_not_yours_says_so(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    machine('fails', said=b'denied')
+    socket = tmp_path / 'docker.sock'
+    socket.write_text('', encoding='utf-8')
+    socket.chmod(0)
+    monkeypatch.setenv('DOCKER_HOST', f'unix://{socket}')
+    with pytest.raises(SystemExit):
+        _cli(monkeypatch, tmp_path, _TOUCH)
+    line, = _wic015(capsys.readouterr().err)
+    assert f'you may not use its socket {socket} (denied): add your user to the docker group' in line
+
+
+@pytest.mark.fast
+def test_an_engine_that_fails_for_another_reason_is_quoted_with_its_status(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    machine('fails', said=b'  whatever the engine said\n')
+    monkeypatch.setenv('DOCKER_HOST', 'tcp://engine.invalid:2375')
+    with pytest.raises(SystemExit):
+        _cli(monkeypatch, tmp_path, _TOUCH)
+    line, = _wic015(capsys.readouterr().err)
+    assert '`docker info` exited with status 1 (whatever the engine said): run `docker info` to see why' in line
+
+
+@pytest.mark.fast
+def test_too_many_docker_processes_is_one_line_unless_ignored(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    machine('running', processes=1001)
+    with pytest.raises(SystemExit):
+        _cli(monkeypatch, tmp_path, _TOUCH)
+    line, = _wic015(capsys.readouterr().err)
+    assert '1001 docker processes are running' in line and '--ignore_docker_processes' in line
+    assert 'Warning' not in line
+    _cli(monkeypatch, tmp_path, _TOUCH, '--ignore_docker_processes')   # returns
+
+
+@pytest.mark.fast
+def test_ignore_docker_install_skips_the_engine_check_and_still_pulls(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls = machine('fails', said=b'stopped')
+    monkeypatch.setenv('DOCKER_HOST', 'tcp://engine.invalid:2375')
+    _cli(monkeypatch, tmp_path, _TOUCH, '--ignore_docker_install')    # returns
+    assert _pulled(calls)
+
+
+@pytest.mark.skipif(shutil.which('docker') is None, reason='needs the docker CLI')
+def test_the_docker_cli_with_no_daemon_is_named_not_reachable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    tool = tmp_path / 'tool.cwl'
+    tool.write_text('cwlVersion: v1.2\nclass: CommandLineTool\nrequirements:\n  DockerRequirement:\n'
+                    '    dockerPull: docker.io/bash:4.4\nbaseCommand: [echo]\ninputs: {}\noutputs: {}\n',
+                    encoding='utf-8')
+    # short: socket paths max out near 100 bytes
+    monkeypatch.setenv('DOCKER_HOST', 'unix:///nonexistent/no-daemon.sock')
+    with pytest.raises(SophiosError) as caught:
+        preflight.check(preflight.needs([tool]), preflight.RunSettings('docker', str(tmp_path), ignore_processes=True))
+    found, = caught.value.diagnostics
+    assert found.code is SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE
+    assert 'the socket /nonexistent/no-daemon.sock does not exist' in found.message
+
+
+# --------------------------------------------------------------------------
+# Input paths are checked, with the input's name, before anything is pulled
+# --------------------------------------------------------------------------
+
+_CAT = 'steps:\n- id: cat\n  in:\n    file: !ii\n      class: File\n      location: {}\n'
+_CAT_INPUT = 'inputs:\n  file: File\nsteps:\n- id: cat\n  in:\n    file: file\n'
+
+
+def _wic016(err: str) -> list[str]:
+    return [line for line in err.splitlines() if '[wic016]' in line]
+
+
+@pytest.mark.fast
+def test_a_missing_input_is_named_before_any_image_is_pulled(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    calls = machine('running')
+    with pytest.raises(SystemExit):
+        _cli(monkeypatch, tmp_path, _CAT.format('absent.txt'))
+    line, = _wic016(capsys.readouterr().err)
+    assert "input 'cat/file' (from the workflow, whose relative paths are read from " in line
+    assert "names 'absent.txt', which does not exist at " in line and 'create the file' in line
+    assert not _pulled(calls)
+
+
+@pytest.mark.fast
+def test_a_missing_path_in_the_inputs_file_is_named(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    machine('running')
+    (tmp_path / 'job.yml').write_text('file:\n  class: File\n  location: absent.txt\nn: 3\n', encoding='utf-8')
+    with pytest.raises(SystemExit):
+        _cli(monkeypatch, tmp_path, _CAT_INPUT, '--inputs_file', str(tmp_path / 'job.yml'))
+    line, = _wic016(capsys.readouterr().err)
+    assert "input 'file' (from --inputs_file, whose relative paths are read from " in line
+
+
+@pytest.mark.fast
+def test_a_relative_path_in_the_inputs_file_is_read_beside_the_inputs_file(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """CWL v1.2 section 5.1.5: the base IRI of the inputs document, not the working directory, at any depth."""
+    machine('running')
+    jobs = tmp_path / 'jobs'
+    (jobs / 'data').mkdir(parents=True)
+    (jobs / 'data' / 'a.txt').write_text('x', encoding='utf-8')
+    (tmp_path / 'cwd').mkdir()
+    (jobs / 'job.yml').write_text(
+        'file:\n  class: File\n  location: data/a.txt\n  secondaryFiles:\n  - class: File\n    path: data/a.txt\n',
+        encoding='utf-8')
+    _cli(monkeypatch, tmp_path / 'cwd', _CAT_INPUT, '--inputs_file', str(jobs / 'job.yml'))   # returns: nothing missing
+    written = yaml.safe_load((tmp_path / 'cwd' / 'autogenerated' / 'w_inputs.yml').read_text(encoding='utf-8'))
+    assert written['file']['location'] == str(jobs / 'data' / 'a.txt')
+    assert written['file']['secondaryFiles'][0]['path'] == str(jobs / 'data' / 'a.txt')
+
+
+@pytest.mark.fast
+def test_an_output_target_directory_is_not_a_missing_input(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The runner gets it as the name of a directory the step creates, which does not exist yet."""
+    machine('running')
+    (tmp_path / 'write_dir.cwl').write_text(
+        'cwlVersion: v1.2\nclass: CommandLineTool\nrequirements:\n  InitialWorkDirRequirement:\n'
+        '    listing:\n    - entry: $(inputs.outDir)\n      writable: true\n  InlineJavascriptRequirement: {}\n'
+        'baseCommand: [mkdir]\ninputs:\n  outDir: Directory\n'
+        'outputs:\n  outDir:\n    type: Directory\n    outputBinding:\n      glob: $(inputs.outDir.basename)\n',
+        encoding='utf-8')
+    (tmp_path / 'config.json').write_text(json.dumps({'search_paths_cwl': {'global': [str(tmp_path)], 'gpu': []},
+                                                      'search_paths_wic': {'global': [str(tmp_path)]}}),
+                                          encoding='utf-8')
+    _cli(monkeypatch, tmp_path, 'steps:\n- id: write_dir\n  in:\n    outDir: !ii result.outDir\n',
+         '--config_file', str(tmp_path / 'config.json'))   # returns: nothing missing
+
+
+@pytest.mark.fast
+def test_an_inputs_file_that_is_not_a_mapping_is_one_clear_error(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    machine('running')
+    (tmp_path / 'job.yml').write_text('- a\n- b\n', encoding='utf-8')
+    with pytest.raises(SystemExit) as caught:
+        _cli(monkeypatch, tmp_path, _CAT_INPUT, '--inputs_file', str(tmp_path / 'job.yml'))
+    assert caught.value.code == 1
+    err = capsys.readouterr().err
+    assert 'must be a mapping of input names to values, not a list' in err and 'Traceback' not in err
+
+
+@pytest.mark.fast
+@pytest.mark.skipif(sys.platform == 'win32' or os.geteuid() == 0, reason='file modes do not stop Windows or root')
+def test_an_unreadable_input_is_named_with_the_fix(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    machine('running')
+    locked = tmp_path / 'locked.txt'
+    locked.write_text('x', encoding='utf-8')
+    locked.chmod(0)
+    with pytest.raises(SystemExit):
+        _cli(monkeypatch, tmp_path, _CAT.format('locked.txt'))
+    line, = _wic016(capsys.readouterr().err)
+    assert 'which you may not read' in line and 'chmod u+r' in line
+
+
+@pytest.mark.fast
+def test_a_missing_input_and_a_stopped_engine_are_reported_together(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    machine('fails', said=b'stopped')
+    monkeypatch.setenv('DOCKER_HOST', 'tcp://engine.invalid:2375')
+    with pytest.raises(SystemExit):
+        _cli(monkeypatch, tmp_path, _CAT.format('absent.txt'))
+    err = capsys.readouterr().err
+    assert len(_wic016(err)) == 1 and len(_wic015(err)) == 1
+
+
+@pytest.mark.fast
+def test_a_directory_beside_the_workflow_reaches_the_run_where_it_is(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The job names it beside the workflow, so the run reads it in place, however large; nothing is copied."""
+    machine('running')
+    (tmp_path / 'data').mkdir()
+    (tmp_path / 'data' / 'a.txt').write_text('x', encoding='utf-8')
+    _cli(monkeypatch, tmp_path, 'steps:\n- id: subdirectory\n  in:\n    directory: !ii\n      class: Directory\n'
+         '      location: data\n    glob_pattern: !ii a.txt\n')
+    job = yaml.safe_load((tmp_path / 'autogenerated' / 'w_inputs.yml').read_text(encoding='utf-8'))
+    directory, = [value for value in job.values() if isinstance(value, dict)]
+    assert directory['location'] == str(tmp_path / 'data')
+    assert not (tmp_path / 'autogenerated' / 'data').exists()
+
+
+# --------------------------------------------------------------------------
+# A program the run calls that is missing is wic029
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_a_run_script_whose_runner_is_missing_is_wic029(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    machine(missing=('cwltool_filterlog',))
+    with pytest.raises(SystemExit) as caught:
+        _cli(monkeypatch, tmp_path, None)
+    assert caught.value.code == 1
+    assert ('error [wic029] run.sh calls cwltool_filterlog, which is not on PATH: install Sophios'
+            in capsys.readouterr().err)
+    assert not (tmp_path / 'run.sh').exists()
+
+
+@pytest.mark.fast
+def test_a_runner_that_cannot_run_here_is_named_before_the_run(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(run_local, 'RUNNER_UNAVAILABLE', 'no pwd module', raising=False)
+    monkeypatch.setattr(run_local.cwltool.main, 'main', lambda _args: 0)
+    workflow = Path(__file__).resolve().parents[2] / 'docs' / 'tutorials' / 'helloworld.wic'
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), '--run_local'])
+    with pytest.raises(SystemExit) as caught:
+        cli.main()
+    assert caught.value.code == 1
+    assert 'error [wic029] cwltool cannot run here (no pwd module): run Sophios inside WSL' in capsys.readouterr().err
+
+
+@pytest.mark.fast
+def test_a_missing_image_puller_is_wic029(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    machine(missing=('cwl-docker-extract',))
+    with pytest.raises(SystemExit):
+        _cli(monkeypatch, tmp_path, _TOUCH, '--container_engine', 'singularity')
+    assert 'error [wic029] pulling the images for singularity needs cwl-docker-extract' in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# --check compiles and runs the pre-flight, then stops
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_check_compiles_and_checks_then_stops_without_pulling_or_running(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    calls = machine('running')
+    monkeypatch.setattr(run_local.cwltool.main, 'main', lambda _args: pytest.fail('--check must not run the workflow'))
+    _cli(monkeypatch, tmp_path, _TOUCH, mode='--check')   # returns: the machine is fine
+    assert 'Checked ' in capsys.readouterr().out
+    assert (tmp_path / 'autogenerated' / 'w.cwl').exists()
+    assert not (tmp_path / 'run.sh').exists()
+    assert ['docker', 'info'] in calls and not _pulled(calls)
+
+
+@pytest.mark.fast
+def test_check_reports_what_a_run_would_hit(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    machine('missing')
+    with pytest.raises(SystemExit) as caught:
+        _cli(monkeypatch, tmp_path, _CAT.format('absent.txt'), mode='--check')
+    assert caught.value.code == 1
+    err = capsys.readouterr().err
+    assert len(_wic016(err)) == 1 and len(_wic015(err)) == 1
+
+
+@pytest.mark.fast
+def test_generate_run_script_still_writes_run_sh_after_the_same_checks(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls = machine('running')
+    _cli(monkeypatch, tmp_path, _TOUCH)
+    assert (tmp_path / 'run.sh').exists() and _pulled(calls)
+
+
+@pytest.mark.fast
+def test_graphviz_without_dot_is_a_note(
+        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    machine(missing=('dot',))
+    _cli(monkeypatch, tmp_path, None, '--graphviz', mode='--generate_cwl_workflow')
+    captured = capsys.readouterr()
+    assert 'note [wic029] --graphviz needs the dot program' in captured.err
+    assert 'Warning: Cannot generate graphviz' not in captured.out

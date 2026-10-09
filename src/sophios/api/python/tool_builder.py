@@ -898,7 +898,7 @@ class CommandLineTool:
         *,
         step_name: str | None = None,
         run_path: str | Path | None = None,
-        config: dict[str, Any] | None = None,
+        step_inputs: dict[str, Any] | None = None,
         tool_registry: Tools | None = None,
     ) -> "Step":
         """Make a workflow `Step` that runs this tool, without writing a `.cwl` file.
@@ -907,7 +907,8 @@ class CommandLineTool:
             step_name (str | None): The step's name; the tool's `name` by default.
             run_path (str | Path | None): The `.cwl` path the compiler records for the
                 tool; `<step_name>.cwl` by default. Nothing is written there.
-            config (dict[str, Any] | None): Input values to bind on the step, by input name.
+            step_inputs (dict[str, Any] | None): Input values to bind on the step, by input
+                name, as written.
             tool_registry (Tools | None): A tool registry to keep on the step.
 
         Returns:
@@ -917,7 +918,7 @@ class CommandLineTool:
             self,
             step_name=step_name,
             run_path=run_path,
-            config=config,
+            step_inputs=step_inputs,
             tool_registry=tool_registry,
         )
 

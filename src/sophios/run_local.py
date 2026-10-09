@@ -14,26 +14,22 @@ from typing import Iterator, Mapping
 from sophios.ir.names import Names
 from sophios.ir.types import DerivedName, WorkflowGraph
 from sophios.wic_types import Json
+from . import auto_gen_header, realtime
+from . import utils  # , utils_graphs
 from .compute_request import ComputeRequest
+from .input_output import names_map_path
+from .plugins import AuthoredNamesFilter, logging_filters
 
+#: Why cwltool and Toil cannot run in this process, or None. Windows has no `pwd`, which they import
+#: (transitively, in cwltool.provenance); the pre-flight says so when a run is asked for.
+RUNNER_UNAVAILABLE: str | None = None
 try:
     import cwltool.main
     import toil.cwl.cwltoil  # transitively imports cwltool
-except ImportError as exc:
-    print('Could not import cwltool.main and/or toil.cwl.cwltoil')
-    # (pwd is imported transitively in cwltool.provenance)
-    print(exc)
-    if exc.msg == "No module named 'pwd'":
-        print('Windows does not have a pwd module')
-        print('If you want to run on windows, you need to install')
-        print('Windows Subsystem for Linux')
-        print('See https://pypi.org/project/cwltool/#ms-windows-users')
-    else:
-        raise exc
-
-from . import auto_gen_header, realtime
-from . import utils  # , utils_graphs
-from .plugins import AuthoredNamesFilter, logging_filters
+except ModuleNotFoundError as exc:
+    if exc.name != 'pwd':
+        raise
+    RUNNER_UNAVAILABLE = 'cwltool and Toil need the pwd module, which Windows does not have'
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,7 +213,7 @@ def _execute_inprocess(cmd: list[str], cwl_runner: str, workflow_name: str,
     """
     retval = 1
     logger = logging.getLogger('cwltool')
-    names_path = _names_map_path(yaml_path.parent, workflow_name)
+    names_path = names_map_path(yaml_path.parent, workflow_name)
     authored_names = (AuthoredNamesFilter(json.loads(names_path.read_text(encoding='utf-8')))
                       if names_path.exists() else None)
     if authored_names is not None:
@@ -273,11 +269,6 @@ def _runnable(plans: tuple[realtime.Plan, ...], run_args_dict: dict[str, str]) -
     return plans
 
 
-def _names_map_path(basepath: Path, workflow_name: str) -> Path:
-    """Where the compile wrote the map from emitted ids to authored names."""
-    return basepath / f'{workflow_name}.names.json'
-
-
 def _report_outcome(retval: int | None, cmd: list[str], basepath: str, workflow_name: str) -> None:
     """Print the success/failure summary message after execution."""
     if retval == 0:
@@ -286,7 +277,7 @@ def _report_outcome(retval: int | None, cmd: list[str], basepath: str, workflow_
     else:
         print('Failure! Please scroll up and find the FIRST error message.')
         print('(You may have to scroll up A LOT.)')
-        names_path = _names_map_path(Path(basepath), workflow_name)
+        names_path = names_map_path(Path(basepath), workflow_name)
         if names_path.exists():
             print(f'Emitted ids are mapped to authored names in {names_path}')
 

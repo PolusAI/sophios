@@ -404,10 +404,10 @@ Codes are contract: a caller matches on `SophiosErrorCode`, suppresses a code, o
 reads it out of a log, while message wording is free to improve. The enum is
 `sophios.lang.error_codes.SophiosErrorCode`, in two ranges: `wic0NN` for a
 document (it said something the language does not accept) or what running it needs from the machine (kind
-`machine`, such as `wic015`, `wic016` and `wic021`) and `api0NN` for
+`machine`, such as `wic015`, `wic016`, `wic021` and `wic029`) and `api0NN` for
 the Python API (the document is fine, the call was not). A code is never renumbered,
 and a code that shipped in a release is never reused; a number that never shipped is
-free. `wic029`, `wic037`, `wic040` and `wic041` are unassigned. `wic042` and `wic043` are notes, which report without failing the
+free. `wic037`, `wic040` and `wic041` are unassigned. `wic042` and `wic043` are notes, which report without failing the
 compile, and errors under `--inference_strict`.
 
 Every member is provoked in `tests/core/provocations.py`, in one of two tiers:
@@ -450,6 +450,7 @@ every member has an `Explanation` in `EXPLANATIONS` (kind, meaning, fix);
 | `wic026` | `DUPLICATE_EDGE_DEF` | `COMPILED` |
 | `wic027` | `EMPTY_NAME` | `COMPILED` |
 | `wic028` | `UNDECLARED_PORT` | `COMPILED` |
+| `wic029` | `PROGRAM_MISSING` | `COMPILED` |
 | `wic030` | `RECURSIVE_ALIAS` | `PARSE` |
 | `wic031` | `DUPLICATE_DOCUMENT_NAME` | `COMPILED` |
 | `wic032` | `UNKNOWN_SCATTER_PORT` | `COMPILED` |
