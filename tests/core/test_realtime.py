@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 import sophios.main
-import sophios.post_compile
+import sophios.preflight
 from sophios import realtime, run_local
 from sophios.api.python.workflow import Step, Workflow
 from sophios.cli import default_compilation_settings
@@ -563,8 +563,8 @@ def test_the_analysis_runs_beside_the_workflow_and_never_changes_its_outcome(
     config.write_text(json.dumps({'search_paths_cwl': {'global': [str(tools), str(ADAPTER_PATH.parent)]},
                                   'search_paths_wic': {'global': [str(tmp_path)]}}), encoding='utf-8')
     extracted: list[Path] = []
-    monkeypatch.setattr(sophios.post_compile, 'verify_container_engine_config', lambda *_a, **_k: None)
-    monkeypatch.setattr(sophios.post_compile, 'cwl_docker_extract', lambda _e, _p, path: extracted.append(Path(path)))
+    monkeypatch.setattr(sophios.preflight, 'prepare', lambda documents,
+                        _settings, _jobs=(): extracted.extend(documents))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr('sys.argv', ['sophios', '--yaml', 'live.wic', '--run_local', '--config_file', str(config)])
 
@@ -677,8 +677,8 @@ def test_the_python_api_declares_an_analysis_and_run_prepares_it(monkeypatch: py
     declaration.inputs.config = {'in': {'filename': 'again.txt'}}
     workflow = Workflow([touch, declaration], 'py_live')
     extracted: list[Path] = []
-    monkeypatch.setattr(sophios.post_compile, 'verify_container_engine_config', lambda *_a, **_k: None)
-    monkeypatch.setattr(sophios.post_compile, 'cwl_docker_extract', lambda _e, _p, path: extracted.append(Path(path)))
+    monkeypatch.setattr(sophios.preflight, 'prepare', lambda documents,
+                        _settings, _jobs=(): extracted.extend(documents))
     monkeypatch.chdir(tmp_path)
 
     assert [step['id'] for step in workflow.compile().cwl_workflow['steps']] == ['py_live__step__1__touch']
@@ -704,8 +704,7 @@ def test_the_python_api_finds_a_wic_analysis_through_workflow_paths(monkeypatch:
     declaration.inputs.max_times = 2
     declaration.inputs.config = {'(1, touch)': {'in': {'filename': 'again.txt'}}}
     workflow = Workflow([touch, declaration], 'py_wic')
-    monkeypatch.setattr(sophios.post_compile, 'verify_container_engine_config', lambda *_a, **_k: None)
-    monkeypatch.setattr(sophios.post_compile, 'cwl_docker_extract', lambda *_a: None)
+    monkeypatch.setattr(sophios.preflight, 'prepare', lambda *_a: None)
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises(SophiosError) as raised:

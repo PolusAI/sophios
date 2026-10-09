@@ -6,6 +6,7 @@ from pathlib import Path
 import signal
 import sys
 import argparse
+from dataclasses import replace
 from typing import Any, Final
 
 import pytest
@@ -19,15 +20,14 @@ import sophios.run_local
 import sophios.utils
 from sophios.ir import frontdoor
 import sophios.plugins
-from sophios import post_compile, realtime
+from sophios import post_compile, preflight, realtime
 from sophios import auto_gen_header
 from sophios.cli import get_args
 from sophios.utils_yaml import Key, wic_loader
-from sophios.post_compile import (apply_inline_options, cwl_docker_extract, inline_artifact_runs,
-                                  remove_artifact_entrypoints, stage_input_files)
+from sophios.post_compile import apply_inline_options, inline_artifact_runs, remove_artifact_entrypoints
+from sophios.runtime_inputs import normalize_artifact_job_inputs
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.post_compile import verify_container_engine_config
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.wic_types import Json
 from sophios.utils_graphs import get_graph_reps
@@ -284,16 +284,21 @@ def run_workflows(
     yaml_stem = artifact.name
 
     artifact = sophios.plugins.cwl_prepend_dockerFile_include_path_artifact(artifact)
+    # As the CLI writes them: a relative path is read beside the workflow.
+    artifact = replace(artifact, job_inputs=sophios.input_output.absolute_paths(
+        normalize_artifact_job_inputs(artifact, artifact.job_inputs), Path(args.yaml).parent.absolute()))
     sophios.input_output.write_artifacts_to_disk(
         artifact, Path(basepath), True, args.inputs_file)
 
-    # verify container_engine install and config
-    verify_container_engine_config(args.container_engine, args.ignore_docker_install,
-                                   ignore_container_processes=args.ignore_docker_processes)
-
+    settings = preflight.RunSettings(args.container_engine, args.pull_dir, ignore_install=args.ignore_docker_install,
+                                     ignore_processes=args.ignore_docker_processes)
+    root_cwl = Path(basepath) / f'{Path(yml_path).stem}.cwl'
     if docker_pull_only:
-        cwl_docker_extract(args.container_engine, args.pull_dir, Path(basepath) / f'{Path(yml_path).stem}.cwl')
+        preflight.prepare([root_cwl], settings)
         return
+    # The run lane does not pull again.
+    job = preflight.Job(artifact.job_inputs, Path(args.yaml).parent.absolute(), 'the workflow')
+    preflight.check(preflight.needs([root_cwl], [job]), settings)
 
     if args.docker_remove_entrypoints:
         artifact = remove_artifact_entrypoints(args.container_engine, artifact)
@@ -307,8 +312,6 @@ def run_workflows(
         sophios.input_output.write_artifacts_to_disk(
             artifact, Path(basepath), True, args.inputs_file)
     # NOTE: Do not use --cachedir; we want to actually test everything.
-    # stage input files for run
-    stage_input_files(artifact.job_inputs, Path(args.yaml).parent.absolute(), basepath)
     run_args_dict = {}
     run_args_dict['container_engine'] = args.container_engine
     run_args_dict['cwl_runner'] = cwl_runner

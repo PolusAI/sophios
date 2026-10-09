@@ -164,6 +164,12 @@ only on your machine fails that pull. For such an image write `dockerImageId`
 alone, `.docker(docker_image_id="my-tool:dev")`: the pull skips it, saying it has
 no `dockerPull`, and the runner uses the local image as it is.
 
+With `--container_engine podman` the pull is done by podman. A tool that ships
+its image, with `dockerLoad` (a file or an http(s) URL) or `dockerImport` (with
+`dockerImageId`), has it loaded into the engine before the run, since the run
+itself never pulls. A pull, load or import that fails stops the run with
+`wic037`, quoting the engine's last line.
+
 The runner starts the container with the tool's command line as the arguments of
 the image's `ENTRYPOINT`, if it has one. Give the full command in
 `.base_command(...)`, from an image without an entrypoint;

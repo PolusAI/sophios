@@ -298,6 +298,11 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # given and run on Windows.
     'tests/core/test_plain_cwl.py::test_a_plain_cwl_workflow_runs_as_it_is',
     'tests/core/test_plain_cwl.py::test_a_conformance_workflow_runs_through_sophios_as_cwltool_runs_it',
+    # One `Workflow.run()` of a one-step echo, by cwltool in a new interpreter, under
+    # a second. Only a new interpreter shows a root-logger handler added by an
+    # import, which stops cwltool's in-process run; the import check itself runs
+    # on every leg.
+    'tests/core/test_python_api_workflow.py::test_workflow_run_runs_cwltool_in_the_callers_process',
     # A workflow run by cwltool through --run_local, with two real-time analyses
     # run by cwltool beside it, one of them failing, in one run of about eight
     # seconds. The watcher's own tests use a stand-in for cwltool and run on
