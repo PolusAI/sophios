@@ -7,7 +7,7 @@ errors in one pass instead of one per run.
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import overload
+from typing import Any, overload
 
 from . import error_codes as _error_codes
 from .spans import SourceSpan
@@ -16,11 +16,13 @@ from .spans import SourceSpan
 class Severity(StrEnum):
     """How much a diagnostic matters.
 
-    One member today: nothing in the library emits a warning, and a severity
-    no code path can produce is a claim no test can provoke.
+    Two members: a note is reported and does not fail a compile; an error
+    does. There is no warning: a severity no code path can produce is a claim
+    no test can provoke.
     """
 
     ERROR = 'error'
+    NOTE = 'note'
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +68,26 @@ class Diagnostic:
         suffix = f' ({self.locator})' if self.locator is not None else ''
         return f'{prefix}{self.severity} [{self.code}] {self.message}{suffix}'
 
+    def to_json(self) -> dict[str, Any]:
+        """This diagnostic as the object `--diagnostics json` prints.
+
+        Every key is always present, None where Sophios does not know the value, so a reader
+        never tests for a key. `kind` and `fix` are the code's explanation.
+        """
+        span, locator, explanation = self.span, self.locator, self.code.explanation
+        return {
+            'severity': str(self.severity), 'code': str(self.code), 'kind': str(explanation.kind),
+            'message': self.message, 'fix': explanation.fix,
+            'file': span.file if span else None,
+            'line': span.start_line if span else None,
+            'column': span.start_column if span else None,
+            'end_line': span.end_line if span else None,
+            'end_column': span.end_column if span else None,
+            'step': locator.step if locator else None,
+            'index': locator.index if locator else None,
+            'port': locator.port if locator else None,
+        }
+
 
 class Diagnostics(Sequence[Diagnostic]):
     """An ordered, append-only collection of diagnostics."""
@@ -85,6 +107,12 @@ class Diagnostics(Sequence[Diagnostic]):
         better than an exception.
         """
         self._append(Diagnostic(Severity.ERROR, code, message, span, locator))
+
+    def note(self, code: _error_codes.SophiosErrorCode,
+             message: str, span: SourceSpan | None = None,
+             locator: Locator | None = None) -> None:
+        """Record a note: something the reader should know that is not wrong."""
+        self._append(Diagnostic(Severity.NOTE, code, message, span, locator))
 
     def _append(self, diagnostic: Diagnostic) -> None:
         """Append, dropping exact duplicates."""
@@ -132,9 +160,10 @@ class SophiosError(Exception):
         self.diagnostics: Diagnostics = items
 
     @classmethod
-    def error(cls, code: _error_codes.SophiosErrorCode, *messages: str) -> 'SophiosError':
-        """Build from one error, spelled as one or more message lines.
+    def error(cls, code: _error_codes.SophiosErrorCode, *messages: str,
+              span: SourceSpan | None = None, locator: Locator | None = None) -> 'SophiosError':
+        """Build from one error, spelled as one or more message lines, at `span` and `locator`.
 
-        Multiple lines become multiple diagnostics under the same code.
+        Multiple lines become multiple diagnostics under the same code and position.
         """
-        return cls(Diagnostic(Severity.ERROR, code, message) for message in messages)
+        return cls(Diagnostic(Severity.ERROR, code, message, span, locator) for message in messages)

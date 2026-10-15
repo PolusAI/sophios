@@ -9,15 +9,18 @@ The two are deliberately separate files rather than one file with a `tools=`
 parameter. A shared module would have to import `test_setup` for one of its two
 callers, and the import is the thing being forbidden.
 """
+import socket
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
+import pytest
 import yaml
 
 import sophios.cli
 import sophios.compiler
 from sophios.input_output import NoAliasDumper
-from sophios.utils_graphs import get_graph_reps
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.resolve import RegistrySnapshot
@@ -32,6 +35,30 @@ from .synthetic_tools import SYNTHETIC_TOOLS
 COVERAGE: Final = budget(500)
 ORACLE: Final = budget(100)
 PARTITION: Final = budget(50)
+
+
+@contextmanager
+def network_refused() -> Iterator[list[str]]:
+    """Refuse every name lookup and outgoing connection, recording each attempt.
+
+    The attempts are yielded so the caller can assert there were none: a
+    library that downgrades a failed fetch to a warning would otherwise pass
+    unnoticed. A context manager rather than a fixture, because Hypothesis
+    rejects function-scoped fixtures under `@given`.
+    """
+    attempts: list[str] = []
+
+    def refuse(kind: str) -> Any:
+        def refused(*args: Any, **_kwargs: Any) -> Any:
+            attempts.append(f'{kind} {args[1:] if kind != "lookup" else args[:1]}')
+            raise OSError(f'network refused: {kind}')
+        return refused
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(socket, 'getaddrinfo', refuse('lookup'))
+        patch.setattr(socket.socket, 'connect', refuse('connect'))
+        patch.setattr(socket.socket, 'connect_ex', refuse('connect_ex'))
+        yield attempts
 
 
 def _documents(*results: ParseResult) -> tuple[Document, ...]:
@@ -82,33 +109,43 @@ def bundle(yml: Yaml, name: str, tools: Tools) -> SourceBundle:
 def compile_hermetic(yml: Yaml, name: str = 'oracle', *,
                      tools: Tools | None = None,
                      insert_steps_automatically: bool = False,
+                     inference_strict: bool = False,
                      is_root: bool = True) -> CompilationResult:
     """Compile one in-memory workflow against the synthetic registry.
 
-    `insert_steps_automatically` is named rather than taken as `**options` so a
+    `insert_steps_automatically` and `inference_strict` are named rather than taken as `**options` so a
     typo is a type error instead of a silently ignored setting — the same
     reasoning as `compile_harness.compile_info`.
     """
-    compiler_options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
+    compiler_options = sophios.cli.default_compilation_settings()
     compiler_options['insert_steps_automatically'] = insert_steps_automatically
-    graph = get_graph_reps(name)
+    compiler_options['inference_strict'] = inference_strict
     del is_root
     return sophios.compiler.compile_source(
-        bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools),
-        compiler_options, graph_settings, tag_paths,
-        relative_run_path=True, testing=True, graph_target=graph)
+        bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools), compiler_options,
+        relative_run_path=True, testing=True)
+
+
+def compile_hermetic_source(source: str, name: str = 'oracle', *, tools: Tools | None = None) -> CompilationResult:
+    """Compile one `.wic` text against the synthetic registry, as `compile_hermetic` compiles a document.
+
+    For what only the text can say, such as whether an `!ii` scalar is quoted: `bundle` writes a document
+    out with `yaml.dump`, which chooses the quoting itself.
+    """
+    parsed = parse(source, f'{name}.wic')
+    return sophios.compiler.compile_source(
+        SourceBundle(parsed, name, RegistrySnapshot.from_tools(SYNTHETIC_TOOLS if tools is None else tools), ()),
+        sophios.cli.default_compilation_settings(), relative_run_path=True, testing=True)
 
 
 def compile_production(yml: Yaml, name: str = 'binding', *,
                        tools: Tools | None = None,
                        is_root: bool = True) -> CompilationResult:
     """Compile with user-facing progress enabled (``testing=False``)."""
-    compiler_options, graph_settings, tag_paths = sophios.cli.default_compilation_settings()
     del is_root
     return sophios.compiler.compile_source(
         bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools),
-        compiler_options, graph_settings, tag_paths,
-        relative_run_path=True, testing=False, graph_target=get_graph_reps(name))
+        sophios.cli.default_compilation_settings(), relative_run_path=True, testing=False)
 
 
 def compile_hermetic_cwl(yml: Yaml, name: str = 'oracle', *,
@@ -119,6 +156,14 @@ def compile_hermetic_cwl(yml: Yaml, name: str = 'oracle', *,
                             insert_steps_automatically=insert_steps_automatically)
     compiled: Yaml = info.artifact.cwl
     return compiled
+
+
+def nested_workflow(levels: int) -> Yaml:
+    """A leaf step wrapped `levels` deep, each level a `subworkflow_step` of its own."""
+    tree: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'leaf.txt'}}}]}
+    for level in range(levels):
+        tree = {'steps': [subworkflow_step(f'level_{level}.wic', tree)]}
+    return tree
 
 
 def subworkflow_step(stem: str, subtree: Yaml) -> Yaml:

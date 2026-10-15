@@ -8,18 +8,25 @@ ADAPTERS = REPO_ROOT / "cwl_adapters"
 
 
 def workflow() -> Workflow:
-    """Build a three-step workflow that creates, appends, and reads a file."""
+    """Build docs/tutorials/multistep1.wic in Python: create a file, append Hello and World!, read it.
+
+    Python step names are unique, so the two `append` steps are named apart.
+    """
     touch = Step(clt_path=ADAPTERS / "touch.cwl")
     touch.inputs.filename = "empty.txt"
 
-    append = Step(clt_path=ADAPTERS / "append.cwl")
-    append.inputs.file = touch.outputs.file
-    append.inputs.str = "Hello"
+    hello = Step(clt_path=ADAPTERS / "append.cwl", step_name="append_hello")
+    hello.inputs.file = touch.outputs.file
+    hello.inputs.str = "Hello"
+
+    world = Step(clt_path=ADAPTERS / "append.cwl", step_name="append_world")
+    world.inputs.file = hello.outputs.file
+    world.inputs.str = "World!"
 
     cat = Step(clt_path=ADAPTERS / "cat.cwl")
-    cat.inputs.file = append.outputs.file
+    cat.inputs.file = world.outputs.file
 
-    return Workflow([touch, append, cat], "multistep1_pyapi_py")
+    return Workflow([touch, hello, world, cat], "multistep1_pyapi_py")
 
 
 # Do NOT .run() here

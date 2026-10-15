@@ -821,10 +821,8 @@ def import_nextflow(path: str | Path) -> "Workflow":
     process_by_name = {process.name: process for process in nf_workflow.processes}
     for connection in nf_workflow.connections:
         if isinstance(connection, NfWorkflowOutputConnection):
-            workflow.add_output(
-                connection.to_port,
-                step_by_name[connection.from_process].get_output(connection.from_port),
-            )
+            source = getattr(step_by_name[connection.from_process].outputs, connection.from_port)
+            setattr(workflow.outputs, connection.to_port, source)
             continue
         destination = step_by_name[connection.to_process]
         if isinstance(connection, NfWorkflowInputConnection):
@@ -832,16 +830,10 @@ def import_nextflow(path: str | Path) -> "Workflow":
             destination_port = next(
                 port for port in destination_process.inputs if port.name == connection.to_port
             )
-            workflow.add_input(connection.from_port, _cwl_type(destination_port))
+            source = getattr(workflow.inputs, connection.from_port).as_type(_cwl_type(destination_port))
             if connection.from_port in nf_workflow.params:
-                workflow.bind_input(connection.from_port, nf_workflow.params[connection.from_port])
-            destination.bind_input(
-                connection.to_port,
-                getattr(workflow.inputs, connection.from_port),
-            )
+                setattr(workflow.inputs, connection.from_port, nf_workflow.params[connection.from_port])
         else:
-            destination.bind_input(
-                connection.to_port,
-                step_by_name[connection.from_process].get_output(connection.from_port),
-            )
+            source = getattr(step_by_name[connection.from_process].outputs, connection.from_port)
+        setattr(destination.inputs, connection.to_port, source)
     return workflow

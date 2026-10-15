@@ -1,10 +1,8 @@
 from dataclasses import dataclass
 from functools import lru_cache
-from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 
 import pytest
-import yaml
 
 import sophios
 import sophios.cli
@@ -12,8 +10,8 @@ import sophios.input_output as io
 import sophios.plugins
 import sophios.api
 import sophios.api.python.workflow
+from sophios.lang import parse
 from sophios.wic_types import Json, Tools
-from sophios.utils_yaml import wic_loader
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,8 +25,9 @@ class CorpusRegistry:
 def _config() -> tuple[Json, bool]:
     """Read configuration without provisioning a missing user config."""
     args = sophios.cli.get_args()
-    if Path(args.config_file).exists():
-        return io.get_config(Path(args.config_file), Path(args.config_file)), args.quiet
+    config_file = args.config_file or io.default_config_file(Path(args.homedir))
+    if config_file.exists():
+        return io.read_config_from_disk(config_file), args.quiet
     return io.get_basic_config(), args.quiet
 
 
@@ -49,15 +48,15 @@ def yml_path_is_workflow(yml_path: Path) -> bool:
     Returns:
         bool: True when the file declares steps or workflow implementations.
     """
-    with open(yml_path, mode='r', encoding='utf-8') as yml_file:
-        yml = yaml.load(yml_file.read(), Loader=wic_loader())
-    if not isinstance(yml, dict):
+    # parse() rather than read_wic(): a corpus file may carry diagnostics and
+    # still be a document whose shape answers the question.
+    document = parse(yml_path.read_text(encoding='utf-8'), str(yml_path)).document
+    if document is None:
         return False
-    wic_tag = yml.get('wic', {})
     return (
-        'steps' in yml
-        or 'implementations' in yml
-        or (isinstance(wic_tag, dict) and 'implementations' in wic_tag)
+        bool(document.steps) or document.steps_as_mapping
+        or 'implementations' in dict(document.passthrough)
+        or (document.sidecar is not None and 'implementations' in dict(document.sidecar.entries))
     )
 
 
@@ -76,14 +75,3 @@ def load_test_registry() -> CorpusRegistry:
 def corpus_registry() -> CorpusRegistry:
     """Explicit registry fixture for tests that exercise the discovered corpus."""
     return load_test_registry()
-
-
-def test_version_resolution_warns_when_package_metadata_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An uninstalled package warns rather than resolving to a wrong version."""
-    def missing_version(distribution_name: str) -> str:
-        raise PackageNotFoundError(distribution_name)
-
-    monkeypatch.setattr(sophios, "version", missing_version)
-
-    with pytest.warns(RuntimeWarning, match="sophios is not installed"):
-        assert sophios._resolve_version() == "unknown"

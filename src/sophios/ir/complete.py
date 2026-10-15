@@ -7,17 +7,23 @@ source. A boundary name it derives is a `DerivedName`, not text: `ir.names`
 spells it, at Emit. It states no document -- requirements, `$namespaces`,
 `$schemas`, a step's `run:` path and field order are spelled in `emit.surface`.
 """
+import datetime
+import difflib
 import json
+import re
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any, TypeVar
+from typing import Any, Final, TypeVar
 
-from ..lang.nodes import InlineLiteral, UnresolvedName
-from ..lang.diagnostics import SophiosError
+from ..lang.nodes import CwlRecord, InlineLiteral, UnresolvedName
+from ..lang.diagnostics import Locator, SophiosError
+from ..lang.spans import SourceSpan
 from ..lang.error_codes import SophiosErrorCode
-from .declarations import feeding_declaration, produced_declaration
+from .declarations import feeding_declaration, input_rank, produced_declaration
+from .names import Names, authored_path
 from .types import (
     AuthoredName,
+    BoundaryDeclaration,
     DerivedName,
     Direction,
     JobBinding,
@@ -25,6 +31,7 @@ from .types import (
     PortDeclaration,
     PortId,
     PortName,
+    PortType,
     StepOutputRef,
     WorkflowGraph,
     WorkflowPort,
@@ -63,7 +70,7 @@ def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
             continue
 
         inputs = list(step.inputs)
-        outputs = list(step.outputs)
+        outputs = _completed_outputs(step.outputs, child)
         input_names = {port.id.port for port in inputs}
         output_names = {port.id.port for port in outputs}
         for boundary in child.workflow_inputs:
@@ -89,7 +96,9 @@ def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
             declaration = feeding_declaration(step, sink)
             _put(workflow_inputs, WorkflowPort(outer_name, declaration))
             _put(job_bindings, JobBinding(outer_name, coerce_job_value(
-                str(boundary.name), declaration, child_jobs[boundary.name])))
+                boundary.name, declaration, child_jobs[boundary.name],
+                scatter_rank=input_rank(step, sink.id.port), span=step.span,
+                locator=Locator(step.id.name, step.id.index, '/'.join(authored_path(boundary.name))))))
             _put_input_mapping(input_mapping, outer_name, sink.id)
             if outer_name not in shorthand_relays:
                 shorthand_relays.append(outer_name)
@@ -117,22 +126,38 @@ def _materialize_bindings(graph: WorkflowGraph) -> WorkflowGraph:
         for binding in step.bindings:
             port = next(port for port in step.inputs if port.id == binding.sink)
             match binding.value:
-                case InlineLiteral(value=value):
+                case InlineLiteral(value=value, span=span):
                     name = DerivedName(step.id, port.id.port)
                     declaration = feeding_declaration(step, port)
                     _put(workflow_inputs, WorkflowPort(name, declaration))
-                    _put(job_bindings, JobBinding(
-                        name, coerce_job_value(str(port.id.port), declaration, value)))
+                    locator = Locator(step.id.name, step.id.index, '/'.join(authored_path(port.id.port)))
+                    _put(job_bindings, JobBinding(name, coerce_job_value(
+                        port.id.port, declaration, value, scatter_rank=input_rank(step, port.id.port),
+                        span=span, locator=locator)))
                     _put_input_mapping(input_mapping, name, port.id)
                 case UnresolvedName(name=text):
-                    authored = AuthoredName(text)
-                    if authored in authored_inputs:
-                        _put_input_mapping(input_mapping, authored, port.id)
-                        _merge_boundary_documentation(workflow_inputs, authored, port.declaration)
+                    _relay(workflow_inputs, input_mapping, authored_inputs, AuthoredName(text), port)
+                case CwlRecord(sources=sources):
+                    for source in sources:
+                        if isinstance(source, UnresolvedName):
+                            _relay(workflow_inputs, input_mapping, authored_inputs, AuthoredName(source.name), port)
                 case _:
                     pass
     return replace(graph, workflow_inputs=tuple(workflow_inputs),
                    job_bindings=tuple(job_bindings), input_mapping=tuple(input_mapping))
+
+
+def _completed_outputs(outputs: tuple[Port, ...], child: WorkflowGraph) -> list[Port]:
+    """`outputs` of a call step, each taking the declaration its completed child gives it.
+
+    Resolve read the child's interface before the child was completed, so an
+    output its author left untyped is untyped there until it takes the type the
+    child gave it.
+    """
+    completed = {boundary.name: boundary.declaration for boundary in child.workflow_outputs}
+    return [replace(port, type=declaration.type, declaration=declaration)
+            if (declaration := completed.get(port.id.port)) is not None else port
+            for port in outputs]
 
 
 def _emitted_source(graph: WorkflowGraph, port_id: PortId) -> StepOutputRef | None:
@@ -143,17 +168,56 @@ def _emitted_source(graph: WorkflowGraph, port_id: PortId) -> StepOutputRef | No
     return StepOutputRef(step.id, port_id.port)
 
 
+def _produced_type(graph: WorkflowGraph, port_id: PortId) -> PortType:
+    """The boundary type the output `port_id` produces, scatter layers included.
+
+    `port_id` is a step of `graph`: Link has not yet redirected an output into
+    a child, which is why `compile_source` completes a graph before it links it.
+    """
+    step = next(item for item in graph.steps if item.id == port_id.step)
+    port = next(item for item in step.outputs if item.id == port_id)
+    # pylint: disable-next=no-member
+    return produced_declaration(step, port).type
+
+
+def _untyped_output(graph: WorkflowGraph, output: WorkflowPort) -> SophiosError:
+    """`wic036`: `output` declares no type and names no step output to take one from."""
+    names = Names.of(graph)
+    where = f'workflow output {names.port(output.name)!r} declares no type'
+    if not output.has_output_source:
+        return SophiosError.error(
+            SophiosErrorCode.UNTYPED_OUTPUT,
+            f'{where} and has no `outputSource:` to take one from; '
+            'add `type:`, or an `outputSource: <step>/<output>`.')
+    # What an `outputSource:` can name: not a name the compiler derives for a
+    # call's lifted outputs.
+    sources = [f'{step.id.name}/{names.port(port.id.port)}' for step in graph.steps
+               for port in step.outputs if not isinstance(port.id.port, DerivedName)]
+    close = difflib.get_close_matches(str(output.output_source), sources, n=1)
+    check = f"Did you mean '{close[0]}'?" if close else 'Check the step and output names.'
+    return SophiosError.error(
+        SophiosErrorCode.UNTYPED_OUTPUT,
+        f'{where}, and its `outputSource: {output.output_source}` names no output of a step in '
+        f'this workflow, so there is no type to take. {check} If it names something that is '
+        'not a step output, add `type:`.')
+
+
 def _materialize_outputs(graph: WorkflowGraph) -> WorkflowGraph:
     # Record Link's resolved producer, not the authored `outputSource:` string:
     # emission renames every step, so the authored text points nowhere.
     resolved = dict(graph.output_mapping)
-    outputs = [
-        replace(port, output_source=emitted)
-        if port.has_output_source and port.name in resolved
-        and (emitted := _emitted_source(graph, resolved[port.name])) is not None
-        else port
-        for port in graph.workflow_outputs
-    ]
+    outputs = []
+    for output in graph.workflow_outputs:
+        producer = resolved.get(output.name)
+        if output.declaration.type.declared is None:
+            if producer is None:
+                raise _untyped_output(graph, output)
+            output = replace(output, declaration=BoundaryDeclaration(replace(
+                output.declaration, type=_produced_type(graph, producer))))
+        emitted = _emitted_source(graph, producer) if producer is not None else None
+        if output.has_output_source and emitted is not None:
+            output = replace(output, output_source=emitted)
+        outputs.append(output)
     output_mapping = list(graph.output_mapping)
     authored = {port.name for port in outputs}
     for step in graph.steps:
@@ -188,6 +252,14 @@ def _put_input_mapping(mappings: list[tuple[PortName, tuple[PortId, ...]]],
     mappings.append((name, (sink,)))
 
 
+def _relay(workflow_inputs: list[WorkflowPort], input_mapping: list[tuple[PortName, tuple[PortId, ...]]],
+           authored_inputs: set[PortName], name: AuthoredName, port: Port) -> None:
+    """Relay the workflow input `name` to `port`, when the document declares it."""
+    if name in authored_inputs:
+        _put_input_mapping(input_mapping, name, port.id)
+        _merge_boundary_documentation(workflow_inputs, name, port.declaration)
+
+
 def _merge_boundary_documentation(ports: list[WorkflowPort], name: PortName,
                                   source: PortDeclaration | None) -> None:
     if source is None:
@@ -216,12 +288,24 @@ def _as_text(value: Any) -> Any:
     return '\n'.join(value) if isinstance(value, list) else value
 
 
-def coerce_job_value(name: str, declaration: PortDeclaration, value: Any) -> Any:
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def coerce_job_value(name: PortName, declaration: PortDeclaration, value: Any, *, scatter_rank: int = 0,
+                     span: SourceSpan | None = None, locator: Locator | None = None) -> Any:
     """`value` in the one plain-JSON form a job document holds for `declaration`.
 
     A projection: a value already in that form (a lifted child job value, an
     authored `File` object) passes through. Each array layer of the type wraps
-    a scalar in a list and keeps a list.
+    a scalar in a list and keeps a list. A scalar literal must already have the
+    declared type: an int is also a float, and a scalar is also a `string`'s
+    text, but nothing else is converted. A scattered input (`scatter_rank`
+    above zero, the layers `scatter:` adds) takes a list and never wraps a
+    scalar: the scatter splits the value, so a scalar has nothing to split.
+
+    `name` is the input the value is for. It is spelled only if the value does
+    not convert and a message must name it: a derived name's text prints every
+    step id it was exposed through, so spelling it for every value is the cost
+    that made nesting exponential. `span` and `locator` say where the value was
+    written, for the diagnostic.
     """
     value = _plain(value)
     if value is None:
@@ -229,12 +313,20 @@ def coerce_job_value(name: str, declaration: PortDeclaration, value: Any) -> Any
             return None
         raise SophiosError.error(SophiosErrorCode.MISSING_REQUIRED_INPUT,
                                  f'Required input of type {declaration.type.declared} '
-                                 'was not provided.')
+                                 'was not provided.', span=span, locator=locator)
+    if scatter_rank and not isinstance(value, list):
+        raise SophiosError.error(
+            SophiosErrorCode.LITERAL_TYPE_MISMATCH,
+            f'Input {str(name)!r} is scattered, so its literal must be a list of values to scatter over; '
+            f'{value!r} is a scalar. Write `!ii [...]`, or drop the port from `scatter:`.',
+            span=span, locator=locator)
     return _coerce_type(name, declaration.type.canonical, value,
-                        declaration.format if declaration.has_format else None)
+                        declaration.format if declaration.has_format else None, span=span, locator=locator)
 
 
-def _coerce_type(name: str, raw: Any, value: Any, fmt: Any) -> Any:
+# pylint: disable-next=too-many-arguments
+def _coerce_type(name: PortName, raw: Any, value: Any, fmt: Any, *,
+                 span: SourceSpan | None, locator: Locator | None) -> Any:
     if isinstance(raw, list):
         non_null = [item for item in raw if item != 'null']
         arrays = [item for item in non_null if isinstance(item, dict)
@@ -242,8 +334,8 @@ def _coerce_type(name: str, raw: Any, value: Any, fmt: Any) -> Any:
         raw = arrays[0] if arrays else (non_null[0] if len(non_null) == 1 else non_null)
     if isinstance(raw, dict) and raw.get('type') == 'array':
         values = value if isinstance(value, list) else [value]
-        return [_coerce_type(name, raw.get('items'), item, fmt) for item in values]
-    return _coerce_scalar(name, raw, value, fmt)
+        return [_coerce_type(name, raw.get('items'), item, fmt, span=span, locator=locator) for item in values]
+    return _coerce_scalar(name, raw, value, fmt, span=span, locator=locator)
 
 
 def _plain(value: Any) -> Any:
@@ -257,35 +349,101 @@ def _plain(value: Any) -> Any:
     return value
 
 
-def _coerce_scalar(name: str, raw: Any, value: Any, fmt: Any) -> Any:
+# pylint: disable-next=too-many-arguments
+def _coerce_scalar(name: PortName, raw: Any, value: Any, fmt: Any, *,
+                   span: SourceSpan | None, locator: Locator | None) -> Any:
     if raw in ('File', 'Directory'):
         if isinstance(value, str):
             value = {'class': raw, 'location': value}
         elif not isinstance(value, dict) or value.get('class') != raw:
-            raise _mismatch(name, raw, value)
+            raise _mismatch(name, raw, value, span, locator)
         result = deepcopy(value)
         if raw == 'File' and fmt and 'format' not in result:
             result['format'] = fmt
         return result
     if raw == 'string':
-        # A dict/list bound to `string` is JSON to parse, not Python repr to print.
-        if isinstance(value, (dict, list)):
-            return json.dumps(value)
-        return str(value)
-    try:
-        if raw == 'int':
-            return int(value)
-        if raw == 'float':
-            return float(value)
-        if raw == 'boolean':
-            return bool(value)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise _mismatch(name, raw, value) from exc
+        return _coerce_string(name, value, span=span, locator=locator)
+    if raw in ('int', 'long'):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        raise _mismatch(name, raw, value, span, locator)
+    if raw in ('float', 'double'):
+        return _coerce_float(name, raw, value, span=span, locator=locator)
+    if raw == 'boolean':
+        if isinstance(value, bool):
+            return value
+        raise _mismatch(name, raw, value, span, locator)
     return deepcopy(value)
 
 
-def _mismatch(name: str, raw: Any, value: Any) -> SophiosError:
+def _coerce_string(name: PortName, value: Any, *, span: SourceSpan | None, locator: Locator | None) -> str:
+    """The text of a scalar literal, or of a mapping or list as JSON.
+
+    The one conversion kept besides an int into a float: `!ii 20` cannot be
+    spelled as the text "20" (the composer resolves it to a number). A boolean is
+    JSON's `true` or `false`, as inside a mapping; a number is Python's spelling
+    of it (`1.0e-5` is "1e-05"). YAML reads an unquoted 2024-01-15 as a date; its
+    text is what the author wrote.
+    """
+    if isinstance(value, (dict, list, bool)):
+        try:
+            return json.dumps(value)
+        except TypeError as exc:
+            raise _mismatch(name, 'string', value, span, locator) from exc
+    if isinstance(value, (str, int, float, datetime.date)):
+        return str(value)
+    raise _mismatch(name, 'string', value, span, locator)
+
+
+def _coerce_float(name: PortName, raw: Any, value: Any, *,
+                  span: SourceSpan | None, locator: Locator | None) -> float:
+    """A float as it is, or an int the float holds exactly."""
+    if isinstance(value, float):
+        return float(value)
+    if isinstance(value, int) and not isinstance(value, bool):
+        try:
+            as_float = float(value)
+        except OverflowError as exc:
+            raise _mismatch(name, raw, value, span, locator) from exc
+        if int(as_float) == value:
+            return as_float
+    raise _mismatch(name, raw, value, span, locator)
+
+
+#: A number written in scientific notation that YAML 1.1 reads as text: PyYAML
+#: resolves a float only with a decimal point and a signed exponent.
+_UNSIGNED_EXPONENT: Final = re.compile(r'([-+]?\d+\.?\d*)[eE]([-+]?)(\d+)')
+
+_KINDS: Final = {str: 'text', bool: 'a boolean', int: 'an int', float: 'a float',
+                 list: 'a list', dict: 'a mapping', type(None): 'null'}
+
+#: The Python type each scalar port type is, named when a value of another type is passed.
+_PYTHON_TYPE: Final = {'int': int, 'long': int, 'float': float, 'double': float,
+                       'boolean': bool, 'string': str}
+
+
+def _mismatch(name: PortName, raw: Any, value: Any, span: SourceSpan | None,
+              locator: Locator | None) -> SophiosError:
     return SophiosError.error(
         SophiosErrorCode.LITERAL_TYPE_MISMATCH,
-        f'Input {name!r} is declared type {raw!r} but its literal {value!r} '
-        'does not convert to it.')
+        f'Input {str(name)!r} is declared type {raw!r} but its literal {value!r} {_what_is_wrong(raw, value)}',
+        span=span, locator=locator)
+
+
+def _what_is_wrong(raw: Any, value: Any) -> str:
+    """What `value` is, for a message; for a float port, the cause and the fix."""
+    if raw in ('float', 'double'):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return 'is an int that a float cannot hold exactly.'
+        scientific = _UNSIGNED_EXPONENT.fullmatch(value) if isinstance(value, str) else None
+        if scientific:
+            mantissa, sign, digits = scientific.groups()
+            written = f'{mantissa if "." in mantissa else mantissa + ".0"}e{sign or "+"}{digits}'
+            return ('is text: YAML reads a number as a float only with a decimal point and a signed '
+                    f'exponent. Write {written}.')
+    kind = type(value)
+    if kind in _KINDS:
+        return f'is {_KINDS[kind]}.'
+    qualified = kind.__qualname__ if kind.__module__ == 'builtins' else f'{kind.__module__}.{kind.__qualname__}'
+    wanted = _PYTHON_TYPE.get(raw)
+    return f'is of type {qualified}' + (f', not a Python {wanted.__name__}.' if wanted else '.')

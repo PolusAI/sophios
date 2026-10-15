@@ -1,0 +1,31 @@
+steps:
+- id: touch
+  in:
+    filename: !ii empty.txt
+  out:
+  - file: !& empty
+- id: echo
+  in:
+    message: !ii Hello
+  out:
+  - stdout: !& hello
+- id: concat
+  run:
+    class: CommandLineTool
+    cwlVersion: v1.2
+    baseCommand: cat
+    inputs:
+      files:
+        type: File[]
+        inputBinding:
+          position: 1
+    outputs:
+      joined:
+        type: File
+        outputBinding:
+          glob: joined.txt
+    stdout: joined.txt
+  in:
+    files: !cwl
+      source: [!* empty, !* hello]
+      linkMerge: merge_flattened

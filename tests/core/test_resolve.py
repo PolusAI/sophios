@@ -34,11 +34,13 @@ from sophios.ir import (
 from sophios.ir.lower import lower
 from sophios.lang import (EdgeRef, InlineLiteral, RawCwlRef, SourceSpan, Step,
                           UnresolvedName, parse)
+from sophios.lang.diagnostics import SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
 from sophios.wic_types import StepId as LegacyStepId, Yaml
 
 from . import ast_strategies as strat
 from .budgets import budget
-from .hermetic import ORACLE, bundle, compile_hermetic
+from .hermetic import ORACLE, bundle, compile_hermetic, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, inputs_of, outputs_of
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -179,6 +181,23 @@ def test_nested_workflow_source_is_resolved_from_the_snapshot() -> None:
     assert result.resolved is not None and result.resolved.document is not None
     assert result.graph is not None and len(result.graph.children) == 1
     assert result.resolved.document.steps[0].process.child is not None
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('key', ['inputs', 'outputs'])
+@pytest.mark.parametrize('directive', ['$import', '$include'])
+def test_a_called_workflow_listing_its_ports_with_an_import_is_reported(key: str, directive: str) -> None:
+    """The ports are in a file only cwltool reads, so no step can be checked against them.
+
+    Calling such a workflow is reported at the call, not met with a `KeyError`.
+    """
+    child = {key: [{directive: 'shared.yml'}],
+             'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]}
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [subworkflow_step('child.wic', child)]})
+    [diagnostic] = caught.value.diagnostics
+    assert diagnostic.code is SophiosErrorCode.SUBWORKFLOW_INVALID
+    assert f'workflow global/child lists its {key}:' in diagnostic.message
 
 
 @pytest.mark.fast
@@ -382,8 +401,10 @@ steps:
 
 
 @pytest.mark.fast
-def test_a_contribution_needs_both_the_index_and_the_name_to_agree() -> None:
-    """`(N, name)` addresses one occurrence, so half a match is no match."""
+def test_a_contribution_whose_key_does_not_match_its_step_is_named_on_stderr(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """`(N, name)` addresses one step, so half a match is no match: the key is
+    ignored, and each such key is named once on stderr."""
     document = _resolved('''
 wic:
   steps:
@@ -401,6 +422,11 @@ steps:
 ''', child='steps:\n- id: mk_file\n  in:\n    name: !ii its_own.txt\n')
     bound = _descend(document, 1).steps[0].source.input('name')
     assert isinstance(bound, InlineLiteral) and bound.value == 'its_own.txt'
+    assert capsys.readouterr().err.splitlines() == [
+        "Warning! root.wic: wic: steps: key (2, mk_file) addresses no step of 'child': "
+        'there is no step 2; the document has 1 step. The key is ignored.',
+        "Warning! root.wic: wic: steps: key (1, mk_text) addresses no step of 'child': "
+        "step 1 is 'mk_file'; write (1, mk_file). The key is ignored."]
 
 
 @pytest.mark.fast
@@ -531,3 +557,190 @@ steps:
     assert isinstance(contributed, InlineLiteral) and contributed.value == 'contributed.txt'
     assert [(binding.name, binding.edge_def and binding.edge_def.name)
             for binding in step.outputs] == [('file', 'its_own_edge')]
+
+
+@pytest.mark.fast
+def test_an_id_keyed_contribution_reaches_the_one_step_with_that_id(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """A parent contributes to the one step with that id by its bare id."""
+    document = _resolved('''
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+          mk_file:
+            in:
+              name: !ii from_root.txt
+steps:
+- id: child.wic
+''', child='steps:\n- id: mk_file\n')
+    bound = _descend(document, 1).steps[0].source.input('name')
+    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
+    assert capsys.readouterr().err == ''
+
+
+@pytest.mark.fast
+def test_an_id_keyed_entry_for_a_repeated_id_is_named_on_stderr_and_ignored(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """A bare id naming several steps is reported and ignored."""
+    document = _resolved('wic:\n  steps:\n    mk_file:\n      in:\n        name: !ii x.txt\n'
+                         'steps:\n- id: mk_file\n- id: mk_file\n')
+    assert all(step.source.input('name') is None for step in document.steps)
+    assert capsys.readouterr().err.splitlines() == [
+        "Warning! root.wic: wic: steps: key mk_file addresses no step of 'root': "
+        "'mk_file' names 2 steps; write (index, mk_file). The key is ignored."]
+
+
+@pytest.mark.fast
+def test_a_positional_key_wins_over_an_id_key_for_the_same_step() -> None:
+    """Within one sidecar a positional key wins over a bare id for the same step."""
+    document = _resolved('wic:\n  steps:\n    mk_file:\n      in:\n        name: !ii by_id.txt\n'
+                         '    (1, mk_file):\n      in:\n        name: !ii by_position.txt\n'
+                         'steps:\n- id: mk_file\n')
+    bound = document.steps[0].source.input('name')
+    assert isinstance(bound, InlineLiteral) and bound.value == 'by_position.txt'
+
+
+@pytest.mark.fast
+def test_a_stale_key_is_named_once_however_many_steps_call_the_workflow(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """A stale key is reported once however many steps call the workflow."""
+    _resolved('steps:\n- id: child.wic\n- id: child.wic\n',
+              child='wic:\n  steps:\n    (2, mk_file): {}\nsteps:\n- id: mk_file\n')
+    assert len(capsys.readouterr().err.splitlines()) == 1
+
+
+@pytest.mark.fast
+def test_an_id_key_from_the_parent_merges_over_the_childs_positional_entry(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """The calling step's contribution wins whichever spelling each side uses."""
+    document = _resolved('''
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+          mk_file:
+            in:
+              name: !ii from_root.txt
+steps:
+- id: child.wic
+''', child='''
+wic:
+  steps:
+    (1, mk_file):
+      wic:
+        graphviz:
+          label: a label
+steps:
+- id: mk_file
+''')
+    bound = _descend(document, 1).steps[0].source.input('name')
+    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
+    assert capsys.readouterr().err == ''
+
+
+@pytest.mark.fast
+def test_an_id_key_from_the_parent_wins_when_the_child_has_both_spellings() -> None:
+    """The contribution wins over a child that spells the same step both ways."""
+    document = _resolved(
+        _PARENT_CONTRIBUTING.format(contribution='          mk_file:\n            in:\n'
+                                                 '              name: !ii from_root.txt'),
+        child='wic:\n  steps:\n    mk_file:\n      in:\n        other: !ii o\n'
+              '    (1, mk_file):\n      in:\n        name: !ii child_pos.txt\n'
+              'steps:\n- id: mk_file\n')
+    step = _descend(document, 1).steps[0].source
+    bound = step.input('name')
+    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
+    other = step.input('other')
+    assert isinstance(other, InlineLiteral) and other.value == 'o'
+
+
+@pytest.mark.fast
+def test_a_positional_key_from_the_parent_merges_over_the_childs_id_entry() -> None:
+    """The parent's (index, id) contribution overrides the child's own bare-id entry."""
+    document = _resolved('''
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+          (1, mk_file):
+            in:
+              name: !ii from_root.txt
+steps:
+- id: child.wic
+''', child='''
+wic:
+  steps:
+    mk_file:
+      in:
+        name: !ii child_own.txt
+steps:
+- id: mk_file
+''')
+    bound = _descend(document, 1).steps[0].source.input('name')
+    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
+
+
+_PARENT_CONTRIBUTING = '''
+wic:
+  steps:
+    (1, child.wic):
+      wic:
+        steps:
+{contribution}
+steps:
+- id: child.wic
+'''
+
+
+@pytest.mark.fast
+def test_a_stale_positional_key_from_the_parent_does_not_swallow_the_childs_id_entry() -> None:
+    """A parent key that addresses no step leaves the child's valid bare-id entry alone."""
+    document = _resolved(
+        _PARENT_CONTRIBUTING.format(contribution='          (2, mk_file):\n            in:\n'
+                                                 '              name: !ii from_root.txt'),
+        child='wic:\n  steps:\n    mk_file:\n      in:\n        name: !ii child_own.txt\n'
+              'steps:\n- id: mk_file\n')
+    bound = _descend(document, 1).steps[0].source.input('name')
+    assert isinstance(bound, InlineLiteral) and bound.value == 'child_own.txt'
+
+
+@pytest.mark.fast
+def test_a_stale_positional_key_in_the_child_does_not_swallow_the_parents_id_contribution() -> None:
+    """A child key that addresses no step leaves the parent's valid bare-id contribution alone."""
+    document = _resolved(
+        _PARENT_CONTRIBUTING.format(contribution='          mk_file:\n            in:\n'
+                                                 '              name: !ii from_root.txt'),
+        child='wic:\n  steps:\n    (2, mk_file):\n      in:\n        name: !ii child_stale.txt\n'
+              'steps:\n- id: mk_file\n')
+    bound = _descend(document, 1).steps[0].source.input('name')
+    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
+
+
+@pytest.mark.fast
+def test_an_id_key_and_a_positional_key_for_the_same_step_merge_in_one_sidecar() -> None:
+    """Fields only the bare entry sets survive; the positional entry wins where both set one."""
+    document = _resolved('wic:\n  steps:\n    mk_file:\n      in:\n        a: !ii x.txt\n'
+                         '    (1, mk_file):\n      in:\n        b: !ii y.txt\n'
+                         'steps:\n- id: mk_file\n')
+    step = document.steps[0].source
+    a, b = step.input('a'), step.input('b')
+    assert isinstance(a, InlineLiteral) and a.value == 'x.txt'
+    assert isinstance(b, InlineLiteral) and b.value == 'y.txt'
+
+
+@pytest.mark.fast
+def test_a_stale_child_id_entry_does_not_pair_with_the_parents_positional_key() -> None:
+    """A child bare id naming two steps addresses none, so it is not merged under the parent's (1, id) key."""
+    document = _resolved(
+        _PARENT_CONTRIBUTING.format(contribution='          (1, mk_file):\n            in:\n'
+                                                 '              name: !ii from_root.txt'),
+        child='wic:\n  steps:\n    mk_file:\n      in:\n        extra: !ii stale_child.txt\n'
+              'steps:\n- id: mk_file\n- id: mk_file\n')
+    step = _descend(document, 1).steps[0].source
+    assert not isinstance(step.input('extra'), InlineLiteral)
+    bound = step.input('name')
+    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'

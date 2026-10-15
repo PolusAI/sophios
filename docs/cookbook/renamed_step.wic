@@ -1,0 +1,9 @@
+steps:
+- id: hello
+  run: echo
+  in:
+    message: !ii Hello
+- id: goodbye
+  run: echo
+  in:
+    message: !ii Goodbye

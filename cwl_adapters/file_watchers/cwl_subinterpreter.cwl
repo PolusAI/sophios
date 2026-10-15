@@ -3,103 +3,39 @@ cwlVersion: v1.0
 
 class: CommandLineTool
 
-label: Speculatively executes an arbitrary CommandLineTool (upto max_times) by file watching / polling --cachedir. This is primarily intended for parsing logfiles before the associated CWL process has finished.
+label: Declares a real-time analysis, which Sophios runs beside the workflow as the files it watches change and once the workflow ends.
 
 doc: |-
-  Speculatively executes an arbitrary CommandLineTool (upto max_times) by file watching / polling --cachedir. This is primarily intended for parsing logfiles before the associated CWL process has finished.
+  Declares a real-time analysis. This tool is never run and never emitted: Sophios takes
+  a step that uses it out of the workflow at compile time, compiles the analysis
+  (cwl_tool, configured by config) once, and with --run_local runs it on the host
+  each time a file matching file_pattern changes in a step's output directory, when
+  that step finishes, and once more when the workflow ends, at most max_times in all.
+  Every input is a literal (!ii). See docs/advanced.md, Real-time analysis.
 
-baseCommand: cwl_subinterpreter
+baseCommand: 'false'
 
 inputs:
-  cachedir_path:
-    label: The full absolute path to the --cachedir cwltool directory. You should also use this same directory when invoking RealtimePlots.py
-    doc: |
-      The full absolute path to the --cachedir cwltool directory. You should also use this same directory when invoking RealtimePlots.py
-    type: string
-    format:
-    - edam:format_2330 # 'Textual format'
-    inputBinding:
-      position: 1
-      prefix: --cachedir_path
-
   file_pattern:
-    label: Filenames that match this pattern will be watched / polled for changes. i.e. '*.log'
-    doc: |
-      Filenames that match this pattern will be watched / polled for changes. i.e. '*.log'
+    label: A glob, matched against the names of the files the workflow's steps write, i.e. '*prod.trr'
     type: string
-    format:
-    - edam:format_2330 # 'Textual format'
-    inputBinding:
-      position: 2
-      prefix: --file_pattern
 
   cwl_tool:
-    label: The filename (without .cwl extension) of the CommandLineTool to speculatively execute.
-    doc: |
-      The filename (without .cwl extension) of the CommandLineTool to speculatively execute.
+    label: The analysis to run, a registered tool (by name) or a .wic workflow (with its extension)
     type: string
-    format:
-    - edam:format_2330 # 'Textual format'
-    inputBinding:
-      position: 3
-      prefix: --cwl_tool
 
   max_times:
-    label: The maximum number of times to speculatively execute cwl_tool. This is used to guarantee termination in case of errors.
-    doc: |
-      The maximum number of times to speculatively execute cwl_tool. This is used to guarantee termination in case of errors.
-    type: string
-    format:
-    - edam:format_2330 # 'Textual format'
-    inputBinding:
-      position: 4
-      prefix: --max_times
+    label: The most times the analysis runs, including the final run when the workflow ends
+    type: int
+
+  interval:
+    label: The fewest seconds between two runs triggered by a watched file changing (default 60)
+    type: int?
 
   config:
-    label: A JSON-encoded string which contains the arguments (i.e. the `in:` tag) to the wrapped CommandLineTool. Make sure to escape any substrings as necessary!
-    doc: |-
-      A JSON-encoded string which contains the arguments (i.e. the `in:` tag) to the wrapped CommandLineTool. Make sure to escape any substrings as necessary!
-    type: string
-    format:
-    - edam:format_2330 # 'Textual format'
-    inputBinding:
-      position: 5
-      prefix: --config
+    label: |-
+      For a .wic analysis its `wic: steps:` entries, for a tool the step's own keys
+      such as `in:`. Every `in:` value is a literal, and a file is named by its basename.
+    type: Any
 
-  root_workflow_yml_path:
-    label: The full absolute path to the root workflow yml file.
-    doc: |
-      The full absolute path to the root workflow yml file.
-    type: string
-    format:
-    - edam:format_2330 # 'Textual format'
-    inputBinding:
-      position: 6
-      prefix: --root_workflow_yml_path
-
-  homedir:
-    label: The full absolute path to the users home directory.
-    doc: |
-      The full absolute path to the root users home directory.
-    type: string
-    format:
-    - edam:format_2330 # 'Textual format'
-    inputBinding:
-      position: 7
-      prefix: --homedir
-
-outputs:
-  output_log_path:
-    label: Path to the output log file
-    doc: |-
-      Path to the output log file
-    type: File
-    outputBinding:
-      glob: $(inputs.cwl_tool)_only.log
-    format: edam:format_2330 # 'Textual format'
-
-$namespaces:
-  edam: https://edamontology.org/
-
-$schemas:
-- https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl
+outputs: []

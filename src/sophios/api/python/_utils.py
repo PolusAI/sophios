@@ -1,16 +1,22 @@
 """Internal helpers for the Python API."""
 
+import functools
+import inspect
 import keyword
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import yaml
 
 from sophios import utils_cwl
+from sophios.lang.spans import SourceSpan
 
-from ._errors import InvalidInputValueError
 from ._types import CWLAtomicType
+
+_PACKAGE_ROOT: Final = Path(__file__).resolve().parents[2]
 
 
 def normalize_parameter_name(cwl_id: str) -> str:
@@ -82,15 +88,6 @@ def serialize_value(value: Any) -> Any:
             return value
 
 
-def _infer_fs_object_type(path: Path) -> str:
-    """Infer whether a `Path` literal denotes a CWL `File` or `Directory`."""
-    if path.exists():
-        return CWLAtomicType.DIRECTORY.value if path.is_dir() else CWLAtomicType.FILE.value
-    if path.suffix:
-        return CWLAtomicType.FILE.value
-    return CWLAtomicType.DIRECTORY.value
-
-
 def _infer_array_parameter_type(items: Sequence[Any]) -> Any:
     """Infer a CWL array type from a homogeneous list/tuple literal, or `None` if it isn't one."""
     if not items:
@@ -113,6 +110,9 @@ def _infer_array_parameter_type(items: Sequence[Any]) -> Any:
 def infer_literal_parameter_type(value: Any) -> Any:  # pylint: disable=too-many-return-statements
     """Infer a CWL type expression from a Python literal when practical.
 
+    Not from a `Path`: whether it names a File or a Directory is for the input's declared type to say,
+    not the disk this runs on.
+
     One `return` per atomic CWL type keeps this dispatch table-like and easy
     to scan; collapsing cases to reduce the count would hurt readability.
     """
@@ -127,8 +127,6 @@ def infer_literal_parameter_type(value: Any) -> Any:  # pylint: disable=too-many
             return CWLAtomicType.FLOAT.value
         case str():
             return CWLAtomicType.STRING.value
-        case Path() as path:
-            return _infer_fs_object_type(path)
         case list() | tuple() as items:
             return _infer_array_parameter_type(items)
         case {"class": "File" | "Directory" as class_name}:
@@ -137,50 +135,60 @@ def infer_literal_parameter_type(value: Any) -> Any:  # pylint: disable=too-many
             return None
 
 
-def _validate_fs_object(path_value: Path, *, class_name: str) -> Path:
-    if class_name == "Directory":
-        if not path_value.is_dir():
-            raise InvalidInputValueError(f"{str(path_value)} is not a directory")
-        return path_value
-    if class_name == "File":
-        if not path_value.is_file():
-            raise InvalidInputValueError(f"{str(path_value)} is not a file")
-        return path_value
-    raise InvalidInputValueError(f"Unsupported CWL object class {class_name!r}")
-
-
-def get_value_from_cfg(value: Any) -> Any:
-    """Normalize config values into Python values accepted by the DSL.
-
-    This supports the common CWL input-object shapes users put in YAML config
-    files, notably `File`, `Directory`, and arrays/records containing them.
-    """
-    match value:
-        case list() as items:
-            return [get_value_from_cfg(item) for item in items]
-        case tuple() as items:
-            return [get_value_from_cfg(item) for item in items]
-        case dict() as data if data.get("class") in {"Directory", "File"}:
-            path_text = data.get("location", data.get("path"))
-            if path_text is None:
-                raise InvalidInputValueError(
-                    f"{data['class']} value has no location or path"
-                )
-            try:
-                path_value = Path(path_text)
-            except (TypeError, ValueError) as exc:
-                raise InvalidInputValueError(
-                    f"{data['class']} path must be a string or path-like value: {path_text!r}"
-                ) from exc
-            return _validate_fs_object(path_value, class_name=str(data["class"]))
-        case dict() as data:
-            return {key: get_value_from_cfg(item) for key, item in data.items()}
-        case _:
-            return value
-
-
 def load_yaml(path: Path) -> dict[str, Any]:
     """Load a YAML file, returning an empty dict for an empty/null document."""
     with path.open("r", encoding="utf-8") as file_handle:
         loaded = yaml.safe_load(file_handle)
     return loaded or {}
+
+
+@functools.lru_cache(maxsize=None)
+def _user_file(code_filename: str) -> str | None:
+    """The name a diagnostic gives `code_filename`, or None for a frame to skip.
+
+    A name like `<stdin>`, `<string>` or `<ipython-input-3-abc>` is not a path
+    and is kept as it is. Resolving a path costs a filesystem call, so the
+    decision is made once per file.
+    """
+    if code_filename.startswith('<'):
+        return code_filename
+    path = Path(code_filename).resolve()
+    if _PACKAGE_ROOT in path.parents or 'site-packages' in path.parts:
+        return None
+    return str(path)
+
+
+#: The `.wic` position objects are being built from, while `Workflow.from_wic` builds them.
+_AUTHORED: Final[ContextVar[SourceSpan | None]] = ContextVar('_AUTHORED', default=None)
+
+
+@contextmanager
+def authored_at(span: SourceSpan | None) -> Iterator[None]:
+    """Make `caller_span` answer `span` while objects are built from that place in a `.wic` file."""
+    token = _AUTHORED.set(span)
+    try:
+        yield
+    finally:
+        _AUTHORED.reset(token)
+
+
+def caller_span() -> SourceSpan:
+    """The user's own line: the innermost frame outside the `sophios` package.
+
+    A workflow built in Python has no `.wic` text, but it has a file and a
+    line where each step was made and each port bound, which is what a
+    diagnostic names. Frames inside `sophios/` (the API, the compiler) are
+    skipped; frames inside site-packages too, so a test harness or notebook
+    wrapper does not become the location. Objects `Workflow.from_wic` builds
+    carry the `.wic` position they were read from instead (`authored_at`).
+    """
+    authored = _AUTHORED.get()
+    if authored is not None:
+        return authored
+    frame = inspect.currentframe()
+    while frame is not None:
+        file = _user_file(frame.f_code.co_filename)
+        if file is not None:
+            return SourceSpan(file, frame.f_lineno, 1, frame.f_lineno, 1)
+        frame = frame.f_back
+    return SourceSpan('<python>', 1, 1, 1, 1)

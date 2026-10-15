@@ -2,7 +2,7 @@
 
 `get_tools_cwl` globs `search_paths_cwl`, so the tools a property sees depend
 on which plugin repositories a machine has checked out. That cannot be an
-oracle. These nine stems are the whole vocabulary, so a counterexample
+oracle. These stems are the whole vocabulary, so a counterexample
 reproduces from this repository alone.
 
 The signatures are chosen to reach the compiler's branches rather than to model
@@ -46,7 +46,8 @@ def _declared_prefixes(ports: dict[str, Cwl]) -> set[str]:
 
 
 def clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl], *,
-        javascript: bool = False, canonical: bool = False) -> Cwl:
+        javascript: bool = False, requirements: dict[str, Cwl] | None = None,
+        canonical: bool = False) -> Cwl:
     """One stub CommandLineTool. `true` succeeds and produces nothing, which is
     all a compile-only registry needs.
 
@@ -61,6 +62,8 @@ def clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl], *,
         inputs (dict[str, Cwl]): The tool's declared inputs.
         outputs (dict[str, Cwl]): The tool's declared outputs.
         javascript (bool): Add `InlineJavascriptRequirement`.
+        requirements (dict[str, Cwl] | None): Further requirements, keyed by
+            class, beside the `javascript` one.
         canonical (bool): Return canonical normal form, which the inference and
             explicit-edge paths read. `plugins.py` applies it when it loads a
             tool, so only a caller building one directly has to ask.
@@ -78,10 +81,18 @@ def clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl], *,
     prefixes = _declared_prefixes(inputs) | _declared_prefixes(outputs)
     if prefixes:
         tool['$namespaces'] = {prefix: _NAMESPACE_URIS[prefix] for prefix in sorted(prefixes)}
-    if javascript:
-        tool['requirements'] = {'InlineJavascriptRequirement': {}}
+    merged = {**({'InlineJavascriptRequirement': {}} if javascript else {}), **(requirements or {})}
+    if merged:
+        tool['requirements'] = merged
     return desugar_into_canonical_normal_form(tool) if canonical else tool
 
+
+#: The named types `schemed` declares in its `SchemaDefRequirement`, by name,
+#: so a literal strategy can draw a value for a port that only names one.
+SCHEMA_TYPES: Final[dict[str, Cwl]] = {
+    'Coords': {'name': 'Coords', 'type': 'record',
+               'fields': [{'name': 'x', 'type': 'float'}, {'name': 'y', 'type': 'float'}]},
+}
 
 _SPECS: Final[dict[str, Cwl]] = {
     'mk_file': clt(
@@ -139,6 +150,45 @@ _SPECS: Final[dict[str, Cwl]] = {
          'n': {'type': 'int', 'outputBinding': {'outputEval': '$(2)'}}},
         javascript=True,
     ),
+    # A record input and an enum input: the two structured types a tool
+    # author writes most, and the two no generator could draw.
+    'typed': clt(
+        {'pair': {'type': {'type': 'record', 'name': 'pair',
+                           'fields': [{'name': 'left', 'type': 'string'}, {'name': 'right', 'type': 'int'}]},
+                  'inputBinding': {'position': 1}},
+         'mode': {'type': {'type': 'enum', 'name': 'mode', 'symbols': ['fast', 'slow']},
+                  'inputBinding': {'position': 2}}},
+        {'file': {'type': 'File', 'format': _TXT, 'outputBinding': {'glob': 'typed.txt'}}},
+    ),
+    # A named type from a SchemaDefRequirement, referenced by name.
+    'schemed': clt(
+        {'coords': {'type': 'Coords', 'inputBinding': {'position': 1}}},
+        {'n': {'type': 'int', 'outputBinding': {'outputEval': '$(3)'}}},
+        javascript=True,
+        requirements={'SchemaDefRequirement': {'types': list(SCHEMA_TYPES.values())}},
+    ),
+    # secondaryFiles and loadContents on an input; a promoted boundary keeps both.
+    'indexed': clt(
+        {'file': {'type': 'File', 'secondaryFiles': ['.idx'], 'loadContents': True,
+                  'inputBinding': {'position': 1}}},
+        {'file': {'type': 'File', 'secondaryFiles': ['.idx'], 'format': _TXT,
+                  'outputBinding': {'glob': 'indexed.txt'}}},
+    ),
+    # A captured stream as an output: the one tool-only type.
+    'captured': {**clt({'name': {'type': 'string', 'inputBinding': {'position': 1}}},
+                       {'out': {'type': 'stdout'}}), 'stdout': 'captured.txt'},
+    # List-form inputs, outputs, requirements and hints, as cwl_utils renders
+    # them. The desugaring below lifts only `inputs` and `outputs`, so the
+    # compiler has to read `requirements` and `hints` in list form itself.
+    'listed': {
+        'cwlVersion': CWL_VERSION, 'class': 'CommandLineTool', 'baseCommand': 'true',
+        'inputs': [{'id': 'name', 'type': 'string', 'inputBinding': {'position': 1}}],
+        'outputs': [{'id': 'file', 'type': 'File', 'format': _TXT,
+                     'outputBinding': {'glob': '$(inputs.name)'}}],
+        'requirements': [{'class': 'InlineJavascriptRequirement'}],
+        'hints': [{'class': 'DockerRequirement', 'dockerPull': 'docker.io/bash:4.4'}],
+        '$namespaces': {'edam': 'https://edamontology.org/'},
+    },
 }
 
 #: Desugared exactly as `get_tools_cwl` desugars real adapters

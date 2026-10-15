@@ -1,5 +1,4 @@
 myst-parser
-# https://docs.readthedocs.io/en/stable/intro/getting-started-with-sphinx.html
-# "We strongly recommend to pin the Sphinx version used for your project to build the docs to avoid potential future incompatibilities."
-sphinx==6.1.*
+# The api page uses automodule's :no-index:, which needs Sphinx 7.2 or newer.
+sphinx>=7.2
 sphinx-autodoc-typehints

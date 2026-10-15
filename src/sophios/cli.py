@@ -3,9 +3,28 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .wic_types import CompilerOptions, GraphSettings, YamlTagPaths
+from .lang.error_codes import SophiosErrorCode
+from .wic_types import CompilerOptions, GraphSettings
 
-parser = argparse.ArgumentParser(prog='main', description='Convert a high-level yaml workflow file to CWL or Nextflow.')
+
+def _config_file(path: str) -> Path:
+    """The `--config_file` argparse type: a file that exists, since it is only ever read."""
+    if not Path(path).is_file():
+        raise argparse.ArgumentTypeError(f'no config file at {path}')
+    return Path(path)
+
+
+def _error_code(text: str) -> SophiosErrorCode:
+    """The `--explain` argparse type: a code Sophios reports."""
+    try:
+        return SophiosErrorCode(text.lower())
+    except ValueError:
+        raise argparse.ArgumentTypeError(f'{text} is not a Sophios error code; '
+                                         'docs/error_codes.md lists them') from None
+
+
+parser = argparse.ArgumentParser(prog='main', description='Convert a high-level yaml workflow file to CWL or Nextflow.',
+                                 allow_abbrev=False)
 
 # Each option is declared in exactly one group, so its target is stated where it
 # is declared. `--target` offers the keys of `target_options`.
@@ -32,8 +51,11 @@ group_gen.add_argument('--generate_schemas', default=False, action="store_true",
 group_gen.add_argument('--generate_config', default=False, action="store_true",
                        help='''Generate default config in wic/global_config.json
                        with default search_paths_wic and search_paths_cwl''')
-neutral.add_argument('--config_file', type=str, required=False, default=str(Path().home()/'wic'/'global_config.json'),
-                     help='User provided (JSON) config file')
+group_gen.add_argument('--explain', type=_error_code, default=None, metavar='CODE',
+                       help='Print what an error code (wic011, api002, ...) means and how to fix it')
+neutral.add_argument('--config_file', type=_config_file, required=False, default=None,
+                     help='User provided (JSON) config file. Without it, <homedir>/wic/global_config.json '
+                     'is used, and generated the first time it is needed')
 # version action exits the parser
 # Ref : https://github.com/python/cpython/blob/1f515e8a109204f7399d85b7fd806135166422d9/Lib/argparse.py#L1167
 neutral.add_argument('--version', action='version', version=__version__,
@@ -46,32 +68,35 @@ neutral.add_argument('--insert_steps_automatically', default=False, action="stor
                      inserting workflow steps from a curated whitelist.''')
 neutral.add_argument('--quiet', default=False, action="store_true",
                      help='''Disable verbose output. This will not print out the commands used for each step,
-                     and it will capture all stdout/stderr into log files for each step.''')
+                     and it will capture all stdout/stderr into log files for each step.
+                     With --run_local or --generate_run_script, cwltool is also given --quiet.''')
 neutral.add_argument('--lang_version', type=str, default=None,
                      help='Pin the Sophios language version for this compilation. '
                      'Defaults to inferring the newest version that accepts the source.')
 neutral.add_argument('--allow_raw_cwl', default=False, action="store_true",
-                     help='Do not check whether the input to a workflow step refers to the workflow inputs: tag')
+                     help='''Do not check whether the input to a workflow step refers to the workflow inputs: tag.
+                     A --yaml file that is a plain CWL workflow (cwlVersion and class: Workflow, or a $graph
+                     whose main is a Workflow, and no Sophios syntax) is not compiled: it is used as it is''')
 neutral.add_argument('--target', choices=tuple(target_options), default='cwl',
                      help='Compilation artifact target. Defaults to cwl.')
 neutral.add_argument('--inference_disable', default=False, action="store_true",
                      help='Disables use of the inference algorithm when compiling.')
 neutral.add_argument('--inference_use_naming_conventions', default=False, action="store_true",
                      help='Enables the use of naming conventions in the inference algorithm')
+neutral.add_argument('--inference_strict', default=False, action="store_true",
+                     help='Treat an inference choice between equal candidates (wic042, wic043) as an error.')
 neutral.add_argument('--validate_plugins', default=False, action="store_true",
                      help='Validate all CWL CommandLineTools')
 neutral.add_argument('--ignore_validation_errors', default=False, action="store_true",
                      help='Deprecated; does nothing. The parser reports a malformed file, '
                      'and nothing else validates one.')
+neutral.add_argument('--diagnostics', choices=['text', 'json'], default='text',
+                     help='''How diagnostics are printed on stderr: text, or one JSON object per line
+                     for programs and agents (see docs/error_codes.md)''')
 
-cwl.add_argument('--no_skip_dollar_schemas', default=False, action="store_true",
-                 help='''Does not skip processing $schemas tags in CWL files for performance.
-                 Skipping significantly improves initial validation performance, but is not always desired.
-                 See https://github.com/common-workflow-language/cwltool/issues/623''')
-cwl.add_argument('--cachedir', type=str, required=False, default='cachedir',
-                 help='The directory to save intermediate results; useful with RealtimePlots.py')
 cwl.add_argument('--inputs_file', type=str, required=False, default='',
-                 help='Additional inputs Yaml file')
+                 help='Additional inputs Yaml file. For a plain CWL workflow under --allow_raw_cwl, '
+                 'its job file, given to the runner as it is')
 cwl.add_argument('--pull_dir', type=str, required=False, default=str(Path().cwd()),
                  help='''The user specified pull directory for (singularity) image pull.
                  The default is the current working directory i.e. `pwd`''')
@@ -81,12 +106,11 @@ cwl.add_argument('--no_provenance', default=False, action="store_true",
 cwl.add_argument('--copy_output_files', default=False, action="store_true",
                  help='Copy primary outputs into the legacy outdir/ layout after a successful cwltool run.')
 cwl.add_argument('--cwl_inline_runtag', default=False, action="store_true",
-                 help='Copies cwl adapter file contents inline into the final .cwl in autogenerated/')
-
+                 help='''Write one self-contained file: embed the CWL of every step, tools and
+                 subworkflows, in its run field. The shape of the workflow is unchanged.''')
 cwl.add_argument('--parallel', default=False, action="store_true",
                  help='''When running locally, execute independent steps in parallel.
-                 \nThis is required for real-time analysis, but it may cause issues with
-                 \nhanging (particularly when scattering). See user guide for details.''')
+                 \nThis may cause issues with hanging (particularly when scattering).''')
 cwl.add_argument('--cwl_runner', type=str, required=False, default='cwltool', choices=['cwltool', 'toil-cwl-runner'],
                  help='The CWL runner to use for running workflows locally.')
 cwl.add_argument('--ignore_docker_install', default=False, action="store_true",
@@ -96,7 +120,6 @@ cwl.add_argument('--ignore_docker_processes', default=False, action="store_true"
                  help='Do not check whether there are too many running docker processes before running workflows.')
 cwl.add_argument('--container_engine', default='docker',
                  help='Specify which command to use to run OCI containers.')
-
 cwl.add_argument('--docker_remove_entrypoints', default=False, action="store_true",
                  help='''Remove entrypoints from docker images before running workflows.
                  See https://cwl.discourse.group/t/override-docker-entrypoint-in-command-line-tool/695/2
@@ -106,35 +129,45 @@ cwl.add_argument('--docker_remove_entrypoints', default=False, action="store_tru
                  In other words, this flag can be used to tell you if your workflows are
                  trapped inside a walled garden of docker containers or if there is at least a chance that
                  they can be run in dev environments (conda, etc) and/or directly on the host machine.''')
-
 cwl.add_argument('--partial_failure_enable', default=False, action="store_true",
                  help='''Let workflows to continue with partial failures
                  \n(i.e. run next steps after failure step by guarding for possible no input)''')
-
 cwl.add_argument('--partial_failure_success_codes', nargs='*', type=int, default=[0, 1], required=False,
                  help='Let users add custom error codes to be treated as success')
-
 cwl.add_argument('--partial_failure_success_codes_range', nargs=2, type=int, default=[0, 1], required=False,
                  help='Let users add custom error code range to be treated as success')
-
 group_run = cwl.add_mutually_exclusive_group()
 group_run.add_argument('--generate_run_script', default=False, action="store_true",
                        help='Just generates run.sh and exits. Does not actually invoke ./run.sh')
+group_run.add_argument('--check', default=False, action="store_true",
+                       help='''Compile the workflow and check that this machine can run it (the container engine
+                       when a step uses a container, the input paths, the directories Sophios writes, the programs
+                       it calls), then stop: nothing is pulled and nothing is run.''')
 group_run.add_argument('--run_local', default=False, action="store_true",
                        help='After generating the cwl file(s), run it on your local machine.')
 group_run.add_argument('--generate_cwl_workflow', required=False, default=False, action="store_true",
                        help='Compile the workflow without pulling the docker image')
 cwl.add_argument('--cwl_inline_subworkflows', default=False, action="store_true",
-                 help='Embed linked subworkflows in the generated CWL run fields.')
+                 help='''Write one flat workflow: replace every step that runs a subworkflow by that
+                 subworkflow's own steps. Tools stay separate files. A subworkflow call that has
+                 scatter, when or any other key besides in and out, or that is marked
+                 inlineable: false, stays a subworkflow, and each one is named on stderr.''')
+cwl.add_argument('--no_skip_dollar_schemas', default=False, action="store_true",
+                 help='''Does not skip processing $schemas tags in CWL files for performance.
+                 Skipping significantly improves initial validation performance, but is not always desired.
+                 See https://github.com/common-workflow-language/cwltool/issues/623''')
+cwl.add_argument('--cachedir', type=str, required=False, default='',
+                 help='''With --run_local and cwltool, the directory cwltool caches each step's outputs in:
+                 a step whose tool and inputs are unchanged reuses them. No cache unless given.''')
 cwl.add_argument('--outdir', type=str, required=False, default='',
                  help='Workflow output directory passed to the CWL runner.')
-
 cwl.add_argument('--graphviz', default=False, action="store_true",
                  help='Generate a DAG using graphviz.')
 cwl.add_argument('--graph_label_edges', default=False, action="store_true",
                  help='Label the graph edges with the name of the intermediate input/output.')
 cwl.add_argument('--graph_label_stepname', default=False, action="store_true",
-                 help='Prepend the step name to each step node.')
+                 help='Label each step node with its generated step name instead of its id '
+                 'or its wic: graphviz: label.')
 cwl.add_argument('--graph_show_inputs', default=False, action="store_true",
                  help='Add nodes to the graph representing the workflow inputs.')
 cwl.add_argument('--graph_show_outputs', default=False, action="store_true",
@@ -145,12 +178,9 @@ cwl.add_argument('--graph_dark_theme', default=False, action="store_true",
                  help='Changees the color of the fonts and edges from white to black.')
 cwl.add_argument('--custom_net', type=str, required=False,
                  help='Passes --custom-net flag to cwltool.')
-cwl.add_argument('--passthrough_flags', type=str, default='no', required=False,
-                 help='''Indicates that the user is passing flags to the cwl_runner backend.
-                 No checks are done on the flags or values passed.
-                 User must verify that they are sending correct flags.
-                 only two valid values of this flag 'yes' or 'no'.
-                 If set to 'no' (default) passthrough flags won't be sent to the cwl_runner backend.''')
+cwl.add_argument('--passthrough_flags', type=str, default='no', choices=['yes', 'no'], required=False,
+                 help='''With 'yes', arguments sophios does not recognise are sent to the cwl_runner
+                 backend unchecked. With 'no' (the default) an unrecognised argument is an error.''')
 
 
 def validate_target_args(args: argparse.Namespace) -> None:
@@ -203,22 +233,22 @@ def get_known_and_unknown_args(
     return args, unknown
 
 
-def default_compilation_settings() -> tuple[CompilerOptions, GraphSettings, YamlTagPaths]:
-    """The settings a compilation runs with when nobody has chosen otherwise.
+def default_compilation_settings() -> CompilerOptions:
+    """The options a compilation runs with when nobody has chosen otherwise.
 
     This is what a library caller wants — the Python API, the schema
-    generator, the subinterpreter — and it exists so that asking for defaults
+    generator, a real-time analysis — and it exists so that asking for defaults
     is a thing you can *say*. Previously the only way to obtain them was to
     fabricate a command line, so library code called a CLI helper and got its
     configuration from an argv that no user had typed. Defaults still come
     from one place, the parser's own `default=` values; only the fiction is
     gone.
     """
-    return get_dicts_for_compilation(get_args())
+    return get_dicts_for_compilation(get_args())[0]
 
 
-def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions, GraphSettings, YamlTagPaths]:
-    """Split parsed command-line arguments into the three dicts compilation needs.
+def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions, GraphSettings]:
+    """Split parsed command-line arguments into the compiler's options and the drawing's settings.
 
     The adapter at the CLI boundary, and the only function here that takes an
     `argparse.Namespace`. Arguments are parsed once, converted here, and
@@ -238,6 +268,7 @@ def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions
     compiler_options: CompilerOptions = {
         'partial_failure_enable': args.partial_failure_enable,
         'inference_use_naming_conventions': args.inference_use_naming_conventions,
+        'inference_strict': args.inference_strict,
         'insert_steps_automatically': args.insert_steps_automatically,
         'inference_disable': args.inference_disable,
         'allow_raw_cwl': args.allow_raw_cwl,
@@ -246,7 +277,7 @@ def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions
         'renaming_conventions': [],
     }
 
-    # to be given to graph util functions
+    # for drawing.draw, after the compile
     graph_settings: GraphSettings = {
         'graph_dark_theme': args.graph_dark_theme,
         'graph_inline_depth': args.graph_inline_depth,
@@ -255,11 +286,4 @@ def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions
         'graph_show_outputs': args.graph_show_outputs,
         'graph_show_inputs': args.graph_show_inputs,
     }
-
-    # to be given to io absolute_yaml_tags function
-    yaml_tag_paths: YamlTagPaths = {
-        'cachedir': args.cachedir,
-        'yaml': args.yaml,
-        'homedir': args.homedir,
-    }
-    return (compiler_options, graph_settings, yaml_tag_paths)
+    return (compiler_options, graph_settings)

@@ -38,4 +38,4 @@ docs/tutorials/multistep3.wic.gv.png
 </tr>
 </table>
 
-We have simply moved the append steps into `append_twice.wic` and called it from the main workflow. As you can see from the arrows in the graphical representation, the exact same edges have been inferred! The inference algorithm is guaranteed to work identically across subworkflow boundaries! You are completely free to abstract away minor details behind a subworkflow, and the main workflow graph will be identical.
+We have moved the two append steps into `append_twice.wic`. The step `- id: append_twice.wic` runs that file as a subworkflow: a step named after a `.wic` file runs it (see [What a step runs](../language_guide.md#23-what-a-step-runs)). As you can see from the arrows in the graphical representation, the exact same edges have been inferred! The inference algorithm is guaranteed to work identically across subworkflow boundaries! You are completely free to abstract away minor details behind a subworkflow, and the main workflow graph will be identical.

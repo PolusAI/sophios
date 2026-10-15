@@ -1,0 +1,8 @@
+steps:
+- id: touch
+  in:
+    filename: !ii empty.txt
+- id: echo
+  in:
+    message: !ii Hello
+- id: cat

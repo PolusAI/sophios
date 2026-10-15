@@ -20,7 +20,9 @@
         "!*",
         "!ii",
         "!ii mapping",
-        "!ii sequence"
+        "!ii sequence",
+        "!cwl",
+        "!cwl mapping"
     ],
     "[yaml]": {
         "editor.suggest.showWords": false

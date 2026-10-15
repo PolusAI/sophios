@@ -1,13 +1,16 @@
 import json
+from collections import Counter
 # pylint: disable=redefined-outer-name
 import subprocess as sub
 from pathlib import Path
 import signal
 import sys
 import argparse
+from dataclasses import replace
 from typing import Any, Final
 
 import pytest
+import networkx as nx
 import yaml
 from networkx.algorithms import isomorphism
 from mergedeep import merge, Strategy
@@ -18,23 +21,24 @@ import sophios.run_local
 import sophios.utils
 from sophios.ir import frontdoor
 import sophios.plugins
-from sophios import post_compile
+from sophios import post_compile, preflight, realtime
 from sophios import auto_gen_header
 from sophios.cli import get_args
-from sophios.utils_yaml import Key, wic_loader
-from sophios.post_compile import (cwl_docker_extract, inline_artifact_runs,
-                                  remove_artifact_entrypoints, stage_input_files)
+from sophios.utils_yaml import Key
+from sophios.post_compile import apply_inline_options, inline_artifact_runs, remove_artifact_entrypoints
+from sophios.runtime_inputs import normalize_artifact_job_inputs
+from sophios.lang import parse
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.post_compile import verify_container_engine_config
 from sophios.ir.artifacts import CompilationArtifact
+from sophios.ir.types import WorkflowGraph
 from sophios.wic_types import Json
-from sophios.utils_graphs import get_graph_reps
 
 # pylint: disable-next=unused-import  # `corpus_registry` is a pytest fixture
 from .test_setup import (CorpusRegistry, corpus_registry, workflow_paths,
                          yml_path_is_workflow)
-from .equivalence import Strength, equivalent
+from .cwl_validation import validate_cwl
+from .equivalence import Strength, equivalent, flatten_model
 
 yml_paths = workflow_paths()
 yml_paths_tuples = [(name, path) for paths in yml_paths.values()
@@ -43,7 +47,7 @@ yml_paths_tuples = [(name, path) for paths in yml_paths.values()
 # Look in each directory of search_paths_wic tag in global_config.json
 # for separate config_ci.json files and combine them.
 config_ci: Json = {}
-global_config = sophios.input_output.get_config(Path(get_args().config_file), Path(get_args().config_file))
+global_config = sophios.input_output.get_config(get_args().config_file, Path(get_args().homedir))
 search_paths_wic_tag = global_config['search_paths_wic']
 for _yml_namespaces in search_paths_wic_tag:
     yml_dirs = search_paths_wic_tag[_yml_namespaces]
@@ -65,14 +69,16 @@ large_workflows: list[str] = config_ci.get("large_workflows", [])
 
 
 def _is_workflow_document(yml_path: Path) -> bool:
-    with open(yml_path, mode='r', encoding='utf-8') as y:
-        match yaml.load(y.read(), Loader=wic_loader()):
-            case {"steps": _}:
-                return True
-            case {"wic": {"implementations": _}}:
-                return True
-            case _:
-                return False
+    """Whether the file has steps or a `wic: implementations:` block, as `parse` reads it.
+
+    `parse` rather than `read_wic`: an includer fragment carries diagnostics
+    and is still a workflow document.
+    """
+    document = parse(yml_path.read_text(encoding='utf-8'), str(yml_path)).document
+    if document is None:
+        return False
+    return (bool(document.steps) or document.steps_as_mapping
+            or (document.sidecar is not None and 'implementations' in dict(document.sidecar.entries)))
 
 
 yml_paths_tuples_not_large = [
@@ -128,6 +134,7 @@ def _artifacts(root: CompilationArtifact) -> list[CompilationArtifact]:
     return [root, *(item for child in root.children for item in _artifacts(child))]
 
 
+@pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_blacklist_on_push)
 def test_run_workflows_on_push(yml_path_str: str, yml_path: Path, cwl_runner: str,
@@ -140,17 +147,58 @@ def test_run_workflows_on_push(yml_path_str: str, yml_path: Path, cwl_runner: st
     run_workflows(yml_path_str, yml_path, cwl_runner, args, corpus_registry)
 
 
+#: The three forms the inline flags give, each of which must run to the same
+#: results as the default one: the shape alone, the packaging alone, and both.
+INLINE_FORMS: Final = [
+    pytest.param('flat', ['--cwl_inline_subworkflows'], id='flat'),
+    pytest.param('embedded', ['--cwl_inline_runtag'], id='embedded'),
+    pytest.param('flat_embedded', ['--cwl_inline_subworkflows', '--cwl_inline_runtag'], id='flat_embedded'),
+]
+
+
+def _calls_a_workflow(yml_path: Path) -> bool:
+    """Whether `yml_path` calls a subworkflow: only then can `--cwl_inline_subworkflows` change it."""
+    return bool(frontdoor.bundle_from_disk(yml_path, yml_paths, {}).registry.workflows)
+
+
+#: Each workflow in each inline form that can differ from its other forms: without a call,
+#: `flat` is the default form and `flat_embedded` is `embedded` (pinned below).
+INLINE_CASES: Final = [pytest.param(name, path, *form.values, id=f'{name}-{form.id}')
+                       for name, path in yml_paths_tuples_not_blacklist_on_push for form in INLINE_FORMS
+                       if form.id not in ('flat', 'flat_embedded') or _calls_a_workflow(path)]
+
+
 @pytest.mark.slow
-@pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_blacklist_on_push)
-def test_run_inlined_workflows_on_push(yml_path_str: str, yml_path: Path, cwl_runner: str,
-                                       corpus_registry: CorpusRegistry) -> None:
-    """Inlines and runs all of the workflows auto-discovered from the various
-       directories in 'search_paths_wic', excluding all workflows which have been
-       blacklisted in the various config_ci.json files and excluding the weekly
-       workflows."""
-    args = get_args(str(yml_path), ['--cwl_inline_subworkflows'])
+@pytest.mark.parametrize("yml_path_str, yml_path, form, flags", INLINE_CASES)
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def test_run_inlined_workflows_on_push(yml_path_str: str, yml_path: Path, form: str, flags: list[str],
+                                       cwl_runner: str, corpus_registry: CorpusRegistry) -> None:
+    """Runs all of the workflows auto-discovered from the various directories in
+       'search_paths_wic', excluding all workflows which have been blacklisted in
+       the various config_ci.json files and excluding the weekly workflows, in each
+       form the inline flags give."""
+    args = get_args(str(yml_path), flags)
     run_workflows(yml_path_str, yml_path, cwl_runner, args, corpus_registry,
-                  basepath='autogenerated/inline')
+                  basepath=f'autogenerated/inline_{form}')
+
+
+@pytest.mark.serial
+@pytest.mark.parametrize(
+    "yml_path_str, yml_path",
+    [(name, path) for name, path in yml_paths_tuples_not_blacklist_on_push if not _calls_a_workflow(path)])
+def test_inline_flags_change_nothing_for_a_workflow_that_calls_none(
+        yml_path_str: str, yml_path: Path, corpus_registry: CorpusRegistry) -> None:
+    """`--cwl_inline_subworkflows` changes no document of a workflow that calls none,
+    which is why `INLINE_CASES` runs no `flat` form of it."""
+    def compiled(flags: list[str]) -> list[tuple[Any, ...]]:
+        """Everything in the tree but the drawings, which are new objects each compile."""
+        tree = _compiled_for_run(yml_path, get_args(str(yml_path), flags), corpus_registry)
+        return [(item.namespace, item.name, item.run_path, item.cwl, item.job_inputs, item.graph)
+                for item in _artifacts(tree)]
+
+    assert compiled(['--cwl_inline_subworkflows']) == compiled([]), yml_path_str
+    both, tagged = ['--cwl_inline_subworkflows', '--cwl_inline_runtag'], ['--cwl_inline_runtag']
+    assert compiled(both) == compiled(tagged), yml_path_str
 
 
 # partial failure tests
@@ -182,13 +230,16 @@ def test_run_workflows_weekly(yml_path_str: str, yml_path: Path, cwl_runner: str
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("form, flags", INLINE_FORMS)
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_weekly)
-def test_run_inlined_workflows_weekly(yml_path_str: str, yml_path: Path, cwl_runner: str,
-                                      corpus_registry: CorpusRegistry) -> None:
-    """Inlines and runs all of the run_weekly workflows whitelisted in the various config_ci.json files."""
-    args = get_args(str(yml_path), ['--cwl_inline_subworkflows'])
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def test_run_inlined_workflows_weekly(yml_path_str: str, yml_path: Path, form: str, flags: list[str],
+                                      cwl_runner: str, corpus_registry: CorpusRegistry) -> None:
+    """Runs all of the run_weekly workflows whitelisted in the various config_ci.json
+       files, in each form the inline flags give."""
+    args = get_args(str(yml_path), flags)
     run_workflows(yml_path_str, yml_path, cwl_runner, args, corpus_registry,
-                  basepath='autogenerated/inline')
+                  basepath=f'autogenerated/inline_{form}')
 
 
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_blacklist_on_push)
@@ -198,6 +249,15 @@ def test_cwl_docker_extract(yml_path_str: str, yml_path: Path,
     args = get_args(str(yml_path))
     run_workflows(yml_path_str, yml_path, 'cwltool', args, corpus_registry,
                   docker_pull_only=True)
+
+
+def _compiled_for_run(yml_path: Path, args: argparse.Namespace, registry: CorpusRegistry) -> CompilationArtifact:
+    """The artifact tree `run_workflows` writes and runs for `yml_path`: compiled, then shaped by the inline flags."""
+    bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, registry.tools)
+    compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
+    result = sophios.compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=True)
+    return apply_inline_options(result.artifact, subworkflows=args.cwl_inline_subworkflows,
+                                runtag=args.cwl_inline_runtag)
 
 
 # pylint: disable-next=too-many-arguments,too-many-locals
@@ -214,42 +274,34 @@ def run_workflows(
 ) -> None:
     """Runs all of the given workflows.
 
-    `basepath` separates one lane's artifacts from another's. The weekly job
-    runs four of these steps in sequence in one working directory, and an
+    `basepath` separates one lane's artifacts from another's, and one inline
+    form's from another's. The weekly job runs several of these steps in
+    sequence in one working directory, and an
     artifact is named for the workflow rather than for how it was compiled --
     inlining changes where a child is written, not which workflow this is --
     so two steps would otherwise write one path and only the last would
     survive for anyone reading the directory afterwards.
     """
-    tools_cwl = registry.tools
-
-    # First compile the workflow.
-    # Load the high-level yaml workflow file.
     Path(basepath).mkdir(parents=True, exist_ok=True)
-    bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, tools_cwl)
-
-    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
-
-    graph = get_graph_reps(str(yml_path))
-    result = sophios.compiler.compile_source(
-        bundle, compiler_options, graph_settings, yaml_tag_paths,
-        relative_run_path=True, testing=True, graph_target=graph)
-    artifact = result.artifact
-    if args.cwl_inline_subworkflows:
-        artifact = inline_artifact_runs(artifact)
+    artifact = _compiled_for_run(yml_path, args, registry)
     yaml_stem = artifact.name
 
     artifact = sophios.plugins.cwl_prepend_dockerFile_include_path_artifact(artifact)
+    # As the CLI writes them: a relative path is read beside the workflow.
+    artifact = replace(artifact, job_inputs=sophios.input_output.absolute_paths(
+        normalize_artifact_job_inputs(artifact, artifact.job_inputs), Path(args.yaml).parent.absolute()))
     sophios.input_output.write_artifacts_to_disk(
         artifact, Path(basepath), True, args.inputs_file)
 
-    # verify container_engine install and config
-    verify_container_engine_config(args.container_engine, args.ignore_docker_install,
-                                   ignore_container_processes=args.ignore_docker_processes)
-
+    settings = preflight.RunSettings(args.container_engine, args.pull_dir, ignore_install=args.ignore_docker_install,
+                                     ignore_processes=args.ignore_docker_processes)
+    root_cwl = Path(basepath) / f'{Path(yml_path).stem}.cwl'
     if docker_pull_only:
-        cwl_docker_extract(args.container_engine, args.pull_dir, Path(basepath) / f'{Path(yml_path).stem}.cwl')
+        preflight.prepare([root_cwl], settings)
         return
+    # The run lane does not pull again.
+    job = preflight.Job(artifact.job_inputs, Path(args.yaml).parent.absolute(), 'the workflow')
+    preflight.check(preflight.needs([root_cwl], [job]), settings)
 
     if args.docker_remove_entrypoints:
         artifact = remove_artifact_entrypoints(args.container_engine, artifact)
@@ -263,8 +315,6 @@ def run_workflows(
         sophios.input_output.write_artifacts_to_disk(
             artifact, Path(basepath), True, args.inputs_file)
     # NOTE: Do not use --cachedir; we want to actually test everything.
-    # stage input files for run
-    stage_input_files(artifact.job_inputs, Path(args.yaml).parent.absolute(), basepath)
     run_args_dict = {}
     run_args_dict['container_engine'] = args.container_engine
     run_args_dict['cwl_runner'] = cwl_runner
@@ -298,9 +348,9 @@ def _is_includer_fragment(error: SophiosError) -> bool:
 #: Fields a CWL `CommandLineTool` input may declare and a workflow input may
 #: not. `declarations.boundary_declaration` is the one place that reduces a
 #: promoted port, and this is what says so about the output rather than about
-#: the call.
-_TOOL_ONLY_BOUNDARY_FIELDS: Final = ('inputBinding', 'loadContents', 'loadListing',
-                                     'secondaryFiles', 'streamable')
+#: the call. `secondaryFiles`, `streamable`, `loadContents` and `loadListing`
+#: are not here: the CWL v1.2 schema allows each on a workflow input.
+_TOOL_ONLY_BOUNDARY_FIELDS: Final = ('inputBinding',)
 
 #: Fields belonging to a CWL document rather than to a process, which an
 #: embedded process therefore may not keep. The same set `post_compile` lifts
@@ -326,12 +376,9 @@ def test_emitted_cwl_says_nothing_cwl_cannot_read(yml_path_str: str, yml_path: P
     still carry one anywhere else in the document.
     """
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, corpus_registry.tools)
-    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(
-        get_args(str(yml_path)))
+    compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(get_args(str(yml_path)))
     try:
-        result = sophios.compiler.compile_source(
-            bundle, compiler_options, graph_settings, yaml_tag_paths,
-            relative_run_path=True, testing=True, graph_target=get_graph_reps(str(yml_path)))
+        result = sophios.compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=True)
     except SophiosError as error:
         if _is_includer_fragment(error):
             pytest.skip(f'{yml_path_str} consumes edges from an includer')
@@ -384,6 +431,15 @@ def test_emitted_cwl_says_nothing_cwl_cannot_read(yml_path_str: str, yml_path: P
     embedded(post_compile.inline_artifact_runs(result.artifact).cwl)
 
 
+def _dependencies(graph: WorkflowGraph) -> nx.DiGraph:
+    """The steps of `graph`'s tree, and an edge from each step to every step that reads its output."""
+    dependencies = nx.DiGraph([(edge.source.step, edge.sink.step) for edge in graph.edges])
+    dependencies.add_nodes_from(step.id for step in graph.steps)
+    for child in graph.children:
+        dependencies.update(_dependencies(child))
+    return dependencies
+
+
 @pytest.mark.fast
 @pytest.mark.serial
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_large)
@@ -402,13 +458,10 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
     Path('autogenerated/').mkdir(parents=True, exist_ok=True)
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, tools_cwl)
 
-    graph = get_graph_reps(str(yml_path))
-    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
+    compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
 
     try:
-        result = sophios.compiler.compile_source(
-            bundle, compiler_options, graph_settings, yaml_tag_paths,
-            relative_run_path=False, testing=True, graph_target=graph)
+        result = sophios.compiler.compile_source(bundle, compiler_options, relative_run_path=False, testing=True)
     except SophiosError as error:
         if _is_includer_fragment(error):
             pytest.skip(f'{yml_path_str} consumes edges from an includer')
@@ -439,13 +492,10 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
         # If so, we will need to patch testargs depending on len(sub_node_data.namespaces)
         # (due to the various instances of `if len(namespaces) < args.graph_inline_depth`)
 
-        graph_fakeroot = get_graph_reps(str(sub_name))
         try:
             fake_result = sophios.compiler.compile_source(
-                frontdoor.bundle_from_disk(sub_path, yml_paths, tools_cwl),
-                compiler_options, graph_settings, yaml_tag_paths,
-                relative_run_path=False, testing=True,
-                graph_target=graph_fakeroot)
+                frontdoor.bundle_from_disk(sub_path, yml_paths, tools_cwl), compiler_options,
+                relative_run_path=False, testing=True)
         except SophiosError as error:
             if _is_includer_fragment(error):
                 continue
@@ -484,9 +534,8 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
         assert sub_cwl_embedded == sub_cwl_fakeroot
 
         # Check that the subgraphs are isomorphic.
-        sub_graph_nx = embedded_artifact.graph_view.networkx
-        sub_graph_fakeroot_nx = fake_result.artifact.graph_view.networkx
-        g_m = isomorphism.DiGraphMatcher(sub_graph_nx, sub_graph_fakeroot_nx)
+        assert embedded_artifact.graph is not None
+        g_m = isomorphism.DiGraphMatcher(_dependencies(embedded_artifact.graph), _dependencies(fake_result.graph))
         is_isomorphic_with_timeout(g_m, yml_path_str)
         compared += 1
 
@@ -500,30 +549,149 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
         pytest.skip(f'{yml_path_str}: every subworkflow is a fragment, none compiles alone')
 
 
-@pytest.mark.serial
-@pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_large)
-def test_inline_subworkflows(yml_path_str: str, yml_path: Path,
-                             corpus_registry: CorpusRegistry) -> None:
-    """Embedding linked child graphs changes placement, not workflow meaning."""
-    tools_cwl = corpus_registry.tools
+def _compile_corpus_workflow(yml_path_str: str, yml_path: Path, registry: CorpusRegistry) -> CompilationArtifact:
+    """The artifact tree of one corpus workflow, skipping a fragment that has no standalone compile."""
     args = get_args(str(yml_path))
-    # Load the high-level yaml workflow file.
-    Path('autogenerated/').mkdir(parents=True, exist_ok=True)
-    bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, tools_cwl)
-
-    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
-
-    graph = get_graph_reps(str(yml_path))
+    bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, registry.tools)
+    compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
     try:
-        result = sophios.compiler.compile_source(
-            bundle, compiler_options, graph_settings, yaml_tag_paths,
-            relative_run_path=True, testing=True, graph_target=graph)
+        return sophios.compiler.compile_source(bundle, compiler_options, relative_run_path=True,
+                                               testing=True).artifact
     except SophiosError as error:
         if _is_includer_fragment(error):
             pytest.skip(f'{yml_path_str} consumes edges from an includer')
         raise
-    embedded = inline_artifact_runs(result.artifact)
-    divergence = equivalent(result.artifact.cwl,
-                            embedded.cwl,
-                            Strength.UP_TO_EMBEDDING)
+
+
+#: The corpus documents that declare a real-time analysis, and the analysis each declares.
+_REALTIME_DECLARATIONS: Final = (
+    ('cwl_subinterpreter_protein', 'analysis_realtime_protein.wic'),
+    ('cwl_subinterpreter_complex', 'analysis_realtime_complex.wic'),
+    ('cwl_subinterpreter_ligand', 'analysis_realtime_ligand.wic'),
+    ('npt_amber', 'process_mdout'),
+)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("stem, analysis", _REALTIME_DECLARATIONS)
+def test_a_corpus_declaration_compiles_its_analysis(stem: str, analysis: str,
+                                                    corpus_registry: CorpusRegistry) -> None:
+    """Each analysis the corpus declares compiles, the file names in its `config: in:` read as literals."""
+    yml_path = _discover(corpus_registry.workflows, stem)
+    if yml_path is None:
+        pytest.skip(f'{stem}.wic is not reachable from search_paths_wic')
+    bundle = frontdoor.bundle_from_disk(yml_path, corpus_registry.workflows, corpus_registry.tools)
+    compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(get_args(str(yml_path)))
+    result = sophios.compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=True)
+
+    analyses = realtime.compile_analyses(result.realtime, corpus_registry.workflows, corpus_registry.tools,
+                                         compiler_options)
+    assert [compiled.declaration.analysis for compiled in analyses] == [analysis]
+    assert analyses[0].artifact.cwl['steps']
+
+
+@pytest.mark.serial
+@pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_large)
+def test_embedding_keeps_meaning(yml_path_str: str, yml_path: Path,
+                                 corpus_registry: CorpusRegistry) -> None:
+    """Embedding linked child graphs changes placement, not workflow meaning."""
+    nested = _compile_corpus_workflow(yml_path_str, yml_path, corpus_registry)
+    embedded = inline_artifact_runs(nested)
+    divergence = equivalent(nested.cwl, embedded.cwl, Strength.UP_TO_EMBEDDING)
     assert divergence is None, divergence
+
+
+def _kept_calls(artifact: CompilationArtifact) -> list[str]:
+    """The ids of the steps anywhere in the tree that run a workflow and carry more than `in` and `out`,
+    or run one that says `wic: inlineable: false`.
+
+    Decided here from the nested document, not read back from the code under
+    test: these are the calls `--cwl_inline_subworkflows` is expected to leave
+    nested. (No corpus workflow is compiled with `--partial_failure_enable`,
+    which would keep every call nested with its `when`.)
+    """
+    return [step['id'] for document in _artifacts(artifact)
+            for step, child in zip(document.cwl.get('steps', []), document.children)
+            if child.cwl.get('class') == 'Workflow'
+            and (set(step) - {'id', 'in', 'run', 'out'} or (child.graph is not None and not child.graph.inlineable))]
+
+
+@pytest.mark.serial
+@pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_large)
+def test_flatten_keeps_meaning(yml_path_str: str, yml_path: Path, corpus_registry: CorpusRegistry,
+                               capsys: pytest.CaptureFixture[str]) -> None:
+    """Flattening dissolves each subworkflow call it can and nothing else.
+
+    The root is compared with a model written separately (`flatten_model`) up to
+    renaming, and its inputs, outputs and job inputs are untouched. The calls left
+    nested are the ones `_kept_calls` expects, and each is named on stderr.
+    """
+    nested = _compile_corpus_workflow(yml_path_str, yml_path, corpus_registry)
+    flat = post_compile.flatten_subworkflows(nested)
+    remaining = [step['id'] for document in _artifacts(flat)
+                 for step, child in zip(document.cwl.get('steps', []), document.children)
+                 if child.cwl.get('class') == 'Workflow']
+    # A dissolved call's steps are renamed `<call>___<step>`; the step's own id is the last part.
+    assert sorted(i.split('___')[-1] for i in remaining) == sorted(i.split('___')[-1] for i in _kept_calls(nested)), \
+        yml_path_str
+    assert capsys.readouterr().err.count('stays a subworkflow') == len(remaining)
+    divergence = equivalent(flatten_model(nested), flat.cwl, Strength.UP_TO_RENAMING)
+    assert divergence is None, divergence
+    assert list(flat.cwl['inputs']) == list(nested.cwl['inputs'])
+    assert list(flat.cwl['outputs']) == list(nested.cwl['outputs'])
+    assert flat.job_inputs == nested.job_inputs
+
+
+@pytest.mark.needs_cwltool
+@pytest.mark.serial
+@pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_large)
+def test_flatten_validates_as_cwl(yml_path_str: str, yml_path: Path, tmp_path: Path,
+                                  corpus_registry: CorpusRegistry) -> None:
+    """The flat form, and the flat form embedded, are documents cwltool accepts."""
+    nested = sophios.plugins.cwl_prepend_dockerFile_include_path_artifact(
+        _compile_corpus_workflow(yml_path_str, yml_path, corpus_registry))
+    flat = post_compile.flatten_subworkflows(nested)
+    for form, artifact in (('flat', flat), ('flat_embedded', inline_artifact_runs(flat))):
+        sophios.input_output.write_artifacts_to_disk(artifact, tmp_path / form, True)
+        assert validate_cwl(str(tmp_path / form / f'{nested.name}.cwl')) == 0
+
+
+def _tool_defaults(path: Path) -> Counter[tuple[str, str, Any, Any]]:
+    """What cwltool makes of the network and directory-listing defaults of every tool under `path`."""
+    from cwltool.context import LoadingContext  # pylint: disable=import-outside-toplevel
+    from cwltool.load_tool import load_tool  # pylint: disable=import-outside-toplevel
+    from cwltool.workflow import default_make_tool  # pylint: disable=import-outside-toplevel
+
+    found: Counter[tuple[str, str, Any, Any]] = Counter()
+
+    def walk(process: Any) -> None:
+        for step in getattr(process, 'steps', []):
+            tool = step.embedded_tool
+            if tool.tool['class'] != 'Workflow':
+                network, _ = tool.get_requirement('NetworkAccess')
+                listing, _ = tool.get_requirement('LoadListingRequirement')
+                found[(tool.tool['class'], str(tool.tool.get('baseCommand')),
+                       network and network.get('networkAccess'), listing and listing.get('loadListing'))] += 1
+            walk(tool)
+
+    walk(load_tool(str(path), LoadingContext({'construct_tool_object': default_make_tool})))
+    return found
+
+
+@pytest.mark.needs_cwltool
+@pytest.mark.serial
+@pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_tuples_not_large)
+def test_embedding_keeps_runtime_defaults(yml_path_str: str, yml_path: Path, tmp_path: Path,
+                                          corpus_registry: CorpusRegistry) -> None:
+    """A tool cwltool reads from its own file and the same tool embedded get the same defaults.
+
+    A tool written for CWL v1.0 is run with network access and a deep directory
+    listing; embedded in a v1.2 document with no `cwlVersion` of its own it
+    was run without either, and every download in the weekly lane failed.
+    """
+    nested = sophios.plugins.cwl_prepend_dockerFile_include_path_artifact(
+        _compile_corpus_workflow(yml_path_str, yml_path, corpus_registry))
+    sophios.input_output.write_artifacts_to_disk(nested, tmp_path / 'nested', True)
+    sophios.input_output.write_artifacts_to_disk(inline_artifact_runs(nested), tmp_path / 'embedded', True)
+    root = f'{nested.name}.cwl'
+    assert _tool_defaults(tmp_path / 'embedded' / root) == _tool_defaults(tmp_path / 'nested' / root)

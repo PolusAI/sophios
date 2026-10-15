@@ -11,6 +11,7 @@ Python-facing workflow authoring.
 
 import logging
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
@@ -18,22 +19,22 @@ import yaml
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
-from sophios import compiler, input_output, plugins, post_compile as pc, run_local as rl
+from sophios import compiler, input_output, plugins, post_compile as pc, preflight, realtime, run_local as rl
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import SourceBundle
+from sophios.ir.realtime import ADAPTER
 from sophios.ir.resolve import RegistrySnapshot
-from sophios.lang import Diagnostics, Document, ParseResult, render
-from sophios.ir.names import render_step_id
+from sophios.lang import Diagnostics, Document, ParseResult, SophiosError, render
 from sophios.input_output_nf import remove_nextflow_artifacts, write_nextflow_artifacts
 from sophios.nf_types import ExecutableNextflowWorkflow
 from sophios.cli import default_compilation_settings, get_known_and_unknown_args
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
 from sophios.utils import convert_args_dict_to_args_list
+from sophios.utils_cwl import tool_process
 from sophios.utils_nf import compiled_source_to_nextflow
-from sophios.utils_graphs import get_graph_reps
 from sophios.wic_types import StepId, Tool, Tools
 
-from ._errors import InvalidCLTError, InvalidStepError
+from ._errors import InvalidCLTError, InvalidStepError, WorkflowRunError
 from ._compiled import CompiledWorkflow
 from ._ports import InputParameter, OutputParameter, ParameterStore
 from ._types import ScatterMethod
@@ -52,6 +53,7 @@ _RUN_ARG_BOOLEAN_FLAGS = {
     "copy_output_files",
     "docker_remove_entrypoints",
     "generate_run_script",
+    "quiet",
 }
 
 
@@ -204,10 +206,13 @@ def load_clt(clt_path: Path, tool_registry: Tools) -> tuple[CWLCommandLineTool, 
 
     if clt_path.exists():
         try:
+            # The process first: a packed document with no `main` is refused by name, not as "invalid".
+            yaml_file = tool_process(_load_yaml(clt_path), str(clt_path))
             clt = load_document_by_uri(clt_path)
+        except SophiosError:
+            raise
         except Exception as exc:
             raise InvalidCLTError(f"invalid cwl file: {clt_path}") from exc
-        yaml_file = _load_yaml(clt_path)
         tool_registry[stepid] = Tool(str(clt_path), yaml_file)
         return clt, yaml_file
 
@@ -243,8 +248,8 @@ def load_clt_document(
         tuple[CWLCommandLineTool, dict[str, Any]]: Parsed CWL object and normalized YAML.
     """
     match yaml.safe_load(yaml.safe_dump(dict(document), sort_keys=False)):
-        case dict() as yaml_file:
-            pass
+        case dict() as loaded:
+            yaml_file = tool_process(loaded, str(run_path))
         case _:
             raise TypeError("document must be a mapping of CWL fields")
     try:
@@ -254,67 +259,45 @@ def load_clt_document(
     return clt, yaml_file
 
 
-def workflow_document(
-    workflow: "Workflow",
-    *,
-    inline_subtrees: bool,
-    directory: Path | None = None,
-    document_stem: str | None = None,
-) -> Document:
+def workflow_document(workflow: "Workflow") -> Document:
     """Build a workflow's language document.
 
-    A workflow output's `outputSource` is always written in the compiler's
-    concrete step-id spelling, because the compiler boundary consumes an
-    explicit `outputSource` verbatim. There is no flag: a second spelling
-    would be a second language, selectable per caller.
+    Steps name their tools (a step renamed from its tool carries `run:`), nested
+    workflows appear as steps naming their own `.wic` documents, and every
+    workflow output is addressed by its authored step name.
 
     Args:
         workflow (Workflow): Workflow to serialize.
-        inline_subtrees (bool): Whether nested workflows should be embedded inline.
-        directory (Path | None): Output directory for sibling `.wic` files.
 
     Returns:
-        Document: The workflow's document; nested workflows appear as steps
-        naming them, their bodies under `subtree` when inlined.
+        Document: The workflow's document.
     """
-    from .workflow import Workflow  # pylint: disable=import-outside-toplevel
-
     workflow_inputs: dict[str, Any] = {}
     for parameter in workflow._inputs:
         cwl_type = parameter.cwl_type()
+        if cwl_type is None and _read_by_a_record(workflow, parameter):
+            cwl_type = "Any"
         if cwl_type is None:
             raise InvalidStepError(
                 f"workflow input {workflow.process_name}.{parameter.name} has no resolved type"
             )
         workflow_inputs[parameter.name] = {"type": cwl_type}
 
-    # The compiler takes the step-id prefix from the *path it loads*, not from
-    # process_name, so a document saved under another name must be spelled for
-    # that name or its outputSource points at steps that do not exist.
-    stem = document_stem if document_stem is not None else workflow.process_name
-    # Keyed by object identity, not by process_name: a step renamed after an
-    # output was bound to it still is the step the output names.
-    compiled_step_ids = {
-        id(step): render_step_id(
-            stem,
-            index,
-            f"{step.process_name}.wic" if isinstance(step, Workflow) else step.process_name,
-        )
-        for index, step in enumerate(workflow.steps, start=1)
-    }
-
-    workflow_outputs: dict[str, Any] = {}
-    for output_parameter in workflow._outputs:
-        workflow_outputs[output_parameter.name] = output_parameter.to_workflow_output(
-            step_ids=compiled_step_ids
-        )
-
+    workflow_outputs: dict[str, Any] = {parameter.name: parameter.to_workflow_output(workflow.steps)
+                                        for parameter in workflow._outputs}
     return Document(
-        steps=tuple(step._as_workflow_step(inline_subtrees=inline_subtrees, directory=directory)
-                    for step in workflow.steps),
+        steps=tuple(step._as_workflow_step() for step in workflow.steps),
         passthrough=tuple((key, value) for key, value in
                           (("inputs", workflow_inputs), ("outputs", workflow_outputs)) if value),
+        span=workflow._span,
     )
+
+
+def _read_by_a_record(workflow: "Workflow", parameter: InputParameter) -> bool:
+    """Whether a `StepInput` on one of `workflow`'s steps names `parameter` as a source."""
+    return any(source is parameter
+               for step in workflow.steps for step_input in step._inputs
+               for source in step_input.record_sources())
 
 
 def _wic_output_path(workflow: "Workflow", path: str | Path | None) -> Path:
@@ -330,70 +313,71 @@ def _wic_output_path(workflow: "Workflow", path: str | Path | None) -> Path:
     return output_path / f"{workflow.process_name}.wic"
 
 
-def workflow_wic_yaml(workflow: "Workflow", *, inline_subworkflows: bool = True) -> str:
-    """Render a workflow as `.wic` YAML text.
+def step_run(clt_path: Path) -> str:
+    """What a step's `run:` names: `<stem>.cwl`, the tool written beside the document.
 
-    The text compiles correctly only when saved as `<process_name>.wic`. The
-    compiler derives step ids from the name of the file it loads, and an
-    explicit `outputSource` is consumed verbatim, so a document saved under
-    another name names steps that do not exist. There is no destination here to
-    spell them for; `write_workflow_wic` takes one and does.
-
-    Args:
-        workflow (Workflow): Workflow to serialize.
-        inline_subworkflows (bool): Whether nested workflows should be embedded
-            in the returned document. When false, nested workflows are expected
-            to be written as sibling `.wic` files by `write_workflow_wic`.
-
-    Returns:
-        str: The serialized `.wic` YAML text.
+    The real-time analysis adapter is named by its registry stem instead, and not
+    written: a step is a declaration only when it runs the adapter the registry
+    holds, and a `run:` path would make it an ordinary tool step.
     """
-    from .workflow import Workflow  # pylint: disable=import-outside-toplevel
-
-    workflow._validate()
-    if not inline_subworkflows and any(isinstance(step, Workflow) for step in workflow.steps):
-        raise ValueError(
-            "to_wic_yaml(inline_subworkflows=False) cannot emit sibling files; "
-            "use write_wic(..., inline_subworkflows=False) instead"
-        )
-    return render(workflow_document(workflow, inline_subtrees=inline_subworkflows))
+    return ADAPTER if clt_path.stem == ADAPTER else f"{clt_path.stem}.cwl"
 
 
-def write_workflow_wic(
-    workflow: "Workflow",
-    path: str | Path | None = None,
-    *,
-    inline_subworkflows: bool = True,
-) -> Path:
-    """Write a workflow as a `.wic` file.
+def _bundle_tools(workflow: "Workflow") -> dict[str, "Step"]:
+    """Every tool the workflow tree runs, by the file stem a document names it with."""
+    tools: dict[str, "Step"] = {}
+    for step in workflow._flatten_steps():
+        known = tools.setdefault(step.clt_path.stem, step)
+        if known.yaml != step.yaml:
+            raise InvalidStepError(
+                f"steps {known.process_name!r} and {step.process_name!r} run different tools that "
+                f"share the file stem {step.clt_path.stem!r}; a document names a tool by its stem"
+            )
+    return tools
+
+
+def write_workflow_wic(workflow: "Workflow", path: str | Path | None = None) -> Path:
+    """Write a workflow as a self-contained bundle in one directory.
+
+    The bundle is the root `.wic`, one `<name>.wic` per nested workflow and one
+    `<stem>.cwl` per distinct tool. Only a tool's own document is written: files
+    it refers to by relative path (such as a `$import`) are not copied. A tool
+    already on disk as its target is left alone, and a different file there is
+    an error.
 
     Args:
         workflow (Workflow): Workflow to serialize.
         path (str | Path | None): Destination `.wic` path or output directory.
             When omitted, writes `<workflow>.wic` in the current directory.
-        inline_subworkflows (bool): Whether nested workflows should be embedded
-            in the root `.wic` file. When false, nested workflows are written as
-            sibling `.wic` files beside the root document.
 
     Returns:
         Path: The path to the root `.wic` file that was written.
     """
     workflow._validate()
-    output_path = _wic_output_path(workflow, path)
-    output_path.parent.mkdir(exist_ok=True, parents=True)
-    document = workflow_document(
-        workflow,
-        inline_subtrees=inline_subworkflows,
-        directory=output_path.parent if not inline_subworkflows else None,
-        document_stem=output_path.stem,
-    )
-    output_path.write_text(render(document), encoding="utf-8")
-    return output_path
+    root = _wic_output_path(workflow, path)
+    missing_tools: dict[Path, "Step"] = {}
+    for stem, step in _bundle_tools(workflow).items():
+        if step_run(step.clt_path) != f"{stem}.cwl":
+            continue
+        target = root.parent / f"{stem}.cwl"
+        if not target.exists():
+            missing_tools[target] = step
+        elif _load_yaml(target) != step.yaml:
+            raise InvalidStepError(f"{target} already exists and is not the tool of step {step.process_name!r}")
+    root.parent.mkdir(exist_ok=True, parents=True)
+    for nested in workflow._flatten_subworkflows():
+        target = root if nested is workflow else root.parent / f"{nested.process_name}.wic"
+        target.write_text(render(workflow_document(nested)), encoding="utf-8")
+    for target, step in missing_tools.items():
+        target.write_text(input_output.dump_wic_yaml(step.yaml), encoding="utf-8")
+    return root
 
 
-def _merged_known_tools(steps: list["Step"], tool_registry: Tools | None = None) -> Tools:
-    """Merge known tools: step tools, then step registries, then the explicit registry."""
-    merged_tools: Tools = {StepId(step.process_name, "global"): Tool(str(step.clt_path), step.yaml) for step in steps}
+def _merged_known_tools(workflow: "Workflow", tool_registry: Tools | None = None) -> Tools:
+    """Merge known tools: step tools by stem, then step registries, then the explicit registry."""
+    steps = workflow._flatten_steps()
+    merged_tools: Tools = {StepId(stem, "global"): Tool(str(step.clt_path), step.yaml)
+                           for stem, step in _bundle_tools(workflow).items()}
     for step in steps:
         merged_tools.update(step._tool_registry)
     if tool_registry is not None:
@@ -410,7 +394,7 @@ def _nested_documents(workflow: "Workflow") -> dict[tuple[str, str], ParseResult
         if isinstance(step, Workflow):
             documents |= _nested_documents(step)
             documents[("global", step.process_name)] = ParseResult(
-                workflow_document(step, inline_subtrees=False), Diagnostics())
+                workflow_document(step), Diagnostics())
     return documents
 
 
@@ -436,19 +420,16 @@ def compile_workflow_result(
     """
     workflow._validate()
 
-    graph = get_graph_reps(workflow.process_name)
-    merged_tools = _merged_known_tools(workflow._flatten_steps(), tool_registry)
+    merged_tools = _merged_known_tools(workflow, tool_registry)
 
-    compiler_options, graph_settings, yaml_tag_paths = default_compilation_settings()
+    compiler_options = default_compilation_settings()
     if lang_version is not None:
         compiler_options = {**compiler_options, 'lang_version': lang_version}
     bundle = SourceBundle(
-        ParseResult(workflow_document(workflow, inline_subtrees=False), Diagnostics()),
+        ParseResult(workflow_document(workflow), Diagnostics()),
         Path(workflow.process_name).stem,
         RegistrySnapshot.from_tools(merged_tools, workflows=_nested_documents(workflow)))
-    result = compiler.compile_source(
-        bundle, compiler_options, graph_settings, yaml_tag_paths,
-        relative_run_path=True, testing=False, graph_target=graph)
+    result = compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=False)
     if write_to_disk:
         input_output.write_artifacts_to_disk(result.artifact, Path("autogenerated/"), True)
 
@@ -475,6 +456,7 @@ def compiled_workflow_from_result(
         cwl_workflow=cwl_workflow,
         cwl_job_inputs=normalize_artifact_job_inputs(artifact, artifact.job_inputs),
         lang_version=result.lang_version,
+        diagnostics=tuple(str(diagnostic) for diagnostic in result.diagnostics),
     )
 
 
@@ -538,8 +520,14 @@ def write_nextflow_workflow(
 
 
 def _run_args(overrides: dict[str, str] | None) -> dict[str, str]:
-    """The default local-run settings with `overrides` applied."""
-    return {**DEFAULT_RUN_ARGS, **(overrides or {})}
+    """The default local-run settings with `overrides` applied.
+
+    `quiet` is on unless the caller turns it off, and is normalised to the `yes`/`no`
+    that `run_local` reads.
+    """
+    resolved = {**DEFAULT_RUN_ARGS, **(overrides or {})}
+    resolved["quiet"] = "yes" if _enabled(resolved["quiet"]) else "no"
+    return resolved
 
 
 def _enabled(value: Any) -> bool:
@@ -547,6 +535,7 @@ def _enabled(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+# pylint: disable-next=too-many-arguments
 def run_workflow(
     workflow: "Workflow",
     *,
@@ -554,6 +543,7 @@ def run_workflow(
     user_env_vars: dict[str, str] | None = None,
     basepath: str = "autogenerated",
     tool_registry: Tools | None = None,
+    workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
 ) -> None:
     """Compile and execute a workflow locally.
 
@@ -563,38 +553,55 @@ def run_workflow(
         user_env_vars (dict[str, str] | None): Environment variables to expose to the run.
         basepath (str): Directory used for generated files and execution artifacts.
         tool_registry (Tools | None): Optional tool registry override.
+        workflow_paths (Mapping[str, Mapping[str, Path]] | None): The `.wic` files a
+            real-time analysis may be, shaped `{namespace: {stem: path}}`.
 
-    Returns:
-        None: The workflow is executed as a side effect.
+    Raises:
+        WorkflowRunError: If the runner exits non-zero.
+        KeyboardInterrupt: On Ctrl-C. With cwltool, the runner's child processes are terminated first.
     """
     logger.info("Running %s", workflow.process_name)
     plugins.logging_filters()
 
     resolved_run_args = _run_args(run_args_dict)
     result = compile_workflow_result(workflow, tool_registry=tool_registry)
+    analyses = realtime.compile_analyses(
+        result.realtime, {namespace: dict(paths) for namespace, paths in (workflow_paths or {}).items()},
+        _merged_known_tools(workflow, tool_registry), default_compilation_settings())
     artifact = pc.inline_artifact_runs(result.artifact)
-    pc.verify_container_engine_config(resolved_run_args["container_engine"], False)
-    input_output.write_artifacts_to_disk(
-        artifact,
-        Path(basepath),
-        True,
-        resolved_run_args.get("inputs_file", ""),
-    )
-    pc.cwl_docker_extract(
-        resolved_run_args["container_engine"],
-        resolved_run_args["pull_dir"],
-        Path(basepath) / f"{workflow.process_name}.cwl",
-    )
+    if (problem := preflight.unwritable(Path(basepath), "the workflow and its run",
+                                        "pass run() a basepath you can write to")) is not None:
+        raise SophiosError([problem])
+    outdir = resolved_run_args.get("outdir")
+    writes = ((Path(outdir), "the run's outputs", "give run() an outdir you can write to"),) if outdir else ()
+    # The values as the runner gets them, in which an output-target Directory is a name for the run to create.
+    bound = normalize_artifact_job_inputs(artifact, artifact.job_inputs)
+    artifact = replace(artifact, job_inputs=input_output.absolute_paths(bound, Path.cwd()))
+    inputs_file = resolved_run_args.get("inputs_file", "")
+    input_output.write_artifacts_to_disk(artifact, Path(basepath), True, inputs_file)
+    plans = realtime.write(analyses, Path(basepath), workflow.process_name, Path.cwd())
+    extra = normalize_artifact_job_inputs(artifact, input_output.read_inputs_file(inputs_file)) if inputs_file else {}
+    # The inputs file wins over a value bound in Python for the same input when the job is written.
+    jobs = (preflight.Job({key: value for key, value in bound.items() if key not in extra}, Path.cwd(), "the workflow"),
+            *((preflight.Job(extra, Path(inputs_file).parent.absolute(), "inputs_file"),) if inputs_file else ()))
+    preflight.prepare(
+        [Path(basepath) / f"{workflow.process_name}.cwl", *realtime.documents(analyses, Path(basepath))],
+        preflight.RunSettings(resolved_run_args["container_engine"], resolved_run_args["pull_dir"],
+                              runner=resolved_run_args["cwl_runner"],
+                              run_script=_enabled(resolved_run_args.get("generate_run_script", "no")), writes=writes),
+        jobs)
     if _enabled(resolved_run_args.get("docker_remove_entrypoints")):
         artifact = pc.remove_artifact_entrypoints(
             resolved_run_args["container_engine"], artifact)
+        plans = realtime.write(realtime.without_entrypoints(analyses), Path(basepath), workflow.process_name,
+                               Path.cwd())
     user_args = convert_args_dict_to_args_list(
         resolved_run_args,
         boolean_flags=_RUN_ARG_BOOLEAN_FLAGS,
     )
 
     _, unknown_args = get_known_and_unknown_args(workflow.process_name, user_args)
-    rl.run_local(
+    retval = rl.run_local(
         resolved_run_args,
         False,
         workflow_name=workflow.process_name,
@@ -602,4 +609,7 @@ def run_workflow(
         passthrough_args=unknown_args,
         user_env_vars=dict(user_env_vars or {}),
         output_directories=rl.output_directories(result.graph),
+        realtime_plans=plans,
     )
+    if retval != 0:
+        raise WorkflowRunError(workflow.process_name, retval)

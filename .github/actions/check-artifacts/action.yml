@@ -1,0 +1,24 @@
+name: Check the built artifacts
+description: >-
+  Install the built wheel and the built sdist, each into a fresh virtual
+  environment with nothing from the checkout on the path, and use each install
+  from outside the checkout: the CLI, the Python API, and a tutorial compile
+  with the adapters the package ships. A publish must not start until this passes.
+
+inputs:
+  dist:
+    description: Directory holding exactly one sophios wheel and one sophios sdist.
+    required: true
+  version:
+    description: The version every install must report, as verify-version resolved it.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install and use the wheel and the sdist
+      shell: bash
+      env:
+        DIST: ${{ inputs.dist }}
+        VERSION: ${{ inputs.version }}
+      run: '"${GITHUB_ACTION_PATH}/check.sh" "${DIST}" "${VERSION}"'

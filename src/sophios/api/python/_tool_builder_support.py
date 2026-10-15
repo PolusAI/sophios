@@ -15,7 +15,7 @@ from types import MappingProxyType
 import warnings
 from typing import Any
 
-import yaml
+from sophios.input_output import dump_wic_yaml
 
 from ._utils import validate_python_identifier_name
 
@@ -278,12 +278,14 @@ def _import_cwltool_validation_support() -> tuple[Any, Any, Any]:
     return RuntimeContext, get_default_args, setup_loadingContext
 
 
-def _build_validation_loading_context(path: Path, *, skip_schemas: bool = False) -> Any:
+def _build_validation_loading_context(path: Path) -> Any:
     runtime_context_cls, get_default_args, setup_loading_context = _import_cwltool_validation_support()
     args_dict = get_default_args()
     args_dict.update(
         {
-            "skip_schemas": skip_schemas,
+            # The ontologies under `$schemas` are not loaded, as a local run does
+            # not load them: cwltool fetches each one, uncached, on every load.
+            "skip_schemas": True,
             "validate": True,
             "workflow": str(path),
         }
@@ -297,22 +299,21 @@ def validate_cwl_document(
     document: dict[str, Any],
     *,
     filename: str = "tool.cwl",
-    skip_schemas: bool = False,
 ) -> ValidationResult:
     """Validate a generated CLT document through cwltool/schema-salad."""
     with tempfile.TemporaryDirectory(prefix="sophios-tool-builder-") as tmpdir:
         temp_path = Path(tmpdir) / filename
         temp_path.write_text(
-            yaml.safe_dump(_render(document), sort_keys=False, line_break="\n"),
+            dump_wic_yaml(_render(document)),
             encoding="utf-8",
         )
-        return _validate_path(temp_path, skip_schemas=skip_schemas)
+        return _validate_path(temp_path)
 
 
-def _validate_path(path: Path, *, skip_schemas: bool = False) -> ValidationResult:
+def _validate_path(path: Path) -> ValidationResult:
     load_tool = _import_cwltool_load_tool()
     try:
-        loading_context = _build_validation_loading_context(path, skip_schemas=skip_schemas)
+        loading_context = _build_validation_loading_context(path)
         loading_context, workflowobj, uri = load_tool.fetch_document(str(path), loading_context)
         loading_context, uri = load_tool.resolve_and_validate_document(
             loading_context,

@@ -1,0 +1,9 @@
+inputs:
+  loud:
+    type: boolean
+steps:
+  echo:
+    when: $(inputs.enabled)
+    in:
+      message: !ii Hello
+      enabled: !cwl {source: loud}

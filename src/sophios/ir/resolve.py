@@ -3,15 +3,22 @@
 Resolution does no discovery, performs no filesystem access, and parses
 nothing.  Parsed workflows and process definitions are values in
 ``RegistrySnapshot``; changing the environment cannot change the result of
-resolving the same two values.
+resolving the same two values.  It prints one stderr line for each
+``wic: steps:`` key that addresses no step; the key is ignored.
 """
+from collections import Counter
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
+from pathlib import Path
+import sys
 from typing import Any, Iterable, Mapping
 
 from ..lang import (
+    CWL_VERSION,
+    CwlRecord,
     Document,
     EdgeDef,
     EdgeRef,
@@ -22,9 +29,11 @@ from ..lang import (
     RawCwlRef,
     SophiosErrorCode,
     SourceSpan,
+    StepKey,
     UnresolvedName,
     WicSidecar,
     resolve_lang_version,
+    step_key,
 )
 from ..lang.diagnostics import Diagnostic, Diagnostics
 from ..lang.nodes import InputValue, OpaqueCwl, Step
@@ -52,6 +61,8 @@ class WorkflowSource:
 
     key: RegistryKey
     parsed: ParseResult
+    #: Where the file is, which its own ``run:`` paths are relative to.
+    directory: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,10 +71,19 @@ class RegistrySnapshot:
 
     tools: tuple[ToolDefinition, ...] = ()
     workflows: tuple[WorkflowSource, ...] = ()
+    #: The name each ``run:`` path was registered under, by the directory of
+    #: the document that wrote it: the same spelling beside two documents is
+    #: two files. A path with no entry names no file beside its document.
+    run_names: tuple[tuple[Path, str, str], ...] = ()
+    #: Where the root document is, for the ``run:`` paths it writes.
+    root_directory: Path | None = None
 
     @classmethod
     def from_tools(cls, tools: Tools, *,
-                   workflows: Mapping[tuple[str, str], ParseResult] | None = None) -> 'RegistrySnapshot':
+                   workflows: Mapping[tuple[str, str], ParseResult] | None = None,
+                   directories: Mapping[tuple[str, str], Path] | None = None,
+                   run_names: Mapping[tuple[Path, str], str] | None = None,
+                   root_directory: Path | None = None) -> 'RegistrySnapshot':
         """Own a deterministic snapshot of the legacy public registry."""
         definitions = tuple(sorted((
             ToolDefinition(RegistryKey(step_id.plugin_ns, step_id.stem),
@@ -71,10 +91,11 @@ class RegistrySnapshot:
             for step_id, tool in tools.items()
         ), key=lambda item: item.key))
         sources = tuple(sorted((
-            WorkflowSource(RegistryKey(namespace, name), parsed)
+            WorkflowSource(RegistryKey(namespace, name), parsed, (directories or {}).get((namespace, name)))
             for (namespace, name), parsed in (workflows or {}).items()
         ), key=lambda item: item.key))
-        return cls(definitions, sources)
+        named = tuple(sorted((directory, run, name) for (directory, run), name in (run_names or {}).items()))
+        return cls(definitions, sources, named, root_directory)
 
     def tool(self, key: RegistryKey) -> ToolDefinition | None:
         """Look up a tool without exposing a mutable mapping."""
@@ -83,6 +104,11 @@ class RegistrySnapshot:
     def workflow(self, key: RegistryKey) -> WorkflowSource | None:
         """Look up a parsed workflow without touching a path."""
         return next((workflow for workflow in self.workflows if workflow.key == key), None)
+
+    def run_name(self, directory: Path | None, run: str) -> str | None:
+        """The name ``run`` was registered under beside ``directory``, if it named a file."""
+        return next((name for where, spelled, name in self.run_names
+                     if where == directory and spelled == run), None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +124,7 @@ class ResolvedProcess:
     """The process a step names, including a recursively resolved workflow."""
 
     key: RegistryKey
-    run_path: OpaqueCwl
+    run_path: str
     inputs: tuple[ResolvedPort, ...]
     outputs: tuple[ResolvedPort, ...]
     declaration: OpaqueCwl
@@ -145,21 +171,28 @@ def resolve(document: Document, registry: RegistrySnapshot, *, name: str = 'work
     if selected is None:
         return Resolved(None, selection_diagnostics)
     document = selected
+    reported: set[str] = set()
+    _report_stale_keys(document.sidecar, document, name, reported)
     version = resolve_lang_version(lang_version, _version_pins(document))
-    resolved, diagnostics = _resolve_document(document, registry, name, version, ())
+    resolved, diagnostics = _resolve_document(document, registry, name, version, (), reported,
+                                              registry.root_directory)
     _copy_diagnostics(diagnostics, selection_diagnostics)
     return Resolved(resolved if not diagnostics.has_errors else None, diagnostics)
 
 
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
-                      version: str, trail: tuple[RegistryKey, ...]) \
+                      version: str, trail: tuple[RegistryKey, ...], reported: set[str],
+                      directory: Path | None) \
         -> tuple[ResolvedDocument, Diagnostics]:
     diagnostics = Diagnostics()
     document = _apply_parameters(document)
     steps: list[ResolvedStep] = []
+    counts = Counter(step.id for step in document.steps)
     for index, step in enumerate(document.steps, start=1):
-        sidecar = _step_sidecar(document.sidecar, index, step.id)
-        process = _resolve_process(step, sidecar, registry, version, trail, diagnostics)
+        sidecar = step_sidecar(document.sidecar, index, step.id, counts[step.id])
+        process = _resolve_process(step, sidecar, registry, version, trail, diagnostics, reported,
+                                   directory)
         if process is not None:
             steps.append(ResolvedStep(step, process, sidecar))
     return ResolvedDocument(name, document, tuple(steps), version), diagnostics
@@ -168,49 +201,30 @@ def _resolve_document(document: Document, registry: RegistrySnapshot, name: str,
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistrySnapshot,
                      version: str, trail: tuple[RegistryKey, ...],
-                     diagnostics: Diagnostics) -> ResolvedProcess | None:
-    sidecar_entries = dict(sidecar.entries) if sidecar is not None else {}
-    namespace = str(sidecar_entries.get('namespace', 'global'))
-    interpreted = dict(step.interpreted)
-    run = interpreted.get('run')
-    authored_name = _stem(run) if isinstance(run, str) else _stem(step.id)
+                     diagnostics: Diagnostics, reported: set[str],
+                     directory: Path | None) -> ResolvedProcess | None:
+    namespace = str(dict(sidecar.entries).get('namespace', 'global')) if sidecar is not None else 'global'
+    run = dict(step.interpreted).get('run')
     generated = step.id == 'python_script'
-    name = generated_process_id(step) if generated else authored_name
-    key = RegistryKey(namespace, name)
+    name = generated_process_id(step) if generated else _stem(run if isinstance(run, str) else step.id)
+    own_name = _own_run_name(step, registry, directory)
+    own_key = RegistryKey(namespace, own_name or name)
+    key = own_key if registry.tool(own_key) is not None or registry.workflow(own_key) is not None \
+        else RegistryKey(namespace, name)
 
     # A tool and workflow may share a stem: an ordinary step prefers the tool,
     # falling back to a workflow only when no tool exists.
     explicit_workflow = step.id.endswith('.wic') \
         or (isinstance(run, str) and run.endswith('.wic'))
     tool = registry.tool(key)
-    if tool is None and run is not None and isinstance(run, str):
+    if tool is None and isinstance(run, str):
         tool = registry.tool(RegistryKey(namespace, _stem(run)))
     workflow = registry.workflow(key) if explicit_workflow or tool is None else None
     if workflow is None and explicit_workflow:
         workflow = registry.workflow(RegistryKey(namespace, _stem(step.id)))
     if workflow is not None:
-        workflow_key = workflow.key
-        if workflow_key in trail:
-            diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
-                              f'workflow cycle reaches {workflow_key.namespace}/{workflow_key.name}',
-                              step.span)
-            return None
-        parsed = workflow.parsed
-        _copy_diagnostics(diagnostics, parsed.diagnostics)
-        if parsed.document is None:
-            return None
-        inherited = _inherit_parameters(parsed.document, sidecar)
-        # A called workflow selects its implementation exactly as a root one does.
-        child_source, selection = _select_implementation(inherited, registry)
-        _copy_diagnostics(diagnostics, selection)
-        if child_source is None:
-            return None
-        child, child_diagnostics = _resolve_document(
-            child_source, registry, workflow_key.name, version, trail + (workflow_key,))
-        _copy_diagnostics(diagnostics, child_diagnostics)
-        inputs, outputs = _workflow_interface(child_source)
-        return ResolvedProcess(workflow_key, f'{workflow_key.name}.cwl', inputs, outputs,
-                               {'class': 'Workflow'}, child)
+        return _resolve_workflow(step, sidecar, workflow, registry, version, trail, diagnostics,
+                                 reported)
 
     if tool is None:
         diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
@@ -222,14 +236,115 @@ def _resolve_process(step: Step, sidecar: WicSidecar | None, registry: RegistryS
         diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
                           f'process {namespace}/{name} is not a CWL mapping', step.span)
         return None
+    # A packed document was read as its `main` where the tool was loaded, so `class` is the process's own.
+    if cwl.get('class') == 'Workflow':
+        diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
+                          _cwl_workflow_step(step, tool, own_name, directory), step.span)
+        return None
     return ResolvedProcess(
         tool.key,
-        deepcopy(run) if run is not None and not isinstance(run, str) else tool.run_path,
+        tool.run_path,
         _ports(cwl.get('inputs', {}), output=False),
         _ports(cwl.get('outputs', {}), output=True),
         deepcopy(cwl),
         generated=generated,
     )
+
+
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
+def _resolve_workflow(step: Step, sidecar: WicSidecar | None, workflow: WorkflowSource,
+                      registry: RegistrySnapshot, version: str, trail: tuple[RegistryKey, ...],
+                      diagnostics: Diagnostics, reported: set[str]) -> ResolvedProcess | None:
+    key = workflow.key
+    if key in trail:
+        diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
+                          f'workflow cycle reaches {key.namespace}/{key.name}', step.span)
+        return None
+    parsed = workflow.parsed
+    _copy_diagnostics(diagnostics, parsed.diagnostics)
+    if parsed.document is None:
+        return None
+    inherited = _inherit_parameters(parsed.document, sidecar)
+    # A called workflow selects its implementation exactly as a root one does.
+    source, selection = _select_implementation(inherited, registry)
+    _copy_diagnostics(diagnostics, selection)
+    if source is None:
+        return None
+    for stale in (parsed.document.sidecar, sidecar) if source is inherited else (source.sidecar,):
+        _report_stale_keys(stale, source, key.name, reported)
+    child, child_diagnostics = _resolve_document(source, registry, key.name, version,
+                                                 trail + (key,), reported, workflow.directory)
+    _copy_diagnostics(diagnostics, child_diagnostics)
+    interface = _workflow_interface(source, key, diagnostics)
+    if interface is None:
+        return None
+    return ResolvedProcess(key, f'{key.name}.cwl', *interface, {'class': 'Workflow'}, child)
+
+
+def _cwl_workflow_step(step: Step, tool: ToolDefinition, own_name: str | None, directory: Path | None) -> str:
+    """Why a step whose process is a CWL ``class: Workflow`` is refused, and what works.
+
+    The step would run a copy of the file without the files its own steps run,
+    and the calling workflow would lack ``SubworkflowFeatureRequirement``.
+    A document with no ``directory`` was not read from a file: the Python API
+    built it, and its steps' files are the ``clt_path`` each ``Step`` was given.
+    ``--allow_raw_cwl`` runs a CWL Workflow file on its own, so it is offered
+    for a file and not for an inline body.
+    """
+    step_runs = f'step {step.id!r} runs'
+    cannot = 'Sophios cannot embed a CWL Workflow as a step'
+    if directory is None:
+        return (f'{step_runs} {tool.run_path}, a CWL Workflow given in Python as its clt_path. {cannot}: '
+                'build it in Python as a nested Workflow of Steps, or run the CWL Workflow on its own '
+                f'with sophios --yaml {tool.run_path} --allow_raw_cwl')
+    as_wic = 'write it as a .wic subworkflow (on search_paths_wic, or beside this document as run: <name>.wic)'
+    run = dict(step.interpreted).get('run')
+    if isinstance(run, dict):
+        return f'{step_runs} an inline run: body that is a CWL Workflow. {cannot}: {as_wic}'
+    where = (f'run: {run}, a CWL Workflow' if tool.key.name == own_name
+             else f'{tool.run_path}, a CWL Workflow from the tool search paths (search_paths_cwl)')
+    return f'{step_runs} {where}. {cannot}: {as_wic}, or run the CWL Workflow on its own with --allow_raw_cwl'
+
+
+def _own_run_name(step: Step, registry: RegistrySnapshot, directory: Path | None) -> str | None:
+    """The name the front door registered a step's own ``run:`` under, if it registered one."""
+    run = dict(step.interpreted).get('run')
+    if isinstance(run, dict):
+        return inline_run_name(step)
+    return registry.run_name(directory, run) if isinstance(run, str) else None
+
+
+def inline_run_name(step: Step) -> str | None:
+    """The registry name of an inline ``run:`` body, or None for any other step.
+
+    A body is identified by its content, so two steps with the same id but
+    different bodies are different processes. It is identified as it is
+    registered, in ``CWL_VERSION``: a ``cwlVersion`` inside it is ignored.
+    """
+    run = dict(step.interpreted).get('run')
+    if not isinstance(run, dict):
+        return None
+    identity = json.dumps({**run, 'cwlVersion': CWL_VERSION}, sort_keys=True, default=str)
+    return _hashed(_stem(step.id), identity)
+
+
+def is_run_path(run: str) -> bool:
+    """Whether a ``run:`` string names a ``.cwl`` or ``.wic`` file rather than a registry entry."""
+    return run.endswith(('.cwl', '.wic'))
+
+
+def run_path_name(run: str, root_relative: str) -> str:
+    """The registry name of the file a ``run:`` path resolved to.
+
+    ``root_relative`` is that file's path from the root document's directory,
+    so the name does not depend on where the checkout is, and two files with
+    one stem are two names.
+    """
+    return _hashed(_stem(run), root_relative)
+
+
+def _hashed(stem: str, identity: str) -> str:
+    return f'{stem}_{sha256(identity.encode("utf-8")).hexdigest()[:8]}'
 
 
 def generated_process_id(step: Step) -> str:
@@ -279,6 +394,8 @@ def _input_identity(value: InputValue) -> Any:
             return ('cwl', expression)
         case UnresolvedName(name=name):
             return ('name', name)
+        case CwlRecord(sources=sources, fields=fields):
+            return ('record', [_input_identity(source) for source in sources], fields)
 
 
 def _ports(raw: Any, *, output: bool) -> tuple[ResolvedPort, ...]:
@@ -298,9 +415,24 @@ def _named_entries(raw: Any) -> tuple[tuple[str, Any], ...]:
             return ()
 
 
-def _workflow_interface(document: Document) -> tuple[tuple[ResolvedPort, ...],
-                                                     tuple[ResolvedPort, ...]]:
+def _workflow_interface(document: Document, key: RegistryKey, diagnostics: Diagnostics) \
+        -> tuple[tuple[ResolvedPort, ...], tuple[ResolvedPort, ...]] | None:
+    """The ports a called workflow declares, or None, reported, when it declares them in a list.
+
+    The parser reads CWL's list form of `inputs:` and `outputs:` as a mapping.
+    It leaves a list as written only when it holds an `$import` or `$include`,
+    which names ports in a file only cwltool reads, so no step could be checked
+    against them.
+    """
     passthrough = dict(document.passthrough)
+    listed = [name for name in ('inputs', 'outputs') if isinstance(passthrough.get(name), list)]
+    for name in listed:
+        diagnostics.error(SophiosErrorCode.SUBWORKFLOW_INVALID,
+                          f'workflow {key.namespace}/{key.name} lists its {name}: with an $import or $include, '
+                          'whose ports only cwltool can read; write them as a mapping to call it',
+                          document.span)
+    if listed:
+        return None
     return (_ports(passthrough.get('inputs', {}), output=False),
             _ports(passthrough.get('outputs', {}), output=True))
 
@@ -319,7 +451,8 @@ def _apply_parameters(document: Document) -> Document:
     """Contribute each `wic: steps: (N, name):` body to the step it names."""
     if document.sidecar is None:
         return document
-    steps = tuple(_contributed_step(step, _step_sidecar(document.sidecar, index, step.id))
+    counts = Counter(step.id for step in document.steps)
+    steps = tuple(_contributed_step(step, step_sidecar(document.sidecar, index, step.id, counts[step.id]))
                   for index, step in enumerate(document.steps, start=1))
     return document if steps == document.steps else replace(document, steps=steps)
 
@@ -352,10 +485,10 @@ def _contributed_input(value: OpaqueCwl, span: SourceSpan) -> InputValue:
     """Read one contributed `in:` value back into the closed input union.
 
     Accepts either an already-typed tagged construct or its desugared mapping
-    spelling; both surfaces mean one thing (§4.1).
+    spelling; both surfaces mean one thing (language guide §3.1).
     """
     match value:
-        case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName():
+        case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName() | CwlRecord():
             return value
         case {Key.INLINE_INPUT: literal}:
             return InlineLiteral(literal, span)
@@ -396,16 +529,28 @@ def _inherit_parameters(document: Document, sidecar: WicSidecar | None) -> Docum
     return replace(document, sidecar=_merged_sidecar(
         document.sidecar, WicSidecar(sidecar.steps, entries,
                                      implementations=sidecar.implementations,
-                                     span=sidecar.span)))
+                                     span=sidecar.span),
+        [step.id for step in document.steps]))
 
 
-def _merged_sidecar(own: WicSidecar | None, contributed: WicSidecar) -> WicSidecar:
-    """`own` with `contributed` merged over it, key by key and step by step."""
+def called_document(document: Document, call_site: WicSidecar | None,
+                    registry: RegistrySnapshot) -> Document | None:
+    """What a step runs when it calls `document`, as Resolve reads it: `call_site`, the step's
+    own `wic:` entry, merged into the document's `wic:` block, then its implementation selected.
+    None when no implementation can be selected."""
+    return _select_implementation(_inherit_parameters(document, call_site), registry)[0]
+
+
+def _merged_sidecar(own: WicSidecar | None, contributed: WicSidecar,
+                    ids: Sequence[str] | None = None) -> WicSidecar:
+    """`own` with `contributed` merged over it, key by key and step by step. `ids` are the
+    step ids of the document both address, when known: a bare id and an `(index, id)` key
+    are paired only when each addresses a step of it."""
     if own is None:
         return contributed
     steps = dict(own.steps)
     for key, child in contributed.steps:
-        inherited = steps.get(key)
+        key, inherited = _inherited_step(steps, key, ids)
         steps[key] = child if inherited is None else _merged_sidecar(inherited, child)
     entries = dict(own.entries)
     for name, value in contributed.entries:
@@ -413,6 +558,30 @@ def _merged_sidecar(own: WicSidecar | None, contributed: WicSidecar) -> WicSidec
     return WicSidecar(tuple(steps.items()), tuple(entries.items()),
                       implementations=own.implementations or contributed.implementations,
                       span=own.span)
+
+
+def _inherited_step(steps: dict[StepKey, WicSidecar], key: StepKey,
+                    ids: Sequence[str] | None) -> tuple[StepKey, WicSidecar | None]:
+    """The key `key` is merged under and the entry of `steps` it is merged over.
+    A bare id and an `(index, id)` key of the same name address the same step, so a
+    bare id merges into the one positional entry, even when a bare entry exists too, and a
+    positional key absorbs the bare one, provided both address a step of `ids`; a stale key is left where it is.
+    """
+    if key.index is None:
+        positional = [other for other in steps if other.index is not None and other.name == key.name
+                      and (ids is None or _stale_key_reason(other, ids) is None)]
+        if len(positional) == 1 and (ids is None or _stale_key_reason(key, ids) is None):
+            return positional[0], steps[positional[0]]
+    if key in steps:
+        return key, steps[key]
+    if ids is not None and _stale_key_reason(key, ids) is not None:
+        return key, None
+    if key.index is None:
+        return key, None
+    bare = StepKey(None, key.name)
+    if ids is not None and _stale_key_reason(bare, ids) is not None:
+        return key, None
+    return key, steps.pop(bare, None)
 
 
 def _merged_value(own: OpaqueCwl, contributed: OpaqueCwl) -> OpaqueCwl:
@@ -425,11 +594,72 @@ def _merged_value(own: OpaqueCwl, contributed: OpaqueCwl) -> OpaqueCwl:
     return merged
 
 
-def _step_sidecar(sidecar: WicSidecar | None, index: int, name: str) -> WicSidecar | None:
+def step_sidecar(sidecar: WicSidecar | None, index: int, name: str,
+                 occurrences: int) -> WicSidecar | None:
+    """The sidecar entry addressing step `index` called `name`: its `(index, name)` key,
+    else its bare id when the id occurs once in the document. When both are present they
+    merge, the positional key winning."""
     if sidecar is None:
         return None
-    return next((child for key, child in sidecar.steps
-                 if key.index == index and key.name == name), None)
+    by_id = positional = None
+    for key, child in sidecar.steps:
+        if key.index == index and key.name == name:
+            positional = child
+        if key.index is None and key.name == name and occurrences == 1:
+            by_id = child
+    if positional is None or by_id is None:
+        return positional or by_id
+    return _merged_sidecar(by_id, positional)
+
+
+def _stale_key_reason(key: StepKey, ids: Sequence[str]) -> str | None:
+    """Why `key` addresses no step among `ids`, the step ids of one document; None if it does."""
+    if key.index is None:
+        count = ids.count(key.name)
+        if count == 1:
+            return None
+        if count == 0:
+            return f'no step is called {key.name!r}'
+        return f'{key.name!r} names {count} steps; write (index, {key.name})'
+    if not 1 <= key.index <= len(ids):
+        noun = 'step' if len(ids) == 1 else 'steps'
+        return f'there is no step {key.index}; the document has {len(ids)} {noun}'
+    actual = ids[key.index - 1]
+    if actual == key.name:
+        return None
+    return f'step {key.index} is {actual!r}; write ({key.index}, {actual})'
+
+
+def graphviz_entry(sidecar: WicSidecar | None) -> dict[str, Any]:
+    """`sidecar`'s `graphviz:` entry, or nothing."""
+    drawn = dict(sidecar.entries).get('graphviz') if sidecar is not None else None
+    return drawn if isinstance(drawn, dict) else {}
+
+
+def ranksame(sidecar: WicSidecar | None) -> tuple[StepKey, ...]:
+    """The steps `sidecar`'s `graphviz: ranksame:` list names; the parser checked each is a step key."""
+    return tuple(key for key in map(step_key, graphviz_entry(sidecar).get('ranksame', ())) if key is not None)
+
+
+def _report_stale_keys(sidecar: WicSidecar | None, document: Document, name: str,
+                       reported: set[str]) -> None:
+    """Print, once each, a line for every ``wic: steps:`` key and ``graphviz: ranksame:`` entry
+    of `sidecar` that addresses no step of `document`. They are ignored, as they always were."""
+    if sidecar is None:
+        return
+    ids = [step.id for step in document.steps]
+    addresses = [('wic: steps:', 'key', key, child.span) for key, child in sidecar.steps]
+    addresses += [('wic: graphviz: ranksame', 'entry', key, None) for key in ranksame(sidecar)]
+    for where, noun, key, span in addresses:
+        reason = _stale_key_reason(key, ids)
+        if reason is None:
+            continue
+        file = (span or sidecar.span or _CONTRIBUTION_SPAN).file
+        line = (f'Warning! {file}: {where} {noun} {key} addresses no step of {name!r}: '
+                f'{reason}. The {noun} is ignored.')
+        if line not in reported:
+            reported.add(line)
+            print(line, file=sys.stderr)
 
 
 def _version_pins(document: Document) -> tuple[str, ...]:

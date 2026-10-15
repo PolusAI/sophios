@@ -1,6 +1,6 @@
 """The CWL substrate the Sophios language compiles onto.
 
-The language reference pins Sophios to one CWL version; that version belongs
+The language spec pins Sophios to one CWL version; that version belongs
 here, in the language definition, not to whichever module emits a document.
 Import `CWL_VERSION` rather than writing a version literal.
 """

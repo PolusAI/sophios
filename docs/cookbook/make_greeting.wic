@@ -1,0 +1,16 @@
+steps:
+- id: touch
+  in:
+    filename: !ii greeting.txt
+  out:
+  - file: !& blank
+- id: append
+  in:
+    file: !* blank
+    str: !ii Hello
+  out:
+  - file: !& greeting
+outputs:
+  greeting:
+    type: File
+    outputSource: append/file

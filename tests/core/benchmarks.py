@@ -28,7 +28,7 @@ from typing import Callable, Final
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.hermetic import compile_hermetic, subworkflow_step
+from core.hermetic import compile_hermetic, nested_workflow
 from core.synthetic_tools import clt, SYNTHETIC_TOOLS
 from core.wic_corpus import CORPUS, corpus_id
 
@@ -39,7 +39,6 @@ import sophios.input_output as io
 import sophios.plugins
 from sophios.lang import parse
 from sophios.utils_cwl import desugar_into_canonical_normal_form
-from sophios.utils_graphs import get_graph_reps
 from sophios.wic_types import Cwl, StepId, Tool, Tools, Yaml
 
 
@@ -76,8 +75,8 @@ def _get_corpus_env() -> _CorpusEnv:
     global _corpus_env  # pylint: disable=global-statement
     if _corpus_env is None:
         args = sophios.cli.get_args()
-        config_path = Path(args.config_file)
-        config = io.get_config(config_path, config_path) if config_path.exists() else io.get_basic_config()
+        config_path = args.config_file or io.default_config_file(Path(args.homedir))
+        config = io.read_config_from_disk(config_path) if config_path.exists() else io.get_basic_config()
         tools = sophios.plugins.get_tools_cwl(config, quiet=True)
         yml_paths = sophios.plugins.get_yml_paths(config)
         _corpus_env = _CorpusEnv(tools, yml_paths)
@@ -92,11 +91,8 @@ def _compile_corpus_file(path: Path) -> None:
     env = _get_corpus_env()
     args = sophios.cli.get_args(str(path))
     bundle = frontdoor.bundle_from_disk(path, env.yml_paths, env.tools)
-    compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
-    graph = get_graph_reps(str(path))
-    sophios.compiler.compile_source(
-        bundle, compiler_options, graph_settings, yaml_tag_paths,
-        relative_run_path=True, testing=True, graph_target=graph)
+    compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
+    sophios.compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=True)
 
 
 # --------------------------------------------------------------------------
@@ -105,10 +101,8 @@ def _compile_corpus_file(path: Path) -> None:
 
 def _speculative_insertion_registry() -> tuple[Yaml, Tools]:
     """Two branches, each needing exactly one whitelisted-format-converter
-    insertion. "Two or more whitelisted converter tools" is the design's own
-    phrase for what this path requires (design_docs/core-refactor-design.md
-    §6.2). Section 6.3 puts the path in benchmark coverage; §1 documents its
-    `O(2^n)` complexity.
+    insertion. Two or more whitelisted converter tools put a compilation on
+    this path, whose cost is `O(2^n)`.
 
     Formats may be written either way here: `inference.declared_formats`
     normalises a bare string to a one-element list at every point of entry, so
@@ -146,15 +140,7 @@ def _run_speculative_insertion() -> None:
 # --------------------------------------------------------------------------
 # Case 3: deep nesting.
 
-def _deep_nesting_yml() -> Yaml:
-    """A leaf step wrapped five levels deep with `hermetic.subworkflow_step`."""
-    tree: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'leaf.txt'}}}]}
-    for level in range(5):
-        tree = {'steps': [subworkflow_step(f'level_{level}.wic', tree)]}
-    return tree
-
-
-_DEEP_NESTING_YML: Final = _deep_nesting_yml()
+_DEEP_NESTING_YML: Final = nested_workflow(15)
 
 
 # --------------------------------------------------------------------------
@@ -193,16 +179,15 @@ CASES: Final[tuple[Case, ...]] = tuple(
 ) + (
     Case('speculative_insertion',
          "A workflow with two branches, each needing one whitelisted-format-"
-         "converter insertion — the design's own phrase, 'two or more "
-         "whitelisted converter tools', for what puts a compilation on this "
-         "path. Section 6.3 puts it in benchmark coverage; §1 documents the "
-         "O(2^n) complexity. The corpus never reaches it. This case times "
+         "converter insertion. Two or more whitelisted converter tools put a "
+         "compilation on this path, whose cost is O(2^n). The corpus never "
+         "reaches it. This case times "
          "two real insertions and the fixed-point passes they force, so it is "
          "the one number on this list that moves with the insertion search "
          "rather than with per-step cost.",
          run=_run_speculative_insertion),
     Case('deep_nesting',
-         "A workflow partitioned five levels deep with "
+         "A workflow partitioned fifteen levels deep with "
          "hermetic.subworkflow_step. Namespacing cost grows with depth and "
          "nothing else on this list has depth.",
          run=lambda: compile_hermetic(_DEEP_NESTING_YML, 'oracle', tools=SYNTHETIC_TOOLS)),

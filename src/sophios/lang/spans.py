@@ -2,7 +2,7 @@
 
 Every AST node carries a span so a diagnostic can name a file, a line, and a
 column instead of describing a schema violation somewhere in a generated
-document. See design_docs/core-refactor-design.md, Spec 1.
+document.
 """
 from dataclasses import dataclass
 from typing import Self

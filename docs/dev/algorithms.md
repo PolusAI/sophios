@@ -29,7 +29,7 @@ does not allow arbitrary extra tags in the places Sophios needs them. The Galaxy
 workflow platform uses a similar encoded-string scheme, although its indexing
 starts at zero.
 
-On the other hand, GraphViz and NetworkX require all names to be globally unique, so by default we do not truncate the namespaces when constructing graphs. However, --graph_inline_depth allows users to hide irrelevant details by collapsing all subgraphs below the given depth to a single node. This is implemented by simply truncating the *trailing* namespaces. Thus, keeping track of namespaces allows us to trivially implement two key features.
+On the other hand, Graphviz requires every node name to be unique, so the drawing names each step by its whole namespace. --graph_inline_depth N hides detail: the steps of subworkflows nested deeper than N are left out of the drawing, and the step that calls such a subworkflow is still drawn as one box.
 
 ## Compilation Algorithm
 
@@ -47,7 +47,15 @@ Compilation is a one-way typed pipeline:
    common ancestor, and discharges deferred obligations.
 5. **Infer** adds only missing edges and optional converter steps. Its
    fixed-point loop is local to this phase; the preceding phases run once.
-6. **Emit** projects the final graph to CWL v1.2. It does not reopen source,
+6. **Declare namespaces** gives every workflow the `$namespaces` that the
+   `format:` CURIEs of its promoted ports need. Which ports are promoted is
+   known only once Infer is done, and the prefixes a tool binds are a fact about
+   the tool, so this phase reads the registry as Resolve does. It reports
+   `wic031` where the document and the steps whose promoted ports use a prefix
+   bind it to different URIs. A binding by any other step conflicts with
+   nothing, which keeps the result independent of how the workflow is
+   partitioned.
+7. **Emit** projects the final graph to CWL v1.2. It does not reopen source,
    consult registries, or replay an older compiler result.
 
 An idempotent internal graph-completion operation materializes emission facts
@@ -67,9 +75,17 @@ environment and result tree no longer exist.
 Compilation remains independent of how the root workflow is partitioned into
 subworkflows. The property suite flattens final graph-derived artifacts with an
 independent test model and compares their observable behavior at
-`UP_TO_EMBEDDING`. Embedding a linked child directly in a CWL `run:` field is a
-placement choice; it does not invoke a second source-level implementation of
-workflow-call semantics.
+`UP_TO_RENAMING`.
+
+Both CWL output options rewrite the emitted artifact tree after compilation.
+`flatten_subworkflows` (`--cwl_inline_subworkflows`) changes the shape: it
+replaces a subworkflow call by that workflow's steps only when the call's
+author wrote nothing on it but `in` and `out` and the workflow allows it, and
+it leaves the root's inputs, outputs and job inputs alone.
+`inline_artifact_runs` (`--cwl_inline_runtag`) changes the packaging: every
+`run:` carries its process, which keeps the defaults of its own `cwlVersion`.
+Neither is a second source-level implementation of workflow-call semantics.
+The Python API and the REST endpoint use the second.
 
 ## Deferred obligations
 
@@ -101,8 +117,8 @@ effective array rank on both producing and consuming endpoints.
 
 ## Edge Inference
 
-The user-facing edge inference algorithm is described in
-[Advanced YAML and Operations](../advanced.md#edge-inference). Inference reads a
+The user-facing edge inference algorithm is described in the
+[language guide](../language_guide.md#8-what-inference-does-and-how-to-pin-it). Inference reads a
 complete graph and an explicit immutable policy. It preserves the historical
 candidate order, naming/format rules, defaults, ambiguity behavior, and
 converter catalog. `types_match()` remains a candidate-selection heuristic; it
@@ -141,7 +157,7 @@ partially inserted source tree into another compilation.
 ## Compatibility contract
 
 The typed compiler promises behaviorally identical workflows, not byte-identical
-serialization relative to the retired implementation. The end-to-end P57
+serialization relative to the retired implementation. The end-to-end
 contract is `UP_TO_EMBEDDING`: generated `run:` paths may move when artifacts
 are embedded differently, while workflow structure, bindings, ports, types,
 requirements, and opaque payloads remain equivalent. Narrower phase properties

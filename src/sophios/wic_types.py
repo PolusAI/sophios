@@ -1,7 +1,4 @@
-from dataclasses import dataclass, field
 from typing import Any, NamedTuple, NotRequired, TypeAlias, TypedDict
-
-import networkx as nx
 
 # See https://mypy.readthedocs.io/en/stable/kinds_of_types.html#type-aliases
 
@@ -36,30 +33,6 @@ Tools: TypeAlias = dict[StepId, Tool]
 # NOTE: Please read the Namespacing section of docs/dev/devguide.md !!!
 Namespace: TypeAlias = str
 
-DiGraph: TypeAlias = Any  # graphviz.DiGraph
-
-
-@dataclass(slots=True)
-class GraphData:
-    # `default_factory` gives each instance its own list; a bare `[]` default
-    # would be shared and mutated across every instance. Not `frozen=True`:
-    # the compiler rebinds these fields in place while building a graph.
-    name: str  # TODO: Should this be StepId?
-    nodes: list[tuple[str, dict]] = field(default_factory=list)
-    edges: list[tuple[str, str, dict]] = field(default_factory=list)
-    subgraphs: list[Any] = field(default_factory=list)
-    ranksame: list[str] = field(default_factory=list)
-
-
-# This groups together the classes which represent our graph.
-# Excluding --graph_inline_depth related code, all graph
-# operations should be performed on all representations.
-class GraphReps(NamedTuple):
-    graphviz: DiGraph
-    networkx: nx.DiGraph
-    graphdata: GraphData
-
-
 # Create a type for our Abstract Syntax Tree (AST).
 # We can probably use Dict here if str is step_name_i not just yaml_stem.
 # If we need to insert steps, that will happen
@@ -76,6 +49,7 @@ class CompilerOptions(TypedDict):
     """Core compiler flags needed for compilation and transformation into CWL."""
     partial_failure_enable: bool
     inference_use_naming_conventions: bool
+    inference_strict: bool
     insert_steps_automatically: bool
     inference_disable: bool
     allow_raw_cwl: bool
@@ -94,13 +68,6 @@ class GraphSettings(TypedDict):
     graph_label_stepname: bool
     graph_show_outputs: bool
     graph_show_inputs: bool
-
-
-class YamlTagPaths(TypedDict):
-    """Paths that need to be included in (generated) yaml tags."""
-    cachedir: str
-    yaml: str
-    homedir: str
 
 
 class PluginNodeConfig(TypedDict):

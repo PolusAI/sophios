@@ -47,7 +47,6 @@ from sophios.utils_nf import (
     compilation_result_source,
     compiled_source_to_nextflow,
 )
-from sophios.utils_graphs import get_graph_reps
 from sophios.wic_types import Yaml
 
 from .testkit import (
@@ -1984,30 +1983,22 @@ def _nested_downstream_result() -> CompilationResult:
     consume = Step(_copy_tool(), step_name="consume")
     consume.inputs.source = "placeholder.txt"
     root = Workflow([write, child, consume], "root")
-    document = workflow_runtime.workflow_document(root, inline_subtrees=False)
+    document = workflow_runtime.workflow_document(root)
     steps = list(document.steps)
     steps[1] = replace(steps[1], outputs=(OutputBinding("result", EdgeDef("childout")),))
     steps[2] = replace(steps[2], inputs=(("source", EdgeRef("childout")),))
-    compiler_options, graph_settings, tag_paths = default_compilation_settings()
-    tools = workflow_runtime._merged_known_tools(root._flatten_steps())
+    compiler_options = default_compilation_settings()
+    tools = workflow_runtime._merged_known_tools(root)
     bundle = SourceBundle(
         ParseResult(replace(document, steps=tuple(steps)), Diagnostics()),
         "root",
         RegistrySnapshot.from_tools(tools, workflows={
             ("global", child.process_name): ParseResult(
-                workflow_runtime.workflow_document(child, inline_subtrees=False), Diagnostics()
+                workflow_runtime.workflow_document(child), Diagnostics()
             ),
         }),
     )
-    return compiler.compile_source(
-        bundle,
-        compiler_options,
-        graph_settings,
-        tag_paths,
-        relative_run_path=True,
-        testing=True,
-        graph_target=get_graph_reps("root"),
-    )
+    return compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=True)
 
 
 def _nested_artifacts(result: CompilationResult) -> list[Any]:

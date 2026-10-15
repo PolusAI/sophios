@@ -2,10 +2,10 @@
 
 Two things are checked here, and neither is style:
 
-**Nothing leaks into a global.** `wic_loader()` used to register the Sophios
-tags on `yaml.SafeLoader` itself, which changed how every `yaml.safe_load` in
-the process behaved — including calls from libraries that had never heard of
-Sophios — for the rest of the program's life.
+**Nothing leaks into a global.** Registering the Sophios tags on
+`yaml.SafeLoader` itself would change how every `yaml.safe_load` in the process
+behaves — including calls from libraries that have never heard of Sophios — for
+the rest of the program's life.
 
 **Shared tables cannot be mutated.** A module-level `dict` is reachable from
 every thread. One caller mutating it changes parsing for all of them, and the
@@ -24,7 +24,7 @@ import yaml
 from sophios.lang import Forms, Grammar, parse, wic_schema
 from sophios.lang import schema as schema_module
 from sophios.lang.render import render
-from sophios.utils_yaml import Key, Tag, WicLoader, wic_loader
+from sophios.utils_yaml import Key, Tag
 
 SOURCE = 'steps:\n- id: touch\n  in:\n    f: !ii empty.txt\n  out:\n  - file: !& out\n'
 
@@ -35,34 +35,20 @@ SOURCE = 'steps:\n- id: touch\n  in:\n    f: !ii empty.txt\n  out:\n  - file: !&
 
 
 @pytest.mark.fast
-def test_the_loader_does_not_touch_the_global_safeloader() -> None:
-    """Using the Sophios loader leaves `yaml.safe_load` alone.
+def test_parsing_does_not_touch_the_global_safeloader() -> None:
+    """Parsing a `.wic` leaves `yaml.safe_load` alone.
 
-    Registering on `yaml.SafeLoader` would make every later `safe_load` in the
-    process interpret `!ii`, anywhere, including in unrelated libraries.
+    The parser builds YAML with `yaml.SafeLoader`; registering on it would make
+    every later `safe_load` in the process interpret `!ii`, anywhere, including
+    in unrelated libraries.
     """
-    yaml.load(SOURCE, Loader=wic_loader())
+    assert parse(SOURCE, 'tags.wic').ok
 
     for tag in Tag.ALL:
         assert tag not in yaml.SafeLoader.yaml_constructors, f'{tag} leaked onto SafeLoader'
 
     with pytest.raises(yaml.YAMLError):
         yaml.safe_load('x: !ii 5')
-
-
-@pytest.mark.fast
-def test_the_loader_is_a_subclass_not_safeloader_itself() -> None:
-    """The tags live on a dedicated class, so their scope is the callers who ask."""
-    assert wic_loader() is WicLoader
-    assert issubclass(WicLoader, yaml.SafeLoader)
-    assert WicLoader is not yaml.SafeLoader
-
-
-@pytest.mark.fast
-def test_the_loader_still_understands_every_tag() -> None:
-    """Isolation did not cost the tags themselves."""
-    loaded = yaml.load('a: !ii 5\nb: !& e\nc: !* e\n', Loader=wic_loader())
-    assert loaded == {'a': {Key.INLINE_INPUT: 5}, 'b': {Key.ANCHOR: 'e'}, 'c': {Key.ALIAS: 'e'}}
 
 
 # --------------------------------------------------------------------------
@@ -94,18 +80,10 @@ def test_shared_mappings_are_read_only(name: str, mapping: Any) -> None:
 def test_the_membership_sets_are_derived_from_the_members() -> None:
     """`Tag.ALL` and `Key.ALL` are computed, never restated.
 
-    The two facts are established independently — a constructor is registered
-    on the loader for each tag, and the parser asks `Tag.ALL` which tags the
-    language owns — so they can disagree, and the disagreement is silent in
-    the direction that matters: a tag with a working constructor but missing
-    from the set is reported as an unknown tag. Deriving the set removes the
-    edit that could go missing; this checks the two views still agree.
+    The parser asks `Tag.ALL` which tags the language owns, so a tag missing
+    from the set would be reported as an unknown tag. Deriving the set removes
+    the edit that could go missing.
     """
-    # PyYAML keys its own default constructor under None; the wic tags are the
-    # ones this class adds beyond what SafeLoader already had.
-    registered = set(WicLoader.yaml_constructors) - set(yaml.SafeLoader.yaml_constructors)
-    assert registered == Tag.ALL
-
     assert Tag.ALL == {Tag.ANCHOR, Tag.ALIAS, Tag.INLINE_INPUT, Tag.RAW_CWL}
     assert Key.ALL == {Key.ANCHOR, Key.ALIAS, Key.INLINE_INPUT, Key.RAW_CWL}
 
@@ -135,7 +113,7 @@ def test_parsing_and_rendering_are_safe_from_many_threads() -> None:
     """The same source parsed concurrently gives every thread the same answer.
 
     Not a proof of thread safety — no test is — but it exercises the shared
-    tables, the loader, and the schema export from several threads at once,
+    tables, the parser's YAML loading, and the schema export from several threads at once,
     which is where per-module mutable state would show up as divergence.
     """
     def once(_: int) -> tuple[str, int]:

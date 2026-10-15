@@ -9,8 +9,6 @@ collection is re-spelled rather than handed raw to the dumper.
     render(document)   ->  text,  tagged spelling      (`!ii x`)
     to_json(document)  ->  data,  desugared spelling, JSON-serialisable
 """
-import math
-import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Final, Literal, final
@@ -19,6 +17,7 @@ import yaml
 
 from ..utils_yaml import Key, Tag
 from .nodes import (
+    CwlRecord,
     Document,
     EdgeDef,
     EdgeRef,
@@ -41,17 +40,21 @@ class _Emit:  # pylint: disable=too-few-public-methods  # a namespace, not a typ
     #: Every tag the tagged spelling emits.
     WIC_TAGS: Final = Tag.ALL
 
-    #: Text needing no quoting after a tag: no leading YAML indicator, no
-    #: whitespace, and nothing that would start a comment or end the scalar.
-    PLAIN_SAFE: Final = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_./-]*\Z')
+    #: What YAML resolves a plain scalar to when it reads it as text.
+    STR_TAG: Final = 'tag:yaml.org,2002:str'
 
 
 @dataclass(frozen=True, slots=True)
 class _Tagged:
-    """A value carrying a wic tag: `!tag payload`, scalar or collection."""
+    """A value carrying a wic tag: `!tag payload`, scalar or collection.
+
+    A scalar payload is written plain where YAML allows it, unless `quoted`:
+    under `!ii` the quotes say the payload is text (language spec §2).
+    """
 
     tag: str
     value: Any
+    quoted: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -71,7 +74,7 @@ class _Writer:
     mode: Literal['tagged', 'json']
 
     def document(self, document: Document) -> dict[str, Any]:
-        """Key order follows the reference: `wic:`, then `steps:`, then the rest."""
+        """Key order follows the language guide: `wic:`, then `steps:`, then the rest."""
         body: dict[str, Any] = {}
 
         if document.sidecar is not None:
@@ -113,7 +116,7 @@ class _Writer:
         return {binding.name: self.edge_def(binding.edge_def)}
 
     def edge_def(self, edge: EdgeDef) -> Any:
-        """Spell an `!&` edge definition — legal only on an `out:` entry (§4.1.1)."""
+        """Spell an `!&` edge definition — legal only on an `out:` entry (language guide §3.6)."""
         return _Tagged(Tag.ANCHOR, edge.name) if self.mode == 'tagged' else {Key.ANCHOR: edge.name}
 
     def sidecar(self, sidecar: WicSidecar) -> Any:
@@ -140,6 +143,15 @@ class _Writer:
                 return _Tagged(Tag.RAW_CWL, expression) if self.mode == 'tagged' else {Key.RAW_CWL: expression}
             case UnresolvedName(name=name):
                 return name
+            case CwlRecord(sources=sources, fields=fields):
+                body: dict[str, Any] = {}
+                if sources:
+                    spelled = [self.input_value(source) for source in sources]
+                    # One source stays a list beside `linkMerge`, which CWL reads as a merge of a list.
+                    body['source'] = spelled[0] if len(spelled) == 1 and 'linkMerge' not in dict(fields) \
+                        else spelled
+                body.update({key: self.plain(value) for key, value in fields})
+                return _Tagged(Tag.RAW_CWL, body) if self.mode == 'tagged' else {Key.RAW_CWL: body}
 
     def _literal(self, literal: InlineLiteral) -> Any:
         """Spell an `!ii` literal: transcribed from source text when parsed, else serialised."""
@@ -152,23 +164,17 @@ class _Writer:
         if isinstance(literal.value, (list, dict)):
             return _Tagged(Tag.INLINE_INPUT, self.plain(literal.value))
 
-        if isinstance(literal.value, (InlineLiteral, EdgeRef, RawCwlRef, UnresolvedName)):
+        if isinstance(literal.value, (InlineLiteral, EdgeRef, RawCwlRef, UnresolvedName, CwlRecord)):
             # A construct as the direct payload has no tagged spelling — two
             # tags cannot share a node — so the desugared form carries it.
             return {Key.INLINE_INPUT: self.plain(literal.value)}
 
-        spelled = _spell_scalar(literal.value)
-        if spelled is not None:
-            return _Tagged(Tag.INLINE_INPUT, spelled)
-        # The tagged form has no spelling for this value (e.g. the string
-        # '0' — the composer strips quotes before the payload is re-resolved),
-        # so the desugared spelling carries it instead of a lossy tag.
-        return {Key.INLINE_INPUT: self.plain(literal.value)}
+        return _spell_scalar(literal.value)
 
     def plain(self, value: OpaqueCwl) -> Any:
         """Spell passthrough content, exhaustively over the closed `OpaqueCwl` union."""
         match value:
-            case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName():
+            case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName() | CwlRecord():
                 return self.input_value(value)
             case dict():
                 return {k: self.plain(v) for k, v in value.items()}
@@ -185,27 +191,18 @@ class _Writer:
 # --------------------------------------------------------------------------
 
 
-def _spell_scalar(value: Any) -> str | None:
-    """Return a tagged spelling for `value`, or None when no faithful one exists.
+def _spell_scalar(value: Any) -> _Tagged:
+    """Return the tagged spelling that reads back as the scalar `value`.
 
-    Checked by simulating the parser's actual pipeline: a tagged payload has
-    its quotes resolved by the composer before `yaml.safe_load` re-types the
-    content, which is why quoted spellings cannot protect a string like '0'.
-    A `ScannerError` from the re-parse is treated the same as a mismatch.
+    The parser reads an `!ii` scalar as YAML reads the same scalar untagged
+    (language spec §2), so a string is written plain when YAML resolves that
+    text as a string, and quoted otherwise: `!ii '0'` is the text 0. Any
+    other scalar is written as `yaml.safe_dump` spells it, plain.
     """
-    candidate = yaml.safe_dump(value, default_flow_style=True).partition('\n')[0].strip()
-    try:
-        node = yaml.compose(candidate, Loader=yaml.SafeLoader)
-        if not isinstance(node, yaml.nodes.ScalarNode):
-            return None
-        reparsed = yaml.safe_load(node.value) if node.value != '' else ''
-    except yaml.YAMLError:
-        return None
-    if isinstance(value, float) and isinstance(reparsed, float) and math.isnan(value) and math.isnan(reparsed):
-        return candidate
-    if reparsed == value and type(reparsed) is type(value):
-        return candidate
-    return None
+    if isinstance(value, str):
+        resolved = yaml.resolver.Resolver().resolve(yaml.nodes.ScalarNode, value, (True, False))
+        return _Tagged(Tag.INLINE_INPUT, value, quoted=resolved != _Emit.STR_TAG)
+    return _Tagged(Tag.INLINE_INPUT, yaml.safe_dump(value, default_flow_style=True).partition('\n')[0].strip())
 
 
 # --------------------------------------------------------------------------
@@ -221,9 +218,10 @@ def _represent_tagged(dumper: yaml.SafeDumper, data: _Tagged) -> yaml.nodes.Node
         case list():
             return dumper.represent_sequence(data.tag, data.value)
         case _:
-            text = str(data.value)
-            style = '' if _Emit.PLAIN_SAFE.match(text) else None
-            return dumper.represent_scalar(data.tag, text, style=style)
+            # Plain is asked for, and `_WicDumper` grants it where YAML's own
+            # analysis of the text allows; a quoted payload gets the quote
+            # style the text needs.
+            return dumper.represent_scalar(data.tag, str(data.value), style=None if data.quoted else '')
 
 
 class _WicDumper(yaml.SafeDumper):

@@ -3,10 +3,10 @@
 There is no discovery mechanism here — Sophios already has one. The config's
 `search_paths_wic` defines where workflows live, `plugins.get_yml_paths` finds
 them (excluding generated `*_inputs*` files), and CI provisions the config to
-reach `docs/tutorials`, `mm-workflows/examples`, and
+reach `docs/tutorials`, `docs/cookbook`, `mm-workflows/examples`, and
 `image-workflows/workflows` (`.github/update_sophios_config.py`). The corpus
-is exactly that reachable set — the same set §3 of the design promises still
-parses — so the corpus and the compiler can never disagree about what exists.
+is exactly that reachable set, so the corpus and the compiler can never
+disagree about what exists.
 
 Whatever the corpus repositories' `main` contains, those are the tests, for
 better or worse. Locally you test what your config reaches; CI reaches
@@ -25,6 +25,7 @@ from sophios.cli import get_args
 #: `pytest --collect-only` provision the environment it is meant to inspect.
 _IN_REPO_DIRS: Final = (
     Path(__file__).resolve().parents[2] / 'docs' / 'tutorials',
+    Path(__file__).resolve().parents[2] / 'docs' / 'cookbook',
     Path(__file__).resolve().parents[2] / 'examples',
 )
 
@@ -38,9 +39,10 @@ def _discover() -> tuple[Path, ...]:
     directly rather than provisioning the user's home to ask the config; CI
     always provisions a config first and remains the arbiter of full coverage.
     """
-    config_path = Path(get_args().config_file)
+    args = get_args()
+    config_path = args.config_file or io.default_config_file(Path(args.homedir))
     if config_path.exists():
-        config = io.get_config(config_path, config_path)  # read-only: the file exists
+        config = io.read_config_from_disk(config_path)
         return tuple(sorted(
             path
             for namespace in plugins.get_yml_paths(config).values()

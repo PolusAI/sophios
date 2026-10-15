@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final, Mapping, TypeAlias, final
+from typing import Any, Final, Mapping, NoReturn, TypeAlias, final
 
 import yaml
 
@@ -17,6 +17,7 @@ from ..utils_yaml import Key, Tag
 from .diagnostics import Diagnostics
 from .error_codes import SophiosErrorCode
 from .nodes import (
+    RECORD_FIELDS,
     Document,
     EdgeDef,
     EdgeRef,
@@ -29,9 +30,11 @@ from .nodes import (
     StepKey,
     UnresolvedName,
     WicSidecar,
+    cwl_record,
 )
 from .cwl import CWL_VERSIONS
 from .spans import SourceSpan
+from .support import STEP_INPUT_RECORD_KEYS
 from .values import Anything, AnyMapping, Flag, ListOf, OneOf, Record, Text, ValueShape
 
 #: A `graphviz: style:` value: one or more styles, comma separated.
@@ -52,15 +55,29 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     """
 
     #: CWL keys on a step that Sophios reads and acts upon; everything else
-    #: on a step is passthrough, by definition.
+    #: on a step is passthrough, by definition, bar `STEP_LISTED_KEYS`, whose
+    #: list form is read as a mapping.
     INTERPRETED_STEP_KEYS: Final = frozenset({'scatter', 'scatterMethod', 'when', 'run'})
+
+    #: CWL keys whose entries are named, written either as a mapping or as a
+    #: list. Each maps to the key that names a list entry: `id` for a port,
+    #: `class` for a requirement. The parser reads both spellings as the mapping.
+    LISTED_BY: Final[Mapping[str, str]] = MappingProxyType({
+        'inputs': 'id', 'outputs': 'id', 'requirements': 'class', 'hints': 'class'})
+
+    #: The ones a step carries; a step's ports are `in:` and `out:`.
+    STEP_LISTED_KEYS: Final = frozenset({'requirements', 'hints'})
+
+    #: The keys of a list entry that names no `id:` or `class:` until cwltool has
+    #: read the file it points at. A list holding one is left as written.
+    IMPORT_KEYS: Final = frozenset({'$import', '$include'})
 
     #: Every key a step carries in its own right. A key here cannot also be a
     #: step's name in a sequence entry, which is how `wic006` tells a
     #: forgotten `id:` from a step called `run`.
     STEP_KEYS: Final = frozenset({'id', 'in', 'out'}) | INTERPRETED_STEP_KEYS
 
-    #: Every value key a `wic:` block admits (§5), with the shape its value
+    #: Every value key a `wic:` block admits (language guide §7), with the shape its value
     #: takes. The block is Sophios's own metadata, not passthrough CWL, so it
     #: is closed: any other key is `wic033`, and a value of the wrong shape is
     #: `wic034`. The schema generator reads the same table.
@@ -92,7 +109,7 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     })
 
     #: What an authored `cwlVersion:` may say: a version the substrate
-    #: toolchain runs (§1). The compiler still writes its own; any other value
+    #: toolchain runs (language spec §1). The compiler still writes its own; any other value
     #: is `wic035`, and the schema generator states the same enum.
     CWL_VERSION_VALUE: Final = OneOf(CWL_VERSIONS)
 
@@ -109,6 +126,10 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     #: The same rule as a string, for consumers that need to state it rather
     #: than apply it — the exported JSON Schema, principally.
     WIC_STEP_KEY_PATTERN: Final = WIC_STEP_KEY.pattern
+
+    #: The other spelling: a bare step id, for a step whose id is unique.
+    WIC_STEP_ID: Final = re.compile(r'^[A-Za-z0-9_.-]+$')
+    WIC_STEP_ID_PATTERN: Final = WIC_STEP_ID.pattern
 
     # No SCALAR_TAGS table here: scalar resolution is delegated to PyYAML's
     # SafeConstructor (see _resolved_scalar) to avoid diverging from it.
@@ -152,6 +173,120 @@ def _every_node(root: yaml.nodes.Node) -> list[yaml.nodes.Node]:
     return order
 
 
+#: What the loader's scalar constructors raise, with no mark, on a value they
+#: cannot read: `!!int abc`, `!!bool x`, an empty `!!float`, `2020-13-45`.
+_UNREADABLE: Final = (ValueError, KeyError, AttributeError, IndexError)
+
+_MERGE_TAG: Final = 'tag:yaml.org,2002:merge'
+
+
+class _Unbuildable(yaml.constructor.ConstructorError):
+    """A node the loader cannot build, already worded for `wic009`."""
+
+
+class _Loader(yaml.SafeLoader):  # pylint: disable=too-many-ancestors  # SafeLoader's own depth
+    """`yaml.SafeLoader`, run over an already composed tree.
+
+    The constructors are YAML's own, so whatever YAML builds or rejects, this
+    does too. A `!` tag builds nothing, since the parser reads each one
+    itself; the content of a tagged collection is still YAML, and is built.
+    A failure YAML raises with no mark is raised at the node that failed.
+    """
+
+    yaml_constructors = dict(yaml.SafeLoader.yaml_constructors)
+    yaml_multi_constructors = dict(yaml.SafeLoader.yaml_multi_constructors)
+
+    def construct_object(self, node: yaml.nodes.Node, deep: bool = False) -> Any:
+        try:
+            return super().construct_object(node, deep)
+        except _UNREADABLE as exc:
+            raise _Unbuildable(None, None, f'YAML cannot read this value as {_tag_name(node.tag)}',
+                               node.start_mark) from exc
+
+    def construct_undefined(self, node: yaml.nodes.Node) -> NoReturn:
+        problem = ('`!!merge` belongs on a `<<` key; YAML cannot construct it as a value'
+                   if node.tag == _MERGE_TAG else f'unknown tag {node.tag!r}; YAML cannot construct it')
+        raise _Unbuildable(None, None, problem, node.start_mark)
+
+    def construct_sophios_tag(self, _suffix: str, node: yaml.nodes.Node) -> None:
+        """Build the content of a `!` tagged collection as YAML, and nothing for the tag."""
+        match node:
+            case yaml.nodes.MappingNode():
+                self.construct_mapping(node, deep=True)
+            case yaml.nodes.SequenceNode():
+                self.construct_sequence(node, deep=True)
+
+
+_Loader.yaml_constructors[None] = _Loader.construct_undefined  # what a tag with no constructor gets
+_Loader.add_multi_constructor('!', _Loader.construct_sophios_tag)
+
+
+def _tag_name(tag: str) -> str:
+    """A core tag as its short name (`timestamp`), any other as written."""
+    prefix = 'tag:yaml.org,2002:'
+    return tag.removeprefix(prefix) if tag.startswith(prefix) and len(tag) > len(prefix) else repr(tag)
+
+
+def _load(root: yaml.nodes.Node, nodes: list[yaml.nodes.Node], file: str) -> tuple[str, SourceSpan] | None:
+    """Build the composed tree with the loader, and return the first thing it cannot build.
+
+    Only the first failure is known, since the loader stops there. Building a
+    mapping applies its `<<` merges to the tree in place, and the tree is left
+    so, for the parser to read the entries the loader reads; a mapping the
+    loader did not reach before it stopped is merged the same way after.
+    """
+    merging = [(node, sum(key.tag != _MERGE_TAG for key, _ in node.value)) for node in nodes
+               if isinstance(node, yaml.nodes.MappingNode) and any(key.tag == _MERGE_TAG for key, _ in node.value)]
+    loader = _Loader('')
+    failure = None
+    try:
+        loader.construct_document(root)
+    except yaml.MarkedYAMLError as exc:
+        problem = exc.problem if isinstance(exc, _Unbuildable) else f'YAML cannot load this: {exc.problem}'
+        failure = str(problem), _yaml_error_span(file, exc, SourceSpan.of(file, root))
+    for node, written in merging:
+        try:
+            loader.flatten_mapping(node)  # nothing left to merge, unless the loader stopped first
+        except yaml.YAMLError:
+            continue  # a merge the loader cannot apply; the mapping is read as it is left
+        _drop_overridden(node, written)
+    return failure
+
+
+def _drop_overridden(node: yaml.nodes.MappingNode, written: int) -> None:
+    """Keep each key once, in the place and with the entry the loader's dict gives it.
+
+    The loader has put the merged entries first and the mapping's own
+    `written` entries after them. A dict keeps a key where it first comes and
+    takes its last value, so a merged key stays in its merged place and holds
+    the mapping's own entry when the mapping overrides it. A key the parser
+    then finds twice is one the author wrote twice.
+    """
+    merged, own = node.value[:len(node.value) - written], node.value[len(node.value) - written:]
+    first_own: dict[str, int] = {}
+    for index, (key, _) in enumerate(own):
+        first_own.setdefault(str(key.value), index)
+    winners = {str(key.value): (key, value) for key, value in merged}  # the last wins, first place kept
+    moved = {first_own[name] for name in winners if name in first_own}
+    node.value = ([own[first_own[name]] if name in first_own else entry for name, entry in winners.items()]
+                  + [entry for index, entry in enumerate(own) if index not in moved])
+
+
+def _report_unbuildable(failure: tuple[str, SourceSpan] | None, diags: Diagnostics) -> None:
+    """Report what the loader cannot build, unless the parser has reported an error at that place.
+
+    Both can trip over one node -- a collection used as a key or as a name, a
+    misplaced `!&` -- and one mistake earns one diagnostic. Either way the
+    document carries an error, so the parser never accepts what the loader rejects.
+    """
+    if failure is None:
+        return
+    problem, span = failure
+    if not any(d.span is not None and (d.span.start_line, d.span.start_column) == (span.start_line, span.start_column)
+               for d in diags):
+        diags.error(SophiosErrorCode.UNKNOWN_TAG, problem, span)
+
+
 def _report_unknown_tag(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> None:
     """Report a tag the language does not own, wherever it appears.
 
@@ -190,8 +325,10 @@ def parse(text: str, filename: str = '<string>') -> ParseResult:
     if root is None:  # An empty document is well-formed and carries nothing.
         return ParseResult(Document(span=whole), diagnostics)
 
-    for node in _every_node(root):
+    nodes = _every_node(root)
+    for node in nodes:
         _report_unknown_tag(node, filename, diagnostics)
+    unbuildable = _load(root, nodes, filename)
 
     if not isinstance(root, yaml.nodes.MappingNode):
         diagnostics.error(
@@ -199,9 +336,12 @@ def parse(text: str, filename: str = '<string>') -> ParseResult:
             f'a Sophios document must be a mapping, found {_kind(root)}',
             SourceSpan.of(filename, root),
         )
+        if unbuildable is not None:  # the root's kind is no reason to keep quiet about its content
+            diagnostics.error(SophiosErrorCode.UNKNOWN_TAG, *unbuildable)
         return ParseResult(None, _in_reading_order(diagnostics))
 
     document = _document(root, filename, diagnostics)
+    _report_unbuildable(unbuildable, diagnostics)
     return ParseResult(document, _in_reading_order(diagnostics))
 
 
@@ -231,6 +371,46 @@ def _unique_entries(node: yaml.nodes.MappingNode, file: str, diags: Diagnostics,
     return kept
 
 
+def _listed(key: str, node: yaml.nodes.Node, file: str, diags: Diagnostics) -> OpaqueCwl:
+    """Materialise `inputs`, `outputs`, `requirements` or `hints`, reading CWL's list form as its mapping form.
+
+    CWL writes each as a mapping or as a list of entries named by `id:` (ports)
+    or `class:` (requirements). The compiler acts on the mapping, so the list is
+    lifted here. A port's `id:` may be written as a fragment (`#name`); the key
+    is the name after the `#`. An entry with no name, a fragment with nothing
+    after the `#`, or a name already taken cannot be a mapping entry and is
+    reported. A list holding an `$import` or `$include`
+    entry cannot be keyed, since that entry is named by a file only cwltool
+    reads, so it is returned as written for cwltool to resolve.
+    """
+    value = _opaque(node, file, diags)
+    if not (isinstance(node, yaml.nodes.SequenceNode) and isinstance(value, list)):
+        return value
+    if any(isinstance(entry, dict) and entry.keys() & Grammar.IMPORT_KEYS for entry in value):
+        return value
+    named_by = Grammar.LISTED_BY[key]
+    mapping: dict[str, OpaqueCwl] = {}
+    for entry_node, entry in zip(node.value, value, strict=True):
+        span = SourceSpan.of(file, entry_node)
+        name = entry.get(named_by) if isinstance(entry, dict) else None
+        if not isinstance(entry, dict) or not isinstance(name, str):
+            diags.error(SophiosErrorCode.EXPECTED_MAPPING,
+                        f'a list-form {key}: entry must be a mapping with a string {named_by}:', span)
+            continue
+        if named_by == 'id':
+            written, name = name, name.rsplit('#', 1)[-1]
+            if not name:
+                diags.error(SophiosErrorCode.EXPECTED_MAPPING,
+                            f'a list-form {key}: entry id: {written!r} names no port: '
+                            'the name is the part after the last #, and it must not be empty', span)
+                continue
+        if name in mapping:
+            diags.error(SophiosErrorCode.DUPLICATE_KEY, f'{key}: entry {name!r} is defined more than once', span)
+            continue
+        mapping[name] = {field: item for field, item in entry.items() if field != named_by}
+    return mapping
+
+
 def _document(root: yaml.nodes.MappingNode, file: str, diags: Diagnostics) -> Document:
     """Build a Document from the root mapping node."""
     steps: tuple[Step, ...] = ()
@@ -249,6 +429,8 @@ def _document(root: yaml.nodes.MappingNode, file: str, diags: Diagnostics) -> Do
                 for message, at in Grammar.CWL_VERSION_VALUE.problems(version, value_node, key):
                     diags.error(SophiosErrorCode.UNSUPPORTED_CWL_VERSION, message, SourceSpan.of(file, at))
                 passthrough.append((key, version))
+            case key if key in Grammar.LISTED_BY:
+                passthrough.append((key, _listed(key, value_node, file, diags)))
             case _:
                 passthrough.append((key, _opaque(value_node, file, diags)))
 
@@ -284,7 +466,7 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
     A single-key mapping (`- touch:`) is not a second sequence form: CWL lifts
     a key into `id` only when the field's value is a mapping, so in a
     sequence the key is never lifted and the step has no identity. Reported
-    as `wic006` (reference §3.1).
+    as `wic006` (language guide §2.1).
     """
     span = SourceSpan.of(file, node)
     if not isinstance(node, yaml.nodes.MappingNode):
@@ -316,7 +498,7 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
         diags.error(
             SophiosErrorCode.MISSING_STEP_ID,
             f'a step in a sequence carries its name in an id: key — {first}; {second}. '
-            f'Keying the whole steps: block by name is the other form (§3.1)',
+            f'Keying the whole steps: block by name is the other form (language guide §2.1)',
             span,
         )
         # The reading decided above also decides which node holds the body:
@@ -404,6 +586,8 @@ def _step_body(
             outputs = _outputs(value_node, file, diags)
         elif key in Grammar.INTERPRETED_STEP_KEYS:
             interpreted.append((key, _opaque(value_node, file, diags)))
+        elif key in Grammar.STEP_LISTED_KEYS:
+            passthrough.append((key, _listed(key, value_node, file, diags)))
         else:
             passthrough.append((key, _opaque(value_node, file, diags)))
 
@@ -451,7 +635,7 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
     and desugared (`{wic_inline_input: empty.txt}`) — that must produce the
     same node. An untagged scalar is an `UnresolvedName`, resolved later
     against workflow inputs. `!&`/`wic_anchor` is checked separately: it is a
-    known tag, just in the wrong position (§4.1.1), so it is diagnosed as
+    known tag, just in the wrong position (language guide §3.6), so it is diagnosed as
     `wic019` rather than `wic009 UNKNOWN_TAG`.
     """
     span = SourceSpan.of(file, node)
@@ -462,7 +646,7 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
         diags.error(
             SophiosErrorCode.MISPLACED_EDGE_DEF,
             "'!&' defines an edge, and an edge is defined where its value comes into being: "
-            "a step's out: entry (§4.1.1). Use '!*' to consume an edge",
+            "a step's out: entry (language guide §3.6). Use '!*' to consume an edge",
             span,
         )
         return UnresolvedName(_recovered_edge_name(node), span)
@@ -477,8 +661,17 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
 
     if isinstance(node, yaml.nodes.ScalarNode):
         return UnresolvedName(node.value, span)
+    if isinstance(node, yaml.nodes.MappingNode):
+        keys = {str(key.value) for key, _ in node.value if isinstance(key, yaml.nodes.ScalarNode)}
+        if keys and keys <= STEP_INPUT_RECORD_KEYS:
+            diags.error(
+                SophiosErrorCode.STEP_INPUT_RECORD,
+                'this mapping spells a CWL step input (' + ', '.join(sorted(keys)) + '), which '
+                'Sophios does not read untagged; write `!cwl {source: ..., default: ...}` for a CWL '
+                'step input, `!ii` for a literal of that shape',
+                span)
     # A bare mapping or sequence cannot name a workflow input, so it is only
-    # meaningful as a literal.
+    # meaningful as a literal; a step-input record is kept as one for recovery.
     return InlineLiteral(_opaque(node, file, diags), span)
 
 
@@ -494,12 +687,27 @@ def _recovered_edge_name(node: yaml.nodes.Node) -> str:
 
 
 def _is_edge_def(node: yaml.nodes.Node) -> bool:
-    """Whether `node` spells an edge definition, in either surface form (§6.1)."""
+    """Whether `node` spells an edge definition, in either surface form (language spec §2)."""
     if node.tag == Tag.ANCHOR:
         return True
     return (isinstance(node, yaml.nodes.MappingNode)
             and len(node.value) == 1
             and getattr(node.value[0][0], 'value', None) == Key.ANCHOR)
+
+
+def _is_desugared_record(node: yaml.nodes.Node) -> bool:
+    """Whether `node` spells a step-input record as `{wic_raw_cwl: {...}}`."""
+    return (isinstance(node, yaml.nodes.MappingNode)
+            and len(node.value) == 1
+            and getattr(node.value[0][0], 'value', None) == Key.RAW_CWL
+            and isinstance(node.value[0][1], yaml.nodes.MappingNode))
+
+
+def _record_body(node: yaml.nodes.Node) -> yaml.nodes.MappingNode | None:
+    """The body of a step-input record, `!cwl {...}` or `{wic_raw_cwl: {...}}`, or None for anything else."""
+    if node.tag == Tag.RAW_CWL and isinstance(node, yaml.nodes.MappingNode):
+        return node
+    return node.value[0][1] if _is_desugared_record(node) else None
 
 
 def _desugared_form(
@@ -530,7 +738,7 @@ def _report_misspelled_construct(key: str, key_node: yaml.nodes.Node,
     """Report a single-key mapping that reaches for a construct and misses.
 
     A desugared key shares its namespace with passthrough CWL, which is open
-    by definition (§1), so a misspelled construct like `wic_inline_inpt`
+    by definition (language spec §1), so a misspelled construct like `wic_inline_inpt`
     would otherwise vanish silently into the emitted document.
     """
     if not key.startswith(CONSTRUCT_PREFIX):
@@ -542,21 +750,52 @@ def _report_misspelled_construct(key: str, key_node: yaml.nodes.Node,
         SourceSpan.of(file, key_node))
 
 
+def _raw_cwl(node: yaml.nodes.Node, file: str, diags: Diagnostics, span: SourceSpan,
+             _path: frozenset[int] = frozenset(), _spent: list[int] | None = None) -> InputValue:
+    """`!cwl name` is a raw reference; `!cwl {source: ..., ...}` is a step-input record.
+
+    The record's entries are materialised one by one: materialising the tagged
+    node itself would route it back here. They are materialised on the path
+    that reached the record, so a record holding itself is an alias cycle.
+    """
+    if not isinstance(node, yaml.nodes.MappingNode):
+        return RawCwlRef(_name_text(node, file, diags), span)
+    path, spent = _path | {id(node)}, _spent if _spent is not None else [0]
+    body = {_key_text(key, file, diags): _opaque(value, file, diags, path, spent) for key, value in node.value}
+    record, bad = cwl_record(body, span)
+    for key in bad:
+        if key == 'source':
+            message = '!cwl record: `source` names edges (!*) or workflow inputs, one or a list'
+        elif key in RECORD_FIELDS:
+            message = (f'!cwl record: {key!r} holds a Sophios construct; every field but source is CWL, '
+                       'written out as is')
+        else:
+            message = (f'!cwl record: {key!r} is not a WorkflowStepInput field Sophios writes; the fields '
+                       f'are source, {", ".join(sorted(RECORD_FIELDS))}')
+        diags.error(SophiosErrorCode.STEP_INPUT_RECORD, message, span)
+    if not bad and not record.sources and not {'default', 'valueFrom'} & dict(record.fields).keys():
+        diags.error(SophiosErrorCode.STEP_INPUT_RECORD,
+                    '!cwl record: with no source, default or valueFrom the step input receives no value; '
+                    'leave it unbound for Sophios to connect, or give it a source or a default',
+                    span)
+    return record
+
+
 #: One builder: a YAML node and its context in, one input node out.
 Builder: TypeAlias = Callable[[yaml.nodes.Node, str, Diagnostics, SourceSpan], InputValue]
 
 
 @final
 class Forms:  # pylint: disable=too-few-public-methods  # a namespace, not a type
-    """Each construct's two spellings (§6.1), and what each builds."""
+    """Each construct's two spellings (language spec §2), and what each builds."""
 
     #: Tagged spellings — what people write. `!&` (`Tag.ANCHOR`) is
     #: deliberately absent: it is legal only on an `out:` entry, checked via
-    #: `_out_edge_def` before this table is consulted (§4.1.1).
+    #: `_out_edge_def` before this table is consulted (language guide §3.6).
     TAGGED: Final[Mapping[str, Builder]] = MappingProxyType({
         Tag.INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_literal(n, f, d), s, text=_literal_text(n)),
         Tag.ALIAS: lambda n, f, d, s: EdgeRef(_name_text(n, f, d), s),
-        Tag.RAW_CWL: lambda n, f, d, s: RawCwlRef(_name_text(n, f, d), s),
+        Tag.RAW_CWL: _raw_cwl,
     })
 
     #: Desugared spellings — what tooling emits. `wic_anchor` (`Key.ANCHOR`)
@@ -564,7 +803,7 @@ class Forms:  # pylint: disable=too-few-public-methods  # a namespace, not a typ
     DESUGARED: Final[Mapping[str, Builder]] = MappingProxyType({
         Key.INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_opaque(n, f, d), s),
         Key.ALIAS: lambda n, f, d, s: EdgeRef(_name_text(n, f, d), s),
-        Key.RAW_CWL: lambda n, f, d, s: RawCwlRef(_name_text(n, f, d), s),
+        Key.RAW_CWL: _raw_cwl,
     })
 
     #: The desugared construct keys, derived so a construct added above
@@ -612,7 +851,7 @@ def _output_binding(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Out
 
 
 def _sidecar_out_entry(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> OpaqueCwl:
-    """Parse a `wic:` sidecar step's `out:` entry exactly as a step's own `out:` (§4.1.1).
+    """Parse a `wic:` sidecar step's `out:` entry exactly as a step's own `out:` (language guide §3.6).
 
     Re-expressed as `OpaqueCwl` passthrough, in the desugared shape
     `render.py` emits for a stored edge def, since a bare `EdgeDef` is not a
@@ -630,7 +869,7 @@ SIDECAR_WRAPPER_KEY: Final = 'wic'
 
 
 def _child_sidecar_node(node: yaml.nodes.Node) -> yaml.nodes.Node:
-    """Unwrap the `wic:` key a nested sidecar step carries on the surface (§5).
+    """Unwrap the `wic:` key a nested sidecar step carries on the surface (language guide §7).
 
     Also handles a merged sibling shape — `{wic: {namespace: ...}, out: [...]}`
     — folding siblings into the unwrapped mapping so nothing nested under the
@@ -691,7 +930,7 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
     """Parse a `wic:` block, normalising its `"(1, name)"` step keys.
 
     A key outside ``values`` and `steps:` is reported and dropped, since the
-    block is closed (§5); a value is checked against its declared shape.
+    block is closed (language guide §7); a value is checked against its declared shape.
     """
     span = SourceSpan.of(file, node)
     if id(node) in _path:
@@ -731,11 +970,11 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
                             SourceSpan.of(file, sub_key))
                 continue
             seen_steps.add(key_text)
-            parsed = _step_key(key_text)
+            parsed = step_key(key_text)
             if parsed is None:
                 diags.error(
                     SophiosErrorCode.MALFORMED_WIC_STEP_KEY,
-                    f'wic: step key {key_text!r} must have the form "(index, name)"',
+                    f'wic: step key {key_text!r} must have the form "(index, name)" or be a step id',
                     SourceSpan.of(file, sub_key),
                 )
                 continue
@@ -780,12 +1019,14 @@ def _sidecar_value(key: str, node: yaml.nodes.Node, shape: ValueShape,
     return value
 
 
-def _step_key(text: str) -> StepKey | None:
-    """Normalise a `"(1, name)"` sidecar key, or None if it is malformed."""
+def step_key(text: str) -> StepKey | None:
+    """Normalise a `"(1, name)"` or bare `"name"` sidecar key, or None if it is malformed."""
     match = Grammar.WIC_STEP_KEY.match(text)
-    if match is None:
-        return None
-    return StepKey(int(match.group(1)), match.group(2))
+    if match is not None:
+        return StepKey(int(match.group(1)), match.group(2))
+    if Grammar.WIC_STEP_ID.match(text):
+        return StepKey(None, text)
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -794,25 +1035,40 @@ def _step_key(text: str) -> StepKey | None:
 
 
 def _literal_text(node: yaml.nodes.Node) -> str | None:
-    """Return the source spelling of a tagged scalar literal, or None for collections."""
-    return str(node.value) if isinstance(node, yaml.nodes.ScalarNode) else None
+    """Return the source spelling of a plain, one-line tagged scalar literal, or None.
+
+    That is the only scalar whose spelling says more than its value: `!ii 0777`
+    is the int 511, and would otherwise be written back as `!ii 511`. A quoted
+    or block scalar is its text, which the writer spells from the value; a
+    plain scalar spanning lines has been folded, so its text is no spelling.
+    """
+    if not isinstance(node, yaml.nodes.ScalarNode) or node.style is not None or '\n' in node.value:
+        return None
+    return str(node.value)
 
 
 def _literal(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Any:
     """Materialise an `!ii` payload, which may be a scalar, mapping, or sequence.
 
     A custom tag suppresses YAML's own type resolution, so `!ii 5` arrives as
-    the text "5"; re-resolving it here must reproduce `inlineinput_constructor`
-    exactly.
+    the text "5". A scalar is read as YAML reads the same scalar untagged
+    (language spec §2): a plain one by what it says, so `!ii 5` is the int 5,
+    and a plain value YAML cannot read (`!ii 2020-13-45`) is reported as the
+    untagged one is; a quoted or block one is its text, so `!ii '5'` is "5".
     """
     if not isinstance(node, yaml.nodes.ScalarNode):
         return _opaque(node, file, diags, _wrap_self=False)
-    if node.value == '':
-        return ''
+    if node.style is not None or node.value == '':
+        return node.value
     try:
         return yaml.safe_load(node.value)
     except yaml.YAMLError:
         # Not a primitive; the literal text is the honest interpretation.
+        return node.value
+    except _UNREADABLE:
+        read = yaml.compose(node.value, Loader=yaml.SafeLoader)
+        diags.error(SophiosErrorCode.UNKNOWN_TAG, f'YAML cannot read this value as {_tag_name(read.tag)}',
+                    SourceSpan.of(file, node))
         return node.value
 
 
@@ -852,11 +1108,15 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
         return _input_value(node, file, diags)
 
     if node.tag in (Tag.ANCHOR, Tag.ALIAS, Tag.RAW_CWL) or (
-            node.tag == Tag.INLINE_INPUT and isinstance(node, yaml.nodes.ScalarNode)):
+            node.tag == Tag.INLINE_INPUT and isinstance(node, yaml.nodes.ScalarNode)) or _is_desugared_record(node):
         # Name-carrying tags route through the construct builder regardless
         # of node kind, so the tag is never silently stripped. Collection
-        # `!ii` is handled below instead, on the materialised content.
-        return _input_value(node, file, diags)
+        # `!ii` is handled below instead, on the materialised content. A
+        # record spelled `{wic_raw_cwl: {...}}` is `!cwl {...}` (language spec §2), its
+        # body checked the same wherever it is written, on this path.
+        body = _record_body(node)
+        return (_input_value(node, file, diags) if body is None
+                else _raw_cwl(body, file, diags, SourceSpan.of(file, node), path, spent))
 
     content: OpaqueCwl
     match node:
@@ -879,16 +1139,16 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
 
 
 def _resolved_scalar(node: yaml.nodes.ScalarNode) -> Any:
-    """Convert a resolved scalar node to its Python value, exactly as the loader would.
+    """Convert a resolved scalar node to its Python value, exactly as `yaml.SafeLoader` would.
 
     Delegated to PyYAML's own `SafeConstructor` rather than re-implemented,
-    to avoid diverging from the loader on octals, hex, timestamps, `.inf`,
+    to avoid diverging from YAML on octals, hex, timestamps, `.inf`,
     and sexagesimals. A fresh constructor per call, since the class carries
     per-document state and this layer is shared across threads.
     """
     try:
         return yaml.constructor.SafeConstructor().construct_object(node)
-    except yaml.constructor.ConstructorError:
+    except (yaml.YAMLError, *_UNREADABLE):  # reported by `_load`
         return node.value
 
 
@@ -910,13 +1170,19 @@ def _name_text(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> str:
 def _key_text(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> str:
     """Return a mapping key as text.
 
-    YAML admits collection keys (`? [a, b]`); Sophios does not, since every
-    key in the language is a name. A non-scalar key is reported and
-    stringified for recovery.
+    YAML admits collection keys (`? [a, b]`) and tagged ones (`!ii a: b`);
+    Sophios does not, since every key in the language is a name. A non-scalar
+    key, or one carrying a Sophios tag, is reported and stringified for
+    recovery.
     """
     if not isinstance(node, yaml.nodes.ScalarNode):
         diags.error(SophiosErrorCode.EXPECTED_SCALAR,
                     f'mapping keys must be scalars, found {_kind(node)}',
+                    SourceSpan.of(file, node))
+    elif node.tag in Tag.ALL:
+        diags.error(SophiosErrorCode.EXPECTED_SCALAR,
+                    f'a mapping key is a name and takes no tag; {node.tag} belongs on the value, '
+                    f'as in `{node.value}: {node.tag} <value>`',
                     SourceSpan.of(file, node))
     return str(node.value)
 

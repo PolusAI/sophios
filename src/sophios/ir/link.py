@@ -2,7 +2,7 @@
 from dataclasses import dataclass, replace
 from typing import Any
 
-from ..lang import SophiosErrorCode
+from ..lang import CwlRecord, SophiosErrorCode
 from ..lang.compatibility import TypeRelation, reference_relation
 from ..lang.diagnostics import Diagnostics, Locator
 from .declarations import boundary_declaration, input_rank, layered, output_rank
@@ -15,6 +15,7 @@ from .types import (
     Port,
     WorkflowPort,
     PortId,
+    SourceList,
     StepId,
     StepNode,
     WorkflowGraph,
@@ -38,10 +39,11 @@ def link(graph: WorkflowGraph) -> Linked:
     """Compose ``graph`` and discharge every obligation it can prove."""
     diagnostics = Diagnostics()
     attached = _attach_children(graph)
-    normalized = _normalize_explicit_edges(attached, attached, diagnostics)
-    attached = _attach_children(normalized)
+    attached = _attach_children(_normalize_explicit_edges(attached, attached, diagnostics))
     _check_workflow_inputs(attached, diagnostics)
     definitions = _definitions(attached)
+    unjudged = _merging_sinks(attached)
+    merges = _merges_by_sink(attached)
     edges: list[Edge] = []
     discharged: list[PortId] = []
 
@@ -55,7 +57,7 @@ def link(graph: WorkflowGraph) -> Linked:
             )
             continue
         if _position(attached, source.step) >= _position(attached, obligation.sink.step):
-            # Reference §4.1.2: a call does not exempt a document from resolving
+            # Language guide §4: a call does not exempt a document from resolving
             # against definitions seen so far, or splitting it would legalize the error.
             diagnostics.error(
                 SophiosErrorCode.UNDEFINED_EDGE,
@@ -66,8 +68,10 @@ def link(graph: WorkflowGraph) -> Linked:
             continue
         for sink in _concrete_input_sinks(attached, obligation.sink):
             edge = Edge(source, sink, obligation.span)
-            if _relation(attached, edge) is TypeRelation.DISJOINT:
-                produced, consumed = _compared_types(attached, edge)
+            record = merges.get(obligation.sink)
+            if (obligation.sink not in unjudged or record is not None) \
+                    and _relation(attached, edge, record) is TypeRelation.DISJOINT:
+                produced, consumed = _compared_types(attached, edge, record)
                 diagnostics.error(
                     SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
                     f"edge '{obligation.name}' is provably disjoint: "
@@ -78,10 +82,7 @@ def link(graph: WorkflowGraph) -> Linked:
             edges.append(edge)
         discharged.append(obligation.sink)
 
-    for edge in _workflow_call_edges(attached):
-        if _reject_if_disjoint(attached, edge, diagnostics):
-            continue
-        edges.append(edge)
+    edges.extend(_judged_call_edges(attached, unjudged, diagnostics))
     unique_edges = tuple(dict.fromkeys(edges))
     linked = _place_edges(attached, unique_edges, tuple(discharged))
     linked = _expose_cross_scope_inputs(linked, unique_edges)
@@ -96,16 +97,15 @@ def _normalize_explicit_edges(graph: WorkflowGraph, universe: WorkflowGraph,
     for step in graph.steps:
         bindings = []
         for binding in step.bindings:
+            record = _merge_without_value_from(binding.value)
+            judged = record is not None or not _merges(binding.value)
             resolution = binding.resolution
             if isinstance(resolution, Edge):
-                resolution = replace(
-                    resolution,
-                    source=_concrete_output(universe, resolution.source),
-                )
-                # `universe` resolves the alias to its concrete producer, but the
-                # judgment stays scoped to `graph` so ancestor scatter layers
-                # outside this local edge's scope are not double-counted.
-                _reject_if_disjoint(graph, resolution, diagnostics)
+                resolution = _normalized(resolution, graph, universe, diagnostics, judged=judged, record=record)
+            elif isinstance(resolution, SourceList):
+                resolution = replace(resolution, items=tuple(
+                    _normalized(item, graph, universe, diagnostics, judged=judged, record=record)
+                    if isinstance(item, Edge) else item for item in resolution.items))
             bindings.append(replace(binding, resolution=resolution))
         steps.append(replace(step, bindings=tuple(bindings)))
     children = tuple(_normalize_explicit_edges(child, universe, diagnostics)
@@ -113,13 +113,58 @@ def _normalize_explicit_edges(graph: WorkflowGraph, universe: WorkflowGraph,
     return replace(graph, steps=tuple(steps), children=children)
 
 
+def _normalized(edge: Edge, graph: WorkflowGraph, universe: WorkflowGraph,
+                diagnostics: Diagnostics, *, judged: bool, record: CwlRecord | None) -> Edge:
+    """`edge` from its concrete producer, judged unless its sink is rewritten by a `valueFrom`;
+    a `record` that merges or picks is judged by what it delivers."""
+    edge = replace(edge, source=_concrete_output(universe, edge.source))
+    # `universe` resolves the alias to its concrete producer, but the
+    # judgment stays scoped to `graph` so ancestor scatter layers
+    # outside this local edge's scope are not double-counted.
+    if judged:
+        _reject_if_disjoint(graph, edge, diagnostics, record)
+    return edge
+
+
+def _merges(value: object) -> bool:
+    """Whether a binding is a record whose input is not its one source's value as it is.
+
+    CWL types such an input from the merge, pick or `valueFrom` that makes it,
+    so no source of it is judged against the input's own type.
+    """
+    return isinstance(value, CwlRecord) and not value.delivers_its_source
+
+
+def _merge_without_value_from(value: object) -> CwlRecord | None:
+    """`value` when it is a record that merges or picks and leaves the result as it is:
+    what it delivers has a type of its own, so its sources are judged by that."""
+    if isinstance(value, CwlRecord) and _merges(value) and 'valueFrom' not in dict(value.fields):
+        return value
+    return None
+
+
+def _merges_by_sink(graph: WorkflowGraph) -> dict[PortId, CwlRecord]:
+    """Every input in `graph`'s tree bound by a record `_merge_without_value_from` names."""
+    return {binding.sink: record for step in graph.all_steps for binding in step.bindings
+            if (record := _merge_without_value_from(binding.value)) is not None}
+
+
+def _merging_sinks(graph: WorkflowGraph) -> frozenset[PortId]:
+    """Every input in `graph`'s tree bound by a record that `_merges`."""
+    return frozenset(binding.sink for step in graph.all_steps for binding in step.bindings
+                     if _merges(binding.value))
+
+
 def _check_workflow_inputs(graph: WorkflowGraph, diagnostics: Diagnostics) -> None:
     """Apply the same conservative relation to typed workflow-input references."""
     declarations = {port.name: port.declaration.type.canonical
                     for port in graph.workflow_inputs}
+    unjudged = _merging_sinks(graph)
     for name, sinks in graph.input_mapping:
         source_type = declarations.get(name)
         for sink in sinks:
+            if sink in unjudged:
+                continue
             sink_type = _effective_type(graph, sink, producing=False)
             relation = reference_relation(
                 source_type, sink_type, lang_version=graph.lang_version)
@@ -135,12 +180,12 @@ def _check_workflow_inputs(graph: WorkflowGraph, diagnostics: Diagnostics) -> No
         _check_workflow_inputs(child, diagnostics)
 
 
-def _reject_if_disjoint(graph: WorkflowGraph, edge: Edge,
-                        diagnostics: Diagnostics) -> bool:
+def _reject_if_disjoint(graph: WorkflowGraph, edge: Edge, diagnostics: Diagnostics,
+                        record: CwlRecord | None = None) -> bool:
     """Diagnose one edge only when the language relation proves rejection."""
-    if _relation(graph, edge) is not TypeRelation.DISJOINT:
+    if _relation(graph, edge, record) is not TypeRelation.DISJOINT:
         return False
-    produced, consumed = _compared_types(graph, edge)
+    produced, consumed = _compared_types(graph, edge, record)
     diagnostics.error(
         SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
         f'edge is provably disjoint: {produced!r} cannot feed {consumed!r}.',
@@ -226,38 +271,79 @@ def _concrete_input_sinks(graph: WorkflowGraph, port: PortId) -> tuple[PortId, .
     return tuple(mapped) if mapped else (port,)
 
 
-def _workflow_call_edges(graph: WorkflowGraph) -> tuple[Edge, ...]:
-    found: list[Edge] = []
+def _judged_call_edges(graph: WorkflowGraph, unjudged: frozenset[PortId],
+                       diagnostics: Diagnostics) -> tuple[Edge, ...]:
+    """Each call edge but those proved disjoint; one into a merging record is not judged."""
+    return tuple(edge for sink, edge in _workflow_call_edges(graph)
+                 if sink in unjudged or not _reject_if_disjoint(graph, edge, diagnostics))
+
+
+def _workflow_call_edges(graph: WorkflowGraph) -> tuple[tuple[PortId, Edge], ...]:
+    """Each edge a call step's binding carries on into its child, beside the call's own input."""
+    found: list[tuple[PortId, Edge]] = []
     for step in graph.steps:
         child = step.run.child if step.run is not None else None
         if child is None:
             continue
         child_inputs = dict(child.input_mapping)
         for binding in step.bindings:
-            if not isinstance(binding.resolution, Edge):
-                continue
-            for sink in child_inputs.get(binding.sink.port, ()):
-                found.append(Edge(binding.resolution.source, sink, binding.resolution.span))
+            resolution = binding.resolution
+            items = resolution.items if isinstance(resolution, SourceList) else (resolution,)
+            for item in items:
+                if not isinstance(item, Edge):
+                    continue
+                for sink in child_inputs.get(binding.sink.port, ()):
+                    found.append((binding.sink, Edge(item.source, sink, item.span)))
     for child in graph.children:
         found.extend(_workflow_call_edges(child))
     return tuple(found)
 
 
-def _compared_types(graph: WorkflowGraph, edge: Edge) -> tuple[Any, Any]:
-    """The two types `_relation` judges, in the scope it judges them in."""
+def _compared_types(graph: WorkflowGraph, edge: Edge,
+                    record: CwlRecord | None = None) -> tuple[Any, Any]:
+    """The two types `_relation` judges, in the scope it judges them in. Where `record` merges
+    or picks, the first is what it makes of the edge's source."""
     scope = _graph_at(graph, _owner_namespace(edge))
-    return (_effective_type(scope, edge.source, producing=True),
+    produced = _effective_type(scope, edge.source, producing=True)
+    return (produced if record is None else _delivered(produced, record),
             _effective_type(scope, edge.sink, producing=False))
 
 
-def _relation(graph: WorkflowGraph, edge: Edge) -> TypeRelation:
+def _delivered(produced: Any, record: CwlRecord) -> Any:
+    """The type `record` delivers from a source of type `produced`: the list CWL's `linkMerge`
+    makes of its sources (a merged array stays flat; one source with no `linkMerge` is not
+    wrapped) or, for a `pickValue` that picks one value, one element of it. `Any` where a
+    pick has no array to take an element of, so nothing is proved against it."""
+    fields = dict(record.fields)
+    link_merge = fields.get('linkMerge')
+    match produced:
+        case {'type': 'array'}:
+            flat = True
+        case _:
+            flat = False
+    if len(record.sources) == 1 and link_merge is None:
+        merged = produced
+    elif link_merge == 'merge_flattened' and flat:
+        merged = produced
+    else:
+        merged = {'type': 'array', 'items': produced}
+    if fields.get('pickValue') not in ('first_non_null', 'the_only_non_null'):
+        return merged
+    match merged:
+        case {'type': 'array', 'items': items}:
+            return items
+        case _:
+            return 'Any'
+
+
+def _relation(graph: WorkflowGraph, edge: Edge, record: CwlRecord | None = None) -> TypeRelation:
     """Judge one edge in its own scope.
 
     Ancestor scatter layers that wrap both endpoints alike are excluded; they
     would inflate the comparison unevenly.
     """
     scope = _graph_at(graph, _owner_namespace(edge))
-    source, sink = _compared_types(graph, edge)
+    source, sink = _compared_types(graph, edge, record)
     return reference_relation(source, sink, lang_version=scope.lang_version)
 
 

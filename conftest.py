@@ -8,7 +8,6 @@ import pytest
 # Zone membership is defined by directory: anything under tests/contrib/ is
 # contrib. The marker is derived from that rather than applied by hand, so the
 # directory stays the single source of truth and the two cannot drift.
-# See design_docs/core-refactor-design.md, Spec 0.
 CONTRIB_DIR = Path(__file__).resolve().parent / 'tests' / 'contrib'
 
 # `import cwltool.main` pulls in spython, which imports `pwd` at module scope —

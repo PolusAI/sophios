@@ -1,15 +1,21 @@
 import copy
+from collections.abc import Iterator
 from shutil import copytree, ignore_patterns
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
+from ruamel.yaml import YAML as _RuamelYAML
+from ruamel.yaml.nodes import ScalarNode as _RuamelScalarNode
 
 from . import auto_gen_header
 from .runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
-from .ir.names import NAMESPACE_SEPARATOR
+from .ir.names import NAMESPACE_SEPARATOR, Names, names_map
 from .ir.artifacts import CompilationArtifact
+from .lang.diagnostics import SophiosError
+from .lang.error_codes import SophiosErrorCode
 from .wic_types import Yaml, Json
 
 
@@ -20,9 +26,28 @@ from .wic_types import Yaml, Json
 # See https://ttl255.com/yaml-anchors-and-aliases-and-how-to-disable-them/#override
 
 
+# cwltool reads job files and documents with ruamel (YAML 1.2 rules), PyYAML
+# writes them with YAML 1.1 rules, and the two disagree on what is a number:
+# PyYAML leaves `1e3`, `0o17` and `._5` plain, which ruamel reads as a float, an
+# int and a float (`._` as a float it then cannot convert). Every string is
+# written quoted when either reader would type it as anything else.
+_YAML12_RESOLVER = _RuamelYAML(typ='rt').resolver
+_STR_TAG = 'tag:yaml.org,2002:str'
+
+
 class NoAliasDumper(yaml.SafeDumper):
     def ignore_aliases(self, data: Any) -> bool:
         return True
+
+
+def _represent_str(dumper: yaml.SafeDumper, data: str) -> yaml.ScalarNode:
+    plain = dumper.represent_str(data)
+    if plain.style is None and _YAML12_RESOLVER.resolve(_RuamelScalarNode, data, (True, False)) != _STR_TAG:
+        return dumper.represent_scalar(_STR_TAG, data, style="'")
+    return plain
+
+
+NoAliasDumper.add_representer(str, _represent_str)
 
 
 def dump_wic_yaml(document: Json) -> str:
@@ -41,16 +66,86 @@ def dump_wic_yaml(document: Json) -> str:
     return yaml.dump(document, sort_keys=False, line_break='\n', indent=2, Dumper=NoAliasDumper)
 
 
+def names_map_path(directory: Path, name: str) -> Path:
+    """Where the compile writes, and run-time messages read, the map from emitted ids to authored names."""
+    return directory / f'{name}.names.json'
+
+
+def read_inputs_file(path: str) -> Yaml:
+    """The job values in an `--inputs_file`; empty for an empty file.
+
+    Raises:
+        SophiosError: The file is not YAML, or its top level is not a mapping of input names to values.
+    """
+    try:
+        with open(path, mode='r', encoding='utf-8') as stream:
+            values = yaml.safe_load(stream.read())
+    except yaml.YAMLError as error:
+        raise SophiosError.error(SophiosErrorCode.INVALID_YAML,
+                                 f'The inputs file {path} is not valid YAML: {" ".join(str(error).split())}') from error
+    if values is None:
+        return {}
+    if not isinstance(values, dict):
+        raise SophiosError.error(
+            SophiosErrorCode.NOT_A_MAPPING,
+            f'The inputs file {path} must be a mapping of input names to values, not a {type(values).__name__}: '
+            'write one `name: value` entry per input.')
+    return values
+
+
+def relative_local_path(written: Any) -> str | None:
+    """`written` when it names a local file or directory by a relative path; None for anything else.
+
+    Not relative: a non-string, a URI (`file:`, `https:`, ...) and an absolute path. A one-letter scheme
+    is a Windows drive.
+    """
+    if not isinstance(written, str) or len(urlparse(written).scheme) > 1 or Path(written).is_absolute():
+        return None
+    return written
+
+
+def input_paths(values: Yaml) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Every File and Directory object in a job, with the input it is under, in written order.
+
+    Found in lists, in records, in a File's `secondaryFiles` and in a Directory's `listing`.
+    """
+    for name, value in values.items():
+        stack = [value]
+        while stack:
+            match stack.pop():
+                case list() as items:
+                    stack.extend(reversed(items))
+                case {'class': 'File' | 'Directory'} as found:
+                    yield name, found
+                    stack.extend(reversed(found.get('secondaryFiles') or []))
+                    stack.extend(reversed(found.get('listing') or []))
+                case dict() as record:
+                    stack.extend(reversed(list(record.values())))
+
+
+def absolute_paths(values: Yaml, base: Path) -> Yaml:
+    """A copy of `values` in which each relative `location` or `path` of a File or Directory, at any
+    depth, is resolved against `base` and written absolute, so it names the same place wherever the
+    run reads it from."""
+    absolute = copy.deepcopy(values)
+    for _name, found in input_paths(absolute):
+        for key in ('location', 'path'):
+            if (written := relative_local_path(found.get(key))) is not None:
+                found[key] = str(base / written)
+    return absolute
+
+
 def write_artifacts_to_disk(artifact: CompilationArtifact, path: Path,
                             relative_run_path: bool, inputs_file: str = '') -> None:
-    """Write a graph-derived artifact tree and its job-input documents."""
-    inputs: Yaml = {}
-    if inputs_file:
-        with open(inputs_file, mode='r', encoding='utf-8') as stream:
-            inputs = yaml.safe_load(stream.read())
-        for value in inputs.values():
-            if 'location' in value and not Path(value['location']).is_absolute():
-                value['location'] = '../' + value['location']
+    """Write a graph-derived artifact tree and its job-input documents.
+
+    A relative `location` or `path` of a File or Directory in `inputs_file`, at any depth, is
+    resolved against the inputs file's own directory (CWL v1.2 section 5.1.5: the base IRI of the
+    document) and written absolute. An output-target Directory in it is a name for the run to
+    create, so it is read as one first.
+    """
+    inputs = absolute_paths(normalize_artifact_job_inputs(artifact, read_inputs_file(inputs_file)),
+                            Path(inputs_file).absolute().parent) if inputs_file else {}
     _write_artifacts_to_disk(artifact, path, relative_run_path, inputs)
 
 
@@ -70,6 +165,10 @@ def _write_artifacts_to_disk(artifact: CompilationArtifact, path: Path,
         f'#!/usr/bin/env cwl-runner\n{auto_gen_header}{dump_wic_yaml(cwl)}', encoding='utf-8')
     (path / filename_yml).write_text(
         f'{auto_gen_header}{dump_wic_yaml(job)}', encoding='utf-8')
+    if artifact.graph is not None and artifact.namespace == ():
+        # The root carries the whole tree: one map names every emitted id in it.
+        names_map_path(path, artifact.name).write_text(
+            json.dumps(names_map(artifact.graph, Names.of(artifact.graph)), indent=2), encoding='utf-8')
 
     for child in artifact.children:
         subpath = path / child.namespace[-1] if relative_run_path else path
@@ -90,30 +189,49 @@ def write_config_to_disk(config: Json, config_file: Path) -> None:
         json.dump(config, f, indent=4, sort_keys=True)
 
 
-def get_config(config_file: Path, default_config_file: Path) -> Json:
-    """Returns the config json object from config_file with absolute paths
+def default_config_file(homedir: Path) -> Path:
+    """The config file Sophios uses when the user does not name one."""
+    return homedir / 'wic' / 'global_config.json'
+
+
+def generate_config(homedir: Path) -> Json:
+    """Writes the default config, adapters and examples under the selected home directory.
 
     Args:
-        config_file (Path): The path of the user specified config file
-        default_config_file (Path): The default path of the config file if user hasn't specified one
+        homedir (Path): The home directory whose wic directory will hold the config and resources
 
     Returns:
         Json: The config json object with absolute filepaths
     """
-    global_config: Json = {}
-    if not config_file.exists():
-        global_config = get_basic_config()
-        # write the basic config object to the 'global_config.json' file in user's ~/wic directory
-        # for user to inspect and or modify the config json file
-        write_config_to_disk(global_config, default_config_file)
-        move_adapters_and_examples(global_config)
-        print(f'default config file : {default_config_file} generated')
-    else:
-        # reading user specified config file only if it exists
-        # never overwrite user's config file or generate another file in user's non-default directory
-        # TODO : Validate the json inside 'read_config_from_disk' function
-        global_config = read_config_from_disk(config_file)
-    return global_config
+    config = get_basic_config(homedir)
+    write_config_to_disk(config, default_config_file(homedir))
+    move_adapters_and_examples(config)
+    return config
+
+
+def get_config(config_file: Path | None, homedir: Path) -> Json:
+    """Returns the config json object with absolute paths
+
+    A config file the user names is only ever read. Without one, the default
+    under homedir is used, and generated first if it does not exist yet.
+
+    Args:
+        config_file (Path | None): The user specified config file, if any
+        homedir (Path): The user's home directory
+
+    Raises:
+        FileNotFoundError: If config_file does not exist.
+
+    Returns:
+        Json: The config json object with absolute filepaths
+    """
+    if config_file is None:
+        config_file = default_config_file(homedir)
+        if not config_file.exists():
+            config = generate_config(homedir)
+            print(f'default config file : {config_file} generated')
+            return config
+    return read_config_from_disk(config_file)
 
 
 def move_adapters_and_examples(config: Json) -> None:
@@ -141,31 +259,38 @@ def move_adapters_and_examples(config: Json) -> None:
              ignore=ignore_patterns(*extlist))
 
 
-def read_config_from_disk(config_file: Path, abspath: bool = True) -> Json:
+def read_config_from_disk(config_file: Path, base_dir: Path | None = None) -> Json:
     """Returns the config json object from config_file with absolute paths
 
     Args:
         config_file (Path): The path of json file where it is to be read from
+        base_dir (Path | None): Base for relative search paths; defaults to the working directory
 
     Returns:
         Json: The config json object with absolute filepaths
+
+    Raises:
+        TypeError: A namespace under ``search_paths_cwl`` or ``search_paths_wic`` is not a list of paths.
     """
     # config_file can contain absolute or relative paths
     config: Json = json.loads(config_file.read_text(encoding='utf-8'))
+    base_dir = Path.cwd() if base_dir is None else base_dir.absolute()
     conf_tags = ['search_paths_cwl', 'search_paths_wic']
     for tag in conf_tags:
         sub_config = copy.deepcopy(config[tag])
         for ns in sub_config:
-            if abspath:
-                sub_config[ns] = [str(Path(path).absolute()) for path in sub_config[ns]]
-            else:  # this is a hacky way to fix global paths wrt ~/home/wic/
-                sub_config[ns] = [str(Path.home() / path) for path in sub_config[ns]]
+            if not isinstance(sub_config[ns], list):
+                raise TypeError(f'{tag}.{ns} must be a list of paths, not {type(sub_config[ns]).__name__}')
+            sub_config[ns] = [str(base_dir / path) for path in sub_config[ns]]
         config[tag] = sub_config
     return config
 
 
-def get_basic_config() -> Json:
+def get_basic_config(homedir: Path | None = None) -> Json:
     """Returns the (default) basic config with absolute paths
+
+    Args:
+        homedir (Path | None): Base for the packaged search paths; defaults to the process home
 
     Returns:
         Json: The config json object with absolute filepaths
@@ -175,5 +300,6 @@ def get_basic_config() -> Json:
     src_dir = Path(__file__).parent
     basic_config: Json = {}
     # read_config_from_disk handles converting them to absolute paths
-    basic_config = read_config_from_disk(src_dir/'config_basic.json', False)
+    basic_config = read_config_from_disk(
+        src_dir/'config_basic.json', base_dir=Path.home() if homedir is None else homedir)
     return basic_config

@@ -13,12 +13,14 @@ FAST"` read as selecting every `@pytest.mark.fast` test where pytest deselects
 all of them. Asking pytest cannot disagree with pytest.
 """
 import ast
+import json
 import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import pytest
 import yaml
@@ -74,35 +76,80 @@ def _invocations(workflow: Path) -> list[list[str]]:
     return found
 
 
-def _collect(argv: list[str]) -> set[str]:
-    """The tests pytest selects for `argv`, as `path::name` without parameters.
+def _collect_all(argvs: list[list[str]]) -> list[set[str]]:
+    """The tests pytest selects for each of `argvs`, as `path::name` without parameters.
+
+    `lane_collector` asks pytest about all of them in one interpreter, so the
+    imports every collection needs are paid for once.
 
     Raises:
-        AssertionError: If pytest cannot collect the invocation at all, which
+        AssertionError: If pytest cannot collect an invocation at all, which
             is what a lane naming a file that no longer exists looks like.
     """
-    result = subprocess.run(
-        [sys.executable, '-m', 'pytest', '--collect-only', '-q', '--no-header',
-         '-p', 'no:randomly', '-p', 'no:cacheprovider', *argv],
-        capture_output=True, text=True, cwd=REPO_ROOT, check=False)
-    assert result.returncode in (0, 5), (
-        f'pytest could not collect `pytest {" ".join(argv)}`:\n{result.stdout[-2000:]}')
-    return {line.split('[')[0] for line in result.stdout.splitlines() if '::' in line}
+    with tempfile.TemporaryDirectory() as scratch:
+        report = Path(scratch) / 'report.json'
+        run = subprocess.run([sys.executable, '-m', 'tests.core.lane_collector', str(report)],
+                             input=json.dumps(argvs), capture_output=True, text=True, cwd=REPO_ROOT, check=False)
+        assert report.exists(), f'the collector failed:\n{run.stderr[-2000:]}'
+        results = json.loads(report.read_text(encoding='utf-8'))
+    selected = []
+    for argv, (code, ids, output) in zip(argvs, results):
+        assert code in (0, 5), f'pytest could not collect `pytest {" ".join(argv)}`:\n{output}'
+        selected.append({node.split('[')[0] for node in ids})
+    return selected
 
 
-def _covered() -> set[str]:
-    """Every test any configured invocation collects."""
-    argvs = sorted({tuple(argv) for lane in sorted(WORKFLOWS.glob('*.yml'))
-                    for argv in _invocations(lane)})
-    covered: set[str] = set()
-    for argv in argvs:
-        # Collection imports test_setup, which writes the generated schema.
-        # Concurrent collectors can observe another process's truncated file.
-        covered.update(_collect(list(argv)))
-    return covered
+def _lane_argvs() -> list[list[str]]:
+    """Every distinct pytest invocation the lanes make."""
+    return [list(argv) for argv in sorted({tuple(argv) for lane in sorted(WORKFLOWS.glob('*.yml'))
+                                           for argv in _invocations(lane)})]
+
+
+#: The refs a branch dispatch hands a lane: one per repository it pairs.
+DISPATCHED_REFS: Final = ('wic_ref', 'mm-workflows_ref', 'image-workflows_ref')
+
+
+def _dispatched_workflows() -> dict[str, Any]:
+    """Each workflow a branch dispatch starts, by name: those taking the paired refs as inputs."""
+    found = {}
+    for workflow in sorted(WORKFLOWS.glob('*.yml')):
+        script = yaml.safe_load(workflow.read_text(encoding='utf-8'))
+        # YAML 1.1 reads the bare key `on` as the boolean True.
+        triggers = script.get('on') or script.get(True) or {}
+        inputs = (triggers.get('workflow_dispatch') or {}).get('inputs') or {}
+        if all(ref in inputs for ref in DISPATCHED_REFS):
+            found[workflow.name] = script
+    return found
 
 
 @pytest.mark.fast
+def test_every_dispatched_run_names_the_refs_it_tests() -> None:
+    """A dispatched run's name and its summary say which three refs ran together.
+
+    A branch dispatch starts the lanes on the fork, attached to whatever sha
+    the dispatch itself ran on, and pairs same-named branches of sophios,
+    mm-workflows and image-workflows. The run page therefore does not say which
+    three refs were tested, and the inputs only carry refs, never commits. So
+    the run name must spell the three refs, and some step must write the three
+    commits it checked out to the job summary, so a green run can be read back
+    to what it ran.
+    """
+    dispatched = _dispatched_workflows()
+    assert {'lint_and_test.yml', 'run_workflows.yml'} <= dispatched.keys()
+    for name, script in dispatched.items():
+        run_name = str(script.get('run-name') or '')
+        unnamed = [ref for ref in DISPATCHED_REFS if f'inputs.{ref}' not in run_name]
+        assert not unnamed, f'{name}: run-name does not name {unnamed}'
+
+        summaries = [
+            step for job in (script.get('jobs') or {}).values() for step in (job.get('steps') or [])
+            if 'GITHUB_STEP_SUMMARY' in str(step.get('run') or '')
+            and all(f'inputs.{ref}' in ' '.join(map(str, (step.get('env') or {}).values()))
+                    for ref in DISPATCHED_REFS)
+        ]
+        assert summaries, f'{name}: no step writes the three checked-out refs to the job summary'
+
+
 @pytest.mark.fast
 def test_no_lane_checks_our_own_repo_out_at_a_literal_ref() -> None:
     """A lane tests the ref it was triggered on, or it tests nothing it claims.
@@ -140,11 +187,28 @@ def test_the_weekly_property_lane_runs_the_whole_oracle_suite() -> None:
     """
     from .test_hermeticity import ORACLE_FILES  # pylint: disable=import-outside-toplevel
 
-    weekly: set[str] = set()
-    for argv in _invocations(WORKFLOWS / 'property_weekly.yml'):
-        weekly |= _collect(argv)
-    missing = sorted(_collect(list(ORACLE_FILES)) - weekly)
+    *lanes, oracle = _collect_all([*_invocations(WORKFLOWS / 'property_weekly.yml'), list(ORACLE_FILES)])
+    missing = sorted(oracle - set().union(*lanes))
     assert not missing, 'the weekly property lane does not run:\n  ' + '\n  '.join(missing)
+
+
+@pytest.mark.fast
+def test_the_corpus_lane_round_trips_every_wic_root_through_the_python_api() -> None:
+    """The lane whose config reaches the external corpora runs the from_wic properties.
+
+    `test_python_api_from_wic.py` parametrizes its two properties over every
+    `.wic` root `search_paths_wic` reaches. Only `run_workflows.yml` writes a
+    config that reaches the mm-workflows and image-workflows roots; the
+    packaging lane also selects the file, but checks out neither corpus, so
+    there the properties see the repository's own roots and nothing else.
+    """
+    properties = {
+        'tests/core/test_python_api_from_wic.py::test_a_wic_file_and_its_python_objects_compile_alike',
+        'tests/core/test_python_api_from_wic.py::test_write_wic_of_a_loaded_workflow_compiles_identically',
+    }
+    selected = set().union(*_collect_all(_invocations(WORKFLOWS / 'run_workflows.yml')))
+    missing = sorted(properties - selected)
+    assert not missing, 'run_workflows.yml does not run:\n  ' + '\n  '.join(missing)
 
 
 def test_the_census_sees_the_repo() -> None:
@@ -157,26 +221,26 @@ def test_the_census_sees_the_repo() -> None:
 @pytest.mark.parametrize('workflow_name', ['build_wheel.yml', 'test_and_publish_pypi.yml'])
 def test_package_lanes_leave_nextflow_runtime_to_its_runtime_lane(workflow_name: str) -> None:
     """Package lanes do not collect tests whose executable they do not install."""
-    runtime_tests = _collect(['tests/core/nextflow', '-m', 'nextflow'])
-    package_tests = set().union(*(
-        _collect(argv) for argv in _invocations(WORKFLOWS / workflow_name)
-    ))
+    runtime_tests, *package_tests = _collect_all(
+        [['tests/core/nextflow', '-m', 'nextflow'], *_invocations(WORKFLOWS / workflow_name)]
+    )
     assert runtime_tests
-    assert runtime_tests.isdisjoint(package_tests)
+    assert runtime_tests.isdisjoint(set().union(*package_tests))
 
 
 @pytest.mark.fast
 def test_collection_is_pytests_answer_and_not_ours() -> None:
     """The helper really asks pytest, and pytest really narrows.
 
-    If `_collect` returned everything whatever its arguments, the census below
-    would pass no matter which lanes existed.
+    If `_collect_all` returned everything whatever its arguments, the census
+    below would pass no matter which lanes existed.
     """
-    everything = _collect([])
-    one_file = _collect(['tests/core/test_ci_coverage.py'])
+    # pylint: disable-next=unbalanced-tuple-unpacking  # one result per invocation asked
+    everything, one_file, none = _collect_all([[], ['tests/core/test_ci_coverage.py'],
+                                               ['tests/core/test_ci_coverage.py', '-k', 'no_such_test_name_exists']])
     assert one_file and one_file < everything
     assert all(node.startswith('tests/core/test_ci_coverage.py::') for node in one_file)
-    assert not _collect(['tests/core/test_ci_coverage.py', '-k', 'no_such_test_name_exists'])
+    assert not none
 
 
 @pytest.mark.slow
@@ -184,11 +248,11 @@ def test_no_test_is_collected_by_nothing() -> None:
     """Every test the repository defines is selected by some lane.
 
     Slow because it asks pytest once per distinct invocation -- about thirty
-    sequential collections. They cannot run concurrently while test_setup
-    writes the shared generated schema. That is the price of the answer being
+    collections, in one interpreter. That is the price of the answer being
     pytest's rather than a model's, and a model is what this file used to be.
     """
-    orphans = sorted(_collect([]) - _covered())
+    everything, *lanes = _collect_all([[], *_lane_argvs()])
+    orphans = sorted(everything - set().union(*lanes))
     assert not orphans, (
         'these tests are collected by no configured lane, so they never run:\n  '
         + '\n  '.join(orphans)
@@ -271,8 +335,8 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 #: named its file, so none has ever executed on Windows. Measured on the
 #: `Lint And Test` Windows job, where they fail on `import pwd`.
 #:
-#: `test_emit.py`'s validator pair exercise cwltool itself; the phase lane
-#: collects their platform-neutral siblings on Windows and these two run on
+#: `test_emit.py`'s validator tests exercise cwltool itself; the phase lane
+#: collects their platform-neutral siblings on Windows and these run on
 #: the POSIX matrix legs where cwltool's `pwd` dependency is available.
 #:
 #: The list is the claim. Growing it is a deliberate edit here, not a marker
@@ -280,6 +344,11 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 WINDOWS_EXCLUDED: Final = frozenset({
     'tests/core/test_emit.py::test_emit_validates_as_cwl_v1_2',
     'tests/core/test_emit.py::test_validator_rejects_the_independent_invalid_control',
+    'tests/core/test_emit.py::test_a_compiled_string_job_input_validates',
+    # A strict xfail on one cwltool validation of a `schemed` workflow, under a
+    # second. It states the SchemaDefRequirement gap the generators exclude,
+    # which only cwltool's validator can show, so it runs where the pair does.
+    'tests/core/test_emit.py::test_a_schema_def_typed_input_validates',
     'tests/core/test_leak_boundary.py::test_residue_validates_as_cwl_v1_2',
     # One compile and one `--validate` of a four-line workflow, under a second.
     # It buys the authored `outputSource` path, which the residue property
@@ -287,6 +356,41 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # synthesized path was ever validated, and the authored one emitted a
     # reference to a step the document does not contain.
     'tests/core/test_leak_boundary.py::test_an_authored_output_source_validates',
+    # One `cwltool --validate` of a one-step workflow whose tool was unpacked from
+    # a `$graph`, under a second. The ports and the file written are checked on
+    # every leg by the test before it.
+    'tests/core/test_frontdoor.py::test_a_packed_tool_step_validates_in_cwltool',
+    # The script validates the tool it writes through cwltool, so the import
+    # is the script's, not the test's. Its compact twin builds the same hinted
+    # tool without validating it and still runs on Windows.
+    'tests/core/test_example_scripts.py::test_the_integrated_ichnaea_script_compiles_its_hinted_tool',
+    # Loads the corpus into cwltool, to ask it what an embedded document means. Its
+    # platform-neutral sibling `test_embedding_keeps_meaning` runs on every leg.
+    'tests/core/test_examples.py::test_embedding_keeps_runtime_defaults',
+    # Loads the flat and flat-embedded corpus documents into cwltool to validate
+    # them. Its platform-neutral sibling `test_flatten_keeps_meaning` runs on
+    # every leg.
+    'tests/core/test_examples.py::test_flatten_validates_as_cwl',
+    # Plain CWL workflows run by cwltool through --run_local: a two-step one,
+    # and twelve conformance workflows, each also run by cwltool directly, in
+    # about four seconds. The file's other tests check what the runner is
+    # given and run on Windows.
+    'tests/core/test_plain_cwl.py::test_a_plain_cwl_workflow_runs_as_it_is',
+    'tests/core/test_plain_cwl.py::test_a_conformance_workflow_runs_through_sophios_as_cwltool_runs_it',
+    # One `Workflow.run()` of a one-step echo, by cwltool in a new interpreter, under
+    # a second. Only a new interpreter shows a root-logger handler added by an
+    # import, which stops cwltool's in-process run; the import check itself runs
+    # on every leg.
+    'tests/core/test_python_api_workflow.py::test_workflow_run_runs_cwltool_in_the_callers_process',
+    # A workflow run by cwltool through --run_local, with two real-time analyses
+    # run by cwltool beside it, one of them failing, in one run of about eight
+    # seconds. The watcher's own tests use a stand-in for cwltool and run on
+    # every leg.
+    'tests/core/test_realtime.py::test_the_analysis_runs_beside_the_workflow_and_never_changes_its_outcome',
+    # One real cwltool run of a failing one-line tool, under a second. It pins the
+    # wording of cwltool's job-failure record, which the summary reads; the other
+    # tests of the summary use a stand-in for cwltool and run on every leg.
+    'tests/core/test_python_api_workflow.py::test_a_real_failed_step_is_named_with_its_status',
 })
 
 

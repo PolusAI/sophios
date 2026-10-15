@@ -4,9 +4,8 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 import json
-import yaml
 from jsonschema import Draft202012Validator
-from sophios.utils_yaml import Key, Tag, wic_loader
+from sophios.utils_yaml import Key
 
 from sophios.wic_types import Json, Cwl, PluginNodeConfig
 from sophios.contrib.ict.ict_spec.model import ICT
@@ -171,12 +170,6 @@ def get_topological_order(links: list[dict[str, str]]) -> list[str]:
     return result
 
 
-def _tag_value(tag: str, value: Any) -> dict:
-    """Tag a value with a wic yaml tag (Tag.ANCHOR/Tag.ALIAS/Tag.INLINE_INPUT)."""
-    tagged: dict = yaml.load(f'{tag} ' + str(value), Loader=wic_loader())
-    return tagged
-
-
 def _find_edge_nodes(edge: Json, nodes: list[Json]) -> tuple[Json, Json]:
     """Look up an edge's source and target nodes by id, asserting both exist."""
     src_node = _find_by_id(nodes, 'id', edge['sourceId'])
@@ -236,7 +229,7 @@ def wfb_to_wic(wfb_payload: Json, plugins: list[dict[str, Any]]) -> Cwl:
         if node.get('settings'):
             node['in'] = node['settings'].get('inputs')
             if node['settings'].get('outputs'):
-                node['out'] = list({k: _tag_value(Tag.ANCHOR, v)} for k, v in node['settings']
+                node['out'] = list({k: {Key.ANCHOR: v}} for k, v in node['settings']
                                    # outputs always have to be list
                                    ['outputs'].items())
             # remove these (now) superfluous keys
@@ -258,7 +251,7 @@ def wfb_to_wic(wfb_payload: Json, plugins: list[dict[str, Any]]) -> Cwl:
         if node.get('in'):
             for nkey in node['in']:
                 if str(node['in'][nkey]) != "":
-                    node['in'][nkey] = _tag_value(Tag.INLINE_INPUT, node['in'][nkey])
+                    node['in'][nkey] = {Key.INLINE_INPUT: node['in'][nkey]}
                     node_arg_map[node['id']].add(nkey)
 
     if plugins != []:  # use the look up logic similar to WFB
@@ -284,14 +277,14 @@ def wfb_to_wic(wfb_payload: Json, plugins: list[dict[str, Any]]) -> Cwl:
 
                 if tgt_node.get('in'):
                     source_output = _resolve_wic_anchor(src_node['out'][0][src_node_out_arg])
-                    tgt_node['in'][tgt_node_in_arg] = _tag_value(Tag.ALIAS, source_output)
+                    tgt_node['in'][tgt_node_in_arg] = {Key.ALIAS: source_output}
                     node_arg_map[tgt_id].add(tgt_node_in_arg)
 
         for node in inp_restrict['nodes']:
             output_dict = node['settings'].get('outputs', {})
             for key in output_dict:
                 if str(output_dict[key]) != "":
-                    node['in'][key] = _tag_value(Tag.INLINE_INPUT, output_dict[key])
+                    node['in'][key] = {Key.INLINE_INPUT: output_dict[key]}
                     node_arg_map[node['id']].add(key)
             node.pop('settings', None)
 
@@ -301,7 +294,7 @@ def wfb_to_wic(wfb_payload: Json, plugins: list[dict[str, Any]]) -> Cwl:
                     unprocessed_args = unprocessed_args.difference(
                         node_arg_map[node['id']])
                 for arg in unprocessed_args:
-                    node['in'][arg] = _tag_value(Tag.INLINE_INPUT, node['in'][arg])
+                    node['in'][arg] = {Key.INLINE_INPUT: node['in'][arg]}
     else:  # No plugins, use the node/link mapping directly.
         for node in inp_restrict['nodes']:
             node.pop('settings', None)
@@ -322,12 +315,12 @@ def wfb_to_wic(wfb_payload: Json, plugins: list[dict[str, Any]]) -> Cwl:
                         # if the output is a dict, it is a wic_anchor, so we need to get the anchor
                         # and use that as the input
                         source_output = _resolve_wic_anchor(src_node['out'][0][sk])
-                        tgt_node['in'][sk] = _tag_value(Tag.ALIAS, source_output)
+                        tgt_node['in'][sk] = {Key.ALIAS: source_output}
                 # the inputs which aren't dependent on previous/other steps
                 # they are by default inline input
                 diff_keys = set(tgt_in_keys) - set(src_out_keys)
                 for dfk in diff_keys:
-                    tgt_node['in'][dfk] = _tag_value(Tag.INLINE_INPUT, tgt_node['in'][dfk])
+                    tgt_node['in'][dfk] = {Key.INLINE_INPUT: tgt_node['in'][dfk]}
 
     workflow_temp: Cwl = {}
     if inp_restrict["links"] != []:

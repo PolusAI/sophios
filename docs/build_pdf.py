@@ -97,7 +97,7 @@ def _print_pdf(html_path: Path) -> Path:
         html_path.resolve().as_uri(),
     ]
     timeout_seconds = int(os.environ.get("SOPHIOS_PDF_CHROME_TIMEOUT", "30"))
-    if os.name == "posix":
+    if sys.platform != "win32":
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
@@ -115,7 +115,7 @@ def _print_pdf(html_path: Path) -> Path:
     try:
         stdout, stderr = process.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
-        if os.name == "posix":
+        if sys.platform != "win32":
             os.killpg(process.pid, signal.SIGTERM)
         else:
             process.terminate()

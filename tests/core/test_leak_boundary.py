@@ -8,20 +8,21 @@ and the stripped residue validates as CWL v1.2 under cwltool.
 These run the actual `compile_workflow`, not the syntax layer, because the
 boundary being specified is the compiler's behaviour. The syntax layer's
 partition is checked exhaustively over the declared set as well, since
-that is what the schema and the reference derive from.
+that is what the schema and the language spec derive from.
 
 The keys the compiler owns are the documented exceptions. Their normative
-statement lives in the reference's §1 footnote — the single home — and each is
+statement lives in language spec §1.2 — the single home — and each is
 enforced by a named test below rather than by a property: `requirements`,
 `inputs` and `outputs` are merged into, `$schemas` is append-only,
 `$namespaces` reserves the `edam` and `sophios` prefixes, and `class` and
-`cwlVersion` are written.
+`cwlVersion` are written. `hints` is the one other exception: its list form is
+read as a mapping, unless the list holds an `$import` or `$include`, so the
+properties generate only the mapping.
 A property broad enough to cover them would have to be weak enough to say
 nothing, so the properties quantify over the keys that really are untouched
 and the exceptions are pinned one at a time.
-
-See design_docs/core-refactor-design.md §5.4.
 """
+import copy
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -38,8 +39,9 @@ from sophios.lang import Grammar, parse
 from sophios.lang.cwl import CWL_VERSION
 from sophios.wic_types import Yaml
 
-from .ast_strategies import passthrough_keys, passthrough_values
+from .ast_strategies import hints_values, passthrough_keys, passthrough_values
 from .compile_harness import COMPILED, FAST, compile_cwl, compile_info
+from .cwl_validation import validate_cwl
 
 #: Top-level keys the *compiler* owns, which is a larger set than the syntax
 #: layer's. `_document` claims only `steps` and `wic`; `compile_workflow` also
@@ -113,6 +115,68 @@ def test_top_level_passthrough_is_byte_identical(freight: dict[str, Any]) -> Non
 
 
 @pytest.mark.skip_pypi_ci
+@pytest.mark.slow
+@given(hints_values)
+@COMPILED
+def test_hints_survive_on_the_document_and_the_step_and_change_nothing_else(hints: dict[str, Any]) -> None:
+    """`hints:` is read by the parser, so it is generated as the mapping the parser keeps."""
+    without = _compile(_touch_workflow({}, {}))
+    with_hints = _compile(_touch_workflow({'hints': hints}, {'hints': hints}))
+    assert _step(with_hints).pop('hints') == hints
+    assert with_hints.pop('hints') == hints
+    assert with_hints == without
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.fast
+def test_list_form_hints_are_emitted_as_a_mapping_on_the_document_and_the_step() -> None:
+    """CWL's list form of `hints:` reaches the emitted document as the mapping form, at both levels."""
+    hints = [{'class': 'DockerRequirement', 'dockerPull': 'x'}]
+    compiled = _compile(_touch_workflow({'hints': hints}, {'hints': hints}))
+    assert compiled['hints'] == {'DockerRequirement': {'dockerPull': 'x'}}
+    assert _step(compiled)['hints'] == {'DockerRequirement': {'dockerPull': 'x'}}
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.fast
+@pytest.mark.parametrize('key', ['requirements', 'hints'])
+def test_a_list_holding_an_import_is_emitted_as_authored_on_the_document_and_the_step(key: str) -> None:
+    """cwltool resolves an `$import` entry, so a list holding one reaches the emitted document untouched."""
+    def entries() -> list[dict[str, Any]]:
+        return [{'$import': 'shared.yml'}, {'class': 'ResourceRequirement', 'coresMin': 1}]
+
+    compiled = _compile(_touch_workflow({key: entries()}, {key: entries()}))
+    assert compiled[key] == entries()
+    assert _step(compiled)[key] == entries()
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.fast
+def test_a_requirements_list_holding_an_import_is_not_merged_into() -> None:
+    """The one `requirements:` that is not extended: a list holding an `$import` is emitted as written.
+
+    The file it names is read only by cwltool, so the compiler adds nothing to
+    it, not the `ScatterFeatureRequirement` a scattering step needs.
+    """
+    authored = [{'$import': 'shared.yml'}]
+    compiled = _compile({
+        'requirements': copy.deepcopy(authored),
+        'steps': [{'id': 'touch', 'in': {'filename': {'wic_inline_input': ['a.txt', 'b.txt']}},
+                   'scatter': ['filename']}],
+    })
+    assert compiled['requirements'] == authored
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.fast
+@pytest.mark.parametrize('key', ['inputs', 'outputs'])
+def test_a_root_inputs_or_outputs_list_holding_an_import_is_not_carried_into_the_output(key: str) -> None:
+    """The compiler models only the mapping form of `inputs:` and `outputs:`; the list is neither merged nor emitted."""
+    compiled = _compile(_touch_workflow({}, {key: [{'$import': 'shared.yml'}]}))
+    assert '$import' not in yaml.safe_dump(compiled)
+
+
+@pytest.mark.skip_pypi_ci
 @pytest.mark.fast
 def test_user_namespaces_survive_except_edam() -> None:
     """`$namespaces` keeps every user binding but the reserved `edam`.
@@ -183,17 +247,36 @@ def test_user_requirements_are_merged_into_not_copied() -> None:
     workflow that supplies its own `requirements` gets them back extended, not
     unchanged. The generated properties never see it: their one step is a plain
     tool step, so the requirement set is empty and the merge is skipped on
-    every example.
+    every example. A class the user already wrote keeps its body.
     """
     compiled = _compile({
-        'requirements': {'ResourceRequirement': {'coresMin': 4}},
+        'requirements': {'ResourceRequirement': {'coresMin': 4},
+                         'InlineJavascriptRequirement': {'expressionLib': ['function f(){}']}},
         'steps': [{'id': 'touch',
-                   'in': {'filename': {'wic_inline_input': 'empty.txt'}},
-                   'scatter': ['filename']}],
+                   'in': {'filename': {'wic_inline_input': ['empty.txt']}},
+                   'scatter': ['filename'],
+                   'when': '$(true)'}],
     })
     requirements = compiled['requirements']
     assert requirements['ResourceRequirement'] == {'coresMin': 4}, 'user entry lost'
     assert 'ScatterFeatureRequirement' in requirements, 'scatter requirement not added'
+    assert requirements['InlineJavascriptRequirement'] == {'expressionLib': ['function f(){}']}, \
+        'the compiler needing the same class must not wipe the body the user wrote'
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.fast
+def test_an_authored_requirement_with_no_body_is_emitted_as_an_empty_one() -> None:
+    """`ScatterFeatureRequirement:` written with no value is YAML null, which cwltool rejects."""
+    compiled = _compile({
+        'requirements': {'ScatterFeatureRequirement': None, 'InlineJavascriptRequirement': None},
+        'steps': [{'id': 'touch',
+                   'in': {'filename': {'wic_inline_input': ['empty.txt']}},
+                   'scatter': ['filename'],
+                   'when': '$(true)'}],
+    })
+    assert compiled['requirements']['ScatterFeatureRequirement'] == {}
+    assert compiled['requirements']['InlineJavascriptRequirement'] == {}
 
 
 @pytest.mark.skip_pypi_ci
@@ -291,8 +374,6 @@ cwl_passthrough = st.fixed_dictionaries(
 def test_residue_validates_as_cwl_v1_2(freight: dict[str, Any]) -> None:
     """Strip the Sophios syntax, inline the tools, and cwltool agrees the
     residue is CWL v1.2."""
-    import cwltool.main  # pylint: disable=import-outside-toplevel  # expensive; slow lane only
-
     info = compile_info(_touch_workflow(freight, {}), 'leak')
     inlined = sophios.post_compile.inline_artifact_runs(info.artifact).cwl
 
@@ -302,7 +383,7 @@ def test_residue_validates_as_cwl_v1_2(freight: dict[str, Any]) -> None:
     with tempfile.TemporaryDirectory() as workdir:
         target = Path(workdir) / 'residue.cwl'
         target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
-        assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 0
+        assert validate_cwl(str(target)) == 0
     assert inlined['cwlVersion'] == CWL_VERSION
 
 
@@ -318,8 +399,6 @@ def test_an_authored_output_source_validates() -> None:
     authored path carried the document's own spelling through to a document
     whose steps are all renamed, and nothing looked until a runner did.
     """
-    import cwltool.main  # pylint: disable=import-outside-toplevel  # expensive
-
     info = compile_info({
         'outputs': {'mine': {'type': 'File', 'outputSource': 'touch/file'}},
         **_touch_workflow({}, {}),
@@ -329,7 +408,7 @@ def test_an_authored_output_source_validates() -> None:
     with tempfile.TemporaryDirectory() as workdir:
         target = Path(workdir) / 'authored_output_source.cwl'
         target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
-        assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 0
+        assert validate_cwl(str(target)) == 0
 
 
 # --------------------------------------------------------------------------

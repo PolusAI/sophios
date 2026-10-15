@@ -32,16 +32,17 @@ from sophios.ir import (
     StepNode,
     WorkflowGraph,
 )
-from sophios.ir.lower import lower
+from sophios.ir.lower import lower, output_step
 from sophios.ir.declarations import port_declaration
 from sophios.ir.types import AuthoredName
+from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.nodes import Document, InlineLiteral, Step
 from sophios.lang.parser import parse
 from sophios.lang.spans import SourceSpan
 
 from . import ast_strategies as strat
-from .hermetic import COVERAGE, ORACLE
+from .hermetic import COVERAGE, ORACLE, compile_hermetic, compile_hermetic_cwl, subworkflow_step
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -84,23 +85,9 @@ def _lower(source: str) -> Any:
 @pytest.mark.fast
 @given(strat.documents())
 @COVERAGE
-def test_every_parseable_document_lowers_or_diagnoses(document: Document) -> None:
-    """Lowering is total, in the sense `parse` is: what it cannot represent
-    comes back as a diagnostic, never as an exception."""
-    result = lower(_resolved(document))
-    assert result.graph is not None or result.diagnostics.has_errors
-
-
-@pytest.mark.fast
-@given(strat.documents())
-@COVERAGE
 def test_a_well_formed_document_actually_lowers(document: Document) -> None:
-    """Totality alone is satisfied by rejecting everything.
-
-    `documents()` draws only well-formed documents, so every one of them must
-    produce a graph. Without this, an implementation returning diagnostics for
-    all input passes the claim above.
-    """
+    """`documents()` draws only well-formed documents, so every one of them
+    must produce a graph, never a diagnostic or an exception."""
     result = lower(_resolved(document))
     assert result.graph is not None, [d.code.value for d in result.diagnostics]
     assert len(result.graph.steps) == len(document.steps)
@@ -120,7 +107,7 @@ def test_every_reference_the_graph_holds_names_a_port_that_exists(document: Docu
     if result.graph is None:
         return
     known = {p.id for s in result.graph.steps for p in s.inputs + s.outputs}
-    for where, port_id in result.graph._references():  # pylint: disable=protected-access
+    for where, _name, port_id in result.graph._references():  # pylint: disable=protected-access
         assert port_id in known, f'{where} names {port_id}'
 
 
@@ -266,7 +253,7 @@ def test_a_union_member_written_either_way_parses_the_same() -> None:
 
 @pytest.mark.fast
 def test_a_reference_before_its_definition_is_reported() -> None:
-    """`!* e` above its `!& e` is `wic025`, as the reference and compiler say.
+    """`!* e` above its `!& e` is `wic025`, as the language guide and compiler say.
 
     Resolving it by pre-scanning every definition would make Lower accept a
     document the compiler refuses, and silently change an ordering rule.
@@ -285,7 +272,7 @@ def test_a_name_defined_twice_is_reported() -> None:
 
 @pytest.mark.fast
 def test_a_sidecar_out_mentioning_the_name_does_not_mask_a_real_duplicate() -> None:
-    """A `wic:` sidecar `out:` entry (§4.1.1, accepted since `wic019` no
+    """A `wic:` sidecar `out:` entry (language guide §3.6, accepted since `wic019` no
     longer rejects it there) is inert passthrough, never itself a second
     definition — `basic.wic` relies on exactly this to place `min.tpr`'s one
     definition at a distance without it colliding with anything. A real
@@ -379,6 +366,55 @@ def test_a_malformed_graph_cannot_be_constructed(build: Any) -> None:
         build()
 
 
+_GHOST = PortId(StepId(Namespace(), 1, 'ghost'), Direction.INPUT, AuthoredName('p'))
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('build', 'where'), [
+    (lambda: WorkflowGraph(Namespace(), explicit_edge_defs=(('e', _GHOST),)), "mapping 'e'"),
+    (lambda: WorkflowGraph(Namespace(), explicit_edge_calls=(('e', _GHOST),)), "mapping 'e'"),
+    (lambda: WorkflowGraph(Namespace(), output_mapping=((AuthoredName('o'), _GHOST),)), 'an output mapping'),
+    (lambda: WorkflowGraph(Namespace(), input_mapping=((AuthoredName('i'), (_GHOST,)),)), "input mapping 'i'"),
+], ids=['edge defs', 'edge calls', 'output mapping', 'input mapping'])
+def test_a_reference_to_a_port_no_step_declares_is_reported_where_it_is_held(
+        build: Any, where: str) -> None:
+    """The report says which mapping holds the reference and, for the ones keyed
+    by a name, under what name."""
+    with pytest.raises(ValueError) as caught:
+        build()
+    assert str(caught.value) == f'{where} names a port no step declares: {_GHOST}'
+
+
+class _Spelling(str):
+    """A name that notes when it is written out."""
+
+    spelled = False
+
+    def __repr__(self) -> str:
+        self.spelled = True
+        return super().__repr__()
+
+
+@pytest.mark.fast
+def test_a_reference_is_not_spelled_unless_it_is_reported() -> None:
+    """A derived name written out prints every step id it was exposed through,
+    which is the cost that made nesting exponential, so the name a reference is
+    held under is written for the report and not for every graph."""
+    step = StepId(Namespace(), 1, 'step')
+    source = PortId(step, Direction.OUTPUT, AuthoredName('o'))
+    sink = PortId(step, Direction.INPUT, AuthoredName('i'))
+    name = _Spelling('e')
+
+    WorkflowGraph(
+        Namespace(),
+        steps=(StepNode(step, inputs=(Port(sink, PortType(None)),), outputs=(Port(source, PortType(None)),)),),
+        explicit_edge_defs=((name, source),),
+        explicit_edge_calls=((name, sink),),
+        input_mapping=((AuthoredName(name), (sink,)),))
+
+    assert not name.spelled
+
+
 @pytest.mark.fast
 def test_the_graph_owns_no_mutable_container() -> None:
     """A frozen graph holding a dict can have its invariants invalidated after
@@ -400,3 +436,107 @@ def test_a_scatter_entry_that_is_not_a_name_is_wic032(scatter: str) -> None:
 
     codes = [diagnostic.code for diagnostic in result.diagnostics]
     assert SophiosErrorCode.UNKNOWN_SCATTER_PORT in codes, codes
+
+
+@pytest.mark.fast
+def test_an_anchor_on_an_undeclared_call_output_is_reported_not_raised() -> None:
+    """A call step anchoring a name its child never declares is wic028; the graph
+    is not built from a document the phase rejected, so no ValueError escapes."""
+    child = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}]}
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic({'steps': [
+            {**subworkflow_step('child.wic', child),
+             'parentargs': {'out': [{'child__step__1__mk_file___file': {'wic_anchor': 'e'}}]}},
+            {'id': 'sink', 'in': {'file': {'wic_alias': 'e'}, 'n': {'wic_inline_input': 1}}}]})
+    assert {d.code for d in caught.value.diagnostics} == {SophiosErrorCode.UNDECLARED_PORT}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('extra', [{'linkMerge': 'merge_flattened'}, {'pickValue': 'first_non_null'},
+                                   {'outputSource': ['a/f', 'b/f']}, {'outputSource': ['s/f']},
+                                   {'outputSource': []}])
+def test_link_merge_and_pick_value_on_an_output_are_wic038(extra: dict[str, Any]) -> None:
+    """CWL's merge fields on a workflow output were copied out unread, and a list
+    `outputSource` was emitted naming steps by their authored ids, which cwltool cannot resolve."""
+    source = 'steps:\n- id: s\n  out: [f]\noutputs:\n  o:\n    type: File\n'
+    for key, value in {'outputSource': 's/f', **extra}.items():
+        source += f'    {key}: {value}\n'
+    result = _lower(source)
+    assert SophiosErrorCode.STEP_INPUT_RECORD in {d.code for d in result.diagnostics}
+
+
+@pytest.mark.fast
+def test_a_positional_output_source_addresses_the_occurrence_at_that_index() -> None:
+    """Two `s` steps; `(2, s)/f` is the second one, and nothing else can say so."""
+    result = _lower('steps:\n- id: s\n  out: [f]\n- id: s\n  out: [f]\n'
+                    'outputs:\n  o:\n    type: File\n    outputSource: (2, s)/f\n')
+    assert result.graph is not None, list(result.diagnostics)
+    (_name, source), = result.graph.output_mapping
+    assert source.step.index == 2
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('address', ['(2, t)/f', '(3, s)/f'], ids=['wrong-name', 'out-of-range'])
+def test_a_positional_output_source_that_disagrees_with_the_document_is_wic039(address: str) -> None:
+    """A wrong name or an index past the last step is refused as wic039."""
+    result = _lower('steps:\n- id: s\n  out: [f]\n- id: s\n  out: [f]\n'
+                    f'outputs:\n  o:\n    type: File\n    outputSource: {address}\n')
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE]
+
+
+@pytest.mark.fast
+def test_a_positional_output_source_naming_a_port_the_step_lacks_is_wic028() -> None:
+    """The step is known, so the missing port is reported with the step's outputs."""
+    result = _lower('steps:\n- id: s\n  out: [f]\n- id: s\n  out: [f]\n'
+                    'outputs:\n  o:\n    type: File\n    outputSource: (2, s)/nope\n')
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.UNDECLARED_PORT]
+    assert all("'nope'" in d.message and 'its outputs are: f' in d.message for d in result.diagnostics)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('step_text, found', [
+    ('s', (1, None)), ('wf__step__2__s', (2, None)), ('wf__step__3__t', (3, None)),
+    ('(2, s)', (2, 's')), ('(9, x)', (9, 'x')), ('u', None), ('wf__step__1__t', None)])
+def test_output_step_reads_the_step_an_output_source_names(step_text: str, found: Any) -> None:
+    """An id names its first occurrence, written as authored or as generated; a
+    positional key names its index whatever is there, and keeps the name it wrote."""
+    assert output_step('wf', ['s', 's', 't'], step_text) == found
+
+
+@pytest.mark.fast
+def test_a_record_source_before_its_definition_is_reported() -> None:
+    """A record's `!*` source resolves as a bare `!*` does: above its `!& e` it is `wic025`."""
+    result = _lower('steps:\n- id: use\n  in:\n    f: !cwl {source: !* e}\n- id: mk\n  out:\n  - file: !& e\n')
+    assert [d.code.value for d in result.diagnostics] == ['wic025']
+
+
+@pytest.mark.fast
+def test_a_record_with_several_sources_takes_none_from_outside_its_document() -> None:
+    """One input crosses a workflow boundary through one relay, so it cannot carry several outside sources."""
+    result = _lower('inputs:\n  w: string\nsteps:\n- id: use\n  in:\n    f: !cwl {source: [!* e, w]}\n')
+    assert [d.code.value for d in result.diagnostics] == ['wic025']
+
+
+@pytest.mark.fast
+def test_a_record_binds_an_input_its_process_does_not_declare() -> None:
+    """The input is a port of the step with no declaration; any other value there is `wic028`."""
+    workflow: dict[str, Any] = {'inputs': {'go': 'boolean'}, 'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}, 'go': {'wic_raw_cwl': {'source': 'go'}}}}]}
+    (step,) = compile_hermetic(workflow).graph.steps
+    (port,) = [port for port in step.inputs if port.id.port == 'go']
+    assert port.declaration is None
+    workflow['steps'][0]['in']['go'] = 'go'
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic(workflow)
+    assert SophiosErrorCode.UNDECLARED_PORT in {d.code for d in caught.value.diagnostics}
+
+
+@pytest.mark.fast
+def test_scatter_ports_keep_the_authored_order() -> None:
+    """`scatter: [name, file]` on xform is emitted in that order: under
+    `nested_crossproduct` the order is the nesting of the output arrays."""
+    compiled = compile_hermetic_cwl({'steps': [{'id': 'xform', 'scatter': ['name', 'file'],
+                                                'scatterMethod': 'nested_crossproduct',
+                                                'in': {'name': {'wic_inline_input': ['a']},
+                                                       'file': {'wic_inline_input': ['x.txt']}}}]})
+    assert compiled['steps'][0]['scatter'] == ['name', 'file']

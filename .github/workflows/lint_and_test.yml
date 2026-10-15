@@ -49,7 +49,10 @@ on:
 
 # See https://github.com/orgs/community/discussions/15690
 # For workflow_dispatch, the commit message, repo, and branch name are not displayed by default.
-run-name: "${{ inputs.commit_message}} - ${{ inputs.sender_repo }} - ${{ inputs.wic_ref }}"
+# A dispatched run is not attached to the branch it tests, so its name says which
+# sophios, mm-workflows and image-workflows refs ran together. The inputs carry refs,
+# not commits: the "Name what this run tests" step below adds the commits to the summary.
+run-name: "${{ inputs.commit_message || 'unknown' }} - ${{ inputs.sender_repo || 'unknown' }} - sophios ${{ inputs.wic_owner || 'unknown' }}/${{ inputs.wic_ref || 'unknown' }} - mm-workflows ${{ inputs.mm-workflows_owner || 'unknown' }}/${{ inputs.mm-workflows_ref || 'unknown' }} - image-workflows ${{ inputs.image-workflows_owner || 'unknown' }}/${{ inputs.image-workflows_ref || 'unknown' }}"
 
 defaults:
   run:
@@ -124,6 +127,26 @@ jobs:
           ref: ${{ inputs.image-workflows_ref }}
           path: image-workflows
 
+      # The run page shows the dispatched sha, which may be master's; the summary
+      # names what was checked out. Inputs go through env, never into the script.
+      - name: Name what this run tests
+        if: always()
+        env:
+          SOPHIOS: ${{ inputs.wic_owner || 'unknown' }}/sophios@${{ inputs.wic_ref || 'unknown' }}
+          MM_WORKFLOWS: ${{ inputs.mm-workflows_owner || 'unknown' }}/mm-workflows@${{ inputs.mm-workflows_ref || 'unknown' }}
+          IMAGE_WORKFLOWS: ${{ inputs.image-workflows_owner || 'unknown' }}/image-workflows@${{ inputs.image-workflows_ref || 'unknown' }}
+        run: |
+          sophios_sha=$(git -C sophios rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
+          mm_workflows_sha=$(git -C mm-workflows rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
+          image_workflows_sha=$(git -C image-workflows rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
+          {
+            echo '| checked out | commit |'
+            echo '|---|---|'
+            echo "| $SOPHIOS | $sophios_sha |"
+            echo "| $MM_WORKFLOWS | $mm_workflows_sha |"
+            echo "| $IMAGE_WORKFLOWS | $image_workflows_sha |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       # Completely moving away from pypy
       - name: Setup miniforge (linux, macos)
         if: runner.os != 'Windows'
@@ -172,7 +195,7 @@ jobs:
       # Do the static analysis, type and style check first
       - name: MyPy Check Type Annotations
         if: runner.os == 'Linux'
-        run: cd sophios/ && mypy src/ examples/ tests/
+        run: cd sophios/ && mypy src/ examples/ tests/ docs/cookbook/
         # NOTE: Do not use `mypy .` because then mypy will check both src/ and build/ causing:
         # src/sophios/__init__.py: error: Duplicate module named "wic"
         # (also at "./build/lib/sophios/__init__.py")
@@ -231,14 +254,14 @@ jobs:
         run: cd sophios/ && pytest -k test_emitted_cwl_says_nothing_cwl_cannot_read
         timeout-minutes: 20 # backup timeout for windows
 
-      - name: PyTest Inline Subworkflows
+      - name: PyTest Inline Flags
         if: always()
-        run: cd sophios/ && pytest -k test_inline_subworkflows # --cov --cov-config=.coveragerc_serial
+        run: cd sophios/ && pytest tests/core/test_examples.py -k "test_embedding_keeps or test_flatten" # --cov --cov-config=.coveragerc_serial
         timeout-minutes: 20 # backup timeout for windows
 
-      # design_docs/core-refactor-design.md, Spec 0: entry-point resolution. The
-      # core/contrib import boundary is the Import Boundaries lint step.
-      - name: PyTest Spec 0 Invariants
+      # Entry-point resolution and CI coverage. The core/contrib import boundary
+      # is the Import Boundaries lint step.
+      - name: PyTest Entry Points and CI Coverage
         if: always()
         run: cd sophios/ && pytest tests/core/test_entry_points.py tests/core/test_ci_coverage.py
 
@@ -254,19 +277,18 @@ jobs:
         timeout-minutes: 20
         run: cd sophios/ && pytest tests/core/test_predicates.py tests/core/test_leak_boundary.py tests/core/test_lang_version.py tests/core/test_lang_parser.py tests/core/test_hermeticity.py -m "skip_pypi_ci"
 
-      # design_docs/core-refactor-design.md, Spec 2: the oracle suite — the
-      # generators, the equivalence relation and P25's own hermeticity checks.
-      # Its own step for the reason Spec 0 has one: a red build is attributable
-      # to a zone without bisecting. It needs nothing this matrix lacks, which
-      # is the point of P25 — no plugins, no containers, no corpus.
+      # The oracle suite: the generators, the equivalence relation and the
+      # suite's own hermeticity checks. Its own step, so a red build is
+      # attributable to a zone without bisecting. It needs nothing this matrix
+      # lacks: no plugins, no containers, no corpus.
       #
       # skip_pypi_ci excludes the per-stem `cwltool --validate` cases, for the
       # reason the contrib step gives below.
-      - name: PyTest Spec 2 Oracle
+      - name: PyTest Oracle
         if: always()
         run: cd sophios/ && pytest tests/core/test_hermeticity.py tests/core/test_generators.py tests/core/test_equivalence.py tests/core/test_equivalences.py -m "not skip_pypi_ci"
 
-      # Spec 3 prerequisite: the front end's opinion of the documents the
+      # The front end's opinion of the documents the
       # compiler manufactures. Its own step because a red build here means the
       # compiler emitted something the language refuses — a different fact from
       # a property failing, and one worth reading without bisecting. ~3s.
@@ -274,11 +296,11 @@ jobs:
         if: always()
         run: cd sophios/ && pytest tests/core/test_manufactured_documents.py
 
-      # Spec 3's cumulative blocking lane: phase contracts plus the composed
+      # Phase contracts plus the composed
       # pipeline. It does not assert that a retired name has stayed retired --
       # a deleted symbol coming back is a review failure, and a test that
       # names one can only ever restate its own deletion.
-      - name: PyTest Spec 3 Phases
+      - name: PyTest IR Phases
         if: always()
         timeout-minutes: 30
         run: cd sophios/ && pytest tests/core/test_lower.py tests/core/test_emit.py tests/core/test_resolve.py tests/core/test_link.py tests/core/test_infer_phase.py tests/core/test_pipeline.py
@@ -292,7 +314,15 @@ jobs:
         if: always()
         run: cd sophios/ && pytest tests/core/test_example_scripts.py
 
-      # design_docs/core-refactor-design.md, Spec 2: the fast contracts for the
+      # A plain CWL workflow under --allow_raw_cwl is handed to the runner as
+      # it is. Twelve conformance workflows (tests/core/data/cwl-v1.2) and a
+      # two-step one run in-process with cwltool, about five seconds; the
+      # Windows leg skips those (needs_cwltool) and runs the rest.
+      - name: PyTest Plain CWL
+        if: always()
+        run: cd sophios/ && pytest tests/core/test_plain_cwl.py
+
+      # The fast contracts for the
       # weekly benchmark harness. Its own step because importing it imports
       # tests/core/wic_corpus.py, which reads the config and walks
       # search_paths_wic — so a corpus or config problem reds this step and not
@@ -303,7 +333,7 @@ jobs:
 
       # Contrib surfaces (ICT, Workflow Builder, REST) run in core CI, but as
       # their own step, so a red build is attributable to a zone without
-      # bisecting. See design_docs/core-refactor-design.md, Spec 0.
+      # bisecting.
       #
       # skip_pypi_ci excludes the cases that shell out to a CWL runner against
       # pre-pulled Docker images. This matrix is GitHub-hosted and has no

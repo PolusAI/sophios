@@ -40,6 +40,8 @@ class CompiledWorkflow:
     cwl_job_inputs: Json
     #: The Sophios language version this workflow was compiled under.
     lang_version: str = ''
+    #: The notes the compile made, rendered (e.g. an inference choice between equals).
+    diagnostics: tuple[str, ...] = ()
 
     def to_cwl_yaml(self) -> str:
         """Return the compiled CWL workflow as YAML."""

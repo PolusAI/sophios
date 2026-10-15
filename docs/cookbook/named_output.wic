@@ -1,0 +1,8 @@
+steps:
+  echo:
+    in:
+      message: !ii Hello
+outputs:
+  greeting:
+    type: File
+    outputSource: echo/stdout

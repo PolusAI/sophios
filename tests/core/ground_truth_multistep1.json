@@ -39,6 +39,14 @@
               "glob": "$(inputs.filename)"
             }
           }
+        },
+        "hints": {
+          "LoadListingRequirement": {
+            "loadListing": "deep_listing"
+          },
+          "NetworkAccess": {
+            "networkAccess": true
+          }
         }
       }
     },
@@ -91,6 +99,14 @@
               "glob": "$(inputs.file.basename)"
             }
           }
+        },
+        "hints": {
+          "LoadListingRequirement": {
+            "loadListing": "deep_listing"
+          },
+          "NetworkAccess": {
+            "networkAccess": true
+          }
         }
       }
     },
@@ -131,7 +147,15 @@
           }
         },
         "stdin": "$(inputs.file.path)",
-        "stdout": "output"
+        "stdout": "output",
+        "hints": {
+          "LoadListingRequirement": {
+            "loadListing": "deep_listing"
+          },
+          "NetworkAccess": {
+            "networkAccess": true
+          }
+        }
       }
     }
   ],

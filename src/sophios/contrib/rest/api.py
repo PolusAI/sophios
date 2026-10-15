@@ -1,5 +1,6 @@
 from pathlib import Path
 import copy
+import sys
 
 
 import uvicorn
@@ -9,12 +10,11 @@ import yaml
 
 from sophios import compiler
 from sophios import input_output
-from sophios.utils_graphs import get_graph_reps
 from sophios import utils_cwl
 from sophios.post_compile import inline_artifact_runs
 from sophios.cli import get_args, get_dicts_for_compilation
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
-from sophios.wic_types import Json, Tool, Tools, StepId
+from sophios.wic_types import Json, Tools
 from sophios.contrib import converter
 from sophios import plugins
 from sophios.ir import frontdoor
@@ -72,29 +72,21 @@ async def compile_wf(request: Request) -> Json:
     # Build a list of CLTs
     # The default list
     tools_cwl: Tools = {}
-    global_config = input_output.get_config(Path(args.config_file), Path(args.homedir)/'wic'/'global_config.json')
+    global_config = input_output.get_config(args.config_file, Path(args.homedir))
     tools_cwl = plugins.get_tools_cwl(global_config, args.validate_plugins, args.quiet)
-    # Add to the default list if the tool is 'inline' in run tag
-    # run tag will have the actual CommandLineTool
-    for can_step in workflow_can["steps"]:
-        if can_step.get("run", None):
-            # add a new tool
-            tools_cwl[StepId(can_step["id"], "global")] = Tool(".", can_step["run"])
-    graph = get_graph_reps(wkflw_name)
 
     # From the arguments this endpoint actually built, not a fresh default
-    # parse. Nothing observable changes here — `wkflw_name` is a name, not a
-    # path, and the sole consumer takes `Path(...).parent.absolute()`, which
-    # is the cwd for both `''` and `'workflow_'`. It is still the right shape:
-    # re-deriving configuration that is already in hand is how the two drift.
-    compiler_options, graph_settings, yaml_tag_paths = get_dicts_for_compilation(args)
+    # parse: re-deriving configuration that is already in hand is how the two drift.
+    compiler_options, _graph_settings = get_dicts_for_compilation(args)
 
     # ========= COMPILE WORKFLOW ================
     bundle = frontdoor.bundle_from_source(
         yaml.safe_dump(workflow_can, sort_keys=False), wkflw_name, {}, tools_cwl)
-    result = compiler.compile_source(
-        bundle, compiler_options, graph_settings, yaml_tag_paths,
-        relative_run_path=True, testing=False, graph_target=graph)
+    result = compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=False)
+    if result.realtime:
+        analyses = ', '.join(declaration.analysis for declaration in result.realtime)
+        print(f'Real-time analysis runs only with --run_local; the returned workflow has no step for {analyses}',
+              file=sys.stderr)
     # generating cwl inline within the 'run' tag is post compile
     # and always on when compiling and preparing REST return payload
     artifact = inline_artifact_runs(result.artifact)

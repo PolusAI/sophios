@@ -61,6 +61,10 @@ class StepId:
     namespace: Namespace
     index: int
     name: str
+    #: `hash((namespace, index, name))`, computed once. A namespace holds the step
+    #: ids that enclose it and each of those holds its own namespace, so hashing
+    #: on demand re-walks the whole chain and the cost doubles per level.
+    _hash: int = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Reject an occurrence that names nothing or sits nowhere."""
@@ -68,6 +72,10 @@ class StepId:
             raise ValueError('a step must be named')
         if self.index < 1:
             raise ValueError(f'a step occurrence is 1-based, not {self.index}')
+        object.__setattr__(self, '_hash', hash((self.namespace, self.index, self.name)))
+
+    def __hash__(self) -> int:
+        return self._hash
 
 
 #: A name as its author wrote it: a tool's port, a workflow input, a step key.
@@ -84,6 +92,15 @@ class DerivedName:
 
     step: StepId
     port: 'PortName'
+    #: `hash((step, port))`, computed once: `port` may itself be derived, so
+    #: hashing on demand walks every level the name was exposed through.
+    _hash: int = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, '_hash', hash((self.step, self.port)))
+
+    def __hash__(self) -> int:
+        return self._hash
 
 
 #: What a port or workflow boundary is called: written, or derived from one.
@@ -111,6 +128,7 @@ class PortType:
     `T[]` shorthand expanded, through array items and every union member, so
     `string?[]` is an array of nullable strings and not a nullable array, and
     `[File?, string]` accepts null in either spelling of that member.
+    `stdin`, `stdout` and `stderr` canonicalise to `File`.
     """
 
     declared: OpaqueCwl
@@ -128,6 +146,11 @@ class PortType:
 
 def _canonical(raw: OpaqueCwl) -> OpaqueCwl:
     """Expand `T?` and `T[]` wherever they are written, including inside a member."""
+    if raw in ('stdin', 'stdout', 'stderr'):
+        # A tool's own shorthand for "the stream, as a File". Only a
+        # CommandLineTool port may say it; a workflow boundary promoted from
+        # one must say `File`, which is what cwltool makes of it.
+        return 'File'
     if isinstance(raw, str) and raw.endswith('?'):
         return ['null', _canonical(raw[:-1])]
     if isinstance(raw, str) and raw.endswith('[]'):
@@ -227,20 +250,28 @@ class Expression:
     text: str
 
 
+@dataclass(frozen=True, slots=True)
+class Record:
+    """A step input spelled as CWL's WorkflowStepInput: its resolved sources, in
+    the authored order, and the other fields verbatim."""
+
+    sources: tuple['PortName | StepOutputRef', ...]
+    fields: tuple[tuple[str, OpaqueCwl], ...]
+
+
 #: What a step's `in:` entry can be: a closed set of the shapes CWL has a
 #: field for, distinct from the authored `InputValue` union.
-EmittedValue: TypeAlias = Source | Expression
+EmittedValue: TypeAlias = Source | Expression | Record
 
 
 @dataclass(frozen=True, slots=True)
 class ProcessRun:
-    """What a step executes: `target` is transported exactly as CWL (usually a
-    relative path, but an inline process object is legal), and `process_id` is
+    """What a step executes: `target` is a relative path, and `process_id` is
     the resolved logical identity, kept separate since a path is an embedding
     choice, not a tool identity.
     """
 
-    target: OpaqueCwl
+    target: str
     process_id: RegistryKey
     child: 'WorkflowGraph | None' = None
 
@@ -320,10 +351,26 @@ class DeferredObligation:
             raise ValueError('only an input can await a value')
 
 
+@dataclass(frozen=True, slots=True)
+class SourceList:
+    """What each `source` entry of a step-input record resolved to, in order:
+    an edge, an obligation, or None for a workflow input relayed by name."""
+
+    sink: PortId
+    items: tuple[Edge | DeferredObligation | None, ...]
+
+    def __post_init__(self) -> None:
+        """Reject an entry resolved against another port."""
+        for item in self.items:
+            if item is not None and item.sink != self.sink:
+                raise ValueError(f'source list for {self.sink} holds a resolution for {item.sink}')
+
+
 #: What a binding resolved to, or None when the value needs no producer -- a
 #: literal, a workflow parameter, a raw CWL reference. `Binding.value` says
-#: which of those it is; this says where it comes from.
-Resolution: TypeAlias = Edge | DeferredObligation | None
+#: which of those it is; this says where it comes from. A step-input record
+#: resolves to a `SourceList`, one entry per source.
+Resolution: TypeAlias = Edge | DeferredObligation | SourceList | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -427,6 +474,10 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     #: `input_mapping` names emitted in shorthand: a step's own lifted input,
     #: recorded where Complete or Infer creates it (a name cannot tell).
     shorthand_relays: tuple[PortName, ...] = ()
+    #: False when the workflow is marked `wic: inlineable: false`, in its own file or
+    #: at the call site (read from the child's sidecar once call-site keys are folded
+    #: in): a caller asking to flatten its calls keeps this one nested.
+    inlineable: bool = True
 
     def __post_init__(self) -> None:
         """Reject a graph naming a port no step declares, checked over every
@@ -443,15 +494,19 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
 
         known = {port.id for step in self.steps for port in step.inputs + step.outputs}
         recursive_known = self.port_ids
-        recursive_wheres = {'an edge source', 'an output mapping'}
-        for where, port_id in self._references():
+        recursive_wheres = {'an edge source', 'an output mapping', 'input mapping'}
+        for where, name, port_id in self._references():
             # An input mapping may legitimately relay a boundary name to a
             # sink several levels below it, outside this graph's own steps,
             # the same way an output mapping already may.
-            recursive = where in recursive_wheres or where.startswith('input mapping ')
-            allowed = recursive_known if recursive else known
+            allowed = recursive_known if where in recursive_wheres else known
             if port_id not in allowed:
-                raise ValueError(f'{where} names a port no step declares: {port_id}')
+                # Spelled only on failure: a derived name's repr prints every
+                # step id it was exposed through, and each of those prints its
+                # own namespace, so writing it out for every reference is the
+                # cost that made nesting exponential.
+                label = where if name is None else f'{where} {name!r}'
+                raise ValueError(f'{label} names a port no step declares: {port_id}')
         for edge in self.linked_edges:
             if edge.source not in recursive_known or edge.sink not in recursive_known:
                 raise ValueError(f'a linked edge names a port outside this graph tree: {edge}')
@@ -462,22 +517,24 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
         if len(recursive_steps) != len(set(recursive_steps)):
             raise ValueError('step identities must be injective across a composed graph')
 
-    def _references(self) -> tuple[tuple[str, PortId], ...]:
-        """Every port identity this graph holds, with where it came from."""
-        found: list[tuple[str, PortId]] = []
+    def _references(self) -> tuple[tuple[str, str | PortName | None, PortId], ...]:
+        """Every port identity this graph holds, with where it came from and
+        the name it is held under there, when it is held under one."""
+        found: list[tuple[str, str | PortName | None, PortId]] = []
         for step in self.steps:
             for binding in step.bindings:
-                found.append(('a binding', binding.sink))
-                if isinstance(binding.resolution, Edge):
-                    found.append(('an edge source', binding.resolution.source))
-                elif isinstance(binding.resolution, DeferredObligation):
-                    found.append(('an obligation', binding.resolution.sink))
+                found.append(('a binding', None, binding.sink))
+                for item in _resolved_items(binding.resolution):
+                    if isinstance(item, Edge):
+                        found.append(('an edge source', None, item.source))
+                    else:
+                        found.append(('an obligation', None, item.sink))
         for name, port_id in (*self.explicit_edge_defs, *self.explicit_edge_calls):
-            found.append((f'mapping {name!r}', port_id))
+            found.append(('mapping', name, port_id))
         for _name, port_id in self.output_mapping:
-            found.append(('an output mapping', port_id))
+            found.append(('an output mapping', None, port_id))
         for boundary, port_ids in self.input_mapping:
-            found.extend((f'input mapping {boundary!r}', port_id) for port_id in port_ids)
+            found.extend(('input mapping', boundary, port_id) for port_id in port_ids)
         return tuple(found)
 
     @property
@@ -485,15 +542,15 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
         """The edges this graph owns: its own bindings, and what Link or
         Infer placed here. Local, not tree-wide.
         """
-        local = tuple(b.resolution for s in self.steps for b in s.bindings
-                      if isinstance(b.resolution, Edge))
+        local = tuple(item for s in self.steps for b in s.bindings
+                      for item in _resolved_items(b.resolution) if isinstance(item, Edge))
         return local + self.linked_edges
 
     @property
     def obligations(self) -> tuple[DeferredObligation, ...]:
         """Every binding this document cannot satisfy on its own."""
-        local = tuple(b.resolution for s in self.steps for b in s.bindings
-                      if isinstance(b.resolution, DeferredObligation))
+        local = tuple(item for s in self.steps for b in s.bindings
+                      for item in _resolved_items(b.resolution) if isinstance(item, DeferredObligation))
         nested = tuple(obligation for child in self.children for obligation in child.obligations)
         discharged = set(self.discharged_obligations)
         return tuple(obligation for obligation in local + nested
@@ -519,6 +576,17 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
             StepNode | None: The first occurrence, if this graph has one.
         """
         return next((s for s in self.steps if s.id.name == name), None)
+
+
+def _resolved_items(resolution: Resolution) -> tuple[Edge | DeferredObligation, ...]:
+    """The edges and obligations one binding resolved to: none, one, or a record's several."""
+    match resolution:
+        case SourceList(items=items):
+            return tuple(item for item in items if item is not None)
+        case None:
+            return ()
+        case _:
+            return (resolution,)
 
 
 #: A `WorkflowGraph` that states a whole CWL document: both versions set and

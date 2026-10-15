@@ -98,6 +98,9 @@ podman --version
 For Docker, Docker Desktop is the usual path on macOS and Windows. On Linux,
 install Docker or Podman through your distribution package manager.
 
+Before a local run, Sophios checks the engine only when a step runs in a
+container, and says whether it is missing, stopped or not yours to use.
+
 ### Node.js
 
 Install Node.js when workflows use CWL JavaScript expressions such as
@@ -160,30 +163,21 @@ For example, if your CWL tool runs `samtools`, `python`, `bash`, or a project
 specific executable outside a container, that executable must be available in
 the runtime environment.
 
-## Quick Environment Check
+## Checking a Machine
 
-This check reports the optional system tools Sophios commonly uses:
+Before a local run starts, Sophios checks what it needs: the container engine
+when a step runs in a container, the input paths, the directories it writes and
+the programs it calls. Each problem is one line saying what to install or fix.
+To check a machine without running anything, compile a workflow with `--check`:
+it does every check a run does, then stops, pulling and running nothing.
+Before a run, the engine you chose pulls every image, and loads or imports the ones a tool ships
+(`dockerLoad`, `dockerImport`); a failure there is `wic037`.
+`--generate_run_script` does the same checks and the image pulls, then writes
+`run.sh` instead of running. Compute submissions are not checked against this
+machine, since they run elsewhere.
 
-```bash
-python - <<'PY'
-import shutil
-
-checks = {
-    "node": "needed for CWL JavaScript expressions",
-    "dot": "needed for Graphviz diagrams",
-    "docker": "needed for Docker-backed local execution",
-    "podman": "needed for Podman-backed local execution",
-}
-
-for executable, reason in checks.items():
-    path = shutil.which(executable)
-    status = path if path else "not found"
-    print(f"{executable:>6}: {status} ({reason})")
-PY
-```
-
-Missing optional tools are not always errors. Install the tools required by the
-workflows you plan to run.
+Node.js and Graphviz are named by what uses them: cwltool when a JavaScript
+expression needs Node.js, and `--graphviz` when `dot` is missing.
 
 ## Next Steps
 

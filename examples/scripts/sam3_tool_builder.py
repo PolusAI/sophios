@@ -41,7 +41,7 @@ def build_tool() -> CommandLineTool:
         .label("LoRA alpha")
         .doc("LoRA alpha scaling factor used when lora_weights is set (default 32)"),
     )
-    outputs = Outputs(output=Output(cwl.directory, from_input=inputs.output).label("Output segmentation Zarr"))
+    outputs = Outputs(output=Output(cwl.directory, glob="$(inputs.output.basename)").label("Output segmentation Zarr"))
 
     return (
         CommandLineTool("sam3_ome_zarr_autosegmentation", inputs, outputs)

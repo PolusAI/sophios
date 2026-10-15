@@ -28,8 +28,9 @@ import yaml
 
 import sophios.cli
 import sophios.compiler
+import sophios.drawing
 import sophios.main
-from sophios.wic_types import CompilerOptions, GraphSettings, YamlTagPaths
+from sophios.wic_types import CompilerOptions, GraphSettings
 
 
 @pytest.mark.fast
@@ -38,14 +39,12 @@ def test_defaults_are_available_without_a_command_line() -> None:
 
     The other half of the split. The CLI property below covers what a user
     *chooses*; this covers what a caller gets when nobody chooses — which is
-    the path the Python API, the schema generator and the subinterpreter all
+    the path the Python API, the schema generator and a real-time analysis all
     take, and therefore the one the corpus workflows compile through. Deleting
     it as "subsumed" was wrong: the property never names this function.
     """
-    options, graph, tags = sophios.cli.default_compilation_settings()
+    options = sophios.cli.default_compilation_settings()
     assert options['allow_raw_cwl'] is False
-    assert graph['graph_dark_theme'] is False
-    assert tags['yaml'] == ''
 
 
 @pytest.mark.fast
@@ -64,11 +63,11 @@ def test_the_converter_requires_arguments() -> None:
 
 
 # --------------------------------------------------------------------------
-# Every setting the user chooses is the setting the compiler is handed
+# Every setting the user chooses is the setting the compiler or the drawing is handed
 # --------------------------------------------------------------------------
 
-#: A minimal workflow: enough to reach the compiler, cheap enough to run once
-#: per setting. Compilation is intercepted before it does any work.
+#: A minimal workflow: enough to reach the compiler and the drawing, cheap enough to run once
+#: per setting. The compiler's options are caught before it does any work.
 PROBE_WORKFLOW: Final = {'steps': [{'id': 'touch', 'in': {'filename': {'wic_inline_input': 'empty.txt'}}}]}
 
 
@@ -80,14 +79,19 @@ class _Delivered(BaseException):
     write an error file.
     """
 
-    def __init__(self, settings: tuple[Any, Any, Any]) -> None:
+    def __init__(self, settings: Any) -> None:
         super().__init__('settings captured')
         self.settings = settings
 
 
+#: Where each settings dict is handed over, by its index in `_settings_fields`: the function, and
+#: the position of the dict among its arguments. The drawing is made only with `--graphviz`.
+_RECEIVERS: Final = ((sophios.compiler, 'compile_source', 1, ()), (sophios.drawing, 'draw', 2, ('--graphviz',)))
+
+
 @pytest.fixture(name='settings_from_cli')
-def _settings_from_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., tuple[Any, Any, Any]]:
-    """Run the real CLI and return the three settings dicts the compiler got.
+def _settings_from_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., Any]:
+    """Run the real CLI and return the settings dict the compiler (index 0) or the drawing (index 1) got.
 
     Deliberately driven through `main._main()` with a real argv rather than by
     calling the converter: the bug this guards was never in the conversion, it
@@ -95,39 +99,37 @@ def _settings_from_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Calla
     anyway. A test of the converter alone passed throughout.
 
     That makes these integration tests, and `fast` is a claim about cost
-    rather than about layer: compilation is intercepted before it does any
-    work, so a case runs in well under a second. They stay in the fast lane
-    because a delivery bug is exactly the kind one wants to hear about on the
-    first run, not the nightly one.
+    rather than about layer: a one-step workflow compiles in well under a
+    second. They stay in the fast lane because a delivery bug is exactly the
+    kind one wants to hear about on the first run, not the nightly one.
     """
-    def run(*flags: str) -> tuple[Any, Any, Any]:
+    def run(index: int, *flags: str) -> Any:
         workflow = tmp_path / 'probe.wic'
         workflow.write_text(yaml.safe_dump(PROBE_WORKFLOW), encoding='utf-8')
+        module, receiver, position, needs = _RECEIVERS[index]
 
-        def capture(_bundle: Any, compiler_options: Any, graph_settings: Any,
-                    yaml_tag_paths: Any, *_args: Any, **_kwargs: Any) -> None:
-            raise _Delivered((compiler_options, graph_settings, yaml_tag_paths))
+        def capture(*args: Any, **_kwargs: Any) -> None:
+            raise _Delivered(args[position])
 
-        # The CLI reads files, so it enters through the source door.
-        monkeypatch.setattr(sophios.compiler, 'compile_source', capture)
-        monkeypatch.setattr(sys, 'argv', ['sophios', '--yaml', str(workflow), *flags])
+        monkeypatch.setattr(module, receiver, capture)
+        monkeypatch.setattr(sys, 'argv', ['sophios', '--yaml', str(workflow), *needs, *flags])
         try:
-            sophios.main._main()
+            sophios.main._main(*sophios.cli.parser.parse_known_args())
         except _Delivered as delivered:
             return delivered.settings
-        raise AssertionError('the compiler was never reached')
+        raise AssertionError(f'{receiver} was never reached')
     return run
 
 
 def _settings_fields() -> list[tuple[int, str, type]]:
-    """Every field of the three settings types, with which dict it belongs to.
+    """Every field of the two settings types, with which dict it belongs to.
 
     Derived from the `TypedDict`s rather than listed here, so a setting added
     later is covered the day it is added — the failure mode being guarded is
     precisely that someone adds a flag and nobody notices it is not delivered.
     """
     return [(index, name, annotation)
-            for index, settings_type in enumerate((CompilerOptions, GraphSettings, YamlTagPaths))
+            for index, settings_type in enumerate((CompilerOptions, GraphSettings))
             for name, annotation in settings_type.__annotations__.items()]
 
 
@@ -144,12 +146,7 @@ def _non_default(name: str, annotation: type) -> tuple[list[str], object]:
     return [f'--{name}', f'chosen_{name}'], f'chosen_{name}'
 
 
-#: `yaml` is the workflow path, supplied by the fixture, and `homedir` and
-#: `cachedir` name real directories the run reads from — pointing them at
-#: sentinels breaks the run rather than testing delivery. `yaml` is covered by
-#: its own case below; the other two share the code path it exercises.
 UNDELIVERABLE_BY_SENTINEL: Final = frozenset({
-    'yaml', 'homedir', 'cachedir',
     # These are values in global_config.json, not CLI flags. They still travel
     # in CompilerOptions after main has loaded that explicit configuration.
     'inference_rules', 'renaming_conventions',
@@ -162,9 +159,9 @@ _DELIVERABLE: Final = [field for field in _settings_fields()
 @pytest.mark.fast
 @pytest.mark.parametrize('index,name,annotation', _DELIVERABLE,
                          ids=[name for _index, name, _annotation in _DELIVERABLE])
-def test_every_setting_reaches_the_compiler(settings_from_cli: Callable[..., tuple[Any, Any, Any]],
+def test_every_setting_reaches_the_compiler(settings_from_cli: Callable[..., Any],
                                             index: int, name: str, annotation: type) -> None:
-    """A setting chosen on the command line is the setting the compiler gets.
+    """A setting chosen on the command line is the setting the compiler, or the drawing, gets.
 
     One property instead of a test per flag, and derived from the settings
     types instead of a list someone maintains. Every delivery bug found so far
@@ -173,20 +170,8 @@ def test_every_setting_reaches_the_compiler(settings_from_cli: Callable[..., tup
     defaults at once.
     """
     flags, expected = _non_default(name, annotation)
-    settings = settings_from_cli(*flags)
-    assert settings[index][name] == expected, (
-        f'--{name} was set on the command line but the compiler received '
-        f'{settings[index][name]!r} instead of {expected!r}'
+    settings = settings_from_cli(index, *flags)
+    assert settings[name] == expected, (
+        f'--{name} was set on the command line but {_RECEIVERS[index][1]} received '
+        f'{settings[name]!r} instead of {expected!r}'
     )
-
-
-@pytest.mark.fast
-def test_the_workflow_path_reaches_the_compiler(settings_from_cli: Callable[..., tuple[Any, Any, Any]]) -> None:
-    """`yaml_tag_paths['yaml']` is the workflow being compiled.
-
-    Separate because its value is the path the fixture wrote, not a sentinel.
-    It is the field that differed between `main` and every other caller, and
-    the one a `cwl_subinterpreter` step reads.
-    """
-    _options, _graph, tag_paths = settings_from_cli()
-    assert tag_paths['yaml'].endswith('probe.wic')

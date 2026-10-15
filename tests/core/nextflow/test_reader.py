@@ -467,7 +467,7 @@ def test_public_import_reconstructs_sophios_workflow(tmp_path: Path) -> None:
     assert [step.process_name for step in imported.steps] == ["PRODUCE", "COPY"]
     imported_produce = cast(Step, imported.steps[0])
     imported_copy = cast(Step, imported.steps[1])
-    assert imported_copy.inputs.source.source_parameter is imported_produce.outputs.result
+    assert imported_copy.inputs.source.source_outputs() == (imported_produce.outputs.result,)
     compiled = imported.compile()
     assert isinstance(compiled, CompiledWorkflow)
     assert list(compiled.cwl_workflow["steps"])
