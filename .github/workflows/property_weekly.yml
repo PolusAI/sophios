@@ -70,11 +70,18 @@ jobs:
             echo "Scale: $SOPHIOS_PROPERTY_SCALE"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # See run_workflows.yml: everything above is setup, and a failure there
+      # stops the job; the suites below run when this one ran and the job was
+      # not cancelled, so one failing suite does not hide the next.
+      - name: Setup done
+        id: setup
+        run: 'true'
+
       # The oracle suite (tests/core/test_hermeticity.py::ORACLE_FILES) and the
       # phase properties beside it, slow ones included: the `--validate`
       # property is slow-marked, and deepening it is the point of this lane.
       - name: PyTest Oracle and Phase Properties
-        if: always()
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         timeout-minutes: 180
         run: pytest tests/core/test_generators.py tests/core/test_equivalence.py tests/core/test_equivalences.py tests/core/test_predicates.py tests/core/test_reference_compatibility.py tests/core/test_canonical_path.py tests/core/test_emit.py tests/core/test_resolve.py tests/core/test_link.py tests/core/test_infer_phase.py tests/core/test_lower.py tests/core/test_pipeline.py --hypothesis-seed="$HYPOTHESIS_SEED" --junitxml=property-reports/oracle.xml
 
@@ -82,7 +89,7 @@ jobs:
       # skip_pypi_ci tests compile against a discovered registry, which this
       # lane does not have; lint_and_test runs them.
       - name: PyTest Language Properties
-        if: always()
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         timeout-minutes: 30
         run: pytest tests/core/test_lang_parser.py tests/core/test_lang_render.py tests/core/test_lang_schema.py -m "not skip_pypi_ci" --hypothesis-seed="$HYPOTHESIS_SEED" --junitxml=property-reports/language.xml
 

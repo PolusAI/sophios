@@ -12,7 +12,7 @@ from sophios.input_output import dump_wic_yaml
 from sophios.runtime_inputs import normalize_cwl_document, normalize_job_inputs
 from sophios.wic_types import Json
 
-from .run_local import build_cmd, copy_output_files, create_safe_env, generate_run_script
+from .run_local import build_cmd, create_safe_env, generate_run_script
 
 
 async def run_cwl_workflow(
@@ -71,8 +71,6 @@ async def run_cwl_workflow(
 
         if retval != 0:
             await _print_stderr_tail(workflow_name, retval, stdout_log_path, stderr_log_path)
-        elif cwl_runner == "cwltool" and run_args.get("copy_output_files", "no") == "yes":
-            await asyncio.to_thread(copy_output_files, workflow_name, basepath=basepath)
         return retval
 
     except Exception as exc:  # pylint: disable=broad-exception-caught

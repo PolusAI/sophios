@@ -1,14 +1,24 @@
 # Error codes
 
-Every problem Sophios reports carries a code: `wic0NN` for a document, `api0NN` for a Python API call.
-A diagnostic reads `file:line:col: error [code] message (step, port)`; the position and the step are there
-when Sophios knows them. A note reports a choice Sophios made and does not stop anything.
+What does a code in a Sophios message mean, and what do I change? This page is
+the catalog, one row per code; `sophios --explain <code>` prints the same row.
 
-`sophios --explain <code>` prints a row of this table. The kind says what to change: `document` (the
-`.wic` file or the Python workflow), `call` (the Python API call), `machine` (what is installed, running,
-readable or writable here) or `run` (nothing in Sophios: a tool failed while it ran).
+Every problem Sophios reports carries a code: `wic0NN` for a document or for
+what running it needs from this machine, `api0NN` for a Python API call. A
+diagnostic reads `file:line:col: error [code] message (step, port)`; the
+position and the step are there when Sophios knows them. A note reports a
+choice Sophios made and stops nothing.
 
-`wic040` and `wic041` are not assigned.
+The kind says what to change:
+
+- `document`: the `.wic` file or the Python workflow;
+- `call`: the Python API call;
+- `machine`: this machine, what is installed, running, readable or writable;
+- `run`: nothing in Sophios, a tool failed while it ran.
+
+`wic040` and `wic041` are not assigned. Section numbers (§) refer to the
+[`.wic` reference](wic-reference.md). [Checks and errors](checks-and-errors.md)
+explains when each kind of check runs and how a diagnostic is laid out.
 
 | Code | Kind | Meaning | Fix |
 |---|---|---|---|
@@ -17,63 +27,46 @@ readable or writable here) or `run` (nothing in Sophios: a tool failed while it 
 | `wic003` | document | A mapping was expected here, as in `steps: 3`. | Write `key: value` entries at the position shown. |
 | `wic004` | document | A sequence was expected here, as in `out: 3`. | Write a list at the position shown: `- item` lines, or `[a, b]`. |
 | `wic005` | document | A scalar was expected here, such as a mapping key that is itself a list or carries a Sophios tag. | Write one name, number or string at the position shown; a tag goes on the value, as in `a: !ii b`. |
-| `wic006` | document | A step in a sequence has no `id:`. | Add `id:` with the tool or workflow the step runs, or write `steps:` as a mapping keyed by step (language guide §2.1). |
+| `wic006` | document | A step in a sequence has no `id:`. | Add `id:` with the tool or workflow the step runs, or write `steps:` as a mapping keyed by step (.wic reference §2.1). |
 | `wic007` | document | A step's `id:` is empty. | Write the name of the tool or workflow the step runs. |
-| `wic008` | document | A `wic: steps:` key is neither `(index, name)` nor a step id. | Key the entry `(index, name)` with the step's 1-based position and id, or by the id alone when no other step has it (language guide §7). |
+| `wic008` | document | A `wic: steps:` key is neither `(index, name)` nor a step id. | Key the entry `(index, name)` with the step's 1-based position and id, or by the id alone when no other step has it (.wic reference §7). |
 | `wic009` | document | An unknown YAML tag; the Sophios tags are `!ii`, `!&`, `!*` and `!cwl`. | Use one of the four Sophios tags, or remove the tag. |
-| `wic010` | document | A key bound twice: an input, a step, a `wic:` key, or a second `id:`. | Keep one of the two and delete the other (language guide §3.8). |
-| `wic011` | document | An untagged input value names no workflow input. | Write a literal as `!ii <value>`, or declare the name under `inputs:` (language guide §3.3). |
+| `wic010` | document | A key bound twice: an input, a step, a `wic:` key, or a second `id:`. | Keep one of the two and delete the other (.wic reference §3.8). |
+| `wic011` | document | An untagged input value names no workflow input. | Write a literal as `!ii <value>`, or declare the name under `inputs:` (.wic reference §3.3). |
 | `wic012` | document | A required input gets no value, such as `!ii null` on an input that is not optional. | Bind the input to a value, an edge or a workflow input, or make the tool's input optional. |
-| `wic013` | document | A workflow or a step's process cannot be used: no steps, a tool or subworkflow not found, a CWL `Workflow` as a step, a packed `$graph` with no `main`, subworkflows that call each other in a cycle, `implementations` with none chosen, or ports only the CWL runner can read. | Do what the message names: put the tool or `.wic` file on a search path of the config (`search_paths_cwl`, `search_paths_wic`), give the workflow steps, or break the cycle (language guide §2.3). |
+| `wic013` | document | A workflow or a step's process cannot be used: no steps, a tool or subworkflow not found, a CWL `Workflow` as a step, a packed `$graph` with no `main`, subworkflows that call each other in a cycle, `implementations` with none chosen, or ports only the CWL runner can read. | Do what the message names: put the tool or `.wic` file on a search path of the config (`search_paths_cwl`, `search_paths_wic`), give the workflow steps, or break the cycle (.wic reference §2.3). |
 | `wic014` | document | The arguments given to a Python script step do not match its declared inputs. | Bind exactly the inputs the script declares. |
 | `wic015` | machine | The container engine cannot be used: not installed, not running, not yours to use, or overloaded. Checked only when a step runs in a container. | Do what the message says: install the engine, start it, or give your user access to it; `--container_engine` names another engine, and `--ignore_docker_install` skips the check. |
 | `wic016` | machine | An input file or directory cannot be used: it does not exist, it is the other kind, or you may not read it. | Correct the path, create it, or make it readable; the message says where Sophios looked. |
 | `wic017` | document | An unknown `lang_version`. | Pin a version the message lists, or remove the pin. |
 | `wic018` | document | Two `lang_version` pins in one compilation disagree. | Make the pins agree, or set one version for the whole compilation with `--lang_version`. |
-| `wic019` | document | `!&` outside a step's `out:` entry. | Name the output with `!&` on the producing step's `out:` entry, and read it with `!*` (language guide §3.6). |
-| `wic020` | document | A literal does not have the type of its input, or a scattered input's literal is not a list. | Write a value of the input's type, quoting a string YAML would read as something else, and give a scattered input a list (language guide §3.2, §6.1). |
+| `wic019` | document | `!&` outside a step's `out:` entry. | Name the output with `!&` on the producing step's `out:` entry, and read it with `!*` (.wic reference §3.6). |
+| `wic020` | document | A literal does not have the type of its input, or a scattered input's literal is not a list. | Write a value of the input's type, quoting a string YAML would read as something else, and give a scattered input a list (.wic reference §3.2, §6.1). |
 | `wic021` | machine | A directory Sophios writes into cannot be created or written: `autogenerated/` under the working directory, `--outdir`, or a `basepath` or `outdir` given to `Workflow.run()`. | Run Sophios from a directory you can write to, or name one with `--outdir`; from Python, `run(basepath=...)` and `run_args_dict={"outdir": ...}` take another. |
 | `wic022` | document | Inference did not settle within its iteration limit. | Bind the inputs explicitly with `!&` and `!*` or workflow inputs, or drop `--insert_steps_automatically`. |
 | `wic023` | document | A reference whose type can never feed the input it binds, such as a `string` into a `File`. | Bind the input to a source of a matching type. |
-| `wic024` | document | A `wic_` mapping in an input position that is not a Sophios construct. | Correct the spelling to a construct of language guide §3.7, or rename the key. |
-| `wic025` | document | An edge reference with no definition before it, anywhere in the compilation. | Define the name with `!&` on an earlier step's `out:` entry, or correct its spelling (language guide §4). |
+| `wic024` | document | A `wic_` mapping in an input position that is not a Sophios construct. | Correct the spelling to a construct of .wic reference §3.7, or rename the key. |
+| `wic025` | document | An edge reference with no definition before it, anywhere in the compilation. | Define the name with `!&` on an earlier step's `out:` entry, or correct its spelling (.wic reference §4). |
 | `wic026` | document | An edge name defined twice. | Give each `!&` its own name. |
 | `wic027` | document | An input, `out:` entry or edge with an empty name. | Write the name. |
 | `wic028` | document | An input or output name the step's process does not declare. | Use a port the tool or subworkflow declares. |
 | `wic029` | machine | A program the run calls is not installed, or cannot run on this platform. | Install the program the message names, as it says; on Windows, run Sophios inside WSL. |
 | `wic030` | document | A YAML alias that contains itself. | Remove the alias that refers back to its own anchor. |
-| `wic031` | document | Two ports the compiled CWL would spell the same way, or a namespace prefix bound to two URIs. | Rename one of the two ports, or bind the prefix to one URI (language guide §5.2). |
-| `wic032` | document | A `scatter:` entry that is not an input of its step. | Scatter over an input the step declares and binds (language guide §6.1). |
-| `wic033` | document | A key the `wic:` block does not have. | Use a key from language guide §7, or remove it. |
-| `wic034` | document | A `wic:` value of the wrong shape. | Write the value in the shape language guide §7 gives for its key. |
+| `wic031` | document | Two ports the compiled CWL would spell the same way, or a namespace prefix bound to two URIs. | Rename one of the two ports, or bind the prefix to one URI (.wic reference §5.2). |
+| `wic032` | document | A `scatter:` entry that is not an input of its step. | Scatter over an input the step declares and binds (.wic reference §6.1). |
+| `wic033` | document | A key the `wic:` block does not have. | Use a key from .wic reference §7, or remove it. |
+| `wic034` | document | A `wic:` value of the wrong shape. | Write the value in the shape .wic reference §7 gives for its key. |
 | `wic035` | document | A `cwlVersion` other than `v1.0`, `v1.1` or `v1.2`. | Declare `cwlVersion: v1.2`. |
-| `wic036` | document | A workflow output with no `type:` and no producer to take it from. | Give the output a `type:`, or an `outputSource:` naming the step output it comes from (language guide §5.2). |
+| `wic036` | document | A workflow output with no `type:` and no producer to take it from. | Give the output a `type:`, or an `outputSource:` naming the step output it comes from (.wic reference §5.2). |
 | `wic037` | machine | An image the run needs could not be pulled, loaded or imported before the run; the message quotes the engine's last line. | Check the image name or source, the network and your registry login, then run again. |
-| `wic038` | document | CWL's step input written where Sophios does not read it: an untagged mapping of step-input fields, a malformed `!cwl {...}` record, or a list `outputSource`, `linkMerge` or `pickValue` on a workflow output. | Write step-input fields as a `!cwl {...}` record (language guide §3.5); a workflow output names one step output. |
-| `wic039` | document | A positional `(index, name)` `outputSource` that names the wrong step. | Use the index and id of the step the output comes from, or write `step/port` (language guide §5.2). |
-| `wic042` | document | Note: one step offered several matching outputs and inference took the last. | Pin the choice the note shows, with `!&` on the output and `!*` on the input (language guide §8); `--inference_strict` makes this an error. |
-| `wic043` | document | Note: an earlier step also matched and inference took the most recent. | Pin the choice the note shows, with `!&` on the output and `!*` on the input (language guide §8); `--inference_strict` makes this an error. |
-| `wic044` | document | A real-time analysis declaration (a `cwl_subinterpreter` step) with an input that is not a literal or has the wrong shape, or whose analysis does not compile. | Write each input of the step as a literal of the shape the message names, and fix the analysis it names (docs/advanced.md, Real-time Analysis). |
+| `wic038` | document | CWL's step input written where Sophios does not read it: an untagged mapping of step-input fields, a malformed `!cwl {...}` record, or a list `outputSource`, `linkMerge` or `pickValue` on a workflow output. | Write step-input fields as a `!cwl {...}` record (.wic reference §3.5); a workflow output names one step output. |
+| `wic039` | document | A positional `(index, name)` `outputSource` that names the wrong step. | Use the index and id of the step the output comes from, or write `step/port` (.wic reference §5.2). |
+| `wic042` | document | Note: one step offered several matching outputs and inference took the last. | Pin the choice the note shows, with `!&` on the output and `!*` on the input (.wic reference §8); `--inference_strict` makes this an error. |
+| `wic043` | document | Note: an earlier step also matched and inference took the most recent. | Pin the choice the note shows, with `!&` on the output and `!*` on the input (.wic reference §8); `--inference_strict` makes this an error. |
+| `wic044` | document | A real-time analysis declaration (a `cwl_subinterpreter` step) with an input that is not a literal or has the wrong shape, or whose analysis does not compile. | Write each input of the step as a literal of the shape the message names, and fix the analysis it names (docs/realtime-analysis.md). |
 | `api001` | call | A value bound to a step input that the input cannot take. | Bind a port object directly, or several with `StepInput(source=[...])`; a string never names a port. |
 | `api002` | call | A step the workflow cannot place: a repeated step name, a link to a step outside the workflow or later in it, a workflow input with no type, or two tools that share a file stem. | Do what the message names: pass `step_name=` to a reused tool, list the source step earlier, or add it to this workflow. |
 | `api003` | call | A link from this workflow's own output, or between ports whose types do not match. | Bind the input to an earlier step's output, or to a workflow input, of a matching type. |
 | `api004` | call | A CWL tool that could not be loaded or parsed. | Point the step at a valid CWL CommandLineTool; the message says what is wrong with it. |
 | `api005` | run | A local run that finished with a non-zero exit code. | Read the failed step's messages, printed before the error. |
 | `api006` | call | A `.wic` construct the Python API has no spelling for, met by `Workflow.from_wic`. | Write the workflow in the Python API in the way the message names, or keep it as a `.wic` file. |
-
-## For programs and agents
-
-With `--diagnostics json`, each diagnostic is printed as one JSON object on one line of stderr. Every key is
-always present; a value Sophios does not know is `null`.
-
-| Key | Value |
-|---|---|
-| `severity` | `error` or `note` |
-| `code`, `kind`, `fix` | the code, and its row in the table above |
-| `message` | what happened, in this instance |
-| `file`, `line`, `column`, `end_line`, `end_column` | where in the source, 1-based |
-| `step`, `index`, `port` | the authored step, its 1-based position and the port |
-
-Other lines on stderr are not diagnostics: the runner's output, `Failed to compile <file>`, and the lines
-that start with `Warning`. From Python, `Diagnostic.to_json()` returns the same object for each entry of
-`SophiosError.diagnostics`.

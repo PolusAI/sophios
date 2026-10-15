@@ -223,7 +223,7 @@ def test_surface_forms_are_equivalent(form: tuple[str, str, type], payload: str)
 @FAST
 def test_the_two_spellings_of_an_edge_definition_agree_on_an_output(payload: str) -> None:
     """`!&` has the same two spellings as its siblings, in the one position it
-    is legal (language guide §3.6). Tested separately rather than as a fourth row above,
+    is legal (.wic reference §3.6). Tested separately rather than as a fourth row above,
     because that table quantifies over *input* position and an anchor there is
     now `wic019` — the case does not disappear, it moves to where it belongs.
     """
@@ -275,7 +275,7 @@ ACCEPTED: Final[tuple[Accepted, ...]] = (
     Accepted('a bare name is an unresolved name',
              'steps:\n  s:\n    in:\n      e: plain\n',
              lambda d: isinstance(d.steps[0].input('e'), UnresolvedName)),
-    Accepted('an untagged mapping input is an inline literal (language guide §3.2)',
+    Accepted('an untagged mapping input is an inline literal (.wic reference §3.2)',
              'steps:\n- id: s\n  in:\n    a: {some: mapping}\n',
              lambda d: isinstance(d.steps[0].inputs[0][1], InlineLiteral)
              and d.steps[0].inputs[0][1].value == {'some': 'mapping'}),
@@ -318,13 +318,13 @@ class Reported(NamedTuple):
 
 
 REPORTED: Final[tuple[Reported, ...]] = (
-    Reported('a sequence step without an id: names both forms that exist (language guide §2.1)',
+    Reported('a sequence step without an id: names both forms that exist (.wic reference §2.1)',
              'steps:\n- touch:\n    in: {f: !ii x}\n',
              SophiosErrorCode.MISSING_STEP_ID, 2, message_contains="- id: touch"),
     Reported('and with no body either, which is the shape insertion used to write',
              'steps:\n- sub.wic:\n', SophiosErrorCode.MISSING_STEP_ID, 2,
              message_contains='- id: sub.wic'),
-    Reported('an edge definition in input position names the position (language guide §3.6)',
+    Reported('an edge definition in input position names the position (.wic reference §3.6)',
              'steps:\n- id: s\n  in:\n    f: !& e\n',
              SophiosErrorCode.MISPLACED_EDGE_DEF, 4, message_contains='out:'),
     Reported('the desugared spelling is reported the same way',
@@ -347,7 +347,7 @@ REPORTED: Final[tuple[Reported, ...]] = (
     Reported('a collection step key is reported, not stringified',
              'steps:\n  ? [a, b]\n  : {}\n', SophiosErrorCode.EXPECTED_SCALAR, 2,
              message_contains='mapping keys must be scalars'),
-    Reported('an input bound twice names the input (language guide §3.8)',
+    Reported('an input bound twice names the input (.wic reference §3.8)',
              'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
              SophiosErrorCode.DUPLICATE_KEY, 5, message_contains="'f'"),
     Reported('a step that is not a mapping is reported',
@@ -671,7 +671,7 @@ def test_one_code_carries_both_step_without_id_messages() -> None:
     assert single[0].message == (
         "a step in a sequence carries its name in an id: key — write '- id: touch' if 'touch' "
         "is the step's name; add the '- id:' line above if 'touch' is one of the step's own "
-        'keys. Keying the whole steps: block by name is the other form (language guide §2.1)')
+        'keys. Keying the whole steps: block by name is the other form (.wic reference §2.1)')
     assert multi[0].message == 'a step in a sequence needs an id:'
 
 
@@ -793,7 +793,7 @@ def test_unknown_tags_report_wic009(source: str) -> None:
     """The code contract: an unknown tag reports wic009, in every position.
 
     *Detection* is the adversarial property's job (with @example pins for
-    determinism); this asserts only the stable code the language guide documents.
+    determinism); this asserts only the stable code the .wic reference documents.
     """
     result = parse(source, 'x.wic')
     assert any(d.code is SophiosErrorCode.UNKNOWN_TAG for d in result.diagnostics), source
@@ -899,7 +899,7 @@ def test_sidecar_nesting_is_normalised_at_every_depth() -> None:
 @pytest.mark.fast
 def test_a_sidecar_steps_out_accepts_an_edge_definition() -> None:
     """`!&` is legal under `wic.steps.(N, name).out`, exactly as on a step's
-    own `out:` (language guide §3.6) — a sidecar `(N, name): out:` block *is* a step's
+    own `out:` (.wic reference §3.6) — a sidecar `(N, name): out:` block *is* a step's
     `out:` entry, just written at a distance (see `basic.wic`, which places
     the corpus's only definition of `min.tpr` here rather than in the nested
     file, precisely to avoid a `wic026 DUPLICATE_EDGE_DEF`).
@@ -1023,7 +1023,7 @@ def test_alias_cycles_are_reported(source: str) -> None:
     """The contract: a cycle is a diagnosed error, never a quiet success.
 
     Totality (no raise) is the adversarial property's job, with these shapes
-    pinned on it as @example; this asserts the report the language guide promises.
+    pinned on it as @example; this asserts the report the .wic reference promises.
 
     The sidecar shape has to actually recurse through `_sidecar` to test that
     contract — a self-referential `steps:` value one level up hits an

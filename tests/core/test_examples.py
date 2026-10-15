@@ -324,7 +324,6 @@ def run_workflows(
     run_args_dict = {}
     run_args_dict['container_engine'] = args.container_engine
     run_args_dict['cwl_runner'] = cwl_runner
-    run_args_dict['copy_output_files'] = str(args.copy_output_files)
     retval = sophios.run_local.run_local(run_args_dict, True,
                                          workflow_name=yaml_stem, passthrough_args=[], basepath=basepath)
     if expect_success:

@@ -47,7 +47,6 @@ logger = logging.getLogger("Sophios Python API")
 ParameterT = TypeVar("ParameterT")
 
 _RUN_ARG_BOOLEAN_FLAGS = {
-    "copy_output_files",
     "docker_remove_entrypoints",
     "generate_run_script",
     "quiet",
@@ -571,7 +570,6 @@ def run_workflow(
         basepath=basepath,
         passthrough_args=unknown_args,
         user_env_vars=dict(user_env_vars or {}),
-        output_directories=rl.output_directories(result.graph),
         realtime_plans=plans,
     )
     if retval != 0:

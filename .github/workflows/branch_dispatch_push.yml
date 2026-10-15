@@ -15,7 +15,6 @@ jobs:
     steps:
       # See token.md
       - name: Generate a token
-        if: always()
         id: generate_token
         uses: actions/create-github-app-token@v3
         with:

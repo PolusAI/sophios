@@ -1,63 +1,63 @@
-# The Sophios Language Specification
+# The language specification
 
-**Version:** `lang_version` 0.0.1
-**Substrate:** CWL v1.2
+**Version:** `lang_version` 0.0.1. **Substrate:** CWL v1.2.
 
-This page is for people who implement or change Sophios: what the language does with
-CWL, how its two surfaces must agree, and how it is versioned. To write a workflow,
-read the [language guide](../language_guide.md) instead.
+What must an implementation of the Sophios language do? This page is for
+people who implement or change Sophios: what the language does with CWL, how
+its two surfaces must agree, how it is versioned, and how its codes are
+assigned. To write a workflow, read the [`.wic` reference](../wic-reference.md)
+instead.
 
-The executable definition is `sophios.lang`, the typed AST and parser; this page and
-it are meant to agree, and where they disagree, that is a bug in one of them. Every
-rule here is implemented and pinned by the tests it names. One gap is known: a step
-input typed by a `SchemaDefRequirement` name is promoted to a workflow input without
-the requirement that defines the name, so cwltool rejects the compiled workflow
-(`test_a_schema_def_typed_input_validates` in `tests/core/test_emit.py`, a strict
-xfail).
+The executable definition is `sophios.lang`, the typed AST and parser; this
+page and it are meant to agree, and where they disagree, that is a bug in one
+of them. Every rule here is implemented and pinned by the tests it names. One
+gap is known: a step input typed by a `SchemaDefRequirement` name is promoted
+to a workflow input without the requirement that defines the name, so cwltool
+rejects the compiled workflow (`test_a_schema_def_typed_input_validates` in
+`tests/core/test_emit.py`, a strict xfail).
 
 ## The language and its two surfaces
 
-Sophios is the language. It has one DSL, and that DSL can be written two ways:
+Sophios is the language. It has one model, and that model can be written two
+ways:
 
 | Surface | How it is written | Where it lives |
 |---|---|---|
-| **YAML** | The YAML-based spelling of the DSL | Conventionally in files named `.wic` |
-| **Python API** | `Workflow`, `Step`, `CommandLineTool` | Python source |
+| **YAML** | the YAML spelling of the language | files named `.wic` |
+| **Python API** | `Workflow`, `Step`, `StepInput` | Python source |
 
-Neither is "the language" and neither is subordinate to the other. They are two ways
-of saying the same thing, which is why section 3 can state what each owes the other
-and check it.
-
-`.wic` is **a file extension, not a language**. A handful of spellings inside the
-syntax still carry the older `wic` prefix: the `wic:` block, the `wic_*` desugared
-keys, and the `wic0NN` diagnostic codes. Those are concrete syntax that existing
-workflows depend on, so they stay as they are.
+Neither is the language and neither is subordinate to the other; section 3
+states what each owes the other and how that is checked. The `.wic`
+extension, the `wic:` block, the `wic_*` desugared keys and the `wic0NN`
+codes are concrete syntax that workflows depend on.
 
 ## 1. What Sophios does with CWL
 
-Sophios is a **leaky abstraction over CWL, deliberately**. You write shorthand for
-the common case and drop into raw CWL for anything the shorthand does not cover.
-Sealing the abstraction would mean re-inventing CWL one feature at a time and asking
-users to wait.
+Sophios is a leaky abstraction over CWL, deliberately. The document is
+shorthand for the common case, with raw CWL available for anything the
+shorthand does not cover; sealing the abstraction would mean re-inventing
+CWL one feature at a time.
 
-Sophios-owned syntax (`!ii`, `!&`, `!*`, `!cwl`, the `wic:` block) is consumed and
-never appears in the output. Everything else is CWL, and what Sophios does with each
-field of the five workflow-level CWL v1.2 classes is declared in one place:
-`sophios.lang.SUPPORT_MATRIX` (`src/sophios/lang/support.py`). Each field is one of
+Sophios-owned syntax (`!ii`, `!&`, `!*`, `!cwl`, the `wic:` block) is
+consumed and never appears in the output. Everything else is CWL, and what
+Sophios does with each field of the five workflow-level CWL v1.2 classes is
+declared in one place, `sophios.lang.SUPPORT_MATRIX`
+(`src/sophios/lang/support.py`). Each field is one of:
 
 - **native**: Sophios reads it and acts on it, or writes it;
 - **passthrough**: copied out unchanged;
-- **rejected**: reported with a diagnostic, never silently dropped or coerced. It
-  is positioned at the value; a step's `run` is positioned at the step, and a
-  workflow output at the document.
+- **rejected**: reported with a diagnostic, never silently dropped or
+  coerced, positioned at the value (a step's `run` at the step, a workflow
+  output at the document).
 
-`support.py` is the source; `tests/core/test_support_matrix.py` is the check. It
-reads the fields of each class from `cwl_utils.parser.cwl_v1_2`, so a field the
-schema has and the matrix lacks fails the build, and so does a row whose pinning
-test does not exist. The tables below are the matrix at the time of writing; where
-they disagree, `support.py` wins. A test named without a file is in
-`tests/core/test_leak_boundary.py`. A field outside these five classes on a step's
-tool is passthrough wholesale: Sophios does not classify `CommandLineTool` fields.
+`support.py` is the source and `tests/core/test_support_matrix.py` the
+check: it reads the fields of each class from `cwl_utils.parser.cwl_v1_2`,
+so a field the schema has and the matrix lacks fails the build, and so does a
+row whose pinning test does not exist. Where the tables below and
+`support.py` disagree, `support.py` wins. A test named without a file is in
+`tests/core/test_leak_boundary.py`. A field outside these five classes on a
+step's tool is passthrough wholesale: Sophios does not classify
+`CommandLineTool` fields.
 
 **`Workflow`**
 
@@ -138,106 +138,78 @@ tool is passthrough wholesale: Sophios does not classify `CommandLineTool` field
 
 ### 1.1 The native rows of `Workflow`
 
-- `class` is **written by the compiler**: a workflow-level value you supply does not
-  survive.
-- `inputs` and `outputs` are **merged into**, with the compiler winning on a
-  collision: entries you write survive unless the compiler generates one of the same
-  name. `outputs` is additionally *read*: each entry's `outputSource` names one step
-  output, which feeds the compiler's output mapping. An output with no `type:` takes
-  the type of the step output its `outputSource:` names, as an array when that step
-  scatters. One whose `outputSource:` names no step output of the workflow, or that
-  has none, has no type to take and is `wic036`. A list `outputSource:`, `linkMerge`
-  or `pickValue` on an output is `wic038`. A list of `inputs` or `outputs` holding an
-  `$import` or `$include` is the exception (section 1.4): the compiler models only
-  the mapping form, so it is neither merged into nor carried into the output.
-- `cwlVersion` is **written by the compiler**: it is always the one declared
-  substrate version, whatever the document says. Supplying `v1.0`, `v1.1` or `v1.2`
-  is not an error, and the emitted document says the substrate version. Any other
-  value is `wic035`, reported by the parser at the value: accepting a version is a
-  promise to process it, and the toolchain processes no other.
-- `requirements` is **merged into**: the compiler adds what the workflow needs with
-  `setdefault`, so an authored body survives. It adds `ScatterFeatureRequirement`
-  for a scattering step, `InlineJavascriptRequirement` for `when`, and
-  `SubworkflowFeatureRequirement` for a `.wic` step, each only when the class is not
-  already there: an authored `InlineJavascriptRequirement: {expressionLib: [...]}`
-  survives a `when`. A `requirements:` list holding an `$import` or `$include` is the
-  exception (section 1.4): it is emitted as written, Sophios adds nothing to it, and
-  the imported file has to supply what the workflow needs, such as the
-  `ScatterFeatureRequirement` of a scattering step.
+- `class` is written by the compiler: a value you supply does not survive.
+- `inputs` and `outputs` are merged into, the compiler winning on a
+  collision. `outputs` is also read: each entry's `outputSource` names one
+  step output. An output with no `type:` takes the type of the step output it
+  names, as an array when that step scatters; one with no producer to take it
+  from is `wic036`. A list `outputSource:`, `linkMerge` or `pickValue` on an
+  output is `wic038`. A list of `inputs` or `outputs` holding an `$import` or
+  `$include` is the exception (section 1.4).
+- `cwlVersion` is written by the compiler: always the substrate version.
+  `v1.0`, `v1.1` and `v1.2` are accepted in a document; any other value is
+  `wic035`, reported by the parser at the value.
+- `requirements` is merged into with `setdefault`, so an authored body
+  survives: `ScatterFeatureRequirement` for a scattering step,
+  `InlineJavascriptRequirement` for `when`, `SubworkflowFeatureRequirement`
+  for a `.wic` step, `MultipleInputFeatureRequirement` and
+  `StepInputExpressionRequirement` for records, each only when the class is
+  not already there. A `requirements:` list holding an `$import` or `$include`
+  is emitted as written and nothing is added to it.
 
 ### 1.2 Compiler-owned keys outside the schema
 
-Two document keys are not schema fields of `Workflow` but are written by the
-compiler too:
-
-- `$schemas` is **append-only**: authored entries survive and the EDAM entry is
+- `$schemas` is append-only: authored entries survive and the EDAM entry is
   added once.
-- `$namespaces` is **merged, with two reserved prefixes**: every authored binding
-  survives except `edam` and `sophios`, which are replaced by the canonical ones
-  (section 6 for `sophios:lang_version`). A port the document promotes from a step
-  keeps that port's `format:` CURIE, so the document also declares each prefix such
-  a format uses, bound as the step's tool or subworkflow binds it. If the document
-  and the steps whose promoted ports use that prefix do not all bind it to the same
-  URI, that is `wic031`: the CURIE could only mean one of them. Those bindings are
-  the only ones that count. A tool that binds the prefix differently but promotes no
-  port using it conflicts with nothing, wherever the step sits, so compiling does
-  not depend on how the workflow is split into subworkflows. A prefix no promoted
-  format uses is not declared for you. An authored port keeps the prefixes the
-  document bound. What a tool binds `edam` or `sophios` to is ignored, since the
-  compiler binds both. Pinned by `test_user_namespaces_survive_except_edam` and
-  `test_the_sophios_namespace_prefix_is_reserved`, and in `tests/core/test_emit.py`
-  by `test_a_prefix_two_promoting_sources_bind_differently_is_reported`,
+- `$namespaces` is merged, with two reserved prefixes: every authored binding
+  survives except `edam` and `sophios`, which the compiler binds. A port the
+  document promotes from a step keeps that port's `format:` CURIE, so the
+  document also declares each prefix such a format uses, bound as the step's
+  tool or subworkflow binds it. If the document and the steps whose promoted
+  ports use a prefix do not all bind it to one URI, that is `wic031`; a tool
+  that binds the prefix differently but promotes no port using it conflicts
+  with nothing, so the result does not depend on how the workflow is split
+  into subworkflows. Pinned by `test_user_namespaces_survive_except_edam`,
+  `test_the_sophios_namespace_prefix_is_reserved`, and in `test_emit.py` by
+  `test_a_prefix_two_promoting_sources_bind_differently_is_reported`,
   `test_a_clash_on_a_prefix_no_promoted_format_uses_is_no_error` and
   `test_a_step_promoting_no_format_with_a_prefix_is_no_source_for_it_wherever_it_sits`.
 
 ### 1.3 Passthrough
 
-Any other top-level or step key is passthrough and survives byte-identically, which
-is the statement the properties in `tests/core/test_leak_boundary.py` quantify over.
-The exception is the list form of `hints:` (on the document or on a step) and of a
-step's `requirements:`, which the parser reads as the mapping form (section 1.4) and
-which is written out as one, unless the list holds an `$import` or `$include`
-entry: that list is not read and survives as written.
+Any other top-level or step key survives byte-identically, the statement the
+properties in `tests/core/test_leak_boundary.py` quantify over. The exception
+is the list form of `hints:` and of a step's `requirements:`, which the
+parser reads as the mapping form (section 1.4) and writes out as one, unless
+the list holds an `$import` or `$include` entry.
 
 ### 1.4 List forms
 
-`inputs`, `outputs`, `requirements` and `hints` may be written in CWL's list form
-(`- id: x` / `- class: X`), and a step's `requirements` and `hints` likewise. The
-parser reads the list as the mapping form, so what follows it sees the mapping. A
-port's `id:` may be written as a fragment (`#name` or `file.cwl#name`); its mapping
-key is the name after the last `#`, so `a` and `#a` name the same port. An entry
-without its `id:` or `class:` (or whose `id:` has nothing after the `#`), and one
-naming the same key twice, are reported.
+`inputs`, `outputs`, `requirements` and `hints` may be written in CWL's list
+form, and a step's `requirements` and `hints` likewise. The parser reads the
+list as the mapping form. A port's `id:` may be a fragment (`#name` or
+`file.cwl#name`); its key is the name after the last `#`. An entry without
+its `id:` or `class:`, and one naming a key twice, are reported.
 
-A list holding an `$import` or `$include` entry is the exception. That entry names no
-`id:` or `class:` until cwltool has read its file, so the whole list is left as
-written, and its other entries are not checked. A `requirements:` or `hints:` list
-reaches the output as written, for cwltool to resolve, and Sophios adds no
-requirement to a `requirements:` list so left. The compiler models only the mapping
-form of `inputs:` and `outputs:`, so a list of those left as written is not carried
-into the output of the document compiled. In a workflow that another calls it is
-`wic013`: no step can be checked against ports that only cwltool can read.
+A list holding an `$import` or `$include` entry is left as written, and its
+other entries are not checked: a `requirements:` or `hints:` list reaches the
+output for cwltool to resolve, and Sophios adds nothing to it; a list of
+`inputs:` or `outputs:` so left is not carried into the compiled document,
+and in a workflow another calls it is `wic013`.
 
 ### 1.5 The sequence-of-single-key-mappings step form
 
-CWL v1.2 types `Workflow.steps` as an array of `WorkflowStep` and attaches
-`jsonldPredicate: {mapSubject: id}`, and Schema Salad applies that transformation
-only *"if the value of the field is a JSON object"*. When `steps:` is already an
-array, no key is lifted into `id`, so each item is a plain `WorkflowStep`, and a
-`WorkflowStep` has no field named after the step. `cwltool` fails such a document
-with `unknown identifier`. Sophios inherits the rule and reports the form as
-`wic006`, naming the two forms that exist.
-
-Until the May 2024 normal-form refactor (`9758e81`), which made the compiler read a
-step's name from `id:` and rewrote every tutorial into the `id:` form, it was the
-only sequence form that worked. That break is ratified rather than reverted: the
-substrate does not admit the form, so a document using it breaks the moment it meets
-raw CWL.
+CWL v1.2 types `Workflow.steps` as an array of `WorkflowStep` with
+`jsonldPredicate: {mapSubject: id}`, and Schema Salad lifts a key into `id`
+only when the value is a mapping. When `steps:` is already an array, each
+item is a plain `WorkflowStep` with no field named after the step, and
+cwltool fails such a document with `unknown identifier`. Sophios inherits the
+rule: the form is `wic006`, and the message names the two forms that exist.
 
 ## 2. Two spellings per construct
 
-Within the YAML surface, every Sophios-owned construct has a **tagged** form and a
-**desugared** form, and they are equivalent:
+Within the YAML surface, every Sophios-owned construct has a tagged form and
+a desugared form, and they are equivalent:
 
 | Construct | Tagged | Desugared |
 |---|---|---|
@@ -247,89 +219,79 @@ Within the YAML surface, every Sophios-owned construct has a **tagged** form and
 | Raw CWL reference | `!cwl expr` | `{wic_raw_cwl: expr}` |
 | Step-input record | `!cwl {source: [!* a, b]}` | `{wic_raw_cwl: {source: [{wic_alias: a}, b]}}` |
 
-The desugared form is plain YAML, with no tags, so a tool that cannot write YAML
-tags, or a JSON consumer, can still spell every construct. `sophios.lang.to_json`
-produces the desugared spelling, and the editor schema (section 4) describes it.
+The desugared form is plain YAML, so a tool that cannot write YAML tags, or a
+JSON consumer, can spell every construct. `sophios.lang.to_json` produces it,
+and the editor schema (section 4) describes it. Both spellings are for
+writing by hand; neither is a lesser citizen.
 
-**Both spellings are written by hand.** Every layer Sophios exposes is meant to be
-one a person can read and edit, and that includes the document a tool just emitted.
-Neither spelling is a lesser citizen.
-
-The syntax layer reads YAML with `yaml.SafeLoader`, and may never be more permissive
-than it: what YAML cannot read is an error here too. The Sophios tags mean what this
-specification says, and nothing else decides them. An unknown tag (`!foo`) is
-`wic009`. `!&` in any position other than an `out:` entry is `wic019`: it is a known
-tag in a position with no meaning.
+The syntax layer reads YAML with `yaml.SafeLoader` and may never be more
+permissive than it. The Sophios tags mean what this specification says. An
+unknown tag is `wic009`; `!&` in any position other than an `out:` entry is
+`wic019`.
 
 A tag switches off YAML's implicit typing, so the payload of `!ii` is read as
-`yaml.SafeLoader` would read the same scalar untagged: a plain scalar by what it
-says (`!ii 5` is the integer 5; `!ii 2020-13-45` is `wic009`, as the untagged
-value is), and a quoted or block scalar as its text (`!ii '5'` is the string `5`,
-with YAML's own escapes in double quotes). The desugared spelling has no tag, so
-YAML's own reading gives it the same rule. The writer keeps the distinction: a
-string that YAML would read as something else is written quoted.
+`yaml.SafeLoader` would read the same scalar untagged: a plain scalar by what
+it says (`!ii 5` is the integer 5), a quoted or block scalar as its text
+(`!ii '5'` is the string `5`). The desugared spelling has no tag, so YAML's
+own reading gives it the same rule. The writer keeps the distinction: a
+string YAML would read as something else is written quoted.
 
 ### 2.1 `wic_` in construct position
 
-Where an input value is expected, a **single-key mapping whose key begins `wic_`** is
-read as one of the constructs above. If it is not one of them, it is `wic024`.
-
-This exists because the two spellings were equally *accepted* and unequally *safe*. A
-tag is a closed namespace, so `!iii` is `wic009` at once. A desugared key shares its
-namespace with passthrough CWL, which is open by definition (section 1), so
-`wic_inline_inpt` was indistinguishable from a key the compiler should carry through
-untouched: the construct silently vanished and the typo rode into the emitted
-document.
-
-**Only construct position is claimed.** A *name* may carry the prefix: an input port
-called `wic_` or `wic_port` is legal, because names are the user's to choose. So is
-any passthrough key: `wic`, `wicked` and `my_wic_key` are ordinary CWL and pass
-through untouched.
+Where an input value is expected, a single-key mapping whose key begins
+`wic_` is read as one of the constructs above, and otherwise is `wic024`. A
+tag is a closed namespace, so `!iii` is `wic009` at once; a desugared key
+shares its namespace with passthrough CWL, which is open, so without this
+rule a misspelling such as `wic_inline_inpt` would ride into the emitted
+document as a passthrough key. Only construct position is claimed: a name
+may carry the prefix, and `wic`, `wicked` and `my_wic_key` are ordinary
+passthrough keys.
 
 ## 3. What each surface must do
 
 **`.wic` files** are the YAML surface as written. They are parsed by
-`sophios.lang.parse`, which accepts both spellings above, and written by
-`sophios.lang.render`, which emits the tagged one. The two are inverses, a claim
-that lives as the round-trip property in `tests/core/test_lang_render.py`.
-A nested step entry keeps its `wic:` wrapper through a render, since every consumer
-reads through it, and an empty `wic:` block renders as `{}`, never as a null
-(`test_empty_sidecar_renders_as_mapping_not_null`).
+`sophios.lang.parse`, which accepts both spellings, and written by
+`sophios.lang.render`, which emits the tagged one; the two are inverses, the
+round-trip property in `tests/core/test_lang_render.py`. A nested step entry
+keeps its `wic:` wrapper through a render, and an empty `wic:` block renders
+as `{}`, never as a null (`test_empty_sidecar_renders_as_mapping_not_null`).
 
-**The Python API** (`Workflow`, `Step`) is the second surface of the same language.
-It builds a `sophios.lang.Document` directly, compiles it through the same door as a
-`.wic` file, and writes it with `sophios.lang.render`: `Workflow.write_wic()` emits
-the tagged spelling with sequence-form steps and explicit `id:`.
-`Workflow.from_wic()` reads a document back into objects; a construct the Python API
-cannot hold is `api006`.
+**The Python API** (`Workflow`, `Step`) is the second surface of the same
+language. It builds a `sophios.lang.Document` directly, compiles it through
+the same door as a `.wic` file, and writes it with `sophios.lang.render`:
+`Workflow.write_wic()` emits the tagged spelling with sequence-form steps and
+explicit `id:`. `Workflow.from_wic()` reads a document back into objects; a
+construct the Python API cannot hold is `api006`.
 
-A workflow that contains a nested `Workflow` is written as a bundle: each nested
-workflow is its own `.wic` file and the parent calls it by name, like any other
-subworkflow. Workflow outputs name their authored step, and a step named apart from
-its tool's file stem carries `run: <stem>.cwl`, the tool written beside the
-document. A real-time analysis declaration names the adapter by its registry
-stem, `run: cwl_subinterpreter`, so it stays a declaration.
+A workflow that contains a nested `Workflow` is written as a bundle: each
+nested workflow is its own `.wic` file and the parent calls it by name.
+Workflow outputs name their authored step, and every step carries
+`run: <stem>.cwl`, the tool written beside the document, except a real-time
+declaration, which names the adapter by its registry stem
+(`run: cwl_subinterpreter`) so that it stays a declaration.
 
-Two obligations follow, and both are enforced by tests rather than convention:
+Two obligations follow, both enforced by tests:
 
-1. **Whatever the Python API writes as a `.wic` file must parse**, for every
+1. Whatever the Python API writes as a `.wic` file must parse, for every
    workflow, nested or not
    (`test_python_api_emits_documents_this_parser_accepts` in
    `tests/core/test_lang_parser.py`).
-2. **Both spellings must produce the same result.** `!ii x` and
-   `{wic_inline_input: x}` are the same input, so compiling either must give the
-   same answer. This is checked as a property over generated inputs in
-   `tests/core/test_lang_parser.py`.
+2. Both spellings must produce the same result: `!ii x` and
+   `{wic_inline_input: x}` are the same input, checked as a property over
+   generated inputs in `tests/core/test_lang_parser.py`. And both surfaces
+   must produce the same result for the same workflow:
+   `tests/core/test_cookbook.py` compiles every pair both ways.
 
 ## 4. The machine-readable schema
 
-`sophios.lang.wic_schema()` exports a JSON Schema for editors. It is generated from
-the AST, not written by hand, and it is the only schema Sophios produces:
-`sophios --generate_schemas` writes it to `autogenerated/schemas/wic.json`.
+`sophios.lang.wic_schema()` exports a JSON Schema for editors, generated from
+the AST and the only schema Sophios produces; `sophios --generate_schemas`
+writes it to `autogenerated/schemas/wic.json`.
 
-Every field of every AST node declares how it is written, next to the field itself:
+Every field of every AST node declares how it is written, next to the field
+itself:
 
-```python
+```text
 class Step:
     id:      ... = surface(Shape.IDENTITY,        'id')
     inputs:  ... = surface(Shape.INPUT_BINDINGS,  'in')
@@ -338,95 +300,74 @@ class Step:
     span:        ... = surface(Shape.INTERNAL)         # not syntax at all
 ```
 
-That declaration is the single source of truth for the mapping between the AST and
-the surface. The schema generator walks those declarations; the construct keys and
-the `wic:` step-key pattern come from the parser's own tables, and the `wic:` block's
-keys and value shapes from `Grammar.SIDECAR_VALUES`, which the parser reads too.
-Nothing restates the shape of a document a second time, so nothing can disagree
-about it.
+That declaration is the single source of truth for the mapping between the
+AST and the surface. The generator walks it; the construct keys and the
+`wic:` step-key pattern come from the parser's tables, and the `wic:` block's
+keys and value shapes from `Grammar.SIDECAR_VALUES`, which the parser reads
+too. Add a field to a node and either the schema gains the key or generation
+fails because the field never said how it is written.
 
-Add a field to a node and one of two things happens: the schema gains the key, or
-generation fails because the field never said how it is written. There is no third
-outcome in which the schema quietly describes an older language.
+`to_json`'s output is always JSON-serialisable: dates and datetimes become
+ISO-8601 strings.
 
-`to_json`'s output is always JSON-serialisable; YAML values with no JSON counterpart
-are projected: dates and datetimes become ISO-8601 strings.
-
-The schema is an **over-approximation**, for two reasons that come from the language
-itself:
-
-- **JSON has no YAML tags.** A validator sees the document after loading, so
-  `!ii x` is invisible to it. The schema therefore describes the *desugared*
-  projection of section 2, what `sophios.lang.to_json` produces.
-- **Passthrough is open by definition.** Since any key outside the support matrix
-  is copied through untouched (section 1), the schema cannot close any object that
-  might carry passthrough CWL.
-
-So the schema catches structural mistakes (`steps:` that is a string, `in:` that is
-a list, a malformed `(index, name)` key, a `wic:` key or value the block does not
-admit) and admits everything else. The `wic:` block is not passthrough, so it is the
-one object the schema closes. It is an editor aid, not a second implementation of
-the language.
+The schema is an over-approximation, for two reasons that come from the
+language: JSON has no YAML tags, so the schema describes the desugared
+projection; and passthrough is open, so the schema cannot close any object
+that might carry CWL. It catches structural mistakes and admits everything
+else. The `wic:` block is not passthrough, so it is the one object the
+schema closes.
 
 ## 5. What this does not cover
 
-The language defines **syntax**: whether a Sophios document is well-formed. Two
-further questions are deliberately separate because they depend on the environment,
-not the language:
-
-- **Resolution**: do the step names refer to tools that exist *here*?
-- **Type checking**: do the connected ports have compatible types?
-
-A document can be perfectly well-formed and still fail to resolve on a machine
-without the right plugins installed. That is not a language error.
+The language defines syntax: whether a document is well formed. Two further
+questions depend on the environment and are deliberately separate:
+resolution, whether the step names refer to tools that exist here; and type
+checking, whether connected ports are compatible. A well-formed document can
+fail to resolve on a machine without the right tools, and that is not a
+language error.
 
 ## 6. Versioning
 
-`lang_version` starts at **0.0.1**, defined against CWL v1.2. The Sophios version and
-its CWL substrate move together.
+`lang_version` is 0.0.1, defined against CWL v1.2; the language version and
+its CWL substrate move together. The version tag is optional and expected to
+stay unused: an untagged file is compiled at the highest `lang_version`
+under which it compiles. A file using only long-standing syntax resolves to
+the newest version; one using syntax a later version dropped resolves to the
+newest version that still accepts it; one using syntax only a newer version
+added resolves there without a tag. A tag is for pinning a file, or for a
+construct valid under two versions with different meanings.
 
-The version tag is **optional and expected to stay unused**. An untagged file is
-compiled at the highest `lang_version` under which that source actually compiles,
-not merely the newest version available. That means:
-
-- A file using only long-standing syntax resolves to the newest version.
-- A file using syntax a later version dropped resolves to the newest version that
-  still accepts it, and keeps working.
-- A file using syntax only a newer version added resolves there automatically, with
-  no tag required to adopt a feature.
-
-A tag is needed only to pin a file for reproducibility, or where a construct is
-valid under two versions with different meanings.
-
-The version Sophios chose is always reported: on the command line, on
-`CompiledWorkflow.lang_version`, and as a `sophios:lang_version` annotation in the
-emitted CWL, namespaced so the output stays valid. It can be pinned per file
-(`wic: {lang_version: 0.0.1}`) or set for a whole compilation with `--lang_version`
-/ `Workflow.compile(lang_version=...)`; the explicit setting beats any tag, and one
-compilation resolves to exactly one version tree-wide. An unknown version is
-`wic017`; pins that disagree within one compilation are `wic018`.
+The version chosen is always reported: on the command line, on
+`CompiledWorkflow.lang_version`, and as a `sophios:lang_version` annotation
+in the emitted CWL, namespaced so the output stays valid. It can be pinned
+per file (`wic: {lang_version: 0.0.1}`) or set for a whole compilation
+(`--lang_version`, `Workflow.compile(lang_version=...)`); the explicit setting
+beats any tag, and one compilation resolves to exactly one version tree-wide.
+An unknown version is `wic017`; pins that disagree within one compilation are
+`wic018`. Every known version owns a reference-type judgment in
+`sophios.lang.compatibility`, and the module refuses to import otherwise.
 
 ## 7. Diagnostic codes
 
-Codes are contract: a caller matches on `SophiosErrorCode`, suppresses a code, or
-reads it out of a log, while message wording is free to improve. The enum is
-`sophios.lang.error_codes.SophiosErrorCode`, in two ranges: `wic0NN` for a
-document (it said something the language does not accept) or what running it needs from the machine (kind
-`machine`, such as `wic015`, `wic016`, `wic021`, `wic029` and `wic037`) and `api0NN` for
-the Python API (the document is fine, the call was not). A code is never renumbered,
-and a code that shipped in a release is never reused; a number that never shipped is
-free. `wic040` and `wic041` are unassigned. `wic042` and `wic043` are notes, which report without failing the
-compile, and errors under `--inference_strict`.
+Codes are contract: a caller matches on `SophiosErrorCode`, suppresses a
+code, or reads it out of a log, while message wording is free to improve. The
+enum is `sophios.lang.error_codes.SophiosErrorCode`, in two ranges: `wic0NN`
+for a document, or for what running it needs from the machine (kind
+`machine`: `wic015`, `wic016`, `wic021`, `wic029`, `wic037`), and `api0NN`
+for the Python API, where the document is fine and the call was not. A code
+is never renumbered, and a code that shipped in a release is never reused;
+`wic040` and `wic041` are unassigned. `wic042` and `wic043` are notes, errors
+under `--inference_strict`.
 
-Every member is provoked in `tests/core/provocations.py`, in one of two tiers:
-`PARSE` (source text through `parse()` alone) or `COMPILED` (a callable that drives
-the compiler or its helpers). `test_every_code_has_a_registered_provocation` in
-`tests/core/test_lang_parser.py` fails for a member with no provocation, so a new
-code lands with its provocation in the same commit. The
-[error codes page](../error_codes.md) says what each code means and how to fix it:
-every member has an `Explanation` in `EXPLANATIONS` (kind, meaning, fix);
+Every member is provoked in `tests/core/provocations.py`, in one of two
+tiers: `PARSE` (source text through `parse()` alone) or `COMPILED` (a
+callable that drives the compiler or its helpers).
+`test_every_code_has_a_registered_provocation` fails for a member with no
+provocation, so a new code lands with its provocation in the same commit.
+Every member has an `Explanation` in `EXPLANATIONS` (kind, meaning, fix);
 `test_every_code_is_explained` fails for one without, and
-`test_the_error_codes_page_says_what_the_code_says` keeps the page equal to it.
+`test_the_error_codes_page_says_what_the_code_says` keeps the
+[error codes page](../error_codes.md) equal to it.
 
 | Code | Member | Provoked in |
 |---|---|---|

@@ -1,94 +1,83 @@
-# Coding Standards
+# Coding standards
 
-This page describes the development checks used in the Sophios repository. For
-environment setup, start with the [Developer Install Guide](installguide.md).
+What do the checks require of a change to Sophios? Four tools run in CI over
+`src/`, `examples/`, `tests/` and `docs/cookbook/`, configured in
+`pyproject.toml`, and a change is expected to pass them before it is pushed.
 
-## Type Checking
+## Types
 
-Sophios uses mypy type annotations throughout the source tree. The active mypy
-configuration lives in `pyproject.toml`.
-
-Run the same broad paths used by CI:
-
-```bash
-mypy src/ examples/ tests/
-```
-
-When adding or changing public APIs, prefer explicit types at the API boundary.
-Internal helper code can still be compact, but typed inputs and return values
-make the workflow compiler and Python API much easier to maintain.
-
-## Docstrings
-
-Docstrings should explain what a function or class is responsible for, what its
-important arguments mean, and what callers can expect back.
-
-Use docstrings to clarify behavior, not to repeat obvious type information. For
-example, this is useful because it explains the naming convention:
-
-```python
-def render_step_id(workflow: str, index: int, name: str) -> str:
-    """The text a step occurrence carries at `index` in `workflow`."""
-    ...
-```
-
-## Tests
-
-Tests live under `tests/` and use pytest markers declared in `pyproject.toml`:
-
-- `fast`: quick API, schema, and unit-style checks,
-- `serial`: tests that should not run in parallel,
-- `slow`: workflow or integration checks that can take longer.
-
-Useful local commands:
+Every function is annotated, and mypy runs with `disallow_untyped_defs`,
+`disallow_incomplete_defs`, `check_untyped_defs`, `warn_return_any`,
+`warn_redundant_casts` and `warn_unused_ignores`; the pydantic plugin is
+loaded. Third-party packages without stubs are listed under
+`[[tool.mypy.overrides]]` with `ignore_missing_imports`. Run the same paths
+as CI:
 
 ```bash
-pytest -m fast
-pytest tests/core/test_python_api_workflow.py tests/core/test_python_api_tool_builder.py -q
-pytest -m serial
-pytest -m "not serial" --workers 8
+mypy src/ examples/ tests/ docs/cookbook/
 ```
 
-Runtime workflow tests may need Docker or Podman and can pull container images.
-Prefer the focused API tests while iterating on Python API or documentation
-changes.
+Prefer explicit types at a public boundary. A `# type: ignore` needs a reason
+the reader can check, and an unused one fails the build.
 
-## Coverage
+## Style
 
-The repository includes `pytest-cov`. To generate a coverage report, add
-`--cov` and use the checked-in `.coveragerc`:
-
-```bash
-pytest -m fast --cov --cov-config=.coveragerc
-```
-
-## Linting
-
-Sophios uses pylint for style, formatting, and common mistake detection. The
-configuration lives in `pyproject.toml`.
-
-Run:
+pylint runs with a threshold of 9.25 and a line length of 120; modules are
+kept under 750 lines. `missing-class-docstring`, `missing-module-docstring`,
+`invalid-name`, `fixme` and a few others are disabled repository-wide, so a
+docstring is required on functions and not on every class. autopep8 checks
+formatting at the same line length:
 
 ```bash
 pylint src/ examples/**/*.py tests/
+autopep8 --exit-code --recursive --diff --max-line-length 120 examples/ src/ tests/
 ```
 
-The current configured maximum line length is 120 characters.
+Docstrings say what a function is responsible for, what its arguments mean
+and what the caller gets back, in Google style; types are in the signature
+and not repeated in the docstring. A comment explains a decision, not the
+line below it.
 
-## CI Checks
+## Import boundaries
 
-GitHub Actions workflows live under `.github/workflows/`. The main Linux CI
-workflow installs `.[all_except_runner_src]` and runs:
+`lint-imports` checks the contracts in `pyproject.toml`:
 
-- `mypy src/ examples/ tests/`,
-- `pylint src/ examples/**/*.py tests/`,
-- focused Python API and workflow tests,
-- selected runtime workflow tests.
+- the core never imports `sophios.contrib`; contrib may import the core;
+- the compiler is layered: `sophios.api` over `sophios.compiler` over
+  `sophios.ir` over `sophios.lang`, and a lower layer never imports a higher
+  one;
+- `sophios.api.python.workflow` and `sophios.api.python.tool_builder` reach
+  the compiler, the registry, the runner and the pre-flight only through
+  their runtime adapter, never directly.
 
-Before pushing a broad change, run the focused checks that match the area you
-touched. For Python API or docs changes, the most useful baseline is:
+A change that needs to cross one of these lines is a design change, not a
+lint exception.
+
+## Shell and spelling
+
+`shellcheck -e SC1017` runs over the shell scripts, and codespell over the
+tree, with `codespellwords.txt` as its allow list.
+
+## Tests
+
+A behaviour change comes with a test through a public entry point: the
+command line, `Workflow`, `Step`, `CommandLineTool`, or `compile_source`. A
+test that pins existing behaviour should fail under a plausible mutation of
+it. Markers are listed in [Validation and testing](../validation.md); a test
+that pulls images or runs a container is marked so that the quick lanes skip
+it. Every new error code lands with its provocation in
+`tests/core/provocations.py` and its explanation in `EXPLANATIONS`, or the
+suite fails.
+
+## Before pushing
 
 ```bash
-sphinx-build -b html docs docs/_build/html
-pytest tests/core/test_python_api_workflow.py tests/core/test_python_api_tool_builder.py -q
+pytest -m fast
+mypy src/ examples/ tests/ docs/cookbook/
+pylint src/ examples/**/*.py tests/
+lint-imports
+sphinx-build -W --keep-going -b html docs docs/_build/html   # when docs/ changed
 ```
+
+The pre-commit hooks installed by `pre-commit install` run the formatting
+and type checks on each commit.

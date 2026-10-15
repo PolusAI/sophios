@@ -8,7 +8,7 @@ Two ranges, one enum: `wic0NN` is a document (it said something the language
 does not accept) or what running it needs from the machine (kind `machine`,
 such as wic015, wic016, wic021 and wic029); `api0NN` is the Python API (the document is
 fine, the call was not). One type so a caller matches on one `except`;
-separate ranges so an API code does not point at the language guide.
+separate ranges so an API code does not point at the .wic reference.
 
 Every member has an `Explanation` (`EXPLANATIONS`): what it means and what to
 do, which `sophios --explain` and docs/error_codes.md show.
@@ -70,9 +70,9 @@ class SophiosErrorCode(StrEnum):
     #: inference is done. On a subworkflow call the inputs are the ones the
     #: subworkflow declares.
     UNKNOWN_SCATTER_PORT = 'wic032'
-    #: A key in a ``wic:`` block that the block does not have (language guide §7).
+    #: A key in a ``wic:`` block that the block does not have (.wic reference §7).
     UNKNOWN_WIC_KEY = 'wic033'
-    #: A ``wic:`` key whose value does not have the shape the key declares (language guide §7).
+    #: A ``wic:`` key whose value does not have the shape the key declares (.wic reference §7).
     MALFORMED_WIC_VALUE = 'wic034'
     #: An authored `cwlVersion` the substrate toolchain does not run (language spec §1).
     UNSUPPORTED_CWL_VERSION = 'wic035'
@@ -167,8 +167,8 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
     SophiosErrorCode.MISSING_STEP_ID: Explanation(
         Kind.DOCUMENT,
         'A step in a sequence has no `id:`.',
-        'Add `id:` with the tool or workflow the step runs, or write `steps:` as a mapping keyed by step (language '
-        'guide §2.1).'),
+        'Add `id:` with the tool or workflow the step runs, or write `steps:` as a mapping keyed by step (.wic '
+        'reference §2.1).'),
     SophiosErrorCode.EMPTY_STEP_ID: Explanation(
         Kind.DOCUMENT,
         "A step's `id:` is empty.",
@@ -177,7 +177,7 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         Kind.DOCUMENT,
         'A `wic: steps:` key is neither `(index, name)` nor a step id.',
         "Key the entry `(index, name)` with the step's 1-based position and id, or by the id alone when no other "
-        "step has it (language guide §7)."),
+        "step has it (.wic reference §7)."),
     SophiosErrorCode.UNKNOWN_TAG: Explanation(
         Kind.DOCUMENT,
         'An unknown YAML tag; the Sophios tags are `!ii`, `!&`, `!*` and `!cwl`.',
@@ -185,11 +185,11 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
     SophiosErrorCode.DUPLICATE_KEY: Explanation(
         Kind.DOCUMENT,
         'A key bound twice: an input, a step, a `wic:` key, or a second `id:`.',
-        'Keep one of the two and delete the other (language guide §3.8).'),
+        'Keep one of the two and delete the other (.wic reference §3.8).'),
     SophiosErrorCode.UNRESOLVED_INPUT: Explanation(
         Kind.DOCUMENT,
         'An untagged input value names no workflow input.',
-        'Write a literal as `!ii <value>`, or declare the name under `inputs:` (language guide §3.3).'),
+        'Write a literal as `!ii <value>`, or declare the name under `inputs:` (.wic reference §3.3).'),
     SophiosErrorCode.MISSING_REQUIRED_INPUT: Explanation(
         Kind.DOCUMENT,
         'A required input gets no value, such as `!ii null` on an input that is not optional.',
@@ -200,7 +200,7 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         "as a step, a packed `$graph` with no `main`, subworkflows that call each other in a cycle, "
         "`implementations` with none chosen, or ports only the CWL runner can read.",
         'Do what the message names: put the tool or `.wic` file on a search path of the config (`search_paths_cwl`, '
-        '`search_paths_wic`), give the workflow steps, or break the cycle (language guide §2.3).'),
+        '`search_paths_wic`), give the workflow steps, or break the cycle (.wic reference §2.3).'),
     SophiosErrorCode.SCRIPT_ARGUMENT_MISMATCH: Explanation(
         Kind.DOCUMENT,
         'The arguments given to a Python script step do not match its declared inputs.',
@@ -226,13 +226,13 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
     SophiosErrorCode.MISPLACED_EDGE_DEF: Explanation(
         Kind.DOCUMENT,
         "`!&` outside a step's `out:` entry.",
-        "Name the output with `!&` on the producing step's `out:` entry, and read it with `!*` (language guide "
+        "Name the output with `!&` on the producing step's `out:` entry, and read it with `!*` (.wic reference "
         "§3.6)."),
     SophiosErrorCode.LITERAL_TYPE_MISMATCH: Explanation(
         Kind.DOCUMENT,
         "A literal does not have the type of its input, or a scattered input's literal is not a list.",
         "Write a value of the input's type, quoting a string YAML would read as something else, and give a scattered"
-        " input a list (language guide §3.2, §6.1)."),
+        " input a list (.wic reference §3.2, §6.1)."),
     SophiosErrorCode.DIRECTORY_NOT_WRITABLE: Explanation(
         Kind.MACHINE,
         'A directory Sophios writes into cannot be created or written: `autogenerated/` under the working '
@@ -250,11 +250,11 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
     SophiosErrorCode.RESERVED_KEY: Explanation(
         Kind.DOCUMENT,
         'A `wic_` mapping in an input position that is not a Sophios construct.',
-        'Correct the spelling to a construct of language guide §3.7, or rename the key.'),
+        'Correct the spelling to a construct of .wic reference §3.7, or rename the key.'),
     SophiosErrorCode.UNDEFINED_EDGE: Explanation(
         Kind.DOCUMENT,
         'An edge reference with no definition before it, anywhere in the compilation.',
-        "Define the name with `!&` on an earlier step's `out:` entry, or correct its spelling (language guide §4)."),
+        "Define the name with `!&` on an earlier step's `out:` entry, or correct its spelling (.wic reference §4)."),
     SophiosErrorCode.DUPLICATE_EDGE_DEF: Explanation(
         Kind.DOCUMENT,
         'An edge name defined twice.',
@@ -278,19 +278,19 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
     SophiosErrorCode.DUPLICATE_DOCUMENT_NAME: Explanation(
         Kind.DOCUMENT,
         'Two ports the compiled CWL would spell the same way, or a namespace prefix bound to two URIs.',
-        'Rename one of the two ports, or bind the prefix to one URI (language guide §5.2).'),
+        'Rename one of the two ports, or bind the prefix to one URI (.wic reference §5.2).'),
     SophiosErrorCode.UNKNOWN_SCATTER_PORT: Explanation(
         Kind.DOCUMENT,
         'A `scatter:` entry that is not an input of its step.',
-        'Scatter over an input the step declares and binds (language guide §6.1).'),
+        'Scatter over an input the step declares and binds (.wic reference §6.1).'),
     SophiosErrorCode.UNKNOWN_WIC_KEY: Explanation(
         Kind.DOCUMENT,
         'A key the `wic:` block does not have.',
-        'Use a key from language guide §7, or remove it.'),
+        'Use a key from .wic reference §7, or remove it.'),
     SophiosErrorCode.MALFORMED_WIC_VALUE: Explanation(
         Kind.DOCUMENT,
         'A `wic:` value of the wrong shape.',
-        'Write the value in the shape language guide §7 gives for its key.'),
+        'Write the value in the shape .wic reference §7 gives for its key.'),
     SophiosErrorCode.UNSUPPORTED_CWL_VERSION: Explanation(
         Kind.DOCUMENT,
         'A `cwlVersion` other than `v1.0`, `v1.1` or `v1.2`.',
@@ -298,7 +298,7 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
     SophiosErrorCode.UNTYPED_OUTPUT: Explanation(
         Kind.DOCUMENT,
         'A workflow output with no `type:` and no producer to take it from.',
-        'Give the output a `type:`, or an `outputSource:` naming the step output it comes from (language guide '
+        'Give the output a `type:`, or an `outputSource:` naming the step output it comes from (.wic reference '
         '§5.2).'),
     SophiosErrorCode.IMAGE_UNAVAILABLE: Explanation(
         Kind.MACHINE,
@@ -309,28 +309,28 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         Kind.DOCUMENT,
         "CWL's step input written where Sophios does not read it: an untagged mapping of step-input fields, a "
         "malformed `!cwl {...}` record, or a list `outputSource`, `linkMerge` or `pickValue` on a workflow output.",
-        'Write step-input fields as a `!cwl {...}` record (language guide §3.5); a workflow output names one step '
+        'Write step-input fields as a `!cwl {...}` record (.wic reference §3.5); a workflow output names one step '
         'output.'),
     SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE: Explanation(
         Kind.DOCUMENT,
         'A positional `(index, name)` `outputSource` that names the wrong step.',
-        'Use the index and id of the step the output comes from, or write `step/port` (language guide §5.2).'),
+        'Use the index and id of the step the output comes from, or write `step/port` (.wic reference §5.2).'),
     SophiosErrorCode.INFERENCE_TIE: Explanation(
         Kind.DOCUMENT,
         'Note: one step offered several matching outputs and inference took the last.',
-        'Pin the choice the note shows, with `!&` on the output and `!*` on the input (language guide §8); '
+        'Pin the choice the note shows, with `!&` on the output and `!*` on the input (.wic reference §8); '
         '`--inference_strict` makes this an error.'),
     SophiosErrorCode.INFERENCE_RECENCY: Explanation(
         Kind.DOCUMENT,
         'Note: an earlier step also matched and inference took the most recent.',
-        'Pin the choice the note shows, with `!&` on the output and `!*` on the input (language guide §8); '
+        'Pin the choice the note shows, with `!&` on the output and `!*` on the input (.wic reference §8); '
         '`--inference_strict` makes this an error.'),
     SophiosErrorCode.REALTIME_DECLARATION: Explanation(
         Kind.DOCUMENT,
         'A real-time analysis declaration (a `cwl_subinterpreter` step) with an input that is not a literal or has '
         'the wrong shape, or whose analysis does not compile.',
         'Write each input of the step as a literal of the shape the message names, and fix the analysis it names '
-        '(docs/advanced.md, Real-time Analysis).'),
+        '(docs/realtime-analysis.md).'),
     SophiosErrorCode.INVALID_INPUT_VALUE: Explanation(
         Kind.CALL,
         'A value bound to a step input that the input cannot take.',

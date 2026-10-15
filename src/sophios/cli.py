@@ -66,8 +66,6 @@ parser.add_argument('--insert_steps_automatically', default=False, action="store
 parser.add_argument('--no_provenance', default=False, action="store_true",
                     help='''Do not use the --provenance feature of CWL.
                     (You should only disable provenance if absolutely necessary.)''')
-parser.add_argument('--copy_output_files', default=False, action="store_true",
-                    help='Copy primary outputs into the legacy outdir/ layout after a successful cwltool run.')
 parser.add_argument('--cwl_inline_runtag', default=False, action="store_true",
                     help='''Write one self-contained file: embed the CWL of every step, tools and
                     subworkflows, in its run field. The shape of the workflow is unchanged.''')

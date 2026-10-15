@@ -11,8 +11,6 @@ import traceback
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Final, Iterator, Mapping
-from sophios.ir.names import Names
-from sophios.ir.types import DerivedName, WorkflowGraph
 from sophios.wic_types import Json
 from . import auto_gen_header, realtime
 from . import utils
@@ -204,9 +202,8 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
 
 
 def _execute_inprocess(cmd: list[str], cwl_runner: str, workflow_name: str,
-                       run_args_dict: dict[str, str], user_env_vars: dict[str, str] | None,
-                       yaml_path: Path, output_directories: Mapping[str, str] | None,
-                       failed: FailedJobs) -> int:
+                       user_env_vars: dict[str, str] | None,
+                       yaml_path: Path, failed: FailedJobs) -> int:
     """Execute the workflow in-process via the cwltool or toil python API, handling errors.
 
     While it runs, cwltool's messages name each emitted id as the author wrote it, read from
@@ -236,8 +233,6 @@ def _execute_inprocess(cmd: list[str], cwl_runner: str, workflow_name: str,
                     raise
                 print(
                     f'Final output json metadata blob is in output_{workflow_name}.json')
-                if run_args_dict.get('copy_output_files', 'no') == 'yes':
-                    copy_output_files(workflow_name, output_directories=output_directories)
             elif cwl_runner == 'toil-cwl-runner':
                 print('via toil.cwl.cwltoil.main python API')
                 retval = toil.cwl.cwltoil.main(cmd[1:])
@@ -320,7 +315,6 @@ def _report_outcome(retval: int | None, cmd: list[str], basepath: str, workflow_
 def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
               passthrough_args: list[str], workflow_name: str,
               basepath: str, user_env_vars: dict[str, str] | None = None,
-              output_directories: Mapping[str, str] | None = None,
               documents: tuple[str, ...] | None = None,
               realtime_plans: tuple[realtime.Plan, ...] = ()) -> int:
     """This function runs the compiled workflow locally.
@@ -333,7 +327,6 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
         or use the cwltool python api.
         basepath (str): The path at which the workflow to be executed
         user_env_vars (dict[str, str] | None): User supplied environment variables.
-        output_directories (Mapping[str, str] | None): Passed to `copy_output_files`.
         documents (tuple[str, ...] | None): Passed to `build_cmd`.
         realtime_plans (tuple[realtime.Plan, ...]): The real-time analyses to run beside the
         workflow, as `realtime.write` returned them for it. With any, cwltool gets a `--cachedir`.
@@ -375,10 +368,10 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
             # "signal only works in main thread or with __pypy__.thread.enable_signals()"
             retval = sub.run(cmd, check=False, env=exec_env).returncode
         else:
-            retval = _execute_inprocess(cmd, cwl_runner, workflow_name, run_args_dict,
-                                        user_env_vars, yaml_path, output_directories, failed)
+            retval = _execute_inprocess(cmd, cwl_runner, workflow_name,
+                                        user_env_vars, yaml_path, failed)
     if use_subprocess:
-        return retval  # Skip copying files to outdir/ for CI
+        return retval
 
     _report_outcome(retval, cmd, basepath, workflow_name, failed)
 
@@ -415,80 +408,6 @@ def run_compute(workflow_name: str, workflow: Json, workflow_inputs: Json,
         log_path=Path(f'compute_logs_{jobid}.txt'),
     )
     return submission.exit_code
-
-
-def output_directories(graph: WorkflowGraph) -> dict[str, str]:
-    """Where `copy_output_files` puts each of `graph`'s outputs, under `outdir/`.
-
-    A derived output sits below the root workflow's name in one
-    `step <i> <name>` directory per step it was exposed through, outermost
-    first, numbered as the document numbers them; an authored output is its
-    own directory. Keyed by the name the emitted document gives the output,
-    which is the key the runner's provenance JSON uses.
-
-    Args:
-        graph (WorkflowGraph): The compiled root graph.
-
-    Returns:
-        dict[str, str]: Each root output's directory, relative to `outdir/`.
-    """
-    names = Names.of(graph)
-    directories: dict[str, str] = {}
-    for port in graph.workflow_outputs:
-        name, parts = port.name, []
-        while isinstance(name, DerivedName):
-            parts.append(f'step {names.position(name.step)} {name.step.name}')
-            name = name.port
-        directories[names.port(port.name)] = '/'.join((graph.name, *parts, name)) if parts else name
-    return directories
-
-
-def copy_output_files(yaml_stem: str, basepath: str = '',
-                      output_directories: Mapping[str, str] | None = None) -> None:
-    """Copies output files from the cachedir to outdir/
-
-    Args:
-        yaml_stem (str): The --yaml filename (without .extension)
-        output_directories (Mapping[str, str] | None): Each root output's directory under
-            `outdir/`, as `output_directories()` computes it. An output it does not name is
-            copied to `outdir/<its name>`.
-    """
-    output_json_file_prov = Path(
-        f'provenance/{yaml_stem}/workflow/primary-output.json')
-    # NOTE: The contents of --write-summary is
-    # slightly different than provenance/{yaml_stem}/workflow/primary-output.json!
-    # They are NOT the same file!
-    if output_json_file_prov.exists():
-        with open(output_json_file_prov, mode='r', encoding='utf-8') as f:
-            output_json = json.loads(f.read())
-        directories = output_directories or {}
-        files = [file for name, obj in output_json.items()
-                 for file in utils.parse_provenance_output_files(obj, directories.get(name, name))]
-        dests: set[str] = set()
-        for location, parentdirs, basename in files:
-            Path('outdir/' + parentdirs).mkdir(parents=True, exist_ok=True)
-            source = f'provenance/{yaml_stem}/workflow/' + location
-            # NOTE: Even though we are using subdirectories (not just a single output directory),
-            # there is still the possibility of filename collisions, i.e. when scattering.
-            # For now, let's use a similar trick as cwltool of append _2, _3 etc.
-            # except do it BEFORE the extension.
-            # This could still cause problems with slicing, i.e. if you scatter across
-            # indices 11-20 first, then 1-10 second, the output file indices will get switched.
-            if basepath:
-                dest = basepath + '/' + 'outdir/' + parentdirs + '/' + basename
-            else:
-                dest = 'outdir/' + parentdirs + '/' + basename
-            if dest in dests:
-                idx = 2
-                while Path(dest).exists():
-                    stem = Path(basename).stem
-                    suffix = Path(basename).suffix
-                    dest = 'outdir/' + parentdirs + \
-                        '/' + stem + f'_{idx}' + suffix
-                    idx += 1
-            dests.add(dest)
-            cmd = ['cp', source, dest]
-            sub.run(cmd, check=True)
 
 
 def cwltool_main() -> int:

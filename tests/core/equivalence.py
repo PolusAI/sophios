@@ -33,7 +33,7 @@ class Strength(IntEnum):
 
     #: Namespaced names may differ; the DAG and the tools at each node may not.
     #: Legitimate because a namespace encodes *nesting depth*
-    #: (`{stem}__step__{i}__{key}`, joined with `'___'`, docs/dev/algorithms.md),
+    #: (`{stem}__step__{i}__{key}`, joined with `'___'`, docs/dev/architecture.md),
     #: so splitting a workflow into subworkflows renames every port and moves
     #: no edge. This is the only strength partitioning can preserve.
     UP_TO_RENAMING = 1

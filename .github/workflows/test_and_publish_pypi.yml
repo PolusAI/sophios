@@ -37,7 +37,6 @@ jobs:
           expected-ref: ${{ github.event.inputs.ref }}
 
       - name: Remove old global config
-        if: always()
         run: rm -rf "/home/$(whoami)/wic/" && rm -rf "/home/$(whoami)/.toil/"
 
       - name: Install sophios 🔧

@@ -130,7 +130,7 @@ def test_two_in_memory_tools_chain_and_keep_their_output_binding() -> None:
     `test_python_api_tool_builder.py` already owns that claim.
     """
     example = REPO_ROOT / 'examples' / 'scripts' / 'tool_builder_workflow.py'
-    assert example.is_file(), f'{example} is linked from docs/tool_builder_workflow.md'
+    assert example.is_file(), f'{example} is linked from docs/tool-builder.md'
     module = import_python_file(example.stem, example.resolve())
 
     compiled = module.build_workflow('hello from test').compile()
@@ -184,7 +184,7 @@ def test_the_integrated_ichnaea_script_compiles_its_hinted_tool(tmp_path: Path) 
 
 @pytest.mark.fast
 def test_the_sam3_handoff_snippet_compiles_with_stdout_and_stderr_outputs() -> None:
-    """docs/tool_builder_sam3.md hands a built tool with `Output.stdout()` to the
+    """docs/tool-builder.md hands a built tool with `Output.stdout()` to the
     workflow API. `stdout` and `stderr` are tool-only shorthands that cwltool
     rejects at the workflow boundary, so each promoted output must be a `File`."""
     tool = CommandLineTool('echo_tool', Inputs(message=Input(cwl.string, position=1)),

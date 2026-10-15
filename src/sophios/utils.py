@@ -48,33 +48,6 @@ def recursively_delete_dict_key(key: str, obj: Any) -> Any:
     return obj
 
 
-def parse_provenance_output_files(obj: Any, parentdirs: str) -> list[tuple[str, str, str]]:
-    """Parses the primary workflow provenance JSON object.
-
-    Args:
-        obj (Any): The provenance object or one of its recursive sub-objects.
-        parentdirs (str): The directory associated with obj.
-
-    Returns:
-        list[tuple[str, str, str]]: A List of (location, parentdirs, basename) for each output file.
-    """
-    if isinstance(obj, dict):
-        if obj.get('class', '') == 'File':
-            # This basename is a file name
-            return [(str(obj['location']), parentdirs, str(obj['basename']))]
-        if obj.get('class', '') == 'Directory':
-            # This basename is a directory name
-            subdir = parentdirs + '/' + obj['basename']
-            return parse_provenance_output_files(obj['listing'], subdir)
-    if isinstance(obj, list):
-        files = []
-        for o in obj:
-            files.append(parse_provenance_output_files(o, parentdirs))
-        # Should we flatten?? This will lose the structure of 2D (and higher) array outputs.
-        return [y for x in files for y in x]
-    return []
-
-
 def convert_args_dict_to_args_list(
     args_dict: dict[str, Any],
     boolean_flags: set[str] | None = None,
