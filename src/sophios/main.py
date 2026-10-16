@@ -300,7 +300,7 @@ def main() -> None:
 
 
 def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
-    """See docs/userguide.md"""
+    """The command line, as docs/cli-reference.md describes it."""
     if unknown_args and args.passthrough_flags != 'yes':
         cli.parser.error(f'unrecognized arguments: {" ".join(unknown_args)}. '
                          'Flags for the CWL runner need --passthrough_flags yes')

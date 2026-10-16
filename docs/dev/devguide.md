@@ -1,191 +1,155 @@
-# Developer Guide
+# Developer guide
 
-See [algorithms](algorithms.md) for a description of the compilation
-algorithms and high-level implementation considerations.
+How do I work on Sophios itself: set up a checkout, run the tests and checks,
+build these docs, and find my way around the source? This page is the
+entry point for the Developers section. [Architecture](architecture.md)
+describes the compiler, the [language specification](language_spec.md) the
+contract between its two surfaces, and [Validation and testing](../validation.md)
+what the suite promises.
 
-## Coding Standards
-
-See [coding standards](codingstandards.md)
-
-## Git Etiquette
-
-See [git etiquette](gitetiquette.md)
-
-## Runtime Notes And Known Issues
-
-### Globbing Unexpected File Order
-
-Do not rely on `glob` order when output order matters. CWL runners may return
-globbed files in a different order than the input values that produced them.
-
-When order is semantically important, write an explicit manifest or index file
-from the tool and read that file downstream.
-
-The simplified example below shows the problem:
-
-```
-input: [3, 2, 1]  # Here is the order of the input array.
-```
-
-```
-#!/usr/bin/env cwl-runner
-cwlVersion: v1.2
-class: CommandLineTool
-baseCommand: ["python", "example.py"]
-
-requirements:
-- class: InitialWorkDirRequirement
-  listing:
-  # See https://www.commonwl.org/user_guide/topics/creating-files-at-runtime.html
-    - entryname: example.py
-      entry: |
-        import sys
-        from pathlib import Path
-
-        for arg in sys.argv[1:]:
-            Path(f'{arg}.txt').touch()
-
-inputs:
-  input:
-    type: Any[]
-    inputBinding:
-      position: 0
-
-outputs:
-  output:
-    type: File[]
-    outputBinding:
-      glob: "*.txt"
-```
-
-```
-cwltool touch_array.cwl touch_array_inputs.yml
-
-
-INFO [job test.cwl] /tmp/0x0q86bg$ python \
-    example.py \
-    3 \
-    2 \
-    1
-INFO [job test.cwl] completed success
-{
-    "output": [
-        {
-            "location": "file:///home/walkerbd/sophios/cwl_adapters/1.txt",
-            "basename": "1.txt",
-            "class": "File",
-            "checksum": "sha1$da39a3ee5e6b4b0d3255bfef95601890afd80709",
-            "size": 0,
-            "path": "/home/walkerbd/sophios/cwl_adapters/1.txt"
-        },
-        {
-            "location": "file:///home/walkerbd/sophios/cwl_adapters/2.txt",
-            "basename": "2.txt",
-            "class": "File",
-            "checksum": "sha1$da39a3ee5e6b4b0d3255bfef95601890afd80709",
-            "size": 0,
-            "path": "/home/walkerbd/sophios/cwl_adapters/2.txt"
-        },
-        {
-            "location": "file:///home/walkerbd/sophios/cwl_adapters/3.txt",
-            "basename": "3.txt",
-            "class": "File",
-            "checksum": "sha1$da39a3ee5e6b4b0d3255bfef95601890afd80709",
-            "size": 0,
-            "path": "/home/walkerbd/sophios/cwl_adapters/3.txt"
-        }
-    ]
-```
-
-The output array is sorted by filename, not by the original input order.
-
-
-## Partial Failures
-
-When partial failures are enabled, the command for a workflow step can succeed
-while a CWL JavaScript post-processing expression still fails. Sophios can
-compile the CWL structure, but it cannot automatically repair arbitrary
-JavaScript embedded in a tool.
-
-For example, this output expression assumes that `self[0]` exists:
-```
-outputs:
-
-  topology_changed:
-    type: boolean
-    outputBinding:
-      glob: valid.txt
-      loadContents: true
-      outputEval: |
-        ${
-          // Read the contents of the file
-          const lines = self[0].contents.split("\n");
-          // Read boolean value from the first line
-          const valid = lines[0].trim() === "True";
-          return valid;
-        }
-```
-```
-stdout was: ''
-stderr was: 'evalmachine.<anonymous>:45
-  const lines = self[0].contents.split("\n");
-                        ^
-TypeError: Cannot read properties of undefined (reading 'contents')
-```
-Fix the tool by checking that the globbed object exists before reading it:
-```
-outputs:
-
-  topology_changed:
-    type: boolean
-    outputBinding:
-      glob: valid.txt
-      loadContents: true
-      outputEval: |
-        ${
-          // check if self[0] exists
-          if (!self[0]) {
-            return null;
-          }
-          // Read the contents of the file
-          const lines = self[0].contents.split("\n");
-          // Read boolean value from the first line
-          const valid = lines[0].trim() === "True";
-          return valid;
-        }
-```
-
-## Workflow Development
-
-When adding new `.cwl` or `.wic` files, regenerate the discovery config when
-tool discovery looks stale:
+## A source checkout
 
 ```bash
-sophios --generate_config
+git clone https://github.com/PolusAI/sophios.git
+cd sophios
+conda env create -n sophios_dev -f install/system_deps.yml
+conda activate sophios_dev
+python -m pip install -e ".[all_except_runner_src]"
+pre-commit install
 ```
 
-The editor schema describes syntax only, so it does not go stale when tools
-change. Write it once with `sophios --generate_schemas`.
+`install/system_deps.yml` (`install/system_deps_windows.yml` on Windows)
+installs the non-Python programs the tests and local runs need, Node.js and
+Graphviz among them, and the binary Python packages that are easier to get
+from conda than from pip. It does not install Sophios. The editable install
+puts the checkout's `src/` on the path and adds the test, documentation,
+plotting and type-stub extras, as the CI installs them;
+`".[test,doc,mypy-types]"` is enough for API tests and docs work. To update
+an existing environment, `conda env update -n sophios_dev -f install/system_deps.yml --prune`.
 
-Sophios uses `~/wic/global_config.json` by default. Inspect that file before
-deleting `~/wic`, because it may contain local search paths you want to keep.
+Check that Python imports the checkout:
 
-## Singularity
-
-When building images with Singularity, clear the cache if `cwltool` or
-`cwl-docker-extract` reports stale-image or cache-related failures:
-
+```bash
+python -c "import sophios; print(sophios.__version__, sophios.__file__)"
+sophios --help
 ```
-singularity cache clean
+
+The version is written by setuptools-scm when the package is built, so an
+import of a checkout that was never installed says `unknown` and asks for
+`pip install -e .`.
+
+## Configuration for development
+
+`sophios --generate_config` from a checkout writes `~/wic/global_config.json`
+and copies the checkout's `cwl_adapters/` and `docs/tutorials/` to
+`~/wic/cwl_adapters` and `~/wic/examples`. To compile against the checkout
+itself rather than a copy, point the search paths at it:
+
+```json
+{
+    "search_paths_cwl": {"global": ["/path/to/sophios/cwl_adapters"], "gpu": []},
+    "search_paths_wic": {"global": ["/path/to/sophios/docs/tutorials", "/path/to/sophios/docs/cookbook"]}
+}
 ```
 
-## Toil
+The CI writes its configuration with `.github/update_sophios_config.py`,
+which lists the tool and workflow repositories each lane checks out. A test
+run reads the configuration the process finds; when there is none, the suite
+falls back to the in-repository directories without writing one.
 
-When working with Toil, stale job stores can preserve older runtime state. If
-changing workflow inputs or runner flags produces surprising behavior, clean the
-Toil state:
+## Tests
 
+```bash
+pytest -m fast                      # the quick check: unit and API tests
+pytest tests/core/test_cookbook.py  # the cookbook pairs
+pytest -m "not serial" --workers 8  # the parallel part of the suite
+pytest -m serial                    # the rest
 ```
-toil clean
-rm -r ~/.toil
+
+[Validation and testing](../validation.md) lists the markers. Tests that run
+workflows need a container engine and pull images; compiling and the API
+tests do not. `tests/core/test_examples.py` compiles every workflow the
+configuration reaches and runs those not blacklisted, so a broad
+configuration makes it long.
+
+## Checks
+
+The CI runs, over `src/`, `examples/`, `tests/` and `docs/cookbook/`:
+
+```bash
+mypy src/ examples/ tests/ docs/cookbook/
+pylint src/ examples/**/*.py tests/
+autopep8 --exit-code --recursive --diff --max-line-length 120 examples/ src/ tests/
+lint-imports
+shellcheck -e SC1017 install/*.sh
 ```
+
+`lint-imports` checks the three import contracts in `pyproject.toml`: the
+core never imports `sophios.contrib`; `sophios.api` sits above
+`sophios.compiler`, above `sophios.ir`, above `sophios.lang`; and the two
+public API modules reach the compiler only through their runtime adapter.
+[Coding standards](codingstandards.md) has the settings.
+
+## Documentation
+
+```bash
+sphinx-build -W --keep-going -b html docs docs/_build/html
+cd docs && make html
+cd docs && make pdf
+```
+
+The site is built with warnings as errors, here and on Read the Docs. `make
+pdf` builds one single-page HTML document from `docs/pdf_index.rst` and
+prints it to `docs/_build/pdf/sophios-docs.pdf` with a local Chrome or
+Chromium (`CHROME_BIN` names one). Pages are Markdown (MyST); the API pages
+use autodoc, so the build imports `sophios` from `src/`. Every workflow a page
+shows in both forms is a cookbook pair, which
+`tests/core/test_cookbook.py` keeps honest; `docs/error_codes.md` is
+generated from `EXPLANATIONS` in `src/sophios/lang/error_codes.py`, and a
+test keeps the two equal.
+
+## The layout of `src/sophios`
+
+| Where | What |
+|---|---|
+| `lang/` | the language: parser, AST, renderer, JSON Schema, diagnostics, error codes, versions, the CWL support matrix |
+| `ir/` | the compiler's phases: front door, resolve, lower, link, infer, namespaces, emit, and the graph types |
+| `compiler.py` | `compile_source`, the one entry point |
+| `api/python/` | the public Python API: `workflow.py`, `tool_builder.py`, and the private modules behind them |
+| `main.py`, `cli.py` | the command line: argument parsing and the adapter from arguments to settings |
+| `plugins.py`, `input_output.py` | tool and workflow discovery, the configuration, writing artifacts |
+| `preflight.py` | what a local run needs from this machine |
+| `run_local.py`, `realtime.py` | running the compiled CWL, and the real-time analyses beside it |
+| `post_compile.py` | the rewrites of a compiled tree: flattening, embedding, partial failures |
+| `drawing.py` | `--graphviz` |
+| `contrib/` | see [Contrib](../contrib.md) |
+
+## Runtime notes
+
+**Glob order.** A CWL runner returns globbed files in filename order, not in
+the order the inputs that produced them were given. A tool whose output
+order matters writes a manifest and reads it downstream.
+
+**Partial failures and expressions.** Under `--partial_failure_enable` a
+command may be forgiven while an `outputEval` that assumes `self[0]` exists
+still fails. Guard such expressions:
+
+```javascript
+${
+  if (!self[0]) {
+    return null;
+  }
+  const lines = self[0].contents.split("\n");
+  return lines[0].trim() === "True";
+}
+```
+
+**Singularity.** When cwltool or `cwl-docker-extract` reports a stale or
+cached image, `singularity cache clean`.
+
+**Toil.** A stale job store keeps older state; when changing inputs or flags
+behaves strangely, `toil clean` the job store and remove `~/.toil`.
+
+**Docker Desktop.** Many `com.docker` processes left behind can make a run
+hang; the pre-flight counts them and says so. Quitting and restarting Docker
+Desktop clears it.

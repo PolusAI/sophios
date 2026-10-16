@@ -1,0 +1,15 @@
+steps:
+- id: touch
+  in:
+    filename: !ii greeting.txt
+- id: append
+  in:
+    str: !ii Hello, Sophios
+- id: cwl_subinterpreter
+  in:
+    file_pattern: !ii greeting.txt
+    cwl_tool: !ii cat
+    max_times: !ii 3
+    config: !ii
+      in:
+        file: greeting.txt

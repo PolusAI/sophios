@@ -121,7 +121,7 @@ def _edges(cluster: graphviz.Digraph, graph: WorkflowGraph, names: Names, settin
         source = names.qualified(edge.source.step)
         sink = names.qualified(edge.sink.step)
         # Explicit edges are blue; an inferred one takes the theme's font
-        # colour, as docs/tutorials/multistep.md says, so a reader can tell
+        # colour, as docs/drawing.md says, so a reader can tell
         # what the document said from what the compiler decided.
         attrs = {'color': 'blue'}
         if edge.origin is EdgeOrigin.INFERRED:
