@@ -33,15 +33,15 @@ class Strength(IntEnum):
 
     #: Namespaced names may differ; the DAG and the tools at each node may not.
     #: Legitimate because a namespace encodes *nesting depth*
-    #: (`{stem}__step__{i}__{key}`, joined with `'___'`, docs/dev/algorithms.md),
+    #: (`{stem}__step__{i}__{key}`, joined with `'___'`, docs/dev/architecture.md),
     #: so splitting a workflow into subworkflows renames every port and moves
     #: no edge. This is the only strength partitioning can preserve.
     UP_TO_RENAMING = 1
 
     #: `run:` paths may differ; nothing else may. Legitimate because `run:`
-    #: encodes where a document sits relative to its parent — `relative_run_path`
-    #: writes `step_name/stem.cwl` or `'___'.join(namespaces + [stem.cwl])`
-    #: (src/sophios/compiler.py:626-634) — which is embedding, not meaning.
+    #: names the file a process is written to, which depends on what else the
+    #: tree holds (a stem another process took is numbered) — embedding, not
+    #: meaning.
     UP_TO_EMBEDDING = 2
 
     #: Mapping key order may differ; nothing else may. Legitimate because a
@@ -678,6 +678,10 @@ def flatten_model(artifact: CompilationArtifact) -> Yaml:
         # names (its inner workflow-level `inputs:` keys) to the sources that
         # actually feed them at *this* level.
         formal_to_actual = {name: _source_of(value) for name, value in step.get('in', {}).items()}
+        # Ids are unique in a document only: two subworkflows may each call a step `captured`, so an
+        # inlined step takes its wrapper's id in front of its own, as the compiler's flattening does.
+        wrapper_id = step['id']
+        inner_ids = {str(inner_step['id']) for inner_step in inner.get('steps', [])}
         for inner_step in inner.get('steps', []):
             for name, value in inner_step.get('in', {}).items():
                 source = _source_of(value)
@@ -685,16 +689,20 @@ def flatten_model(artifact: CompilationArtifact) -> Yaml:
                     actual = formal_to_actual[source]
                     if actual is not None:
                         _set_source(inner_step['in'], name, actual)
+                elif source is not None and source.partition('/')[0] in inner_ids:
+                    _set_source(inner_step['in'], name, f'{wrapper_id}__{source}')
+            inner_step['id'] = f'{wrapper_id}__{inner_step["id"]}'
             if step_requirements:
                 inner_step['requirements'] = {**step_requirements, **(inner_step.get('requirements') or {})}
             flat_steps.append(inner_step)
-        wrapper_id = step['id']
         # The subworkflow's own `outputs:` map its output port names to
         # `outputSource: '<inner step>/<port>'`; anything outside referred to
         # `{wrapper_id}/{that port name}`, so redirect that reference straight
         # to the real producer, which is now itself one of `flat_steps`.
         for out_name, out_value in inner.get('outputs', {}).items():
-            redirects[f'{wrapper_id}/{out_name}'] = out_value['outputSource']
+            producer, _, port = out_value['outputSource'].partition('/')
+            redirects[f'{wrapper_id}/{out_name}'] = (
+                f'{wrapper_id}__{producer}/{port}' if producer in inner_ids else out_value['outputSource'])
 
     for flat_step in flat_steps:
         for name, value in flat_step.get('in', {}).items():

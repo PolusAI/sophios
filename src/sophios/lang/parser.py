@@ -77,7 +77,7 @@ class Grammar:  # pylint: disable=too-few-public-methods  # a namespace, not a t
     #: forgotten `id:` from a step called `run`.
     STEP_KEYS: Final = frozenset({'id', 'in', 'out'}) | INTERPRETED_STEP_KEYS
 
-    #: Every value key a `wic:` block admits (language guide §7), with the shape its value
+    #: Every value key a `wic:` block admits (.wic reference §7), with the shape its value
     #: takes. The block is Sophios's own metadata, not passthrough CWL, so it
     #: is closed: any other key is `wic033`, and a value of the wrong shape is
     #: `wic034`. The schema generator reads the same table.
@@ -466,7 +466,7 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
     A single-key mapping (`- touch:`) is not a second sequence form: CWL lifts
     a key into `id` only when the field's value is a mapping, so in a
     sequence the key is never lifted and the step has no identity. Reported
-    as `wic006` (language guide §2.1).
+    as `wic006` (.wic reference §2.1).
     """
     span = SourceSpan.of(file, node)
     if not isinstance(node, yaml.nodes.MappingNode):
@@ -498,7 +498,7 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
         diags.error(
             SophiosErrorCode.MISSING_STEP_ID,
             f'a step in a sequence carries its name in an id: key — {first}; {second}. '
-            f'Keying the whole steps: block by name is the other form (language guide §2.1)',
+            f'Keying the whole steps: block by name is the other form (.wic reference §2.1)',
             span,
         )
         # The reading decided above also decides which node holds the body:
@@ -635,7 +635,7 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
     and desugared (`{wic_inline_input: empty.txt}`) — that must produce the
     same node. An untagged scalar is an `UnresolvedName`, resolved later
     against workflow inputs. `!&`/`wic_anchor` is checked separately: it is a
-    known tag, just in the wrong position (language guide §3.6), so it is diagnosed as
+    known tag, just in the wrong position (.wic reference §3.6), so it is diagnosed as
     `wic019` rather than `wic009 UNKNOWN_TAG`.
     """
     span = SourceSpan.of(file, node)
@@ -646,7 +646,7 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
         diags.error(
             SophiosErrorCode.MISPLACED_EDGE_DEF,
             "'!&' defines an edge, and an edge is defined where its value comes into being: "
-            "a step's out: entry (language guide §3.6). Use '!*' to consume an edge",
+            "a step's out: entry (.wic reference §3.6). Use '!*' to consume an edge",
             span,
         )
         return UnresolvedName(_recovered_edge_name(node), span)
@@ -791,7 +791,7 @@ class Forms:  # pylint: disable=too-few-public-methods  # a namespace, not a typ
 
     #: Tagged spellings — what people write. `!&` (`Tag.ANCHOR`) is
     #: deliberately absent: it is legal only on an `out:` entry, checked via
-    #: `_out_edge_def` before this table is consulted (language guide §3.6).
+    #: `_out_edge_def` before this table is consulted (.wic reference §3.6).
     TAGGED: Final[Mapping[str, Builder]] = MappingProxyType({
         Tag.INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_literal(n, f, d), s, text=_literal_text(n)),
         Tag.ALIAS: lambda n, f, d, s: EdgeRef(_name_text(n, f, d), s),
@@ -851,7 +851,7 @@ def _output_binding(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Out
 
 
 def _sidecar_out_entry(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> OpaqueCwl:
-    """Parse a `wic:` sidecar step's `out:` entry exactly as a step's own `out:` (language guide §3.6).
+    """Parse a `wic:` sidecar step's `out:` entry exactly as a step's own `out:` (.wic reference §3.6).
 
     Re-expressed as `OpaqueCwl` passthrough, in the desugared shape
     `render.py` emits for a stored edge def, since a bare `EdgeDef` is not a
@@ -869,7 +869,7 @@ SIDECAR_WRAPPER_KEY: Final = 'wic'
 
 
 def _child_sidecar_node(node: yaml.nodes.Node) -> yaml.nodes.Node:
-    """Unwrap the `wic:` key a nested sidecar step carries on the surface (language guide §7).
+    """Unwrap the `wic:` key a nested sidecar step carries on the surface (.wic reference §7).
 
     Also handles a merged sibling shape — `{wic: {namespace: ...}, out: [...]}`
     — folding siblings into the unwrapped mapping so nothing nested under the
@@ -930,7 +930,7 @@ def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics,
     """Parse a `wic:` block, normalising its `"(1, name)"` step keys.
 
     A key outside ``values`` and `steps:` is reported and dropped, since the
-    block is closed (language guide §7); a value is checked against its declared shape.
+    block is closed (.wic reference §7); a value is checked against its declared shape.
     """
     span = SourceSpan.of(file, node)
     if id(node) in _path:

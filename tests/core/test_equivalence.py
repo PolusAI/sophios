@@ -127,10 +127,9 @@ def compiled_documents(draw: st.DrawFn) -> Yaml:
 def _rewrite_run_paths(document: Yaml) -> Yaml:
     """The rewrite UP_TO_EMBEDDING forgives: move every document somewhere else.
 
-    Models `relative_run_path` — the compiler writes `run:` as either
-    `step_name/stem.cwl` or `'___'.join(namespaces + [stem.cwl])`
-    (src/sophios/compiler.py:626-634) depending on how the tree is laid out on
-    disk. Nothing but the path changes, which is exactly the claim
+    Models where the compiler writes a process: the file name in `run:`
+    depends on what else the tree holds (a stem another process took is
+    numbered). Nothing but the path changes, which is exactly the claim
     UP_TO_EMBEDDING makes.
     """
     moved = copy.deepcopy(document)

@@ -11,7 +11,7 @@ doc: |-
   (cwl_tool, configured by config) once, and with --run_local runs it on the host
   each time a file matching file_pattern changes in a step's output directory, when
   that step finishes, and once more when the workflow ends, at most max_times in all.
-  Every input is a literal (!ii). See docs/advanced.md, Real-time analysis.
+  Every input is a literal (!ii). See docs/realtime-analysis.md.
 
 baseCommand: 'false'
 

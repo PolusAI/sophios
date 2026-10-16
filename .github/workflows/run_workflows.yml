@@ -137,19 +137,23 @@ jobs:
       # For self-hosted runners, make sure we use new global config settings
 
 
-    - name: Remove old mamba environment
-      run: rm -rf "/home/$(whoami)/miniconda3/envs/wic_github_actions/"
-      # For self-hosted runners, make sure we install into a new mamba environment
+    - name: Remove old mamba environment and packages
+      # Every job installs fresh on this self-hosted runner, whatever the job
+      # before it left: no environment and no downloaded or unpacked package.
+      run: rm -rf "/home/$(whoami)/miniconda3/envs/wic_github_actions/" "/home/$(whoami)/conda_pkgs_dir/"
 
     - name: Setup miniforge (linux, macos)
       uses: conda-incubator/setup-miniconda@v4.0.1
       with:
         miniforge-variant: Miniforge3
         miniforge-version: 24.7.1-2
-        environment-file: sophios/install/system_deps.yml
+        environment-file: sophios/install/system_deps_ci.yml
         activate-environment: wic_github_actions
         channels: conda-forge
         python-version: "3.11.*"
+        # Its post step moves the unpacked packages aside (2 min here), and only
+        # after a green job; the step above deletes them before every job instead.
+        run-post: false
 
     # - name: Docker pull
     #   if: always()

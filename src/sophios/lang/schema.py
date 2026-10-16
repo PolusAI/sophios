@@ -34,7 +34,7 @@ class Json:  # pylint: disable=too-few-public-methods  # a namespace, not a type
 #: reference to.
 _SHAPE_SCHEMA: Final[Mapping[Shape, Callable[[], dict[str, Any]]]] = MappingProxyType({
     Shape.INPUT_BINDINGS: lambda: {
-        'description': 'Input bindings. Each input may be bound only once (language guide §3.8).',
+        'description': 'Input bindings. Each input may be bound only once (.wic reference §3.8).',
         'type': 'object',
         'additionalProperties': {'$ref': '#/$defs/inputValue'},
     },
@@ -75,7 +75,7 @@ def wic_schema() -> dict[str, Any]:
         '$id': Json.SCHEMA_ID,
         'title': 'Sophios workflow',
         'description': 'Desugared projection of a Sophios document. '
-                       'See docs/language_guide.md.',
+                       'See docs/wic-reference.md.',
         **document,
         '$defs': _defs(),
     }
@@ -102,7 +102,7 @@ def _object_schema(node_type: type, *, omit: frozenset[str] = frozenset()) -> di
                 # A closed set of CWL keys, listed for editor completion but
                 # left unconstrained — Sophios reads them, CWL owns their shapes.
                 for key in sorted(Grammar.INTERPRETED_STEP_KEYS):
-                    properties[key] = {'description': f'Interpreted by Sophios: {key} (language guide §2.2).'}
+                    properties[key] = {'description': f'Interpreted by Sophios: {key} (.wic reference §2.2).'}
             case Shape.SIDECAR_ENTRIES:
                 # Closed, and each value's shape is the one the parser checks.
                 properties.update(_values_schema(Grammar.SIDECAR_VALUES))
@@ -138,7 +138,7 @@ def _defs() -> dict[str, Any]:
 
 
 def _step_body() -> dict[str, Any]:
-    """A step keyed by name. Null is legal: a step may have no body (language guide §2.1)."""
+    """A step keyed by name. Null is legal: a step may have no body (.wic reference §2.1)."""
     # `id` is omitted: in this form the step's name is the mapping key.
     body = _object_schema(Step, omit=frozenset({'id'}))
     return {**body, 'type': ['object', 'null']}
@@ -174,11 +174,11 @@ def _values_schema(values: Mapping[str, ValueShape]) -> dict[str, Any]:
 
 
 def _wic_block() -> dict[str, Any]:
-    """The `wic:` sidecar. Null is legal: a bare `wic:` is empty (language guide §7)."""
+    """The `wic:` sidecar. Null is legal: a bare `wic:` is empty (.wic reference §7)."""
     body = _object_schema(WicSidecar)
     return {
         **body,
-        'description': 'Compiler metadata. Never emitted to CWL (language guide §7).',
+        'description': 'Compiler metadata. Never emitted to CWL (.wic reference §7).',
         'type': ['object', 'null'],
     }
 
@@ -189,7 +189,7 @@ def _wic_step_block() -> dict[str, Any]:
     body = _wic_block()
     return {
         **body,
-        'description': 'Metadata for the step this entry names (language guide §7).',
+        'description': 'Metadata for the step this entry names (.wic reference §7).',
         'properties': {'steps': body['properties']['steps'],
                        **_values_schema(Grammar.SIDECAR_STEP_VALUES)},
     }
@@ -206,14 +206,14 @@ def _wic_step_entry() -> dict[str, Any]:
 
 
 def _input_value() -> dict[str, Any]:
-    """One of the five input forms (language guide §3.1).
+    """One of the five input forms (.wic reference §3.1).
 
     Unconstrained on purpose; `construct` is referenced only so editors can
     offer construct keys as completions.
     """
     return {
         'description': 'An inline literal, edge reference, raw CWL reference, '
-                       'unresolved name, or step-input record (language guide §3.1).',
+                       'unresolved name, or step-input record (.wic reference §3.1).',
         'anyOf': [{'$ref': '#/$defs/construct'}, {}],
     }
 

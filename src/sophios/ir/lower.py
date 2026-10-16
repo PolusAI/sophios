@@ -23,7 +23,6 @@ from ..lang.spans import SourceSpan
 from ..lang.versions import (ANNOTATION_KEY, ANNOTATION_NAMESPACE,
                              ANNOTATION_NAMESPACE_URI)
 from .declarations import port_declaration
-from .names import render_step_id
 from .resolve import ResolvedDocument, ResolvedStep
 from .types import (
     AuthoredName,
@@ -128,8 +127,7 @@ def _lower_resolved(document: ResolvedDocument,
     )
     output_mapping = []
     for port in workflow_outputs:
-        source = _output_port(document.name, nodes, port.output_source,
-                              diagnostics, document.source.span, str(port.name))
+        source = _output_port(nodes, port.output_source, diagnostics, document.source.span, str(port.name))
         if source is not None:
             output_mapping.append((port.name, source))
     namespaces_raw = passthrough.get('$namespaces', {})
@@ -338,37 +336,34 @@ def _workflow_ports(raw: object, *, output: bool, diagnostics: Diagnostics,
     return tuple(ports)
 
 
-def output_step(workflow_name: str, step_ids: Sequence[str], step_text: str) -> tuple[int, str | None] | None:
+def output_step(step_ids: Sequence[str], step_text: str) -> tuple[int, str | None] | None:
     """The step `step_text`, an `outputSource` up to its last `/`, names in a
     workflow whose steps are `step_ids`: its 1-based position, and the name a
     positional `(index, name)` key wrote, None when it named the step by id.
 
     A positional key names its position whatever step is there, and the caller
-    checks the name; an id names its first occurrence, written as authored or
-    as generated. None when `step_text` names no step.
+    checks the name; an id names its first occurrence. None when `step_text`
+    names no step.
     """
     key = Grammar.WIC_STEP_KEY.match(step_text)
     if key is not None:
         return int(key.group(1)), key.group(2)
-    for position, step_id in enumerate(step_ids, start=1):
-        if step_text in {render_step_id(workflow_name, position, step_id), step_id}:
-            return position, None
+    if step_text in step_ids:
+        return step_ids.index(step_text) + 1, None
     return None
 
 
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments
-def _output_port(workflow_name: str, nodes: list[StepNode], raw: object,
-                 diagnostics: Diagnostics, span: SourceSpan | None,
-                 output_name: str) -> PortId | None:
+def _output_port(nodes: list[StepNode], raw: object, diagnostics: Diagnostics,
+                 span: SourceSpan | None, output_name: str) -> PortId | None:
     """The step output an authored `outputSource: <step>/<port>` names, if any.
 
-    `<step>` is the authored id (its first occurrence), `(index, name)` (that
-    occurrence, which must carry that name), or the generated id.
+    `<step>` is the authored id (its first occurrence), or `(index, name)` (that
+    occurrence, which must carry that name).
     """
     if not isinstance(raw, str) or '/' not in raw:
         return None
     step_text, port_name = raw.rsplit('/', 1)
-    found = output_step(workflow_name, [node.id.name for node in nodes], step_text)
+    found = output_step([node.id.name for node in nodes], step_text)
     if found is None:
         return None
     index, positional_name = found

@@ -1,7 +1,7 @@
 """Every cookbook pair compiles to one CWL from both surfaces.
 
 `docs/cookbook/<stem>.wic` and `docs/cookbook/<stem>.py` are the two spellings
-`docs/cookbook.md` shows side by side. Each pair is compiled through both doors,
+the documentation shows side by side. Each pair is compiled through both doors,
 the file the CLI reads and `Workflow.compile()`, and the emitted CWL, the job
 inputs and the codes of the notes the compile made must agree. A pair that
 drifts apart is a cookbook entry that tells one surface's reader something
@@ -24,10 +24,18 @@ from sophios.wic_types import Json
 from .test_setup import load_test_registry
 from .wic_reading import read_wic
 
-COOKBOOK = Path(__file__).resolve().parents[2] / 'docs' / 'cookbook'
+REPO_ROOT = Path(__file__).resolve().parents[2]
+COOKBOOK = REPO_ROOT / 'docs' / 'cookbook'
 #: A pair is a `.py` beside a `.wic` of the same stem. A `.wic` without a `.py`
 #: is a subworkflow a pair calls; its Python lives in the caller's script.
 PAIRS = sorted(path.stem for path in COOKBOOK.glob('*.py'))
+
+
+@pytest.fixture(autouse=True)
+def _from_the_repository_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The scripts name their tools `cwl_adapters/<tool>.cwl`, relative to the working
+    directory, as the documentation tells a reader to run them; here that is the repository."""
+    monkeypatch.chdir(REPO_ROOT)
 
 
 def _codes(diagnostics: Iterable[object]) -> list[str]:
@@ -40,7 +48,7 @@ def _as_compile_returns(cwl: Json, wic_path: Path) -> Json:
 
     A workflow that names outputs returns only those from `compile()`; the CLI
     also exposes every step output under its generated name. That is the one
-    place the two doors differ, and `docs/cookbook.md` says so.
+    place the two doors differ, and `docs/connecting-steps.md` says so.
     """
     named = read_wic(wic_path.read_text(encoding='utf-8'), wic_path.name).get('outputs')
     if not named:
@@ -59,7 +67,7 @@ def test_both_surfaces_compile_to_the_same_cwl(stem: str) -> None:
     workflows = {'global': {path.stem: path for path in COOKBOOK.glob('*.wic')}}
     bundle = bundle_from_disk(wic_path, workflows, load_test_registry().tools)
     result = sophios.compiler.compile_source(bundle, default_compilation_settings(),
-                                             relative_run_path=True, testing=True)
+                                             testing=True)
     artifact = inline_artifact_runs(result.artifact)
 
     assert _as_compile_returns(normalize_artifact_cwl(artifact), wic_path) == python_side.cwl_workflow
@@ -75,9 +83,9 @@ def test_the_inference_pair_prints_its_note() -> None:
 
 
 @pytest.mark.fast
-def test_the_note_the_cookbook_quotes_is_the_one_the_compiler_prints() -> None:
-    """`docs/cookbook.md` quotes the inference note; the quote must be the compiler's text."""
+def test_the_note_the_docs_quote_is_the_one_the_compiler_prints() -> None:
+    """`docs/edge-inference.md` quotes the inference note; the quote must be the compiler's text."""
     module = import_python_file('cookbook_inference', COOKBOOK / 'inference.py')
     (note,) = map(str, module.workflow().compile().diagnostics)
     message = note.split(' note ', 1)[1]
-    assert f'note {message}' in (COOKBOOK.parent / 'cookbook.md').read_text(encoding='utf-8')
+    assert f'note {message}' in (REPO_ROOT / 'docs' / 'edge-inference.md').read_text(encoding='utf-8')

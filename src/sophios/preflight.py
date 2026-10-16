@@ -10,14 +10,13 @@ Each check returns diagnostics rather than raising, so a caller reports every
 problem at once, each on one line: what is wrong, then what to do.
 """
 import ast
-import json
 import os
 import re
 import shutil
 import subprocess as sub
 import sys
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -28,7 +27,7 @@ import cwl_utils.parser as cwl
 import requests
 
 from . import run_local
-from .input_output import input_paths, names_map_path
+from .input_output import input_paths
 from .lang.diagnostics import Diagnostic, Severity, SophiosError
 from .lang.error_codes import SophiosErrorCode
 from .wic_types import Yaml
@@ -270,7 +269,6 @@ def unwritable(directory: Path, holds: str, remedy: str) -> Diagnostic | None:
 
 def _path_problems(found: Needs) -> list[Diagnostic]:
     """One `wic016` for each File or Directory a job names that the run could not use."""
-    spelled = _spellings(found.documents[0])
     problems = []
     for job in found.jobs:
         for name, value in input_paths(job.values):
@@ -281,7 +279,7 @@ def _path_problems(found: Needs) -> list[Diagnostic]:
             if (why := _unusable(resolved, value['class'])) is not None:
                 problems.append(Diagnostic(
                     Severity.ERROR, SophiosErrorCode.MISSING_INPUT_FILE,
-                    f"input '{spelled(name)}' (from {job.origin}, whose relative paths are read from "
+                    f"input '{name}' (from {job.origin}, whose relative paths are read from "
                     f"{job.base}) names {written!r}, which {why}."))
     return problems
 
@@ -310,18 +308,6 @@ def _written_path(value: Mapping[str, Any]) -> str | None:
     if parsed.scheme == 'file':
         return url2pathname(parsed.path)
     return None if len(parsed.scheme) > 1 else written   # one letter is a Windows drive
-
-
-def _spellings(root: Path) -> Callable[[str], str]:
-    """How a message spells a job input: as authored (`cat/file`), from the names map the compile wrote
-    beside `root`; as it is when there is no map (a plain CWL workflow)."""
-    path = names_map_path(root.parent, root.stem)
-    ports = json.loads(path.read_text(encoding='utf-8')).get('ports', {}) if path.exists() else {}
-
-    def spelled(name: str) -> str:
-        entry = ports.get(name)
-        return '/'.join([*entry['steps'], entry['port']]) if entry and entry['steps'] else name
-    return spelled
 
 
 #: How to install each program a run may call.

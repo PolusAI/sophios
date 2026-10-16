@@ -81,8 +81,8 @@ def test_a_child_reference_binds_to_the_parents_definition() -> None:
         subworkflow_step('child.wic', child)]}, 'root')
 
     bindings = info.artifact.cwl['steps'][1]['in']
-    source = bindings['child__step__1__sink___file']['source']
-    assert source == 'root__step__1__mk_file/file', (
+    source = bindings['sink__file']['source']
+    assert source == 'mk_file/file', (
         f'the child bound to {source!r} rather than the parent output that defines it')
 
 

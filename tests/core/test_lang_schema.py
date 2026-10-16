@@ -92,7 +92,7 @@ def test_generate_schemas_writes_the_ast_schema_and_nothing_else(
     from .hermetic import compile_hermetic, subworkflow_step  # pylint: disable=import-outside-toplevel
 
     compiled = compile_hermetic({'steps': [subworkflow_step('child.wic', {'steps': [{'id': 'mk_file'}]})]})
-    generated = 'child__step__1__mk_file___name'
+    generated = 'mk_file__name'
     assert any(generated in child.cwl['inputs'] for child in compiled.artifact.children)
 
     def forbidden(*_args: Any, **_kwargs: Any) -> None:
@@ -191,7 +191,7 @@ def test_rejects_every_wic_value_the_parser_reports(source: str, _line: int, _co
 @pytest.mark.fast
 def test_the_wic_block_is_closed_and_complete_for_editors() -> None:
     """Each `wic:` form offers exactly the keys the parser admits there, and
-    no other, so an editor completes them and flags the rest (language guide §7)."""
+    no other, so an editor completes them and flags the rest (.wic reference §7)."""
     forms = {'wicBlock': Grammar.SIDECAR_KEYS, 'wicStepBlock': Grammar.SIDECAR_STEP_KEYS,
              'wicStepEntry': Grammar.SIDECAR_STEP_KEYS | {'wic'}}
     for form, keys in forms.items():
@@ -229,7 +229,7 @@ def test_passthrough_is_admitted_everywhere() -> None:
 
 @pytest.mark.fast
 def test_a_step_may_have_no_body() -> None:
-    """`some_subworkflow.wic:` with nothing under it is well-formed (language guide §2.1)."""
+    """`some_subworkflow.wic:` with nothing under it is well-formed (.wic reference §2.1)."""
     assert _accepts({'steps': {'sub.wic': None}})
     assert _accepts({'wic': None})
 

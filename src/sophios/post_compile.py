@@ -1,4 +1,3 @@
-from pathlib import PurePosixPath
 import sys
 import copy
 from dataclasses import dataclass, replace
@@ -306,11 +305,7 @@ class _Call:
             for key, moved in (('requirements', required), ('hints', hinted)):
                 if combined := moved | self.classes(inner_step.get(key), f"step '{inner_step['id']}' {key}"):
                     flat[key] = combined
-            if isinstance(flat['run'], str):
-                if PurePosixPath(flat['run']).parent.name != inner_child.namespace[-1]:
-                    raise ValueError(f"{flat['run']} is not in the relative layout flattening needs")
-                flat['run'] = f"{flat['id']}/{PurePosixPath(flat['run']).name}"
-                inner_child = replace(inner_child, namespace=(flat['id'],))
+            inner_child = replace(inner_child, namespace=(flat['id'],))
             steps.append(flat)
             children.append(inner_child)
         redirects = self.redirects()
@@ -342,7 +337,7 @@ def flatten_subworkflows(artifact: CompilationArtifact) -> CompilationArtifact:
     recursively. The root's inputs, outputs and job inputs are untouched, so the
     flat form is run with the same inputs and returns the same outputs as the
     nested one. Each dissolved call's inner steps take `flat_step_id(call,
-    inner)`, run the same tool files from `<id>/<tool>.cwl`, and are wired
+    inner)`, run the same files, and are wired
     producer to consumer. What the workflow the call ran required or hinted
     moves with the steps: the classes in `DOCUMENT_FEATURES` to the root, the
     rest onto each step, where the step's own entry wins.
@@ -356,8 +351,7 @@ def flatten_subworkflows(artifact: CompilationArtifact) -> CompilationArtifact:
     that names neither an input nor a step.
 
     Args:
-        artifact (CompilationArtifact): A compiled artifact tree, written with
-            the relative `run:` layout the CLI uses.
+        artifact (CompilationArtifact): A compiled artifact tree.
 
     Returns:
         CompilationArtifact: The same workflow with every dissolvable call replaced

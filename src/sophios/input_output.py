@@ -12,7 +12,6 @@ from ruamel.yaml.nodes import ScalarNode as _RuamelScalarNode
 
 from . import auto_gen_header
 from .runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
-from .ir.names import NAMESPACE_SEPARATOR, Names, names_map
 from .ir.artifacts import CompilationArtifact
 from .lang.diagnostics import SophiosError
 from .lang.error_codes import SophiosErrorCode
@@ -64,11 +63,6 @@ def dump_wic_yaml(document: Json) -> str:
         str: The YAML-serialized document.
     """
     return yaml.dump(document, sort_keys=False, line_break='\n', indent=2, Dumper=NoAliasDumper)
-
-
-def names_map_path(directory: Path, name: str) -> Path:
-    """Where the compile writes, and run-time messages read, the map from emitted ids to authored names."""
-    return directory / f'{name}.names.json'
 
 
 def read_inputs_file(path: str) -> Yaml:
@@ -135,8 +129,7 @@ def absolute_paths(values: Yaml, base: Path) -> Yaml:
     return absolute
 
 
-def write_artifacts_to_disk(artifact: CompilationArtifact, path: Path,
-                            relative_run_path: bool, inputs_file: str = '') -> None:
+def write_artifacts_to_disk(artifact: CompilationArtifact, path: Path, inputs_file: str = '') -> None:
     """Write a graph-derived artifact tree and its job-input documents.
 
     A relative `location` or `path` of a File or Directory in `inputs_file`, at any depth, is
@@ -146,33 +139,20 @@ def write_artifacts_to_disk(artifact: CompilationArtifact, path: Path,
     """
     inputs = absolute_paths(normalize_artifact_job_inputs(artifact, read_inputs_file(inputs_file)),
                             Path(inputs_file).absolute().parent) if inputs_file else {}
-    _write_artifacts_to_disk(artifact, path, relative_run_path, inputs)
+    _write_artifacts_to_disk(artifact, path, inputs)
 
 
-def _write_artifacts_to_disk(artifact: CompilationArtifact, path: Path,
-                             relative_run_path: bool, inputs: Yaml) -> None:
+def _write_artifacts_to_disk(artifact: CompilationArtifact, path: Path, inputs: Yaml) -> None:
+    """Write `artifact` and every document beneath it in `path`, each under its own name."""
     path.mkdir(parents=True, exist_ok=True)
-    if relative_run_path:
-        filename_cwl = f'{artifact.name}.cwl'
-        filename_yml = f'{artifact.name}_inputs.yml'
-    else:
-        filename_cwl = NAMESPACE_SEPARATOR.join((*artifact.namespace, f'{artifact.name}.cwl'))
-        filename_yml = NAMESPACE_SEPARATOR.join((*artifact.namespace, f'{artifact.name}_inputs.yml'))
-
     cwl = normalize_artifact_cwl(artifact)
     job = normalize_artifact_job_inputs(artifact, {**artifact.job_inputs, **inputs})
-    (path / filename_cwl).write_text(
+    (path / f'{artifact.name}.cwl').write_text(
         f'#!/usr/bin/env cwl-runner\n{auto_gen_header}{dump_wic_yaml(cwl)}', encoding='utf-8')
-    (path / filename_yml).write_text(
+    (path / f'{artifact.name}_inputs.yml').write_text(
         f'{auto_gen_header}{dump_wic_yaml(job)}', encoding='utf-8')
-    if artifact.graph is not None and artifact.namespace == ():
-        # The root carries the whole tree: one map names every emitted id in it.
-        names_map_path(path, artifact.name).write_text(
-            json.dumps(names_map(artifact.graph, Names.of(artifact.graph)), indent=2), encoding='utf-8')
-
     for child in artifact.children:
-        subpath = path / child.namespace[-1] if relative_run_path else path
-        _write_artifacts_to_disk(child, subpath, relative_run_path, inputs)
+        _write_artifacts_to_disk(child, path, inputs)
 
 
 def write_config_to_disk(config: Json, config_file: Path) -> None:

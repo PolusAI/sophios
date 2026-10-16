@@ -1,20 +1,17 @@
 {
   "name": "multistep1_toJson_pyapi_py",
   "yaml_inputs": {
-    "multistep1_toJson_pyapi_py__step__1__touch___filename": "empty.txt",
-    "multistep1_toJson_pyapi_py__step__2__append___str": "Hello"
+    "touch__filename": "empty.txt",
+    "append__str": "Hello"
   },
   "steps": [
     {
-      "id": "multistep1_toJson_pyapi_py__step__1__touch",
+      "id": "touch",
       "in": {
         "filename": {
-          "source": "multistep1_toJson_pyapi_py__step__1__touch___filename"
+          "source": "touch__filename"
         }
       },
-      "out": [
-        "file"
-      ],
       "run": {
         "class": "CommandLineTool",
         "requirements": {
@@ -48,21 +45,21 @@
             "networkAccess": true
           }
         }
-      }
-    },
-    {
-      "id": "multistep1_toJson_pyapi_py__step__2__append",
-      "in": {
-        "str": {
-          "source": "multistep1_toJson_pyapi_py__step__2__append___str"
-        },
-        "file": {
-          "source": "multistep1_toJson_pyapi_py__step__1__touch/file"
-        }
       },
       "out": [
         "file"
-      ],
+      ]
+    },
+    {
+      "id": "append",
+      "in": {
+        "str": {
+          "source": "append__str"
+        },
+        "file": {
+          "source": "touch/file"
+        }
+      },
       "run": {
         "class": "CommandLineTool",
         "requirements": {
@@ -108,18 +105,18 @@
             "networkAccess": true
           }
         }
-      }
-    },
-    {
-      "id": "multistep1_toJson_pyapi_py__step__3__cat",
-      "in": {
-        "file": {
-          "source": "multistep1_toJson_pyapi_py__step__2__append/file"
-        }
       },
       "out": [
-        "output"
-      ],
+        "file"
+      ]
+    },
+    {
+      "id": "cat",
+      "in": {
+        "file": {
+          "source": "append/file"
+        }
+      },
       "run": {
         "class": "CommandLineTool",
         "requirements": {
@@ -156,7 +153,10 @@
             "networkAccess": true
           }
         }
-      }
+      },
+      "out": [
+        "output"
+      ]
     }
   ],
   "cwlVersion": "v1.2",
@@ -169,26 +169,26 @@
     "https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl"
   ],
   "inputs": {
-    "multistep1_toJson_pyapi_py__step__1__touch___filename": {
+    "touch__filename": {
       "type": "string"
     },
-    "multistep1_toJson_pyapi_py__step__2__append___str": {
+    "append__str": {
       "type": "string"
     }
   },
+  "sophios:lang_version": "0.0.1",
   "outputs": {
-    "multistep1_toJson_pyapi_py__step__1__touch___file": {
+    "touch__file": {
       "type": "File",
-      "outputSource": "multistep1_toJson_pyapi_py__step__1__touch/file"
+      "outputSource": "touch/file"
     },
-    "multistep1_toJson_pyapi_py__step__2__append___file": {
+    "append__file": {
       "type": "File",
-      "outputSource": "multistep1_toJson_pyapi_py__step__2__append/file"
+      "outputSource": "append/file"
     },
-    "multistep1_toJson_pyapi_py__step__3__cat___output": {
+    "cat__output": {
       "type": "string",
-      "outputSource": "multistep1_toJson_pyapi_py__step__3__cat/output"
+      "outputSource": "cat/output"
     }
-  },
-  "sophios:lang_version": "0.0.1"
+  }
 }

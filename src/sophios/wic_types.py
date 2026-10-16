@@ -30,7 +30,7 @@ class StepId(NamedTuple):
 
 Tools: TypeAlias = dict[StepId, Tool]
 
-# NOTE: Please read the Namespacing section of docs/dev/devguide.md !!!
+# NOTE: Please read the Names section of docs/dev/architecture.md !!!
 Namespace: TypeAlias = str
 
 # Create a type for our Abstract Syntax Tree (AST).

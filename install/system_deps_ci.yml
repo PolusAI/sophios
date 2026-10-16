@@ -1,0 +1,23 @@
+# What the CI lanes on the self-hosted runner (Run Workflows, its weekly lane
+# and the benchmarks) install, fresh on every job: system_deps.yml without
+# graphviz, which only drawing needs and which brings in more than half of its
+# packages, and without the tools nothing in these lanes runs.
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - "python>=3.11"
+# The same pin as system_deps.yml, for the reason given there.
+  - nodejs<26.8
+# Tools without a container run these on the host (wget_xlsx.cwl, zip_top.cwl).
+  - wget
+  - zip
+# Binary packages taken from conda rather than pip, as in system_deps.yml.
+  - scipy
+  - numpy
+  - pandas
+  - psutil
+  - ruamel.yaml.clib
+  - cryptography
+  - zstandard

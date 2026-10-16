@@ -1,0 +1,4 @@
+steps:
+  cat:
+    in:
+      file: !ii {class: File, location: data.txt}

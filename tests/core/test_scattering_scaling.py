@@ -77,7 +77,7 @@ def test_scattering_scaling(tmp_path: Path) -> None:
     times: dict[int, float] = {}
     for maxval in SCATTER_SIZES:
         inputs = yaml.safe_load(INPUTS_YML.read_text(encoding="utf-8"))
-        inputs["scattering_scaling__step__1__array_int___maxval"] = maxval
+        inputs["array_int__maxval"] = maxval
         INPUTS_YML.write_text(yaml.safe_dump(inputs, sort_keys=False), encoding="utf-8")
 
         summary_path = tmp_path / f"summary_{maxval}.json"
@@ -101,10 +101,10 @@ def test_scattering_scaling(tmp_path: Path) -> None:
         expected_ints = list(range(1, maxval + 1))
         expected_strings = [str(value) for value in expected_ints]
 
-        assert summary["scattering_scaling__step__1__array_int___array"] == expected_ints
-        assert summary["scattering_scaling__step__2__toString___output"] == expected_strings
+        assert summary["array_int__array"] == expected_ints
+        assert summary["toString__output"] == expected_strings
 
-        stdout_files = summary["scattering_scaling__step__3__echo___stdout"]
+        stdout_files = summary["echo__stdout"]
         assert len(stdout_files) == maxval
         assert [
             Path(stdout_file["path"]).read_text(encoding="utf-8").strip()

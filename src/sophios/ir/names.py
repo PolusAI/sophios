@@ -6,36 +6,20 @@ is built from a finished graph and assigns each identity its outward spelling,
 so a definition and every reference to it are rendered by the same table
 rather than reconstructed separately.
 
-The spelling is the legacy one, kept for WIC and CWL compatibility:
-`{workflow}__step__{i}__{name}` for a step, joined with `___` when nested.
+A step is spelled as it was written, less the `.wic` a call names its
+workflow by; a name the compiler derives joins the step and the port with
+`__`. Each emitted document's names are unique in it, and each emitted file's
+name is unique in the one directory the tree is written to: see `Names.of`.
 Rendering is one-way. Nothing here takes text apart, and nothing may: a
 consumer that needs to know what a name came from is given the identity.
 """
+from collections import Counter
 from dataclasses import dataclass
-from typing import Any
 
-from .types import DerivedName, Namespace, PortName, StepId, StepOutputRef, WorkflowGraph
+from .types import DerivedName, Namespace, PortName, ProcessRun, RegistryKey, StepId, StepOutputRef, WorkflowGraph
 
 #: Joins a step to the name nested inside it.
-NAMESPACE_SEPARATOR = '___'
-
-
-def render_step_id(workflow: str, index: int, name: str) -> str:
-    """The text a step occurrence carries at `index` in `workflow`.
-
-    Public for Lower, which recognizes a generated name in an authored
-    `outputSource` by comparing against it, and for tests that state the
-    spelling. Nothing may parse the result.
-
-    Args:
-        workflow (str): The name of the workflow the step belongs to.
-        index (int): The step's one-based position in that workflow.
-        name (str): The step's authored name.
-
-    Returns:
-        str: The rendered step id.
-    """
-    return f'{workflow}__step__{index}__{name}'
+NAMESPACE_SEPARATOR = '__'
 
 
 def authored_path(name: PortName) -> tuple[str, ...]:
@@ -58,54 +42,128 @@ def authored_path(name: PortName) -> tuple[str, ...]:
     return (*parts, name)
 
 
+def claim(text: str, taken: set[str]) -> str:
+    """`text`, or `text_2`, `text_3`, ... the first not in `taken`, which it is added to.
+
+    Names are compared casefolded: `Foo.cwl` and `foo.cwl` are one file on
+    macOS and Windows, and CWL ids are names a person tells apart by reading.
+    """
+    claimed, suffix = text, 2
+    while claimed.casefold() in taken:
+        claimed, suffix = f'{text}_{suffix}', suffix + 1
+    taken.add(claimed.casefold())
+    return claimed
+
+
+def run_stem(run: ProcessRun) -> str:
+    """The stem of the file `run`'s process was read from: `touch` for `.../touch.cwl`,
+    `make_greeting` for `.../make_greeting.wic`; its registry name when it was read from none."""
+    leaf = run.target.replace('\\', '/').rsplit('/', 1)[-1]
+    stem = leaf.rsplit('.', 1)[0] if leaf.endswith(('.cwl', '.wic')) else ''
+    return stem or run.process_id.name
+
+
 @dataclass(frozen=True, slots=True)
 class Names:
-    """The outward spelling of every step in a graph tree.
-
-    A step's rendered index is its position in its graph when the table is
-    built, not `StepId.index`: an occurrence keeps its identity when Infer
-    inserts a step before it, but the document numbers steps as it lists them.
-    """
+    """The outward spelling of every step, derived name and file in a graph tree."""
 
     steps: dict[StepId, str]
-    positions: dict[StepId, int]
+    derived: dict[DerivedName, str]
+    files: dict[StepId, str]
 
     @classmethod
     def of(cls, root: WorkflowGraph) -> 'Names':
         """The table for `root` and every graph nested in it.
 
+        In each document, inputs, outputs and steps share CWL's one id space,
+        and the names the author wrote claim it first:
+
+        - an input or output keeps its authored name;
+        - a step keeps its id, less `.wic`, unless another step has it or an
+          input or output is called it: then it is `<id>_<index>`, the
+          position the author wrote it at, which `(index, id)` names (a step
+          Infer inserted is numbered after every authored one);
+        - a derived name is `<step>__<port>`, and `_2`, `_3`, ... when that
+          is taken, by a step or by a name on its own side (an input and an
+          output may share a name, as CWL allows).
+
+        Every document of the tree is written to one directory, each named
+        for the file it was read from (`run_stem`), the root first and then in
+        the order the steps run them: a tool once however many steps run it, a
+        called workflow once per call, and `_2`, `_3`, ... after a name another
+        process took.
+
         Args:
             root (WorkflowGraph): The outermost graph that will be rendered.
 
         Returns:
-            Names: The spelling of each step occurrence in the tree.
+            Names: The spelling of each step occurrence and derived name in the tree.
         """
-        found: dict[StepId, str] = {}
-        positions: dict[StepId, int] = {}
+        graphs: list[WorkflowGraph] = []
         seen: set[Namespace] = set()
 
-        def visit(graph: WorkflowGraph) -> None:
+        def collect(graph: WorkflowGraph) -> None:
             if graph.namespace in seen:
                 return
             seen.add(graph.namespace)
-            for position, step in enumerate(graph.steps, start=1):
-                found[step.id] = render_step_id(graph.name, position, step.id.name)
-                positions[step.id] = position
             nested = [step.run.child for step in graph.steps
                       if step.run is not None and step.run.child is not None]
             for child in (*graph.children, *nested):
-                visit(child)
+                collect(child)
+            graphs.append(graph)  # after its children: a derived name spells theirs
 
-        visit(root)
-        return cls(found, positions)
+        collect(root)
+        table = cls({}, {}, {})
+        for graph in graphs:
+            table._spell(graph)  # pylint: disable=protected-access
+        taken = {root.name.casefold()}
+        tools: dict[RegistryKey, str] = {}
+
+        def name_files(graph: WorkflowGraph) -> None:
+            for step in graph.steps:
+                if step.run is None:
+                    continue
+                if step.run.child is None:
+                    if step.run.process_id not in tools:
+                        tools[step.run.process_id] = claim(run_stem(step.run), taken)
+                    table.files[step.id] = tools[step.run.process_id]
+                else:
+                    table.files[step.id] = claim(run_stem(step.run), taken)
+                    name_files(step.run.child)
+
+        name_files(root)
+        return table
+
+    def _spell(self, graph: WorkflowGraph) -> None:
+        """Enter `graph`'s steps and derived boundary names, its children's already entered."""
+        authored = {side: {str(port.name).casefold() for port in ports if not isinstance(port.name, DerivedName)}
+                    for side, ports in (('in', graph.workflow_inputs), ('out', graph.workflow_outputs))}
+        ids = authored['in'] | authored['out']
+        written = [(step, step.id.name.removesuffix('.wic')) for step in graph.steps]
+        repeated = Counter(name.casefold() for _step, name in written)
+        for step, name in written:
+            if repeated[name.casefold()] == 1 and name.casefold() not in ids:
+                self.steps[step.id] = claim(name, ids)
+        for step, name in written:
+            if step.id not in self.steps:
+                self.steps[step.id] = claim(f'{name}_{step.id.index}', ids)
+        steps = {self.steps[step.id].casefold() for step in graph.steps}
+        for side, ports in (('in', graph.workflow_inputs), ('out', graph.workflow_outputs)):
+            taken = authored[side] | steps
+            for port in ports:
+                if isinstance(port.name, DerivedName) and port.name not in self.derived:
+                    self.derived[port.name] = claim(self._joined(port.name), taken)
+
+    def _joined(self, name: DerivedName) -> str:
+        return f'{self.step(name.step)}{NAMESPACE_SEPARATOR}{self.port(name.port)}'
 
     def step(self, step: StepId) -> str:
         """The id `step` carries in its own document."""
         return self.steps[step]
 
-    def position(self, step: StepId) -> int:
-        """The one-based index `step` is rendered with."""
-        return self.positions[step]
+    def file(self, step: StepId) -> str:
+        """The stem of the file `step`'s process is written to: its `run:` is `<stem>.cwl`."""
+        return self.files[step]
 
     def qualified(self, step: StepId) -> str:
         """`step`'s id prefixed by every step it is nested in, outermost first."""
@@ -115,8 +173,8 @@ class Names:
     def port(self, name: PortName) -> str:
         """The text a port or boundary name carries."""
         match name:
-            case DerivedName(step=step, port=port):
-                return f'{self.step(step)}{NAMESPACE_SEPARATOR}{self.port(port)}'
+            case DerivedName():
+                return self.derived.get(name) or self._joined(name)
             case _:
                 return str(name)
 
@@ -127,41 +185,3 @@ class Names:
                 return f'{self.step(step)}/{self.port(port)}'
             case _:
                 return self.port(ref)
-
-
-def names_map(graph: WorkflowGraph, names: Names) -> dict[str, Any]:
-    """Every emitted id in `graph`'s tree, mapped back to what the author wrote.
-
-    Written beside the root CWL so a run-time message naming
-    `w__step__2__append___file` can be read as step 2 `append`, port `file`,
-    at `w.wic:7`. `steps` is keyed by the emitted step id, prefixed by every
-    step it is nested in; each entry's `id` is the id the step carries in its
-    own document, `index` is the position the author wrote the step at (the
-    one a compile diagnostic counts), and `inserted` marks a step Infer added. `ports` is keyed by the emitted
-    boundary name of every workflow input and output.
-
-    Args:
-        graph (WorkflowGraph): The compiled root graph.
-        names (Names): The spelling table `graph` was emitted with.
-
-    Returns:
-        dict[str, Any]: `{'steps': {...}, 'ports': {...}}`, ready for JSON.
-    """
-    steps: dict[str, Any] = {}
-    ports: dict[str, Any] = {}
-
-    def visit(node: WorkflowGraph) -> None:
-        for step in node.steps:
-            steps[names.qualified(step.id)] = {
-                'id': names.step(step.id), 'workflow': node.name,
-                'index': step.id.index, 'name': step.id.name, 'inserted': step.synthesized,
-                'file': step.span.file if step.span else None,
-                'line': step.span.start_line if step.span else None}
-        for port in (*node.workflow_inputs, *node.workflow_outputs):
-            *parts, written = authored_path(port.name)
-            ports[names.port(port.name)] = {'workflow': node.name, 'steps': parts, 'port': written}
-        for child in node.children:
-            visit(child)
-
-    visit(graph)
-    return {'steps': steps, 'ports': ports}

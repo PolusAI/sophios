@@ -78,7 +78,7 @@ def _compile_file(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> Co
     """`path` compiled as the CLI reads it, with the settings `Workflow.compile()` uses."""
     return sophios.compiler.compile_source(
         bundle_from_disk(path, workflow_paths, tools), default_compilation_settings(),
-        relative_run_path=True, testing=False)
+        testing=False)
 
 
 def _file_door(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> tuple[Json, Json, list[str]]:
@@ -251,16 +251,18 @@ def test_a_record_becomes_a_step_input(tmp_path: Path) -> None:
     _assert_compiles_alike(tmp_path, workflow)
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize('output_source', ['(2, xform)/file', 'root__step__2__xform/file'])
-def test_positional_and_generated_output_sources_become_object_references(
-        output_source: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """A position or a generated step name is read as Lower reads it; the objects say `xform/file`,
-    so the written bundle names the authored step and its compile warns about no spelling."""
-    root = ('steps:\n- id: mk_file\n  in:\n    name: !ii a\n  out:\n  - file: !& f\n'
+def _output_source_root(output_source: str) -> str:
+    return ('steps:\n- id: mk_file\n  in:\n    name: !ii a\n  out:\n  - file: !& f\n'
             '- id: xform\n  in:\n    file: !* f\n    name: !ii b\n'
             f'outputs:\n  o:\n    type: File\n    outputSource: {output_source}\n')
-    workflow = _from_wic(tmp_path, root=root)
+
+
+@pytest.mark.fast
+def test_a_positional_output_source_becomes_an_object_reference(tmp_path: Path,
+                                                                capsys: pytest.CaptureFixture[str]) -> None:
+    """A position is read as Lower reads it; the objects say `xform/file`,
+    so the written bundle names the authored step and its compile warns about no spelling."""
+    workflow = _from_wic(tmp_path, root=_output_source_root('(2, xform)/file'))
     written = workflow.write_wic(tmp_path / 'written')
     document = read_wic(written.read_text(encoding='utf-8'))
     assert document['outputs']['o']['outputSource'] == 'xform/file'
@@ -268,6 +270,14 @@ def test_positional_and_generated_output_sources_become_object_references(
     workflow.compile()
     captured = capsys.readouterr()
     assert 'Warning!' not in captured.out + captured.err
+
+
+@pytest.mark.fast
+def test_a_generated_step_name_in_output_source_names_no_step_output(tmp_path: Path) -> None:
+    """`root__step__2__xform` is no step's id, so the output cannot be bound to a Python object."""
+    with pytest.raises(SophiosError) as caught:
+        _from_wic(tmp_path, root=_output_source_root('root__step__2__xform/file'))
+    assert 'outputSource: root__step__2__xform/file names no step output and no declared input' in str(caught.value)
 
 
 @pytest.mark.fast
@@ -303,7 +313,7 @@ def test_a_real_time_declaration_written_back_stays_a_declaration(tmp_path: Path
     assert [replace(item, span=None) for item in via_file.realtime] == [replace(declared, span=None)]
     direct_cwl = _workflow_runtime.compiled_workflow_from_result(workflow, direct).cwl_workflow
     via_file_cwl = _workflow_runtime.compiled_workflow_from_result(workflow, via_file).cwl_workflow
-    assert [step['id'] for step in direct_cwl['steps']] == ['root__step__1__mk_file']
+    assert [step['id'] for step in direct_cwl['steps']] == ['mk_file']
     assert equivalent(direct_cwl, via_file_cwl, Strength.IDENTICAL) is None
 
 

@@ -123,7 +123,7 @@ def compile_hermetic(yml: Yaml, name: str = 'oracle', *,
     del is_root
     return sophios.compiler.compile_source(
         bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools), compiler_options,
-        relative_run_path=True, testing=True)
+        testing=True)
 
 
 def compile_hermetic_source(source: str, name: str = 'oracle', *, tools: Tools | None = None) -> CompilationResult:
@@ -135,7 +135,7 @@ def compile_hermetic_source(source: str, name: str = 'oracle', *, tools: Tools |
     parsed = parse(source, f'{name}.wic')
     return sophios.compiler.compile_source(
         SourceBundle(parsed, name, RegistrySnapshot.from_tools(SYNTHETIC_TOOLS if tools is None else tools), ()),
-        sophios.cli.default_compilation_settings(), relative_run_path=True, testing=True)
+        sophios.cli.default_compilation_settings(), testing=True)
 
 
 def compile_production(yml: Yaml, name: str = 'binding', *,
@@ -145,7 +145,7 @@ def compile_production(yml: Yaml, name: str = 'binding', *,
     del is_root
     return sophios.compiler.compile_source(
         bundle(yml, name, SYNTHETIC_TOOLS if tools is None else tools),
-        sophios.cli.default_compilation_settings(), relative_run_path=True, testing=False)
+        sophios.cli.default_compilation_settings(), testing=False)
 
 
 def compile_hermetic_cwl(yml: Yaml, name: str = 'oracle', *,

@@ -119,7 +119,7 @@ def _compile_bundle(root: Path) -> CompilationResult:
     yml_paths = {'global': {path.stem: path for path in root.parent.glob('*.wic')}}
     return sophios.compiler.compile_source(
         bundle_from_disk(root, yml_paths, SYNTHETIC_TOOLS), default_compilation_settings(),
-        relative_run_path=True, testing=False)
+        testing=False)
 
 
 @pytest.mark.fast
@@ -325,4 +325,4 @@ def test_a_written_document_compiles_under_any_file_name(stem: str) -> None:
         compiled = _compile_bundle(root).artifact.cwl
 
     assert document['outputs']['result']['outputSource'] == 'joined/file'
-    assert compiled['outputs']['result']['outputSource'] == f'{stem}__step__3__joined/file'
+    assert compiled['outputs']['result']['outputSource'] == 'joined/file'

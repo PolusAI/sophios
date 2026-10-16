@@ -1,0 +1,9 @@
+steps:
+- id: touch
+  in:
+    filename: !ii greeting.txt
+- id: append
+  in:
+    str: !ii Hello, Sophios
+- id: word_count
+  run: word_count.cwl

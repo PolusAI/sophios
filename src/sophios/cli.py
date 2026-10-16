@@ -156,8 +156,8 @@ parser.add_argument('--graphviz', default=False, action="store_true",
 parser.add_argument('--graph_label_edges', default=False, action="store_true",
                     help='Label the graph edges with the name of the intermediate input/output.')
 parser.add_argument('--graph_label_stepname', default=False, action="store_true",
-                    help='Label each step node with its generated step name instead of its id '
-                    'or its wic: graphviz: label.')
+                    help='Label each step node with its name in the compiled CWL instead of '
+                    'its wic: graphviz: label.')
 parser.add_argument('--graph_show_inputs', default=False, action="store_true",
                     help='Add nodes to the graph representing the workflow inputs.')
 parser.add_argument('--graph_show_outputs', default=False, action="store_true",

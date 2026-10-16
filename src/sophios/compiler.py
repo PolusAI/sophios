@@ -2,7 +2,6 @@
 import re
 import sys
 from copy import deepcopy
-from pathlib import Path
 from typing import Final
 
 from .ir.complete import complete
@@ -29,7 +28,6 @@ from .wic_types import CompilerOptions
 def compile_source(bundle: SourceBundle,
                    compiler_options: CompilerOptions,
                    *,
-                   relative_run_path: bool,
                    testing: bool) -> CompilationResult:
     """Compile a parsed root workflow and every workflow it reaches.
 
@@ -69,16 +67,12 @@ def compile_source(bundle: SourceBundle,
     if inferred.graph is None:
         raise SophiosError(inferred.diagnostics)
     graph = declare_namespaces(complete(inferred.graph), bundle.registry)
-    artifact = _artifact_tree(graph, Names.of(graph), bundle.registry,
-                              relative_run_path=relative_run_path,
+    artifact = _artifact_tree(graph, graph.name, Names.of(graph), bundle.registry,
                               partial_failure=compiler_options['partial_failure_enable'])
     if not testing:
         print('finishing compilation of', bundle.name)
     return CompilationResult(graph, artifact, inferred.diagnostics, realtime)
 
-
-#: The shape of a name only Emit writes, `<workflow>__step__<n>__<id>`. Recognised, never taken apart.
-_GENERATED_NAME: Final = re.compile(r'__step__\d+__')
 
 #: `inputs.name` and `inputs["name"]` inside a `when:` expression.
 _EXPRESSION_INPUT: Final = re.compile(r'inputs(?:\.([A-Za-z_]\w*)|\[\s*["\']([^"\']+)["\']\s*\])')
@@ -91,15 +85,13 @@ def _expression_inputs(expression: object) -> tuple[str, ...]:
     return tuple(dict.fromkeys(a or b for a, b in _EXPRESSION_INPUT.findall(expression)))
 
 
-# pylint: disable-next=too-many-locals
 def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
-    """One plain line for each place a document addresses a step by a name the compiler generates.
+    """One plain line for each place a document addresses a step or an input ambiguously.
 
-    Such a spelling still resolves, so nothing here fails the compile; each line says what to
-    write instead. Three places are checked: an `outputSource` that names its step as
-    `<workflow>__step__<n>__<id>`, an `outputSource` that names a step by an id more than one
-    step has (it means the first), and a `when:` that reads an input its step does not declare
-    (a generated name, or one CWL evaluates as null).
+    Such a spelling still compiles, so nothing here fails the compile; each line says what
+    to write instead. Two places are checked: an `outputSource` that names a step by an id
+    more than one step has (it means the first), and a `when:` that reads an input its step
+    does not declare (CWL evaluates it as null).
     A document the Python API built names the script that built it.
     """
     notes: list[str] = []
@@ -111,26 +103,16 @@ def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
     ids = [step.id.name for step in graph.steps]
     for name, source in graph.output_mapping:
         written = str(sources[name]).rsplit('/', 1)[0]
-        if Grammar.WIC_STEP_KEY.match(written):
+        if Grammar.WIC_STEP_KEY.match(written) or ids.count(source.step.name) == 1:
             continue
-        repeated = ids.count(source.step.name) > 1
         position = [step.id for step in graph.steps].index(source.step) + 1
-        address = f'({position}, {source.step.name})' if repeated else source.step.name
-        if written == source.step.name:
-            if repeated:
-                notes.append(f"Warning! {file}: output {str(name)!r} has outputSource '{sources[name]}', but "
-                             f'{ids.count(source.step.name)} steps have the id {written!r} and it means the first. '
-                             f"Write '{address}/{source.port}' to say so.")
-            continue
-        notes.append(f'Warning! {file}: output {str(name)!r} names its step {written!r}, a name the '
-                     f"compiler generates. Write '{address}/{source.port}' instead.")
+        notes.append(f"Warning! {file}: output {str(name)!r} has outputSource '{sources[name]}', but "
+                     f'{ids.count(source.step.name)} steps have the id {written!r} and it means the first. '
+                     f"Write '({position}, {source.step.name})/{source.port}' to say so.")
     for step in graph.steps:
         declared = {str(port.id.port) for port in step.inputs}
         for read in _expression_inputs(dict(step.interpreted).get('when')):
-            if _GENERATED_NAME.search(read):
-                notes.append(f"Warning! {file}: step {step.id.name!r} reads inputs.{read} in `when:`, a name "
-                             "the compiler generates. Declare the port in the callee's `inputs:` and read that name.")
-            elif read not in declared:
+            if read not in declared:
                 notes.append(f"Warning! {file}: step {step.id.name!r} reads inputs.{read} in `when:`, which "
                              'its process does not declare; CWL evaluates it as null.')
     for child in graph.children:
@@ -162,18 +144,17 @@ def _check_unresolved_names(graph: WorkflowGraph, allow_raw_cwl: bool,
         _check_unresolved_names(child, allow_raw_cwl, names)
 
 
-def _artifact_tree(graph: WorkflowGraph, names: Names, registry: RegistrySnapshot, *,
-                   relative_run_path: bool, partial_failure: bool) -> CompilationArtifact:
-    """One artifact per emitted document, each surfaced exactly once."""
-    document = surface(graph, names, relative_run_path=relative_run_path,
-                       partial_failure=partial_failure)
+def _artifact_tree(graph: WorkflowGraph, name: str, names: Names, registry: RegistrySnapshot, *,
+                   partial_failure: bool) -> CompilationArtifact:
+    """One artifact per emitted document, each surfaced exactly once, a child
+    named as the `run:` its parent emits, so the file written is the one it runs."""
+    document = surface(graph, names, partial_failure=partial_failure)
     children: list[CompilationArtifact] = []
     for step in document.steps:
         assert step.run is not None
         child = step.run.child
         if child is not None:
-            children.append(_artifact_tree(child, names, registry,
-                                           relative_run_path=relative_run_path,
+            children.append(_artifact_tree(child, names.file(step.id), names, registry,
                                            partial_failure=partial_failure))
             continue
         key = step.run.process_id
@@ -184,14 +165,14 @@ def _artifact_tree(graph: WorkflowGraph, names: Names, registry: RegistrySnapsho
                 f'process {key.namespace}/{key.name} disappeared after resolution')
         # Named by the `run:` the parent emits, so the file written is the one it runs.
         children.append(CompilationArtifact(
-            (names.step(step.id),), Path(step.run.target).stem,
+            (names.step(step.id),), names.file(step.id),
             definition.run_path, deepcopy(definition.cwl), {}, None,
         ))
 
     return CompilationArtifact(
         tuple(names.step(part) for part in graph.namespace.parts),
-        graph.name,
-        f'{graph.name}.cwl',
+        name,
+        f'{name}.cwl',
         emit(document, names),
         emit_job_inputs(document, names),
         graph,

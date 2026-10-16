@@ -224,7 +224,7 @@ def test_class_is_written_while_inputs_outputs_and_version_are_not() -> None:
     # renames the step it names. Asserting the authored spelling survived was
     # asserting a document cwltool rejects.
     assert compiled['outputs']['mine'] == {
-        **user_output, 'outputSource': 'leak__step__1__touch/file',
+        **user_output, 'outputSource': 'touch/file',
     }, 'user output lost, or its source not rewritten to the emitted step'
     assert len(compiled['outputs']) > 1, 'compiler outputs not merged alongside'
 
@@ -404,7 +404,7 @@ def test_an_authored_output_source_validates() -> None:
         **_touch_workflow({}, {}),
     }, 'leak')
     inlined = sophios.post_compile.inline_artifact_runs(info.artifact).cwl
-    assert inlined['outputs']['mine']['outputSource'] == 'leak__step__1__touch/file'
+    assert inlined['outputs']['mine']['outputSource'] == 'touch/file'
     with tempfile.TemporaryDirectory() as workdir:
         target = Path(workdir) / 'authored_output_source.cwl'
         target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')

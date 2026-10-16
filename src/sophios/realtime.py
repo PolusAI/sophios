@@ -68,7 +68,7 @@ def compile_analyses(declarations: tuple[Declaration, ...],
         source = yaml.dump(_wrapper(declaration), Dumper=io.NoAliasDumper, sort_keys=False, line_break='\n')
         try:
             bundle = frontdoor.bundle_from_source(source, f'{Path(declaration.analysis).stem}_only', yml_paths, tools)
-            result = compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=True)
+            result = compiler.compile_source(bundle, compiler_options, testing=True)
         except SophiosError as e:
             raise SophiosError(Diagnostic(
                 Severity.ERROR, SophiosErrorCode.REALTIME_DECLARATION,
@@ -105,7 +105,7 @@ def _literal_inputs(config: Any) -> Any:
 
 
 def manifest_path(basepath: Path, workflow_name: str) -> Path:
-    """Where `write` records the analyses of `workflow_name`, beside its names map."""
+    """Where `write` records the analyses of `workflow_name`, beside its compiled CWL."""
     return basepath / f'{workflow_name}.realtime.json'
 
 
@@ -147,7 +147,7 @@ def write(analyses: tuple[Analysis, ...], basepath: Path, workflow_name: str, ro
         return ()
     plans = []
     for analysis, cwl in zip(analyses, documents(analyses, basepath)):
-        io.write_artifacts_to_disk(analysis.artifact, cwl.parent, True)
+        io.write_artifacts_to_disk(analysis.artifact, cwl.parent)
         declaration = analysis.declaration
         plans.append(Plan(analysis.name, declaration.analysis, declaration.file_pattern, declaration.max_times,
                           declaration.interval, cwl.absolute(),

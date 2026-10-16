@@ -204,12 +204,12 @@ def test_rest_core_blank_plugin_id_uses_node_name() -> None:
     """Compile inline-run REST payloads even when pluginId is blank.
 
     Returns:
-        None: The assertion verifies a stable generated step name.
+        None: The assertion verifies a step named for the node.
     """
     inp_path = REST_OBJECTS / "single_node_bbbc_download.json"
     res = prepare_call_rest_api(inp_path)
     assert int(res["retval"]) == 0
-    assert "workflow___step__1__bbbcdownload" in res["steps"]
+    assert "bbbcdownload" in res["steps"]
 
 
 def test_rest_compile_says_a_real_time_analysis_is_not_in_the_returned_workflow(
@@ -232,7 +232,7 @@ def test_rest_compile_says_a_real_time_analysis_is_not_in_the_returned_workflow(
     res = prepare_call_rest_api(payload)
 
     assert int(res["retval"]) == 0
-    assert list(res["steps"]) == ["workflow___step__1__touch", "workflow___step__2__append",
-                                  "workflow___step__3__append"]
+    # Numbered as written: the declaration was step 3, so the second append is `(4, append)`.
+    assert list(res["steps"]) == ["touch", "append_2", "append_4"]
     assert ("Real-time analysis runs only with --run_local; the returned workflow has no step for touch"
             in capsys.readouterr().err)

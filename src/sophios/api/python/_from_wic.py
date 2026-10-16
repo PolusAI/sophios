@@ -99,7 +99,7 @@ def workflow_from_wic(path: Path, tool_registry: Tools,
     bundle = bundle_from_disk(path, {namespace: dict(paths) for namespace, paths in workflow_paths.items()},
                               tool_registry)
     compiler_options = default_compilation_settings()
-    compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=False)
+    compiler.compile_source(bundle, compiler_options, testing=False)
     assert bundle.parsed.document is not None  # the compile above raised otherwise
     version = resolve_lang_version(compiler_options.get('lang_version'), bundle.lang_version_pins)
     resolved = resolve(bundle.parsed.document, bundle.registry, name=bundle.name, lang_version=version)
@@ -334,7 +334,7 @@ def _output_source(document: ResolvedDocument, raw: str) -> tuple[int, str] | No
     if '/' not in raw:
         return None
     step_text, port = raw.rsplit('/', 1)
-    found = output_step(document.name, [step.source.id for step in document.steps], step_text)
+    found = output_step([step.source.id for step in document.steps], step_text)
     if found is None or not 1 <= found[0] <= len(document.steps):
         return None
     if port not in {output.name for output in document.steps[found[0] - 1].process.outputs}:

@@ -82,7 +82,7 @@ async def compile_wf(request: Request) -> Json:
     # ========= COMPILE WORKFLOW ================
     bundle = frontdoor.bundle_from_source(
         yaml.safe_dump(workflow_can, sort_keys=False), wkflw_name, {}, tools_cwl)
-    result = compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=False)
+    result = compiler.compile_source(bundle, compiler_options, testing=False)
     if result.realtime:
         analyses = ', '.join(declaration.analysis for declaration in result.realtime)
         print(f'Real-time analysis runs only with --run_local; the returned workflow has no step for {analyses}',

@@ -183,11 +183,8 @@ def _document(written: Path, name: str) -> Yaml:
     return loaded
 
 
-NESTED_IDS = ['multistep3__step__1__touch', 'multistep3__step__2__append_twice.wic', 'multistep3__step__3__cat']
-FLAT_IDS = ['multistep3__step__1__touch',
-            'multistep3__step__2__append_twice.wic___append_twice__step__1__append',
-            'multistep3__step__2__append_twice.wic___append_twice__step__2__append',
-            'multistep3__step__3__cat']
+NESTED_IDS = ['touch', 'append_twice', 'cat']
+FLAT_IDS = ['touch', 'append_twice__append_1', 'append_twice__append_2', 'cat']
 
 
 @pytest.mark.fast
@@ -200,15 +197,15 @@ def test_inline_subworkflows_writes_one_flat_workflow(tmp_path: Path, monkeypatc
     assert [step['id'] for step in default['steps']] == NESTED_IDS
     assert [step['id'] for step in document['steps']] == FLAT_IDS
     assert all(isinstance(step['run'], str) for step in document['steps']), 'tools stay separate files'
-    assert document['steps'][1]['run'] == f'{FLAT_IDS[1]}/append.cwl'
-    assert (flat / FLAT_IDS[1] / 'append.cwl').is_file()
+    assert document['steps'][1]['run'] == 'append.cwl'
+    assert (flat / 'append.cwl').is_file()
     assert not list(flat.rglob('append_twice.cwl')), 'a dissolved call leaves no Workflow document'
     assert 'SubworkflowFeatureRequirement' not in document.get('requirements', {})
     assert document['steps'][2]['in']['file'] == f'{FLAT_IDS[1]}/file'
     assert document['steps'][3]['in']['file'] == f'{FLAT_IDS[2]}/file'
     for key in ('inputs', 'outputs'):
         assert list(document[key]) == list(default[key]), f'the flat form keeps the root {key}'
-    last = 'multistep3__step__2__append_twice.wic___append_twice__step__2__append___file'
+    last = 'append_twice__append_2__file'
     assert document['outputs'][last]['outputSource'] == f'{FLAT_IDS[2]}/file'
     assert (flat / 'multistep3_inputs.yml').read_text() == (nested / 'multistep3_inputs.yml').read_text()
     assert 'Warning!' not in capsys.readouterr().err, 'nothing stayed nested, so nothing is said'
@@ -245,7 +242,7 @@ def test_a_scattered_call_stays_nested_and_the_compile_says_so(tmp_path: Path, m
     """`test_rand_fail` scatters over `fail.wic`: the call keeps its place, and one line names it."""
     written = _cli(tmp_path / 'kept', monkeypatch, 'test_rand_fail', '--cwl_inline_subworkflows')
     document = _document(written, 'test_rand_fail')
-    kept = next(step for step in document['steps'] if step['id'].endswith('__fail.wic'))
+    kept = next(step for step in document['steps'] if step['id'] == 'fail')
     assert kept['run'].endswith('fail.cwl') and 'scatter' in kept
     assert (written / kept['run']).is_file(), 'the Workflow document it runs is still written'
     assert document['requirements']['SubworkflowFeatureRequirement'] == {}
@@ -343,8 +340,8 @@ def test_a_kept_call_does_not_stop_the_others_from_flattening(capsys: pytest.Cap
     nested = compile_hermetic(two, 'wf').artifact
     flat = post_compile.flatten_subworkflows(nested)
     kinds = [(step['id'], child.cwl['class']) for step, child in zip(flat.cwl['steps'], flat.children)]
-    assert kinds == [('wf__step__1__mk_file', 'CommandLineTool'), ('wf__step__2__child.wic', 'Workflow'),
-                     ('wf__step__3__other.wic___other__step__1__xform', 'CommandLineTool')]
+    assert kinds == [('mk_file', 'CommandLineTool'), ('child', 'Workflow'),
+                     ('other__xform', 'CommandLineTool')]
     assert capsys.readouterr().err.count('Warning!') == 1
 
 
@@ -420,7 +417,7 @@ def test_every_level_of_nesting_is_dissolved_and_named_for_where_the_step_came_f
     nested = compile_hermetic({'steps': [MK_FILE, subworkflow_step('middle.wic', middle)]}, 'wf').artifact
     flat = post_compile.flatten_subworkflows(nested)
     assert [step['id'] for step in flat.cwl['steps']] == [
-        'wf__step__1__mk_file', 'wf__step__2__middle.wic___middle__step__1__inner.wic___inner__step__1__xform']
+        'mk_file', 'middle__inner__xform']
     assert [child.namespace for child in flat.children] == [(step['id'],) for step in flat.cwl['steps']]
     assert all(child.cwl['class'] == 'CommandLineTool' for child in flat.children)
     assert flat.job_inputs == nested.job_inputs

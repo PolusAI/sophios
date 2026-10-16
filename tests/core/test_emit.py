@@ -123,8 +123,8 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
     names = Names.of(graph)
     document = surface(graph, names)
     assert emit(document, names) == {
-        'steps': [{'id': 'handmade__step__1__write', 'in': {'message': {'source': 'message'}},
-                   'run': 'handmade__step__1__write/write.cwl', 'out': ['file']}],
+        'steps': [{'id': 'write', 'in': {'message': {'source': 'message'}},
+                   'run': 'write.cwl', 'out': ['file']}],
         'cwlVersion': CWL_VERSION,
         'class': 'Workflow',
         '$namespaces': {'edam': 'https://edamontology.org/',
@@ -133,7 +133,7 @@ def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
         'inputs': {'message': {'type': 'string'}},
         ANNOTATION_KEY: '0.0.1',
         'outputs': {'file': {'type': 'File',
-                             'outputSource': 'handmade__step__1__write/file'}},
+                             'outputSource': 'write/file'}},
     }
     assert emit_job_inputs(document, names) == {'message': 'hello'}
 
@@ -304,7 +304,7 @@ def test_an_untyped_output_of_a_called_workflow_is_typed_in_the_caller(
     """A called workflow's output the author left untyped takes its producer's type, and
     so does the caller's output that names it, whether the call or the caller wrote it."""
     kid = {'inputs': {'name': {'type': 'string'}},
-           'outputs': {'res': {'outputSource': 'kid__step__1__mk_file/file'}},
+           'outputs': {'res': {'outputSource': 'mk_file/file'}},
            'steps': [{'id': 'mk_file', 'in': {'name': 'name'}}]}
     compiled = compile_hermetic({
         'outputs': {'o': {'outputSource': 'kid.wic/res'}},
@@ -312,7 +312,7 @@ def test_an_untyped_output_of_a_called_workflow_is_typed_in_the_caller(
                    'parentargs': {'in': {'name': {'wic_inline_input': 'a'}}, **call}}],
     }, 'out_f')
     outputs = compiled.artifact.cwl['outputs']
-    lifted = [declaration['type'] for name, declaration in outputs.items() if name.endswith('___res')]
+    lifted = [declaration['type'] for name, declaration in outputs.items() if name.endswith('__res')]
     assert [outputs['o']['type']] + lifted == [expected, expected]
 
 
@@ -326,14 +326,14 @@ def test_an_untyped_output_of_a_called_workflow_is_typed_in_the_caller(
      ('`outputSource: kid/res` names no output of a step', "Did you mean 'kid.wic/res'?")),
     ({'outputSource': 'nothing/at_all'},
      ('names no output of a step', 'Check the step and output names.')),
-    ({'outputSource': 'kid.wic/kid__step__1__mk_file___file'},
-     ('names no output of a step', 'Check the step and output names.')),
+    ({'outputSource': 'kid.wic/mk_file__file'},
+     ('names no output of a step', "Did you mean 'mk_file/file'?")),
 ], ids=['no-source', 'misspelled-output', 'workflow-without-its-extension', 'nothing-close',
         'name-the-compiler-derives'])
 def test_an_untyped_output_with_nothing_to_take_a_type_from_is_wic036(
         output: Yaml, said: tuple[str, ...]) -> None:
     """The message says which half of the author's `outputSource:` to fix, not only to add a `type:`."""
-    kid = {'outputs': {'res': {'type': 'File', 'outputSource': 'kid__step__1__mk_file/file'}},
+    kid = {'outputs': {'res': {'type': 'File', 'outputSource': 'mk_file/file'}},
            'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]}
     with pytest.raises(SophiosError) as caught:
         compile_hermetic({'outputs': {'o': output},
@@ -357,7 +357,7 @@ def test_list_form_outputs_and_requirements_compile_as_their_mapping_form() -> N
     mapped = compiled({'InlineJavascriptRequirement': {}},
                       {'o': {'type': 'File', 'outputSource': 'mk_file/file'}})
     assert listed == mapped
-    assert listed['outputs']['o']['outputSource'] == 'oracle__step__1__mk_file/file'
+    assert listed['outputs']['o']['outputSource'] == 'mk_file/file'
     assert set(listed['requirements']) == {'InlineJavascriptRequirement', 'ScatterFeatureRequirement'}
 
 
@@ -379,7 +379,7 @@ def test_a_promoted_input_keeps_the_fields_a_workflow_input_may_state() -> None:
         {'f': {'type': 'File', 'secondaryFiles': ['.idx'], 'streamable': True, 'loadContents': True,
                'loadListing': 'shallow_listing', 'inputBinding': {'position': 1}}}, {})
     compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
-    assert compiled['inputs'] == {'oracle__step__1__probe___f': {
+    assert compiled['inputs'] == {'probe__f': {
         'type': 'File', 'secondaryFiles': ['.idx'], 'streamable': True, 'loadContents': True,
         'loadListing': 'shallow_listing'}}
 
@@ -413,10 +413,10 @@ def test_a_promoted_port_leaves_a_secondary_files_expression_to_its_tool(declare
          'plain': {'type': 'File', 'secondaryFiles': ['.dict'], 'outputBinding': {'glob': 'p'}}})
     compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
     inputs, outputs = compiled['inputs'], compiled['outputs']
-    assert inputs['oracle__step__1__probe___plain']['secondaryFiles'] == ['.dict']
-    assert outputs['oracle__step__1__probe___plain']['secondaryFiles'] == ['.dict']
-    assert inputs['oracle__step__1__probe___f'].get('secondaryFiles') == promoted
-    assert outputs['oracle__step__1__probe___o'].get('secondaryFiles') == promoted
+    assert inputs['probe__plain']['secondaryFiles'] == ['.dict']
+    assert outputs['probe__plain']['secondaryFiles'] == ['.dict']
+    assert inputs['probe__f'].get('secondaryFiles') == promoted
+    assert outputs['probe__o'].get('secondaryFiles') == promoted
     assert 'InlineJavascriptRequirement' not in (compiled.get('requirements') or {})
 
 
@@ -437,8 +437,8 @@ def test_a_promoted_port_states_secondary_files_as_a_list(declared: Any, promote
         {'f': {'type': 'File', 'secondaryFiles': declared, 'inputBinding': {'position': 1}}},
         {'o': {'type': 'File', 'secondaryFiles': declared, 'outputBinding': {'glob': 'o'}}})
     compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
-    assert compiled['inputs']['oracle__step__1__probe___f'].get('secondaryFiles') == promoted
-    assert compiled['outputs']['oracle__step__1__probe___o'].get('secondaryFiles') == promoted
+    assert compiled['inputs']['probe__f'].get('secondaryFiles') == promoted
+    assert compiled['outputs']['probe__o'].get('secondaryFiles') == promoted
 
 
 @pytest.mark.fast
@@ -448,9 +448,9 @@ def test_a_promoted_output_keeps_the_fields_a_workflow_output_may_state() -> Non
         {}, {'o': {'type': 'File', 'secondaryFiles': ['.bai'], 'streamable': True,
                    'outputBinding': {'glob': 'o.bam'}}})
     compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
-    assert compiled['outputs'] == {'oracle__step__1__probe___o': {
+    assert compiled['outputs'] == {'probe__o': {
         'type': 'File', 'secondaryFiles': ['.bai'], 'streamable': True,
-        'outputSource': 'oracle__step__1__probe/o'}}
+        'outputSource': 'probe/o'}}
 
 
 _MYNS: Final = 'http://tool.example/'
@@ -469,7 +469,7 @@ def _tools_binding_myns(**uris: str) -> Tools:
 def test_a_tools_namespace_prefix_is_declared_by_the_document_that_promotes_its_port() -> None:
     """The promoted port keeps its `myns:` CURIE, so the document that promotes it declares `myns`."""
     compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=_tools_binding_myns(probe=_MYNS))
-    assert compiled['inputs']['oracle__step__1__probe___f']['format'] == 'myns:format_1'
+    assert compiled['inputs']['probe__f']['format'] == 'myns:format_1'
     assert compiled['$namespaces'].get('myns') == _MYNS
 
 
@@ -497,7 +497,7 @@ def test_a_workflow_an_explicit_edge_crosses_declares_the_prefix_of_the_step_ben
         subworkflow_step('child.wic', {'steps': [subworkflow_step('grand.wic', grandchild)]})]},
         tools=_tools_binding_myns(probe=_MYNS))
     child = next(artifact for artifact in info.artifact.children if artifact.name == 'child')
-    assert child.cwl['inputs']['grand__step__1__probe___f']['format'] == 'myns:format_1'
+    assert child.cwl['inputs']['probe__f']['format'] == 'myns:format_1'
     assert child.cwl['$namespaces']['myns'] == _MYNS
 
 
@@ -514,7 +514,7 @@ def test_tools_binding_a_prefix_alike_declare_it_once_and_edam_is_left_to_emit()
     compiled = compile_hermetic_cwl({'steps': [
         {'id': 'probe'}, {'id': 'other'}, {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]},
         tools=tools)
-    assert compiled['outputs']['oracle__step__3__mk_file___file']['format'] == 'edam:format_2330'
+    assert compiled['outputs']['mk_file__file']['format'] == 'edam:format_2330'
     assert compiled['$namespaces']['myns'] == _MYNS
     assert compiled['$namespaces']['edam'] == 'https://edamontology.org/'
 
@@ -612,7 +612,7 @@ def test_a_prefix_only_a_promoted_output_format_uses_is_declared() -> None:
     tools = _tools_with_probe(
         {}, {'o': {'type': 'File', 'format': 'myns:format_1', 'outputBinding': {'glob': 'o'}}}, {'myns': _MYNS})
     compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
-    assert compiled['outputs']['oracle__step__1__probe___o']['format'] == 'myns:format_1'
+    assert compiled['outputs']['probe__o']['format'] == 'myns:format_1'
     assert compiled['$namespaces']['myns'] == _MYNS
 
 
@@ -643,7 +643,7 @@ def test_a_cwl_record_emits_the_fields_it_carries() -> None:
             'extras': {'wic_raw_cwl': {'source': [{'wic_alias': 'fa'}, {'wic_alias': 'fb'}],
                                        'linkMerge': 'merge_flattened', **carried}}}}]})
     sink = compiled['steps'][2]
-    assert sink['in']['extras'] == {'source': ['oracle__step__1__mk_file/file', 'oracle__step__2__mk_file/file'],
+    assert sink['in']['extras'] == {'source': ['mk_file_1/file', 'mk_file_2/file'],
                                     'linkMerge': 'merge_flattened', **carried}
     assert sink['in']['n'] == {'default': 3, 'valueFrom': '$(self + 1)'}
     assert {'MultipleInputFeatureRequirement', 'StepInputExpressionRequirement',
@@ -685,7 +685,7 @@ def test_a_record_source_from_an_includer_is_discharged_like_a_bare_reference() 
     assert edge.sink.step.name == 'sink'
     workflow = next(child.cwl for child in compiled.artifact.children if child.cwl['class'] == 'Workflow')
     (inner,) = workflow['steps']
-    assert inner['in']['file'] == {'source': 'child__step__1__sink___file'}
+    assert inner['in']['file'] == {'source': 'sink__file'}
 
 
 @pytest.mark.fast
@@ -709,27 +709,6 @@ def test_a_desugared_record_under_wic_steps_binds_like_the_tagged_one() -> None:
 
 
 @pytest.mark.fast
-def test_the_names_map_covers_every_emitted_step_and_boundary_port() -> None:
-    """Every step id and boundary name the root document emits maps back to what the author wrote."""
-    from sophios.ir.names import names_map  # pylint: disable=import-outside-toplevel
-    child = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}]}
-    compiled = compile_hermetic({'steps': [subworkflow_step('child.wic', child), {'id': 'count'}]})
-    found = names_map(compiled.graph, Names.of(compiled.graph))
-    emitted_steps = {step['id'] for step in compiled.artifact.cwl['steps']}
-    assert emitted_steps <= set(found['steps'])
-    assert set(compiled.artifact.cwl['inputs']) <= set(found['ports'])
-    count = found['steps']['oracle__step__2__count']
-    assert count == {'id': 'oracle__step__2__count', 'workflow': 'oracle', 'index': 2, 'name': 'count',
-                     'inserted': False, 'file': 'oracle.wic', 'line': count['line']}
-    assert count['line'] > 0
-    nested = found['steps']['oracle__step__1__child.wic___child__step__1__mk_file']
-    assert (nested['id'], nested['workflow'], nested['index'], nested['name']) == (
-        'child__step__1__mk_file', 'child', 1, 'mk_file')
-    lifted = found['ports']['oracle__step__1__child.wic___child__step__1__mk_file___name']
-    assert lifted == {'workflow': 'oracle', 'steps': ['child.wic', 'mk_file'], 'port': 'name'}
-
-
-@pytest.mark.fast
 def test_emitted_inputs_list_authored_names_first_then_derived_in_step_order() -> None:
     """Authored inputs keep the order written and come before the inputs
     exposing a step's port, which follow the steps. `mk_file.name` is lifted by
@@ -739,4 +718,4 @@ def test_emitted_inputs_list_authored_names_first_then_derived_in_step_order() -
         'steps': [{'id': 'mk_file'},
                   {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'a'}}}]})
     assert list(compiled['inputs']) == ['zeta', 'alpha',
-                                        'oracle__step__1__mk_file___name', 'oracle__step__2__mk_text___name']
+                                        'mk_file__name', 'mk_text__name']

@@ -304,19 +304,27 @@ def _provoke_invalid_link() -> None:
 
 
 def _provoke_duplicate_document_name() -> None:
-    """Author a workflow input spelled like the one a literal is lifted to.
+    """Bind a `$namespaces` prefix to one URI in the document and to another in a tool it promotes.
 
-    The two are different ports -- one written, one derived -- that the
-    emitted document would spell the same way, so neither can be emitted.
+    The promoted `myns:` format would resolve to whichever binding the
+    emitted document kept, so neither can be emitted.
 
     Raises:
         SophiosError: Always, carrying `wic031`.
     """
-    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+    import copy  # pylint: disable=import-outside-toplevel
 
-    compile_hermetic({'inputs': {'provoke__step__1__mk_file___name': 'string'},
-                      'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]},
-                     'provoke')
+    from sophios.wic_types import StepId, Tool  # pylint: disable=import-outside-toplevel
+
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+    from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt  # pylint: disable=import-outside-toplevel
+
+    probe = clt({'f': {'type': 'File', 'format': 'myns:format_1'}}, {})
+    probe['$namespaces'] = {'myns': 'http://tool.example/'}
+    tools = copy.deepcopy(SYNTHETIC_TOOLS)
+    tools[StepId('probe', SYNTHETIC_NS)] = Tool('/synthetic/probe.cwl', probe)
+    compile_hermetic({'$namespaces': {'myns': 'http://other.example/'}, 'steps': [{'id': 'probe'}]},
+                     'provoke', tools=tools)
 
 
 def _provoke_unknown_scatter_port() -> None:

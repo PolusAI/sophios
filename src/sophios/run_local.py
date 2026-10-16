@@ -1,4 +1,3 @@
-import json
 import logging
 import subprocess as sub
 import sys
@@ -10,13 +9,12 @@ from pathlib import Path
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Final, Iterator, Mapping
+from typing import Final, Iterator, Mapping
 from sophios.wic_types import Json
 from . import auto_gen_header, realtime
 from . import utils
 from .compute_request import ComputeRequest
-from .input_output import names_map_path
-from .plugins import AuthoredNamesFilter, FailedJobs, logging_filters
+from .plugins import FailedJobs, logging_filters
 
 #: Why cwltool and Toil cannot run in this process, or None. Windows has no `pwd`, which they import
 #: (transitively, in cwltool.provenance); the pre-flight says so when a run is asked for.
@@ -206,18 +204,11 @@ def _execute_inprocess(cmd: list[str], cwl_runner: str, workflow_name: str,
                        yaml_path: Path, failed: FailedJobs) -> int:
     """Execute the workflow in-process via the cwltool or toil python API, handling errors.
 
-    While it runs, cwltool's messages name each emitted id as the author wrote it, read from
-    the names map the compile wrote beside the root CWL. `failed` collects the jobs cwltool
-    reports as not successful.
+    `failed` collects the jobs cwltool reports as not successful.
     """
     retval = 1
     logger = logging.getLogger('cwltool')
-    names_path = names_map_path(yaml_path.parent, workflow_name)
-    authored_names = (AuthoredNamesFilter(json.loads(names_path.read_text(encoding='utf-8')))
-                      if names_path.exists() else None)
-    logger.addFilter(failed)  # before the rewrite: it reads cwltool's record, not its text
-    if authored_names is not None:
-        logger.addFilter(authored_names)
+    logger.addFilter(failed)
     try:
         with _temporary_env(user_env_vars or {}):
             if cwl_runner == 'cwltool':
@@ -250,8 +241,6 @@ def _execute_inprocess(cmd: list[str], cwl_runner: str, workflow_name: str,
             traceback.print_exception(e, file=f)
     finally:
         logger.removeFilter(failed)
-        if authored_names is not None:
-            logger.removeFilter(authored_names)
     return retval
 
 
@@ -278,7 +267,7 @@ _STATUS_MEANS: Final = {
 }
 
 
-def _failure_lines(failed: Mapping[str, int | str | None], spelled: Callable[[str], str]) -> list[str]:
+def _failure_lines(failed: Mapping[str, int | str | None]) -> list[str]:
     """One line per failed step: who, how it ended, what that means, where its messages are."""
     if not failed:
         return ['Failure! Above, the first ERROR line, or the error the runner itself raised, says why the run failed.']
@@ -291,25 +280,19 @@ def _failure_lines(failed: Mapping[str, int | str | None], spelled: Callable[[st
             how, means = f'was ended by {ended}', _STATUS_MEANS[137] if ended == 'SIGKILL' else None
         else:
             how, means = 'could not run, or its outputs could not be collected', None
-        lines.append(f'Failure! {spelled(job)} {how}' + (f', which means {means}' if means else '')
+        lines.append(f"Failure! step '{job}' {how}" + (f', which means {means}' if means else '')
                      + '. Its own messages are above, under its name.')
     return lines
 
 
-def _report_outcome(retval: int | None, cmd: list[str], basepath: str, workflow_name: str,
-                    failed: FailedJobs) -> None:
+def _report_outcome(retval: int | None, cmd: list[str], basepath: str, failed: FailedJobs) -> None:
     """Print the success/failure summary message after execution."""
     if retval == 0:
         output_location = cmd[cmd.index('--outdir') + 1] if '--outdir' in cmd else basepath
         print(f'Success! Runner outputs are under {output_location}/')
     else:
-        names_path = names_map_path(Path(basepath), workflow_name)
-        spelled = (AuthoredNamesFilter(json.loads(names_path.read_text(encoding='utf-8'))).spelled
-                   if names_path.exists() else str)
-        for line in _failure_lines(failed.failed, spelled):
+        for line in _failure_lines(failed.failed):
             print(line, file=sys.stderr)
-        if names_path.exists():
-            print(f'Emitted ids are mapped to authored names in {names_path}', file=sys.stderr)
 
 
 def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
@@ -373,7 +356,7 @@ def run_local(run_args_dict: dict[str, str], use_subprocess: bool,
     if use_subprocess:
         return retval
 
-    _report_outcome(retval, cmd, basepath, workflow_name, failed)
+    _report_outcome(retval, cmd, basepath, failed)
 
     return retval
 

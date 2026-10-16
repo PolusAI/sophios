@@ -200,11 +200,11 @@ def test_linear_python_workflow_reuses_compiler_edge_inference(tmp_path: Path) -
 
     compiled = workflow.compile()
 
-    assert compiled.cwl_workflow["steps"][1]["in"]["file"] == "wf__step__1__touch/file"
-    assert compiled.cwl_workflow["steps"][2]["in"]["file"] == "wf__step__2__append/file"
+    assert compiled.cwl_workflow["steps"][1]["in"]["file"] == "touch/file"
+    assert compiled.cwl_workflow["steps"][2]["in"]["file"] == "append/file"
     assert compiled.cwl_job_inputs == {
-        "wf__step__1__touch___filename": "empty.txt",
-        "wf__step__2__append___str": "Hello",
+        "touch__filename": "empty.txt",
+        "append__str": "Hello",
     }
 
 
@@ -260,7 +260,7 @@ def test_step_inputs_bind_values_on_a_tool_given_in_memory() -> None:
     from_tool = tool.to_step(step_name="say", step_inputs={"message": "hi"})
 
     for step in (from_document, from_tool):
-        assert Workflow([step], "wf").compile().cwl_job_inputs == {"wf__step__1__say___message": "hi"}
+        assert Workflow([step], "wf").compile().cwl_job_inputs == {"say__message": "hi"}
     with pytest.raises(TypeError, match="config"):
         tool.to_step(config={"message": "hi"})  # type: ignore[call-arg]  # pylint: disable=unexpected-keyword-arg
 
@@ -408,8 +408,8 @@ def test_output_target_directories_compile_as_runner_local_inputs(tmp_path: Path
 
     compiled = workflow.compile()
 
-    assert compiled.cwl_job_inputs["virtual_dir_demo__step__1__write_dir___outDir"] == "result.outDir"
-    assert compiled.cwl_workflow["inputs"]["virtual_dir_demo__step__1__write_dir___outDir"]["type"] == "string"
+    assert compiled.cwl_job_inputs["write_dir__outDir"] == "result.outDir"
+    assert compiled.cwl_workflow["inputs"]["write_dir__outDir"]["type"] == "string"
     assert compiled.cwl_workflow["steps"][0]["run"]["inputs"]["outDir"]["type"] == "string"
     assert compiled.cwl_workflow["steps"][0]["run"]["outputs"]["outDir"]["outputBinding"]["glob"] == "$(inputs.outDir)"
 
@@ -448,7 +448,7 @@ def test_compute_request_accepts_compiled_python_workflow() -> None:
     assert request_mapping["cwlWorkflow"]["steps"][0]["run"]["class"] == "CommandLineTool"
     assert request_mapping["computeConfig"]["outputConfig"]["mode"] == "workflowDeclared"
     input_key = next(iter(request_mapping["cwlJobInputs"]))
-    assert input_key.endswith("emit_text___message")
+    assert input_key.endswith("emit_text__message")
     assert request_mapping["cwlJobInputs"][input_key] == "hello from compute"
 
 
@@ -1319,7 +1319,7 @@ def test_workflow_run_writes_virtual_output_directories_without_orphans(
     workflow.run(basepath=str(tmp_path))
 
     inputs = yaml.safe_load((tmp_path / "virtual_run_demo_inputs.yml").read_text(encoding="utf-8"))
-    assert inputs["virtual_run_demo__step__1__write_dir___outDir"] == "result.outDir"
+    assert inputs["write_dir__outDir"] == "result.outDir"
     assert not (tmp_path / "result.outDir").exists()
 
 
@@ -1494,7 +1494,7 @@ def test_every_api_failure_is_catchable_as_one_type() -> None:
 def test_an_api_failure_carries_an_api_code_not_a_language_one(error: type[ApiError]) -> None:
     """`api0NN`, because the document is not what is wrong -- the call is.
 
-    A `wic0NN` here would send a reader to a section of the language guide
+    A `wic0NN` here would send a reader to a section of the .wic reference
     that does not describe their problem. `is_language` is the distinction, so
     a caller can route on it rather than on the string prefix.
     """
@@ -1634,7 +1634,7 @@ def test_a_relative_path_bound_in_python_is_read_from_the_working_directory(
     cat = _cat()
     cat.inputs.f = 'data.txt'
     job = _job_written_by_run(monkeypatch, Workflow([cat], 'wf'))
-    assert job['wf__step__1__cat___f'] == {'class': 'File', 'location': str(Path.cwd() / 'data.txt')}
+    assert job['cat__f'] == {'class': 'File', 'location': str(Path.cwd() / 'data.txt')}
 
 
 def _missing_paths(monkeypatch: pytest.MonkeyPatch, workflow: Workflow) -> list[str]:
@@ -1660,7 +1660,7 @@ def test_a_missing_path_bound_in_python_is_named_before_the_run(monkeypatch: pyt
     cat = _cat()
     cat.inputs.f = str(tmp_path / 'gone.txt')
     line, = _missing_paths(monkeypatch, Workflow([cat], 'wf'))
-    assert line.startswith("error [wic016] input 'cat/f' (from the workflow, ")
+    assert line.startswith("error [wic016] input 'cat__f' (from the workflow, ")
     assert f"names {str(tmp_path / 'gone.txt')!r}, which does not exist" in line
 
 
@@ -1682,7 +1682,7 @@ def test_an_inputs_file_value_is_checked_instead_of_the_one_bound_in_python(
     """The inputs file's value is the one the runner gets, so the one it replaces is not checked."""
     monkeypatch.chdir(tmp_path)
     Path('data.txt').write_text('hello\n', encoding='utf-8')
-    Path('in.yml').write_text('wf__step__1__cat___f: {class: File, location: data.txt}\n', encoding='utf-8')
+    Path('in.yml').write_text('cat__f: {class: File, location: data.txt}\n', encoding='utf-8')
     cat = _cat()
     cat.inputs.f = 'gone.txt'
     monkeypatch.setattr(python_runtime.rl, 'run_local', lambda *_a, **_k: 0)
@@ -1706,7 +1706,7 @@ def test_an_output_target_directory_in_the_inputs_file_is_not_looked_for(
     """Written as CWL writes a Directory, it still names the directory the step creates."""
     monkeypatch.chdir(tmp_path)
     step = Step(clt_path=_output_directory_tool(tmp_path / 'write_dir.cwl'))
-    Path('in.yml').write_text('wf__step__1__write_dir___outDir: {class: Directory, location: result.outDir}\n',
+    Path('in.yml').write_text('write_dir__outDir: {class: Directory, location: result.outDir}\n',
                               encoding='utf-8')
     monkeypatch.setattr(python_runtime.rl, 'run_local', lambda *_a, **_k: 0)
     Workflow([step], 'wf').run(run_args_dict={'inputs_file': 'in.yml'})
@@ -1720,7 +1720,7 @@ def test_a_missing_path_in_a_step_inputs_file_is_named_before_the_run(monkeypatc
     Path('cat.yml').write_text('f: {class: File, location: gone.txt}\n', encoding='utf-8')
     cat = Step(clt_path=_cat_tool(tmp_path), step_inputs_file='cat.yml')
     line, = _missing_paths(monkeypatch, Workflow([cat], 'wf'))
-    assert "input 'cat/f' (from the workflow, " in line and "names 'gone.txt'" in line
+    assert "input 'cat__f' (from the workflow, " in line and "names 'gone.txt'" in line
 
 
 @pytest.mark.fast
@@ -1733,7 +1733,7 @@ def test_a_relative_path_in_a_step_inputs_file_is_read_from_the_working_director
     Path('inputs/cat.yml').write_text('f: {class: File, location: data.txt}\n', encoding='utf-8')
     cat = Step(clt_path=_cat_tool(tmp_path), step_inputs_file='inputs/cat.yml')
     job = _job_written_by_run(monkeypatch, Workflow([cat], 'wf'))
-    assert job['wf__step__1__cat___f'] == {'class': 'File', 'location': str(Path.cwd() / 'data.txt')}
+    assert job['cat__f'] == {'class': 'File', 'location': str(Path.cwd() / 'data.txt')}
 
 
 def _interrupted(_args: list[str]) -> int:
@@ -1793,16 +1793,12 @@ def test_ctrl_c_during_run_is_not_reported_as_a_failed_run(monkeypatch: pytest.M
 
 
 @pytest.mark.fast
-def test_a_failed_in_process_run_names_authored_steps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-                                                      caplog: pytest.LogCaptureFixture,
-                                                      capsys: pytest.CaptureFixture[str]) -> None:
-    """cwltool names emitted ids; during the run they read as authored, and the failure points at the map."""
+def test_a_failed_in_process_run_leaves_cwltools_messages_as_they_are(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """The ids cwltool names are the authored ones, so its messages are not respelled."""
     import logging  # pylint: disable=import-outside-toplevel
-    emitted = "wf__step__2__append"
-    names_path = tmp_path / "wf.names.json"
-    entry = {"id": emitted, "workflow": "wf", "index": 2,
-             "name": "append", "inserted": False, "file": "wf.wic", "line": 7}
-    names_path.write_text(json.dumps({"steps": {emitted: entry}, "ports": {}}), encoding="utf-8")
+    emitted = "append"
 
     def failing_main(args: list[str]) -> int:
         del args
@@ -1817,20 +1813,16 @@ def test_a_failed_in_process_run_names_authored_steps(monkeypatch: pytest.Monkey
                                  passthrough_args=[], workflow_name="wf", basepath=str(tmp_path))
 
     assert retval == 1
-    assert f"[step 2 'append' ({emitted})] completed permanentFail" in caplog.messages
-    assert f"Emitted ids are mapped to authored names in {names_path}" in capsys.readouterr().err
-    assert not [f for f in logging.getLogger("cwltool").filters
-                if isinstance(f, (sophios.plugins.AuthoredNamesFilter, sophios.plugins.FailedJobs))]
+    assert caplog.messages == [f"[step {emitted}] completed permanentFail"]
+    assert "authored names" not in capsys.readouterr().err
+    assert not [f for f in logging.getLogger("cwltool").filters if isinstance(f, sophios.plugins.FailedJobs)]
 
 
 @pytest.mark.fast
 def test_a_failed_run_names_the_step_its_status_and_what_127_means(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     import logging  # pylint: disable=import-outside-toplevel
-    emitted = "wf__step__2__append"
-    entry = {"id": emitted, "workflow": "wf", "index": 2, "name": "append", "inserted": False,
-             "file": "wf.wic", "line": 7}
-    (tmp_path / "wf.names.json").write_text(json.dumps({"steps": {emitted: entry}, "ports": {}}), encoding="utf-8")
+    emitted = "append"
 
     def failing_main(args: list[str]) -> int:
         del args
@@ -1845,7 +1837,7 @@ def test_a_failed_run_names_the_step_its_status_and_what_127_means(
                                  passthrough_args=[], workflow_name="wf", basepath=str(tmp_path))
     assert retval == 1
     captured = capsys.readouterr()
-    assert (f"Failure! step 2 'append' ({emitted}_2) exited with status 127, which means its command was not "
+    assert (f"Failure! step '{emitted}_2' exited with status 127, which means its command was not "
             "found") in captured.err
     assert "scroll up" not in captured.out + captured.err
 
@@ -1897,7 +1889,7 @@ def test_a_real_failed_step_is_named_with_its_status(monkeypatch: pytest.MonkeyP
     with pytest.raises(WorkflowRunError):
         Workflow([step], "exits").run(basepath=str(tmp_path / "autogenerated"))
     err = capfd.readouterr().err
-    assert "Failure! step 1 'exits_3' (" in err
+    assert "Failure! step 'exits_3" in err
     assert "exited with status 3." in err
 
 
@@ -1992,7 +1984,7 @@ def test_a_sibling_step_consumes_a_subworkflows_output() -> None:
     inner, cat = _inner_and_sibling()
     compiled = Workflow([inner, cat], 'outer').compile()
     cat_step = compiled.cwl_workflow['steps'][1]
-    assert cat_step['in']['file'] == {'source': 'outer__step__1__inner.wic/made'}
+    assert cat_step['in']['file'] == {'source': 'inner/made'}
 
 
 @pytest.mark.fast
@@ -2002,7 +1994,7 @@ def test_a_parent_re_exports_a_subworkflows_output() -> None:
     outer = Workflow([inner, cat], 'outer')
     outer.outputs.made = inner.outputs.made
     compiled = outer.compile()
-    assert compiled.cwl_workflow['outputs']['made']['outputSource'] == 'outer__step__1__inner.wic/made'
+    assert compiled.cwl_workflow['outputs']['made']['outputSource'] == 'inner/made'
 
 
 @pytest.mark.fast
@@ -2029,7 +2021,7 @@ def test_the_written_bundle_of_a_nested_workflow_compiles_to_the_same_cwl(tmp_pa
     bundle = bundle_from_disk(root, {'global': {path.stem: path for path in tmp_path.glob('*.wic')}},
                               sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}}))
     result = sophios.compiler.compile_source(bundle, default_compilation_settings(),
-                                             relative_run_path=True, testing=True)
+                                             testing=True)
     assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct
 
 
@@ -2129,7 +2121,7 @@ def test_the_chained_scatter_agrees_with_the_dsl(tmp_path: Path) -> None:
     bundle = bundle_from_disk(root, {'global': {path.stem: path for path in tmp_path.glob('*.wic')}},
                               sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}}))
     result = sophios.compiler.compile_source(bundle, default_compilation_settings(),
-                                             relative_run_path=True, testing=True)
+                                             testing=True)
     assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct
 
 
@@ -2150,7 +2142,7 @@ def test_step_input_merges_two_sources() -> None:
     """Several sources and `linkMerge` on one step input, written from Python as objects."""
     compiled = _merge().compile()
     step = compiled.cwl_workflow['steps'][2]
-    assert step['in']['files'] == {'source': ['merge__step__1__a/file', 'merge__step__2__b/file'],
+    assert step['in']['files'] == {'source': ['a/file', 'b/file'],
                                    'linkMerge': 'merge_flattened'}
     assert 'MultipleInputFeatureRequirement' in compiled.cwl_workflow['requirements']
 
@@ -2241,7 +2233,7 @@ def test_step_input_round_trips_through_write_wic(tmp_path: Path) -> None:
     bundle = bundle_from_disk(root, {'global': {path.stem: path for path in tmp_path.glob('*.wic')}},
                               sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}}))
     result = sophios.compiler.compile_source(bundle, default_compilation_settings(),
-                                             relative_run_path=True, testing=True)
+                                             testing=True)
     assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct
 
 
@@ -2285,7 +2277,7 @@ def test_a_step_input_and_a_plain_link_on_similarly_named_steps_compile() -> Non
     sink1.inputs.files = c.outputs.file
     wf = Workflow([*wf.steps, c, sink1], 'similar')
     steps = wf.compile().cwl_workflow['steps']
-    assert steps[4]['in']['files'] == {'source': 'similar__step__4__c/file'}
+    assert steps[4]['in']['files'] == {'source': 'c/file'}
 
 
 @pytest.mark.fast

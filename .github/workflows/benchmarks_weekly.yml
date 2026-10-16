@@ -61,16 +61,24 @@ jobs:
           repository: ${{ github.repository_owner }}/image-workflows
           path: image-workflows
 
+      - name: Remove old mamba environment and packages
+        # Every job installs fresh on this self-hosted runner, whatever the job
+        # before it left: no environment and no downloaded or unpacked package.
+        run: rm -rf "/home/$(whoami)/miniconda3/envs/wic/" "/home/$(whoami)/conda_pkgs_dir/"
+
       - name: Setup miniforge (linux, macos)
         if: runner.os != 'Windows'
         uses: conda-incubator/setup-miniconda@v4.0.1
         with:
           miniforge-variant: Miniforge3
           miniforge-version: 24.7.1-2
-          environment-file: sophios/install/system_deps.yml
+          environment-file: sophios/install/system_deps_ci.yml
           activate-environment: wic
           channels: conda-forge
           python-version: "3.11.*"
+          # Its post step moves the unpacked packages aside (2 min here), and only
+          # after a green job; the step above deletes them before every job instead.
+          run-post: false
 
       - name: Install Sophios
         run: cd sophios/ && pip install ".[all_except_runner_src]"

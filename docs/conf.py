@@ -87,9 +87,10 @@ building_pdf = os.environ.get('SOPHIOS_BUILD_PDF') == '1'
 
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 if building_pdf:
-    exclude_patterns.append('index.rst')
+    exclude_patterns.append('index.md')
 else:
-    exclude_patterns.append('pdf_index.rst')
+    # landing.md re-includes the landing page for the PDF, whose root is a bare toctree.
+    exclude_patterns += ['pdf_index.rst', 'landing.md']
 
 
 # -- Options for HTML output -------------------------------------------------

@@ -92,7 +92,7 @@ def _compile_corpus_file(path: Path) -> None:
     args = sophios.cli.get_args(str(path))
     bundle = frontdoor.bundle_from_disk(path, env.yml_paths, env.tools)
     compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
-    sophios.compiler.compile_source(bundle, compiler_options, relative_run_path=True, testing=True)
+    sophios.compiler.compile_source(bundle, compiler_options, testing=True)
 
 
 # --------------------------------------------------------------------------

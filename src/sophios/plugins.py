@@ -44,58 +44,10 @@ class NoPartialFailureNullWarning(logging.Filter):
         return err_str not in record.getMessage()
 
 
-class AuthoredNamesFilter(logging.Filter):
-    """Rewrite each emitted id in a runner message as `authored (emitted)`.
-
-    Installed around an in-process run from the names map the compile wrote,
-    so a cwltool error names the step the user wrote. One pass, longest id
-    first, whole ids only: a nested id is rewritten as itself, never as the
-    step id it starts with, and a port the author named is left as written.
-    A step is matched by its id in the root document and by the id it carries
-    in its own document, which is the one cwltool prints for a nested step.
-    An id right after a `/` is a directory of the emitted tree and stays as is,
-    so a printed path still opens; the `_<n>` cwltool appends to a repeated
-    job stays with its id. A step is spelled `step <index> '<name>'` and one
-    Infer inserted `inserted step '<name>'`; a `step` the message already has
-    in front of the id is replaced by that spelling, not repeated.
-    """
-    # pylint:disable=too-few-public-methods
-
-    def __init__(self, names: dict[str, Any]) -> None:
-        super().__init__()
-        authored: dict[str, str] = {}
-        for emitted, entry in names.get('steps', {}).items():
-            for known in (emitted, entry.get('id', emitted)):
-                authored[known] = (f"inserted step '{entry['name']}'" if entry['inserted']
-                                   else f"step {entry['index']} '{entry['name']}'")
-        for emitted, entry in names.get('ports', {}).items():
-            if entry['steps']:
-                authored[emitted] = '/'.join([*entry['steps'], entry['port']])
-        self._authored = authored
-        alternatives = '|'.join(re.escape(emitted) for emitted in sorted(authored, key=len, reverse=True))
-        self._pattern = (re.compile(rf'(?:(?P<lead>(?<![\w/-])step )|(?<![\w/-]))'
-                                    rf'(?P<id>{alternatives})(?P<job>_\d+)?(?![\w-])')
-                         if authored else None)
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        if self._pattern is not None:
-            record.msg = self.spelled(record.getMessage())
-            record.args = ()
-        return True
-
-    def spelled(self, text: str) -> str:
-        """`text` with each emitted id written as `authored (emitted)`."""
-        return self._pattern.sub(self._one, text) if self._pattern is not None else text
-
-    def _one(self, found: re.Match[str]) -> str:
-        return f"{self._authored[found['id']]} ({found['id']}{found['job'] or ''})"
-
-
 class FailedJobs(logging.Filter):
     """Collect each job an in-process cwltool run reports as not successful.
 
-    Reads cwltool's own record, whose first argument is the job's emitted name,
-    so it is installed before `AuthoredNamesFilter` rewrites the text. `failed`
+    Reads cwltool's own record, whose first argument is the job's name. `failed`
     maps each failed job to its exit status, the signal that ended it, or None
     when cwltool gave neither, in the order the jobs failed.
     """

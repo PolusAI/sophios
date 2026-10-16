@@ -289,20 +289,6 @@ def test_converter_insertion_reaches_the_same_fixed_point() -> None:
 
 
 @pytest.mark.fast
-def test_the_names_map_counts_authored_steps_and_flags_inserted_converters() -> None:
-    """An inserted converter shifts rendered positions, not the index the author wrote."""
-    from sophios.ir.names import names_map  # pylint: disable=import-outside-toplevel
-    workflow, tools = _insertion_registry()
-    compiled = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
-                                insert_steps_automatically=True)
-    found = names_map(compiled.graph, Names.of(compiled.graph))['steps']
-    authored = {entry['name']: entry['index'] for entry in found.values() if not entry['inserted']}
-    assert authored == {'mk_1': 1, 'use_1': 2, 'mk_2': 3, 'use_2': 4}
-    inserted = [entry['name'] for entry in found.values() if entry['inserted']]
-    assert sorted(inserted) == ['insert_steps_automatically_conv_1', 'insert_steps_automatically_conv_2']
-
-
-@pytest.mark.fast
 def test_workflow_call_outputs_are_inference_candidates() -> None:
     """A child output remains visible to a later tool in its parent."""
     child = {'steps': [
@@ -353,7 +339,7 @@ def test_converter_search_stops_at_the_candidate_break() -> None:
     assert result.graph is not None, list(result.diagnostics)
     assert not any(step.synthesized for step in result.graph.steps)
     assert [Names.of(result.graph).port(port.name) for port in result.graph.workflow_inputs] == [
-        'oracle__step__3__use_1___file']
+        'use_1__file']
     live = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
                             insert_steps_automatically=True)
     assert not any('insert_steps_automatically_' in step['id']
@@ -528,9 +514,9 @@ def test_a_positional_output_source_compiles_beside_an_inferred_edge() -> None:
     compiled = compile_hermetic({'outputs': {'n': {'type': 'int', 'outputSource': '(4, count)/n'}},
                                  'steps': [mk, {'id': 'count'}, mk, {'id': 'count'}]})
     cwl = compiled.artifact.cwl
-    assert cwl['outputs']['n']['outputSource'] == 'oracle__step__4__count/n'
-    fourth = next(step for step in cwl['steps'] if step['id'] == 'oracle__step__4__count')
-    assert fourth['in']['file'] == 'oracle__step__3__mk_file/file'
+    assert cwl['outputs']['n']['outputSource'] == 'count_4/n'
+    fourth = next(step for step in cwl['steps'] if step['id'] == 'count_4')
+    assert fourth['in']['file'] == 'mk_file_3/file'
 
 
 @pytest.mark.fast
@@ -540,7 +526,7 @@ def test_a_positional_output_source_compiles_in_a_fully_explicit_workflow() -> N
                                  'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}},
                                             'out': [{'file': {'wic_anchor': 'f'}}]},
                                            {'id': 'count', 'in': {'file': {'wic_alias': 'f'}}}]})
-    assert compiled.artifact.cwl['outputs']['n']['outputSource'] == 'oracle__step__2__count/n'
+    assert compiled.artifact.cwl['outputs']['n']['outputSource'] == 'count/n'
 
 
 @pytest.mark.fast

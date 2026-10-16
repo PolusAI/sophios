@@ -23,13 +23,10 @@ from dataclasses import replace
 from typing import Any
 
 from ..lang import CwlRecord, versions
-from ..lang.diagnostics import SophiosError
-from ..lang.error_codes import SophiosErrorCode
-from ..lang.spans import SourceSpan
 from ..lang.versions import ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
 from ..wic_types import Cwl
 from .declarations import required
-from .names import NAMESPACE_SEPARATOR, Names
+from .names import Names
 from .stepin import step_inputs, step_out
 from .types import (DerivedName, EmissionDocument, EmittedValue, Expression, PortName, Record,
                     Source, StepNode, StepOutputRef, WorkflowGraph, WorkflowPort)
@@ -38,9 +35,9 @@ EDAM_NAMESPACE = ('edam', 'https://edamontology.org/')
 EDAM_SCHEMA = 'https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl'
 
 
-def _step_spelling(step: StepNode, names: Names, relative_run_path: bool,
-                   partial_failure: bool) -> StepNode:
-    """`step` with its `run:` path written.
+def _step_spelling(step: StepNode, names: Names, partial_failure: bool) -> StepNode:
+    """`step` with its `run:` path written: the file its process is written to,
+    beside every other document of the tree.
 
     Under partial failure a step runs only when every required input arrived,
     so its `when` is rewritten from the ports it declares.
@@ -53,20 +50,11 @@ def _step_spelling(step: StepNode, names: Names, relative_run_path: bool,
         if needed:
             interpreted['when'] = '$(' + ' && '.join(
                 f'inputs["{name}"] != null' for name in needed) + ')'
-    # From the resolved identity: `target` is this function's own output,
-    # so a leaf read back out of it would compound.
-    leaf = f'{run.process_id.name}.cwl'
-    if relative_run_path:
-        target = f'{names.step(step.id)}/{leaf}'
-    elif run.child is not None:
-        target = f'{names.qualified(step.id)}{NAMESPACE_SEPARATOR}{leaf}'
-    else:
-        target = f'../{leaf}'
+    target = f'{names.file(step.id)}.cwl'
     return replace(step, interpreted=tuple(interpreted.items()), run=replace(run, target=target))
 
 
-def surface(graph: WorkflowGraph, names: Names, *,
-            relative_run_path: bool = True, partial_failure: bool = False) -> EmissionDocument:
+def surface(graph: WorkflowGraph, names: Names, *, partial_failure: bool = False) -> EmissionDocument:
     """Spell `graph`'s facts as the document Emit renders, for this graph alone.
 
     Requirements implied by the steps, the EDAM namespace and schema, a step's
@@ -78,8 +66,6 @@ def surface(graph: WorkflowGraph, names: Names, *,
     Args:
         graph (WorkflowGraph): One completed document, without its children.
         names (Names): The spelling of every step in the tree `graph` is in.
-        relative_run_path (bool): Whether a `run:` target is written relative
-            to the step directory or namespaced beside the root.
         partial_failure (bool): Whether each step runs only when its required
             inputs arrived.
 
@@ -90,8 +76,6 @@ def surface(graph: WorkflowGraph, names: Names, *,
         ValueError: If the graph states no document -- a missing version, or a
             step with no run. Emit asks for the type this returns, so this
             is the only place the question is asked.
-        SophiosError: `wic031` if two distinct boundary names are spelled
-            alike, which the emitted document could not tell apart.
     """
     if not graph.cwl_version:
         raise ValueError('an emission graph must declare its CWL version')
@@ -100,10 +84,7 @@ def surface(graph: WorkflowGraph, names: Names, *,
     if any(step.run is None for step in graph.steps):
         raise ValueError('every step in an emission graph needs a run')
 
-    for ports in (graph.workflow_inputs, graph.workflow_outputs):
-        _refuse_colliding_names(tuple(port.name for port in ports), names, graph.span)
-    steps = [_step_spelling(step, names, relative_run_path, partial_failure)
-             for step in graph.steps]
+    steps = [_step_spelling(step, names, partial_failure) for step in graph.steps]
 
     requirements = dict(graph.requirements)
     for requirement in _implied_requirements(graph, steps):
@@ -156,18 +137,6 @@ def _implied_requirements(graph: WorkflowGraph, steps: list[StepNode]) -> tuple[
          any(len(record.sources) > 1 or 'linkMerge' in dict(record.fields) for record in records)),
         ('StepInputExpressionRequirement', bool(value_from)),
     ) if needed)
-
-
-def _refuse_colliding_names(declared: tuple[PortName, ...], names: Names, span: SourceSpan | None) -> None:
-    """Raise `wic031`, at the document's `span`, when two distinct names in one namespace render alike."""
-    spelled: dict[str, PortName] = {}
-    for name in declared:
-        text = names.port(name)
-        if text in spelled and spelled[text] != name:
-            raise SophiosError.error(
-                SophiosErrorCode.DUPLICATE_DOCUMENT_NAME,
-                f'{text!r} names two different ports in the emitted document', span=span)
-        spelled[text] = name
 
 
 def emit(graph: EmissionDocument, names: Names) -> Cwl:
