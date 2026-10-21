@@ -29,6 +29,7 @@ from sophios.nf_types import (
     NfFlag,
     NfInputReference,
     NfLiteral,
+    NfOptionalBinding,
     NfPort,
     NfProcess,
     NfProcessConnection,
@@ -306,6 +307,38 @@ def test_array_binding_rejects_a_blank_prefix(prefix: str) -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.fast
+def test_optional_binding_survives_hydration() -> None:
+    process = NfProcess(
+        "GREET",
+        [NfPort("name", "val")],
+        [],
+        NfCommand((NfTemplate((NfLiteral("echo"),)), NfOptionalBinding("name", "--name=", separate=False))),
+    )
+    payload = ExecutableNextflowWorkflow(
+        "wf", [process], [NfWorkflowInputConnection("name", "GREET", "name")], {"name": []}, {"name": "string?"}
+    ).to_dict()
+    assert payload["processes"][0]["command"]["tokens"][1] == {
+        "kind": "optional_binding", "name": "name", "prefix": "--name=", "separate": False,
+    }
+    assert ExecutableNextflowWorkflow.from_dict(payload).to_dict() == payload
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    ("binding", "port", "message"),
+    [
+        (lambda: NfOptionalBinding("name", " "), NfPort("name", "val"), "prefix"),
+        (lambda: NfOptionalBinding("name", separate=False), NfPort("name", "val"), "needs a prefix"),
+        (lambda: NfOptionalBinding("name"), NfPort("name", "path"), "optional bindings must reference val inputs"),
+        (lambda: NfOptionalBinding("name"), NfPort("name", "val", is_array=True), "array bindings"),
+    ],
+)
+def test_optional_binding_takes_one_val_input(binding: Any, port: NfPort, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        NfProcess("GREET", [port], [], NfCommand((NfTemplate((NfLiteral("echo"),)), binding())))
+
+
 def test_every_parameter_has_one_declared_type_its_sinks_agree_with() -> None:
     process = NfProcess("ONE", [NfPort("value", "val")], [], command("true"))
     connections = [NfWorkflowInputConnection("value", "ONE", "value")]

@@ -337,6 +337,40 @@ class NfArrayBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class NfOptionalBinding:
+    """Command-line binding of an optional string, int or float input.
+
+    Renders nothing at all when the input holds the ``[]`` sentinel of an
+    absent value. Otherwise contributes the optional prefix and the value as
+    two argv words, or as one when ``separate`` is false, as the same binding
+    of a required input does. Valid only in command token position, and
+    only against val ports that are not array-marked.
+    """
+
+    name: str
+    prefix: str | None = None
+    separate: bool = True
+
+    def __post_init__(self) -> None:
+        _validate_ir_identifier(self.name, field_name="optional binding input reference")
+        if self.prefix is not None and (not isinstance(self.prefix, str) or not self.prefix.strip()):
+            raise ValueError("optional binding prefix must be a non-empty string or None")
+        if not isinstance(self.separate, bool):
+            raise TypeError("optional binding separate must be a bool")
+        if not self.separate and self.prefix is None:
+            raise ValueError("an optional binding with separate false needs a prefix")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, Any]: The token as
+                ``{"kind": "optional_binding", "name": ..., "prefix": ..., "separate": ...}``.
+        """
+        return {"kind": "optional_binding", "name": self.name, "prefix": self.prefix, "separate": self.separate}
+
+
+@dataclass(frozen=True, slots=True)
 class NfShellLiteral:
     """Raw, unquoted shell text from an approved ``shellQuote: false`` binding.
 
@@ -364,7 +398,7 @@ class NfShellLiteral:
         return {"kind": "shell_literal", "text": self.text}
 
 
-NfCommandToken = NfTemplate | NfFlag | NfArrayBinding | NfShellLiteral
+NfCommandToken = NfTemplate | NfFlag | NfArrayBinding | NfOptionalBinding | NfShellLiteral
 
 
 def _command_token_from_dict(value: Mapping[str, Any]) -> NfCommandToken:
@@ -376,6 +410,9 @@ def _command_token_from_dict(value: Mapping[str, Any]) -> NfCommandToken:
         case "array":
             _fields(item, type_name="NfArrayBinding", required={"kind", "name", "prefix"})
             return NfArrayBinding(item["name"], item["prefix"])
+        case "optional_binding":
+            _fields(item, type_name="NfOptionalBinding", required={"kind", "name", "prefix", "separate"})
+            return NfOptionalBinding(item["name"], item["prefix"], item["separate"])
         case "shell_literal":
             _fields(item, type_name="NfShellLiteral", required={"kind", "text"})
             return NfShellLiteral(item["text"])
@@ -446,7 +483,7 @@ class NfCommand:
     def __post_init__(self) -> None:
         tokens = tuple(self.tokens)
         if not tokens or not all(
-            isinstance(token, (NfTemplate, NfFlag, NfArrayBinding, NfShellLiteral)) for token in tokens
+            isinstance(token, get_args(NfCommandToken)) for token in tokens
         ):
             raise ValueError("command must contain at least one typed token")
         object.__setattr__(self, "tokens", tokens)
@@ -862,6 +899,9 @@ class NfProcess:
         array_binding_names = {
             token.name for token in self.command.tokens if isinstance(token, NfArrayBinding)
         }
+        optional_binding_names = {
+            token.name for token in self.command.tokens if isinstance(token, NfOptionalBinding)
+        }
         templates = [*self.command.templates, *(port.glob for port in outputs if port.glob)]
         segments = [segment for template in templates for segment in template.segments]
         basename_names = {
@@ -870,7 +910,9 @@ class NfProcess:
         plain_reference_names = {
             segment.name for segment in segments if isinstance(segment, NfInputReference)
         }
-        referenced_names = flag_names | array_binding_names | basename_names | plain_reference_names
+        referenced_names = (
+            flag_names | array_binding_names | optional_binding_names | basename_names | plain_reference_names
+        )
         if unknown := referenced_names - input_names:
             raise ValueError(
                 f"process {self.name!r} templates reference unknown inputs: {', '.join(sorted(unknown))}"
@@ -882,6 +924,10 @@ class NfProcess:
         }
         rules: tuple[tuple[set[str], Callable[[NfPort], bool], str], ...] = (
             (flag_names, lambda port: port.qualifier == "val", "flag tokens must reference val inputs"),
+            (
+                optional_binding_names, lambda port: port.qualifier == "val",
+                "optional bindings must reference val inputs",
+            ),
             (env_names, lambda port: port.qualifier == "val", "environment variables must reference val inputs"),
             (basename_names, lambda port: port.qualifier == "path", "basename references must target path inputs"),
             (array_binding_names, lambda port: port.is_array, "array bindings must reference array-marked inputs"),
@@ -890,7 +936,7 @@ class NfProcess:
             # collection as a Groovy list, while a flag lets list truthiness decide
             # whether its prefix appears.
             (
-                plain_reference_names | basename_names | flag_names,
+                plain_reference_names | basename_names | flag_names | optional_binding_names,
                 lambda port: not port.is_array,
                 "array-marked inputs may only be referenced by array bindings",
             ),
@@ -1328,7 +1374,7 @@ class ExecutableNextflowWorkflow:
     """
 
     # Hydration reads this version only; any change to the payload bumps it (design §5.3).
-    SCHEMA_VERSION: ClassVar[int] = 18
+    SCHEMA_VERSION: ClassVar[int] = 19
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
     name: str

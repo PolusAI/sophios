@@ -153,12 +153,16 @@ omits the whole binding when that input is absent.
 An absent optional `val` input (string/int/float/boolean) lowers to a
 reserved `[]` sentinel parameter when its consuming tool input is never
 dereferenced in that tool's command, stream targets, or output globs, or is
-referenced solely as the boolean flag it drives. `[]` is used instead of
-`null` because `Channel.value(null)` never binds under the pinned Nextflow
-runtime and the run hangs; `[]` is Groovy-falsy like `null`, so flag
-rendering is unaffected. Any other reference position, and any absent
-optional `File`/`Directory` or array input, still rejects: those need their
-own sentinel or presence-gated binding, not yet approved.
+referenced only by the boolean flag it drives or by its own binding. `[]` is
+used instead of `null` because `Channel.value(null)` never binds under the
+pinned Nextflow runtime and the run hangs; `[]` is Groovy-falsy like `null`,
+so flag rendering is unaffected.
+
+An optional `string`, `int` or `float` input's own `inputBinding`, with no
+`valueFrom`, adds nothing for `[]`, prefix included, as CWL adds nothing for
+a null input; any other value adds the prefix and the value as the binding of
+a required input does. Any other reference to an absent input, and any absent
+optional `File`/`Directory` or array input, is rejected.
 
 ## Basename references
 
@@ -599,7 +603,7 @@ skipped upstream step, as in CWL.
 That possibly-null value is admitted only where the sentinel is sound: at a
 workflow output (which reports `null`), or at an optional `val` input of a
 later step whose use the absent-optional lowering already admits (never
-referenced, or referenced only as a boolean flag). Every other consumer is
+referenced, or referenced only as a boolean flag or by its own binding). Every other consumer is
 rejected by name — a non-optional port, a `path` consumer, an array-typed
 port, or an array-typed output of a conditional step outside scatter.
 

@@ -27,6 +27,7 @@ from .nf_types import (
     NfFlag,
     NfInputReference,
     NfLiteral,
+    NfOptionalBinding,
     NfPort,
     NfProcess,
     NfProcessConnection,
@@ -199,6 +200,18 @@ def _render_array_binding(token: NfArrayBinding) -> str:
     return f"${{{token.name}.isEmpty() ? '' : {joined}}}"
 
 
+def _render_optional_binding(token: NfOptionalBinding) -> str:
+    """Render an optional input's binding: nothing for the [] sentinel, else the prefix and the value."""
+    value = f"{token.name}.toString()"
+    if token.prefix is None:
+        words = f"{NF_SHELL_QUOTE_HELPER}({value})"
+    elif token.separate:
+        words = f"{NF_SHELL_QUOTE_HELPER}({groovy_literal(token.prefix)}) + ' ' + {NF_SHELL_QUOTE_HELPER}({value})"
+    else:
+        words = f"{NF_SHELL_QUOTE_HELPER}({groovy_literal(token.prefix)} + {value})"
+    return f"${{{token.name} == [] ? '' : {words}}}"
+
+
 def _render_shell_literal(token: NfShellLiteral) -> str:
     """Render one approved shellQuote:false literal exactly as written, unquoted.
 
@@ -210,12 +223,14 @@ def _render_shell_literal(token: NfShellLiteral) -> str:
 
 
 def _render_command_token(token: Any, entries: Mapping[str, str]) -> str:
-    """Render one argv token; flags and array bindings collapse away when falsy/empty."""
+    """Render one argv token; flags, array and optional bindings collapse away when false, empty or absent."""
     if isinstance(token, NfFlag):
         quoted = f"{NF_SHELL_QUOTE_HELPER}({groovy_literal(token.prefix)})"
         return f"${{{token.name} ? {quoted} : ''}}"
     if isinstance(token, NfArrayBinding):
         return _render_array_binding(token)
+    if isinstance(token, NfOptionalBinding):
+        return _render_optional_binding(token)
     if isinstance(token, NfShellLiteral):
         return _render_shell_literal(token)
     return _render_template(token, entries)

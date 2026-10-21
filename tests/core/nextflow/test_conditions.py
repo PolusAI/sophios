@@ -9,7 +9,7 @@ import pytest
 
 from sophios.input_output_nf import render_nextflow
 from sophios.nf_expr import parse
-from sophios.nf_types import ExecutableNextflowWorkflow, NfProcess
+from sophios.nf_types import ExecutableNextflowWorkflow, NfOptionalBinding, NfProcess
 from sophios.utils_nf import compiled_source_to_nextflow
 
 from .testkit import command, execute_nextflow, output_port, step, synthetic_source, tool, workflow_doc
@@ -227,6 +227,48 @@ def test_non_optional_consumer_of_a_conditional_output_is_rejected() -> None:
     )
     with pytest.raises(ValueError, match="non-optional port cannot consume a possibly-null"):
         compiled_source_to_nextflow(synthetic_source(workflow, [produce, consume], workflow_inputs={"a": 1}))
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    ("arguments", "admitted"), [([], True), ([{"position": 2, "valueFrom": "$(inputs.result)"}], False)]
+)
+def test_optional_binding_consumer_of_a_conditional_output(arguments: list[Any], admitted: bool) -> None:
+    """A skipped step's null reaches an optional input's own binding, and no other reference to it."""
+    produce = tool(
+        "PRODUCE",
+        inputs={"a": {"type": "int"}},
+        baseCommand="echo",
+        outputs={
+            "result": {
+                "type": "string",
+                "outputBinding": {"glob": "out.txt", "loadContents": True, "outputEval": "$(self[0].contents)"},
+            }
+        },
+    )
+    consume = tool(
+        "CONSUME",
+        inputs={"result": {"type": "string?", "inputBinding": {"position": 1, "prefix": "--result"}}},
+        arguments=arguments,
+        baseCommand="echo",
+        outputs={"done": {"type": "File", "outputBinding": {"glob": "done.txt"}}},
+    )
+    workflow = workflow_doc(
+        [
+            step("PRODUCE", **{"in": {"a": "a"}, "out": ["result"], "when": "$(inputs.a > 0)"}),
+            step("CONSUME", **{"in": {"result": "PRODUCE/result"}, "out": ["done"]}),
+        ],
+        inputs={"a": "int"},
+        outputs={"done": {"type": "File", "outputSource": "CONSUME/done"}},
+    )
+    source = synthetic_source(workflow, [produce, consume], workflow_inputs={"a": 1})
+    if admitted:
+        assert compiled_source_to_nextflow(source).processes[1].command.tokens[-1] == NfOptionalBinding(
+            "result", "--result"
+        )
+    else:
+        with pytest.raises(ValueError, match="not one the absent-optional lowering admits"):
+            compiled_source_to_nextflow(source)
 
 
 @pytest.mark.fast

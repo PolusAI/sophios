@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from typing import Any
 
 import pytest
 
@@ -782,6 +783,52 @@ def test_absent_optional_unreferenced_value_does_not_hang_or_crash(tmp_path: Pat
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "work").rglob("out.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == ["still runs\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ({}, "\n"),
+        (
+            {"name": "two words", "count": 3, "ratio": 0.5, "plain": ""},
+            "--name\ntwo words\n--count\n3\n--ratio=0.5\n\n",
+        ),
+    ],
+    ids=["absent", "present"],
+)
+def test_optional_value_binding_renders_nothing_when_absent(
+    values: dict[str, Any],
+    expected: str,
+    tmp_path: Path,
+) -> None:
+    """An optional string, int or float binding adds nothing for a null input, prefix included, as in CWL."""
+    printf_tool = (
+        CommandLineTool(
+            "print_words",
+            Inputs(
+                name=Input(cwl.optional(cwl.string), position=1, flag="--name"),
+                count=Input(cwl.optional(cwl.int), position=2, flag="--count"),
+                ratio=Input(cwl.optional(cwl.float), position=3, flag="--ratio=", separate=False),
+                plain=Input(cwl.optional(cwl.string), position=4),
+            ),
+            Outputs(result=Output(cwl.file, glob="words.txt")),
+        )
+        .base_command("printf")
+        .argument("%s\\n", position=0)
+        .stdout("words.txt")
+    )
+    print_step = Step(printf_tool, step_name="print_words")
+    for name, value in values.items():
+        setattr(print_step.inputs, name, value)
+    workflow = Workflow([print_step], "nextflow_optional_binding")
+    workflow.outputs.words = print_step.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert [path.read_text(encoding="utf-8") for path in (tmp_path / "work").rglob("words.txt")] == [expected]
 
 
 @pytest.mark.nextflow

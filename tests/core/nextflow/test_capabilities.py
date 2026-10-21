@@ -35,6 +35,7 @@ from sophios.nf_types import (
     NfPort,
     NfProcessConnection,
     NfLiteral,
+    NfOptionalBinding,
     NfResources,
     NfShellLiteral,
     NfTemplate,
@@ -216,8 +217,8 @@ def test_accepts_unreferenced_absent_optional_input() -> None:
 
 
 @pytest.mark.fast
-def test_rejects_absent_optional_input_bound_directly_into_the_command() -> None:
-    """A general presence-gated value binding (the value analogue of a flag) is deferred."""
+def test_absent_optional_input_bound_directly_into_the_command_lowers_to_an_optional_binding() -> None:
+    """CWL adds nothing for a null input: its own binding is presence-gated, prefix included."""
     optional = tool(
         "OPTIONAL",
         inputs={
@@ -226,6 +227,25 @@ def test_rejects_absent_optional_input_bound_directly_into_the_command() -> None
                 "inputBinding": {"position": 1, "prefix": "--message"},
             }
         },
+    )
+    rose = one_step(optional, message=None)
+    workflow = compiled_source_to_nextflow(rose)
+    assert workflow.processes[0].command.tokens[-1] == NfOptionalBinding("message", "--message")
+    assert workflow.params == {"message": ()}
+
+
+@pytest.mark.fast
+def test_rejects_absent_optional_input_referenced_outside_its_own_binding() -> None:
+    """Only the input's own binding is presence-gated; a reference elsewhere would render the sentinel."""
+    optional = tool(
+        "OPTIONAL",
+        inputs={
+            "message": {
+                "type": ["null", "string"],
+                "inputBinding": {"position": 1, "prefix": "--message"},
+            }
+        },
+        arguments=[{"position": 2, "valueFrom": "$(inputs.message)"}],
     )
     rose = one_step(optional, message=None)
     with pytest.raises(

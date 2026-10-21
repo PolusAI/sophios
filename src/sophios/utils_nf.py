@@ -35,6 +35,7 @@ from .nf_types import (
     NfFlag,
     NfInputReference,
     NfLiteral,
+    NfOptionalBinding,
     NfPort,
     NfProcess,
     NfProcessConnection,
@@ -531,6 +532,23 @@ def _array_binding(
     return NfArrayBinding(name, prefix)
 
 
+_OPTIONAL_BINDING_TYPES = frozenset({"string", "int", "float"})
+
+
+def _optional_binding(raw_name: Any, name: str, binding: Mapping[str, Any]) -> NfOptionalBinding:
+    """Lower an optional string, int or float input's own binding: nothing when the input is absent."""
+    separate = binding.get("separate", True)
+    match binding.get("prefix"):
+        case None:
+            if separate is False:
+                raise ValueError("CWL separate cannot be specified without a prefix")
+            return NfOptionalBinding(name)
+        case str() as prefix if prefix.strip():
+            return NfOptionalBinding(name, prefix, separate is not False)
+        case _:
+            raise ValueError(f"CWL command prefix for {raw_name!r} must be a non-empty string")
+
+
 _IWDR_ENTRY_PATTERN = re.compile(r"^\$\(\s*inputs\.([A-Za-z_][A-Za-z0-9_]*)\s*\)$")
 
 
@@ -750,6 +768,10 @@ def _input_binding_items(
                 # CWL omits the whole binding for an absent input; a flag renders whatever it is.
                 raise ValueError(f"a boolean valueFrom on optional input {raw_name!r} is not supported")
             items.append(((position, 1, str(raw_name)), _flag_tokens(flag, binding.get("prefix"))))
+            continue
+        if value_from is None and _is_optional(input_definition.get("type")) and required_type in _OPTIONAL_BINDING_TYPES:
+            # CWL adds nothing for a null input; the [] sentinel stands for one.
+            items.append(((position, 1, str(raw_name)), (_optional_binding(raw_name, name, binding),)))
             continue
         value = (
             _template(value_from, context=f"CWL input {raw_name!r} valueFrom")
@@ -2345,8 +2367,9 @@ def _safe_absence_names(tool: Mapping[str, Any]) -> set[str] | None:
     A name is safe when its absence leaves rendering unchanged: it is not
     referenced by any command token, stream target, or output glob, it does
     not own a shell-literal binding that CWL would omit, or it is referenced
-    solely as the boolean-flag token it drives (a flag tests its value, never
-    calls ``.toString()`` on it). Returns None when the tool's command or
+    only by the boolean-flag token it drives or its own optional binding
+    (each tests its value, never calls ``.toString()`` on the sentinel).
+    Returns None when the tool's command or
     outputs cannot be analyzed; lowering reports why, so absence is not judged.
     """
     referenced = _referenced_names(tool)
@@ -2355,7 +2378,7 @@ def _safe_absence_names(tool: Mapping[str, Any]) -> set[str] | None:
     # Every template reference dereferences the value, so it is unsafe even
     # when the same input also drives a flag: excusing it on the strength of
     # the flag use would let the absence sentinel render into a command line.
-    # A flag-only boolean has no template reference and never enters `referenced`.
+    # A flag or an optional binding is not a template, so it never enters `referenced`.
     try:
         inputs = _as_mapping(tool.get("inputs", {}), error="")
         all_names = {_identifier(raw_name, context="input reference") for raw_name in inputs}
@@ -2460,8 +2483,8 @@ def _conditional_consumer_findings(
     A conditional step's output may be null at runtime (design §6, Topology).
     That null is admitted only at a workflow output (which reports null) or an
     optional val input of a later step whose use the absent-optional lowering
-    already admits (never referenced, or referenced solely as a boolean-flag
-    token). Every other consumer is rejected by name, as is an array-typed
+    already admits (never referenced, or referenced only by a boolean-flag
+    token or its own optional binding). Every other consumer is rejected by name, as is an array-typed
     output of a conditional step outside scatter, where the sentinel would
     collide with a genuinely empty array.
     """
