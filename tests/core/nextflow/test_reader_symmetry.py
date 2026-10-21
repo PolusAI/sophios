@@ -12,9 +12,9 @@ from typing import Callable, Sequence
 
 import pytest
 
-from sophios.input_output_nf import write_nextflow_artifacts
+from sophios.input_output_nf import render_nextflow, write_nextflow_artifacts
 from sophios.nf_expr import parse
-from sophios.nf_reader import nextflow_to_cwl, parse_nf_file, promote_nextflow_document
+from sophios.nf_reader import NextflowPort, nextflow_to_cwl, parse_nf_file, parse_nf_text, promote_nextflow_document
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
     NfBasenameReference,
@@ -114,6 +114,14 @@ def test_every_generated_pattern_reads_back_and_promotes(name: str, tmp_path: Pa
     assert parsed.connections == tuple(workflow.connections)
     assert [process.name for process in parsed.processes] == [process.name for process in workflow.processes]
     assert promote_nextflow_document(parsed) == workflow
+
+
+@pytest.mark.fast
+def test_a_source_read_alone_reads_each_entry_input_as_a_path() -> None:
+    workflow = _entries()
+    parsed = parse_nf_text(render_nextflow(workflow), params=dict(workflow.params))
+    assert parsed.processes[0].inputs == (NextflowPort("src", "path"), NextflowPort("out", "path"))
+    assert parsed.connections == tuple(workflow.connections)
 
 
 @pytest.mark.fast
