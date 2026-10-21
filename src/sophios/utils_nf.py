@@ -2379,7 +2379,7 @@ def _safe_absence_names(tool: Mapping[str, Any]) -> set[str] | None:
 
     A name is safe when its absence leaves rendering unchanged: it is not
     referenced by any command token, stream target, or output glob, it does
-    not own a shell-literal binding that CWL would omit, or it is referenced
+    not own a shell-literal or valueFrom binding that CWL would omit, or it is referenced
     only by the boolean-flag token it drives or its own optional binding
     (each tests its value, never calls ``.toString()`` on the sentinel).
     Returns None when the tool's command or
@@ -2395,16 +2395,18 @@ def _safe_absence_names(tool: Mapping[str, Any]) -> set[str] | None:
     try:
         inputs = _as_mapping(tool.get("inputs", {}), error="")
         all_names = {_identifier(raw_name, context="input reference") for raw_name in inputs}
-        shell_literal_names = {
+        # A shell literal, or a valueFrom other than a boolean's flag, renders whatever the value is.
+        unconditional_names = {
             _identifier(raw_name, context="input reference")
             for raw_name, definition in inputs.items()
             if isinstance(definition, Mapping)
-            and isinstance(definition.get("inputBinding"), Mapping)
-            and definition["inputBinding"].get("shellQuote") is False
+            and isinstance(binding := definition.get("inputBinding"), Mapping)
+            and (binding.get("shellQuote") is False
+                 or binding.get("valueFrom") is not None and _required_type(definition.get("type")) != "boolean")
         }
     except ValueError:
         return None
-    return all_names - referenced - shell_literal_names
+    return all_names - referenced - unconditional_names
 
 
 def _absent_optional_findings(

@@ -235,19 +235,35 @@ def test_absent_optional_input_bound_directly_into_the_command_lowers_to_an_opti
 
 
 @pytest.mark.fast
-def test_rejects_absent_optional_input_referenced_outside_its_own_binding() -> None:
-    """Only the input's own binding is presence-gated; a reference elsewhere would render the sentinel."""
-    optional = tool(
-        "OPTIONAL",
-        inputs={
-            "message": {
-                "type": ["null", "string"],
-                "inputBinding": {"position": 1, "prefix": "--message"},
-            }
-        },
-        arguments=[{"position": 2, "valueFrom": "$(inputs.message)"}],
-    )
-    rose = one_step(optional, message=None)
+@pytest.mark.parametrize(
+    ("declared", "binding", "extra"),
+    [
+        # Only the input's own binding is presence-gated; a reference elsewhere would render the sentinel.
+        (
+            "string",
+            {"position": 1, "prefix": "--message"},
+            {"arguments": [{"position": 2, "valueFrom": "$(inputs.message)"}]},
+        ),
+        # CWL omits the entire binding when its optional source is absent.
+        (
+            "string",
+            {"position": 1, "valueFrom": "printf optional", "shellQuote": False},
+            {"requirements": {"ShellCommandRequirement": {}}},
+        ),
+        # CWL omits the prefix and the literal when the optional source is absent.
+        ("string", {"position": 1, "prefix": "--message", "valueFrom": "literal"}, {}),
+        # No binding of its own, but referenced elsewhere.
+        ("string", None, {"arguments": [{"position": 1, "valueFrom": "$(inputs.message)"}]}),
+        # path-qualifier channel construction always stages unconditionally.
+        ("File", None, {}),
+    ],
+    ids=["referenced-elsewhere", "shell-literal", "literal-value-from", "other-value-from", "path"],
+)
+def test_rejects_an_absent_optional_input_whose_absence_would_change_the_command(
+    declared: str, binding: dict[str, Any] | None, extra: dict[str, Any]
+) -> None:
+    definition = {"type": ["null", declared], **({"inputBinding": binding} if binding else {})}
+    rose = one_step(tool("OPTIONAL", inputs={"message": definition}, **extra), message=None)
     with pytest.raises(
         ValueError,
         match=r"steps\[0\].run.inputs.message: absent optional values are supported only for "
@@ -1847,27 +1863,6 @@ MATCHES = [
     # A shape _source_values cannot read must still fail closed, not skip the boolean-source check.
     pytest.param(lambda: _flag_wired_to([]), "", id="a_flag_input_wired_to_an_unrecognized_source_shape-list"),
     pytest.param(lambda: _flag_wired_to(42), "", id="a_flag_input_wired_to_an_unrecognized_source_shape-int"),
-    # CWL omits the entire binding when its optional source is absent.
-    pytest.param(lambda: one_step(tool(
-        "OPTIONAL",
-        inputs={"message": {
-            "type": ["null", "string"],
-            "inputBinding": {"position": 1, "valueFrom": "printf optional", "shellQuote": False},
-        }},
-        requirements={"ShellCommandRequirement": {}},
-    ), message=None), r"steps\[0\].run.inputs.message: absent optional values are supported only for ",
-        id="absent_optional_input_whose_binding_emits_a_shell_literal"),
-    # An optional input with no binding of its own but referenced elsewhere still rejects.
-    pytest.param(lambda: one_step(tool(
-        "ALIASED", inputs={"message": {"type": ["null", "string"]}},
-        arguments=[{"position": 1, "valueFrom": "$(inputs.message)"}],
-    ), message=None), _ABSENT_OPTIONAL.format("message"),
-        id="absent_optional_input_referenced_via_another_bindings_value_from"),
-    # path-qualifier channel construction always stages unconditionally; absence stays rejected.
-    pytest.param(
-        lambda: one_step(tool("OPTIONAL", inputs={"reference": {"type": ["null", "File"]}}), reference=None),
-        _ABSENT_OPTIONAL.format("reference"), id="absent_optional_path_input",
-    ),
     pytest.param(lambda: synthetic_source(
         workflow_doc(
             [step("REQUIRED", **{"in": {"message": "message"}})], inputs={"message": {"type": ["null", "string"]}}

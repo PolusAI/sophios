@@ -161,8 +161,9 @@ so flag rendering is unaffected.
 An optional `string`, `int` or `float` input's own `inputBinding`, with no
 `valueFrom`, adds nothing for `[]`, prefix included, as CWL adds nothing for
 a null input; any other value adds the prefix and the value as the binding of
-a required input does. Any other reference to an absent input, and any absent
-optional `File`/`Directory` or array input, is rejected.
+a required input does. Any other reference to an absent input, a `valueFrom`
+on its own binding included, and any absent optional `File`/`Directory` or
+array input, is rejected.
 
 ## Basename references
 
