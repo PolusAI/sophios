@@ -571,6 +571,17 @@ def test_rejects_shell_mode_in_a_container() -> None:
 
 
 @pytest.mark.fast
+def test_rejects_a_containerized_tool_that_gives_its_container_no_arguments() -> None:
+    entry_only = tool("ENTRY", requirements={"DockerRequirement": {"dockerPull": "ubuntu:24.04"}})
+    del entry_only["baseCommand"]
+    assert _findings(synthetic_source(workflow_doc([step("ENTRY")]), [entry_only])) == [
+        "steps[0]: a containerized tool with no baseCommand, arguments or bound inputs is not supported: CWL gives "
+        "the container no arguments, so the image runs its CMD, after its ENTRYPOINT if it has one, which the "
+        "Nextflow task does not; name the program in baseCommand"
+    ]
+
+
+@pytest.mark.fast
 def test_host_and_container_tools_lower_into_one_workflow() -> None:
     containerized = tool(
         "CONTAINERIZED",

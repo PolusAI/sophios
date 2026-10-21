@@ -812,8 +812,16 @@ def _command(tool: Mapping[str, Any]) -> NfCommand:
             raise ValueError("CommandLineTool baseCommand must be a string or list of strings")
 
     tokens.extend(_command_items(tool))
-    if not any(isinstance(token, (NfTemplate, NfShellLiteral)) for token in tokens):
-        # A command made only of conditional flags has nothing to execute.
+    if _requirement(tool, "DockerRequirement") is not None:
+        # In a container, the image's entrypoint runs a command made only of conditional tokens.
+        if not tokens:
+            raise ValueError(
+                "a containerized tool with no baseCommand, arguments or bound inputs is not supported: CWL "
+                "gives the container no arguments, so the image runs its CMD, after its ENTRYPOINT if it has one, "
+                "which the Nextflow task does not; name the program in baseCommand"
+            )
+    elif not any(isinstance(token, (NfTemplate, NfShellLiteral)) for token in tokens):
+        # On the host, a command made only of conditional tokens has nothing to execute.
         tokens.insert(0, _template("true", context="empty CWL command"))
 
     def stream(name: str) -> NfTemplate | None:
