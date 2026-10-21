@@ -1906,14 +1906,22 @@ def test_an_input_named_like_a_script_name_prints_its_value(tmp_path: Path) -> N
 @pytest.mark.nextflow
 @pytest.mark.serial
 @pytest.mark.parametrize(
-    ("command_line", "observed"),
-    [(["true"], "[]"), (["touch", "maybe.txt"], "maybe.txt")],
-    ids=["absent", "present"],
+    ("glob", "command_line", "observed"),
+    [
+        ("maybe.txt", ["true"], "[]"),
+        ("maybe.txt", ["touch", "maybe.txt"], "maybe.txt"),
+        ("*.log", ["touch", "unmatched.txt"], "[]"),
+        ("*.log", ["touch", "unmatched.txt", "a.log"], "a.log"),
+        ("*.log", ["touch", "unmatched.txt", "a.log", "b.log"], None),
+    ],
+    ids=["absent", "present", "pattern-none", "pattern-one", "pattern-two"],
 )
-def test_an_optional_output_is_null_when_nothing_matches(command_line: list[str], observed: str, tmp_path: Path) -> None:
-    """CWL reports an optional File output that matched nothing as null, the [] sentinel."""
+def test_an_optional_output_is_null_when_nothing_matches(
+    glob: str, command_line: list[str], observed: str | None, tmp_path: Path
+) -> None:
+    """A File? output is null (the [] sentinel) for no match and the file for one; more fail the run, as in CWL."""
     maybe = (
-        CommandLineTool("maybe", Inputs(), Outputs(o=Output("File?", glob="maybe.txt")))
+        CommandLineTool("maybe", Inputs(), Outputs(o=Output("File?", glob=glob)))
         .base_command(*command_line)
     )
     step = Step(maybe, step_name="maybe")
@@ -1924,5 +1932,9 @@ def test_an_optional_output_is_null_when_nothing_matches(command_line: list[str]
     sink = "\n    optional_output.out.o.subscribe { new File('o.sink').text = it instanceof Path ? it.name : it }\n}\n"
     script.write_text(script.read_text(encoding="utf-8")[:-2] + sink, encoding="utf-8")
     result = execute_nextflow(tmp_path)
-    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    assert (tmp_path / "o.sink").read_text(encoding="utf-8") == observed
+    if observed is None:
+        assert result.returncode != 0
+        assert "Sophios workflow output 'o' matched 2 files; it takes at most one" in result.stdout + result.stderr
+    else:
+        assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        assert (tmp_path / "o.sink").read_text(encoding="utf-8") == observed

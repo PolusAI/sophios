@@ -516,9 +516,12 @@ nothing matches, a workflow output reports `null`, carried by the `[]`
 sentinel. Such an output reaches workflow outputs only: a later step
 consuming it, or an optional output of a scattered step, is rejected, since a
 `path` port has no lowering of `null` and a gather would drop the position.
-An optional output with a pattern glob or a `$(self[0])` capture is rejected
-too: Nextflow fails `arity: '1'` when nothing matches, even beside
-`optional: true`.
+An optional output with a pattern glob or a `$(self[0])` capture renders
+`arity: '0..*'` instead, since Nextflow fails `arity: '1'` when nothing
+matches, even beside `optional: true`. Its workflow output takes the one
+file, reports `null` for none, and stops the run with `Sophios workflow
+output '<name>' matched <n> files; it takes at most one` for more, as cwltool
+fails the step. Such an output must reach a workflow output.
 
 The paired `glob` must be one literal with no `*`, `?`, or `[` and no
 `$(inputs...)` reference. `self[0]` is the first of the matched list, which is

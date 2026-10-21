@@ -278,8 +278,12 @@ def _process_output(port: NfPort, entries: Mapping[str, str], *, tuple_element: 
         return body if tuple_element else f"{body}, emit: {emit}"
     # A text capture returns above, so neither option reaches a val declaration.
     literal = ", glob: false" if port.literal_glob else ""
-    arity = ", arity: '1'" if port.one_file else ""
-    arity += ", optional: true" if port.optional else ""
+    if port.one_file:
+        # Nextflow refuses arity '0..1' and fails arity '1' on no match even
+        # when optional; the workflow output checks at most one match.
+        arity = f", arity: '{NF_ARRAY_PATH_ARITY}'" if port.optional else ", arity: '1'"
+    else:
+        arity = ", optional: true" if port.optional else ""
     glob = port.glob if literal else NfTemplate(tuple(
         NfLiteral(segment.value.translate(_BRACE_ESCAPES)) if isinstance(segment, NfLiteral) else segment
         for segment in port.glob.segments
@@ -291,6 +295,19 @@ def _process_output(port: NfPort, entries: Mapping[str, str], *, tuple_element: 
         # standalone output line becomes a parenthesized tuple element here.
         return f"path({_render_glob(glob, entries)}{literal}{arity})"
     return f"path {_render_glob(glob, entries)}{literal}{arity}, emit: {emit}"
+
+
+def at_most_one_suffix(output: str) -> str:
+    """The operator an optional output that must match at most one file reaches its workflow output by.
+
+    Its port declares ``arity: '0..*'``, so each task emits a list: one file
+    is the value, none is null as ``[]``, and more stop the run, as in CWL.
+    """
+    message = groovy_literal(f"Sophios workflow output '{output}' matched ")
+    return (
+        f".map {{ files -> files.size() > 1 ? error({message} + files.size() + ' files; it takes at most one')"
+        " : files ? files[0] : [] }"
+    )
 
 
 def _entry_directory(port: NfPort) -> str:
@@ -789,9 +806,11 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
                     f".combine({_shape_channel(connection.from_process)})"
                     f".flatMap {{ flat, shape -> {NF_NEST_HELPER}(flat, shape) }}"
                 )
-            elif any(port.optional for port in processes[connection.from_process].outputs if port.name == connection.from_port):
-                # An optional output that matched nothing emits nothing: report CWL null.
-                expression = f"{expression}.ifEmpty([])"
+            elif (port := next(
+                port for port in processes[connection.from_process].outputs if port.name == connection.from_port
+            )).optional:
+                # An optional output that matched nothing reports CWL null.
+                expression += at_most_one_suffix(connection.to_port) if port.one_file else ".ifEmpty([])"
             elif connection.from_process in methods:
                 # Sort by the hidden invocation index before stripping it, so
                 # the gathered workflow output never depends on task

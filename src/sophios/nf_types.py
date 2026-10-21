@@ -776,11 +776,6 @@ class NfPort:
                     "a capture marker requires a glob with no wildcard character; "
                     f"found {', '.join(repr(character) for character in wildcards)}"
                 )
-        if self.optional and self.one_file:
-            raise ValueError(
-                "an optional output cannot require exactly one file (a pattern glob or a $(self[0]) "
-                "capture): Nextflow fails that output when nothing matches"
-            )
 
     @property
     def literal_glob(self) -> bool:
@@ -789,7 +784,7 @@ class NfPort:
 
     @property
     def one_file(self) -> bool:
-        """Whether the output must match exactly one file (``arity: '1'``), as cwltool enforces."""
+        """Whether the output must match one file, or at most one when optional, as cwltool enforces."""
         return self.capture == "single" or (self.glob is not None and not self.literal_glob and any(
             not isinstance(segment, NfLiteral) or _GLOB_METACHARACTERS & set(segment.value)
             for segment in self.glob.segments
@@ -1454,6 +1449,20 @@ class ExecutableNextflowWorkflow:
             if optional := [port.name for port in process_by_name[name].outputs if port.optional]:
                 # A gather would drop the absent positions instead of keeping null there.
                 raise ValueError(f"scattered process {name!r} cannot have the optional outputs {', '.join(optional)}")
+        checked = {
+            (connection.from_process, connection.from_port)
+            for connection in self.connections if isinstance(connection, NfWorkflowOutputConnection)
+        }
+        for process in self.processes:
+            # The workflow output is where at most one match is checked (design §6, Outputs and globs).
+            if unchecked := [
+                port.name for port in process.outputs
+                if port.optional and port.one_file and (process.name, port.name) not in checked
+            ]:
+                raise ValueError(
+                    f"process {process.name!r} optional outputs {', '.join(unchecked)} must match at most one "
+                    "file and must reach a workflow output, where that is checked"
+                )
 
         for connection in self.connections:
             merge = connection if isinstance(connection, NfStepInputConnection) else None

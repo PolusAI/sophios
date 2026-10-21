@@ -1047,10 +1047,21 @@ def test_an_optional_output_round_trips_and_reads_back() -> None:
 
 @pytest.mark.fast
 @pytest.mark.parametrize(("glob", "capture"), [("*.log", None), ("maybe.txt", "single")], ids=["pattern", "single"])
-def test_an_optional_output_never_requires_exactly_one_file(glob: str, capture: str | None) -> None:
-    # Nextflow fails arity '1' when nothing matches, optional or not.
-    with pytest.raises(ValueError, match="optional output cannot require exactly one file"):
-        NfPort("o", "path", "o", template(glob), capture=capture, optional=True)
+def test_an_optional_output_of_at_most_one_file_is_checked_at_its_workflow_output(
+    glob: str, capture: str | None
+) -> None:
+    # Nextflow fails arity '1' when nothing matches, optional or not, and refuses '0..1'.
+    process = NfProcess(
+        "MAYBE", [], [NfPort("o", "path", "o", template(glob), capture=capture, optional=True)], command("true")
+    )
+    with pytest.raises(ValueError, match="optional outputs o must match at most one file and must reach a workflow"):
+        ExecutableNextflowWorkflow("WF", [process], [], {})
+    workflow = ExecutableNextflowWorkflow("WF", [process], [NfWorkflowOutputConnection("MAYBE", "o", "result")], {})
+    rendered = render_nextflow(workflow)
+    assert "arity: '0..*', emit: o" in rendered and "optional: true" not in rendered
+    assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow
+    [port] = parse_nf_text(rendered, params={}).processes[0].outputs
+    assert (port.optional, port.capture) == (True, capture)
 
 
 @pytest.mark.fast

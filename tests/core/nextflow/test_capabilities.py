@@ -549,14 +549,13 @@ def test_rejects_unsupported_workflow_level_requirements(
 
 
 @pytest.mark.fast
-def test_rejects_an_optional_output_with_a_pattern_glob() -> None:
+def test_an_optional_output_with_a_pattern_glob_must_reach_a_workflow_output() -> None:
     logs = tool("LOGS", baseCommand="true", outputs={"o": {"type": "File?", "outputBinding": {"glob": "*.log"}}})
     workflow = workflow_doc([step("LOGS", out=["o"])], outputs={"o": {"type": "File?", "outputSource": "LOGS/o"}})
+    assert compiled_source_to_nextflow(synthetic_source(workflow, [logs])).processes[0].outputs[0].optional
 
-    assert _findings(synthetic_source(workflow, [logs])) == [
-        "steps[0]: an optional output cannot require exactly one file (a pattern glob or a $(self[0]) "
-        "capture): Nextflow fails that output when nothing matches"
-    ]
+    with pytest.raises(ValueError, match="optional outputs o must match at most one file and must reach a workflow"):
+        compiled_source_to_nextflow(synthetic_source(workflow_doc([step("LOGS", out=["o"])]), [logs]))
 
 
 @pytest.mark.fast

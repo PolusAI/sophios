@@ -36,6 +36,7 @@ from .input_output_nf import (
     NF_SHELL_QUOTE_FUNCTION,
     NF_STEP_INPUT_FUNCTION,
     NF_STUB_LINES,
+    at_most_one_suffix,
     render_nextflow,
     render_number,
 )
@@ -52,7 +53,7 @@ _PORT = re.compile(
     # option order mirrors the renderer's.
     r"^(?P<qualifier>path|val|tuple|env|stdin)\s+(?P<target>.+?)"
     r"(?P<literal>,\s*glob:\s*false)?"
-    r"(?:,\s*arity:\s*'(?P<arity>1)')?"
+    r"(?:,\s*arity:\s*'(?P<arity>1|0\.\.\*)')?"
     r"(?:,\s*optional:\s*(?P<optional>true))?"
     r"(?:,\s*emit:\s*(?P<emit>\S+))?$"
 )
@@ -283,7 +284,8 @@ def _parse_process(name: str, body: list[str]) -> tuple[NextflowProcess, tuple[s
                 target,
                 # Only a single capture renders both; a pattern output has arity alone.
                 "single" if match["arity"] and match["literal"] else None,
-                match["optional"] is not None,
+                # An optional output that matches at most one file declares arity '0..*'.
+                match["optional"] is not None or match["arity"] == NF_ARRAY_PATH_ARITY,
             ))
             continue
         if stripped.startswith("container "):
@@ -409,9 +411,11 @@ def _parse_workflow(
                 output_name, expression = (part.strip() for part in stripped.split("=", maxsplit=1))
             else:
                 output_name, expression = stripped, stripped
-            # An optional output reports null as `.ifEmpty([])`, the renderer's one emit suffix.
-            optional = expression.endswith(".ifEmpty([])")
-            source = _PROCESS_OUTPUT.match(expression.removesuffix(".ifEmpty([])"))
+            # An optional output reports null by one of the renderer's two emit suffixes.
+            suffix = next((suffix for suffix in (".ifEmpty([])", at_most_one_suffix(output_name))
+                           if expression.endswith(suffix)), "")
+            optional = bool(suffix)
+            source = _PROCESS_OUTPUT.match(expression.removesuffix(suffix))
             if source is None or source.group(1) not in process_by_name:
                 unparsed.append(stripped)
                 continue
