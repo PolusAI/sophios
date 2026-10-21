@@ -1,0 +1,110 @@
+name: Nextflow Corpus
+
+# Compiles the corpus workflows the Nextflow target supports and runs each
+# under Nextflow with Docker: tests/core/nextflow/test_corpus.py. Manual only;
+# the runs pull the tools' images and download their data.
+on:
+  workflow_dispatch:
+    inputs:
+      mm-workflows_owner:
+        description: The account name of the mm-workflows repository
+        required: true
+        default: vjaganat90
+        type: string
+      mm-workflows_ref:
+        description: The branch name within the mm-workflows repository
+        required: true
+        default: feat/authored-cwl-names
+        type: string
+      image-workflows_owner:
+        description: The account name of the image-workflows repository; empty for this repository's owner
+        required: false
+        default: ''
+        type: string
+      image-workflows_ref:
+        description: The branch name within the image-workflows repository
+        required: true
+        default: main
+        type: string
+
+defaults:
+  run:
+    shell: bash -l {0} # login mode, so the conda environment is active
+
+permissions:
+  contents: read
+
+jobs:
+  nextflow_corpus:
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 120
+    env:
+      NXF_ANSI_LOG: "false"
+      NXF_VER: "26.04.2"
+
+    steps:
+    - name: Checkout sophios
+      uses: actions/checkout@v5
+      with:
+        path: sophios
+
+    - name: Checkout biobb_adapters
+      uses: actions/checkout@v5
+      with:
+        repository: vjaganat90/biobb_adapters
+        ref: master
+        path: biobb_adapters
+
+    - name: Checkout mm-workflows
+      uses: actions/checkout@v5
+      with:
+        repository: ${{ inputs.mm-workflows_owner }}/mm-workflows
+        ref: ${{ inputs.mm-workflows_ref }}
+        path: mm-workflows
+
+    - name: Checkout image-workflows
+      uses: actions/checkout@v5
+      with:
+        repository: ${{ inputs.image-workflows_owner || github.repository_owner }}/image-workflows
+        ref: ${{ inputs.image-workflows_ref }}
+        path: image-workflows
+
+    - name: Remove old global config
+      run: rm -rf "/home/$(whoami)/wic/"
+
+    - name: Remove old mamba environment and packages
+      run: rm -rf "/home/$(whoami)/miniconda3/envs/wic_github_actions/" "/home/$(whoami)/conda_pkgs_dir/"
+
+    - name: Setup miniforge (linux, macos)
+      uses: conda-incubator/setup-miniconda@v4.0.1
+      with:
+        miniforge-variant: Miniforge3
+        miniforge-version: 24.7.1-2
+        environment-file: sophios/install/system_deps_ci.yml
+        activate-environment: wic_github_actions
+        channels: conda-forge
+        python-version: "3.11.*"
+        run-post: false
+
+    - name: Install Sophios
+      run: cd sophios/ && pip install -e ".[all_except_runner_src]"
+
+    - name: Update Sophios Config
+      run: cd sophios/ && python .github/update_sophios_config.py
+
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: "17"
+
+    - name: Install pinned Nextflow
+      run: |
+        curl --fail --silent --show-error https://get.nextflow.io | bash
+        install -m 0755 nextflow "${RUNNER_TEMP}/nextflow"
+        echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+    - name: Verify pinned runtime
+      run: nextflow -version | grep 'version 26.04.2'
+
+    - name: Run the corpus under Nextflow
+      run: cd sophios/ && pytest tests/core/nextflow/test_corpus.py -m nextflow_corpus --durations=0

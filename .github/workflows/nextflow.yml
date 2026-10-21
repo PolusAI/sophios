@@ -44,7 +44,7 @@ jobs:
         run: python -m pytest tests/core/nextflow -m 'nextflow and not docker' -q
 
       - name: Run Docker conformance
-        run: python -m pytest tests/core/nextflow -m docker -q
+        run: python -m pytest tests/core/nextflow -m 'docker and not nextflow_corpus' -q
 
       - name: Run the Python 3.12 compatibility suite
         run: python -m pytest tests/core/nextflow -m 'not nextflow and not docker' -q
