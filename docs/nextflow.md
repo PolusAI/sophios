@@ -339,10 +339,13 @@ above.
 
 Rejected: an `entry` that is not a bare reference to one `File` or
 `Directory` input (inline content construction), an `entryname` that is any
-other expression or holds a `/`, an `entryname` that begins with
+other expression, holds a `/`, or is `.` or `..`, an `entryname` that begins with
 `.sophios_entry_` (the hidden directory's prefix), a `writable` that is not a
 literal boolean, a listing entry naming a `val`-qualifier or array-typed
-input, an input listed twice, and two entries with one literal name.
+input, an input listed twice, and two entries with one literal name. A name
+that collides only when the task runs, such as two entries of inputs with one
+basename, or an entry and a staged input with one basename, stops the task
+with an error naming the entry.
 
 ## Scatter
 

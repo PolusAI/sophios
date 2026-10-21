@@ -382,11 +382,17 @@ def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...] = ())
     )
     lines.extend(["", "    script:", '    \"\"\"'])
     # The task makes each entry before the command runs: a copy the command may change, or a symlink.
-    lines.extend(
-        f"    {'cp -RL' if port.entry.copy else 'ln -s'} -- ${{{NF_SHELL_QUOTE_HELPER}({port.name}.toString())}} "
-        f"${{{NF_SHELL_QUOTE_HELPER}({entries[port.name]})}}"
-        for port in process.inputs if port.entry is not None
-    )
+    # A name the task directory already holds stops the task, since cp and ln would make the entry inside it.
+    for port in process.inputs:
+        if port.entry is not None:
+            name = f"${{{NF_SHELL_QUOTE_HELPER}({entries[port.name]})}}"
+            lines.extend([
+                f"    if [ -e {name} ] || [ -L {name} ]; then "
+                f"echo 'InitialWorkDirRequirement entry already exists in the task directory:' {name} >&2; "
+                "exit 1; fi",
+                f"    {'cp -RL' if port.entry.copy else 'ln -s'} -- "
+                f"${{{NF_SHELL_QUOTE_HELPER}({port.name}.toString())}} {name}",
+            ])
     lines.extend(
         f"    export {variable.name}={_render_template(variable.value, entries)}" for variable in process.command.env
     )

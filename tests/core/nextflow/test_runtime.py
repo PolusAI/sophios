@@ -1067,6 +1067,36 @@ def test_a_writable_output_directory_entry_is_a_copy_the_tool_writes_into(tmp_pa
 
 @pytest.mark.nextflow
 @pytest.mark.serial
+@pytest.mark.parametrize("both_entries", [True, False], ids=["two entries", "an entry and a staged input"])
+def test_an_entry_whose_name_the_task_directory_holds_stops_the_task(tmp_path: Path, both_entries: bool) -> None:
+    """design §6, Inputs and channels: cp and ln would make the entry inside the directory holding its name."""
+    sources = []
+    for label in ("one", "two"):
+        source = tmp_path / label / "data"
+        source.mkdir(parents=True)
+        (source / f"{label}.txt").write_text(label, encoding="utf-8")
+        sources.append(source)
+    mix_tool = CommandLineTool(
+        "mix",
+        Inputs(a=Input(cwl.directory), b=Input(cwl.directory, position=1)),
+        Outputs(listing=Output(cwl.file, glob="listing.txt")),
+    )
+    mix_tool = mix_tool.base_command("ls").stdout("listing.txt").stage(mix_tool.inputs.a, writable=True)
+    if both_entries:
+        mix_tool = mix_tool.stage(mix_tool.inputs.b)
+    mix = Step(mix_tool, step_name="mix")
+    mix.inputs.a, mix.inputs.b = sources
+    workflow = Workflow([mix], "nextflow_entry_collision")
+    workflow.outputs.listing = mix.outputs.listing
+    workflow.to_nextflow(tmp_path / "run")
+    result = execute_nextflow(tmp_path / "run")
+    assert result.returncode != 0
+    assert "InitialWorkDirRequirement entry already exists in the task directory: data" in result.stdout
+    assert [sorted(path.name for path in source.iterdir()) for source in sources] == [["one.txt"], ["two.txt"]]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
 def test_a_pattern_glob_matches_an_entry_as_a_cwl_glob_does(tmp_path: Path) -> None:
     """F69 and F84: a pattern glob, or a glob of the input's own basename, captures the entry the task made."""
     write_tool = (

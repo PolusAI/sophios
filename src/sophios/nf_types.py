@@ -622,6 +622,8 @@ class NfEntry:
                 raise ValueError("entryname must be a non-empty string")
             if "/" in self.name or "\x00" in self.name:
                 raise ValueError("entryname must not contain a path separator or NUL byte")
+            if self.name in {".", ".."}:
+                raise ValueError(f"entryname must not be {self.name!r}, which names a directory, not an entry")
             if self.name.startswith(NF_ENTRY_STAGING_PREFIX):
                 raise ValueError(f"entryname must not begin with {NF_ENTRY_STAGING_PREFIX!r}, which Sophios reserves")
         if not isinstance(self.copy, bool):

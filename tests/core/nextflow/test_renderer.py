@@ -158,9 +158,13 @@ def test_renders_each_entry_staged_hidden_and_made_by_the_task() -> None:
         "    path other\n"
     ) in rendered
     assert f'    path "${{{entry}}}", glob: false, emit: result\n' in rendered
+    exists = "InitialWorkDirRequirement entry already exists in the task directory:"
+    renamed, own = f"${{{quote}('renamed.txt')}}", f"${{{quote}({entry})}}"
     assert (
-        f"    ln -s -- ${{{quote}(source.toString())}} ${{{quote}('renamed.txt')}}\n"
-        f"    cp -RL -- ${{{quote}(outDir.toString())}} ${{{quote}({entry})}}\n"
+        f"    if [ -e {renamed} ] || [ -L {renamed} ]; then echo '{exists}' {renamed} >&2; exit 1; fi\n"
+        f"    ln -s -- ${{{quote}(source.toString())}} {renamed}\n"
+        f"    if [ -e {own} ] || [ -L {own} ]; then echo '{exists}' {own} >&2; exit 1; fi\n"
+        f"    cp -RL -- ${{{quote}(outDir.toString())}} {own}\n"
         f"    ${{{quote}('cat')}} ${{{quote}('renamed.txt')}} ${{{quote}('--outDir')}} ${{{quote}({entry})}}\n"
     ) in rendered
 

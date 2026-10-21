@@ -480,7 +480,7 @@ def test_only_a_path_input_that_is_not_an_array_is_an_entry(port: Callable[[], N
 @pytest.mark.fast
 @pytest.mark.parametrize(("name", "reason"), [
     ("", "non-empty"), ("   ", "non-empty"), ("sub/dir.txt", "path separator"), ("a\x00b", "NUL byte"),
-    (".sophios_entry_x", "Sophios reserves"),
+    (".sophios_entry_x", "Sophios reserves"), (".", "names a directory"), ("..", "names a directory"),
 ])
 def test_an_entry_name_is_one_path_component_outside_the_reserved_prefix(name: str, reason: str) -> None:
     with pytest.raises(ValueError, match=reason):
