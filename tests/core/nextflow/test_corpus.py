@@ -7,16 +7,15 @@ mm-workflows and image-workflows beside sophios, as `run_workflows.yml` does, an
 from pathlib import Path
 import subprocess
 import sys
-from unittest.mock import patch
 
 import pytest
 
 import sophios.input_output as io
 import sophios.plugins
-from sophios.api.python import workflow as python_workflow
 from sophios.nf_types import ExecutableNextflowWorkflow, NfWorkflowOutputConnection
 from sophios.python_cwl_adapter import import_python_file
 
+from ..test_python_api_workflow import _step_registry_injected
 from .testkit import REPO_ROOT, execute_nextflow
 
 CHECKOUTS = REPO_ROOT.parent
@@ -44,14 +43,8 @@ def _compile(source: Path, pipeline: Path, monkeypatch: pytest.MonkeyPatch) -> N
         return
     # A Python workflow names its tools relative to its repository, as run_workflows.yml compiles it.
     tools = sophios.plugins.get_tools_cwl(io.read_config_from_disk(CONFIG))
-    step = python_workflow.Step
-
-    def step_with_tools(*args: object, **kwargs: object) -> object:
-        kwargs.setdefault("tool_registry", tools)
-        return step(*args, **kwargs)
-
     monkeypatch.chdir(source.parents[1])
-    with patch.object(python_workflow, "Step", step_with_tools):
+    with _step_registry_injected(tools):
         built = import_python_file(source.stem, source).workflow()
     built.to_nextflow(pipeline, tool_registry=tools)
 
@@ -61,13 +54,13 @@ def _compile(source: Path, pipeline: Path, monkeypatch: pytest.MonkeyPatch) -> N
 @pytest.mark.nextflow_corpus
 @pytest.mark.parametrize("workflow", WORKFLOWS)
 def test_a_corpus_workflow_runs_under_nextflow(workflow: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The run succeeds and every declared workflow output holds what its type says."""
+    """The run succeeds, every file a workflow output emits exists, and every directory it emits holds something."""
     pipeline = tmp_path / "pipeline"
     _compile(CHECKOUTS / workflow, pipeline, monkeypatch)
     executable = ExecutableNextflowWorkflow.from_json(
         (pipeline / "nextflow_workflow.json").read_text(encoding="utf-8")
     )
-    # An output directory a tool writes into is a name the run makes, as Sophios's CWL runs make it.
+    # The output directories a tool writes into must exist when the pipeline starts (docs/nextflow.md).
     for name, declared in executable.param_types.items():
         value = executable.params[name]
         path = value.get("path") if hasattr(value, "get") else value
@@ -78,8 +71,10 @@ def test_a_corpus_workflow_runs_under_nextflow(workflow: str, tmp_path: Path, mo
         connection for connection in executable.connections if isinstance(connection, NfWorkflowOutputConnection)
     ]
     sinks = "".join(
-        f"\n    {executable.name}.out.{output.to_port}.subscribe {{ new File('emits/{output.to_port}').text = "
-        "(it instanceof List ? it : [it]).join('\\n') }"
+        # Every item, each a value or a list of them, one per line.
+        f"\n    {executable.name}.out.{output.to_port}.toList().subscribe {{ "
+        f"new File('emits/{output.to_port}').text = "
+        "it.collectMany { item -> (item instanceof List) ? item : [item] }.join('\\n') }"
         for output in outputs
     )
     script = pipeline / "workflow.nf"
@@ -95,3 +90,5 @@ def test_a_corpus_workflow_runs_under_nextflow(workflow: str, tmp_path: Path, mo
         if port.capture == "text" or (port.optional and not values):
             continue  # a captured text, or an optional output's null
         assert values and all(Path(value).exists() for value in values), f"{output.to_port}: {values}"
+        if port.path_kind == "Directory":
+            assert all(any(Path(value).iterdir()) for value in values), f"{output.to_port} is empty: {values}"
