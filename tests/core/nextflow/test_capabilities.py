@@ -75,9 +75,8 @@ def test_real_unsupported_compilation_aggregates_capability_errors(
     assert "steps[1].run.inputs.file.inputBinding.shellQuote" in message
     # cat.cwl's string output is the approved file-text capture shape
     # (loadContents: true, outputEval: $(self[0].contents), literal glob), so
-    # it no longer produces a finding at all; the mixed container policy does.
+    # it no longer produces a finding at all.
     assert "steps[2].run.outputs.output" not in message
-    assert "workflow.steps: mixed container execution is not supported" in message
 
 
 @pytest.mark.fast
@@ -541,18 +540,18 @@ def test_rejects_an_optional_output_with_a_pattern_glob() -> None:
 
 
 @pytest.mark.fast
-def test_rejects_mixed_container_execution_policy() -> None:
+def test_host_and_container_tools_lower_into_one_workflow() -> None:
     containerized = tool(
         "CONTAINERIZED",
         requirements={"DockerRequirement": {"dockerPull": "ubuntu:24.04"}},
     )
     host = tool("HOST")
-    rose = synthetic_source(
+    workflow = compiled_source_to_nextflow(synthetic_source(
         workflow_doc([step("CONTAINERIZED"), step("HOST")]),
         [containerized, host],
-    )
-    with pytest.raises(ValueError, match="mixed container execution is not supported"):
-        compiled_source_to_nextflow(rose)
+    ))
+    assert [process.container for process in workflow.processes] == ["ubuntu:24.04", None]
+    assert workflow.containers_enabled
 
 
 @pytest.mark.fast

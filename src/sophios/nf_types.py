@@ -1353,12 +1353,6 @@ class ExecutableNextflowWorkflow:
             raise TypeError("workflow connections must use a typed connection variant")
         object.__setattr__(self, "processes", processes)
         object.__setattr__(self, "connections", connections)
-        container_modes = {process.container is not None for process in processes}
-        if len(container_modes) > 1:
-            raise ValueError(
-                "mixed container execution is not supported; "
-                "every process must declare a container or no process may declare one"
-            )
         if not isinstance(self.params, Mapping):
             raise TypeError("workflow params must be a mapping")
         frozen_params = _freeze_json(self.params)
@@ -1384,13 +1378,13 @@ class ExecutableNextflowWorkflow:
 
     @property
     def containers_enabled(self) -> bool:
-        """Return the validated workflow-wide container execution policy.
+        """Whether Docker is enabled: some process declares a container.
 
         Returns:
-            bool: True when every process declares a container; construction
-                rejects mixed policies, so this is uniform by invariant.
+            bool: True when any process declares a container. Nextflow runs a
+                process with no container directive on the host either way.
         """
-        return bool(self.processes) and self.processes[0].container is not None
+        return any(process.container is not None for process in self.processes)
 
     def _validate_graph(self) -> None:
         process_by_name = {process.name: process for process in self.processes}

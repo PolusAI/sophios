@@ -1245,6 +1245,36 @@ def test_docker_container_behavior(tmp_path: Path) -> None:
 
 
 @pytest.mark.nextflow
+@pytest.mark.docker
+@pytest.mark.serial
+def test_host_and_container_tasks_run_in_one_workflow(tmp_path: Path) -> None:
+    """A tool without a DockerRequirement runs on the host beside one that runs in a container."""
+    def where(name: str) -> CommandLineTool:
+        return (
+            CommandLineTool(name, Inputs(), Outputs(place=Output(cwl.file, glob="place.txt")))
+            .base_command("sh", "-c", "test -e /.dockerenv && echo container || echo host")
+            .stdout("place.txt")
+        )
+
+    in_container = Step(where("in_container").docker("debian:bookworm-slim"), step_name="in_container")
+    on_host = Step(where("on_host"), step_name="on_host")
+    workflow = Workflow([in_container, on_host], "nextflow_host_and_container")
+    workflow.outputs.container_place = in_container.outputs.place
+    workflow.outputs.host_place = on_host.outputs.place
+
+    workflow.to_nextflow(tmp_path)
+    assert (tmp_path / "nextflow.config").read_text(encoding="utf-8") == "docker.enabled = true\n"
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    places = {
+        task.parent.joinpath(".command.run").read_text(encoding="utf-8").count("docker run") > 0:
+        task.read_text(encoding="utf-8")
+        for task in (tmp_path / "work").rglob("place.txt")
+    }
+    assert places == {True: "container\n", False: "host\n"}
+
+
+@pytest.mark.nextflow
 @pytest.mark.serial
 def test_scatter_runs_one_task_per_element(tmp_path: Path) -> None:
     """R2.12: a single-input scatter over an array workflow input runs N tasks."""

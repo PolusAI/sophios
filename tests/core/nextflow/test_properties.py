@@ -16,6 +16,7 @@ from sophios.input_output_nf import (
     _render_template,
     _shell_quote,
     render_nextflow,
+    render_nextflow_config,
 )
 from sophios.nf_expr import Expr, groovy_literal
 from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
@@ -270,12 +271,8 @@ def test_memory_rendering_is_non_exponential_and_value_preserving(
 
 
 @settings(max_examples=60, deadline=None)
-@given(
-    st.lists(st.booleans(), min_size=2, max_size=10).filter(
-        lambda modes: any(modes) and not all(modes)
-    )
-)
-def test_mixed_container_policy_is_unrepresentable(modes: list[bool]) -> None:
+@given(st.lists(st.booleans(), max_size=10))
+def test_docker_is_enabled_exactly_when_a_process_has_a_container(modes: list[bool]) -> None:
     processes = tuple(
         NfProcess(
             f"P{index}",
@@ -286,8 +283,8 @@ def test_mixed_container_policy_is_unrepresentable(modes: list[bool]) -> None:
         )
         for index, containerized in enumerate(modes)
     )
-    with pytest.raises(ValueError, match="mixed container execution"):
-        ExecutableNextflowWorkflow("wf", processes, (), {})
+    workflow = ExecutableNextflowWorkflow("wf", processes, (), {})
+    assert render_nextflow_config(workflow) == f"docker.enabled = {str(any(modes)).lower()}\n"
 
 
 @settings(max_examples=80, deadline=None)

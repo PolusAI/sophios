@@ -592,14 +592,6 @@ def test_rejects_mixed_path_kinds_for_one_parameter() -> None:
         )
 
 
-@pytest.mark.fast
-def test_rejects_mixed_container_policy() -> None:
-    containerized = NfProcess("CONTAINERIZED", [], [], command("true"), container="ubuntu:24.04")
-    host = NfProcess("HOST", [], [], command("true"))
-    with pytest.raises(ValueError, match="mixed container execution is not supported"):
-        ExecutableNextflowWorkflow("WF", [containerized, host], [], {})
-
-
 @pytest.mark.serial
 def test_rejects_cyclic_or_multiply_connected_dags() -> None:
     a = NfProcess(

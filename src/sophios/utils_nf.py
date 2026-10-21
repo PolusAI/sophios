@@ -3034,27 +3034,6 @@ def _apply_absent_sentinel(params: Mapping[str, Any]) -> dict[str, Any]:
     return {name: (ABSENT_VAL_SENTINEL if value is None else value) for name, value in params.items()}
 
 
-def _container_policy_findings(tools: tuple[Mapping[str, Any], ...]) -> list[str]:
-    """Require one workflow-wide host or container execution policy."""
-    containerized: list[int] = []
-    host: list[int] = []
-    for step_index, tool in enumerate(tools):
-        requirement_names = [
-            class_name
-            for section_name in ("requirements", "hints")
-            for class_name, _suffix, _payload in _requirement_entries(tool.get(section_name))
-        ]
-        target = containerized if "DockerRequirement" in requirement_names else host
-        target.append(step_index)
-    if not containerized or not host:
-        return []
-    return [
-        "workflow.steps: mixed container execution is not supported; "
-        "DockerRequirement must be declared by every process or by none "
-        f"(containerized steps: {containerized}; host steps: {host})"
-    ]
-
-
 def compiled_source_to_nextflow(
     source: CompilationResult | CompiledNextflowSource,
 ) -> ExecutableNextflowWorkflow:
@@ -3132,7 +3111,6 @@ def compiled_source_to_nextflow_with_notes(
     findings.extend(_scatter_findings(workflow, steps, tools))
     findings.extend(_step_input_findings(workflow, steps, tools))
     findings.extend(_text_capture_sink_findings(steps, tools))
-    findings.extend(_container_policy_findings(tools))
     _raise_capability_findings(findings)
     try:
         params = _workflow_params(workflow, compiled.params)
