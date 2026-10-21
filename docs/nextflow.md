@@ -184,6 +184,8 @@ object as JSON, so it is rejected; write `$(inputs.f.path)` there instead.
 A string holding a `$(…)` reference is interpolated as cwltool does: it is
 stripped of surrounding whitespace, `\$(` writes a literal `$(`, and `\\`
 writes one backslash. A string with no reference is used exactly as written.
+A `$` that is not followed by `(` or `{` is plain text, so a literal argument
+such as `mv a "$1"` reaches the command as written.
 
 The `.copy` suffix above is load-bearing: a basename glob must derive a **new**
 name. A Nextflow output declaration does not capture staged inputs, so a glob

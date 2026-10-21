@@ -576,3 +576,36 @@ def test_a_whole_boolean_valuefrom_is_a_flag(owner: dict[str, Any] | None) -> No
 def test_a_boolean_valuefrom_on_an_optional_input_is_rejected() -> None:
     with pytest.raises(ValueError, match="a boolean valueFrom on optional input 's' is not supported"):
         _boolean_valuefrom_tokens({"prefix": "--flag"}, owner={"type": "string?"})
+
+
+def _argument_tokens(*arguments: Any) -> tuple[Any, ...]:
+    rose = synthetic_source(
+        workflow_doc([step("ARGS", **{"in": {"x": "x"}})], inputs={"x": "string"}),
+        [tool("ARGS", inputs={"x": {"type": "string"}}, baseCommand="echo", arguments=list(arguments))],
+        workflow_inputs={"x": "v"},
+    )
+    return tuple(compiled_source_to_nextflow(rose).processes[0].command.tokens[1:])
+
+
+# design §6, Commands: a `$` that is not followed by `(` or `{` is plain text.
+PLAIN_DOLLARS = ["$", "cost $5", "$HOME", "a $ b", "$$", ' mv a "$1" ', "trailing $\n", "$)", "$}"]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("text", PLAIN_DOLLARS)
+def test_a_dollar_not_starting_an_expression_is_plain_text(text: str) -> None:
+    assert _argument_tokens(text, {"valueFrom": text}) == (NfTemplate((NfLiteral(text),)),) * 2
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("text", PLAIN_DOLLARS)
+def test_a_plain_dollar_stays_text_beside_a_reference(text: str) -> None:
+    [token] = _argument_tokens(f"{text}$(inputs.x){text}")
+    assert token == NfTemplate((NfLiteral(text.lstrip()), NfInputReference("x"), NfLiteral(text.rstrip())))
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("text", ["$(runtime.cores)", "${return 1}", "cost $5 $(inputs.x.size)", "$$(self)"])
+def test_a_dollar_starting_any_other_expression_is_rejected(text: str) -> None:
+    with pytest.raises(ValueError, match="unsupported CWL expression"):
+        _argument_tokens(text)

@@ -301,6 +301,7 @@ _INPUT_EXPRESSION = re.compile(
 )
 # One token of a string CWL interpolates: an escape it rewrites (`\$(`, `\${`, `\\`), or a reference.
 _INTERPOLATION = re.compile(rf"\\(?P<escaped>\$[({{]|\\)|{_INPUT_EXPRESSION.pattern}")
+_EXPRESSION_START = re.compile(r"\$[({]")
 
 
 def _template(value: Any, *, context: str) -> NfTemplate:
@@ -327,7 +328,8 @@ def _template(value: Any, *, context: str) -> NfTemplate:
             segments.append(NfBasenameReference(name) if match["suffix"] == "basename" else NfInputReference(name))
         offset = match.end()
     segments.append(NfLiteral(text[offset:]))
-    if "$" in (_INTERPOLATION.sub("", text) if interpolated else text):
+    # A `$` not followed by `(` or `{` is plain text, as in CWL.
+    if interpolated and _EXPRESSION_START.search(_INTERPOLATION.sub("", text)):
         raise ValueError(
             f"{context} contains an unsupported CWL expression; the supported forms are $(inputs.<name>) "
             "and, on a File or Directory input, $(inputs.<name>.path) and $(inputs.<name>.basename)"

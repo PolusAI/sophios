@@ -118,6 +118,31 @@ def test_shell_command_requirement_with_no_shell_quote_false_behaves_identically
 
 @pytest.mark.nextflow
 @pytest.mark.serial
+def test_a_plain_dollar_in_a_literal_argument_reaches_the_command(tmp_path: Path) -> None:
+    """A `$` not followed by `(` or `{` is text, as in a corpus tool's `bash -c` script (design §6, Commands)."""
+    script_tool = (
+        CommandLineTool(
+            "dollar_script",
+            Inputs(message=Input(cwl.string, position=3)),
+            Outputs(result=Output(cwl.file, glob="out.txt")),
+        )
+        .base_command("sh", "-c")
+        .argument("printf '%s|' \"$1\" '$5' $ > out.txt", position=1)
+        .argument("$0", position=2)
+    )
+    run = Step(script_tool, step_name="dollar_script")
+    run.inputs.message = "it costs $HOME"
+    workflow = Workflow([run], "nextflow_dollar")
+    workflow.outputs.result = run.outputs.result
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("out.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == ["it costs $HOME|$5|$|"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
 def test_shell_quote_false_literal_enables_a_real_shell_redirect(tmp_path: Path) -> None:
     """R2.9: an approved shellQuote:false literal reaches the shell as real redirect syntax."""
     marker = "payload; not a separate command"
