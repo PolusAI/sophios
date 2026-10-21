@@ -807,7 +807,7 @@ def _env_entries(requirement: Mapping[str, Any]) -> list[tuple[str, Any]]:
             return [(f"envDef[{index}]", entry) for index, entry in enumerate(entries)]
         case Mapping() as entries:
             return [
-                (f"envDef.{name}", {"envName": name, **(value if isinstance(value, Mapping) else {"envValue": value})})
+                (f"envDef.{name}", {**(value if isinstance(value, Mapping) else {"envValue": value}), "envName": name})
                 for name, value in entries.items()
             ]
         case _:

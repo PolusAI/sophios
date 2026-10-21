@@ -586,9 +586,10 @@ def test_a_dollar_starting_any_other_expression_is_rejected(text: str) -> None:
 @pytest.mark.fast
 @pytest.mark.parametrize("env_def", [
     [{"envName": "A", "envValue": "cost $5"}, {"envName": "B", "envValue": " $(inputs.s) "}],
-    {"A": "cost $5", "B": {"envValue": " $(inputs.s) "}},
+    {"A": "cost $5", "B": {"envName": "C", "envValue": " $(inputs.s) "}},
 ], ids=["list", "map"])
 def test_env_var_requirement_lowers_each_variable_to_an_export(env_def: Any) -> None:
+    """The map form's key names the variable, over an envName inside it, as schema-salad resolves it."""
     rose = synthetic_source(
         workflow_doc([step("ENV", **{"in": {"s": "s"}})], inputs={"s": "string"}),
         [tool("ENV", inputs={"s": {"type": "string"}}, requirements={"EnvVarRequirement": {"envDef": env_def}})],
