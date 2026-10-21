@@ -570,8 +570,12 @@ def nextflow_workflow(
     tool_registry: Tools | None = None,
     lang_version: str | None = None,
     inference: Inference = Inference(),
+    stacklevel: int = 3,
 ) -> ExecutableNextflowWorkflow:
-    """Compile once through the core semantic pipeline and lower to Nextflow; each note is a `UserWarning`."""
+    """Compile once through the core semantic pipeline and lower to Nextflow; each note is a `UserWarning`.
+
+    `stacklevel` makes each warning point at the public method's caller.
+    """
     result = compile_workflow_result(
         workflow,
         tool_registry=tool_registry,
@@ -580,7 +584,7 @@ def nextflow_workflow(
     )
     executable, notes = compiled_source_to_nextflow_with_notes(result)
     for note in notes:
-        warnings.warn(str(note), UserWarning, stacklevel=3)
+        warnings.warn(str(note), UserWarning, stacklevel=stacklevel)
     return executable
 
 
@@ -600,6 +604,7 @@ def write_nextflow_workflow(
             tool_registry=tool_registry,
             lang_version=lang_version,
             inference=inference,
+            stacklevel=4,
         ),
         outdir,
     )

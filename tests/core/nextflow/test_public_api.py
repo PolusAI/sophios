@@ -61,10 +61,14 @@ CUDA_NOTES = [
 
 
 @pytest.mark.fast
-def test_the_python_api_reports_each_cuda_note_as_a_user_warning() -> None:
+def test_the_python_api_reports_each_cuda_note_as_a_user_warning(tmp_path: Path) -> None:
+    """Each warning points at the caller, through either public method."""
     with pytest.warns(UserWarning) as caught:
         executable = gpu_workflow().compile(target="nextflow")
-    assert [str(warning.message) for warning in caught if "[wic046]" in str(warning.message)] == CUDA_NOTES
+        gpu_workflow().to_nextflow(tmp_path)
+    notes = [warning for warning in caught if "[wic046]" in str(warning.message)]
+    assert [str(warning.message) for warning in notes] == CUDA_NOTES * 2
+    assert {warning.filename for warning in notes} == {__file__}
     assert executable.processes[0].resources.accelerator == 2
 
 
