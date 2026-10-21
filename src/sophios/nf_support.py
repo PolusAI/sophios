@@ -196,7 +196,8 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
         'outputEval': Row(_L, '`$(self[0])`, or `$(self[0].contents)` beside `loadContents`, over a literal glob'),
     }),
     'DockerRequirement': MappingProxyType({
-        'class': Row(_L, 'the `container` directive; a tool without one runs on the host'),
+        'class': Row(_L, "the `container` directive; the command runs after the image's ENTRYPOINT, and a tool "
+                         'without one runs on the host'),
         'dockerFile': Row(_R, 'dockerFile is not supported: use dockerPull'),
         'dockerImageId': Row(_L, 'the image'),
         'dockerImport': Row(_R, 'dockerImport is not supported: use dockerPull'),
@@ -248,7 +249,7 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
         'class': Row(_L, 'a declaration only; each scatter is lowered at its step'),
     }),
     'ShellCommandRequirement': MappingProxyType({
-        'class': Row(_L, 'admits `shellQuote: false` on literal text'),
+        'class': Row(_L, 'admits `shellQuote: false` on literal text; not beside a `DockerRequirement`'),
     }),
     'SubworkflowFeatureRequirement': MappingProxyType({
         'class': Row(_L, 'a declaration only; each nested workflow is inlined'),

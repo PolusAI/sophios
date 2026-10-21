@@ -12,6 +12,7 @@ import pytest
 
 from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
 from sophios.input_output_nf import (
+    container_directives,
     render_nextflow,
     write_nextflow_artifacts,
 )
@@ -300,7 +301,17 @@ def _container_workflow(container: str) -> ExecutableNextflowWorkflow:
 def test_reader_keeps_a_dynamic_container_opaque(directive: str) -> None:
     source = render_nextflow(_container_workflow("ubuntu:24.04")).replace("container 'ubuntu:24.04'", directive)
     parsed = parse_nf_text(source, params={"source": "input.txt"})
-    assert (parsed.processes[0].container, parsed.opaque_regions) == (None, (f"process TASK: {directive}",))
+    # The entrypoint directives are read only beside the static container they render for.
+    entrypoint = tuple(f"process TASK: {line}" for line in container_directives("ubuntu:24.04")[1:])
+    assert (parsed.processes[0].container, parsed.opaque_regions) == (None, (f"process TASK: {directive}", *entrypoint))
+
+
+@pytest.mark.fast
+def test_reader_keeps_entrypoint_directives_for_another_image_opaque() -> None:
+    other = container_directives("debian:12")[2]
+    rendered = render_nextflow(_container_workflow("ubuntu:24.04"))
+    source = rendered.replace(container_directives("ubuntu:24.04")[2], other)
+    assert parse_nf_text(source, params={"source": "input.txt"}).opaque_regions == (f"process TASK: {other}",)
 
 
 @pytest.mark.fast

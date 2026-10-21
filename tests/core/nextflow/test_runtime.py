@@ -1294,6 +1294,41 @@ def test_docker_container_behavior(tmp_path: Path) -> None:
 @pytest.mark.nextflow
 @pytest.mark.docker
 @pytest.mark.serial
+def test_a_containerized_command_runs_after_its_images_entrypoint(tmp_path: Path) -> None:
+    """CWL gives the command to the container as its arguments, so the image's ENTRYPOINT runs first."""
+    image = "sophios-nextflow-entrypoint:test"
+    context = tmp_path / "image"
+    context.mkdir()
+    (context / "Dockerfile").write_text(
+        'FROM debian:bookworm-slim\nENTRYPOINT ["/bin/echo", "from the entrypoint"]\n', encoding="utf-8"
+    )
+    built = subprocess.run(["docker", "build", "-q", "-t", image, str(context)], capture_output=True, text=True,
+                           timeout=300, check=False)
+    assert built.returncode == 0, built.stderr
+
+    def words(name: str, *base_command: str) -> CommandLineTool:
+        tool_ = CommandLineTool(name, Inputs(), Outputs(out=Output(cwl.file, glob="out.txt"))).stdout("out.txt")
+        return (tool_.base_command(*base_command) if base_command else tool_).argument("an argument", position=1)
+
+    steps = [
+        Step(words("no_base_command").docker(image), step_name="no_base_command"),
+        Step(words("base_command", "printf").docker(image), step_name="base_command"),
+        Step(words("no_entrypoint", "echo").docker("debian:bookworm-slim"), step_name="no_entrypoint"),
+    ]
+    workflow = Workflow(steps, "nextflow_entrypoint")
+    for step in steps:
+        setattr(workflow.outputs, step.process_name, step.outputs.out)
+    workflow.to_nextflow(tmp_path / "pipeline")
+    result = execute_nextflow(tmp_path / "pipeline")
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert sorted(path.read_text(encoding="utf-8") for path in (tmp_path / "pipeline" / "work").rglob("out.txt")) == [
+        "an argument\n", "from the entrypoint an argument\n", "from the entrypoint printf an argument\n",
+    ]
+
+
+@pytest.mark.nextflow
+@pytest.mark.docker
+@pytest.mark.serial
 def test_host_and_container_tasks_run_in_one_workflow(tmp_path: Path) -> None:
     """A tool without a DockerRequirement runs on the host beside one that runs in a container."""
     def where(name: str) -> CommandLineTool:

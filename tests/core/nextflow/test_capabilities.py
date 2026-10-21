@@ -559,6 +559,18 @@ def test_an_optional_output_with_a_pattern_glob_must_reach_a_workflow_output() -
 
 
 @pytest.mark.fast
+def test_rejects_shell_mode_in_a_container() -> None:
+    shell = tool(
+        "SHELL",
+        requirements={"DockerRequirement": {"dockerPull": "ubuntu:24.04"}, "ShellCommandRequirement": {}},
+    )
+    assert _findings(synthetic_source(workflow_doc([step("SHELL")]), [shell])) == [
+        "steps[0].run: ShellCommandRequirement beside a DockerRequirement is not supported: CWL runs the command "
+        "as /bin/sh -c after the image's ENTRYPOINT, which the Nextflow task does not"
+    ]
+
+
+@pytest.mark.fast
 def test_host_and_container_tools_lower_into_one_workflow() -> None:
     containerized = tool(
         "CONTAINERIZED",

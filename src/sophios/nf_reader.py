@@ -37,6 +37,7 @@ from .input_output_nf import (
     NF_STEP_INPUT_FUNCTION,
     NF_STUB_LINES,
     at_most_one_suffix,
+    container_directives,
     render_nextflow,
     render_number,
 )
@@ -294,6 +295,8 @@ def _parse_process(name: str, body: list[str]) -> tuple[NextflowProcess, tuple[s
                 container = _unquote(literal)
             else:
                 unparsed.append(stripped)
+        elif container is not None and stripped in container_directives(container)[1:]:
+            pass  # the entrypoint directives every container renders
         elif stripped.startswith("cpus "):
             candidate = stripped.removeprefix("cpus ").strip()
             if _static_cpu_value(candidate) is None:

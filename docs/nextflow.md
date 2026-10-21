@@ -280,6 +280,24 @@ needs a value. Any other value is rejected by name: a reference to an input
 of another type, `.path` or `.basename`, a reference inside other text, or any
 other expression. So is a name that is not a shell variable name.
 
+## Containers
+
+A tool's `DockerRequirement` image becomes its process's `container`
+directive, and a tool without one runs on the host; one workflow may hold
+both. `nextflow.config` enables Docker when any process has a container.
+
+CWL gives the command to the container as its arguments, so the image's
+`ENTRYPOINT` runs first, and a tool with no `baseCommand` relies on it.
+Each containerized process clears the entrypoint and runs its command after
+the entrypoint's words: its `beforeScript`, on the host where the task
+starts, pulls the image if it is missing and writes its `ENTRYPOINT` to a
+hidden file in the task directory, which the script reads. The host needs
+the `docker` command, as Nextflow's own Docker support does. A tool with
+both `DockerRequirement` and `ShellCommandRequirement` is rejected: CWL runs
+its command as `/bin/sh -c` after the entrypoint. So is a containerized tool
+with no `baseCommand`, `arguments` or bound input: CWL gives its container no
+arguments, so the image runs its `CMD`; name the program in `baseCommand`.
+
 ## GPUs
 
 `cwltool:CUDARequirement`, as a requirement or a hint, becomes the

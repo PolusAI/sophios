@@ -20,6 +20,7 @@ from .nf_types import (
     NF_LOAD_CONTENTS_HELPER,
     NF_LOAD_CONTENTS_LIMIT,
     NF_ENTRY_STAGING_PREFIX,
+    NF_ENTRYPOINT_FILE,
     NF_SCATTER_INDEX_NAME,
     NF_SHELL_QUOTE_HELPER,
     NfArrayBinding,
@@ -359,11 +360,40 @@ def _unscattered_input(port: NfPort) -> str:
     return _process_input(port)
 
 
+# A task's script reads its image's ENTRYPOINT words, NUL-separated, and runs its command after them.
+NF_ENTRYPOINT_READ = (
+    f"__sophios_entrypoint=(); while IFS= read -r -d '' word; do __sophios_entrypoint+=(\"\\$word\"); "
+    f"done < {NF_ENTRYPOINT_FILE}"
+)
+NF_ENTRYPOINT_WORDS = '\\${__sophios_entrypoint[@]+"\\${__sophios_entrypoint[@]}"}'
+
+
+def container_directives(container: str) -> tuple[str, ...]:
+    """The directives of a process that runs in ``container``.
+
+    CWL runs the command as the container's arguments, after the image's
+    ENTRYPOINT; Nextflow runs the task script as the container's command. So
+    the entrypoint is cleared, and a ``beforeScript``, on the host where
+    Nextflow starts the container, writes the image's ENTRYPOINT words for
+    the script to run the command after.
+    """
+    image = _shell_quote(container)
+    entrypoint = "'{{range .Config.Entrypoint}}{{.}}{{\"\\x00\"}}{{end}}'"
+    return (
+        f"container {groovy_literal(container)}",
+        "containerOptions \"--entrypoint ''\"",
+        "beforeScript " + groovy_literal(
+            f"docker image inspect {image} > /dev/null 2>&1 || docker pull -q {image} > /dev/null; "
+            f"docker image inspect --format {entrypoint} {image} > {NF_ENTRYPOINT_FILE}"
+        ),
+    )
+
+
 def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...] = ()) -> str:
     entries = _entry_names(process)
     lines = [f"process {process.name} {{"]
     if process.container is not None:
-        lines.append(f"    container {groovy_literal(process.container)}")
+        lines.extend(f"    {directive}" for directive in container_directives(process.container))
     if process.resources.cpus is not None:
         lines.append(f"    cpus {process.resources.cpus}")
     if process.resources.memory_mb is not None:
@@ -421,6 +451,9 @@ def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...] = ())
     lines.extend(
         f"    export {variable.name}={_render_template(variable.value, entries)}" for variable in process.command.env
     )
+    if process.container is not None:
+        lines.append(f"    {NF_ENTRYPOINT_READ}")
+        command = f"{NF_ENTRYPOINT_WORDS} {command}"
     if redirects and any(isinstance(token, NfShellLiteral) for token in process.command.tokens):
         # CWL redirects the whole command, not just the last one a shell literal starts;
         # on separate lines, a trailing `&` or `#` in the literal cannot swallow the `)`.

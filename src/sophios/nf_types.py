@@ -37,6 +37,10 @@ PARAM_TYPES = frozenset(
 # An InitialWorkDirRequirement entry's input is staged under this prefix and
 # its port name, and the task makes the entry from it (design §6).
 NF_ENTRY_STAGING_PREFIX = ".sophios_entry_"
+# The file a containerized task reads its image's ENTRYPOINT from: under the
+# reserved prefix, and not an identifier, so no entry's staging directory and
+# no literal entryname can take its name.
+NF_ENTRYPOINT_FILE = f"{NF_ENTRY_STAGING_PREFIX}.entrypoint"
 # CWL v1.2 requires a loadContents file to be a UTF-8 text file of this many
 # bytes or fewer, read entirely, with a fatal error above the limit.
 NF_LOAD_CONTENTS_LIMIT = 64 * 1024

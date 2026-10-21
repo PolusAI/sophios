@@ -1850,6 +1850,11 @@ def _tool_capability_findings(
         renamed_names = set()
     findings.extend(_iwdr_rename_reference_findings(tool, renamed_names, path=path))
     shell_mode_active = _requirement(tool, "ShellCommandRequirement") is not None
+    if shell_mode_active and _requirement(tool, "DockerRequirement") is not None:
+        findings.append(
+            f"{path}.run: ShellCommandRequirement beside a DockerRequirement is not supported: CWL runs the "
+            "command as /bin/sh -c after the image's ENTRYPOINT, which the Nextflow task does not"
+        )
     if isinstance(inputs := tool.get("inputs", {}), Mapping):
         findings.extend(
             _identifier_normalization_findings(
