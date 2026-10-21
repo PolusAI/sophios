@@ -7,10 +7,11 @@ LOWERED: a lowering consumes it.
 COMPILE_TIME: Sophios uses it while compiling; the Nextflow output carries nothing for it.
 REJECTED: a finding at the field, whose message is the row's note, and no artifacts.
 
-`FIELDS` is keyed by the `cwl_utils.parser.cwl_v1_2` class whose fields each part classifies.
+`FIELDS` is keyed by the `cwl_utils.parser.cwl_v1_2` class whose fields each part classifies, or by
+cwltool's extension class as a tool names it, such as `cwltool:CUDARequirement`.
 Capability analysis (`sophios.utils_nf`) consumes exactly the fields that are not rejected, and
 docs/nextflow.md renders this table (docs/conf.py). `tests/core/nextflow/test_support_table.py`
-holds `FIELDS` to the fields cwl_utils declares and to Sophios's own `SUPPORT_MATRIX`.
+holds `FIELDS` to the fields cwl_utils or cwltool declares and to Sophios's own `SUPPORT_MATRIX`.
 """
 from dataclasses import dataclass
 from enum import StrEnum
@@ -251,6 +252,13 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
     'SubworkflowFeatureRequirement': MappingProxyType({
         'class': Row(_L, 'a declaration only; each nested workflow is inlined'),
     }),
+    'cwltool:CUDARequirement': MappingProxyType({
+        'class': Row(_L, 'the `accelerator` directive; 1 GPU when neither count is given'),
+        'cudaComputeCapability': Row(_C, 'not checked by the generated pipeline; a note (`wic046`) says so'),
+        'cudaDeviceCountMax': Row(_L, 'the `accelerator` count when `cudaDeviceCountMin` is absent; a whole number'),
+        'cudaDeviceCountMin': Row(_L, 'the `accelerator` count; a whole number'),
+        'cudaVersionMin': Row(_C, 'not checked by the generated pipeline; a note (`wic046`) says so'),
+    }),
 })
 
 _WORKFLOW_FEATURE = 'is a workflow requirement: declare it on the workflow'
@@ -272,6 +280,7 @@ REQUIREMENT_CLASSES: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
         'ShellCommandRequirement': Row(_L, 'admits `shellQuote: false` on literal text'),
         'SoftwareRequirement': Row(_R, 'SoftwareRequirement is not supported: use DockerRequirement'),
         'SubworkflowFeatureRequirement': Row(_R, f'SubworkflowFeatureRequirement {_WORKFLOW_FEATURE}'),
+        'cwltool:CUDARequirement': Row(_L, 'the `accelerator` directive'),
     }),
     'Workflow': MappingProxyType({
         'InlineJavascriptRequirement': Row(_L, 'a declaration only; Sophios adds it for every `when`'),

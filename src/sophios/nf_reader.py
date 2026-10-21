@@ -103,6 +103,7 @@ class NextflowProcess:
     container: str | None = None
     cpus: str | None = None
     memory: str | None = None
+    accelerator: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +223,7 @@ def _parse_process(name: str, body: list[str]) -> tuple[NextflowProcess, tuple[s
     container: str | None = None
     cpus: str | None = None
     memory: str | None = None
+    accelerator: str | None = None
     script: list[str] = []
     stub: list[str] = []
     unparsed: list[str] = []
@@ -298,6 +300,12 @@ def _parse_process(name: str, body: list[str]) -> tuple[NextflowProcess, tuple[s
                 unparsed.append(stripped)
             else:
                 memory = candidate
+        elif stripped.startswith("accelerator "):
+            candidate = stripped.removeprefix("accelerator ").strip()
+            if _static_cpu_value(candidate) is None:
+                unparsed.append(stripped)
+            else:
+                accelerator = candidate
         else:
             unparsed.append(stripped)
 
@@ -306,7 +314,7 @@ def _parse_process(name: str, body: list[str]) -> tuple[NextflowProcess, tuple[s
     if stub and tuple(stub) != NF_STUB_LINES[2:-1]:
         unparsed.append("stub: " + "\n".join(stub))  # only the generated stub is read
     return (
-        NextflowProcess(name, tuple(inputs), tuple(outputs), "\n".join(script), container, cpus, memory),
+        NextflowProcess(name, tuple(inputs), tuple(outputs), "\n".join(script), container, cpus, memory, accelerator),
         tuple(unparsed),
     )
 
@@ -593,6 +601,7 @@ def _document_from_model(executable: ExecutableNextflowWorkflow, source_text: st
             process.container,
             None if process.resources.cpus is None else str(process.resources.cpus),
             None if process.resources.memory_mb is None else f"{render_number(process.resources.memory_mb)} MB",
+            None if process.resources.accelerator is None else str(process.resources.accelerator),
         )
         for process in executable.processes
     )
@@ -700,6 +709,12 @@ def nextflow_to_cwl(workflow: NextflowDocument) -> tuple[dict[str, Any], list[di
                 resources["ramMin"] = memory
         if resources:
             requirements["ResourceRequirement"] = resources
+        # The GPU count is cwltool's extension, written as a hint, as the tool builder writes it.
+        gpus = None if process.accelerator is None else _static_cpu_value(process.accelerator)
+        gpu_hint: dict[str, Any] = {} if gpus is None else {
+            "hints": {"cwltool:CUDARequirement": {"cudaDeviceCountMin": gpus}},
+            "$namespaces": {"cwltool": "http://commonwl.org/cwltool#"},
+        }
         outputs: dict[str, Any] = {}
         for port in process.outputs:
             output: dict[str, Any] = {
@@ -723,6 +738,7 @@ def nextflow_to_cwl(workflow: NextflowDocument) -> tuple[dict[str, Any], list[di
             "inputs": {port.name: {"type": _cwl_type(port)} for port in process.inputs},
             "outputs": outputs,
             "requirements": requirements,
+            **gpu_hint,
         })
 
     incoming: dict[

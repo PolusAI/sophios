@@ -706,6 +706,32 @@ def test_env_var_requirement_rejects_an_unknown_field_and_an_absent_input() -> N
     ]
 
 
+@pytest.mark.fast
+@pytest.mark.parametrize("field", ["cudaDeviceCountMin", "cudaDeviceCountMax"])
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "2", "$(inputs.n)"])
+def test_a_cuda_device_count_is_a_positive_whole_number(field: str, value: Any) -> None:
+    rose = synthetic_source(
+        workflow_doc([step("GPU")]),
+        [tool("GPU", hints={"cwltool:CUDARequirement": {"cudaDeviceCountMin": 1, field: value}})],
+    )
+    assert _findings(rose) == [
+        f"steps[0].run.hints.cwltool:CUDARequirement.{field}: a CUDA device count must be a positive whole "
+        f"number, got {value!r}"
+    ]
+
+
+@pytest.mark.fast
+def test_a_cuda_field_cwltool_does_not_declare_is_rejected() -> None:
+    rose = synthetic_source(
+        workflow_doc([step("GPU")]),
+        [tool("GPU", hints=[{"class": "cwltool:CUDARequirement", "cudaComputeCapabilityMin": "3.0"}])],
+    )
+    assert _findings(rose) == [
+        "steps[0].run.hints.0.cudaComputeCapabilityMin: cudaComputeCapabilityMin is not consumed by the "
+        "Nextflow lowering"
+    ]
+
+
 def _iwdr_tool(
     listing: list[Any],
     *,

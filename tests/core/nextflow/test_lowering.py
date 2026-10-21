@@ -23,7 +23,11 @@ from sophios.nf_types import (
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
-from sophios.utils_nf import compiled_source_to_nextflow, cwl_type_to_nf_qualifier
+from sophios.lang.diagnostics import Diagnostic, Locator, Severity
+from sophios.lang.error_codes import SophiosErrorCode
+from sophios.utils_nf import (
+    compiled_source_to_nextflow, compiled_source_to_nextflow_with_notes, cwl_type_to_nf_qualifier,
+)
 
 from .testkit import one_step, step, synthetic_source, tool, workflow_doc
 
@@ -631,4 +635,43 @@ def test_env_var_requirement_lowers_each_variable_to_an_export(env_def: Any) -> 
     assert script.splitlines()[:2] == [
         "    export A=${__sophios_shell_quote_9f72e('cost $5')}",
         "    export B=${__sophios_shell_quote_9f72e(s.toString())}",
+    ]
+
+
+def _gpu_lowering(cuda: Any, section: str = "hints") -> tuple[Any, tuple[Diagnostic, ...]]:
+    rose = synthetic_source(
+        workflow_doc([step("GPU")]), [tool("GPU", **{section: {"cwltool:CUDARequirement": cuda}})]
+    )
+    return compiled_source_to_nextflow_with_notes(rose)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("section", ["requirements", "hints"])
+@pytest.mark.parametrize(("cuda", "count"), [
+    ({}, 1),
+    ({"cudaDeviceCountMin": 2}, 2),
+    ({"cudaDeviceCountMax": 3}, 3),
+    ({"cudaDeviceCountMin": 2, "cudaDeviceCountMax": 4}, 2),
+])
+def test_cuda_requirement_lowers_to_the_accelerator_directive(cuda: Any, count: int, section: str) -> None:
+    """The count cwltool's job requests: the minimum, else the maximum, else 1 (design §6)."""
+    workflow, notes = _gpu_lowering(cuda, section)
+    assert workflow.processes[0].resources == NfResources(accelerator=count)
+    assert f"\n    accelerator {count}\n" in render_nextflow(workflow)
+    assert notes == ()
+
+
+@pytest.mark.fast
+def test_the_unchecked_cuda_fields_are_notes_and_leave_the_model_unchanged() -> None:
+    plain, _ = _gpu_lowering({"cudaDeviceCountMin": 1})
+    workflow, notes = _gpu_lowering(
+        {"cudaDeviceCountMin": 1, "cudaVersionMin": "11.4", "cudaComputeCapability": ["3.0", "7.5"]}
+    )
+    assert workflow == plain
+    assert [(note.severity, note.code, note.locator) for note in notes] == [
+        (Severity.NOTE, SophiosErrorCode.UNCHECKED_CUDA_FIELD, Locator("GPU"))
+    ] * 2
+    assert [note.message.split(" is not checked")[0] for note in notes] == [
+        "cwltool:CUDARequirement cudaVersionMin '11.4'",
+        "cwltool:CUDARequirement cudaComputeCapability ['3.0', '7.5']",
     ]

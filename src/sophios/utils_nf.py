@@ -12,6 +12,8 @@ from typing import Any
 from .ir.artifacts import CompilationArtifact, CompilationResult
 from .ir.names import Names
 from .ir.types import Direction, Edge, PortId, SourceList, StepNode, WorkflowGraph
+from .lang.diagnostics import Diagnostic, Locator, Severity
+from .lang.error_codes import SophiosErrorCode
 from .nf_expr import (
     Expr, check as check_safe_subset, is_safe_subset_text, parse as parse_safe_subset, references,
 )
@@ -941,6 +943,29 @@ def _cpu_resource(value: Any) -> int:
     return number
 
 
+_CUDA_REQUIREMENT = "cwltool:CUDARequirement"
+# The CUDA fields with no Nextflow counterpart: each one present is reported with a note.
+_UNCHECKED_CUDA_FIELDS = ("cudaVersionMin", "cudaComputeCapability")
+
+
+def _device_count(value: Any) -> int:
+    match value:
+        case bool():
+            pass
+        case int() as count if count > 0:
+            return count
+    raise ValueError(f"a CUDA device count must be a positive whole number, got {value!r}")
+
+
+def _gpu_count(tool: Mapping[str, Any]) -> int | None:
+    """cwltool's device count: the minimum, else the maximum, else 1 (design §6, Resources and containers)."""
+    cuda = _requirement(tool, _CUDA_REQUIREMENT)
+    if cuda is None:
+        return None
+    count = _resource_value(cuda, "cudaDeviceCountMin", "cudaDeviceCountMax")
+    return 1 if count is None else _device_count(count)
+
+
 def _memory(value: Any) -> int | float:
     return _resource_number(value, name="memory")
 
@@ -948,18 +973,31 @@ def _memory(value: Any) -> int | float:
 # The value checks of a requirement's fields, in the order findings report them.
 _REQUIREMENT_VALUES: Mapping[str, Mapping[str, Callable[[Any], Any]]] = {
     "ResourceRequirement": {"coresMin": _cpu_resource, "coresMax": _cpu_resource, "ramMin": _memory, "ramMax": _memory},
+    _CUDA_REQUIREMENT: {"cudaDeviceCountMin": _device_count, "cudaDeviceCountMax": _device_count},
 }
 
 
 def _resources(tool: Mapping[str, Any]) -> NfResources:
-    resource = _requirement(tool, "ResourceRequirement")
-    if resource is None:
-        return NfResources()
+    resource = _requirement(tool, "ResourceRequirement") or {}
     cpus = _resource_value(resource, "coresMin", "coresMax")
     memory = _resource_value(resource, "ramMin", "ramMax")
     rendered_cpus = None if cpus is None else _cpu_resource(cpus)
     rendered_memory = None if memory is None else _memory(memory)
-    return NfResources(rendered_cpus, rendered_memory)
+    return NfResources(rendered_cpus, rendered_memory, _gpu_count(tool))
+
+
+def _cuda_notes(step: Mapping[str, Any], tool: Mapping[str, Any]) -> list[Diagnostic]:
+    """A note for each CUDA field the generated pipeline does not check."""
+    cuda = _requirement(tool, _CUDA_REQUIREMENT) or {}
+    return [
+        Diagnostic(
+            Severity.NOTE, SophiosErrorCode.UNCHECKED_CUDA_FIELD,
+            f"{_CUDA_REQUIREMENT} {name} {cuda[name]!r} is not checked: the Nextflow accelerator directive "
+            "asks only for a number of GPUs",
+            locator=Locator(step=str(step.get("id"))),
+        )
+        for name in _UNCHECKED_CUDA_FIELDS if name in cuda
+    ]
 
 
 def _output_template(raw_name: Any, definition: Any) -> NfTemplate:
@@ -3036,6 +3074,21 @@ def _container_policy_findings(tools: tuple[Mapping[str, Any], ...]) -> list[str
 def compiled_source_to_nextflow(
     source: CompilationResult | CompiledNextflowSource,
 ) -> ExecutableNextflowWorkflow:
+    """Lower a completed Sophios compilation, leaving out the notes the lowering makes.
+
+    Args:
+        source (CompilationResult | CompiledNextflowSource): As
+            :func:`compiled_source_to_nextflow_with_notes` takes it.
+
+    Returns:
+        ExecutableNextflowWorkflow: The validated executable representation.
+    """
+    return compiled_source_to_nextflow_with_notes(source)[0]
+
+
+def compiled_source_to_nextflow_with_notes(
+    source: CompilationResult | CompiledNextflowSource,
+) -> tuple[ExecutableNextflowWorkflow, tuple[Diagnostic, ...]]:
     """Lower a completed Sophios compilation without repeating core semantics.
 
     Every unsupported source semantic, including one that only lowering or
@@ -3053,7 +3106,9 @@ def compiled_source_to_nextflow(
             lowering/validation rejects the workflow.
 
     Returns:
-        ExecutableNextflowWorkflow: The validated executable representation.
+        tuple[ExecutableNextflowWorkflow, tuple[Diagnostic, ...]]: The
+            validated executable representation, and the notes the lowering
+            made, such as a CUDA field it does not check.
     """
     if isinstance(source, CompilationResult):
         nested_findings = _nested_workflow_capability_findings(
@@ -3075,6 +3130,7 @@ def compiled_source_to_nextflow(
     tools = compiled.tools
     steps = _workflow_steps(workflow)
     findings = list(nested_findings)
+    notes: list[Diagnostic] = []
     processes: list[NfProcess] = []
     for step_index, (step, tool) in enumerate(zip(steps, tools, strict=True)):
         if step_findings := _tool_capability_findings(step, tool, step_index=step_index):
@@ -3084,6 +3140,7 @@ def compiled_source_to_nextflow(
             processes.append(_process(step, tool))
         except ValueError as error:  # lowering and the model reject what no source pass can see
             findings.append(f"steps[{step_index}]: {error}")
+        notes.extend(_cuda_notes(step, tool))
     findings.extend(_workflow_capability_findings(workflow, compiled.params, steps))
     findings.extend(_absent_optional_findings(workflow, compiled.params, steps, tools))
     findings.extend(_conditional_consumer_findings(list(steps), tools))
@@ -3108,6 +3165,6 @@ def compiled_source_to_nextflow(
             connections=_connections(workflow, list(steps), processes, default_connections),
             params=_apply_absent_sentinel(params),
             param_types={**_workflow_param_types(workflow), **default_types},
-        )
+        ), tuple(notes)
     except ValueError as error:
         raise _capability_error([f"workflow: {error}"]) from None

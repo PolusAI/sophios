@@ -440,6 +440,13 @@ def test_a_command_sets_an_env_var_once_from_a_val_input() -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "2"])
+def test_an_accelerator_count_is_a_positive_integer(value: Any) -> None:
+    with pytest.raises(ValueError, match="accelerator must be a positive integer"):
+        NfResources(accelerator=value)
+
+
+@pytest.mark.fast
 def test_stage_as_port_survives_hydration() -> None:
     port = NfPort("source", "path", stage_as="renamed.txt")
     assert NfPort.from_dict(port.to_dict()) == port

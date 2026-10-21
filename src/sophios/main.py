@@ -21,7 +21,7 @@ from . import post_compile as pc
 from . import backends, cli, compiler, drawing, plugins, preflight, realtime, run_local, run_setup
 from .ir import frontdoor
 from .ir.frontdoor import SourceBundle
-from .utils_nf import compiled_source_to_nextflow
+from .utils_nf import compiled_source_to_nextflow_with_notes
 from .wic_types import CompilerOptions, Json, Tools
 
 
@@ -84,17 +84,20 @@ def _write_nextflow_target(
     compilation: CompilationResult,
     yaml_stem: str,
     basepath: Path,
+    diagnostics_form: str,
 ) -> tuple[Path, Path, Path, Path]:
-    """Lower the completed semantic graph and write Nextflow artifacts under `basepath`."""
+    """Lower the completed semantic graph, write Nextflow artifacts under `basepath`, and report the notes."""
     io_nf.remove_nextflow_artifacts(basepath)
     try:
-        workflow = compiled_source_to_nextflow(compilation)
-        return io_nf.write_nextflow_artifacts(workflow, basepath)
+        workflow, notes = compiled_source_to_nextflow_with_notes(compilation)
+        paths = io_nf.write_nextflow_artifacts(workflow, basepath)
     except ValueError as error:
         error_path = Path(f'error_{yaml_stem}.txt')
         error_path.write_text(f'{error}\n', encoding='utf-8')
         print(f'Failed to generate Nextflow artifacts. See {error_path}.')
         raise SystemExit(1) from None
+    _report(notes, diagnostics_form)
+    return paths
 
 
 #: Flags that rewrite the CWL Sophios compiled. A plain CWL workflow is not
@@ -374,7 +377,7 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     compilation, analyses = _compile_loaded_document(yaml_path, bundle, yml_paths, tools_cwl, compiler_options)
     _report(compilation.diagnostics, args.diagnostics)
     if args.target == 'nextflow':
-        _write_nextflow_target(compilation, yaml_stem, Path(args.basepath))
+        _write_nextflow_target(compilation, yaml_stem, Path(args.basepath), args.diagnostics)
         return
     root_dir = Path(args.yaml).parent.absolute()
     artifact = compilation.artifact

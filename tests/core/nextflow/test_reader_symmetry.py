@@ -59,12 +59,13 @@ def _tool_shapes() -> ExecutableNextflowWorkflow:
         [output_port("out", "out.txt")],
         NfCommand((template("printenv"),), stdout=template("out.txt"),
                   env=(NfEnvVar("A", template("a $b")), NfEnvVar("B", template(ref("s"))))),
+        resources=NfResources(accelerator=2),
     )
     return single_process_workflow(process, params={"s": "v"}, param_types={"s": "string"}, output_port_name="out")
 
 
 BUILDERS: dict[str, Callable[[], ExecutableNextflowWorkflow]] = {
-    "exported environment variables": _tool_shapes,
+    "exported environment variables and a GPU count": _tool_shapes,
     "single-input dotproduct": lambda: _scattered("dotproduct", names=("item",)),
     "conditional step": lambda: _when_workflow("$(inputs.a > 0)", {"a": 1}, second_step=True, a="int"),
     "dotproduct": lambda: _scattered("dotproduct"),
@@ -95,6 +96,18 @@ def test_every_generated_pattern_reads_back_and_promotes(name: str, tmp_path: Pa
     assert parsed.connections == tuple(workflow.connections)
     assert [process.name for process in parsed.processes] == [process.name for process in workflow.processes]
     assert promote_nextflow_document(parsed) == workflow
+
+
+@pytest.mark.fast
+def test_a_model_derived_document_reads_the_accelerator(tmp_path: Path) -> None:
+    workflow = BUILDERS["dotproduct"]()
+    resources = NfResources(accelerator=2)
+    workflow = replace(workflow, processes=[replace(process, resources=resources) for process in workflow.processes])
+    write_nextflow_artifacts(workflow, tmp_path)
+    parsed = parse_nf_file(tmp_path / "workflow.nf")
+    assert [process.accelerator for process in parsed.processes] == ["2"]
+    _, [tool] = nextflow_to_cwl(parsed)
+    assert tool["hints"] == {"cwltool:CUDARequirement": {"cudaDeviceCountMin": 2}}
 
 
 @pytest.mark.fast

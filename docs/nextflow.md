@@ -273,6 +273,19 @@ needs a value. Any other value is rejected by name: a reference to an input
 of another type, `.path` or `.basename`, a reference inside other text, or any
 other expression. So is a name that is not a shell variable name.
 
+## GPUs
+
+`cwltool:CUDARequirement`, as a requirement or a hint, becomes the
+`accelerator` directive. The count is `cudaDeviceCountMin`, else
+`cudaDeviceCountMax`, else 1, the count cwltool asks for. A count is a whole
+number; an expression is rejected. `cudaVersionMin` and
+`cudaComputeCapability` have no Nextflow counterpart. The generated pipeline
+does not check them, and compiling reports each one with the note
+[`wic046`](error_codes.md). The command line prints the note with the other
+diagnostics; the Python API gives it as a `UserWarning`. Where a task runs is
+the executor's choice: the local executor accepts the directive and runs the
+task on the machine as it is.
+
 ## Staging with InitialWorkDirRequirement
 
 Nextflow already stages every `File`/`Directory` input under its own

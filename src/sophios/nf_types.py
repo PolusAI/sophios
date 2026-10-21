@@ -512,10 +512,11 @@ class NfCommand:
 
 @dataclass(frozen=True, slots=True)
 class NfResources:
-    """Typed supported process resources."""
+    """Typed supported process resources; ``accelerator`` is a GPU count."""
 
     cpus: int | None = None
     memory_mb: int | float | None = None
+    accelerator: int | None = None
 
     def __post_init__(self) -> None:
         cpus = self.cpus
@@ -525,6 +526,10 @@ class NfResources:
             or (isinstance(cpus, int) and cpus <= 0)
         ):
             raise ValueError("cpus must be a positive integer or None")
+        accelerator = self.accelerator
+        if accelerator is not None and (isinstance(accelerator, bool) or not isinstance(accelerator, int)
+                                        or accelerator <= 0):
+            raise ValueError("accelerator must be a positive integer or None")
         memory = self.memory_mb
         if memory is not None and (
             isinstance(memory, bool) or not isinstance(memory, (int, float)) or not 0 < memory < math.inf
@@ -535,9 +540,9 @@ class NfResources:
         """Return a JSON-compatible representation.
 
         Returns:
-            dict[str, Any]: The ``cpus`` and ``memory_mb`` values.
+            dict[str, Any]: The ``cpus``, ``memory_mb`` and ``accelerator`` values.
         """
-        return {"cpus": self.cpus, "memory_mb": self.memory_mb}
+        return {"cpus": self.cpus, "memory_mb": self.memory_mb, "accelerator": self.accelerator}
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
@@ -554,8 +559,8 @@ class NfResources:
         Returns:
             Self: The validated resources.
         """
-        item = _fields(value, type_name=cls.__name__, required={"cpus", "memory_mb"})
-        return cls(item["cpus"], item["memory_mb"])
+        item = _fields(value, type_name=cls.__name__, required={"cpus", "memory_mb", "accelerator"})
+        return cls(item["cpus"], item["memory_mb"], item["accelerator"])
 
 
 GLOB_WILDCARDS = frozenset("*?[")

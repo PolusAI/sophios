@@ -530,3 +530,20 @@ def _provoke_image_unavailable() -> None:
 
 
 COMPILED.update({SophiosErrorCode.IMAGE_UNAVAILABLE: _provoke_image_unavailable})
+
+
+def _provoke_unchecked_cuda_field() -> None:
+    """A GPU tool lowered to Nextflow with a `cudaVersionMin`. A note stops nothing, so it is raised here."""
+    # pylint: disable=import-outside-toplevel
+    from sophios.api.python._workflow_runtime import compile_workflow_result
+    from sophios.api.python.tool_builder import CommandLineTool, Inputs, Output, Outputs, cwl
+    from sophios.api.python.workflow import Step, Workflow
+    from sophios.lang.diagnostics import SophiosError
+    from sophios.utils_nf import compiled_source_to_nextflow_with_notes
+
+    gpu = CommandLineTool('gpu', Inputs(), Outputs(out=Output(cwl.file, glob='out'))).gpu(cuda_version_min='11.4')
+    _, notes = compiled_source_to_nextflow_with_notes(compile_workflow_result(Workflow([Step(gpu)], 'provoke')))
+    raise SophiosError(notes)
+
+
+COMPILED.update({SophiosErrorCode.UNCHECKED_CUDA_FIELD: _provoke_unchecked_cuda_field})

@@ -322,6 +322,8 @@ def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...] = ())
         lines.append(f"    cpus {process.resources.cpus}")
     if process.resources.memory_mb is not None:
         lines.append(f'    memory "{render_number(process.resources.memory_mb)} MB"')
+    if process.resources.accelerator is not None:
+        lines.append(f"    accelerator {process.resources.accelerator}")
 
     if process.inputs:
         lines.extend(["", "    input:"])

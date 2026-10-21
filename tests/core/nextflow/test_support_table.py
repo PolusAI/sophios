@@ -4,10 +4,12 @@
 
 from collections.abc import Callable
 import copy
+from importlib.resources import files
 import re
 from typing import Any
 
 import pytest
+import yaml
 from cwl_utils.parser import cwl_v1_2
 
 from sophios.lang import SUPPORT_MATRIX
@@ -24,22 +26,32 @@ def test_the_sophios_classes_have_the_support_matrix_fields(cwl_class: str) -> N
     assert set(FIELDS[cwl_class]) == set(SUPPORT_MATRIX[cwl_class])
 
 
+def _declared_fields(cwl_class: str) -> set[str]:
+    """The fields cwl_utils declares for a CWL class, or cwltool's extension schema for a `cwltool:` one."""
+    if cwl_class.startswith("cwltool:"):
+        schema = yaml.safe_load(files("cwltool").joinpath("extensions-v1.2.yml").read_text("utf-8"))
+        [record] = [item for item in schema["$graph"] if item.get("name") == cwl_class.removeprefix("cwltool:")]
+        return set(record["fields"])
+    return set(getattr(cwl_v1_2, cwl_class).attrs)
+
+
 @pytest.mark.fast
 @pytest.mark.parametrize("cwl_class", sorted(FIELDS))
-def test_every_field_cwl_utils_declares_is_classified(cwl_class: str) -> None:
-    assert set(FIELDS[cwl_class]) == set(getattr(cwl_v1_2, cwl_class).attrs)
+def test_every_field_cwl_utils_or_cwltool_declares_is_classified(cwl_class: str) -> None:
+    assert set(FIELDS[cwl_class]) == _declared_fields(cwl_class)
 
 
 @pytest.mark.fast
 def test_every_requirement_class_is_a_cwl_class_and_an_admitted_one_has_its_fields() -> None:
     for classes in REQUIREMENT_CLASSES.values():
         for name, row in classes.items():
-            assert isinstance(getattr(cwl_v1_2, name), type), name
+            assert _declared_fields(name), name
             assert row.state is State.REJECTED or name in FIELDS, name
 
 
-# Design §3 names the compile-time fields: these wherever CWL declares them, and NetworkAccess.
+# Design §3 names the compile-time fields: these wherever CWL declares them, NetworkAccess, and two CUDA fields.
 COMPILE_TIME = {"doc", "format", "intent", "label", "streamable"}
+COMPILE_TIME_CUDA = {("cwltool:CUDARequirement", name) for name in ("cudaVersionMin", "cudaComputeCapability")}
 
 
 @pytest.mark.fast
@@ -51,7 +63,7 @@ def test_the_compile_time_fields_are_the_ones_the_design_names() -> None:
     assert compile_time == {
         (cwl_class, name) for cwl_class, rows in FIELDS.items() for name in rows
         if name in COMPILE_TIME or cwl_class == "NetworkAccess"
-    }
+    } | COMPILE_TIME_CUDA
 
 
 def _strings() -> Yaml:
