@@ -634,6 +634,34 @@ step's tool does not declare, which CWL allows so that a `when` can read it, is
 rejected. A conditional step needs at least one input to gate on, so `when`
 on a tool that declares no inputs is rejected.
 
+## The corpus lane
+
+`.github/workflows/nextflow_corpus.yml` compiles corpus workflows with
+`--target nextflow`, runs each under Nextflow with Docker, and checks that the
+run succeeds and that every declared workflow output exists. It runs every
+standalone image-workflows workflow (`bbbc.wic`, `bbbc.py`, `bbbc_sub.py`) and
+the standalone mm-workflows workflows the target compiles (`molgan.wic`,
+`load_trained_molgan.wic`); the list is in
+`tests/core/nextflow/test_corpus.py`. The target rejects the other standalone
+mm-workflows workflows: they scatter over a nested workflow step, compute an
+output with JavaScript `outputEval`, or declare an optional union of a
+`boolean` and a string array.
+
+The lane runs only when dispatched, on a self-hosted Linux runner, since the
+tools pull their images and download their data. Dispatch it from the
+*Nextflow Corpus* workflow in the Actions tab, or:
+
+```console
+gh workflow run nextflow_corpus.yml --ref <branch> \
+  -f mm-workflows_owner=vjaganat90 -f mm-workflows_ref=feat/authored-cwl-names \
+  -f image-workflows_ref=main
+```
+
+`image-workflows_owner` defaults to the repository's owner. A `Directory`
+input must exist when the pipeline starts, so before each run the lane makes
+an empty directory for every `Directory` input given as a bare name that
+names nothing yet, such as the `outDir` a plugin writes into.
+
 ## Current limits
 
 - Processes must be `CommandLineTool`-equivalent.
