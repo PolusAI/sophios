@@ -60,7 +60,10 @@ number within the 32-bit range for an `int`, and a finite decimal number for
 a `float`; a number given for a `float` must be finite too. A `File` or
 `Directory` value is a path, or a CWL File or Directory object with a `path`
 and, if it has a `class`, the declared one, and must name an existing file or
-directory of that kind. An array comes only from the params file, and `[]`
+directory of that kind; a relative path is relative to the directory Nextflow
+is launched from. A path that names nothing of that kind stops the run with
+`Sophios workflow input '<name>' must be <type>; no <kind> exists at
+'<path>'`. An array comes only from the params file, and `[]`
 stands for an absent optional value that is not a `File` or `Directory`; an
 absent optional `File` or `Directory` workflow input is rejected when the
 workflow compiles. Any other value stops the run with `Sophios workflow input

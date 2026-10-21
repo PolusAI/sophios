@@ -73,9 +73,10 @@ NF_SHELL_QUOTE_FUNCTION = f'''def {NF_SHELL_QUOTE_HELPER}(value) {{
 # passes, and a float is finite; a command-line value is text, and text
 # converts only when it is exact. A File or Directory is path text, or a
 # mapping with a path and, if it has one, the declared class, naming an entry
-# of that kind, and the check returns its path text. [] stands for an absent optional value; no
-# path has a lowering of one. Anything else stops the run, naming the
-# parameter.
+# of that kind, and the check returns its path text; path text that names no
+# entry of that kind stops the run, naming the path. [] stands for an absent
+# optional value; no path has a lowering of one. Anything else stops the run,
+# naming the parameter.
 NF_INPUT_FUNCTION = f'''def {NF_INPUT_HELPER}(String name, value, String type) {{
     def item = type.replace('[]', '').replace('?', '')
     if( type.contains('[]') ) {{
@@ -99,9 +100,12 @@ NF_INPUT_FUNCTION = f'''def {NF_INPUT_HELPER}(String name, value, String type) {
         if( item == 'float' && text && value ==~ /[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?/ &&
             Double.isFinite(value.toDouble()) )
             return value.toDouble()
-        if( item in ['File', 'Directory'] && path instanceof String && path != '' &&
-            (item == 'File' ? file(path, glob: false).isFile() : file(path, glob: false).isDirectory()) )
-            return path
+        if( item in ['File', 'Directory'] && path instanceof String && path != '' ) {{
+            if( item == 'File' ? file(path, glob: false).isFile() : file(path, glob: false).isDirectory() )
+                return path
+            throw new IllegalArgumentException("Sophios workflow input '" + name + "' must be " + type + "; no " +
+                item + " exists at '" + path + "'")
+        }}
     }}
     throw new IllegalArgumentException("Sophios workflow input '" + name + "' must be " + type + ", not " +
         value.inspect())

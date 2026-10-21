@@ -125,7 +125,11 @@ class _JsonNumber(str):
     """Number text the params file holds as it is: Python writes no JSON number past the double range."""
 
 
-# (value, declared type, the checked value, or None when the check stops the run)
+class _Missing(str):
+    """The path text the check names when it stops the run because nothing of the declared kind is there."""
+
+
+# (value, declared type, the checked value, or None or _Missing when the check stops the run)
 _ENTRY_CASES: list[tuple[Any, str, Any]] = [
     (True, "boolean", True), ("true", "boolean", True), ("false", "boolean", False),
     ("yes", "boolean", None), ("False", "boolean", None), (1, "boolean", None),
@@ -140,9 +144,11 @@ _ENTRY_CASES: list[tuple[Any, str, Any]] = [
     ([], "int?", []), ([], "string?", []), ([], "int", None), ([], "File?", None), (None, "int?", None),
     (["1", 2], "int[]", [1, 2]), ([], "string[]", []), ([], "string[]?", []), ("a", "string[]", None),
     ([1], "string[]", None), (["true"], "boolean[]", [True]),
-    ("f.txt", "File", "f.txt"), ({"class": "File", "path": "f.txt"}, "File", "f.txt"), ("d", "File", None),
-    ("missing", "File", None), (5, "File", None), ("d", "Directory", "d"), ({"path": "d"}, "Directory", "d"),
-    ("f.txt", "Directory", None), (["f.txt"], "File[]", ["f.txt"]), (["d", "f.txt"], "Directory[]", None),
+    ("f.txt", "File", "f.txt"), ({"class": "File", "path": "f.txt"}, "File", "f.txt"), ("d", "File", _Missing("d")),
+    ("missing", "File", _Missing("missing")), (5, "File", None), ("d", "Directory", "d"),
+    ({"path": "d"}, "Directory", "d"), ({"class": "Directory", "path": "missing"}, "Directory", _Missing("missing")),
+    ("f.txt", "Directory", _Missing("f.txt")), (["f.txt"], "File[]", ["f.txt"]),
+    (["d", "f.txt"], "Directory[]", _Missing("f.txt")),
     ({"class": "Directory", "path": "f.txt"}, "File", None), ({"class": "File", "path": "d"}, "Directory", None),
     ("", "File", None), ({"path": ""}, "Directory", None),
 ]
@@ -180,11 +186,12 @@ workflow {{
     assert result.returncode == 0, result.stdout + result.stderr
     checked = json.loads((tmp_path / "checked.json").read_text(encoding="utf-8"))
     for index, ((value, declared, expected), outcome) in enumerate(zip(_ENTRY_CASES, checked, strict=True)):
-        if expected is None:
+        if expected is None or isinstance(expected, _Missing):
             # A list's elements are checked one by one, and the message names the one that fails.
             failed = declared.split("[]")[0] if isinstance(value, list) and "[]" in declared else declared
             assert outcome[0] is False, (value, declared)
-            assert outcome[1].startswith(f"Sophios workflow input 'c{index}' must be {failed}, not "), outcome
+            reason = f"; no {failed} exists at '{expected}'" if isinstance(expected, _Missing) else ", not "
+            assert outcome[1].startswith(f"Sophios workflow input 'c{index}' must be {failed}{reason}"), outcome
         else:
             assert outcome == [True, expected], (value, declared)
 
