@@ -645,6 +645,15 @@ def test_accepts_shell_command_requirement_with_no_shell_quote_false() -> None:
     assert converted.processes[0].command.tokens[0] == NfTemplate((NfLiteral("SHELL"),))
 
 
+@pytest.mark.fast
+@pytest.mark.parametrize("value_from", ["[$UNSET]", "\\$(date)"], ids=["variable", "escaped substitution"])
+def test_rejects_a_dollar_in_a_shell_quote_false_literal(value_from: str) -> None:
+    """design §6, Commands: the task's bash -ue would expand it, not CWL's sh -c."""
+    rose = _shell_rose([{"valueFrom": value_from, "shellQuote": False}])
+    with pytest.raises(ValueError, match="holds a '\\$', which the task's shell would expand"):
+        compiled_source_to_nextflow(rose)
+
+
 def _shell_tool_with_input(value_from: str) -> Yaml:
     return tool(
         "SHELL",

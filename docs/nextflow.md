@@ -252,7 +252,9 @@ arguments:
 whose `valueFrom` references any input — directly, or via a `.path`/
 `.basename` suffix — is rejected: unquoting a runtime-supplied value would
 let workflow input data or a chosen file name be interpreted as shell
-syntax, which is exactly the boundary this lowering must not cross.
+syntax, which is exactly the boundary this lowering must not cross. A `$` in
+the literal is rejected too: the task's shell would expand it in its own
+environment, not CWL's.
 
 ## Environment variables
 

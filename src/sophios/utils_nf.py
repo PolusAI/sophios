@@ -386,7 +386,8 @@ def _shell_literal_value(
     whose valueFrom is a CWL-author literal with no input reference: the
     input's own runtime value must never be rendered unquoted, so a binding
     with no valueFrom, a prefix, or an input-referencing valueFrom is
-    rejected here rather than silently losing its quoting.
+    rejected here rather than silently losing its quoting. A `$` is rejected
+    too: no helper quotes it, and the task's shell is not CWL's.
     """
     if not shell_mode:
         raise ValueError(
@@ -415,7 +416,13 @@ def _shell_literal_value(
                 "CWL-author literal with no input reference may be rendered unquoted"
             )
         literal_parts.append(segment.value)
-    return NfShellLiteral("".join(literal_parts))
+    text = "".join(literal_parts)
+    if "$" in text:
+        raise ValueError(
+            f"shellQuote false for {raw_name!r} holds a '$', which the task's shell would expand "
+            "in its own environment, not CWL's"
+        )
+    return NfShellLiteral(text)
 
 
 def _boolean_value_from(value_from: Any, tool: Mapping[str, Any]) -> str | None:

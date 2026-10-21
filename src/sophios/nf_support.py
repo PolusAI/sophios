@@ -175,7 +175,7 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
         'position': Row(_L, 'orders the tokens'),
         'prefix': Row(_L, "literal text before the value, or a `boolean`'s flag"),
         'separate': Row(_L, '`false` joins the prefix and the value into one word'),
-        'shellQuote': Row(_L, '`false` only on literal text under `ShellCommandRequirement`'),
+        'shellQuote': Row(_L, '`false` only on literal text with no `$` under `ShellCommandRequirement`'),
         'valueFrom': Row(_L, 'literal text or `$(inputs.<name>)`, and on a `boolean` only its bare '
                              'self-reference; a computed `valueFrom` is rejected'),
     }),
