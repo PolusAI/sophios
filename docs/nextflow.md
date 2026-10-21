@@ -287,7 +287,9 @@ does not check them, and compiling reports each one with the note
 [`wic046`](error_codes.md). The command line prints the note with the other
 diagnostics; the Python API gives it as a `UserWarning`. Where a task runs is
 the executor's choice: the local executor accepts the directive and runs the
-task on the machine as it is.
+task on the machine as it is. Structural import does not write the count back:
+cwltool's `CUDARequirement` requires `cudaVersionMin` and
+`cudaComputeCapability`, which the directive does not hold.
 
 ## Staging with InitialWorkDirRequirement
 

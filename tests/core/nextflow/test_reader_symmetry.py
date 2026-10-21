@@ -125,7 +125,7 @@ def test_a_model_derived_document_reads_the_accelerator(tmp_path: Path) -> None:
     parsed = parse_nf_file(tmp_path / "workflow.nf")
     assert [process.accelerator for process in parsed.processes] == ["2"]
     _, [tool] = nextflow_to_cwl(parsed)
-    assert tool["hints"] == {"cwltool:CUDARequirement": {"cudaDeviceCountMin": 2}}
+    assert "hints" not in tool
 
 
 @pytest.mark.fast

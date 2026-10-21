@@ -263,8 +263,8 @@ def test_reader_extracts_ports_container_and_resources() -> None:
     assert process.memory == "512 MB"
     assert process.accelerator == "3"
     _workflow_cwl, [cwl_tool] = nextflow_to_cwl(parsed)
-    assert cwl_tool["hints"] == {"cwltool:CUDARequirement": {"cudaDeviceCountMin": 3}}
-    assert cwl_tool["$namespaces"] == {"cwltool": "http://commonwl.org/cwltool#"}
+    # cwltool's CUDARequirement requires two fields the directive does not give.
+    assert "hints" not in cwl_tool
     assert process.inputs == (NextflowPort("source", "path"),)
     assert process.outputs == (
         NextflowPort("result", "path", "result", "result.txt"),

@@ -709,12 +709,8 @@ def nextflow_to_cwl(workflow: NextflowDocument) -> tuple[dict[str, Any], list[di
                 resources["ramMin"] = memory
         if resources:
             requirements["ResourceRequirement"] = resources
-        # The GPU count is cwltool's extension, written as a hint, as the tool builder writes it.
-        gpus = None if process.accelerator is None else _static_cpu_value(process.accelerator)
-        gpu_hint: dict[str, Any] = {} if gpus is None else {
-            "hints": {"cwltool:CUDARequirement": {"cudaDeviceCountMin": gpus}},
-            "$namespaces": {"cwltool": "http://commonwl.org/cwltool#"},
-        }
+        # The accelerator count is not written back: cwltool's CUDARequirement also
+        # requires cudaVersionMin and cudaComputeCapability, which the directive lacks.
         outputs: dict[str, Any] = {}
         for port in process.outputs:
             output: dict[str, Any] = {
@@ -738,7 +734,6 @@ def nextflow_to_cwl(workflow: NextflowDocument) -> tuple[dict[str, Any], list[di
             "inputs": {port.name: {"type": _cwl_type(port)} for port in process.inputs},
             "outputs": outputs,
             "requirements": requirements,
-            **gpu_hint,
         })
 
     incoming: dict[
