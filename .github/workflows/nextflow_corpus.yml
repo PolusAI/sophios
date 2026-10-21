@@ -7,14 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       mm-workflows_owner:
-        description: The account name of the mm-workflows repository
-        required: true
-        default: vjaganat90
+        description: The account name of the mm-workflows repository; empty for this repository's owner
+        required: false
+        default: ''
         type: string
       mm-workflows_ref:
         description: The branch name within the mm-workflows repository
         required: true
-        default: feat/authored-cwl-names
+        default: main
         type: string
       image-workflows_owner:
         description: The account name of the image-workflows repository; empty for this repository's owner
@@ -58,7 +58,7 @@ jobs:
     - name: Checkout mm-workflows
       uses: actions/checkout@v5
       with:
-        repository: ${{ inputs.mm-workflows_owner }}/mm-workflows
+        repository: ${{ inputs.mm-workflows_owner || github.repository_owner }}/mm-workflows
         ref: ${{ inputs.mm-workflows_ref }}
         path: mm-workflows
 

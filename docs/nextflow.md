@@ -664,15 +664,14 @@ tools pull their images and download their data. Dispatch it from the
 
 ```console
 gh workflow run nextflow_corpus.yml --ref <branch> \
-  -f mm-workflows_owner=vjaganat90 -f mm-workflows_ref=feat/authored-cwl-names \
-  -f image-workflows_ref=main
+  -f mm-workflows_ref=main -f image-workflows_ref=main
 ```
 
-`image-workflows_owner` defaults to the repository's owner. Before each run
-the lane makes the output directories the image-workflows tools write into,
-as a user must (see Staging with InitialWorkDirRequirement): an empty
-directory for every `Directory` input given as a bare name that names nothing
-yet.
+`mm-workflows_owner` and `image-workflows_owner` default to the repository's
+owner, and both refs to `main`. Before each run the lane makes the output
+directories the image-workflows tools write into, as a user must (see
+Staging with InitialWorkDirRequirement): an empty directory for every
+`Directory` input given as a bare name that names nothing yet.
 
 ## Current limits
 
