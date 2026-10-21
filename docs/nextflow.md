@@ -350,6 +350,13 @@ outputs:
       glob: $(inputs.outDir.basename)
 ```
 
+The `outDir` given to such a tool must be an existing directory when the
+pipeline starts, as every `Directory` input must; the task works on its copy.
+Sophios's CWL runs make an output directory given as a bare name, but the
+generated pipeline does not, so make each one first, for example an empty
+directory under the name `nextflow_params.json` gives it, in the directory
+Nextflow is launched from.
+
 An entry with a literal name is named by that literal:
 
 ```yaml
@@ -661,10 +668,11 @@ gh workflow run nextflow_corpus.yml --ref <branch> \
   -f image-workflows_ref=main
 ```
 
-`image-workflows_owner` defaults to the repository's owner. A `Directory`
-input must exist when the pipeline starts, so before each run the lane makes
-an empty directory for every `Directory` input given as a bare name that
-names nothing yet, such as the `outDir` a plugin writes into.
+`image-workflows_owner` defaults to the repository's owner. Before each run
+the lane makes the output directories the image-workflows tools write into,
+as a user must (see Staging with InitialWorkDirRequirement): an empty
+directory for every `Directory` input given as a bare name that names nothing
+yet.
 
 ## Current limits
 
