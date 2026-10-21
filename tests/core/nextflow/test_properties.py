@@ -139,7 +139,8 @@ def test_interpolated_glob_literals_use_only_valid_gstring_escapes(value: str) -
 @settings(max_examples=150, deadline=None)
 @given(st.text(alphabet=st.characters(blacklist_categories=SURROGATE_CATEGORIES)).filter(str.strip))
 def test_every_single_quoted_groovy_position_uses_the_one_escaper(value: str) -> None:
-    staged = value.translate(str.maketrans("/\x00", "__"))  # an entry name is one path component
+    # An entry name is one path component, and never `.`, `..` or the reserved staging prefix.
+    staged = "_" + value.translate(str.maketrans("/\x00", "__"))
     spoken = "".join(char for char in value if " " <= char <= "~" and char != "\\")  # a when literal's alphabet
     process = NfProcess(
         "TASK",
