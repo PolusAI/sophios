@@ -618,8 +618,10 @@ def _array_rose_from_producer(items: Any, **binding: Any) -> CompiledNextflowSou
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(("items", "binding"), [("boolean", {"prefix": "-x"}), ({"type": "boolean"}, {})],
-                         ids=["prefix", "no-prefix"])
+@pytest.mark.parametrize(("items", "binding"), [
+    ("boolean", {"prefix": "-x"}), ({"type": "boolean"}, {}), (["null", "boolean"], {"prefix": "-x"}),
+    ("boolean?", {"prefix": "-x"}),
+], ids=["prefix", "no-prefix", "optional-items", "optional-items-shorthand"])
 def test_rejects_a_boolean_array_binding(items: Any, binding: dict[str, Any]) -> None:
     """cwltool renders [true, false] bound with prefix -x as -x alone, and with no prefix as nothing."""
     rose = _array_rose(items, [True, False], **binding)

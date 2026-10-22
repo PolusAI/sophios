@@ -1883,7 +1883,7 @@ def _tool_capability_findings(
                 _unconsumed_field_findings(binding, "CommandLineBinding", path=input_binding_path)
             )
             required_type = _required_type(raw_definition.get("type"))
-            if _is_array_type(required_type) and _type_names(required_type.get("items")) == {"boolean"}:
+            if _is_array_type(required_type) and _type_names(required_type.get("items")) - {"null"} == {"boolean"}:
                 findings.append(
                     f"{input_binding_path}: a boolean array's binding is not supported: CWL adds only its "
                     "prefix, when the array is not empty, and never an item's true or false"
