@@ -17,6 +17,7 @@ from sophios.nf_expr import parse
 from sophios.nf_reader import NextflowPort, nextflow_to_cwl, parse_nf_file, parse_nf_text, promote_nextflow_document
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
+    NfArrayBinding,
     NfBasenameReference,
     NfCommand,
     NfEntry,
@@ -82,7 +83,20 @@ def _entries() -> ExecutableNextflowWorkflow:
     )
 
 
+def _floats() -> ExecutableNextflowWorkflow:
+    process = NfProcess(
+        "STEP",
+        [NfPort("x", "val"), NfPort("xs", "val", is_array=True), NfPort("o", "val")],
+        [output_port("out", "out.txt")],
+        NfCommand((template("echo"), template(ref("x")), NfArrayBinding("xs"), NfOptionalBinding("o", "--o")),
+                  stdout=template("out.txt")),
+    )
+    return single_process_workflow(process, params={"x": -0.0, "xs": [1e-07], "o": []},
+                                   param_types={"x": "float", "xs": "float[]", "o": "float?"}, output_port_name="out")
+
+
 BUILDERS: dict[str, Callable[[], ExecutableNextflowWorkflow]] = {
+    "a float's text": _floats,
     "InitialWorkDirRequirement entries": _entries,
     "exported environment variables and a GPU count": _tool_shapes,
     "single-input dotproduct": lambda: _scattered("dotproduct", names=("item",)),
@@ -127,6 +141,11 @@ def test_a_source_read_alone_reads_each_entry_input_as_a_path() -> None:
     parsed = parse_nf_text(render_nextflow(workflow), params=dict(workflow.params))
     assert parsed.processes[0].inputs == (NextflowPort("src", "path"), NextflowPort("out", "path"))
     assert parsed.connections == tuple(workflow.connections)
+
+
+@pytest.mark.fast
+def test_a_source_read_alone_reads_the_float_text_helper() -> None:
+    assert parse_nf_text(render_nextflow(_floats())).opaque_regions == ()
 
 
 @pytest.mark.fast

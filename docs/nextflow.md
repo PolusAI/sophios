@@ -57,7 +57,8 @@ when it starts, before any task runs. A value given on the command line, as
 `--name value`, is text, and so is a JSON string in the params file. Text
 converts only when it is exact: `true` or `false` for a `boolean`, a whole
 number within the 32-bit range for an `int`, and a finite decimal number for
-a `float`; a number given for a `float` must be finite too. A `File` or
+a `float`; a number given for a `float` must be finite too, and the params
+file holds a few it cannot carry exactly, as [Floats](#floats) says. A `File` or
 `Directory` value is a path, or a CWL File or Directory object with a `path`
 and, if it has a `class`, the declared one, and must name an existing file or
 directory of that kind; a relative path is relative to the directory Nextflow
@@ -86,6 +87,21 @@ set away from its default, is an error: `--target nextflow` cannot be combined
 with a CWL-only option such as `--generate_cwl_workflow`, `--run_local`,
 `--generate_run_script`, `--inputs_file`, `--outdir`, `--graphviz` or
 `--partial_failure_enable`.
+
+### Floats
+
+A float reaches the command as cwltool prints it, as Python's `str()` does:
+the shortest digits that read back as the same value, such as `0.1`, `5.0`,
+`0.0001`, `1e-07`, `1e+16` and `-0.0`. A whole number given for a `float` as
+a JSON integer keeps its integer text, as cwltool prints it. Sophios writes
+each float into `nextflow_params.json` as text, such as `"-0.0"`, because
+Nextflow reads a JSON number with a point or an exponent without the sign of
+a zero. A JSON number you write into the params file for a `float` works as
+well, except two that Nextflow cannot read exactly: a zero written with a
+point or an exponent, such as `0.0` or `-0.0`, and a whole number outside the
+32-bit range. Each stops the run with `Sophios workflow input '<name>' must
+be float, not a params-file number Nextflow reads inexactly`; write the
+number as text instead, such as `"-0.0"`.
 
 ## Names
 

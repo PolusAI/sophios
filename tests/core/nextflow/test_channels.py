@@ -8,6 +8,7 @@ Topology; §7 for the stub every process carries.
 
 from dataclasses import replace
 import json
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -129,6 +130,11 @@ class _Missing(str):
     """The path text the check names when it stops the run because nothing of the declared kind is there."""
 
 
+# A params-file number Nextflow reads inexactly: a zero without its sign, or a whole number past the int range as a
+# long, which may have wrapped.
+_INEXACT = object()
+
+
 # (value, declared type, the checked value, or None or _Missing when the check stops the run)
 _ENTRY_CASES: list[tuple[Any, str, Any]] = [
     (True, "boolean", True), ("true", "boolean", True), ("false", "boolean", False),
@@ -139,7 +145,10 @@ _ENTRY_CASES: list[tuple[Any, str, Any]] = [
     (1.5, "float", 1.5), (3, "float", 3), ("1.5e3", "float", 1500.0), (".5", "float", 0.5), ("-2", "float", -2.0),
     ("NaN", "float", None), ("Infinity", "float", None), ("1e400", "float", None), ("0x10", "float", None),
     ("1d", "float", None), (True, "float", None), (_JsonNumber("1e400"), "float", None),
-    (_JsonNumber("-1e400"), "float", None),
+    (_JsonNumber("-1e400"), "float", None), ("-0.0", "float", -0.0), (_JsonNumber("1e-7"), "float", 1e-07),
+    (_JsonNumber("-1e-400"), "float", -0.0), (_JsonNumber("0.0"), "float", _INEXACT),
+    (_JsonNumber("-0.0"), "float", _INEXACT), (_JsonNumber("0e5"), "float", _INEXACT),
+    (2147483648, "float", _INEXACT), (_JsonNumber("12345678901234567890"), "float", _INEXACT),
     ("x", "string", "x"), ("10", "string", "10"), (5, "string", None), (False, "string", None),
     ([], "int?", []), ([], "string?", []), ([], "int", None), ([], "File?", None), (None, "int?", None),
     (["1", 2], "int[]", [1, 2]), ([], "string[]", []), ([], "string[]?", []), ("a", "string[]", None),
@@ -186,14 +195,17 @@ workflow {{
     assert result.returncode == 0, result.stdout + result.stderr
     checked = json.loads((tmp_path / "checked.json").read_text(encoding="utf-8"))
     for index, ((value, declared, expected), outcome) in enumerate(zip(_ENTRY_CASES, checked, strict=True)):
-        if expected is None or isinstance(expected, _Missing):
+        if expected is None or isinstance(expected, _Missing) or expected is _INEXACT:
             # A list's elements are checked one by one, and the message names the one that fails.
             failed = declared.split("[]")[0] if isinstance(value, list) and "[]" in declared else declared
             assert outcome[0] is False, (value, declared)
-            reason = f"; no {failed} exists at '{expected}'" if isinstance(expected, _Missing) else ", not "
+            reason = (f"; no {failed} exists at '{expected}'" if isinstance(expected, _Missing)
+                      else ", not a params-file number Nextflow reads inexactly" if expected is _INEXACT else ", not ")
             assert outcome[1].startswith(f"Sophios workflow input 'c{index}' must be {failed}{reason}"), outcome
         else:
             assert outcome == [True, expected], (value, declared)
+            if declared == "float":  # == does not tell -0.0 from 0.0
+                assert math.copysign(1, outcome[1]) == math.copysign(1, expected), (value, declared)
 
 
 @pytest.mark.fast

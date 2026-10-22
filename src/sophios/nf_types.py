@@ -20,9 +20,10 @@ NF_SCATTER_INDEX_NAME = "__sophios_scatter_index_9f72e"
 NF_NEST_HELPER = "__sophios_nest_9f72e"
 NF_INPUT_HELPER = "__sophios_input_9f72e"
 NF_STEP_INPUT_HELPER = "__sophios_step_input_9f72e"
+NF_FLOAT_TEXT_HELPER = "__sophios_float_text_9f72e"
 NF_INTERNAL_IDENTIFIERS = frozenset({
     NF_SHELL_QUOTE_HELPER, NF_LOAD_CONTENTS_HELPER, NF_FINITE_HELPER, NF_ROUND_HELPER,
-    NF_SCATTER_INDEX_NAME, NF_NEST_HELPER, NF_INPUT_HELPER, NF_STEP_INPUT_HELPER,
+    NF_SCATTER_INDEX_NAME, NF_NEST_HELPER, NF_INPUT_HELPER, NF_STEP_INPUT_HELPER, NF_FLOAT_TEXT_HELPER,
 })
 _PATH_KINDS = {"File": "file", "Directory": "directory"}
 # A workflow parameter's declared type, which the generated pipeline checks

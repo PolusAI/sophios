@@ -30,6 +30,7 @@ from .input_output_nf import (
     NEXTFLOW_PARAMS,
     NEXTFLOW_SCRIPT,
     NF_ARRAY_PATH_ARITY,
+    NF_FLOAT_TEXT_FUNCTION,
     NF_INPUT_FUNCTION,
     NF_LOAD_CONTENTS_FUNCTION,
     NF_NEST_FUNCTION,
@@ -38,6 +39,7 @@ from .input_output_nf import (
     NF_STUB_LINES,
     at_most_one_suffix,
     container_directives,
+    nextflow_params,
     render_nextflow,
     render_number,
 )
@@ -489,7 +491,7 @@ def parse_nf_text(text: str, *, params: Mapping[str, Any] | None = None) -> Next
         covered.update(range(block_start, block_end + 1))
     for helper in (
         NF_SHELL_QUOTE_FUNCTION, NF_INPUT_FUNCTION, NF_LOAD_CONTENTS_FUNCTION, NF_EXPRESSION_FUNCTIONS,
-        NF_NEST_FUNCTION, NF_STEP_INPUT_FUNCTION,
+        NF_NEST_FUNCTION, NF_STEP_INPUT_FUNCTION, NF_FLOAT_TEXT_FUNCTION,
     ):
         helper_lines = _lines(helper)
         for helper_start in range(len(lines) - len(helper_lines) + 1):
@@ -557,8 +559,10 @@ def parse_nf_file(path: str | Path) -> NextflowDocument:
     executable = ExecutableNextflowWorkflow.from_json(ir_path.read_text(encoding="utf-8"))
     if not _renders(executable, source_text):
         raise ValueError("generated Nextflow source does not match its executable IR artifact")
-    if executable.params != params:
+    if nextflow_params(executable) != params:
         raise ValueError("generated Nextflow parameters do not match its executable IR artifact")
+    # The params file holds each float as its text; the document holds the model's values.
+    params = executable.params
     try:
         document = parse_nf_text(source_text, params=params)
     except ValueError:

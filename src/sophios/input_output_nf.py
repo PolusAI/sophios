@@ -12,6 +12,7 @@ from .nf_expr import (
     render_groovy, source_text,
 )
 from .nf_types import (
+    NF_FLOAT_TEXT_HELPER,
     NF_INPUT_HELPER,
     NF_NEST_HELPER,
     NF_STEP_INPUT_HELPER,
@@ -71,7 +72,11 @@ NF_SHELL_QUOTE_FUNCTION = f'''def {NF_SHELL_QUOTE_HELPER}(value) {{
 # Checks one workflow input value against its declared type when the pipeline
 # starts (design §6, Inputs and channels). A value of the declared type
 # passes, and a float is finite; a command-line value is text, and text
-# converts only when it is exact. A File or Directory is path text, or a
+# converts only when it is exact. A float is an int or a double: Nextflow
+# reads a params-file number with a point or an exponent as a BigDecimal,
+# which converts when it is not zero, since a zero has lost its sign, and a
+# whole number outside the int range as a long, which may have wrapped; those
+# two stop the run. A File or Directory is path text, or a
 # mapping with a path and, if it has one, the declared class, naming an entry
 # of that kind, and the check returns its path text; path text that names no
 # entry of that kind stops the run, naming the path. [] stands for an absent
@@ -89,7 +94,7 @@ NF_INPUT_FUNCTION = f'''def {NF_INPUT_HELPER}(String name, value, String type) {
         if( type.endsWith('?') && value == [] && !(item in ['File', 'Directory']) )
             return value
         if( item == 'boolean' && value instanceof Boolean || item == 'int' && value instanceof Integer ||
-            item == 'float' && value instanceof Number && Double.isFinite(value.toDouble()) ||
+            item == 'float' && (value instanceof Integer || value instanceof Double && Double.isFinite(value)) ||
             item == 'string' && text )
             return value
         if( item == 'boolean' && value in ['true', 'false'] )
@@ -97,9 +102,13 @@ NF_INPUT_FUNCTION = f'''def {NF_INPUT_HELPER}(String name, value, String type) {
         if( item == 'int' && text && value ==~ /[+-]?[0-9]+/ &&
             value.toBigInteger() == value.toBigInteger().intValue() )
             return value.toInteger()
-        if( item == 'float' && text && value ==~ /[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?/ &&
-            Double.isFinite(value.toDouble()) )
+        if( item == 'float' && (text && value ==~ /[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?/ ||
+            value instanceof BigDecimal && value.signum() != 0) && Double.isFinite(value.toDouble()) )
             return value.toDouble()
+        if( item == 'float' && (value instanceof BigDecimal && value.signum() == 0 || value instanceof Long) )
+            throw new IllegalArgumentException("Sophios workflow input '" + name + "' must be " + type +
+                ", not a params-file number Nextflow reads inexactly: a zero loses its sign, and a whole number " +
+                "outside the int range may wrap; write the number as text, such as '-0.0'")
         if( item in ['File', 'Directory'] && path instanceof String && path != '' ) {{
             if( item == 'File' ? file(path, glob: false).isFile() : file(path, glob: false).isDirectory() )
                 return path
@@ -109,6 +118,36 @@ NF_INPUT_FUNCTION = f'''def {NF_INPUT_HELPER}(String name, value, String type) {
     }}
     throw new IllegalArgumentException("Sophios workflow input '" + name + "' must be " + type + ", not " +
         value.inspect())
+}}'''
+# The text a float value reaches a command as: Python's str(), as cwltool
+# prints it (design §6, Inputs and channels). The digits are the shortest
+# that read back as the double, nearest it, an even last digit on a tie,
+# found from the double's exact binary value with BigDecimal, since the JDK's
+# Double.toString is not shortest before JDK 19 and writes another notation.
+# They are written in decimal for an exponent from -4 to 15 and in scientific
+# notation otherwise. An int value is its own text.
+NF_FLOAT_TEXT_FUNCTION = f'''def {NF_FLOAT_TEXT_HELPER}(value) {{
+    if( !(value instanceof Double) )
+        return value.toString()
+    def exact = new BigDecimal(value)
+    if( exact.signum() == 0 )
+        return Math.copySign(1d, value) < 0 ? '-0.0' : '0.0'
+    def shortest = (1..17).findResult {{ precision ->
+        [java.math.RoundingMode.FLOOR, java.math.RoundingMode.CEILING]
+            .collect {{ mode -> exact.round(new java.math.MathContext(precision, mode)) }}
+            .findAll {{ digits -> Double.valueOf(digits.toString()).equals(value) }}
+            .sort {{ a, b -> (a - exact).abs() <=> (b - exact).abs() ?:
+                a.unscaledValue().testBit(0) <=> b.unscaledValue().testBit(0) }}[0]
+    }}.stripTrailingZeros()
+    def point = shortest.precision() - shortest.scale()
+    if( point > -4 && point <= 16 ) {{
+        def plain = shortest.toPlainString()
+        return plain.contains('.') ? plain : plain + '.0'
+    }}
+    def digits = shortest.unscaledValue().abs().toString()
+    def exponent = point - 1
+    return (shortest.signum() < 0 ? '-' : '') + digits[0] + (digits.length() > 1 ? '.' + digits.substring(1) : '') +
+        'e' + (exponent < 0 ? '-' : '+') + (Math.abs(exponent) < 10 ? '0' : '') + Math.abs(exponent)
 }}'''
 # The step-input idioms over one step input's values, in the order it names
 # them (design §6, Topology, Step inputs): merge_flattened splices an array
@@ -194,9 +233,10 @@ def _render_template(template: Any, entries: Mapping[str, str]) -> str:
     return f"${{{NF_SHELL_QUOTE_HELPER}({_template_expression(template, entries)})}}"
 
 
-def _render_array_binding(token: NfArrayBinding) -> str:
+def _render_array_binding(token: NfArrayBinding, floats: frozenset[str]) -> str:
     """Render an array binding: nothing when empty, else prefix once plus each item."""
-    items_expression = f"{token.name}.collect{{ {NF_SHELL_QUOTE_HELPER}(it.toString()) }}"
+    item = f"{NF_FLOAT_TEXT_HELPER}(it)" if token.name in floats else "it.toString()"
+    items_expression = f"{token.name}.collect{{ {NF_SHELL_QUOTE_HELPER}({item}) }}"
     if token.prefix is not None:
         quoted_prefix = f"{NF_SHELL_QUOTE_HELPER}({groovy_literal(token.prefix)})"
         joined = f"([{quoted_prefix}] + {items_expression}).join(' ')"
@@ -205,9 +245,9 @@ def _render_array_binding(token: NfArrayBinding) -> str:
     return f"${{{token.name}.isEmpty() ? '' : {joined}}}"
 
 
-def _render_optional_binding(token: NfOptionalBinding) -> str:
+def _render_optional_binding(token: NfOptionalBinding, entries: Mapping[str, str]) -> str:
     """Render an optional input's binding: nothing for the [] sentinel, else the prefix and the value."""
-    value = f"{token.name}.toString()"
+    value = entries.get(token.name, f"{token.name}.toString()")
     if token.prefix is None:
         words = f"{NF_SHELL_QUOTE_HELPER}({value})"
     elif token.separate:
@@ -227,15 +267,15 @@ def _render_shell_literal(token: NfShellLiteral) -> str:
     return _groovy_gstring_fragment(token.text)
 
 
-def _render_command_token(token: Any, entries: Mapping[str, str]) -> str:
+def _render_command_token(token: Any, entries: Mapping[str, str], floats: frozenset[str]) -> str:
     """Render one argv token; flags, array and optional bindings collapse away when false, empty or absent."""
     if isinstance(token, NfFlag):
         quoted = f"{NF_SHELL_QUOTE_HELPER}({groovy_literal(token.prefix)})"
         return f"${{{token.name} ? {quoted} : ''}}"
     if isinstance(token, NfArrayBinding):
-        return _render_array_binding(token)
+        return _render_array_binding(token, floats)
     if isinstance(token, NfOptionalBinding):
-        return _render_optional_binding(token)
+        return _render_optional_binding(token, entries)
     if isinstance(token, NfShellLiteral):
         return _render_shell_literal(token)
     return _render_template(token, entries)
@@ -393,8 +433,10 @@ def container_directives(container: str) -> tuple[str, ...]:
     )
 
 
-def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...] = ()) -> str:
-    entries = _entry_names(process)
+def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...], floats: frozenset[str]) -> str:
+    # The Groovy text a reference to an input renders as, where it is not the value's own: an entry's name,
+    # or a float's text.
+    entries = {**_entry_names(process), **{name: f"{NF_FLOAT_TEXT_HELPER}({name})" for name in floats}}
     lines = [f"process {process.name} {{"]
     if process.container is not None:
         lines.extend(f"    {directive}" for directive in container_directives(process.container))
@@ -430,7 +472,7 @@ def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...] = ())
         else:
             lines.extend(f"    {_process_output(port, entries)}" for port in process.outputs)
 
-    command = " ".join(_render_command_token(token, entries) for token in process.command.tokens)
+    command = " ".join(_render_command_token(token, entries, floats) for token in process.command.tokens)
     streams = (
         ("<", process.command.stdin),
         (">", process.command.stdout),
@@ -881,6 +923,29 @@ def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> st
     return f"Channel.value(file({checked}, glob: false))"
 
 
+def _is_float(param_type: str) -> bool:
+    return param_type.removesuffix("?").removesuffix("[]") == "float"
+
+
+def _float_texts(workflow: ExecutableNextflowWorkflow) -> dict[str, frozenset[str]]:
+    """Each process's inputs a float parameter reaches that it renders as text."""
+    reached = {
+        (edge.to_process, edge.to_port)
+        for connection in workflow.connections
+        for edge in (connection.sources if isinstance(connection, NfStepInputConnection) else (connection,))
+        if isinstance(edge, NfWorkflowInputConnection) and _is_float(workflow.param_types[edge.from_port])
+    }
+    texts: dict[str, frozenset[str]] = {}
+    for process in workflow.processes:
+        templates = [*process.command.templates, *(port.glob for port in process.outputs if port.glob is not None)]
+        names = {segment.name for template in templates for segment in template.segments
+                 if isinstance(segment, NfInputReference)}
+        names |= {token.name for token in process.command.tokens
+                  if isinstance(token, (NfArrayBinding, NfOptionalBinding))}
+        texts[process.name] = frozenset(name for name in names if (process.name, name) in reached)
+    return texts
+
+
 def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
     """Render a supported workflow as deterministic Nextflow DSL2 source.
 
@@ -915,8 +980,12 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
         sections.append(NF_NEST_FUNCTION)
     if any(isinstance(connection, NfStepInputConnection) for connection in workflow.connections):
         sections.append(NF_STEP_INPUT_FUNCTION)
+    floats = _float_texts(workflow)
+    if any(floats.values()):
+        sections.append(NF_FLOAT_TEXT_FUNCTION)
     sections.extend(
-        _render_process(process, tuple(name for name, _, _ in _multi_input_sources(workflow, process)))
+        _render_process(process, tuple(name for name, _, _ in _multi_input_sources(workflow, process)),
+                        floats[process.name])
         for process in workflow.processes
     )
     sections.append(_render_named_workflow(workflow))
@@ -945,6 +1014,27 @@ def render_nextflow_config(workflow: ExecutableNextflowWorkflow) -> str:
     return f"docker.enabled = {str(workflow.containers_enabled).lower()}\n"
 
 
+def _float_param(value: Any) -> Any:
+    """A float as its Python text, which the entry check reads exactly; Nextflow reads a JSON zero without its sign."""
+    if isinstance(value, list):
+        return [_float_param(item) for item in value]
+    return repr(value) if isinstance(value, float) else value
+
+
+def nextflow_params(workflow: ExecutableNextflowWorkflow) -> dict[str, Any]:
+    """The parameter values ``nextflow_params.json`` holds: each float parameter's floats as their Python text.
+
+    Args:
+        workflow (ExecutableNextflowWorkflow): Validated executable IR.
+
+    Returns:
+        dict[str, Any]: The JSON object of the params file.
+    """
+    params: dict[str, Any] = workflow.to_dict()["params"]
+    return {name: _float_param(value) if _is_float(workflow.param_types[name]) else value
+            for name, value in params.items()}
+
+
 def render_nextflow_params(workflow: ExecutableNextflowWorkflow) -> str:
     """Render workflow parameters as deterministic JSON.
 
@@ -959,7 +1049,7 @@ def render_nextflow_params(workflow: ExecutableNextflowWorkflow) -> str:
     """
     _require_executable(workflow)
     return json.dumps(
-        workflow.to_dict()["params"],
+        nextflow_params(workflow),
         indent=2,
         sort_keys=True,
         ensure_ascii=False,
