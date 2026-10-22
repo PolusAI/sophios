@@ -30,8 +30,8 @@ def _workflow(consumer_input: str) -> Workflow:
                             Outputs(file=Output(cwl.file, glob="out.txt"), other=Output(cwl.file, glob="out.txt")))
             .base_command("echo").stdout("out.txt"))
     consume = (CommandLineTool("consume", Inputs(**{consumer_input: Input(cwl.file, position=1)}),
-                               Outputs(result=Output(cwl.file, glob="out.txt")))
-               .base_command("cat").stdout("out.txt"))
+                               Outputs(result=Output(cwl.file, glob="result.txt")))
+               .base_command("cat").stdout("result.txt"))
     producer = Step(emit)
     producer.inputs.message = "hello"
     return Workflow([producer, Step(consume)], "wf")

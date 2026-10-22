@@ -399,7 +399,7 @@ def test_accepts_both_single_input_scatter_spellings(scatter: Any) -> None:
 def _producer() -> Yaml:
     return tool(
         "PRODUCER",
-        outputs={"out": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+        outputs={"out": {"type": "File", "outputBinding": {"glob": "produced.txt"}}},
     )
 
 
@@ -767,15 +767,15 @@ def test_an_entry_under_its_own_basename_may_be_referenced(item: Any, reference:
     assert compiled_source_to_nextflow(rose).processes[0].inputs[0].entry is not None
 
 
-def _copy_tool() -> CommandLineTool:
+def _copy_tool(name: str = "copy.txt") -> CommandLineTool:
     return (
         CommandLineTool(
             "copy_file",
             Inputs(source=Input(cwl.file, position=1)),
-            Outputs(result=Output(cwl.file, glob="copy.txt")),
+            Outputs(result=Output(cwl.file, glob=name)),
         )
         .base_command("cp")
-        .argument("copy.txt", position=2)
+        .argument(name, position=2)
     )
 
 
@@ -825,7 +825,7 @@ def _nested_downstream_result() -> CompilationResult:
     """Compile a child-output edge the Python surface deliberately cannot author yet."""
     write = _write_step()
     child = _copy_child("child", write.outputs.result)
-    consume = Step(_copy_tool(), step_name="consume")
+    consume = Step(_copy_tool("consumed.txt"), step_name="consume")
     consume.inputs.source = "placeholder.txt"
     root = Workflow([write, child, consume], "root")
     document = workflow_runtime.workflow_document(root)
@@ -1941,3 +1941,49 @@ def test_a_rejected_source_raises_a_matching_error(
 ) -> None:
     with pytest.raises(ValueError, match=pattern):
         compiled_source_to_nextflow(build())
+
+
+def _chain(upstream_glob: str, *, stdout: str | None = "sorted.txt", glob: str = "sorted.txt",
+           listing: list[Any] | None = None, source: str = "EMIT/out") -> CompiledNextflowSource:
+    """EMIT writes ``upstream_glob``; SORT reads it as ``src`` and writes ``glob``, by stdout unless None."""
+    emit = tool("EMIT", outputs={"out": {"type": "File", "outputBinding": {"glob": upstream_glob}}},
+                stdout=upstream_glob)
+    sort = tool("SORT", inputs={"src": {"type": "File", "inputBinding": {"position": 1}}},
+                outputs={"out": {"type": "File", "outputBinding": {"glob": glob}}},
+                **({"stdout": stdout} if stdout else {"arguments": ["-o", glob]}),
+                **({"requirements": {"InitialWorkDirRequirement": {"listing": listing}}} if listing else {}))
+    return synthetic_source(
+        workflow_doc([step("EMIT", out=["out"]), step("SORT", **{"in": {"src": source}, "out": ["out"]})],
+                     inputs={"given": {"type": "File"}}),
+        [emit, sort], workflow_inputs={"given": {"class": "File", "path": "in.txt"}},
+    )
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("rose", "where"), [
+    (_chain("sorted.txt"), "steps[1].run.stdout"),
+    (_chain("out/sorted.txt"), "steps[1].run.stdout"),
+    (_chain("sorted.txt", stdout=None), "steps[1].run.outputs.out.outputBinding.glob"),
+    (_chain("emitted.txt", listing=[{"entry": "$(inputs.src)", "entryname": "sorted.txt"}]), "steps[1].run.stdout"),
+    (_chain("emitted.txt", source="given", listing=[{"entry": "$(inputs.src)", "entryname": "sorted.txt"}]),
+     "steps[1].run.stdout"),
+], ids=["upstream-glob", "upstream-glob-in-a-directory", "glob-written-by-the-command", "entry-name",
+        "entry-name-of-a-workflow-input"])
+def test_rejects_an_output_named_like_a_link_its_task_stages(rose: CompiledNextflowSource, where: str) -> None:
+    """Writing a staged input's link writes through it: the run succeeds and leaves every sorted.txt empty."""
+    with pytest.raises(ValueError, match=re.escape(f"{where}: 'sorted.txt' is also the name input 'src' is linked "
+                                                   "under in the task directory")) as raised:
+        compiled_source_to_nextflow(rose)
+    assert str(raised.value).count("'sorted.txt' is also the name") == 1
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("rose", [
+    _chain("emitted.txt"),
+    _chain("*.txt", glob="*.txt"),
+    _chain("sorted.txt", source="given"),
+    _chain("sorted.txt", listing=[{"entry": "$(inputs.src)", "writable": True}]),
+], ids=["another-name", "pattern", "workflow-input", "writable-entry"])
+def test_accepts_an_output_whose_name_no_link_is_known_to_share(rose: CompiledNextflowSource) -> None:
+    """A copy is the task's own; a workflow input's or a pattern's name is known only when the task runs."""
+    assert len(compiled_source_to_nextflow(rose).processes) == 2

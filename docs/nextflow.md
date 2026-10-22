@@ -387,6 +387,20 @@ that collides only when the task runs, such as two entries of inputs with one
 basename, or an entry and a staged input with one basename, stops the task
 with an error naming the entry.
 
+## Outputs named like staged inputs
+
+Nextflow links each `File` or `Directory` input into the task directory
+under its name, so a command that writes that name writes through the link
+into the file the input names: an upstream task's output, or a workflow
+input. Compiling rejects an output whose literal name, a `stdout`, a
+`stderr` or a glob with no pattern or reference, is a name an input is
+linked under that is known before the run: an `InitialWorkDirRequirement`
+entry's literal name, or the literal glob of the output the input comes
+from. A writable entry is the task's own copy, so writing it is not
+checked. A name that a workflow input gives, or that a pattern or a
+reference makes, is known only when the task runs, and is not checked; give
+a tool's outputs names distinct from its inputs' basenames.
+
 ## Scatter
 
 A step that scatters over exactly one input runs once per element of its
@@ -449,10 +463,6 @@ output reaches a scattered step as one value, which every task reads; it is
 not an array to scatter over, since no tool output is an array. Scattering
 over an array-typed port, over a non-array source, and scattering a nested
 workflow step are all rejected.
-
-An output named like one of the task's own staged inputs overwrites that
-input, because Nextflow stages inputs in the task directory; give a tool's
-outputs names distinct from its inputs' basenames.
 
 ## Nested workflows
 

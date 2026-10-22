@@ -2717,6 +2717,101 @@ def _text_capture_sink_findings(
     ]
 
 
+def _literal_text(value: Any) -> str | None:
+    """The text of a template with no input reference, or None."""
+    try:
+        segments = _template(value, context="name").segments
+    except ValueError:
+        return None
+    literals = [segment.value for segment in segments if isinstance(segment, NfLiteral)]
+    return "".join(literals) if len(literals) == len(segments) else None
+
+
+def _literal_outputs(tool: Mapping[str, Any]) -> dict[str, str]:
+    """Each output whose glob is one literal name, with no wildcard, by port."""
+    outputs = tool.get("outputs")
+    names: dict[str, str] = {}
+    for raw_port, definition in outputs.items() if isinstance(outputs, Mapping) else ():
+        binding = definition.get("outputBinding") if isinstance(definition, Mapping) else None
+        glob = _literal_text(binding.get("glob")) if isinstance(binding, Mapping) else None
+        if glob and not GLOB_WILDCARDS & set(glob):
+            names[raw_port] = glob
+    return names
+
+
+def _staged_names(step: Mapping[str, Any], tool: Mapping[str, Any], produced: Mapping[str, str]) -> dict[str, set[str]]:
+    """The names known at compile time that each File or Directory input is linked under in the task directory.
+
+    An InitialWorkDirRequirement entry with a literal name is linked under it;
+    any other input not in an array is linked under its basename, which is a
+    literal output name when its source produces one. A writable entry is a
+    copy, not a link, and an array's files are linked in numbered directories.
+    """
+    inputs, step_inputs = tool.get("inputs"), step.get("in")
+    if not isinstance(inputs, Mapping) or not isinstance(step_inputs, Mapping):
+        return {}
+    try:
+        entries = _iwdr_entries(tool)
+    except ValueError:  # its own finding
+        entries = {}
+    staged: dict[str, set[str]] = {}
+    for raw_name, definition in inputs.items():
+        try:
+            if not isinstance(definition, Mapping) or cwl_type_to_nf_qualifier(definition.get("type")) != "path":
+                continue
+            sources = _source_values(step_inputs.get(raw_name, []), context=str(raw_name))
+            entry = entries.get(_identifier(raw_name, context="tool input"))
+        except ValueError:  # an array, or what another finding names
+            continue
+        if entry is not None and entry.copy:
+            continue
+        staged[raw_name] = (
+            {entry.name} if entry is not None and entry.name is not None
+            else {produced[source] for source in sources if source in produced}
+        )
+    return staged
+
+
+def _staged_name_findings(
+    steps: list[Mapping[str, Any]],
+    tools: tuple[Mapping[str, Any], ...],
+) -> list[str]:
+    """Name each file a task writes under a name one of its inputs is linked under.
+
+    Nextflow links a File or Directory input into the task directory, so a
+    command that writes the link's name writes through it into the file the
+    input names: an upstream task's output, or a workflow input. Only a name
+    known at compile time is checked: a literal stdout, stderr or glob against
+    a literal entry name or a literal upstream glob. A name a workflow input
+    gives, or a pattern or a reference makes, is known only when the task runs.
+    """
+    produced: dict[str, str] = {}
+    for step, tool in zip(steps, tools, strict=True):
+        step_id = str(step.get("id"))
+        for raw_port, glob in _literal_outputs(tool).items():
+            for step_key in (step_id, step_id.rsplit("#", maxsplit=1)[-1]):
+                produced[f"{step_key}/{raw_port}"] = glob.rsplit("/", maxsplit=1)[-1]
+    findings: list[str] = []
+    for step_index, (step, tool) in enumerate(zip(steps, tools, strict=True)):
+        path = f"steps[{step_index}].run"
+        written: dict[str, str] = {}  # each name once, where it is first written: a stdout's glob names it again
+        for where, name in [
+            *((f"{path}.{stream}", _literal_text(tool.get(stream))) for stream in ("stdout", "stderr")),
+            *((f"{path}.outputs.{port}.outputBinding.glob", glob) for port, glob in _literal_outputs(tool).items()),
+        ]:
+            if name is not None:
+                written.setdefault(name, where)
+        staged = _staged_names(step, tool, produced)
+        findings.extend(
+            f"{where}: {name!r} is also the name input {raw_name!r} is linked under in the task directory, so "
+            "writing it writes through the link into the file the input names; give the output another name"
+            for name, where in written.items()
+            for raw_name, names in staged.items()
+            if name in names
+        )
+    return findings
+
+
 def _capability_error(findings: list[str]) -> ValueError:
     details = "\n".join(f"- {finding}" for finding in findings)
     return ValueError(f"Nextflow capability analysis failed:\n{details}")
@@ -3153,6 +3248,7 @@ def compiled_source_to_nextflow_with_notes(
     findings.extend(_scatter_findings(workflow, steps, tools))
     findings.extend(_step_input_findings(workflow, steps, tools))
     findings.extend(_text_capture_sink_findings(steps, tools))
+    findings.extend(_staged_name_findings(steps, tools))
     _raise_capability_findings(findings)
     try:
         params = _workflow_params(workflow, compiled.params)
