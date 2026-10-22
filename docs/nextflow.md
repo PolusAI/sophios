@@ -233,7 +233,9 @@ from an absent optional value above.
 
 `itemSeparator`, `separate: false`, and `valueFrom` on an array binding are
 not supported, nor are the shorthand `File[]` type form, nested arrays, a
-per-item `inputBinding`, or array-typed outputs.
+per-item `inputBinding`, or array-typed outputs. A binding on a `boolean`
+array is rejected: CWL adds only its prefix, when the array is not empty, and
+never an item's `true` or `false`.
 
 ## Shell mode
 

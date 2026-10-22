@@ -617,6 +617,17 @@ def _array_rose_from_producer(items: Any, **binding: Any) -> CompiledNextflowSou
     )
 
 
+@pytest.mark.fast
+@pytest.mark.parametrize(("items", "binding"), [("boolean", {"prefix": "-x"}), ({"type": "boolean"}, {})],
+                         ids=["prefix", "no-prefix"])
+def test_rejects_a_boolean_array_binding(items: Any, binding: dict[str, Any]) -> None:
+    """cwltool renders [true, false] bound with prefix -x as -x alone, and with no prefix as nothing."""
+    rose = _array_rose(items, [True, False], **binding)
+    with pytest.raises(ValueError, match=r"run\.inputs\.values\.inputBinding: a boolean array's binding is not "
+                                         r"supported: CWL adds only its prefix"):
+        compiled_source_to_nextflow(rose)
+
+
 def _shell_tool(arguments: list[Any], *, shell_command: bool = True) -> Yaml:
     extra: dict[str, Any] = {"arguments": arguments}
     if shell_command:

@@ -1882,13 +1882,19 @@ def _tool_capability_findings(
             findings.extend(
                 _unconsumed_field_findings(binding, "CommandLineBinding", path=input_binding_path)
             )
+            required_type = _required_type(raw_definition.get("type"))
+            if _is_array_type(required_type) and _type_names(required_type.get("items")) == {"boolean"}:
+                findings.append(
+                    f"{input_binding_path}: a boolean array's binding is not supported: CWL adds only its "
+                    "prefix, when the array is not empty, and never an item's true or false"
+                )
             if binding.get("shellQuote") is False:
                 try:
                     _shell_literal_value(raw_name, binding, shell_mode=shell_mode_active)
                 except ValueError as exc:
                     findings.append(f"{input_binding_path}.shellQuote: {exc}")
             if (
-                _required_type(raw_definition.get("type")) == "boolean"
+                required_type == "boolean"
                 and binding.get("valueFrom") is not None
                 and binding.get("shellQuote") is not False
             ):

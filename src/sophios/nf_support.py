@@ -151,7 +151,7 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
         'doc': _DOC,
         'format': _FORMAT,
         'id': Row(_L, 'names the port'),
-        'inputBinding': Row(_L, 'command tokens'),
+        'inputBinding': Row(_L, "command tokens; a `boolean` array's is rejected"),
         'label': _DOC,
         'loadContents': Row(_R, "loadContents on an input is not supported: an input's contents would have to "
                                 'become a value channel read at staging time'),
