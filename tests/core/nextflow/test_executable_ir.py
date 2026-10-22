@@ -82,6 +82,13 @@ def test_json_roundtrip_is_deterministic() -> None:
 
 
 @pytest.mark.fast
+def test_a_round_trip_renders_unread_parameters_identically() -> None:
+    """Parameters no step reads are listed in one order, whatever order the model holds them in."""
+    workflow = ExecutableNextflowWorkflow("wf", [], [], {"b": 2, "a": 1}, {"b": "int", "a": "int"})
+    assert render_nextflow(ExecutableNextflowWorkflow.from_json(workflow.to_json())) == render_nextflow(workflow)
+
+
+@pytest.mark.fast
 def test_executable_schema_declares_version_and_kind() -> None:
     workflow = ExecutableNextflowWorkflow("wf", [], [], {})
     payload = workflow.to_dict()

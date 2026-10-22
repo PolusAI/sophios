@@ -987,8 +987,10 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
     )
     sections.append(_render_named_workflow(workflow))
     connected = _workflow_input_names(workflow)
-    # A parameter no step reads is checked all the same, before the call.
-    unread = "".join(f"    {_checked_parameter(workflow, name)}\n" for name in workflow.params if name not in connected)
+    # A parameter no step reads is checked all the same, before the call, in sorted order, as a model
+    # read back from its JSON holds its parameters.
+    unread = "".join(f"    {_checked_parameter(workflow, name)}\n" for name in sorted(workflow.params)
+                     if name not in connected)
     arguments = ",\n        ".join(_parameter_expression(workflow, name) for name in connected)
     sections.append(f"workflow {{\n{NF_PARSER_CHECK}{unread}    {workflow.name}({arguments})\n}}")
     return "\n\n".join(sections) + "\n"
