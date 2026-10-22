@@ -72,16 +72,15 @@ NF_SHELL_QUOTE_FUNCTION = f'''def {NF_SHELL_QUOTE_HELPER}(value) {{
 # Checks one workflow input value against its declared type when the pipeline
 # starts (design §6, Inputs and channels). A value of the declared type
 # passes, and a float is finite; a command-line value is text, and text
-# converts only when it is exact. A float is an int or a double: Nextflow
+# converts only when it is exact. A float is an integer or a double: Nextflow
 # reads a params-file number with a point or an exponent as a BigDecimal,
-# which converts when it is not zero, since a zero has lost its sign, and a
-# whole number outside the int range as a long, which may have wrapped; those
-# two stop the run. A File or Directory is path text, or a
-# mapping with a path and, if it has one, the declared class, naming an entry
-# of that kind, and the check returns its path text; path text that names no
-# entry of that kind stops the run, naming the path. [] stands for an absent
-# optional value; no path has a lowering of one. Anything else stops the run,
-# naming the parameter.
+# which converts to the nearest double, and a whole number outside the int
+# range as a long, wrapped past the long range. A File or Directory is path
+# text, or a mapping with a path and, if it has one, the declared class,
+# naming an entry of that kind, and the check returns its path text; path
+# text that names no entry of that kind stops the run, naming the path. []
+# stands for an absent optional value; no path has a lowering of one.
+# Anything else stops the run, naming the parameter.
 NF_INPUT_FUNCTION = f'''def {NF_INPUT_HELPER}(String name, value, String type) {{
     def item = type.replace('[]', '').replace('?', '')
     if( type.contains('[]') ) {{
@@ -94,7 +93,8 @@ NF_INPUT_FUNCTION = f'''def {NF_INPUT_HELPER}(String name, value, String type) {
         if( type.endsWith('?') && value == [] && !(item in ['File', 'Directory']) )
             return value
         if( item == 'boolean' && value instanceof Boolean || item == 'int' && value instanceof Integer ||
-            item == 'float' && (value instanceof Integer || value instanceof Double && Double.isFinite(value)) ||
+            item == 'float' && (value instanceof Integer || value instanceof Long ||
+                value instanceof Double && Double.isFinite(value)) ||
             item == 'string' && text )
             return value
         if( item == 'boolean' && value in ['true', 'false'] )
@@ -103,12 +103,8 @@ NF_INPUT_FUNCTION = f'''def {NF_INPUT_HELPER}(String name, value, String type) {
             value.toBigInteger() == value.toBigInteger().intValue() )
             return value.toInteger()
         if( item == 'float' && (text && value ==~ /[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?/ ||
-            value instanceof BigDecimal && value.signum() != 0) && Double.isFinite(value.toDouble()) )
+            value instanceof BigDecimal) && Double.isFinite(value.toDouble()) )
             return value.toDouble()
-        if( item == 'float' && (value instanceof BigDecimal && value.signum() == 0 || value instanceof Long) )
-            throw new IllegalArgumentException("Sophios workflow input '" + name + "' must be " + type +
-                ", not a params-file number Nextflow reads inexactly: a zero loses its sign, and a whole number " +
-                "outside the int range may wrap; write the number as text, such as '-0.0'")
         if( item in ['File', 'Directory'] && path instanceof String && path != '' ) {{
             if( item == 'File' ? file(path, glob: false).isFile() : file(path, glob: false).isDirectory() )
                 return path
@@ -119,13 +115,14 @@ NF_INPUT_FUNCTION = f'''def {NF_INPUT_HELPER}(String name, value, String type) {
     throw new IllegalArgumentException("Sophios workflow input '" + name + "' must be " + type + ", not " +
         value.inspect())
 }}'''
-# The text a float value reaches a command as: Python's str(), as cwltool
-# prints it (design §6, Inputs and channels). The digits are the shortest
-# that read back as the double, nearest it, an even last digit on a tie,
-# found from the double's exact binary value with BigDecimal, since the JDK's
-# Double.toString is not shortest before JDK 19 and writes another notation.
-# They are written in decimal for an exponent from -4 to 15 and in scientific
-# notation otherwise. An int value is its own text.
+# The text a float value reaches a command as: Python's str() (design §6,
+# Inputs and channels), which cwltool's text of a job-file float is not. The
+# digits are the shortest that read back as the double, nearest it, an even
+# last digit on a tie, found from the double's exact binary value with
+# BigDecimal, since the JDK's Double.toString is not shortest before JDK 19
+# and writes another notation. They are written in decimal for an exponent
+# from -4 to 15 and in scientific notation otherwise. An integer value is its
+# own text.
 NF_FLOAT_TEXT_FUNCTION = f'''def {NF_FLOAT_TEXT_HELPER}(value) {{
     if( !(value instanceof Double) )
         return value.toString()
