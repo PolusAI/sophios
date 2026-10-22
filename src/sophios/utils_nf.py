@@ -5,6 +5,7 @@ import copy
 from dataclasses import dataclass, replace
 import math
 from os import PathLike
+import posixpath
 import re
 from types import MappingProxyType
 from typing import Any
@@ -2739,13 +2740,16 @@ def _literal_outputs(tool: Mapping[str, Any]) -> dict[str, str]:
     return names
 
 
-def _staged_names(step: Mapping[str, Any], tool: Mapping[str, Any], produced: Mapping[str, str]) -> dict[str, set[str]]:
-    """The names known at compile time that each File or Directory input is linked under in the task directory.
+def _staged_names(
+    step: Mapping[str, Any], tool: Mapping[str, Any], produced: Mapping[str, str],
+) -> dict[str, tuple[set[str], bool]]:
+    """The names known at compile time that each File or Directory input is linked under in the task directory,
+    and whether the link is an InitialWorkDirRequirement entry.
 
-    An InitialWorkDirRequirement entry with a literal name is linked under it;
-    any other input not in an array is linked under its basename, which is a
-    literal output name when its source produces one. A writable entry is a
-    copy, not a link, and an array's files are linked in numbered directories.
+    An entry with a literal name is linked under it; any other input not in an
+    array is linked under its basename, which is a literal output name when its
+    source produces one. A writable entry is a copy, not a link, and an array's
+    files are linked in numbered directories.
     """
     inputs, step_inputs = tool.get("inputs"), step.get("in")
     if not isinstance(inputs, Mapping) or not isinstance(step_inputs, Mapping):
@@ -2754,7 +2758,7 @@ def _staged_names(step: Mapping[str, Any], tool: Mapping[str, Any], produced: Ma
         entries = _iwdr_entries(tool)
     except ValueError:  # its own finding
         entries = {}
-    staged: dict[str, set[str]] = {}
+    staged: dict[str, tuple[set[str], bool]] = {}
     for raw_name, definition in inputs.items():
         try:
             if not isinstance(definition, Mapping) or cwl_type_to_nf_qualifier(definition.get("type")) != "path":
@@ -2767,7 +2771,8 @@ def _staged_names(step: Mapping[str, Any], tool: Mapping[str, Any], produced: Ma
             continue
         staged[raw_name] = (
             {entry.name} if entry is not None and entry.name is not None
-            else {produced[source] for source in sources if source in produced}
+            else {produced[source] for source in sources if source in produced},
+            entry is not None,
         )
     return staged
 
@@ -2776,14 +2781,17 @@ def _staged_name_findings(
     steps: list[Mapping[str, Any]],
     tools: tuple[Mapping[str, Any], ...],
 ) -> list[str]:
-    """Name each file a task writes under a name one of its inputs is linked under.
+    """Name each file a task writes at or under a name one of its inputs is linked under.
 
     Nextflow links a File or Directory input into the task directory, so a
-    command that writes the link's name writes through it into the file the
-    input names: an upstream task's output, or a workflow input. Only a name
-    known at compile time is checked: a literal stdout, stderr or glob against
-    a literal entry name or a literal upstream glob. A name a workflow input
-    gives, or a pattern or a reference makes, is known only when the task runs.
+    command that writes the link's name, or a name inside a linked directory,
+    writes through it into the file the input names: an upstream task's output,
+    or a workflow input. Only a name known at compile time is checked: a literal
+    stdout, stderr or glob against a literal entry name or a literal upstream
+    glob. A glob only collects an entry, which cwltool stages in the output
+    directory too, so an entry is checked against stdout and stderr alone. A
+    name a workflow input gives, or a pattern or a reference makes, is known only
+    when the task runs.
     """
     produced: dict[str, str] = {}
     for step, tool in zip(steps, tools, strict=True):
@@ -2794,20 +2802,24 @@ def _staged_name_findings(
     findings: list[str] = []
     for step_index, (step, tool) in enumerate(zip(steps, tools, strict=True)):
         path = f"steps[{step_index}].run"
-        written: dict[str, str] = {}  # each name once, where it is first written: a stdout's glob names it again
-        for where, name in [
-            *((f"{path}.{stream}", _literal_text(tool.get(stream))) for stream in ("stdout", "stderr")),
-            *((f"{path}.outputs.{port}.outputBinding.glob", glob) for port, glob in _literal_outputs(tool).items()),
+        # Each name once, where it is first written: a stdout's glob names it again.
+        written: dict[str, tuple[str, str, bool]] = {}
+        for where, name, collects in [
+            *((f"{path}.{stream}", _literal_text(tool.get(stream)), False) for stream in ("stdout", "stderr")),
+            *((f"{path}.outputs.{port}.outputBinding.glob", glob, True)
+              for port, glob in _literal_outputs(tool).items()),
         ]:
-            if name is not None:
-                written.setdefault(name, where)
+            if name:
+                written.setdefault(posixpath.normpath(name), (where, name, collects))
         staged = _staged_names(step, tool, produced)
         findings.extend(
-            f"{where}: {name!r} is also the name input {raw_name!r} is linked under in the task directory, so "
-            "writing it writes through the link into the file the input names; give the output another name"
-            for name, where in written.items()
-            for raw_name, names in staged.items()
-            if name in names
+            f"{where}: writing {name!r} writes through {link!r}, the name input {raw_name!r} is linked under in "
+            "the task directory, into the file the input names; give the output another name"
+            for normal, (where, name, collects) in written.items()
+            for raw_name, (links, entry) in staged.items()
+            if not (collects and entry)
+            for link in links
+            if normal == link or normal.startswith(f"{link}/")
         )
     return findings
 

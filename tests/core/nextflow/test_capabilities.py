@@ -1946,37 +1946,46 @@ def test_a_rejected_source_raises_a_matching_error(
 
 
 def _chain(upstream_glob: str, *, stdout: str | None = "sorted.txt", glob: str = "sorted.txt",
-           listing: list[Any] | None = None, source: str = "EMIT/out") -> CompiledNextflowSource:
-    """EMIT writes ``upstream_glob``; SORT reads it as ``src`` and writes ``glob``, by stdout unless None."""
-    emit = tool("EMIT", outputs={"out": {"type": "File", "outputBinding": {"glob": upstream_glob}}},
+           listing: list[Any] | None = None, source: str = "EMIT/out", kind: str = "File") -> CompiledNextflowSource:
+    """EMIT writes ``upstream_glob``; SORT reads it as ``src``, by its binding unless a listing stages it, and
+    writes ``glob``, by stdout unless None."""
+    emit = tool("EMIT", outputs={"out": {"type": kind, "outputBinding": {"glob": upstream_glob}}},
                 stdout=upstream_glob)
-    sort = tool("SORT", inputs={"src": {"type": "File", "inputBinding": {"position": 1}}},
+    binding = {} if listing else {"inputBinding": {"position": 1}}
+    sort = tool("SORT", inputs={"src": {"type": kind, **binding}},
                 outputs={"out": {"type": "File", "outputBinding": {"glob": glob}}},
                 **({"stdout": stdout} if stdout else {"arguments": ["-o", glob]}),
                 **({"requirements": {"InitialWorkDirRequirement": {"listing": listing}}} if listing else {}))
     return synthetic_source(
         workflow_doc([step("EMIT", out=["out"]), step("SORT", **{"in": {"src": source}, "out": ["out"]})],
-                     inputs={"given": {"type": "File"}}),
-        [emit, sort], workflow_inputs={"given": {"class": "File", "path": "in.txt"}},
+                     inputs={"given": {"type": kind}}),
+        [emit, sort], workflow_inputs={"given": {"class": kind, "path": "in.txt"}},
     )
 
 
+_RENAMED = [{"entry": "$(inputs.src)", "entryname": "sorted.txt"}]
+
+
 @pytest.mark.fast
-@pytest.mark.parametrize(("rose", "where"), [
-    (_chain("sorted.txt"), "steps[1].run.stdout"),
-    (_chain("out/sorted.txt"), "steps[1].run.stdout"),
-    (_chain("sorted.txt", stdout=None), "steps[1].run.outputs.out.outputBinding.glob"),
-    (_chain("emitted.txt", listing=[{"entry": "$(inputs.src)", "entryname": "sorted.txt"}]), "steps[1].run.stdout"),
-    (_chain("emitted.txt", source="given", listing=[{"entry": "$(inputs.src)", "entryname": "sorted.txt"}]),
-     "steps[1].run.stdout"),
-], ids=["upstream-glob", "upstream-glob-in-a-directory", "glob-written-by-the-command", "entry-name",
-        "entry-name-of-a-workflow-input"])
-def test_rejects_an_output_named_like_a_link_its_task_stages(rose: CompiledNextflowSource, where: str) -> None:
+@pytest.mark.parametrize(("rose", "where", "written", "link"), [
+    (_chain("sorted.txt"), "steps[1].run.stdout", "sorted.txt", "sorted.txt"),
+    (_chain("out/sorted.txt"), "steps[1].run.stdout", "sorted.txt", "sorted.txt"),
+    (_chain("sorted.txt", stdout="./sorted.txt"), "steps[1].run.stdout", "./sorted.txt", "sorted.txt"),
+    (_chain("sorted.txt", stdout=None), "steps[1].run.outputs.out.outputBinding.glob", "sorted.txt", "sorted.txt"),
+    (_chain("outdir", stdout="outdir/listing.txt", glob="outdir/listing.txt", kind="Directory"),
+     "steps[1].run.stdout", "outdir/listing.txt", "outdir"),
+    (_chain("emitted.txt", listing=_RENAMED), "steps[1].run.stdout", "sorted.txt", "sorted.txt"),
+    (_chain("emitted.txt", source="given", listing=_RENAMED), "steps[1].run.stdout", "sorted.txt", "sorted.txt"),
+], ids=["upstream-glob", "upstream-glob-in-a-directory", "dot-slash", "glob-written-by-the-command",
+        "into-a-linked-directory", "entry-name", "entry-name-of-a-workflow-input"])
+def test_rejects_an_output_named_like_a_link_its_task_stages(
+    rose: CompiledNextflowSource, where: str, written: str, link: str,
+) -> None:
     """Writing a staged input's link writes through it: the run succeeds and leaves every sorted.txt empty."""
-    with pytest.raises(ValueError, match=re.escape(f"{where}: 'sorted.txt' is also the name input 'src' is linked "
-                                                   "under in the task directory")) as raised:
+    with pytest.raises(ValueError, match=re.escape(f"{where}: writing {written!r} writes through {link!r}, the name "
+                                                   "input 'src' is linked under in the task directory")) as raised:
         compiled_source_to_nextflow(rose)
-    assert str(raised.value).count("'sorted.txt' is also the name") == 1
+    assert str(raised.value).count("writes through") == 1
 
 
 @pytest.mark.fast
@@ -1985,7 +1994,12 @@ def test_rejects_an_output_named_like_a_link_its_task_stages(rose: CompiledNextf
     _chain("*.txt", glob="*.txt"),
     _chain("sorted.txt", source="given"),
     _chain("sorted.txt", listing=[{"entry": "$(inputs.src)", "writable": True}]),
-], ids=["another-name", "pattern", "workflow-input", "writable-entry"])
+    _chain("emitted.txt", stdout=None, listing=_RENAMED),
+    _chain("emitted.txt", stdout=None, source="given", listing=_RENAMED),
+    _chain("sorted.txt", stdout=None, listing=[{"entry": "$(inputs.src)"}]),
+], ids=["another-name", "pattern", "workflow-input", "writable-entry", "glob-collects-a-renamed-entry",
+        "glob-collects-a-renamed-workflow-input", "glob-collects-an-entry-under-its-basename"])
 def test_accepts_an_output_whose_name_no_link_is_known_to_share(rose: CompiledNextflowSource) -> None:
-    """A copy is the task's own; a workflow input's or a pattern's name is known only when the task runs."""
+    """A copy is the task's own; a workflow input's or a pattern's name is known only when the task runs; a glob
+    collects an entry, which cwltool stages in the output directory as well."""
     assert len(compiled_source_to_nextflow(rose).processes) == 2

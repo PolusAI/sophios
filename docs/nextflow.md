@@ -406,14 +406,17 @@ with an error naming the entry.
 ## Outputs named like staged inputs
 
 Nextflow links each `File` or `Directory` input into the task directory
-under its name, so a command that writes that name writes through the link
-into the file the input names: an upstream task's output, or a workflow
-input. Compiling rejects an output whose literal name, a `stdout`, a
-`stderr` or a glob with no pattern or reference, is a name an input is
+under its name, so a command that writes that name, or a name inside a
+linked directory such as `outdir/listing.txt`, writes through the link into
+the file the input names: an upstream task's output, or a workflow input.
+Compiling rejects an output whose literal name, a `stdout`, a `stderr` or a
+glob with no pattern or reference, is or lies inside a name an input is
 linked under that is known before the run: an `InitialWorkDirRequirement`
 entry's literal name, or the literal glob of the output the input comes
-from. A writable entry is the task's own copy, so writing it is not
-checked. A name that a workflow input gives, or that a pattern or a
+from. An entry is checked against `stdout` and `stderr` only: a glob that
+names an entry collects it, as cwltool does, which is how a tool renames or
+passes on a file. A writable entry is the task's own copy, so writing it is
+not checked. A name that a workflow input gives, or that a pattern or a
 reference makes, is known only when the task runs, and is not checked; give
 a tool's outputs names distinct from its inputs' basenames.
 
