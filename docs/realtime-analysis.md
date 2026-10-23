@@ -143,9 +143,9 @@ outputs are files like any other.
 ## When it does not run
 
 The analysis needs cwltool's cache and a run Sophios itself conducts. With
-`--generate_run_script`, `run.sh` runs the workflow without its analyses, and
-with `--cwl_runner toil-cwl-runner` so does Toil; in both cases a line on
-stderr says so, and the workflow is otherwise unchanged. `Workflow.run_async()`
+`--generate_run_script`, `run.sh` runs the workflow without its analyses;
+with `--cwl_runner toil-cwl-runner` so does Toil, and with `--target nextflow`
+so does Nextflow. In each case a line on stderr says so, and the workflow is otherwise unchanged. `Workflow.run_async()`
 never runs them: it refuses a workflow that declares one with `api008`, before
 anything is written or run; from a coroutine,
 `await asyncio.to_thread(flow.run)` runs it with its analyses. `--check` and

@@ -234,12 +234,9 @@ def test_nextflow_documentation_uses_supported_public_entry_points() -> None:
     assert "sophios --yaml workflow.wic --target nextflow" in documentation
     assert "workflow.to_nf(" not in documentation
     assert "--generate_cwl_workflow --target nextflow" not in documentation
-    for incompatible_flag in (
-        "--generate_cwl_workflow",
-        "--run_local",
-        "--generate_run_script",
-        "--inputs_file",
-    ):
+    assert "sophios --yaml workflow.wic --target nextflow --run_local" in documentation
+    assert 'workflow.run(target="nextflow")' in documentation
+    for incompatible_flag in ("--generate_cwl_workflow", "--inputs_file", "--quiet"):
         assert f"`{incompatible_flag}`" in documentation
 
 
