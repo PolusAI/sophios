@@ -234,6 +234,10 @@ _ARRAY_ONLY = "array-marked inputs may only be referenced by array bindings"
     (lambda: _proc(NfPort("other", "val"), NfFlag("v", "-r")), "unknown inputs"),
     (lambda: _proc(NfPort("other", "val"), NfArrayBinding("v", "-n")), "unknown inputs"),
     (lambda: _proc(NfPort("v", "path"), NfFlag("v", "-r")), "flag tokens must reference val inputs"),
+    (
+        lambda: _env_process(NfEnvVar("A", template(ref("x"))), qualifier="path"),
+        "environment variables must reference val inputs: x",
+    ),
     # The design claims a basename is valid in every template position, so each is checked.
     (lambda: _proc(NfPort("v", "val"), _BASENAME), "basename references must target path inputs"),
     (lambda: _proc(NfPort("v", "val"), stdout=_BASENAME), "basename references must target path inputs"),
@@ -434,11 +438,9 @@ def test_an_env_var_name_is_a_shell_variable_name(name: str) -> None:
 
 
 @pytest.mark.fast
-def test_a_command_sets_an_env_var_once_from_a_val_input() -> None:
+def test_a_command_sets_an_env_var_once() -> None:
     with pytest.raises(ValueError, match="more than once"):
         _env_process(NfEnvVar("A", template("1")), NfEnvVar("A", template("2")))
-    with pytest.raises(ValueError, match="environment variables must reference val inputs: x"):
-        _env_process(NfEnvVar("A", template(ref("x"))), qualifier="path")
 
 
 @pytest.mark.fast
