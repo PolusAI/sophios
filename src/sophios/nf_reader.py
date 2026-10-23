@@ -24,7 +24,7 @@ from .nf_types import (
     topological_order,
 )
 from .nf_expr import NF_EXPRESSION_FUNCTIONS
-from .nf_types import NF_ENTRY_STAGING_PREFIX, NF_LOAD_CONTENTS_HELPER
+from .nf_types import NF_ENTRY_STAGING_PREFIX, NF_INPUT_HELPER, NF_LOAD_CONTENTS_HELPER
 from .input_output_nf import (
     NEXTFLOW_JSON,
     NEXTFLOW_PARAMS,
@@ -86,6 +86,8 @@ _STATIC_STRING = re.compile(
     r'|"(?:[^"\\$]|\\[\\"$]|\\u[0-9A-Fa-f]{4})*"'
 )
 _STATIC_MEMORY_MB = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)? MB")
+# The entry workflow's check of a parameter declared float, float?, float[] or float[]?.
+_FLOAT_PARAMETER = re.compile(rf"{NF_INPUT_HELPER}\('(\w+)', params\.\1, 'float")
 
 
 @dataclass(frozen=True, slots=True)
@@ -555,7 +557,11 @@ def parse_nf_file(path: str | Path) -> NextflowDocument:
         params = loaded
     ir_path = source.with_name(NEXTFLOW_JSON)
     if not ir_path.exists():
-        return parse_nf_text(source_text, params=params)
+        # The params file holds each float as its Python text; the source declares which parameters are floats.
+        floats = set(_FLOAT_PARAMETER.findall(source_text))
+        return parse_nf_text(source_text, params={
+            name: _float_value(value) if name in floats else value for name, value in params.items()
+        })
     executable = ExecutableNextflowWorkflow.from_json(ir_path.read_text(encoding="utf-8"))
     if not _renders(executable, source_text):
         raise ValueError("generated Nextflow source does not match its executable IR artifact")
@@ -573,6 +579,12 @@ def parse_nf_file(path: str | Path) -> NextflowDocument:
         # parser could not recognize is accounted for: the model is the parse.
         return _document_from_model(executable, source_text)
     return replace(document, verified_executable=executable)
+
+
+def _float_value(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_float_value(item) for item in value]
+    return float(value) if isinstance(value, str) else value
 
 
 def _glob_text(template: Any) -> str:

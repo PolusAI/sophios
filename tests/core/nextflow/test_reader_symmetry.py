@@ -144,8 +144,13 @@ def test_a_source_read_alone_reads_each_entry_input_as_a_path() -> None:
 
 
 @pytest.mark.fast
-def test_a_source_read_alone_reads_the_float_text_helper() -> None:
-    assert parse_nf_text(render_nextflow(_floats())).opaque_regions == ()
+def test_a_source_read_alone_reads_the_float_text_helper_and_float_params(tmp_path: Path) -> None:
+    workflow = _floats()
+    write_nextflow_artifacts(workflow, tmp_path)
+    (tmp_path / "nextflow_workflow.json").unlink()
+    parsed = parse_nf_file(tmp_path / "workflow.nf")
+    assert parsed.opaque_regions == ()
+    assert dict(parsed.params) == workflow.to_dict()["params"]
 
 
 @pytest.mark.fast
