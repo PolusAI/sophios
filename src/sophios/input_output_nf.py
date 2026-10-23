@@ -693,22 +693,20 @@ def _multi_input_methods(workflow: ExecutableNextflowWorkflow) -> dict[str, str]
     }
 
 
-def _output_depth(workflow: ExecutableNextflowWorkflow, process_name: str) -> int:
-    """How many array levels a workflow output of ``process_name`` carries: one per scattered input under
-    ``nested_crossproduct``, one under any other scatter, none for an unscattered process."""
-    adapters = [
-        connection.adapter
-        for connection in workflow.connections
-        if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
-        and connection.to_process == process_name
-        and connection.adapter in MULTI_INPUT_ADAPTERS
-    ]
-    return len(adapters) if "nested_crossproduct" in adapters else min(len(adapters), 1)
-
-
 def _output_record(workflow: ExecutableNextflowWorkflow, connection: NfWorkflowOutputConnection) -> str:
-    """The entry workflow's line that prints one workflow output once it completes (design §7)."""
-    depth = _output_depth(workflow, connection.from_process)
+    """The entry workflow's line that prints one workflow output once it completes (design §7).
+
+    The value carries one array level per scattered input under ``nested_crossproduct``, one under any
+    other scatter, and none for an unscattered process.
+    """
+    adapters = [
+        incoming.adapter
+        for incoming in workflow.connections
+        if isinstance(incoming, (NfWorkflowInputConnection, NfProcessConnection))
+        and incoming.to_process == connection.from_process
+        and incoming.adapter in MULTI_INPUT_ADAPTERS
+    ]
+    depth = len(adapters) if "nested_crossproduct" in adapters else min(len(adapters), 1)
     value = f"{NF_OUTPUT_HELPER}(items, {depth})" if depth else f"{NF_OUTPUT_HELPER}(items[0], 0)"
     return (
         f"    {workflow.name}.out.{connection.to_port}.toList().subscribe {{ items -> "
