@@ -5,7 +5,9 @@ from dataclasses import replace
 from decimal import Decimal
 import json
 from pathlib import Path
-from typing import Any
+import re
+from string import Formatter
+from typing import Any, Final
 
 from .nf_expr import (
     CONTROL_ESCAPES, NF_EXPRESSION_FUNCTIONS, groovy_literal, references,
@@ -184,6 +186,115 @@ NF_LOAD_CONTENTS_FUNCTION = f'''def {NF_LOAD_CONTENTS_HELPER}(path) {{
 }}'''
 
 
+_IDENTIFIER = "[A-Za-z_][A-Za-z0-9_]*"
+_LITERAL = r"'(?:[^'\\]|\\.)*'"
+# The text each named hole of an idiom holds; a hole of another name holds any text.
+_HOLES: Final = {
+    "name": _IDENTIFIER, "process": _IDENTIFIER, "emit": _IDENTIFIER, "output": _IDENTIFIER,
+    "qualifier": "val|path", "count": "[1-9][0-9]*", "memory": "[0-9]+(?:[.][0-9]+)?",
+    "literal": _LITERAL, "prefix": _LITERAL, "type": _LITERAL, "label": _LITERAL, "link_merge": _LITERAL,
+    "pick_value": f"null|{_LITERAL}", "glob": f'{_LITERAL}|"(?:[^"\\\\]|\\\\.)*"', "operator": "ln -s|cp -RL",
+}
+
+
+class Idiom:
+    """One form the renderer writes with holes in it: the renderer fills it and the reader matches it.
+
+    The renderer and the reader encode one subset, so the forms with holes
+    are one table both use (design §4.2): ``text`` is a format string, and
+    a hole named in ``_HOLES`` holds the text it names. A hole named twice
+    holds one value.
+    """
+
+    __slots__ = ("text", "pattern")
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        pattern = ""
+        for literal, hole, _spec, _conversion in Formatter().parse(text):
+            pattern += re.escape(literal)
+            if hole is not None:
+                pattern += f"(?P={hole})" if f"(?P<{hole}>" in pattern else f"(?P<{hole}>{_HOLES.get(hole, '.*')})"
+        self.pattern = re.compile(pattern)
+
+    def fill(self, **holes: object) -> str:
+        """The form with each hole filled."""
+        return self.text.format(**holes)
+
+    def match(self, text: str) -> dict[str, str] | None:
+        """The text of each hole, when ``text`` is this form; None when it is not."""
+        found = self.pattern.fullmatch(text)
+        return None if found is None else found.groupdict()
+
+    def find(self, text: str) -> list[dict[str, str]]:
+        """The text of each hole, for each place in ``text`` that is this form."""
+        return [found.groupdict() for found in self.pattern.finditer(text)]
+
+
+_QUOTE = NF_SHELL_QUOTE_HELPER
+_INDEX = NF_SCATTER_INDEX_NAME
+#: The ``ext`` carriers (design §4.2), under their CWL names: each CUDA field with the ``NfResources`` field it
+#: carries, and the names of a process's Directory outputs.
+NF_CUDA_CARRIERS: Final = (("cudaVersionMin", "cuda_version_min"), ("cudaComputeCapability", "cuda_compute_capability"))
+NF_DIRECTORY_CARRIER: Final = "Directory"
+
+
+class Idioms:  # pylint: disable=too-few-public-methods
+    """The idiom table: each form with holes the renderer writes, which the reader reads back."""
+
+    PROCESS: Final = Idiom("process {name} {{")
+    CONTAINER: Final = Idiom("container {literal}")
+    CPUS: Final = Idiom("cpus {count}")
+    MEMORY: Final = Idiom('memory "{memory} MB"')
+    ACCELERATOR: Final = Idiom("accelerator {count}")
+    EXT: Final = Idiom("ext {carriers}")
+    #: A named argument: an `ext` carrier, or an option of a declaration.
+    OPTION: Final = Idiom("{name}: {value}")
+    INPUT: Final = Idiom("{qualifier} {name}{options}")
+    ELEMENT: Final = Idiom("{qualifier}({name}{options})")
+    TUPLE_INPUT: Final = Idiom(f"tuple val({_INDEX}), {{elements}}")
+    OUTPUT: Final = Idiom("{declaration}, emit: {emit}")
+    TUPLE_OUTPUT: Final = Idiom(f"tuple val({_INDEX}), {{declaration}}, emit: {{emit}}")
+    PATH_OUTPUT: Final = Idiom("path {glob}{options}")
+    PATH_ELEMENT: Final = Idiom("path({glob}{options})")
+    TEXT_CAPTURE: Final = Idiom(f"val({NF_LOAD_CONTENTS_HELPER}(task.workDir.resolve({{literal}})))")
+    ENTRY: Final = Idiom(f"{{operator}} -- ${{{{{_QUOTE}({{name}}.toString())}}}} ${{{{{_QUOTE}({{entry}})}}}}")
+    EXPORT: Final = Idiom("export {name}={value}")
+    TEMPLATE: Final = Idiom(f"${{{{{_QUOTE}({{expression}})}}}}")
+    FLAG: Final = Idiom(f"${{{{{{name}} ? {_QUOTE}({{prefix}}) : ''}}}}")
+    ARRAY: Final = Idiom("${{{name}.isEmpty() ? '' : {joined}}}")
+    PREFIXED_ITEMS: Final = Idiom(f"([{_QUOTE}({{prefix}})] + {{items}}).join(' ')")
+    OPTIONAL: Final = Idiom("${{{name} == [] ? '' : {words}}}")
+    SEPARATE: Final = Idiom(f"{_QUOTE}({{prefix}}) + ' ' + {_QUOTE}({{value}})")
+    JOINED: Final = Idiom(f"{_QUOTE}({{prefix}} + {{value}})")
+    #: A reference's value: an input's staged file name, an entry's name, a float's text.
+    STAGED_NAME: Final = Idiom("{name}.name")
+    ENTRY_NAME: Final = Idiom("({name}.toString() - {literal})")
+    FLOAT_TEXT: Final = Idiom(f"{NF_FLOAT_TEXT_HELPER}({{name}})")
+    STRING: Final = Idiom("{value}.toString()")
+    INTERPOLATION: Final = Idiom("${{{value}}}")
+    WORKFLOW: Final = Idiom("workflow {name} {{")
+    CALL: Final = Idiom("{process}({arguments})")
+    EMIT: Final = Idiom("{output} = {expression}")
+    PROCESS_OUTPUT: Final = Idiom("{process}.out.{emit}")
+    CONDITIONAL_OUTPUT: Final = Idiom("ch_{process}_{emit}")
+    GATHERED: Final = Idiom("{source}.toSortedList {{ it[0] }}.map {{ it.collect {{ row -> row[1] }} }}")
+    BOXED: Final = Idiom("{source}.map {{ [it] }}")
+    COMBINE: Final = Idiom("{channels}.combine({channel})")
+    STEP_INPUT: Final = Idiom(
+        f"{{channels}}.map {{{{ __values -> {NF_STEP_INPUT_HELPER}({{label}}, __values, [{{arrays}}], {{link_merge}}, "
+        "{pick_value}) }}.first()"
+    )
+    SCATTER: Final = Idiom("ch_{process}_scatter = {sources}.flatMap {{ {parameters} ->")
+    SHAPE: Final = Idiom("ch_{process}_shape = {sources}.map {{ {parameters} -> [[{sizes}]] }}")
+    MERGE: Final = Idiom("ch_{process}_in = {first}.merge({second}) {{ __w0, __w1 -> tuple(__w0, __w1) }}")
+    MERGE_NEXT: Final = Idiom(".merge({argument}) {{ __merged, {parameter} -> tuple({carried}, {parameter}) }}")
+    BRANCH: Final = Idiom("ch_{process}_branch = {combined}.branch {{ {parameters} ->")
+    RUN: Final = Idiom("run: {predicate}")
+    MIX: Final = Idiom("ch_{process}_{emit} = {process}.out.{emit}.mix(ch_{process}_branch.skip.map {{ {skip} }})")
+    CHECKED: Final = Idiom(f"{NF_INPUT_HELPER}('{{name}}', params.{{name}}, {{type}})")
+
+
 def _require_executable(workflow: Any) -> ExecutableNextflowWorkflow:
     if not isinstance(workflow, ExecutableNextflowWorkflow):
         raise TypeError("Nextflow rendering requires ExecutableNextflowWorkflow")
@@ -207,14 +318,17 @@ def _groovy_gstring_fragment(value: str) -> str:
 def _value(segment: NfInputReference | NfBasenameReference, entries: Mapping[str, str]) -> str:
     """The Groovy value a reference names: the input itself, its entry's name or its float's text where
     ``entries`` has one, or its staged file's name, which an entry under its own basename keeps."""
-    return entries.get(segment.name, segment.name) if isinstance(segment, NfInputReference) else f"{segment.name}.name"
+    if isinstance(segment, NfInputReference):
+        return entries.get(segment.name, segment.name)
+    return Idioms.STAGED_NAME.fill(name=segment.name)
 
 
 def _segment_expression(segment: Any, entries: Mapping[str, str]) -> str:
     if isinstance(segment, NfLiteral):
         return groovy_literal(segment.value)
     value = _value(segment, entries)
-    return value if isinstance(segment, NfInputReference) and segment.name in entries else f"{value}.toString()"
+    return value if isinstance(segment, NfInputReference) and segment.name in entries else Idioms.STRING.fill(
+        value=value)
 
 
 def _template_expression(template: Any, entries: Mapping[str, str]) -> str:
@@ -228,31 +342,30 @@ def _shell_quote(value: str) -> str:
 
 def _render_template(template: Any, entries: Mapping[str, str]) -> str:
     """Render one typed token through the generated shell-quoting function."""
-    return f"${{{NF_SHELL_QUOTE_HELPER}({_template_expression(template, entries)})}}"
+    return Idioms.TEMPLATE.fill(expression=_template_expression(template, entries))
 
 
 def _render_array_binding(token: NfArrayBinding, floats: frozenset[str]) -> str:
     """Render an array binding: nothing when empty, else prefix once plus each item."""
-    item = f"{NF_FLOAT_TEXT_HELPER}(it)" if token.name in floats else "it.toString()"
+    item = Idioms.FLOAT_TEXT.fill(name="it") if token.name in floats else Idioms.STRING.fill(value="it")
     items_expression = f"{token.name}.collect{{ {NF_SHELL_QUOTE_HELPER}({item}) }}"
     if token.prefix is not None:
-        quoted_prefix = f"{NF_SHELL_QUOTE_HELPER}({groovy_literal(token.prefix)})"
-        joined = f"([{quoted_prefix}] + {items_expression}).join(' ')"
+        joined = Idioms.PREFIXED_ITEMS.fill(prefix=groovy_literal(token.prefix), items=items_expression)
     else:
         joined = f"{items_expression}.join(' ')"
-    return f"${{{token.name}.isEmpty() ? '' : {joined}}}"
+    return Idioms.ARRAY.fill(name=token.name, joined=joined)
 
 
 def _render_optional_binding(token: NfOptionalBinding, entries: Mapping[str, str]) -> str:
     """Render an optional input's binding: nothing for the [] sentinel, else the prefix and the value."""
-    value = entries.get(token.name, f"{token.name}.toString()")
+    value = entries.get(token.name, Idioms.STRING.fill(value=token.name))
     if token.prefix is None:
         words = f"{NF_SHELL_QUOTE_HELPER}({value})"
     elif token.separate:
-        words = f"{NF_SHELL_QUOTE_HELPER}({groovy_literal(token.prefix)}) + ' ' + {NF_SHELL_QUOTE_HELPER}({value})"
+        words = Idioms.SEPARATE.fill(prefix=groovy_literal(token.prefix), value=value)
     else:
-        words = f"{NF_SHELL_QUOTE_HELPER}({groovy_literal(token.prefix)} + {value})"
-    return f"${{{token.name} == [] ? '' : {words}}}"
+        words = Idioms.JOINED.fill(prefix=groovy_literal(token.prefix), value=value)
+    return Idioms.OPTIONAL.fill(name=token.name, words=words)
 
 
 def _render_shell_literal(token: NfShellLiteral) -> str:
@@ -268,8 +381,7 @@ def _render_shell_literal(token: NfShellLiteral) -> str:
 def _render_command_token(token: Any, entries: Mapping[str, str], floats: frozenset[str]) -> str:
     """Render one argv token; flags, array and optional bindings collapse away when false, empty or absent."""
     if isinstance(token, NfFlag):
-        quoted = f"{NF_SHELL_QUOTE_HELPER}({groovy_literal(token.prefix)})"
-        return f"${{{token.name} ? {quoted} : ''}}"
+        return Idioms.FLAG.fill(name=token.name, prefix=groovy_literal(token.prefix))
     if isinstance(token, NfArrayBinding):
         return _render_array_binding(token, floats)
     if isinstance(token, NfOptionalBinding):
@@ -284,7 +396,7 @@ def _render_glob(template: Any, entries: Mapping[str, str]) -> str:
         return groovy_literal("".join(segment.value for segment in template.segments))
     rendered = "".join(
         _groovy_gstring_fragment(segment.value) if isinstance(segment, NfLiteral)
-        else f"${{{_value(segment, entries)}}}"
+        else Idioms.INTERPOLATION.fill(value=_value(segment, entries))
         for segment in template.segments
     )
     return f'"{rendered}"'
@@ -311,34 +423,35 @@ def _capture_literal(port: NfPort) -> str:
     return groovy_literal(segment.value)
 
 
+def _options(options: list[tuple[str, str]]) -> str:
+    """A declaration's named arguments after its value, each with its leading comma."""
+    return "".join(f", {Idioms.OPTION.fill(name=name, value=value)}" for name, value in options)
+
+
 def _process_output(port: NfPort, entries: Mapping[str, str], *, tuple_element: bool = False) -> str:
+    """An output's declaration, without its emit; ``tuple_element`` is its spelling in a scattered tuple."""
     # NfProcess guarantees every output has a typed glob, and the val
     # qualifier only for a text capture.
     assert port.glob is not None
-    emit = port.emit or port.name
     if port.capture == "text":
-        read = f"{NF_LOAD_CONTENTS_HELPER}(task.workDir.resolve({_capture_literal(port)}))"
-        body = f"val({read})"
-        return body if tuple_element else f"{body}, emit: {emit}"
-    # A text capture returns above, so neither option reaches a val declaration.
-    literal = ", glob: false" if port.literal_glob else ""
+        return Idioms.TEXT_CAPTURE.fill(literal=_capture_literal(port))
+    # A text capture returns above, so no option reaches a val declaration.
+    options = [("glob", "false")] if port.literal_glob else []
     if port.one_file:
         # Nextflow refuses arity '0..1' and fails arity '1' on no match even
         # when optional; the workflow output checks at most one match.
-        arity = f", arity: '{NF_ARRAY_PATH_ARITY}'" if port.optional else ", arity: '1'"
-    else:
-        arity = ", optional: true" if port.optional else ""
-    glob = port.glob if literal else NfTemplate(tuple(
+        options.append(("arity", groovy_literal(NF_ARRAY_PATH_ARITY if port.optional else "1")))
+    elif port.optional:
+        options.append(("optional", "true"))
+    glob = port.glob if port.literal_glob else NfTemplate(tuple(
         NfLiteral(segment.value.translate(_BRACE_ESCAPES)) if isinstance(segment, NfLiteral) else segment
         for segment in port.glob.segments
     ))
-    if tuple_element:
-        # A multi-input-scattered process re-emits the hidden invocation
-        # index alongside every output, one tuple line per output port
-        # (design §6, Topology), so the "path ..." spelling used inside a
-        # standalone output line becomes a parenthesized tuple element here.
-        return f"path({_render_glob(glob, entries)}{literal}{arity})"
-    return f"path {_render_glob(glob, entries)}{literal}{arity}, emit: {emit}"
+    # A multi-input-scattered process re-emits the hidden invocation index
+    # alongside every output, one tuple line per output port (design §6,
+    # Topology), so the output is a parenthesized tuple element there.
+    idiom = Idioms.PATH_ELEMENT if tuple_element else Idioms.PATH_OUTPUT
+    return idiom.fill(glob=_render_glob(glob, entries), options=_options(options))
 
 
 def at_most_one_suffix(output: str) -> str:
@@ -363,7 +476,7 @@ def _entry_names(process: NfProcess) -> dict[str, str]:
     """The Groovy expression of each entry's name, by port: its literal, or the input's own basename."""
     return {
         port.name: groovy_literal(port.entry.name) if port.entry.name is not None
-        else f"({port.name}.toString() - {groovy_literal(_entry_directory(port) + '/')})"
+        else Idioms.ENTRY_NAME.fill(name=port.name, literal=groovy_literal(_entry_directory(port) + "/"))
         for port in process.inputs if port.entry is not None
     }
 
@@ -375,21 +488,20 @@ def _path_input(port: NfPort, stage_as: str | None) -> str:
     bare Path, which has no list operations. Declaring the arity makes zero,
     one and many files all arrive as a list.
     """
-    options = [f"arity: '{NF_ARRAY_PATH_ARITY}'"] if port.is_array else []
+    options = [("arity", groovy_literal(NF_ARRAY_PATH_ARITY))] if port.is_array else []
     if stage_as is not None:
-        options.append(f"stageAs: {groovy_literal(stage_as)}")
-    return f"path {port.name}" + "".join(f", {option}" for option in options)
+        options.append(("stageAs", groovy_literal(stage_as)))
+    return Idioms.INPUT.fill(qualifier="path", name=port.name, options=_options(options))
 
 
 def _process_input(port: NfPort, *, tuple_element: bool = False) -> str:
     stage_as = None if port.entry is None else f"{_entry_directory(port)}/*"
     if tuple_element:
-        if stage_as is not None:
-            return f"{port.qualifier}({port.name}, stageAs: {groovy_literal(stage_as)})"
-        return f"{port.qualifier}({port.name})"
+        options = _options([] if stage_as is None else [("stageAs", groovy_literal(stage_as))])
+        return Idioms.ELEMENT.fill(qualifier=port.qualifier, name=port.name, options=options)
     if port.qualifier == "path":
         return _path_input(port, stage_as)
-    return f"{port.qualifier} {port.name}"
+    return Idioms.INPUT.fill(qualifier=port.qualifier, name=port.name, options="")
 
 
 def _unscattered_input(port: NfPort) -> str:
@@ -423,7 +535,7 @@ def container_directives(container: str) -> tuple[str, ...]:
     image = _shell_quote(container)
     entrypoint = "'{{range .Config.Entrypoint}}{{.}}{{\"\\x00\"}}{{end}}'"
     return (
-        f"container {groovy_literal(container)}",
+        Idioms.CONTAINER.fill(literal=groovy_literal(container)),
         "containerOptions \"--entrypoint ''\"",
         "beforeScript " + groovy_literal(
             f"docker image inspect {image} > /dev/null 2>&1 || docker pull -q {image} > /dev/null; "
@@ -438,54 +550,43 @@ def _carriers(process: NfProcess) -> str:
         return groovy_literal(item) if isinstance(item, str) else f"[{', '.join(map(groovy_literal, item))}]"
 
     directories = tuple(port.name for port in process.outputs if port.path_kind == "directory")
-    carried = (
-        ("cudaVersionMin", process.resources.cuda_version_min),
-        ("cudaComputeCapability", process.resources.cuda_compute_capability),
-        ("Directory", directories or None),
-    )
-    return ", ".join(f"{key}: {value(item)}" for key, item in carried if item is not None)
+    carried = (*((key, getattr(process.resources, field)) for key, field in NF_CUDA_CARRIERS),
+               (NF_DIRECTORY_CARRIER, directories or None))
+    return ", ".join(Idioms.OPTION.fill(name=key, value=value(item)) for key, item in carried if item is not None)
 
 
 def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...], floats: frozenset[str]) -> str:
     # The Groovy text a reference to an input renders as, where it is not the value's own: an entry's name,
     # or a float's text.
-    entries = {**_entry_names(process), **{name: f"{NF_FLOAT_TEXT_HELPER}({name})" for name in floats}}
-    lines = [f"process {process.name} {{"]
+    entries = {**_entry_names(process), **{name: Idioms.FLOAT_TEXT.fill(name=name) for name in floats}}
+    lines = [Idioms.PROCESS.fill(name=process.name)]
     if process.container is not None:
         lines.extend(f"    {directive}" for directive in container_directives(process.container))
     if process.resources.cpus is not None:
-        lines.append(f"    cpus {process.resources.cpus}")
+        lines.append(f"    {Idioms.CPUS.fill(count=process.resources.cpus)}")
     if process.resources.memory_mb is not None:
-        lines.append(f'    memory "{render_number(process.resources.memory_mb)} MB"')
+        lines.append(f"    {Idioms.MEMORY.fill(memory=render_number(process.resources.memory_mb))}")
     if process.resources.accelerator is not None:
-        lines.append(f"    accelerator {process.resources.accelerator}")
+        lines.append(f"    {Idioms.ACCELERATOR.fill(count=process.resources.accelerator)}")
     if carriers := _carriers(process):
-        lines.append(f"    ext {carriers}")
+        lines.append(f"    {Idioms.EXT.fill(carriers=carriers)}")
 
     if process.inputs:
         lines.extend(["", "    input:"])
         if multi_input_ports:
             scattered = [port for port in process.inputs if port.name in multi_input_ports]
             other = [port for port in process.inputs if port.name not in multi_input_ports]
-            tuple_elements = ", ".join(
-                [f"val({NF_SCATTER_INDEX_NAME})"]
-                + [_process_input(port, tuple_element=True) for port in scattered]
-            )
-            lines.append(f"    tuple {tuple_elements}")
+            elements = ", ".join(_process_input(port, tuple_element=True) for port in scattered)
+            lines.append(f"    {Idioms.TUPLE_INPUT.fill(elements=elements)}")
             lines.extend(f"    {_unscattered_input(port)}" for port in other)
         else:
             lines.extend(f"    {_unscattered_input(port)}" for port in process.inputs)
     if process.outputs:
         lines.extend(["", "    output:"])
-        if multi_input_ports:
-            for port in process.outputs:
-                emit = port.emit or port.name
-                lines.append(
-                    f"    tuple val({NF_SCATTER_INDEX_NAME}), "
-                    f"{_process_output(port, entries, tuple_element=True)}, emit: {emit}"
-                )
-        else:
-            lines.extend(f"    {_process_output(port, entries)}" for port in process.outputs)
+        idiom = Idioms.TUPLE_OUTPUT if multi_input_ports else Idioms.OUTPUT
+        for port in process.outputs:
+            declaration = _process_output(port, entries, tuple_element=bool(multi_input_ports))
+            lines.append(f"    {idiom.fill(declaration=declaration, emit=port.emit or port.name)}")
 
     command = " ".join(_render_command_token(token, entries, floats) for token in process.command.tokens)
     streams = (
@@ -506,11 +607,12 @@ def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...], floa
                 f"    if [ -e {name} ] || [ -L {name} ]; then "
                 f"echo 'InitialWorkDirRequirement entry already exists in the task directory:' {name} >&2; "
                 "exit 1; fi",
-                f"    {'cp -RL' if port.entry.copy else 'ln -s'} -- "
-                f"${{{NF_SHELL_QUOTE_HELPER}({port.name}.toString())}} {name}",
+                "    " + Idioms.ENTRY.fill(
+                    operator="cp -RL" if port.entry.copy else "ln -s", name=port.name, entry=entries[port.name]),
             ])
     lines.extend(
-        f"    export {variable.name}={_render_template(variable.value, entries)}" for variable in process.command.env
+        f"    {Idioms.EXPORT.fill(name=variable.name, value=_render_template(variable.value, entries))}"
+        for variable in process.command.env
     )
     if process.container is not None:
         lines.append(f"    {NF_ENTRYPOINT_READ}")
@@ -527,7 +629,7 @@ def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...], floa
 
 
 def _conditional_channel_name(process_name: str, port_name: str) -> str:
-    return f"ch_{process_name}_{port_name}"
+    return Idioms.CONDITIONAL_OUTPUT.fill(process=process_name, emit=port_name)
 
 
 def _render_branch(
@@ -552,19 +654,17 @@ def _render_branch(
     )
     branch = f"ch_{process.name}_branch"
     lines = [
-        f"    {branch} = {combined}.branch {{ {params} ->",
-        f"        run: {predicate}",
+        f"    {Idioms.BRANCH.fill(process=process.name, combined=combined, parameters=params)}",
+        f"        {Idioms.RUN.fill(predicate=predicate)}",
         "        skip: true",
         "    }",
     ]
     call_args = ", ".join(f"{branch}.run.map {{ {params} -> {call} }}" for call in calls)
-    lines.append(f"    {process.name}({call_args})")
-    for port in process.outputs:
-        emit = port.emit or port.name
-        lines.append(
-            f"    {_conditional_channel_name(process.name, emit)} = {process.name}.out.{emit}"
-            f".mix({branch}.skip.map {{ {skip} }})"
-        )
+    lines.append(f"    {Idioms.CALL.fill(process=process.name, arguments=call_args)}")
+    lines.extend(
+        f"    {Idioms.MIX.fill(process=process.name, emit=port.emit or port.name, skip=skip)}"
+        for port in process.outputs
+    )
     return lines
 
 
@@ -590,16 +690,11 @@ def _render_conditional_invocation(process: NfProcess, arguments: list[str]) -> 
         # a multi-element item across more than one closure parameter.
         in_channel = arguments[0]
     else:
-        lines.append(
-            f"    {in_channel} = {arguments[0]}.merge({arguments[1]}) "
-            f"{{ {synthetic[0]}, {synthetic[1]} -> tuple({synthetic[0]}, {synthetic[1]}) }}"
-        )
+        lines.append(f"    {Idioms.MERGE.fill(process=process.name, first=arguments[0], second=arguments[1])}")
         for index in range(2, len(ports)):
             carried = ", ".join(f"__merged[{earlier}]" for earlier in range(index))
-            lines.append(
-                f"        .merge({arguments[index]}) "
-                f"{{ __merged, {synthetic[index]} -> tuple({carried}, {synthetic[index]}) }}"
-            )
+            merged = Idioms.MERGE_NEXT.fill(argument=arguments[index], parameter=synthetic[index], carried=carried)
+            lines.append(f"        {merged}")
     rename = dict(zip((port.name for port in ports), synthetic, strict=True))
     return lines + _render_branch(process, in_channel, ", ".join(synthetic), rename, synthetic, "[]")
 
@@ -619,7 +714,9 @@ def _render_conditional_scatter(
     elements = [f"__w{position}" for position in range(len(scattered))]
     broadcasts = [f"__b{position}" for position in range(len(others))]
     params = ", ".join([index, *elements, *broadcasts])
-    combined = scatter_channel + "".join(f".combine({arg}.map {{ [it] }})" for arg in other_args)
+    combined = scatter_channel
+    for arg in other_args:
+        combined = Idioms.COMBINE.fill(channels=combined, channel=Idioms.BOXED.fill(source=arg))
     rename = dict(zip([*scattered, *(port.name for port in others)], [*elements, *broadcasts], strict=True))
     calls = [f"tuple({', '.join([index, *elements])})", *broadcasts]
     return _render_branch(process, combined, params, rename, calls, f"{params} -> tuple({index}, [])")
@@ -672,7 +769,7 @@ NF_NEST_FUNCTION = f'''def {NF_NEST_HELPER}(List flat, List shape) {{
 
 def _gathered(expression: str) -> str:
     """Collect an indexed scatter's outputs once, as one array in invocation order."""
-    return f"{expression}.toSortedList {{ it[0] }}.map {{ it.collect {{ row -> row[1] }} }}"
+    return Idioms.GATHERED.fill(source=expression)
 
 
 def _multi_input_sources(
@@ -733,9 +830,7 @@ def _output_record(workflow: ExecutableNextflowWorkflow, connection: NfWorkflowO
     )
 
 
-def _render_multi_input_channel(
-    channel_name: str, process_name: str, sources: list[tuple[str, str, str]], method: str = "dotproduct"
-) -> str:
+def _render_multi_input_channel(process_name: str, sources: list[tuple[str, str, str]], method: str) -> str:
     """Combine multi-input scatter source value channels into one [index, elem...] queue channel.
 
     Combines the whole-array value channels the design requires (design §6,
@@ -755,9 +850,9 @@ def _render_multi_input_channel(
     # tuple, and a whole scattered array is exactly such a value; boxing each
     # one in a singleton list first keeps combine from splicing its elements
     # into the tuple instead of carrying the array itself.
-    boxed = f"{sources[0][1]}.map {{ [it] }}"
+    boxed = Idioms.BOXED.fill(source=sources[0][1])
     for _, channel, _label in sources[1:]:
-        boxed = f"{boxed}.combine({channel}.map {{ [it] }})"
+        boxed = Idioms.COMBINE.fill(channels=boxed, channel=Idioms.BOXED.fill(source=channel))
     # A one-parameter closure receives a single boxed item unspread, so a lone
     # array is passed as itself.
     combine_expr = boxed if len(sources) > 1 else sources[0][1]
@@ -772,7 +867,7 @@ def _render_multi_input_channel(
         for var, local in reversed(list(zip(loop_vars, locals_))):
             product = f"{local}.collectMany {{ {var} -> {product} }}"
         lines = [
-            f"    {channel_name} = {combine_expr}.flatMap {{ {params_decl} ->",
+            f"    {Idioms.SCATTER.fill(process=process_name, sources=combine_expr, parameters=params_decl)}",
             f"        {product}.withIndex().collect {{ combination, index -> [index] + combination }}",
             "    }",
         ]
@@ -781,7 +876,8 @@ def _render_multi_input_channel(
             # gathered results can be regrouped into one dimension per input
             # even where a dimension is empty.
             sizes = ", ".join(f"{local}.size()" for local in locals_)
-            lines.append(f"    {_shape_channel(process_name)} = {combine_expr}.map {{ {params_decl} -> [[{sizes}]] }}")
+            shape = Idioms.SHAPE.fill(process=process_name, sources=combine_expr, parameters=params_decl, sizes=sizes)
+            lines.append(f"    {shape}")
         return "\n".join(lines)
     mismatch = " || ".join(f"{locals_[0]}.size() != {name}.size()" for name in locals_[1:])
     detail = ", ".join(
@@ -790,7 +886,7 @@ def _render_multi_input_channel(
     message = f"{process_name}: dotproduct scatter inputs have mismatched lengths: {detail}"
     tuple_elements = ", ".join(f"{local}[i]" for local in locals_)
     return "\n".join([
-        f"    {channel_name} = {combine_expr}.flatMap {{ {params_decl} ->",
+        f"    {Idioms.SCATTER.fill(process=process_name, sources=combine_expr, parameters=params_decl)}",
         *([f'        if ({mismatch}) {{ throw new RuntimeException("{message}") }}'] if mismatch else []),
         f"        (0..<{locals_[0]}.size()).collect {{ i -> tuple(i, {tuple_elements}) }}",
         "    }",
@@ -814,7 +910,7 @@ def _source_expression(
             emit = output.emit or output.name
             if process.condition is not None:
                 return _conditional_channel_name(process.name, emit)
-            return f"{process.name}.out.{emit}"
+            return Idioms.PROCESS_OUTPUT.fill(process=process.name, emit=emit)
 
 
 def _step_input_expression(workflow: ExecutableNextflowWorkflow, connection: NfStepInputConnection) -> str:
@@ -824,21 +920,22 @@ def _step_input_expression(workflow: ExecutableNextflowWorkflow, connection: NfS
     item is then the list of the step input's values, in order.
     """
     processes = _process_map(workflow)
-    channels = [f"{_source_expression(source, processes)}.map {{ [it] }}" for source in connection.sources]
+    channels = [Idioms.BOXED.fill(source=_source_expression(source, processes)) for source in connection.sources]
     arrays = [
         param_channel(workflow.param_types[source.from_port]).carries_list
         if isinstance(source, NfWorkflowInputConnection) else source.adapter == "gather"
         for source in connection.sources
     ]
-    combined = channels[0] + "".join(f".combine({channel})" for channel in channels[1:])
-    arguments = ", ".join([
-        groovy_literal(f"{connection.to_process}.{connection.to_port}"),
-        "__values",
-        f"[{', '.join('true' if array else 'false' for array in arrays)}]",
-        groovy_literal(connection.link_merge),
-        "null" if connection.pick_value is None else groovy_literal(connection.pick_value),
-    ])
-    return f"{combined}.map {{ __values -> {NF_STEP_INPUT_HELPER}({arguments}) }}.first()"
+    combined = channels[0]
+    for channel in channels[1:]:
+        combined = Idioms.COMBINE.fill(channels=combined, channel=channel)
+    return Idioms.STEP_INPUT.fill(
+        channels=combined,
+        label=groovy_literal(f"{connection.to_process}.{connection.to_port}"),
+        arrays=", ".join("true" if array else "false" for array in arrays),
+        link_merge=groovy_literal(connection.link_merge),
+        pick_value="null" if connection.pick_value is None else groovy_literal(connection.pick_value),
+    )
 
 
 def _argument(
@@ -875,7 +972,7 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
     processes = _process_map(workflow)
     incoming = _incoming_connections(workflow)
     workflow_inputs = _workflow_input_names(workflow)
-    lines = [f"workflow {workflow.name} {{"]
+    lines = [Idioms.WORKFLOW.fill(name=workflow.name)]
     if workflow_inputs:
         lines.append("    take:")
         lines.extend(f"    {name}" for name in workflow_inputs)
@@ -888,9 +985,7 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
         if multi_input_sources:
             multi_input_names = {name for name, _, _ in multi_input_sources}
             channel_name = f"ch_{process.name}_scatter"
-            lines.append(_render_multi_input_channel(
-                channel_name, process.name, multi_input_sources, methods[process.name]
-            ))
+            lines.append(_render_multi_input_channel(process.name, multi_input_sources, methods[process.name]))
             other_ports = [port for port in process.inputs if port.name not in multi_input_names]
             arguments = [channel_name] + [
                 _argument(workflow, incoming[(process.name, port.name)], methods)
@@ -903,7 +998,7 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
                 for port in process.inputs
             ]
         if process.condition is None:
-            lines.append(f"    {process.name}({', '.join(arguments)})")
+            lines.append(f"    {Idioms.CALL.fill(process=process.name, arguments=', '.join(arguments))}")
         elif multi_input_sources:
             lines.extend(_render_conditional_scatter(
                 process, channel_name, [name for name, _, _ in multi_input_sources], other_ports, arguments[1:]
@@ -941,13 +1036,13 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
                     f"{expression}.toSortedList {{ it[0] }}"
                     ".flatMap { it.collect { row -> row[1] } }"
                 )
-            lines.append(f"    {connection.to_port} = {expression}")
+            lines.append(f"    {Idioms.EMIT.fill(output=connection.to_port, expression=expression)}")
     lines.append("}")
     return "\n".join(lines)
 
 
 def _checked_parameter(workflow: ExecutableNextflowWorkflow, name: str) -> str:
-    return f"{NF_INPUT_HELPER}({groovy_literal(name)}, params.{name}, {groovy_literal(workflow.param_types[name])})"
+    return Idioms.CHECKED.fill(name=name, type=groovy_literal(workflow.param_types[name]))
 
 
 def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> str:
