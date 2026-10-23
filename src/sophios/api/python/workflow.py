@@ -1216,6 +1216,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         *,
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
+        target: Literal["cwl", "nextflow"] = "cwl",
     ) -> RunResult | None:
         """Compile and execute this workflow locally, and wait for it: :meth:`start`, then ``wait()``.
 
@@ -1227,12 +1228,18 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
 
         The run writes the one document ``compile()`` returns to
         ``<basepath>/<name>.cwl``, with its job file beside it, and runs exactly
-        that.
+        that. With ``target="nextflow"`` it writes what :meth:`to_nextflow`
+        writes to ``basepath`` and runs that with Nextflow; the outputs are in
+        ``<basepath>/work_<name>``, Nextflow's work directory.
 
         Args:
             run_args_dict (dict[str, str] | None): Runtime CLI options for local execution,
                 by flag name without the dashes. ``quiet`` (``'yes'`` by default) and
-                ``no_provenance`` (``'no'`` by default) are yes/no switches.
+                ``no_provenance`` (``'no'`` by default) are yes/no switches. Under
+                ``target="nextflow"`` an option only a CWL run reads is refused, as the
+                command line refuses it, and each key Sophios does not read reaches
+                Nextflow as ``-<key> <value>``, or ``-<key>`` alone for an empty value:
+                ``{'process.executor': 'slurm', 'resume': ''}``.
             user_env_vars (dict[str, str] | None): Environment variables to expose to the run.
             basepath (str): Directory used for generated files and execution artifacts.
             tool_registry (Tools | None): Optional tool registry override.
@@ -1240,6 +1247,8 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 ``.wic`` files a real-time analysis may be.
             inference (Inference): How an unbound input is connected; the run
                 infers the same edges ``compile(inference=...)`` does.
+            target (Literal["cwl", "nextflow"]): What the workflow is run as: CWL, by
+                ``cwl_runner``, or the pipeline the Nextflow target lowers it to, by Nextflow.
 
         Returns:
             RunResult | None: The completed run: its outputs, output directory and log
@@ -1248,12 +1257,13 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         Raises:
             SophiosError: The workflow does not compile, or this machine cannot run it.
             ValueError: If a `user_env_vars` key is not an environment variable name, or
-                `run_args_dict` names a `cwl_runner` Sophios cannot run.
+                `run_args_dict` names a `cwl_runner` Sophios cannot run, or under
+                ``target="nextflow"`` the workflow has no Nextflow lowering.
             WorkflowRunError: If the runner exits non-zero. Its `exit_code` is the runner's.
             KeyboardInterrupt: On Ctrl-C, after the runner was stopped.
         """
         return _run_workflow(self, _RunOptions(run_args_dict, user_env_vars, basepath, tool_registry,
-                                               workflow_paths, inference))
+                                               workflow_paths, inference, target))
 
     def start(  # pylint: disable=too-many-arguments
         self,
@@ -1264,6 +1274,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         *,
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
+        target: Literal["cwl", "nextflow"] = "cwl",
     ) -> RunHandle:
         """Compile this workflow, prepare its run, start its runner, and return without waiting for it.
 
@@ -1285,6 +1296,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             workflow_paths (Mapping[str, Mapping[str, Path]] | None): The
                 ``.wic`` files a real-time analysis may be.
             inference (Inference): How an unbound input is connected.
+            target (Literal["cwl", "nextflow"]): As :meth:`run` takes it.
 
         Returns:
             RunHandle: The started run.
@@ -1294,7 +1306,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             ValueError: As :meth:`run` raises it, and for ``generate_run_script``.
         """
         return _start_workflow(self, _RunOptions(run_args_dict, user_env_vars, basepath, tool_registry,
-                                                 workflow_paths, inference))
+                                                 workflow_paths, inference, target))
 
     async def run_async(  # pylint: disable=too-many-arguments
         self,
@@ -1305,6 +1317,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         *,
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
+        target: Literal["cwl", "nextflow"] = "cwl",
     ) -> RunResult | None:
         """:meth:`run`, as a coroutine that never blocks the event loop.
 
@@ -1325,6 +1338,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             workflow_paths (Mapping[str, Mapping[str, Path]] | None): Unused here: they
                 name real-time analyses, which are refused.
             inference (Inference): How an unbound input is connected.
+            target (Literal["cwl", "nextflow"]): As :meth:`run` takes it.
 
         Returns:
             RunResult | None: As :meth:`run` returns it.
@@ -1336,7 +1350,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             asyncio.CancelledError: When the awaiting task is cancelled, after the runner was stopped.
         """
         return await _run_workflow_async(self, _RunOptions(run_args_dict, user_env_vars, basepath, tool_registry,
-                                                           workflow_paths, inference))
+                                                           workflow_paths, inference, target))
 
     def _as_workflow_step(self) -> nodes.Step:
         """Return this workflow as a step naming its own ``.wic`` document, with its anchored outputs."""

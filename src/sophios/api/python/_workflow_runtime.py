@@ -36,7 +36,7 @@ from sophios.lang import Step as LangStep
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.input_output_nf import remove_nextflow_artifacts, write_nextflow_artifacts
 from sophios.nf_types import ExecutableNextflowWorkflow
-from sophios.cli import default_compilation_settings, get_known_and_unknown_args
+from sophios.cli import default_compilation_settings, get_args, get_known_and_unknown_args
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
 from sophios.utils import convert_args_dict_to_args_list
 from sophios.utils_cwl import tool_process
@@ -610,13 +610,14 @@ def write_nextflow_workflow(
     )
 
 
-def _run_args(overrides: dict[str, str] | None) -> dict[str, str]:
-    """The default local-run settings with `overrides` applied.
+def _run_args(overrides: dict[str, str] | None, target: str) -> dict[str, str]:
+    """The default local-run settings of `target` with `overrides` applied.
 
-    `quiet` is on unless the caller turns it off. It, `no_provenance` and
+    Under `cwl`, `quiet` is on unless the caller turns it off; the defaults are
+    a CWL run's, so `nextflow` has none. `quiet`, `no_provenance` and
     `generate_run_script` are normalised to `yes`/`no`.
     """
-    resolved = {**DEFAULT_RUN_ARGS, **(overrides or {})}
+    resolved = {**(DEFAULT_RUN_ARGS if target == "cwl" else {}), **(overrides or {})}
     for switch in ("quiet", "no_provenance", "generate_run_script"):
         if switch in resolved:
             resolved[switch] = "yes" if _enabled(resolved[switch]) else "no"
@@ -638,6 +639,7 @@ class RunOptions:  # pylint: disable=too-many-instance-attributes
     tool_registry: Tools | None = None
     workflow_paths: Mapping[str, Mapping[str, Path]] | None = None
     inference: Inference = Inference()
+    target: str = "cwl"
 
 
 def _realtime_refused(declarations: tuple[Declaration, ...]) -> SophiosError:
@@ -655,12 +657,12 @@ def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: 
         SophiosError: The workflow does not compile, this machine cannot run it, or it declares real-time
             analyses and `refuse_realtime` is set (`api008`).
         ValueError: `run_args_dict` names a `cwl_runner` Sophios cannot run, or a `user_env_vars` key is not
-            an environment variable name.
+            an environment variable name; or, for the Nextflow target, the workflow has no Nextflow lowering.
     """
     logger.info("Running %s", workflow.process_name)
     plugins.logging_filters()
 
-    resolved_run_args = _run_args(options.run_args_dict)
+    resolved_run_args = _run_args(options.run_args_dict, options.target)
     basepath = options.basepath
     result = compile_workflow_result(workflow, tool_registry=options.tool_registry, inference=options.inference)
     if refuse_realtime and result.realtime:
@@ -671,6 +673,8 @@ def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: 
     if (problem := preflight.unwritable(Path(basepath), "the workflow and its run",
                                         "pass run() a basepath you can write to")) is not None:
         raise SophiosError([problem])
+    if options.target == "nextflow":
+        return _nextflow_run_request(workflow, options, result, analyses, resolved_run_args)
     outdir = resolved_run_args.get("outdir")
     writes = ((Path(outdir), "the run's outputs", "give run() an outdir you can write to"),) if outdir else ()
     # One document, the workflow's and each analysis's, as `compile()` returns it.
@@ -700,6 +704,29 @@ def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: 
         generate_run_script=resolved_run_args.get("generate_run_script", "no") == "yes")
 
 
+def _nextflow_run_request(workflow: "Workflow", options: RunOptions, result: CompilationResult,
+                          analyses: tuple[realtime.Analysis, ...], run_args: dict[str, str]) -> backends.RunRequest:
+    """`_run_request` for the Nextflow target: each `run_args` key Sophios does not read reaches Nextflow as
+    `-<key> <value>`, or `-<key>` alone for an empty value; one only a CWL run reads is refused, as the command
+    line refuses it; and the notes of the lowering are warnings."""
+    known = vars(get_args())
+    flags = convert_args_dict_to_args_list({key: value for key, value in run_args.items() if key in known},
+                                           boolean_flags=_RUN_ARG_BOOLEAN_FLAGS)
+    get_args(workflow.process_name, ["--target", "nextflow", *flags])
+    passthrough = tuple(token for key, value in run_args.items() if key not in known
+                        for token in (f"-{key}", *((value,) if value else ())))
+    run_script = _enabled(run_args.get("generate_run_script", "no"))
+    prepared = backends.backend("nextflow", "nextflow").prepare(
+        result, analyses, Path(options.basepath),
+        run_setup.Settings(preflight.RunSettings("docker", "", run_script=run_script), Path.cwd()))
+    for note in prepared.notes:
+        warnings.warn(str(note), UserWarning, stacklevel=5)
+    return backends.RunRequest(
+        workflow.process_name, Path(options.basepath), runner="nextflow", target="nextflow",
+        passthrough_args=passthrough, env=dict(options.user_env_vars or {}), realtime_plans=prepared.plans,
+        generate_run_script=run_script)
+
+
 def _completed(workflow: "Workflow", result: RunResult) -> RunResult:
     """`result`, when the run COMPLETED.
 
@@ -713,7 +740,7 @@ def _completed(workflow: "Workflow", result: RunResult) -> RunResult:
 
 def start_workflow(workflow: "Workflow", options: RunOptions) -> RunHandle:
     """Compile and prepare `workflow`, start its runner, and return the run's handle: see `Workflow.start`."""
-    if _enabled(_run_args(options.run_args_dict).get("generate_run_script", "no")):
+    if _enabled(_run_args(options.run_args_dict, options.target).get("generate_run_script", "no")):
         raise ValueError("generate_run_script writes run.sh instead of starting the run: call run() for it")
     return run_local.start(_run_request(workflow, options, refuse_realtime=False))
 

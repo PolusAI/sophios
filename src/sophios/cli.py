@@ -66,10 +66,6 @@ neutral.add_argument('--homedir', type=str, required=False, default=str(Path().h
 neutral.add_argument('--insert_steps_automatically', default=False, action="store_true",
                      help='''Attempt to fix inference failures by speculatively
                      inserting workflow steps from a curated whitelist.''')
-neutral.add_argument('--quiet', default=False, action="store_true",
-                     help='''With --run_local or --generate_run_script: hide cwltool's own log (cwltool is
-                     given --quiet). Each tool's own messages still print as the run goes.
-                     The compiled CWL is the same with or without it.''')
 neutral.add_argument('--lang_version', type=str, default=None,
                      help='Pin the Sophios language version for this compilation. '
                      'Defaults to inferring the newest version that accepts the source.')
@@ -93,6 +89,21 @@ neutral.add_argument('--ignore_validation_errors', default=False, action="store_
 neutral.add_argument('--diagnostics', choices=['text', 'json'], default='text',
                      help='''How diagnostics are printed on stderr: text, or one JSON object per line
                      for programs and agents (see docs/error_codes.md)''')
+# What to do with the workflow. --generate_cwl_workflow, declared with the CWL options, excludes these too.
+group_run = neutral.add_mutually_exclusive_group()
+group_run.add_argument('--generate_run_script', default=False, action="store_true",
+                       help='Just generates run.sh, the runner command, and exits. Does not actually invoke ./run.sh')
+group_run.add_argument('--check', default=False, action="store_true",
+                       help='''Compile the workflow and check that this machine can run it (the container engine
+                       when a step uses a container, the input paths, the directories Sophios writes, the programs
+                       it calls; under --target nextflow, nextflow and a Java it can run, and the container engine
+                       when a process has a container), then stop: nothing is pulled and nothing is run.''')
+group_run.add_argument('--run_local', default=False, action="store_true",
+                       help='''After compiling, run the workflow on your local machine: with --cwl_runner, or under
+                       --target nextflow with Nextflow.''')
+neutral.add_argument('--passthrough_flags', type=str, default='no', choices=['yes', 'no'], required=False,
+                     help='''With 'yes', arguments sophios does not recognise are sent to the runner (the CWL
+                     runner, or Nextflow) unchecked. With 'no' (the default) an unrecognised argument is an error.''')
 neutral.add_argument('--basepath', type=str, required=False, default=DEFAULT_BASEPATH,
                      help='Directory, relative to the working directory, for the compiled workflow and the job file, '
                      'or under --target nextflow the Nextflow files, '
@@ -139,17 +150,14 @@ cwl.add_argument('--partial_failure_success_codes', nargs='*', type=int, default
                  help='Let users add custom error codes to be treated as success')
 cwl.add_argument('--partial_failure_success_codes_range', nargs=2, type=int, default=[0, 1], required=False,
                  help='Let users add custom error code range to be treated as success')
-group_run = cwl.add_mutually_exclusive_group()
-group_run.add_argument('--generate_run_script', default=False, action="store_true",
-                       help='Just generates run.sh and exits. Does not actually invoke ./run.sh')
-group_run.add_argument('--check', default=False, action="store_true",
-                       help='''Compile the workflow and check that this machine can run it (the container engine
-                       when a step uses a container, the input paths, the directories Sophios writes, the programs
-                       it calls), then stop: nothing is pulled and nothing is run.''')
-group_run.add_argument('--run_local', default=False, action="store_true",
-                       help='After generating the cwl file(s), run it on your local machine.')
-group_run.add_argument('--generate_cwl_workflow', required=False, default=False, action="store_true",
-                       help='Compile the workflow without pulling the docker image')
+# A mutually exclusive group's actions are declared in the group it was made in, so this one is added to it after.
+group_run._group_actions.append(  # pylint: disable=protected-access
+    cwl.add_argument('--generate_cwl_workflow', required=False, default=False, action="store_true",
+                     help='Compile the workflow without pulling the docker image'))
+cwl.add_argument('--quiet', default=False, action="store_true",
+                 help='''With --run_local or --generate_run_script: hide cwltool's own log (cwltool is
+                 given --quiet). Each tool's own messages still print as the run goes.
+                 The compiled CWL is the same with or without it.''')
 cwl.add_argument('--cwl_inline_subworkflows', default=False, action="store_true",
                  help='''Write one flat workflow: replace every step that runs a subworkflow by that
                  subworkflow's own steps. Tools stay separate files. A subworkflow call that has
@@ -181,9 +189,6 @@ cwl.add_argument('--graph_dark_theme', default=False, action="store_true",
                  help='Draw text, box outlines and inferred edges in white, for a dark background.')
 cwl.add_argument('--custom_net', type=str, required=False,
                  help='Passes --custom-net flag to cwltool.')
-cwl.add_argument('--passthrough_flags', type=str, default='no', choices=['yes', 'no'], required=False,
-                 help='''With 'yes', arguments sophios does not recognise are sent to the cwl_runner
-                 backend unchecked. With 'no' (the default) an unrecognised argument is an error.''')
 
 
 def validate_target_args(args: argparse.Namespace) -> None:

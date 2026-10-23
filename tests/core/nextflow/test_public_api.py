@@ -190,14 +190,15 @@ def test_an_option_set_for_another_target_is_rejected(target: str, capsys: pytes
 
 @pytest.mark.fast
 @pytest.mark.parametrize("target", cli.target_options)
-def test_an_unknown_argument_names_passthrough_flags_only_under_cwl(
+def test_an_unknown_argument_names_passthrough_flags_under_every_target(
     target: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Each target's runner takes passthrough arguments: CWL's runners, and Nextflow."""
     with pytest.raises(SystemExit, match="2"):
         sophios_main._main(cli.get_args("workflow.wic", ["--target", target]), ["--bogus"])
     error = capsys.readouterr().err.splitlines()[-1]
-    assert error.startswith("main: error: unrecognized arguments: --bogus")
-    assert ("--passthrough_flags" in error) == (target == "cwl")
+    assert error == ("main: error: unrecognized arguments: --bogus. Flags for the runner need "
+                     "--passthrough_flags yes")
 
 
 @pytest.mark.fast
@@ -240,6 +241,18 @@ def test_nextflow_documentation_uses_supported_public_entry_points() -> None:
         "--inputs_file",
     ):
         assert f"`{incompatible_flag}`" in documentation
+
+
+@pytest.mark.fast
+def test_the_run_modes_act_under_nextflow_and_an_option_only_a_cwl_run_reads_does_not() -> None:
+    for flags in (["--run_local"], ["--check"], ["--generate_run_script"], ["--passthrough_flags", "yes"]):
+        assert cli.get_args("workflow.wic", ["--target", "nextflow", *flags]).target == "nextflow"
+    for flags in (["--generate_cwl_workflow"], ["--quiet"], ["--cwl_runner", "toil-cwl-runner"],
+                  ["--container_engine", "podman"], ["--cachedir", "cache"], ["--outdir", "out"]):
+        with pytest.raises(SystemExit, match="2"):
+            cli.get_args("workflow.wic", ["--target", "nextflow", *flags])
+    with pytest.raises(SystemExit, match="2"):
+        cli.get_args("workflow.wic", ["--run_local", "--generate_cwl_workflow"])
 
 
 @pytest.mark.fast

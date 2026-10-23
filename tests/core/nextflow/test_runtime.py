@@ -2014,3 +2014,79 @@ def test_the_pipeline_records_each_workflow_output_as_its_value(tmp_path: Path) 
     assert recorded["folder"]["class"] == "Directory" and Path(recorded["folder"]["path"]).is_dir()
     assert [[cell["class"] for cell in row] for row in recorded["grid"]] == [["File"] * 3] * 2
     assert len({cell["path"] for row in recorded["grid"] for cell in row}) == 6
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_workflow_run_runs_the_nextflow_target_and_returns_its_outputs(tmp_path: Path) -> None:
+    """Nextflow runs from the base path, and the run's outputs are CWL objects naming the files it made."""
+    base = tmp_path / "base"
+    result = supported_workflow().run(target="nextflow", basepath=str(base))
+    assert result is not None and result.exit_code == 0
+    assert result.outputs is not None
+    file = result.outputs["file"]
+    assert (file["class"], file["basename"]) == ("File", "stdout.txt")
+    assert Path(file["path"]).read_text(encoding="utf-8") == "hello from Sophios\n"
+    assert Path(file["path"]).is_relative_to(base.resolve() / "work_nextflow_public")
+    assert json.loads((base / "output_nextflow_public.json").read_text(encoding="utf-8")) == result.outputs
+    assert (base / ".nextflow.log").is_file()
+
+
+#: A tool that copies its source into an output-target Directory, which it captures.
+_COPY_INTO = """cwlVersion: v1.2
+class: CommandLineTool
+baseCommand: cp
+requirements:
+  InitialWorkDirRequirement:
+    listing:
+    - entry: $(inputs.outDir)
+      writable: true
+inputs:
+  outDir:
+    type: Directory
+  source:
+    type: File
+outputs:
+  outDir:
+    type: Directory
+    outputBinding:
+      glob: $(inputs.outDir.basename)
+arguments:
+- $(inputs.source)
+- $(inputs.outDir.basename)/copied.txt
+"""
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_the_command_line_runs_the_nextflow_target_with_paths_read_beside_the_workflow(tmp_path: Path) -> None:
+    """Started from elsewhere, the run reads a relative path beside the `.wic` file, makes the output directory
+    named there, and writes the output object under the Sophios name of the output."""
+    (tmp_path / "copy_into.cwl").write_text(_COPY_INTO, encoding="utf-8")
+    (tmp_path / "source.txt").write_text("copied text\n", encoding="utf-8")
+    (tmp_path / "w.wic").write_text(
+        "steps:\n  copy_into:\n    in:\n      outDir: !ii made\n      source: !ii source.txt\n"
+        "    out:\n    - outDir: !& made\n", encoding="utf-8")
+    config = {
+        "search_paths_cwl": {"global": [str(tmp_path)], "gpu": []},
+        "search_paths_wic": {"global": [str(tmp_path)]},
+        "renaming_conventions": [],
+        "inference_rules": {},
+    }
+    (tmp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    result = subprocess.run(
+        [sys.executable, "-m", "sophios.main", "--yaml", str(tmp_path / "w.wic"),
+         "--config_file", str(tmp_path / "config.json"), "--homedir", str(tmp_path),
+         "--target", "nextflow", "--run_local", "--basepath", "out"],
+        cwd=elsewhere, env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "src")},
+        text=True, capture_output=True, timeout=180, check=False,
+    )
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert (tmp_path / "made").is_dir()
+    outputs = json.loads((elsewhere / "out" / "output_w.json").read_text(encoding="utf-8"))
+    made = outputs["copy_into~outDir"]
+    assert (made["class"], made["basename"]) == ("Directory", "made")
+    assert (Path(made["path"]) / "copied.txt").read_text(encoding="utf-8") == "copied text\n"
+    assert sorted(path.name for path in elsewhere.iterdir()) == ["out"]
