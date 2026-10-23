@@ -21,6 +21,7 @@ from sophios.nf_types import (
     NfCommand,
     NfEntry,
     NfEnvVar,
+    NfOptionalBinding,
     NfPort,
     NfProcess,
     NfProcessConnection,
@@ -94,6 +95,10 @@ BUILDERS: dict[str, Callable[[], ExecutableNextflowWorkflow]] = {
     "gather into a scattered step's array of paths": lambda: _pair_then_use("dotproduct", _PAIR_THEN_USE_PARAMS),
     "array of paths beside a scatter": lambda: _scatter_with_file_array("flat_crossproduct", ["/tmp/s.txt"]),
     "step-input idioms": lambda: _merged(_GATHERED, _ONE, _XS),
+    "an absent optional binding": lambda: single_process_workflow(NfProcess(
+        "GREET", [NfPort("n", "val")], [output_port("out", "out.txt")],
+        NfCommand((template("echo"), NfOptionalBinding("n", "--name=", False)), stdout=template("out.txt")),
+    ), params={"n": []}, param_types={"n": "string?"}, output_port_name="out"),
     "an unscattered output into a scatter": lambda: ExecutableNextflowWorkflow(
         "PIPELINE",
         [NfProcess("A", [], [output_port("f", "a.txt")], command("true")),

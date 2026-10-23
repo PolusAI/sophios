@@ -250,6 +250,8 @@ _ARRAY_ONLY = "array-marked inputs may only be referenced by array bindings"
         lambda: _proc(NfPort("v", "val"), NfArrayBinding("v", "--name")),
         "array bindings must reference array-marked inputs",
     ),
+    (lambda: _proc(NfPort("v", "path"), NfOptionalBinding("v")), "optional bindings must reference val inputs"),
+    (lambda: _proc(NfPort("v", "val", is_array=True), NfOptionalBinding("v")), f"{_ARRAY_ONLY}: v"),
     # A plain reference renders values.toString(), so a two-item array reaches the command line as "[a, b]".
     (
         lambda: _proc(NfPort("v", "val", is_array=True), NfTemplate((NfLiteral("--joined="), NfInputReference("v")))),
@@ -293,6 +295,8 @@ def test_a_process_reference_to_an_input_it_does_not_admit_is_rejected(
     (NfFlag("reverse", "-r"), {"kind": "flag", "name": "reverse", "prefix": "-r"}),
     (NfBasenameReference("source"), {"kind": "basename", "name": "source"}),
     (NfShellLiteral(">>"), {"kind": "shell_literal", "text": ">>"}),
+    (NfOptionalBinding("name", "--name=", False),
+     {"kind": "optional_binding", "name": "name", "prefix": "--name=", "separate": False}),
 ])
 def test_a_command_part_writes_its_payload_fields(part: Any, payload: dict[str, Any]) -> None:
     """A round trip cannot see a field renamed on both sides, so each part's payload is pinned."""
@@ -307,38 +311,15 @@ def test_array_binding_rejects_a_blank_prefix(prefix: str) -> None:
 
 
 @pytest.mark.fast
-@pytest.mark.fast
-def test_optional_binding_survives_hydration() -> None:
-    process = NfProcess(
-        "GREET",
-        [NfPort("name", "val")],
-        [],
-        NfCommand((NfTemplate((NfLiteral("echo"),)), NfOptionalBinding("name", "--name=", separate=False))),
-    )
-    payload = ExecutableNextflowWorkflow(
-        "wf", [process], [NfWorkflowInputConnection("name", "GREET", "name")], {"name": []}, {"name": "string?"}
-    ).to_dict()
-    assert payload["processes"][0]["command"]["tokens"][1] == {
-        "kind": "optional_binding", "name": "name", "prefix": "--name=", "separate": False,
-    }
-    assert ExecutableNextflowWorkflow.from_dict(payload).to_dict() == payload
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(
-    ("binding", "port", "message"),
-    [
-        (lambda: NfOptionalBinding("name", " "), NfPort("name", "val"), "prefix"),
-        (lambda: NfOptionalBinding("name", separate=False), NfPort("name", "val"), "needs a prefix"),
-        (lambda: NfOptionalBinding("name"), NfPort("name", "path"), "optional bindings must reference val inputs"),
-        (lambda: NfOptionalBinding("name"), NfPort("name", "val", is_array=True), "array bindings"),
-    ],
-)
-def test_optional_binding_takes_one_val_input(binding: Any, port: NfPort, message: str) -> None:
+@pytest.mark.parametrize(("prefix", "separate", "message"), [(" ", True, "prefix"), (None, False, "needs a prefix")])
+def test_an_optional_binding_has_a_non_blank_prefix_and_one_unless_separate(
+    prefix: str | None, separate: bool, message: str
+) -> None:
     with pytest.raises(ValueError, match=message):
-        NfProcess("GREET", [port], [], NfCommand((NfTemplate((NfLiteral("echo"),)), binding())))
+        NfOptionalBinding("name", prefix, separate)
 
 
+@pytest.mark.fast
 def test_every_parameter_has_one_declared_type_its_sinks_agree_with() -> None:
     process = NfProcess("ONE", [NfPort("value", "val")], [], command("true"))
     connections = [NfWorkflowInputConnection("value", "ONE", "value")]
