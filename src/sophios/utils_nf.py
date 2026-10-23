@@ -28,6 +28,7 @@ from .nf_types import (
     NfCommand,
     NfCommandToken,
     NfConnection,
+    NfEnvVar,
     NfFlag,
     NfInputReference,
     NfLiteral,
@@ -810,7 +811,72 @@ def _command(tool: Mapping[str, Any]) -> NfCommand:
     def stream(name: str) -> NfTemplate | None:
         return None if tool.get(name) is None else _template(tool[name], context=f"CWL {name}")
 
-    return NfCommand(tuple(tokens), stream("stdin"), stream("stdout"), stream("stderr"))
+    return NfCommand(tuple(tokens), stream("stdin"), stream("stdout"), stream("stderr"), _environment(tool))
+
+
+def _env_entries(requirement: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    """Each `envDef` entry with the suffix of its path; CWL's map form keys an entry by its `envName`."""
+    match requirement.get("envDef"):
+        case list() as entries:
+            return [(f"envDef[{index}]", entry) for index, entry in enumerate(entries)]
+        case Mapping() as entries:
+            return [
+                (f"envDef.{name}", {"envName": name, **(value if isinstance(value, Mapping) else {"envValue": value})})
+                for name, value in entries.items()
+            ]
+        case _:
+            raise ValueError("EnvVarRequirement envDef must be a list or a mapping")
+
+
+def _env_var(entry: Any, tool: Mapping[str, Any]) -> NfEnvVar:
+    """Lower one `envDef` entry: literal text, or exactly `$(inputs.<name>)` of a `string` input (design §6)."""
+    match entry:
+        case {"envName": str() as name, "envValue": str() as value}:
+            pass
+        case _:
+            raise ValueError("an envDef entry needs a string envName and a string envValue")
+    if whole := _INPUT_EXPRESSION.fullmatch(value.strip()):
+        definition = _as_mapping(tool.get("inputs", {}), error="").get(whole["name"])
+        declared = definition.get("type") if isinstance(definition, Mapping) else None
+        if whole["suffix"] or _required_type(declared) != "string":
+            raise ValueError(
+                f"envValue {value!r} needs a string input, read whole as $(inputs.<name>); "
+                f"{whole['name']} is declared {declared!r}"
+            )
+        return NfEnvVar(name, NfTemplate((NfInputReference(_identifier(whole["name"], context="input reference")),)))
+    try:
+        segments = _template(value, context="envValue").segments
+    except ValueError:
+        segments = ()  # an expression the template reader refuses
+    if not segments or not all(isinstance(segment, NfLiteral) for segment in segments):
+        raise ValueError(
+            f"envValue {value!r} is not supported: write literal text or exactly $(inputs.<name>) of a string input"
+        )
+    return NfEnvVar(name, NfTemplate(segments))
+
+
+def _environment(tool: Mapping[str, Any]) -> tuple[NfEnvVar, ...]:
+    requirement = _requirement(tool, "EnvVarRequirement")
+    if requirement is None:
+        return ()
+    return tuple(_env_var(entry, tool) for _suffix, entry in _env_entries(requirement))
+
+
+def _env_var_findings(tool: Mapping[str, Any], requirement: Mapping[str, Any], *, path: str) -> list[str]:
+    """Report every `envDef` entry the lowering cannot take, each at its own path."""
+    try:
+        entries = _env_entries(requirement)
+    except ValueError as exc:
+        return [f"{path}.envDef: {exc}"]
+    findings: list[str] = []
+    for suffix, entry in entries:
+        if isinstance(entry, Mapping):
+            findings.extend(_unconsumed_field_findings(entry, "EnvironmentDef", path=f"{path}.{suffix}"))
+        try:
+            _env_var(entry, tool)
+        except ValueError as exc:
+            findings.append(f"{path}.{suffix}: {exc}")
+    return findings
 
 
 def _requirement(tool: Mapping[str, Any], class_name: str) -> Mapping[str, Any] | None:
@@ -1271,6 +1337,8 @@ def _requirement_findings(
                         check(payload[field_name])
                     except ValueError as exc:
                         findings.append(f"{requirement_path}.{field_name}: {exc}")
+            if class_name == "EnvVarRequirement" and tool is not None:
+                findings.extend(_env_var_findings(tool, payload, path=requirement_path))
             if class_name == "InitialWorkDirRequirement" and tool is not None:
                 findings.extend(_iwdr_listing_findings(tool, payload, path=requirement_path))
     return findings
@@ -2231,7 +2299,7 @@ def _step_input_findings(
 
 
 def _referenced_names(tool: Mapping[str, Any]) -> set[str] | None:
-    """The input names a plain or basename reference reads in the command, a stream target or an output glob.
+    """The input names a plain or basename reference reads in a command template or an output glob.
 
     None when the tool's command or outputs cannot be lowered; lowering reports why.
     """
@@ -2240,11 +2308,7 @@ def _referenced_names(tool: Mapping[str, Any]) -> set[str] | None:
         outputs = _ports(tool.get("outputs", {}), outputs=True)
     except (ValueError, TypeError):
         return None
-    templates = [
-        *(token for token in command.tokens if isinstance(token, NfTemplate)),
-        *(stream for stream in (command.stdin, command.stdout, command.stderr) if stream),
-        *(port.glob for port in outputs if port.glob),
-    ]
+    templates = [*command.templates, *(port.glob for port in outputs if port.glob)]
     return {
         segment.name
         for template in templates

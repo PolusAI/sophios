@@ -134,6 +134,7 @@ _NF_SUPPORT_PLACES = {
     'CommandOutputParameter': 'a tool output',
     'CommandOutputBinding': 'an `outputBinding`',
     'Dirent': 'an entry of an `InitialWorkDirRequirement` listing',
+    'EnvironmentDef': 'an `envDef` entry of an `EnvVarRequirement`',
 }
 
 

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from graphlib import CycleError, TopologicalSorter
 import json
 import math
+import re
 from types import MappingProxyType
 from typing import Any, ClassVar, Generic, Self, TypeVar, cast, get_args
 
@@ -378,14 +379,65 @@ def _command_token_from_dict(value: Mapping[str, Any]) -> NfCommandToken:
             return NfTemplate.from_dict(item)
 
 
+_SHELL_VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+@dataclass(frozen=True, slots=True)
+class NfEnvVar:
+    """One environment variable the task exports before its command.
+
+    The value is literal text or one input's value, as an
+    ``EnvVarRequirement`` entry lowers (design §6, Resources and containers).
+    """
+
+    name: str
+    value: NfTemplate
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not _SHELL_VARIABLE.fullmatch(self.name):
+            raise ValueError(f"environment variable name must be a shell variable name, got {self.name!r}")
+        match self.value:
+            case NfTemplate(segments=[NfLiteral() | NfInputReference()]):
+                pass
+            case _:
+                raise ValueError(f"environment variable {self.name!r} must be literal text or one input reference")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, Any]: The variable's name and value template.
+        """
+        return {"name": self.name, "value": self.value.to_dict()}
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> Self:
+        """Hydrate and validate an environment variable from a mapping.
+
+        Args:
+            value (Mapping[str, Any]): Serialized variable produced by
+                :meth:`to_dict`.
+
+        Raises:
+            TypeError: If the value is not a mapping.
+            ValueError: If fields are missing, unknown or invalid.
+
+        Returns:
+            Self: The validated variable.
+        """
+        item = _fields(value, type_name=cls.__name__, required={"name", "value"})
+        return cls(item["name"], NfTemplate.from_dict(item["value"]))
+
+
 @dataclass(frozen=True, slots=True)
 class NfCommand:
-    """Typed argv and approved stream redirections for one process."""
+    """Typed argv, approved stream redirections, and the variables exported before it, for one process."""
 
     tokens: Sequence[NfCommandToken]
     stdin: NfTemplate | None = None
     stdout: NfTemplate | None = None
     stderr: NfTemplate | None = None
+    env: Sequence[NfEnvVar] = ()
 
     def __post_init__(self) -> None:
         tokens = tuple(self.tokens)
@@ -398,18 +450,35 @@ class NfCommand:
             value = getattr(self, name)
             if value is not None and not isinstance(value, NfTemplate):
                 raise TypeError(f"command {name} must be an NfTemplate or None")
+        env = tuple(self.env)
+        if not all(isinstance(variable, NfEnvVar) for variable in env):
+            raise TypeError("command env must contain only NfEnvVar values")
+        names = [variable.name for variable in env]
+        if len(names) != len(set(names)):
+            raise ValueError("command env sets one variable more than once")
+        object.__setattr__(self, "env", env)
+
+    @property
+    def templates(self) -> tuple[NfTemplate, ...]:
+        """Every template the command renders a value into: template tokens, redirections and variables."""
+        return (
+            *(token for token in self.tokens if isinstance(token, NfTemplate)),
+            *(stream for stream in (self.stdin, self.stdout, self.stderr) if stream is not None),
+            *(variable.value for variable in self.env),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation.
 
         Returns:
-            dict[str, Any]: Serialized argv tokens and stream redirections.
+            dict[str, Any]: Serialized argv tokens, stream redirections and exported variables.
         """
         return {
             "tokens": [token.to_dict() for token in self.tokens],
             "stdin": self.stdin.to_dict() if self.stdin else None,
             "stdout": self.stdout.to_dict() if self.stdout else None,
             "stderr": self.stderr.to_dict() if self.stderr else None,
+            "env": [variable.to_dict() for variable in self.env],
         }
 
     @classmethod
@@ -427,9 +496,9 @@ class NfCommand:
         Returns:
             Self: The validated command.
         """
-        item = _fields(value, type_name=cls.__name__, required={"tokens", "stdin", "stdout", "stderr"})
-        if not isinstance(item["tokens"], list):
-            raise TypeError("NfCommand tokens must be a list")
+        item = _fields(value, type_name=cls.__name__, required={"tokens", "stdin", "stdout", "stderr", "env"})
+        if not isinstance(item["tokens"], list) or not isinstance(item["env"], list):
+            raise TypeError("NfCommand tokens and env must be lists")
 
         def hydrate(raw: Any) -> NfTemplate | None:
             return None if raw is None else NfTemplate.from_dict(raw)
@@ -437,6 +506,7 @@ class NfCommand:
         return cls(
             tuple(_command_token_from_dict(token) for token in item["tokens"]),
             hydrate(item["stdin"]), hydrate(item["stdout"]), hydrate(item["stderr"]),
+            tuple(NfEnvVar.from_dict(variable) for variable in item["env"]),
         )
 
 
@@ -744,11 +814,7 @@ class NfProcess:
         array_binding_names = {
             token.name for token in self.command.tokens if isinstance(token, NfArrayBinding)
         }
-        templates = [
-            *(token for token in self.command.tokens if isinstance(token, NfTemplate)),
-            *(template for template in (self.command.stdin, self.command.stdout, self.command.stderr) if template),
-            *(port.glob for port in outputs if port.glob),
-        ]
+        templates = [*self.command.templates, *(port.glob for port in outputs if port.glob)]
         segments = [segment for template in templates for segment in template.segments]
         basename_names = {
             segment.name for segment in segments if isinstance(segment, NfBasenameReference)
@@ -762,8 +828,13 @@ class NfProcess:
                 f"process {self.name!r} templates reference unknown inputs: {', '.join(sorted(unknown))}"
             )
         input_ports = {port.name: port for port in inputs}
+        env_names = {
+            segment.name for variable in self.command.env for segment in variable.value.segments
+            if isinstance(segment, NfInputReference)
+        }
         rules: tuple[tuple[set[str], Callable[[NfPort], bool], str], ...] = (
             (flag_names, lambda port: port.qualifier == "val", "flag tokens must reference val inputs"),
+            (env_names, lambda port: port.qualifier == "val", "environment variables must reference val inputs"),
             (basename_names, lambda port: port.qualifier == "path", "basename references must target path inputs"),
             (array_binding_names, lambda port: port.is_array, "array bindings must reference array-marked inputs"),
             # The converse direction: every reference to an array-marked input
@@ -1198,7 +1269,7 @@ class ExecutableNextflowWorkflow:
     """
 
     # Hydration reads this version only; any change to the payload bumps it (design §5.3).
-    SCHEMA_VERSION: ClassVar[int] = 17
+    SCHEMA_VERSION: ClassVar[int] = 18
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
     name: str

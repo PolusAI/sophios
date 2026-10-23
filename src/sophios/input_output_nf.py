@@ -358,6 +358,7 @@ def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...] = ())
         f" {operator} {_render_template(stream)}" for operator, stream in streams if stream is not None
     )
     lines.extend(["", "    script:", '    \"\"\"'])
+    lines.extend(f"    export {variable.name}={_render_template(variable.value)}" for variable in process.command.env)
     if redirects and any(isinstance(token, NfShellLiteral) for token in process.command.tokens):
         # CWL redirects the whole command, not just the last one a shell literal starts;
         # on separate lines, a trailing `&` or `#` in the literal cannot swallow the `)`.

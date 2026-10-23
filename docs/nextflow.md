@@ -253,6 +253,26 @@ whose `valueFrom` references any input — directly, or via a `.path`/
 let workflow input data or a chosen file name be interpreted as shell
 syntax, which is exactly the boundary this lowering must not cross.
 
+## Environment variables
+
+`EnvVarRequirement` sets variables for the command, in list or map form:
+
+```yaml
+requirements:
+  EnvVarRequirement:
+    envDef:
+      RDKIT_ERROR_LOGGING: $(inputs.rdkit_error_logging)
+      CONDA_PREFIX: /opt/conda/
+```
+
+A value is literal text, or exactly `$(inputs.<name>)` of a `string` input.
+The task exports each variable, its value shell-quoted, before the command
+runs, so the command sees the value byte for byte. In literal text a `$` that
+is not followed by `(` or `{` is plain text. A referenced optional input
+needs a value. Any other value is rejected by name: a reference to an input
+of another type, `.path` or `.basename`, a reference inside other text, or any
+other expression. So is a name that is not a shell variable name.
+
 ## Staging with InitialWorkDirRequirement
 
 Nextflow already stages every `File`/`Directory` input under its own

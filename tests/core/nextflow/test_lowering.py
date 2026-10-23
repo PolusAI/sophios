@@ -11,6 +11,7 @@ from sophios.ir.artifacts import CompilationResult
 from sophios.nf_types import (
     NfArrayBinding,
     NfBasenameReference,
+    NfEnvVar,
     NfFlag,
     NfInputReference,
     NfLiteral,
@@ -609,3 +610,25 @@ def test_a_plain_dollar_stays_text_beside_a_reference(text: str) -> None:
 def test_a_dollar_starting_any_other_expression_is_rejected(text: str) -> None:
     with pytest.raises(ValueError, match="unsupported CWL expression"):
         _argument_tokens(text)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("env_def", [
+    [{"envName": "A", "envValue": "cost $5"}, {"envName": "B", "envValue": " $(inputs.s) "}],
+    {"A": "cost $5", "B": {"envValue": " $(inputs.s) "}},
+], ids=["list", "map"])
+def test_env_var_requirement_lowers_each_variable_to_an_export(env_def: Any) -> None:
+    rose = synthetic_source(
+        workflow_doc([step("ENV", **{"in": {"s": "s"}})], inputs={"s": "string"}),
+        [tool("ENV", inputs={"s": {"type": "string"}}, requirements={"EnvVarRequirement": {"envDef": env_def}})],
+        workflow_inputs={"s": "v"},
+    )
+    workflow = compiled_source_to_nextflow(rose)
+    assert workflow.processes[0].command.env == (
+        NfEnvVar("A", NfTemplate((NfLiteral("cost $5"),))), NfEnvVar("B", NfTemplate((NfInputReference("s"),))),
+    )
+    script = render_nextflow(workflow).split('    """\n')[1]
+    assert script.splitlines()[:2] == [
+        "    export A=${__sophios_shell_quote_9f72e('cost $5')}",
+        "    export B=${__sophios_shell_quote_9f72e(s.toString())}",
+    ]

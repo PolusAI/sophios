@@ -23,6 +23,7 @@ from sophios.nf_types import (
     NfCommand,
     NfCommandToken,
     NfConnection,
+    NfEnvVar,
     NfFlag,
     NfInputReference,
     NfLiteral,
@@ -36,7 +37,7 @@ from sophios.nf_types import (
     NfWorkflowOutputConnection,
 )
 
-from .testkit import command, output_port, template
+from .testkit import command, output_port, ref, template
 
 
 @pytest.mark.fast
@@ -405,6 +406,37 @@ def test_public_module_exports_shell_literal() -> None:
 
     assert nextflow.NfShellLiteral is NfShellLiteral
     assert "NfShellLiteral" in nextflow.__all__
+
+
+def _env_process(*env: NfEnvVar, qualifier: str = "val") -> NfProcess:
+    return NfProcess("ENV", [NfPort("x", qualifier)], [], NfCommand((NfTemplate((NfLiteral("env"),)),), env=env))
+
+
+@pytest.mark.fast
+def test_an_env_var_is_literal_text_or_one_input_reference_and_survives_hydration() -> None:
+    process = _env_process(NfEnvVar("A", template("a $b")), NfEnvVar("_B2", template(ref("x"))))
+    payload = ExecutableNextflowWorkflow(
+        "wf", [process], [NfWorkflowInputConnection("x", "ENV", "x")], {"x": "v"}, {"x": "string"}
+    )
+    assert ExecutableNextflowWorkflow.from_dict(payload.to_dict()) == payload
+    for value in (template("a", ref("x")), NfTemplate((NfBasenameReference("x"),))):
+        with pytest.raises(ValueError, match="literal text or one input reference"):
+            NfEnvVar("A", value)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("name", ["", "1A", "A-B", "A B", "A=B"])
+def test_an_env_var_name_is_a_shell_variable_name(name: str) -> None:
+    with pytest.raises(ValueError, match="shell variable name"):
+        NfEnvVar(name, template("v"))
+
+
+@pytest.mark.fast
+def test_a_command_sets_an_env_var_once_from_a_val_input() -> None:
+    with pytest.raises(ValueError, match="more than once"):
+        _env_process(NfEnvVar("A", template("1")), NfEnvVar("A", template("2")))
+    with pytest.raises(ValueError, match="environment variables must reference val inputs: x"):
+        _env_process(NfEnvVar("A", template(ref("x"))), qualifier="path")
 
 
 @pytest.mark.fast

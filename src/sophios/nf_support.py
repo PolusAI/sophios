@@ -203,6 +203,14 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
         'dockerOutputDirectory': Row(_R, 'dockerOutputDirectory is not supported: a task writes to its work directory'),
         'dockerPull': Row(_L, 'the image'),
     }),
+    'EnvVarRequirement': MappingProxyType({
+        'class': Row(_L, 'each variable is exported before the command'),
+        'envDef': Row(_L, 'the variables, in list or map form'),
+    }),
+    'EnvironmentDef': MappingProxyType({
+        'envName': Row(_L, 'a shell variable name'),
+        'envValue': Row(_L, 'literal text, or exactly `$(inputs.<name>)` of a `string` input'),
+    }),
     'InitialWorkDirRequirement': MappingProxyType({
         'class': Row(_L, "stages the inputs a listing names"),
         'listing': Row(_L, 'entries naming one `File` or `Directory` input, under its basename or a literal name'),
@@ -253,6 +261,7 @@ _WORKFLOW_FEATURE = 'is a workflow requirement: declare it on the workflow'
 REQUIREMENT_CLASSES: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
     'CommandLineTool': MappingProxyType({
         'DockerRequirement': Row(_L, 'the `container` directive'),
+        'EnvVarRequirement': Row(_L, 'variables exported before the command'),
         'InitialWorkDirRequirement': Row(_L, 'input staging'),
         'InlineJavascriptRequirement': Row(_L, 'a declaration only'),
         'LoadListingRequirement': Row(_R, 'LoadListingRequirement is not supported: a Directory is staged whole'),

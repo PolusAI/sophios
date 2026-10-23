@@ -17,6 +17,8 @@ from sophios.nf_expr import parse
 from sophios.nf_reader import nextflow_to_cwl, parse_nf_file, promote_nextflow_document
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
+    NfCommand,
+    NfEnvVar,
     NfPort,
     NfProcess,
     NfProcessConnection,
@@ -29,7 +31,7 @@ from .test_composition import _PAIR_THEN_USE_PARAMS, _composed, _pair_then_use
 from .test_conditions import _when_workflow
 from .test_dotproduct import _scatter_with_file_array, _sleep_then_pair, _text_port
 from .test_step_inputs import _GATHERED, _ONE, _XS, _merged
-from .testkit import command, output_port
+from .testkit import command, output_port, ref, single_process_workflow, template
 
 
 def _scattered(
@@ -50,7 +52,19 @@ def _scattered(
     )
 
 
+def _tool_shapes() -> ExecutableNextflowWorkflow:
+    process = NfProcess(
+        "STEP",
+        [NfPort("s", "val")],
+        [output_port("out", "out.txt")],
+        NfCommand((template("printenv"),), stdout=template("out.txt"),
+                  env=(NfEnvVar("A", template("a $b")), NfEnvVar("B", template(ref("s"))))),
+    )
+    return single_process_workflow(process, params={"s": "v"}, param_types={"s": "string"}, output_port_name="out")
+
+
 BUILDERS: dict[str, Callable[[], ExecutableNextflowWorkflow]] = {
+    "exported environment variables": _tool_shapes,
     "single-input dotproduct": lambda: _scattered("dotproduct", names=("item",)),
     "conditional step": lambda: _when_workflow("$(inputs.a > 0)", {"a": 1}, second_step=True, a="int"),
     "dotproduct": lambda: _scattered("dotproduct"),

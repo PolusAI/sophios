@@ -661,6 +661,51 @@ def test_accepts_literal_shell_quote_false_binding() -> None:
     assert NfShellLiteral(">>") in converted.processes[0].command.tokens
 
 
+_ENV_INPUTS = {"s": {"type": "string"}, "n": {"type": "int"}, "f": {"type": "File"}, "o": {"type": "string?"}}
+
+
+def _env_rose(env_def: Any, *, bind_optional: bool = True) -> CompiledNextflowSource:
+    values = {"s": "v", "n": 1, "f": {"class": "File", "path": "x.txt"}, "o": "w"}
+    names = [name for name in _ENV_INPUTS if bind_optional or name != "o"]
+    return synthetic_source(
+        workflow_doc(
+            [step("ENV", **{"in": {name: name for name in names}})],
+            inputs={name: _ENV_INPUTS[name]["type"] for name in names},
+        ),
+        [tool("ENV", inputs=_ENV_INPUTS, requirements={"EnvVarRequirement": {"envDef": env_def}})],
+        workflow_inputs={name: values[name] for name in names},
+    )
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("entry", "reason"), [
+    ({"envName": "A", "envValue": "$(inputs.n)"}, "needs a string input, read whole as $(inputs.<name>); n is declared 'int'"),
+    ({"envName": "A", "envValue": "$(inputs.f.path)"}, "needs a string input"),
+    ({"envName": "A", "envValue": "$(inputs.s.basename)"}, "needs a string input"),
+    ({"envName": "A", "envValue": "pre-$(inputs.s)"}, "is not supported: write literal text or exactly $(inputs.<name>)"),
+    ({"envName": "A", "envValue": "${return 1}"}, "is not supported"),
+    ({"envName": "A", "envValue": "$(runtime.cores)"}, "is not supported"),
+    ({"envName": "1A", "envValue": "x"}, "environment variable name must be a shell variable name, got '1A'"),
+    ({"envName": "A", "envValue": 3}, "an envDef entry needs a string envName and a string envValue"),
+    ("A=x", "an envDef entry needs a string envName and a string envValue"),
+])
+def test_env_var_requirement_rejects_every_other_value_by_name(entry: Any, reason: str) -> None:
+    [finding] = _findings(_env_rose([entry]))
+    assert finding.startswith("steps[0].run.requirements.EnvVarRequirement.envDef[0]: ")
+    assert reason in finding
+
+
+@pytest.mark.fast
+def test_env_var_requirement_rejects_an_unknown_field_and_an_absent_input() -> None:
+    assert _findings(_env_rose({"A": {"envValue": "x", "foo": 1}})) == [
+        "steps[0].run.requirements.EnvVarRequirement.envDef.A.foo: foo is not consumed by the Nextflow lowering"
+    ]
+    assert _findings(_env_rose([{"envName": "A", "envValue": "$(inputs.o)"}], bind_optional=False)) == [
+        "steps[0].run.inputs.o: absent optional values are supported only for a val input whose absence "
+        "leaves command rendering unchanged"
+    ]
+
+
 def _iwdr_tool(
     listing: list[Any],
     *,
