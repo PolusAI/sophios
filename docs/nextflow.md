@@ -153,25 +153,26 @@ From Python, a workflow that declares outputs is lowered with only those,
 as `compile()`, `compile(target="nextflow")` and `to_nextflow()` lower it,
 so its run reports the outputs a CWL run of it reports.
 
-Before the run Sophios writes the four files under the base path from the
-workflow's values, with each relative path made absolute: read beside the
-`.wic` file on the command line, from the working directory in Python. It
-makes each output directory a tool writes into
+Before the run Sophios writes the four files to `nextflow_<workflow>/` in
+the base path from the workflow's values, with each relative path made
+absolute: read beside the `.wic` file on the command line, from the working
+directory in Python. It makes each output directory a tool writes into
 ([Staging with InitialWorkDirRequirement](#staging-with-initialworkdirrequirement))
-that does not exist yet, and writes `nextflow_names_<workflow>.json`, the
-Sophios name of each process and workflow output by its Nextflow name. The
-four files have fixed names, so a base path holds one workflow's pipeline at
-a time: give two runs started together a base path each. It then starts
+that does not exist yet, and writes `nextflow_names.json` beside the four
+files, the Sophios name of each process and workflow output by its Nextflow
+name. The directory is named after the workflow, as a CWL run's files are,
+so runs of two workflows started together from one base path keep apart. It
+then starts
 
 ```console
-nextflow -C <base>/nextflow.config run <base>/workflow.nf \
-  -params-file <base>/nextflow_params.json -work-dir <base>/work_<workflow> -ansi-log false
+nextflow -C <dir>/nextflow.config run <dir>/workflow.nf \
+  -params-file <dir>/nextflow_params.json -work-dir <dir>/work -ansi-log false
 ```
 
-from the base path, so `.nextflow.log` and `.nextflow/` are there with the
-rest of the run. `-C` makes `nextflow.config` the only configuration Nextflow
-reads: a `nextflow.config` in the working directory or `~/.nextflow/config`
-takes no part.
+from that directory, `<dir>`, so the work directory, `.nextflow.log` and
+`.nextflow/` are there with the pipeline they belong to. `-C` makes
+`nextflow.config` the only configuration Nextflow reads: a `nextflow.config`
+in the working directory or `~/.nextflow/config` takes no part.
 
 When the run succeeds, its outputs are the workflow's output object, from
 the lines the pipeline prints: each output by its Sophios name, a file or
@@ -201,10 +202,11 @@ workflow.run(target="nextflow", run_args_dict={"process.executor": "slurm", "res
 ```
 
 Sophios does not check what an executor does with the tasks; that is the
-executor's contract. A run started from the base path reads a relative path
-you pass from there. Passing a configuration file or `-stub-run` this way is
-not supported: Sophios supports neither user-written configuration nor dry
-runs. `run.sh` holds the same command, and runs it from wherever you start it.
+executor's contract. A run started from `nextflow_<workflow>/` in the base
+path reads a relative path you pass from there. Passing a configuration file
+or `-stub-run` this way is not supported: Sophios supports neither
+user-written configuration nor dry runs. `run.sh` holds the same command, and
+runs it from wherever you start it.
 
 ## Names
 
