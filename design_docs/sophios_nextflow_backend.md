@@ -33,7 +33,7 @@ The backend does not perform a second forward inference pass. Imported workflows
 
 - General Groovy parsing or execution equivalence for arbitrary `.nf` files.
 - Silent preservation of unsupported semantics in executable output.
-- A Sophios-managed Nextflow runner in Phases 1 or 2.
+- Running a generated pipeline other than as one local `nextflow run` child process (§4.4), and setting an executor or any other Nextflow option for the user: each reaches Nextflow only as an unchecked passthrough argument.
 - Nextflow-native graph inference, until a successor design. The backend does not perform a second forward inference pass.
 - Backward compatibility for private, unversioned intermediate Python objects. Serialized schemas are versioned explicitly.
 - User-written Nextflow configuration. The generated `nextflow.config` is the only configuration Sophios supports.
@@ -103,15 +103,34 @@ workflow.to_nextflow(outdir)           # four artifact paths
 
 One compile operation and one clearly named artifact-writing operation are sufficient. Duplicate convenience methods are not part of the target design.
 
+A run takes the target as a CWL run takes its runner options (§4.4):
+
+```python
+workflow.run(target="nextflow")               # RunResult
+workflow.start(target="nextflow")             # RunHandle
+await workflow.run_async(target="nextflow")   # RunResult
+```
+
 The intended CLI surface is:
 
 ```text
 sophios --yaml workflow.wic --target nextflow
 ```
 
-`--target nextflow` is sufficient by itself. CWL-specific run flags are rejected with structured diagnostics. Resolved nested workflows are projected recursively; executable semantics attached to a workflow-call boundary or child workflow must be explicitly supported or rejected before that structural boundary is removed.
+`--target nextflow` is sufficient by itself. With `--run_local` Sophios runs the pipeline, with `--generate_run_script` it writes the command that runs it to `run.sh`, and with `--check` it checks the machine for it (§4.4); these three and `--passthrough_flags` act under either target, and every option only a CWL run reads is rejected under `--target nextflow`. Resolved nested workflows are projected recursively; executable semantics attached to a workflow-call boundary or child workflow must be explicitly supported or rejected before that structural boundary is removed.
 
 Import is exposed from the concrete `sophios.api.python.nextflow` module when the reader/import phase lands. The removed generic API aggregator is not restored.
+
+### 4.4 Running
+
+Sophios runs a generated pipeline through the run mechanism of its CWL runners. The backend registered for the target `nextflow` and the runner `nextflow` answers the four questions every backend answers, and Sophios starts what it launches as one child process on this machine, then streams, stops and reports on it as it does a CWL runner.
+
+- **Check.** The `nextflow` program, which must start (`nextflow -version`) and so find a Java it can run, and, when a process has a container, the container engine the generated configuration enables, Docker, checked as the CWL pre-flight checks an engine. A missing or failing program is `wic029`, an engine that cannot run containers `wic015`. The pipeline checks its input values itself when it starts (§6, Inputs and channels), so the check reads no input path. `--check` stops after it, with the artifacts written.
+- **Prepare.** The workflow is lowered from its bound values, each relative File or Directory path made absolute against the directory it is read from (the `.wic` file's on the command line, the working directory from Python), and the four artifacts (§7) are written under the base path, with `nextflow_names.json` beside them giving the Sophios name of each process and workflow output by its Nextflow name. Each output-target `Directory` input — one a tool writes into through a writable `InitialWorkDirRequirement` entry and captures as a `Directory` output, found as the CWL path finds it — whose path names nothing yet is made, empty, since the pipeline stages it as an input and the CWL path has its runner make it. The lowering's notes are reported as a compile reports them, and real-time analyses are written as for a CWL run.
+- **Launch.** `nextflow -C <base>/nextflow.config run <base>/workflow.nf -params-file <base>/nextflow_params.json -work-dir <base>/work_<workflow> -ansi-log false`, then the passthrough arguments, started in the base path with the environment a CWL runner gets: this process's, with the run's variables on top, and `NXF_SYNTAX_PARSER=v2` over both, since the pipeline stops under any other script parser (§6, Inputs and channels). `-C` makes the generated configuration the only one Nextflow reads, so no configuration file in the base path, the working directory or the user's home takes part. Nextflow's own log and cache, `.nextflow.log` and `.nextflow/`, are in the base path with everything else the run writes.
+- **Outcome.** A run that exits 0 reports the workflow's output object, read from the record the pipeline prints (§7): each workflow output under its Sophios name, a `File` or `Directory` as a CWL object with its `class`, `location`, `path` and `basename`, a captured text as a string, `null` for a null, and the output of a scattered step as an array. It is written to `output_<workflow>.json` in the base path, as for the CWL runners. Its paths are in the run's work directory, which Nextflow owns; Sophios copies and publishes nothing. A run that fails reports each process its log names as `Error executing process`, by its Sophios step name, with the exit status Nextflow gives for it, or none when it gives none, as for a missing output.
+- **Real-time analysis** does not run beside a Nextflow run: an analysis watches cwltool's job directories, and a Nextflow run has none. The run says so in one line and goes on without it.
+- **Options.** An executor, and every other Nextflow option, reaches Nextflow only as the run's passthrough arguments, unchecked, as the CWL runners' own options reach them: on the command line after `--passthrough_flags yes`, and from Python as each `run_args_dict` key Sophios does not read, written `-<key> <value>`, or `-<key>` alone for an empty value, since Nextflow's options take one dash. What an executor does with the tasks is that executor's contract, not a claim this backend proves. A configuration file or `-stub-run` passed this way is not supported: Sophios supports neither user-written configuration (§2) nor dry runs (§7).
 
 ---
 
@@ -355,6 +374,8 @@ It does not:
 For a valid executable model, rendering is total. Unsupported-user-input errors belong to capability analysis; renderer invariant failures are compiler defects.
 
 Dry runs are not supported. Every generated process carries a `stub:` block that prints that Sophios-generated Nextflow does not support dry runs (`-stub-run`) and exits 1, so a dry run stops at its first task: a process with no stub block would run its real command under `-stub-run`. The block is part of the fixed rendering of every process, and the generated-subset reader reads it as such. It changes the rendering of every model, so a source generated without it no longer matches its model byte for byte: its artifact pair stops promoting exactly (§5.3), and the source is read by the supported DSL2 reader alone (§4.2).
+
+The entry workflow records each workflow output for the run that reads it back (§4.4): when the output completes, it prints one line on standard output, `sophios-output ` and then the JSON array of the output's Nextflow name and its value. A path is an object with its `class`, `File` or `Directory`, and its absolute `path`; a captured text is a string; the `[]` sentinel (§6, Topology) is `null`; and the output of a scattered step is the array of its values in the order its workflow output emits them, with one array level per scattered input under `nested_crossproduct`. One helper, emitted only when the workflow has an output, makes the value, and the generated-subset reader reads it as such. The record changes the rendering of every model with an output, so a source generated without it no longer matches its model byte for byte: its artifact pair stops promoting exactly (§5.3), and the source is read by the supported DSL2 reader alone (§4.2).
 
 The artifact set is:
 
