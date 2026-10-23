@@ -141,18 +141,27 @@ print(result.outputs)
 `Workflow.start(target="nextflow")` and `Workflow.run_async(target="nextflow")`
 follow the run as they follow a CWL one ([Running](running.md#follow-a-run-from-python)).
 `--generate_run_script` writes the command to `run.sh` instead, and `--check`
-writes the four files and checks the machine: that `nextflow` starts, which
-needs a Java it can run (`wic029` when it does not), and, when a process has a
-container, that Docker can run it (`wic015`). The pipeline checks its input
-values itself when it starts.
+writes the four files and checks the machine: that each input file or
+directory can be read (`wic016`), that `nextflow` starts, which needs a Java
+it can run (`wic029` when it does not), and, when a process has a container,
+that Docker can run it (`wic015`). `run.sh` calls the `nextflow` on PATH, so
+`--generate_run_script` looks for it there. On Windows Sophios runs Nextflow
+inside WSL only. The pipeline also checks its input values itself when it
+starts.
+
+From Python, a workflow that declares outputs is lowered with only those,
+as `compile()`, `compile(target="nextflow")` and `to_nextflow()` lower it,
+so its run reports the outputs a CWL run of it reports.
 
 Before the run Sophios writes the four files under the base path from the
 workflow's values, with each relative path made absolute: read beside the
 `.wic` file on the command line, from the working directory in Python. It
 makes each output directory a tool writes into
 ([Staging with InitialWorkDirRequirement](#staging-with-initialworkdirrequirement))
-that does not exist yet, and writes `nextflow_names.json`, the Sophios name
-of each process and workflow output by its Nextflow name. It then starts
+that does not exist yet, and writes `nextflow_names_<workflow>.json`, the
+Sophios name of each process and workflow output by its Nextflow name. The
+four files have fixed names, so a base path holds one workflow's pipeline at
+a time: give two runs started together a base path each. It then starts
 
 ```console
 nextflow -C <base>/nextflow.config run <base>/workflow.nf \
@@ -174,11 +183,14 @@ process Nextflow names as failing is reported by its step name with its exit
 status. A [real-time analysis](realtime-analysis.md) does not run beside
 Nextflow, and a line on stderr says so.
 
-Every Nextflow option, an executor among them, is yours to pass, unchecked,
-as a CWL runner's options are. On the command line add `--passthrough_flags
-yes` and the options; they follow the command above. In Python each
-`run_args_dict` key Sophios does not read becomes `-<key> <value>`, or
-`-<key>` alone for an empty value, since Nextflow's options take one dash:
+Every option of `nextflow run`, an executor among them, is yours to pass,
+unchecked, as a CWL runner's options are. On the command line add
+`--passthrough_flags yes` and the options; they follow the command above. In
+Python each `run_args_dict` key Sophios does not read becomes
+`-<key> <value>`, or `-<key>` alone for an empty value, since Nextflow's
+options take one dash, and a key only a CWL run reads is a `ValueError`. An
+option of the `nextflow` launcher itself, such as `-log`, `-q` or `-D`,
+belongs before `run`, so it cannot be passed:
 
 ```console
 sophios --yaml workflow.wic --target nextflow --run_local --passthrough_flags yes -process.executor slurm -resume

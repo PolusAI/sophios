@@ -142,10 +142,11 @@ Both forms describe the same thing: the steps, what each one takes and
 produces, the connections between them, and what the whole workflow takes
 and returns. Sophios holds that description in a model of its own and checks
 it there. Sophios is built to be multi-backend: a backend writes the model
-out for a runner, and today the only backend writes CWL, one workflow file,
-one tool file for each step, and the values the run uses.
+out for a runner. The CWL backend writes one workflow file, one tool file
+for each step, and the values the run uses; the [Nextflow](nextflow.md)
+backend writes a DSL2 pipeline.
 [The workflow model](workflow-model.md) describes the model, and
-[Compiling to CWL](compiling-to-cwl.md) reads what the backend writes, line
+[Compiling to CWL](compiling-to-cwl.md) reads what the CWL backend writes, line
 by line.
 
 ## Where to go next

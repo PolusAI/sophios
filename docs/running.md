@@ -168,8 +168,9 @@ Sophios adds is listed here.
 ## Run on the Nextflow target
 
 The same workflow runs as a Nextflow pipeline: Sophios compiles it with
-`--target nextflow`, writes the pipeline into the base path, checks that
-`nextflow` starts and, when a step uses a container, that Docker works, and
+`--target nextflow`, writes the pipeline into the base path, checks the
+input paths, that `nextflow` starts and, when a step uses a container, that
+Docker works, and
 runs it as one `nextflow run` from the base path:
 
 ```bash
@@ -183,8 +184,9 @@ workflow().run(target='nextflow')
 `--check`, `--generate_run_script`, `start(target='nextflow')` and
 `run_async(target='nextflow')` work as they do for CWL. The options that only
 a CWL run reads, such as `--cwl_runner`, `--container_engine`, `--outdir`,
-`--cachedir` and `--quiet`, are refused with `--target nextflow`. Nextflow's
-own options pass through as a runner's do: on the command line after
+`--cachedir` and `--quiet`, are refused with `--target nextflow`. The
+options of `nextflow run` pass through as a runner's do, though not those of
+the `nextflow` launcher, which go before `run`: on the command line after
 `--passthrough_flags yes`, as in `--passthrough_flags yes -process.executor
 slurm -resume`, and in Python as `run_args_dict` keys, each of which becomes
 `-<key> <value>`, or `-<key>` alone for an empty value:
@@ -298,7 +300,7 @@ Everything goes into the base path:
 | `run_<workflow>.log` | everything the runner printed, both streams, as the run went |
 | `provenance/<workflow>/` | the runner's record of what ran, with what, and what came out |
 | `realtime/`, `<workflow>.realtime.json` | compiled real-time analyses, when the workflow declares any |
-| `nextflow_workflow.json`, `workflow.nf`, `nextflow.config`, `nextflow_params.json`, `nextflow_names.json` | under `--target nextflow`, the pipeline and the names it maps back, in place of the CWL |
+| `nextflow_workflow.json`, `workflow.nf`, `nextflow.config`, `nextflow_params.json`, `nextflow_names_<workflow>.json` | under `--target nextflow`, the pipeline and the names it maps back, in place of the CWL |
 | `work_<workflow>/`, `.nextflow.log`, `.nextflow/` | under `--target nextflow`, Nextflow's work directory, which holds the output files, its log and its cache |
 
 `run.sh` and, after a failure Sophios did not expect, `error_<workflow>.txt`

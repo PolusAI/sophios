@@ -205,7 +205,8 @@ On Linux, your account is not in the `docker` group. Run
 
 Sophios cannot find the `docker` program. Install Docker (step 1), or, if
 you use Podman or Singularity, name it with `--container_engine podman` or
-`--container_engine singularity`.
+`--container_engine singularity`. Under `--target nextflow` the pipeline
+runs its containers with Docker, so install Docker.
 
 ### `error [wic037] docker could not pull docker.io/library/debian:bookworm-slim (...)`
 

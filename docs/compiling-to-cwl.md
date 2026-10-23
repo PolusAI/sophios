@@ -9,9 +9,10 @@ why each line is there. It reads the output of the
 [first workflow](first-workflow.md), explains the names, and covers the two
 ways to package the result and how to run it on a CWL runner of your own.
 
-CWL is the one backend Sophios has today, and it writes CWL v1.2: one
-`Workflow` document, one document per step for the tool or subworkflow it
-runs, and a job file. Everything on this page is about what that backend writes;
+CWL is one of Sophios's two backends, with [Nextflow](nextflow.md), and it
+writes CWL v1.2: one `Workflow` document, one document per step for the tool
+or subworkflow it runs, and a job file. Everything on this page is about what
+that backend writes;
 [The workflow model](workflow-model.md) is what it writes from.
 
 To produce the files without running anything, compile alone, in either
