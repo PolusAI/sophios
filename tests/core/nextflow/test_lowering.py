@@ -551,11 +551,7 @@ def test_a_boolean_valuefrom_on_an_optional_input_is_rejected() -> None:
 
 
 def _argument_tokens(*arguments: Any) -> tuple[Any, ...]:
-    rose = synthetic_source(
-        workflow_doc([step("ARGS", **{"in": {"x": "x"}})], inputs={"x": "string"}),
-        [tool("ARGS", inputs={"x": {"type": "string"}}, baseCommand="echo", arguments=list(arguments))],
-        workflow_inputs={"x": "v"},
-    )
+    rose = one_step(tool("ARGS", inputs={"x": {"type": "string"}}, baseCommand="echo", arguments=[*arguments]), x="v")
     return tuple(compiled_source_to_nextflow(rose).processes[0].command.tokens[1:])
 
 
@@ -590,10 +586,8 @@ def test_a_dollar_starting_any_other_expression_is_rejected(text: str) -> None:
 ], ids=["list", "map"])
 def test_env_var_requirement_lowers_each_variable_to_an_export(env_def: Any) -> None:
     """The map form's key names the variable, over an envName inside it, as schema-salad resolves it."""
-    rose = synthetic_source(
-        workflow_doc([step("ENV", **{"in": {"s": "s"}})], inputs={"s": "string"}),
-        [tool("ENV", inputs={"s": {"type": "string"}}, requirements={"EnvVarRequirement": {"envDef": env_def}})],
-        workflow_inputs={"s": "v"},
+    rose = one_step(
+        tool("ENV", inputs={"s": {"type": "string"}}, requirements={"EnvVarRequirement": {"envDef": env_def}}), s="v"
     )
     workflow = compiled_source_to_nextflow(rose)
     assert workflow.processes[0].command.env == (
@@ -607,10 +601,7 @@ def test_env_var_requirement_lowers_each_variable_to_an_export(env_def: Any) -> 
 
 
 def _gpu_lowering(cuda: Any, section: str = "hints") -> tuple[Any, tuple[Diagnostic, ...]]:
-    rose = synthetic_source(
-        workflow_doc([step("GPU")]), [tool("GPU", **{section: {"cwltool:CUDARequirement": cuda}})]
-    )
-    return compiled_source_to_nextflow_with_notes(rose)
+    return compiled_source_to_nextflow_with_notes(one_step(tool("GPU", **{section: {"cwltool:CUDARequirement": cuda}})))
 
 
 @pytest.mark.fast

@@ -645,15 +645,6 @@ def test_accepts_shell_command_requirement_with_no_shell_quote_false() -> None:
     assert converted.processes[0].command.tokens[0] == NfTemplate((NfLiteral("SHELL"),))
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize("value_from", ["[$UNSET]", "\\$(date)"], ids=["variable", "escaped substitution"])
-def test_rejects_a_dollar_in_a_shell_quote_false_literal(value_from: str) -> None:
-    """design §6, Commands: the task's bash -ue would expand it, not CWL's sh -c."""
-    rose = _shell_rose([{"valueFrom": value_from, "shellQuote": False}])
-    with pytest.raises(ValueError, match="holds a '\\$', which the task's shell would expand"):
-        compiled_source_to_nextflow(rose)
-
-
 def _shell_tool_with_input(value_from: str) -> Yaml:
     return tool(
         "SHELL",
@@ -674,17 +665,10 @@ def test_accepts_literal_shell_quote_false_binding() -> None:
 _ENV_INPUTS = {"s": {"type": "string"}, "n": {"type": "int"}, "f": {"type": "File"}, "o": {"type": "string?"}}
 
 
-def _env_rose(env_def: Any, *, bind_optional: bool = True) -> CompiledNextflowSource:
-    values = {"s": "v", "n": 1, "f": {"class": "File", "path": "x.txt"}, "o": "w"}
-    names = [name for name in _ENV_INPUTS if bind_optional or name != "o"]
-    return synthetic_source(
-        workflow_doc(
-            [step("ENV", **{"in": {name: name for name in names}})],
-            inputs={name: _ENV_INPUTS[name]["type"] for name in names},
-        ),
-        [tool("ENV", inputs=_ENV_INPUTS, requirements={"EnvVarRequirement": {"envDef": env_def}})],
-        workflow_inputs={name: values[name] for name in names},
-    )
+def _env_rose(env_def: Any, *, supply_optional: bool = True) -> CompiledNextflowSource:
+    run = tool("ENV", inputs=_ENV_INPUTS, requirements={"EnvVarRequirement": {"envDef": env_def}})
+    values: dict[str, Any] = {"s": "v", "n": 1, "f": {"class": "File", "path": "x.txt"}, "o": "w"}
+    return one_step(run, **{name: value for name, value in values.items() if supply_optional or name != "o"})
 
 
 @pytest.mark.fast
@@ -706,39 +690,13 @@ def test_env_var_requirement_rejects_every_other_value_by_name(entry: Any, reaso
 
 
 @pytest.mark.fast
-def test_env_var_requirement_rejects_an_unknown_field_and_an_absent_input() -> None:
-    assert _findings(_env_rose({"A": {"envValue": "x", "foo": 1}})) == [
-        "steps[0].run.requirements.EnvVarRequirement.envDef.A.foo: foo is not consumed by the Nextflow lowering"
-    ]
-    assert _findings(_env_rose([{"envName": "A", "envValue": "$(inputs.o)"}], bind_optional=False)) == [
-        "steps[0].run.inputs.o: absent optional values are supported only for a val input whose absence "
-        "leaves command rendering unchanged"
-    ]
-
-
-@pytest.mark.fast
 @pytest.mark.parametrize("field", ["cudaDeviceCountMin", "cudaDeviceCountMax"])
 @pytest.mark.parametrize("value", [0, -1, True, 1.5, "2", "$(inputs.n)"])
 def test_a_cuda_device_count_is_a_positive_whole_number(field: str, value: Any) -> None:
-    rose = synthetic_source(
-        workflow_doc([step("GPU")]),
-        [tool("GPU", hints={"cwltool:CUDARequirement": {"cudaDeviceCountMin": 1, field: value}})],
-    )
+    rose = one_step(tool("GPU", hints={"cwltool:CUDARequirement": {"cudaDeviceCountMin": 1, field: value}}))
     assert _findings(rose) == [
         f"steps[0].run.hints.cwltool:CUDARequirement.{field}: a CUDA device count must be a positive whole "
         f"number, got {value!r}"
-    ]
-
-
-@pytest.mark.fast
-def test_a_cuda_field_cwltool_does_not_declare_is_rejected() -> None:
-    rose = synthetic_source(
-        workflow_doc([step("GPU")]),
-        [tool("GPU", hints=[{"class": "cwltool:CUDARequirement", "cudaComputeCapabilityMin": "3.0"}])],
-    )
-    assert _findings(rose) == [
-        "steps[0].run.hints.0.cudaComputeCapabilityMin: cudaComputeCapabilityMin is not consumed by the "
-        "Nextflow lowering"
     ]
 
 
@@ -789,60 +747,18 @@ def test_every_iwdr_entry_is_one_the_task_makes(item: Any, entry: NfEntry) -> No
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("writable", ["true", 1, "$(inputs.flag)"])
-def test_rejects_iwdr_writable_that_is_not_a_literal_boolean(writable: Any) -> None:
-    rose = _iwdr_rose([{"entry": "$(inputs.source)", "writable": writable}])
-    assert _findings(rose) == [
-        "steps[0].run.requirements.InitialWorkDirRequirement.listing[0]: writable must be a literal boolean"
-    ]
-
-
-@pytest.mark.fast
-def test_rejects_iwdr_entryname_under_the_reserved_prefix() -> None:
-    rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": ".sophios_entry_source"}])
-    with pytest.raises(ValueError, match=r"listing\[0\]: entryname must not begin with '.sophios_entry_'"):
-        compiled_source_to_nextflow(rose)
-
-
-@pytest.mark.fast
 @pytest.mark.parametrize("item", ["$(inputs.source)", {"entry": "$(inputs.source)", "writable": True}])
 @pytest.mark.parametrize("reference", ["$(inputs.source)", "$(inputs.source.path)", "$(inputs.source.basename)"])
 def test_an_entry_under_its_own_basename_may_be_referenced(item: Any, reference: str) -> None:
     """The plugin shape: --outDir $(inputs.outDir) and glob: $(inputs.outDir.basename) name the entry."""
-    rose = synthetic_source(
-        workflow_doc(
-            [step("STAGE", **{"in": {"source": "source"}, "out": ["result"]})],
-            inputs={"source": {"type": "Directory"}},
-            outputs={"result": {"type": "Directory", "outputSource": "STAGE/result"}},
-        ),
-        [tool(
-            "STAGE",
-            inputs={"source": {"type": "Directory", "inputBinding": {"prefix": "--outDir"}}},
-            outputs={"result": {"type": "Directory", "outputBinding": {"glob": "$(inputs.source.basename)"}}},
-            requirements={"InitialWorkDirRequirement": {"listing": [item]}},
-            arguments=[reference],
-        )],
-        workflow_inputs={"source": {"class": "Directory", "path": "out"}},
-    )
+    rose = one_step(tool(
+        "STAGE",
+        inputs={"source": {"type": "Directory", "inputBinding": {"prefix": "--outDir"}}},
+        outputs={"result": {"type": "Directory", "outputBinding": {"glob": "$(inputs.source.basename)"}}},
+        requirements={"InitialWorkDirRequirement": {"listing": [item]}},
+        arguments=[reference],
+    ), ["result"], source={"class": "Directory", "path": "out"})
     assert compiled_source_to_nextflow(rose).processes[0].inputs[0].entry is not None
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize("glob", ["$(inputs.source)", "$(inputs.source.basename)", " $(inputs.source.path) "])
-def test_rejects_a_glob_of_only_a_staged_input(glob: str) -> None:
-    """F84: the task directory holds the staged input under that name, which a CWL glob does not match."""
-    rose = synthetic_source(
-        workflow_doc(
-            [step("copy", **{"in": {"source": "source"}, "out": ["result"]})],
-            inputs={"source": {"type": "File"}},
-            outputs={"result": {"type": "File", "outputSource": "copy/result"}},
-        ),
-        [tool("copy", inputs={"source": {"type": "File"}},
-              outputs={"result": {"type": "File", "outputBinding": {"glob": glob}}})],
-        workflow_inputs={"source": {"class": "File", "path": "in.txt"}},
-    )
-    [finding] = _findings(rose)
-    assert finding.startswith("steps[0]: process 'copy' output 'result' globs only the staged input 'source'")
 
 
 def _copy_tool() -> CommandLineTool:
@@ -1669,6 +1585,38 @@ FINDINGS = [
     pytest.param(lambda: one_step(tool("ARGS", arguments=[{"valueFrom": "x", "loadContents": True}])), [
         "steps[0].run.arguments[0].loadContents: a binding's loadContents is not supported"
     ], id="loadContents_on_an_arguments_entry"),
+    pytest.param(lambda: _env_rose({"A": {"envValue": "x", "foo": 1}}), [
+        "steps[0].run.requirements.EnvVarRequirement.envDef.A.foo: foo is not consumed by the Nextflow lowering"
+    ], id="an_env_def_entry_with_an_unknown_field"),
+    pytest.param(lambda: _env_rose([{"envName": "A", "envValue": "$(inputs.o)"}], supply_optional=False), [
+        "steps[0].run.inputs.o: absent optional values are supported only for a val input whose absence "
+        "leaves command rendering unchanged"
+    ], id="an_env_var_from_an_absent_input"),
+    pytest.param(lambda: one_step(tool(
+        "GPU", hints=[{"class": "cwltool:CUDARequirement", "cudaComputeCapabilityMin": "3.0"}]
+    )), [
+        "steps[0].run.hints.0.cudaComputeCapabilityMin: cudaComputeCapabilityMin is not consumed by the "
+        "Nextflow lowering"
+    ], id="a_cuda_field_cwltool_does_not_declare"),
+    *(
+        pytest.param(
+            lambda writable=writable: _iwdr_rose([{"entry": "$(inputs.source)", "writable": writable}]),
+            ["steps[0].run.requirements.InitialWorkDirRequirement.listing[0]: writable must be a literal boolean"],
+            id=f"iwdr_writable_that_is_not_a_literal_boolean-{writable}",
+        )
+        for writable in ("true", 1, "$(inputs.flag)")
+    ),
+    # F84: the task directory holds the staged input under that name, which a CWL glob does not match.
+    *(
+        pytest.param(lambda glob=glob: one_step(tool(
+            "copy", inputs={"source": {"type": "File"}},
+            outputs={"result": {"type": "File", "outputBinding": {"glob": glob}}},
+        ), ["result"], source={"class": "File", "path": "in.txt"}), [
+            "steps[0]: process 'copy' output 'result' globs only the staged input 'source', which a CWL glob "
+            "does not match: derive a new name from it, or make the input an InitialWorkDirRequirement entry"
+        ], id=f"a_glob_of_only_a_staged_input-{glob.strip()}")
+        for glob in ("$(inputs.source)", "$(inputs.source.basename)", " $(inputs.source.path) ")
+    ),
 ]
 
 
@@ -1760,6 +1708,18 @@ MATCHES = [
         outputs=_FILE_RESULT,
         requirements={"ShellCommandRequirement": {}},
     ), ["result"], text="Hello"), "does not support a prefix", id="shell_quote_false_input_binding_with_no_value_from"),
+    # design §6, Commands: the task's bash -ue would expand it, not CWL's sh -c.
+    *(
+        pytest.param(
+            lambda value_from=value_from: _shell_rose([{"valueFrom": value_from, "shellQuote": False}]),
+            "holds a '\\$', which the task's shell would expand", id=f"a_dollar_in_a_shell_quote_false_literal-{name}",
+        )
+        for value_from, name in (("[$UNSET]", "variable"), ("\\$(date)", "escaped_substitution"))
+    ),
+    pytest.param(
+        lambda: _iwdr_rose([{"entry": "$(inputs.source)", "entryname": ".sophios_entry_source"}]),
+        r"listing\[0\]: entryname must not begin with '.sophios_entry_'", id="iwdr_entryname_under_the_reserved_prefix",
+    ),
     pytest.param(
         lambda: _iwdr_rose([{"entry": "literal file content", "entryname": "x.txt"}]),
         "inline content construction is deferred", id="iwdr_inline_content_entry",
