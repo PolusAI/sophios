@@ -14,8 +14,7 @@ import pytest
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, StepInput, Workflow
-from sophios.input_output_nf import render_nextflow, write_nextflow_artifacts
-from sophios.nf_reader import import_nextflow, nextflow_to_cwl, parse_nf_file, parse_nf_text
+from sophios.input_output_nf import render_nextflow
 from sophios.nf_types import (
     ExecutableNextflowWorkflow, NfPort, NfProcess, NfProcessConnection, NfStepInputConnection,
     NfWorkflowInputConnection,
@@ -313,27 +312,10 @@ def test_a_step_input_connection_keeps_the_idioms_invariants(build: Any, message
 
 
 @pytest.mark.fast
-def test_a_step_input_connection_renders_and_imports_as_a_record(tmp_path: Path) -> None:
-    write_nextflow_artifacts(_merged(_GATHERED, _ONE, _XS), tmp_path)
+def test_a_step_input_connection_renders_as_one_helper_call() -> None:
     assert "__sophios_step_input_9f72e('JOIN.files', __values, [true, false, true], 'merge_flattened', null)" in (
-        (tmp_path / "workflow.nf").read_text(encoding="utf-8")
+        render_nextflow(_merged(_GATHERED, _ONE, _XS))
     )
-    cwl_workflow, _tools = nextflow_to_cwl(parse_nf_file(tmp_path / "workflow.nf"))
-    join = next(entry for entry in cwl_workflow["steps"] if entry["id"] == "JOIN")
-    assert join["in"] == {"files": {"source": ["PAIR/f", "A/f", "xs"], "linkMerge": "merge_flattened"}}
-    assert cwl_workflow["inputs"]["xs"] == {"type": "Any"}
-
-
-@pytest.mark.fast
-def test_read_alone_a_joined_call_is_opaque_and_its_helper_is_not() -> None:
-    join = NfProcess("JOIN", [NfPort("words", "val", is_array=True)], [], command("true"))
-    sources = (NfWorkflowInputConnection("a", "JOIN", "words"), NfWorkflowInputConnection("b", "JOIN", "words"))
-    workflow = ExecutableNextflowWorkflow(
-        "WF", [join], [NfStepInputConnection(sources, "merge_nested")], {"a": "x", "b": "y"},
-        {"a": "string", "b": "string"},
-    )
-    regions = parse_nf_text(render_nextflow(workflow)).opaque_regions
-    assert len(regions) == 1 and regions[0].startswith("JOIN(a.map { [it] }.combine(b.map { [it] })")
 
 
 @pytest.mark.fast
@@ -350,21 +332,6 @@ def test_a_nested_steps_record_takes_its_sources_through_the_workflow_that_calls
     lowered = _lower(Workflow([outer], "root"))
     joined = next(connection for connection in lowered.connections if isinstance(connection, NfStepInputConnection))
     assert [lowered.params[source.from_port] for source in joined.sources] == ["y", "x"]
-
-
-@pytest.mark.fast
-def test_a_step_input_connection_imports_into_a_sophios_workflow(tmp_path: Path) -> None:
-    join = NfProcess("JOIN", [NfPort("words", "val", is_array=True)], [], command("true"))
-    sources = (NfWorkflowInputConnection("a", "JOIN", "words"), NfWorkflowInputConnection("b", "JOIN", "words"))
-    write_nextflow_artifacts(ExecutableNextflowWorkflow(
-        "WF", [join], [NfStepInputConnection(sources, "merge_nested")], {"a": "x", "b": "y"},
-        {"a": "string", "b": "string"},
-    ), tmp_path)
-    with pytest.warns(UserWarning, match="opaque"):
-        imported = import_nextflow(tmp_path / "workflow.nf")
-    assert imported.compile().cwl_workflow["steps"][0]["in"]["words"] == {
-        "source": ["a", "b"], "linkMerge": "merge_nested",
-    }
 
 
 @pytest.mark.fast

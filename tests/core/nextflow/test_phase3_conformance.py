@@ -10,19 +10,27 @@ from pathlib import Path
 import pytest
 
 from sophios.input_output_nf import write_nextflow_artifacts
+from sophios.nf_types import (
+    ExecutableNextflowWorkflow, NfPort, NfProcess, NfWorkflowInputConnection, NfWorkflowOutputConnection,
+)
 from sophios.utils_nf import compiled_source_to_nextflow
 
 from .testkit import execute_nextflow
-from .test_reader_symmetry import _scattered
+from .test_dotproduct import _sleep_then_pair, _text_port
 
 
 @pytest.mark.nextflow
 @pytest.mark.serial
 def test_a_dotproduct_length_mismatch_fails_the_run_naming_each_input(tmp_path: Path) -> None:
     """S3: the run fails, naming each scattered input and its length; nothing runs truncated."""
-    workflow = _scattered("dotproduct")
-    params = {"items": ["a", "b"], "tags": ["0"]}
-    workflow = type(workflow)(workflow.name, workflow.processes, workflow.connections, params, workflow.param_types)
+    process = NfProcess("STEP", [NfPort("item", "val"), NfPort("tag", "val")], [_text_port("line")],
+                        _sleep_then_pair("item", "tag"))
+    workflow = ExecutableNextflowWorkflow(
+        "PIPELINE", [process],
+        [*(NfWorkflowInputConnection(f"{name}s", "STEP", name, "dotproduct") for name in ("item", "tag")),
+         NfWorkflowOutputConnection("STEP", "line", "line")],
+        {"items": ["a", "b"], "tags": ["0"]}, {"items": "string[]", "tags": "string[]"},
+    )
     write_nextflow_artifacts(workflow, tmp_path)
     result = execute_nextflow(tmp_path)
     assert result.returncode != 0

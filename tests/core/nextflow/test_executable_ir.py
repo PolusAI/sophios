@@ -13,7 +13,6 @@ import pytest
 
 from sophios.input_output_nf import render_nextflow
 from sophios.nf_expr import parse
-from sophios.nf_reader import parse_nf_text
 from sophios.nf_symbols import (
     NEXTFLOW_SCRIPT_DECLARED_NAMES, NEXTFLOW_SCRIPT_NAMES, is_nextflow_identifier, normalize_nextflow_identifier,
 )
@@ -1022,7 +1021,7 @@ def _optional_producer() -> NfProcess:
 
 
 @pytest.mark.fast
-def test_an_optional_output_round_trips_and_reads_back() -> None:
+def test_an_optional_output_round_trips() -> None:
     workflow = ExecutableNextflowWorkflow(
         "WF",
         [_optional_producer()],
@@ -1030,7 +1029,6 @@ def test_an_optional_output_round_trips_and_reads_back() -> None:
         {"x": 1}, {"x": "int"},
     )
     assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow
-    assert parse_nf_text(render_nextflow(workflow), params={"x": 1}).processes[0].outputs[0].optional
 
 
 @pytest.mark.fast
@@ -1048,8 +1046,6 @@ def test_an_optional_output_of_at_most_one_file_is_checked_at_its_workflow_outpu
     rendered = render_nextflow(workflow)
     assert "arity: '0..*', emit: o" in rendered and "optional: true" not in rendered
     assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow
-    [port] = parse_nf_text(rendered, params={}).processes[0].outputs
-    assert (port.optional, port.capture) == (True, capture)
 
 
 @pytest.mark.fast

@@ -17,7 +17,6 @@ from sophios.api.python._workflow_runtime import compile_workflow_result
 from sophios.api.python.workflow import Step, Workflow
 from sophios.input_output_nf import NF_OUTPUT_MARKER, NF_PARSER_CHECK, write_nextflow_artifacts
 from sophios.ir.artifacts import CompilationResult
-from sophios.nf_reader import parse_nf_file, promote_nextflow_document
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
     NfArrayBinding,
@@ -1242,25 +1241,6 @@ def test_mixed_adapter_and_builder_workflow_executes_end_to_end(tmp_path: Path) 
     assert len(counts) == 1
     counted_bytes = int(counts[0].read_text(encoding="utf-8").split()[0])
     assert counted_bytes == len(message) + 1
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_reader_writer_runtime_roundtrip(tmp_path: Path) -> None:
-    original_dir = tmp_path / "original"
-    regenerated_dir = tmp_path / "regenerated"
-    original = run_nextflow(runtime_workflow(), original_dir)
-    assert original.returncode == 0, original.stderr
-    parsed = parse_nf_file(original_dir / "workflow.nf")
-    regenerated = run_nextflow(promote_nextflow_document(parsed), regenerated_dir)
-    assert regenerated.returncode == 0, regenerated.stderr
-    original_outputs = [
-        path.read_text(encoding="utf-8") for path in (original_dir / "work").rglob("copy.txt")
-    ]
-    regenerated_outputs = [
-        path.read_text(encoding="utf-8") for path in (regenerated_dir / "work").rglob("copy.txt")
-    ]
-    assert original_outputs == regenerated_outputs == ["hello from Sophios"]
 
 
 @pytest.mark.nextflow

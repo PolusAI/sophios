@@ -224,36 +224,6 @@ workflow, a name every Nextflow script declares, such as `file`, `params` or
 Two names that become the same are rejected, and the message names both as
 written.
 
-## Importing supported DSL2
-
-```python
-from sophios.api.python.nextflow import (
-    import_nextflow,
-    parse_nf_file,
-    promote_nextflow_document,
-    render_nextflow_document,
-)
-
-document = parse_nf_file("workflow.nf")
-same_source = render_nextflow_document(document)
-executable = promote_nextflow_document(document)
-sophios_workflow = import_nextflow("workflow.nf")
-```
-
-The reader returns a `NextflowDocument`: a loss-aware structural view, not an
-executable program. It recognizes the process ports, scripts, stubs,
-containers, CPU/memory directives, named workflow calls, direct process-output
-edges, and entry wrapper emitted by Sophios. Unknown process or workflow content is
-retained in `opaque_regions` and reported during structural import.
-Structural rendering returns the original source bytes as text, including
-opaque regions; it does not regenerate them from inferred meaning.
-
-Promotion is deliberately provenance-bound. It succeeds only when the source,
-parameters, and adjacent `nextflow_workflow.json` exactly agree with artifacts
-written from validated executable IR. Parsed source alone is never promoted by
-guessing shell or Groovy semantics; changed source, changed parameters, unknown
-content, and invalid or stale IR fail closed.
-
 ## Boolean flags
 
 A `boolean` input with an `inputBinding` prefix becomes a real command-line
@@ -437,9 +407,7 @@ does not check them, and compiling reports each one with the note
 [`wic046`](error_codes.md). The command line prints the note with the other
 diagnostics; the Python API gives it as a `UserWarning`. Where a task runs is
 the executor's choice: the local executor accepts the directive and runs the
-task on the machine as it is. Structural import does not write the count back:
-cwltool's `CUDARequirement` requires `cudaVersionMin` and
-`cudaComputeCapability`, which the directive does not hold.
+task on the machine as it is.
 
 ## Staging with InitialWorkDirRequirement
 
@@ -819,16 +787,6 @@ names nothing yet.
   is declared, is rejected by name.
 - Fractional CPU requirements reject before lowering; they are not silently
   rounded.
-- The reader does not interpret arbitrary Groovy, channel operators, or `exec`
-  blocks in a script; they stay opaque regions.
-- Read beside its generated `nextflow_workflow.json`, every generated workflow
-  — scatter, conditions, gather — reads back exactly and promotes to the model
-  that produced it. Read alone, the reader recognizes only the plain call
-  subset, so generated scatter, conditional and step-input wiring stay
-  opaque regions.
-- Structurally imported scripts remain opaque. CWL/Sophios import preserves representable
-  names, ports, resources, and topology but does not promise executable
-  equivalence for arbitrary shell or Groovy semantics.
 
 ## Field support
 

@@ -1000,9 +1000,7 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
         NF_SHELL_QUOTE_FUNCTION,
         NF_INPUT_FUNCTION,
     ]
-    # Emitted only where the capture is used, so artifacts for models that
-    # predate it stay byte-identical and existing artifact pairs keep
-    # promoting.
+    # Each helper is emitted only where the model uses it.
     if any(
         port.capture == "text"
         for process in workflow.processes

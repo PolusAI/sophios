@@ -41,7 +41,6 @@ MANUFACTURING_SITES: Final[dict[str, str]] = {
     'sophios/realtime.py::_wrapper': DOCUMENT,
     # Not documents.
     'sophios/ir/emit.py::emit': CWL,
-    'sophios/nf_reader.py::nextflow_to_cwl': CWL,
     'sophios/lang/render.py::_Writer.document': RENDERER,
     'sophios/lang/render.py::_Writer.sidecar': RENDERER,
     'sophios/lang/schema.py::_defs': SCHEMA,
