@@ -244,8 +244,13 @@ def _run_settings(args: argparse.Namespace) -> preflight.RunSettings:
     writes = ((Path(args.outdir), "the run's outputs", 'give --outdir a directory you can write to'),) \
         if args.outdir else ()
     return preflight.RunSettings(args.container_engine, args.pull_dir, ignore_install=args.ignore_docker_install,
-                                 ignore_processes=args.ignore_docker_processes, runner=args.cwl_runner,
+                                 ignore_processes=args.ignore_docker_processes, runner=_runner(args),
                                  run_script=args.generate_run_script, writes=writes)
+
+
+def _runner(args: argparse.Namespace) -> str:
+    """The program that runs the workflow: `--cwl_runner`, or Nextflow under `--target nextflow`."""
+    return 'nextflow' if args.target == 'nextflow' else args.cwl_runner
 
 
 def _run(args: argparse.Namespace, unknown_args: list[str], workflow_name: str,
@@ -256,8 +261,7 @@ def _run(args: argparse.Namespace, unknown_args: list[str], workflow_name: str,
     Exits with the runner's exit code when it is not 0, and with 130 on Ctrl-C.
     """
     request = backends.RunRequest(
-        workflow_name, Path(args.basepath), runner='nextflow' if args.target == 'nextflow' else args.cwl_runner,
-        target=args.target, documents=documents,
+        workflow_name, Path(args.basepath), runner=_runner(args), target=args.target, documents=documents,
         container_engine=args.container_engine, cachedir=args.cachedir, outdir=args.outdir, quiet=args.quiet,
         provenance=not args.no_provenance, passthrough_args=tuple(unknown_args), realtime_plans=realtime_plans,
         generate_run_script=args.generate_run_script)

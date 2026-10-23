@@ -228,7 +228,8 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         'The container engine cannot be used: not installed, not running, not yours to use, or overloaded. '
         'Checked only when a step runs in a container.',
         'Do what the message says: install the engine, start it, or give your user access to it; '
-        '`--container_engine` names another engine, and `--ignore_docker_install` skips the check.'),
+        'under `--target cwl`, `--container_engine` names another engine, and `--ignore_docker_install` skips the '
+        'check.'),
     SophiosErrorCode.MISSING_INPUT_FILE: Explanation(
         Kind.MACHINE,
         'An input file or directory cannot be used: it does not exist, it is the other kind, or you may not read it.',

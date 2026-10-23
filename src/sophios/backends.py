@@ -334,9 +334,15 @@ def _last_json_object(text: str) -> Json | None:
     return found if isinstance(found, dict) else None
 
 
-#: The file `NextflowBackend.prepare` writes beside the Nextflow artifacts: the Sophios name of each process and
-#: workflow output, by its Nextflow name.
-NEXTFLOW_NAMES: Final = 'nextflow_names.json'
+def nextflow_names_file(basepath: Path, workflow_name: str) -> Path:
+    """The file `NextflowBackend.prepare` writes beside the Nextflow artifacts: the Sophios name of each process and
+    workflow output of `workflow_name`, by its Nextflow name.
+
+    Named after the workflow, as its summary is, so the outcome of a run reads its own workflow's names when
+    another workflow was prepared in the same base path since it started.
+    """
+    return basepath / f'nextflow_names_{workflow_name}.json'
+
 
 #: Nextflow's lines for a failed task, as its log prints them: `Error executing process > '<task>'`, then, for a
 #: task that exited non-zero, `Process `<task>` terminated with an error exit status (<n>)`.
@@ -387,14 +393,13 @@ class NextflowBackend:
 
     def check(self, documents: Sequence[Path], jobs: Sequence[preflight.Job],
               settings: preflight.RunSettings) -> None:
-        """`nextflow`, starting with a Java it can run, and the container engine when a process has a container.
+        """The paths `jobs` name, `nextflow`, starting with a Java it can run, and the container engine when a
+        process has a container.
 
-        `documents` are the artifacts `prepare` wrote, the model first. The pipeline checks its inputs when it
-        starts, so `jobs` are not read.
+        `documents` are the artifacts `prepare` wrote, the model first.
         """
-        del jobs
         workflow = ExecutableNextflowWorkflow.from_json(documents[0].read_text(encoding='utf-8'))
-        problems = preflight.nextflow_problems()
+        problems = preflight.path_problems(jobs) + preflight.nextflow_problems(settings)
         images = [process.container for process in workflow.processes if process.container is not None]
         if images:
             problems += preflight.engine_problems(images, settings)
@@ -403,8 +408,8 @@ class NextflowBackend:
 
     def prepare(self, compilation: CompilationResult, analyses: tuple[realtime.Analysis, ...], basepath: Path,
                 settings: run_setup.Settings) -> run_setup.Prepared:
-        """The four artifacts and `nextflow_names.json` under `basepath`, the analyses beside them, the check, and
-        each output-target Directory input that names nothing yet made.
+        """The four artifacts and `nextflow_names_<name>.json` under `basepath`, the analyses beside them, the check,
+        and each output-target Directory input that names nothing yet made.
 
         The workflow is lowered from its bound values, each relative File or Directory path read against
         `settings.root_dir` and written absolute: Nextflow runs from `basepath`.
@@ -419,13 +424,17 @@ class NextflowBackend:
         io_nf.remove_nextflow_artifacts(basepath)
         workflow, notes = compiled_source_to_nextflow_with_notes(compilation)
         documents = io_nf.write_nextflow_artifacts(workflow, basepath)
-        (basepath / NEXTFLOW_NAMES).write_text(json.dumps(nextflow_names(compilation), indent=2) + '\n',
-                                               encoding='utf-8')
+        nextflow_names_file(basepath, artifact.name).write_text(json.dumps(nextflow_names(compilation), indent=2)
+                                                                + '\n', encoding='utf-8')
         plans = realtime.write(analyses, basepath, artifact.name, settings.root_dir)
-        self.check(documents, (), settings.run)
+        targets = output_target_inputs(artifact)
+        # An output-target Directory need not exist yet: it is made below.
+        job = preflight.Job({name: value for name, value in bound.items() if name not in targets}, settings.root_dir,
+                            'the workflow')
+        self.check(documents, (job,), settings.run)
         if not settings.check:
             # The pipeline stages an output-target Directory as an input, so it must exist; a CWL runner makes it.
-            for name in output_target_inputs(artifact):
+            for name in targets:
                 match bound.get(name):
                     case {'class': 'Directory', 'path': str() as path} if not Path(path).exists():
                         Path(path).mkdir(parents=True)
@@ -448,7 +457,7 @@ class NextflowBackend:
         """The outputs the pipeline recorded, by their Sophios names and written to the summary as cwltool's are;
         the failed processes from Nextflow's log, by their Sophios step names."""
         basepath = request.basepath.absolute().resolve()
-        names = json.loads((basepath / NEXTFLOW_NAMES).read_text(encoding='utf-8'))
+        names = json.loads(nextflow_names_file(basepath, request.workflow_name).read_text(encoding='utf-8'))
         failed = {names['processes'][process]: status
                   for process, status in nextflow_failed_steps(_log_lines(log)).items()}
         if exit_code != 0:

@@ -1,5 +1,7 @@
 """What each backend gives a run: the runner's command line, and what it reads back from the runner."""
 import json
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -14,7 +16,7 @@ from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.lang.diagnostics import Diagnostic, Severity, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 
-from .nextflow.testkit import runtime_workflow
+from .nextflow.testkit import REPO_ROOT, runtime_workflow
 
 
 def _argv(request: RunRequest) -> list[str]:
@@ -135,7 +137,7 @@ _NEXTFLOW_FAILED_LOG = [
 
 def _nextflow_request(tmp_path: Path, **fields: Any) -> RunRequest:
     """A Nextflow run of `wf` from `tmp_path`, whose names file `prepare` would have written."""
-    (tmp_path / backends.NEXTFLOW_NAMES).write_text(json.dumps({
+    backends.nextflow_names_file(tmp_path, 'wf').write_text(json.dumps({
         'processes': {'bad_step': 'bad-step', 'copy': 'child~copy'},
         'outputs': {'copy_result': 'copy~result', 'grid': 'grid', 'text': 'text', 'skipped': 'skipped'},
     }), encoding='utf-8')
@@ -246,16 +248,21 @@ def _write_into(tmp_path: Path) -> Any:
     return compile_workflow_result(Workflow([step], 'wf'))
 
 
+#: What a Nextflow run asks of this machine.
+_NEXTFLOW_SETTINGS = preflight.RunSettings('docker', '', runner='nextflow')
+
+
 @pytest.mark.fast
 @pytest.mark.parametrize('check', [False, True])
 def test_nextflow_prepare_writes_the_pipeline_from_absolute_paths_and_makes_each_output_directory(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, check: bool) -> None:
     """A relative path is read from the root directory; an output-target Directory that names nothing yet is
     made, except by a check; and each Nextflow name maps back to its Sophios one."""
-    monkeypatch.setattr(preflight, 'nextflow_problems', list)
+    monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
     root = tmp_path / 'root'
     root.mkdir()
-    settings = run_setup.Settings(preflight.RunSettings('docker', ''), root, check=check)
+    (root / 'source.txt').write_text('', encoding='utf-8')
+    settings = run_setup.Settings(_NEXTFLOW_SETTINGS, root, check=check)
     prepared = backends.backend('nextflow', 'nextflow').prepare(_write_into(root), (), tmp_path / 'base', settings)
     base = tmp_path / 'base'
     assert prepared.documents == tuple(base / name for name in (
@@ -264,8 +271,39 @@ def test_nextflow_prepare_writes_the_pipeline_from_absolute_paths_and_makes_each
     assert params == {'write_into_outDir': {'class': 'Directory', 'path': str(root / 'made')},
                       'write_into_source': {'class': 'File', 'path': str(root / 'source.txt')}}
     assert (root / 'made').is_dir() is not check
-    assert json.loads((base / backends.NEXTFLOW_NAMES).read_text(encoding='utf-8')) == {
+    assert json.loads(backends.nextflow_names_file(base, 'wf').read_text(encoding='utf-8')) == {
         'processes': {'write_into': 'write-into'}, 'outputs': {'write_into_outDir': 'write-into~outDir'}}
+
+
+@pytest.mark.fast
+def test_the_nextflow_check_reports_a_missing_input_and_not_an_output_directory_it_makes(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """As the CWL pre-flight does, before Nextflow starts; an output-target Directory is made, not looked for."""
+    monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
+    settings = run_setup.Settings(_NEXTFLOW_SETTINGS, tmp_path, check=True)
+    with pytest.raises(SophiosError) as raised:
+        backends.backend('nextflow', 'nextflow').prepare(_write_into(tmp_path), (), tmp_path / 'base', settings)
+    (missing,) = raised.value.diagnostics
+    assert missing.code is SophiosErrorCode.MISSING_INPUT_FILE
+    assert f"input 'write-into~source' (from the workflow, whose relative paths are read from {tmp_path}) names " \
+        f"'{tmp_path / 'source.txt'}', which does not exist" in missing.message
+
+
+@pytest.mark.fast
+def test_a_nextflow_run_reads_its_own_names_after_another_workflow_is_prepared_in_its_base_path(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each workflow's names are its own file, as its summary is."""
+    monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
+    (tmp_path / 'source.txt').write_text('', encoding='utf-8')
+    settings = run_setup.Settings(_NEXTFLOW_SETTINGS, tmp_path)
+    backend = backends.backend('nextflow', 'nextflow')
+    backend.prepare(_write_into(tmp_path), (), tmp_path / 'base', settings)
+    echo = Step(clt_path=REPO_ROOT / 'cwl_adapters' / 'echo.cwl')
+    echo.inputs.message = 'hello'
+    backend.prepare(compile_workflow_result(Workflow([echo], 'other')), (), tmp_path / 'base', settings)
+    stdout = 'sophios-output ' + json.dumps(['write_into_outDir', 'made']) + '\n'
+    request = RunRequest('wf', tmp_path / 'base', runner='nextflow', target='nextflow')
+    assert backend.outcome(request, 0, stdout, tmp_path / 'absent.log').outputs == {'write-into~outDir': 'made'}
 
 
 @pytest.mark.fast
@@ -277,33 +315,74 @@ def test_the_nextflow_check_asks_for_the_engine_only_when_a_process_has_a_contai
     def engine_problems(images: list[str], _settings: preflight.RunSettings) -> list[Diagnostic]:
         asked.append(images)
         return [engine_down]
-    monkeypatch.setattr(preflight, 'nextflow_problems', list)
+    monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
     monkeypatch.setattr(preflight, 'engine_problems', engine_problems)
     backend = backends.backend('nextflow', 'nextflow')
     host = runtime_workflow()
     contained = replace(host, processes=[replace(process, container='docker.io/bash:4.4')
                         for process in host.processes])
-    backend.check(write_nextflow_artifacts(host, tmp_path / 'host'), (), preflight.RunSettings('docker', ''))
+    backend.check(write_nextflow_artifacts(host, tmp_path / 'host'), (), _NEXTFLOW_SETTINGS)
     with pytest.raises(SophiosError) as raised:
-        backend.check(write_nextflow_artifacts(contained, tmp_path / 'contained'), (),
-                      preflight.RunSettings('docker', ''))
+        backend.check(write_nextflow_artifacts(contained, tmp_path / 'contained'), (), _NEXTFLOW_SETTINGS)
     assert asked == [['docker.io/bash:4.4', 'docker.io/bash:4.4']]
     assert list(raised.value.diagnostics) == [engine_down]
 
 
+#: The two ways Nextflow may be missing: from where a run looks for it, and from PATH, where run.sh does.
+_NO_NEXTFLOW = ('error [wic029] the run calls nextflow, which is neither in this Python environment nor on PATH: '
+                'install Nextflow (https://www.nextflow.io/docs/latest/install.html).')
+_NO_NEXTFLOW_ON_PATH = ('error [wic029] run.sh calls nextflow, which is not on PATH: '
+                        'install Nextflow (https://www.nextflow.io/docs/latest/install.html).')
+
+
 @pytest.mark.fast
-@pytest.mark.parametrize(('script', 'expected'), [
-    (None, 'error [wic029] the run calls nextflow, which is neither in this Python environment nor on PATH: '
-           'install Nextflow (https://www.nextflow.io/docs/latest/install.html).'),
-    ('printf "\\033[31mERROR: Cannot find Java or it\'s a wrong version\\033(B\\033[m\\n"; exit 1',
+@pytest.mark.parametrize(('script', 'run_script', 'expected'), [
+    (None, False, _NO_NEXTFLOW),
+    ('printf "\\033[31mERROR: Cannot find Java or it\'s a wrong version\\033(B\\033[m\\n"; exit 1', False,
      "error [wic029] nextflow -version exited with status 1 (ERROR: Cannot find Java or it's a wrong version): "
      'Nextflow needs a Java it can run; install one and point JAVA_HOME at it.'),
-    ('echo "nextflow version 26.04.2"', None),
-], ids=['missing', 'no-java', 'starts'])
+    ('echo "nextflow version 26.04.2"', False, None),
+    ('echo "nextflow version 26.04.2"', True, _NO_NEXTFLOW_ON_PATH),
+], ids=['missing', 'no-java', 'starts', 'run-script-not-on-path'])
 def test_nextflow_must_start_for_a_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                       script: str | None, expected: str | None) -> None:
+                                       script: str | None, run_script: bool, expected: str | None) -> None:
+    """A run looks where `runner_program` looks; `run.sh` calls the `nextflow` on PATH."""
     program = tmp_path / 'nextflow'
     program.write_text(f'#!/bin/sh\n{script}\n', encoding='utf-8')
     program.chmod(0o755)
     monkeypatch.setattr(preflight, 'runner_program', lambda _name: None if script is None else str(program))
-    assert [str(problem) for problem in preflight.nextflow_problems()] == ([expected] if expected else [])
+    monkeypatch.setattr(preflight, 'PLATFORM_LACKS_RUNNERS', None)
+    monkeypatch.setenv('PATH', str(tmp_path / 'empty'))
+    settings = replace(_NEXTFLOW_SETTINGS, run_script=run_script)
+    assert [str(problem) for problem in preflight.nextflow_problems(settings)] == ([expected] if expected else [])
+
+
+@pytest.mark.fast
+def test_a_nextflow_run_on_windows_is_sent_to_wsl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """As a CWL run is: Sophios runs a runner on POSIX only."""
+    monkeypatch.setattr(preflight, 'PLATFORM_LACKS_RUNNERS', 'Windows')
+    monkeypatch.setattr(preflight, 'runner_program', lambda _name: sys.executable)
+    assert [str(problem) for problem in preflight.nextflow_problems(_NEXTFLOW_SETTINGS)] == [
+        'error [wic029] nextflow cannot run here (Nextflow needs a POSIX system, which Windows is not): run Sophios '
+        'inside WSL (https://learn.microsoft.com/windows/wsl/install).']
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('runner', ['cwltool', 'nextflow'])
+def test_the_engine_remedies_name_only_the_options_the_runs_target_takes(
+        monkeypatch: pytest.MonkeyPatch, runner: str) -> None:
+    """`--container_engine` and `--ignore_docker_processes` are a CWL run's: a Nextflow run is not told to pass
+    them."""
+    def absent(*_args: Any, **_kwargs: Any) -> Any:
+        raise FileNotFoundError('docker')
+    settings = preflight.RunSettings('docker', '', runner=runner)
+    monkeypatch.setattr(preflight.sub, 'run', absent)
+    (missing,) = preflight.engine_problems(['docker.io/bash:4.4'], settings)
+    monkeypatch.setattr(preflight.sub, 'run', lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, b'', b''))
+    monkeypatch.setattr(preflight, '_docker_processes', lambda: preflight.MAX_DOCKER_PROCESSES + 1)
+    (busy,) = preflight.engine_problems(['docker.io/bash:4.4'], settings)
+    cwl = runner != 'nextflow'
+    assert str(missing).endswith('install docker, or name an installed engine with --container_engine.' if cwl
+                                 else 'install docker.')
+    assert str(busy).endswith('or pass --ignore_docker_processes.' if cwl else '(sudo pkill com.docker && sudo '
+                              'pkill Docker).')

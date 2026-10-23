@@ -96,8 +96,9 @@ group_run.add_argument('--generate_run_script', default=False, action="store_tru
 group_run.add_argument('--check', default=False, action="store_true",
                        help='''Compile the workflow and check that this machine can run it (the container engine
                        when a step uses a container, the input paths, the directories Sophios writes, the programs
-                       it calls; under --target nextflow, nextflow and a Java it can run, and the container engine
-                       when a process has a container), then stop: nothing is pulled and nothing is run.''')
+                       it calls; under --target nextflow, the input paths, nextflow and a Java it can run, and the
+                       container engine when a process has a container), then stop: nothing is pulled and nothing is
+                       run.''')
 group_run.add_argument('--run_local', default=False, action="store_true",
                        help='''After compiling, run the workflow on your local machine: with --cwl_runner, or under
                        --target nextflow with Nextflow.''')

@@ -718,7 +718,7 @@ def _nextflow_run_request(workflow: "Workflow", options: RunOptions, result: Com
     run_script = _enabled(run_args.get("generate_run_script", "no"))
     prepared = backends.backend("nextflow", "nextflow").prepare(
         result, analyses, Path(options.basepath),
-        run_setup.Settings(preflight.RunSettings("docker", "", run_script=run_script), Path.cwd()))
+        run_setup.Settings(preflight.RunSettings("docker", "", runner="nextflow", run_script=run_script), Path.cwd()))
     for note in prepared.notes:
         warnings.warn(str(note), UserWarning, stacklevel=5)
     return backends.RunRequest(
