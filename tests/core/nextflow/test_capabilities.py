@@ -235,44 +235,6 @@ def test_absent_optional_input_bound_directly_into_the_command_lowers_to_an_opti
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(
-    ("declared", "binding", "extra"),
-    [
-        # Only the input's own binding is presence-gated; a reference elsewhere would render the sentinel.
-        (
-            "string",
-            {"position": 1, "prefix": "--message"},
-            {"arguments": [{"position": 2, "valueFrom": "$(inputs.message)"}]},
-        ),
-        # CWL omits the entire binding when its optional source is absent.
-        (
-            "string",
-            {"position": 1, "valueFrom": "printf optional", "shellQuote": False},
-            {"requirements": {"ShellCommandRequirement": {}}},
-        ),
-        # CWL omits the prefix and the literal when the optional source is absent.
-        ("string", {"position": 1, "prefix": "--message", "valueFrom": "literal"}, {}),
-        # No binding of its own, but referenced elsewhere.
-        ("string", None, {"arguments": [{"position": 1, "valueFrom": "$(inputs.message)"}]}),
-        # path-qualifier channel construction always stages unconditionally.
-        ("File", None, {}),
-    ],
-    ids=["referenced-elsewhere", "shell-literal", "literal-value-from", "other-value-from", "path"],
-)
-def test_rejects_an_absent_optional_input_whose_absence_would_change_the_command(
-    declared: str, binding: dict[str, Any] | None, extra: dict[str, Any]
-) -> None:
-    definition = {"type": ["null", declared], **({"inputBinding": binding} if binding else {})}
-    rose = one_step(tool("OPTIONAL", inputs={"message": definition}, **extra), message=None)
-    with pytest.raises(
-        ValueError,
-        match=r"steps\[0\].run.inputs.message: absent optional values are supported only for "
-        "a val input whose absence leaves command rendering unchanged",
-    ):
-        compiled_source_to_nextflow(rose)
-
-
-@pytest.mark.fast
 def test_rejects_basename_against_a_value_input() -> None:
     basename = tool(
         "BASENAME",
@@ -567,34 +529,10 @@ def test_rejects_unsupported_workflow_level_requirements(
 @pytest.mark.fast
 def test_an_optional_output_with_a_pattern_glob_must_reach_a_workflow_output() -> None:
     logs = tool("LOGS", baseCommand="true", outputs={"o": {"type": "File?", "outputBinding": {"glob": "*.log"}}})
-    workflow = workflow_doc([step("LOGS", out=["o"])], outputs={"o": {"type": "File?", "outputSource": "LOGS/o"}})
-    assert compiled_source_to_nextflow(synthetic_source(workflow, [logs])).processes[0].outputs[0].optional
+    assert compiled_source_to_nextflow(one_step(logs, ["o"])).processes[0].outputs[0].optional
 
     with pytest.raises(ValueError, match="optional outputs o must match at most one file and must reach a workflow"):
         compiled_source_to_nextflow(synthetic_source(workflow_doc([step("LOGS", out=["o"])]), [logs]))
-
-
-@pytest.mark.fast
-def test_rejects_shell_mode_in_a_container() -> None:
-    shell = tool(
-        "SHELL",
-        requirements={"DockerRequirement": {"dockerPull": "ubuntu:24.04"}, "ShellCommandRequirement": {}},
-    )
-    assert _findings(synthetic_source(workflow_doc([step("SHELL")]), [shell])) == [
-        "steps[0].run: ShellCommandRequirement beside a DockerRequirement is not supported: CWL runs the command "
-        "as /bin/sh -c after the image's ENTRYPOINT, which the Nextflow task does not"
-    ]
-
-
-@pytest.mark.fast
-def test_rejects_a_containerized_tool_that_gives_its_container_no_arguments() -> None:
-    entry_only = tool("ENTRY", requirements={"DockerRequirement": {"dockerPull": "ubuntu:24.04"}})
-    del entry_only["baseCommand"]
-    assert _findings(synthetic_source(workflow_doc([step("ENTRY")]), [entry_only])) == [
-        "steps[0]: a containerized tool with no baseCommand, arguments or bound inputs is not supported: CWL gives "
-        "the container no arguments, so the image runs its CMD, after its ENTRYPOINT if it has one, which the "
-        "Nextflow task does not; name the program in baseCommand"
-    ]
 
 
 @pytest.mark.fast
@@ -1536,6 +1474,13 @@ def _boundary_value(cwl_type: Any, value: Any) -> CompiledNextflowSource:
     return synthetic_source(document, [], workflow_inputs={"value": value})
 
 
+def _absent_message(declared: str, binding: Yaml | None = None, **extra: Any) -> CompiledNextflowSource:
+    """A step whose optional `message` input, declared `declared` and bound by `binding`, is absent."""
+    definition = {"type": ["null", declared], **({"inputBinding": binding} if binding else {})}
+    return one_step(tool("OPTIONAL", inputs={"message": definition}, **extra), message=None)
+
+
+_DOCKER = {"DockerRequirement": {"dockerPull": "ubuntu:24.04"}}
 _EMPTY_SCATTER = "steps[0].scatter: scatter must name one input, as a string or a non-empty list"
 _SCATTER_ITEM = {"in": {"item": "items"}, "out": ["result"], "scatter": ["item"]}
 _FILE_RESULT = {"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}}
@@ -1674,6 +1619,15 @@ FINDINGS = [
         ], id=f"a_glob_of_only_a_staged_input-{glob.strip()}")
         for glob in ("$(inputs.source)", "$(inputs.source.basename)", " $(inputs.source.path) ")
     ),
+    pytest.param(lambda: one_step(tool("SHELL", requirements={**_DOCKER, "ShellCommandRequirement": {}})), [
+        "steps[0].run: ShellCommandRequirement beside a DockerRequirement is not supported: CWL runs the command "
+        "as /bin/sh -c after the image's ENTRYPOINT, which the Nextflow task does not"
+    ], id="shell_mode_in_a_container"),
+    pytest.param(lambda: one_step(tool("ENTRY", baseCommand=None, requirements=_DOCKER)), [
+        "steps[0]: a containerized tool with no baseCommand, arguments or bound inputs is not supported: CWL gives "
+        "the container no arguments, so the image runs its CMD, after its ENTRYPOINT if it has one, which the "
+        "Nextflow task does not; name the program in baseCommand"
+    ], id="a_containerized_tool_that_gives_its_container_no_arguments"),
 ]
 
 
@@ -1687,6 +1641,10 @@ def test_a_rejected_source_has_exactly_its_findings(
 
 _BOOLEAN_VALUE_FROM = r"valueFrom on a boolean inputBinding is supported only as"
 _ABSENT_OPTIONAL = r"steps\[0\].run.inputs.{}: absent optional"
+_ABSENT_MESSAGE = (
+    _ABSENT_OPTIONAL.format("message")
+    + " values are supported only for a val input whose absence leaves command rendering unchanged"
+)
 
 # Each source, built when its test runs, and a pattern its rejection matches.
 MATCHES = [
@@ -1863,6 +1821,27 @@ MATCHES = [
     # A shape _source_values cannot read must still fail closed, not skip the boolean-source check.
     pytest.param(lambda: _flag_wired_to([]), "", id="a_flag_input_wired_to_an_unrecognized_source_shape-list"),
     pytest.param(lambda: _flag_wired_to(42), "", id="a_flag_input_wired_to_an_unrecognized_source_shape-int"),
+    # Only the input's own binding is presence-gated; a reference elsewhere would render the sentinel.
+    pytest.param(lambda: _absent_message(
+        "string", {"position": 1, "prefix": "--message"}, arguments=[{"position": 2, "valueFrom": "$(inputs.message)"}]
+    ), _ABSENT_MESSAGE, id="absent_optional_input_referenced_outside_its_own_binding"),
+    # CWL omits the entire binding when its optional source is absent.
+    pytest.param(lambda: _absent_message(
+        "string", {"position": 1, "valueFrom": "printf optional", "shellQuote": False},
+        requirements={"ShellCommandRequirement": {}},
+    ), _ABSENT_MESSAGE, id="absent_optional_input_whose_binding_emits_a_shell_literal"),
+    # CWL omits the prefix and the literal when the optional source is absent.
+    pytest.param(
+        lambda: _absent_message("string", {"position": 1, "prefix": "--message", "valueFrom": "literal"}),
+        _ABSENT_MESSAGE, id="absent_optional_input_whose_binding_has_a_literal_value_from",
+    ),
+    # No binding of its own, but referenced elsewhere.
+    pytest.param(
+        lambda: _absent_message("string", arguments=[{"position": 1, "valueFrom": "$(inputs.message)"}]),
+        _ABSENT_MESSAGE, id="absent_optional_input_referenced_via_another_bindings_value_from",
+    ),
+    # path-qualifier channel construction always stages unconditionally.
+    pytest.param(lambda: _absent_message("File"), _ABSENT_MESSAGE, id="absent_optional_path_input"),
     pytest.param(lambda: synthetic_source(
         workflow_doc(
             [step("REQUIRED", **{"in": {"message": "message"}})], inputs={"message": {"type": ["null", "string"]}}
