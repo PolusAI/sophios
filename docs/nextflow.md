@@ -82,6 +82,14 @@ block that prints `Sophios-generated Nextflow does not support dry runs
 (-stub-run)` and exits 1, so `-stub-run` stops at the first task and runs no
 command.
 
+When a workflow output completes, the pipeline prints it on one line of
+standard output: `sophios-output`, then the JSON array of the output's name
+and its value. A file or directory is an object with its `class` and its
+absolute `path`, in Nextflow's work directory; a captured text is a string;
+a null is `null`; and the output of a scattered step is an array, one level
+deep for each input a `nested_crossproduct` scatters. A Sophios run reads
+these lines back as the workflow's output object.
+
 `sophios --help` groups the options by target. An option of another target,
 set away from its default, is an error: `--target nextflow` cannot be combined
 with a CWL-only option such as `--generate_cwl_workflow`, `--run_local`,

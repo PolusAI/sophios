@@ -34,6 +34,7 @@ from .input_output_nf import (
     NF_INPUT_FUNCTION,
     NF_LOAD_CONTENTS_FUNCTION,
     NF_NEST_FUNCTION,
+    NF_OUTPUT_FUNCTION,
     NF_SHELL_QUOTE_FUNCTION,
     NF_STEP_INPUT_FUNCTION,
     NF_STUB_LINES,
@@ -493,7 +494,7 @@ def parse_nf_text(text: str, *, params: Mapping[str, Any] | None = None) -> Next
         covered.update(range(block_start, block_end + 1))
     for helper in (
         NF_SHELL_QUOTE_FUNCTION, NF_INPUT_FUNCTION, NF_LOAD_CONTENTS_FUNCTION, NF_EXPRESSION_FUNCTIONS,
-        NF_NEST_FUNCTION, NF_STEP_INPUT_FUNCTION, NF_FLOAT_TEXT_FUNCTION,
+        NF_NEST_FUNCTION, NF_STEP_INPUT_FUNCTION, NF_FLOAT_TEXT_FUNCTION, NF_OUTPUT_FUNCTION,
     ):
         helper_lines = _lines(helper)
         for helper_start in range(len(lines) - len(helper_lines) + 1):

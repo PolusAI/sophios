@@ -15,6 +15,7 @@ from .nf_types import (
     NF_FLOAT_TEXT_HELPER,
     NF_INPUT_HELPER,
     NF_NEST_HELPER,
+    NF_OUTPUT_HELPER,
     NF_STEP_INPUT_HELPER,
     MULTI_INPUT_ADAPTERS,
     ExecutableNextflowWorkflow,
@@ -622,6 +623,21 @@ def _incoming_connections(workflow: ExecutableNextflowWorkflow) -> dict[tuple[st
     }
 
 
+# The line the entry workflow prints for each workflow output once it
+# completes (design §7): this marker, then the JSON array of the output's name
+# and its value. The helper makes the value: a path is an object with its
+# class and path, the [] sentinel is null, and a scattered output is the list
+# of its values, one level per scattered dimension.
+NF_OUTPUT_MARKER = "sophios-output"
+NF_OUTPUT_FUNCTION = f'''def {NF_OUTPUT_HELPER}(value, int depth) {{
+    if( depth > 0 )
+        return value.collect {{ item -> {NF_OUTPUT_HELPER}(item, depth - 1) }}
+    if( value instanceof java.nio.file.Path )
+        return ['class': java.nio.file.Files.isDirectory(value) ? 'Directory' : 'File', 'path': value.toString()]
+    return value == [] ? null : value
+}}'''
+
+
 def _shape_channel(process_name: str) -> str:
     return f"ch_{process_name}_shape"
 
@@ -675,6 +691,30 @@ def _multi_input_methods(workflow: ExecutableNextflowWorkflow) -> dict[str, str]
         if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
         and connection.adapter in MULTI_INPUT_ADAPTERS
     }
+
+
+def _output_depth(workflow: ExecutableNextflowWorkflow, process_name: str) -> int:
+    """How many array levels a workflow output of ``process_name`` carries: one per scattered input under
+    ``nested_crossproduct``, one under any other scatter, none for an unscattered process."""
+    adapters = [
+        connection.adapter
+        for connection in workflow.connections
+        if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
+        and connection.to_process == process_name
+        and connection.adapter in MULTI_INPUT_ADAPTERS
+    ]
+    return len(adapters) if "nested_crossproduct" in adapters else min(len(adapters), 1)
+
+
+def _output_record(workflow: ExecutableNextflowWorkflow, connection: NfWorkflowOutputConnection) -> str:
+    """The entry workflow's line that prints one workflow output once it completes (design §7)."""
+    depth = _output_depth(workflow, connection.from_process)
+    value = f"{NF_OUTPUT_HELPER}(items, {depth})" if depth else f"{NF_OUTPUT_HELPER}(items[0], 0)"
+    return (
+        f"    {workflow.name}.out.{connection.to_port}.toList().subscribe {{ items -> "
+        f"println({groovy_literal(NF_OUTPUT_MARKER + ' ')} + groovy.json.JsonOutput.toJson("
+        f"[{groovy_literal(connection.to_port)}, {value}])) }}\n"
+    )
 
 
 def _render_multi_input_channel(
@@ -980,6 +1020,9 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
     floats = _float_texts(workflow)
     if any(floats.values()):
         sections.append(NF_FLOAT_TEXT_FUNCTION)
+    outputs = [connection for connection in workflow.connections if isinstance(connection, NfWorkflowOutputConnection)]
+    if outputs:
+        sections.append(NF_OUTPUT_FUNCTION)
     sections.extend(
         _render_process(process, tuple(name for name, _, _ in _multi_input_sources(workflow, process)),
                         floats[process.name])
@@ -992,7 +1035,8 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
     unread = "".join(f"    {_checked_parameter(workflow, name)}\n" for name in sorted(workflow.params)
                      if name not in connected)
     arguments = ",\n        ".join(_parameter_expression(workflow, name) for name in connected)
-    sections.append(f"workflow {{\n{NF_PARSER_CHECK}{unread}    {workflow.name}({arguments})\n}}")
+    records = "".join(_output_record(workflow, connection) for connection in outputs)
+    sections.append(f"workflow {{\n{NF_PARSER_CHECK}{unread}    {workflow.name}({arguments})\n{records}}}")
     return "\n\n".join(sections) + "\n"
 
 

@@ -15,6 +15,8 @@ from sophios.input_output_nf import (
     render_nextflow_config,
     write_nextflow_artifacts,
 )
+from sophios.api.python._workflow_runtime import compile_workflow_result
+from sophios.api.python.workflow import Workflow
 from sophios.ir.artifacts import CompilationResult
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
@@ -36,6 +38,7 @@ from sophios.nf_types import (
 )
 from sophios.utils_nf import compiled_source_to_nextflow
 
+from .test_phase3_cells import _scatter_step
 from .testkit import command, flag_workflow, output_port, ref, runtime_workflow, template
 
 
@@ -68,6 +71,11 @@ def test_write_artifacts_rejects_non_executable_representation(tmp_path: Path) -
         write_nextflow_artifacts(cast(Any, {"representation_kind": "structural"}), tmp_path)
 
 
+#: The entry workflow's record of `runtime_workflow()`'s one output, an unscattered file.
+RESULT_RECORD = ("    PIPELINE.out.result.toList().subscribe { items -> println('sophios-output ' + "
+                 "groovy.json.JsonOutput.toJson(['result', __sophios_output_9f72e(items[0], 0)])) }\n")
+
+
 @pytest.mark.serial
 def test_renders_named_workflow_and_entry_wrapper() -> None:
     rendered = render_nextflow(runtime_workflow())
@@ -76,7 +84,7 @@ def test_renders_named_workflow_and_entry_wrapper() -> None:
     assert "COPY(PRODUCE.out.result)" in rendered
     assert "result = COPY.out.copy" in rendered
     entry = "Channel.value(__sophios_input_9f72e('message', params.message, 'string'))"
-    assert f"workflow {{\n{NF_PARSER_CHECK}    PIPELINE({entry})\n}}" in rendered
+    assert f"workflow {{\n{NF_PARSER_CHECK}    PIPELINE({entry})\n{RESULT_RECORD}}}" in rendered
 
 
 @pytest.mark.fast
@@ -88,7 +96,7 @@ def test_a_parameter_no_step_reads_is_checked_before_the_call() -> None:
     )
     assert render_nextflow(workflow).endswith(
         f"workflow {{\n{NF_PARSER_CHECK}    __sophios_input_9f72e('unread', params.unread, 'int')\n"
-        "    PIPELINE(Channel.value(__sophios_input_9f72e('message', params.message, 'string')))\n}\n"
+        f"    PIPELINE(Channel.value(__sophios_input_9f72e('message', params.message, 'string')))\n{RESULT_RECORD}}}\n"
     )
 
 
@@ -97,6 +105,23 @@ def test_every_process_ends_with_the_stub_that_refuses_a_dry_run() -> None:
     rendered = render_nextflow(runtime_workflow())
     stub = "".join(f"\n    {line}" for line in NF_STUB_LINES)
     assert rendered.count(f'    """\n{stub}\n}}') == rendered.count("process ") == 2
+
+
+@pytest.mark.fast
+def test_an_output_record_has_one_array_level_per_scattered_dimension(
+    real_scattered_result: CompilationResult,
+) -> None:
+    """An unscattered output records its one value, a scatter its list, a nested crossproduct one level per input."""
+    nested = _scatter_step("NEST", "nested_crossproduct", {"a": ["a"], "b": ["x"]})
+    shapes = {
+        "unscattered": render_nextflow(runtime_workflow()),
+        "scattered": render_nextflow(compiled_source_to_nextflow(real_scattered_result)),
+        "nested": render_nextflow(compiled_source_to_nextflow(compile_workflow_result(Workflow([nested], "nest")))),
+    }
+    values = {shape: [line.split("__sophios_output_9f72e(", 1)[1].split(")", 1)[0]
+                      for line in rendered.splitlines() if "subscribe { items" in line]
+              for shape, rendered in shapes.items()}
+    assert values == {"unscattered": ["items[0], 0"], "scattered": ["items, 1"], "nested": ["items, 2"]}
 
 
 @pytest.mark.serial

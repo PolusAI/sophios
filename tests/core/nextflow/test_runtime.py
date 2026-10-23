@@ -15,7 +15,7 @@ import sophios.main as sophios_main
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python._workflow_runtime import compile_workflow_result
 from sophios.api.python.workflow import Step, Workflow
-from sophios.input_output_nf import NF_PARSER_CHECK, write_nextflow_artifacts
+from sophios.input_output_nf import NF_OUTPUT_MARKER, NF_PARSER_CHECK, write_nextflow_artifacts
 from sophios.ir.artifacts import CompilationResult
 from sophios.nf_reader import parse_nf_file, promote_nextflow_document
 from sophios.nf_types import (
@@ -1973,3 +1973,44 @@ def test_an_optional_output_is_null_when_nothing_matches(
     else:
         assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         assert (tmp_path / "o.sink").read_text(encoding="utf-8") == observed
+
+
+def _recorded(stdout: str) -> dict[str, Any]:
+    """Each workflow output the pipeline recorded on ``stdout``, by its Nextflow name."""
+    marker = f"{NF_OUTPUT_MARKER} "
+    return dict(json.loads(line.removeprefix(marker)) for line in stdout.splitlines() if line.startswith(marker))
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_the_pipeline_records_each_workflow_output_as_its_value(tmp_path: Path) -> None:
+    """A path is its class and path, a skipped step's output null, and a nested crossproduct's output
+    one array level per scattered input, each file converted at the innermost level."""
+    touch = Step(CommandLineTool("touch_file", Inputs(), Outputs(out=Output(cwl.file, glob="out.txt")))
+                 .base_command("touch", "out.txt"), step_name="touch")
+    folder = Step(CommandLineTool("make_folder", Inputs(), Outputs(out=Output(cwl.directory, glob="d")))
+                  .base_command("mkdir", "d"), step_name="folder")
+    skipped = Step(CommandLineTool("skipped", Inputs(n=Input(cwl.int)), Outputs(out=Output(cwl.file, glob="n.txt")))
+                   .base_command("touch", "n.txt"), step_name="skipped")
+    skipped.inputs.n = 1
+    skipped.when = "$(inputs.n > 1)"
+    grid = Step(CommandLineTool("cell", Inputs(a=Input(cwl.string), b=Input(cwl.string)),
+                                Outputs(out=Output(cwl.file, glob="cell.txt"))).base_command("touch", "cell.txt"),
+                step_name="grid")
+    grid.inputs.a, grid.inputs.b = ["a", "b"], ["x", "y", "z"]
+    grid.scatter_on(grid.inputs.a, grid.inputs.b, method="nested_crossproduct")
+    workflow = Workflow([touch, folder, skipped, grid], "recorded")
+    workflow.outputs.file, workflow.outputs.folder = touch.outputs.out, folder.outputs.out
+    workflow.outputs.skipped, workflow.outputs.grid = skipped.outputs.out, grid.outputs.out
+    workflow.to_nextflow(tmp_path)
+
+    result = execute_nextflow(tmp_path)
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    recorded = _recorded(result.stdout)
+    assert recorded["skipped"] is None
+    assert recorded["file"] == {"class": "File", "path": recorded["file"]["path"]}
+    assert Path(recorded["file"]["path"]).is_file() and Path(recorded["file"]["path"]).name == "out.txt"
+    assert recorded["folder"]["class"] == "Directory" and Path(recorded["folder"]["path"]).is_dir()
+    assert [[cell["class"] for cell in row] for row in recorded["grid"]] == [["File"] * 3] * 2
+    assert len({cell["path"] for row in recorded["grid"] for cell in row}) == 6
