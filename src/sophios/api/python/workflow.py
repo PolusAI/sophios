@@ -1236,9 +1236,9 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             run_args_dict (dict[str, str] | None): Runtime CLI options for local execution,
                 by flag name without the dashes. ``quiet`` (``'yes'`` by default) and
                 ``no_provenance`` (``'no'`` by default) are yes/no switches. Under
-                ``target="nextflow"`` an option only a CWL run reads is refused, as the
-                command line refuses it, and each key Sophios does not read reaches
-                Nextflow as ``-<key> <value>``, or ``-<key>`` alone for an empty value:
+                ``target="nextflow"`` a key only a CWL run reads is refused, and each key
+                Sophios does not read reaches ``nextflow run`` as ``-<key> <value>``, or
+                ``-<key>`` alone for an empty value:
                 ``{'process.executor': 'slurm', 'resume': ''}``.
             user_env_vars (dict[str, str] | None): Environment variables to expose to the run.
             basepath (str): Directory used for generated files and execution artifacts.
@@ -1258,7 +1258,8 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             SophiosError: The workflow does not compile, or this machine cannot run it.
             ValueError: If a `user_env_vars` key is not an environment variable name, or
                 `run_args_dict` names a `cwl_runner` Sophios cannot run, or under
-                ``target="nextflow"`` the workflow has no Nextflow lowering.
+                ``target="nextflow"`` `run_args_dict` has a key only a CWL run reads or
+                the workflow has no Nextflow lowering.
             WorkflowRunError: If the runner exits non-zero. Its `exit_code` is the runner's.
             KeyboardInterrupt: On Ctrl-C, after the runner was stopped.
         """

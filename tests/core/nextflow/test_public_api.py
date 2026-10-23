@@ -18,6 +18,7 @@ from sophios.api.python.workflow import (
     Step,
     Workflow,
 )
+from sophios.nf_types import NfWorkflowOutputConnection
 
 from .testkit import REPO_ROOT
 
@@ -70,6 +71,20 @@ def test_the_python_api_reports_each_cuda_note_as_a_user_warning(tmp_path: Path)
     assert [str(warning.message) for warning in notes] == CUDA_NOTES * 2
     assert {warning.filename for warning in notes} == {__file__}
     assert executable.processes[0].resources.accelerator == 2
+
+
+@pytest.mark.fast
+def test_a_python_workflow_is_lowered_with_only_the_outputs_it_declares(tmp_path: Path) -> None:
+    """As `compile()` returns it, so a declared `emit_text_file` is not the step output `emit_text~file`, whose
+    Nextflow name it would share."""
+    workflow = supported_workflow()
+    workflow.outputs.emit_text_file = workflow.steps[0].outputs.file
+    executable = workflow.compile(target="nextflow")
+    assert [connection.to_port for connection in executable.connections
+            if isinstance(connection, NfWorkflowOutputConnection)] == ["file", "emit_text_file"]
+    workflow.to_nextflow(tmp_path)
+    assert json.loads((tmp_path / "nextflow_workflow.json").read_text(encoding="utf-8")) == json.loads(
+        executable.to_json())
 
 
 @pytest.mark.fast
