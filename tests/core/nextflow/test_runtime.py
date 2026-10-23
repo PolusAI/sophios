@@ -2018,18 +2018,25 @@ def test_the_pipeline_records_each_workflow_output_as_its_value(tmp_path: Path) 
 
 @pytest.mark.nextflow
 @pytest.mark.serial
-def test_workflow_run_runs_the_nextflow_target_and_returns_its_outputs(tmp_path: Path) -> None:
-    """Nextflow runs from the base path, and the run's outputs are CWL objects naming the files it made."""
+def test_two_workflows_started_from_one_base_path_each_run_their_own_pipeline(tmp_path: Path) -> None:
+    """Each run's pipeline, work directory and Nextflow log are in `nextflow_<workflow>/` under the base path, so
+    a run started before the other has read its pipeline runs its own, and its outputs are CWL objects naming the
+    files it made."""
     base = tmp_path / "base"
-    result = supported_workflow().run(target="nextflow", basepath=str(base))
-    assert result is not None and result.exit_code == 0
-    assert result.outputs is not None
-    file = result.outputs["file"]
-    assert (file["class"], file["basename"]) == ("File", "stdout.txt")
-    assert Path(file["path"]).read_text(encoding="utf-8") == "hello from Sophios\n"
-    assert Path(file["path"]).is_relative_to(base.resolve() / "work_nextflow_public")
-    assert json.loads((base / "output_nextflow_public.json").read_text(encoding="utf-8")) == result.outputs
-    assert (base / ".nextflow.log").is_file()
+    other = supported_workflow()
+    other.process_name = "other"
+    other.steps[0].inputs.message = "hello from the other"
+    handles = [workflow.start(target="nextflow", basepath=str(base)) for workflow in (supported_workflow(), other)]
+    for handle, (name, text) in zip(handles, [("nextflow_public", "hello from Sophios"),
+                                              ("other", "hello from the other")]):
+        result = handle.wait()
+        assert result.exit_code == 0 and result.outputs is not None
+        file = result.outputs["file"]
+        assert (file["class"], file["basename"]) == ("File", "stdout.txt")
+        assert Path(file["path"]).read_text(encoding="utf-8") == f"{text}\n"
+        assert Path(file["path"]).is_relative_to(base.resolve() / f"nextflow_{name}" / "work")
+        assert json.loads((base / f"output_{name}.json").read_text(encoding="utf-8")) == result.outputs
+        assert (base / f"nextflow_{name}" / ".nextflow.log").is_file()
 
 
 #: A tool that copies its source into an output-target Directory, which it captures.

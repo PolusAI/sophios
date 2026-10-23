@@ -1229,8 +1229,9 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         The run writes the one document ``compile()`` returns to
         ``<basepath>/<name>.cwl``, with its job file beside it, and runs exactly
         that. With ``target="nextflow"`` it writes what :meth:`to_nextflow`
-        writes to ``basepath`` and runs that with Nextflow; the outputs are in
-        ``<basepath>/work_<name>``, Nextflow's work directory.
+        writes to ``<basepath>/nextflow_<name>`` and runs that with Nextflow;
+        the outputs are in ``<basepath>/nextflow_<name>/work``, Nextflow's work
+        directory.
 
         Args:
             run_args_dict (dict[str, str] | None): Runtime CLI options for local execution,

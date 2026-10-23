@@ -334,14 +334,19 @@ def _last_json_object(text: str) -> Json | None:
     return found if isinstance(found, dict) else None
 
 
-def nextflow_names_file(basepath: Path, workflow_name: str) -> Path:
-    """The file `NextflowBackend.prepare` writes beside the Nextflow artifacts: the Sophios name of each process and
-    workflow output of `workflow_name`, by its Nextflow name.
+def nextflow_directory(basepath: Path, workflow_name: str) -> Path:
+    """Where `NextflowBackend` writes and runs `workflow_name`'s pipeline: the four artifacts, `nextflow_names.json`
+    with the Sophios name of each process and workflow output by its Nextflow name, the work directory `work`, and
+    Nextflow's own log and cache.
 
-    Named after the workflow, as its summary is, so the outcome of a run reads its own workflow's names when
-    another workflow was prepared in the same base path since it started.
+    Named after the workflow, as a CWL run's `<name>.cwl` and `<name>_inputs.yml` are, so two workflows run
+    together from one base path never read or overwrite each other's pipeline.
     """
-    return basepath / f'nextflow_names_{workflow_name}.json'
+    return basepath / f'nextflow_{workflow_name}'
+
+
+#: The file in a workflow's `nextflow_directory` that maps each Nextflow name back to its Sophios one.
+_NEXTFLOW_NAMES: Final = 'nextflow_names.json'
 
 
 #: Nextflow's lines for a failed task, as its log prints them: `Error executing process > '<task>'`, then, for a
@@ -408,11 +413,11 @@ class NextflowBackend:
 
     def prepare(self, compilation: CompilationResult, analyses: tuple[realtime.Analysis, ...], basepath: Path,
                 settings: run_setup.Settings) -> run_setup.Prepared:
-        """The four artifacts and `nextflow_names_<name>.json` under `basepath`, the analyses beside them, the check,
-        and each output-target Directory input that names nothing yet made.
+        """The four artifacts and `nextflow_names.json` in the workflow's `nextflow_directory`, the analyses under
+        `basepath`, the check, and each output-target Directory input that names nothing yet made.
 
         The workflow is lowered from its bound values, each relative File or Directory path read against
-        `settings.root_dir` and written absolute: Nextflow runs from `basepath`.
+        `settings.root_dir` and written absolute: Nextflow runs from its `nextflow_directory`.
 
         Raises:
             ValueError: The workflow has no Nextflow lowering; no artifact is left.
@@ -421,11 +426,12 @@ class NextflowBackend:
         artifact = compilation.artifact
         bound = absolute_paths(local_locations_as_paths(artifact.job_inputs), settings.root_dir)
         compilation = replace(compilation, artifact=replace(artifact, job_inputs=bound))
-        io_nf.remove_nextflow_artifacts(basepath)
+        directory = nextflow_directory(basepath, artifact.name)
+        io_nf.remove_nextflow_artifacts(directory)
         workflow, notes = compiled_source_to_nextflow_with_notes(compilation)
-        documents = io_nf.write_nextflow_artifacts(workflow, basepath)
-        nextflow_names_file(basepath, artifact.name).write_text(json.dumps(nextflow_names(compilation), indent=2)
-                                                                + '\n', encoding='utf-8')
+        documents = io_nf.write_nextflow_artifacts(workflow, directory)
+        (directory / _NEXTFLOW_NAMES).write_text(json.dumps(nextflow_names(compilation), indent=2) + '\n',
+                                                 encoding='utf-8')
         plans = realtime.write(analyses, basepath, artifact.name, settings.root_dir)
         targets = output_target_inputs(artifact)
         # An output-target Directory need not exist yet: it is made below.
@@ -441,23 +447,24 @@ class NextflowBackend:
         return run_setup.Prepared(artifact, plans, documents, notes)
 
     def launch(self, request: RunRequest) -> Launch:
-        """`nextflow` reading only the generated configuration, with the pipeline, its parameters, a work directory
-        per workflow and no ANSI log, then the passthrough arguments, from the base path.
+        """`nextflow` reading only the generated configuration, with the pipeline, its parameters, its work directory
+        and no ANSI log, then the passthrough arguments, from the workflow's `nextflow_directory`.
 
-        From the base path, Nextflow's own log and cache are there with the run's other files.
+        From there, Nextflow's own log and cache are with the pipeline they belong to.
         """
-        basepath = request.basepath.absolute().resolve()
-        workdir = str(basepath / f'work_{request.workflow_name}')
-        argv = ['nextflow', '-C', str(basepath / io_nf.NEXTFLOW_CONFIG), 'run', str(basepath / io_nf.NEXTFLOW_SCRIPT),
-                '-params-file', str(basepath / io_nf.NEXTFLOW_PARAMS), '-work-dir', workdir, '-ansi-log', 'false',
-                *request.passthrough_args]
-        return Launch(tuple(argv), {**_environment(request), 'NXF_SYNTAX_PARSER': 'v2'}, basepath, workdir)
+        directory = nextflow_directory(request.basepath.absolute().resolve(), request.workflow_name)
+        workdir = str(directory / 'work')
+        argv = ['nextflow', '-C', str(directory / io_nf.NEXTFLOW_CONFIG), 'run',
+                str(directory / io_nf.NEXTFLOW_SCRIPT), '-params-file', str(directory / io_nf.NEXTFLOW_PARAMS),
+                '-work-dir', workdir, '-ansi-log', 'false', *request.passthrough_args]
+        return Launch(tuple(argv), {**_environment(request), 'NXF_SYNTAX_PARSER': 'v2'}, directory, workdir)
 
     def outcome(self, request: RunRequest, exit_code: int, stdout: str, log: Path) -> Outcome:
         """The outputs the pipeline recorded, by their Sophios names and written to the summary as cwltool's are;
         the failed processes from Nextflow's log, by their Sophios step names."""
         basepath = request.basepath.absolute().resolve()
-        names = json.loads(nextflow_names_file(basepath, request.workflow_name).read_text(encoding='utf-8'))
+        names = json.loads((nextflow_directory(basepath, request.workflow_name) / _NEXTFLOW_NAMES)
+                           .read_text(encoding='utf-8'))
         failed = {names['processes'][process]: status
                   for process, status in nextflow_failed_steps(_log_lines(log)).items()}
         if exit_code != 0:

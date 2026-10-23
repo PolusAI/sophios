@@ -137,7 +137,8 @@ _NEXTFLOW_FAILED_LOG = [
 
 def _nextflow_request(tmp_path: Path, **fields: Any) -> RunRequest:
     """A Nextflow run of `wf` from `tmp_path`, whose names file `prepare` would have written."""
-    backends.nextflow_names_file(tmp_path, 'wf').write_text(json.dumps({
+    (tmp_path / 'nextflow_wf').mkdir()
+    (tmp_path / 'nextflow_wf' / 'nextflow_names.json').write_text(json.dumps({
         'processes': {'bad_step': 'bad-step', 'copy': 'child~copy'},
         'outputs': {'copy_result': 'copy~result', 'grid': 'grid', 'text': 'text', 'skipped': 'skipped'},
     }), encoding='utf-8')
@@ -145,20 +146,20 @@ def _nextflow_request(tmp_path: Path, **fields: Any) -> RunRequest:
 
 
 @pytest.mark.fast
-def test_nextflow_reads_only_the_generated_configuration_from_the_base_path(
+def test_nextflow_reads_only_the_generated_configuration_from_the_workflows_own_directory(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The pipeline, its parameters and a work directory per workflow, no ANSI log, then the passthrough arguments,
-    with the environment a CWL runner gets and the v2 script parser."""
+    """The pipeline, its parameters and its work directory, all in `nextflow_<workflow>/` under the base path, no
+    ANSI log, then the passthrough arguments, with the environment a CWL runner gets and the v2 script parser."""
     monkeypatch.setenv('SOPHIOS_TEST_KEPT', 'kept')
     monkeypatch.setenv('NXF_SYNTAX_PARSER', 'v1')
-    base = tmp_path.resolve()
+    base = tmp_path.resolve() / 'nextflow_wf'
     request = RunRequest('wf', tmp_path, runner='nextflow', target='nextflow', env={'TOKEN': 'x'},
                          passthrough_args=('-process.executor', 'slurm', '-resume'))
     launch = backends.backend('nextflow', 'nextflow').launch(request)
     assert launch.argv == ('nextflow', '-C', f'{base}/nextflow.config', 'run', f'{base}/workflow.nf',
-                           '-params-file', f'{base}/nextflow_params.json', '-work-dir', f'{base}/work_wf',
+                           '-params-file', f'{base}/nextflow_params.json', '-work-dir', f'{base}/work',
                            '-ansi-log', 'false', '-process.executor', 'slurm', '-resume')
-    assert (launch.cwd, launch.outdir) == (base, f'{base}/work_wf')
+    assert (launch.cwd, launch.outdir) == (base, f'{base}/work')
     assert launch.env['SOPHIOS_TEST_KEPT'] == 'kept' and launch.env['TOKEN'] == 'x'
     assert launch.env['NXF_SYNTAX_PARSER'] == 'v2'
 
@@ -174,7 +175,7 @@ def test_failed_nextflow_processes_are_read_from_its_log_lines() -> None:
 def test_a_nextflow_run_reports_the_outputs_its_pipeline_recorded_by_their_sophios_names(tmp_path: Path) -> None:
     """Each recorded path becomes a CWL object, the summary holds the output object, and only a run that
     succeeded has one."""
-    file = tmp_path / 'work_wf' / 'ab' / 'copy.txt'
+    file = tmp_path / 'nextflow_wf' / 'work' / 'ab' / 'copy.txt'
     cells = [[{'class': 'File', 'path': f'/w/{a}{b}/cell.txt'} for b in 'xy'] for a in 'ab']
     stdout = ''.join(f'{line}\n' for line in [
         '[PROCESS ab/cdef12] wf:copy',
@@ -264,14 +265,14 @@ def test_nextflow_prepare_writes_the_pipeline_from_absolute_paths_and_makes_each
     (root / 'source.txt').write_text('', encoding='utf-8')
     settings = run_setup.Settings(_NEXTFLOW_SETTINGS, root, check=check)
     prepared = backends.backend('nextflow', 'nextflow').prepare(_write_into(root), (), tmp_path / 'base', settings)
-    base = tmp_path / 'base'
+    base = tmp_path / 'base' / 'nextflow_wf'
     assert prepared.documents == tuple(base / name for name in (
         'nextflow_workflow.json', 'workflow.nf', 'nextflow.config', 'nextflow_params.json'))
     params = json.loads((base / 'nextflow_params.json').read_text(encoding='utf-8'))
     assert params == {'write_into_outDir': {'class': 'Directory', 'path': str(root / 'made')},
                       'write_into_source': {'class': 'File', 'path': str(root / 'source.txt')}}
     assert (root / 'made').is_dir() is not check
-    assert json.loads(backends.nextflow_names_file(base, 'wf').read_text(encoding='utf-8')) == {
+    assert json.loads((base / 'nextflow_names.json').read_text(encoding='utf-8')) == {
         'processes': {'write_into': 'write-into'}, 'outputs': {'write_into_outDir': 'write-into~outDir'}}
 
 
