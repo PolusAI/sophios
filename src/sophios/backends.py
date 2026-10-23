@@ -404,7 +404,7 @@ class NextflowBackend:
         `documents` are the artifacts `prepare` wrote, in one directory; the processes are read from the pipeline
         there, as the import reads them.
         """
-        workflow = read_nextflow(documents[0].parent)
+        workflow, _ = read_nextflow(documents[0].parent)
         problems = preflight.path_problems(jobs) + preflight.nextflow_problems(settings)
         images = [process.container for process in workflow.processes if process.container is not None]
         if images:

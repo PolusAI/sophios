@@ -113,7 +113,7 @@ def test_the_nextflow_target_connects_an_input_as_the_cwl_target_does(inference:
     [feed] = _feeds(workflow.compile(inference=inference).cwl_workflow)
     workflow.to_nextflow(tmp_path, inference=inference)
 
-    for lowered in (workflow.compile(target="nextflow", inference=inference), read_nextflow(tmp_path)):
+    for lowered in (workflow.compile(target="nextflow", inference=inference), read_nextflow(tmp_path)[0]):
         assert [f"{edge.from_process}/{edge.from_port}" for edge in lowered.connections
                 if isinstance(edge, NfProcessConnection)] == [feed["data"]]
 

@@ -58,7 +58,7 @@ def test_a_corpus_workflow_runs_under_nextflow(workflow: str, tmp_path: Path, mo
     """The run succeeds, every file a workflow output emits exists, and every directory it emits holds something."""
     pipeline = tmp_path / "pipeline"
     _compile(CHECKOUTS / workflow, pipeline, monkeypatch)
-    executable = read_nextflow(pipeline)
+    executable, _ = read_nextflow(pipeline)
     # The output directories a tool writes into must exist when the pipeline starts (docs/nextflow.md).
     for name, declared in executable.param_types.items():
         value = executable.params[name]

@@ -171,4 +171,4 @@ BUILDERS = {
 def test_the_files_written_from_a_compiled_model_read_back_to_it(build: Callable[[], Workflow], tmp_path: Path) -> None:
     model = build().compile(target="nextflow", inference=Inference(enabled=False))
     write_nextflow_artifacts(model, tmp_path)
-    assert read_nextflow(tmp_path) == model
+    assert read_nextflow(tmp_path)[0] == model

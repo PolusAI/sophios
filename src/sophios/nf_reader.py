@@ -87,10 +87,15 @@ class _Line:
     text: str
     verbatim: bool = False
 
+    @property
+    def span(self) -> SourceSpan:
+        """Where the line is."""
+        return SourceSpan(self.file, self.number, 1, self.number, 1)
+
     def stop(self, code: SophiosErrorCode, what: str) -> NoReturn:
         """Stop the read here: this line is ``what``."""
         shown = self.text.strip().split("\n", 1)[0][:160]
-        raise SophiosError.error(code, f"{what}: {shown}", span=SourceSpan(self.file, self.number, 1, self.number, 1))
+        raise SophiosError.error(code, f"{what}: {shown}", span=self.span)
 
 
 def _skip(text: str, at: int) -> int:
@@ -746,14 +751,15 @@ def _same(given: list[_Line], expected: list[_Line], code: SophiosErrorCode, hea
         (given[-1] if given else head).stop(code, f"Sophios writes {expected[len(given)].text!r} after this")
 
 
-def read_nextflow(directory: str | Path) -> ExecutableNextflowWorkflow:
+def read_nextflow(directory: str | Path) -> tuple[ExecutableNextflowWorkflow, dict[str, SourceSpan]]:
     """Read the pipeline Sophios wrote into ``directory`` back into the model it was written from.
 
     The reader is the renderer's inverse (design §4.2): from the three files
     Nextflow reads it returns the model they were written from, and that
     model renders the same files, up to layout. It reads nothing else:
     not ``nextflow_workflow.json``, no tool registry, no network, and no
-    path a parameter names.
+    path a parameter names. Beside the model, it gives the line each
+    process block and the named workflow block begins at, by name.
 
     Args:
         directory (str | Path): The directory holding ``workflow.nf``,
@@ -765,7 +771,8 @@ def read_nextflow(directory: str | Path) -> ExecutableNextflowWorkflow:
         OSError: A file cannot be read.
 
     Returns:
-        ExecutableNextflowWorkflow: The model the files were written from.
+        tuple[ExecutableNextflowWorkflow, dict[str, SourceSpan]]: The model the files were written from, and where
+            each of its processes and its workflow begins.
     """
     folder = Path(directory)
     script_file = str(folder / NEXTFLOW_SCRIPT)
@@ -792,4 +799,4 @@ def read_nextflow(directory: str | Path) -> ExecutableNextflowWorkflow:
     config = _lines(config_file, _read(folder / NEXTFLOW_CONFIG))
     _same(config, _lines(config_file, render_nextflow_config(model)), _Code.IMPORT_CONFIG,
           _Line(config_file, 1, ""))
-    return model
+    return model, {name: block[0].span for name, block in blocks.items()} | {model.name: workflows[0][0].span}

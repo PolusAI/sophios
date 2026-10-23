@@ -125,6 +125,8 @@ class SophiosErrorCode(StrEnum):
     IMPORT_CONFIG = 'wic052'
     #: wic053: text in the renderer's forms that is not what it writes for the workflow the text describes.
     IMPORT_MISMATCH = 'wic053'
+    #: wic054: a pipeline no workflow built through the Python API compiles to, as it is written.
+    IMPORT_UNWRITABLE = 'wic054'
 
     #: --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = 'api001'
@@ -415,6 +417,13 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         'Importing Nextflow: text in the forms Sophios writes that is not what it writes for the workflow the '
         'text describes, such as a derived form that disagrees with the rest.',
         'Restore the line the message names as Sophios wrote it, or regenerate the pipeline from its workflow.'),
+    SophiosErrorCode.IMPORT_UNWRITABLE: Explanation(
+        Kind.DOCUMENT,
+        'Importing Nextflow: a pipeline no workflow built through the Python API compiles to as it is written, '
+        'such as one with a capitalized process name, which the compile would give a leading `_`, or with a port '
+        'of a CWL tool named like an attribute of the tool builder\'s `Inputs` or `Outputs`, such as `keys`.',
+        'Rename what the message names in the workflow the pipeline was compiled from, to a name the compile keeps, '
+        'and compile it again.'),
     SophiosErrorCode.INVALID_INPUT_VALUE: Explanation(
         Kind.CALL,
         'A value bound to a step input that the input cannot take.',

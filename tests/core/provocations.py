@@ -13,7 +13,8 @@ lazily so this module stays cheap to import. A branch that adds a `SophiosErrorC
 extends this registry in the same commit, or the meta-test says so.
 """
 from collections.abc import Callable
-from typing import Final
+from functools import partial
+from typing import Any, Final
 
 from sophios.lang.error_codes import SophiosErrorCode
 
@@ -549,46 +550,58 @@ def _provoke_unchecked_cuda_field() -> None:
 COMPILED.update({SophiosErrorCode.UNCHECKED_CUDA_FIELD: _provoke_unchecked_cuda_field})
 
 
-def _import_edited(file: str, old: str, new: str) -> None:
-    """Write a one-process pipeline, replace `old` in one of its files with `new`, and import it."""
+#: One edit of the pipeline `import_edited` writes, for each import code: the file, the text replaced (every
+#: occurrence), its replacement, and text on the line the diagnostic names.
+IMPORT_EDITS: Final[dict[SophiosErrorCode, tuple[str, str, str, str]]] = {
+    # An edited helper; a directive Sophios does not write; a hand-written tuple input; a plain shell script.
+    SophiosErrorCode.IMPORT_EDITED_HELPER: (
+        'workflow.nf', 'value.toString().replace(', 'value.replace(', 'def __sophios_shell_quote_9f72e'),
+    SophiosErrorCode.IMPORT_FOREIGN_STATEMENT: (
+        'workflow.nf', '    input:\n', "    errorStrategy 'retry'\n    input:\n", 'errorStrategy'),
+    SophiosErrorCode.IMPORT_FOREIGN_DECLARATION: (
+        'workflow.nf', '    val message\n', '    tuple val(id), path(reads)\n', 'tuple val(id)'),
+    SophiosErrorCode.IMPORT_FOREIGN_SCRIPT: (
+        'workflow.nf', "    ${__sophios_shell_quote_9f72e('echo')}", '    echo hello\n    echo', 'echo hello'),
+    # A parameter the pipeline does not check; Docker enabled for a pipeline with no container.
+    SophiosErrorCode.IMPORT_PARAMS: ('nextflow_params.json', '{', '{\n  "extra": 1,', '"extra"'),
+    SophiosErrorCode.IMPORT_CONFIG: ('nextflow.config', 'false', 'true', 'docker.enabled'),
+    # A `take:` name the workflow does not use, which the text shows only through its calls.
+    SophiosErrorCode.IMPORT_MISMATCH: ('workflow.nf', '    take:\n    message\n', '    take:\n    msg\n', 'msg'),
+    # A capitalized process name, which the compile writes with a leading `_`.
+    SophiosErrorCode.IMPORT_UNWRITABLE: ('workflow.nf', 'greet', 'Greet', 'process Greet'),
+}
+
+
+def import_edited(directory: str, file: str, old: str, new: str) -> Any:
+    """Write the pipeline of a one-step workflow into `directory`, replace `old` in one of its files with `new`,
+    and import it."""
     # pylint: disable=import-outside-toplevel
-    import tempfile
     from pathlib import Path
 
+    from sophios.api.python.nextflow import import_nextflow
+    from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+    from sophios.api.python.workflow import Workflow
     from sophios.input_output_nf import write_nextflow_artifacts
-    from sophios.nf_reader import read_nextflow
-    from sophios.nf_types import (ExecutableNextflowWorkflow, NfCommand, NfInputReference, NfLiteral, NfPort,
-                                  NfProcess, NfTemplate, NfWorkflowInputConnection, NfWorkflowOutputConnection)
 
-    echo = NfProcess('echo', [NfPort('message', 'val')], [NfPort('out', 'path', 'out', NfTemplate((NfLiteral('o'),)))],
-                     NfCommand((NfTemplate((NfLiteral('echo'),)), NfTemplate((NfInputReference('message'),))),
-                               stdout=NfTemplate((NfLiteral('o'),))))
-    model = ExecutableNextflowWorkflow('provoke', [echo], [
-        NfWorkflowInputConnection('message', 'echo', 'message'), NfWorkflowOutputConnection('echo', 'out', 'out'),
-    ], {'message': 'hi'}, {'message': 'string'})
+    greet = CommandLineTool('greet', Inputs(message=Input(cwl.string, position=1)),
+                            Outputs(out=Output(cwl.file, glob='o'))).base_command('echo').stdout('o').to_step()
+    workflow = Workflow([greet], 'provoke')
+    greet.inputs.message = workflow.inputs.message.as_type('string')
+    workflow.inputs.message = 'hi'
+    workflow.outputs.out = greet.outputs.out
+    write_nextflow_artifacts(workflow.compile(target='nextflow'), directory)
+    path = Path(directory) / file
+    text = path.read_text(encoding='utf-8')
+    assert old in text, old
+    path.write_text(text.replace(old, new), encoding='utf-8')
+    return import_nextflow(directory)
+
+
+def _import_edited(code: SophiosErrorCode) -> None:
+    import tempfile  # pylint: disable=import-outside-toplevel
+
     with tempfile.TemporaryDirectory() as root:
-        write_nextflow_artifacts(model, root)
-        path = Path(root) / file
-        text = path.read_text(encoding='utf-8')
-        assert old in text, old
-        path.write_text(text.replace(old, new, 1), encoding='utf-8')
-        read_nextflow(root)
+        import_edited(root, *IMPORT_EDITS[code][:3])
 
 
-COMPILED.update({
-    # An edited helper; a directive Sophios does not write; a hand-written tuple input; a plain shell script.
-    SophiosErrorCode.IMPORT_EDITED_HELPER: lambda: _import_edited(
-        'workflow.nf', "value.toString().replace(", "value.replace("),
-    SophiosErrorCode.IMPORT_FOREIGN_STATEMENT: lambda: _import_edited(
-        'workflow.nf', '    input:\n', "    errorStrategy 'retry'\n    input:\n"),
-    SophiosErrorCode.IMPORT_FOREIGN_DECLARATION: lambda: _import_edited(
-        'workflow.nf', '    val message\n', '    tuple val(id), path(reads)\n'),
-    SophiosErrorCode.IMPORT_FOREIGN_SCRIPT: lambda: _import_edited(
-        'workflow.nf', "    ${__sophios_shell_quote_9f72e('echo')}", '    echo hello\n    echo'),
-    # A parameter the pipeline does not check; Docker enabled for a pipeline with no container.
-    SophiosErrorCode.IMPORT_PARAMS: lambda: _import_edited('nextflow_params.json', '{', '{\n  "extra": 1,'),
-    SophiosErrorCode.IMPORT_CONFIG: lambda: _import_edited('nextflow.config', 'false', 'true'),
-    # A `take:` name the workflow does not use, which the text shows only through its calls.
-    SophiosErrorCode.IMPORT_MISMATCH: lambda: _import_edited('workflow.nf', '    take:\n    message\n',
-                                                             '    take:\n    msg\n'),
-})
+COMPILED.update({code: partial(_import_edited, code) for code in IMPORT_EDITS})
