@@ -26,7 +26,7 @@ from sophios.nf_types import (
 from sophios.lang.diagnostics import Diagnostic, Locator, Severity
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.utils_nf import (
-    compiled_source_to_nextflow, compiled_source_to_nextflow_with_notes, cwl_type_to_nf_qualifier,
+    compiled_source_to_nextflow, compiled_source_to_nextflow_with_notes, cwl_type_to_nf_qualifier, nextflow_names,
 )
 
 from .testkit import one_step, step, synthetic_source, tool, workflow_doc
@@ -634,3 +634,19 @@ def test_the_unchecked_cuda_fields_are_notes_and_leave_the_model_unchanged() -> 
         "cwltool:CUDARequirement cudaVersionMin '11.4'",
         "cwltool:CUDARequirement cudaComputeCapability ['3.0', '7.5']",
     ]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("fixture", ["real_supported_result", "real_scattered_result", "real_nested_result"])
+def test_the_names_a_run_maps_back_are_the_names_the_lowering_makes(
+    fixture: str, request: pytest.FixtureRequest
+) -> None:
+    """Each process and workflow output of the lowered model has exactly one Sophios name."""
+    result: CompilationResult = request.getfixturevalue(fixture)
+    workflow = compiled_source_to_nextflow(result)
+    names = nextflow_names(result)
+    assert sorted(names["processes"]) == sorted(process.name for process in workflow.processes)
+    assert sorted(names["outputs"]) == sorted(
+        connection.to_port for connection in workflow.connections
+        if isinstance(connection, NfWorkflowOutputConnection)
+    )

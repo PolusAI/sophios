@@ -2,6 +2,7 @@ import json
 from collections import Counter
 # pylint: disable=redefined-outer-name
 import subprocess as sub
+from dataclasses import replace
 from pathlib import Path
 import signal
 import sys
@@ -28,7 +29,7 @@ from sophios.post_compile import apply_inline_options, inline_artifact_runs
 from sophios.lang import parse
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.ir.artifacts import CompilationArtifact
+from sophios.ir.artifacts import CompilationArtifact, CompilationResult
 from sophios.ir.types import WorkflowGraph
 from sophios.wic_types import Json
 
@@ -185,7 +186,7 @@ def test_inline_flags_change_nothing_for_a_workflow_that_calls_none(
     which is why `INLINE_CASES` runs no `flat` form of it."""
     def compiled(flags: list[str]) -> list[tuple[Any, ...]]:
         """Everything in the tree but the drawings, which are new objects each compile."""
-        tree = _compiled_for_run(yml_path, get_args(str(yml_path), flags), corpus_registry)
+        tree = _compiled_for_run(yml_path, get_args(str(yml_path), flags), corpus_registry).artifact
         return [(item.namespace, item.name, item.run_path, item.cwl, item.job_inputs, item.graph)
                 for item in _artifacts(tree)]
 
@@ -250,13 +251,13 @@ def test_cwl_docker_extract(yml_path_str: str, yml_path: Path,
     run_workflows(yml_path_str, yml_path, 'cwltool', args, corpus_registry, docker_pull_only=True)
 
 
-def _compiled_for_run(yml_path: Path, args: argparse.Namespace, registry: CorpusRegistry) -> CompilationArtifact:
-    """The artifact tree `run_workflows` writes and runs for `yml_path`: compiled, then shaped by the inline flags."""
+def _compiled_for_run(yml_path: Path, args: argparse.Namespace, registry: CorpusRegistry) -> CompilationResult:
+    """The compilation `run_workflows` writes and runs for `yml_path`: its artifact tree shaped by the inline flags."""
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, registry.tools)
     compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
     result = sophios.compiler.compile_source(bundle, compiler_options, testing=True)
-    return apply_inline_options(result.artifact, subworkflows=args.cwl_inline_subworkflows,
-                                runtag=args.cwl_inline_runtag)
+    return replace(result, artifact=apply_inline_options(result.artifact, subworkflows=args.cwl_inline_subworkflows,
+                                                         runtag=args.cwl_inline_runtag))
 
 
 # pylint: disable-next=too-many-arguments,too-many-locals
@@ -282,17 +283,17 @@ def run_workflows(
     survive for anyone reading the directory afterwards.
     """
     Path(basepath).mkdir(parents=True, exist_ok=True)
-    artifact = _compiled_for_run(yml_path, args, registry)
+    compilation = _compiled_for_run(yml_path, args, registry)
     if args.partial_failure_enable:
-        artifact = sophios.plugins.cwl_update_outputs_optional_artifact(
-            artifact, args.partial_failure_success_codes_range,
-            args.partial_failure_success_codes)
+        compilation = replace(compilation, artifact=sophios.plugins.cwl_update_outputs_optional_artifact(
+            compilation.artifact, args.partial_failure_success_codes_range,
+            args.partial_failure_success_codes))
     backend = backends.backend('cwl', cwl_runner)
     settings = preflight.RunSettings(args.container_engine, args.pull_dir, ignore_install=args.ignore_docker_install,
                                      ignore_processes=args.ignore_docker_processes, runner=cwl_runner)
     # As the CLI prepares it: a relative path is read beside the workflow. The pull lane pulls; the run
     # lanes run on the images it pulled.
-    prepared = backend.prepare(artifact, (), Path(basepath), run_setup.Settings(
+    prepared = backend.prepare(compilation, (), Path(basepath), run_setup.Settings(
         settings, Path(args.yaml).parent.absolute(), args.inputs_file, pull=docker_pull_only,
         remove_entrypoints=args.docker_remove_entrypoints))
     if docker_pull_only:

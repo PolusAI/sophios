@@ -130,7 +130,7 @@ def check(found: Needs, settings: RunSettings) -> None:
                  if (problem := unwritable(directory, holds, remedy)) is not None]
     problems += _program_problems(found, settings)
     if found.containers:
-        problems += _engine_problems(found, settings)
+        problems += engine_problems(_image_names(found), settings)
     if problems:
         raise SophiosError(problems)
 
@@ -154,7 +154,7 @@ def pull(found: Needs, settings: RunSettings) -> None:
             cmd = ['cwl-docker-extract', '-s', '--dir', settings.pull_dir, str(document)]
         else:
             cmd = ['cwl-docker-extract', '--force-download', '--container-engine', engine, str(document)]
-        _fetch(cmd, f'pull {_images(found)}', engine)
+        _fetch(cmd, f'pull {_images(_image_names(found))}', engine)
     if engine != 'singularity':
         _load_and_import(found, engine)
 
@@ -334,6 +334,7 @@ _INSTALL: Final = {
     'cwltool_filterlog': 'install Sophios in this environment (pip install sophios), which provides it',
     'toil-cwl-runner': 'install Toil (pip install "toil[cwl]")',
     'cwl-docker-extract': 'install cwl-utils (pip install cwl-utils)',
+    'nextflow': 'install Nextflow (https://www.nextflow.io/docs/latest/install.html)',
 }
 
 
@@ -356,12 +357,32 @@ def _program_problems(found: Needs, settings: RunSettings) -> list[Diagnostic]:
     return problems
 
 
+#: A terminal control sequence: the nextflow launcher colours what it prints.
+_CONTROL: Final = re.compile(r'\x1b(?:\[[0-9;]*[A-Za-z]|\([A-Z0-9])')
+
+
+def nextflow_problems() -> list[Diagnostic]:
+    """A `wic029` when a run cannot start `nextflow`: it is not here, or `nextflow -version` fails, as it does
+    without a Java it can run. The first line it printed is quoted."""
+    program = runner_program('nextflow')
+    if program is None:
+        return [_missing(f"the run calls nextflow, which is neither in this Python environment nor on PATH: "
+                         f"{_INSTALL['nextflow']}")]
+    proc = sub.run([program, '-version'], check=False, stdout=sub.PIPE, stderr=sub.STDOUT, text=True, errors='replace')
+    if proc.returncode == 0:
+        return []
+    said = next((line.strip() for line in _CONTROL.sub('', proc.stdout).splitlines() if line.strip()),
+                'it said nothing')
+    return [_missing(f'nextflow -version exited with status {proc.returncode} ({said}): Nextflow needs a Java it '
+                     'can run; install one and point JAVA_HOME at it')]
+
+
 def _missing(message: str) -> Diagnostic:
     return Diagnostic(Severity.ERROR, SophiosErrorCode.PROGRAM_MISSING, f'{message}.')
 
 
-def _engine_problems(found: Needs, settings: RunSettings) -> list[Diagnostic]:
-    """What stops the engine running the containers `found` needs; one diagnostic each.
+def engine_problems(images: Sequence[str], settings: RunSettings) -> list[Diagnostic]:
+    """What stops the engine running the containers of `images`, the images a run uses; one diagnostic each.
 
     Only signals that do not depend on wording are classified: whether the engine
     program exists, the exit status of `<engine> info`, and whether the socket it
@@ -375,7 +396,7 @@ def _engine_problems(found: Needs, settings: RunSettings) -> list[Diagnostic]:
         if settings.ignore_install:
             return []
         return [_engine_error(f'{engine} is not installed (it is not on PATH), and this workflow runs tools in '
-                              f'containers ({_images(found)}): install {engine}, or name an installed engine '
+                              f'containers ({_images(images)}): install {engine}, or name an installed engine '
                               'with --container_engine')]
     problems = []
     if proc.returncode != 0 and not settings.ignore_install:
@@ -416,10 +437,14 @@ def _docker_socket() -> Path | None:
     return Path(host.removeprefix('unix://')) if host.startswith('unix://') else None
 
 
-def _images(found: Needs) -> str:
-    """The first image the run uses, and how many others: `docker.io/bash:4.4 and 2 more`."""
-    names = list(dict.fromkeys(req.dockerPull or req.dockerImageId or 'an image built by the run'
-                               for req in found.containers))
+def _image_names(found: Needs) -> list[str]:
+    """The image each container requirement of `found` names."""
+    return [req.dockerPull or req.dockerImageId or 'an image built by the run' for req in found.containers]
+
+
+def _images(images: Sequence[str]) -> str:
+    """The first of `images`, and how many others: `docker.io/bash:4.4 and 2 more`."""
+    names = list(dict.fromkeys(images))
     return names[0] if len(names) == 1 else f'{names[0]} and {len(names) - 1} more'
 
 

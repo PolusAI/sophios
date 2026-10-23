@@ -6,6 +6,7 @@ import subprocess as sub
 import traceback
 import json
 from collections.abc import Iterable
+from dataclasses import replace
 from typing import Final, Iterator
 
 import graphviz
@@ -402,7 +403,7 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
 
     if _is_local_run(args):
         prepared = backends.backend('cwl', args.cwl_runner).prepare(
-            artifact, analyses, Path(args.basepath),
+            replace(compilation, artifact=artifact), analyses, Path(args.basepath),
             run_setup.Settings(_run_settings(args), root_dir, args.inputs_file, check=args.check,
                                remove_entrypoints=args.docker_remove_entrypoints))
         draw_after_write()

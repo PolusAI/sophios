@@ -1272,7 +1272,7 @@ def _parameter_findings(definition: Any, cwl_class: str, *, path: str) -> list[s
     return findings
 
 
-def _local_locations_as_paths(value: Any) -> Any:
+def local_locations_as_paths(value: Any) -> Any:
     """Rewrite a File or Directory object's plain local ``location`` as its ``path``, and drop a File's ``format``.
 
     The Python API writes file values in CWL's ``location`` form; for a local
@@ -1282,15 +1282,15 @@ def _local_locations_as_paths(value: Any) -> Any:
     """
     match value:
         case {"class": "File", "format": _}:
-            return _local_locations_as_paths({key: item for key, item in value.items() if key != "format"})
+            return local_locations_as_paths({key: item for key, item in value.items() if key != "format"})
         case {"class": "File" | "Directory", "location": str() as location} if (
             set(value) == {"class", "location"} and "://" not in location
         ):
             return {"class": value["class"], "path": location}
         case Mapping():
-            return {key: _local_locations_as_paths(item) for key, item in value.items()}
+            return {key: local_locations_as_paths(item) for key, item in value.items()}
         case list():
-            return [_local_locations_as_paths(item) for item in value]
+            return [local_locations_as_paths(item) for item in value]
     return value
 
 
@@ -3196,6 +3196,22 @@ def compiled_source_to_nextflow(
     return compiled_source_to_nextflow_with_notes(source)[0]
 
 
+def nextflow_names(source: CompilationResult) -> dict[str, dict[str, str]]:
+    """The Sophios name of each process and workflow output the lowering of ``source`` makes, by its Nextflow name.
+
+    A process is named for its compiled step id and a workflow output for its own name, normalized as
+    the lowering normalizes them.
+    """
+    compiled = compilation_result_source(source)
+    steps = _workflow_steps(compiled.workflow)
+    return {
+        "processes": {_identifier(step.get("id"), context="workflow step id", variable=False): str(step["id"])
+                      for step in steps},
+        "outputs": {_identifier(name, context="workflow output destination"): str(name)
+                    for name in compiled.workflow.get("outputs", {})},
+    }
+
+
 def compiled_source_to_nextflow_with_notes(
     source: CompilationResult | CompiledNextflowSource,
 ) -> tuple[ExecutableNextflowWorkflow, tuple[Diagnostic, ...]]:
@@ -3235,7 +3251,7 @@ def compiled_source_to_nextflow_with_notes(
         compiled = source
     else:
         raise TypeError("Nextflow conversion requires a CompilationResult")
-    compiled = replace(compiled, params=_local_locations_as_paths(compiled.params))
+    compiled = replace(compiled, params=local_locations_as_paths(compiled.params))
     workflow = compiled.workflow
     tools = compiled.tools
     steps = _workflow_steps(workflow)

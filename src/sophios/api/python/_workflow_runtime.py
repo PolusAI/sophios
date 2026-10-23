@@ -675,7 +675,7 @@ def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: 
     writes = ((Path(outdir), "the run's outputs", "give run() an outdir you can write to"),) if outdir else ()
     # One document, the workflow's and each analysis's, as `compile()` returns it.
     prepared = backends.backend("cwl", resolved_run_args["cwl_runner"]).prepare(
-        _one_document(workflow, result),
+        replace(result, artifact=_one_document(workflow, result)),
         tuple(replace(analysis, artifact=pc.inline_artifact_runs(analysis.artifact)) for analysis in analyses),
         Path(basepath),
         run_setup.Settings(
