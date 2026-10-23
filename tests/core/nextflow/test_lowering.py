@@ -309,39 +309,6 @@ def test_command_of_only_shell_literals_still_runs_a_program() -> None:
 
 
 @pytest.mark.fast
-def test_iwdr_own_basename_listing_lowers_to_no_stage_as() -> None:
-    """The bare $(inputs.<name>) shorthand is a no-op: Nextflow already stages this way."""
-    stage_tool = tool(
-        "STAGE",
-        inputs={"source": {"type": "File", "inputBinding": {"position": 1}}},
-        requirements={"InitialWorkDirRequirement": {"listing": ["$(inputs.source)"]}},
-    )
-    rose = one_step(stage_tool, source={"class": "File", "path": "in.txt"})
-
-    process = compiled_source_to_nextflow(rose).processes[0]
-
-    assert process.inputs[0] == NfPort("source", "path")
-    assert process.inputs[0].stage_as is None
-
-
-@pytest.mark.fast
-def test_iwdr_literal_entryname_lowers_to_a_stage_as_port() -> None:
-    stage_tool = tool(
-        "STAGE",
-        inputs={"source": {"type": "File"}},
-        requirements={"InitialWorkDirRequirement": {"listing": [
-            {"entry": "$(inputs.source)", "entryname": "renamed.txt"},
-        ]}},
-        arguments=["cat", "renamed.txt"],
-    )
-    rose = one_step(stage_tool, source={"class": "File", "path": "in.txt"})
-
-    process = compiled_source_to_nextflow(rose).processes[0]
-
-    assert process.inputs[0] == NfPort("source", "path", stage_as="renamed.txt")
-
-
-@pytest.mark.fast
 def test_basename_lowers_to_a_typed_segment_in_every_template_position() -> None:
     copy_tool = tool(
         "COPY",

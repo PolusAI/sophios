@@ -188,9 +188,10 @@ A `$` that is not followed by `(` or `{` is plain text, so a literal argument
 such as `mv a "$1"` reaches the command as written.
 
 The `.copy` suffix above is load-bearing: a basename glob must derive a **new**
-name. A Nextflow output declaration does not capture staged inputs, so a glob
-naming only the input itself compiles cleanly and then fails at run time with
-`Missing output file(s)`.
+name. A glob that is only a reference to a `File` or `Directory` input names
+the staged input, which a CWL glob does not match, so it is rejected. The
+exception is an input made an `InitialWorkDirRequirement` entry under its own
+name, below: the glob then names the entry.
 
 A glob built only from basename references is matched literally, so a staged
 name containing `*`, `?`, `[`, `{` or `}` still finds the file. A `*`, `?` or
@@ -288,19 +289,38 @@ task on the machine as it is.
 
 ## Staging with InitialWorkDirRequirement
 
-Nextflow already stages every `File`/`Directory` input under its own
-original name, so a `listing` entry that only asks for that — the bare
-`$(inputs.<name>)` shorthand, or a `Dirent` whose `entryname` is absent or
-`$(inputs.<name>.basename)` — is a no-op and is accepted:
+A `listing` entry names one `File` or `Directory` input: the bare
+`$(inputs.<name>)` shorthand, or a `Dirent` whose `entry` is that reference.
+The entry keeps the input's own name when `entryname` is absent or
+`$(inputs.<name>.basename)`, and takes a literal `entryname` otherwise.
+Nextflow stages the input in a hidden directory, and the task makes the entry
+before the command runs: a copy when `writable: true`, so the command may
+change it without touching the input, and a symlink otherwise. Because the
+task makes the entry, an output glob matches it as a CWL glob does.
+
+An entry under the input's own name is what the input names: a reference to
+the input, plain, `.path` or `.basename`, names the entry. This is how a tool
+writes into an output directory it is given:
 
 ```yaml
 requirements:
   InitialWorkDirRequirement:
     listing:
-    - $(inputs.source)
+    - entry: $(inputs.outDir)
+      writable: true
+inputs:
+  outDir:
+    type: Directory
+    inputBinding:
+      prefix: --outDir
+outputs:
+  outDir:
+    type: Directory
+    outputBinding:
+      glob: $(inputs.outDir.basename)
 ```
 
-Staging under a different, literal name is supported too:
+An entry with a literal name is named by that literal:
 
 ```yaml
 requirements:
@@ -313,17 +333,16 @@ arguments:
 - renamed.txt
 ```
 
-The renamed port stays bound to its own variable but stages under the
-literal name via Nextflow's `stageAs` option. A renamed input's own `.name`
-reports the staged name, not its original CWL basename, so the same input
-cannot also be referenced elsewhere in that tool's command, stream targets,
-or output globs — the command must address the staged file by the literal
-name directly, as above.
+Such an input cannot also be referenced in that tool's command, stream
+targets, or output globs; the command names the entry by its literal, as
+above.
 
-`writable: true`, an `entry` that isn't a bare reference to one File or
-Directory input (inline content construction), an `entryname` that is any
-other expression, a listing entry naming a `val`-qualifier or array-typed
-input, and two inputs staged under the same literal name are all rejected.
+Rejected: an `entry` that is not a bare reference to one `File` or
+`Directory` input (inline content construction), an `entryname` that is any
+other expression or holds a `/`, an `entryname` that begins with
+`.sophios_entry_` (the hidden directory's prefix), a `writable` that is not a
+literal boolean, a listing entry naming a `val`-qualifier or array-typed
+input, an input listed twice, and two entries with one literal name.
 
 ## Scatter
 

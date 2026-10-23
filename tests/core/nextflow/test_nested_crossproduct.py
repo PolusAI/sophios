@@ -15,6 +15,7 @@ from sophios.nf_types import (
     NF_NEST_HELPER,
     ExecutableNextflowWorkflow,
     NfConnection,
+    NfEntry,
     NfPort,
     NfProcess,
     NfProcessConnection,
@@ -176,10 +177,10 @@ def test_a_nested_step_over_gathered_arrays_emits_one_array_per_outer_element(
         [output_port("line", "out.txt")],
         _sleep_then_pair("item", "delay"),
     )
-    # Renamed on staging: every gathered file is called out.txt.
+    # Each file is an entry under its own name: every gathered file is called out.txt.
     join = NfProcess(
         "JOIN",
-        [NfPort("f", "path", stage_as="f.txt"), NfPort("g", "path", stage_as="g.txt")],
+        [NfPort("f", "path", entry=NfEntry("f.txt")), NfPort("g", "path", entry=NfEntry("g.txt"))],
         [_text_port("line", "joined.txt")],
         command("cat", "f.txt", "g.txt", stdout="joined.txt"),
     )

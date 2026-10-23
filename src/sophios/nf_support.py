@@ -213,13 +213,14 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
         'envValue': Row(_L, 'literal text, or exactly `$(inputs.<name>)` of a `string` input'),
     }),
     'InitialWorkDirRequirement': MappingProxyType({
-        'class': Row(_L, "stages the inputs a listing names"),
-        'listing': Row(_L, 'entries naming one `File` or `Directory` input, under its basename or a literal name'),
+        'class': Row(_L, 'the task makes each entry before the command runs'),
+        'listing': Row(_L, 'entries naming one `File` or `Directory` input, under its basename or a literal name; '
+                           'a symlink, or a copy when `writable: true`'),
     }),
     'Dirent': MappingProxyType({
         'entry': Row(_L, '`$(inputs.<name>)` of one `File` or `Directory` input'),
         'entryname': Row(_L, "the input's own basename, or literal text"),
-        'writable': Row(_L, 'the literal `false` only; `true` is rejected'),
+        'writable': Row(_L, 'a literal boolean: a copy when `true`, a symlink otherwise'),
     }),
     'InlineJavascriptRequirement': MappingProxyType({
         'class': Row(_L, 'a declaration only; each expression is judged where it appears'),
@@ -270,7 +271,7 @@ REQUIREMENT_CLASSES: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
     'CommandLineTool': MappingProxyType({
         'DockerRequirement': Row(_L, 'the `container` directive'),
         'EnvVarRequirement': Row(_L, 'variables exported before the command'),
-        'InitialWorkDirRequirement': Row(_L, 'input staging'),
+        'InitialWorkDirRequirement': Row(_L, 'entries the task makes before the command runs'),
         'InlineJavascriptRequirement': Row(_L, 'a declaration only'),
         'LoadListingRequirement': Row(_R, 'LoadListingRequirement is not supported: a Directory is staged whole'),
         'MultipleInputFeatureRequirement': Row(_R, f'MultipleInputFeatureRequirement {_WORKFLOW_FEATURE}'),

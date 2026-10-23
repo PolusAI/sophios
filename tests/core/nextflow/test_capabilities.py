@@ -30,6 +30,7 @@ from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.resolve import RegistrySnapshot
 from sophios.lang import Diagnostics, EdgeDef, EdgeRef, OutputBinding, ParseResult
 from sophios.nf_types import (
+    NfEntry,
     NfFlag,
     NfPort,
     NfProcessConnection,
@@ -764,26 +765,75 @@ def _iwdr_rose(listing: list[Any], **kwargs: Any) -> CompiledNextflowSource:
 
 
 @pytest.mark.fast
-def test_accepts_iwdr_bare_shorthand_own_basename() -> None:
-    """The real append.cwl shape: a bare $(inputs.<name>) listing entry is a no-op."""
-    rose = _iwdr_rose(["$(inputs.source)"])
-    converted = compiled_source_to_nextflow(rose)
-    assert converted.processes[0].inputs[0].stage_as is None
+@pytest.mark.parametrize(("item", "entry"), [
+    ("$(inputs.source)", NfEntry()),  # the real append.cwl shape
+    ({"entry": "$(inputs.source)", "entryname": "$(inputs.source.basename)"}, NfEntry()),  # tool_builder .stage()
+    ({"entry": "$(inputs.source)", "writable": False}, NfEntry()),
+    ({"entry": "$(inputs.source)", "writable": True}, NfEntry(copy=True)),  # the image-workflows plugins' outDir
+    ({"entry": "$(inputs.source)", "entryname": "renamed.txt"}, NfEntry("renamed.txt")),
+    ({"entry": "$(inputs.source)", "entryname": "reads*.fq", "writable": True}, NfEntry("reads*.fq", copy=True)),
+])
+def test_every_iwdr_entry_is_one_the_task_makes(item: Any, entry: NfEntry) -> None:
+    """design §6, Inputs and channels: under its own basename or a literal name, linked or copied."""
+    converted = compiled_source_to_nextflow(_iwdr_rose([item]))
+    assert converted.processes[0].inputs[0].entry == entry
 
 
 @pytest.mark.fast
-def test_accepts_iwdr_dirent_self_basename_entryname() -> None:
-    """The tool_builder .stage() default: entryname restates the input's own basename."""
-    rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "$(inputs.source.basename)"}])
-    converted = compiled_source_to_nextflow(rose)
-    assert converted.processes[0].inputs[0].stage_as is None
+@pytest.mark.parametrize("writable", ["true", 1, "$(inputs.flag)"])
+def test_rejects_iwdr_writable_that_is_not_a_literal_boolean(writable: Any) -> None:
+    rose = _iwdr_rose([{"entry": "$(inputs.source)", "writable": writable}])
+    assert _findings(rose) == [
+        "steps[0].run.requirements.InitialWorkDirRequirement.listing[0]: writable must be a literal boolean"
+    ]
 
 
 @pytest.mark.fast
-def test_accepts_iwdr_dirent_literal_rename() -> None:
-    rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "renamed.txt"}])
-    converted = compiled_source_to_nextflow(rose)
-    assert converted.processes[0].inputs[0].stage_as == "renamed.txt"
+def test_rejects_iwdr_entryname_under_the_reserved_prefix() -> None:
+    rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": ".sophios_entry_source"}])
+    with pytest.raises(ValueError, match=r"listing\[0\]: entryname must not begin with '.sophios_entry_'"):
+        compiled_source_to_nextflow(rose)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("item", ["$(inputs.source)", {"entry": "$(inputs.source)", "writable": True}])
+@pytest.mark.parametrize("reference", ["$(inputs.source)", "$(inputs.source.path)", "$(inputs.source.basename)"])
+def test_an_entry_under_its_own_basename_may_be_referenced(item: Any, reference: str) -> None:
+    """The plugin shape: --outDir $(inputs.outDir) and glob: $(inputs.outDir.basename) name the entry."""
+    rose = synthetic_source(
+        workflow_doc(
+            [step("STAGE", **{"in": {"source": "source"}, "out": ["result"]})],
+            inputs={"source": {"type": "Directory"}},
+            outputs={"result": {"type": "Directory", "outputSource": "STAGE/result"}},
+        ),
+        [tool(
+            "STAGE",
+            inputs={"source": {"type": "Directory", "inputBinding": {"prefix": "--outDir"}}},
+            outputs={"result": {"type": "Directory", "outputBinding": {"glob": "$(inputs.source.basename)"}}},
+            requirements={"InitialWorkDirRequirement": {"listing": [item]}},
+            arguments=[reference],
+        )],
+        workflow_inputs={"source": {"class": "Directory", "path": "out"}},
+    )
+    assert compiled_source_to_nextflow(rose).processes[0].inputs[0].entry is not None
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("glob", ["$(inputs.source)", "$(inputs.source.basename)", " $(inputs.source.path) "])
+def test_rejects_a_glob_of_only_a_staged_input(glob: str) -> None:
+    """F84: the task directory holds the staged input under that name, which a CWL glob does not match."""
+    rose = synthetic_source(
+        workflow_doc(
+            [step("copy", **{"in": {"source": "source"}, "out": ["result"]})],
+            inputs={"source": {"type": "File"}},
+            outputs={"result": {"type": "File", "outputSource": "copy/result"}},
+        ),
+        [tool("copy", inputs={"source": {"type": "File"}},
+              outputs={"result": {"type": "File", "outputBinding": {"glob": glob}}})],
+        workflow_inputs={"source": {"class": "File", "path": "in.txt"}},
+    )
+    [finding] = _findings(rose)
+    assert finding.startswith("steps[0]: process 'copy' output 'result' globs only the staged input 'source'")
 
 
 def _copy_tool() -> CommandLineTool:
@@ -1702,10 +1752,6 @@ MATCHES = [
         requirements={"ShellCommandRequirement": {}},
     ), ["result"], text="Hello"), "does not support a prefix", id="shell_quote_false_input_binding_with_no_value_from"),
     pytest.param(
-        lambda: _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "renamed.txt", "writable": True}]),
-        "writable: true", id="iwdr_writable_true",
-    ),
-    pytest.param(
         lambda: _iwdr_rose([{"entry": "literal file content", "entryname": "x.txt"}]),
         "inline content construction is deferred", id="iwdr_inline_content_entry",
     ),
@@ -1716,13 +1762,6 @@ MATCHES = [
     pytest.param(
         lambda: _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "sub/dir.txt"}]), "path separator",
         id="iwdr_entryname_with_path_separator",
-    ),
-    *(
-        pytest.param(
-            lambda entryname=entryname: _iwdr_rose([{"entry": "$(inputs.source)", "entryname": entryname}]),
-            "stageAs wildcard", id=f"iwdr_entryname_with_nextflow_stage_as_wildcard-{entryname}",
-        )
-        for entryname in ("reads*.fq", "sample?.txt")
     ),
     pytest.param(lambda: _iwdr_rose(["$(inputs.nope)"]), "undeclared input", id="iwdr_undeclared_input"),
     pytest.param(
@@ -1748,7 +1787,7 @@ MATCHES = [
         lambda: _iwdr_rose(
             [{"entry": "$(inputs.source)", "entryname": "renamed.txt"}], arguments=["cat", "$(inputs.source)"]
         ),
-        "staged under an explicit rename", id="iwdr_renamed_input_referenced_elsewhere",
+        "has an InitialWorkDirRequirement entry with a literal name", id="iwdr_renamed_input_referenced_elsewhere",
     ),
     pytest.param(lambda: _iwdr_rose([
         {"entry": "$(inputs.source)", "entryname": "one.txt"},

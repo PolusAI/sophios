@@ -34,6 +34,9 @@ PARAM_TYPES = frozenset(
     for array in ("", "[]")
     for optional in ("", "?")
 )
+# An InitialWorkDirRequirement entry's input is staged under this prefix and
+# its port name, and the task makes the entry from it (design §6).
+NF_ENTRY_STAGING_PREFIX = ".sophios_entry_"
 # CWL v1.2 requires a loadContents file to be a UTF-8 text file of this many
 # bytes or fewer, read entirely, with a fatal error above the limit.
 NF_LOAD_CONTENTS_LIMIT = 64 * 1024
@@ -192,7 +195,8 @@ class NfBasenameReference:
     """Reference to the staged file name of one path input.
 
     Nextflow stages an input under its original file name, so the staged
-    path's name is exactly the CWL ``basename``.
+    path's name is exactly the CWL ``basename``. An entry's input renders the
+    name of its entry instead (:class:`NfEntry`).
     """
 
     name: str
@@ -600,8 +604,60 @@ def _glob_names_one_file(template: NfTemplate) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
+class NfEntry:
+    """An ``InitialWorkDirRequirement`` entry the task makes from its input before the command runs.
+
+    The input is staged under a hidden name. ``name`` is the entry's literal
+    CWL name, or None for the input's own basename; ``copy`` makes the entry a
+    copy the command may change, and otherwise it is a symlink (design §6,
+    Inputs and channels).
+    """
+
+    name: str | None = None
+    copy: bool = False
+
+    def __post_init__(self) -> None:
+        if self.name is not None:
+            if not isinstance(self.name, str) or not self.name.strip():
+                raise ValueError("entryname must be a non-empty string")
+            if "/" in self.name or "\x00" in self.name:
+                raise ValueError("entryname must not contain a path separator or NUL byte")
+            if self.name.startswith(NF_ENTRY_STAGING_PREFIX):
+                raise ValueError(f"entryname must not begin with {NF_ENTRY_STAGING_PREFIX!r}, which Sophios reserves")
+        if not isinstance(self.copy, bool):
+            raise TypeError("entry copy must be a bool")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, Any]: The entry's literal name, or None, and whether it is a copy.
+        """
+        return {"name": self.name, "copy": self.copy}
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> Self:
+        """Hydrate and validate an entry from a mapping.
+
+        Args:
+            value (Mapping[str, Any]): Serialized entry produced by :meth:`to_dict`.
+
+        Raises:
+            TypeError: If the value is not a mapping.
+            ValueError: If fields are missing, unknown or invalid.
+
+        Returns:
+            Self: The validated entry.
+        """
+        item = _fields(value, type_name=cls.__name__, required={"name", "copy"})
+        return cls(item["name"], item["copy"])
+
+
+@dataclass(frozen=True, slots=True)
 class NfPort:
     """A typed Nextflow process port.
+
+    ``entry`` marks a path input made an ``InitialWorkDirRequirement`` entry.
 
     ``optional`` marks a File or Directory output CWL declares optional: no
     match yields null rather than failing the task.
@@ -627,7 +683,7 @@ class NfPort:
     glob: NfTemplate | None = None
     path_kind: str | None = None
     is_array: bool = False
-    stage_as: str | None = None
+    entry: NfEntry | None = None
     capture: str | None = None
     optional: bool = False
 
@@ -653,17 +709,11 @@ class NfPort:
             raise TypeError("port optional must be a bool")
         if self.optional and (self.qualifier != "path" or self.glob is None):
             raise ValueError("only a path output may be optional")
-        if self.stage_as is not None:
-            if self.qualifier != "path":
-                raise ValueError("only path ports may declare a stage_as rename")
-            if self.is_array:
-                raise ValueError("array-marked ports cannot declare a stage_as rename")
-            if not isinstance(self.stage_as, str) or not self.stage_as.strip():
-                raise ValueError("stage_as must be a non-empty string or None")
-            if "/" in self.stage_as or "\x00" in self.stage_as:
-                raise ValueError("stage_as must not contain a path separator or NUL byte")
-            if "*" in self.stage_as or "?" in self.stage_as:
-                raise ValueError("stage_as must not contain a Nextflow wildcard ('*' or '?')")
+        if self.entry is not None:
+            if not isinstance(self.entry, NfEntry):
+                raise TypeError("port entry must be an NfEntry or None")
+            if self.qualifier != "path" or self.is_array or self.glob is not None:
+                raise ValueError("only a path input that is not array-marked may be an InitialWorkDirRequirement entry")
         if self.capture is not None:
             if self.capture not in self.CAPTURE_QUALIFIERS:
                 allowed = ", ".join(sorted(self.CAPTURE_QUALIFIERS))
@@ -676,10 +726,8 @@ class NfPort:
                     f"capture {self.capture!r} requires a {required} port, "
                     f"got {self.qualifier!r}"
                 )
-            if self.is_array or self.stage_as is not None:
-                raise ValueError(
-                    "a capture marker cannot combine with an array marker or a stage_as rename"
-                )
+            if self.is_array:
+                raise ValueError("a capture marker cannot combine with an array marker")
             match self.glob:
                 case NfTemplate(segments=[NfLiteral() as literal]):
                     pass
@@ -720,8 +768,8 @@ class NfPort:
 
         Returns:
             dict[str, Any]: The port's name, qualifier, emit, glob, path
-                kind, array marker, staged-name override, capture marker,
-                and optional marker.
+                kind, array marker, entry marker, capture marker, and
+                optional marker.
         """
         return {
             "name": self.name,
@@ -730,7 +778,7 @@ class NfPort:
             "glob": self.glob.to_dict() if self.glob else None,
             "path_kind": self.path_kind,
             "is_array": self.is_array,
-            "stage_as": self.stage_as,
+            "entry": self.entry.to_dict() if self.entry else None,
             "capture": self.capture,
             "optional": self.optional,
         }
@@ -753,7 +801,7 @@ class NfPort:
         item = _fields(
             value,
             type_name=cls.__name__,
-            required={"name", "qualifier", "emit", "glob", "path_kind", "is_array", "stage_as", "capture", "optional"},
+            required={"name", "qualifier", "emit", "glob", "path_kind", "is_array", "entry", "capture", "optional"},
         )
         glob = None if item["glob"] is None else NfTemplate.from_dict(item["glob"])
         return cls(
@@ -763,7 +811,7 @@ class NfPort:
             glob=glob,
             path_kind=item["path_kind"],
             is_array=item["is_array"],
-            stage_as=item["stage_as"],
+            entry=None if item["entry"] is None else NfEntry.from_dict(item["entry"]),
             capture=item["capture"],
             optional=item["optional"],
         )
@@ -855,17 +903,28 @@ class NfProcess:
         for referencing, admits, rule in rules:
             if invalid := sorted(name for name in referencing if not admits(input_ports[name])):
                 raise ValueError(f"process {self.name!r} {rule}: {', '.join(invalid)}")
-        stage_as_names = {port.name for port in inputs if port.stage_as is not None}
-        if overlap := stage_as_names & referenced_names:
+        entry_names = [port.entry.name for port in inputs if port.entry is not None and port.entry.name is not None]
+        renamed = {port.name for port in inputs if port.entry is not None and port.entry.name is not None}
+        if overlap := renamed & referenced_names:
             raise ValueError(
-                f"process {self.name!r} references a renamed IWDR input elsewhere in its "
-                f"command, stream targets, or output globs: {', '.join(sorted(overlap))}"
+                f"process {self.name!r} references an input whose InitialWorkDirRequirement entry has a literal "
+                f"name in its command, stream targets, or output globs: {', '.join(sorted(overlap))}"
             )
-        stage_as_values = [port.stage_as for port in inputs if port.stage_as is not None]
-        if len(stage_as_values) != len(set(stage_as_values)):
-            raise ValueError(
-                f"process {self.name!r} stages more than one input under the same literal name"
-            )
+        if len(entry_names) != len(set(entry_names)):
+            raise ValueError(f"process {self.name!r} makes two InitialWorkDirRequirement entries with one literal name")
+        # A glob that is one reference to a staged input names that input, which
+        # a CWL glob does not match; the task makes an entry's own file.
+        staged = {port.name for port in inputs if port.qualifier == "path" and port.entry is None}
+        for port in outputs:
+            match port.glob:
+                case NfTemplate(segments=[NfInputReference(name=name) | NfBasenameReference(name=name)]) if (
+                    name in staged
+                ):
+                    raise ValueError(
+                        f"process {self.name!r} output {port.name!r} globs only the staged input {name!r}, which a "
+                        "CWL glob does not match: derive a new name from it, or make the input an "
+                        "InitialWorkDirRequirement entry"
+                    )
         match self.container:
             case None:
                 pass

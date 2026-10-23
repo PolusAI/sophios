@@ -17,12 +17,15 @@ from sophios.nf_expr import parse
 from sophios.nf_reader import nextflow_to_cwl, parse_nf_file, promote_nextflow_document
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
+    NfBasenameReference,
     NfCommand,
+    NfEntry,
     NfEnvVar,
     NfPort,
     NfProcess,
     NfProcessConnection,
     NfResources,
+    NfTemplate,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
@@ -64,7 +67,22 @@ def _tool_shapes() -> ExecutableNextflowWorkflow:
     return single_process_workflow(process, params={"s": "v"}, param_types={"s": "string"}, output_port_name="out")
 
 
+def _entries() -> ExecutableNextflowWorkflow:
+    process = NfProcess(
+        "STEP",
+        [NfPort("src", "path", entry=NfEntry("renamed.txt")),
+         NfPort("out", "path", path_kind="directory", entry=NfEntry(copy=True))],
+        [NfPort("result", "path", "result", NfTemplate((NfBasenameReference("out"),)), "directory")],
+        NfCommand((template("cat"), template("renamed.txt"), template(ref("out")))),
+    )
+    return single_process_workflow(
+        process, params={"src": "/tmp/s.txt", "out": "/tmp/o"}, param_types={"src": "File", "out": "Directory"},
+        output_port_name="result",
+    )
+
+
 BUILDERS: dict[str, Callable[[], ExecutableNextflowWorkflow]] = {
+    "InitialWorkDirRequirement entries": _entries,
     "exported environment variables and a GPU count": _tool_shapes,
     "single-input dotproduct": lambda: _scattered("dotproduct", names=("item",)),
     "conditional step": lambda: _when_workflow("$(inputs.a > 0)", {"a": 1}, second_step=True, a="int"),

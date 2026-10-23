@@ -23,6 +23,7 @@ from sophios.nf_types import (
     NfArrayBinding,
     NfBasenameReference,
     NfCommand,
+    NfEntry,
     NfFlag,
     NfInputReference,
     NfLiteral,
@@ -35,7 +36,7 @@ from sophios.nf_types import (
 )
 from sophios.utils_nf import compiled_source_to_nextflow
 
-from .testkit import command, flag_workflow, output_port, runtime_workflow
+from .testkit import command, flag_workflow, output_port, ref, runtime_workflow, template
 
 
 @pytest.mark.serial
@@ -130,24 +131,56 @@ def test_renders_supported_process_metadata() -> None:
 
 
 @pytest.mark.serial
-def test_renders_stage_as_rename_and_bare_input_declarations() -> None:
+def test_renders_each_entry_staged_hidden_and_made_by_the_task() -> None:
+    """design §6, Inputs and channels: a hidden staging name, then a symlink or a copy under the CWL name."""
     process = NfProcess(
         "STAGE",
-        [NfPort("source", "path", stage_as="renamed.txt"), NfPort("other", "path")],
-        [output_port("report", "report.txt")],
-        NfCommand((NfTemplate((NfLiteral("cat"),)), NfTemplate((NfLiteral("renamed.txt"),)))),
+        [
+            NfPort("source", "path", entry=NfEntry("renamed.txt")),
+            NfPort("outDir", "path", path_kind="directory", entry=NfEntry(copy=True)),
+            NfPort("other", "path"),
+        ],
+        [NfPort("result", "path", "result", NfTemplate((NfBasenameReference("outDir"),)), "directory")],
+        NfCommand((template("cat"), template("renamed.txt"), template("--outDir"), template(ref("outDir")))),
     )
     rendered = render_nextflow(ExecutableNextflowWorkflow(
         "WF",
         [process],
-        [
-            NfWorkflowInputConnection("source", "STAGE", "source"),
-            NfWorkflowInputConnection("other", "STAGE", "other"),
-        ],
-        {"source": "input.txt", "other": "input2.txt"}, {"source": "File", "other": "File"},
+        [NfWorkflowInputConnection(name, "STAGE", name) for name in ("source", "outDir", "other")],
+        {"source": "input.txt", "outDir": "out", "other": "input2.txt"},
+        {"source": "File", "outDir": "Directory", "other": "File"},
     ))
-    assert "path source, stageAs: 'renamed.txt'" in rendered
-    assert "path other\n" in rendered
+    quote = "__sophios_shell_quote_9f72e"
+    entry = "(outDir.toString() - '.sophios_entry_outDir/')"
+    assert (
+        "    path source, stageAs: '.sophios_entry_source/*'\n"
+        "    path outDir, stageAs: '.sophios_entry_outDir/*'\n"
+        "    path other\n"
+    ) in rendered
+    assert f'    path "${{{entry}}}", glob: false, emit: result\n' in rendered
+    assert (
+        f"    ln -s -- ${{{quote}(source.toString())}} ${{{quote}('renamed.txt')}}\n"
+        f"    cp -RL -- ${{{quote}(outDir.toString())}} ${{{quote}({entry})}}\n"
+        f"    ${{{quote}('cat')}} ${{{quote}('renamed.txt')}} ${{{quote}('--outDir')}} ${{{quote}({entry})}}\n"
+    ) in rendered
+
+
+@pytest.mark.serial
+def test_a_scattered_entry_is_staged_hidden_in_its_tuple() -> None:
+    process = NfProcess(
+        "STAGE",
+        [NfPort("source", "path", entry=NfEntry(copy=True))],
+        [NfPort("result", "path", "result", NfTemplate((NfBasenameReference("source"),)))],
+        NfCommand((template("touch"), template(ref("source")))),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [NfWorkflowInputConnection("sources", "STAGE", "source", "dotproduct")],
+        {"sources": ["a.txt", "b.txt"]}, {"sources": "File[]"},
+    ))
+    assert "    tuple val(__sophios_scatter_index_9f72e), path(source, stageAs: '.sophios_entry_source/*')\n" in rendered
+    assert "    cp -RL -- ${__sophios_shell_quote_9f72e(source.toString())} " in rendered
 
 
 @pytest.mark.serial

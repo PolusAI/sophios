@@ -30,6 +30,7 @@ from .nf_types import (
     NfCommand,
     NfCommandToken,
     NfConnection,
+    NfEntry,
     NfEnvVar,
     NfFlag,
     NfInputReference,
@@ -268,7 +269,7 @@ def _ports(
     raw_ports: Any,
     *,
     outputs: bool,
-    stage_as: Mapping[str, str] | None = None,
+    entries: Mapping[str, NfEntry] | None = None,
 ) -> list[NfPort]:
     port_definitions = _as_mapping(raw_ports, error="CommandLineTool ports must be a mapping")
     ports: list[NfPort] = []
@@ -289,7 +290,7 @@ def _ports(
                         glob=_output_template(raw_name, raw_definition) if outputs else None,
                         path_kind=path_kind,
                         is_array=is_array,
-                        stage_as=None if outputs or stage_as is None else stage_as.get(name),
+                        entry=None if outputs or entries is None else entries.get(name),
                         capture=_output_capture(raw_name, raw_definition) if outputs else None,
                         optional=outputs and qualifier == "path" and _is_optional(cwl_type),
                     )
@@ -539,13 +540,11 @@ def _iwdr_entry_reference(value: Any) -> str:
 
 
 def _iwdr_entryname(value: Any, *, raw_name: str) -> str | None:
-    """Classify an IWDR entryname: None for a same-basename no-op, else a literal rename.
+    """An entry's literal name, or None for the input's own basename.
 
     Absent, or the exact self-referencing $(inputs.<name>.basename), both
-    mean "stage under the input's own basename" -- already Nextflow's
-    default, so neither needs a stage_as override. A plain literal with no
-    reference is the one supported rename shape; any other reference has no
-    runtime-proven representation.
+    name the entry after the input. A plain literal with no reference is the
+    one supported rename shape; NfEntry validates it.
     """
     if value is None:
         return None
@@ -560,35 +559,29 @@ def _iwdr_entryname(value: Any, *, raw_name: str) -> str | None:
             raise ValueError(
                 "entryname is supported only as a literal string or the input's own "
                 f"$(inputs.{raw_name}.basename); a computed or differently-referencing "
-                "entryname is deferred"
+                "entryname is not supported"
             )
         literal_parts.append(segment.value)
-    literal = "".join(literal_parts)
-    if not literal.strip():
-        raise ValueError("entryname must be a non-empty string")
-    if "/" in literal:
-        raise ValueError("entryname must not contain a path separator")
-    if "*" in literal or "?" in literal:
-        raise ValueError("entryname must not contain a Nextflow stageAs wildcard ('*' or '?')")
-    return literal
+    return "".join(literal_parts)
 
 
-def _iwdr_listing_item(item: Any, *, tool_inputs: Mapping[str, Any]) -> tuple[str, str | None]:
+def _iwdr_listing_item(item: Any, *, tool_inputs: Mapping[str, Any]) -> tuple[str, NfEntry]:
     """Validate one InitialWorkDirRequirement listing entry.
 
-    Returns (normalized_input_name, literal_rename_or_None). Approved
-    shapes: a bare $(inputs.<name>) string, or a Dirent {entry:
-    $(inputs.<name>), entryname: ..., writable: false} whose entryname is
-    absent, the input's own basename self-reference, or a literal with no
-    path separator.
+    Returns the normalized input name and its entry. Approved shapes: a bare
+    $(inputs.<name>) string, or a Dirent {entry: $(inputs.<name>), entryname:
+    ..., writable: ...} whose entryname is absent, the input's own basename
+    self-reference, or a literal with no path separator, and whose writable
+    is a literal boolean.
     """
     match item:
         case str() as bare:
             raw_name = _iwdr_entry_reference(bare)
-            rename = None
+            rename, writable = None, False
         case Mapping() as dirent:
-            if dirent.get("writable") is True:
-                raise ValueError("writable: true is deferred; copy-and-mutate staging is not supported")
+            writable = dirent.get("writable", False)
+            if not isinstance(writable, bool):
+                raise ValueError("writable must be a literal boolean")
             raw_name = _iwdr_entry_reference(dirent.get("entry"))
             rename = _iwdr_entryname(dirent.get("entryname"), raw_name=raw_name)
         case _:
@@ -599,7 +592,7 @@ def _iwdr_listing_item(item: Any, *, tool_inputs: Mapping[str, Any]) -> tuple[st
     required = _required_type(definition.get("type"))
     if _is_array_type(required):
         raise ValueError(
-            f"references array-typed input {raw_name!r}; staging an array of files is deferred"
+            f"references array-typed input {raw_name!r}; staging an array of files is not supported"
         )
     try:
         qualifier = cwl_type_to_nf_qualifier(required)
@@ -609,7 +602,7 @@ def _iwdr_listing_item(item: Any, *, tool_inputs: Mapping[str, Any]) -> tuple[st
         raise ValueError(
             f"references non-path input {raw_name!r}; only File/Directory inputs can be staged"
         )
-    return _identifier(raw_name, context="IWDR listing target"), rename
+    return _identifier(raw_name, context="IWDR listing target"), NfEntry(rename, writable)
 
 
 def _iwdr_listing_findings(
@@ -635,7 +628,7 @@ def _iwdr_listing_findings(
             findings.extend(dirent_findings)
             continue
         try:
-            name, rename = _iwdr_listing_item(item, tool_inputs=tool_inputs)
+            name, entry = _iwdr_listing_item(item, tool_inputs=tool_inputs)
         except ValueError as exc:
             findings.append(f"{path}.listing[{index}]: {exc}")
             continue
@@ -646,8 +639,8 @@ def _iwdr_listing_findings(
             )
             continue
         listed_at[name] = index
-        if rename is not None:
-            renamed_by.setdefault(rename, set()).add(name)
+        if entry.name is not None:
+            renamed_by.setdefault(entry.name, set()).add(name)
     for rename, names in renamed_by.items():
         if len(names) > 1:
             findings.append(
@@ -657,13 +650,8 @@ def _iwdr_listing_findings(
     return findings
 
 
-def _iwdr_stage_as(tool: Mapping[str, Any]) -> dict[str, str]:
-    """Return {input_name: literal_rename} for every approved IWDR rename entry.
-
-    Only rename entries are represented: a self-basename entry needs no
-    stage_as override, since Nextflow already stages a path input under its
-    own basename by default.
-    """
+def _iwdr_entries(tool: Mapping[str, Any]) -> dict[str, NfEntry]:
+    """Each input an InitialWorkDirRequirement listing names, with its entry; the task makes every one."""
     requirement = _requirement(tool, "InitialWorkDirRequirement")
     if requirement is None:
         return {}
@@ -671,23 +659,13 @@ def _iwdr_stage_as(tool: Mapping[str, Any]) -> dict[str, str]:
     if not isinstance(listing, list):
         raise ValueError("InitialWorkDirRequirement listing must be a list")
     tool_inputs = _as_mapping(tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
-    stage_as: dict[str, str] = {}
-    by_rename: dict[str, set[str]] = {}
-    listed_names: set[str] = set()
+    entries: dict[str, NfEntry] = {}
     for item in listing:
-        name, rename = _iwdr_listing_item(item, tool_inputs=tool_inputs)
-        if name in listed_names:
+        name, entry = _iwdr_listing_item(item, tool_inputs=tool_inputs)
+        if name in entries:
             raise ValueError(f"input {name!r} appears more than once in the IWDR listing")
-        listed_names.add(name)
-        if rename is not None:
-            stage_as[name] = rename
-            by_rename.setdefault(rename, set()).add(name)
-    for rename, names in by_rename.items():
-        if len(names) > 1:
-            raise ValueError(
-                f"inputs {sorted(names)} are all staged under the same literal name {rename!r}"
-            )
-    return stage_as
+        entries[name] = entry
+    return entries
 
 
 def _iwdr_rename_reference_findings(
@@ -696,20 +674,19 @@ def _iwdr_rename_reference_findings(
     *,
     path: str,
 ) -> list[str]:
-    """Reject any other reference to an input IWDR stages under a different name.
+    """Reject any reference to an input whose entry has a literal name.
 
-    A renamed port's own .name reports the staged name, not the original
-    CWL basename (runtime-proven), so resolving what a plain or basename
-    reference to it would mean is out of scope; the supported pattern is
-    for the command to hard-code the literal staged name directly.
+    What such a reference means is out of scope (design §6, Inputs and
+    channels); the supported pattern is for the command to name the entry by
+    its literal. An entry under the input's own basename is referenced freely.
     """
     if not renamed_names:
         return []
     referenced = (_referenced_names(tool) or set()) & renamed_names
     return [
-        f"{path}.run.requirements.InitialWorkDirRequirement: input {name!r} is staged under "
-        "an explicit rename and cannot also be referenced elsewhere in the command, stream "
-        "targets, or output globs"
+        f"{path}.run.requirements.InitialWorkDirRequirement: input {name!r} has an InitialWorkDirRequirement "
+        "entry with a literal name and cannot also be referenced in the command, stream targets, or output "
+        "globs; name the entry by its literal"
         for name in sorted(referenced)
     ]
 
@@ -1839,7 +1816,7 @@ def _tool_capability_findings(
             )
         )
     try:
-        renamed_names = set(_iwdr_stage_as(tool))
+        renamed_names = {name for name, entry in _iwdr_entries(tool).items() if entry.name is not None}
     except ValueError:
         renamed_names = set()
     findings.extend(_iwdr_rename_reference_findings(tool, renamed_names, path=path))
@@ -2736,7 +2713,7 @@ def _process(step: Mapping[str, Any], tool: Mapping[str, Any]) -> NfProcess:
     when = step.get("when")
     return NfProcess(
         name=_identifier(step.get("id"), context="workflow step id", variable=False),
-        inputs=_ports(tool.get("inputs", {}), outputs=False, stage_as=_iwdr_stage_as(tool)),
+        inputs=_ports(tool.get("inputs", {}), outputs=False, entries=_iwdr_entries(tool)),
         outputs=_ports(tool.get("outputs", {}), outputs=True),
         command=_command(tool),
         container=_container(tool),

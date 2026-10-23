@@ -19,6 +19,7 @@ from .nf_types import (
     ExecutableNextflowWorkflow,
     NF_LOAD_CONTENTS_HELPER,
     NF_LOAD_CONTENTS_LIMIT,
+    NF_ENTRY_STAGING_PREFIX,
     NF_SCATTER_INDEX_NAME,
     NF_SHELL_QUOTE_HELPER,
     NfArrayBinding,
@@ -162,8 +163,10 @@ def _groovy_gstring_fragment(value: str) -> str:
     return value.translate(_GSTRING_FRAGMENT_TABLE)
 
 
-def _segment_expression(segment: Any) -> str:
+def _segment_expression(segment: Any, entries: Mapping[str, str]) -> str:
     match segment:
+        case NfInputReference() | NfBasenameReference() if segment.name in entries:
+            return entries[segment.name]
         case NfInputReference():
             return f"{segment.name}.toString()"
         case NfBasenameReference():
@@ -172,8 +175,8 @@ def _segment_expression(segment: Any) -> str:
             return groovy_literal(segment.value)
 
 
-def _template_expression(template: Any) -> str:
-    return " + ".join(_segment_expression(segment) for segment in template.segments)
+def _template_expression(template: Any, entries: Mapping[str, str]) -> str:
+    return " + ".join(_segment_expression(segment, entries) for segment in template.segments)
 
 
 def _shell_quote(value: str) -> str:
@@ -181,9 +184,9 @@ def _shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
-def _render_template(template: Any) -> str:
+def _render_template(template: Any, entries: Mapping[str, str]) -> str:
     """Render one typed token through the generated shell-quoting function."""
-    return f"${{{NF_SHELL_QUOTE_HELPER}({_template_expression(template)})}}"
+    return f"${{{NF_SHELL_QUOTE_HELPER}({_template_expression(template, entries)})}}"
 
 
 def _render_array_binding(token: NfArrayBinding) -> str:
@@ -207,7 +210,7 @@ def _render_shell_literal(token: NfShellLiteral) -> str:
     return _groovy_gstring_fragment(token.text)
 
 
-def _render_command_token(token: Any) -> str:
+def _render_command_token(token: Any, entries: Mapping[str, str]) -> str:
     """Render one argv token; flags and array bindings collapse away when falsy/empty."""
     if isinstance(token, NfFlag):
         quoted = f"{NF_SHELL_QUOTE_HELPER}({groovy_literal(token.prefix)})"
@@ -216,15 +219,17 @@ def _render_command_token(token: Any) -> str:
         return _render_array_binding(token)
     if isinstance(token, NfShellLiteral):
         return _render_shell_literal(token)
-    return _render_template(token)
+    return _render_template(token, entries)
 
 
-def _render_glob(template: Any) -> str:
+def _render_glob(template: Any, entries: Mapping[str, str]) -> str:
     if all(isinstance(segment, NfLiteral) for segment in template.segments):
         return groovy_literal("".join(segment.value for segment in template.segments))
     rendered: list[str] = []
     for segment in template.segments:
         match segment:
+            case NfInputReference() | NfBasenameReference() if segment.name in entries:
+                rendered.append(f"${{{entries[segment.name]}}}")
             case NfInputReference():
                 rendered.append(f"${{{segment.name}}}")
             case NfBasenameReference():
@@ -254,7 +259,7 @@ def _capture_literal(port: NfPort) -> str:
     return groovy_literal(segment.value)
 
 
-def _process_output(port: NfPort, *, tuple_element: bool = False) -> str:
+def _process_output(port: NfPort, entries: Mapping[str, str], *, tuple_element: bool = False) -> str:
     # NfProcess guarantees every output has a typed glob, and the val
     # qualifier only for a text capture.
     assert port.glob is not None
@@ -276,8 +281,22 @@ def _process_output(port: NfPort, *, tuple_element: bool = False) -> str:
         # index alongside every output, one tuple line per output port
         # (design §6, Topology), so the "path ..." spelling used inside a
         # standalone output line becomes a parenthesized tuple element here.
-        return f"path({_render_glob(glob)}{literal}{arity})"
-    return f"path {_render_glob(glob)}{literal}{arity}, emit: {emit}"
+        return f"path({_render_glob(glob, entries)}{literal}{arity})"
+    return f"path {_render_glob(glob, entries)}{literal}{arity}, emit: {emit}"
+
+
+def _entry_directory(port: NfPort) -> str:
+    """The hidden directory Nextflow stages an entry's input in; the input keeps its own name there."""
+    return f"{NF_ENTRY_STAGING_PREFIX}{port.name}"
+
+
+def _entry_names(process: NfProcess) -> dict[str, str]:
+    """The Groovy expression of each entry's name, by port: its literal, or the input's own basename."""
+    return {
+        port.name: groovy_literal(port.entry.name) if port.entry.name is not None
+        else f"({port.name}.toString() - {groovy_literal(_entry_directory(port) + '/')})"
+        for port in process.inputs if port.entry is not None
+    }
 
 
 def _path_input(port: NfPort, stage_as: str | None) -> str:
@@ -294,12 +313,13 @@ def _path_input(port: NfPort, stage_as: str | None) -> str:
 
 
 def _process_input(port: NfPort, *, tuple_element: bool = False) -> str:
+    stage_as = None if port.entry is None else f"{_entry_directory(port)}/*"
     if tuple_element:
-        if port.stage_as is not None:
-            return f"{port.qualifier}({port.name}, stageAs: {groovy_literal(port.stage_as)})"
+        if stage_as is not None:
+            return f"{port.qualifier}({port.name}, stageAs: {groovy_literal(stage_as)})"
         return f"{port.qualifier}({port.name})"
     if port.qualifier == "path":
-        return _path_input(port, port.stage_as)
+        return _path_input(port, stage_as)
     return f"{port.qualifier} {port.name}"
 
 
@@ -315,6 +335,7 @@ def _unscattered_input(port: NfPort) -> str:
 
 
 def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...] = ()) -> str:
+    entries = _entry_names(process)
     lines = [f"process {process.name} {{"]
     if process.container is not None:
         lines.append(f"    container {groovy_literal(process.container)}")
@@ -345,22 +366,30 @@ def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...] = ())
                 emit = port.emit or port.name
                 lines.append(
                     f"    tuple val({NF_SCATTER_INDEX_NAME}), "
-                    f"{_process_output(port, tuple_element=True)}, emit: {emit}"
+                    f"{_process_output(port, entries, tuple_element=True)}, emit: {emit}"
                 )
         else:
-            lines.extend(f"    {_process_output(port)}" for port in process.outputs)
+            lines.extend(f"    {_process_output(port, entries)}" for port in process.outputs)
 
-    command = " ".join(_render_command_token(token) for token in process.command.tokens)
+    command = " ".join(_render_command_token(token, entries) for token in process.command.tokens)
     streams = (
         ("<", process.command.stdin),
         (">", process.command.stdout),
         ("2>", process.command.stderr),
     )
     redirects = "".join(
-        f" {operator} {_render_template(stream)}" for operator, stream in streams if stream is not None
+        f" {operator} {_render_template(stream, entries)}" for operator, stream in streams if stream is not None
     )
     lines.extend(["", "    script:", '    \"\"\"'])
-    lines.extend(f"    export {variable.name}={_render_template(variable.value)}" for variable in process.command.env)
+    # The task makes each entry before the command runs: a copy the command may change, or a symlink.
+    lines.extend(
+        f"    {'cp -RL' if port.entry.copy else 'ln -s'} -- ${{{NF_SHELL_QUOTE_HELPER}({port.name}.toString())}} "
+        f"${{{NF_SHELL_QUOTE_HELPER}({entries[port.name]})}}"
+        for port in process.inputs if port.entry is not None
+    )
+    lines.extend(
+        f"    export {variable.name}={_render_template(variable.value, entries)}" for variable in process.command.env
+    )
     if redirects and any(isinstance(token, NfShellLiteral) for token in process.command.tokens):
         # CWL redirects the whole command, not just the last one a shell literal starts;
         # on separate lines, a trailing `&` or `#` in the literal cannot swallow the `)`.

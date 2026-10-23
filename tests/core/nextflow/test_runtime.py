@@ -953,7 +953,7 @@ def test_basename_derived_output_name_executes(tmp_path: Path) -> None:
 @pytest.mark.nextflow
 @pytest.mark.serial
 def test_iwdr_own_basename_listing_executes_unchanged(tmp_path: Path) -> None:
-    """R2.10: the bare $(inputs.<name>) IWDR shorthand is a no-op and still executes."""
+    """R2.10: the bare $(inputs.<name>) IWDR shorthand makes the entry, which the command reads."""
     write_tool = (
         CommandLineTool(
             "write_source",
@@ -1028,6 +1028,92 @@ def test_iwdr_stage_as_rename_executes_and_reaches_the_command(tmp_path: Path) -
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "work").rglob("out.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == ["iwdr staged content\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_a_writable_output_directory_entry_is_a_copy_the_tool_writes_into(tmp_path: Path) -> None:
+    """The image-workflows plugin shape: `--outDir $(inputs.outDir)`, writable, captured by its own basename.
+
+    design §6, Inputs and channels: the copy is independent of the staged input, and a reference to the
+    input names the entry.
+    """
+    out_dir = tmp_path / "plugin_out"
+    out_dir.mkdir()
+    (out_dir / "keep.txt").write_text("kept\n", encoding="utf-8")
+    plugin_tool = CommandLineTool(
+        "plugin",
+        Inputs(outDir=Input(cwl.directory, flag="--outDir", position=1)),
+        Outputs(outDir=Output(cwl.directory, glob="$(inputs.outDir.basename)")),
+    )
+    plugin_tool = (
+        plugin_tool
+        .base_command("sh", "-c", "printf written > \"$2/result.txt\"", "plugin")
+        .stage(plugin_tool.inputs.outDir, writable=True)
+    )
+    run = Step(plugin_tool, step_name="plugin")
+    run.inputs.outDir = out_dir
+    workflow = Workflow([run], "nextflow_plugin")
+    workflow.outputs.outDir = run.outputs.outDir
+    workflow.to_nextflow(tmp_path / "run")
+    result = execute_nextflow(tmp_path / "run")
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    [written] = list((tmp_path / "run" / "work").rglob("result.txt"))
+    assert written.parent.name == "plugin_out" and not written.parent.is_symlink()
+    assert written.read_text(encoding="utf-8") == "written"
+    assert (written.parent / "keep.txt").read_text(encoding="utf-8") == "kept\n"
+    assert sorted(path.name for path in out_dir.iterdir()) == ["keep.txt"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_a_pattern_glob_matches_an_entry_as_a_cwl_glob_does(tmp_path: Path) -> None:
+    """F69 and F84: a pattern glob, or a glob of the input's own basename, captures the entry the task made."""
+    write_tool = (
+        CommandLineTool(
+            "write_source",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="lines.txt")),
+        )
+        .base_command("echo")
+        .stdout("lines.txt")
+    )
+    write = Step(write_tool, step_name="write")
+    write.inputs.message = "entry content"
+    own_tool = (
+        CommandLineTool(
+            "own",
+            Inputs(source=Input(cwl.file)),
+            Outputs(
+                wild=Output(cwl.file, glob="lines*"),
+                same=Output(cwl.file, glob="$(inputs.source.basename)"),
+            ),
+        )
+        .base_command("true")
+        .initial_workdir(["$(inputs.source)"])
+    )
+    own = Step(own_tool, step_name="own")
+    own.inputs.source = write.outputs.result
+    renamed_tool = CommandLineTool(
+        "renamed", Inputs(source=Input(cwl.file)), Outputs(wild=Output(cwl.file, glob="renamed*"))
+    )
+    renamed_tool = renamed_tool.base_command("true").stage(renamed_tool.inputs.source, entryname="renamed.txt")
+    renamed = Step(renamed_tool, step_name="renamed")
+    renamed.inputs.source = write.outputs.result
+    workflow = Workflow([write, own, renamed], "nextflow_entry_globs")
+    workflow.outputs.wild = own.outputs.wild
+    workflow.outputs.same = own.outputs.same
+    workflow.outputs.renamed = renamed.outputs.wild
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    # Nextflow stages each entry's input as a symlink in the hidden directory; the task links the entry beside it.
+    entries = [
+        path for path in (tmp_path / "work").rglob("*")
+        if path.is_symlink() and not path.parent.name.startswith(".sophios_entry_")
+    ]
+    assert sorted(path.name for path in entries) == ["lines.txt", "renamed.txt"]
+    assert {path.read_text(encoding="utf-8") for path in entries} == {"entry content\n"}
 
 
 @pytest.mark.nextflow
