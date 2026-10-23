@@ -12,7 +12,8 @@ import pytest
 
 import sophios.input_output as io
 import sophios.plugins
-from sophios.nf_types import ExecutableNextflowWorkflow, NfWorkflowOutputConnection
+from sophios.nf_reader import read_nextflow
+from sophios.nf_types import NfWorkflowOutputConnection
 from sophios.python_cwl_adapter import import_python_file
 
 from ..test_python_api_workflow import _step_registry_injected
@@ -57,9 +58,7 @@ def test_a_corpus_workflow_runs_under_nextflow(workflow: str, tmp_path: Path, mo
     """The run succeeds, every file a workflow output emits exists, and every directory it emits holds something."""
     pipeline = tmp_path / "pipeline"
     _compile(CHECKOUTS / workflow, pipeline, monkeypatch)
-    executable = ExecutableNextflowWorkflow.from_json(
-        (pipeline / "nextflow_workflow.json").read_text(encoding="utf-8")
-    )
+    executable = read_nextflow(pipeline)
     # The output directories a tool writes into must exist when the pipeline starts (docs/nextflow.md).
     for name, declared in executable.param_types.items():
         value = executable.params[name]

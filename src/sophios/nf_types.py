@@ -7,7 +7,7 @@ import json
 import math
 import re
 from types import MappingProxyType
-from typing import Any, ClassVar, Generic, Self, TypeVar, cast, get_args
+from typing import Any, ClassVar, Generic, TypeVar, get_args
 
 from .nf_expr import NF_FINITE_HELPER, NF_ROUND_HELPER, Expr, canonical, references, validate
 from .nf_symbols import NEXTFLOW_SCRIPT_DECLARED_NAMES, validate_nextflow_identifier
@@ -131,33 +131,6 @@ def _validate_string_mapping(value: Mapping[str, str], *, field_name: str) -> No
                 raise ValueError(f"{field_name} keys must be non-empty strings")
 
 
-def _mapping(value: Any, *, type_name: str) -> Mapping[str, Any]:
-    match value:
-        case Mapping() as item:
-            return item
-        case _:
-            raise TypeError(f"{type_name} hydration requires a mapping")
-
-
-def _fields(
-    value: Any,
-    *,
-    type_name: str,
-    required: set[str],
-    optional: frozenset[str] | set[str] = frozenset(),
-) -> Mapping[str, Any]:
-    """The mapping `value`, holding every `required` field and no field but those and the `optional` ones.
-
-    An optional field is one serialization omits when it holds no value.
-    """
-    item = _mapping(value, type_name=type_name)
-    if missing := required - set(item):
-        raise ValueError(f"{type_name} is missing required fields: {', '.join(sorted(missing))}")
-    if unknown := set(item) - required - optional:
-        raise ValueError(f"{type_name} has unknown fields: {', '.join(sorted(unknown))}")
-    return item
-
-
 @dataclass(frozen=True, slots=True)
 class NfLiteral:
     """Literal data inside a command or path template."""
@@ -223,22 +196,6 @@ class NfBasenameReference:
 NfTemplateSegment = NfLiteral | NfInputReference | NfBasenameReference
 
 
-def _segment_from_dict(value: Mapping[str, Any]) -> NfTemplateSegment:
-    item = _mapping(value, type_name="NfTemplateSegment")
-    match item.get("kind"):
-        case "literal":
-            _fields(item, type_name="NfLiteral", required={"kind", "value"})
-            return NfLiteral(item["value"])
-        case "input":
-            _fields(item, type_name="NfInputReference", required={"kind", "name"})
-            return NfInputReference(item["name"])
-        case "basename":
-            _fields(item, type_name="NfBasenameReference", required={"kind", "name"})
-            return NfBasenameReference(item["name"])
-        case kind:
-            raise ValueError(f"unsupported template segment kind {kind!r}")
-
-
 @dataclass(frozen=True, slots=True)
 class NfTemplate:
     """Canonical immutable sequence of literal and input-reference segments."""
@@ -266,26 +223,6 @@ class NfTemplate:
             dict[str, Any]: The canonical segment list under ``"segments"``.
         """
         return {"segments": [segment.to_dict() for segment in self.segments]}
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> Self:
-        """Hydrate and validate a template from a mapping.
-
-        Args:
-            value (Mapping[str, Any]): Serialized template produced by
-                :meth:`to_dict`.
-
-        Raises:
-            TypeError: If the value or its segment list has the wrong shape.
-            ValueError: If a segment kind is unsupported or a field is invalid.
-
-        Returns:
-            Self: The validated template.
-        """
-        item = _fields(value, type_name=cls.__name__, required={"segments"})
-        if not isinstance(item["segments"], list):
-            raise TypeError("NfTemplate segments must be a list")
-        return cls(tuple(_segment_from_dict(segment) for segment in item["segments"]))
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,25 +345,6 @@ class NfShellLiteral:
 NfCommandToken = NfTemplate | NfFlag | NfArrayBinding | NfOptionalBinding | NfShellLiteral
 
 
-def _command_token_from_dict(value: Mapping[str, Any]) -> NfCommandToken:
-    item = _mapping(value, type_name="NfCommandToken")
-    match item.get("kind"):
-        case "flag":
-            _fields(item, type_name="NfFlag", required={"kind", "name", "prefix"})
-            return NfFlag(item["name"], item["prefix"])
-        case "array":
-            _fields(item, type_name="NfArrayBinding", required={"kind", "name", "prefix"})
-            return NfArrayBinding(item["name"], item["prefix"])
-        case "optional_binding":
-            _fields(item, type_name="NfOptionalBinding", required={"kind", "name", "prefix", "separate"})
-            return NfOptionalBinding(item["name"], item["prefix"], item["separate"])
-        case "shell_literal":
-            _fields(item, type_name="NfShellLiteral", required={"kind", "text"})
-            return NfShellLiteral(item["text"])
-        case _:
-            return NfTemplate.from_dict(item)
-
-
 _SHELL_VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
@@ -457,24 +375,6 @@ class NfEnvVar:
             dict[str, Any]: The variable's name and value template.
         """
         return {"name": self.name, "value": self.value.to_dict()}
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> Self:
-        """Hydrate and validate an environment variable from a mapping.
-
-        Args:
-            value (Mapping[str, Any]): Serialized variable produced by
-                :meth:`to_dict`.
-
-        Raises:
-            TypeError: If the value is not a mapping.
-            ValueError: If fields are missing, unknown or invalid.
-
-        Returns:
-            Self: The validated variable.
-        """
-        item = _fields(value, type_name=cls.__name__, required={"name", "value"})
-        return cls(item["name"], NfTemplate.from_dict(item["value"]))
 
 
 @dataclass(frozen=True, slots=True)
@@ -536,34 +436,6 @@ class NfCommand:
             "env": [variable.to_dict() for variable in self.env],
         }
 
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> Self:
-        """Hydrate and validate a command from a mapping.
-
-        Args:
-            value (Mapping[str, Any]): Serialized command produced by
-                :meth:`to_dict`.
-
-        Raises:
-            TypeError: If the value or its token list has the wrong shape.
-            ValueError: If required fields are missing or tokens are invalid.
-
-        Returns:
-            Self: The validated command.
-        """
-        item = _fields(value, type_name=cls.__name__, required={"tokens", "stdin", "stdout", "stderr", "env"})
-        if not isinstance(item["tokens"], list) or not isinstance(item["env"], list):
-            raise TypeError("NfCommand tokens and env must be lists")
-
-        def hydrate(raw: Any) -> NfTemplate | None:
-            return None if raw is None else NfTemplate.from_dict(raw)
-
-        return cls(
-            tuple(_command_token_from_dict(token) for token in item["tokens"]),
-            hydrate(item["stdin"]), hydrate(item["stdout"]), hydrate(item["stderr"]),
-            tuple(NfEnvVar.from_dict(variable) for variable in item["env"]),
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class NfResources:
@@ -615,26 +487,6 @@ class NfResources:
             "cuda_version_min": self.cuda_version_min,
             "cuda_compute_capability": list(capability) if isinstance(capability, tuple) else capability,
         }
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> Self:
-        """Hydrate and validate resources from a mapping.
-
-        Args:
-            value (Mapping[str, Any]): Serialized resources produced by
-                :meth:`to_dict`.
-
-        Raises:
-            TypeError: If the value is not a mapping.
-            ValueError: If required fields are missing or values are invalid.
-
-        Returns:
-            Self: The validated resources.
-        """
-        item = _fields(value, type_name=cls.__name__, required={
-            "cpus", "memory_mb", "accelerator", "cuda_version_min", "cuda_compute_capability"})
-        return cls(item["cpus"], item["memory_mb"], item["accelerator"], item["cuda_version_min"],
-                   item["cuda_compute_capability"])
 
 
 GLOB_WILDCARDS = frozenset("*?[")
@@ -706,23 +558,6 @@ class NfEntry:
             dict[str, Any]: The entry's literal name, or None, and whether it is a copy.
         """
         return {"name": self.name, "copy": self.copy}
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> Self:
-        """Hydrate and validate an entry from a mapping.
-
-        Args:
-            value (Mapping[str, Any]): Serialized entry produced by :meth:`to_dict`.
-
-        Raises:
-            TypeError: If the value is not a mapping.
-            ValueError: If fields are missing, unknown or invalid.
-
-        Returns:
-            Self: The validated entry.
-        """
-        item = _fields(value, type_name=cls.__name__, required={"name", "copy"})
-        return cls(item["name"], item["copy"])
 
 
 @dataclass(frozen=True, slots=True)
@@ -849,39 +684,6 @@ class NfPort:
             "capture": self.capture,
             "optional": self.optional,
         }
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> Self:
-        """Hydrate and validate a port from a mapping.
-
-        Args:
-            value (Mapping[str, Any]): Serialized port produced by
-                :meth:`to_dict`.
-
-        Raises:
-            TypeError: If the value is not a mapping.
-            ValueError: If required fields are missing or values are invalid.
-
-        Returns:
-            Self: The validated port.
-        """
-        item = _fields(
-            value,
-            type_name=cls.__name__,
-            required={"name", "qualifier", "emit", "glob", "path_kind", "is_array", "entry", "capture", "optional"},
-        )
-        glob = None if item["glob"] is None else NfTemplate.from_dict(item["glob"])
-        return cls(
-            name=item["name"],
-            qualifier=item["qualifier"],
-            emit=item["emit"],
-            glob=glob,
-            path_kind=item["path_kind"],
-            is_array=item["is_array"],
-            entry=None if item["entry"] is None else NfEntry.from_dict(item["entry"]),
-            capture=item["capture"],
-            optional=item["optional"],
-        )
 
 
 # The tree roots that compute a boolean: logic, comparison, negation, a boolean literal or input.
@@ -1052,41 +854,6 @@ class NfProcess:
             item["condition"] = self.condition.to_dict()
         return item
 
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> Self:
-        """Hydrate and validate a process from a mapping.
-
-        Args:
-            value (Mapping[str, Any]): Serialized process produced by
-                :meth:`to_dict`.
-
-        Raises:
-            TypeError: If the value or its port lists have the wrong shape.
-            ValueError: If required fields are missing or values are invalid.
-
-        Returns:
-            Self: The validated process.
-        """
-        item = _fields(
-            value,
-            type_name=cls.__name__,
-            required={"name", "inputs", "outputs", "command", "container", "resources"},
-            optional={"condition"},
-        )
-        match item["inputs"], item["outputs"]:
-            case list() as inputs, list() as outputs:
-                return cls(
-                    name=item["name"],
-                    inputs=tuple(NfPort.from_dict(port) for port in inputs),
-                    outputs=tuple(NfPort.from_dict(port) for port in outputs),
-                    command=NfCommand.from_dict(item["command"]),
-                    container=item["container"],
-                    resources=NfResources.from_dict(item["resources"]),
-                    condition=Expr.from_dict(item["condition"]) if "condition" in item else None,
-                )
-            case _:
-                raise TypeError("NfProcess inputs and outputs must be lists")
-
 
 # Adapters that combine two or more scattered whole arrays into invocations
 # (design §6, Topology, Multi-input scatter); each value names its method.
@@ -1238,6 +1005,11 @@ LINK_MERGES = frozenset({"merge_nested", "merge_flattened"})
 PICK_VALUES = frozenset({"first_non_null", "the_only_non_null", "all_non_null"})
 
 
+#: A connection that carries one source's values, a workflow input's or a process output's, into a process input:
+#: the connection a scatter adapter sits on, and each source of a step input.
+NfSourceConnection = NfWorkflowInputConnection | NfProcessConnection
+
+
 @dataclass(frozen=True, slots=True)
 class NfStepInputConnection:
     """Connect one step input's bound values to one process input through the step-input idioms.
@@ -1249,7 +1021,7 @@ class NfStepInputConnection:
     idioms combine values, never queue channels.
     """
 
-    sources: Sequence[NfWorkflowInputConnection | NfProcessConnection]
+    sources: Sequence[NfSourceConnection]
     link_merge: str
     pick_value: str | None = None
 
@@ -1359,48 +1131,6 @@ def topological_order(
     return ordered
 
 
-def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
-    item = _mapping(value, type_name="NfConnection")
-    match item.get("kind"):
-        case "workflow_input":
-            _fields(
-                item,
-                type_name="NfWorkflowInputConnection",
-                required={"kind", "from_port", "to_process", "to_port", "adapter"},
-            )
-            return NfWorkflowInputConnection(item["from_port"], item["to_process"], item["to_port"], item["adapter"])
-        case "process":
-            _fields(
-                item,
-                type_name="NfProcessConnection",
-                required={"kind", "from_process", "from_port", "to_process", "to_port"},
-                optional={"adapter"},
-            )
-            return NfProcessConnection(
-                item["from_process"], item["from_port"], item["to_process"], item["to_port"], item.get("adapter")
-            )
-        case "workflow_output":
-            _fields(
-                item,
-                type_name="NfWorkflowOutputConnection",
-                required={"kind", "from_process", "from_port", "to_port"},
-            )
-            return NfWorkflowOutputConnection(item["from_process"], item["from_port"], item["to_port"])
-        case "step_input":
-            _fields(
-                item, type_name="NfStepInputConnection", required={"kind", "sources", "link_merge", "pick_value"}
-            )
-            if not isinstance(item["sources"], list):
-                raise TypeError("NfStepInputConnection sources must be a list")
-            return NfStepInputConnection(
-                tuple(cast(Any, _connection_from_dict(source)) for source in item["sources"]),
-                item["link_merge"],
-                item["pick_value"],
-            )
-        case kind:
-            raise ValueError(f"NfConnection has unsupported kind {kind!r}")
-
-
 @dataclass(frozen=True, slots=True)
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow.
@@ -1409,7 +1139,7 @@ class ExecutableNextflowWorkflow:
     one of ``PARAM_TYPES``.
     """
 
-    # Hydration reads this version only; any change to the payload bumps it (design §5.3).
+    # Written into nextflow_workflow.json, which nothing reads back; any change to the payload bumps it (design §5.3).
     SCHEMA_VERSION: ClassVar[int] = 20
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
@@ -1755,78 +1485,3 @@ class ExecutableNextflowWorkflow:
             str: Indented JSON with sorted keys; byte-stable across calls.
         """
         return json.dumps(self.to_dict(), indent=2, sort_keys=True, allow_nan=False)
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> Self:
-        """Hydrate and strictly validate a versioned executable workflow.
-
-        Args:
-            value (Mapping[str, Any]): Serialized workflow produced by
-                :meth:`to_dict`.
-
-        Raises:
-            TypeError: If the value or its collections have the wrong shape.
-            ValueError: If the schema version, representation kind, fields,
-                or graph invariants are invalid.
-
-        Returns:
-            Self: The validated executable workflow.
-        """
-        item = _fields(
-            value,
-            type_name=cls.__name__,
-            required={
-                "schema_version",
-                "representation_kind",
-                "name",
-                "processes",
-                "connections",
-                "params",
-                "param_types",
-            },
-        )
-        if item["schema_version"] != cls.SCHEMA_VERSION:
-            raise ValueError(
-                f"executable Nextflow schema version {item['schema_version']!r} is not the current version "
-                f"{cls.SCHEMA_VERSION}; regenerate the artifacts"
-            )
-        if item["representation_kind"] != cls.REPRESENTATION_KIND:
-            raise ValueError(
-                f"unsupported Nextflow representation kind {item['representation_kind']!r}"
-            )
-        match item["processes"], item["connections"]:
-            case list() as processes, list() as connections:
-                return cls(
-                    name=item["name"],
-                    processes=tuple(NfProcess.from_dict(process) for process in processes),
-                    connections=tuple(_connection_from_dict(connection) for connection in connections),
-                    params=_mapping(item["params"], type_name="workflow params"),
-                    param_types=_mapping(item["param_types"], type_name="workflow param_types"),
-                )
-            case _:
-                raise TypeError(
-                    "ExecutableNextflowWorkflow processes and connections must be lists"
-                )
-
-    @classmethod
-    def from_json(cls, value: str) -> Self:
-        """Hydrate and validate an executable workflow from JSON text.
-
-        Args:
-            value (str): JSON text produced by :meth:`to_json`.
-
-        Raises:
-            TypeError: If the value is not a string.
-            ValueError: If the text is not valid JSON or fails
-                :meth:`from_dict` validation.
-
-        Returns:
-            Self: The validated executable workflow.
-        """
-        if not isinstance(value, str):
-            raise TypeError("ExecutableNextflowWorkflow JSON input must be a string")
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError as exc:
-            raise ValueError("invalid ExecutableNextflowWorkflow JSON") from exc
-        return cls.from_dict(parsed)

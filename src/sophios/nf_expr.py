@@ -63,22 +63,13 @@ class Expr:
     value: Any = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize without a ``kind`` key, so schema gates never mistake a node for a token."""
+        """Serialize the node and its arguments, with a literal's or reference's value."""
         item: dict[str, Any] = {"op": self.op}
         if self.args:
             item["args"] = [arg.to_dict() for arg in self.args]
         if self.op in {"number", "string", "boolean", "ref"}:
             item["value"] = self.value
         return item
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> "Expr":
-        """Hydrate one node; the tree is re-typed by its owning token."""
-        return cls(
-            str(value["op"]),
-            tuple(cls.from_dict(arg) for arg in value.get("args", ())),
-            value.get("value"),
-        )
 
 
 def is_safe_subset_text(value: Any) -> bool:
@@ -304,11 +295,12 @@ def _require(expected: str, actual: str, construct: str) -> str:
 
 
 def validate(node: Expr) -> None:
-    """Reject a hydrated tree the closed grammar would not have built.
+    """Reject a tree the closed grammar would not have built.
 
-    ``from_dict`` rebuilds nodes without parsing, and the renderer writes a
-    call's ``op`` into the script. Hydration therefore re-checks each operator
-    against the closed set, each arity, and each literal.
+    A tree can be built without parsing, as the reader builds one from its
+    Groovy, and the renderer writes a call's ``op`` into the script, so a
+    process re-checks each operator against the closed set, each arity, and
+    each literal.
     """
     match node.op:
         case "number":
@@ -405,6 +397,136 @@ _GROOVY_LITERAL_TABLE = {ord("\\"): "\\\\", ord("'"): "\\'", **CONTROL_ESCAPES}
 def groovy_literal(value: str) -> str:
     """``value`` as a single-quoted Groovy string: the one escaper for that literal."""
     return f"'{value.translate(_GROOVY_LITERAL_TABLE)}'"
+
+
+_ESCAPE = re.compile(r"\\(u[0-9a-fA-F]{4}|.)", re.DOTALL)
+
+
+def groovy_unescape(text: str) -> str:
+    """The value Groovy reads from ``text``, the inside of a string, whose escapes are a backslash and a
+    character, or ``\\u`` and four hex digits."""
+    return _ESCAPE.sub(lambda found: chr(int(found[1][1:], 16)) if len(found[1]) == 5 else found[1], text)
+
+
+#: A single-quoted Groovy string and a Groovy identifier: the text of the idiom table's holes, and what the readers
+#: of the generated text match.
+GROOVY_LITERAL = re.compile(r"'(?:[^'\\]|\\.)*'")
+GROOVY_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_GROOVY_CAST = re.compile(rf"\(\(({GROOVY_IDENTIFIER.pattern})\) as double\)")
+_COMPARISONS = (" || ", " && ", " <= ", " >= ", " < ", " > ", " == ", " != ")
+
+
+def read_groovy(text: str, variables: Mapping[str, str]) -> Expr:
+    """The tree :func:`render_groovy` writes as ``text``: its inverse, on canonical trees (design §4.2).
+
+    ``variables`` maps each Groovy variable the text reads to the input it
+    holds. Text that is not such a rendering raises ValueError.
+    """
+    at = 0
+
+    def take(prefix: str) -> bool:
+        nonlocal at
+        if text.startswith(prefix, at):
+            at += len(prefix)
+            return True
+        return False
+
+    def expect(prefix: str) -> None:
+        if not take(prefix):
+            raise ValueError(f"expected {prefix!r} at {text[at:at + 40]!r}")
+
+    def literal() -> str:
+        nonlocal at
+        if (found := GROOVY_LITERAL.match(text, at)) is None:
+            raise ValueError(f"expected a string at {text[at:at + 40]!r}")
+        at = found.end()
+        return groovy_unescape(found.group()[1:-1])
+
+    def reference() -> Expr:
+        nonlocal at
+        if (found := GROOVY_IDENTIFIER.match(text, at)) is None or found.group() not in variables:
+            raise ValueError(f"expected an input at {text[at:at + 40]!r}")
+        at = found.end()
+        return Expr("ref", value=variables[found.group()])
+
+    def operand() -> Expr:
+        nonlocal at
+        if take("Double.valueOf("):
+            number = literal()
+            expect(")")
+            return Expr("number", value=number)
+        if text.startswith("'", at):
+            return Expr("string", value=literal())
+        for word, constant in (("true", Expr("boolean", value=True)), ("false", Expr("boolean", value=False)),
+                               ("null", Expr("null"))):
+            if take(word):
+                return constant
+        if take(f"{NF_FINITE_HELPER}("):
+            # The check's where, part and inputs are the node's to render; they are not read.
+            node = numeric()
+            expect(", ")
+            literal()
+            expect(", ")
+            literal()
+            expect(", [")
+            at = text.index("]", at) + 1
+            expect(")")
+            return node
+        if (cast := _GROOVY_CAST.match(text, at)) is not None:
+            at = cast.end()
+            return read_groovy(cast[1], variables)
+        if take("(!"):
+            node = operand()
+            expect(")")
+            return Expr("u!", (node,))
+        if take("("):
+            left = operand()
+            if take(" == null || "):
+                operand()
+                expect(" == [])")
+                return Expr("==", (left, Expr("null")))
+            return binary(left, _COMPARISONS)
+        return reference()
+
+    def binary(left: Expr, operators: tuple[str, ...]) -> Expr:
+        for operator in operators:
+            if take(operator):
+                right = operand()
+                expect(")")
+                return Expr(operator.strip(), (left, right))
+        raise ValueError(f"expected an operator at {text[at:at + 40]!r}")
+
+    def folded(call: str) -> list[Expr]:
+        expect(f"{call}(")
+        args = folded(call) if text.startswith(f"{call}(", at) else [operand()]
+        expect(", ")
+        args.append(operand())
+        expect(")")
+        return args
+
+    def numeric() -> Expr:
+        if take("(-"):
+            node = operand()
+            expect(")")
+            return Expr("u-", (node,))
+        for call in ("Math.min", "Math.max"):
+            if text.startswith(f"{call}(", at):
+                return Expr(call, tuple(folded(call)))
+        for spelling, call in ((f"{NF_ROUND_HELPER}(", "Math.round"), ("StrictMath.pow(", "Math.pow"),
+                               *((f"{name}(", name) for name in ("Math.abs", "Math.sqrt", "Math.floor", "Math.ceil"))):
+            if take(spelling):
+                args = [operand()]
+                while take(", "):
+                    args.append(operand())
+                expect(")")
+                return Expr(call, tuple(args))
+        expect("(")
+        return binary(operand(), (" + ", " - ", " * ", " / ", " % "))
+
+    tree = operand()
+    if at != len(text):
+        raise ValueError(f"unexpected text {text[at:at + 40]!r}")
+    return canonical(tree)
 
 
 def render_groovy(node: Expr, *, where: str, inputs: str, variables: Mapping[str, str] | None = None) -> str:

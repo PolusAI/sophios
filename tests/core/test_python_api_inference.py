@@ -11,7 +11,8 @@ from sophios import main as cli
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import (Inference, InvalidInferenceError, RunResult, RunState, SophiosError,
                                          SophiosErrorCode, Step, Workflow)
-from sophios.nf_types import ExecutableNextflowWorkflow, NfProcessConnection
+from sophios.nf_reader import read_nextflow
+from sophios.nf_types import NfProcessConnection
 from sophios.wic_types import Json, StepId, Tool
 
 from .synthetic_tools import clt
@@ -110,10 +111,9 @@ def test_the_nextflow_target_connects_an_input_as_the_cwl_target_does(inference:
     infers."""
     workflow = _workflow("data")
     [feed] = _feeds(workflow.compile(inference=inference).cwl_workflow)
-    json_path, *_ = workflow.to_nextflow(tmp_path, inference=inference)
+    workflow.to_nextflow(tmp_path, inference=inference)
 
-    for lowered in (workflow.compile(target="nextflow", inference=inference),
-                    ExecutableNextflowWorkflow.from_json(json_path.read_text(encoding="utf-8"))):
+    for lowered in (workflow.compile(target="nextflow", inference=inference), read_nextflow(tmp_path)):
         assert [f"{edge.from_process}/{edge.from_port}" for edge in lowered.connections
                 if isinstance(edge, NfProcessConnection)] == [feed["data"]]
 

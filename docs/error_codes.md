@@ -11,7 +11,7 @@ choice Sophios made and stops nothing.
 
 The kind says what to change:
 
-- `document`: the `.wic` file or the Python workflow;
+- `document`: the `.wic` file, the Python workflow, or an imported Nextflow pipeline;
 - `call`: the Python API call;
 - `machine`: this machine, what is installed, running, readable or writable;
 - `run`: nothing in Sophios, a tool failed while it ran.
@@ -66,6 +66,13 @@ explains when each kind of check runs and how a diagnostic is laid out.
 | `wic044` | document | A real-time analysis declaration (a `cwl_subinterpreter` step) with an input that is not a literal or has the wrong shape, or whose analysis does not compile. | Write each input of the step as a literal of the shape the message names, and fix the analysis it names (docs/realtime-analysis.md). |
 | `wic045` | document | A step id, workflow input or output, or workflow name with a character other than letters, digits, `_`, `.` and `-`, or starting with `.`. | Rename it with letters, digits, `_`, `.` and `-`: the name becomes part of file names and of the names Sophios makes with `~` and `@`. |
 | `wic046` | document | Note: under `--target nextflow`, a `cwltool:CUDARequirement` names a `cudaVersionMin` or `cudaComputeCapability`, which the generated pipeline does not check; it asks only for a number of GPUs. | Run the pipeline where the GPUs and the container image provide that CUDA version and compute capability, or remove the field. |
+| `wic047` | document | Importing Nextflow: a `def` in `workflow.nf` that is not a helper Sophios generates, byte for byte. | Restore the helper as Sophios wrote it, or remove the `def`: the import reads only what Sophios writes. |
+| `wic048` | document | Importing Nextflow: a statement, directive or channel operator Sophios does not write, such as an `include`, an `errorStrategy` directive or a `.view()` call. | Remove the construct the message names: the import reads only the pipelines Sophios writes (docs/nextflow.md). |
+| `wic049` | document | Importing Nextflow: a process input or output declaration Sophios does not write, such as `tuple val(id), path(reads)`. | Write the process as a Sophios tool and compile it to Nextflow; the import reads only what Sophios writes. |
+| `wic050` | document | Importing Nextflow: a process script or stub that is not the command or stub Sophios writes, such as a hand-written shell script. | Write the command as a Sophios tool and compile it to Nextflow; the import reads only what Sophios writes. |
+| `wic051` | document | Importing Nextflow: a `nextflow_params.json` that does not hold the values of the parameters the pipeline checks, as Sophios writes them. | Give each parameter the entry workflow checks one value, and no other key, in the form Sophios writes. |
+| `wic052` | document | Importing Nextflow: a `nextflow.config` other than the one Sophios writes for the pipeline. | Restore the line Sophios wrote: `docker.enabled` is true exactly when a process has a container. |
+| `wic053` | document | Importing Nextflow: text in the forms Sophios writes that is not what it writes for the workflow the text describes, such as a derived form that disagrees with the rest. | Restore the line the message names as Sophios wrote it, or regenerate the pipeline from its workflow. |
 | `api001` | call | A value bound to a step input that the input cannot take. | Bind a port object directly, or several with `StepInput(source=[...])`; a string never names a port. |
 | `api002` | call | A step the workflow cannot place: a repeated step name, a link to a step outside the workflow or later in it, a workflow input with no type, or two tools that share a file stem. | Do what the message names: pass `step_name=` to a reused tool, list the source step earlier, or add it to this workflow. |
 | `api003` | call | A link from this workflow's own output, or between ports whose types do not match. | Bind the input to an earlier step's output, or to a workflow input, of a matching type. |

@@ -1,10 +1,9 @@
-"""Executable IR invariants: identifiers, immutability, hydration, and graph rules."""
+"""Executable IR invariants: identifiers, immutability, serialization, and graph rules."""
 
 # pylint: disable=missing-function-docstring
 
 from collections.abc import Callable
 from dataclasses import replace
-import json
 from pathlib import Path
 import re
 from typing import Any, cast
@@ -12,7 +11,7 @@ from typing import Any, cast
 import pytest
 
 from sophios.input_output_nf import render_nextflow
-from sophios.nf_expr import parse
+from sophios.nf_expr import Expr, parse
 from sophios.nf_symbols import (
     NEXTFLOW_SCRIPT_DECLARED_NAMES, NEXTFLOW_SCRIPT_NAMES, is_nextflow_identifier, normalize_nextflow_identifier,
 )
@@ -43,70 +42,17 @@ from .testkit import command, output_port, ref, template
 
 
 @pytest.mark.fast
-def test_port_dict_roundtrip() -> None:
-    port = NfPort("reads", "path", path_kind="directory")
-    assert NfPort.from_dict(port.to_dict()) == port
-
-
-@pytest.mark.fast
-def test_process_dict_roundtrip() -> None:
-    process = NfProcess(
-        name="ALIGN",
-        inputs=[NfPort("reads", "path")],
-        outputs=[output_port("bam", "result.bam")],
-        command=command("align", "reads"),
-        container="aligner:1",
-        resources=NfResources(2, 1024),
-    )
-    assert NfProcess.from_dict(process.to_dict()) == process
-
-
-@pytest.mark.fast
-def test_workflow_dict_roundtrip() -> None:
-    workflow = ExecutableNextflowWorkflow(
-        name="wf",
-        processes=[NfProcess("ECHO", [], [output_port("out")], command("echo", "hi"))],
-        connections=[NfWorkflowOutputConnection("ECHO", "out", "result")],
-        params={"message": "hello"}, param_types={"message": "string"},
-    )
-    assert ExecutableNextflowWorkflow.from_dict(workflow.to_dict()) == workflow
-
-
-@pytest.mark.fast
-def test_json_roundtrip_is_deterministic() -> None:
-    workflow = ExecutableNextflowWorkflow("wf", [], [], {"b": 2, "a": 1}, {"b": "int", "a": "int"})
-    serialized = workflow.to_json()
-    assert serialized == workflow.to_json()
-    assert ExecutableNextflowWorkflow.from_json(serialized) == workflow
-
-
-@pytest.mark.fast
-def test_a_round_trip_renders_unread_parameters_identically() -> None:
+def test_unread_parameters_render_in_one_order() -> None:
     """Parameters no step reads are listed in one order, whatever order the model holds them in."""
-    workflow = ExecutableNextflowWorkflow("wf", [], [], {"b": 2, "a": 1}, {"b": "int", "a": "int"})
-    assert render_nextflow(ExecutableNextflowWorkflow.from_json(workflow.to_json())) == render_nextflow(workflow)
+    assert render_nextflow(ExecutableNextflowWorkflow("wf", [], [], {"b": 2, "a": 1}, {"b": "int", "a": "int"})) == \
+        render_nextflow(ExecutableNextflowWorkflow("wf", [], [], {"a": 1, "b": 2}, {"a": "int", "b": "int"}))
 
 
 @pytest.mark.fast
 def test_executable_schema_declares_version_and_kind() -> None:
-    workflow = ExecutableNextflowWorkflow("wf", [], [], {})
-    payload = workflow.to_dict()
-
-    current = ExecutableNextflowWorkflow.SCHEMA_VERSION
-    assert payload["schema_version"] == current
+    payload = ExecutableNextflowWorkflow("wf", [], [], {}).to_dict()
+    assert payload["schema_version"] == ExecutableNextflowWorkflow.SCHEMA_VERSION
     assert payload["representation_kind"] == "executable"
-
-    for version in (current - 1, current + 1):
-        payload["schema_version"] = version
-        with pytest.raises(ValueError, match=re.escape(
-            f"executable Nextflow schema version {version} is not the current version {current}"
-        )):
-            ExecutableNextflowWorkflow.from_dict(payload)
-
-    payload["schema_version"] = current
-    payload["representation_kind"] = "structural"
-    with pytest.raises(ValueError, match="representation kind"):
-        ExecutableNextflowWorkflow.from_dict(payload)
 
 
 @pytest.mark.fast
@@ -140,16 +86,6 @@ def test_executable_values_are_deeply_immutable_and_hashable() -> None:
         ExecutableNextflowWorkflow("wf", (), (), cast(Any, {1: "value"}))
     with pytest.raises(ValueError, match="JSON-compatible"):
         ExecutableNextflowWorkflow("wf", (), (), {"value": cast(Any, {1, 2})})
-
-
-@pytest.mark.fast
-def test_executable_ir_has_no_opaque_or_magic_directive_fields() -> None:
-    payload = ExecutableNextflowWorkflow(
-        "wf", [NfProcess("P", [], [], command("true"))], [], {}
-    ).to_dict()
-    payload["directives"] = {"_unparsed": "workflow.onComplete { ... }"}
-    with pytest.raises(ValueError, match="unknown fields"):
-        ExecutableNextflowWorkflow.from_dict(payload)
 
 
 @pytest.mark.fast
@@ -279,14 +215,8 @@ _ARRAY_ONLY = "array-marked inputs may only be referenced by array bindings"
         ),
         _ARRAY_ONLY,
     ),
-    # A flag lets list truthiness decide whether its prefix appears; checked on hydration too.
-    (
-        lambda: NfProcess.from_dict(
-            {**(payload := _proc(NfPort("v", "val"), NfFlag("v", "--verbose")).to_dict()),
-             "inputs": [{**payload["inputs"][0], "is_array": True}]}
-        ),
-        f"{_ARRAY_ONLY}: v",
-    ),
+    # A flag lets list truthiness decide whether its prefix appears.
+    (lambda: _proc(NfPort("v", "val", is_array=True), NfFlag("v", "--verbose")), f"{_ARRAY_ONLY}: v"),
 ])
 def test_a_process_reference_to_an_input_it_does_not_admit_is_rejected(
     build_process: Callable[[], NfProcess], message: str
@@ -305,7 +235,7 @@ def test_a_process_reference_to_an_input_it_does_not_admit_is_rejected(
      {"kind": "optional_binding", "name": "name", "prefix": "--name=", "separate": False}),
 ])
 def test_a_command_part_writes_its_payload_fields(part: Any, payload: dict[str, Any]) -> None:
-    """A round trip cannot see a field renamed on both sides, so each part's payload is pinned."""
+    """Each part's payload fields are pinned."""
     assert part.to_dict() == payload
 
 
@@ -439,12 +369,8 @@ def _env_process(*env: NfEnvVar, qualifier: str = "val") -> NfProcess:
 
 
 @pytest.mark.fast
-def test_an_env_var_is_literal_text_or_one_input_reference_and_survives_hydration() -> None:
-    process = _env_process(NfEnvVar("A", template("a $b")), NfEnvVar("_B2", template(ref("x"))))
-    payload = ExecutableNextflowWorkflow(
-        "wf", [process], [NfWorkflowInputConnection("x", "ENV", "x")], {"x": "v"}, {"x": "string"}
-    )
-    assert ExecutableNextflowWorkflow.from_dict(payload.to_dict()) == payload
+def test_an_env_var_is_literal_text_or_one_input_reference() -> None:
+    _env_process(NfEnvVar("A", template("a $b")), NfEnvVar("_B2", template(ref("x"))))
     for value in (template("a", ref("x")), NfTemplate((NfBasenameReference("x"),))):
         with pytest.raises(ValueError, match="literal text or one input reference"):
             NfEnvVar("A", value)
@@ -482,10 +408,9 @@ def _entry_workflow(
 
 @pytest.mark.fast
 @pytest.mark.parametrize("entry", [NfEntry(), NfEntry(copy=True), NfEntry("renamed.txt"), NfEntry("a*b?.txt", True)])
-def test_an_entry_port_survives_hydration(entry: NfEntry) -> None:
+def test_an_entry_port_writes_its_entry(entry: NfEntry) -> None:
     workflow = _entry_workflow(NfPort("source", "path", entry=entry))
     assert workflow.processes[0].inputs[0].to_dict()["entry"] == {"name": entry.name, "copy": entry.copy}
-    assert ExecutableNextflowWorkflow.from_dict(workflow.to_dict()) == workflow
 
 
 @pytest.mark.fast
@@ -518,8 +443,7 @@ def test_process_rejects_two_entries_with_one_literal_name() -> None:
 @pytest.mark.fast
 @pytest.mark.parametrize("segment", [NfInputReference("source"), NfBasenameReference("source")])
 def test_only_an_entry_under_its_own_basename_is_referenced(segment: NfInputReference | NfBasenameReference) -> None:
-    own = _entry_workflow(NfPort("source", "path", entry=NfEntry(copy=True)), tokens=("cat", NfTemplate((segment,))))
-    assert ExecutableNextflowWorkflow.from_dict(own.to_dict()) == own
+    _entry_workflow(NfPort("source", "path", entry=NfEntry(copy=True)), tokens=("cat", NfTemplate((segment,))))
     with pytest.raises(ValueError, match="references an input whose InitialWorkDirRequirement entry has a literal name"):
         _entry_workflow(NfPort("source", "path", entry=NfEntry("renamed.txt")), tokens=("cat", NfTemplate((segment,))))
 
@@ -907,7 +831,6 @@ def test_a_text_capture_output_is_the_one_val_qualified_output() -> None:
     process = _text_capture_process()
 
     assert process.outputs[0].qualifier == "val"
-    assert NfProcess.from_dict(process.to_dict()) == process
 
     glob = NfTemplate((NfLiteral("out.txt"),))
     with pytest.raises(ValueError, match="require path qualifier and typed glob"):
@@ -942,11 +865,9 @@ def test_a_captured_value_cannot_feed_a_process_input() -> None:
 
 @pytest.mark.fast
 def test_a_captured_value_reaches_a_workflow_output() -> None:
-    producer = _text_capture_process("PRODUCE")
-
-    workflow = ExecutableNextflowWorkflow(
+    ExecutableNextflowWorkflow(
         "wf",
-        [producer],
+        [_text_capture_process("PRODUCE")],
         [
             NfWorkflowInputConnection("message", "PRODUCE", "message"),
             NfWorkflowOutputConnection("PRODUCE", "text", "captured"),
@@ -954,40 +875,24 @@ def test_a_captured_value_reaches_a_workflow_output() -> None:
         {"message": "hi"}, {"message": "string"},
     )
 
-    assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow
 
-
-def _conditional_payload() -> dict[str, Any]:
-    process = NfProcess(
-        "TASK",
-        [NfPort("a", "val")],
-        [output_port("result", "out.txt")],
-        command("true"),
-        condition=parse("$(inputs.a > 1)"),
-    )
-    workflow = ExecutableNextflowWorkflow(
-        "WF", [process], [NfWorkflowInputConnection("a", "TASK", "a")], {"a": 2}, {"a": "int"}
-    )
-    assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow
-    return cast(dict[str, Any], json.loads(workflow.to_json()))
+def _conditional(condition: Any = None, *, is_array: Any = False) -> NfProcess:
+    return NfProcess("TASK", [NfPort("a", "val", is_array=is_array)], [output_port("result", "out.txt")],
+                     command("true"), condition=condition)
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(("field", "value"), [
-    ("condition", {}),
-    ("condition", False),
-    ("condition", {"op": "string", "value": "false"}),
-    ("condition", {"op": "bogus"}),
-    ("condition", {"op": ">", "args": [{"op": "ref", "value": "a"}]}),
-    ("is_array", "false"),
-    ("is_array", 0),
-], ids=["empty-condition", "false-condition", "string-condition", "unknown-op", "wrong-arity", "string-is-array", "zero-is-array"])
-def test_hydration_refuses_a_malformed_condition_or_port(field: str, value: Any) -> None:
-    payload = _conditional_payload()
-    target = payload["processes"][0] if field == "condition" else payload["processes"][0]["inputs"][0]
-    target[field] = value
-    with pytest.raises((ValueError, TypeError, KeyError)):
-        ExecutableNextflowWorkflow.from_json(json.dumps(payload))
+@pytest.mark.parametrize(("build", "message"), [
+    (lambda: _conditional(False), "condition must be a typed Expr"),
+    (lambda: _conditional(Expr("string", value="false")), "condition must compute a boolean"),
+    (lambda: _conditional(Expr("bogus")), "unsupported construct 'bogus'"),
+    (lambda: _conditional(Expr(">", (Expr("ref", value="a"),))), "> takes two operands"),
+    (lambda: _conditional(is_array="false"), "is_array must be a bool"),
+    (lambda: _conditional(is_array=0), "is_array must be a bool"),
+], ids=["false-condition", "string-condition", "unknown-op", "wrong-arity", "string-is-array", "zero-is-array"])
+def test_the_model_refuses_a_malformed_condition_or_port(build: Callable[[], NfProcess], message: str) -> None:
+    with pytest.raises((ValueError, TypeError), match=message):
+        build()
 
 
 @pytest.mark.fast
@@ -1021,14 +926,13 @@ def _optional_producer() -> NfProcess:
 
 
 @pytest.mark.fast
-def test_an_optional_output_round_trips() -> None:
-    workflow = ExecutableNextflowWorkflow(
+def test_an_optional_output_reaches_a_workflow_output() -> None:
+    ExecutableNextflowWorkflow(
         "WF",
         [_optional_producer()],
         [NfWorkflowInputConnection("x", "MAYBE", "x"), NfWorkflowOutputConnection("MAYBE", "o", "o")],
         {"x": 1}, {"x": "int"},
     )
-    assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow
 
 
 @pytest.mark.fast
@@ -1045,7 +949,6 @@ def test_an_optional_output_of_at_most_one_file_is_checked_at_its_workflow_outpu
     workflow = ExecutableNextflowWorkflow("WF", [process], [NfWorkflowOutputConnection("MAYBE", "o", "result")], {})
     rendered = render_nextflow(workflow)
     assert "arity: '0..*', emit: o" in rendered and "optional: true" not in rendered
-    assert ExecutableNextflowWorkflow.from_json(workflow.to_json()) == workflow
 
 
 @pytest.mark.fast

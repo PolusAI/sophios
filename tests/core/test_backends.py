@@ -310,6 +310,7 @@ def test_a_nextflow_run_reads_its_own_names_after_another_workflow_is_prepared_i
 @pytest.mark.fast
 def test_the_nextflow_check_asks_for_the_engine_only_when_a_process_has_a_container(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each process's image is read from the pipeline Nextflow runs, not from `nextflow_workflow.json`."""
     asked: list[list[str]] = []
     engine_down = Diagnostic(Severity.ERROR, SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE, 'docker is down.')
 
@@ -323,8 +324,10 @@ def test_the_nextflow_check_asks_for_the_engine_only_when_a_process_has_a_contai
     contained = replace(host, processes=[replace(process, container='docker.io/bash:4.4')
                         for process in host.processes])
     backend.check(write_nextflow_artifacts(host, tmp_path / 'host'), (), _NEXTFLOW_SETTINGS)
+    documents = write_nextflow_artifacts(contained, tmp_path / 'contained')
+    documents[0].unlink()
     with pytest.raises(SophiosError) as raised:
-        backend.check(write_nextflow_artifacts(contained, tmp_path / 'contained'), (), _NEXTFLOW_SETTINGS)
+        backend.check(documents, (), _NEXTFLOW_SETTINGS)
     assert asked == [['docker.io/bash:4.4', 'docker.io/bash:4.4']]
     assert list(raised.value.diagnostics) == [engine_down]
 

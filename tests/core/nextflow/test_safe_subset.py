@@ -2,12 +2,13 @@
 
 # pylint: disable=missing-function-docstring
 
+from dataclasses import replace
 import re
 from typing import Any
 
 import pytest
 
-from sophios.nf_expr import check, parse, render_groovy
+from sophios.nf_expr import Expr, check, parse, render_groovy
 from sophios.nf_types import ExecutableNextflowWorkflow, NfTemplate
 from sophios.utils_nf import compiled_source_to_nextflow
 
@@ -137,12 +138,13 @@ def test_two_projections_in_one_field_stay_a_template(value_from: str) -> None:
 
 @pytest.mark.fast
 @pytest.mark.parametrize(("node", "message"), [
-    ({"op": "Runtime.getRuntime().exec", "args": [{"op": "ref", "value": "a"}]},
+    (Expr("Runtime.getRuntime().exec", (Expr("ref", value="a"),)),
      "unsupported construct 'Runtime.getRuntime\\(\\)\\.exec'"),
-    ({"op": "number", "value": "010"}, "not a strict-mode decimal"),
+    (Expr("number", value="010"), "not a strict-mode decimal"),
 ])
-def test_a_hydrated_condition_outside_the_closed_grammar_is_rejected(node: dict[str, Any], message: str) -> None:
-    payload = _when_workflow("$(Math.pow(inputs.a, 2) > 1)", {"a": 3}, a="int").to_dict()
-    payload["processes"][0]["condition"]["args"][0] = node
+def test_a_condition_built_outside_the_closed_grammar_is_rejected(node: Expr, message: str) -> None:
+    """A tree built without parsing, as the reader builds one, is checked when its process is built."""
+    process = _when_workflow("$(Math.pow(inputs.a, 2) > 1)", {"a": 3}, a="int").processes[0]
+    assert process.condition is not None
     with pytest.raises(ValueError, match=message):
-        ExecutableNextflowWorkflow.from_dict(payload)
+        replace(process, condition=replace(process.condition, args=(node, *process.condition.args[1:])))

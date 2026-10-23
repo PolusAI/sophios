@@ -28,7 +28,7 @@ from . import preflight, realtime, run_setup
 from .ir.artifacts import CompilationResult
 from .ir.locations import absolute_paths
 from .lang.diagnostics import SophiosError
-from .nf_types import ExecutableNextflowWorkflow
+from .nf_reader import read_nextflow
 from .runtime_inputs import output_target_inputs
 from .utils_nf import compiled_source_to_nextflow_with_notes, local_locations_as_paths, nextflow_names
 from .wic_types import Json
@@ -401,9 +401,10 @@ class NextflowBackend:
         """The paths `jobs` name, `nextflow`, starting with a Java it can run, and the container engine when a
         process has a container.
 
-        `documents` are the artifacts `prepare` wrote, the model first.
+        `documents` are the artifacts `prepare` wrote, in one directory; the processes are read from the pipeline
+        there, as the import reads them.
         """
-        workflow = ExecutableNextflowWorkflow.from_json(documents[0].read_text(encoding='utf-8'))
+        workflow = read_nextflow(documents[0].parent)
         problems = preflight.path_problems(jobs) + preflight.nextflow_problems(settings)
         images = [process.container for process in workflow.processes if process.container is not None]
         if images:

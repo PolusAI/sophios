@@ -38,7 +38,6 @@ from .testkit import (
     output_port,
     ref,
     run_nextflow,
-    runtime_workflow,
     single_process_workflow,
     template,
 )
@@ -1246,18 +1245,6 @@ def test_mixed_adapter_and_builder_workflow_executes_end_to_end(tmp_path: Path) 
     assert len(counts) == 1
     counted_bytes = int(counts[0].read_text(encoding="utf-8").split()[0])
     assert counted_bytes == len(message) + 1
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_json_hydration_preserves_runtime_behavior(tmp_path: Path) -> None:
-    workflow = runtime_workflow()
-    hydrated = ExecutableNextflowWorkflow.from_json(workflow.to_json())
-    result = run_nextflow(hydrated, tmp_path)
-    assert result.returncode == 0, result.stderr
-    assert [path.read_text(encoding="utf-8") for path in (tmp_path / "work").rglob("copy.txt")] == [
-        "hello from Sophios"
-    ]
 
 
 @pytest.mark.nextflow

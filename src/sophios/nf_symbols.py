@@ -192,8 +192,8 @@ def is_nextflow_identifier(value: object) -> TypeGuard[str]:
 def validate_nextflow_identifier(value: object, *, field_name: str) -> str:
     """Return a valid Nextflow symbol or raise a grammar-specific error.
 
-    This is the untrusted-input boundary for hydrated and source-derived
-    names: it accepts anything and returns a proven identifier.
+    This is the untrusted-input boundary for names read from a pipeline and
+    source-derived ones: it accepts anything and returns a proven identifier.
 
     Args:
         value (object): Candidate identifier to validate.

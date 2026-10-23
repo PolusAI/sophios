@@ -3,7 +3,6 @@
 # pylint: disable=missing-function-docstring
 
 from decimal import Decimal
-import json
 import shlex
 from typing import Any, Literal, cast
 
@@ -47,11 +46,6 @@ SAFE_TEXT = st.text(
     ),
     min_size=1,
     max_size=80,
-)
-JSON_VALUES = st.recursive(
-    st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False, allow_infinity=False) | SAFE_TEXT,
-    lambda children: st.lists(children, max_size=4) | st.dictionaries(SAFE_TEXT, children, max_size=4),
-    max_leaves=12,
 )
 
 
@@ -171,16 +165,6 @@ def test_template_interpolation_agrees_with_cwltool(text: str) -> None:
     # cwltool interpolates a string only when it contains an expression.
     expected = interpolate(text, {"inputs": {"x": "VALUE"}}) if "$(" in text or "${" in text else text
     assert lowered == expected
-
-
-@settings(max_examples=150, deadline=None)
-@given(st.dictionaries(SAFE_TEXT, JSON_VALUES, max_size=8))
-def test_executable_json_roundtrip_is_canonical(params: dict[str, object]) -> None:
-    workflow = ExecutableNextflowWorkflow("wf", (), (), params, dict.fromkeys(params, "string"))
-    hydrated = ExecutableNextflowWorkflow.from_json(workflow.to_json())
-    assert hydrated == workflow
-    assert hydrated.to_json() == workflow.to_json()
-    assert json.loads(workflow.to_json())["representation_kind"] == "executable"
 
 
 @settings(max_examples=120, deadline=None)

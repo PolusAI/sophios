@@ -10,7 +10,7 @@ from string import Formatter
 from typing import Any, Final
 
 from .nf_expr import (
-    CONTROL_ESCAPES, NF_EXPRESSION_FUNCTIONS, groovy_literal, references,
+    CONTROL_ESCAPES, GROOVY_IDENTIFIER, GROOVY_LITERAL, NF_EXPRESSION_FUNCTIONS, groovy_literal, references,
     render_groovy, source_text,
 )
 from .nf_types import (
@@ -186,8 +186,8 @@ NF_LOAD_CONTENTS_FUNCTION = f'''def {NF_LOAD_CONTENTS_HELPER}(path) {{
 }}'''
 
 
-_IDENTIFIER = "[A-Za-z_][A-Za-z0-9_]*"
-_LITERAL = r"'(?:[^'\\]|\\.)*'"
+_IDENTIFIER = GROOVY_IDENTIFIER.pattern
+_LITERAL = GROOVY_LITERAL.pattern
 # The text each named hole of an idiom holds; a hole of another name holds any text.
 _HOLES: Final = {
     "name": _IDENTIFIER, "process": _IDENTIFIER, "emit": _IDENTIFIER, "output": _IDENTIFIER,
@@ -1082,6 +1082,13 @@ def _float_texts(workflow: ExecutableNextflowWorkflow) -> dict[str, frozenset[st
                   if isinstance(token, (NfArrayBinding, NfOptionalBinding))}
         texts[process.name] = frozenset(name for name in names if (process.name, name) in reached)
     return texts
+
+
+# Every helper the renderer may write, each byte for byte as it writes it.
+NF_HELPER_FUNCTIONS: Final = (
+    NF_SHELL_QUOTE_FUNCTION, NF_INPUT_FUNCTION, NF_LOAD_CONTENTS_FUNCTION, NF_EXPRESSION_FUNCTIONS, NF_NEST_FUNCTION,
+    NF_STEP_INPUT_FUNCTION, NF_FLOAT_TEXT_FUNCTION, NF_OUTPUT_FUNCTION,
+)
 
 
 def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:

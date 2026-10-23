@@ -547,3 +547,48 @@ def _provoke_unchecked_cuda_field() -> None:
 
 
 COMPILED.update({SophiosErrorCode.UNCHECKED_CUDA_FIELD: _provoke_unchecked_cuda_field})
+
+
+def _import_edited(file: str, old: str, new: str) -> None:
+    """Write a one-process pipeline, replace `old` in one of its files with `new`, and import it."""
+    # pylint: disable=import-outside-toplevel
+    import tempfile
+    from pathlib import Path
+
+    from sophios.input_output_nf import write_nextflow_artifacts
+    from sophios.nf_reader import read_nextflow
+    from sophios.nf_types import (ExecutableNextflowWorkflow, NfCommand, NfInputReference, NfLiteral, NfPort,
+                                  NfProcess, NfTemplate, NfWorkflowInputConnection, NfWorkflowOutputConnection)
+
+    echo = NfProcess('echo', [NfPort('message', 'val')], [NfPort('out', 'path', 'out', NfTemplate((NfLiteral('o'),)))],
+                     NfCommand((NfTemplate((NfLiteral('echo'),)), NfTemplate((NfInputReference('message'),))),
+                               stdout=NfTemplate((NfLiteral('o'),))))
+    model = ExecutableNextflowWorkflow('provoke', [echo], [
+        NfWorkflowInputConnection('message', 'echo', 'message'), NfWorkflowOutputConnection('echo', 'out', 'out'),
+    ], {'message': 'hi'}, {'message': 'string'})
+    with tempfile.TemporaryDirectory() as root:
+        write_nextflow_artifacts(model, root)
+        path = Path(root) / file
+        text = path.read_text(encoding='utf-8')
+        assert old in text, old
+        path.write_text(text.replace(old, new, 1), encoding='utf-8')
+        read_nextflow(root)
+
+
+COMPILED.update({
+    # An edited helper; a directive Sophios does not write; a hand-written tuple input; a plain shell script.
+    SophiosErrorCode.IMPORT_EDITED_HELPER: lambda: _import_edited(
+        'workflow.nf', "value.toString().replace(", "value.replace("),
+    SophiosErrorCode.IMPORT_FOREIGN_STATEMENT: lambda: _import_edited(
+        'workflow.nf', '    input:\n', "    errorStrategy 'retry'\n    input:\n"),
+    SophiosErrorCode.IMPORT_FOREIGN_DECLARATION: lambda: _import_edited(
+        'workflow.nf', '    val message\n', '    tuple val(id), path(reads)\n'),
+    SophiosErrorCode.IMPORT_FOREIGN_SCRIPT: lambda: _import_edited(
+        'workflow.nf', "    ${__sophios_shell_quote_9f72e('echo')}", '    echo hello\n    echo'),
+    # A parameter the pipeline does not check; Docker enabled for a pipeline with no container.
+    SophiosErrorCode.IMPORT_PARAMS: lambda: _import_edited('nextflow_params.json', '{', '{\n  "extra": 1,'),
+    SophiosErrorCode.IMPORT_CONFIG: lambda: _import_edited('nextflow.config', 'false', 'true'),
+    # A `take:` name the workflow does not use, which the text shows only through its calls.
+    SophiosErrorCode.IMPORT_MISMATCH: lambda: _import_edited('workflow.nf', '    take:\n    message\n',
+                                                             '    take:\n    msg\n'),
+})
