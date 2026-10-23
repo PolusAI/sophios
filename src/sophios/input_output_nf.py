@@ -163,16 +163,15 @@ def _groovy_gstring_fragment(value: str) -> str:
     return value.translate(_GSTRING_FRAGMENT_TABLE)
 
 
+def _value(segment: NfInputReference | NfBasenameReference) -> str:
+    """The Groovy value a reference names: the input itself, or its staged file's name."""
+    return segment.name if isinstance(segment, NfInputReference) else f"{segment.name}.name"
+
+
 def _segment_expression(segment: Any, entries: Mapping[str, str]) -> str:
-    match segment:
-        case NfInputReference() | NfBasenameReference() if segment.name in entries:
-            return entries[segment.name]
-        case NfInputReference():
-            return f"{segment.name}.toString()"
-        case NfBasenameReference():
-            return f"{segment.name}.name.toString()"
-        case _:
-            return groovy_literal(segment.value)
+    if isinstance(segment, NfLiteral):
+        return groovy_literal(segment.value)
+    return entries.get(segment.name, f"{_value(segment)}.toString()")
 
 
 def _template_expression(template: Any, entries: Mapping[str, str]) -> str:
@@ -225,18 +224,12 @@ def _render_command_token(token: Any, entries: Mapping[str, str]) -> str:
 def _render_glob(template: Any, entries: Mapping[str, str]) -> str:
     if all(isinstance(segment, NfLiteral) for segment in template.segments):
         return groovy_literal("".join(segment.value for segment in template.segments))
-    rendered: list[str] = []
-    for segment in template.segments:
-        match segment:
-            case NfInputReference() | NfBasenameReference() if segment.name in entries:
-                rendered.append(f"${{{entries[segment.name]}}}")
-            case NfInputReference():
-                rendered.append(f"${{{segment.name}}}")
-            case NfBasenameReference():
-                rendered.append(f"${{{segment.name}.name}}")
-            case _:
-                rendered.append(_groovy_gstring_fragment(segment.value))
-    return f'"{"".join(rendered)}"'
+    rendered = "".join(
+        _groovy_gstring_fragment(segment.value) if isinstance(segment, NfLiteral)
+        else f"${{{entries.get(segment.name, _value(segment))}}}"
+        for segment in template.segments
+    )
+    return f'"{rendered}"'
 
 
 def render_number(value: int | float) -> str:
