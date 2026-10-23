@@ -49,9 +49,8 @@ def test_every_requirement_class_is_a_cwl_class_and_an_admitted_one_has_its_fiel
             assert row.state is State.REJECTED or name in FIELDS, name
 
 
-# Design §3 names the compile-time fields: these wherever CWL declares them, NetworkAccess, and two CUDA fields.
+# Design §3 names the compile-time fields: these wherever CWL declares them, and NetworkAccess.
 COMPILE_TIME = {"doc", "format", "intent", "label", "streamable"}
-COMPILE_TIME_CUDA = {("cwltool:CUDARequirement", name) for name in ("cudaVersionMin", "cudaComputeCapability")}
 
 
 @pytest.mark.fast
@@ -63,7 +62,7 @@ def test_the_compile_time_fields_are_the_ones_the_design_names() -> None:
     assert compile_time == {
         (cwl_class, name) for cwl_class, rows in FIELDS.items() for name in rows
         if name in COMPILE_TIME or cwl_class == "NetworkAccess"
-    } | COMPILE_TIME_CUDA
+    }
 
 
 def _strings() -> Yaml:

@@ -256,10 +256,10 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
     }),
     'cwltool:CUDARequirement': MappingProxyType({
         'class': Row(_L, 'the `accelerator` directive; 1 GPU when neither count is given'),
-        'cudaComputeCapability': Row(_C, 'not checked by the generated pipeline; a note (`wic046`) says so'),
+        'cudaComputeCapability': Row(_L, 'in the `ext` directive, which the pipeline does not check; note `wic046`'),
         'cudaDeviceCountMax': Row(_L, 'the `accelerator` count when `cudaDeviceCountMin` is absent; a whole number'),
         'cudaDeviceCountMin': Row(_L, 'the `accelerator` count; a whole number'),
-        'cudaVersionMin': Row(_C, 'not checked by the generated pipeline; a note (`wic046`) says so'),
+        'cudaVersionMin': Row(_L, 'in the `ext` directive, which the pipeline does not check; note `wic046`'),
     }),
 })
 

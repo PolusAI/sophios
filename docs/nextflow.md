@@ -402,9 +402,10 @@ no arguments, so the image runs its `CMD`; name the program in `baseCommand`.
 `accelerator` directive. The count is `cudaDeviceCountMin`, else
 `cudaDeviceCountMax`, else 1, the count cwltool asks for. A count is a whole
 number; an expression is rejected. `cudaVersionMin` and
-`cudaComputeCapability` have no Nextflow counterpart. The generated pipeline
-does not check them, and compiling reports each one with the note
-[`wic046`](error_codes.md). The command line prints the note with the other
+`cudaComputeCapability` have no Nextflow counterpart: the process carries
+each one present, as written, in its `ext` directive, which no generated
+script reads. The generated pipeline does not check them, and compiling
+reports each one with the note [`wic046`](error_codes.md). The command line prints the note with the other
 diagnostics; the Python API gives it as a `UserWarning`. Where a task runs is
 the executor's choice: the local executor accepts the directive and runs the
 task on the machine as it is.
@@ -645,6 +646,11 @@ the declaration instead of dropping it, emits a single path, and fails the
 task when nothing matches. A `File` or `Directory` output whose glob is a
 pattern renders `arity: '1'` as well, so several matches fail the task as
 they fail in cwltool.
+
+A `path` output declares no kind, and Nextflow does not check `type: 'dir'`
+for a literal output name, so a process names its `Directory` outputs in its
+`ext` directive instead, `ext Directory: ['<name>']`, which no generated
+script reads.
 
 An optional `File?` or `Directory?` output renders `optional: true`; when
 nothing matches, a workflow output reports `null`, carried by the `[]`

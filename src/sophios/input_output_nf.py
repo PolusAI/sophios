@@ -40,8 +40,6 @@ from .nf_types import (
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
     param_channel,
-    process_dependencies,
-    topological_order,
 )
 
 
@@ -206,15 +204,17 @@ def _groovy_gstring_fragment(value: str) -> str:
     return value.translate(_GSTRING_FRAGMENT_TABLE)
 
 
-def _value(segment: NfInputReference | NfBasenameReference) -> str:
-    """The Groovy value a reference names: the input itself, or its staged file's name."""
-    return segment.name if isinstance(segment, NfInputReference) else f"{segment.name}.name"
+def _value(segment: NfInputReference | NfBasenameReference, entries: Mapping[str, str]) -> str:
+    """The Groovy value a reference names: the input itself, its entry's name or its float's text where
+    ``entries`` has one, or its staged file's name, which an entry under its own basename keeps."""
+    return entries.get(segment.name, segment.name) if isinstance(segment, NfInputReference) else f"{segment.name}.name"
 
 
 def _segment_expression(segment: Any, entries: Mapping[str, str]) -> str:
     if isinstance(segment, NfLiteral):
         return groovy_literal(segment.value)
-    return entries.get(segment.name, f"{_value(segment)}.toString()")
+    value = _value(segment, entries)
+    return value if isinstance(segment, NfInputReference) and segment.name in entries else f"{value}.toString()"
 
 
 def _template_expression(template: Any, entries: Mapping[str, str]) -> str:
@@ -284,17 +284,18 @@ def _render_glob(template: Any, entries: Mapping[str, str]) -> str:
         return groovy_literal("".join(segment.value for segment in template.segments))
     rendered = "".join(
         _groovy_gstring_fragment(segment.value) if isinstance(segment, NfLiteral)
-        else f"${{{entries.get(segment.name, _value(segment))}}}"
+        else f"${{{_value(segment, entries)}}}"
         for segment in template.segments
     )
     return f'"{rendered}"'
 
 
 def render_number(value: int | float) -> str:
-    """Render a validated JSON number without exponent notation."""
+    """Render a validated JSON number without exponent notation; a float always has a point."""
     if isinstance(value, int):
         return str(value)
-    return format(Decimal(str(value)), "f")
+    text = format(Decimal(str(value)), "f")
+    return text if "." in text else f"{text}.0"
 
 
 # A CWL glob has no brace expansion, so a brace is escaped for Nextflow.
@@ -431,6 +432,20 @@ def container_directives(container: str) -> tuple[str, ...]:
     )
 
 
+def _carriers(process: NfProcess) -> str:
+    """The ``ext`` directive's entries: each fact the workflow needs that no directive acts on (design §4.2)."""
+    def value(item: str | tuple[str, ...]) -> str:
+        return groovy_literal(item) if isinstance(item, str) else f"[{', '.join(map(groovy_literal, item))}]"
+
+    directories = tuple(port.name for port in process.outputs if port.path_kind == "directory")
+    carried = (
+        ("cudaVersionMin", process.resources.cuda_version_min),
+        ("cudaComputeCapability", process.resources.cuda_compute_capability),
+        ("Directory", directories or None),
+    )
+    return ", ".join(f"{key}: {value(item)}" for key, item in carried if item is not None)
+
+
 def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...], floats: frozenset[str]) -> str:
     # The Groovy text a reference to an input renders as, where it is not the value's own: an entry's name,
     # or a float's text.
@@ -444,6 +459,8 @@ def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...], floa
         lines.append(f'    memory "{render_number(process.resources.memory_mb)} MB"')
     if process.resources.accelerator is not None:
         lines.append(f"    accelerator {process.resources.accelerator}")
+    if carriers := _carriers(process):
+        lines.append(f"    ext {carriers}")
 
     if process.inputs:
         lines.extend(["", "    input:"])
@@ -498,9 +515,10 @@ def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...], floa
     if process.container is not None:
         lines.append(f"    {NF_ENTRYPOINT_READ}")
         command = f"{NF_ENTRYPOINT_WORDS} {command}"
-    if redirects and any(isinstance(token, NfShellLiteral) for token in process.command.tokens):
-        # CWL redirects the whole command, not just the last one a shell literal starts;
-        # on separate lines, a trailing `&` or `#` in the literal cannot swallow the `)`.
+    if any(isinstance(token, NfShellLiteral) for token in process.command.tokens):
+        # CWL redirects the whole command, not just the last one a shell literal starts; on separate lines, a
+        # trailing `&` or `#` in the literal cannot swallow the `)`. Without redirects, the parentheses keep a
+        # literal's own `>` from reading as one.
         lines.extend(["    (", f"    {command}", f"    ){redirects}"])
     else:
         lines.append(f"    {command}{redirects}")
@@ -844,17 +862,6 @@ def _argument(
     return expression
 
 
-def _ordered_processes(workflow: ExecutableNextflowWorkflow) -> list[NfProcess]:
-    """Return processes in stable topological order and reject cycles."""
-    position = {process.name: index for index, process in enumerate(workflow.processes)}
-    names = topological_order(
-        process_dependencies(position, workflow.connections),
-        error="Nextflow workflow connections contain a cycle",
-        key=position.__getitem__,
-    )
-    return [workflow.processes[position[name]] for name in names]
-
-
 def _workflow_input_names(workflow: ExecutableNextflowWorkflow) -> list[str]:
     return list(dict.fromkeys(
         edge.from_port
@@ -875,7 +882,8 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
 
     methods = _multi_input_methods(workflow)
     lines.append("    main:")
-    for process in _ordered_processes(workflow):
+    # The model holds its processes in the order they are called (design §5.2).
+    for process in workflow.processes:
         multi_input_sources = _multi_input_sources(workflow, process)
         if multi_input_sources:
             multi_input_names = {name for name, _, _ in multi_input_sources}

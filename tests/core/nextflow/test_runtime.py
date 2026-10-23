@@ -173,21 +173,26 @@ def test_env_var_requirement_values_reach_the_command_byte_for_byte(tmp_path: Pa
 @pytest.mark.nextflow
 @pytest.mark.serial
 def test_a_cuda_requirement_runs_under_the_local_executor(tmp_path: Path) -> None:
-    """design §6, Resources and containers: the local executor accepts the accelerator directive and runs the task."""
+    """design §6, Resources and containers: the local executor accepts the accelerator directive and runs the task.
+
+    The CUDA fields and the Directory output ride in the ext directive, which changes nothing (design §4.2).
+    """
     gpu_tool = (
-        CommandLineTool("gpu_tool", Inputs(), Outputs(result=Output(cwl.file, glob="out.txt")))
-        .base_command("touch", "out.txt")
-        .gpu(cuda_version_min="11.4", device_count_min=2)
+        CommandLineTool("gpu_tool", Inputs(), Outputs(result=Output(cwl.directory, glob="made")))
+        .base_command("mkdir", "made")
+        .gpu(cuda_version_min="11.4", device_count_min=2, extra={"cudaComputeCapability": ["7.0", "8.0"]})
     )
     run = Step(gpu_tool, step_name="gpu")
     workflow = Workflow([run], "nextflow_gpu")
     workflow.outputs.result = run.outputs.result
     with pytest.warns(UserWarning, match=r"\[wic046\]"):
         workflow.to_nextflow(tmp_path)
-    assert "\n    accelerator 2\n" in (tmp_path / "workflow.nf").read_text(encoding="utf-8")
+    assert (
+        "\n    accelerator 2\n    ext cudaVersionMin: '11.4', cudaComputeCapability: ['7.0', '8.0'], Directory: ['result']\n"
+    ) in (tmp_path / "workflow.nf").read_text(encoding="utf-8")
     result = execute_nextflow(tmp_path)
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    assert len(list((tmp_path / "work").rglob("out.txt"))) == 1
+    assert '"class":"Directory"' in result.stdout
 
 
 @pytest.mark.nextflow

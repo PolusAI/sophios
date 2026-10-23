@@ -182,7 +182,8 @@ def test_renders_each_entry_staged_hidden_and_made_by_the_task() -> None:
         "    path outDir, stageAs: '.sophios_entry_outDir/*'\n"
         "    path other\n"
     ) in rendered
-    assert f'    path "${{{entry}}}", glob: false, emit: result\n' in rendered
+    # A basename reference to the entry is its staged file's name, which the entry keeps.
+    assert '    path "${outDir.name}", glob: false, emit: result\n' in rendered
     exists = "InitialWorkDirRequirement entry already exists in the task directory:"
     renamed, own = f"${{{quote}('renamed.txt')}}", f"${{{quote}({entry})}}"
     assert (

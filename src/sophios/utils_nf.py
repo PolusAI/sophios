@@ -957,8 +957,24 @@ def _cpu_resource(value: Any) -> int:
 
 
 _CUDA_REQUIREMENT = "cwltool:CUDARequirement"
-# The CUDA fields with no Nextflow counterpart: each one present is reported with a note.
+# The CUDA fields with no Nextflow counterpart, carried in the process's ext directive: each one present is
+# reported with a note.
 _UNCHECKED_CUDA_FIELDS = ("cudaVersionMin", "cudaComputeCapability")
+
+
+def _cuda_version(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    raise ValueError(f"cudaVersionMin must be a string, got {value!r}")
+
+
+def _cuda_capability(value: Any) -> str | tuple[str, ...]:
+    match value:
+        case str():
+            return value
+        case list() if all(isinstance(item, str) for item in value):
+            return tuple(value)
+    raise ValueError(f"cudaComputeCapability must be a string or a list of strings, got {value!r}")
 
 
 def _device_count(value: Any) -> int:
@@ -986,7 +1002,10 @@ def _memory(value: Any) -> int | float:
 # The value checks of a requirement's fields, in the order findings report them.
 _REQUIREMENT_VALUES: Mapping[str, Mapping[str, Callable[[Any], Any]]] = {
     "ResourceRequirement": {"coresMin": _cpu_resource, "coresMax": _cpu_resource, "ramMin": _memory, "ramMax": _memory},
-    _CUDA_REQUIREMENT: {"cudaDeviceCountMin": _device_count, "cudaDeviceCountMax": _device_count},
+    _CUDA_REQUIREMENT: {
+        "cudaDeviceCountMin": _device_count, "cudaDeviceCountMax": _device_count,
+        "cudaVersionMin": _cuda_version, "cudaComputeCapability": _cuda_capability,
+    },
 }
 
 
@@ -996,7 +1015,13 @@ def _resources(tool: Mapping[str, Any]) -> NfResources:
     memory = _resource_value(resource, "ramMin", "ramMax")
     rendered_cpus = None if cpus is None else _cpu_resource(cpus)
     rendered_memory = None if memory is None else _memory(memory)
-    return NfResources(rendered_cpus, rendered_memory, _gpu_count(tool))
+    cuda = _requirement(tool, _CUDA_REQUIREMENT) or {}
+    version, capability = (cuda.get(name) for name in _UNCHECKED_CUDA_FIELDS)
+    return NfResources(
+        rendered_cpus, rendered_memory, _gpu_count(tool),
+        None if version is None else _cuda_version(version),
+        None if capability is None else _cuda_capability(capability),
+    )
 
 
 def _cuda_notes(step: Mapping[str, Any], tool: Mapping[str, Any]) -> list[Diagnostic]:

@@ -355,6 +355,27 @@ def references(node: Expr) -> set[str]:
     return found
 
 
+_SPELLINGS = {"===": "==", "!==": "!="}
+
+
+def canonical(node: Expr) -> Expr:
+    """The one tree among those the Groovy rendering writes alike (design §5.2).
+
+    With operands typed as the subset types them, ``===`` and ``!==`` mean
+    ``==`` and ``!=``, a unary ``+`` changes no number, ``null`` sits on the
+    right of an equality, and ``!(x == null)`` is ``x != null``.
+    """
+    args = tuple(canonical(arg) for arg in node.args)
+    op = _SPELLINGS.get(node.op, node.op)
+    if op == "u+":
+        return args[0]
+    if op in ("==", "!=") and args[0].op == "null":
+        args = (args[1], args[0])
+    if op == "u!" and args[0].op == "==" and args[0].args[1].op == "null":
+        return Expr("!=", args[0].args)
+    return Expr(op, args, node.value)
+
+
 def source_text(node: Expr) -> str:
     """Canonical JavaScript text of a node, used only in diagnostics."""
     match node.op:
@@ -369,7 +390,9 @@ def source_text(node: Expr) -> str:
         case "ref":
             return f"inputs.{node.value}"
         case op if op.startswith("u"):
-            return f"{op[1]}{source_text(node.args[0])}"
+            # A unary operand of a unary is parenthesized: `--x` is a decrement.
+            operand = source_text(node.args[0])
+            return f"{op[1]}({operand})" if node.args[0].op.startswith("u") else f"{op[1]}{operand}"
         case op if op in _CALLS:
             return f"{op}({', '.join(source_text(arg) for arg in node.args)})"
     return f"({source_text(node.args[0])} {node.op} {source_text(node.args[1])})"

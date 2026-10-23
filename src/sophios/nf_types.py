@@ -1,7 +1,7 @@
 """Validated executable intermediate-representation types for Nextflow DSL2."""
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from graphlib import CycleError, TopologicalSorter
 import json
 import math
@@ -9,7 +9,7 @@ import re
 from types import MappingProxyType
 from typing import Any, ClassVar, Generic, Self, TypeVar, cast, get_args
 
-from .nf_expr import NF_FINITE_HELPER, NF_ROUND_HELPER, Expr, references, validate
+from .nf_expr import NF_FINITE_HELPER, NF_ROUND_HELPER, Expr, canonical, references, validate
 from .nf_symbols import NEXTFLOW_SCRIPT_DECLARED_NAMES, validate_nextflow_identifier
 
 
@@ -493,7 +493,6 @@ class NfCommand:
             isinstance(token, get_args(NfCommandToken)) for token in tokens
         ):
             raise ValueError("command must contain at least one typed token")
-        object.__setattr__(self, "tokens", tokens)
         for name in ("stdin", "stdout", "stderr"):
             value = getattr(self, name)
             if value is not None and not isinstance(value, NfTemplate):
@@ -505,6 +504,14 @@ class NfCommand:
         if len(names) != len(set(names)):
             raise ValueError("command env sets one variable more than once")
         object.__setattr__(self, "env", env)
+        # Adjacent shell literals render as one text with a space between them, so they are one (design §5.2).
+        merged: list[NfCommandToken] = []
+        for token in tokens:
+            if isinstance(token, NfShellLiteral) and merged and isinstance(merged[-1], NfShellLiteral):
+                merged[-1] = NfShellLiteral(f"{merged[-1].text} {token.text}")
+            else:
+                merged.append(token)
+        object.__setattr__(self, "tokens", tuple(merged))
 
     @property
     def templates(self) -> tuple[NfTemplate, ...]:
@@ -560,11 +567,20 @@ class NfCommand:
 
 @dataclass(frozen=True, slots=True)
 class NfResources:
-    """Typed supported process resources; ``accelerator`` is a GPU count."""
+    """Typed supported process resources; ``accelerator`` is a GPU count.
+
+    ``cuda_version_min`` and ``cuda_compute_capability`` are a
+    ``cwltool:CUDARequirement``'s ``cudaVersionMin`` and
+    ``cudaComputeCapability``, as written: the process carries them in its
+    ``ext`` directive, which nothing in the pipeline reads (design §4.2,
+    Carriers).
+    """
 
     cpus: int | None = None
     memory_mb: int | float | None = None
     accelerator: int | None = None
+    cuda_version_min: str | None = None
+    cuda_compute_capability: str | tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         for name in ("cpus", "accelerator"):
@@ -576,14 +592,29 @@ class NfResources:
             isinstance(memory, bool) or not isinstance(memory, (int, float)) or not 0 < memory < math.inf
         ):
             raise ValueError("memory_mb must be a positive finite number or None")
+        if not isinstance(self.cuda_version_min, str | None):
+            raise ValueError("cuda_version_min must be a string or None")
+        match self.cuda_compute_capability:
+            case None | str():
+                pass
+            case list() | tuple() as items if all(isinstance(item, str) for item in items):
+                object.__setattr__(self, "cuda_compute_capability", tuple(items))
+            case _:
+                raise ValueError("cuda_compute_capability must be a string, a list of strings, or None")
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation.
 
         Returns:
-            dict[str, Any]: The ``cpus``, ``memory_mb`` and ``accelerator`` values.
+            dict[str, Any]: The ``cpus``, ``memory_mb``, ``accelerator``, ``cuda_version_min`` and
+                ``cuda_compute_capability`` values.
         """
-        return {"cpus": self.cpus, "memory_mb": self.memory_mb, "accelerator": self.accelerator}
+        capability = self.cuda_compute_capability
+        return {
+            "cpus": self.cpus, "memory_mb": self.memory_mb, "accelerator": self.accelerator,
+            "cuda_version_min": self.cuda_version_min,
+            "cuda_compute_capability": list(capability) if isinstance(capability, tuple) else capability,
+        }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
@@ -600,8 +631,10 @@ class NfResources:
         Returns:
             Self: The validated resources.
         """
-        item = _fields(value, type_name=cls.__name__, required={"cpus", "memory_mb", "accelerator"})
-        return cls(item["cpus"], item["memory_mb"], item["accelerator"])
+        item = _fields(value, type_name=cls.__name__, required={
+            "cpus", "memory_mb", "accelerator", "cuda_version_min", "cuda_compute_capability"})
+        return cls(item["cpus"], item["memory_mb"], item["accelerator"], item["cuda_version_min"],
+                   item["cuda_compute_capability"])
 
 
 GLOB_WILDCARDS = frozenset("*?[")
@@ -998,6 +1031,7 @@ class NfProcess:
                     f"process {self.name!r} condition must reference scalar val inputs: "
                     f"{', '.join(invalid)}"
                 )
+            object.__setattr__(self, "condition", canonical(self.condition))
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation.
@@ -1376,7 +1410,7 @@ class ExecutableNextflowWorkflow:
     """
 
     # Hydration reads this version only; any change to the payload bumps it (design §5.3).
-    SCHEMA_VERSION: ClassVar[int] = 19
+    SCHEMA_VERSION: ClassVar[int] = 20
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
     name: str
@@ -1423,6 +1457,7 @@ class ExecutableNextflowWorkflow:
                              "which has no lowering; give it a value")
         object.__setattr__(self, "param_types", FrozenMapping(self.param_types))
         self._validate_graph()
+        self._canonicalize()
 
     @property
     def containers_enabled(self) -> bool:
@@ -1560,6 +1595,11 @@ class ExecutableNextflowWorkflow:
                                 f"connection {from_process}.{from_port} -> {to_process}.{to_port} "
                                 "joins incompatible channel cardinalities"
                             )
+                        if merge is None and source.path_kind != destination.path_kind:
+                            raise ValueError(
+                                f"connection {from_process}.{from_port} -> {to_process}.{to_port} joins a "
+                                f"{source.path_kind or 'value'} output to a {destination.path_kind or 'value'} input"
+                            )
                         if source.optional:
                             # Null has one representation, the [] sentinel, and no path port
                             # has an approved lowering of it; a workflow output reports it.
@@ -1601,9 +1641,6 @@ class ExecutableNextflowWorkflow:
                     f"{', '.join(sorted(adapters))}; a process may use only one scatter shape"
                 )
 
-        topological_order(
-            process_dependencies(process_by_name, self.connections), error="workflow connections contain a cycle"
-        )
         expected_inputs = {
             (process.name, port.name)
             for process in self.processes
@@ -1612,6 +1649,42 @@ class ExecutableNextflowWorkflow:
         if missing := expected_inputs - incoming:
             process_name, port_name = sorted(missing)[0]
             raise ValueError(f"process input {process_name}.{port_name} is not connected")
+
+    def _canonicalize(self) -> None:
+        """Put the orders the rendering does not show in their one canonical form (design §5.2).
+
+        Processes are in stable topological order, the order the workflow
+        calls them; a multi-input-scattered process declares its scattered
+        inputs first; connections are in the order of their destination
+        process and port, and the workflow outputs follow in their own order.
+        """
+        position = {process.name: index for index, process in enumerate(self.processes)}
+        order = topological_order(
+            process_dependencies(position, self.connections), error="workflow connections contain a cycle",
+            key=position.__getitem__,
+        )
+        scattered = {
+            (connection.to_process, connection.to_port) for connection in self.connections
+            if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
+            and connection.adapter in MULTI_INPUT_ADAPTERS
+        }
+        processes = []
+        for name in order:
+            process = self.processes[position[name]]
+            inputs = [port for port in process.inputs if (name, port.name) in scattered]
+            inputs += [port for port in process.inputs if (name, port.name) not in scattered]
+            processes.append(process if inputs == list(process.inputs) else replace(process, inputs=inputs))
+        destinations = {
+            (process.name, port.name): (index, port_index)
+            for index, process in enumerate(processes) for port_index, port in enumerate(process.inputs)
+        }
+        outputs = [connection for connection in self.connections if isinstance(connection, NfWorkflowOutputConnection)]
+        incoming = sorted(
+            (connection for connection in self.connections if not isinstance(connection, NfWorkflowOutputConnection)),
+            key=lambda connection: destinations[(connection.to_process, connection.to_port)],
+        )
+        object.__setattr__(self, "processes", tuple(processes))
+        object.__setattr__(self, "connections", (*incoming, *outputs))
 
     @staticmethod
     def _check_merged(merge: NfStepInputConnection, source: str, channel: NfChannel, destination: NfPort) -> None:

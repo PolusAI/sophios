@@ -621,12 +621,14 @@ def test_cuda_requirement_lowers_to_the_accelerator_directive(cuda: Any, count: 
 
 
 @pytest.mark.fast
-def test_the_unchecked_cuda_fields_are_notes_and_leave_the_model_unchanged() -> None:
-    plain, _ = _gpu_lowering({"cudaDeviceCountMin": 1})
+def test_the_unchecked_cuda_fields_are_notes_and_ride_in_the_ext_directive() -> None:
     workflow, notes = _gpu_lowering(
         {"cudaDeviceCountMin": 1, "cudaVersionMin": "11.4", "cudaComputeCapability": ["3.0", "7.5"]}
     )
-    assert workflow == plain
+    assert workflow.processes[0].resources == NfResources(
+        accelerator=1, cuda_version_min="11.4", cuda_compute_capability=("3.0", "7.5"))
+    assert "\n    accelerator 1\n    ext cudaVersionMin: '11.4', cudaComputeCapability: ['3.0', '7.5']\n" in (
+        render_nextflow(workflow))
     assert [(note.severity, note.code, note.locator) for note in notes] == [
         (Severity.NOTE, SophiosErrorCode.UNCHECKED_CUDA_FIELD, Locator("GPU"))
     ] * 2
