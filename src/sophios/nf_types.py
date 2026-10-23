@@ -523,17 +523,10 @@ class NfResources:
     accelerator: int | None = None
 
     def __post_init__(self) -> None:
-        cpus = self.cpus
-        if (
-            isinstance(cpus, bool)
-            or (cpus is not None and not isinstance(cpus, int))
-            or (isinstance(cpus, int) and cpus <= 0)
-        ):
-            raise ValueError("cpus must be a positive integer or None")
-        accelerator = self.accelerator
-        if accelerator is not None and (isinstance(accelerator, bool) or not isinstance(accelerator, int)
-                                        or accelerator <= 0):
-            raise ValueError("accelerator must be a positive integer or None")
+        for name in ("cpus", "accelerator"):
+            value = getattr(self, name)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
+                raise ValueError(f"{name} must be a positive integer or None")
         memory = self.memory_mb
         if memory is not None and (
             isinstance(memory, bool) or not isinstance(memory, (int, float)) or not 0 < memory < math.inf
