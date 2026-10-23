@@ -299,8 +299,9 @@ hidden file in the task directory, which the script reads. The host needs
 the `docker` command, as Nextflow's own Docker support does. A tool with
 both `DockerRequirement` and `ShellCommandRequirement` is rejected: CWL runs
 its command as `/bin/sh -c` after the entrypoint. So is a containerized tool
-with no `baseCommand`, `arguments` or bound input: CWL gives its container no
-arguments, so the image runs its `CMD`; name the program in `baseCommand`.
+whose command can render empty, with no `baseCommand`, no `arguments` and no
+bound input but optional, boolean or array ones: CWL then gives its container
+no arguments, so the image runs its `CMD`; name the program in `baseCommand`.
 
 ## GPUs
 

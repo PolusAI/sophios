@@ -1310,20 +1310,11 @@ def test_a_containerized_command_runs_after_its_images_entrypoint(tmp_path: Path
         tool_ = CommandLineTool(name, Inputs(), Outputs(out=Output(cwl.file, glob="out.txt"))).stdout("out.txt")
         return (tool_.base_command(*base_command) if base_command else tool_).argument("an argument", position=1)
 
-    conditional = CommandLineTool(
-        "conditional_only",
-        Inputs(name=Input(cwl.optional(cwl.string), position=1, flag="--name"),
-               verbose=Input(cwl.boolean, position=2, flag="-v")),
-        Outputs(out=Output(cwl.file, glob="out.txt")),
-    ).stdout("out.txt").docker(image)
     steps = [
         Step(words("no_base_command").docker(image), step_name="no_base_command"),
         Step(words("base_command", "printf").docker(image), step_name="base_command"),
         Step(words("no_entrypoint", "echo").docker("debian:bookworm-slim"), step_name="no_entrypoint"),
-        Step(conditional, step_name="conditional_only"),
     ]
-    steps[-1].inputs.name = "x"
-    steps[-1].inputs.verbose = True
     workflow = Workflow(steps, "nextflow_entrypoint")
     for step in steps:
         setattr(workflow.outputs, step.process_name, step.outputs.out)
@@ -1331,8 +1322,7 @@ def test_a_containerized_command_runs_after_its_images_entrypoint(tmp_path: Path
     result = execute_nextflow(tmp_path / "pipeline")
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     assert sorted(path.read_text(encoding="utf-8") for path in (tmp_path / "pipeline" / "work").rglob("out.txt")) == [
-        "an argument\n", "from the entrypoint --name x -v\n", "from the entrypoint an argument\n",
-        "from the entrypoint printf an argument\n",
+        "an argument\n", "from the entrypoint an argument\n", "from the entrypoint printf an argument\n",
     ]
 
 

@@ -1623,11 +1623,14 @@ FINDINGS = [
         "steps[0].run: ShellCommandRequirement beside a DockerRequirement is not supported: CWL runs the command "
         "as /bin/sh -c after the image's ENTRYPOINT, which the Nextflow task does not"
     ], id="shell_mode_in_a_container"),
-    pytest.param(lambda: one_step(tool("ENTRY", baseCommand=None, requirements=_DOCKER)), [
-        "steps[0]: a containerized tool with no baseCommand, arguments or bound inputs is not supported: CWL gives "
-        "the container no arguments, so the image runs its CMD, after its ENTRYPOINT if it has one, which the "
+    pytest.param(lambda: one_step(tool("ENTRY", baseCommand=None, requirements=_DOCKER, inputs={
+        "name": {"type": "string?", "inputBinding": {"prefix": "--name"}},
+        "verbose": {"type": "boolean", "inputBinding": {"prefix": "-v"}},
+    }), verbose=False), [
+        "steps[0]: a containerized tool whose command can render empty is not supported: CWL then gives the "
+        "container no arguments, so the image runs its CMD, after its ENTRYPOINT if it has one, which the "
         "Nextflow task does not; name the program in baseCommand"
-    ], id="a_containerized_tool_that_gives_its_container_no_arguments"),
+    ], id="a_containerized_command_that_can_render_empty"),
 ]
 
 
