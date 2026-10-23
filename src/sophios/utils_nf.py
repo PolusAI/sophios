@@ -2795,10 +2795,8 @@ def _staged_name_findings(
     """
     produced: dict[str, str] = {}
     for step, tool in zip(steps, tools, strict=True):
-        step_id = str(step.get("id"))
         for raw_port, glob in _literal_outputs(tool).items():
-            for step_key in (step_id, step_id.rsplit("#", maxsplit=1)[-1]):
-                produced[f"{step_key}/{raw_port}"] = glob.rsplit("/", maxsplit=1)[-1]
+            produced[f"{step.get('id')}/{raw_port}"] = glob.rsplit("/", maxsplit=1)[-1]
     findings: list[str] = []
     for step_index, (step, tool) in enumerate(zip(steps, tools, strict=True)):
         path = f"steps[{step_index}].run"
