@@ -617,19 +617,6 @@ def _array_rose_from_producer(items: Any, **binding: Any) -> CompiledNextflowSou
     )
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize(("items", "binding"), [
-    ("boolean", {"prefix": "-x"}), ({"type": "boolean"}, {}), (["null", "boolean"], {"prefix": "-x"}),
-    ("boolean?", {"prefix": "-x"}),
-], ids=["prefix", "no-prefix", "optional-items", "optional-items-shorthand"])
-def test_rejects_a_boolean_array_binding(items: Any, binding: dict[str, Any]) -> None:
-    """cwltool renders [true, false] bound with prefix -x as -x alone, and with no prefix as nothing."""
-    rose = _array_rose(items, [True, False], **binding)
-    with pytest.raises(ValueError, match=r"run\.inputs\.values\.inputBinding: a boolean array's binding is not "
-                                         r"supported: CWL adds only its prefix"):
-        compiled_source_to_nextflow(rose)
-
-
 def _shell_tool(arguments: list[Any], *, shell_command: bool = True) -> Yaml:
     extra: dict[str, Any] = {"arguments": arguments}
     if shell_command:
@@ -1708,6 +1695,18 @@ MATCHES = [
     pytest.param(
         lambda: _array_rose("string", ["a", 1]), "does not match its supported CWL type",
         id="array_value_with_a_mismatched_item_type",
+    ),
+    # cwltool renders [true, false] bound with prefix -x as -x alone, and with no prefix as nothing.
+    *(
+        pytest.param(
+            lambda items=items, binding=binding: _array_rose(items, [True, False], **binding),
+            r"run\.inputs\.values\.inputBinding: a boolean array's binding is not supported: CWL adds only its prefix",
+            id=f"a_boolean_array_binding-{name}",
+        )
+        for name, items, binding in (
+            ("prefix", "boolean", {"prefix": "-x"}), ("no-prefix", {"type": "boolean"}, {}),
+            ("optional", ["null", "boolean"], {"prefix": "-x"}), ("optional-shorthand", "boolean?", {"prefix": "-x"}),
+        )
     ),
     pytest.param(
         lambda: _shell_rose([{"valueFrom": ">>", "shellQuote": False}], shell_command=False),
