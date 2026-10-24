@@ -5,6 +5,8 @@ design_docs/sophios_nextflow_backend.md §6. Expected values are what node
 computes, printed as JSON. Compatible cells share one run to
 keep the runtime lane lean; ``CELLS`` maps every cell to the test that runs it,
 and ``test_every_cell_is_claimed_by_a_runtime_test`` keeps that map total.
+The calculator and predicate cells are each built by a function of their own,
+which the import's fixed point (test_import.py) reads as well.
 A10, a computed ``valueFrom`` reaching a tool argument, has no runtime
 test: the backend rejects a computed ``valueFrom``.
 """
@@ -107,6 +109,16 @@ def _calc_workflow(whens: list[str], name: str) -> Workflow:
     return Workflow(steps, name)
 
 
+def calculator_workflow() -> Workflow:
+    """A1-A9: a step for each calculation compared in a when with what node computes, then with twice that."""
+    expressions = [text for texts in CALCULATIONS.values() for text in texts]
+    whens = [
+        f"$(({text[2:-1]}) === {value}{scale})"
+        for scale in ("", " * 2") for text, value in zip(expressions, CALCULATED.split(), strict=True)
+    ]
+    return _calc_workflow(whens, "calc_cells")
+
+
 @pytest.mark.nextflow
 @pytest.mark.serial
 def test_calculator(tmp_path: Path) -> None:
@@ -114,16 +126,10 @@ def test_calculator(tmp_path: Path) -> None:
 
     Compared with twice that value, which no calculation yields since none is zero, it skips its step.
     """
-    expressions = [text for texts in CALCULATIONS.values() for text in texts]
-    expected = CALCULATED.split()
-    whens = [
-        f"$(({text[2:-1]}) === {value}{scale})"
-        for scale in ("", " * 2") for text, value in zip(expressions, expected, strict=True)
-    ]
-    result, _ = _run(_calc_workflow(whens, "calc_cells"), tmp_path)
+    result, _ = _run(calculator_workflow(), tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
-    ran = [_ran(tmp_path, f"c{index}.txt") for index in range(len(whens))]
-    assert ran == [True] * len(expected) + [False] * len(expected)
+    count = len(CALCULATED.split())
+    assert [_ran(tmp_path, f"c{index}.txt") for index in range(2 * count)] == [True] * count + [False] * count
 
 
 @pytest.mark.nextflow
@@ -160,17 +166,22 @@ def _when_tool(name: str) -> CommandLineTool:
     return tool.base_command("touch").argument(f"{name}.txt", position=1)
 
 
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_predicates(tmp_path: Path) -> None:
-    """W1-W6: every predicate kind decides the step, without truthiness."""
+def predicates_workflow() -> Workflow:
+    """W1-W6: a step for each predicate."""
     steps = []
     for index, predicate in enumerate(PREDICATES):
         step = Step(_when_tool(f"p{index}"), step_name=f"p{index}")
         step.inputs.flag, step.inputs.s, step.inputs.n = True, "x", 3
         step.when = predicate
         steps.append(step)
-    result, _ = _run(Workflow(steps, "when_cells"), tmp_path)
+    return Workflow(steps, "when_cells")
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_predicates(tmp_path: Path) -> None:
+    """W1-W6: every predicate kind decides the step, without truthiness."""
+    result, _ = _run(predicates_workflow(), tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     assert [_ran(tmp_path, f"p{index}.txt") for index in range(len(PREDICATES))] == list(PREDICATES.values())
 

@@ -1,0 +1,526 @@
+"""The import is the renderer's exact inverse over the workflows Sophios compiles (design §4.2).
+
+The fixed point. For each workflow W in CASES, M is W compiled to
+Nextflow; the three files written from M import to a workflow that compiles,
+with inference disabled, to M. Model equality implies equal text and also sees
+the fields that never reach it. The domain is the image of compilation: the
+workflows built here through the Python API, the real-world examples, the
+Phase 3 calculator and predicate cells, which hold every arithmetic, ``Math``
+and comparison form a condition reads, and the one workflow in examples/ the
+target compiles. Every form with holes in the idiom table is written or read
+for at least one of them.
+
+Layout. Each rewrite in LAYOUTS changes only what design §4.2 calls
+layout, with its reason, and the import of the rewritten files compiles to M.
+Deliberately NOT on the list, though they look like layout: reordering the
+statements of ``main:``, since the call order is the order of the steps, as
+core keeps "reorder independent steps" off its list (tests/core/transformations.py);
+adding a space where the renderer writes none, or removing the one it writes,
+since that joins or splits a token; and anything inside a string literal, a
+script or stub body, or a helper, which are content.
+"""
+
+# pylint: disable=missing-function-docstring
+
+from collections.abc import Callable
+from dataclasses import dataclass
+import json
+from pathlib import Path
+import re
+import tempfile
+from typing import Any
+
+from hypothesis import given, settings, strategies as st
+import pytest
+
+from sophios.api.python.nextflow import import_nextflow
+from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.api.python.workflow import Inference, Step, StepInput, Workflow
+from sophios.input_output_nf import (
+    NEXTFLOW_CONFIG,
+    NEXTFLOW_PARAMS,
+    NEXTFLOW_SCRIPT,
+    NF_HELPER_FUNCTIONS,
+    Idiom,
+    Idioms,
+    write_nextflow_artifacts,
+)
+from sophios.nf_reader import read_nextflow
+from sophios.nf_types import ExecutableNextflowWorkflow
+from sophios.python_cwl_adapter import import_python_file
+
+from .test_phase3_cells import calculator_workflow, predicates_workflow
+from .test_real_world_examples import (flags_workflow, months_workflow, plan_workflow, summaries_workflow,
+                                       tallies_workflow)
+from .testkit import REPO_ROOT
+
+
+def _echo(name: str, **inputs: Input) -> CommandLineTool:
+    """A tool that echoes its inputs in order into `<name>.txt`."""
+    return CommandLineTool(name, Inputs(**inputs), Outputs(out=Output(cwl.file, glob=f"{name}.txt"))).base_command(
+        "echo").stdout(f"{name}.txt")
+
+
+def _bindings() -> Workflow:
+    """A flag, a prefixed array, a joined optional, both kinds of entry, a piped shell literal, variables, and
+    braces in globs: escaped in a pattern, kept as written in a literal name."""
+    inputs = Inputs(v=Input(cwl.boolean, position=1, flag="-v"),
+                    xs=Input(cwl.array(cwl.string), position=2, flag="--x"),
+                    name=Input(cwl.string, required=False, position=3, flag="--name=", separate=False),
+                    src=Input(cwl.file), out=Input(cwl.directory))
+    tool = (CommandLineTool("bind", inputs, Outputs(
+        res=Output(cwl.directory, glob="$(inputs.out.basename)"),
+        one=Output(cwl.file, glob="one.txt", output_eval="$(self[0])"),
+        maybe=Output(cwl.file, glob="*.log", required=False), braced=Output(cwl.file, glob="a{b}.txt"),
+        named=Output(cwl.file, glob="$(inputs.out.basename)\\\\{x}")))
+        .base_command("prog").argument("2>&1 | tee", shell_quote=False, position=4)
+        .argument("$(inputs.out.basename)", position=5).shell_command()
+        .stage(inputs.src, entryname="renamed.txt").stage(inputs.out, writable=True)
+        .stdout("o.txt").env_var("A", "lit $x").env_var("B", "$(inputs.name)"))
+    step = tool.to_step()
+    step.inputs.v, step.inputs.xs, step.inputs.src, step.inputs.out = True, ["p", "q"], "/data/s.txt", "/data/o"
+    step.inputs.name = "n"
+    workflow = Workflow([step], "bindings")
+    workflow.outputs.res, workflow.outputs.one, workflow.outputs.maybe = (
+        step.outputs.res, step.outputs.one, step.outputs.maybe)
+    return workflow
+
+
+def _crossproduct() -> Workflow:
+    """A conditional flat crossproduct gathered into an array, a step input picking a value, a conditional step."""
+    pair = _echo("pair", item=Input(cwl.string, position=1), tag=Input(cwl.string, position=2)).to_step()
+    use = CommandLineTool("use", Inputs(files=Input(cwl.array(cwl.file), position=1), n=Input(cwl.int, position=2)),
+                          Outputs(o=Output(cwl.file, glob="o.txt"))).base_command("cat").stdout("o.txt").to_step()
+    join = _echo("join", words=Input(cwl.string, position=1)).to_step()
+    workflow = Workflow([pair, use, join], "crossproduct")
+    pair.inputs.item, pair.inputs.tag = ["i", "j"], ["1", "2"]
+    pair.scatter_on(pair.inputs.item, pair.inputs.tag, method="flat_crossproduct")
+    use.inputs.files = pair.outputs.out
+    use.inputs.n = 3
+    use.when = "$(inputs.n > 1)"
+    join.inputs.words = StepInput(source=[workflow.inputs.a.as_type("string?"), workflow.inputs.b.as_type("string?")],
+                                  link_merge="merge_nested", pick_value="first_non_null")
+    workflow.outputs.o, workflow.outputs.j = use.outputs.o, join.outputs.out
+    return workflow
+
+
+def _scatters(method: str) -> Callable[[], Workflow]:
+    def build() -> Workflow:
+        """A scatter over two inputs, an unscattered output into every task, and its outputs gathered."""
+        first = _echo("first", word=Input(cwl.string, position=1)).to_step()
+        pair = _echo("pair", a=Input(cwl.string, position=1), b=Input(cwl.int, position=2),
+                     context=Input(cwl.file, position=3)).to_step()
+        first.inputs.word = "context"
+        pair.inputs.a, pair.inputs.b, pair.inputs.context = ["x", "y"], [1, 2], first.outputs.out
+        pair.scatter_on(pair.inputs.a, pair.inputs.b, method=method)
+        steps: list[Step] = [first, pair]
+        if method != "nested_crossproduct":
+            report = CommandLineTool("report", Inputs(files=Input(cwl.array(cwl.file), position=1)),
+                                     Outputs(r=Output(cwl.file, glob="r.txt"))).base_command("cat").stdout("r.txt")
+            steps.append(report.to_step())
+            steps[-1].inputs.files = pair.outputs.out
+        workflow = Workflow(steps, f"scatter_{method}")
+        workflow.outputs.pairs = pair.outputs.out
+        return workflow
+    return build
+
+
+def _resources() -> Workflow:
+    """An image, cores, fractional memory, GPUs with a capability list, file text, and a float into a command."""
+    tool = (CommandLineTool("res", Inputs(ratio=Input(cwl.float, position=1, flag="--ratio")),
+                            Outputs(text=Output(cwl.string, glob="t.txt", load_contents=True,
+                                                output_eval="$(self[0].contents)"),
+                                    made=Output(cwl.directory, glob="made")))
+            .base_command("run").docker("registry.io/a b:{1}'\"").resources(cores_min=2, ram_min=1.5)
+            .gpu(cuda_version_min="11.7", device_count_min=2, extra={"cudaComputeCapability": ["7.0", "8.0"]}))
+    step = tool.to_step()
+    step.inputs.ratio = 0.1
+    workflow = Workflow([step], "resources")
+    workflow.outputs.text, workflow.outputs.made = step.outputs.text, step.outputs.made
+    return workflow
+
+
+def _directories() -> Workflow:
+    """A Directory output into a Directory input, directly and gathered from a scatter."""
+    make = CommandLineTool("make", Inputs(name=Input(cwl.string, position=1)),
+                           Outputs(d=Output(cwl.directory, glob="$(inputs.name)"))).base_command("mkdir").to_step()
+    each = CommandLineTool("each", Inputs(dir=Input(cwl.directory, position=1), n=Input(cwl.string, position=2)),
+                           Outputs(d=Output(cwl.directory, glob="$(inputs.n)"))).base_command("cp", "-r").to_step()
+    every = CommandLineTool("every", Inputs(dirs=Input(cwl.array(cwl.directory), position=1)),
+                            Outputs(o=Output(cwl.file, glob="o.txt"))).base_command("ls").stdout("o.txt").to_step()
+    make.inputs.name = "made"
+    each.inputs.dir, each.inputs.n = make.outputs.d, ["a", "b"]
+    each.scatter_on(each.inputs.n)
+    every.inputs.dirs = each.outputs.d
+    workflow = Workflow([make, each, every], "directories")
+    workflow.outputs.o = every.outputs.o
+    return workflow
+
+
+def _unary_whens() -> Workflow:
+    """Conditions of nested unary operators, whose canonical text is not a decrement, and of each spelling the
+    Groovy text writes as another's (`===`, `!==`, a unary `+`, null on the left, `!(x == null)`), with the other."""
+    whens = ("$(-(-inputs.x) > 0)", "$(- -inputs.x > 0)", "$(+(+inputs.x) > 0)", "$(-(-3) > inputs.x)",
+             "$(inputs.s === 'it\"s' && !(inputs.o == null))", "$(inputs.s !== 'x' && null != inputs.o)")
+    steps = [_echo(f"w{index}", x=Input(cwl.int, position=1), s=Input(cwl.string, position=2),
+                   o=Input(cwl.string, required=False)).to_step() for index in range(len(whens))]
+    workflow = Workflow(steps, "whens")
+    for step, when in zip(steps, whens):
+        step.inputs.x, step.inputs.s, step.inputs.o = 2, "it\"s", workflow.inputs.o.as_type("string?")
+        step.when = when
+        setattr(workflow.outputs, step.process_name, step.outputs.out)
+    return workflow
+
+
+def _streams() -> Workflow:
+    """Each stream redirected, a shell literal `>` that is not one, and two adjacent shell literals, which the model
+    merges."""
+    redirected = CommandLineTool("streams", Inputs(src=Input(cwl.file)), Outputs(
+        out=Output(cwl.file, glob="out.txt"), err=Output(cwl.file, glob="err.txt"))).base_command("cat").stdin(
+        "$(inputs.src.path)").stdout("out.txt").stderr("err.txt")
+    literal = CommandLineTool("literal", Inputs(), Outputs(o=Output(cwl.file, glob="o.txt"))).base_command(
+        "echo").argument(">", shell_quote=False, position=1).argument("o.txt", position=2).argument(
+        "&&", shell_quote=False, position=3).argument("true", shell_quote=False, position=4).shell_command()
+    first, second = redirected.to_step(), literal.to_step()
+    first.inputs.src = "/data/in.txt"
+    workflow = Workflow([first, second], "streams")
+    workflow.outputs.out, workflow.outputs.err, workflow.outputs.o = (
+        first.outputs.out, first.outputs.err, second.outputs.o)
+    return workflow
+
+
+def _merged() -> Workflow:
+    """Two outputs merged flat into one array input."""
+    one, two = (_echo(name, w=Input(cwl.string, position=1)).to_step() for name in ("one", "two"))
+    cat = CommandLineTool("cat", Inputs(files=Input(cwl.array(cwl.file), position=1)),
+                          Outputs(o=Output(cwl.file, glob="o.txt"))).base_command("cat").stdout("o.txt").to_step()
+    one.inputs.w, two.inputs.w = "1", "2"
+    workflow = Workflow([one, two, cat], "merged")
+    cat.inputs.files = StepInput(source=[one.outputs.out, two.outputs.out], link_merge="merge_flattened")
+    workflow.outputs.o = cat.outputs.o
+    return workflow
+
+
+def _valued() -> Workflow:
+    """Values bound on workflow inputs: text with what CWL and Groovy escape, ints, files, an empty optional array;
+    one input feeds two steps and one none. A required int is given to an optional binding, and an optional int
+    that has a value to a condition, which holds each tool input to its own optionality. A literal `$(` in an
+    argument after a reference is written escaped, and a pattern glob's brace is escaped for Nextflow."""
+    count = CommandLineTool("count", Inputs(
+        word=Input(cwl.string, position=1), n=Input(cwl.int, required=False, position=2, flag="--n"),
+        files=Input(cwl.array(cwl.file), position=3), main=Input(cwl.file, position=4, flag="--in=", separate=False),
+        tag=Input(cwl.string, position=5, flag=" --tag=", separate=False),
+        extras=Input(cwl.array(cwl.string), position=6, flag="--extra")),
+        Outputs(o=Output(cwl.file, glob="$(inputs.word).txt"), braced=Output(cwl.file, glob="$(inputs.word){x}.txt"))
+    ).base_command("wc", "$(not) \\${x}").argument("a \\$(b) \\\\ c", position=7).stdout(
+        "$(inputs.word).txt").to_step()
+    again = _echo("again", word=Input(cwl.string, position=1), k=Input(cwl.int)).to_step()
+    again.when = "$(inputs.k > 1)"
+    workflow = Workflow([count, again], "valued")
+    word = workflow.inputs.word.as_type("string")
+    count.inputs.word, count.inputs.n, again.inputs.word = word, workflow.inputs.n.as_type("int"), word
+    count.inputs.files, count.inputs.main = workflow.inputs.files.as_type("File[]"), "/data/main.txt"
+    count.inputs.tag, again.inputs.k = "t", workflow.inputs.k.as_type("int?")
+    count.inputs.extras = workflow.inputs.extras.as_type("string[]?")
+    workflow.inputs.unread.as_type("string")
+    workflow.inputs.word, workflow.inputs.n, workflow.inputs.k, workflow.inputs.unread = "w'\"$x", 3, 2, "kept"
+    workflow.inputs.files, workflow.inputs.extras = ["/data/a.txt", {"class": "File", "path": "/data/b.txt"}], []
+    workflow.outputs.o, workflow.outputs.again = count.outputs.o, again.outputs.out
+    return workflow
+
+
+def _renamed() -> Workflow:
+    """Names normalization gives a leading `_`, which the import keeps: a capitalized step with a value written on
+    it, a capitalized tool input, workflow input and workflow output, and a reserved step name."""
+    fetch = _echo("Fetch", word=Input(cwl.string, position=1), N=Input(cwl.int, position=2)).to_step()
+    task = _echo("task", word=Input(cwl.string, position=1)).to_step()
+    workflow = Workflow([fetch, task], "renamed")
+    fetch.inputs.word, fetch.inputs.N, task.inputs.word = "x", workflow.inputs.X.as_type("int"), "y"
+    workflow.inputs.X = 1
+    workflow.outputs.Out, workflow.outputs.t = fetch.outputs.out, task.outputs.out
+    return workflow
+
+
+def _nested() -> Workflow:
+    """A subworkflow, inlined, whose input comes from an outer step."""
+    write = _echo("write", message=Input(cwl.string, position=1)).to_step()
+    write.inputs.message = "nested composition"
+    copy = CommandLineTool("copy_file", Inputs(source=Input(cwl.file, position=1)),
+                           Outputs(result=Output(cwl.file, glob="copy.txt"))).base_command("cp").argument(
+        "copy.txt", position=2).to_step(step_name="inner_copy")
+    child = Workflow([copy], "child")
+    copy.inputs.source = child.inputs.source
+    child.inputs.source = write.outputs.out
+    child.outputs.result = copy.outputs.result
+    workflow = Workflow([write, child], "root")
+    workflow.outputs.copied = child.outputs.result
+    return workflow
+
+
+def _example(name: str) -> Callable[[], Workflow]:
+    def build() -> Workflow:
+        path = REPO_ROOT / "examples" / "scripts" / f"{name}.py"
+        workflow: Workflow = import_python_file(name, path).workflow()
+        return workflow
+    return build
+
+
+CASES: dict[str, Callable[[], Workflow]] = {
+    "bindings": _bindings, "crossproduct": _crossproduct, "dotproduct": _scatters("dotproduct"),
+    "flat_crossproduct": _scatters("flat_crossproduct"), "nested_crossproduct": _scatters("nested_crossproduct"),
+    "resources": _resources, "directories": _directories, "unary_whens": _unary_whens, "streams": _streams,
+    "merged": _merged, "valued": _valued, "renamed": _renamed, "nested": _nested,
+    # The one workflow in examples/ the Nextflow target compiles.
+    "helloworld_pyapi": _example("helloworld_pyapi"),
+    "plan": plan_workflow, "months": lambda: months_workflow(Path("/data")), "summaries": summaries_workflow,
+    "tallies": tallies_workflow, "flags": flags_workflow,
+    "calculator": calculator_workflow, "predicates": predicates_workflow,
+}
+_FILES = (NEXTFLOW_SCRIPT, NEXTFLOW_PARAMS, NEXTFLOW_CONFIG)
+
+
+def _compiled(name: str) -> ExecutableNextflowWorkflow:
+    return CASES[name]().compile(target="nextflow")
+
+
+def _imported(directory: Path) -> ExecutableNextflowWorkflow:
+    return import_nextflow(directory).compile(target="nextflow", inference=Inference(enabled=False))
+
+
+@pytest.mark.parametrize("name", CASES)
+def test_the_import_of_a_compiled_pipeline_compiles_to_its_model(name: str, tmp_path: Path) -> None:
+    model = _compiled(name)
+    write_nextflow_artifacts(model, tmp_path)
+    assert _imported(tmp_path) == model
+
+
+# Text with what CWL, Groovy and the shell each escape. A base command is not interpolated, so any text is
+# literal there; in an argument, a literal `$(` or `${` is written escaped, and a backslash before one is escaped.
+_TEXT = st.lists(st.sampled_from([" ", "a", "$", "\\", "'", '"', "{", "}", "(", ")", "<", "|", ";", "#", "*", "?",
+                                  "[", "é", "\t", "$(", "${"]), max_size=4).map("".join)
+_LITERAL = st.lists(st.sampled_from([" ", "a", "$", "\\\\", "'", '"', "}", ")", "<", "|", "#", "*", "[", "é", "\t",
+                                     "\\$(", "\\${"]), min_size=1, max_size=4).map("".join)
+_VALUES: dict[str, st.SearchStrategy[Any]] = {
+    "string": _TEXT, "int": st.integers(-5, 10**6), "float": st.floats(-1e17, 1e17, allow_nan=False),
+    "boolean": st.booleans(), "File": st.sampled_from(["/data/a.txt", "/data/b c.txt"]),
+    "string[]": st.lists(_TEXT, max_size=2), "string?": st.none() | _TEXT, "int?": st.none() | st.integers(0, 9),
+    "float?": st.none() | st.floats(0, 10),
+}
+_PREFIXES = st.sampled_from(["-x", "--name=", "--long"])
+
+
+@st.composite
+def _generated(draw: st.DrawFn) -> Workflow:
+    """One tool with inputs of each kind, bound on the step or on a workflow input, given to the command by their
+    own bindings and by arguments among literal words and shell text, in a container or with resources."""
+    kinds = draw(st.lists(st.sampled_from(sorted(_VALUES)), min_size=1, max_size=4))
+    names = [f"i{index}" for index in range(len(kinds))]
+    specs = {}
+    for name, kind in zip(names, kinds):
+        base = kind.removesuffix("?")
+        binding: dict[str, Any] = {}
+        if base == "boolean" or kind.endswith("?") or draw(st.booleans()):
+            binding = {"position": draw(st.integers(1, 9))}
+            if base in ("boolean", "string[]") or draw(st.booleans()):
+                binding["flag"] = draw(_PREFIXES)
+                if base not in ("boolean", "string[]") and draw(st.booleans()):
+                    binding["separate"] = False
+        specs[name] = Input(cwl.array(cwl.string) if base == "string[]" else base, required=not kind.endswith("?"),
+                            **binding)
+    words = [st.just(f"$(inputs.{name})") for name, kind in zip(names, kinds) if kind in ("string", "int", "float")]
+    words += [st.just(f"$(inputs.{name}.basename)") for name, kind in zip(names, kinds) if kind == "File"]
+    tool = CommandLineTool("tool", Inputs(**specs), Outputs(out=Output(cwl.file, glob="out.txt"))).base_command(
+        *draw(st.lists(_TEXT.filter(bool), min_size=1, max_size=2))).stdout("out.txt")
+    for value, position, prefix in draw(st.lists(st.tuples(st.lists(st.one_of(_LITERAL, *words), min_size=1,
+                                                                    max_size=3).map("".join),
+                                                           st.integers(0, 9), st.none() | _PREFIXES), max_size=3)):
+        tool.argument(value, position=position, **({"prefix": prefix} if prefix else {}))
+    if draw(st.booleans()):
+        tool.argument(draw(st.sampled_from(["| tee", "2>&1", "&& true"])), shell_quote=False,
+                      position=draw(st.integers(0, 9))).shell_command()
+    elif draw(st.booleans()):  # Sophios supports a shell command on the host only
+        tool.docker(draw(_TEXT.filter(str.strip)))
+    strings = [st.just(f"$(inputs.{name})") for name, kind in zip(names, kinds) if kind == "string"]
+    for index in range(draw(st.integers(0, 2))):
+        tool.env_var(f"V{index}", draw(st.one_of(_TEXT.filter(lambda text: "$(" not in text and "${" not in text),
+                                                 *strings)))
+    if draw(st.booleans()):
+        tool.resources(cores_min=draw(st.integers(1, 8)), ram_min=draw(st.integers(1, 10**6) | st.floats(0.5, 1e17)))
+    step = tool.to_step()
+    workflow = Workflow([step], "generated")
+    for name, kind in zip(names, kinds):
+        value = draw(_VALUES[kind])
+        if draw(st.booleans()):  # on a workflow input, optional or not whatever the tool's input is, if it has a value
+            optional = value is None or draw(st.booleans())
+            setattr(step.inputs, name, getattr(workflow.inputs, f"w_{name}").as_type(
+                kind.removesuffix("?") + "?" * optional))
+            if value is not None:
+                setattr(workflow.inputs, f"w_{name}", value)
+        elif value is not None:
+            setattr(step.inputs, name, value)
+    workflow.outputs.out = step.outputs.out
+    return workflow
+
+
+@settings(max_examples=100, deadline=None)
+@given(_generated())
+def test_the_import_of_a_generated_tool_compiles_to_its_model(workflow: Workflow) -> None:
+    model = workflow.compile(target="nextflow")
+    with tempfile.TemporaryDirectory() as directory:
+        write_nextflow_artifacts(model, directory)
+        assert _imported(Path(directory)) == model
+
+
+#: The forms the reader reads by filling them and looking up what it read, as `ch_{process}_{emit}` splits more
+#: than one way: the reader matches every other form.
+_LOOKED_UP = (Idioms.PROCESS_OUTPUT, Idioms.CONDITIONAL_OUTPUT)
+
+
+def test_every_idiom_is_written_and_read_for_some_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """For some case, the renderer fills each form with holes in the idiom table, and the reader matches it."""
+    used: set[Idiom] = set()
+
+    def recording(method: Callable[..., Any]) -> Callable[..., Any]:
+        def record(idiom: Idiom, *args: Any, **holes: Any) -> Any:
+            if found := method(idiom, *args, **holes):
+                used.add(idiom)
+            return found
+        return record
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Idiom, "fill", recording(Idiom.fill))
+        for name in CASES:
+            write_nextflow_artifacts(_compiled(name), tmp_path / name)
+    filled = set(used)
+    used.clear()
+    with monkeypatch.context() as patch:
+        patch.setattr(Idiom, "match", recording(Idiom.match))
+        patch.setattr(Idiom, "find", recording(Idiom.find))
+        for name in CASES:
+            read_nextflow(tmp_path / name)
+    idioms = {name: idiom for name, idiom in vars(Idioms).items() if isinstance(idiom, Idiom)}
+    assert [name for name, idiom in idioms.items() if idiom not in filled] == []
+    assert [name for name, idiom in idioms.items() if idiom not in used and idiom not in _LOOKED_UP] == []
+
+
+_STRINGS = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"")
+
+
+def _lines(text: str) -> list[tuple[str, str]]:
+    """Each line of `workflow.nf` with its kind: `code`, whose layout is free; `opener`, the triple quote that
+    opens a script or stub, whose indentation alone is; and `content`, a helper's or a body's line."""
+    lines = text.split("\n")
+    kinds = ["code"] * len(lines)
+    for helper in NF_HELPER_FUNCTIONS:
+        if (start := text.find(helper)) >= 0:
+            first = text.count("\n", 0, start)
+            kinds[first:first + helper.count("\n") + 1] = ["content"] * (helper.count("\n") + 1)
+    body = False
+    for index, line in enumerate(lines):
+        if body:
+            kinds[index], body = "content", line.strip() != '"""'
+        elif line.strip() == '"""':  # a script's or stub's closing quotes are in its body
+            kinds[index], body = "opener", True
+    return list(zip(lines, kinds))
+
+
+def _code_lines(edit: Callable[[str], list[str]]) -> Callable[[dict[str, str]], dict[str, str]]:
+    """A rewrite of `workflow.nf` that replaces each non-empty code line by the lines `edit` makes of it."""
+    def apply(files: dict[str, str]) -> dict[str, str]:
+        written = [new for line, kind in _lines(files[NEXTFLOW_SCRIPT])
+                   for new in (edit(line) if kind == "code" and line.strip() else [line])]
+        return {**files, NEXTFLOW_SCRIPT: "\n".join(written)}
+    return apply
+
+
+def _spaced(line: str) -> str:
+    """`line` with every space between tokens, outside its strings, a longer run of spaces and tabs."""
+    pieces = _STRINGS.split(line)
+    strings = _STRINGS.findall(line)
+    return "".join(piece.replace(" ", " \t  ") + (strings[index] if index < len(strings) else "")
+                   for index, piece in enumerate(pieces))
+
+
+def _reindented(files: dict[str, str]) -> dict[str, str]:
+    written = [f"\t  {line.lstrip(' ')}" if kind in ("code", "opener") and line.strip() else line
+               for line, kind in _lines(files[NEXTFLOW_SCRIPT])]
+    return {**files, NEXTFLOW_SCRIPT: "\n".join(written)}
+
+
+_PROCESS_BLOCKS = re.compile(r"(?ms)^process \S+ \{\n.*?\n^\}\n")
+
+
+def _reordered(files: dict[str, str]) -> dict[str, str]:
+    text = files[NEXTFLOW_SCRIPT]
+    blocks = _PROCESS_BLOCKS.findall(text)
+    start, end = text.index(blocks[0]), text.index(blocks[-1]) + len(blocks[-1])
+    return {**files, NEXTFLOW_SCRIPT: text[:start] + "\n".join(reversed(blocks)) + text[end:]}
+
+
+def _crlf(files: dict[str, str]) -> dict[str, str]:
+    return {**files, **{name: files[name].replace("\n", "\r\n") for name in (NEXTFLOW_SCRIPT, NEXTFLOW_CONFIG)}}
+
+
+def _json(files: dict[str, str]) -> dict[str, str]:
+    params = json.loads(files[NEXTFLOW_PARAMS])
+    return {**files, NEXTFLOW_PARAMS: json.dumps(dict(reversed(params.items())), indent=1, ensure_ascii=True)}
+
+
+def _config(files: dict[str, str]) -> dict[str, str]:
+    return {**files, NEXTFLOW_CONFIG: "// written by Sophios\n\n" + files[NEXTFLOW_CONFIG].replace(" = ", "  =\t")}
+
+
+@dataclass(frozen=True, slots=True)
+class Layout:
+    """A rewrite of the three files that changes only their layout, and why it does not change what they say."""
+
+    name: str
+    apply: Callable[[dict[str, str]], dict[str, str]]
+    #: Why the rewrite is layout. Not a comment: it is the claim the property checks.
+    rationale: str
+
+
+LAYOUTS: tuple[Layout, ...] = (
+    Layout("process order", _reordered,
+           "Each process block is declared on its own and a call names it wherever it is declared; the order of "
+           "the calls, which is the order of the steps, does not change."),
+    Layout("indentation", _reindented,
+           "Groovy reads a statement, a declaration or a script's opening quotes alike at any indentation."),
+    Layout("space runs", _code_lines(lambda line: [_spaced(line)]),
+           "Groovy separates two tokens by any run of spaces and tabs; outside a string, the run's length is not "
+           "data."),
+    Layout("blank lines", _code_lines(lambda line: [line, "", "  "]),
+           "A line break ends a statement, and an empty line is no statement."),
+    Layout("line comments", _code_lines(lambda line: ["// a comment, with 'quotes' and \"{\" in it", line + "  // c"]),
+           "Groovy drops a `//` comment to the end of its line, outside a string."),
+    Layout("block comments", _code_lines(lambda line: ["/* a block", "   comment */", line + " /* c */"]),
+           "Groovy drops a block comment as it drops the space it stands in."),
+    Layout("CR LF", _crlf,
+           "Groovy reads a carriage return and a line feed as a line feed, even inside a triple-quoted script "
+           "(design §4.2, probed on the pinned Nextflow under the v2 parser)."),
+    Layout("params JSON", _json,
+           "`nextflow_params.json` is read as JSON, in which whitespace, key order and escapes are not data."),
+    Layout("config", _config,
+           "`nextflow.config` is Groovy: its comments, blank lines and space runs are layout as in `workflow.nf`."),
+)
+
+
+def _everything(files: dict[str, str], layouts: tuple[Layout, ...] = LAYOUTS) -> dict[str, str]:
+    # The process blocks are found by their unchanged layout, so they move first.
+    for layout in layouts:
+        files = layout.apply(files)
+    return files
+
+
+LAYOUTS += (Layout("all at once", _everything, "Each rewrite above is layout, so their composition is."),)
+
+
+@pytest.mark.parametrize("layout", LAYOUTS, ids=[layout.name for layout in LAYOUTS])
+@pytest.mark.parametrize("name", CASES)
+def test_layout_leaves_the_import_unchanged(layout: Layout, name: str, tmp_path: Path) -> None:
+    model = _compiled(name)
+    write_nextflow_artifacts(model, tmp_path)
+    files = {file: (tmp_path / file).read_text(encoding="utf-8") for file in _FILES}
+    for file, text in layout.apply(files).items():
+        (tmp_path / file).write_bytes(text.encode("utf-8"))
+    assert _imported(tmp_path) == model

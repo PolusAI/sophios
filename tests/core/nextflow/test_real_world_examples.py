@@ -10,7 +10,8 @@ same-named files from different directories in one File[] workflow input; and a
 boolean parameter set in the params file and cleared on the command line.
 
 Every task list is enumerated in Python when the workflow is built, and every
-dependency is data that a task reads.
+dependency is data that a task reads. Each workflow is built by a function of its
+own, which the import's fixed point (test_import.py) reads as well.
 """
 
 # pylint: disable=missing-function-docstring
@@ -70,9 +71,7 @@ def _run_report(workflow: Workflow, directory: Path, *arguments: str) -> str:
 
 
 # Modelled on Matthew's repo, main.nf.
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_four_scatter_shapes_feed_one_scattered_tally(tmp_path: Path) -> None:
+def plan_workflow() -> Workflow:
     """(year, region) pairs; a crossproduct; one task per year over a list; an empty scatter."""
     per_region = _sh("per_region", _EMIT, "piece", group=Input(cwl.string, position=1),
                      year=Input(cwl.int, position=2), region=Input(cwl.string, position=3))
@@ -125,8 +124,14 @@ def test_four_scatter_shapes_feed_one_scattered_tally(tmp_path: Path) -> None:
         setattr(tally.inputs, f"pieces_{name}", group.outputs.piece)
     tally.scatter_on(tally.inputs.group)
 
-    workflow = Workflow([fetch, *groups.values(), tally, _report(tallies=tally.outputs.tally)], "plan")
-    assert _run_report(workflow, tmp_path) == """\
+    return Workflow([fetch, *groups.values(), tally, _report(tallies=tally.outputs.tally)], "plan")
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_four_scatter_shapes_feed_one_scattered_tally(tmp_path: Path) -> None:
+    """Every group's pieces reach every task of the tally; the empty scatter's tally still runs."""
+    assert _run_report(plan_workflow(), tmp_path) == """\
 alpha 4
 alpha 2001 north data
 alpha 2001 south data
@@ -146,31 +151,39 @@ gamma 0
 """
 
 
+# The (year, month) pairs of each lane.
+_LANES = {"lane_a": [(2001, 11), (2001, 12), (2002, 1), (2002, 2)], "lane_b": [(2002, 6), (2002, 7)]}
+
+
 # Modelled on Matthew's repo, satellite.nf.
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_one_step_per_lane_runs_one_task_per_month(tmp_path: Path) -> None:
-    """Each lane's step is a dotproduct over (year, month) pairs written in Python; the report reads lane headers."""
+def months_workflow(headers: Path) -> Workflow:
+    """Each lane's step is a dotproduct over (year, month) pairs written in Python; the report reads lane headers.
+
+    One workflow input holds each lane's header, `<headers>/<lane>/header.txt`, every one named header.txt.
+    """
     per_month = _sh("per_month", 'printf "%s %04d-%02d\\n" "$1" "$2" "$3"', "piece",
                     lane=Input(cwl.string, position=1), year=Input(cwl.int, position=2),
                     month=Input(cwl.int, position=3))
-    lanes = {"lane_a": [(2001, 11), (2001, 12), (2002, 1), (2002, 2)], "lane_b": [(2002, 6), (2002, 7)]}
     steps = {}
-    for lane, pairs in lanes.items():
+    for lane, pairs in _LANES.items():
         step = steps[lane] = Step(per_month, step_name=lane)
         step.inputs.lane = lane
         step.inputs.year = [year for year, _ in pairs]
         step.inputs.month = [month for _, month in pairs]
         step.scatter_on(step.inputs.year, step.inputs.month)
-    # One workflow input holds each lane's header, every one named header.txt.
-    headers = []
-    for lane in lanes:
-        header = tmp_path / lane / "header.txt"
-        header.parent.mkdir()
-        header.write_text(f"{lane} header\n", encoding="utf-8")
-        headers.append({"class": "File", "path": str(header)})
-    report = _report(headers=headers, **{name: step.outputs.piece for name, step in steps.items()})
-    assert _run_report(Workflow([*steps.values(), report], "months"), tmp_path) == """\
+    report = _report(headers=[{"class": "File", "path": str(headers / lane / "header.txt")} for lane in _LANES],
+                     **{name: step.outputs.piece for name, step in steps.items()})
+    return Workflow([*steps.values(), report], "months")
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_one_step_per_lane_runs_one_task_per_month(tmp_path: Path) -> None:
+    """One task per (year, month) pair of each lane, after the lanes' headers."""
+    for lane in _LANES:
+        (tmp_path / lane).mkdir()
+        (tmp_path / lane / "header.txt").write_text(f"{lane} header\n", encoding="utf-8")
+    assert _run_report(months_workflow(tmp_path), tmp_path) == """\
 lane_a header
 lane_b header
 lane_a 2001-11
@@ -183,9 +196,7 @@ lane_b 2002-07
 
 
 # Modelled on Matthew's repo, nlcd.nf.
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_unscattered_outputs_reach_every_task_of_a_scattered_step(tmp_path: Path) -> None:
+def summaries_workflow() -> Workflow:
     """A year's fetched file reaches every task of that year's summary; another step reads them all merged."""
     fetch_tool = _sh("fetch", 'printf "data %s\\n" "$1"', "data", year=Input(cwl.int, position=1))
     summarise_tool = _sh("summarise", 'read -r kind of < "$2"; printf "%s %s %s\\n" "$of" "$1" "$kind"', "summary",
@@ -211,7 +222,14 @@ def test_unscattered_outputs_reach_every_task_of_a_scattered_step(tmp_path: Path
     across.scatter_on(across.inputs.year, across.inputs.region)
 
     report = _report(**{name: step.outputs.summary for name, step in {**summaries, "across": across}.items()})
-    assert _run_report(Workflow([*fetches, *summaries.values(), across, report], "summaries"), tmp_path) == """\
+    return Workflow([*fetches, *summaries.values(), across, report], "summaries")
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_unscattered_outputs_reach_every_task_of_a_scattered_step(tmp_path: Path) -> None:
+    """Each summary task keeps its year's file; the merged step keeps its own year's from all of them."""
+    assert _run_report(summaries_workflow(), tmp_path) == """\
 2001 north data
 2001 south data
 2002 north data
@@ -224,9 +242,7 @@ alpha 2002 west data
 
 
 # Modelled on Matthew's repo, quality.nf.
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_a_tally_per_group_reads_every_groups_pieces_merged_into_one_input(tmp_path: Path) -> None:
+def tallies_workflow() -> Workflow:
     """Scattered groups, one with no tasks, merge_flattened into one input of a scattered tally."""
     per_region = _sh("per_region", _EMIT, "piece", group=Input(cwl.string, position=1),
                      year=Input(cwl.int, position=2), region=Input(cwl.string, position=3))
@@ -248,8 +264,14 @@ def test_a_tally_per_group_reads_every_groups_pieces_merged_into_one_input(tmp_p
                                     link_merge="merge_flattened")
     tally.scatter_on(tally.inputs.group)
 
-    workflow = Workflow([*groups.values(), tally, _report(tallies=tally.outputs.tally)], "tallies")
-    assert _run_report(workflow, tmp_path) == """\
+    return Workflow([*groups.values(), tally, _report(tallies=tally.outputs.tally)], "tallies")
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_a_tally_per_group_reads_every_groups_pieces_merged_into_one_input(tmp_path: Path) -> None:
+    """Each group's tally counts its own pieces among every group's."""
+    assert _run_report(tallies_workflow(), tmp_path) == """\
 alpha 2
 alpha 2001 north
 alpha 2002 south
@@ -263,15 +285,20 @@ gamma 0
 
 
 # Modelled on Matthew's repo, quality.nf.
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_a_command_line_false_overrides_a_flag_the_params_file_sets(tmp_path: Path) -> None:
-    """The params file sets strict and verbose and clears fast; the command line clears verbose."""
+def flags_workflow() -> Workflow:
+    """Three boolean flags, the params file setting strict and verbose and clearing fast."""
     flags = Step(_sh("flags", 'printf "%s\\n" "$@"', "report", strict=Input(cwl.boolean, position=1, flag="--strict"),
                      verbose=Input(cwl.boolean, position=2, flag="--verbose"),
                      fast=Input(cwl.boolean, position=3, flag="--fast")), step_name="flags")
     flags.inputs.strict, flags.inputs.verbose, flags.inputs.fast = True, True, False
-    workflow = Workflow([flags], "flags")
+    return Workflow([flags], "flags")
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_a_command_line_false_overrides_a_flag_the_params_file_sets(tmp_path: Path) -> None:
+    """The params file sets strict and verbose and clears fast; the command line clears verbose."""
+    workflow = flags_workflow()
     verbose = next(connection.from_port for connection in workflow.compile(target="nextflow").connections
                    if isinstance(connection, NfWorkflowInputConnection) and connection.to_port == "verbose")
     assert _run_report(workflow, tmp_path, f"--{verbose}", "false") == "--strict\n"
