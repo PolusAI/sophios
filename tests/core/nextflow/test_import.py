@@ -18,6 +18,15 @@ core keeps "reorder independent steps" off its list (tests/core/transformations.
 adding a space where the renderer writes none, or removing the one it writes,
 since that joins or splits a token; and anything inside a string literal, a
 script or stub body, or a helper, which are content.
+
+Rejection. One edit of generated text for each import code
+(provocations.IMPORT_EDITS, which the provocation of each code applies too),
+and a few more: each stops the import with its code at the line it names,
+and nothing is returned.
+
+Hermetic. The import reads the three files alone: copied into an empty
+directory, with no network, they import, and no path a parameter names is
+looked at.
 """
 
 # pylint: disable=missing-function-docstring
@@ -25,8 +34,10 @@ script or stub body, or a helper, which are content.
 from collections.abc import Callable
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import re
+import shutil
 import tempfile
 from typing import Any
 
@@ -45,10 +56,14 @@ from sophios.input_output_nf import (
     Idioms,
     write_nextflow_artifacts,
 )
+from sophios.lang.diagnostics import SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
 from sophios.nf_reader import read_nextflow
 from sophios.nf_types import ExecutableNextflowWorkflow
 from sophios.python_cwl_adapter import import_python_file
 
+from ..hermetic import network_refused
+from ..provocations import IMPORT_EDITS, import_edited
 from .test_phase3_cells import calculator_workflow, predicates_workflow
 from .test_real_world_examples import (flags_workflow, months_workflow, plan_workflow, summaries_workflow,
                                        tallies_workflow)
@@ -524,3 +539,113 @@ def test_layout_leaves_the_import_unchanged(layout: Layout, name: str, tmp_path:
     for file, text in layout.apply(files).items():
         (tmp_path / file).write_bytes(text.encode("utf-8"))
     assert _imported(tmp_path) == model
+
+
+_CODE = SophiosErrorCode
+# More edits than one per code: the constructs the import is most often handed.
+_EDITS = [
+    *((code, *edit) for code, edit in IMPORT_EDITS.items()),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    greet(message)\n", "    greet(message.view())\n", ".view()"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "nextflow.enable.dsl=2\n",
+     "nextflow.enable.dsl=2\ninclude { X } from './x'\n", "include"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "\nworkflow {\n",
+     "\nworkflow.onComplete { println('done') }\nworkflow {\n", "onComplete"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    input:\n", "    cpus params.threads\n    input:\n", "cpus"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    greet(message)\n", "    greet(message)\n    other(message)\n",
+     "other("),
+    # A second block of a process, which nothing else would read.
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "\nworkflow provoke {\n",
+     '\nprocess greet {\n    script:\n    """\n    rm o\n    """\n}\n\nworkflow provoke {\n', "process greet"),
+    (_CODE.IMPORT_FOREIGN_SCRIPT, NEXTFLOW_SCRIPT, "    exit 1\n", "    exit 0\n", "stub:"),
+    (_CODE.IMPORT_MISMATCH, NEXTFLOW_SCRIPT, "    val message\n", "    val message, arity: '1'\n", "arity"),
+    # Text after a script's opening quotes is in the script, quotes open one only after `script:` or `stub:`, and a
+    # lone carriage return ends no line.
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, '    script:\n    """\n', '    script:\n    """ \n', '"""'),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    input:\n", '    input:\n    """\n', '"""'),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    input:\n", "    input:\r", "input:"),
+    # A value the compile writes otherwise, as a text parameter's 3 is "3", or not at all.
+    (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"hi"', "3", '"message": 3'),
+    (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"hi"', "null", '"message": null'),
+    # The compile renames a capitalized workflow, and refuses an empty command word.
+    (_CODE.IMPORT_UNWRITABLE, NEXTFLOW_SCRIPT, "provoke", "Provoke", "workflow Provoke"),
+    (_CODE.IMPORT_UNWRITABLE, NEXTFLOW_SCRIPT, "('echo')", "('')", "workflow provoke"),
+]
+
+
+def test_the_unedited_pipeline_imports(tmp_path: Path) -> None:
+    """The pipeline every edit below starts from is one the import reads."""
+    assert isinstance(import_edited(str(tmp_path), NEXTFLOW_SCRIPT, "", ""), Workflow)
+
+
+def _stops(code: SophiosErrorCode, path: Path, at: str, importing: Callable[[], object]) -> None:
+    """`importing` stops with `code` at a line of `path` that holds `at`, which its message names."""
+    with pytest.raises(SophiosError) as caught:
+        importing()
+    (diagnostic,) = caught.value.diagnostics
+    assert diagnostic.code is code, diagnostic
+    assert diagnostic.span is not None and Path(diagnostic.span.file) == path
+    assert at in path.read_bytes().decode("utf-8").split("\n")[diagnostic.span.start_line - 1]
+    assert at in diagnostic.message
+
+
+@pytest.mark.parametrize("code, file, old, new, at", _EDITS,
+                         ids=[f"{edit[0].name}-{edit[4]!r}" for edit in _EDITS])
+def test_an_edit_outside_the_subset_stops_the_import_at_its_line(
+        code: SophiosErrorCode, file: str, old: str, new: str, at: str, tmp_path: Path) -> None:
+    _stops(code, tmp_path / file, at, lambda: import_edited(str(tmp_path), file, old, new))
+
+
+def test_an_int_for_a_float_parameter_stops_the_import(tmp_path: Path) -> None:
+    """Sophios writes a float parameter's value as its text, `"1.0"` and never the int `1`, which an import would
+    write back as `"1.0"`."""
+    write_nextflow_artifacts(_compiled("resources"), tmp_path)
+    path = tmp_path / NEXTFLOW_PARAMS
+    path.write_text(path.read_text(encoding="utf-8").replace('"0.1"', "1"), encoding="utf-8")
+    _stops(_CODE.IMPORT_PARAMS, path, '"res_ratio": 1', lambda: import_nextflow(tmp_path))
+
+
+def test_a_process_block_after_the_workflows_stops_the_import(tmp_path: Path) -> None:
+    """The process blocks are free in their order among themselves, not past the workflows (design §4.2)."""
+    import_edited(str(tmp_path), NEXTFLOW_SCRIPT, "", "")
+    path = tmp_path / NEXTFLOW_SCRIPT
+    text = path.read_text(encoding="utf-8")
+    (block,) = _PROCESS_BLOCKS.findall(text)
+    path.write_text(text.replace(block, "") + "\n" + block, encoding="utf-8")
+    _stops(_CODE.IMPORT_MISMATCH, path, "process greet", lambda: import_nextflow(tmp_path))
+
+
+def test_a_port_the_tool_builder_cannot_name_stops_the_import_at_its_process(tmp_path: Path) -> None:
+    """A CWL tool may call a port `keys`, which `Inputs` keeps for its method, so no workflow built through the
+    tool builder compiles to the pipeline."""
+    step = Step.from_cwl_document({
+        "cwlVersion": "v1.2", "class": "CommandLineTool", "baseCommand": "echo", "stdout": "o.txt",
+        "inputs": {"keys": {"type": "string", "inputBinding": {"position": 1}}},
+        "outputs": {"out": {"type": "File", "outputBinding": {"glob": "o.txt"}}}}, process_name="tool")
+    workflow = Workflow([step], "reserved")
+    step.inputs.keys, workflow.outputs.out = "x", step.outputs.out
+    write_nextflow_artifacts(workflow.compile(target="nextflow"), tmp_path)
+    _stops(_CODE.IMPORT_UNWRITABLE, tmp_path / NEXTFLOW_SCRIPT, "process tool", lambda: import_nextflow(tmp_path))
+
+
+def test_the_import_reads_the_three_files_alone(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Copied alone into an empty directory, with the network refused, the files import, and no path a parameter
+    names is looked at: not `nextflow_workflow.json`, no tool registry, no network, no input file."""
+    model = _compiled("valued")
+    write_nextflow_artifacts(model, tmp_path / "written")
+    (tmp_path / "alone").mkdir()
+    for file in _FILES:
+        shutil.copy(tmp_path / "written" / file, tmp_path / "alone" / file)
+    named = {item["path"] for value in model.to_dict()["params"].values()
+             for item in (value if isinstance(value, list) else [value]) if isinstance(item, dict)}
+    looked: list[str] = []
+    stat = os.stat
+
+    def recording(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+        looked.append(os.fspath(path) if isinstance(path, (str, os.PathLike)) else str(path))
+        return stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", recording)
+    with network_refused() as attempts:
+        imported = _imported(tmp_path / "alone")
+    assert (imported, attempts, named & set(looked)) == (model, [], set())
+    assert named, "the case names no file"
