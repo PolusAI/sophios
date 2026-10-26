@@ -124,6 +124,16 @@ jobs:
           ref: ${{ inputs.image-workflows_ref }}
           path: image-workflows
 
+      # The compute service's tests run its slurm driver, at the commit sophios.compute is written against and
+      # its run-request.schema.json was copied from, under the driver's own fake Slurm.
+      - name: Checkout the slurm driver
+        if: ${{ runner.os != 'Windows' }}
+        uses: actions/checkout@v5
+        with:
+          repository: vjaganat90/compute
+          ref: e7ec43b4575a769288c0d73788bbdee2c31cb1c5
+          path: compute
+
       # The run page shows the dispatched sha, which may be master's; the summary
       # names what was checked out. Inputs go through env, never into the script.
       - name: Name what this run tests
@@ -277,6 +287,12 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         timeout-minutes: 20
         run: cd sophios/ && pytest tests/core/test_predicates.py tests/core/test_leak_boundary.py tests/core/test_lang_version.py tests/core/test_lang_parser.py tests/core/test_hermeticity.py -m "skip_pypi_ci"
+
+      # sophios.compute against the slurm driver checked out above, run with this env's Node (26 or later) and
+      # bash fakes, so not on Windows. skip_pypi_ci keeps the file out of the packaging lane, which has no driver.
+      - name: PyTest Compute Service
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os != 'Windows' }}
+        run: cd sophios/ && SOPHIOS_SLURM_DRIVER="$PWD/../compute/packages/slurm-driver" pytest tests/core/test_compute_service.py -m "skip_pypi_ci"
 
       # The oracle suite: the generators, the equivalence relation and the
       # suite's own hermeticity checks. Its own step, so a red build is

@@ -3,17 +3,23 @@
 Fast and without a service: what the request holds, and what Sophios refuses before sending. What the service
 answers is `test_compute_service.py`'s, against the service itself.
 """
+import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import requests
 from jsonschema import Draft202012Validator
 
 from sophios import compute
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
 from sophios.lang.error_codes import SophiosErrorCode
+from sophios.run_status import RunState
+
+from . import fake_ssh
 
 ADAPTERS = Path(__file__).resolve().parents[2] / 'cwl_adapters'
 
@@ -87,13 +93,13 @@ def test_a_run_id_is_the_workflow_name_the_time_and_four_hex_digits_within_the_s
     """`<name>-<UTC yyyymmddThhmmss>-<4 hex>`; a name outside the rule is fitted to it."""
     rule = Draft202012Validator(compute.SCHEMA['$defs']['Id'])
     now = datetime(2026, 10, 26, 14, 22, 5, tzinfo=timezone.utc)
-    assert re.fullmatch(r'segment-20261026T142205-[0-9a-f]{4}', compute.run_id('segment', now))
+    assert re.fullmatch(r'segment-20261026T142205-[0-9a-f]{4}', compute.new_run_id('segment', now))
     for name in ['segment', 'a b/c', '.hidden', '__x', 'é' * 5, '', 'x' * 300, '-', 'ok.name_1-2']:
-        made = compute.run_id(name, now)
+        made = compute.new_run_id(name, now)
         assert rule.is_valid(made) and len(made) <= 128, (name, made)
-    assert compute.run_id('a b/c', now).startswith('a-b-c-2026')
-    assert compute.run_id('...', now).startswith('run-2026')
-    assert compute.run_id('a', now) != compute.run_id('a', now)
+    assert compute.new_run_id('a b/c', now).startswith('a-b-c-2026')
+    assert compute.new_run_id('...', now).startswith('run-2026')
+    assert compute.new_run_id('a', now) != compute.new_run_id('a', now)
 
 
 @pytest.mark.fast
@@ -160,3 +166,144 @@ def test_the_vendored_schema_is_a_json_schema_2020_12_document_and_its_example_a
     """The copy the requests are checked with is itself valid, and takes its own example."""
     Draft202012Validator.check_schema(compute.SCHEMA)
     assert Draft202012Validator(compute.SCHEMA).is_valid(compute.SCHEMA['examples'][0])
+
+
+def _answer(status: int, body: object, headers: dict[str, str] | None = None) -> requests.Response:
+    """An HTTP answer, as `requests` gives one."""
+    response = requests.Response()
+    response.status_code = status
+    response._content = json.dumps(body).encode()  # pylint: disable=protected-access
+    response.headers.update({'Content-Type': 'application/json', **(headers or {})})
+    return response
+
+
+def _serving(monkeypatch: pytest.MonkeyPatch,
+             answers: dict[tuple[str, str], requests.Response | Exception]) -> list[tuple[str, str, object]]:
+    """Have every HTTP call answered from `answers`, by method and path; each call is appended to the list returned,
+    as its method, path and timeout."""
+    calls: list[tuple[str, str, object]] = []
+
+    def request(_: requests.Session, method: str, url: str, **options: object) -> requests.Response:
+        path = url.split('://', 1)[1].split('/', 1)[1]
+        calls.append((method, path, options.get('timeout')))
+        found = answers[(method, path)]
+        if isinstance(found, Exception):
+            raise found
+        return found
+    monkeypatch.setattr(requests.Session, 'request', request)
+    return calls
+
+
+_CONTRACT = _answer(200, {'openapi': '3.1.0', 'info': {'version': '2.0.0'}})
+
+
+@pytest.mark.fast
+def test_a_service_that_speaks_another_contract_is_refused_before_anything_is_sent(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """The major version is read once, from openapi.json."""
+    _serving(monkeypatch, {('GET', 'openapi.json'): _answer(200, {'info': {'version': '3.1.0'}})})
+    with pytest.raises(compute.ServiceUnavailable, match='speaks contract 3.1.0, and this Sophios speaks 2'):
+        compute.Service('http://127.0.0.1:1').submit(_workflow())
+
+
+@pytest.mark.fast
+def test_a_submission_lost_on_the_way_says_the_run_may_exist_and_how_to_follow_it(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sent again until PATIENCE runs out; then the id it was sent under, and `attach`."""
+    monkeypatch.setattr(compute, 'PATIENCE', 0.0)
+    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('POST', 'runs'): requests.ConnectionError('gone')})
+    with pytest.raises(compute.ServiceUnavailable) as unavailable:
+        compute.Service('http://127.0.0.1:1').submit(_workflow())
+    could_not, may_exist = (d.message for d in unavailable.value.diagnostics)
+    assert could_not == 'the compute service at http://127.0.0.1:1 could not be reached (ConnectionError), for 0 s'
+    assert re.fullmatch(r"run (segment-\S+) may exist all the same: Service\('http://127.0.0.1:1'\)\.attach\('\1'\) "
+                        r'follows it, and the same request sent again never starts a second one', may_exist)
+
+
+@pytest.mark.fast
+def test_an_answer_the_contract_does_not_document_is_the_services_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """500 is the service's; its message is shown."""
+    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT,
+                           ('GET', 'runs/r1'): _answer(500, {'errors': [{'message': 'the driver failed'}]})})
+    with pytest.raises(compute.ServiceUnavailable, match='answered 500: the driver failed'):
+        compute.Service('http://127.0.0.1:1').attach('r1')
+
+
+@pytest.mark.fast
+def test_a_status_takes_what_it_knows_and_leaves_the_rest(monkeypatch: pytest.MonkeyPatch,
+                                                          capsys: pytest.CaptureFixture[str]) -> None:
+    """Unknown fields are ignored, a step without a name is its Slurm job, nothing is parsed out of a message;
+    the warnings are printed where they cannot be missed, at the input they name."""
+    answer: dict[str, object] = {
+        'id': 'r1', 'state': 'RUNNING', 'reason': None, 'slurmJobId': '7', 'startedAt': '2026-10-26T10:00:00-04:00',
+        'endedAt': None, 'outputs': None, 'targets': {}, 'new': 'field',
+        'steps': [{'name': None, 'state': 'FAILED', 'exitCode': '1:0', 'slurmJobId': '8', 'logs': []}],
+        'warnings': [{'pointer': '/inputs/write~out/location', 'message': 'is empty; the run writes into it'}]}
+    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _answer(200, answer)})
+    run = compute.Service('http://127.0.0.1:1').attach('r1')
+    assert capsys.readouterr().err == ('WARNING from the compute service: input write~out: is empty; the run '
+                                       'writes into it\n')
+    status = run.status()
+    assert status.state is RunState.RUNNING and status.started_at == datetime.fromisoformat('2026-10-26T10:00:00-04:00')
+    assert [(s.name, s.state, s.exit_status, s.signal) for s in status.steps] == [
+        ('(Slurm job 8)', RunState.FAILED, None, None)]
+
+
+@pytest.mark.fast
+def test_ctrl_c_while_waiting_leaves_the_run_going_and_says_how_to_follow_it(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The interrupt goes on up, after one line on how to attach again."""
+    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT,
+                           ('GET', 'runs/r1'): _answer(200, {'id': 'r1', 'state': 'QUEUED'})})
+    run = compute.Service('http://127.0.0.1:1').attach('r1')
+
+    def interrupted() -> None:
+        raise KeyboardInterrupt
+    monkeypatch.setattr(run, 'status', interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        run.wait()
+    assert capsys.readouterr().err.strip() == (
+        "Run r1 goes on in Slurm: Service('http://127.0.0.1:1').attach('r1') follows it again, and its cancel() "
+        'stops it.')
+
+
+@pytest.mark.fast
+def test_a_failure_whose_log_cannot_be_read_still_says_why(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A leader Slurm never started has no log: the reason stands, and the log is said to be unreadable."""
+    ended = {'id': 'r1', 'state': 'FAILED', 'reason': 'Slurm will never start the leader (PartitionTimeLimit)'}
+    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _answer(200, ended),
+                           ('GET', 'runs/r1/logs/leader.log'): _answer(404, {'errors': [{'message': 'no log yet'}]})})
+    assert compute.Service('http://127.0.0.1:1').attach('r1').failure() == [
+        'run r1 ended FAILED: Slurm will never start the leader (PartitionTimeLimit)',
+        'the end of leader.log:\n(it cannot be read: error [cmp001] no log yet)']
+
+
+@pytest.mark.fast
+def test_a_tunnel_ssh_cannot_open_without_a_login_fails_at_once_saying_how_to_log_in(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """BatchMode: ssh never asks for a password; the error says what ssh said, and to log in once in a terminal."""
+    calls = fake_ssh.install(tmp_path)
+    monkeypatch.setenv('PATH', f'{tmp_path}{os.pathsep}{os.environ["PATH"]}')
+    with pytest.raises(compute.ServiceUnavailable) as unavailable:
+        with compute.Service.over_ssh('nologin'):
+            pass
+    ended, how = (d.message for d in unavailable.value.diagnostics)
+    assert ended == ('ssh nologin ended (nologin: Permission denied (publickey).) before its tunnel to '
+                     '/run/slurm-driver/api.sock was open')
+    assert how.startswith('when ssh needs a password or a code, run `ssh nologin true` in a terminal once')
+    (argv,) = (json.loads(line) for line in calls.read_text('utf-8').splitlines())
+    assert argv[:-2] == ['-N', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', '-L']
+    assert re.fullmatch(r'127\.0\.0\.1:\d+:/run/slurm-driver/api\.sock', argv[-2]) and argv[-1] == 'nologin'
+
+
+@pytest.mark.fast
+def test_a_submission_may_take_longer_than_a_status_read_before_it_is_sent_again(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """The service asks Slurm several times, 30 s each at most, before it answers a POST /runs: a slow but healthy
+    submission is waited for, not sent again; every other call is given up on sooner."""
+    accepted = _answer(201, {'id': 'x', 'state': 'QUEUED', 'slurmJobId': '7'})
+    calls = _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('POST', 'runs'): accepted,
+                                   ('GET', 'runs/x'): _answer(200, {'id': 'x', 'state': 'QUEUED'})})
+    compute.Service('http://127.0.0.1:1').submit(_workflow()).status()
+    assert [(method, path, timeout) for method, path, timeout in calls] == [
+        ('GET', 'openapi.json', (10.0, 60.0)), ('POST', 'runs', (10.0, 300.0)), ('GET', 'runs/x', (10.0, 60.0))]
