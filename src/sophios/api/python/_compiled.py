@@ -43,6 +43,16 @@ class CompiledWorkflow:
     #: The notes the compile made, rendered (e.g. an inference choice between equals).
     diagnostics: tuple[str, ...] = ()
 
+    def write(self, path: str | Path | None = None) -> Path:
+        """Write everything a CWL runner needs, `<name>.cwl` and `<name>_inputs.yml`, into the directory `path`.
+
+        `path` defaults to the current directory. Returns the directory.
+        """
+        directory = Path(path if path is not None else ".")
+        self.write_cwl(directory / f"{self.name}.cwl")
+        self.write_job_inputs(directory / f"{self.name}_inputs.yml")
+        return directory
+
     def to_cwl_yaml(self) -> str:
         """Return the compiled CWL workflow as YAML."""
         return dump_wic_yaml(self.cwl_workflow)
