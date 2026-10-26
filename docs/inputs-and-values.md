@@ -58,7 +58,11 @@ python greeting_input.py
 ```
 
 The Python script passes the same file to `run()` in its last line,
-`run(run_args_dict={'inputs_file': 'job.yml'})`. It also says what it did as
+`run(run_args_dict={'inputs_file': 'job.yml'})`. In Python a workflow input
+can also take its value as you build the workflow:
+`flow.inputs.message = 'Hello'` gives it the value an inputs file would, in
+the job `compile()` returns and in every run, and an inputs file passed to
+`run()` still wins over it. It also says what it did as
 you built the workflow:
 
 ```text
@@ -199,7 +203,9 @@ its input has to ask for a writable copy in its working directory;
 A workflow input is a value the workflow leaves open: `inputs:` and an
 untagged name in a `.wic` file, `flow.inputs.<name>` in Python. An inputs
 file gives it a value when you run, with `--inputs_file` on the command line
-or `run_args_dict={'inputs_file': ...}` in Python. Every value has to fit the
+or `run_args_dict={'inputs_file': ...}` in Python; in Python,
+`flow.inputs.<name> = value` gives it one as you build, which an inputs file
+overrides. Every value has to fit the
 type of its input, and a file is a mapping with `class: File` and a
 `location`, read relative to where you wrote it.
 

@@ -823,7 +823,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         )
         self.outputs = ParameterNamespace(
             self._outputs,
-            self._add_output,
+            self._read_output,
             self._bind_output_from_namespace,
             read_only_error="",
         )
@@ -937,6 +937,13 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
     def _bind_output_from_namespace(self, name: str, value: Any) -> None:
         self._add_output(name, implicit=False)
         _bind_workflow_output(self, name, value)
+
+    def _read_output(self, name: str) -> OutputParameter:
+        """The output ``name``, which reading declares, unless the name has a leading ``_``: binding alone declares
+        such a name, since a probe of private names reads them, as IPython's display does."""
+        if name.startswith("_") and name not in self._outputs:
+            raise AttributeError(f"workflow {self.process_name!r} has no output {name!r}; bind it to declare it")
+        return self._add_output(name)
 
     def _get_input(self, name: str) -> InputParameter:
         """Return a named workflow input, creating it if needed."""

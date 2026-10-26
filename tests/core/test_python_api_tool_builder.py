@@ -85,8 +85,8 @@ def test_tool_builder_names_reject_namespace_collisions() -> None:
     """A port may not shadow the container's own API.
 
     `Inputs` and friends are mappings with methods, so a port called `items` or
-    `to_dict` would make `inputs.items` ambiguous. Leading underscores are
-    reserved for the same reason.
+    `to_dict` would make `inputs.items` ambiguous. The collection's own
+    attribute `_items` is reserved for the same reason.
     """
     with pytest.raises(ValueError, match="reserved"):
         Inputs(items=Input(cwl.file))

@@ -305,6 +305,35 @@ def test_a_numpy_float_reaches_the_job_as_a_plain_float() -> None:
 
 
 @pytest.mark.fast
+def test_a_value_bound_on_a_workflow_input_is_its_job_value() -> None:
+    """`workflow.inputs.<name> = value` is that input's value in the job of either target, in the form a value
+    written on a step takes, as an inputs file gives one."""
+    tool = (CommandLineTool("cat_tool", Inputs(name=Input(cwl.string, position=1), file=Input(cwl.file, position=2)),
+                            Outputs(out=Output(cwl.file, glob="stdout.txt"))).base_command("cat").stdout("stdout.txt"))
+    step = tool.to_step(step_name="cat")
+    workflow = Workflow([step], "wf")
+    step.inputs.name, step.inputs.file = workflow.inputs.name.as_type("string"), workflow.inputs.file.as_type("File")
+    workflow.inputs.name, workflow.inputs.file = "n", "data.txt"
+
+    assert workflow.compile().cwl_job_inputs == {"name": "n", "file": {"class": "File", "location": "data.txt"}}
+    assert workflow.compile(target="nextflow").params == {"name": "n", "file": {"class": "File", "path": "data.txt"}}
+
+
+@pytest.mark.fast
+def test_a_workflow_output_with_a_leading_underscore_is_declared_by_binding_alone() -> None:
+    """A port name may have a leading `_`, as Nextflow normalization writes one; reading an undeclared one, as
+    IPython's display probes private names, declares nothing."""
+    tool = CommandLineTool("make", Inputs(), Outputs(out=Output(cwl.file, glob="o"))).base_command("touch", "o")
+    step = tool.to_step()
+    workflow = Workflow([step], "wf")
+    assert getattr(workflow.outputs, "_repr_html_", None) is None
+    setattr(workflow.outputs, "_Out", step.outputs.out)
+
+    assert [output.name for output in workflow.outputs] == ["_Out"]
+    assert workflow.compile().cwl_workflow["outputs"] == {"_Out": {"type": "File", "outputSource": "make/out"}}
+
+
+@pytest.mark.fast
 @pytest.mark.parametrize("declared, python_type", [
     (cwl.int, "int"), (cwl.float, "float"), (cwl.boolean, "bool"), (cwl.string, "str"),
 ])

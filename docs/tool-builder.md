@@ -156,8 +156,9 @@ chained method that returns a changed copy: `.label('...')`, `.doc('...')`,
 `.format('edam:format_2572')` for a file format, `.secondary_files(...)` for
 the files that travel with a `File`, `.load_contents(True)` to read the first
 64 KiB into `contents`, `.load_listing('deep_listing')` for a `Directory`,
-`.streamable(True)`. Names are Python identifiers; a name that starts with
-`_` or is a method of the collection (`keys`) is a `ValueError`.
+`.streamable(True)`. Names are Python identifiers; a special name such as
+`__len__`, or the name of an attribute of the collection (`keys`), is a
+`ValueError`.
 
 ## Outputs
 

@@ -27,10 +27,12 @@ from sophios import run_local, run_setup
 from sophios.run_local import RunHandle
 from sophios.run_status import RunResult, RunState
 from sophios.ir.artifacts import CompilationArtifact, CompilationResult
+from sophios.ir.complete import coerce_job_value
 from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.locations import absolute_paths
 from sophios.ir.realtime import ADAPTER, Declaration
 from sophios.ir.resolve import RegistrySnapshot
+from sophios.ir.types import AuthoredName
 from sophios.lang import CwlRecord, Diagnostic, Diagnostics, Document, ParseResult, Severity, SophiosError, render
 from sophios.lang import Step as LangStep
 from sophios.lang.error_codes import SophiosErrorCode
@@ -48,7 +50,7 @@ from ._errors import InvalidCLTError, InvalidStepError, WorkflowRunError
 from ._compiled import CompiledWorkflow
 from ._ports import InputParameter, OutputParameter, ParameterStore
 from ._types import ScatterMethod
-from ._utils import load_yaml as _load_yaml
+from ._utils import load_yaml as _load_yaml, serialize_value
 from ._api_config import DEFAULT_RUN_ARGS
 
 if TYPE_CHECKING:
@@ -473,7 +475,17 @@ def _compile_bundle(
         ParseResult(workflow_document(workflow), Diagnostics()),
         Path(workflow.process_name).stem,
         RegistrySnapshot.from_tools(merged_tools, workflows=_nested_documents(workflow)))
-    return bundle, compiler.compile_source(bundle, options, testing=False)
+    return bundle, _with_bound_values(workflow, compiler.compile_source(bundle, options, testing=False))
+
+
+def _with_bound_values(workflow: "Workflow", result: CompilationResult) -> CompilationResult:
+    """`result`, whose job holds each value bound on one of the workflow's own inputs, as an inputs file gives it,
+    in the form a value written on a step takes (design §4.3)."""
+    declarations = {port.name: port.declaration for port in result.graph.workflow_inputs}
+    bound = {parameter.name: coerce_job_value(AuthoredName(parameter.name), declarations[AuthoredName(parameter.name)],
+                                              serialize_value(binding.value), span=binding.span)
+             for parameter in workflow._inputs if (binding := parameter._binding) is not None and not binding.linked}
+    return replace(result, artifact=replace(result.artifact, job_inputs={**result.artifact.job_inputs, **bound}))
 
 
 #: The background of a drawing from Python: opaque, so it reads in a light or a dark notebook,
