@@ -248,7 +248,7 @@ dev/api
 
 ```{toctree}
 :maxdepth: 1
-:caption: Compute client
+:caption: Compute service
 
 compute
 ```

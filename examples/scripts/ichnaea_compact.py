@@ -1,21 +1,20 @@
-"""Canonical end-to-end example: tool_builder -> Workflow -> compute request."""
+"""Canonical end-to-end example: tool_builder -> Workflow -> the compute service.
 
-from datetime import datetime
-from pathlib import Path
+The outputs are copied into a folder on the cluster, `workflow_out_dir`: the supported way.
+"""
 
-from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
+import json
+
+from sophios.api.python.workflow import Step, Workflow
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.compute_request import (
-    ComputeExecutionConfig,
-    ComputeOutputConfig,
-    ComputeRequest,
-    SlurmJobConfig,
-    ToilRuntimeConfig,
-)
+from sophios.compute import Service, build_request
 
-
-SUBMIT_URL: str | None = None
+#: The compute service: the local end of an SSH tunnel to it, such as 'http://127.0.0.1:7998'. None only builds
+#: and prints the request.
+SERVICE_URL: str | None = None
+#: The directory on the cluster the paths below are relative to.
+BASEPATH = '/projects/collabs/mock_common'
 
 
 def build_autoseg_CLT() -> CommandLineTool:
@@ -93,50 +92,28 @@ def workflow(input_dicts: dict[str, str], workflow_name: str) -> Workflow:
     return wkflw
 
 
-def create_compute_request(workflow_id: str, compiled_workflow: CompiledWorkflow) -> ComputeRequest:
-    """Return a compute request object for the compiled workflow."""
-    return ComputeRequest(
-        compiled_workflow,
-        workflow_id=workflow_id,
-        compute_config=ComputeExecutionConfig(
-            toil=ToilRuntimeConfig(log_level="INFO"),
-            output=ComputeOutputConfig.workflow_declared(),
-            slurm=SlurmJobConfig(partition="normal_gpu", cpus_per_task=4),
-        ),
-    )
-
-
 def main() -> int:
-    """Build the workflow, create the compute request, and optionally submit it."""
+    """Build the workflow and its request; run it on the compute service when SERVICE_URL is set."""
     # ========== INPUTS TO WORKFLOW ==================
-    # The main directory constants
-    inputs_dir = Path('/projects/collabs/mock_common/')
-    input_dicts = {}
-    input_dicts['input_dir'] = str(inputs_dir / 'input_directory')
-    input_dicts['output_dir'] = str(inputs_dir / 'output_directory_compact')
-    input_dicts['model_file'] = str(inputs_dir / 'model_directory' / 'sam3.pt')
+    # Paths on the cluster, relative to BASEPATH, as written: Sophios never looks at them.
+    input_dicts = {'input_dir': 'input_directory', 'output_dir': 'output_directory_compact',
+                   'model_file': 'model_directory/sam3.pt'}
 
     # ========== BUILD WORKFLOW ======================
     autoseg_workflow = workflow(input_dicts, "autoseg_workflow")
-    compiled_workflow = autoseg_workflow.compile()
+    out_dir = f'{BASEPATH}/results_compact'  # the outputs are copied here
+    steps = {'partition': 'normal', 'gpuPartition': 'normal_gpu'}
 
-    # ========== COMPUTE INPUT =======================
-    # workflow Name
-    workflow_name = compiled_workflow.name
-    # adjust workflow name/id to distinguish after submit using a timestamp
-    workflow_name = workflow_name + '__' + \
-        datetime.now().strftime('%Y_%m_%d_%H.%M.%S') + '__'
-
-    # ========== CONSTRUCT COMPUTE OBJECT ============
-    compute_request = create_compute_request(workflow_name, compiled_workflow)
-
-    if SUBMIT_URL is None:
-        print("Built compute request object in memory. Set SUBMIT_URL to submit it.")
+    if SERVICE_URL is None:
+        request = build_request(autoseg_workflow, basepath=BASEPATH, workflow_out_dir=out_dir, steps=steps)
+        print(json.dumps(request, indent=4))
+        print("Set SERVICE_URL to run it.")
         return 0
 
-    # =========  SUBMIT TO COMPUTE ===================
-    submission = compute_request.submit(SUBMIT_URL)
-    return submission.exit_code
+    # =========  RUN ON THE COMPUTE SERVICE ===========
+    run = Service(SERVICE_URL).run(autoseg_workflow, basepath=BASEPATH, workflow_out_dir=out_dir, steps=steps)
+    print(f'{run.id} COMPLETED: {run.outputs()}')
+    return 0
 
 
 if __name__ == '__main__':

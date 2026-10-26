@@ -5,8 +5,9 @@ Three claims about the compatibility contract the two front ends advertise:
   * **Path agreement.** A workflow built through the Python API and compiled
     directly must equal the same workflow written with `write_wic` and
     compiled from the file. Two spellings of one DAG, one compiled result.
-  * **Compute-payload conformance.** `ComputeRequest` builds and validates its
-    own payload. No network: build and validate, never submit.
+  * **Compute-payload conformance.** Every compiled workflow makes a request
+    the compute service's schema takes (`sophios.compute.request_for`). No
+    network: build and check, never send.
   * **Passthrough fidelity over workflows the narrower generators miss** — a
     step that scatters beside its own passthrough, which one-step documents
     cannot express.
@@ -27,9 +28,9 @@ from hypothesis import strategies as st
 
 from sophios.api.python import _workflow_runtime
 import sophios.compiler
-from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
+from sophios.api.python.workflow import Step, Workflow
 from sophios.cli import default_compilation_settings
-from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest
+from sophios import compute
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.wic_types import StepId, Yaml
@@ -208,33 +209,17 @@ def test_the_two_front_ends_compile_to_the_same_cwl(spec: _BundleSpec) -> None:
 @pytest.mark.fast
 @given(strat.workflows())
 @ORACLE
-def test_compute_request_builds_and_validates_every_compiled_workflow(yml: Yaml) -> None:
-    """`ComputeRequest` builds and validates its own payload from a
-    `CompiledWorkflow`, for everything this oracle compiles.
+def test_every_compiled_workflow_makes_a_request_the_compute_service_schema_takes(yml: Yaml) -> None:
+    """`request_for` builds and checks the request for everything this oracle compiles, against Sophios's copy of
+    the service's `run-request.schema.json`; it raises `RequestRefused` on a mismatch. Nothing is sent.
 
-    Constructor keyword names and dumped-payload key names come from
-    `test_python_api_workflow.test_compute_request_accepts_compiled_python_workflow`,
-    not from invention here. No network: `to_mapping()`/`to_json()` build and
-    validate entirely locally, against the checked-in schema
-    (`ComputeRequest`'s own `_validate_compute_request`, which raises
-    `ComputeRequestValidationError` on a mismatch); `.submit()` is never
-    called.
-
-    BLIND SPOTS: one `ComputeExecutionConfig` shape (`workflow_declared()`
-    output mode; no `toilConfig`/`slurmConfig`). The schema itself is a
-    checked-in artifact — if it drifts from the real service, this test
-    cannot see that.
+    BLIND SPOTS: the default output mode, and no `leader`, `steps` or `logLevel`; whether the copy is the service's
+    own is `test_compute_service.py`'s.
     """
     info = compile_hermetic(yml, 'oracle')
-    compiled = CompiledWorkflow('oracle', info.artifact.cwl, info.artifact.job_inputs)
-    request = ComputeRequest(
-        compiled, compute_config=ComputeExecutionConfig(output=ComputeOutputConfig.workflow_declared()))
-
-    mapping = request.to_mapping()
-    assert mapping['cwlWorkflow'] == compiled.cwl_workflow
-    assert mapping['cwlJobInputs'] == compiled.cwl_job_inputs
-    assert mapping['id'] == 'oracle'
-    assert json.loads(request.to_json()) == mapping
+    request = compute.request_for('oracle', info.artifact.cwl, info.artifact.job_inputs)
+    assert (request['workflow'], request['inputs']) == (info.artifact.cwl, info.artifact.job_inputs)
+    assert json.loads(json.dumps(request)) == request
 
 
 # --------------------------------------------------------------------------

@@ -144,7 +144,24 @@ def build_request(workflow: 'Workflow', *, basepath: str | None = None, workflow
         raise RequestRefused(*(f'{declaration.document} declares the real-time analysis {declaration.analysis!r}, '
                                'which the compute service never runs; remove it, or run the workflow locally'
                                for declaration in document.realtime))
-    request: Json = {'id': new_run_id(workflow.process_name), 'workflow': document.cwl, 'inputs': document.job_inputs}
+    return request_for(new_run_id(workflow.process_name), document.cwl, document.job_inputs, basepath=basepath,
+                       workflow_out_dir=workflow_out_dir, workflow_in_place=workflow_in_place, leader=leader,
+                       steps=steps, log_level=log_level)
+
+
+# pylint: disable-next=too-many-arguments
+def request_for(run_id: str, cwl: Json, job_inputs: Json, *, basepath: str | None = None,
+                workflow_out_dir: str | None = None, workflow_in_place: bool = False,
+                leader: Mapping[str, str] | None = None, steps: Mapping[str, str] | None = None,
+                log_level: str | None = None) -> Json:
+    """The request to run the compiled document `cwl` with `job_inputs` as the run `run_id`: what `build_request`
+    builds once it has compiled the workflow. The other arguments are `build_request`'s.
+
+    Raises:
+        RequestRefused: A path that names nothing on the cluster, or a field the schema does not take; every one is
+            a line.
+    """
+    request: Json = {'id': run_id, 'workflow': cwl, 'inputs': job_inputs}
     if basepath is not None:
         request['basepath'] = basepath
     if workflow_out_dir is not None:

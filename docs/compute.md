@@ -1,121 +1,133 @@
-# The compute client
+# The compute service
 
-How do I hand a compiled workflow to the compute service? `sophios.compute_request`
-is a client for a separate service, which runs CWL workflows on a cluster. It
-is part of the `sophios` package so that a compiled workflow can be submitted
-from the same program that built it, and this page covers only Sophios's
-side: what the client sends, how to configure the request, and how status
-comes back. What the service does with a request, where it runs, and how to
-deploy it belong to the service's own documentation.
+How do I run a workflow on the cluster? `sophios.compute` compiles a workflow
+built with the Python API and sends it to the cluster's compute service, the
+slurm driver of PolusAI/compute, which runs it with Toil on Slurm: the Toil
+leader as one Slurm job, and each step as a Slurm job of its own.
 
-## From a compiled workflow to a request
+`sophios.compute` is a core feature of Sophios, but it is **not part of the
+Python API**: nothing under `sophios.api.python` exports or documents it, and
+its interface follows the service's contract rather than the API's. This page
+covers Sophios's side; how the service checks a request, runs it and is
+deployed is in the service's own README.
+
+## Reaching the service
+
+The service listens on a Unix socket on a host of the cluster set aside for
+services, reached through SSH. One block in `~/.ssh/config` names it:
+
+```
+Host sophios-compute
+    HostName <the host the service runs on>
+    # ProxyJump <login node>      # when that host is reached through a login node
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 8h
+```
+
+`Service.over_ssh` opens the tunnel itself, for as long as a `with` block:
 
 ```python
-from pathlib import Path
+from sophios.compute import Service
 
-from sophios.api.python.workflow import Step, Workflow
-from sophios.compute_request import ComputeRequest
-
-touch = Step(clt_path=Path.home() / 'wic' / 'cwl_adapters' / 'touch.cwl')
-touch.inputs.filename = 'greeting.txt'
-compiled = Workflow([touch], 'greeting').compile()
-
-request = ComputeRequest(compiled, workflow_id='greeting_2026_10_15')
-print(request.to_json(indent=2))
+with Service.over_ssh('sophios-compute') as service:
+    ...
 ```
 
-`ComputeRequest` takes the result of `Workflow.compile()`, any object with
-`name`, `cwl_workflow` and `cwl_job_inputs`, and three keyword arguments:
+It runs `ssh` in batch mode, so it never stops to ask for a password or a
+code. When `ssh` would need one, the call fails at once and says so: run
+`ssh sophios-compute true` in a terminal once, and the `ControlMaster`
+connection serves Sophios for the next eight hours. The socket defaults to
+`/run/slurm-driver/api.sock`; `over_ssh(host, socket=...)` names another. A
+tunnel you open yourself works too:
 
-- `workflow_id`: the id the service knows the submission by; the compiled
-  workflow's name when not given;
-- `jobs`: a mapping the service reads, passed through as it is; empty by
-  default;
-- `compute_config`: the execution settings below.
-
-`to_mapping()` and `to_json()` render the request and validate it against the
-JSON Schema that ships with Sophios, `src/sophios/compute_request_schema.json`.
-The request is:
-
-```json
-{
-  "id": "greeting_2026_10_15",
-  "cwlWorkflow": {"...the compiled CWL, every run: embedded..."},
-  "cwlJobInputs": {"touch~filename": "greeting.txt"},
-  "jobs": {},
-  "computeConfig": {"...when given..."}
-}
+```bash
+ssh -N -L 127.0.0.1:7998:/run/slurm-driver/api.sock sophios-compute
 ```
-
-`cwlWorkflow`, `cwlJobInputs` and `jobs` are required; a request the schema
-rejects is `ComputeRequestValidationError`. The CWL is the one `compile()`
-returned: one document with every process embedded, so the service needs no
-other file. Relative `File` paths in the job inputs are sent as written; the
-service resolves them where it runs, so give absolute paths or paths the
-service can reach.
-
-## Execution settings
 
 ```python
-from sophios.compute_request import (
-    ComputeExecutionConfig, ComputeOutputConfig, SlurmJobConfig, ToilRuntimeConfig,
-)
-
-config = ComputeExecutionConfig(
-    toil=ToilRuntimeConfig(log_level='INFO'),
-    output=ComputeOutputConfig.user_specified('/data/results'),
-    slurm=SlurmJobConfig(partition='normal_gpu', cpus_per_task=4, memory='16G'),
-)
-request = ComputeRequest(compiled, workflow_id='greeting_2026_10_15', compute_config=config)
+service = Service('http://127.0.0.1:7998')
 ```
 
-Each part is optional and is written under `computeConfig` only when given:
-
-| Object | Key | Fields |
-|---|---|---|
-| `ToilRuntimeConfig` | `toilConfig` | `log_level` |
-| `ComputeOutputConfig` | `outputConfig` | `service_default()`, `workflow_declared()`, or `user_specified(output_dir)`; `mode` and `outputDir` in the request |
-| `SlurmJobConfig` | `slurmConfig` | `job_name`, `partition`, `slurm_job_gpu_count`, `cpus_per_task`, `nodes`, `tasks_per_node`, `output`, `error`, `time_limit` (`time`), `memory` |
-
-The field names are the schema's, in Python spelling; the request carries
-the schema's spelling. What each setting makes the service do is the
-service's to define.
-
-## Submitting
+## Running a workflow
 
 ```python
-submission = request.submit('http://compute.example.org:7998/compute/')
-print(submission.phase, submission.ok)
+run = service.run(workflow, basepath='/projects/lab/data',
+                  workflow_out_dir='/projects/lab/results/run7')
+print(run.outputs())
 ```
 
-`submit(url, timeout=(5, 30), poll_interval_seconds=15, fetch_logs=True,
-log_path=None)` does the following, in order:
+Every path goes as written: a path on the cluster, absolute or relative to
+`basepath`, or an http(s) URL. Sophios never looks at them; the service
+checks each one on the cluster before anything is queued (it exists, can be
+read, has a name cwltool takes) and answers every problem at once. Sophios
+refuses before sending only what names nothing on the cluster: a path with
+`~` or an environment variable in it.
 
-1. `POST`s the validated request JSON to `url`. A response that is not OK
-   returns at once with `accepted=False` and the response body in
-   `submit_response`.
-2. Polls `GET <url>/<workflow_id>/status/` every `poll_interval_seconds`
-   until the body's `status` is `RUNNING`, `COMPLETED`, `ERROR` or
-   `CANCELLED`; it waits as long as that takes.
-3. When the phase is `RUNNING` and `fetch_logs` is set, fetches
-   `GET <url>/<workflow_id>/logs/` once, and writes the body to `log_path` if
-   given.
+`run` returns once the run has completed, and raises otherwise. `submit`
+returns at once instead, with the run's id printed; either way the run goes
+on in Slurm whatever happens to the Python process, and `Service.attach(id)`
+follows it from any session or machine.
 
-It returns a `ComputeSubmission` with `workflow_id`, `phase`, `accepted`
-(true for `RUNNING` and `COMPLETED`), and the raw `submit_response`,
-`status_response` and `logs` bodies, parsed as JSON when they are JSON.
-`submission.ok` is `accepted`, and `submission.exit_code` is `0` when
-accepted and `1` otherwise, for a script that wants a process status. A
-request with no `workflow_id` and a compiled workflow with no name cannot be
-submitted (`ValueError`).
+| Argument | What it is |
+|---|---|
+| `basepath` | The directory on the cluster that relative paths are relative to; required when one is |
+| `workflow_out_dir` | The folder the workflow's outputs are copied into: see below |
+| `workflow_in_place` | `True` to write each output folder where its input names it: see below |
+| `leader` | The Toil leader's Slurm job: `{'partition': ..., 'time': ..., 'memory': ...}`; the service's settings otherwise |
+| `steps` | Where step jobs go and how long each may run: `{'partition': ..., 'gpuPartition': ..., 'time': ...}` |
+| `log_level` | Toil's log level: `DEBUG`, `INFO` (the default), `WARNING` or `ERROR` |
+| `timeout` | (`run` only) seconds to wait at most; the run goes on after a `TimeoutError` |
 
-The client does none of what a local run does: no pre-flight, no image pull,
-no run. Whether the service's machine can run the workflow is the service's
-to check. `--check` on this machine says nothing about that one.
+## Where the outputs go
 
-## From the command line
+- **`workflow_out_dir='<folder>'`: the supported way.** Toil copies the
+  workflow's outputs into that folder on the cluster. It may exist, empty, or
+  the service creates it in a parent it can write to.
+- **Neither:** the outputs are copied into the run's own folder on the
+  cluster; the output object says where.
+- **`workflow_in_place=True`: an advanced choice.** Each tool writes straight
+  into the folder its input names, with no copy, which is what very large
+  outputs need. The service warns on every run that uses it. A tool that also
+  stages another input writable cannot write in place without changing that
+  input too, so its outputs are copied as above, with a warning that says so.
+  `run.targets` names the folders written in place.
 
-There is no command-line flag for submission. Compile with
-`--generate_cwl_workflow --cwl_inline_runtag` to get the same self-contained
-CWL the client sends, and submit it with a client of your own, or build the
-request in Python as above.
+## Following a run
+
+| `Run` | What it does |
+|---|---|
+| `id` | The run's id: the workflow's name, the UTC time and four hex digits |
+| `status()` | Where the run is, asked anew: a `RunStatus`, as a local `Workflow.start()` handle reports it |
+| `wait(timeout=None)` | Asks every 10 s until the run ends, printing a line per change; Ctrl-C leaves the run going |
+| `logs(step=None)` | Toil's `leader.log`, or the logs of a step by its name, such as `compact/merge` |
+| `outputs()` | The workflow's output object once the run has completed |
+| `cancel()` | Cancels the run and every job of it in Slurm's queue; safe to send again |
+| `targets`, `warnings`, `slurm_job` | The folders written in place, what the service warned of, the leader's Slurm job |
+
+The states are those of a local run: `QUEUED`, `RUNNING`, then `COMPLETED`,
+`FAILED` or `CANCELLED`, which never change.
+
+## The request
+
+`build_request(workflow, ...)` returns the request `run` and `submit` send,
+with the same arguments: the workflow compiled into one document, every
+process inline, its inputs, and the choices above. Its shape is
+`run-request.schema.json`, Sophios's copy of the service's own schema, which
+the service also serves at `GET /run-request.schema.json`. Sophios checks
+every request against it before sending, and the service again on arrival.
+
+## When something goes wrong
+
+Each failure is a `SophiosError` with a code of the compute range
+([Error codes](error_codes.md)):
+
+- `cmp001`, `RequestRefused`: Sophios or the service refused the request.
+  Each problem is a line, at the input it is about; a relative path sent
+  without `basepath` says to pass one.
+- `cmp002`, `ServiceUnavailable`: the service could not be reached, stayed
+  busy for five minutes (Sophios asks again meanwhile, which never starts a
+  second run), failed, or speaks another version of the contract. A
+  submission cut short this way says the run may exist, and how to attach.
+- `cmp003`, `RunFailed`: the run ended `FAILED` or `CANCELLED`; the message
+  has the reason and the end of the failed step's log.
