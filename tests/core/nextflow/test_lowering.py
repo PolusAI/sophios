@@ -3,11 +3,10 @@
 # pylint: disable=missing-function-docstring
 
 import copy
-import json
 from typing import Any
 
 import pytest
-from sophios.input_output_nf import render_nextflow, render_nextflow_params
+from sophios.input_output_nf import nextflow_params, render_nextflow
 from sophios.ir.artifacts import CompilationResult
 from sophios.nf_types import (
     NfArrayBinding,
@@ -375,7 +374,7 @@ def test_a_default_is_held_as_a_value_written_on_a_step_is() -> None:
     workflow = compiled_source_to_nextflow(synthetic_source(workflow_doc(
         [step("take", **{"in": {"x": "y"}, "out": ["result"]})], inputs={"y": {"type": "float", "default": 5}},
         outputs={"result": {"type": "File", "outputSource": "take/result"}}), [take]))
-    assert json.loads(render_nextflow_params(workflow)) == {
+    assert nextflow_params(workflow) == {
         "y": "5.0", "take_r": "7.0", "take_f": {"class": "File", "path": "/data/a.txt"}}
 
 

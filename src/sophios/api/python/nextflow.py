@@ -1,4 +1,4 @@
-"""Public Nextflow compilation types, artifact writers, and the import of a pipeline Sophios wrote.
+"""Public Nextflow compilation types and the import of a pipeline Sophios wrote.
 
 ``import_nextflow(directory)`` reads the three files Nextflow itself reads,
 ``workflow.nf``, ``nextflow_params.json`` and ``nextflow.config``, and builds
@@ -44,12 +44,6 @@ What the compile does not keep does not come back:
 from pathlib import Path
 from typing import Any, NoReturn
 
-from sophios.input_output_nf import (
-    render_nextflow,
-    render_nextflow_config,
-    render_nextflow_params,
-    write_nextflow_artifacts,
-)
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.spans import SourceSpan
@@ -109,10 +103,6 @@ __all__ = [
     "NfWorkflowInputConnection",
     "NfWorkflowOutputConnection",
     "import_nextflow",
-    "render_nextflow",
-    "render_nextflow_config",
-    "render_nextflow_params",
-    "write_nextflow_artifacts",
 ]
 
 _KINDS = {"file": cwl.file, "directory": cwl.directory}
@@ -153,7 +143,7 @@ def import_nextflow(directory: str | Path) -> Workflow:
     try:
         workflow = Workflow(list(steps.values()), model.name)
         _bind(model, workflow, steps)
-        compiled = workflow.compile(target="nextflow", inference=Inference(enabled=False))
+        compiled = workflow.compile(target="nextflow", inference=Inference(enabled=False)).nextflow_workflow
     except (ValueError, TypeError, SophiosError) as exc:
         _stop(heads[model.name], f"workflow {model.name}, which no Python workflow compiles to: {exc}")
     for written, process in zip(compiled.processes, model.processes):

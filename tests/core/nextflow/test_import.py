@@ -323,11 +323,11 @@ _FILES = (NEXTFLOW_SCRIPT, NEXTFLOW_PARAMS, NEXTFLOW_CONFIG)
 
 
 def _compiled(name: str) -> ExecutableNextflowWorkflow:
-    return CASES[name]().compile(target="nextflow")
+    return CASES[name]().compile(target="nextflow").nextflow_workflow
 
 
 def _imported(directory: Path) -> ExecutableNextflowWorkflow:
-    return import_nextflow(directory).compile(target="nextflow", inference=Inference(enabled=False))
+    return import_nextflow(directory).compile(target="nextflow", inference=Inference(enabled=False)).nextflow_workflow
 
 
 @pytest.mark.parametrize("name", CASES)
@@ -423,10 +423,9 @@ def _generated(draw: st.DrawFn) -> Workflow:
 @settings(max_examples=100, deadline=None)
 @given(_generated())
 def test_the_import_of_a_generated_tool_compiles_to_its_model(workflow: Workflow) -> None:
-    model = workflow.compile(target="nextflow")
+    compiled = workflow.compile(target="nextflow")
     with tempfile.TemporaryDirectory() as directory:
-        write_nextflow_artifacts(model, directory)
-        assert _imported(Path(directory)) == model
+        assert _imported(compiled.write(directory)) == compiled.nextflow_workflow
 
 
 #: The forms the reader reads by filling them and looking up what it read, as `ch_{process}_{emit}` splits more
@@ -793,9 +792,8 @@ def test_a_minimum_of_more_arguments_than_python_recurses_imports(tmp_path: Path
     workflow = Workflow([step], "least")
     step.inputs.n, step.when = 2, "$(Math.min(" + ", ".join(["inputs.n"] * _DEEP) + ") > 1)"
     workflow.outputs.out = step.outputs.out
-    model = workflow.compile(target="nextflow")
-    write_nextflow_artifacts(model, tmp_path)
-    assert _imported(tmp_path) == model
+    compiled = workflow.compile(target="nextflow")
+    assert _imported(compiled.write(tmp_path)) == compiled.nextflow_workflow
 
 
 def test_a_condition_too_deep_to_render_stops_the_import_at_its_workflow(
@@ -838,7 +836,7 @@ def test_a_port_the_tool_builder_cannot_name_stops_the_import_at_its_process(tmp
         "outputs": {"out": {"type": "File", "outputBinding": {"glob": "o.txt"}}}}, process_name="tool")
     workflow = Workflow([step], "reserved")
     step.inputs.keys, workflow.outputs.out = "x", step.outputs.out
-    write_nextflow_artifacts(workflow.compile(target="nextflow"), tmp_path)
+    workflow.compile(target="nextflow").write(tmp_path)
     _stops(_CODE.IMPORT_UNWRITABLE, tmp_path / NEXTFLOW_SCRIPT, "process tool", lambda: import_nextflow(tmp_path))
 
 

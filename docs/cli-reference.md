@@ -128,7 +128,7 @@ value are both dropped without a message. For a flag with fixed choices, an
 invalid value such as `{'diagnostics': 'x'}` exits the process with status 2
 and `main: error: argument --diagnostics: invalid choice`, after the workflow
 has been written. `Workflow.compile()`
-takes `target=`, `lang_version=`, `tool_registry=` and `inference=`, and nothing else; `Workflow.to_nextflow()` takes the last three.
+takes `target=`, `lang_version=`, `tool_registry=` and `inference=`, and nothing else.
 The inference flags map onto `Inference(enabled=, strict=, naming_conventions=, insert_steps=)`, and the
 configuration file's `renaming_conventions` and `inference_rules` onto its `renamings=` and `format_rules=`, which are empty in Python unless passed, as it reads no configuration file;
 `Workflow.run()`, `start()` and `run_async()` take the same `inference=`, and `target='nextflow'` to run the

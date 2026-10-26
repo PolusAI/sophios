@@ -738,7 +738,8 @@ def test_python_run_args_reach_nextflow_with_one_dash_and_a_cwl_only_option_is_r
 @pytest.mark.fast
 def test_each_python_front_door_warns_with_the_nextflow_notes_at_its_caller(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, nextflow_ready: None) -> None:
-    """As `compile(target='nextflow')` does, a coroutine's caller included."""
+    """Each note the lowering made is a `UserWarning` at the line that called the method, a coroutine's caller
+    included."""
     del nextflow_ready
     install(monkeypatch, tmp_path)
 

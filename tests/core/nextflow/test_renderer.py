@@ -3,7 +3,6 @@
 # pylint: disable=missing-function-docstring
 
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
 
@@ -57,18 +56,6 @@ def test_writes_four_deterministic_artifacts(tmp_path: Path) -> None:
     write_nextflow_artifacts(workflow, tmp_path)
     assert {path.name: path.read_bytes() for path in paths} == first
     assert workflow.to_json() == before
-
-
-@pytest.mark.fast
-def test_renderer_rejects_non_executable_representation() -> None:
-    with pytest.raises(TypeError, match="requires ExecutableNextflowWorkflow"):
-        render_nextflow(cast(Any, {"representation_kind": "structural"}))
-
-
-@pytest.mark.fast
-def test_write_artifacts_rejects_non_executable_representation(tmp_path: Path) -> None:
-    with pytest.raises(TypeError, match="requires ExecutableNextflowWorkflow"):
-        write_nextflow_artifacts(cast(Any, {"representation_kind": "structural"}), tmp_path)
 
 
 #: The entry workflow's record of `runtime_workflow()`'s one output, an unscattered file.

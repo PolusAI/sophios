@@ -36,8 +36,6 @@ from sophios.ir.types import AuthoredName
 from sophios.lang import CwlRecord, Diagnostic, Diagnostics, Document, ParseResult, Severity, SophiosError, render
 from sophios.lang import Step as LangStep
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.input_output_nf import remove_nextflow_artifacts, write_nextflow_artifacts
-from sophios.nf_types import ExecutableNextflowWorkflow
 from sophios.cli import default_compilation_settings, get_args, get_known_and_unknown_args, target_options
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
 from sophios.utils import convert_args_dict_to_args_list
@@ -47,7 +45,7 @@ from sophios.wic_types import DEFAULT_BASEPATH, CompilerOptions, GraphSettings, 
 
 from ._inference import Inference
 from ._errors import InvalidCLTError, InvalidStepError, WorkflowRunError
-from ._compiled import CompiledWorkflow
+from ._compiled import CompiledNextflowWorkflow, CompiledWorkflow
 from ._ports import InputParameter, OutputParameter, ParameterStore
 from ._types import ScatterMethod
 from ._utils import load_yaml as _load_yaml, serialize_value
@@ -580,18 +578,14 @@ def compiled_workflow(
     return compiled_workflow_from_result(workflow, result)
 
 
-def nextflow_workflow(
+def compiled_nextflow_workflow(
     workflow: "Workflow",
     *,
     tool_registry: Tools | None = None,
     lang_version: str | None = None,
     inference: Inference = Inference(),
-    stacklevel: int = 3,
-) -> ExecutableNextflowWorkflow:
-    """Compile once through the core semantic pipeline and lower to Nextflow; each note is a `UserWarning`.
-
-    `stacklevel` makes each warning point at the public method's caller.
-    """
+) -> CompiledNextflowWorkflow:
+    """Compile once through the core semantic pipeline and lower to Nextflow, keeping every note the two made."""
     result = compile_workflow_result(
         workflow,
         tool_registry=tool_registry,
@@ -600,30 +594,10 @@ def nextflow_workflow(
     )
     executable, notes = compiled_source_to_nextflow_with_notes(
         replace(result, artifact=_declared_outputs(workflow, result.artifact)))
-    for note in notes:
-        warnings.warn(str(note), UserWarning, stacklevel=stacklevel)
-    return executable
-
-
-def write_nextflow_workflow(
-    workflow: "Workflow",
-    outdir: str | Path,
-    *,
-    tool_registry: Tools | None = None,
-    lang_version: str | None = None,
-    inference: Inference = Inference(),
-) -> tuple[Path, Path, Path, Path]:
-    """Compile once and write the versioned IR plus executable artifacts."""
-    remove_nextflow_artifacts(outdir)
-    return write_nextflow_artifacts(
-        nextflow_workflow(
-            workflow,
-            tool_registry=tool_registry,
-            lang_version=lang_version,
-            inference=inference,
-            stacklevel=4,
-        ),
-        outdir,
+    return CompiledNextflowWorkflow(
+        nextflow_workflow=executable,
+        lang_version=result.lang_version,
+        diagnostics=tuple(str(diagnostic) for diagnostic in (*result.diagnostics, *notes)),
     )
 
 

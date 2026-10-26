@@ -133,8 +133,7 @@ def test_a_plain_dollar_in_a_literal_argument_reaches_the_command(tmp_path: Path
     run.inputs.message = "it costs $HOME"
     workflow = Workflow([run], "nextflow_dollar")
     workflow.outputs.result = run.outputs.result
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "work").rglob("out.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == ["it costs $HOME|$5|$|"]
@@ -161,8 +160,7 @@ def test_env_var_requirement_values_reach_the_command_byte_for_byte(tmp_path: Pa
     run.inputs.message = message
     workflow = Workflow([run], "nextflow_env")
     workflow.outputs.result = run.outputs.result
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "work").rglob("out.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == [f"{message}\n{literal}\n"]
@@ -184,8 +182,7 @@ def test_a_cuda_requirement_runs_under_the_local_executor(tmp_path: Path) -> Non
     run = Step(gpu_tool, step_name="gpu")
     workflow = Workflow([run], "nextflow_gpu")
     workflow.outputs.result = run.outputs.result
-    with pytest.warns(UserWarning, match=r"\[wic046\]"):
-        workflow.to_nextflow(tmp_path)
+    workflow.compile(target="nextflow").write(tmp_path)
     assert (
         "\n    accelerator 2\n    ext cudaVersionMin: '11.4', cudaComputeCapability: ['7.0', '8.0'], Directory: ['result']\n"
     ) in (tmp_path / "workflow.nf").read_text(encoding="utf-8")
@@ -217,8 +214,7 @@ def test_shell_quote_false_literal_enables_a_real_shell_redirect(tmp_path: Path)
     workflow = Workflow([redirect_step], "nextflow_shell_quote_false")
     workflow.outputs.result = redirect_step.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "work").rglob("redirected.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == [marker]
@@ -242,8 +238,7 @@ def test_stdout_captures_every_command_a_shell_literal_starts(tmp_path: Path) ->
     workflow = Workflow([two_commands_step], "nextflow_shell_stdout")
     workflow.outputs.result = two_commands_step.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "work").rglob("out.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == ["first\nsecond\n"]
@@ -468,8 +463,7 @@ def test_a_step_or_workflow_named_like_a_script_name_runs(
 ) -> None:
     echo = Step(clt_path=REPO_ROOT / "cwl_adapters" / "echo.cwl", step_name=step_name)
     echo.inputs.message = "hi"
-    Workflow([echo], workflow_name).to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(Workflow([echo], workflow_name).compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     assert [path.read_text(encoding="utf-8") for path in (tmp_path / "work").rglob("stdout")] == ["hi\n"]
 
@@ -536,8 +530,7 @@ def test_python_and_cli_generated_artifacts_execute(
     tmp_path: Path,
 ) -> None:
     workflow = supported_workflow()
-    python_dir = tmp_path / "python"
-    workflow.to_nextflow(python_dir)
+    python_dir = workflow.compile(target="nextflow").write(tmp_path / "python")
 
     cli_root = tmp_path / "cli"
     cli_root.mkdir()
@@ -585,11 +578,10 @@ def test_four_step_checked_in_adapter_workflow_executes_end_to_end(
     for index, current in enumerate(steps, start=1):
         setattr(workflow.outputs, f"message_{index}", current.outputs.stdout)
 
-    artifacts = workflow.to_nextflow(tmp_path)
-    serialized = json.loads(artifacts[0].read_text(encoding="utf-8"))
-    assert len(serialized["processes"]) == 4
+    compiled = workflow.compile(target="nextflow")
+    assert len(compiled.nextflow_workflow.processes) == 4
 
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(compiled.write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = sorted(
         output.read_text(encoding="utf-8").strip()
@@ -647,8 +639,7 @@ def test_boolean_flag_changes_observable_command_behavior(
     workflow = Workflow([write, sort_step], "nextflow_boolean_flag")
     workflow.outputs.sorted = sort_step.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "work").rglob("sorted.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == [expected]
@@ -703,8 +694,7 @@ def test_self_referencing_value_from_flag_changes_observable_command_behavior(
     workflow = Workflow([write, sort_step], "nextflow_value_from_flag")
     workflow.outputs.sorted = sort_step.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "work").rglob("sorted.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == [expected]
@@ -750,8 +740,7 @@ def test_absent_optional_flag_renders_identically_to_false(tmp_path: Path) -> No
     workflow = Workflow([write, sort_step], "nextflow_absent_optional_flag")
     workflow.outputs.sorted = sort_step.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "work").rglob("sorted.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == ["alpha\nbeta\n"]
@@ -781,8 +770,7 @@ def test_absent_optional_unreferenced_value_does_not_hang_or_crash(tmp_path: Pat
     workflow = Workflow([step_], "nextflow_absent_optional_unreferenced")
     workflow.outputs.out = step_.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "work").rglob("out.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == ["still runs\n"]
@@ -828,8 +816,7 @@ def test_optional_value_binding_renders_nothing_when_absent(
     workflow = Workflow([print_step], "nextflow_optional_binding")
     workflow.outputs.words = print_step.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     assert [path.read_text(encoding="utf-8") for path in (tmp_path / "work").rglob("words.txt")] == [expected]
 
@@ -862,8 +849,7 @@ def test_array_binding_renders_each_element_or_nothing_when_empty(
     workflow = Workflow([echo_step], "nextflow_array_binding")
     workflow.outputs.out = echo_step.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "work").rglob("out.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == [expected]
@@ -993,8 +979,7 @@ def test_basename_derived_output_name_executes(tmp_path: Path) -> None:
     workflow = Workflow([write, copy_step], "nextflow_basename")
     workflow.outputs.copied = copy_step.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     copies = list((tmp_path / "work").rglob("lines.txt.copy"))
     assert [path.read_text(encoding="utf-8") for path in copies] == ["basename derived\n"]
@@ -1032,8 +1017,7 @@ def test_iwdr_own_basename_listing_executes_unchanged(tmp_path: Path) -> None:
     workflow = Workflow([write, stage_step], "nextflow_iwdr_own_basename")
     workflow.outputs.result = stage_step.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "work").rglob("out.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == ["own basename staging\n"]
@@ -1073,8 +1057,7 @@ def test_iwdr_stage_as_rename_executes_and_reaches_the_command(tmp_path: Path) -
     workflow = Workflow([write, stage_step], "nextflow_iwdr_rename")
     workflow.outputs.result = stage_step.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = list((tmp_path / "work").rglob("out.txt"))
     assert [path.read_text(encoding="utf-8") for path in outputs] == ["iwdr staged content\n"]
@@ -1105,8 +1088,7 @@ def test_a_writable_output_directory_entry_is_a_copy_the_tool_writes_into(tmp_pa
     run.inputs.outDir = out_dir
     workflow = Workflow([run], "nextflow_plugin")
     workflow.outputs.outDir = run.outputs.outDir
-    workflow.to_nextflow(tmp_path / "run")
-    result = execute_nextflow(tmp_path / "run")
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path / "run"))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     [written] = list((tmp_path / "run" / "work").rglob("result.txt"))
     assert written.parent.name == "plugin_out" and not written.parent.is_symlink()
@@ -1138,8 +1120,7 @@ def test_an_entry_whose_name_the_task_directory_holds_stops_the_task(tmp_path: P
     mix.inputs.a, mix.inputs.b = sources
     workflow = Workflow([mix], "nextflow_entry_collision")
     workflow.outputs.listing = mix.outputs.listing
-    workflow.to_nextflow(tmp_path / "run")
-    result = execute_nextflow(tmp_path / "run")
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path / "run"))
     assert result.returncode != 0
     assert "InitialWorkDirRequirement entry already exists in the task directory: data" in result.stdout
     assert [sorted(path.name for path in source.iterdir()) for source in sources] == [["one.txt"], ["two.txt"]]
@@ -1184,8 +1165,7 @@ def test_a_pattern_glob_matches_an_entry_as_a_cwl_glob_does(tmp_path: Path) -> N
     workflow.outputs.wild = own.outputs.wild
     workflow.outputs.same = own.outputs.same
     workflow.outputs.renamed = renamed.outputs.wild
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     # Nextflow stages each entry's input as a symlink in the hidden directory; the task links the entry beside it.
     entries = [
@@ -1236,8 +1216,7 @@ def test_mixed_adapter_and_builder_workflow_executes_end_to_end(tmp_path: Path) 
     workflow.outputs.copy = duplicate.outputs.result
     workflow.outputs.count = count.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     copies = list((tmp_path / "work").rglob("copy.txt"))
     assert [path.read_text(encoding="utf-8") for path in copies] == [f"{message}\n"]
@@ -1290,8 +1269,7 @@ def test_a_containerized_command_runs_after_its_images_entrypoint(tmp_path: Path
     workflow = Workflow(steps, "nextflow_entrypoint")
     for step in steps:
         setattr(workflow.outputs, step.process_name, step.outputs.out)
-    workflow.to_nextflow(tmp_path / "pipeline")
-    result = execute_nextflow(tmp_path / "pipeline")
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path / "pipeline"))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     assert sorted(path.read_text(encoding="utf-8") for path in (tmp_path / "pipeline" / "work").rglob("out.txt")) == [
         "an argument\n", "from the entrypoint an argument\n", "from the entrypoint printf an argument\n",
@@ -1316,7 +1294,7 @@ def test_host_and_container_tasks_run_in_one_workflow(tmp_path: Path) -> None:
     workflow.outputs.container_place = in_container.outputs.place
     workflow.outputs.host_place = on_host.outputs.place
 
-    workflow.to_nextflow(tmp_path)
+    workflow.compile(target="nextflow").write(tmp_path)
     assert (tmp_path / "nextflow.config").read_text(encoding="utf-8") == "docker.enabled = true\n"
     result = execute_nextflow(tmp_path)
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -1349,8 +1327,7 @@ def test_scatter_runs_one_task_per_element(tmp_path: Path) -> None:
     workflow = Workflow([echo], "nextflow_scatter")
     workflow.outputs.scattered = echo.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = sorted(
         path.read_text(encoding="utf-8") for path in (tmp_path / "work").rglob("out.txt")
@@ -1393,8 +1370,7 @@ def test_scatter_over_an_empty_array_runs_zero_tasks_and_terminates(
     workflow.outputs.scattered = echo.outputs.result
     workflow.outputs.marker = marker.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     assert list((tmp_path / "work").rglob("out.txt")) == []
     markers = list((tmp_path / "work").rglob("marker.txt"))
@@ -1478,8 +1454,7 @@ def test_nested_workflow_executes_through_its_inlined_process(tmp_path: Path) ->
     child.inputs.source = write.outputs.result
 
     root = Workflow([write, child], "nextflow_nested")
-    root.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(root.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     copies = list((tmp_path / "work").rglob("copy.txt"))
     assert [path.read_text(encoding="utf-8") for path in copies] == [f"{message}\n"]
@@ -1548,8 +1523,7 @@ def test_a_scattered_step_broadcasts_its_unscattered_inputs(tmp_path: Path) -> N
     workflow = Workflow([echo], "nextflow_scatter_broadcast")
     workflow.outputs.pairs = echo.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = sorted(
         path.read_text(encoding="utf-8") for path in (tmp_path / "work").rglob("out.txt")
@@ -1613,10 +1587,10 @@ def test_a_cardinality_declaration_runs_and_emits_one_path(tmp_path: Path) -> No
     workflow = Workflow([write], "nextflow_single_capture")
     workflow.outputs.only = write.outputs.result
 
-    paths = workflow.to_nextflow(tmp_path)
+    workflow.compile(target="nextflow").write(tmp_path)
     assert (
         "path 'out{1,2}.txt', glob: false, arity: '1', emit: result"
-        in paths[1].read_text(encoding="utf-8")
+        in (tmp_path / "workflow.nf").read_text(encoding="utf-8")
     )
 
     result = execute_nextflow(tmp_path)
@@ -1644,8 +1618,7 @@ def test_a_declared_single_output_that_never_appears_fails_the_run(tmp_path: Pat
     workflow = Workflow([silent], "nextflow_single_capture_missing")
     workflow.outputs.only = silent.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
 
     assert result.returncode != 0
     assert "out.txt" in result.stdout + result.stderr
@@ -1671,8 +1644,7 @@ def test_a_cardinality_declaration_inside_a_scattered_step_runs_per_task(tmp_pat
     workflow = Workflow([echo], "nextflow_scattered_single_capture")
     workflow.outputs.each = echo.outputs.result
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
 
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = sorted(
@@ -1727,7 +1699,7 @@ def _run_text_capture(
 
     workflow = Workflow([write], workflow_name)
     workflow.outputs.captured = write.outputs.text
-    workflow.to_nextflow(tmp_path)
+    workflow.compile(target="nextflow").write(tmp_path)
     if probe:
         _probe_captured_value(tmp_path, workflow_name)
     return execute_nextflow(tmp_path)
@@ -1855,8 +1827,7 @@ def test_a_scatter_over_a_gathered_array_broadcasts_a_file_workflow_input(tmp_pa
     workflow = Workflow([first, second], "gathered_scatter")
     workflow.outputs.out = second.outputs.out
 
-    workflow.to_nextflow(tmp_path / "run")
-    result = execute_nextflow(tmp_path / "run")
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path / "run"))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     outputs = sorted(path.read_text(encoding="utf-8") for path in (tmp_path / "run" / "work").rglob("b.txt"))
     assert outputs == ["1\nREF\n", "2\nREF\n", "3\nREF\n"]
@@ -1903,8 +1874,7 @@ def test_an_input_named_like_a_script_name_prints_its_value(tmp_path: Path) -> N
     workflow = Workflow([step], "script_names")
     workflow.outputs.out = step.outputs.out
 
-    workflow.to_nextflow(tmp_path)
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     [text] = [path.read_text(encoding="utf-8") for path in (tmp_path / "work").rglob("out.txt")]
     assert text.split("|")[:-1] == [f"value of {name}" for name in names]
@@ -1934,7 +1904,7 @@ def test_an_optional_output_is_null_when_nothing_matches(
     step = Step(maybe, step_name="maybe")
     workflow = Workflow([step], "optional_output")
     workflow.outputs.o = step.outputs.o
-    workflow.to_nextflow(tmp_path)
+    workflow.compile(target="nextflow").write(tmp_path)
     script = tmp_path / "workflow.nf"
     sink = "\n    optional_output.out.o.subscribe { new File('o.sink').text = it instanceof Path ? it.name : it }\n}\n"
     script.write_text(script.read_text(encoding="utf-8")[:-2] + sink, encoding="utf-8")
@@ -1974,9 +1944,8 @@ def test_the_pipeline_records_each_workflow_output_as_its_value(tmp_path: Path) 
     workflow = Workflow([touch, folder, skipped, grid], "recorded")
     workflow.outputs.file, workflow.outputs.folder = touch.outputs.out, folder.outputs.out
     workflow.outputs.skipped, workflow.outputs.grid = skipped.outputs.out, grid.outputs.out
-    workflow.to_nextflow(tmp_path)
 
-    result = execute_nextflow(tmp_path)
+    result = execute_nextflow(workflow.compile(target="nextflow").write(tmp_path))
 
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     recorded = _recorded(result.stdout)

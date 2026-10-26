@@ -47,7 +47,7 @@ def _compile(source: Path, pipeline: Path, monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.chdir(source.parents[1])
     with _step_registry_injected(tools):
         built = import_python_file(source.stem, source).workflow()
-    built.to_nextflow(pipeline, tool_registry=tools)
+    built.compile(target="nextflow", tool_registry=tools).write(pipeline)
 
 
 @pytest.mark.nextflow

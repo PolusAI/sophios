@@ -11,7 +11,7 @@ import pytest
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, StepInput, Workflow
 from sophios.input_output_nf import (
-    NF_FLOAT_TEXT_FUNCTION, render_nextflow, render_nextflow_params, write_nextflow_artifacts,
+    NF_FLOAT_TEXT_FUNCTION, nextflow_params, render_nextflow, write_nextflow_artifacts,
 )
 from sophios.nf_types import NfPort, NfProcess, NfTemplate
 
@@ -118,4 +118,4 @@ def test_the_params_file_holds_each_float_as_its_python_text() -> None:
     workflow = single_process_workflow(
         process, params={"x": -0.0, "xs": [1e-07, 5], "n": 2},
         param_types={"x": "float", "xs": "float[]", "n": "int"}, output_port_name="result")
-    assert json.loads(render_nextflow_params(workflow)) == {"x": "-0.0", "xs": ["1e-07", 5], "n": 2}
+    assert nextflow_params(workflow) == {"x": "-0.0", "xs": ["1e-07", 5], "n": 2}

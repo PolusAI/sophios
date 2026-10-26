@@ -316,7 +316,8 @@ def test_a_value_bound_on_a_workflow_input_is_its_job_value() -> None:
     workflow.inputs.name, workflow.inputs.file = "n", "data.txt"
 
     assert workflow.compile().cwl_job_inputs == {"name": "n", "file": {"class": "File", "location": "data.txt"}}
-    assert workflow.compile(target="nextflow").params == {"name": "n", "file": {"class": "File", "path": "data.txt"}}
+    assert workflow.compile(target="nextflow").nextflow_workflow.params == {
+        "name": "n", "file": {"class": "File", "path": "data.txt"}}
 
 
 @pytest.mark.fast

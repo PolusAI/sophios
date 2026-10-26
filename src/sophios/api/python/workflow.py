@@ -19,11 +19,10 @@ from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.names import check_written_name
 from sophios.lang.spans import SourceSpan
 from sophios.lang.versions import KNOWN_VERSIONS
-from sophios.nf_types import ExecutableNextflowWorkflow
 from sophios.run_status import RunResult, RunState, RunStatus, StepStatus
 from sophios.wic_types import DEFAULT_BASEPATH, Tools
 
-from ._compiled import CompiledWorkflow
+from ._compiled import CompiledNextflowWorkflow, CompiledWorkflow
 from ._inference import Inference
 from ._errors import (
     ApiError,
@@ -55,13 +54,13 @@ from ._workflow_runtime import (
     RunHandle,
     RunOptions as _RunOptions,
     coerce_path as _coerce_path,
+    compiled_nextflow_workflow as _compiled_nextflow_workflow,
     compiled_workflow as _compiled_workflow,
     draw_workflow as _draw_workflow,
     load_clt_document as _load_clt_document,
     load_clt as _load_clt,
     lookup_parameter as _lookup_parameter,
     normalize_workflow_name as _normalize_workflow_name,
-    nextflow_workflow as _nextflow_workflow,
     populate_parameters as _populate_parameters,
     run_workflow as _run_workflow,
     run_workflow_async as _run_workflow_async,
@@ -70,7 +69,6 @@ from ._workflow_runtime import (
     step_run as _step_run,
     validate_step_assignment as _validate_step_assignment,
     write_workflow_wic as _write_workflow_wic,
-    write_nextflow_workflow as _write_nextflow_workflow,
 )
 
 
@@ -85,8 +83,8 @@ StrPath = str | Path
 #: fails. Ordinary Python call-contract errors remain built-in exceptions.
 __all__ = [
     "ApiError",
+    "CompiledNextflowWorkflow",
     "CompiledWorkflow",
-    "ExecutableNextflowWorkflow",
     "Inference",
     "InvalidCLTError",
     "InvalidInferenceError",
@@ -1107,7 +1105,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         tool_registry: Tools | None = None,
         lang_version: str | None = None,
         inference: Inference = Inference(),
-    ) -> ExecutableNextflowWorkflow:
+    ) -> CompiledNextflowWorkflow:
         ...
 
     def compile(
@@ -1117,7 +1115,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         tool_registry: Tools | None = None,
         lang_version: str | None = None,
         inference: Inference = Inference(),
-    ) -> CompiledWorkflow | ExecutableNextflowWorkflow:
+    ) -> CompiledWorkflow | CompiledNextflowWorkflow:
         """Compile this workflow into the selected target representation.
 
         Args:
@@ -1126,7 +1124,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             lang_version (str | None): Pin the Sophios language version for
                 this compilation; None (the default) infers it. An explicit
                 setting beats any file tag. The resolved version is reported
-                on the result as ``CompiledWorkflow.lang_version``.
+                on the result as its ``lang_version``.
             inference (Inference): How an unbound input is connected to an
                 earlier output. Unlike the command line, the Python API
                 reads no configuration: renamings and format rules are empty
@@ -1135,30 +1133,18 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 for each option and its flag.
 
         Returns:
-            CompiledWorkflow | ExecutableNextflowWorkflow: Target-specific result.
+            CompiledWorkflow | CompiledNextflowWorkflow: The CWL workflow and its job
+            inputs, or the Nextflow IR, ``nextflow_workflow``, that ``write()`` writes
+            the four files from. Either keeps every note the compile made in
+            ``diagnostics``, and compiling warns with none of them.
         """
         if target == "cwl":
             return _compiled_workflow(self, tool_registry=tool_registry, lang_version=lang_version,
                                       inference=inference)
         if target == "nextflow":
-            return _nextflow_workflow(self, tool_registry=tool_registry, lang_version=lang_version,
-                                      inference=inference)
+            return _compiled_nextflow_workflow(self, tool_registry=tool_registry, lang_version=lang_version,
+                                               inference=inference)
         raise ValueError(f"unsupported compilation target {target!r}")
-
-    def to_nextflow(
-        self,
-        outdir: StrPath,
-        *,
-        tool_registry: Tools | None = None,
-        lang_version: str | None = None,
-        inference: Inference = Inference(),
-    ) -> tuple[Path, Path, Path, Path]:
-        """Compile once and write the four supported Nextflow artifacts.
-
-        ``inference`` connects unbound inputs as :meth:`compile` does.
-        """
-        return _write_nextflow_workflow(self, outdir, tool_registry=tool_registry, lang_version=lang_version,
-                                        inference=inference)
 
     def draw(  # pylint: disable=too-many-arguments
         self,
@@ -1238,10 +1224,9 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
 
         The run writes the one document ``compile()`` returns to
         ``<basepath>/<name>.cwl``, with its job file beside it, and runs exactly
-        that. With ``target="nextflow"`` it writes what :meth:`to_nextflow`
-        writes to ``<basepath>/nextflow_<name>`` and runs that with Nextflow;
-        the outputs are in ``<basepath>/nextflow_<name>/work``, Nextflow's work
-        directory.
+        that. With ``target="nextflow"`` it writes the pipeline to ``<basepath>/nextflow_<name>``,
+        runs it with Nextflow and warns with each note the lowering made; the outputs are in
+        ``<basepath>/nextflow_<name>/work``, Nextflow's work directory.
 
         Args:
             run_args_dict (dict[str, str] | None): Runtime CLI options for local execution,

@@ -581,7 +581,6 @@ def import_edited(directory: str, file: str, old: str, new: str, workflow: Any =
     from sophios.api.python.nextflow import import_nextflow
     from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
     from sophios.api.python.workflow import Workflow
-    from sophios.input_output_nf import write_nextflow_artifacts
 
     if workflow is None:
         greet = CommandLineTool('greet', Inputs(message=Input(cwl.string, position=1)),
@@ -590,7 +589,7 @@ def import_edited(directory: str, file: str, old: str, new: str, workflow: Any =
         greet.inputs.message = workflow.inputs.message.as_type('string')
         workflow.inputs.message = 'hi'
         workflow.outputs.out = greet.outputs.out
-    write_nextflow_artifacts(workflow.compile(target='nextflow'), directory)
+    workflow.compile(target='nextflow').write(directory)
     path = Path(directory) / file
     text = path.read_text(encoding='utf-8')
     assert old in text, old

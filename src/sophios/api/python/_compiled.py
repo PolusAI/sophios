@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sophios.input_output import dump_wic_yaml
+from sophios.input_output_nf import write_nextflow_artifacts
+from sophios.nf_types import ExecutableNextflowWorkflow
 from sophios.wic_types import Json
 
 
@@ -68,3 +70,24 @@ class CompiledWorkflow:
             ),
             self.cwl_job_inputs,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledNextflowWorkflow:
+    """Compiled Nextflow workflow: its executable IR, `nextflow_workflow`, plus the notes its compile made."""
+
+    nextflow_workflow: ExecutableNextflowWorkflow
+    #: The Sophios language version this workflow was compiled under.
+    lang_version: str
+    #: The notes the compile made, then the lowering's, rendered (e.g. a CUDA field the pipeline does not check).
+    diagnostics: tuple[str, ...]
+
+    def write(self, path: str | Path | None = None) -> Path:
+        """Write everything Nextflow needs, `workflow.nf`, `nextflow.config` and `nextflow_params.json`, and the
+        record `nextflow_workflow.json`, into the directory `path`.
+
+        `path` defaults to the current directory. Returns the directory.
+        """
+        directory = Path(path if path is not None else ".")
+        write_nextflow_artifacts(self.nextflow_workflow, directory)
+        return directory

@@ -62,8 +62,7 @@ def _report(**files: Any) -> Step:
 
 def _run_report(workflow: Workflow, directory: Path, *arguments: str) -> str:
     """Write ``workflow``'s pipeline, run it with ``arguments``, and read the one report it writes."""
-    workflow.to_nextflow(directory)
-    run = execute_nextflow(directory, *arguments)
+    run = execute_nextflow(workflow.compile(target="nextflow").write(directory), *arguments)
     assert run.returncode == 0, f"stdout:\n{run.stdout}\nstderr:\n{run.stderr}"
     reports = list((directory / "work").rglob("report.txt"))
     assert len(reports) == 1, f"no single report was written:\n{run.stdout}"
@@ -299,7 +298,8 @@ def flags_workflow() -> Workflow:
 def test_a_command_line_false_overrides_a_flag_the_params_file_sets(tmp_path: Path) -> None:
     """The params file sets strict and verbose and clears fast; the command line clears verbose."""
     workflow = flags_workflow()
-    verbose = next(connection.from_port for connection in workflow.compile(target="nextflow").connections
+    verbose = next(connection.from_port
+                   for connection in workflow.compile(target="nextflow").nextflow_workflow.connections
                    if isinstance(connection, NfWorkflowInputConnection) and connection.to_port == "verbose")
     assert _run_report(workflow, tmp_path, f"--{verbose}", "false") == "--strict\n"
     assert json.loads((tmp_path / "nextflow_params.json").read_text(encoding="utf-8"))[verbose] is True

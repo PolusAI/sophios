@@ -300,12 +300,6 @@ class Idioms:  # pylint: disable=too-few-public-methods
     CHECKED: Final = Idiom(f"{NF_INPUT_HELPER}('{{name}}', params.{{name}}, {{type}})")
 
 
-def _require_executable(workflow: Any) -> ExecutableNextflowWorkflow:
-    if not isinstance(workflow, ExecutableNextflowWorkflow):
-        raise TypeError("Nextflow rendering requires ExecutableNextflowWorkflow")
-    return workflow
-
-
 def _write_text(path: Path, value: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(value, encoding="utf-8")
@@ -1102,13 +1096,9 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
         workflow (ExecutableNextflowWorkflow): Validated executable IR; no
             other representation is accepted.
 
-    Raises:
-        TypeError: If the value is not an ``ExecutableNextflowWorkflow``.
-
     Returns:
         str: The complete ``workflow.nf`` text; byte-stable across calls.
     """
-    _require_executable(workflow)
     sections = [
         "nextflow.enable.dsl=2",
         NF_SHELL_QUOTE_FUNCTION,
@@ -1156,14 +1146,10 @@ def render_nextflow_config(workflow: ExecutableNextflowWorkflow) -> str:
     Args:
         workflow (ExecutableNextflowWorkflow): Validated executable IR.
 
-    Raises:
-        TypeError: If the value is not an ``ExecutableNextflowWorkflow``.
-
     Returns:
         str: The ``nextflow.config`` text carrying the validated
             workflow-wide container policy.
     """
-    _require_executable(workflow)
     return f"docker.enabled = {str(workflow.containers_enabled).lower()}\n"
 
 
@@ -1188,30 +1174,8 @@ def nextflow_params(workflow: ExecutableNextflowWorkflow) -> dict[str, Any]:
             for name, value in params.items()}
 
 
-def render_nextflow_params(workflow: ExecutableNextflowWorkflow) -> str:
-    """Render workflow parameters as deterministic JSON.
-
-    Args:
-        workflow (ExecutableNextflowWorkflow): Validated executable IR.
-
-    Raises:
-        TypeError: If the value is not an ``ExecutableNextflowWorkflow``.
-
-    Returns:
-        str: The ``nextflow_params.json`` text with sorted keys.
-    """
-    _require_executable(workflow)
-    return json.dumps(
-        nextflow_params(workflow),
-        indent=2,
-        sort_keys=True,
-        ensure_ascii=False,
-        allow_nan=False,
-    ) + "\n"
-
-
 def remove_nextflow_artifacts(outdir: str | Path) -> None:
-    """Remove the four fixed-name artifacts, so a rejected workflow leaves none (design §8)."""
+    """Remove the four fixed-name artifacts, so a workflow the lowering rejects leaves none (design §8)."""
     for name in (NEXTFLOW_JSON, NEXTFLOW_SCRIPT, NEXTFLOW_CONFIG, NEXTFLOW_PARAMS):
         (Path(outdir) / name).unlink(missing_ok=True)
 
@@ -1226,19 +1190,15 @@ def write_nextflow_artifacts(
         workflow (ExecutableNextflowWorkflow): Validated executable IR.
         outdir (str | Path): Output directory; created when missing.
 
-    Raises:
-        TypeError: If the value is not an ``ExecutableNextflowWorkflow``.
-
     Returns:
         tuple[Path, Path, Path, Path]: Paths to the versioned JSON IR,
             ``workflow.nf``, ``nextflow.config``, and
             ``nextflow_params.json``, in that order.
     """
-    _require_executable(workflow)
     serialized = f"{workflow.to_json()}\n"
     script = render_nextflow(workflow)
     config = render_nextflow_config(workflow)
-    params = render_nextflow_params(workflow)
+    params = json.dumps(nextflow_params(workflow), indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False) + "\n"
     output = Path(outdir)
     return (
         _write_text(output / NEXTFLOW_JSON, serialized),

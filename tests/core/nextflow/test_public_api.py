@@ -4,7 +4,7 @@
 
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 import pytest
 
@@ -13,11 +13,12 @@ import sophios.main as sophios_main
 from sophios.api.python import _workflow_runtime as runtime
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import (
+    CompiledNextflowWorkflow,
     CompiledWorkflow,
-    ExecutableNextflowWorkflow,
     Step,
     Workflow,
 )
+from sophios.nf_reader import read_nextflow
 from sophios.nf_types import NfWorkflowOutputConnection
 
 from .testkit import REPO_ROOT
@@ -42,9 +43,10 @@ def supported_workflow() -> Workflow:
 
 
 def gpu_workflow() -> Workflow:
-    """One GPU process: a device count, and the two CUDA fields the target does not check."""
+    """One GPU process with two equal outputs: a device count, and the two CUDA fields the target does not check."""
     gpu_tool = (
-        CommandLineTool("gpu_tool", Inputs(), Outputs(file=Output(cwl.file, glob="out.txt")))
+        CommandLineTool("gpu_tool", Inputs(), Outputs(file=Output(cwl.file, glob="out.txt"),
+                                                      other=Output(cwl.file, glob="out.txt")))
         .base_command("touch", "out.txt")
         .gpu(cuda_version_min="11.4", compute_capability="3.0", device_count_min=2)
     )
@@ -59,32 +61,32 @@ CUDA_NOTES = [
     "asks only for a number of GPUs (step 'gpu')"
     for field, value in (("cudaVersionMin", "11.4"), ("cudaComputeCapability", "3.0"))
 ]
+FOUR_FILES = {"nextflow_workflow.json", "workflow.nf", "nextflow.config", "nextflow_params.json"}
 
 
 @pytest.mark.fast
-def test_the_python_api_reports_each_cuda_note_as_a_user_warning(tmp_path: Path) -> None:
-    """Each warning points at the caller, through either public method."""
-    with pytest.warns(UserWarning) as caught:
-        executable = gpu_workflow().compile(target="nextflow")
-        gpu_workflow().to_nextflow(tmp_path)
-    notes = [warning for warning in caught if "[wic046]" in str(warning.message)]
-    assert [str(warning.message) for warning in notes] == CUDA_NOTES * 2
-    assert {warning.filename for warning in notes} == {__file__}
-    assert executable.processes[0].resources.accelerator == 2
+@pytest.mark.filterwarnings("error::UserWarning")
+def test_a_nextflow_compile_keeps_every_note_and_warns_with_none() -> None:
+    """The CWL compile's version and notes, then the lowering's notes; only a run warns (test_run_local)."""
+    consume = CommandLineTool("consume", Inputs(file=Input(cwl.file, position=1)),
+                              Outputs(result=Output(cwl.file, glob="result.txt"))).base_command("cat")
+    workflow = Workflow([*gpu_workflow().steps, Step(consume)], "nextflow_noted")
+    compiled = workflow.compile(target="nextflow")
+    core = workflow.compile()
+    assert [note for note in core.diagnostics if "note [wic042]" in note]
+    assert (compiled.lang_version, *compiled.diagnostics) == (core.lang_version, *core.diagnostics, *CUDA_NOTES)
+    assert compiled.nextflow_workflow.processes[0].resources.accelerator == 2
 
 
 @pytest.mark.fast
-def test_a_python_workflow_is_lowered_with_only_the_outputs_it_declares(tmp_path: Path) -> None:
+def test_a_python_workflow_is_lowered_with_only_the_outputs_it_declares() -> None:
     """As `compile()` returns it, so a declared `emit_text_file` is not the step output `emit_text~file`, whose
     Nextflow name it would share."""
     workflow = supported_workflow()
     workflow.outputs.emit_text_file = workflow.steps[0].outputs.file
-    executable = workflow.compile(target="nextflow")
-    assert [connection.to_port for connection in executable.connections
+    compiled = workflow.compile(target="nextflow")
+    assert [connection.to_port for connection in compiled.nextflow_workflow.connections
             if isinstance(connection, NfWorkflowOutputConnection)] == ["file", "emit_text_file"]
-    workflow.to_nextflow(tmp_path)
-    assert json.loads((tmp_path / "nextflow_workflow.json").read_text(encoding="utf-8")) == json.loads(
-        executable.to_json())
 
 
 @pytest.mark.fast
@@ -121,8 +123,9 @@ def test_default_and_explicit_cwl_targets_match() -> None:
 
 
 @pytest.mark.serial
-def test_nextflow_target_compiles_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    workflow = adapter_workflow()
+def test_one_nextflow_compile_writes_all_four_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`write()` writes the model the compile holds over the pipeline already there, and compiles nothing again."""
+    supported_workflow().compile(target="nextflow").write(tmp_path)
     original = runtime.compile_workflow_result
     calls = 0
 
@@ -133,42 +136,37 @@ def test_nextflow_target_compiles_once(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(runtime, "compile_workflow_result", counted_compile)
 
-    compiled = workflow.compile(target="nextflow")
+    compiled = adapter_workflow().compile(target="nextflow")
+    compiled.write(tmp_path)
 
-    assert isinstance(compiled, ExecutableNextflowWorkflow)
+    assert isinstance(compiled, CompiledNextflowWorkflow)
     assert calls == 1
+    assert read_nextflow(tmp_path)[0] == compiled.nextflow_workflow
+    assert json.loads((tmp_path / "nextflow_workflow.json").read_text(encoding="utf-8")) == json.loads(
+        compiled.nextflow_workflow.to_json())
+
+
+@pytest.mark.fast
+def test_write_writes_into_the_current_directory_or_the_one_given(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """With no argument, into the current directory; either way it returns the directory it wrote into."""
+    compiled = supported_workflow().compile(target="nextflow")
+    monkeypatch.chdir(tmp_path)
+    assert compiled.write() == Path(".")
+    assert compiled.write("out") == Path("out")
+    assert {path.name for path in tmp_path.iterdir()} == FOUR_FILES | {"out"}
+    assert {path.name for path in (tmp_path / "out").iterdir()} == FOUR_FILES
+
+
+@pytest.mark.fast
+def test_the_compiled_workflow_is_the_one_nextflow_writer() -> None:
+    assert not any(hasattr(Workflow, name) for name in ("to_nextflow", "get_nextflow_workflow", "to_nf"))
 
 
 @pytest.mark.fast
 def test_unknown_python_target_is_rejected() -> None:
     with pytest.raises(ValueError, match="unsupported compilation target"):
         cast(Any, supported_workflow()).compile(target="unknown")
-
-
-@pytest.mark.serial
-def test_to_nextflow_is_the_single_four_artifact_writer(tmp_path: Path) -> None:
-    paths = supported_workflow().to_nextflow(tmp_path)
-
-    assert [path.name for path in paths] == [
-        "nextflow_workflow.json",
-        "workflow.nf",
-        "nextflow.config",
-        "nextflow_params.json",
-    ]
-    assert not hasattr(Workflow, "get_nextflow_workflow")
-    assert not hasattr(Workflow, "to_nf")
-
-
-@pytest.mark.serial
-def test_to_nextflow_writes_artifacts_for_adapter_workflows(tmp_path: Path) -> None:
-    paths = adapter_workflow().to_nextflow(tmp_path)
-
-    assert [path.name for path in paths] == [
-        "nextflow_workflow.json",
-        "workflow.nf",
-        "nextflow.config",
-        "nextflow_params.json",
-    ]
 
 
 _OPTION_GROUPS = {"every target": cli.neutral, **cli.target_options}
@@ -233,21 +231,17 @@ def test_a_plain_cwl_workflow_under_allow_raw_cwl_is_lowered_under_nextflow(
     sophios_main._main(cli.get_args("raw.cwl", [
         "--allow_raw_cwl", "--homedir", str(tmp_path), "--target", "nextflow", "--basepath", "out",
     ]), [])
-    assert {path.name for path in (tmp_path / "out").iterdir()} == {
-        "nextflow_workflow.json", "workflow.nf", "nextflow.config", "nextflow_params.json",
-    }
+    assert {path.name for path in (tmp_path / "out").iterdir()} == FOUR_FILES
 
 
 @pytest.mark.fast
 def test_nextflow_documentation_uses_supported_public_entry_points() -> None:
     documentation = (REPO_ROOT / "docs" / "nextflow.md").read_text(encoding="utf-8")
 
-    assert (
-        'json_path, script, config, params = workflow.to_nextflow("autogenerated")'
-        in documentation
-    )
+    assert 'compiled = workflow.compile(target="nextflow")\ncompiled.write("autogenerated")' in documentation
     assert "sophios --yaml workflow.wic --target nextflow" in documentation
     assert "workflow.to_nf(" not in documentation
+    assert "to_nextflow(" not in documentation
     assert "--generate_cwl_workflow --target nextflow" not in documentation
     assert "sophios --yaml workflow.wic --target nextflow --run_local" in documentation
     assert 'workflow.run(target="nextflow")' in documentation
@@ -268,43 +262,27 @@ def test_the_run_modes_act_under_nextflow_and_an_option_only_a_cwl_run_reads_doe
 
 
 @pytest.mark.fast
-def test_a_rejected_workflow_leaves_no_artifacts_from_an_earlier_write(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    previous = runtime.write_nextflow_workflow(supported_workflow(), tmp_path)
-
-    def reject_unsupported(_compilation: Any) -> ExecutableNextflowWorkflow:
-        raise ValueError("unsupported")
-
-    monkeypatch.setattr(runtime, "compiled_source_to_nextflow_with_notes", reject_unsupported)
-    with pytest.raises(ValueError, match="unsupported"):
-        runtime.write_nextflow_workflow(supported_workflow(), tmp_path)
-
-    assert not any(path.exists() for path in previous)
-
-
-@pytest.mark.fast
 def test_nextflow_cli_conversion_error_is_concise_and_actionable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """A workflow the lowering rejects leaves none of the four files an earlier write left in the base path."""
     compilation = runtime.compile_workflow_result(supported_workflow())
     capsys.readouterr()
 
-    def reject_unsupported(_compilation: Any) -> ExecutableNextflowWorkflow:
+    def reject_unsupported(_compilation: Any) -> NoReturn:
         raise ValueError("workflow.steps[0].when is deferred to Phase 3")
 
     monkeypatch.setattr(sophios_main, "compiled_source_to_nextflow_with_notes", reject_unsupported)
     monkeypatch.chdir(tmp_path)
-    previous = runtime.write_nextflow_workflow(supported_workflow(), tmp_path / "autogenerated")
+    supported_workflow().compile(target="nextflow").write("autogenerated")
     capsys.readouterr()
 
     with pytest.raises(SystemExit, match="1"):
         sophios_main._write_nextflow_target(compilation, "unsupported", Path("autogenerated"), "text")
 
-    assert not any(path.exists() for path in previous)
+    assert not any((tmp_path / "autogenerated").iterdir())
 
     error_path = tmp_path / "error_unsupported.txt"
     assert error_path.read_text(encoding="utf-8") == (
