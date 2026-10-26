@@ -131,7 +131,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: vjaganat90/compute
-          ref: e7ec43b4575a769288c0d73788bbdee2c31cb1c5
+          ref: bec46f2180d0ce84bce6a5003e2b40ec5b7e2387
           path: compute
 
       # The run page shows the dispatched sha, which may be master's; the summary

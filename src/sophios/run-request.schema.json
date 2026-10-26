@@ -1,7 +1,7 @@
 {
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"title": "RunRequest",
-	"description": "What to run and where. id names the run: the client chooses it, new for each run, and the same request sent again under the same id is the same run. Only id, workflow and inputs are required; leader, steps and logLevel default to the driver's settings. The driver checks every POST /runs body against this schema, served at GET /run-request.schema.json, before anything else; a request of the right shape is then checked against the cluster.",
+	"description": "What to run and where. id names the run: the client chooses it, new for each run, and the same request sent again under the same id is the same run. Only id, workflow and inputs are required; outputMode defaults to serviceOutDir, and leader, steps and logLevel to the driver's settings. The driver checks every POST /runs body against this schema, served at GET /run-request.schema.json, before anything else; a request of the right shape is then checked against the cluster.",
 	"$comment": "Each pattern ends with (?!\\n)$, not $: in Python's re, which jsonschema uses, $ also matches before a final line break, and in JavaScript it does not. Written so, a pattern takes the same strings in both.",
 	"type": "object",
 	"required": ["id", "workflow", "inputs"],
@@ -34,13 +34,13 @@
 			"description": "the CWL job: the workflow's inputs by name. Every File and Directory location is a path on the cluster (absolute, or relative to basepath), a file:// URL, or an http(s) URL",
 			"type": "object"
 		},
-		"outputTargets": {
-			"description": "keys of Directory inputs that tools write into in place. Every tool that receives one from the workflow's inputs, through subworkflows too, must have InplaceUpdateRequirement (inplaceUpdate: true) in effect, its own or inherited from its step or an enclosing workflow, or Toil would let it write into a copy. The driver creates each target, or uses it if it exists and is empty",
-			"type": "array",
-			"uniqueItems": true,
-			"items": {
-				"type": "string"
-			}
+		"outputMode": {
+			"description": "where the outputs go. serviceOutDir (the default): Toil copies them into the run's own folder. workflowOutDir, the supported way: Toil copies them into the folder workflowOutDir names. workflowInPlace, an advanced feature the driver warns of: each output folder (a Directory input that a tool stages writable and returns as an output) with an absolute location is written there, once, without a copy; the rest is copied into the run's own folder, and so are the outputs of a tool that also stages another input writable, with a warning. In every mode the driver makes the output folders: one with a relative location in the run, copied into the outputs' folder under its name; one with an absolute location there, when missing, inside an existing folder it can write. Under workflowInPlace an existing one must be empty",
+			"enum": ["serviceOutDir", "workflowOutDir", "workflowInPlace"]
+		},
+		"workflowOutDir": {
+			"description": "with outputMode workflowOutDir, and only with it: the folder on the cluster the outputs are copied into, absolute or relative to basepath",
+			"type": "string"
 		},
 		"leader": {
 			"$ref": "#/$defs/Leader"
@@ -131,7 +131,8 @@
 					"location": "output_directory_compact"
 				}
 			},
-			"outputTargets": ["output"],
+			"outputMode": "workflowOutDir",
+			"workflowOutDir": "results/autoseg-20261020T142205-7f3a",
 			"leader": {
 				"time": "1-00:00:00"
 			},

@@ -57,10 +57,11 @@ run = service.run(workflow, basepath='/projects/lab/data',
 print(run.outputs())
 ```
 
-Every path goes as written: a path on the cluster, absolute or relative to
-`basepath`, or an http(s) URL. Sophios never looks at them; the service
-checks each one on the cluster before anything is queued (it exists, can be
-read, has a name cwltool takes) and answers every problem at once. Sophios
+Every path goes as written; the service, not Sophios, reads it on the
+cluster, before anything is queued, and answers every problem at once. A
+path a tool reads is a path on the cluster, absolute or relative to
+`basepath`, or an http(s) URL; it must exist and be readable, with a name
+cwltool takes. An output folder is written, not read: see below. Sophios
 refuses before sending only what names nothing on the cluster: a path with
 `~` or an environment variable in it.
 
@@ -71,9 +72,9 @@ follows it from any session or machine.
 
 | Argument | What it is |
 |---|---|
-| `basepath` | The directory on the cluster that relative paths are relative to; required when one is |
-| `workflow_out_dir` | The folder the workflow's outputs are copied into: see below |
-| `workflow_in_place` | `True` to write each output folder where its input names it: see below |
+| `basepath` | The directory on the cluster that the relative paths of what the tools read are relative to; required when there is one |
+| `workflow_out_dir` | The folder the workflow's outputs are copied into, absolute or relative to `basepath`: see below |
+| `workflow_in_place` | `True` to write each output folder given as an absolute path there: see below |
 | `leader` | The Toil leader's Slurm job: `{'partition': ..., 'time': ..., 'memory': ...}`; the service's settings otherwise |
 | `steps` | Where step jobs go and how long each may run: `{'partition': ..., 'gpuPartition': ..., 'time': ...}` |
 | `log_level` | Toil's log level: `DEBUG`, `INFO` (the default), `WARNING` or `ERROR` |
@@ -81,17 +82,32 @@ follows it from any session or machine.
 
 ## Where the outputs go
 
+An output folder is a `Directory` input that a tool writes into and returns,
+such as the folder a segmentation tool fills; the service finds them itself,
+whatever they are called and however deep in the workflow. Give one **just a
+name**, such as `step.inputs.output = 'segmentation'`: the service makes it,
+empty, in the run, and its result lands in the outputs' folder under that
+name, never anywhere `basepath` points. Give one an absolute path only to
+have it written in place (below), or to hand the tool an existing folder as
+its input: the tool then works on a copy of it, and the folder is left as it
+is, which the service warns of.
+
 - **`workflow_out_dir='<folder>'`: the supported way.** Toil copies the
-  workflow's outputs into that folder on the cluster. It may exist, empty, or
-  the service creates it in a parent it can write to.
-- **Neither:** the outputs are copied into the run's own folder on the
-  cluster; the output object says where.
-- **`workflow_in_place=True`: an advanced choice.** Each tool writes straight
-  into the folder its input names, with no copy, which is what very large
-  outputs need. The service warns on every run that uses it. A tool that also
-  stages another input writable cannot write in place without changing that
-  input too, so its outputs are copied as above, with a warning that says so.
-  `run.targets` names the folders written in place.
+  workflow's outputs into that folder on the cluster, an output folder given
+  as `segmentation` as `<folder>/segmentation`. The folder may exist, empty,
+  or the service creates it, in a parent it can write to.
+- **Neither:** the outputs are copied, as above, into the run's own folder on
+  the cluster; the output object says where.
+- **`workflow_in_place=True`: an advanced choice, which the service warns of
+  on every run.** Each output folder given as an absolute path is written
+  there, once, without a copy, which is what very large outputs need; the
+  service creates it when it is missing (one folder, in a parent it can
+  write), and an existing one must be empty. An output folder given as a
+  name is copied into the run's own folder, with a warning. So is the output
+  of a tool that also stages another input writable, since writing in place
+  would change that input too, and of a step scattered over something other
+  than its output folders: each falls back to copying, with a warning that
+  says why it is slower. `run.targets` names the folders written in place.
 
 ## Following a run
 

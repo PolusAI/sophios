@@ -11,8 +11,10 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,7 +27,8 @@ from referencing.jsonschema import DRAFT202012
 from sophios import compute
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
-from sophios.run_status import RunState
+from sophios.run_status import RunState, RunStatus
+from sophios.python_cwl_adapter import import_python_file
 
 from . import fake_ssh
 
@@ -62,32 +65,59 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-@pytest.fixture(scope='module', name='cluster')
-def _cluster(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Cluster]:
-    """The driver of `SOPHIOS_SLURM_DRIVER`, listening on a free port of 127.0.0.1, until the module ends."""
+@contextmanager
+def _serving(root: Path, toil_env: Path) -> Iterator[Cluster]:
+    """The driver of `SOPHIOS_SLURM_DRIVER`, over the fakes copied into `root` and the Toil env `toil_env`,
+    listening on a free port of 127.0.0.1; its log is `root/driver.log`."""
     if 'SOPHIOS_SLURM_DRIVER' not in os.environ:
         pytest.fail('set SOPHIOS_SLURM_DRIVER to the packages/slurm-driver directory of a PolusAI/compute checkout '
                     'at the commit lint_and_test.yml pins')
     driver = Path(os.environ['SOPHIOS_SLURM_DRIVER']).resolve()
     node = shutil.which('node')
     assert node is not None, 'the slurm driver needs Node 26 or later on PATH'
-    root = tmp_path_factory.mktemp('cluster')
     shutil.copytree(driver / 'test' / 'fake', root, dirs_exist_ok=True)
     for name in ('data', 'shared', 'images', 'home'):
         (root / name).mkdir()
     port = _free_port()
     env = {'HOME': str(root / 'home'), 'PATH': f'{root / "slurm"}:/usr/bin:/bin', 'DATA_DIR': str(root / 'data'),
-           'SHARED_ROOTS': str(root / 'shared'), 'TOIL_ENV': str(root / 'toil'), 'IMAGE_CACHE': str(root / 'images'),
+           'SHARED_ROOTS': str(root / 'shared'), 'TOIL_ENV': str(toil_env), 'IMAGE_CACHE': str(root / 'images'),
            'LEADER_PARTITION': 'normal', 'LEADER_TIME': '1-00:00:00', 'LEADER_MEMORY': '8G', 'LEADER_CPUS': '2',
            'PORT': str(port)}
-    with subprocess.Popen([node, 'src/main.ts'], cwd=driver, env=env, stderr=subprocess.PIPE, text=True) as process:
-        assert process.stderr is not None
-        started = process.stderr.readline()
-        assert 'listening on http://127.0.0.1' in started, started + process.stderr.read()
+    log = root / 'driver.log'
+    with log.open('w', encoding='utf-8') as stderr, \
+            subprocess.Popen([node, 'src/main.ts'], cwd=driver, env=env, stderr=stderr) as process:
         try:
+            for _ in range(300):
+                if 'listening on http://127.0.0.1' in log.read_text('utf-8') or process.poll() is not None:
+                    break
+                time.sleep(0.1)
+            assert process.poll() is None, log.read_text('utf-8')
             yield Cluster(f'http://127.0.0.1:{port}', driver, root / 'slurm', root / 'shared', root / 'data' / 'runs')
         finally:
             process.terminate()
+
+
+@pytest.fixture(scope='module', name='cluster')
+def _cluster(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Cluster]:
+    """The driver under fake Slurm and the driver's fake Toil, until the module ends."""
+    root = tmp_path_factory.mktemp('cluster')
+    with _serving(root, root / 'toil') as cluster:
+        yield cluster
+
+
+@pytest.fixture(scope='module', name='toil_cluster')
+def _toil_cluster(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Cluster]:
+    """The driver under fake Slurm with real Toil: this Python's own env, which has Toil and cwltool as Sophios
+    does. Each job script is run on this machine, as the driver's own real-Toil lane runs it: Toil's single_machine
+    batch system instead of Slurm's, and no containers."""
+    toil_env = Path(sys.prefix)
+    assert (toil_env / 'bin' / 'toil-cwl-runner').exists(), f'{toil_env} has no toil-cwl-runner, which Sophios needs'
+    root = tmp_path_factory.mktemp('toil_cluster')
+    with _serving(root, toil_env) as cluster:
+        (cluster.slurm / 'sbatch.then').write_text(
+            "sed -e 's|--batchSystem slurm|--batchSystem single_machine|' -e 's|--singularity|--no-container|' "
+            '"$script" > "$script.local" && mv "$script.local" "$script"\n', encoding='utf-8')
+        yield cluster
 
 
 def _reader() -> CommandLineTool:
@@ -245,3 +275,104 @@ def test_over_ssh_reaches_the_service_through_a_tunnel_the_block_closes(
     assert argv[-2:] == [tunnel, 'cluster']
     with pytest.raises(requests.ConnectionError):
         requests.get(f'{local}/openapi.json', timeout=5)
+
+
+#: A tool that writes into the folder its input `out` names and returns that folder: an output folder, to the service.
+_WRITER = """cwlVersion: v1.2
+class: CommandLineTool
+requirements:
+  InitialWorkDirRequirement:
+    listing:
+      - entry: $(inputs.out)
+        writable: true
+inputs:
+  out: Directory
+outputs:
+  out:
+    type: Directory
+    outputBinding:
+      glob: $(inputs.out.basename)
+baseCommand: [sh, -c, 'echo segmented > "$0/result.txt"']
+arguments: [$(inputs.out.basename)]
+"""
+
+
+def _writes(directory: Path, out: str) -> Workflow:
+    tool = directory / 'writer.cwl'
+    tool.write_text(_WRITER, encoding='utf-8')
+    step = Step(clt_path=tool, step_name='write')
+    step.inputs.out = out
+    return Workflow([step], 'writes')
+
+
+def _ended(cluster: Cluster, run: compute.Run) -> RunStatus:
+    """Once real Toil has run the job to its end, the run's status: Slurm says COMPLETED for exit 0, else FAILED."""
+    ended = cluster.slurm / f'{run.slurm_job}.exit'
+    for _ in range(1800):
+        if ended.exists() and ended.read_text('utf-8').strip():
+            break
+        time.sleep(0.1)
+    cluster.leader(run, 'COMPLETED' if ended.read_text('utf-8').strip() == '0' else 'FAILED')
+    return run.wait()
+
+
+def test_workflow_out_dir_takes_an_output_folder_given_as_a_name_and_files_its_result_under_that_name(
+        toil_cluster: Cluster, tmp_path: Path) -> None:
+    """With real Toil: an output folder sent as just a name is made in the run, never read against basepath, and
+    lands in <workflow_out_dir>/<name>; the workflow_out_dir folder is created when missing."""
+    results = toil_cluster.shared / 'results'
+    run = compute.Service(toil_cluster.url).submit(_writes(tmp_path, 'segmentation'), basepath=str(toil_cluster.shared),
+                                                   workflow_out_dir=str(results))
+    status = _ended(toil_cluster, run)
+    assert status.state is RunState.COMPLETED, run.logs()
+    assert (results / 'segmentation' / 'result.txt').read_text('utf-8') == 'segmented\n'
+    assert not (toil_cluster.shared / 'segmentation').exists() and not run.targets
+
+
+def test_workflow_in_place_writes_an_absolute_output_folder_there_without_a_copy_and_warns_it_is_advanced(
+        toil_cluster: Cluster, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """With real Toil: the folder, created by the service, holds the result; run.targets names it; nothing is copied
+    into the run's own folder; and the service's ADVANCED warning is printed when the run is submitted."""
+    folder = toil_cluster.shared / 'in_place'
+    run = compute.Service(toil_cluster.url).submit(_writes(tmp_path, str(folder)), workflow_in_place=True)
+    assert ('WARNING from the compute service: outputMode workflowInPlace is an ADVANCED feature'
+            in capsys.readouterr().err)
+    status = _ended(toil_cluster, run)
+    assert status.state is RunState.COMPLETED, run.logs()
+    assert (folder / 'result.txt').read_text('utf-8') == 'segmented\n'
+    assert run.targets == {'write~out': str(folder)}
+    assert not list((toil_cluster.runs / run.id / 'out').rglob('result.txt'))
+
+
+@pytest.mark.parametrize('script', ['ichnaea_compact', 'ichnaea_integrated'])
+def test_the_ichnaea_examples_run_on_the_service(cluster: Cluster, script: str, tmp_path: Path,
+                                                 monkeypatch: pytest.MonkeyPatch,
+                                                 capsys: pytest.CaptureFixture[str]) -> None:
+    """Each example's `main()`, its BASEPATH and SERVICE_URL pointed at this service, submits a request the service
+    accepts and follows the run to its end; Slurm says COMPLETED once the job script has ended."""
+    monkeypatch.setattr(compute, 'POLL', 0.2)
+    for name in ('input_directory', 'model_directory'):
+        (cluster.shared / name).mkdir(exist_ok=True)
+    (cluster.shared / 'model_directory' / 'sam3.pt').write_text('weights\n', encoding='utf-8')
+    source = tmp_path / f'{script}.py'
+    shutil.copyfile(Path(__file__).resolve().parents[2] / 'examples' / 'scripts' / f'{script}.py', source)
+    example = import_python_file(script, source)
+    monkeypatch.setattr(example, 'BASEPATH', str(cluster.shared))
+    monkeypatch.setattr(example, 'SERVICE_URL', cluster.url)
+    monkeypatch.chdir(tmp_path)
+    # The job ends by writing Slurm's word on it: the id the fake sbatch is about to give, COMPLETED.
+    (cluster.slurm / 'sbatch.then').write_text(
+        'id=$((1000 + $(cat "$here/jobs" 2> /dev/null | wc -l)))\n'
+        'echo "printf \'%s\\n\' \'x|COMPLETED|0:0|2026-10-26T10:00:00|2026-10-26T10:05:00|1-00:00:00\' '
+        '> \'$here/$id.sacct\'" >> "$script"\n', encoding='utf-8')
+    try:
+        assert example.main() == 0
+    finally:
+        (cluster.slurm / 'sbatch.then').unlink()
+    printed = capsys.readouterr()
+    assert 'COMPLETED' in printed.out
+    if script == 'ichnaea_compact':
+        assert (cluster.shared / 'results_compact').is_dir()
+    else:
+        assert (cluster.shared / 'output_directory3').is_dir() and "'autoseg~output'" in printed.out
+        assert 'outputMode workflowInPlace is an ADVANCED feature' in printed.err

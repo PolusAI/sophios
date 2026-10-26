@@ -95,13 +95,14 @@ def workflow(input_dicts: dict[str, str], workflow_name: str) -> Workflow:
 def main() -> int:
     """Build the workflow and its request; run it on the compute service when SERVICE_URL is set."""
     # ========== INPUTS TO WORKFLOW ==================
-    # Paths on the cluster, relative to BASEPATH, as written: Sophios never looks at them.
-    input_dicts = {'input_dir': 'input_directory', 'output_dir': 'output_directory_compact',
+    # What the tool reads: paths on the cluster, relative to BASEPATH, as written; Sophios never looks at them.
+    # The output folder is just a name: the service makes it in the run, and copies it into out_dir under that name.
+    input_dicts = {'input_dir': 'input_directory', 'output_dir': 'segmentation_compact',
                    'model_file': 'model_directory/sam3.pt'}
 
     # ========== BUILD WORKFLOW ======================
     autoseg_workflow = workflow(input_dicts, "autoseg_workflow")
-    out_dir = f'{BASEPATH}/results_compact'  # the outputs are copied here
+    out_dir = f'{BASEPATH}/results_compact'  # the outputs are copied here: results_compact/segmentation_compact
     steps = {'partition': 'normal', 'gpuPartition': 'normal_gpu'}
 
     if SERVICE_URL is None:

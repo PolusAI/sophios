@@ -149,7 +149,6 @@ def test_a_workflow_with_a_real_time_analysis_is_refused_the_service_never_runs_
 
 
 @pytest.mark.fast
-@pytest.mark.xfail(strict=True, reason="the vendored schema, of the driver's e7ec43b, has no outputMode yet")
 def test_where_the_outputs_go_is_one_choice_and_workflow_out_dir_is_its_folder() -> None:
     """`workflow_out_dir` copies them into a folder; `workflow_in_place` writes each where its input names it."""
     request = compute.build_request(_workflow(), workflow_out_dir='/projects/lab/results')

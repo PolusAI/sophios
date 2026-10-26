@@ -1,8 +1,8 @@
 """Artifact-first variant of the ichnaea example, writing its output folder in place on the cluster.
 
 `workflow_in_place` is the compute service's advanced choice: the tool writes straight into the folder its `output`
-input names, with no copy, and the service warns of what that asks of every tool. `workflow_out_dir`, as in
-`ichnaea_compact.py`, is the supported way.
+input names, an absolute path, with no copy, and the service warns of what that asks of every tool.
+`workflow_out_dir`, as in `ichnaea_compact.py`, is the supported way.
 """
 
 import json
@@ -101,8 +101,9 @@ def workflow(input_dicts: dict[str, str], workflow_name: str) -> Workflow:
 def main() -> int:
     """Write the built tool, the compiled workflow and its request to disk; run it when SERVICE_URL is set."""
     # ========== INPUTS TO WORKFLOW ==================
-    # Paths on the cluster, relative to BASEPATH, as written: Sophios never looks at them.
-    input_dicts = {'input_dir': 'input_directory', 'output_dir': 'output_directory3',
+    # What the tool reads: paths on the cluster, relative to BASEPATH, as written; Sophios never looks at them.
+    # The output folder is written in place, so it is an absolute path: the service creates it, or it must be empty.
+    input_dicts = {'input_dir': 'input_directory', 'output_dir': f'{BASEPATH}/output_directory3',
                    'model_file': 'model_directory/sam3.pt'}
 
     # ========== BUILD WORKFLOW ======================

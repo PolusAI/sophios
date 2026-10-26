@@ -12,12 +12,14 @@ A core feature, but not part of the Python API: `sophios.api.python` neither exp
 `Service.run` submits and waits, and raises when the run does not complete; `Service.attach` follows a run from
 any session or machine. The run goes on in Slurm whatever happens to the session.
 
-Every path goes as written: a path on the cluster, absolute or relative to `basepath`, or an http(s) URL; the
-service checks each one there, and Sophios never looks at them. The request's shape is `run-request.schema.json`, a
-copy of the service's own: Sophios checks every request against it before sending, and the service again on
-arrival. Where the workflow's outputs go is `workflow_out_dir` (the supported way: they are copied into that folder),
-the run's own folder on the cluster when it is not given, or, as an advanced choice, `workflow_in_place`, where
-each tool writes straight into the folder its input names.
+Every path goes as written, and the service, not Sophios, reads it on the cluster. A path a tool reads is a path on
+the cluster, absolute or relative to `basepath`, or an http(s) URL. An output folder (a Directory input a tool writes
+into and returns) given as a name, such as `segmentation`, is made in the run, never read against `basepath`, and
+its result lands in the outputs' folder under that name; one given as an absolute path is that folder. The outputs'
+folder is `workflow_out_dir` (the supported way: the outputs are copied into it), or the run's own folder on the
+cluster when it is not given; `workflow_in_place`, an advanced choice, has each tool write an output folder with an
+absolute path there, once, without a copy. The request's shape is `run-request.schema.json`, a copy of the
+service's own: Sophios checks every request against it before sending, and the service again on arrival.
 """
 import json
 import re
@@ -123,9 +125,12 @@ def build_request(workflow: 'Workflow', *, basepath: str | None = None, workflow
 
     Args:
         workflow: The workflow, compiled here into one document with its inputs.
-        basepath: The directory on the cluster that relative paths are relative to.
-        workflow_out_dir: The folder on the cluster the workflow's outputs are copied into: the supported way.
-        workflow_in_place: Instead, have each tool write its output folder where its input names it (advanced).
+        basepath: The directory on the cluster that the relative paths of what the tools read are relative to; an
+            output folder given as a name is made in the run instead.
+        workflow_out_dir: The folder on the cluster the workflow's outputs are copied into, absolute or relative to
+            `basepath`, created when missing: the supported way.
+        workflow_in_place: Instead, have each tool write an output folder given as an absolute path there, without
+            a copy (advanced; the service warns of it).
         leader: The Toil leader's Slurm job: `partition`, `time`, `memory`; the service's settings otherwise.
         steps: Where step jobs go and how long each may run: `partition`, `gpuPartition`, `time`.
         log_level: Toil's log level: `DEBUG`, `INFO`, `WARNING` or `ERROR`.
