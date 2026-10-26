@@ -1,0 +1,141 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "RunRequest",
+	"description": "What to run and where. id names the run: the client chooses it, new for each run, and the same request sent again under the same id is the same run. Only id, workflow and inputs are required; leader, steps and logLevel default to the driver's settings. The driver checks every POST /runs body against this schema, served at GET /run-request.schema.json, before anything else; a request of the right shape is then checked against the cluster.",
+	"$comment": "Each pattern ends with (?!\\n)$, not $: in Python's re, which jsonschema uses, $ also matches before a final line break, and in JavaScript it does not. Written so, a pattern takes the same strings in both.",
+	"type": "object",
+	"required": ["id", "workflow", "inputs"],
+	"additionalProperties": false,
+	"properties": {
+		"id": {
+			"$ref": "#/$defs/Id"
+		},
+		"basepath": {
+			"description": "an absolute directory on the cluster, which every relative location in workflow and inputs is relative to; required when one is",
+			"type": "string",
+			"pattern": "^/"
+		},
+		"workflow": {
+			"description": "a CWL Workflow or CommandLineTool with every step's run inline, as one document",
+			"type": "object",
+			"required": ["class", "cwlVersion"],
+			"properties": {
+				"class": {
+					"description": "Workflow or CommandLineTool",
+					"enum": ["Workflow", "CommandLineTool"]
+				},
+				"cwlVersion": {
+					"description": "v1.0, v1.1 or v1.2",
+					"enum": ["v1.0", "v1.1", "v1.2"]
+				}
+			}
+		},
+		"inputs": {
+			"description": "the CWL job: the workflow's inputs by name. Every File and Directory location is a path on the cluster (absolute, or relative to basepath), a file:// URL, or an http(s) URL",
+			"type": "object"
+		},
+		"outputTargets": {
+			"description": "keys of Directory inputs that tools write into in place. Every tool that receives one from the workflow's inputs, through subworkflows too, must have InplaceUpdateRequirement (inplaceUpdate: true) in effect, its own or inherited from its step or an enclosing workflow, or Toil would let it write into a copy. The driver creates each target, or uses it if it exists and is empty",
+			"type": "array",
+			"uniqueItems": true,
+			"items": {
+				"type": "string"
+			}
+		},
+		"leader": {
+			"$ref": "#/$defs/Leader"
+		},
+		"steps": {
+			"$ref": "#/$defs/Steps"
+		},
+		"logLevel": {
+			"description": "Toil's log level: DEBUG, INFO (the default), WARNING or ERROR",
+			"enum": ["DEBUG", "INFO", "WARNING", "ERROR"]
+		}
+	},
+	"$defs": {
+		"Id": {
+			"description": "1 to 128 letters, digits, '.', '_' or '-', starting with a letter or digit",
+			"type": "string",
+			"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(?!\\n)$"
+		},
+		"Partition": {
+			"description": "a Slurm partition of this cluster: letters, digits, '_', '.' or '-'",
+			"type": "string",
+			"pattern": "^[A-Za-z0-9_.-]+(?!\\n)$"
+		},
+		"Time": {
+			"description": "a Slurm time limit: M, M:S, H:M:S, D-H, D-H:M or D-H:M:S, such as 3-00:00:00",
+			"type": "string",
+			"pattern": "^([0-9]+-[0-9]+(:[0-9]+){0,2}|[0-9]+(:[0-9]+){0,2})(?!\\n)$"
+		},
+		"Leader": {
+			"description": "The Toil leader's Slurm job, which lives as long as the run. Each field defaults to the driver's setting.",
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"partition": {
+					"$ref": "#/$defs/Partition"
+				},
+				"time": {
+					"$ref": "#/$defs/Time",
+					"description": "a Slurm time limit for the whole run, above 0 (Slurm reads 0 as no limit): M, M:S, H:M:S, D-H, D-H:M or D-H:M:S, such as 3-00:00:00, within the partition's own limit and, where Slurm enforces them, the limits of the service account's QOS or association"
+				},
+				"memory": {
+					"description": "the leader's memory, as Slurm writes it: a whole number with K, M, G or T, such as 8G",
+					"type": "string",
+					"pattern": "^[1-9][0-9]*[KMGT]?(?!\\n)$"
+				}
+			}
+		},
+		"Steps": {
+			"description": "Where Toil sends the workflow's step jobs, and how long each may run. A tool's resources and GPUs come from its CWL. Setting partition requires gpuPartition (from the request or the driver's settings): Toil would otherwise send GPU steps to partition too. Each field defaults to the driver's setting; time then defaults to the run's leader.time.",
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"partition": {
+					"$ref": "#/$defs/Partition"
+				},
+				"gpuPartition": {
+					"$ref": "#/$defs/Partition"
+				},
+				"time": {
+					"$ref": "#/$defs/Time",
+					"description": "the Slurm time limit of each step job, above 0, in leader.time's forms, within the limit of each step partition (of the largest partition when none is named) and, where Slurm enforces them, the limits of the service account's QOS or association. A step that reaches it fails, and the run's reason says so"
+				}
+			}
+		}
+	},
+	"examples": [
+		{
+			"id": "autoseg-20261020T142205-7f3a",
+			"basepath": "/projects/collabs/mock_common",
+			"workflow": {
+				"cwlVersion": "v1.2",
+				"class": "Workflow",
+				"inputs": {},
+				"outputs": {},
+				"steps": {}
+			},
+			"inputs": {
+				"input": {
+					"class": "Directory",
+					"location": "input_directory"
+				},
+				"model": {
+					"class": "File",
+					"location": "model_directory/sam3.pt"
+				},
+				"output": {
+					"class": "Directory",
+					"location": "output_directory_compact"
+				}
+			},
+			"outputTargets": ["output"],
+			"leader": {
+				"time": "1-00:00:00"
+			},
+			"logLevel": "INFO"
+		}
+	]
+}

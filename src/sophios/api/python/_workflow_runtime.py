@@ -10,11 +10,12 @@ Python-facing workflow authoring.
 # compiler/runtime boundary, so reaching internal state is intentional.
 
 import asyncio
+import copy
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar
 
 import graphviz
 import yaml
@@ -34,10 +35,10 @@ from sophios.lang import CwlRecord, Diagnostic, Diagnostics, Document, ParseResu
 from sophios.lang import Step as LangStep
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.cli import default_compilation_settings, get_known_and_unknown_args
-from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
+from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs, resolve_file_formats
 from sophios.utils import convert_args_dict_to_args_list
 from sophios.utils_cwl import tool_process
-from sophios.wic_types import DEFAULT_BASEPATH, CompilerOptions, GraphSettings, StepId, Tool, Tools
+from sophios.wic_types import DEFAULT_BASEPATH, CompilerOptions, GraphSettings, Json, StepId, Tool, Tools
 
 from ._inference import Inference
 from ._errors import InvalidCLTError, InvalidStepError
@@ -515,6 +516,26 @@ def _one_document(workflow: "Workflow", result: CompilationResult) -> Compilatio
             declared = {output.name: outputs[output.name] for output in workflow._outputs if output.name in outputs}
             return replace(artifact, cwl={**artifact.cwl, "outputs": declared})
     return artifact
+
+
+class ServiceDocument(NamedTuple):
+    """What a remote service is sent to run `workflow`: see `service_document`."""
+
+    #: The one document, every process embedded, and only the outputs the workflow declares, when it declares any.
+    cwl: Json
+    #: Its job inputs, every path as written; only each File's list of possible formats is resolved.
+    job_inputs: Json
+    #: The real-time analyses the workflow declares, which no service runs.
+    realtime: tuple[Declaration, ...]
+
+
+def service_document(workflow: "Workflow", *, tool_registry: Tools | None = None,
+                     inference: Inference = Inference()) -> ServiceDocument:
+    """Compile `workflow` for a service that runs it elsewhere: what `compile()` returns, without the local run's
+    rewrite of output directories to bare names, which only a local runner reads."""
+    result = compile_workflow_result(workflow, tool_registry=tool_registry, inference=inference)
+    artifact = _one_document(workflow, result)
+    return ServiceDocument(copy.deepcopy(artifact.cwl), resolve_file_formats(artifact.job_inputs), result.realtime)
 
 
 def compiled_workflow_from_result(
