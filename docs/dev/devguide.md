@@ -84,7 +84,7 @@ configuration makes it long.
 The CI runs, over `src/`, `examples/`, `tests/` and `docs/cookbook/`:
 
 ```bash
-mypy src/ examples/ tests/ docs/cookbook/
+mypy
 pylint src/ examples/**/*.py tests/
 autopep8 --exit-code --recursive --diff --max-line-length 120 examples/ src/ tests/
 lint-imports

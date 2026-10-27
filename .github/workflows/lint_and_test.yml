@@ -207,10 +207,8 @@ jobs:
       # Do the static analysis, type and style check first
       - name: MyPy Check Type Annotations
         if: ${{ runner.os == 'Linux' && !cancelled() && steps.setup.outcome == 'success' }}
-        run: cd sophios/ && mypy src/ examples/ tests/ docs/cookbook/
-        # NOTE: Do not use `mypy .` because then mypy will check both src/ and build/ causing:
-        # src/sophios/__init__.py: error: Duplicate module named "wic"
-        # (also at "./build/lib/sophios/__init__.py")
+        run: cd sophios/ && mypy
+        # The paths are `files` in [tool.mypy], which the pre-commit hook runs too.
 
       - name: Import Boundaries
         if: ${{ runner.os == 'Linux' && !cancelled() && steps.setup.outcome == 'success' }}

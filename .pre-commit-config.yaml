@@ -45,31 +45,20 @@ repos:
     hooks:
     -   id: autopep8
         args: [--exit-code, --recursive, --diff, --max-line-length, "120"]
--   repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.9.0
-    hooks:
-    -   id: mypy
-        args: [--no-strict-optional, --ignore-missing-imports]
-        additional_dependencies: # Copied from pyproject.toml
-        - pydantic  # so we can enable the pydantic.mypy plugin
-        - pytest  # the tests' fixtures and `pytest.raises` are typed, as in CI's mypy step
-        - lxml-stubs
-        - types-Pillow
-        - types-PyYAML
-        - types-Pygments
-        - types-colorama
-        - types-decorator
-        - types-docutils
-        - types-jsonschema
-        - types-psutil
-        - types-html5lib
-        - types-python-jose
-        - types-pytz
-        - types-redis
-        - types-requests
-        - types-setuptools
-        - types-six
-        - types-urllib3
+- repo: local
+  hooks:
+  - id: mypy
+    name: mypy
+    # CI's command in the active environment: that env's mypy, packages and
+    # stubs, over the `files` in [tool.mypy]. An isolated hook env types every
+    # package it lacks, sophios included, as Any, and passing the staged files
+    # checks a commit against that. It runs on every commit, as CI checks the
+    # tree whatever changed: the staged list leaves out deletions, so a filter
+    # on it skips a commit that only deletes a module another still imports.
+    entry: mypy
+    language: system
+    always_run: true
+    pass_filenames: false
 -   repo: https://github.com/pre-commit/pygrep-hooks
     rev: v1.10.0
     hooks:

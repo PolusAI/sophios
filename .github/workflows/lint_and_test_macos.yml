@@ -134,10 +134,8 @@ jobs:
 
       - name: MyPy Check Type Annotations
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        run: cd sophios/ && mypy src/ examples/ tests/ docs/cookbook/
-        # NOTE: Do not use `mypy .` because then mypy will check both src/ and build/ causing:
-        # src/sophios/__init__.py: error: Duplicate module named "wic"
-        # (also at "./build/lib/sophios/__init__.py")
+        run: cd sophios/ && mypy
+        # The paths are `files` in [tool.mypy], which the pre-commit hook runs too.
 
       - name: PyLint Check Code Quality
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}

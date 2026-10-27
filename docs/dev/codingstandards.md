@@ -10,11 +10,11 @@ Every function is annotated, and mypy runs with `disallow_untyped_defs`,
 `disallow_incomplete_defs`, `check_untyped_defs`, `warn_return_any`,
 `warn_redundant_casts` and `warn_unused_ignores`; the pydantic plugin is
 loaded. Third-party packages without stubs are listed under
-`[[tool.mypy.overrides]]` with `ignore_missing_imports`. Run the same paths
-as CI:
+`[[tool.mypy.overrides]]` with `ignore_missing_imports`. The paths are
+`files` in `[tool.mypy]`, so a bare `mypy` checks what CI checks:
 
 ```bash
-mypy src/ examples/ tests/ docs/cookbook/
+mypy
 ```
 
 Prefer explicit types at a public boundary. A `# type: ignore` needs a reason
@@ -73,11 +73,13 @@ suite fails.
 
 ```bash
 pytest -m fast
-mypy src/ examples/ tests/ docs/cookbook/
+mypy
 pylint src/ examples/**/*.py tests/
 lint-imports
 sphinx-build -W --keep-going -b html docs docs/_build/html   # when docs/ changed
 ```
 
 The pre-commit hooks installed by `pre-commit install` run the formatting
-and type checks on each commit.
+and type checks on each commit. The mypy hook runs the `mypy` of the active
+environment over the `files` in `[tool.mypy]`, as CI does, so commit with the
+development environment activated.

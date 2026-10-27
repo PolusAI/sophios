@@ -85,7 +85,6 @@ test = [
 ]
 # NOTE: The following list was generated using the command
 # mypy --install-types
-# When updating this list, also update .pre-commit-config.yaml
 # Alternatively, the --non-interactive flag can be used install these automatically.
 # See https://mypy.readthedocs.io/en/stable/command_line.html#miscellaneous
 mypy-types = [
@@ -166,6 +165,13 @@ source_dir = "docs"
 # Based on https://packaging.python.org/en/latest/tutorials/packaging-projects/
 
 [tool.mypy]
+# What a bare `mypy` checks: CI, the pre-commit hook and a local run. Not `.`,
+# which also takes build/ and fails with: Duplicate module named "sophios"
+files = ["src", "examples", "tests", "docs/cookbook"]
+# The platform CI checks, from any host: on win32, typeshed leaves out the Unix
+# signals tests/core/test_run_local.py sends (SIGKILL, SIGHUP).
+platform = "linux"
+
 # See https://docs.pydantic.dev/latest/integrations/mypy/#enabling-the-plugin
 plugins = ["pydantic.mypy"]
 
