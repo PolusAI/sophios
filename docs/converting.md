@@ -78,6 +78,9 @@ What `write_wic` writes:
   a bundle that nests, since a nested `.wic` is found on the search paths.
 - An input left to inference stays unbound, so the compiler infers it when
   the bundle is compiled.
+- A value bound on an input of the workflow you write, `flow.inputs.x = 4`,
+  is not written: the input stays open, and the value is in the job
+  `compile()` returns, so a run of the bundle takes it from an inputs file.
 - A real-time analysis declaration carries `run: cwl_subinterpreter`, the
   adapter's registry stem, which is not written: a step is a declaration only
   when it runs the adapter the registry holds.

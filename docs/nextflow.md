@@ -249,8 +249,8 @@ calls them; each parameter a workflow input holding its value; and every
 edge bound on the input it feeds, so the workflow leans on no inference.
 Compiled to Nextflow, the workflow gives back the model the files were
 written from, and so the same files. A value bound on a workflow input is
-that input's value in the job either target compiles; a `.wic` file holds no
-values, so `write_wic` leaves them to the job.
+that input's value in the job either target compiles; `write_wic` leaves the
+input open, so the values are in the job alone.
 
 The supported DSL2 is what Sophios writes, and the only freedom is layout:
 indentation, the length of a run of spaces or tabs, blank lines, line and

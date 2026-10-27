@@ -130,7 +130,7 @@ failure codes; a code that means a crash should stay a failure.
   `when:` to it.
 - The flag is a command-line option. `Workflow.run()` has no partial-failure
   setting; write the workflow out with `write_wic()` and run it on the
-  command line.
+  command line, giving any value bound on its inputs in an inputs file.
 
 ## What it is not
 

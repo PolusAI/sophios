@@ -1021,6 +1021,9 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         ``$import``) are not copied. Raises if ``<stem>.cwl`` already exists in
         the directory with a different tool.
 
+        A value bound on one of this workflow's own inputs is not written: the
+        input stays open, and the value is in the job :meth:`compile` returns.
+
         Args:
             path (StrPath | None): Destination ``.wic`` path or output
                 directory. When omitted, writes ``<workflow>.wic`` in the
