@@ -21,8 +21,9 @@ script or stub body, or a helper, which are content.
 
 Rejection. One edit of generated text for each import code
 (provocations.IMPORT_EDITS, which the provocation of each code applies too),
-and a few more: each stops the import with its code at the line it names,
-and nothing is returned.
+a few more, and a value Sophios never writes on each kind of line that holds
+one: each stops the import with its code at the line it names, not at the
+process or workflow around it, and nothing is returned.
 
 Hermetic. The import reads the three files alone: copied into an empty
 directory, with no network, they import, and no path a parameter names is
@@ -273,6 +274,22 @@ def _nested() -> Workflow:
     return workflow
 
 
+def _conditions() -> Workflow:
+    """A condition on a step of one input, which branches that input's channel, and on a scattered step, which
+    branches the scatter combined with its other inputs, one of them an optional File with a value."""
+    one = _echo("one", n=Input(cwl.int, position=1)).to_step()
+    each = _echo("each", word=Input(cwl.string, position=1), n=Input(cwl.int, position=2),
+                 f=Input(cwl.file, required=False)).to_step()
+    workflow = Workflow([one, each], "conditions")
+    one.inputs.n, one.when = 2, "$(inputs.n > 1)"
+    each.inputs.word, each.inputs.n, each.inputs.f = ["a", "b"], 3, workflow.inputs.f.as_type("File?")
+    workflow.inputs.f = "/data/f.txt"
+    each.scatter_on(each.inputs.word)
+    each.when = "$(inputs.n > 2)"
+    workflow.outputs.one, workflow.outputs.each = one.outputs.out, each.outputs.out
+    return workflow
+
+
 def _example(name: str) -> Callable[[], Workflow]:
     def build() -> Workflow:
         path = REPO_ROOT / "examples" / "scripts" / f"{name}.py"
@@ -285,7 +302,7 @@ CASES: dict[str, Callable[[], Workflow]] = {
     "bindings": _bindings, "crossproduct": _crossproduct, "dotproduct": _scatters("dotproduct"),
     "flat_crossproduct": _scatters("flat_crossproduct"), "nested_crossproduct": _scatters("nested_crossproduct"),
     "resources": _resources, "directories": _directories, "unary_whens": _unary_whens, "streams": _streams,
-    "merged": _merged, "valued": _valued, "renamed": _renamed, "nested": _nested,
+    "merged": _merged, "valued": _valued, "renamed": _renamed, "nested": _nested, "conditions": _conditions,
     # The one workflow in examples/ the Nextflow target compiles.
     "helloworld_pyapi": _example("helloworld_pyapi"),
     "plan": plan_workflow, "months": lambda: months_workflow(Path("/data")), "summaries": summaries_workflow,
@@ -586,6 +603,49 @@ _EDITS = [
     (_CODE.IMPORT_UNWRITABLE, NEXTFLOW_SCRIPT, "provoke", "Provoke", "workflow Provoke"),
     (_CODE.IMPORT_UNWRITABLE, NEXTFLOW_SCRIPT, "('echo')", "('')", "workflow provoke"),
 ]
+# A value Sophios never writes, on each kind of line that holds one, in a case whose pipeline has that line: the
+# import stops at that line, not at the process or workflow the line is in.
+_VALUE_EDITS = [
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "container 'registry.io/a b:{1}\\'\"'", "container ''",
+     "container ''", "resources"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "cpus 2", "cpus 0", "cpus 0", "resources"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, 'memory "1.5 MB"', 'memory "0 MB"', 'memory "0 MB"',
+     "resources"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "cudaVersionMin: '11.7'", "cudaVersionMin: ['11.7']",
+     "cudaVersionMin: ['11.7']", "resources"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "Directory: ['made']", "Directory: [made]", "Directory: [made]",
+     "resources"),
+    (_CODE.IMPORT_FOREIGN_DECLARATION, NEXTFLOW_SCRIPT, 'path "${word}.txt"', 'path "${word.size()}.txt"',
+     "word.size()", "valued"),
+    (_CODE.IMPORT_FOREIGN_SCRIPT, NEXTFLOW_SCRIPT, "('wc')", "('\\u0000')", "('\\u0000')", "valued"),
+    (_CODE.IMPORT_FOREIGN_SCRIPT, NEXTFLOW_SCRIPT, "('renamed.txt')}\n", "('a/b')}\n", "('a/b')", "bindings"),
+    (_CODE.IMPORT_FOREIGN_SCRIPT, NEXTFLOW_SCRIPT, "('lit $x')", "('\\u0000')", "export A=", "bindings"),
+    # The command of a parenthesized script is on the line after `(`, and its redirects on the `)` line.
+    (_CODE.IMPORT_FOREIGN_SCRIPT, NEXTFLOW_SCRIPT, "('prog')", "('\\u0000')", "('\\u0000')", "bindings"),
+    (_CODE.IMPORT_FOREIGN_SCRIPT, NEXTFLOW_SCRIPT, ") > ${", ") >> ${", ") >>", "bindings"),
+    # A number that is not a finite decimal, a string outside the subset, and a condition that is not a boolean.
+    *((_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "Double.valueOf('1')", f"Double.valueOf({number})",
+       f"Double.valueOf({number})", "valued") for number in ("'0x1'", "'abc'", "'1e999'")),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "(__w1 == 'it\"s')", "(__w1 == 'é')", "'é'", "unary_whens"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "run: (((__w1) as double) > Double.valueOf('1'))",
+     "run: Double.valueOf('1')", "run: Double.valueOf('1')", "valued"),
+    # A channel no statement makes, where a merge, a scatter or a branch reads it.
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "word.merge(k)", "word.merge(nope)", "merge(nope)", "valued"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, ".merge(o) {", ".merge(nope) {", ".merge(nope)", "unary_whens"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "= pair_a.map", "= nope.map", "nope.map", "dotproduct"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "= one_1_n.branch", "= nope.branch", "nope.branch", "conditions"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, ".combine(each_2_n.map", ".combine(nope.map", ".combine(nope",
+     "conditions"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "'merge_nested', 'first_non_null')", "'bogus', 'first_non_null')",
+     "'bogus'", "crossproduct"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "params.word, 'string')", "params.word, 'strin')", "'strin'",
+     "valued"),
+    # A key another value names, and an absent optional File, which has no lowering.
+    (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"a": [],\n  "b": []', '"a": "b",\n  "b": 3', '"b": 3', "crossproduct"),
+    (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"f": {\n    "class": "File",\n    "path": "/data/f.txt"\n  }', '"f": []',
+     '"f": []', "conditions"),
+]
+_ALL_EDITS = [*((*edit, None) for edit in _EDITS), *_VALUE_EDITS]
 
 
 def test_the_unedited_pipeline_imports(tmp_path: Path) -> None:
@@ -604,11 +664,12 @@ def _stops(code: SophiosErrorCode, path: Path, at: str, importing: Callable[[], 
     assert at in diagnostic.message
 
 
-@pytest.mark.parametrize("code, file, old, new, at", _EDITS,
-                         ids=[f"{edit[0].name}-{edit[4]!r}" for edit in _EDITS])
+@pytest.mark.parametrize("code, file, old, new, at, case", _ALL_EDITS, ids=[
+    f"{edit[0].name}-{edit[4]!r}" + (f"-{edit[5]}" if edit[5] else "") for edit in _ALL_EDITS])
 def test_an_edit_outside_the_subset_stops_the_import_at_its_line(
-        code: SophiosErrorCode, file: str, old: str, new: str, at: str, tmp_path: Path) -> None:
-    _stops(code, tmp_path / file, at, lambda: import_edited(str(tmp_path), file, old, new))
+        code: SophiosErrorCode, file: str, old: str, new: str, at: str, case: str | None, tmp_path: Path) -> None:
+    workflow = CASES[case]() if case else None
+    _stops(code, tmp_path / file, at, lambda: import_edited(str(tmp_path), file, old, new, workflow))
 
 
 def test_an_int_for_a_float_parameter_stops_the_import(tmp_path: Path) -> None:

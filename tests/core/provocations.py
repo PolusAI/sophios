@@ -572,9 +572,9 @@ IMPORT_EDITS: Final[dict[SophiosErrorCode, tuple[str, str, str, str]]] = {
 }
 
 
-def import_edited(directory: str, file: str, old: str, new: str) -> Any:
-    """Write the pipeline of a one-step workflow into `directory`, replace `old` in one of its files with `new`,
-    and import it."""
+def import_edited(directory: str, file: str, old: str, new: str, workflow: Any = None) -> Any:
+    """Write the pipeline of `workflow`, by default a one-step workflow, into `directory`, replace `old` in one of
+    its files with `new`, and import it."""
     # pylint: disable=import-outside-toplevel
     from pathlib import Path
 
@@ -583,12 +583,13 @@ def import_edited(directory: str, file: str, old: str, new: str) -> Any:
     from sophios.api.python.workflow import Workflow
     from sophios.input_output_nf import write_nextflow_artifacts
 
-    greet = CommandLineTool('greet', Inputs(message=Input(cwl.string, position=1)),
-                            Outputs(out=Output(cwl.file, glob='o'))).base_command('echo').stdout('o').to_step()
-    workflow = Workflow([greet], 'provoke')
-    greet.inputs.message = workflow.inputs.message.as_type('string')
-    workflow.inputs.message = 'hi'
-    workflow.outputs.out = greet.outputs.out
+    if workflow is None:
+        greet = CommandLineTool('greet', Inputs(message=Input(cwl.string, position=1)),
+                                Outputs(out=Output(cwl.file, glob='o'))).base_command('echo').stdout('o').to_step()
+        workflow = Workflow([greet], 'provoke')
+        greet.inputs.message = workflow.inputs.message.as_type('string')
+        workflow.inputs.message = 'hi'
+        workflow.outputs.out = greet.outputs.out
     write_nextflow_artifacts(workflow.compile(target='nextflow'), directory)
     path = Path(directory) / file
     text = path.read_text(encoding='utf-8')

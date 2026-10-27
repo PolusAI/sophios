@@ -16,7 +16,7 @@ helper, which are content, as a line break is. ``nextflow_params.json`` is
 read as JSON, so its whitespace and the order of its keys are free.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import math
 from pathlib import Path
@@ -46,6 +46,7 @@ from .lang.spans import SourceSpan
 from .nf_expr import GROOVY_IDENTIFIER, GROOVY_LITERAL, groovy_unescape, read_groovy
 from .nf_types import (
     NF_ENTRY_STAGING_PREFIX,
+    PARAM_TYPES,
     ExecutableNextflowWorkflow,
     NfArrayBinding,
     NfBasenameReference,
@@ -370,16 +371,16 @@ def _command(body: list[_Line], head: _Line) -> tuple[NfCommand, dict[str, NfEnt
         parenthesized = len(rest) == 3 and rest[0] == "(" and rest[2].startswith(")")
         if not parenthesized and len(rest) != 1:
             raise ValueError("a script that is not a command Sophios writes")
-        pieces = _pieces(rest[1 if parenthesized else 0].removeprefix(f"{NF_ENTRYPOINT_WORDS} "))
-        redirects = _pieces(rest[2][1:]) if parenthesized else []
-        if not parenthesized:
-            # A command on one line holds no shell literal: its first operator between spaces starts its redirects.
-            split = next((at for at, (interpolation, text) in enumerate(pieces)
-                          if not interpolation and text.strip() in _STREAMS and text.startswith(" ")), len(pieces))
-            pieces, redirects = pieces[:split], pieces[split:]
-        streams = _streams(redirects)
+        index += parenthesized  # the command's line, after its "("
+        pieces = _pieces(texts[index].removeprefix(f"{NF_ENTRYPOINT_WORDS} "))
+        # A command on one line holds no shell literal: its first operator between spaces starts its redirects.
+        split = len(pieces) if parenthesized else next(
+            (at for at, (interpolation, text) in enumerate(pieces)
+             if not interpolation and text.strip() in _STREAMS and text.startswith(" ")), len(pieces))
         # An empty line is the one shell literal with no text.
-        tokens = _tokens(pieces) or [NfShellLiteral("")]
+        tokens = _tokens(pieces[:split]) or [NfShellLiteral("")]
+        index += parenthesized  # the ")" line, which holds the redirects
+        streams = _streams(_pieces(texts[index][1:]) if parenthesized else pieces[split:])
         return NfCommand(tokens, streams.get("stdin"), streams.get("stdout"), streams.get("stderr"), env), entries
     except ValueError as exc:
         (body[index] if body else head).stop(_Code.IMPORT_FOREIGN_SCRIPT, str(exc))
@@ -427,26 +428,32 @@ def _input(found: dict[str, str]) -> tuple[str, str, bool]:
     return found["name"], found["qualifier"], stage == f"'{NF_ENTRY_STAGING_PREFIX}{found['name']}/*'"
 
 
-def _output(text: str) -> tuple[str, str, dict[str, str]]:
-    """An output declaration's emit, glob and options; a text capture's option is its capture."""
+def _output(text: str, directories: str | tuple[str, ...]) -> NfPort:
+    """The port an output declaration declares; ``directories`` names the outputs that are Directories."""
     element = Idioms.TUPLE_OUTPUT.match(text)
     if found := element or Idioms.OUTPUT.match(text):
+        emit = found["emit"]
         if capture := Idioms.TEXT_CAPTURE.match(found["declaration"]):
-            return found["emit"], capture["literal"], {"capture": "text"}
+            return NfPort(emit, "val", emit, NfTemplate((NfLiteral(_literal(capture["literal"])),)), capture="text")
         if path := (Idioms.PATH_ELEMENT if element else Idioms.PATH_OUTPUT).match(found["declaration"]):
-            return found["emit"], path["glob"], _options(path["options"])
+            options = _options(path["options"])
+            literal = options.get("glob") == "false"
+            return NfPort(emit, "path", emit, _glob(path["glob"], literal),
+                          "directory" if emit in directories else None,
+                          capture="single" if literal and "arity" in options else None,
+                          optional=options.get("optional") == "true" or options.get("arity") == "'0..*'")
     raise ValueError("an output Sophios does not write")
 
 
 def _process(block: list[_Line]) -> _Process:  # pylint: disable=too-many-branches
-    """Read a process block's directives, declarations and script."""
+    """Read a process block's directives, declarations and script, each value at the line that holds it."""
     head, section = block[0], "directive"
     container: str | None = None
-    resources: dict[str, Any] = {}
-    ext: dict[str, str] = {}
+    resources = NfResources()
+    directories: str | tuple[str, ...] = ()
     inputs: list[tuple[str, str, bool]] = []
     scattered: list[str] = []
-    outputs: list[tuple[str, str, dict[str, str]]] = []
+    outputs: list[NfPort] = []
     script: list[_Line] = []
     index = 1
     while index < len(block) - 1:
@@ -464,13 +471,19 @@ def _process(block: list[_Line]) -> _Process:  # pylint: disable=too-many-branch
                     line.stop(_Code.IMPORT_FOREIGN_SCRIPT, "a stub other than the one Sophios writes")
             elif section == "directive":
                 if found := Idioms.CONTAINER.match(line.text):
-                    container = _literal(found["literal"])
-                elif found := Idioms.CPUS.match(line.text) or Idioms.ACCELERATOR.match(line.text):
-                    resources[line.text.split(" ")[0]] = int(found["count"])
+                    if not (container := _literal(found["literal"])).strip():
+                        raise ValueError("a container with no image")
+                elif found := Idioms.CPUS.match(line.text):
+                    resources = replace(resources, cpus=int(found["count"]))
+                elif found := Idioms.ACCELERATOR.match(line.text):
+                    resources = replace(resources, accelerator=int(found["count"]))
                 elif found := Idioms.MEMORY.match(line.text):
-                    resources["memory_mb"] = (float if "." in found["memory"] else int)(found["memory"])
+                    memory = found["memory"]
+                    resources = replace(resources, memory_mb=(float if "." in memory else int)(memory))
                 elif found := Idioms.EXT.match(line.text):
-                    ext = _named(found["carriers"])
+                    ext: dict[str, Any] = {name: _strings(value) for name, value in _named(found["carriers"]).items()}
+                    directories = ext.get(NF_DIRECTORY_CARRIER, ())
+                    resources = replace(resources, **{field: ext[key] for key, field in NF_CUDA_CARRIERS if key in ext})
                 elif not line.text.startswith(("containerOptions ", "beforeScript ")):
                     line.stop(_Code.IMPORT_FOREIGN_STATEMENT, "a process directive Sophios does not write")
             elif section == "input":
@@ -485,30 +498,15 @@ def _process(block: list[_Line]) -> _Process:  # pylint: disable=too-many-branch
                 else:
                     raise ValueError("an input Sophios does not write")
             else:
-                outputs.append(_output(line.text))
+                outputs.append(_output(line.text, directories))
         except ValueError as exc:
-            code = _Code.IMPORT_FOREIGN_DECLARATION if section in ("input", "output") else _Code.IMPORT_FOREIGN_SCRIPT
+            code = _Code.IMPORT_FOREIGN_STATEMENT if section == "directive" else _Code.IMPORT_FOREIGN_DECLARATION
             line.stop(code, str(exc))
     command, entries = _command(script, head)
-    try:
-        directories = _strings(ext.get(NF_DIRECTORY_CARRIER, "[]"))
-        ports = []
-        for emit, glob, options in outputs:
-            literal = options.get("glob") == "false"
-            ports.append(NfPort(
-                emit, "val" if options.get("capture") else "path", emit,
-                NfTemplate((NfLiteral(_literal(glob)),)) if options.get("capture") else _glob(glob, literal),
-                "directory" if emit in directories else None,
-                capture=options.get("capture") or ("single" if literal and "arity" in options else None),
-                optional=options.get("optional") == "true" or options.get("arity") == "'0..*'",
-            ))
-        cuda: dict[str, Any] = {field: _strings(ext[key]) for key, field in NF_CUDA_CARRIERS if key in ext}
-        return _Process(
-            head, tuple((name, qualifier, entries.get(name) if entry else None) for name, qualifier, entry in inputs),
-            tuple(scattered), tuple(ports), command, container, NfResources(**resources, **cuda),
-        )
-    except (ValueError, TypeError) as exc:
-        head.stop(_Code.IMPORT_MISMATCH, f"a process Sophios does not write ({exc})")
+    return _Process(
+        head, tuple((name, qualifier, entries.get(name) if entry else None) for name, qualifier, entry in inputs),
+        tuple(scattered), tuple(outputs), command, container, resources,
+    )
 
 
 def _chain(text: str) -> list[str]:
@@ -555,12 +553,12 @@ class _Channels:
 
 @dataclass(slots=True)
 class _Main:
-    """What the statements of ``main:`` say of each process, which they name."""
+    """What the statements of ``main:`` say of each process, which they name, each channel with the line it is on."""
 
     calls: dict[str, tuple[_Line, list[str]]]
-    scatters: dict[str, list[str]]
-    merges: dict[str, list[str]]
-    branches: dict[str, tuple[_Line, str, str]]
+    scatters: dict[str, list[Any]]
+    merges: dict[str, list[tuple[_Line, str]]]
+    branches: dict[str, tuple[_Line, tuple[_Line, str], str]]
 
 
 def _main(lines: list[_Line]) -> _Main:
@@ -582,17 +580,17 @@ def _statement(main: _Main, lines: list[_Line], index: int) -> int:
     if found := Idioms.SCATTER.match(line.text):
         index = next((end for end in range(index, len(lines)) if lines[end].text == "}"), len(lines) - 1)
         method = "dotproduct" if lines[index - 1].text.startswith("(0..<") else "flat_crossproduct"
-        main.scatters[found["process"]] = [found["sources"], method]
+        main.scatters[found["process"]] = [line, found["sources"], method]
     elif (found := Idioms.SHAPE.match(line.text)) and found["process"] in main.scatters:
-        main.scatters[found["process"]][1] = "nested_crossproduct"
+        main.scatters[found["process"]][2] = "nested_crossproduct"
     elif found := Idioms.MERGE.match(line.text):
-        main.merges[found["process"]] = [found["first"], found["second"]]
+        main.merges[found["process"]] = [(line, found["first"]), (line, found["second"])]
         while index + 1 < len(lines) and (more := Idioms.MERGE_NEXT.match(lines[index + 1].text)):
-            main.merges[found["process"]].append(more["argument"])
+            main.merges[found["process"]].append((lines[index + 1], more["argument"]))
             index += 1
     elif (found := Idioms.BRANCH.match(line.text)) and index + 3 < len(lines) and (
             run := Idioms.RUN.match(lines[index + 1].text)):
-        main.branches[found["process"]] = (lines[index + 1], found["combined"], run["predicate"])
+        main.branches[found["process"]] = (lines[index + 1], (line, found["combined"]), run["predicate"])
         index += 3
     elif found := Idioms.CALL.match(line.text):
         main.calls[found["process"]] = (line, _split(found["arguments"]) if found["arguments"] else [])
@@ -619,33 +617,40 @@ def _port(name: str, qualifier: str, entry: NfEntry | None, connection: Any, cha
 def _process_model(
     name: str, process: _Process, main: _Main, channels: _Channels
 ) -> tuple[NfProcess, list[NfConnection]]:
-    """A process, with the connections into it the workflow block makes."""
-    line, arguments = main.calls[name]
+    """A process, with the connections into it the workflow block makes, each read at the line it is on."""
+    line, texts = main.calls[name]
     branch = main.branches.get(name)
+    arguments = [(line, text) for text in texts]
     incoming: dict[str, Any] = {}
+    at = line
     try:
         if name in main.scatters:
-            sources, method = main.scatters[name]
+            at, sources, method = main.scatters[name]
             for port, source in zip(process.scattered, _chain(sources), strict=True):
                 incoming[port] = channels.edge(source, name, port, method)
-            arguments = _chain(branch[1])[1:] if branch else arguments[1:]
+            arguments = [(branch[1][0], channel) for channel in _chain(branch[1][1])[1:]] if branch else arguments[1:]
         elif branch:
             arguments = main.merges.get(name, [branch[1]])
         others = [port for port, _, _ in process.inputs if port not in process.scattered]
-        for port, argument in zip(others, arguments, strict=True):
+        for port, (at, argument) in zip(others, arguments, strict=True):
             incoming[port] = channels.incoming(argument, name, port)
         names = [port for port, _, _ in process.inputs]
         variables = {f"__w{index}": port for index, port in enumerate(names[:len(process.scattered) or None])}
         variables |= {f"__b{index}": port for index, port in enumerate(others)} if process.scattered else {}
-        condition = None if branch is None else read_groovy(branch[2], variables)
     except ValueError as exc:
-        (branch[0] if branch else line).stop(_Code.IMPORT_FOREIGN_STATEMENT, f"channels Sophios does not write ({exc})")
+        at.stop(_Code.IMPORT_FOREIGN_STATEMENT, f"channels Sophios does not write ({exc})")
     try:
         inputs = [_port(port, qualifier, entry, incoming[port], channels) for port, qualifier, entry in process.inputs]
-        return NfProcess(name, inputs, process.outputs, process.command, process.container, process.resources,
-                         condition), list(incoming.values())
+        model = NfProcess(name, inputs, process.outputs, process.command, process.container, process.resources)
     except (ValueError, TypeError, KeyError) as exc:
         process.head.stop(_Code.IMPORT_MISMATCH, f"a process Sophios does not write ({exc})")
+    if branch is None:
+        return model, list(incoming.values())
+    try:
+        # The process holds without its condition, so what it refuses with one is the condition, on its run: line.
+        return replace(model, condition=read_groovy(branch[2], variables)), list(incoming.values())
+    except ValueError as exc:
+        branch[0].stop(_Code.IMPORT_FOREIGN_STATEMENT, f"a condition Sophios does not write ({exc})")
 
 
 def _workflow(block: list[_Line], processes: dict[str, _Process], parameters: dict[str, str],
@@ -694,8 +699,9 @@ def _float(value: Any) -> Any:
 
 def _written(name: str, declared: str, value: Any) -> bool:
     """Whether ``value`` is what a compile writes for a parameter of type ``declared``: a job value its coercion
-    keeps as it is, and ``[]`` for an absent optional. Compared as JSON, where an int is not the float it equals."""
-    absent = declared.endswith("?") and value == []
+    keeps as it is, and ``[]`` for an absent optional other than a File or Directory, which has no lowering.
+    Compared as JSON, where an int is not the float it equals."""
+    absent = declared.endswith("?") and value == [] and declared not in ("File?", "Directory?")
     try:
         kept = coerce_job_value(AuthoredName(name), PortDeclaration(PortType(declared)), None if absent else value)
     except SophiosError:
@@ -709,9 +715,10 @@ def _read(path: Path) -> str:
 
 
 def _key(file: str, text: str, key: str | None) -> _Line:
-    """The line of the params file that holds ``key``, or its first line."""
+    """The line of the params file that holds ``key`` as a key, not as a value, or its first line."""
     lines = text.split("\n")
-    number = next((number for number, line in enumerate(lines, 1) if key is not None and f'"{key}"' in line), 1)
+    number = next((number for number, line in enumerate(lines, 1)
+                   if key is not None and re.search(rf'"{re.escape(key)}"\s*:', line)), 1)
     return _Line(file, number, lines[number - 1])
 
 
@@ -781,8 +788,11 @@ def read_nextflow(directory: str | Path) -> tuple[ExecutableNextflowWorkflow, di
     start = script[0] if script else _Line(script_file, 1, "")
     if len(workflows) != 2 or workflows[1][0].text != "workflow {" or workflows[0][0].text == "workflow {":
         start.stop(_Code.IMPORT_FOREIGN_STATEMENT, "not one named workflow and then the entry workflow")
-    parameters = {found["name"]: _literal(found["type"])
-                  for line in workflows[1] for found in Idioms.CHECKED.find(line.text)}
+    checks = [(line, found["name"], _literal(found["type"]))
+              for line in workflows[1] for found in Idioms.CHECKED.find(line.text)]
+    if unknown := [line for line, _, declared in checks if declared not in PARAM_TYPES]:
+        unknown[0].stop(_Code.IMPORT_FOREIGN_STATEMENT, "a parameter type Sophios does not write")
+    parameters = {name: declared for _, name, declared in checks}
     params_file = str(folder / NEXTFLOW_PARAMS)
     params_text = (folder / NEXTFLOW_PARAMS).read_text(encoding="utf-8")
     params = _params(params_file, params_text, parameters)
