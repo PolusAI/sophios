@@ -4,7 +4,9 @@ Three claims about the compatibility contract the two front ends advertise:
 
   * **Path agreement.** A workflow built through the Python API and compiled
     directly must equal the same workflow written with `write_wic` and
-    compiled from the file. Two spellings of one DAG, one compiled result.
+    compiled from the file, given as its inputs file the values bound on the
+    workflow's own inputs, which the file leaves open. Two spellings of one
+    DAG, one compiled result.
   * **Compute-payload conformance.** `ComputeRequest` builds and validates its
     own payload. No network: build and validate, never submit.
   * **Passthrough fidelity over workflows the narrower generators miss** — a
@@ -57,7 +59,8 @@ class _BundleSpec:
     independent File sources feeding one `join` step, exposed as a single
     workflow output. `rename` names the `join` step apart from its tool, so
     the written document carries `run: join.cwl`; `nest` calls `mk_text`
-    through a nested workflow.
+    through a nested workflow; `bound` gives `join` its name through a
+    workflow input, with `join_name` bound on it in Python.
 
     Not `ast_strategies.documents()`: the Python API is a *stricter* front
     end than the `.wic` language — `Workflow._validate_graph_shape` rejects
@@ -73,6 +76,7 @@ class _BundleSpec:
     join_name: str
     rename: bool
     nest: bool
+    bound: bool = False
 
 
 def _build_workflow(spec: _BundleSpec) -> Workflow:
@@ -104,6 +108,9 @@ def _build_workflow(spec: _BundleSpec) -> Workflow:
 
     workflow = Workflow([mk_file, text_step, join], 'oracle')
     workflow.outputs.result = join.outputs.file
+    if spec.bound:
+        join.inputs.name = workflow.inputs.name
+        workflow.inputs.name = spec.join_name
     return workflow
 
 
@@ -157,7 +164,7 @@ _safe_text: Final = st.text('abcxyz_', max_size=8)
 @st.composite
 def _bundle_specs(draw: st.DrawFn) -> _BundleSpec:
     return _BundleSpec(draw(_safe_text), draw(_safe_text), draw(_safe_text), draw(st.booleans()),
-                       draw(st.booleans()))
+                       draw(st.booleans()), draw(st.booleans()))
 
 
 @pytest.mark.slow
@@ -168,17 +175,19 @@ def test_the_two_front_ends_compile_to_the_same_cwl(spec: _BundleSpec) -> None:
 
     `f` is "write the workflow's bundle to disk and read it back through the
     file door"; the claim is that compiling directly and compiling
-    `f(workflow)` are the same compilation. Checked at `Strength.IDENTICAL`,
-    not a bare `==`, so a divergence reports *where* the two front ends
-    disagree.
+    `f(workflow)` are the same compilation, once the values bound on the
+    workflow's own inputs, which the bundle leaves open, are merged in as an
+    inputs file merges them. Checked at `Strength.IDENTICAL`, not a bare `==`, so a
+    divergence reports *where* the two front ends disagree.
 
     Built twice from one drawn `spec` (see `_build_workflow`'s own docstring
     for why sharing one object would weaken the claim).
 
     BLIND SPOTS: one fixed topology (two File sources into one `join`, one
     workflow output) rather than the full grammar `ast_strategies.documents()`
-    covers — see `_BundleSpec`'s docstring for why. No `scatter`/`when`, no
-    workflow-level input reference, and nesting only one level deep.
+    covers — see `_BundleSpec`'s docstring for why. No `scatter`/`when`, a
+    workflow-level input only as `bound` makes one, and nesting only one level
+    deep.
     """
     direct = _build_workflow(spec).compile(tool_registry=SYNTHETIC_TOOLS)
 
@@ -194,7 +203,11 @@ def test_the_two_front_ends_compile_to_the_same_cwl(spec: _BundleSpec) -> None:
         'the Python API and the bundle it writes disagree about what this workflow compiles to.\n'
         f'{found}\n\n--- written .wic ---\n{written_text}')
 
-    inputs_found = equivalent(direct.cwl_job_inputs, via_file.cwl_job_inputs, Strength.IDENTICAL)
+    inputs_file = {'name': spec.join_name} if spec.bound else {}
+    assert all(name not in via_file.cwl_job_inputs for name in inputs_file), (
+        "the bundle gives a value to an input bound in Python, which is the job's.\n"
+        f'--- written .wic ---\n{written_text}')
+    inputs_found = equivalent(direct.cwl_job_inputs, {**via_file.cwl_job_inputs, **inputs_file}, Strength.IDENTICAL)
     assert inputs_found is None, (
         f'the two front ends disagree about the generated job inputs.\n{inputs_found}\n\n'
         f'--- written .wic ---\n{written_text}')
