@@ -4,12 +4,11 @@ Its own module because a code is contract: a caller matches on
 `SophiosErrorCode.UNDEFINED_EDGE`, suppresses it, or reads it out of a log,
 without importing the reporting plumbing.
 
-Three ranges, one enum: `wic0NN` is a document (it said something the language
+Two ranges, one enum: `wic0NN` is a document (it said something the language
 does not accept) or what running it needs from the machine (kind `machine`,
 such as wic015, wic016, wic021 and wic029); `api0NN` is the Python API (the document is
-fine, the call was not); `cmp0NN` is the compute service (`sophios.compute`),
-which is not part of the Python API. One type so a caller matches on one
-`except`; separate ranges so an API code does not point at the .wic reference.
+fine, the call was not). One type so a caller matches on one `except`;
+separate ranges so an API code does not point at the .wic reference.
 
 Every member has an `Explanation` (`EXPLANATIONS`): what it means and what to
 do, which `sophios --explain` and docs/error_codes.md show.
@@ -126,14 +125,6 @@ class SophiosErrorCode(StrEnum):
     #: `Workflow.run_async`, which never runs them.
     REALTIME_NOT_ASYNC = 'api008'
 
-    #: --- The compute service (`sophios.compute`). ---
-    #: A request Sophios refused before sending it, or the service refused.
-    COMPUTE_REQUEST_REFUSED = 'cmp001'
-    #: The service could not be reached, stayed busy, failed, or speaks a contract this Sophios does not.
-    COMPUTE_UNAVAILABLE = 'cmp002'
-    #: A run on the service that ended FAILED or CANCELLED.
-    COMPUTE_RUN_FAILED = 'cmp003'
-
     @property
     def is_language(self) -> bool:
         """Whether this code describes a document rather than a call."""
@@ -149,7 +140,7 @@ class Kind(StrEnum):
     """What a reader changes when a code is reported."""
 
     DOCUMENT = 'document'  #: the .wic file or the Python workflow
-    CALL = 'call'          #: the call: to the Python API, or what was sent to the compute service
+    CALL = 'call'          #: the Python API call
     MACHINE = 'machine'    #: this machine: what is installed, running, readable or writable
     RUN = 'run'            #: nothing in Sophios: a tool failed while it ran
 
@@ -399,18 +390,4 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         'A workflow that declares real-time analyses, given to `Workflow.run_async`, which never runs them.',
         'Run it with `Workflow.run()` or `Workflow.start()`; from a coroutine, '
         '`await asyncio.to_thread(workflow.run)` keeps the event loop free.'),
-    SophiosErrorCode.COMPUTE_REQUEST_REFUSED: Explanation(
-        Kind.CALL,
-        'A request to the compute service that Sophios refused before sending it, or the service refused: a path, '
-        'a name, an output folder, a partition or a time the cluster cannot use, or a real-time analysis.',
-        'Do what each message says, at the input or field it names; a relative path needs `basepath=`.'),
-    SophiosErrorCode.COMPUTE_UNAVAILABLE: Explanation(
-        Kind.MACHINE,
-        'The compute service could not be reached, stayed busy, failed, or speaks a contract this Sophios does not.',
-        'Check the SSH tunnel and that the service runs, then make the same call again: it never starts a second '
-        'run. When the versions differ, upgrade Sophios or the service.'),
-    SophiosErrorCode.COMPUTE_RUN_FAILED: Explanation(
-        Kind.RUN,
-        'A run on the compute service that ended FAILED or CANCELLED.',
-        "Read the reason and the step's log in the message; `run.logs(step)` has all of it."),
 }

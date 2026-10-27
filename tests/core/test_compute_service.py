@@ -182,11 +182,11 @@ def test_a_request_the_driver_refuses_names_each_input_and_says_to_pass_basepath
     service = compute.Service(cluster.url)
     with pytest.raises(compute.RequestRefused) as refused:
         service.submit(_workflow(cluster, location='data/missing.txt'), RunConfig(basepath=str(cluster.shared)))
-    (problem,) = refused.value.diagnostics
-    assert problem.message.startswith('input show~file: data/missing.txt') and 'does not exist' in problem.message
+    (problem,) = refused.value.messages
+    assert problem.startswith('input show~file: data/missing.txt') and 'does not exist' in problem
     with pytest.raises(compute.RequestRefused) as refused:
         service.submit(_workflow(cluster))
-    assert [d.message for d in refused.value.diagnostics][-1].startswith(
+    assert refused.value.messages[-1].startswith(
         'these paths are relative and the request has no basepath: give RunConfig a basepath')
     with pytest.raises(compute.RequestRefused, match='there is no run nope'):
         service.attach('nope')
@@ -204,7 +204,7 @@ def test_a_run_that_fails_raises_naming_why_and_the_end_of_its_log(cluster: Clus
     finally:
         (cluster.slurm.parent / 'toil' / 'bin' / 'toil-cwl-runner.fail').unlink()
     assert failed.value.status.state is RunState.FAILED and failed.value.run.slurm_job == str(after)
-    first, tail = (d.message for d in failed.value.diagnostics)
+    first, tail = failed.value.messages
     assert first == f'run {failed.value.run.id} ended FAILED: the workflow failed; see leader.log'
     assert tail.startswith('the end of leader.log:') and 'the workflow failed' in tail
 

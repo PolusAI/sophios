@@ -4,8 +4,7 @@ What does a code in a Sophios message mean, and what do I change? This page is
 the catalog, one row per code; `sophios --explain <code>` prints the same row.
 
 Every problem Sophios reports carries a code: `wic0NN` for a document or for
-what running it needs from this machine, `api0NN` for a Python API call,
-`cmp0NN` for the [compute service](compute.md). A
+what running it needs from this machine, `api0NN` for a Python API call. A
 diagnostic reads `file:line:col: error [code] message (step, port)`; the
 position and the step are there when Sophios knows them. A note reports a
 choice Sophios made and stops nothing.
@@ -13,7 +12,7 @@ choice Sophios made and stops nothing.
 The kind says what to change:
 
 - `document`: the `.wic` file or the Python workflow;
-- `call`: the call: to the Python API, or what was sent to the compute service;
+- `call`: the Python API call;
 - `machine`: this machine, what is installed, running, readable or writable;
 - `run`: nothing in Sophios, a tool failed while it ran.
 
@@ -74,6 +73,3 @@ explains when each kind of check runs and how a diagnostic is laid out.
 | `api006` | call | A `.wic` construct the Python API has no spelling for, met by `Workflow.from_wic`. | Write the workflow in the Python API in the way the message names, or keep it as a `.wic` file. |
 | `api007` | call | An `Inference` the compiler cannot be given: a format rule other than `continue` or `break`, a renaming that is not a pair of strings, renamings with naming conventions off, or format rules with step insertion off. | Do what the message names: use `continue` or `break`, write each renaming as `(before, after)`, set `naming_conventions=True` for renamings, or set `insert_steps=True` for format rules. |
 | `api008` | call | A workflow that declares real-time analyses, given to `Workflow.run_async`, which never runs them. | Run it with `Workflow.run()` or `Workflow.start()`; from a coroutine, `await asyncio.to_thread(workflow.run)` keeps the event loop free. |
-| `cmp001` | call | A request to the compute service that Sophios refused before sending it, or the service refused: a path, a name, an output folder, a partition or a time the cluster cannot use, or a real-time analysis. | Do what each message says, at the input or field it names; a relative path needs `basepath=`. |
-| `cmp002` | machine | The compute service could not be reached, stayed busy, failed, or speaks a contract this Sophios does not. | Check the SSH tunnel and that the service runs, then make the same call again: it never starts a second run. When the versions differ, upgrade Sophios or the service. |
-| `cmp003` | run | A run on the compute service that ended FAILED or CANCELLED. | Read the reason and the step's log in the message; `run.logs(step)` has all of it. |

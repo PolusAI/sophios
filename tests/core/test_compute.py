@@ -19,6 +19,7 @@ from sophios import compute
 from sophios.compute import RunConfig
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
+from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.run_status import RunState
 
@@ -110,10 +111,8 @@ def test_a_path_that_names_nothing_on_the_cluster_is_refused_before_sending_nami
     """`~` and an environment variable are this machine's; a URL is the service's to read."""
     with pytest.raises(compute.RequestRefused) as refused:
         compute.build_request(_workflow(out='~/results', model='$HOME/sam3.pt'))
-    assert [(d.code, d.message.split(':')[0]) for d in refused.value.diagnostics] == [
-        (SophiosErrorCode.COMPUTE_REQUEST_REFUSED, 'input write~out'),
-        (SophiosErrorCode.COMPUTE_REQUEST_REFUSED, 'input write~model')]
-    assert "'~/results' names nothing on the cluster" in refused.value.diagnostics[0].message
+    assert [message.split(':')[0] for message in refused.value.messages] == ['input write~out', 'input write~model']
+    assert "'~/results' names nothing on the cluster" in refused.value.messages[0]
     compute.build_request(_workflow(model='https://example.org/$file?x=~y'))
     compute.build_request(_workflow(out='results/a~b', model='models/50$'))
 
@@ -125,7 +124,7 @@ def test_every_field_the_schema_refuses_is_a_line_in_the_schemas_words() -> None
         compute.build_request(_workflow(), RunConfig(leader={'time': '3 days', 'memory': '8GB'},
                                                      log_level='LOUD',  # type: ignore[arg-type]
                                                      steps={'partition': 'a b'}))
-    assert sorted(d.message for d in refused.value.diagnostics) == [
+    assert sorted(refused.value.messages) == [
         "leader.memory: '8GB' is not the leader's memory, as Slurm writes it: a whole number with K, M, G or T, "
         'such as 8G',
         "leader.time: '3 days' is not a Slurm time limit: M, M:S, H:M:S, D-H, D-H:M or D-H:M:S, such as 3-00:00:00",
@@ -168,9 +167,9 @@ def test_where_the_outputs_go_is_the_output_mode_and_workflow_out_dir_goes_with_
                    RunConfig(output_mode='workflowInPlace', workflow_out_dir='results')]:
         with pytest.raises(compute.RequestRefused) as refused:
             compute.build_request(_workflow(), config)
-        assert [d.message for d in refused.value.diagnostics] == [
+        assert refused.value.messages == (
             'workflowOutDir: give it with outputMode workflowOutDir, and only with it: it is the folder the outputs '
-            'are copied into'], config
+            'are copied into',), config
     schema = Draft202012Validator(compute.SCHEMA)
     core = {'id': 'r1', 'workflow': {'class': 'Workflow', 'cwlVersion': 'v1.2'}, 'inputs': {}}
     assert schema.is_valid(core | {'outputMode': 'workflowOutDir'}) and schema.is_valid(core | {'workflowOutDir': 'x'})
@@ -200,6 +199,32 @@ def test_run_config_is_the_request_but_its_workflow_and_inputs_field_for_field_a
     workflow = {'class': 'Workflow', 'cwlVersion': 'v1.2'}
     assert compute.request_for('r1', workflow, {}, config) == {
         'id': 'r1', 'workflow': workflow, 'inputs': {}, **{key: getattr(config, name) for name, key in keys.items()}}
+
+
+@pytest.mark.fast
+def test_the_compute_codes_are_the_clients_own_and_never_a_sophios_errors() -> None:
+    """cmp001 to cmp003 belong to sophios.compute: a ComputeError is not a SophiosError, no SophiosErrorCode is
+    one of them, and the message is every line under its code."""
+    errors = (compute.RequestRefused, compute.ServiceUnavailable, compute.RunFailed)
+    assert [error.code for error in errors] == ['cmp001', 'cmp002', 'cmp003']
+    assert not issubclass(compute.ComputeError, SophiosError)
+    assert not {error.code for error in errors} & {str(code) for code in SophiosErrorCode}
+    refused = compute.RequestRefused('one', 'two')
+    assert (refused.messages, str(refused)) == (('one', 'two'), '[cmp001] one\n[cmp001] two')
+
+
+@pytest.mark.fast
+def test_a_workflow_that_does_not_compile_is_a_sophios_error_and_nothing_is_sent(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """The compile is Sophios's, so its failure is a SophiosError with Sophios's own code, before the service is
+    asked anything: the one failure of `submit` that is not a ComputeError."""
+    calls = _serving(monkeypatch, {})
+    step = Step(CommandLineTool('count', Inputs(n=Input(cwl.int, position=1)), Outputs()).base_command('echo'))
+    step.inputs.n = 'not an int'
+    with pytest.raises(SophiosError) as raised:
+        compute.Service('http://127.0.0.1:1').submit(Workflow([step], 'count'))
+    assert [diagnostic.code for diagnostic in raised.value.diagnostics] == [SophiosErrorCode.LITERAL_TYPE_MISMATCH]
+    assert not calls
 
 
 @pytest.mark.fast
@@ -255,7 +280,7 @@ def test_a_submission_lost_on_the_way_says_the_run_may_exist_and_how_to_follow_i
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('POST', 'runs'): requests.ConnectionError('gone')})
     with pytest.raises(compute.ServiceUnavailable) as unavailable:
         compute.Service('http://127.0.0.1:1').submit(_workflow())
-    could_not, may_exist = (d.message for d in unavailable.value.diagnostics)
+    could_not, may_exist = unavailable.value.messages
     assert could_not == 'the compute service at http://127.0.0.1:1 could not be reached (ConnectionError), for 0 s'
     assert re.fullmatch(r"run (segment-\S+) may exist all the same: Service\('http://127.0.0.1:1'\)\.attach\('\1'\) "
                         r'follows it, and the same request sent again never starts a second one', may_exist)
@@ -316,7 +341,7 @@ def test_a_failure_whose_log_cannot_be_read_still_says_why(monkeypatch: pytest.M
                            ('GET', 'runs/r1/logs/leader.log'): _answer(404, {'errors': [{'message': 'no log yet'}]})})
     assert compute.Service('http://127.0.0.1:1').attach('r1').failure() == [
         'run r1 ended FAILED: Slurm will never start the leader (PartitionTimeLimit)',
-        'the end of leader.log:\n(it cannot be read: error [cmp001] no log yet)']
+        'the end of leader.log:\n(it cannot be read: [cmp001] no log yet)']
 
 
 @pytest.mark.fast
@@ -328,7 +353,7 @@ def test_a_tunnel_ssh_cannot_open_without_a_login_fails_at_once_saying_how_to_lo
     with pytest.raises(compute.ServiceUnavailable) as unavailable:
         with compute.Service.over_ssh('nologin'):
             pass
-    ended, how = (d.message for d in unavailable.value.diagnostics)
+    ended, how = unavailable.value.messages
     assert ended == ('ssh nologin ended (nologin: Permission denied (publickey).) before its tunnel to '
                      '/run/slurm-driver/api.sock was open')
     assert how.startswith('when ssh needs a password or a code, run `ssh nologin true` in a terminal once')

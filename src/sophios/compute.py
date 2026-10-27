@@ -46,8 +46,6 @@ from jsonschema import Draft202012Validator
 
 from .api.python._inference import Inference
 from .api.python._workflow_runtime import service_document
-from .lang.diagnostics import Diagnostic, Severity, SophiosError
-from .lang.error_codes import SophiosErrorCode
 from .run_status import RunState, RunStatus, StepStatus
 from .wic_types import Json, Tools
 
@@ -82,31 +80,37 @@ _PATH_KEYS: Final[Mapping[str, tuple[str, ...]]] = {
     'File': ('location', 'path'), 'Directory': ('location', 'path'), 'DockerRequirement': ('dockerLoad',)}
 
 
-class ComputeError(SophiosError):
-    """A call to the compute service that could not do what was asked; each subclass names its code."""
+class ComputeError(Exception):
+    """A call to the compute service that could not do what was asked: `code`, which each subclass names, says
+    which, and `messages` holds every problem, a line each.
 
-    code: ClassVar[SophiosErrorCode]
+    The codes are this module's own, `cmp001` to `cmp003` (docs/compute.md), and not Sophios's error codes: a
+    ComputeError is never a `SophiosError`.
+    """
+
+    code: ClassVar[str]
 
     def __init__(self, *messages: str) -> None:
-        super().__init__(Diagnostic(Severity.ERROR, self.code, message) for message in messages)
+        super().__init__('\n'.join(f'[{self.code}] {message}' for message in messages))
+        self.messages = messages
 
 
 class RequestRefused(ComputeError):
     """A request Sophios refused before sending it, or the service refused; every problem is a line."""
 
-    code = SophiosErrorCode.COMPUTE_REQUEST_REFUSED
+    code = 'cmp001'
 
 
 class ServiceUnavailable(ComputeError):
     """The service could not be reached, stayed busy, failed, or speaks another contract."""
 
-    code = SophiosErrorCode.COMPUTE_UNAVAILABLE
+    code = 'cmp002'
 
 
 class RunFailed(ComputeError):
     """A run that ended FAILED or CANCELLED, raised by `Service.run`: `run` is the run, `status` how it ended."""
 
-    code = SophiosErrorCode.COMPUTE_RUN_FAILED
+    code = 'cmp003'
 
     def __init__(self, run: 'Run', status: RunStatus, *messages: str) -> None:
         super().__init__(*messages)
@@ -161,6 +165,7 @@ def build_request(workflow: 'Workflow', config: RunConfig = RunConfig(), *, tool
         inference: How unbound inputs are connected.
 
     Raises:
+        SophiosError: The workflow does not compile, with Sophios's own codes.
         RequestRefused: A path that names nothing on the cluster, a real-time analysis, a field the schema does
             not take, or `workflow_out_dir` without output mode `workflowOutDir` or that mode without it; every one
             is a line.
@@ -393,6 +398,7 @@ class Service:
         reached or is busy.
 
         Raises:
+            SophiosError: The workflow does not compile; nothing is sent.
             RequestRefused: Sophios or the service refused the request: see `build_request`.
             ServiceUnavailable: The service could not be reached, stayed busy, failed, or speaks another contract.
         """
@@ -412,7 +418,7 @@ class Service:
         Raises:
             RunFailed: It ended FAILED or CANCELLED: the message names why, and the end of the failed step's log.
             TimeoutError: It had not ended within `timeout` seconds; it goes on.
-            RequestRefused, ServiceUnavailable: As `submit` and `Run.wait` raise them.
+            SophiosError, RequestRefused, ServiceUnavailable: As `submit` and `Run.wait` raise them.
         """
         run = self.submit(workflow, config, tool_registry=tool_registry, inference=inference)
         status = run.wait(timeout)

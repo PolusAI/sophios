@@ -150,15 +150,25 @@ every request against it before sending, and the service again on arrival.
 
 ## When something goes wrong
 
-Each failure is a `SophiosError` with a code of the compute range
-([Error codes](error_codes.md)):
+A workflow that does not compile raises a `SophiosError`, with Sophios's own
+[error codes](error_codes.md), as a local run does, and nothing is sent.
+A refused request, a failing service and a failed run each raise a
+`ComputeError`, an exception of `sophios.compute`'s own: its `code` says
+which of three it is, and `messages` holds every problem, a line each. The
+codes belong to the compute client alone: a `ComputeError` is never a
+`SophiosError`, and `sophios --explain` does not know them.
 
-- `cmp001`, `RequestRefused`: Sophios or the service refused the request.
-  Each problem is a line, at the input it is about; a relative path sent
-  without `basepath` says to pass one.
+- `cmp001`, `RequestRefused`: Sophios or the service refused the request: a
+  path, a name, an output folder, a partition or a time the cluster cannot
+  use, or a real-time analysis. Each problem is a line, at the input or
+  field it is about; do what it says. A relative path sent without
+  `basepath` says to give one.
 - `cmp002`, `ServiceUnavailable`: the service could not be reached, stayed
   busy for five minutes (Sophios asks again meanwhile, which never starts a
-  second run), failed, or speaks another version of the contract. A
-  submission cut short this way says the run may exist, and how to attach.
+  second run), failed, or speaks another version of the contract. Check the
+  SSH tunnel and that the service runs, then make the same call again; when
+  the versions differ, upgrade Sophios or the service. A submission cut
+  short this way says the run may exist, and how to attach.
 - `cmp003`, `RunFailed`: the run ended `FAILED` or `CANCELLED`; the message
-  has the reason and the end of the failed step's log.
+  has the reason and the end of the failed step's log, and `run.logs(step)`
+  has all of it. Its `run` is the run, and `status` how it ended.
