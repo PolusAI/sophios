@@ -9,7 +9,7 @@ channels:
 dependencies:
   - "python>=3.11"
 # The same pin as system_deps.yml, for the reason given there.
-  - nodejs<26.8
+  - nodejs=26
 # Tools without a container run these on the host (wget_xlsx.cwl, zip_top.cwl).
   - wget
   - zip

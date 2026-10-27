@@ -5,14 +5,15 @@ channels:
 dependencies:
   - "python>=3.11"
 # NOTE: cwltool needs nodejs for InlineJavascriptRequirement.
-# Pinned below 26.8: conda-forge published 26.8.0 with a pre-release version
-# string, and cwltool's sandboxjs splits `node --version` on '.' and calls
-# int() on each part, so `0-alpha` raises ValueError and every workflow fails
-# to load with "I'm sorry, I couldn't load this CWL file". Nothing in this
-# repository changed — 26.6.0 passed and 26.8.0 failed hours later on the same
-# commits. Lift the ceiling once cwltool parses pre-release node versions,
-# here and in system_deps_ci.yml.
-  - nodejs<26.8
+# nodejs=26 is the 26.x line at its newest patch, so a new or updated env gets
+# Node's security releases. The former ceiling, <26.8, kept out conda-forge's
+# 26.8.0, whose `node --version` was a pre-release string; 26.12.1 prints a
+# plain v26.12.1. cwltool's sandboxjs still splits that string on '.' and calls
+# int() on each part, so a pre-release build fails loudly, never quietly:
+# cwltool stops with "I'm sorry, I couldn't load this CWL file" and "invalid
+# literal for int() with base 10". system_deps_ci.yml and
+# system_deps_windows.yml pin the same.
+  - nodejs=26
   - graphviz
 # "Warning: Could not load "/miniconda/bin/../lib/graphviz/libgvplugin_pango.so.6"
 #  - It was found, so perhaps one of its dependents was not.  Try ldd."

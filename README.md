@@ -15,10 +15,10 @@ The documentation is on [Read the Docs](https://sophios.readthedocs.io/en/latest
 ## Install
 
 1. Install [Docker](https://docs.docker.com/get-docker/) and start it. Sophios runs each tool in the container image it names.
-2. Create a conda environment with the programs pip cannot install, Node.js and Graphviz (Node.js 26.8.0 has a version string cwltool cannot parse, hence the pin):
+2. Create a conda environment with the programs pip cannot install, Node.js (the newest 26.x) and Graphviz:
 
    ```bash
-   conda create --name sophios --channel conda-forge python=3.11 "nodejs<26.8" graphviz
+   conda create --name sophios --channel conda-forge python=3.11 nodejs=26 graphviz
    conda activate sophios
    ```
 

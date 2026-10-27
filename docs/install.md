@@ -65,14 +65,14 @@ descriptions, and **Graphviz** draws pictures of your workflows. A conda
 environment holds both, together with the Python that Sophios runs on:
 
 ```bash
-conda create --name sophios --channel conda-forge python=3.11 "nodejs<26.8" graphviz
+conda create --name sophios --channel conda-forge python=3.11 nodejs=26 graphviz
 conda activate sophios
 ```
 
 Sophios needs Python 3.11 or newer; 3.11 is the version its test suite runs
-on. Node.js is kept below 26.8 because one conda-forge build, 26.8.0, has a
-version string cwltool cannot parse, and with it every run fails. Graphviz is
-optional: without it, Sophios runs your workflows and skips the pictures.
+on. `nodejs=26` installs the newest Node.js 26 release, which carries the
+latest security fixes. Graphviz is optional: without it, Sophios runs your
+workflows and skips the pictures.
 
 To check the environment, print each program's version:
 
@@ -83,7 +83,7 @@ dot -V
 ```
 
 You should see `Python 3.11` followed by a patch number, a Node.js version
-such as `v26.6.0`, and a line that starts with `dot - graphviz version`. If
+such as `v26.12.1`, and a line that starts with `dot - graphviz version`. If
 a command is not found, see [Troubleshooting](#troubleshooting).
 
 Activate the environment, `conda activate sophios`, in every new terminal
@@ -225,9 +225,13 @@ You are running on Windows outside WSL. Follow the Windows steps under
 
 ### Every run fails with `I'm sorry, I couldn't load this CWL file`
 
-Check `node --version`. If it shows `v26.8.0`, you have the build cwltool
-cannot parse. Install the range from step 2:
-`conda install --channel conda-forge "nodejs<26.8"`.
+Check `node --version`. If it shows a pre-release, a version with a suffix
+such as `v26.8.0-alpha`, cwltool cannot parse it. That build is most likely
+the newest 26.x, which step 2's `nodejs=26` would install again, so install
+the release before it, with the version shown as the ceiling:
+`conda install --channel conda-forge "nodejs=26,<26.8.0"`. Once conda-forge
+publishes a newer release, `conda install --channel conda-forge nodejs=26`
+brings you back to the newest.
 
 ## Next
 
