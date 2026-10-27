@@ -14,40 +14,28 @@ deployed is in the service's own README.
 ## Reaching the service
 
 The service listens on a Unix socket on a host of the cluster set aside for
-services, reached through SSH. One block in `~/.ssh/config` names it:
+services. Open a tunnel to that socket, one command, and leave it running
+while you work:
 
-```
-Host sophios-compute
-    HostName <the host the service runs on>
-    # ProxyJump <login node>      # when that host is reached through a login node
-    ControlMaster auto
-    ControlPath ~/.ssh/cm-%r@%h:%p
-    ControlPersist 8h
+```bash
+ssh -N -L 127.0.0.1:7998:<socket> <driver host>
 ```
 
-`Service.over_ssh` opens the tunnel itself, for as long as a `with` block:
+with `-J <login node>` where the driver's host is reached through a login
+node. `<socket>` is the path the service listens on, its `SOCKET_PATH`:
+`/run/slurm-driver/api.sock` where the service is set up as the driver's
+README shows. The compute service's `start-polus-compute.sh`, which starts
+one from a checkout for testing, prints the whole command, its socket in it.
+Sophios then takes the tunnel's local end:
 
 ```python
 from sophios.compute import Service
 
-with Service.over_ssh('sophios-compute') as service:
-    ...
-```
-
-It runs `ssh` in batch mode, so it never stops to ask for a password or a
-code. When `ssh` would need one, the call fails at once and says so: run
-`ssh sophios-compute true` in a terminal once, and the `ControlMaster`
-connection serves Sophios for the next eight hours. The socket defaults to
-`/run/slurm-driver/api.sock`; `over_ssh(host, socket=...)` names another. A
-tunnel you open yourself works too:
-
-```bash
-ssh -N -L 127.0.0.1:7998:/run/slurm-driver/api.sock sophios-compute
-```
-
-```python
 service = Service('http://127.0.0.1:7998')
 ```
+
+The tunnel is yours: Sophios opens none, reads nothing of your SSH
+configuration, and stores neither the URL nor anything else of a service.
 
 ## Running a workflow
 
@@ -177,10 +165,11 @@ codes belong to the compute client alone: a `ComputeError` is never a
   `basepath` says to give one.
 - `cmp002`, `ServiceUnavailable`: the service could not be reached, stayed
   busy for five minutes (Sophios asks again meanwhile, which never starts a
-  second run), failed, or speaks another version of the contract. Check the
-  SSH tunnel and that the service runs, then make the same call again; when
-  the versions differ, upgrade Sophios or the service. A submission cut
-  short this way says the run may exist, and how to attach.
+  second run), failed, or speaks another version of the contract. Check that
+  your tunnel runs, to the socket the service listens on, and that the
+  service runs, then make the same call again; when the versions differ,
+  upgrade Sophios or the service. A submission cut short this way says the
+  run may exist, and how to attach.
 - `cmp003`, `RunFailed`: the run ended `FAILED` or `CANCELLED`; the message
   has the reason and the end of the failed step's log, and `run.logs(step)`
   has all of it. Its `run` is the run, and `status` how it ended.

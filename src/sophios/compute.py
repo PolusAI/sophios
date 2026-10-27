@@ -5,10 +5,10 @@ A core feature, but not part of the Python API: `sophios.api.python` neither exp
 
     from sophios.compute import RunConfig, Service
 
+    service = Service('http://127.0.0.1:7998')  # the local end of your own tunnel to the service
     config = RunConfig('/projects/lab/results/run7').basepath('/projects/lab/data').leader(time='2:00:00')
-    with Service.over_ssh('sophios-compute') as service:  # a host of your SSH configuration
-        run = service.submit(workflow, config)
-        run.wait()
+    run = service.submit(workflow, config)
+    run.wait()
 
 A `RunConfig` is everything of the request but the workflow and its inputs: the folder it is made with is where
 the outputs go, and each of its setters sets a field more; without one, the run takes the service's settings.
@@ -29,12 +29,9 @@ request against it before sending, and the service again on arrival.
 import json
 import re
 import secrets
-import socket as sockets
-import subprocess
 import sys
 import time
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from importlib import resources
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
@@ -355,62 +352,14 @@ class _Client:
 
 
 class Service:
-    """A compute service, at `url`, such as the local end of an SSH tunnel to it: `http://127.0.0.1:<port>`.
-
-    `Service.over_ssh` opens the tunnel itself. Sophios stores neither the URL nor anything else of a service.
-    """
+    """A compute service, at `url`: the local end of the tunnel the user opens to it, such as
+    `http://127.0.0.1:7998`. Sophios opens no tunnel, and stores neither the URL nor anything else of a service."""
 
     def __init__(self, url: str) -> None:
         self._client = _Client(url)
 
     def __repr__(self) -> str:
         return f'Service({self._client.url!r})'
-
-    @classmethod
-    @contextmanager
-    def over_ssh(cls, host: str, *, socket: str = '/run/slurm-driver/api.sock',
-                 wait: float = 30.0) -> Iterator['Service']:
-        """The service on `host`, through an SSH tunnel to its `socket` that lasts as long as the `with` block.
-
-        Runs `ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 127.0.0.1:<free port>:<socket> <host>` with the
-        user's own SSH configuration, where `host` is a name or `user@host`. BatchMode keeps ssh from ever asking for a
-        password or a code: when it would, the tunnel fails at once, and the error says to log in once in a terminal,
-        after which a `ControlMaster` connection lasts as long as its `ControlPersist`.
-
-        Raises:
-            ServiceUnavailable: ssh could not open the tunnel, or the service did not answer through it within
-                `wait` seconds, or speaks another contract.
-        """
-        with sockets.socket() as probe:
-            probe.bind(('127.0.0.1', 0))
-            port = probe.getsockname()[1]
-        argv = ['ssh', '-N', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', '-L',
-                f'127.0.0.1:{port}:{socket}', host]
-        with subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                              text=True) as ssh:
-            try:
-                service = cls(f'http://127.0.0.1:{port}')
-                give_up = time.monotonic() + wait
-                while True:
-                    if ssh.poll() is not None:
-                        said = ssh.stderr.read().strip() if ssh.stderr else ''
-                        raise ServiceUnavailable(
-                            f'ssh {host} ended ({said or f"exit code {ssh.returncode}"}) before its tunnel to '
-                            f'{socket} was open',
-                            f'when ssh needs a password or a code, run `ssh {host} true` in a terminal once; with '
-                            'ControlMaster in your SSH configuration, that login then serves Sophios too')
-                    try:
-                        requests.get(f'{service._client.url}/openapi.json', timeout=2)
-                        break
-                    except requests.RequestException as error:
-                        if time.monotonic() > give_up:
-                            raise ServiceUnavailable(f'the compute service did not answer through the tunnel to '
-                                                     f'{host}:{socket} within {wait:g} s ({error})') from None
-                        time.sleep(0.2)
-                service._client.speaks()
-                yield service
-            finally:
-                ssh.terminate()
 
     def submit(self, workflow: 'Workflow', config: RunConfig | None = None, *, tool_registry: Tools | None = None,
                inference: Inference = Inference()) -> 'Run':

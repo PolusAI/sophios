@@ -5,7 +5,6 @@ answers is `test_compute_service.py`'s, against the service itself.
 """
 import inspect
 import json
-import os
 import re
 import typing
 from datetime import datetime, timezone
@@ -22,8 +21,6 @@ from sophios.api.python.workflow import Step, Workflow
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.run_status import RunState
-
-from . import fake_ssh
 
 ADAPTERS = Path(__file__).resolve().parents[2] / 'cwl_adapters'
 
@@ -377,24 +374,6 @@ def test_a_failure_whose_log_cannot_be_read_still_says_why(monkeypatch: pytest.M
     assert compute.Service('http://127.0.0.1:1').attach('r1').failure() == [
         'run r1 ended FAILED: Slurm will never start the leader (PartitionTimeLimit)',
         'the end of leader.log:\n(it cannot be read: [cmp001] no log yet)']
-
-
-@pytest.mark.fast
-def test_a_tunnel_ssh_cannot_open_without_a_login_fails_at_once_saying_how_to_log_in(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """BatchMode: ssh never asks for a password; the error says what ssh said, and to log in once in a terminal."""
-    calls = fake_ssh.install(tmp_path)
-    monkeypatch.setenv('PATH', f'{tmp_path}{os.pathsep}{os.environ["PATH"]}')
-    with pytest.raises(compute.ServiceUnavailable) as unavailable:
-        with compute.Service.over_ssh('nologin'):
-            pass
-    ended, how = unavailable.value.messages
-    assert ended == ('ssh nologin ended (nologin: Permission denied (publickey).) before its tunnel to '
-                     '/run/slurm-driver/api.sock was open')
-    assert how.startswith('when ssh needs a password or a code, run `ssh nologin true` in a terminal once')
-    (argv,) = (json.loads(line) for line in calls.read_text('utf-8').splitlines())
-    assert argv[:-2] == ['-N', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', '-L']
-    assert re.fullmatch(r'127\.0\.0\.1:\d+:/run/slurm-driver/api\.sock', argv[-2]) and argv[-1] == 'nologin'
 
 
 @pytest.mark.fast

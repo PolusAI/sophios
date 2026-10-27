@@ -2,7 +2,7 @@
 
 The driver runs as it does on a cluster, `node src/main.ts`, from the checkout `SOPHIOS_SLURM_DRIVER` names: the
 `packages/slurm-driver` directory of vjaganat90/compute, branch vasu_revamp, at the commit this client is written
-against, bec46f2. Its fake `sbatch` runs each leader's job script, whose fake Toil prints an output object; what
+against, 4fecaba. Its fake `sbatch` runs each leader's job script, whose fake Toil prints an output object; what
 Slurm says of a job is the line a test writes into `<job>.sacct` beside the fakes, as the driver's own tests do.
 Node 26 or later must be on PATH.
 
@@ -36,8 +36,6 @@ from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outp
 from sophios.api.python.workflow import Step, Workflow
 from sophios.run_status import RunState, RunStatus
 from sophios.python_cwl_adapter import import_python_file
-
-from . import fake_ssh
 
 pytestmark = pytest.mark.skip_pypi_ci
 
@@ -78,7 +76,7 @@ def _serving(root: Path, toil_env: Path) -> Iterator[Cluster]:
     listening on a free port of 127.0.0.1; its log is `root/driver.log`."""
     if 'SOPHIOS_SLURM_DRIVER' not in os.environ:
         pytest.fail('set SOPHIOS_SLURM_DRIVER to the packages/slurm-driver directory of a vjaganat90/compute '
-                    'checkout at bec46f2, on its branch vasu_revamp, the commit this client is written against')
+                    'checkout at 4fecaba, on its branch vasu_revamp, the commit this client is written against')
     driver = Path(os.environ['SOPHIOS_SLURM_DRIVER']).resolve()
     node = shutil.which('node')
     assert node is not None, 'the slurm driver needs Node 26 or later on PATH'
@@ -269,22 +267,6 @@ def test_a_busy_service_is_asked_again_after_retry_after_and_then_given_up_on(
         assert time.monotonic() - started >= 4  # one Retry-After of 5 s
     finally:
         failing.unlink(missing_ok=True)
-
-
-def test_over_ssh_reaches_the_service_through_a_tunnel_the_block_closes(
-        cluster: Cluster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The service answers through the tunnel ssh opens, and the tunnel is gone once the block ends."""
-    calls = fake_ssh.install(tmp_path)
-    monkeypatch.setenv('PATH', f'{tmp_path}{os.pathsep}{os.environ["PATH"]}')
-    with compute.Service.over_ssh('cluster', socket=cluster.url.removeprefix('http://')) as service:
-        run = service.submit(_workflow(cluster))
-        assert run.status().state is RunState.QUEUED
-        local = repr(service).split("'")[1]
-    (argv,) = (json.loads(line) for line in calls.read_text('utf-8').splitlines())
-    tunnel = f'{local.removeprefix("http://")}:{cluster.url.removeprefix("http://")}'
-    assert argv[-2:] == [tunnel, 'cluster']
-    with pytest.raises(requests.ConnectionError):
-        requests.get(f'{local}/openapi.json', timeout=5)
 
 
 #: A tool that writes into the folder its input `out` names and returns that folder: an output folder, to the service.
