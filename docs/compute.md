@@ -52,8 +52,11 @@ service = Service('http://127.0.0.1:7998')
 ## Running a workflow
 
 ```python
-run = service.run(workflow, basepath='/projects/lab/data',
-                  workflow_out_dir='/projects/lab/results/run7')
+from sophios.compute import RunConfig
+
+config = RunConfig(basepath='/projects/lab/data', output_mode='workflowOutDir',
+                   workflow_out_dir='/projects/lab/results/run7')
+run = service.run(workflow, config)
 print(run.outputs())
 ```
 
@@ -70,15 +73,24 @@ returns at once instead, with the run's id printed; either way the run goes
 on in Slurm whatever happens to the Python process, and `Service.attach(id)`
 follows it from any session or machine.
 
-| Argument | What it is |
+A `RunConfig` holds everything of the request but the workflow and its
+inputs: one field per field of the request, named as the request names it
+in snake_case, and sent as it is given. A field left `None` is left out of
+the request, for the service's default.
+
+| `RunConfig` field | What it is |
 |---|---|
 | `basepath` | The directory on the cluster that the relative paths of what the tools read are relative to; required when there is one |
-| `workflow_out_dir` | The folder the workflow's outputs are copied into, absolute or relative to `basepath`: see below |
-| `workflow_in_place` | `True` to write each output folder given as an absolute path there: see below |
+| `output_mode` | Where the outputs go: `serviceOutDir` (the default), `workflowOutDir` or `workflowInPlace`: see below |
+| `workflow_out_dir` | With `output_mode='workflowOutDir'`, and only with it: the folder the outputs are copied into, absolute or relative to `basepath` |
 | `leader` | The Toil leader's Slurm job: `{'partition': ..., 'time': ..., 'memory': ...}`; the service's settings otherwise |
 | `steps` | Where step jobs go and how long each may run: `{'partition': ..., 'gpuPartition': ..., 'time': ...}` |
 | `log_level` | Toil's log level: `DEBUG`, `INFO` (the default), `WARNING` or `ERROR` |
-| `timeout` | (`run` only) seconds to wait at most; the run goes on after a `TimeoutError` |
+
+`run`, `submit` and `build_request` take the workflow and a `RunConfig`;
+besides, `tool_registry=` and `inference=` say how the workflow compiles,
+as `Workflow.compile` takes them, and `run`'s `timeout=` is how many seconds
+it waits at most: the run goes on after a `TimeoutError`.
 
 ## Where the outputs go
 
@@ -92,14 +104,17 @@ have it written in place (below), or to hand the tool an existing folder as
 its input: the tool then works on a copy of it, and the folder is left as it
 is, which the service warns of.
 
-- **`workflow_out_dir='<folder>'`: the supported way.** Toil copies the
-  workflow's outputs into that folder on the cluster, an output folder given
-  as `segmentation` as `<folder>/segmentation`. The folder may exist, empty,
-  or the service creates it, in a parent it can write to.
-- **Neither:** the outputs are copied, as above, into the run's own folder on
-  the cluster; the output object says where.
-- **`workflow_in_place=True`: an advanced choice, which the service warns of
-  on every run.** Each output folder given as an absolute path is written
+- **`output_mode='workflowOutDir'`, `workflow_out_dir='<folder>'`: the
+  supported way.** Toil copies the workflow's outputs into that folder on
+  the cluster, an output folder given as `segmentation` as
+  `<folder>/segmentation`. The folder may exist, empty, or the service
+  creates it, in a parent it can write to. `workflow_out_dir` goes with this
+  mode and only with it; Sophios refuses either without the other.
+- **`output_mode='serviceOutDir'`, or none:** the outputs are copied, as
+  above, into the run's own folder on the cluster; the output object says
+  where.
+- **`output_mode='workflowInPlace'`: an advanced choice, which the service
+  warns of on every run.** Each output folder given as an absolute path is written
   there, once, without a copy, which is what very large outputs need; the
   service creates it when it is missing (one folder, in a parent it can
   write), and an existing one must be empty. An output folder given as a
@@ -126,9 +141,9 @@ The states are those of a local run: `QUEUED`, `RUNNING`, then `COMPLETED`,
 
 ## The request
 
-`build_request(workflow, ...)` returns the request `run` and `submit` send,
-with the same arguments: the workflow compiled into one document, every
-process inline, its inputs, and the choices above. Its shape is
+`build_request(workflow, config)` returns the request `run` and `submit`
+send, with the same arguments: the workflow compiled into one document,
+every process inline, its inputs, and the fields of `config`. Its shape is
 `run-request.schema.json`, Sophios's copy of the service's own schema, which
 the service also serves at `GET /run-request.schema.json`. Sophios checks
 every request against it before sending, and the service again on arrival.

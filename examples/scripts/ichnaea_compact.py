@@ -1,6 +1,7 @@
 """Canonical end-to-end example: tool_builder -> Workflow -> the compute service.
 
-The outputs are copied into a folder on the cluster, `workflow_out_dir`: the supported way.
+The outputs are copied into a folder on the cluster, `workflow_out_dir`, by the output mode `workflowOutDir`: the
+supported way.
 """
 
 import json
@@ -8,7 +9,7 @@ import json
 from sophios.api.python.workflow import Step, Workflow
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.compute import Service, build_request
+from sophios.compute import RunConfig, Service, build_request
 
 #: The compute service: the local end of an SSH tunnel to it, such as 'http://127.0.0.1:7998'. None only builds
 #: and prints the request.
@@ -96,23 +97,25 @@ def main() -> int:
     """Build the workflow and its request; run it on the compute service when SERVICE_URL is set."""
     # ========== INPUTS TO WORKFLOW ==================
     # What the tool reads: paths on the cluster, relative to BASEPATH, as written; Sophios never looks at them.
-    # The output folder is just a name: the service makes it in the run, and copies it into out_dir under that name.
+    # The output folder is just a name: the service makes it in the run, and copies it into workflow_out_dir under
+    # that name.
     input_dicts = {'input_dir': 'input_directory', 'output_dir': 'segmentation_compact',
                    'model_file': 'model_directory/sam3.pt'}
 
     # ========== BUILD WORKFLOW ======================
     autoseg_workflow = workflow(input_dicts, "autoseg_workflow")
-    out_dir = f'{BASEPATH}/results_compact'  # the outputs are copied here: results_compact/segmentation_compact
-    steps = {'partition': 'normal', 'gpuPartition': 'normal_gpu'}
+    # The outputs are copied into results_compact: the output folder lands in results_compact/segmentation_compact.
+    config = RunConfig(basepath=BASEPATH, output_mode='workflowOutDir', workflow_out_dir=f'{BASEPATH}/results_compact',
+                       steps={'partition': 'normal', 'gpuPartition': 'normal_gpu'})
 
     if SERVICE_URL is None:
-        request = build_request(autoseg_workflow, basepath=BASEPATH, workflow_out_dir=out_dir, steps=steps)
+        request = build_request(autoseg_workflow, config)
         print(json.dumps(request, indent=4))
         print("Set SERVICE_URL to run it.")
         return 0
 
     # =========  RUN ON THE COMPUTE SERVICE ===========
-    run = Service(SERVICE_URL).run(autoseg_workflow, basepath=BASEPATH, workflow_out_dir=out_dir, steps=steps)
+    run = Service(SERVICE_URL).run(autoseg_workflow, config)
     print(f'{run.id} COMPLETED: {run.outputs()}')
     return 0
 
