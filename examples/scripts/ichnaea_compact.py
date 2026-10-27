@@ -5,8 +5,9 @@ The outputs are copied into a folder on the cluster, the one `RunConfig` is made
 """
 
 import json
+import sys
 
-from sophios.api.python.workflow import Step, Workflow
+from sophios.api.python.workflow import RunState, Step, Workflow
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.compute import RunConfig, Service, build_request
@@ -116,7 +117,10 @@ def main() -> int:
         return 0
 
     # =========  RUN ON THE COMPUTE SERVICE ===========
-    run = Service(SERVICE_URL).run(autoseg_workflow, config)
+    run = Service(SERVICE_URL).submit(autoseg_workflow, config)
+    if run.wait().state is not RunState.COMPLETED:
+        print(run.logs(), file=sys.stderr)  # Toil's log of the whole run
+        return 1
     print(f'{run.id} COMPLETED: {run.outputs()}')
     return 0
 

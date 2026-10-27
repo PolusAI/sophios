@@ -2,7 +2,7 @@
 
 The driver runs as it does on a cluster, `node src/main.ts`, from the checkout `SOPHIOS_SLURM_DRIVER` names: the
 `packages/slurm-driver` directory of vjaganat90/compute, branch vasu_revamp, at the commit this client is written
-against, 4fecaba. Its fake `sbatch` runs each leader's job script, whose fake Toil prints an output object; what
+against, 02e2a23. Its fake `sbatch` runs each leader's job script, whose fake Toil prints an output object; what
 Slurm says of a job is the line a test writes into `<job>.sacct` beside the fakes, as the driver's own tests do.
 Node 26 or later must be on PATH.
 
@@ -11,6 +11,9 @@ The driver's repository is private, so no CI lane runs this file: it is a local 
     SOPHIOS_SLURM_DRIVER=<checkout>/packages/slurm-driver pytest tests/core/test_compute_service.py -m skip_pypi_ci
 
 and `test_ci_coverage.LOCAL_ONLY` names it. Marked `skip_pypi_ci`, which keeps it out of the packaging lane.
+Without SOPHIOS_SLURM_DRIVER the module is skipped, as the repository's other environment-gated tests are, so a
+plain `pytest tests/core` passes where there is no driver; the lane's command always sets it, so the lane never
+passes by skipping.
 """
 import json
 import os
@@ -37,7 +40,10 @@ from sophios.api.python.workflow import Step, Workflow
 from sophios.run_status import RunState, RunStatus
 from sophios.python_cwl_adapter import import_python_file
 
-pytestmark = pytest.mark.skip_pypi_ci
+pytestmark = [pytest.mark.skip_pypi_ci, pytest.mark.skipif(
+    'SOPHIOS_SLURM_DRIVER' not in os.environ,
+    reason='set SOPHIOS_SLURM_DRIVER to the packages/slurm-driver directory of a vjaganat90/compute checkout at '
+    '02e2a23, on its branch vasu_revamp, the commit this client is written against')]
 
 
 @dataclass(frozen=True)
@@ -74,9 +80,6 @@ def _free_port() -> int:
 def _serving(root: Path, toil_env: Path) -> Iterator[Cluster]:
     """The driver of `SOPHIOS_SLURM_DRIVER`, over the fakes copied into `root` and the Toil env `toil_env`,
     listening on a free port of 127.0.0.1; its log is `root/driver.log`."""
-    if 'SOPHIOS_SLURM_DRIVER' not in os.environ:
-        pytest.fail('set SOPHIOS_SLURM_DRIVER to the packages/slurm-driver directory of a vjaganat90/compute '
-                    'checkout at 4fecaba, on its branch vasu_revamp, the commit this client is written against')
     driver = Path(os.environ['SOPHIOS_SLURM_DRIVER']).resolve()
     node = shutil.which('node')
     assert node is not None, 'the slurm driver needs Node 26 or later on PATH'
@@ -176,8 +179,9 @@ def test_a_run_is_submitted_followed_and_reattached_and_its_answers_are_the_cont
     valid(requests.get(f'{cluster.url}/runs/nope', timeout=10), 'Errors')
 
 
-def test_a_request_the_driver_refuses_names_each_input_and_says_to_pass_basepath(cluster: Cluster) -> None:
-    """Every problem at once, each at its authored input; a relative path sent without basepath gets the fix."""
+def test_a_request_the_driver_refuses_names_each_input_and_says_to_send_basepath(cluster: Cluster) -> None:
+    """Every problem at once, each at its authored input, in the driver's words: a relative path sent without
+    basepath is told to send one."""
     service = compute.Service(cluster.url)
     with pytest.raises(compute.RequestRefused) as refused:
         service.submit(_workflow(cluster, location='data/missing.txt'),
@@ -186,32 +190,42 @@ def test_a_request_the_driver_refuses_names_each_input_and_says_to_pass_basepath
     assert problem.startswith('input show~file: data/missing.txt') and 'does not exist' in problem
     with pytest.raises(compute.RequestRefused) as refused:
         service.submit(_workflow(cluster, location='data/a.txt'))
-    assert refused.value.messages[-1] == (
-        'these paths are relative and the request has no basepath: make a RunConfig with the folder the outputs go '
-        'to and give it .basepath(<dir>), the directory on the cluster they are relative to')
+    assert refused.value.messages == (
+        'input show~file: data/a.txt is relative: send basepath, the cluster directory it is relative to',)
     with pytest.raises(compute.RequestRefused, match='there is no run nope'):
         service.attach('nope')
 
 
-def test_a_run_that_fails_raises_naming_why_and_the_end_of_its_log(cluster: Cluster) -> None:
-    """`Service.run` raises `RunFailed` with the run's reason and `leader.log`'s last lines."""
+def test_a_path_written_for_a_shell_is_sent_as_written_and_the_driver_refuses_it(cluster: Cluster) -> None:
+    """Sophios walks no paths: the driver, the one authority on them, refuses `~` at the authored input, naming the
+    shared roots, the only paths it reads."""
+    with pytest.raises(compute.RequestRefused) as refused:
+        compute.Service(cluster.url).submit(_workflow(cluster, location='~/Desktop/raw'))
+    assert refused.value.messages == (
+        'input show~file: ~/Desktop/raw starts with "~", which a shell expands on the machine that wrote it; no '
+        f'shell reads the request, and the driver reads only paths under its shared roots, {cluster.shared}: send '
+        'the path as it is on the cluster',)
+
+
+def test_a_run_that_fails_is_a_status_from_wait_naming_why_and_its_log_says_so(cluster: Cluster) -> None:
+    """`wait` returns the FAILED run's status, raising nothing, with the service's reason; `leader.log` has why."""
     jobs = cluster.slurm / 'jobs'
     after = 1000 + (len(jobs.read_text('utf-8').splitlines()) if jobs.exists() else 0)
     cluster.says(str(after), 'svc|FAILED|1:0|2026-10-26T10:00:00|2026-10-26T10:05:00|1-00:00:00')
     (cluster.slurm.parent / 'toil' / 'bin' / 'toil-cwl-runner.fail').write_text('', encoding='utf-8')
     try:
-        with pytest.raises(compute.RunFailed) as failed:
-            compute.Service(cluster.url).run(_workflow(cluster))
+        run = compute.Service(cluster.url).submit(_workflow(cluster))
+        status = run.wait()
     finally:
         (cluster.slurm.parent / 'toil' / 'bin' / 'toil-cwl-runner.fail').unlink()
-    assert failed.value.status.state is RunState.FAILED and failed.value.run.slurm_job == str(after)
-    first, tail = failed.value.messages
-    assert first == f'run {failed.value.run.id} ended FAILED: the workflow failed; see leader.log'
-    assert tail.startswith('the end of leader.log:') and 'the workflow failed' in tail
+    assert (status.state, status.reason, run.slurm_job) == (
+        RunState.FAILED, 'the workflow failed; see leader.log', str(after))
+    assert 'the workflow failed' in run.logs()
 
 
-def test_a_failed_step_is_named_with_the_end_of_its_own_log(cluster: Cluster) -> None:
-    """The step's name as the author wrote it, and the last lines of the first of its logs, errors first."""
+def test_a_failed_step_is_named_in_the_status_and_the_logs_stay_the_leaders(cluster: Cluster) -> None:
+    """The step's name as the author wrote it, with its exit code in the reason; `logs` is `leader.log`, Toil's log
+    of the whole run, not the step's."""
     run = compute.Service(cluster.url).submit(_workflow(cluster))
     directory = cluster.runs / run.id
     processes = json.loads((directory / 'run.json').read_text('utf-8'))['processes']
@@ -223,20 +237,44 @@ def test_a_failed_step_is_named_with_the_end_of_its_own_log(cluster: Cluster) ->
     cluster.leader(run, 'FAILED')
     status = run.wait()
     assert [(step.name, step.state, step.exit_status) for step in status.steps] == [('show', RunState.FAILED, None)]
-    assert run.failure() == [f'run {run.id} ended FAILED: step show failed (exit code 1:0); see its logs',
-                             f'the end of failed_CWLJob_{unit}_000.log, of step show:\nreading\nboom']
-    assert run.logs('show') == f'==> failed_CWLJob_{unit}_000.log <==\nreading\nboom\n'
-    with pytest.raises(ValueError, match="no step 'nope' that has started; those that have are show"):
-        run.logs('nope')
+    assert status.reason == 'step show failed (exit code 1:0); see its logs'
+    leader = run.logs()
+    assert 'fake toil-cwl-runner' in leader and 'boom' not in leader
 
 
-def test_cancel_ends_a_run_cancelled_by_request(cluster: Cluster) -> None:
-    """Safe to send again; the answer is the run, cancelled."""
+def test_a_run_whose_leader_slurm_never_starts_fails_naming_why_and_has_no_log(cluster: Cluster) -> None:
+    """Slurm makes `leader.log` as it starts the leader: a leader it will never start is the run's FAILED end, with
+    Slurm's reason, and `logs` is '', as the examples print it when a run did not complete."""
+    # Slurm keeps the job waiting for good, and its script writes no leader.log.
+    (cluster.slurm / 'sbatch.then').write_text(
+        'id=$((1000 + $(cat "$here/jobs" 2> /dev/null | wc -l)))\n'
+        'echo PartitionTimeLimit > "$here/$id.squeue"\n'
+        "sed -e 's|^#SBATCH --output=.*|#SBATCH --output=/dev/null|' \"$script\" > \"$script.x\" "
+        '&& mv "$script.x" "$script"\n', encoding='utf-8')
+    try:
+        run = compute.Service(cluster.url).submit(_workflow(cluster))
+        status = run.wait()
+    finally:
+        (cluster.slurm / 'sbatch.then').unlink()
+    assert status.state is RunState.FAILED and str(status.reason).startswith(
+        'Slurm will never start the leader (PartitionTimeLimit)')
+    assert run.logs() == ''
+
+
+def test_cancel_says_whether_the_run_is_cancelled_as_future_cancel_does(cluster: Cluster) -> None:
+    """True once the run is CANCELLED by request, and again when sent again; a run that had ended COMPLETED stays
+    so, and cancel is False."""
     run = compute.Service(cluster.url).submit(_workflow(cluster))
     cluster.leader(run, 'RUNNING')
-    assert run.cancel().state in (RunState.RUNNING, RunState.CANCELLED)
-    status = run.cancel()
+    assert run.cancel() is True
+    status = run.status()
     assert (status.state, status.reason) == (RunState.CANCELLED, 'cancelled by request')
+    assert run.cancel() is True
+
+    done = compute.Service(cluster.url).submit(_workflow(cluster))
+    cluster.leader(done, 'COMPLETED')
+    assert done.wait().state is RunState.COMPLETED
+    assert done.cancel() is False and done.status().state is RunState.COMPLETED
 
 
 def test_waiting_ends_at_its_timeout_and_the_run_goes_on(cluster: Cluster, monkeypatch: pytest.MonkeyPatch,
@@ -250,9 +288,9 @@ def test_waiting_ends_at_its_timeout_and_the_run_goes_on(cluster: Cluster, monke
     assert run.status().state is RunState.QUEUED
 
 
-def test_a_busy_service_is_asked_again_after_retry_after_and_then_given_up_on(
+def test_a_busy_service_is_asked_again_every_5_s_and_then_given_up_on(
         cluster: Cluster, monkeypatch: pytest.MonkeyPatch) -> None:
-    """503 while Slurm cannot be asked: the call is made again after Retry-After, until PATIENCE runs out."""
+    """503 while Slurm cannot be asked: the call is made again every 5 s, until PATIENCE runs out."""
     run = compute.Service(cluster.url).submit(_workflow(cluster))
     failing = cluster.slurm / 'sacct.fail'
     failing.write_text('sacct: error: Problem talking to the database\n', encoding='utf-8')
@@ -264,7 +302,7 @@ def test_a_busy_service_is_asked_again_after_retry_after_and_then_given_up_on(
         started = time.monotonic()
         subprocess.Popen(['sh', '-c', f'sleep 1 && rm {failing}'])  # pylint: disable=consider-using-with
         assert run.status().state is RunState.QUEUED
-        assert time.monotonic() - started >= 4  # one Retry-After of 5 s
+        assert time.monotonic() - started >= 4  # once again, after 5 s
     finally:
         failing.unlink(missing_ok=True)
 
@@ -318,13 +356,14 @@ def test_workflow_out_dir_takes_an_output_folder_given_as_a_name_and_files_its_r
     status = _ended(toil_cluster, run)
     assert status.state is RunState.COMPLETED, run.logs()
     assert (results / 'segmentation' / 'result.txt').read_text('utf-8') == 'segmented\n'
-    assert not (toil_cluster.shared / 'segmentation').exists() and not run.targets
+    assert not (toil_cluster.shared / 'segmentation').exists()
 
 
 def test_workflow_in_place_writes_an_absolute_output_folder_there_without_a_copy_and_warns_it_is_advanced(
         toil_cluster: Cluster, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """With real Toil: the folder, created by the service, holds the result; run.targets names it; nothing is copied
-    into the run's own folder; and the service's ADVANCED warning is printed when the run is submitted."""
+    """With real Toil: the folder, created by the service, holds the result, and `outputs()` names it there, under its
+    output's id; nothing is copied into the run's own folder; and the service's ADVANCED warning is printed when the
+    run is submitted."""
     folder = toil_cluster.shared / 'in_place'
     run = compute.Service(toil_cluster.url).submit(_writes(tmp_path, str(folder)),
                                                    RunConfig.in_place())
@@ -333,7 +372,8 @@ def test_workflow_in_place_writes_an_absolute_output_folder_there_without_a_copy
     status = _ended(toil_cluster, run)
     assert status.state is RunState.COMPLETED, run.logs()
     assert (folder / 'result.txt').read_text('utf-8') == 'segmented\n'
-    assert run.targets == {'write~out': str(folder)}
+    assert run.outputs() == {'write~out': {'class': 'Directory', 'location': folder.as_uri(), 'path': str(folder),
+                                           'basename': 'in_place'}}
     assert not list((toil_cluster.runs / run.id / 'out').rglob('result.txt'))
 
 
@@ -342,7 +382,8 @@ def test_the_ichnaea_examples_run_on_the_service(cluster: Cluster, script: str, 
                                                  monkeypatch: pytest.MonkeyPatch,
                                                  capsys: pytest.CaptureFixture[str]) -> None:
     """Each example's `main()`, its BASEPATH and SERVICE_URL pointed at this service, submits a request the service
-    accepts and follows the run to its end; Slurm says COMPLETED once the job script has ended."""
+    accepts and follows the run to its end, then prints its outputs (the fake Toil's); Slurm says COMPLETED once the
+    job script has ended."""
     monkeypatch.setattr(compute, 'POLL', 0.2)
     for name in ('input_directory', 'model_directory'):
         (cluster.shared / name).mkdir(exist_ok=True)
@@ -363,9 +404,9 @@ def test_the_ichnaea_examples_run_on_the_service(cluster: Cluster, script: str, 
     finally:
         (cluster.slurm / 'sbatch.then').unlink()
     printed = capsys.readouterr()
-    assert 'COMPLETED' in printed.out
+    assert printed.out.endswith(" COMPLETED: {'answer': 42}\n")
     if script == 'ichnaea_compact':
         assert (cluster.shared / 'results_compact').is_dir()
     else:
-        assert (cluster.shared / 'output_directory3').is_dir() and "'autoseg~output'" in printed.out
+        assert (cluster.shared / 'output_directory3').is_dir()
         assert 'outputMode workflowInPlace is an ADVANCED feature' in printed.err

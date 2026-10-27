@@ -46,27 +46,31 @@ config = (RunConfig('/shared/lab/results')    # the folder the outputs are copie
           .basepath('/shared/lab')
           .leader(time='2:00:00', memory='4G')
           .steps(time='30:00'))
-run = service.run(workflow, config)
-print(run.outputs())
+run = service.submit(workflow, config)
+status = run.wait()
+print(status.state, run.outputs())
 ```
 
 A `RunConfig` is made with the folder on the cluster the outputs are copied
 into, absolute or relative to `basepath`: the supported way. For a quick
-try, leave it out: `service.run(workflow)` copies the outputs into the run's
-own folder on the cluster, with every setting the service's.
+try, leave it out: `service.submit(workflow)` copies the outputs into the
+run's own folder on the cluster, with every setting the service's.
 
 Every path goes as written; the service, not Sophios, reads it on the
-cluster, before anything is queued, and answers every problem at once. A
-path a tool reads is a path on the cluster, absolute or relative to
-`basepath`, or an http(s) URL; it must exist and be readable, with a name
-cwltool takes. An output folder is written, not read: see below. Sophios
-refuses before sending only what names nothing on the cluster: a path with
-`~` or an environment variable in it.
+cluster, before anything is queued, refuses what it cannot read, and
+answers every problem at once. A path a tool reads is a path on the
+cluster, absolute or relative to `basepath`, or an http(s) URL; it must
+exist and be readable, with a name cwltool takes. An output folder is
+written, not read: see below. No path on the cluster may start with `~`
+or hold a `$VARIABLE`: a shell expands those on the machine that wrote
+them, no shell reads the request, and the service reads only its shared
+roots, which its refusal names.
 
-`run` returns once the run has completed, and raises otherwise. `submit`
-returns at once instead, with the run's id printed; either way the run goes
-on in Slurm whatever happens to the Python process, and `Service.attach(id)`
-follows it from any session or machine.
+`submit` returns at once, with the run's id and every warning of the
+service printed, and the run is followed as a local one is
+([Following a run](#following-a-run)): `wait()` returns its status however
+it ended. The run goes on in Slurm whatever happens to the Python process,
+and `Service.attach(id)` follows it from any session or machine.
 
 A `RunConfig` is everything of the request but the workflow and its
 inputs. How it is made says where the outputs go, and nothing changes that
@@ -86,10 +90,9 @@ the request, each problem at the request's field, such as `leader.time`.
 | `.steps(partition=, gpu_partition=, time=)` | Where step jobs go, those that ask for a GPU to `gpu_partition`, and how long each may run |
 | `.log_level(level)` | Toil's log level: `DEBUG`, `INFO` (the default), `WARNING` or `ERROR` |
 
-`run`, `submit` and `build_request` take the workflow and a `RunConfig`, or
-none; besides, `tool_registry=` and `inference=` say how the workflow compiles,
-as `Workflow.compile` takes them, and `run`'s `timeout=` is how many seconds
-it waits at most: the run goes on after a `TimeoutError`.
+`submit` and `build_request` take the workflow and a `RunConfig`, or none;
+besides, `tool_registry=` and `inference=` say how the workflow compiles, as
+`Workflow.compile` takes them.
 
 ## Where the outputs go
 
@@ -122,27 +125,46 @@ is, which the service warns of.
   of a tool that also stages another input writable, since writing in place
   would change that input too, and of a step scattered over something other
   than its output folders: each falls back to copying, with a warning that
-  says why it is slower. `run.targets` names the folders written in place.
+  says why it is slower. An array of output folders is all absolute paths
+  or all names, since a tool writes them all in place or none: the service
+  refuses a mix.
 
 ## Following a run
 
-| `Run` | What it does |
-|---|---|
-| `id` | The run's id: the workflow's name, the UTC time and four hex digits |
-| `status()` | Where the run is, asked anew: a `RunStatus`, as a local `Workflow.start()` handle reports it |
-| `wait(timeout=None)` | Asks every 10 s until the run ends, printing a line per change; Ctrl-C leaves the run going |
-| `logs(step=None)` | Toil's `leader.log`, or the logs of a step by its name, such as `compact/merge` |
-| `outputs()` | The workflow's output object once the run has completed |
-| `cancel()` | Cancels the run and every job of it in Slurm's queue; safe to send again |
-| `targets`, `warnings`, `slurm_job` | The folders written in place, what the service warned of, the leader's Slurm job |
+A run on the cluster is followed as a local one is: `service.submit(workflow,
+config)` is `workflow.start()`, and the `Run` it returns has the local
+`RunHandle`'s `status`, `wait`, `outputs`, `logs` and `cancel`
+([Follow a run from Python](running.md#follow-a-run-from-python)).
+
+```python
+run = workflow.start()                    # a local run, or
+run = service.submit(workflow, config)    # a run on the cluster
+
+status = run.wait()                       # how it ended; nothing is raised
+print(status.state, status.reason, run.outputs())
+print(run.logs())
+```
+
+| | Local, `workflow.start()` | On the cluster, `service.submit(workflow, config)` |
+|---|---|---|
+| `status()` | Where the run is, without blocking: a `RunStatus` | The same, asked anew of the service |
+| `wait(timeout=None)` | Blocks until the run ends, and returns its `RunStatus`: a run that failed or was cancelled is returned, not raised. After `timeout` seconds it raises `TimeoutError`, and the run goes on | The same, asking every 10 s and printing a line per change of the run's state and of each step's; Ctrl-C leaves the run going |
+| `outputs()` | The workflow's output object once the run has completed; `None` until then | The same |
+| `logs()` | Everything the runner has printed so far | `leader.log`, Toil's log of the whole run, so far; `''` until Slurm has started the leader |
+| `cancel()` | Stops the run: `True` once it is `CANCELLED`, by this call or before; `False` when it had ended `COMPLETED` or `FAILED`, which it stays | The same, for the run and every job of it in Slurm's queue: sent once, then waited for as `wait(300)` waits: a run that has not ended within five minutes raises `TimeoutError`, its cancel still recorded |
+| `collect(timeout=None)`, `workflow.run()` | `wait()`, then the run's `RunResult`; a run that did not complete raises `WorkflowRunError` | Local only |
+| `id`, `Service.attach(id)` | None | On the cluster only: the run's id, the workflow's name, the UTC time and four hex digits, which `attach` follows from any session or machine |
+| `warnings` | None | On the cluster only: what the service warned of when it accepted the run, also printed then |
+| `slurm_job` | None | On the cluster only: the Slurm job id of the run's Toil leader, for `squeue` and `sacct` |
 
 The states are those of a local run: `QUEUED`, `RUNNING`, then `COMPLETED`,
-`FAILED` or `CANCELLED`, which never change.
+`FAILED` or `CANCELLED`, which never change. A run that did not complete
+has its `reason`, such as the step that failed and its exit code.
 
 ## The request
 
-`build_request(workflow, config)` returns the request `run` and `submit`
-send, with the same arguments: the workflow compiled into one document,
+`build_request(workflow, config)` returns the request `submit` sends, with
+the same arguments: the workflow compiled into one document,
 every process inline, its inputs, and what `config` sets. Its shape is
 `run-request.schema.json`, Sophios's copy of the service's own schema, which
 the service also serves at `GET /run-request.schema.json`. Sophios checks
@@ -152,9 +174,9 @@ every request against it before sending, and the service again on arrival.
 
 A workflow that does not compile raises a `SophiosError`, with Sophios's own
 [error codes](error_codes.md), as a local run does, and nothing is sent.
-A refused request, a failing service and a failed run each raise a
-`ComputeError`, an exception of `sophios.compute`'s own: its `code` says
-which of three it is, and `messages` holds every problem, a line each. The
+A refused request and a failing service each raise a `ComputeError`, an
+exception of `sophios.compute`'s own: its `code` says which of two it is,
+and `messages` holds every problem, a line each. The
 codes belong to the compute client alone: a `ComputeError` is never a
 `SophiosError`, and `sophios --explain` does not know them.
 
@@ -164,12 +186,15 @@ codes belong to the compute client alone: a `ComputeError` is never a
   field it is about; do what it says. A relative path sent without
   `basepath` says to give one.
 - `cmp002`, `ServiceUnavailable`: the service could not be reached, stayed
-  busy for five minutes (Sophios asks again meanwhile, which never starts a
-  second run), failed, or speaks another version of the contract. Check that
-  your tunnel runs, to the socket the service listens on, and that the
-  service runs, then make the same call again; when the versions differ,
-  upgrade Sophios or the service. A submission cut short this way says the
-  run may exist, and how to attach.
-- `cmp003`, `RunFailed`: the run ended `FAILED` or `CANCELLED`; the message
-  has the reason and the end of the failed step's log, and `run.logs(step)`
-  has all of it. Its `run` is the run, and `status` how it ended.
+  busy for five minutes (Sophios asks again every 5 s meanwhile, which never
+  starts a second run), failed, or speaks another version of the contract;
+  or something other than the service answered at the URL. Check that your
+  tunnel runs, to the socket the service listens on, and that the service
+  runs, then make the same call again; when the versions differ, upgrade
+  Sophios or the service. A submission cut short this way says the run may
+  exist, and how to attach.
+
+A run that fails raises nothing, as a local one started with `start()`
+does: `wait()` returns its status, `FAILED`, whose `reason` says why, and
+`run.logs()` holds Toil's log of the whole run, which is empty when Slurm
+never started the leader: the `reason` then says why.

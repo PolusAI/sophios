@@ -7,9 +7,10 @@ supported way.
 """
 
 import json
+import sys
 from pathlib import Path
 
-from sophios.api.python.workflow import Step, Workflow
+from sophios.api.python.workflow import RunState, Step, Workflow
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.compute import RunConfig, Service, build_request
@@ -127,9 +128,13 @@ def main() -> int:
         return 0
 
     # =========  RUN ON THE COMPUTE SERVICE ===========
-    run = Service(SERVICE_URL).run(autoseg_workflow, config)
-    print(f'{run.id} COMPLETED; its output folders: {run.targets}')
-    return 0
+    run = Service(SERVICE_URL).submit(autoseg_workflow, config)
+    status = run.wait()
+    if status.state is RunState.COMPLETED:
+        print(f'{run.id} COMPLETED: {run.outputs()}')
+        return 0
+    print(run.logs(), file=sys.stderr)  # Toil's log of the whole run
+    return 1
 
 
 if __name__ == '__main__':

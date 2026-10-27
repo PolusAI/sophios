@@ -8,30 +8,31 @@ A core feature, but not part of the Python API: `sophios.api.python` neither exp
     service = Service('http://127.0.0.1:7998')  # the local end of your own tunnel to the service
     config = RunConfig('/projects/lab/results/run7').basepath('/projects/lab/data').leader(time='2:00:00')
     run = service.submit(workflow, config)
-    run.wait()
+    status = run.wait()
 
 A `RunConfig` is everything of the request but the workflow and its inputs: the folder it is made with is where
 the outputs go, and each of its setters sets a field more; without one, the run takes the service's settings.
 
-`Service.run` submits and waits, and raises when the run does not complete; `Service.attach` follows a run from
-any session or machine. The run goes on in Slurm whatever happens to the session.
+A `Run` is followed as the local `RunHandle` of `Workflow.start()` is: `status`, `wait`, `outputs`, `logs` and
+`cancel`. `Service.attach` follows a run from any session or machine; the run goes on in Slurm whatever happens to
+the session.
 
-Every path goes as written, and the service, not Sophios, reads it on the cluster. A path a tool reads is a path on
-the cluster, absolute or relative to `basepath`, or an http(s) URL. An output folder (a Directory input a tool writes
-into and returns) given as a name, such as `segmentation`, is made in the run, never read against `basepath`, and
-its result lands in the outputs' folder under that name; one given as an absolute path is that folder. The outputs'
-folder is the one `RunConfig(folder)` names (output mode `workflowOutDir`, the supported way: the outputs are copied
-into it), or the run's own folder on the cluster without a config; `RunConfig.in_place()` (output mode
-`workflowInPlace`), an advanced choice, has each tool write an output folder with an absolute path there, once,
-without a copy. The request's shape is `run-request.schema.json`, a copy of the service's own: Sophios checks every
-request against it before sending, and the service again on arrival.
+Every path goes as written, and the service, not Sophios, reads it on the cluster and refuses what it cannot read
+there, `~` and `$VARIABLE`s included. A path a tool reads is a path on the cluster, absolute or relative to
+`basepath`, or an http(s) URL. An output folder (a Directory input a tool writes into and returns) given as a name,
+such as `segmentation`, is made in the run, never read against `basepath`, and its result lands in the outputs'
+folder under that name; one given as an absolute path is that folder. The outputs' folder is the one
+`RunConfig(folder)` names (output mode `workflowOutDir`, the supported way: the outputs are copied into it), or the
+run's own folder on the cluster without a config; `RunConfig.in_place()` (output mode `workflowInPlace`), an advanced
+choice, has each tool write an output folder with an absolute path there, once, without a copy. The request's shape
+is `run-request.schema.json`, a copy of the service's own: Sophios checks every request against it before sending,
+and the service again on arrival.
 """
 import json
 import re
 import secrets
 import sys
 import time
-from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
 from importlib import resources
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
@@ -52,14 +53,15 @@ if TYPE_CHECKING:
 CONTRACT: Final = 2
 #: How often a waiting run's status is read, in seconds: the service asks clients to wait at least 10 s.
 POLL: Final = 10.0
-#: How long a call is made again while the service cannot be reached or is busy, in seconds.
+#: How long a call is made again while the service cannot be reached or is busy, and `Run.cancel` waits for the run
+#: to end, in seconds.
 PATIENCE: Final = 300.0
+#: How often a call is made again meanwhile, in seconds: the Retry-After the service sends with every 503.
+_RETRY: Final = 5.0
 #: How long a call may take to connect, and to answer: a submission asks Slurm several times, 30 s each at most,
 #: so it gets longer than the other calls, lest a slow but healthy one be sent again while it is still going on.
 _TIMEOUT: Final = (10.0, 60.0)
 _SUBMIT_TIMEOUT: Final = (10.0, 300.0)
-#: How much of a failed step's log a failure shows: its last lines, of at most this many bytes.
-_TAIL: Final = 4096
 _ENDED: Final = (RunState.COMPLETED, RunState.FAILED, RunState.CANCELLED)
 
 #: The schema every request is checked against: the service's own, as Sophios was released with.
@@ -68,19 +70,13 @@ _VALIDATOR: Final = Draft202012Validator(SCHEMA)
 
 #: What a run id may not hold, made "-": the service's id rule is letters, digits, ".", "_" and "-".
 _NOT_IN_ID: Final = re.compile(r'[^A-Za-z0-9._-]')
-#: A local location that names nothing on the cluster: a home directory, or an environment variable.
-_LAPTOP_ONLY: Final = re.compile(r'^~|\$(\{|[A-Za-z_])')
-_URL: Final = re.compile(r'^[A-Za-z][A-Za-z0-9+.-]*:')
-#: The keys of a path, by the class of the object that holds it.
-_PATH_KEYS: Final[Mapping[str, tuple[str, ...]]] = {
-    'File': ('location', 'path'), 'Directory': ('location', 'path'), 'DockerRequirement': ('dockerLoad',)}
 
 
 class ComputeError(Exception):
     """A call to the compute service that could not do what was asked: `code`, which each subclass names, says
     which, and `messages` holds every problem, a line each.
 
-    The codes are this module's own, `cmp001` to `cmp003` (docs/compute.md), and not Sophios's error codes: a
+    The codes are this module's own, `cmp001` and `cmp002` (docs/compute.md), and not Sophios's error codes: a
     ComputeError is never a `SophiosError`.
     """
 
@@ -98,20 +94,10 @@ class RequestRefused(ComputeError):
 
 
 class ServiceUnavailable(ComputeError):
-    """The service could not be reached, stayed busy, failed, or speaks another contract."""
+    """The service could not be reached, stayed busy, failed, speaks another contract, or something else answered in
+    its place."""
 
     code = 'cmp002'
-
-
-class RunFailed(ComputeError):
-    """A run that ended FAILED or CANCELLED, raised by `Service.run`: `run` is the run, `status` how it ended."""
-
-    code = 'cmp003'
-
-    def __init__(self, run: 'Run', status: RunStatus, *messages: str) -> None:
-        super().__init__(*messages)
-        self.run = run
-        self.status = status
 
 
 class RunConfig:
@@ -191,8 +177,7 @@ def build_request(workflow: 'Workflow', config: RunConfig | None = None, *, tool
 
     Raises:
         SophiosError: The workflow does not compile, with Sophios's own codes.
-        RequestRefused: A path that names nothing on the cluster, a real-time analysis, or a value the schema does
-            not take; every one is a line.
+        RequestRefused: A real-time analysis, or a value the schema does not take; every one is a line.
     """
     document = service_document(workflow, tool_registry=tool_registry, inference=inference)
     if document.realtime:
@@ -211,10 +196,7 @@ def request_for(run_id: str, cwl: Json, job_inputs: Json, config: RunConfig | No
     """
     given = config._fields if config is not None else {}  # pylint: disable=protected-access
     request: Json = {'id': run_id, 'workflow': cwl, 'inputs': job_inputs, **given}
-    problems = [f'{_named(pointer)}: {written!r} names nothing on the cluster ("~" or an environment variable '
-                'are this machine\'s); write the path as it is on the cluster'
-                for pointer, written in locations(request) if _LAPTOP_ONLY.search(written) and not _URL.match(written)]
-    problems += [_schema_problem(error) for error in _VALIDATOR.iter_errors(request)]
+    problems = [_schema_problem(error) for error in _VALIDATOR.iter_errors(request)]
     if problems:
         raise RequestRefused(*problems)
     return request
@@ -226,42 +208,13 @@ def _key(name: str) -> str:
     return first + ''.join(word.capitalize() for word in rest)
 
 
-def locations(request: Json) -> Iterator[tuple[str, str]]:
-    """Every path in the request's workflow and inputs, with its pointer: the location and the path of each File
-    and Directory at any depth, and each `dockerLoad`, as the service finds them (its `contract/paths` fixtures)."""
-    def walk(node: Any, pointer: str) -> Iterator[tuple[str, str]]:
-        if isinstance(node, list):
-            for index, item in enumerate(node):
-                yield from walk(item, f'{pointer}/{index}')
-        elif isinstance(node, dict):
-            yield from ((f'{pointer}/{key}', node[key]) for key in _PATH_KEYS.get(str(node.get('class')), ())
-                        if isinstance(node.get(key), str))
-            # In a map of requirements or hints, a DockerRequirement need not repeat its class.
-            for group in ('requirements', 'hints'):
-                docker = node[group].get('DockerRequirement') if isinstance(node.get(group), dict) else None
-                if isinstance(docker, dict) and docker.get('class') != 'DockerRequirement' \
-                        and isinstance(docker.get('dockerLoad'), str):
-                    yield f'{pointer}/{group}/DockerRequirement/dockerLoad', docker['dockerLoad']
-            for key, value in node.items():
-                yield from walk(value, f'{pointer}/{_escape(key)}')
-    for field in ('workflow', 'inputs'):
-        yield from walk(request.get(field), f'/{field}')
-
-
 def _schema_problem(error: Any) -> str:
     """One line for a value the schema refuses: where it is, and what the field is, in the schema's words."""
+    where = _named(''.join('/' + str(part).replace('~', '~0').replace('/', '~1') for part in error.absolute_path))
     what = error.schema.get('description') if isinstance(error.schema, dict) else None
     if what and error.validator in ('type', 'enum', 'pattern'):
-        return f'{_named(_pointer(error.absolute_path))}: {error.instance!r} is not {what}'
-    return f'{_named(_pointer(error.absolute_path))}: {error.message}'
-
-
-def _escape(key: str) -> str:
-    return key.replace('~', '~0').replace('/', '~1')
-
-
-def _pointer(path: Any) -> str:
-    return ''.join(f'/{_escape(str(part))}' for part in path)
+        return f'{where}: {error.instance!r} is not {what}'
+    return f'{where}: {error.message}'
 
 
 def _named(pointer: str) -> str:
@@ -280,61 +233,56 @@ class _Client:
         self.http = requests.Session()
         self.contract: str | None = None
 
-    # pylint: disable-next=too-many-arguments
-    def call(self, method: str, path: str, *, body: Json | None = None, params: Mapping[str, str] | None = None,
-             run: str | None = None, timeout: tuple[float, float] = _TIMEOUT) -> requests.Response:
-        """`method path`, made again while the service cannot be reached or answers 502, 503 or 504, for PATIENCE
-        seconds: every call is safe to make again, a POST of the same request answering the same run.
+    def call(self, method: str, path: str, *, body: Json | None = None, run: str | None = None,
+             timeout: tuple[float, float] = _TIMEOUT) -> requests.Response:
+        """`method path`, made again every _RETRY seconds while the service cannot be reached, cuts its answer short or
+        answers 502, 503 or 504, for PATIENCE seconds: every call is safe to make again, a POST of the same request
+        answering the same run. Any other answer is taken only from the service, which names itself in the Server
+        header of every answer.
 
         Raises:
-            ServiceUnavailable: The service could not be reached, or stayed busy, for PATIENCE seconds; for the
-                POST of `run`, saying the run may exist all the same.
+            ServiceUnavailable: The service could not be reached, or stayed busy, for PATIENCE seconds, for the POST
+                of `run` saying the run may exist all the same; or something else answered in its place.
         """
         give_up = time.monotonic() + PATIENCE
         while True:
             try:
-                response = self.http.request(method, self.url + path, json=body, params=params, timeout=timeout)
+                response = self.http.request(method, self.url + path, json=body, timeout=timeout)
                 if response.status_code not in (502, 503, 504):
-                    return response
-                why, pause = f'answered {response.status_code}: {_said(response)}', float(
-                    response.headers.get('Retry-After') or 5)
-            except (requests.ConnectionError, requests.Timeout) as error:
-                why, pause = f'could not be reached ({type(error).__name__})', 5.0
-            if time.monotonic() + pause > give_up:
+                    break
+                why = f'answered {response.status_code}: {_said(response)}'
+            except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError) as error:
+                why = f'could not be reached ({type(error).__name__})'
+            if time.monotonic() + _RETRY > give_up:
                 lines = [f'the compute service at {self.url} {why}, for {PATIENCE:g} s']
                 if run is not None:
                     lines.append(f'run {run} may exist all the same: Service({self.url!r}).attach({run!r}) follows it, '
                                  'and the same request sent again never starts a second one')
                 raise ServiceUnavailable(*lines)
-            time.sleep(pause)
+            time.sleep(_RETRY)
+        if not response.headers.get('Server', '').startswith('slurm-driver/'):
+            raise ServiceUnavailable(f'{self.url} answered, but not as the compute service: check that your tunnel '
+                                     'reaches its socket')
+        return response
 
-    def answer(self, response: requests.Response, request: Json | None = None) -> Json:
-        """The body of a successful answer.
+    def answer(self, response: requests.Response) -> Json:
+        """The body of a successful answer of the service, which answers in JSON but for a log.
 
         Raises:
-            RequestRefused: 400, 404 or 409: each problem a line, where it is as the author wrote it; and when
-                `request`, the request answered, sent relative paths without a basepath, a line saying to pass one.
-            ServiceUnavailable: Any other failure.
+            RequestRefused: 400, 404 or 409: each problem a line, in the service's words, where it is as the author
+                wrote it.
+            ServiceUnavailable: Any other failure, or an answer that is not JSON.
         """
+        body: Json | None = _json(response)
+        if body is None:
+            raise ServiceUnavailable(f'the compute service at {self.url} answered {response.status_code}, not in JSON')
         if response.ok:
-            body: Json = response.json()
             return body
         if response.status_code not in (400, 404, 409):
             raise ServiceUnavailable(f'the compute service at {self.url} answered {response.status_code}: '
                                      f'{_said(response)}')
-        problems = _problems(response)
-        lines = [f'{_named(problem["pointer"])}: {problem["message"]}' if problem.get('pointer')
-                 else str(problem.get('message')) for problem in problems]
-        if request is not None and 'basepath' not in request:
-            relative = {pointer for pointer, written in locations(request)
-                        if not written.startswith('/') and not _URL.match(written)}
-            if relative & {problem.get('pointer') for problem in problems}:
-                # A request without outputMode was sent without a RunConfig, and a RunConfig is made with a folder.
-                fix = ('give the RunConfig .basepath(<dir>)' if 'outputMode' in request else
-                       'make a RunConfig with the folder the outputs go to and give it .basepath(<dir>)')
-                lines.append(f'these paths are relative and the request has no basepath: {fix}, '
-                             'the directory on the cluster they are relative to')
-        raise RequestRefused(*lines)
+        raise RequestRefused(*(f'{_named(problem["pointer"])}: {problem["message"]}' if problem.get('pointer')
+                               else str(problem.get('message')) for problem in _problems(response)))
 
     def speaks(self) -> None:
         """Read the service's contract, once, and refuse one whose major version is not CONTRACT.
@@ -344,9 +292,9 @@ class _Client:
         """
         if self.contract is not None:
             return
-        version = str(self.answer(self.call('GET', '/openapi.json')).get('info', {}).get('version', ''))
+        version = self.answer(self.call('GET', '/openapi.json'))['info']['version']
         if version.partition('.')[0] != str(CONTRACT):
-            raise ServiceUnavailable(f'the compute service at {self.url} speaks contract {version or "(none)"}, '
+            raise ServiceUnavailable(f'the compute service at {self.url} speaks contract {version}, '
                                      f'and this Sophios speaks {CONTRACT}: upgrade the older of the two')
         self.contract = version
 
@@ -372,30 +320,16 @@ class Service:
         Raises:
             SophiosError: The workflow does not compile; nothing is sent.
             RequestRefused: Sophios or the service refused the request: see `build_request`.
-            ServiceUnavailable: The service could not be reached, stayed busy, failed, or speaks another contract.
+            ServiceUnavailable: The service could not be reached, stayed busy, failed, speaks another contract, or
+                something else answered in its place.
         """
         request = build_request(workflow, config, tool_registry=tool_registry, inference=inference)
         self._client.speaks()
         posted = self._client.call('POST', '/runs', body=request, run=request['id'], timeout=_SUBMIT_TIMEOUT)
-        answer = self._client.answer(posted, request)
+        answer = self._client.answer(posted)
         run = Run(self._client, answer)
         print(f'Submitted run {run.id} (Slurm job {answer.get("slurmJobId")}); from anywhere, {run!r} follows it.')
-        run.show_warnings()
-        return run
-
-    def run(self, workflow: 'Workflow', config: RunConfig | None = None, *, timeout: float | None = None,
-            tool_registry: Tools | None = None, inference: Inference = Inference()) -> 'Run':
-        """`submit`, then `Run.wait`: the run, once it COMPLETED. `timeout` is `Run.wait`'s; the rest, `submit`'s.
-
-        Raises:
-            RunFailed: It ended FAILED or CANCELLED: the message names why, and the end of the failed step's log.
-            TimeoutError: It had not ended within `timeout` seconds; it goes on.
-            SophiosError, RequestRefused, ServiceUnavailable: As `submit` and `Run.wait` raise them.
-        """
-        run = self.submit(workflow, config, tool_registry=tool_registry, inference=inference)
-        status = run.wait(timeout)
-        if status.state is not RunState.COMPLETED:
-            raise RunFailed(run, status, *run.failure())
+        _show_warnings(run)
         return run
 
     def attach(self, run_id: str) -> 'Run':
@@ -407,15 +341,17 @@ class Service:
         """
         self._client.speaks()
         run = Run(self._client, self._client.answer(self._client.call('GET', f'/runs/{quote(run_id, safe="")}')))
-        run.show_warnings()
+        _show_warnings(run)
         return run
 
 
 class Run:
     """A run on the compute service, made by `Service.submit` and `Service.attach`, never by calling the class.
 
-    `status` asks the service where the run is; `wait` asks until it ends. Nothing here ends with the session:
-    the run goes on in Slurm, and `Service.attach` follows it from anywhere.
+    Followed as the local `RunHandle` is: `status` asks the service where the run is, and `wait` asks until it
+    ends and returns its status, raising nothing for a run that FAILED or was CANCELLED; `outputs` and `logs` say
+    what it made and printed; `cancel` stops it. Nothing here ends with the session: the run goes on in Slurm, and
+    `Service.attach` follows it from anywhere. `id`, `warnings` and `slurm_job` are a compute run's alone.
     """
 
     def __init__(self, client: _Client, answer: Json) -> None:
@@ -434,19 +370,9 @@ class Run:
         return None if job is None else str(job)
 
     @property
-    def targets(self) -> dict[str, str]:
-        """The folders the run writes in place, by the input that names each (only with `workflowInPlace`)."""
-        return dict(self._answer.get('targets') or {})
-
-    @property
     def warnings(self) -> tuple[str, ...]:
         """What the service warned of when it accepted the run."""
         return tuple(_line(warning) for warning in self._answer.get('warnings') or ())
-
-    def show_warnings(self) -> None:
-        """Print each warning, where it cannot be missed."""
-        for warning in self.warnings:
-            print(f'WARNING from the compute service: {warning}', file=sys.stderr)
 
     def status(self) -> RunStatus:
         """Where the run is now, as the service says.
@@ -496,54 +422,41 @@ class Run:
         """The workflow's output object, once the run COMPLETED; else None."""
         return self.status().outputs
 
-    def logs(self, step: str | None = None) -> str:
-        """`leader.log`, Toil's log of the whole run; or, for `step` (a name as the status gives it, such as
-        `compact/merge`), each of its logs, under its file name.
+    def logs(self) -> str:
+        """`leader.log`, Toil's log of the whole run, so far: '' until Slurm has started the run's leader, and for good
+        when it never does, as the local handle's is '' with no log.
 
         Raises:
-            ValueError: No step of that name has started.
+            ServiceUnavailable: The service could not be asked.
         """
-        if step is None:
-            return self._log('leader.log')
-        self.status()
-        entries = [entry for entry in self._answer.get('steps') or () if entry.get('name') == step]
-        if not entries:
-            names = sorted({str(entry['name']) for entry in self._answer.get('steps') or () if entry.get('name')})
-            raise ValueError(f'run {self.id} has no step {step!r} that has started; '
-                             f'those that have are {", ".join(names) or "none yet"}')
-        return '\n'.join(f'==> {name} <==\n{self._log(name)}' for entry in entries for name in entry.get('logs') or ())
-
-    def cancel(self) -> RunStatus:
-        """Cancel the run, and every job of it in Slurm's queue; safe to send again. Where it is then.
-
-        Raises:
-            ServiceUnavailable: The service could not be asked; the cancel stays recorded, and sending it again
-                finishes it.
-        """
-        self._answer = self._client.answer(self._client.call('POST', f'/runs/{self.id}/cancel'))
-        return _status(self._answer)
-
-    def failure(self) -> list[str]:
-        """Why the run did not complete, as message lines: its state and the service's reason, and the end of the
-        log of the first step that failed, or of `leader.log` when none did."""
-        status = _status(self._answer)
-        lines = [f'run {self.id} ended {status.state.value}' + (f': {status.reason}' if status.reason else '')]
-        failed = next((entry for entry in self._answer.get('steps') or ()
-                       if entry.get('state') == 'FAILED' and entry.get('logs')), None)
-        name = failed['logs'][0] if failed else 'leader.log'
-        try:
-            tail = '\n'.join(self._log(name, -_TAIL).splitlines()[-20:])
-        except ComputeError as error:  # a leader Slurm never started has no log at all
-            tail = f'(it cannot be read: {error})'
-        lines.append(f'the end of {name}' + (f', of step {_step_name(failed)}' if failed else '') + f':\n{tail}')
-        return lines
-
-    def _log(self, name: str, offset: int = 0) -> str:
-        response = self._client.call('GET', f'/runs/{self.id}/logs/{quote(name, safe="")}',
-                                     params={'offset': str(offset)})
+        response = self._client.call('GET', f'/runs/{self.id}/logs/leader.log')
+        # A Run is one the service answered for: a 404 is its log alone, which Slurm makes as it starts the leader.
+        if response.status_code == 404:
+            return ''
         if not response.ok:
             self._client.answer(response)
         return response.content.decode('utf-8', errors='replace')
+
+    def cancel(self) -> bool:
+        """Cancel the run, and every job of it in Slurm's queue, and return once it has ended, as `wait(PATIENCE)`
+        does: the service records the cancel and asks Slurm for it before it answers, so it is sent once.
+
+        Returns:
+            bool: True when the run is CANCELLED, by this call or before it; False when it had ended COMPLETED or
+            FAILED, which it stays. As `concurrent.futures.Future.cancel`.
+
+        Raises:
+            TimeoutError: It had not ended within PATIENCE seconds; the cancel stays recorded, and the run goes on.
+            ServiceUnavailable: The service could not be asked; sending the cancel again finishes it.
+        """
+        self._client.answer(self._client.call('POST', f'/runs/{self.id}/cancel'))
+        return self.wait(PATIENCE).state is RunState.CANCELLED
+
+
+def _show_warnings(run: Run) -> None:
+    """Print each warning of `run`, where it cannot be missed."""
+    for warning in run.warnings:
+        print(f'WARNING from the compute service: {warning}', file=sys.stderr)
 
 
 def _status(answer: Json) -> RunStatus:
@@ -561,13 +474,21 @@ def _time(value: Any) -> datetime | None:
     return datetime.fromisoformat(value) if isinstance(value, str) else None
 
 
+def _json(response: requests.Response) -> Any:
+    """The body of `response`, or None when it is not JSON: the one place an answer is parsed."""
+    try:
+        return response.json()
+    except ValueError:
+        return None
+
+
 def _problems(response: requests.Response) -> list[Json]:
     """The problems an error answer lists, or one holding its text when it is not the contract's shape."""
     try:
-        problems = response.json()['errors']
+        problems = _json(response)['errors']
         if isinstance(problems, list) and all(isinstance(problem, dict) for problem in problems):
             return problems
-    except (ValueError, KeyError, TypeError):
+    except (KeyError, TypeError):
         pass
     return [{'message': response.text[:500]}]
 
