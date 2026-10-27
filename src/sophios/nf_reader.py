@@ -167,17 +167,21 @@ def _lines(file: str, text: str) -> list[_Line]:
     index, comment, body = 0, False, False
     while index < len(raw):
         line = _Line(file, index + 1, raw[index], verbatim=True)
+        start = len(line.text) - len(line.text.lstrip(" \t"))
+        if body and line.text.startswith('"""', start):
+            # The quotes that close a script or stub end its string; what follows them on their line is code.
+            lines.append(_Line(file, line.number, line.text[:start + 3], verbatim=True))
+            line, body = _Line(file, line.number, line.text[start + 3:]), False
         if body:
             lines.append(line)
-            body = line.text.strip() != '"""'
-        elif not comment and line.text.startswith("def "):
-            helper = helpers.get(line.text, "")
-            if "\n".join(raw[index:index + helper.count("\n") + 1]) != helper:
+        elif not comment and line.verbatim and line.text.startswith("def ", start):
+            helper = helpers.get(line.text[start:], "")
+            if "\n".join([line.text[start:], *raw[index + 1:index + helper.count("\n") + 1]]) != helper:
                 line.stop(_Code.IMPORT_EDITED_HELPER, "a def that is not a helper Sophios writes, byte for byte")
             lines.append(_Line(file, line.number, helper, verbatim=True))
             index += helper.count("\n")
-        elif not comment and line.text.lstrip(" \t") == '"""' and lines and lines[-1].text in ("script:", "stub:"):
-            # What follows the quotes that open a script or stub is in its string.
+        elif lines and lines[-1].text in ("script:", "stub:") and _opens(line.text, comment):
+            # What precedes the quotes that open a script or stub is layout; what follows them is in its string.
             lines.append(_Line(file, line.number, '"""', verbatim=True))
             body = True
         else:
@@ -189,6 +193,14 @@ def _lines(file: str, text: str) -> list[_Line]:
                 lines.append(_Line(file, line.number, code))
         index += 1
     return lines
+
+
+def _opens(line: str, comment: bool) -> bool:
+    """Whether ``line`` ends in the quotes that open a script or stub, with nothing but layout before them."""
+    try:
+        return line.endswith('"""') and _code(line[:-3], comment) == ("", False)
+    except ValueError:
+        return False
 
 
 def _depth(line: _Line) -> int:

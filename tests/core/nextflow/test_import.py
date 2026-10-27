@@ -535,6 +535,20 @@ def _config(files: dict[str, str]) -> dict[str, str]:
     return {**files, NEXTFLOW_CONFIG: "// written by Sophios\n\n" + files[NEXTFLOW_CONFIG].replace(" = ", "  =\t")}
 
 
+def _around_quotes(files: dict[str, str]) -> dict[str, str]:
+    written, body, closers = [], False, 0
+    for line, kind in _lines(files[NEXTFLOW_SCRIPT]):
+        if kind == "opener":
+            line, body = line.replace('"""', '/* c */ """'), True
+        elif body and line.strip() == '"""':
+            closers, body = closers + 1, False
+            line += "  /* c */ // end" if closers % 2 else "   "
+        elif not body and any(helper.startswith(line + "\n") for helper in NF_HELPER_FUNCTIONS):
+            line = "  " + line
+        written.append(line)
+    return {**files, NEXTFLOW_SCRIPT: "\n".join(written)}
+
+
 @dataclass(frozen=True, slots=True)
 class Layout:
     """A rewrite of the three files that changes only their layout, and why it does not change what they say."""
@@ -560,6 +574,9 @@ LAYOUTS: tuple[Layout, ...] = (
            "Groovy drops a `//` comment to the end of its line, outside a string."),
     Layout("block comments", _code_lines(lambda line: ["/* a block", "   comment */", line + " /* c */"]),
            "Groovy drops a block comment as it drops the space it stands in."),
+    Layout("around a script's quotes", _around_quotes,
+           "What comes before the quotes that open a script or stub, and after the quotes that close it, is outside "
+           "its string, and Groovy reads a def at any indentation."),
     Layout("CR LF", _crlf,
            "Groovy reads a carriage return and a line feed as a line feed, even inside a triple-quoted script "
            "(design §4.2, probed on the pinned Nextflow under the v2 parser)."),
@@ -620,6 +637,8 @@ _EDITS = [
     # The compile renames a capitalized workflow, and refuses an empty command word.
     (_CODE.IMPORT_UNWRITABLE, NEXTFLOW_SCRIPT, "provoke", "Provoke", "workflow Provoke"),
     (_CODE.IMPORT_UNWRITABLE, NEXTFLOW_SCRIPT, "('echo')", "('')", "workflow provoke"),
+    # After a script's closing quotes, a comment is layout but code is not.
+    (_CODE.IMPORT_FOREIGN_DECLARATION, NEXTFLOW_SCRIPT, '    """\n\n    stub:', '    """ x\n\n    stub:', " x"),
     # A byte that is not UTF-8, the 0xff \udcff stands for, in each file; nesting deeper than Python recurses in a
     # call, a script's interpolation and the params file; and an integer longer than Python converts.
     (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    val message\n", "    val message // \udcff\n",
