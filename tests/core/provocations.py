@@ -574,7 +574,7 @@ IMPORT_EDITS: Final[dict[SophiosErrorCode, tuple[str, str, str, str]]] = {
 
 def import_edited(directory: str, file: str, old: str, new: str, workflow: Any = None) -> Any:
     """Write the pipeline of `workflow`, by default a one-step workflow, into `directory`, replace `old` in one of
-    its files with `new`, and import it."""
+    its files with `new`, and import it. A surrogate such as `\\udcff` in `new` is written as the byte it escapes."""
     # pylint: disable=import-outside-toplevel
     from pathlib import Path
 
@@ -594,7 +594,7 @@ def import_edited(directory: str, file: str, old: str, new: str, workflow: Any =
     path = Path(directory) / file
     text = path.read_text(encoding='utf-8')
     assert old in text, old
-    path.write_text(text.replace(old, new), encoding='utf-8')
+    path.write_text(text.replace(old, new), encoding='utf-8', errors='surrogateescape')
     return import_nextflow(directory)
 
 

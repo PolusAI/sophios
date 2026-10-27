@@ -26,6 +26,10 @@ value Sophios never writes on each kind of line that holds one: each stops
 the import with its code at the line it names, not at the process or workflow
 around it, and nothing is returned.
 
+Any bytes. Whatever the three files hold, cut short, with a byte that is not
+UTF-8, an integer longer than Python converts or nesting deeper than it
+recurses, the read returns a model or raises SophiosError or OSError.
+
 Hermetic. The import reads the three files alone: copied into an empty
 directory, with no network, they import, and no path a parameter names is
 looked at.
@@ -34,7 +38,9 @@ looked at.
 # pylint: disable=missing-function-docstring
 
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
+from functools import cache
 import json
 import os
 from pathlib import Path
@@ -586,6 +592,7 @@ def test_layout_leaves_the_import_unchanged(layout: Layout, name: str, tmp_path:
 
 
 _CODE = SophiosErrorCode
+_DEEP = 3000  # nested deeper than Python's default recursion limit, 1000
 # More edits than one per code: the constructs the import is most often handed.
 _EDITS = [
     *((code, *edit) for code, edit in IMPORT_EDITS.items()),
@@ -613,6 +620,18 @@ _EDITS = [
     # The compile renames a capitalized workflow, and refuses an empty command word.
     (_CODE.IMPORT_UNWRITABLE, NEXTFLOW_SCRIPT, "provoke", "Provoke", "workflow Provoke"),
     (_CODE.IMPORT_UNWRITABLE, NEXTFLOW_SCRIPT, "('echo')", "('')", "workflow provoke"),
+    # A byte that is not UTF-8, the 0xff \udcff stands for, in each file; nesting deeper than Python recurses in a
+    # call, a script's interpolation and the params file; and an integer longer than Python converts.
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "    val message\n", "    val message // \udcff\n",
+     "val message"),
+    (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"hi"', '"h\udcffi"', '"message"'),
+    (_CODE.IMPORT_CONFIG, NEXTFLOW_CONFIG, "false", "false // \udcff", "false //"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "greet(message)",
+     "greet(" + "(" * _DEEP + "message" + ")" * _DEEP + ")", "greet((("),
+    (_CODE.IMPORT_FOREIGN_SCRIPT, NEXTFLOW_SCRIPT, "${__sophios_shell_quote_9f72e('echo')}",
+     "${" + "(" * _DEEP + "__sophios_shell_quote_9f72e('echo')" + ")" * _DEEP + "}", "${((("),
+    (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"hi"', "[" * _DEEP + "]" * _DEEP, '"message": [[['),
+    (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"hi"', "9" * 5000, "{"),
 ]
 # A value Sophios never writes, on each kind of line that holds one, in a case whose pipeline has that line: the
 # import stops at that line, not at the process or workflow the line is in.
@@ -655,6 +674,11 @@ _VALUE_EDITS = [
     (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"a": [],\n  "b": []', '"a": "b",\n  "b": 3', '"b": 3', "crossproduct"),
     (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"f": {\n    "class": "File",\n    "path": "/data/f.txt"\n  }', '"f": []',
      '"f": []', "conditions"),
+    # Nesting deeper than Python recurses in a string's interpolation, and in a condition.
+    (_CODE.IMPORT_FOREIGN_DECLARATION, NEXTFLOW_SCRIPT, 'path "${word}.txt"',
+     'path "${' + "(" * _DEEP + "word" + ")" * _DEEP + '}.txt"', 'path "${(((', "valued"),
+    (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "run: (((__w1) as double) > Double.valueOf('1'))",
+     "run: " + "(!" * _DEEP + "(((__w1) as double) > Double.valueOf('1'))" + ")" * _DEEP, "run: (!(!", "valued"),
 ]
 _ALL_EDITS = [*((*edit, None) for edit in _EDITS), *_VALUE_EDITS]
 
@@ -671,7 +695,7 @@ def _stops(code: SophiosErrorCode, path: Path, at: str, importing: Callable[[], 
     (diagnostic,) = caught.value.diagnostics
     assert diagnostic.code is code, diagnostic
     assert diagnostic.span is not None and Path(diagnostic.span.file) == path
-    assert at in path.read_bytes().decode("utf-8").split("\n")[diagnostic.span.start_line - 1]
+    assert at in path.read_bytes().decode("utf-8", "surrogateescape").split("\n")[diagnostic.span.start_line - 1]
     assert at in diagnostic.message
 
 
@@ -701,6 +725,70 @@ def test_a_long_near_miss_stops_the_import_at_its_line(lines: str, at: str, tmp_
     _stops(_CODE.IMPORT_FOREIGN_STATEMENT, tmp_path / NEXTFLOW_SCRIPT, at,
            lambda: import_edited(str(tmp_path), NEXTFLOW_SCRIPT, call, lines + call))
     assert time.perf_counter() - started < 5.0
+
+
+@cache
+def _bytes(name: str) -> dict[str, bytes]:
+    """The three files written for a case."""
+    with tempfile.TemporaryDirectory() as directory:
+        write_nextflow_artifacts(_compiled(name), directory)
+        return {file: (Path(directory) / file).read_bytes() for file in _FILES}
+
+
+@st.composite
+def _corrupted(draw: st.DrawFn) -> tuple[str, str, bytes]:
+    """A case, of values of each kind or of thirty conditions, and one of its three files cut short, or with a byte
+    that is not UTF-8, an integer longer than Python converts, or nesting deeper than it recurses at its start or
+    after one of its brackets or quotes."""
+    case, file = draw(st.sampled_from(["valued", "calculator"])), draw(st.sampled_from(_FILES))
+    data = _bytes(case)[file]
+    kind = draw(st.sampled_from(["cut", "byte", "digits", "nesting"]))
+    if kind == "cut":
+        return case, file, data[:draw(st.integers(0, len(data) - 1))]
+    if kind == "nesting":
+        at = draw(st.sampled_from([0, *(index + 1 for index, byte in enumerate(data) if byte in b"([{'\"")]))
+        opener, closer = draw(st.sampled_from([(b"(", b""), (b"(", b")"), (b"[", b"]"), (b"{", b"}"), (b"${", b"}"),
+                                               (b"(!", b")")]))
+        return case, file, data[:at] + opener * _DEEP + closer * _DEEP + data[at:]
+    at = draw(st.integers(0, len(data)))
+    inserted = b"9" * 5000 if kind == "digits" else draw(st.sampled_from([b"\xff", b"\xc3", b"\xed\xa0\x80"]))
+    return case, file, data[:at] + inserted + data[at:]
+
+
+@settings(max_examples=300, deadline=None, derandomize=True)
+@given(_corrupted())
+def test_whatever_bytes_the_files_hold_the_read_returns_a_model_or_stops_with_a_code(
+        corrupted: tuple[str, str, bytes]) -> None:
+    """The read returns a model or raises SophiosError or OSError, as its docstring says, and nothing else."""
+    case, file, data = corrupted
+    with tempfile.TemporaryDirectory() as directory:
+        for name, written in _bytes(case).items():
+            (Path(directory) / name).write_bytes(data if name == file else written)
+        with suppress(SophiosError, OSError):
+            read_nextflow(directory)
+
+
+def test_a_minimum_of_more_arguments_than_python_recurses_imports(tmp_path: Path) -> None:
+    """The renderer folds a Math.min into one call per argument after the first, which the reader counts."""
+    step = _echo("least", n=Input(cwl.int, position=1)).to_step()
+    workflow = Workflow([step], "least")
+    step.inputs.n, step.when = 2, "$(Math.min(" + ", ".join(["inputs.n"] * _DEEP) + ") > 1)"
+    workflow.outputs.out = step.outputs.out
+    model = workflow.compile(target="nextflow")
+    write_nextflow_artifacts(model, tmp_path)
+    assert _imported(tmp_path) == model
+
+
+def test_a_condition_too_deep_to_render_stops_the_import_at_its_workflow(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Python 3.11 recurses deeper rendering nested calls than reading them, so a condition its run: line reads
+    may be too deep to render: the import stops at the workflow."""
+    def too_deep(_model: ExecutableNextflowWorkflow) -> str:
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr("sophios.nf_reader.render_nextflow", too_deep)
+    _stops(_CODE.IMPORT_FOREIGN_STATEMENT, tmp_path / NEXTFLOW_SCRIPT, "workflow provoke",
+           lambda: import_edited(str(tmp_path), NEXTFLOW_SCRIPT, "", ""))
 
 
 def test_an_int_for_a_float_parameter_stops_the_import(tmp_path: Path) -> None:

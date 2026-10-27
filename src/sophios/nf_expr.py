@@ -497,11 +497,15 @@ def read_groovy(text: str, variables: Mapping[str, str]) -> Expr:
         raise ValueError(f"expected an operator at {text[at:at + 40]!r}")
 
     def folded(call: str) -> list[Expr]:
-        expect(f"{call}(")
-        args = folded(call) if text.startswith(f"{call}(", at) else [operand()]
-        expect(", ")
-        args.append(operand())
-        expect(")")
+        # One call opens per argument after the first, so their count, not a recursion, pairs the closes.
+        calls = 0
+        while take(f"{call}("):
+            calls += 1
+        args = [operand()]
+        for _ in range(calls):
+            expect(", ")
+            args.append(operand())
+            expect(")")
         return args
 
     def numeric() -> Expr:

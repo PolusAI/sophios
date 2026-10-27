@@ -76,7 +76,9 @@ from .nf_types import (
 _Code = SophiosErrorCode
 _SOURCE = re.compile(rf"{GROOVY_IDENTIFIER.pattern}(?:\.out\.{GROOVY_IDENTIFIER.pattern})?")
 _STREAMS = {"<": "stdin", ">": "stdout", "2>": "stderr"}
-_CLOSERS = {"(": ")", "[": "]", "{": "}"}
+_CLOSERS = {"(": ")", "[": "]", "{": "}", "'": "'", '"': '"'}
+#: A JSON string, whose brackets nest nothing, or a bracket.
+_JSON_BRACKET = re.compile(r'"(?:[^"\\]|\\.)*"|[][{}]')
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,21 +102,23 @@ class _Line:
 
 
 def _skip(text: str, at: int) -> int:
-    """The index after the string or bracketed group that opens at ``text[at]``."""
-    opener, at = text[at], at + 1
-    closer = opener if opener in "'\"" else _CLOSERS[opener]
-    while at < len(text) and text[at] != closer:
-        if opener in "'\"" and text[at] == "\\":
-            at += 2
-        elif opener == '"' and text.startswith("${", at):
-            at = _skip(text, at + 1)
-        elif opener not in "'\"" and text[at] in "'\"([{":
-            at = _skip(text, at)
-        else:
+    """The index after the string or bracketed group that opens at ``text[at]``, however deep what it holds nests."""
+    openers, at = [text[at]], at + 1
+    while openers:
+        if at >= len(text):
+            raise ValueError(f"a {openers[-1]} that does not close")
+        quoted = openers[-1] in "'\""
+        if text[at] == _CLOSERS[openers[-1]]:
+            openers.pop()
+        elif quoted and text[at] == "\\":
             at += 1
-    if at >= len(text):
-        raise ValueError(f"a {opener} that does not close")
-    return at + 1
+        elif openers[-1] == '"' and text.startswith("${", at):
+            openers.append("{")
+            at += 1
+        elif not quoted and text[at] in _CLOSERS:
+            openers.append(text[at])
+        at += 1
+    return at
 
 
 def _split(text: str, separator: str = ", ") -> list[str]:
@@ -647,9 +651,10 @@ def _process_model(
     if branch is None:
         return model, list(incoming.values())
     try:
-        # The process holds without its condition, so what it refuses with one is the condition, on its run: line.
+        # The process holds without its condition, so what it refuses with one is the condition, on its run: line,
+        # as it is a condition nested deeper than Python recurses, which no compile writes.
         return replace(model, condition=read_groovy(branch[2], variables)), list(incoming.values())
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         branch[0].stop(_Code.IMPORT_FOREIGN_STATEMENT, f"a condition Sophios does not write ({exc})")
 
 
@@ -709,9 +714,16 @@ def _written(name: str, declared: str, value: Any) -> bool:
     return json.dumps([] if kept is None else kept, sort_keys=True) == json.dumps(value, sort_keys=True)
 
 
-def _read(path: Path) -> str:
-    """A Groovy file's text: CR LF ends a line, as Groovy reads it, and a lone CR does not."""
-    return path.read_bytes().decode("utf-8").replace("\r\n", "\n")
+def _read(path: Path, code: SophiosErrorCode) -> str:
+    """A file's text: CR LF ends a line, as Groovy reads it, and a lone CR does not. A byte that is not UTF-8,
+    which Sophios never writes, stops the read with ``code`` at its line."""
+    data = path.read_bytes()
+    try:
+        return data.decode("utf-8").replace("\r\n", "\n")
+    except UnicodeDecodeError as exc:
+        number = data.count(b"\n", 0, exc.start) + 1
+        line = data.split(b"\n")[number - 1].decode("utf-8", "replace")
+        _Line(str(path), number, line).stop(code, f"text that is not UTF-8 ({exc.reason})")
 
 
 def _key(file: str, text: str, key: str | None) -> _Line:
@@ -725,10 +737,19 @@ def _key(file: str, text: str, key: str | None) -> _Line:
 def _params(file: str, text: str, parameters: dict[str, str]) -> dict[str, Any]:
     """The parameter values the params file holds, one for each parameter the entry block checks, as a compile
     writes it for the parameter's type."""
+    depth = 0
+    for found in _JSON_BRACKET.finditer(text):
+        depth += {"[": 1, "{": 1, "]": -1, "}": -1}.get(found.group(), 0)
+        if depth > 3:  # the parameters, a list of values, a File or Directory: Sophios nests nothing deeper
+            number = text.count("\n", 0, found.start()) + 1
+            line = _Line(file, number, text.split("\n")[number - 1])
+            line.stop(_Code.IMPORT_PARAMS, "JSON nested deeper than Sophios writes")
     try:
         values = json.loads(text)
     except json.JSONDecodeError as exc:
         _Line(file, exc.lineno, text.split("\n")[exc.lineno - 1]).stop(_Code.IMPORT_PARAMS, f"not JSON, {exc.msg}")
+    except ValueError as exc:  # an integer with more digits than Python converts
+        _key(file, text, None).stop(_Code.IMPORT_PARAMS, f"not JSON Sophios writes, {exc}")
     if not isinstance(values, dict):
         _key(file, text, None).stop(_Code.IMPORT_PARAMS, "not a JSON object")
     if extra := sorted(values.keys() - parameters.keys()):
@@ -783,7 +804,7 @@ def read_nextflow(directory: str | Path) -> tuple[ExecutableNextflowWorkflow, di
     """
     folder = Path(directory)
     script_file = str(folder / NEXTFLOW_SCRIPT)
-    script = _lines(script_file, _read(folder / NEXTFLOW_SCRIPT))
+    script = _lines(script_file, _read(folder / NEXTFLOW_SCRIPT, _Code.IMPORT_FOREIGN_STATEMENT))
     others, blocks, workflows = _top(script)
     start = script[0] if script else _Line(script_file, 1, "")
     if len(workflows) != 2 or workflows[1][0].text != "workflow {" or workflows[0][0].text == "workflow {":
@@ -794,19 +815,23 @@ def read_nextflow(directory: str | Path) -> tuple[ExecutableNextflowWorkflow, di
         unknown[0].stop(_Code.IMPORT_FOREIGN_STATEMENT, "a parameter type Sophios does not write")
     parameters = {name: declared for _, name, declared in checks}
     params_file = str(folder / NEXTFLOW_PARAMS)
-    params_text = (folder / NEXTFLOW_PARAMS).read_text(encoding="utf-8")
+    params_text = _read(folder / NEXTFLOW_PARAMS, _Code.IMPORT_PARAMS)
     params = _params(params_file, params_text, parameters)
-    model = _workflow(workflows[0], {name: _process(block) for name, block in blocks.items()}, parameters, params)
-    rendered_others, rendered_blocks, _ = _top(_lines(script_file, render_nextflow(model)))
+    try:  # a condition its run: line reads that is too deep to build into the workflow or render, past that line
+        model = _workflow(workflows[0], {name: _process(block) for name, block in blocks.items()}, parameters, params)
+        rendered, written = render_nextflow(model), nextflow_params(model)
+    except RecursionError as exc:
+        workflows[0][0].stop(_Code.IMPORT_FOREIGN_STATEMENT, f"a condition Sophios does not write ({exc})")
+    rendered_others, rendered_blocks, _ = _top(_lines(script_file, rendered))
     _same(others, rendered_others, _Code.IMPORT_MISMATCH, start)
     for name, block in blocks.items():
         _same(block, rendered_blocks.get(name, []), _Code.IMPORT_MISMATCH, block[0])
-    written, given = nextflow_params(model), json.loads(params_text)
+    given = json.loads(params_text)
     for name in sorted(given):
         if json.dumps(written[name], sort_keys=True) != json.dumps(given[name], sort_keys=True):
             _key(params_file, params_text, name).stop(_Code.IMPORT_PARAMS, f"not the value Sophios writes for {name!r}")
     config_file = str(folder / NEXTFLOW_CONFIG)
-    config = _lines(config_file, _read(folder / NEXTFLOW_CONFIG))
+    config = _lines(config_file, _read(folder / NEXTFLOW_CONFIG, _Code.IMPORT_CONFIG))
     _same(config, _lines(config_file, render_nextflow_config(model)), _Code.IMPORT_CONFIG,
           _Line(config_file, 1, ""))
     return model, {name: block[0].span for name, block in blocks.items()} | {model.name: workflows[0][0].span}
