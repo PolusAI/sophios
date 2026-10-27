@@ -19,7 +19,7 @@ from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.names import check_written_name
 from sophios.lang.spans import SourceSpan
 from sophios.lang.versions import KNOWN_VERSIONS
-from sophios.run_status import RunResult, RunState, RunStatus, StepStatus
+from sophios.run_status import RunResult, RunState, RunStatus, StepStatus, WorkflowRunError
 from sophios.wic_types import DEFAULT_BASEPATH, Tools
 
 from ._compiled import CompiledWorkflow
@@ -31,7 +31,6 @@ from ._errors import (
     InvalidInputValueError,
     InvalidLinkError,
     InvalidStepError,
-    WorkflowRunError,
 )
 from ._ports import (
     InputParameter,
@@ -1169,7 +1168,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
     ) -> RunResult | None:
-        """Compile and execute this workflow locally, and wait for it: :meth:`start`, then ``wait()``.
+        """Compile and execute this workflow locally, and wait for it: :meth:`start`, then ``collect()``.
 
         A real-time analysis that is a ``.wic`` file comes from ``workflow_paths``,
         shaped ``{namespace: {stem: path}}`` like ``sophios.plugins.get_yml_paths``.
@@ -1222,10 +1221,10 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         Everything before the runner starts happens before ``start`` returns, as in
         :meth:`run`: the compile, the checks of this machine and the image pulls, so
         their errors are raised here. The handle it returns is RUNNING, or FAILED when
-        the runner could not be started; ``wait()``, ``status()``, ``logs()``,
-        ``outputs()`` and ``cancel()`` follow it from there. The run lives as long as
-        this Python process: when the interpreter exits with the run still going, the
-        run is cancelled.
+        the runner could not be started; ``wait()``, ``collect()``, ``status()``,
+        ``logs()``, ``outputs()`` and ``cancel()`` follow it from there. The run lives
+        as long as this Python process: when the interpreter exits with the run still
+        going, the run is cancelled.
 
         Args:
             run_args_dict (dict[str, str] | None): As :meth:`run` takes them, except

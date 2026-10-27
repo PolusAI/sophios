@@ -271,11 +271,14 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   `log_file`, `exit_code`) for a completed run instead of `None`, and `None`
   with `generate_run_script`. A script that ignores the return value runs as
   before. `Workflow.start()` takes `run()`'s arguments and returns a
-  `RunHandle` once the runner has started: `wait(timeout=None)`, `status()`,
-  `logs()`, `outputs()` and `cancel()`, with the states `QUEUED`, `RUNNING`,
-  `COMPLETED`, `FAILED` and `CANCELLED`. The run lives as long as the Python
-  process: when the interpreter exits with the run still going, it is
-  cancelled.
+  `RunHandle` once the runner has started: `wait(timeout=None)`,
+  `collect(timeout=None)`, `status()`, `logs()`, `outputs()` and `cancel()`,
+  with the states `QUEUED`, `RUNNING`, `COMPLETED`, `FAILED` and
+  `CANCELLED`. `wait()` returns the run's `RunStatus` however it ended;
+  `collect()` returns its `RunResult` or raises `WorkflowRunError`, and
+  `run()` is `start().collect()`; `cancel()` returns whether the run is
+  cancelled. The run lives as long as the Python process: when the
+  interpreter exits with the run still going, it is cancelled.
 - `sophios.run_local_async` is gone: its `run_cwl_workflow` and
   `run_cwl_serialized` ran a runner without Sophios's checks, image pulls or
   failure report. Use `await flow.run_async(...)`, a coroutine with `run()`'s

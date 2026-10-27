@@ -322,8 +322,9 @@ from greeting import workflow
 run = workflow().start()
 print(run.status().state)       # RunState.RUNNING
 # ... do something else ...
-result = run.wait()
-print(result.state, result.outputs)
+status = run.wait()             # how it ended; nothing is raised
+result = run.collect()          # its RunResult, as run() returns it
+print(status.state, result.outputs)
 ```
 
 `start()` returns a `RunHandle`, once the runner has started. Its methods
@@ -331,11 +332,12 @@ can be called from any thread:
 
 | Method | What it does |
 |---|---|
-| `wait(timeout=None)` | blocks until the run ends and returns its `RunResult`; after `timeout` seconds it raises `TimeoutError` and the run goes on. A run that failed or was cancelled is returned, not raised |
+| `wait(timeout=None)` | blocks until the run ends and returns its `RunStatus`; after `timeout` seconds it raises `TimeoutError` and the run goes on. A run that failed or was cancelled is returned, not raised. Once the run has ended, it returns the same status at once |
+| `collect(timeout=None)` | `wait()`, then the run's `RunResult`, as `run()` returns it: a run that failed or was cancelled raises `WorkflowRunError`. `run()` is `start().collect()` |
 | `status()` | where the run is, without blocking: a `RunStatus` with `state`, `reason`, `started_at`, `ended_at`, the failed `steps`, `outputs` and `exit_code` |
 | `logs()` | everything the runner has printed so far |
 | `outputs()` | the workflow's outputs once the run has completed; `None` until then |
-| `cancel()` | stops the runner as Ctrl-C does, and the run ends `CANCELLED`. A runner that has already exited is reported as it ended, `COMPLETED` or `FAILED` |
+| `cancel()` | stops the runner as Ctrl-C does, and the run ends `CANCELLED`; returns `True`, as it does when the run was cancelled already. A runner that has already exited is reported as it ended, `COMPLETED` or `FAILED`, and `cancel()` returns `False` |
 
 The states are those the [compute service](compute.md) reports:
 
@@ -345,7 +347,7 @@ The states are those the [compute service](compute.md) reports:
 | `RUNNING` | the runner is running |
 | `COMPLETED` | the runner exited 0; `outputs()` holds the outputs |
 | `FAILED` | the runner exited non-zero, or could not be started; `status().steps` names the failed steps |
-| `CANCELLED` | `cancel()`, or Ctrl-C during `wait()`, stopped it |
+| `CANCELLED` | `cancel()`, or Ctrl-C during `wait()` or `collect()`, stopped it |
 
 The last three never change. The runner is a child of your Python process,
 and the run lives as long as that process does: there is no detaching from

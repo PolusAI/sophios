@@ -26,7 +26,7 @@ from . import auto_gen_header, backends, preflight, realtime
 from . import utils
 from .backends import Backend, Launch, RunRequest
 from .compute_request import ComputeRequest
-from .run_status import RunResult, RunState, RunStatus, StepStatus
+from .run_status import RunResult, RunState, RunStatus, StepStatus, WorkflowRunError
 from .plugins import logging_filters
 
 
@@ -170,8 +170,9 @@ class RunHandle:  # pylint: disable=too-many-instance-attributes
 
     Made started, by `start` (`Workflow.start()`), never by calling the class. There is
     no detaching from it: when the interpreter exits with the run still going, the run
-    is cancelled. `wait` blocks until it ends; `status`, `logs` and `outputs` say where
-    it is without blocking; `cancel` stops it, as Ctrl-C during `wait` does. Every method
+    is cancelled. `wait` blocks until it ends and returns its status, `collect` its result,
+    raising for a run that did not complete; `status`, `logs` and `outputs` say where it
+    is without blocking; `cancel` stops it, as Ctrl-C during `wait` does. Every method
     may be called from any thread.
     """
 
@@ -278,13 +279,16 @@ class RunHandle:  # pylint: disable=too-many-instance-attributes
         except TimeoutError:
             raise TimeoutError('the runner has exited and its output is still being read; wait again') from None
 
-    def wait(self, timeout: float | None = None) -> RunResult:
-        """Block until the run ends, and say how it ended.
+    def wait(self, timeout: float | None = None) -> RunStatus:
+        """Block until the run ends, and return its status; once it has, the same status at once.
 
         A run that FAILED or was CANCELLED is returned as one: nothing is raised for it.
 
         Args:
             timeout: How many seconds to wait at most; None waits as long as the run takes.
+
+        Returns:
+            RunStatus: How the run ended: COMPLETED, FAILED or CANCELLED.
 
         Raises:
             TimeoutError: The run had not ended within `timeout` seconds. It goes on.
@@ -302,8 +306,27 @@ class RunHandle:  # pylint: disable=too-many-instance-attributes
         except KeyboardInterrupt:
             self.cancel()
             raise
-        status = self._settle()
+        return self._settle()
+
+    def collect(self, timeout: float | None = None) -> RunResult:
+        """`wait`, then the run's result: a run that did not complete is raised, not returned.
+
+        Args:
+            timeout: As `wait` takes it.
+
+        Returns:
+            RunResult: The COMPLETED run's outputs, output directory and log file.
+
+        Raises:
+            WorkflowRunError: The run FAILED or was CANCELLED, as its `reason` says. Its `exit_code` is the runner's.
+            TimeoutError: The run had not ended within `timeout` seconds. It goes on.
+            KeyboardInterrupt: On Ctrl-C, after the runner was stopped (`cancel`).
+        """
+        status = self.wait(timeout)
         assert status.exit_code is not None
+        if status.state is not RunState.COMPLETED:
+            assert status.reason is not None
+            raise WorkflowRunError(self._request.workflow_name, status.exit_code, status.reason)
         return RunResult(status.state, status.outputs, self._launch.cwd / self._launch.outdir, self._log,
                          status.exit_code)
 
@@ -326,18 +349,22 @@ class RunHandle:  # pylint: disable=too-many-instance-attributes
         """The workflow's output object, once the run COMPLETED; else None."""
         return self.status().outputs
 
-    def cancel(self) -> None:
+    def cancel(self) -> bool:
         """Stop the runner and the analyses beside it, and mark the run CANCELLED.
 
         A runner that has already exited is reported on as it ended, COMPLETED or FAILED, as `wait` does.
         On POSIX the runner is sent SIGTERM, on which cwltool stops the containers it started,
         and killed with everything it started when it has not exited within `STOP_GRACE_SECONDS`.
+
+        Returns:
+            bool: True when this call cancelled the run, or it was CANCELLED already; False when it
+            had ended COMPLETED or FAILED, which it stays. As `concurrent.futures.Future.cancel`.
         """
         # Held throughout, so a `wait` in another thread reports the run CANCELLED and not FAILED.
         with self._settle_lock:
             process = self._process
             if process is None or self._status.state not in (RunState.QUEUED, RunState.RUNNING):
-                return
+                return self._status.state is RunState.CANCELLED
             running = process.poll() is None
             if running:
                 try:
@@ -352,7 +379,7 @@ class RunHandle:  # pylint: disable=too-many-instance-attributes
             self._join_readers()
             if not running:
                 self._settle_locked()
-                return
+                return False
             if self._streams is not None:
                 self._streams.log.close()
             self._stop_watching(cancelled=True)
@@ -360,6 +387,7 @@ class RunHandle:  # pylint: disable=too-many-instance-attributes
             print("Interrupted; the runner's processes were terminated.", file=sys.stderr)
             self._status = RunStatus(RunState.CANCELLED, 'cancelled: the runner was stopped',
                                      self._status.started_at, datetime.now(), exit_code=process.returncode)
+            return True
 
     def _release_watcher(self) -> None:
         """Tell the watcher the run is over, so it leaves the runner's session alone."""
@@ -480,7 +508,9 @@ def run(request: RunRequest) -> int:
         _realtime(request, backend)
         generate_run_script(shlex.join(backend.launch(request).argv))
         return 0  # Do not actually run
-    return start(request).wait().exit_code
+    status = start(request).wait()
+    assert status.exit_code is not None
+    return status.exit_code
 
 
 def run_compute(workflow_name: str, workflow: Json, workflow_inputs: Json,

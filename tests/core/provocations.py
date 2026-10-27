@@ -352,20 +352,22 @@ def _provoke_invalid_inference() -> None:
 def _provoke_workflow_run_failed() -> None:
     """Run a workflow whose runner exits non-zero.
 
-    The runner, the container engine and the disk are replaced; the raise is `Workflow.run()`'s own.
+    The container engine and the disk are replaced, the runner is never started, and the run's handle
+    says it FAILED; the raise is its `collect()`'s own, through `Workflow.run()`.
     """
     from pathlib import Path  # pylint: disable=import-outside-toplevel
     from unittest import mock  # pylint: disable=import-outside-toplevel
 
     import sophios.api.python._workflow_runtime as runtime  # pylint: disable=import-outside-toplevel
-    from sophios.api.python.workflow import RunResult, RunState, Step, Workflow  # pylint: disable=C0415
+    from sophios.api.python.workflow import RunState, RunStatus, Step, Workflow  # pylint: disable=C0415
 
     echo = Step(clt_path=Path(__file__).resolve().parents[2] / 'cwl_adapters' / 'echo.cwl')
     echo.inputs.message = 'hello'
-    failed = RunResult(RunState.FAILED, None, Path('outdir'), Path('run_provoke.log'), 1)
+    failed = RunStatus(RunState.FAILED, 'the runner exited with status 1', exit_code=1)
     with mock.patch.object(runtime.preflight, 'prepare'), \
             mock.patch.object(runtime.input_output, 'write_artifacts_to_disk'), \
-            mock.patch.object(runtime.run_local, 'start', return_value=mock.Mock(**{'wait.return_value': failed})):
+            mock.patch.object(runtime.run_local.RunHandle, '_start'), \
+            mock.patch.object(runtime.run_local.RunHandle, 'wait', return_value=failed):
         Workflow([echo], 'provoke').run()
 
 

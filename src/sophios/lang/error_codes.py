@@ -109,8 +109,8 @@ class SophiosErrorCode(StrEnum):
     INVALID_STEP = 'api002'
     INVALID_LINK = 'api003'
     INVALID_TOOL = 'api004'
-    #: A local run that ended with a non-zero exit code. The document and the
-    #: call were fine; the runner was not.
+    #: A local run that did not complete: it failed, or was cancelled. The
+    #: document and the call were fine; the run was not.
     WORKFLOW_RUN_FAILED = 'api005'
     #: A `.wic` construct the Python API has no spelling for, met by
     #: `Workflow.from_wic`. The document is valid and compiles; the API cannot
@@ -372,8 +372,8 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         'Point the step at a valid CWL CommandLineTool; the message says what is wrong with it.'),
     SophiosErrorCode.WORKFLOW_RUN_FAILED: Explanation(
         Kind.RUN,
-        'A local run that finished with a non-zero exit code.',
-        "Read the failed step's messages, printed before the error."),
+        'A local run that did not complete: it failed, or was cancelled.',
+        "Read the lines printed before the error: the failed step's messages, or that the run was stopped."),
     SophiosErrorCode.NO_PYTHON_SPELLING: Explanation(
         Kind.CALL,
         'A `.wic` construct the Python API has no spelling for, met by `Workflow.from_wic`.',

@@ -138,7 +138,7 @@ def test_an_inference_keeps_what_it_was_given_immutably() -> None:
 class _Completed:  # pylint: disable=too-few-public-methods
     """A started run that has completed: for a test of what `run()` writes, not of the run."""
 
-    def wait(self) -> RunResult:
+    def collect(self) -> RunResult:
         return RunResult(RunState.COMPLETED, {}, Path("outdir"), Path("run.log"), 0)
 
 

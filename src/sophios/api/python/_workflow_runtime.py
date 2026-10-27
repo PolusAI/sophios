@@ -24,7 +24,7 @@ from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 from sophios import backends, compiler, drawing, input_output, plugins, post_compile as pc, preflight, realtime
 from sophios import run_local, run_setup
 from sophios.run_local import RunHandle
-from sophios.run_status import RunResult, RunState
+from sophios.run_status import RunResult
 from sophios.ir.artifacts import CompilationArtifact, CompilationResult
 from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.locations import absolute_paths
@@ -40,7 +40,7 @@ from sophios.utils_cwl import tool_process
 from sophios.wic_types import DEFAULT_BASEPATH, CompilerOptions, GraphSettings, StepId, Tool, Tools
 
 from ._inference import Inference
-from ._errors import InvalidCLTError, InvalidStepError, WorkflowRunError
+from ._errors import InvalidCLTError, InvalidStepError
 from ._compiled import CompiledWorkflow
 from ._ports import InputParameter, OutputParameter, ParameterStore
 from ._types import ScatterMethod
@@ -650,17 +650,6 @@ def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: 
         generate_run_script=resolved_run_args.get("generate_run_script", "no") == "yes")
 
 
-def _completed(workflow: "Workflow", result: RunResult) -> RunResult:
-    """`result`, when the run COMPLETED.
-
-    Raises:
-        WorkflowRunError: It did not.
-    """
-    if result.state is not RunState.COMPLETED:
-        raise WorkflowRunError(workflow.process_name, result.exit_code)
-    return result
-
-
 def start_workflow(workflow: "Workflow", options: RunOptions) -> RunHandle:
     """Compile and prepare `workflow`, start its runner, and return the run's handle: see `Workflow.start`."""
     if _enabled(_run_args(options.run_args_dict).get("generate_run_script", "no")):
@@ -674,7 +663,7 @@ def run_workflow(workflow: "Workflow", options: RunOptions) -> RunResult | None:
     if request.generate_run_script:
         run_local.run(request)
         return None
-    return _completed(workflow, run_local.start(request).wait())
+    return run_local.start(request).collect()
 
 
 async def run_workflow_async(workflow: "Workflow", options: RunOptions) -> RunResult | None:
@@ -686,10 +675,10 @@ async def run_workflow_async(workflow: "Workflow", options: RunOptions) -> RunRe
     handle = run_local.start(request)
     waiting = asyncio.ensure_future(asyncio.to_thread(handle.wait))
     try:
-        result = await asyncio.shield(waiting)
+        await asyncio.shield(waiting)
     except asyncio.CancelledError:
         # The runner is stopped before the cancellation goes on, so nothing outlives the task.
         await asyncio.to_thread(handle.cancel)
         await waiting
         raise
-    return _completed(workflow, result)
+    return handle.collect()   # the run has ended, so this returns, or raises, at once

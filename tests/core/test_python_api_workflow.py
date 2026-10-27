@@ -34,7 +34,7 @@ from sophios.backends import RunRequest
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import (_python_api_types_match, ApiError, CompiledWorkflow,
                                          InvalidCLTError, InvalidInputValueError, InvalidLinkError,
-                                         InvalidStepError, RunResult, RunState, SophiosError,
+                                         InvalidStepError, RunResult, RunState, RunStatus, SophiosError,
                                          SophiosErrorCode, Step, StepInput, Workflow)
 from sophios.cli import default_compilation_settings
 from sophios.lang import CwlRecord, InlineLiteral, parse, to_json, wic_schema
@@ -894,16 +894,12 @@ def test_scatter_rejects_unbound_foreign_or_scalar_inputs() -> None:
         echo.scatter = [other_echo.inputs.message]
 
 
-@dataclasses.dataclass
-class _Ended:
-    """A started run that has ended: for a test of what `run()` does around the run, not of the run."""
+class _Ended:  # pylint: disable=too-few-public-methods
+    """A started run that has completed: for a test of what `run()` does around the run, not of the run."""
 
-    state: RunState = RunState.COMPLETED
-    exit_code: int = 0
-
-    def wait(self) -> RunResult:
-        """How the run ended."""
-        return RunResult(self.state, None, Path("outdir"), Path("run.log"), self.exit_code)
+    def collect(self) -> RunResult:
+        """The completed run's result."""
+        return RunResult(RunState.COMPLETED, None, Path("outdir"), Path("run.log"), 0)
 
 
 def _api_run_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, run_args: dict[str, Any]) -> list[str]:
@@ -1274,9 +1270,15 @@ def _echo_workflow(name: str) -> Workflow:
 
 
 def _failed_run(monkeypatch: pytest.MonkeyPatch, exit_code: int) -> SophiosError:
-    """The error `Workflow.run()` raises when the runner ends with `exit_code`."""
+    """The error `Workflow.run()` raises when the runner ends with `exit_code`.
+
+    The run's handle is the real one, its runner never started and its `wait` saying it FAILED, so the
+    raise is its `collect()`'s.
+    """
     _detach_run_from_the_container_engine(monkeypatch)
-    monkeypatch.setattr(python_runtime.run_local, 'start', lambda _request: _Ended(RunState.FAILED, exit_code))
+    monkeypatch.setattr(run_local.RunHandle, '_start', lambda _handle: None)
+    failed = RunStatus(RunState.FAILED, f'the runner exited with status {exit_code}', exit_code=exit_code)
+    monkeypatch.setattr(run_local.RunHandle, 'wait', lambda _handle, _timeout=None: failed)
     with pytest.raises(SophiosError) as caught:
         _echo_workflow('failing').run()
     return caught.value
@@ -1308,15 +1310,15 @@ def test_a_failed_run_error_survives_being_duplicated(monkeypatch: pytest.Monkey
     assert list(clone.diagnostics) == list(raised.diagnostics)
     from sophios.api.python.workflow import WorkflowRunError
     assert isinstance(clone, WorkflowRunError)
-    assert clone.exit_code == 7
+    assert (clone.exit_code, clone.reason) == (7, 'the runner exited with status 7')
 
 
 @pytest.mark.fast
 def test_run_returns_the_result_when_the_runner_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`run()` returns how the run ended instead of None."""
+    """`run()` is `start().collect()`: it returns what the started run collects, instead of None."""
     _detach_run_from_the_container_engine(monkeypatch)
     monkeypatch.setattr(python_runtime.run_local, 'start', lambda _request: _Ended())
-    assert _echo_workflow('passing').run() == _Ended().wait()
+    assert _echo_workflow('passing').run() == _Ended().collect()
 
 
 def _fresh_python(script: str, cwd: Path) -> subprocess.CompletedProcess[str]:

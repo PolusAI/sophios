@@ -1,13 +1,16 @@
 """How a run is, and how it ended: what `Workflow.start()`'s handle reports.
 
 The states and the status are those the compute service reports for a run (its contract 2.0.0),
-so a run reads the same wherever it runs.
+so a run reads the same wherever it runs. `WorkflowRunError` is what the handle's `collect()`
+raises for a run that did not complete.
 """
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
+from .lang.diagnostics import Diagnostic, Severity, SophiosError
+from .lang.error_codes import SophiosErrorCode
 from .wic_types import Json
 
 
@@ -28,17 +31,17 @@ class RunState(Enum):
 
 @dataclass(frozen=True, slots=True)
 class RunResult:
-    """How a run ended, and where it left its outputs and its log."""
+    """A run that COMPLETED, and where it left its outputs and its log: what `RunHandle.collect()` returns."""
 
-    #: COMPLETED, FAILED or CANCELLED.
+    #: COMPLETED: a run that ends any other way is raised, as `WorkflowRunError`.
     state: RunState
-    #: The workflow's output object, when the run COMPLETED; else None.
+    #: The workflow's output object, or None when the runner gave none.
     outputs: Json | None
     #: The directory the runner moved the workflow's outputs to.
     outdir: Path
     #: Both of the runner's streams, as they came: `<basepath>/run_<workflow>.log`.
     log_file: Path
-    #: The runner's exit code; 1 when it could not be started, negative when a signal ended it.
+    #: The runner's exit code, 0.
     exit_code: int
 
 
@@ -70,3 +73,27 @@ class RunStatus:  # pylint: disable=too-many-instance-attributes
     outputs: Json | None = None
     #: The runner's exit code, once it exited.
     exit_code: int | None = None
+
+
+class WorkflowRunError(SophiosError):
+    """A local run that did not complete: it FAILED, or was CANCELLED.
+
+    Raised by `RunHandle.collect()`, and so by `Workflow.run()`, instead of returning,
+    so a caller cannot miss a failed run. `exit_code` is the runner's, and `reason` the
+    run status's: how the run ended. The lines printed before this error say why.
+    """
+
+    code = SophiosErrorCode.WORKFLOW_RUN_FAILED
+
+    def __init__(self, workflow_name: str, exit_code: int, reason: str) -> None:
+        super().__init__(Diagnostic(Severity.ERROR, self.code, message) for message in (
+            f'workflow {workflow_name!r} did not complete: {reason}',
+            'the lines printed above this error say why'))
+        self.workflow_name = workflow_name
+        self.exit_code = exit_code
+        self.reason = reason
+
+    def __reduce__(self) -> tuple[type['WorkflowRunError'], tuple[str, int, str]]:
+        # The message is built from the arguments, so they, not `args`, are what a
+        # copy or a trip between processes has to be rebuilt from.
+        return type(self), (self.workflow_name, self.exit_code, self.reason)

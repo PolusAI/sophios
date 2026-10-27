@@ -180,14 +180,17 @@ for a `StepInput` default against the working directory.
 - `sophios.run_local` is the one path that runs a launch: always as a child
   process in its own session, whose two streams it echoes line by line and
   tees into `<basepath>/run_<workflow>.log`. `start` returns the
-  `RunHandle` (`wait`, `status`, `logs`, `outputs`, `cancel`) that
+  `RunHandle` (`wait`, `collect`, `status`, `logs`, `outputs`, `cancel`) that
   `Workflow.start()` hands out, which lives as long as the Python process;
-  `run` is start and wait, or writes `run.sh`. Ctrl-C during `wait` is
-  `cancel`: SIGTERM to the runner, then a kill after a grace period.
-  `sophios.run_status` holds the states, status and result it reports, those
-  of the compute service's contract. `Workflow.run_async()` prepares in a
-  worker thread, then awaits `wait` from another, and cancels the handle
-  when its task is cancelled. `sophios.realtime` compiles each declaration once and runs a
+  `run` is start and wait, or writes `run.sh`. `wait` returns the run's
+  status however it ended; `collect` waits, and returns its result or raises
+  `WorkflowRunError`, and `Workflow.run()` is `start().collect()`. Ctrl-C
+  during `wait` is `cancel`: SIGTERM to the runner, then a kill after a grace
+  period. `sophios.run_status` holds the states, status and result it
+  reports, those of the compute service's contract, and the error `collect`
+  raises.
+  `Workflow.run_async()` prepares in a worker thread, then awaits `wait` from
+  another, and cancels the handle when its task is cancelled. `sophios.realtime` compiles each declaration once and runs a
   `Watcher` per plan beside the runner.
 
 ## Compatibility contract
