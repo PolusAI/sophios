@@ -1,10 +1,16 @@
 """`sophios.compute` against the compute service itself: the slurm driver, under its own fake Slurm and fake Toil.
 
 The driver runs as it does on a cluster, `node src/main.ts`, from the checkout `SOPHIOS_SLURM_DRIVER` names: the
-`packages/slurm-driver` directory of PolusAI/compute at the commit this client is written against, which the
-lane checks out (`lint_and_test.yml`). Its fake `sbatch` runs each leader's job script, whose fake Toil prints an
-output object; what Slurm says of a job is the line a test writes into `<job>.sacct` beside the fakes, as the
-driver's own tests do. Node 26 or later must be on PATH. Marked `skip_pypi_ci`: only that lane has the driver.
+`packages/slurm-driver` directory of vjaganat90/compute, branch vasu_revamp, at the commit this client is written
+against, bec46f2. Its fake `sbatch` runs each leader's job script, whose fake Toil prints an output object; what
+Slurm says of a job is the line a test writes into `<job>.sacct` beside the fakes, as the driver's own tests do.
+Node 26 or later must be on PATH.
+
+The driver's repository is private, so no CI lane runs this file: it is a local lane, run by hand,
+
+    SOPHIOS_SLURM_DRIVER=<checkout>/packages/slurm-driver pytest tests/core/test_compute_service.py -m skip_pypi_ci
+
+and `test_ci_coverage.LOCAL_ONLY` names it. Marked `skip_pypi_ci`, which keeps it out of the packaging lane.
 """
 import json
 import os
@@ -70,8 +76,8 @@ def _serving(root: Path, toil_env: Path) -> Iterator[Cluster]:
     """The driver of `SOPHIOS_SLURM_DRIVER`, over the fakes copied into `root` and the Toil env `toil_env`,
     listening on a free port of 127.0.0.1; its log is `root/driver.log`."""
     if 'SOPHIOS_SLURM_DRIVER' not in os.environ:
-        pytest.fail('set SOPHIOS_SLURM_DRIVER to the packages/slurm-driver directory of a PolusAI/compute checkout '
-                    'at the commit lint_and_test.yml pins')
+        pytest.fail('set SOPHIOS_SLURM_DRIVER to the packages/slurm-driver directory of a vjaganat90/compute '
+                    'checkout at bec46f2, on its branch vasu_revamp, the commit this client is written against')
     driver = Path(os.environ['SOPHIOS_SLURM_DRIVER']).resolve()
     node = shutil.which('node')
     assert node is not None, 'the slurm driver needs Node 26 or later on PATH'
