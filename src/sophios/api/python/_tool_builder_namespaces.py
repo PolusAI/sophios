@@ -11,6 +11,7 @@ The builder surface is intentionally small:
 from collections.abc import Iterator, Mapping
 from typing import Any, TypeVar
 
+from ._ports import _validate_namespace_name
 from ._tool_builder_specs import FieldSpec, InputSpec, OutputSpec
 from ._tool_builder_support import (
     _canonicalize_type,
@@ -125,7 +126,8 @@ def _validate_collection_name(name: str, *, owner: type[Any]) -> str:
         raise ValueError(
             f"API name {valid_name!r} is reserved by {owner.__name__}; choose a different name"
         )
-    return valid_name
+    # An input or output is a port of each step that runs the tool; a record field is no port.
+    return valid_name if owner is Fields else _validate_namespace_name(valid_name, context="API name")
 
 
 class _NamedCollection(Mapping[str, SpecT]):
@@ -173,7 +175,8 @@ class Inputs(_NamedCollection[InputSpec]):
 
     Raises:
         ValueError: If a name is not a Python identifier, is a special name such
-            as `__len__`, or names an attribute of the collection, such as `keys`.
+            as `__len__`, or names an attribute of the collection, such as `keys`,
+            or of a step's `inputs`, such as `_store`.
     """
 
 
@@ -187,7 +190,8 @@ class Outputs(_NamedCollection[OutputSpec]):
 
     Raises:
         ValueError: If a name is not a Python identifier, is a special name such
-            as `__len__`, or names an attribute of the collection, such as `keys`.
+            as `__len__`, or names an attribute of the collection, such as `keys`,
+            or of a step's `outputs`, such as `_store`.
     """
 
 

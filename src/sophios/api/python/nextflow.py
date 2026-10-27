@@ -81,6 +81,7 @@ from sophios.nf_types import (
     NfWorkflowOutputConnection,
 )
 
+from ._ports import _validate_namespace_name
 from .tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from .workflow import Inference, Step, StepInput, Workflow
 
@@ -306,7 +307,8 @@ def _bind(model: ExecutableNextflowWorkflow, workflow: Workflow, steps: dict[str
     """Each parameter a workflow input holding its value, each edge bound on its input, each scatter and condition."""
     values = model.to_dict()["params"]
     for name, declared in model.param_types.items():
-        getattr(workflow.inputs, name).as_type(declared)
+        # Asked before the read: `workflow.inputs._store` is the namespace's own attribute, not an input.
+        getattr(workflow.inputs, _validate_namespace_name(name, context="parameter")).as_type(declared)
         # The [] of an optional scalar stands for its absence; an array's is the empty array.
         if not (declared.endswith("?") and not declared.endswith("[]?") and values[name] == []):
             setattr(workflow.inputs, name, values[name])

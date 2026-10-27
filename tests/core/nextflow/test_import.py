@@ -44,6 +44,7 @@ from typing import Any
 from hypothesis import given, settings, strategies as st
 import pytest
 
+from sophios.api.python._ports import ParameterNamespace
 from sophios.api.python.nextflow import import_nextflow
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Inference, Step, StepInput, Workflow
@@ -640,6 +641,24 @@ def test_a_port_the_tool_builder_cannot_name_stops_the_import_at_its_process(tmp
     step.inputs.keys, workflow.outputs.out = "x", step.outputs.out
     write_nextflow_artifacts(workflow.compile(target="nextflow"), tmp_path)
     _stops(_CODE.IMPORT_UNWRITABLE, tmp_path / NEXTFLOW_SCRIPT, "process tool", lambda: import_nextflow(tmp_path))
+
+
+@pytest.mark.parametrize("name", sorted({*dir(ParameterNamespace), "keys", "_items", "_x", "__x__"}))
+def test_a_parameter_imports_exactly_when_a_python_workflow_can_take_its_input(name: str, tmp_path: Path) -> None:
+    """A parameter is a workflow input: a pipeline whose parameter `unread` is renamed in all three files imports
+    exactly when `flow.inputs.<name> = value` works. An attribute of the port namespace, such as `_store`, is read
+    as itself, so it stops the import at its workflow, not with an AttributeError; `keys` and `_items` import."""
+    write_nextflow_artifacts(_compiled("valued"), tmp_path)
+    for file in _FILES:
+        path = tmp_path / file
+        path.write_text(path.read_text(encoding="utf-8").replace("unread", name), encoding="utf-8")
+    try:
+        setattr(Workflow([], "python").inputs, name, "kept")
+    except ValueError:
+        _stops(_CODE.IMPORT_UNWRITABLE, tmp_path / NEXTFLOW_SCRIPT, "workflow valued",
+               lambda: import_nextflow(tmp_path))
+    else:
+        assert name in [port.name for port in import_nextflow(tmp_path).inputs]
 
 
 def test_the_import_reads_the_three_files_alone(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

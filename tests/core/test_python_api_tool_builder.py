@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -5,6 +6,7 @@ import pytest
 import yaml
 from schema_salad.utils import yaml_no_ts  # pylint: disable=no-name-in-module
 
+from sophios.api.python._ports import ParameterNamespace
 from sophios.api.python.tool_builder import (
     CommandLineTool,
     Dirent,
@@ -99,6 +101,30 @@ def test_tool_builder_names_reject_namespace_collisions() -> None:
 
     with pytest.raises(ValueError, match="reserved"):
         Inputs(_items=Input(cwl.file))
+
+
+def _refused(build: Callable[..., object], *args: Any, **kwargs: Any) -> bool:
+    """Whether `build(*args, **kwargs)` raises ValueError."""
+    try:
+        build(*args, **kwargs)
+    except ValueError:
+        return True
+    return False
+
+
+@pytest.mark.fast
+def test_tool_builder_refuses_a_port_name_where_it_is_written_when_a_step_would() -> None:
+    """A tool's input or output is a port of each step that runs the tool, so the builder refuses, where the name is
+    written, each name a step refuses, such as `_store`, an attribute of the step's port namespace, and else only
+    its collection's own attributes, such as `keys`. A record field is no port, so it may be called `_store`."""
+    tool = {"cwlVersion": "v1.2", "class": "CommandLineTool", "baseCommand": "true", "inputs": {}, "outputs": {}}
+    output = {"type": "File", "outputBinding": {"glob": "o"}}
+    for name in sorted({*dir(ParameterNamespace), *dir(Inputs), "_", "_x", "_Out", "__x", "__x__"}):
+        assert _refused(Inputs, **{name: Input(cwl.string)}) == (
+            name in dir(Inputs) or _refused(Step.from_cwl_document, {**tool, "inputs": {name: "string"}})), name
+        assert _refused(Outputs, **{name: Output(cwl.file, glob="o")}) == (
+            name in dir(Outputs) or _refused(Step.from_cwl_document, {**tool, "outputs": {name: output}})), name
+    assert list(Fields(_store=Field(cwl.string))) == ["_store"]
 
 
 @pytest.mark.fast
