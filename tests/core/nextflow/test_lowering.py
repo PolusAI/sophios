@@ -3,10 +3,11 @@
 # pylint: disable=missing-function-docstring
 
 import copy
+import json
 from typing import Any
 
 import pytest
-from sophios.input_output_nf import render_nextflow
+from sophios.input_output_nf import render_nextflow, render_nextflow_params
 from sophios.ir.artifacts import CompilationResult
 from sophios.nf_types import (
     NfArrayBinding,
@@ -361,6 +362,21 @@ def test_applies_unwired_scalar_default_before_lowering() -> None:
     assert "Channel.value(__sophios_input_9f72e('_DEFAULT_message', params._DEFAULT_message, 'string'))" in (
         render_nextflow(workflow)
     )
+
+
+@pytest.mark.fast
+def test_a_default_is_held_as_a_value_written_on_a_step_is() -> None:
+    """A workflow input's default, which only a .wic file writes, and a tool's are held as a value written on a step
+    is: an int given for a float is the float, written as its text, and a path given as text is the File there."""
+    take = tool("take", inputs={"x": {"type": "float", "inputBinding": {"position": 1}},
+                                "r": {"type": ["null", "float"], "default": 7, "inputBinding": {"position": 2}},
+                                "f": {"type": "File", "default": "/data/a.txt"}},
+                outputs={"result": {"type": "File", "outputBinding": {"glob": "result.txt"}}})
+    workflow = compiled_source_to_nextflow(synthetic_source(workflow_doc(
+        [step("take", **{"in": {"x": "y"}, "out": ["result"]})], inputs={"y": {"type": "float", "default": 5}},
+        outputs={"result": {"type": "File", "outputSource": "take/result"}}), [take]))
+    assert json.loads(render_nextflow_params(workflow)) == {
+        "y": "5.0", "take_r": "7.0", "take_f": {"class": "File", "path": "/data/a.txt"}}
 
 
 @pytest.mark.fast

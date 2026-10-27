@@ -11,8 +11,11 @@ from types import MappingProxyType
 from typing import Any
 
 from .ir.artifacts import CompilationArtifact, CompilationResult
+from .ir.complete import coerce_job_value
 from .ir.names import Names
-from .ir.types import Direction, Edge, PortId, SourceList, StepNode, WorkflowGraph
+from .ir.types import (
+    AuthoredName, Direction, Edge, PortDeclaration, PortId, PortType, SourceList, StepNode, WorkflowGraph,
+)
 from .lang.diagnostics import Diagnostic, Locator, Severity
 from .lang.error_codes import SophiosErrorCode
 from .nf_expr import (
@@ -3307,6 +3310,7 @@ def compiled_source_to_nextflow_with_notes(
             steps, tools, processes, workflow.get("inputs", {})
         )
         params.update(default_params)
+        param_types = {**_workflow_param_types(workflow), **default_types}
         name = _identifier(compiled.name, context="workflow name", variable=False)
         while name in {process.name for process in processes}:  # a step may share the workflow's name
             name = f"_{name}"
@@ -3314,8 +3318,12 @@ def compiled_source_to_nextflow_with_notes(
             name=name,
             processes=processes,
             connections=_connections(workflow, list(steps), processes, default_connections),
-            params=_apply_absent_sentinel(params),
-            param_types={**_workflow_param_types(workflow), **default_types},
+            # A default is as authored; each value is held as a value written on a step is (design §4.2, Losses):
+            # coerced to its declared type, so an int given for a float is the float, and a local location a path.
+            params=_apply_absent_sentinel({key: local_locations_as_paths(coerce_job_value(
+                AuthoredName(key), PortDeclaration(PortType(param_types[key])), value))
+                for key, value in params.items()}),
+            param_types=param_types,
         ), tuple(notes)
     except ValueError as error:
         raise _capability_error([f"workflow: {error}"]) from None

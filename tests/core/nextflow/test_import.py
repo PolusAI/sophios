@@ -315,33 +315,47 @@ _TEXT = st.lists(st.sampled_from([" ", "a", "$", "\\", "'", '"', "{", "}", "(", 
                                   "[", "é", "\t", "$(", "${"]), max_size=4).map("".join)
 _LITERAL = st.lists(st.sampled_from([" ", "a", "$", "\\\\", "'", '"', "}", ")", "<", "|", "#", "*", "[", "é", "\t",
                                      "\\$(", "\\${"]), min_size=1, max_size=4).map("".join)
+# An int given for a float, alone or in a list, is the float it holds.
 _VALUES: dict[str, st.SearchStrategy[Any]] = {
-    "string": _TEXT, "int": st.integers(-5, 10**6), "float": st.floats(-1e17, 1e17, allow_nan=False),
+    "string": _TEXT, "int": st.integers(-5, 10**6),
+    "float": st.floats(-1e17, 1e17, allow_nan=False) | st.integers(-5, 10**6),
     "boolean": st.booleans(), "File": st.sampled_from(["/data/a.txt", "/data/b c.txt"]),
     "string[]": st.lists(_TEXT, max_size=2), "string?": st.none() | _TEXT, "int?": st.none() | st.integers(0, 9),
-    "float?": st.none() | st.floats(0, 10),
+    "float?": st.none() | st.floats(0, 10) | st.integers(0, 9),
+    "float[]": st.lists(st.floats(0, 10) | st.integers(0, 9), max_size=2),
 }
 _PREFIXES = st.sampled_from(["-x", "--name=", "--long"])
 
 
+def _origins(kind: str, value: Any) -> st.SearchStrategy[str]:
+    """Where a value can come from: a workflow input or the step, or, a JSON scalar, the tool's default or, unless it
+    is a path, the step input's (design §6, Step inputs)."""
+    scalar = value is not None and not isinstance(value, list)
+    return st.sampled_from(["workflow", "step", *(["tool default"] if scalar else []),
+                            *(["step default"] if scalar and kind != "File" else [])])
+
+
 @st.composite
 def _generated(draw: st.DrawFn) -> Workflow:
-    """One tool with inputs of each kind, bound on the step or on a workflow input, given to the command by their
-    own bindings and by arguments among literal words and shell text, in a container or with resources."""
+    """One tool with inputs of each kind, each value bound on the step or on a workflow input or the default of the
+    tool or of the step input, given to the command by their own bindings and by arguments among literal words and
+    shell text, in a container or with resources."""
     kinds = draw(st.lists(st.sampled_from(sorted(_VALUES)), min_size=1, max_size=4))
     names = [f"i{index}" for index in range(len(kinds))]
+    values = [draw(_VALUES[kind]) for kind in kinds]
+    origins = [draw(_origins(kind, value)) for kind, value in zip(kinds, values)]
     specs = {}
-    for name, kind in zip(names, kinds):
+    for name, kind, value, origin in zip(names, kinds, values, origins):
         base = kind.removesuffix("?")
         binding: dict[str, Any] = {}
         if base == "boolean" or kind.endswith("?") or draw(st.booleans()):
             binding = {"position": draw(st.integers(1, 9))}
-            if base in ("boolean", "string[]") or draw(st.booleans()):
+            if base in ("boolean", "string[]", "float[]") or draw(st.booleans()):
                 binding["flag"] = draw(_PREFIXES)
-                if base not in ("boolean", "string[]") and draw(st.booleans()):
+                if base not in ("boolean", "string[]", "float[]") and draw(st.booleans()):
                     binding["separate"] = False
-        specs[name] = Input(cwl.array(cwl.string) if base == "string[]" else base, required=not kind.endswith("?"),
-                            **binding)
+        specs[name] = Input(cwl.array(base[:-2]) if base.endswith("[]") else base, required=not kind.endswith("?"),
+                            **binding, **({"default": value} if origin == "tool default" else {}))
     words = [st.just(f"$(inputs.{name})") for name, kind in zip(names, kinds) if kind in ("string", "int", "float")]
     words += [st.just(f"$(inputs.{name}.basename)") for name, kind in zip(names, kinds) if kind == "File"]
     tool = CommandLineTool("tool", Inputs(**specs), Outputs(out=Output(cwl.file, glob="out.txt"))).base_command(
@@ -363,15 +377,16 @@ def _generated(draw: st.DrawFn) -> Workflow:
         tool.resources(cores_min=draw(st.integers(1, 8)), ram_min=draw(st.integers(1, 10**6) | st.floats(0.5, 1e17)))
     step = tool.to_step()
     workflow = Workflow([step], "generated")
-    for name, kind in zip(names, kinds):
-        value = draw(_VALUES[kind])
-        if draw(st.booleans()):  # on a workflow input, optional or not whatever the tool's input is, if it has a value
+    for name, kind, value, origin in zip(names, kinds, values, origins):
+        if origin == "workflow":  # optional or not whatever the tool's input is, if it has a value
             optional = value is None or draw(st.booleans())
             setattr(step.inputs, name, getattr(workflow.inputs, f"w_{name}").as_type(
                 kind.removesuffix("?") + "?" * optional))
             if value is not None:
                 setattr(workflow.inputs, f"w_{name}", value)
-        elif value is not None:
+        elif origin == "step default":
+            setattr(step.inputs, name, StepInput(default=value))
+        elif origin == "step" and value is not None:
             setattr(step.inputs, name, value)
     workflow.outputs.out = step.outputs.out
     return workflow
