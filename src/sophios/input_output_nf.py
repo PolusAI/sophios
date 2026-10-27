@@ -203,19 +203,23 @@ class Idiom:
     The renderer and the reader encode one subset, so the forms with holes
     are one table both use (design §4.2): ``text`` is a format string, and
     a hole named in ``_HOLES`` holds the text it names. A hole named twice
-    holds one value.
+    holds one value. Each hole is read once, in one atomic group with the
+    text after it up to the next hole: it holds the longest text that this
+    text follows, and matching never goes back into it, so it is linear in
+    the length of the text matched.
     """
 
     __slots__ = ("text", "pattern")
 
     def __init__(self, text: str) -> None:
         self.text = text
-        pattern = ""
+        pattern = "(?>"
         for literal, hole, _spec, _conversion in Formatter().parse(text):
             pattern += re.escape(literal)
             if hole is not None:
-                pattern += f"(?P={hole})" if f"(?P<{hole}>" in pattern else f"(?P<{hole}>{_HOLES.get(hole, '.*')})"
-        self.pattern = re.compile(pattern)
+                read = f"(?P={hole})" if f"(?P<{hole}>" in pattern else f"(?P<{hole}>{_HOLES.get(hole, '.*')})"
+                pattern += f")(?>{read}"
+        self.pattern = re.compile(pattern + ")")
 
     def fill(self, **holes: object) -> str:
         """The form with each hole filled."""
@@ -291,7 +295,8 @@ class Idioms:  # pylint: disable=too-few-public-methods
     MERGE_NEXT: Final = Idiom(".merge({argument}) {{ __merged, {parameter} -> tuple({carried}, {parameter}) }}")
     BRANCH: Final = Idiom("ch_{process}_branch = {combined}.branch {{ {parameters} ->")
     RUN: Final = Idiom("run: {predicate}")
-    MIX: Final = Idiom("ch_{process}_{emit} = {process}.out.{emit}.mix(ch_{process}_branch.skip.map {{ {skip} }})")
+    #: ``channel`` is ``CONDITIONAL_OUTPUT`` as one hole: a name may hold an ``_``, so it splits more than one way.
+    MIX: Final = Idiom("{channel} = {process}.out.{emit}.mix(ch_{process}_branch.skip.map {{ {skip} }})")
     CHECKED: Final = Idiom(f"{NF_INPUT_HELPER}('{{name}}', params.{{name}}, {{type}})")
 
 
@@ -661,10 +666,9 @@ def _render_branch(
     ]
     call_args = ", ".join(f"{branch}.run.map {{ {params} -> {call} }}" for call in calls)
     lines.append(f"    {Idioms.CALL.fill(process=process.name, arguments=call_args)}")
-    lines.extend(
-        f"    {Idioms.MIX.fill(process=process.name, emit=port.emit or port.name, skip=skip)}"
-        for port in process.outputs
-    )
+    for emit in (port.emit or port.name for port in process.outputs):
+        channel = _conditional_channel_name(process.name, emit)
+        lines.append(f"    {Idioms.MIX.fill(channel=channel, process=process.name, emit=emit, skip=skip)}")
     return lines
 
 

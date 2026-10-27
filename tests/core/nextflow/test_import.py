@@ -8,7 +8,7 @@ workflows built here through the Python API, the real-world examples, the
 Phase 3 calculator and predicate cells, which hold every arithmetic, ``Math``
 and comparison form a condition reads, and the one workflow in examples/ the
 target compiles. Every form with holes in the idiom table is written or read
-for at least one of them.
+for at least one of them, and each of its holes is read once.
 
 Layout. Each rewrite in LAYOUTS changes only what design §4.2 calls
 layout, with its reason, and the import of the rewritten files compiles to M.
@@ -21,9 +21,10 @@ script or stub body, or a helper, which are content.
 
 Rejection. One edit of generated text for each import code
 (provocations.IMPORT_EDITS, which the provocation of each code applies too),
-a few more, and a value Sophios never writes on each kind of line that holds
-one: each stops the import with its code at the line it names, not at the
-process or workflow around it, and nothing is returned.
+a few more, among them lines of tens of KB that nearly match a form, and a
+value Sophios never writes on each kind of line that holds one: each stops
+the import with its code at the line it names, not at the process or workflow
+around it, and nothing is returned.
 
 Hermetic. The import reads the three files alone: copied into an empty
 directory, with no network, they import, and no path a parameter names is
@@ -40,6 +41,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import time
 from typing import Any
 
 from hypothesis import given, settings, strategies as st
@@ -104,10 +106,12 @@ def _bindings() -> Workflow:
 
 
 def _crossproduct() -> Workflow:
-    """A conditional flat crossproduct gathered into an array, a step input picking a value, a conditional step."""
+    """A conditional flat crossproduct gathered into an array, a step input picking a value, a conditional step
+    whose output's name holds a `_`, so the name of its channel, `ch_use_o_txt`, splits more than one way."""
     pair = _echo("pair", item=Input(cwl.string, position=1), tag=Input(cwl.string, position=2)).to_step()
     use = CommandLineTool("use", Inputs(files=Input(cwl.array(cwl.file), position=1), n=Input(cwl.int, position=2)),
-                          Outputs(o=Output(cwl.file, glob="o.txt"))).base_command("cat").stdout("o.txt").to_step()
+                          Outputs(o_txt=Output(cwl.file, glob="o.txt"))).base_command("cat").stdout(
+        "o.txt").to_step()
     join = _echo("join", words=Input(cwl.string, position=1)).to_step()
     workflow = Workflow([pair, use, join], "crossproduct")
     pair.inputs.item, pair.inputs.tag = ["i", "j"], ["1", "2"]
@@ -117,7 +121,7 @@ def _crossproduct() -> Workflow:
     use.when = "$(inputs.n > 1)"
     join.inputs.words = StepInput(source=[workflow.inputs.a.as_type("string?"), workflow.inputs.b.as_type("string?")],
                                   link_merge="merge_nested", pick_value="first_non_null")
-    workflow.outputs.o, workflow.outputs.j = use.outputs.o, join.outputs.out
+    workflow.outputs.o, workflow.outputs.j = use.outputs.o_txt, join.outputs.out
     return workflow
 
 
@@ -451,6 +455,13 @@ def test_every_idiom_is_written_and_read_for_some_case(monkeypatch: pytest.Monke
     assert [name for name, idiom in idioms.items() if idiom not in used and idiom not in _LOOKED_UP] == []
 
 
+def test_every_hole_is_read_once() -> None:
+    """Each hole of each form, named the first time or again, opens an atomic group that ends where the next hole's
+    opens: matching never goes back into a hole it has read, so it is linear in the length of the line."""
+    patterns = {name: idiom.pattern.pattern for name, idiom in vars(Idioms).items() if isinstance(idiom, Idiom)}
+    assert [name for name, pattern in patterns.items() if pattern.count("(?P") != pattern.count("(?>(?P")] == []
+
+
 _STRINGS = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"")
 
 
@@ -670,6 +681,26 @@ def test_an_edit_outside_the_subset_stops_the_import_at_its_line(
         code: SophiosErrorCode, file: str, old: str, new: str, at: str, case: str | None, tmp_path: Path) -> None:
     workflow = CASES[case]() if case else None
     _stops(code, tmp_path / file, at, lambda: import_edited(str(tmp_path), file, old, new, workflow))
+
+
+# Lines of tens of KB that nearly match a form with several holes: one after a merge, which the reader tries as the
+# merge's next step, and one in `main:`, where it tries every statement as a scatter's shape.
+_NEAR_MISSES = {
+    "merge": ("    ch_greet_in = a.merge(b) { __w0, __w1 -> tuple(__w0, __w1) }\n        .merge("
+              + "a) { __merged, b -> tuple(" * 1000 + "}" * 1000 + "\n", ".merge(a) { __merged"),
+    "shape": ("    ch_greet_shape = " + "a.map { b -> [[" * 1000 + "}" * 1000 + "\n", "ch_greet_shape = a.map"),
+}
+
+
+@pytest.mark.parametrize("lines, at", _NEAR_MISSES.values(), ids=list(_NEAR_MISSES))
+def test_a_long_near_miss_stops_the_import_at_its_line(lines: str, at: str, tmp_path: Path) -> None:
+    """A line of tens of KB that nearly matches a form stops the import at its line, as other text Sophios does not
+    write does, and within seconds: each hole is read once, so the time is linear in the line's length."""
+    call = "    greet(message)\n"
+    started = time.perf_counter()
+    _stops(_CODE.IMPORT_FOREIGN_STATEMENT, tmp_path / NEXTFLOW_SCRIPT, at,
+           lambda: import_edited(str(tmp_path), NEXTFLOW_SCRIPT, call, lines + call))
+    assert time.perf_counter() - started < 5.0
 
 
 def test_an_int_for_a_float_parameter_stops_the_import(tmp_path: Path) -> None:
