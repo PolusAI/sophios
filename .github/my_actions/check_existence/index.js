@@ -1,20 +1,22 @@
 // See https://docs.github.com/en/actions/creating-actions/creating-a-javascript-action
-// NOTE: Every time you modify this file, you need to run
-// `ncc build index.js && git add -f dist/index.js index.js package.json package-lock.json`
-// Install ncc using `npm install -g @vercel/ncc`
-// You do NOT need to git add node_modules/*
+// The runner runs this file as it is (runs.main), so it requires nothing but Node's built-ins.
 
-const core = require('@actions/core');
-const github = require('@actions/github');
-import fetch from "node-fetch";
+const fs = require('fs');
 
-try {
-  const repository = core.getInput('repository');
-  const sender_repo_owner = core.getInput('sender_repo_owner');
-  const sender_repo_ref = core.getInput('sender_repo_ref');
-  const default_owner = core.getInput('default_owner');
-  const default_branch = core.getInput('default_branch');
-  const access_token = core.getInput('access_token');
+const getInput = (name) => (process.env['INPUT_' + name.toUpperCase()] || '').trim();
+
+function setOutput(name, value) {
+  const delimiter = `ghadelimiter_${crypto.randomUUID()}`;
+  fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
+}
+
+async function main() {
+  const repository = getInput('repository');
+  const sender_repo_owner = getInput('sender_repo_owner');
+  const sender_repo_ref = getInput('sender_repo_ref');
+  const default_owner = getInput('default_owner');
+  const default_branch = getInput('default_branch');
+  const access_token = getInput('access_token');
 
   if (!access_token) {
     console.log("Error! access_token is not defined! (or expired)");
@@ -54,13 +56,17 @@ try {
   const owner = exists ? sender_repo_owner : default_owner;
   const ref = exists ? sender_repo_ref : default_branch;
 
-  core.setOutput("repository", repository);
-  core.setOutput("owner", owner);
-  core.setOutput("ref", ref);
+  setOutput("repository", repository);
+  setOutput("owner", owner);
+  setOutput("ref", ref);
 
   // Get the JSON webhook payload for the event that triggered the workflow
-  const payload = JSON.stringify(github.context.payload, undefined, 2)
+  const event = process.env.GITHUB_EVENT_PATH ? JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')) : {};
+  const payload = JSON.stringify(event, undefined, 2)
   console.log(`The event payload: ${payload}`);
-} catch (error) {
-  core.setFailed(error.message);
 }
+
+main().catch((error) => {
+  console.log(`::error::${error.message}`);
+  process.exitCode = 1;
+});

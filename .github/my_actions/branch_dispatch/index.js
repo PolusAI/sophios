@@ -1,35 +1,32 @@
 // See https://docs.github.com/en/actions/creating-actions/creating-a-javascript-action
-// NOTE: Every time you modify this file, you need to run
-// `ncc build index.js && git add -f dist/index.js index.js package.json package-lock.json`
-// Install ncc using `npm install -g @vercel/ncc`
-// You do NOT need to git add node_modules/*
+// The runner runs this file as it is (runs.main), so it requires nothing but Node's built-ins.
 
-const core = require('@actions/core');
-const github = require('@actions/github');
-import fetch from "node-fetch";
+const fs = require('fs');
 
-try {
-  const repository = core.getInput('repository');
-  const workflow_yml = core.getInput('workflow_yml');
-  const sender_repo = core.getInput('sender_repo');
-  const sender_repo_owner = core.getInput('sender_repo_owner');
-  const dispatch_ref = core.getInput('dispatch_ref');
-  const wic_owner = core.getInput('wic_owner');
-  const wic_ref = core.getInput('wic_ref');
-  const event_type = core.getInput('event_type');
-  const commit_message = core.getInput('commit_message');
-  const mm_workflows_owner = core.getInput('mm_workflows_owner');
-  const mm_workflows_ref = core.getInput('mm_workflows_ref');
-  const image_workflows_owner = core.getInput('image_workflows_owner');
-  const image_workflows_ref = core.getInput('image_workflows_ref');
-  const access_token = core.getInput('access_token');
+const getInput = (name) => (process.env['INPUT_' + name.toUpperCase()] || '').trim();
+
+async function main() {
+  const repository = getInput('repository');
+  const workflow_yml = getInput('workflow_yml');
+  const sender_repo = getInput('sender_repo');
+  const sender_repo_owner = getInput('sender_repo_owner');
+  const dispatch_ref = getInput('dispatch_ref');
+  const wic_owner = getInput('wic_owner');
+  const wic_ref = getInput('wic_ref');
+  const event_type = getInput('event_type');
+  const commit_message = getInput('commit_message');
+  const mm_workflows_owner = getInput('mm_workflows_owner');
+  const mm_workflows_ref = getInput('mm_workflows_ref');
+  const image_workflows_owner = getInput('image_workflows_owner');
+  const image_workflows_ref = getInput('image_workflows_ref');
+  const access_token = getInput('access_token');
 
   if (!access_token) {
     console.log("Error! access_token is not defined! (or expired)");
   }
 
   // Use base repository owner, otherwise permission errors: Resource not accessible by integration.
-  const url_dispatches = "https://api.github.com/repos/" + github.context.repo.owner + "/" + repository + "/actions/workflows/" + workflow_yml + "/dispatches";
+  const url_dispatches = "https://api.github.com/repos/" + process.env.GITHUB_REPOSITORY.split('/')[0] + "/" + repository + "/actions/workflows/" + workflow_yml + "/dispatches";
   console.log(`url_branches: ${url_dispatches}`);
   console.log(`access_token: ${access_token}`);
 
@@ -65,11 +62,16 @@ try {
   });
   const response_str = await response.text();
   console.log(`response: ${response_str}`);
-  core.setOutput("response", response_str);
+  const delimiter = `ghadelimiter_${crypto.randomUUID()}`;
+  fs.appendFileSync(process.env.GITHUB_OUTPUT, `response<<${delimiter}\n${response_str}\n${delimiter}\n`);
 
   // Get the JSON webhook payload for the event that triggered the workflow
-  const payload = JSON.stringify(github.context.payload, undefined, 2)
+  const event = process.env.GITHUB_EVENT_PATH ? JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')) : {};
+  const payload = JSON.stringify(event, undefined, 2)
   console.log(`The event payload: ${payload}`);
-} catch (error) {
-  core.setFailed(error.message);
 }
+
+main().catch((error) => {
+  console.log(`::error::${error.message}`);
+  process.exitCode = 1;
+});

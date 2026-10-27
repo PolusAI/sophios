@@ -39,4 +39,4 @@ outputs:
     description: 'The response text'
 runs:
   using: 'node24'
-  main: 'dist/index.js'
+  main: 'index.js'

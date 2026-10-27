@@ -23,7 +23,6 @@ error_*.txt
 validation_*.txt
 .hypothesis/
 .env
-node_modules/
 run.sh
 
 # test_compile_python_workflows writes the compiled .wic and a config_ci.json
