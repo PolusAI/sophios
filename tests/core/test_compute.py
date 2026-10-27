@@ -3,7 +3,7 @@
 Fast and without a service: what the request holds, and what Sophios refuses before sending. What the service
 answers is `test_compute_service.py`'s, against the service itself.
 """
-import dataclasses
+import inspect
 import json
 import os
 import re
@@ -46,8 +46,9 @@ def _workflow(out: str = 'results/run7', model: str = 'models/sam3.pt', name: st
 @pytest.mark.fast
 def test_the_request_carries_the_compiled_workflow_and_every_path_as_written() -> None:
     """One inline document, its inputs, and `basepath` only when given; nothing is joined or checked."""
-    request = compute.build_request(_workflow(model='https://example.org/sam3.pt'), RunConfig(basepath='/projects/lab'))
-    assert set(request) == {'id', 'workflow', 'inputs', 'basepath'}
+    config = RunConfig('/projects/lab/results').basepath('/projects/lab')
+    request = compute.build_request(_workflow(model='https://example.org/sam3.pt'), config)
+    assert set(request) == {'id', 'workflow', 'inputs', 'basepath', 'outputMode', 'workflowOutDir'}
     assert request['basepath'] == '/projects/lab'
     assert request['workflow']['class'] == 'Workflow' and request['workflow']['cwlVersion'] == 'v1.2'
     assert all(isinstance(step['run'], dict) for step in request['workflow']['steps'])
@@ -121,18 +122,18 @@ def test_a_path_that_names_nothing_on_the_cluster_is_refused_before_sending_nami
 def test_every_field_the_schema_refuses_is_a_line_in_the_schemas_words() -> None:
     """All at once, each where it is and what the field is."""
     with pytest.raises(compute.RequestRefused) as refused:
-        compute.build_request(_workflow(), RunConfig(leader={'time': '3 days', 'memory': '8GB'},
-                                                     log_level='LOUD',  # type: ignore[arg-type]
-                                                     steps={'partition': 'a b'}))
+        compute.build_request(_workflow(), RunConfig('results').leader(time='3 days', memory='8GB')
+                              .log_level('LOUD')  # type: ignore[arg-type]
+                              .steps(partition='a b'))
     assert sorted(refused.value.messages) == [
         "leader.memory: '8GB' is not the leader's memory, as Slurm writes it: a whole number with K, M, G or T, "
         'such as 8G',
         "leader.time: '3 days' is not a Slurm time limit: M, M:S, H:M:S, D-H, D-H:M or D-H:M:S, such as 3-00:00:00",
         "logLevel: 'LOUD' is not Toil's log level: DEBUG, INFO (the default), WARNING or ERROR",
         "steps.partition: 'a b' is not a Slurm partition of this cluster: letters, digits, '_', '.' or '-'"]
-    request = compute.build_request(_workflow(), RunConfig(
-        leader={'partition': 'normal', 'time': '1-00:00:00', 'memory': '8G'},
-        steps={'partition': 'normal', 'gpuPartition': 'gpu', 'time': '10'}, log_level='DEBUG'))
+    request = compute.build_request(_workflow(), RunConfig('results')
+                                    .leader(partition='normal', time='1-00:00:00', memory='8G')
+                                    .steps(partition='normal', gpu_partition='gpu', time='10').log_level('DEBUG'))
     assert (request['leader']['time'], request['steps']['gpuPartition'], request['logLevel']) == (
         '1-00:00:00', 'gpu', 'DEBUG')
 
@@ -151,54 +152,71 @@ def test_a_workflow_with_a_real_time_analysis_is_refused_the_service_never_runs_
         compute.build_request(Workflow([touch, declaration], 'live'))
 
 
-@pytest.mark.fast
-def test_where_the_outputs_go_is_the_output_mode_and_workflow_out_dir_goes_with_its_mode_only() -> None:
-    """`workflowOutDir` copies them into the folder `workflow_out_dir` names, which goes with that mode and only with
-    it; `workflowInPlace` writes each where its input names it. The schema cannot tie the folder to its mode, which
-    is why Sophios checks it, as the service does: once the schema can, the check goes."""
-    request = compute.build_request(_workflow(), RunConfig(output_mode='workflowOutDir',
-                                                           workflow_out_dir='/projects/lab/results'))
-    assert (request['outputMode'], request['workflowOutDir']) == ('workflowOutDir', '/projects/lab/results')
-    assert compute.build_request(_workflow(), RunConfig(output_mode='workflowInPlace'))['outputMode'] == \
-        'workflowInPlace'
-    assert 'outputMode' not in compute.build_request(_workflow())
-    for config in [RunConfig(output_mode='workflowOutDir'), RunConfig(workflow_out_dir='results'),
-                   RunConfig(output_mode='serviceOutDir', workflow_out_dir='results'),
-                   RunConfig(output_mode='workflowInPlace', workflow_out_dir='results')]:
-        with pytest.raises(compute.RequestRefused) as refused:
-            compute.build_request(_workflow(), config)
-        assert refused.value.messages == (
-            'workflowOutDir: give it with outputMode workflowOutDir, and only with it: it is the folder the outputs '
-            'are copied into',), config
-    schema = Draft202012Validator(compute.SCHEMA)
-    core = {'id': 'r1', 'workflow': {'class': 'Workflow', 'cwlVersion': 'v1.2'}, 'inputs': {}}
-    assert schema.is_valid(core | {'outputMode': 'workflowOutDir'}) and schema.is_valid(core | {'workflowOutDir': 'x'})
-
-
 def _camel(name: str) -> str:
     first, *rest = name.split('_')
     return first + ''.join(word.capitalize() for word in rest)
 
 
+#: A valid value of every field RunConfig's setters set, as the request holds it.
+_VALID: typing.Final[dict[str, typing.Any]] = {
+    'basepath': '/projects/lab', 'leader': {'partition': 'normal', 'time': '1-00:00:00', 'memory': '8G'},
+    'steps': {'partition': 'normal', 'gpuPartition': 'gpu', 'time': '10'}, 'logLevel': 'DEBUG'}
+
+
+def _setters() -> dict[str, inspect.Signature]:
+    """RunConfig's setters, each named as the field of the request it sets: its public methods but `in_place`."""
+    return {name: inspect.signature(method) for name, method in vars(RunConfig).items()
+            if inspect.isfunction(method) and not name.startswith('_')}
+
+
+def _set_every_field(config: RunConfig) -> RunConfig:
+    """Call each setter of `config` with every argument it takes, each the value `_VALID` gives its field."""
+    for name, signature in _setters().items():
+        field = _camel(name)
+        parameters = list(signature.parameters.values())[1:]
+        positional = [_VALID[field] for parameter in parameters if parameter.kind is parameter.POSITIONAL_OR_KEYWORD]
+        keywords = {parameter.name: _VALID[field][_camel(parameter.name)] for parameter in parameters
+                    if parameter.kind is parameter.KEYWORD_ONLY}
+        assert getattr(config, name)(*positional, **keywords) is config, name
+    return config
+
+
 @pytest.mark.fast
-def test_run_config_is_the_request_but_its_workflow_and_inputs_field_for_field_as_the_schema_says() -> None:
-    """RunConfig's fields are the schema's top-level properties but id, workflow and inputs, in snake_case; a field
-    the schema enumerates takes exactly its values; and each lands in the request under its own name, as given. The
-    vendored schema and RunConfig cannot drift apart."""
-    keys = {field.name: _camel(field.name) for field in dataclasses.fields(RunConfig)}
-    properties = compute.SCHEMA['properties']
-    assert set(keys.values()) == set(properties) - {'id', 'workflow', 'inputs'}
-    hints = typing.get_type_hints(RunConfig)
-    for name, key in keys.items():
-        values = {value for arg in typing.get_args(hints[name]) if typing.get_origin(arg) is typing.Literal
-                  for value in typing.get_args(arg)}
-        assert values == set(properties[key].get('enum', ())), name
-    config = RunConfig(basepath='/projects/lab', output_mode='workflowOutDir', workflow_out_dir='results',
-                       leader={'partition': 'normal', 'time': '1-00:00:00', 'memory': '8G'},
-                       steps={'partition': 'normal', 'gpuPartition': 'gpu', 'time': '10'}, log_level='DEBUG')
+def test_run_config_reaches_every_field_of_the_request_but_its_workflow_and_inputs_as_the_schema_says() -> None:
+    """Both constructors and every setter, each given a valid value, reach exactly the vendored schema's top-level
+    properties but id, workflow and inputs, each under its own name; the keywords of `leader` and `steps` are the
+    properties of the schema's Leader and Steps, camelCased; the output modes are the two constructors' and none's;
+    and no setter touches where the outputs go. The vendored schema and RunConfig cannot drift apart."""
+    properties, defs = compute.SCHEMA['properties'], compute.SCHEMA['$defs']
     workflow = {'class': 'Workflow', 'cwlVersion': 'v1.2'}
-    assert compute.request_for('r1', workflow, {}, config) == {
-        'id': 'r1', 'workflow': workflow, 'inputs': {}, **{key: getattr(config, name) for name, key in keys.items()}}
+    core = {'id': 'r1', 'workflow': workflow, 'inputs': {}}
+    copied = compute.request_for('r1', workflow, {}, _set_every_field(RunConfig('results')))
+    in_place = compute.request_for('r1', workflow, {}, _set_every_field(RunConfig.in_place()))
+    assert set(copied) | set(in_place) == set(properties)
+    assert copied == core | {'outputMode': 'workflowOutDir', 'workflowOutDir': 'results'} | _VALID
+    assert in_place == core | {'outputMode': 'workflowInPlace'} | _VALID
+    assert compute.request_for('r1', workflow, {}) == core
+    # Without a RunConfig, outputMode is left out: serviceOutDir, the service's default.
+    assert {copied['outputMode'], in_place['outputMode'], 'serviceOutDir'} == set(properties['outputMode']['enum'])
+    for name in ('leader', 'steps'):
+        keywords = {_camel(parameter.name) for parameter in _setters()[name].parameters.values()
+                    if parameter.kind is parameter.KEYWORD_ONLY}
+        assert keywords == set(defs[name.capitalize()]['properties']), name
+    levels = typing.get_args(typing.get_type_hints(RunConfig.log_level)['level'])
+    assert set(levels) == set(properties['logLevel']['enum'])
+
+
+@pytest.mark.fast
+def test_each_setter_sets_just_what_it_is_passed_and_leaves_the_rest() -> None:
+    """Called again, a setter replaces what it is passed again and keeps the rest; what no setter sets is left out
+    of the request, for the service's own settings."""
+    config = RunConfig('/shared/lab/results').basepath('/shared/lab').leader(time='2:00:00', memory='4G')
+    config.steps(time='30:00').leader(memory='8G', partition='normal').basepath('/shared/lab2')
+    request = compute.request_for('r1', {'class': 'Workflow', 'cwlVersion': 'v1.2'}, {}, config)
+    assert request == {'id': 'r1', 'workflow': {'class': 'Workflow', 'cwlVersion': 'v1.2'}, 'inputs': {},
+                       'outputMode': 'workflowOutDir', 'workflowOutDir': '/shared/lab/results',
+                       'basepath': '/shared/lab2', 'leader': {'time': '2:00:00', 'memory': '8G', 'partition': 'normal'},
+                       'steps': {'time': '30:00'}}
 
 
 @pytest.mark.fast
@@ -293,6 +311,23 @@ def test_an_answer_the_contract_does_not_document_is_the_services_failure(monkey
                            ('GET', 'runs/r1'): _answer(500, {'errors': [{'message': 'the driver failed'}]})})
     with pytest.raises(compute.ServiceUnavailable, match='answered 500: the driver failed'):
         compute.Service('http://127.0.0.1:1').attach('r1')
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('config', 'fix'), [
+    (None, 'make a RunConfig with the folder the outputs go to and give it .basepath(<dir>)'),
+    (RunConfig('/shared/lab/results'), 'give the RunConfig .basepath(<dir>)')])
+def test_a_relative_path_refused_for_want_of_basepath_gets_a_fix_that_can_be_made(
+        monkeypatch: pytest.MonkeyPatch, config: RunConfig | None, fix: str) -> None:
+    """A RunConfig is made with the folder the outputs go to, so a run sent without one is told to make one."""
+    refusal = {'pointer': '/inputs/write~0model/location', 'message': 'is relative and the request has no basepath'}
+    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('POST', 'runs'): _answer(400, {'errors': [refusal]})})
+    with pytest.raises(compute.RequestRefused) as refused:
+        compute.Service('http://127.0.0.1:1').submit(_workflow(), config)
+    assert refused.value.messages == (
+        'input write~model: is relative and the request has no basepath',
+        f'these paths are relative and the request has no basepath: {fix}, the directory on the cluster they are '
+        'relative to')
 
 
 @pytest.mark.fast

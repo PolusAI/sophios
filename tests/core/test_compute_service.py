@@ -132,11 +132,12 @@ def _reader() -> CommandLineTool:
     return CommandLineTool('reader', inputs, Outputs()).base_command('cat')
 
 
-def _workflow(cluster: Cluster, location: str = 'data/a.txt', name: str = 'svc') -> Workflow:
+def _workflow(cluster: Cluster, location: str | None = None, name: str = 'svc') -> Workflow:
+    """A step that reads `location`, by default a file on the shared filesystem, by its absolute path."""
     (cluster.shared / 'data').mkdir(exist_ok=True)
     (cluster.shared / 'data' / 'a.txt').write_text('a\n', encoding='utf-8')
     step = Step(_reader(), step_name='show')
-    step.inputs.file = location
+    step.inputs.file = location or str(cluster.shared / 'data' / 'a.txt')
     return Workflow([step], name)
 
 
@@ -153,7 +154,7 @@ def test_a_run_is_submitted_followed_and_reattached_and_its_answers_are_the_cont
     """201 with its id printed; the status until COMPLETED with the output object; the same run from a new
     Service; every answer valid against the contract the driver serves."""
     service = compute.Service(cluster.url)
-    run = service.submit(_workflow(cluster), RunConfig(basepath=str(cluster.shared)))
+    run = service.submit(_workflow(cluster))
     assert run.id.startswith('svc-') and run.slurm_job
     assert f'Submitted run {run.id}' in capsys.readouterr().out
     cluster.leader(run, 'COMPLETED')
@@ -181,13 +182,15 @@ def test_a_request_the_driver_refuses_names_each_input_and_says_to_pass_basepath
     """Every problem at once, each at its authored input; a relative path sent without basepath gets the fix."""
     service = compute.Service(cluster.url)
     with pytest.raises(compute.RequestRefused) as refused:
-        service.submit(_workflow(cluster, location='data/missing.txt'), RunConfig(basepath=str(cluster.shared)))
+        service.submit(_workflow(cluster, location='data/missing.txt'),
+                       RunConfig('results').basepath(str(cluster.shared)))
     (problem,) = refused.value.messages
     assert problem.startswith('input show~file: data/missing.txt') and 'does not exist' in problem
     with pytest.raises(compute.RequestRefused) as refused:
-        service.submit(_workflow(cluster))
-    assert refused.value.messages[-1].startswith(
-        'these paths are relative and the request has no basepath: give RunConfig a basepath')
+        service.submit(_workflow(cluster, location='data/a.txt'))
+    assert refused.value.messages[-1] == (
+        'these paths are relative and the request has no basepath: make a RunConfig with the folder the outputs go '
+        'to and give it .basepath(<dir>), the directory on the cluster they are relative to')
     with pytest.raises(compute.RequestRefused, match='there is no run nope'):
         service.attach('nope')
 
@@ -200,7 +203,7 @@ def test_a_run_that_fails_raises_naming_why_and_the_end_of_its_log(cluster: Clus
     (cluster.slurm.parent / 'toil' / 'bin' / 'toil-cwl-runner.fail').write_text('', encoding='utf-8')
     try:
         with pytest.raises(compute.RunFailed) as failed:
-            compute.Service(cluster.url).run(_workflow(cluster), RunConfig(basepath=str(cluster.shared)))
+            compute.Service(cluster.url).run(_workflow(cluster))
     finally:
         (cluster.slurm.parent / 'toil' / 'bin' / 'toil-cwl-runner.fail').unlink()
     assert failed.value.status.state is RunState.FAILED and failed.value.run.slurm_job == str(after)
@@ -211,7 +214,7 @@ def test_a_run_that_fails_raises_naming_why_and_the_end_of_its_log(cluster: Clus
 
 def test_a_failed_step_is_named_with_the_end_of_its_own_log(cluster: Cluster) -> None:
     """The step's name as the author wrote it, and the last lines of the first of its logs, errors first."""
-    run = compute.Service(cluster.url).submit(_workflow(cluster), RunConfig(basepath=str(cluster.shared)))
+    run = compute.Service(cluster.url).submit(_workflow(cluster))
     directory = cluster.runs / run.id
     processes = json.loads((directory / 'run.json').read_text('utf-8'))['processes']
     (process,) = (key for key, path in processes.items() if path == 'show')
@@ -231,7 +234,7 @@ def test_a_failed_step_is_named_with_the_end_of_its_own_log(cluster: Cluster) ->
 
 def test_cancel_ends_a_run_cancelled_by_request(cluster: Cluster) -> None:
     """Safe to send again; the answer is the run, cancelled."""
-    run = compute.Service(cluster.url).submit(_workflow(cluster), RunConfig(basepath=str(cluster.shared)))
+    run = compute.Service(cluster.url).submit(_workflow(cluster))
     cluster.leader(run, 'RUNNING')
     assert run.cancel().state in (RunState.RUNNING, RunState.CANCELLED)
     status = run.cancel()
@@ -242,7 +245,7 @@ def test_waiting_ends_at_its_timeout_and_the_run_goes_on(cluster: Cluster, monke
                                                          capsys: pytest.CaptureFixture[str]) -> None:
     """A QUEUED run not ended within the timeout raises, and is still there."""
     monkeypatch.setattr(compute, 'POLL', 0.05)
-    run = compute.Service(cluster.url).submit(_workflow(cluster), RunConfig(basepath=str(cluster.shared)))
+    run = compute.Service(cluster.url).submit(_workflow(cluster))
     with pytest.raises(TimeoutError, match=f'run {run.id} has not ended within 0.2 s; it goes on'):
         run.wait(timeout=0.2)
     assert f'{run.id}: QUEUED' in capsys.readouterr().out
@@ -252,7 +255,7 @@ def test_waiting_ends_at_its_timeout_and_the_run_goes_on(cluster: Cluster, monke
 def test_a_busy_service_is_asked_again_after_retry_after_and_then_given_up_on(
         cluster: Cluster, monkeypatch: pytest.MonkeyPatch) -> None:
     """503 while Slurm cannot be asked: the call is made again after Retry-After, until PATIENCE runs out."""
-    run = compute.Service(cluster.url).submit(_workflow(cluster), RunConfig(basepath=str(cluster.shared)))
+    run = compute.Service(cluster.url).submit(_workflow(cluster))
     failing = cluster.slurm / 'sacct.fail'
     failing.write_text('sacct: error: Problem talking to the database\n', encoding='utf-8')
     try:
@@ -274,7 +277,7 @@ def test_over_ssh_reaches_the_service_through_a_tunnel_the_block_closes(
     calls = fake_ssh.install(tmp_path)
     monkeypatch.setenv('PATH', f'{tmp_path}{os.pathsep}{os.environ["PATH"]}')
     with compute.Service.over_ssh('cluster', socket=cluster.url.removeprefix('http://')) as service:
-        run = service.submit(_workflow(cluster), RunConfig(basepath=str(cluster.shared)))
+        run = service.submit(_workflow(cluster))
         assert run.status().state is RunState.QUEUED
         local = repr(service).split("'")[1]
     (argv,) = (json.loads(line) for line in calls.read_text('utf-8').splitlines())
@@ -326,9 +329,9 @@ def _ended(cluster: Cluster, run: compute.Run) -> RunStatus:
 def test_workflow_out_dir_takes_an_output_folder_given_as_a_name_and_files_its_result_under_that_name(
         toil_cluster: Cluster, tmp_path: Path) -> None:
     """With real Toil: an output folder sent as just a name is made in the run, never read against basepath, and
-    lands in <workflow_out_dir>/<name>; the workflow_out_dir folder is created when missing."""
+    lands in <the RunConfig's folder>/<name>; that folder is created when missing."""
     results = toil_cluster.shared / 'results'
-    config = RunConfig(basepath=str(toil_cluster.shared), output_mode='workflowOutDir', workflow_out_dir=str(results))
+    config = RunConfig(str(results)).basepath(str(toil_cluster.shared))
     run = compute.Service(toil_cluster.url).submit(_writes(tmp_path, 'segmentation'), config)
     status = _ended(toil_cluster, run)
     assert status.state is RunState.COMPLETED, run.logs()
@@ -342,7 +345,7 @@ def test_workflow_in_place_writes_an_absolute_output_folder_there_without_a_copy
     into the run's own folder; and the service's ADVANCED warning is printed when the run is submitted."""
     folder = toil_cluster.shared / 'in_place'
     run = compute.Service(toil_cluster.url).submit(_writes(tmp_path, str(folder)),
-                                                   RunConfig(output_mode='workflowInPlace'))
+                                                   RunConfig.in_place())
     assert ('WARNING from the compute service: outputMode workflowInPlace is an ADVANCED feature'
             in capsys.readouterr().err)
     status = _ended(toil_cluster, run)

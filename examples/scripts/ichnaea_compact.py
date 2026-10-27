@@ -1,7 +1,7 @@
 """Canonical end-to-end example: tool_builder -> Workflow -> the compute service.
 
-The outputs are copied into a folder on the cluster, `workflow_out_dir`, by the output mode `workflowOutDir`: the
-supported way.
+The outputs are copied into a folder on the cluster, the one `RunConfig` is made with (the output mode
+`workflowOutDir`): the supported way.
 """
 
 import json
@@ -97,16 +97,17 @@ def main() -> int:
     """Build the workflow and its request; run it on the compute service when SERVICE_URL is set."""
     # ========== INPUTS TO WORKFLOW ==================
     # What the tool reads: paths on the cluster, relative to BASEPATH, as written; Sophios never looks at them.
-    # The output folder is just a name: the service makes it in the run, and copies it into workflow_out_dir under
-    # that name.
+    # The output folder is just a name: the service makes it in the run, and copies it into the RunConfig's folder
+    # under that name.
     input_dicts = {'input_dir': 'input_directory', 'output_dir': 'segmentation_compact',
                    'model_file': 'model_directory/sam3.pt'}
 
     # ========== BUILD WORKFLOW ======================
     autoseg_workflow = workflow(input_dicts, "autoseg_workflow")
     # The outputs are copied into results_compact: the output folder lands in results_compact/segmentation_compact.
-    config = RunConfig(basepath=BASEPATH, output_mode='workflowOutDir', workflow_out_dir=f'{BASEPATH}/results_compact',
-                       steps={'partition': 'normal', 'gpuPartition': 'normal_gpu'})
+    config = (RunConfig(f'{BASEPATH}/results_compact')
+              .basepath(BASEPATH)
+              .steps(partition='normal', gpu_partition='normal_gpu'))
 
     if SERVICE_URL is None:
         request = build_request(autoseg_workflow, config)

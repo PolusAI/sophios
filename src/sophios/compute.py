@@ -5,13 +5,13 @@ A core feature, but not part of the Python API: `sophios.api.python` neither exp
 
     from sophios.compute import RunConfig, Service
 
-    config = RunConfig(basepath='/projects/lab/data', output_mode='workflowOutDir',
-                       workflow_out_dir='/projects/lab/results/run7')
+    config = RunConfig('/projects/lab/results/run7').basepath('/projects/lab/data').leader(time='2:00:00')
     with Service.over_ssh('sophios-compute') as service:  # a host of your SSH configuration
         run = service.submit(workflow, config)
         run.wait()
 
-`RunConfig` holds everything of the request but the workflow and its inputs, as the request names it.
+A `RunConfig` is everything of the request but the workflow and its inputs: the folder it is made with is where
+the outputs go, and each of its setters sets a field more; without one, the run takes the service's settings.
 
 `Service.run` submits and waits, and raises when the run does not complete; `Service.attach` follows a run from
 any session or machine. The run goes on in Slurm whatever happens to the session.
@@ -20,11 +20,11 @@ Every path goes as written, and the service, not Sophios, reads it on the cluste
 the cluster, absolute or relative to `basepath`, or an http(s) URL. An output folder (a Directory input a tool writes
 into and returns) given as a name, such as `segmentation`, is made in the run, never read against `basepath`, and
 its result lands in the outputs' folder under that name; one given as an absolute path is that folder. The outputs'
-folder is `workflow_out_dir` with output mode `workflowOutDir` (the supported way: the outputs are copied into it),
-or the run's own folder on the cluster by default; output mode `workflowInPlace`, an advanced choice, has each tool
-write an output folder with an absolute path there, once, without a copy. The request's shape is
-`run-request.schema.json`, a copy of the service's own: Sophios checks every request against it before sending, and
-the service again on arrival.
+folder is the one `RunConfig(folder)` names (output mode `workflowOutDir`, the supported way: the outputs are copied
+into it), or the run's own folder on the cluster without a config; `RunConfig.in_place()` (output mode
+`workflowInPlace`), an advanced choice, has each tool write an output folder with an absolute path there, once,
+without a copy. The request's shape is `run-request.schema.json`, a copy of the service's own: Sophios checks every
+request against it before sending, and the service again on arrival.
 """
 import json
 import re
@@ -35,7 +35,6 @@ import sys
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from importlib import resources
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
@@ -118,32 +117,60 @@ class RunFailed(ComputeError):
         self.status = status
 
 
-@dataclass(frozen=True)
 class RunConfig:
-    """How and where a run goes: every field of the request but `id`, `workflow` and `inputs`, each named as the
-    request names it, in snake_case, and sent as it is given; None leaves the field out, for the service's default.
-    The schema checks every value when the request is built.
+    """Everything of a request but `id`, `workflow` and `inputs`: made with where the outputs go, which nothing
+    changes after, and given the rest by setters that set and return it, so the calls chain.
 
-    Attributes:
-        basepath: The directory on the cluster that the relative paths of what the tools read are relative to; an
-            output folder given as a name is made in the run instead.
-        output_mode: Where the outputs go: `serviceOutDir`, the run's own folder on the cluster (the default);
-            `workflowOutDir`, the folder `workflow_out_dir` names (the supported way); or `workflowInPlace`, each
-            output folder given as an absolute path written there, without a copy (advanced; the service warns of
-            it).
-        workflow_out_dir: With output mode `workflowOutDir`, and only with it: the folder on the cluster the outputs
-            are copied into, absolute or relative to `basepath`, created when missing.
-        leader: The Toil leader's Slurm job: `partition`, `time`, `memory`; the service's settings otherwise.
-        steps: Where step jobs go and how long each may run: `partition`, `gpuPartition`, `time`.
-        log_level: Toil's log level.
+        RunConfig('/shared/lab/results').basepath('/shared/lab').leader(time='2:00:00', memory='4G')
+
+    Each setter sets just what it is passed, and leaves the rest as it was; what no setter sets is left out of the
+    request, so the service's own settings apply. The values are strings in Slurm's own forms, which the schema
+    checks when the request is built. Without any `RunConfig`, the outputs go into the run's own folder on the
+    cluster (output mode `serviceOutDir`), with every setting the service's.
+
+    Args:
+        workflow_out_dir: The folder on the cluster the outputs are copied into, absolute or relative to `basepath`,
+            created when missing: output mode `workflowOutDir`, the supported way.
     """
 
-    basepath: str | None = None
-    output_mode: Literal['serviceOutDir', 'workflowOutDir', 'workflowInPlace'] | None = None
-    workflow_out_dir: str | None = None
-    leader: Mapping[str, str] | None = None
-    steps: Mapping[str, str] | None = None
-    log_level: Literal['DEBUG', 'INFO', 'WARNING', 'ERROR'] | None = None
+    def __init__(self, workflow_out_dir: str) -> None:
+        self._fields: Json = {'outputMode': 'workflowOutDir', 'workflowOutDir': workflow_out_dir}
+
+    @classmethod
+    def in_place(cls) -> 'RunConfig':
+        """Output mode `workflowInPlace`, an advanced choice the service warns of: each output folder given as an
+        absolute path is written there, once, without a copy."""
+        config = cls.__new__(cls)
+        config._fields = {'outputMode': 'workflowInPlace'}
+        return config
+
+    def basepath(self, path: str) -> 'RunConfig':
+        """The directory on the cluster that the relative paths of what the tools read are relative to; an output
+        folder given as a name is made in the run instead."""
+        self._fields['basepath'] = path
+        return self
+
+    def leader(self, *, partition: str | None = None,
+               time: str | None = None,  # pylint: disable=redefined-outer-name  # the request's name
+               memory: str | None = None) -> 'RunConfig':
+        """The Toil leader's Slurm job, which lasts as long as the run: its partition, time limit and memory."""
+        return self._merge('leader', partition=partition, time=time, memory=memory)
+
+    def steps(self, *, partition: str | None = None, gpu_partition: str | None = None,
+              time: str | None = None) -> 'RunConfig':  # pylint: disable=redefined-outer-name  # the request's name
+        """Where the step jobs go, those that ask for a GPU to `gpu_partition`, and how long each may run."""
+        return self._merge('steps', partition=partition, gpu_partition=gpu_partition, time=time)
+
+    def log_level(self, level: Literal['DEBUG', 'INFO', 'WARNING', 'ERROR']) -> 'RunConfig':
+        """Toil's log level."""
+        self._fields['logLevel'] = level
+        return self
+
+    def _merge(self, field: str, **values: str | None) -> 'RunConfig':
+        """Set each of `values` that is given in the object `field`, under the request's name for it."""
+        given = {_key(name): value for name, value in values.items() if value is not None}
+        self._fields[field] = {**self._fields.get(field, {}), **given}
+        return self
 
 
 def new_run_id(name: str, now: datetime | None = None) -> str:
@@ -154,21 +181,21 @@ def new_run_id(name: str, now: datetime | None = None) -> str:
     return f'{base}-{stamp}-{secrets.token_hex(2)}'
 
 
-def build_request(workflow: 'Workflow', config: RunConfig = RunConfig(), *, tool_registry: Tools | None = None,
+def build_request(workflow: 'Workflow', config: RunConfig | None = None, *, tool_registry: Tools | None = None,
                   inference: Inference = Inference()) -> Json:
     """The request `POST /runs` takes to run `workflow` as `config` says, as `Service.submit` sends it.
 
     Args:
         workflow: The workflow, compiled here into one document with its inputs.
-        config: Everything of the request but the workflow and its inputs.
+        config: Everything of the request but the workflow and its inputs; None for the service's settings, the
+            outputs in the run's own folder.
         tool_registry: Tools the workflow's steps may name, besides those it was built with.
         inference: How unbound inputs are connected.
 
     Raises:
         SophiosError: The workflow does not compile, with Sophios's own codes.
-        RequestRefused: A path that names nothing on the cluster, a real-time analysis, a field the schema does
-            not take, or `workflow_out_dir` without output mode `workflowOutDir` or that mode without it; every one
-            is a line.
+        RequestRefused: A path that names nothing on the cluster, a real-time analysis, or a value the schema does
+            not take; every one is a line.
     """
     document = service_document(workflow, tool_registry=tool_registry, inference=inference)
     if document.realtime:
@@ -178,25 +205,18 @@ def build_request(workflow: 'Workflow', config: RunConfig = RunConfig(), *, tool
     return request_for(new_run_id(workflow.process_name), document.cwl, document.job_inputs, config)
 
 
-def request_for(run_id: str, cwl: Json, job_inputs: Json, config: RunConfig = RunConfig()) -> Json:
+def request_for(run_id: str, cwl: Json, job_inputs: Json, config: RunConfig | None = None) -> Json:
     """The request to run the compiled document `cwl` with `job_inputs` as the run `run_id`, as `config` says: what
     `build_request` builds once it has compiled the workflow.
 
     Raises:
         RequestRefused: As `build_request` raises it, but for a real-time analysis.
     """
-    request: Json = {'id': run_id, 'workflow': cwl, 'inputs': job_inputs}
-    for field in fields(config):
-        value = getattr(config, field.name)
-        if value is not None:
-            request[_key(field.name)] = dict(value) if isinstance(value, Mapping) else value
+    given = config._fields if config is not None else {}  # pylint: disable=protected-access
+    request: Json = {'id': run_id, 'workflow': cwl, 'inputs': job_inputs, **given}
     problems = [f'{_named(pointer)}: {written!r} names nothing on the cluster ("~" or an environment variable '
                 'are this machine\'s); write the path as it is on the cluster'
                 for pointer, written in locations(request) if _LAPTOP_ONLY.search(written) and not _URL.match(written)]
-    # The schema cannot tie workflowOutDir to its mode; the service checks that on arrival, as Sophios does here.
-    if (request.get('outputMode') == 'workflowOutDir') != ('workflowOutDir' in request):
-        problems.append('workflowOutDir: give it with outputMode workflowOutDir, and only with it: it is the folder '
-                        'the outputs are copied into')
     problems += [_schema_problem(error) for error in _VALIDATOR.iter_errors(request)]
     if problems:
         raise RequestRefused(*problems)
@@ -204,7 +224,7 @@ def request_for(run_id: str, cwl: Json, job_inputs: Json, config: RunConfig = Ru
 
 
 def _key(name: str) -> str:
-    """The request's name for the `RunConfig` field `name`: the same words, in camelCase."""
+    """The request's name for the keyword `name` of a `RunConfig` setter: the same words, in camelCase."""
     first, *rest = name.split('_')
     return first + ''.join(word.capitalize() for word in rest)
 
@@ -312,7 +332,10 @@ class _Client:
             relative = {pointer for pointer, written in locations(request)
                         if not written.startswith('/') and not _URL.match(written)}
             if relative & {problem.get('pointer') for problem in problems}:
-                lines.append('these paths are relative and the request has no basepath: give RunConfig a basepath, '
+                # A request without outputMode was sent without a RunConfig, and a RunConfig is made with a folder.
+                fix = ('give the RunConfig .basepath(<dir>)' if 'outputMode' in request else
+                       'make a RunConfig with the folder the outputs go to and give it .basepath(<dir>)')
+                lines.append(f'these paths are relative and the request has no basepath: {fix}, '
                              'the directory on the cluster they are relative to')
         raise RequestRefused(*lines)
 
@@ -389,7 +412,7 @@ class Service:
             finally:
                 ssh.terminate()
 
-    def submit(self, workflow: 'Workflow', config: RunConfig = RunConfig(), *, tool_registry: Tools | None = None,
+    def submit(self, workflow: 'Workflow', config: RunConfig | None = None, *, tool_registry: Tools | None = None,
                inference: Inference = Inference()) -> 'Run':
         """Send `workflow` to run as `config` says, and return its run at once, having printed its id and every
         warning.
@@ -411,7 +434,7 @@ class Service:
         run.show_warnings()
         return run
 
-    def run(self, workflow: 'Workflow', config: RunConfig = RunConfig(), *, timeout: float | None = None,
+    def run(self, workflow: 'Workflow', config: RunConfig | None = None, *, timeout: float | None = None,
             tool_registry: Tools | None = None, inference: Inference = Inference()) -> 'Run':
         """`submit`, then `Run.wait`: the run, once it COMPLETED. `timeout` is `Run.wait`'s; the rest, `submit`'s.
 

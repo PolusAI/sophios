@@ -54,11 +54,18 @@ service = Service('http://127.0.0.1:7998')
 ```python
 from sophios.compute import RunConfig
 
-config = RunConfig(basepath='/projects/lab/data', output_mode='workflowOutDir',
-                   workflow_out_dir='/projects/lab/results/run7')
+config = (RunConfig('/shared/lab/results')    # the folder the outputs are copied into
+          .basepath('/shared/lab')
+          .leader(time='2:00:00', memory='4G')
+          .steps(time='30:00'))
 run = service.run(workflow, config)
 print(run.outputs())
 ```
+
+A `RunConfig` is made with the folder on the cluster the outputs are copied
+into, absolute or relative to `basepath`: the supported way. For a quick
+try, leave it out: `service.run(workflow)` copies the outputs into the run's
+own folder on the cluster, with every setting the service's.
 
 Every path goes as written; the service, not Sophios, reads it on the
 cluster, before anything is queued, and answers every problem at once. A
@@ -73,22 +80,26 @@ returns at once instead, with the run's id printed; either way the run goes
 on in Slurm whatever happens to the Python process, and `Service.attach(id)`
 follows it from any session or machine.
 
-A `RunConfig` holds everything of the request but the workflow and its
-inputs: one field per field of the request, named as the request names it
-in snake_case, and sent as it is given. A field left `None` is left out of
-the request, for the service's default.
+A `RunConfig` is everything of the request but the workflow and its
+inputs. How it is made says where the outputs go, and nothing changes that
+after. Each setter sets just what it is passed, leaves the rest as it was,
+and returns the config, so the calls chain. What no setter sets is left out
+of the request, so the service's own settings apply: only the service knows
+the cluster. The values are strings in Slurm's own forms, such as `'2:00:00'`
+and `'4G'`; Sophios checks them against the service's schema when it builds
+the request, each problem at the request's field, such as `leader.time`.
 
-| `RunConfig` field | What it is |
+| `RunConfig` | What it sets |
 |---|---|
-| `basepath` | The directory on the cluster that the relative paths of what the tools read are relative to; required when there is one |
-| `output_mode` | Where the outputs go: `serviceOutDir` (the default), `workflowOutDir` or `workflowInPlace`: see below |
-| `workflow_out_dir` | With `output_mode='workflowOutDir'`, and only with it: the folder the outputs are copied into, absolute or relative to `basepath` |
-| `leader` | The Toil leader's Slurm job: `{'partition': ..., 'time': ..., 'memory': ...}`; the service's settings otherwise |
-| `steps` | Where step jobs go and how long each may run: `{'partition': ..., 'gpuPartition': ..., 'time': ...}` |
-| `log_level` | Toil's log level: `DEBUG`, `INFO` (the default), `WARNING` or `ERROR` |
+| `RunConfig(folder)` | Output mode `workflowOutDir`: the folder on the cluster the outputs are copied into, absolute or relative to `basepath`, created when missing |
+| `RunConfig.in_place()` | Output mode `workflowInPlace`, an advanced choice: see below |
+| `.basepath(path)` | The directory on the cluster that the relative paths of what the tools read are relative to; required when there is one |
+| `.leader(partition=, time=, memory=)` | The Toil leader's Slurm job, which lasts as long as the run |
+| `.steps(partition=, gpu_partition=, time=)` | Where step jobs go, those that ask for a GPU to `gpu_partition`, and how long each may run |
+| `.log_level(level)` | Toil's log level: `DEBUG`, `INFO` (the default), `WARNING` or `ERROR` |
 
-`run`, `submit` and `build_request` take the workflow and a `RunConfig`;
-besides, `tool_registry=` and `inference=` say how the workflow compiles,
+`run`, `submit` and `build_request` take the workflow and a `RunConfig`, or
+none; besides, `tool_registry=` and `inference=` say how the workflow compiles,
 as `Workflow.compile` takes them, and `run`'s `timeout=` is how many seconds
 it waits at most: the run goes on after a `TimeoutError`.
 
@@ -104,18 +115,19 @@ have it written in place (below), or to hand the tool an existing folder as
 its input: the tool then works on a copy of it, and the folder is left as it
 is, which the service warns of.
 
-- **`output_mode='workflowOutDir'`, `workflow_out_dir='<folder>'`: the
-  supported way.** Toil copies the workflow's outputs into that folder on
-  the cluster, an output folder given as `segmentation` as
+- **`RunConfig('<folder>')`, output mode `workflowOutDir`: the supported
+  way.** Toil copies the workflow's outputs into that folder on the
+  cluster, an output folder given as `segmentation` as
   `<folder>/segmentation`. The folder may exist, empty, or the service
-  creates it, in a parent it can write to. `workflow_out_dir` goes with this
-  mode and only with it; Sophios refuses either without the other.
-- **`output_mode='serviceOutDir'`, or none:** the outputs are copied, as
-  above, into the run's own folder on the cluster; the output object says
-  where.
-- **`output_mode='workflowInPlace'`: an advanced choice, which the service
-  warns of on every run.** Each output folder given as an absolute path is written
-  there, once, without a copy, which is what very large outputs need; the
+  creates it, in a parent it can write to.
+- **No `RunConfig`, output mode `serviceOutDir`: the quick try.** The
+  outputs are copied, as above, into the run's own folder on the cluster;
+  the output object says where. Without a `RunConfig` there is no
+  `basepath` either, so every path a tool reads is absolute.
+- **`RunConfig.in_place()`, output mode `workflowInPlace`: an advanced
+  choice, which the service warns of on every run.** Each output folder
+  given as an absolute path is written there, once, without a copy, which
+  is what very large outputs need; the
   service creates it when it is missing (one folder, in a parent it can
   write), and an existing one must be empty. An output folder given as a
   name is copied into the run's own folder, with a warning. So is the output
@@ -143,7 +155,7 @@ The states are those of a local run: `QUEUED`, `RUNNING`, then `COMPLETED`,
 
 `build_request(workflow, config)` returns the request `run` and `submit`
 send, with the same arguments: the workflow compiled into one document,
-every process inline, its inputs, and the fields of `config`. Its shape is
+every process inline, its inputs, and what `config` sets. Its shape is
 `run-request.schema.json`, Sophios's copy of the service's own schema, which
 the service also serves at `GET /run-request.schema.json`. Sophios checks
 every request against it before sending, and the service again on arrival.
