@@ -105,12 +105,13 @@ and `--passthrough_flags` act under both targets.
 
 A float reaches the command as Python's `str()` writes it: the shortest
 digits that read back as the same value, such as `0.1`, `5.0`, `0.0001`,
-`1e-07`, `1e+16` and `-0.0`. A whole number given for a `float` as a JSON
-integer keeps its integer text, such as `3000000000`. Sophios writes each
-float into `nextflow_params.json` as text, such as `"-0.0"`, because Nextflow
-reads a JSON number with a point or an exponent without the sign of a zero.
-A JSON number you write into the params file for a `float` works too, as
-Nextflow reads it: `0.0` is `0.0`, but `-0.0` written as a number reaches the
+`1e-07`, `1e+16` and `-0.0`. A whole number given for a `float`, a default
+included, is that float, so `5` reaches the command as `5.0`. Sophios writes
+each float into `nextflow_params.json` as text, such as `"-0.0"`, because
+Nextflow reads a JSON number with a point or an exponent without the sign of
+a zero. A JSON number you write into the params file for a `float` works too,
+as Nextflow reads it: a whole number keeps its integer text, such as
+`3000000000`, and `0.0` is `0.0`, but `-0.0` written as a number reaches the
 command as `0.0`, and a whole number past the 64-bit range has wrapped before
 the pipeline sees it. Write such a number as text, such as `"-0.0"`, to keep
 it exact.
@@ -122,7 +123,9 @@ rounds one spelled with an exponent to a whole number, so `1e-07` reaches the
 command as `0` and `1e+16` as `10000000000000000`; only a float inside a
 longer string, such as `x=$(inputs.x)`, reaches it as Python's `str()`. The
 two targets print the same text for a float Sophios writes that is zero or
-from `0.0001` up to, but not including, `1e16` in size.
+from `0.0001` up to, but not including, `1e16` in size, except a whole-number
+default, which cwltool prints as spelled, `5`, and the Nextflow target as the
+float, `5.0`.
 
 ## Running on the Nextflow target
 
