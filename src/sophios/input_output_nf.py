@@ -482,26 +482,29 @@ def _entry_names(process: NfProcess) -> dict[str, str]:
     }
 
 
-def _path_input(port: NfPort, stage_as: str | None) -> str:
-    """Declare a path input: an array's list arity, then the staging name.
+def _staged_under(directory: str | None) -> list[tuple[str, str]]:
+    """The ``stageAs`` option staging a path input's files in ``directory``, each under its own name, which a
+    basename reference reads as the last part of the staged path; none for a file staged as itself."""
+    return [] if directory is None else [("stageAs", groovy_literal(f"{directory}/*"))]
+
+
+def _path_input(port: NfPort, directory: str | None) -> str:
+    """Declare a path input: an array's list arity, then the directory its files are staged in.
 
     Nextflow hands a path input holding exactly one file to the script as a
     bare Path, which has no list operations. Declaring the arity makes zero,
     one and many files all arrive as a list.
     """
     options = [("arity", groovy_literal(NF_ARRAY_PATH_ARITY))] if port.is_array else []
-    if stage_as is not None:
-        options.append(("stageAs", groovy_literal(stage_as)))
-    return Idioms.INPUT.fill(qualifier="path", name=port.name, options=_options(options))
+    return Idioms.INPUT.fill(qualifier="path", name=port.name, options=_options(options + _staged_under(directory)))
 
 
 def _process_input(port: NfPort, *, tuple_element: bool = False) -> str:
-    stage_as = None if port.entry is None else f"{_entry_directory(port)}/*"
+    directory = None if port.entry is None else _entry_directory(port)
     if tuple_element:
-        options = _options([] if stage_as is None else [("stageAs", groovy_literal(stage_as))])
-        return Idioms.ELEMENT.fill(qualifier=port.qualifier, name=port.name, options=options)
+        return Idioms.ELEMENT.fill(qualifier=port.qualifier, name=port.name, options=_options(_staged_under(directory)))
     if port.qualifier == "path":
-        return _path_input(port, stage_as)
+        return _path_input(port, directory)
     return Idioms.INPUT.fill(qualifier=port.qualifier, name=port.name, options="")
 
 
@@ -512,7 +515,7 @@ def _unscattered_input(port: NfPort) -> str:
     # numbers the directories per port, so the port name in the pattern keeps
     # two such ports apart.
     if port.is_array and port.qualifier == "path":
-        return _path_input(port, f"gather_{port.name}_*/*")
+        return _path_input(port, f"gather_{port.name}_*")
     return _process_input(port)
 
 
