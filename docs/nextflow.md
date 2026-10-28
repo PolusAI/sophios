@@ -854,11 +854,12 @@ step's tool does not declare, which CWL allows so that a `when` can read it, is
 rejected. A conditional step needs at least one input to gate on, so `when`
 on a tool that declares no inputs is rejected.
 
-## The corpus lane
+## The corpus runs
 
-`.github/workflows/nextflow_corpus.yml` compiles corpus workflows with
-`--target nextflow`, runs each under Nextflow with Docker, and checks that the
-run succeeds and that every declared workflow output exists. It runs every
+A step of *Run Workflows* (`.github/workflows/run_workflows.yml`) compiles
+corpus workflows with `--target nextflow`, runs each under Nextflow with
+Docker, and checks that the run succeeds, that every file a workflow output
+emits exists, and that every directory it emits holds something. It runs every
 standalone image-workflows workflow (`bbbc.wic`, `bbbc.py`, `bbbc_sub.py`) and
 the standalone mm-workflows workflows the target compiles (`molgan.wic`,
 `load_trained_molgan.wic`); the list is in
@@ -867,21 +868,14 @@ mm-workflows workflows: they scatter over a nested workflow step, compute an
 output with JavaScript `outputEval`, or declare an optional union of a
 `boolean` and a string array.
 
-The lane runs only when dispatched, on a self-hosted Linux runner, since the
-tools pull their images and download their data. Dispatch it from the
-*Nextflow Corpus* workflow in the Actions tab, or:
-
-```console
-gh workflow run nextflow_corpus.yml --ref <branch> \
-  -f mm-workflows_ref=main -f image-workflows_ref=main
-```
-
-`mm-workflows_owner` and `image-workflows_owner` default to the repository's
-owner, and both refs to `main`. The lane runs each pipeline itself, not
-through Sophios, so before each run it makes the output directories the
-image-workflows tools write into (see Staging with InitialWorkDirRequirement):
-an empty directory for every `Directory` input given as a bare name that
-names nothing yet.
+The step runs on a push to Sophios, after the same lane has run the corpus
+under cwltool, which never reaches the Nextflow backend. A pull request does
+not run it, nor does a push to mm-workflows or image-workflows, since the
+tools pull their images and download their data. The step runs each pipeline
+itself, not through Sophios, so before each run it makes the output
+directories the image-workflows tools write into (see Staging with
+InitialWorkDirRequirement): an empty directory for every `Directory` input
+given as a bare name that names nothing yet.
 
 ## Current limits
 
