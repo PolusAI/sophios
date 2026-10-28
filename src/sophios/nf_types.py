@@ -174,9 +174,11 @@ class NfInputReference:
 class NfBasenameReference:
     """Reference to the staged file name of one path input.
 
-    Nextflow stages an input under its original file name, so the staged
-    path's name is exactly the CWL ``basename``. An entry's input renders the
-    name of its entry instead (:class:`NfEntry`).
+    Nextflow stages an input under its original file name, alone or under a
+    directory, so the last part of the staged path is exactly the CWL
+    ``basename``: for an entry's input (:class:`NfEntry`), the entry's name.
+    The staged path's own ``.name`` is not that part when there is a
+    directory: it is the whole staged path.
     """
 
     name: str

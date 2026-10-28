@@ -169,8 +169,9 @@ def test_renders_each_entry_staged_hidden_and_made_by_the_task() -> None:
         "    path outDir, stageAs: '.sophios_entry_outDir/*'\n"
         "    path other\n"
     ) in rendered
-    # A basename reference to the entry is its staged file's name, which the entry keeps.
-    assert '    path "${outDir.name}", glob: false, emit: result\n' in rendered
+    # A basename reference to the entry is the last part of its staged path, the name the entry keeps; the
+    # path's `.name` would be the whole staged path, `.sophios_entry_outDir/<name>`.
+    assert "    path \"${outDir.toString().tokenize('/').last()}\", glob: false, emit: result\n" in rendered
     exists = "InitialWorkDirRequirement entry already exists in the task directory:"
     renamed, own = f"${{{quote}('renamed.txt')}}", f"${{{quote}({entry})}}"
     assert (
@@ -427,8 +428,8 @@ def test_renders_basename_segments_in_commands_and_globs() -> None:
         {"source": "lines.txt"}, {"source": "File"},
     ))
 
-    assert "source.name.toString() + '.copy'" in rendered
-    assert 'path "${source.name}.copy", glob: false, emit: result' in rendered
+    assert "source.toString().tokenize('/').last().toString() + '.copy'" in rendered
+    assert "path \"${source.toString().tokenize('/').last()}.copy\", glob: false, emit: result" in rendered
 
 
 @pytest.mark.fast
@@ -464,7 +465,7 @@ def test_assembled_name_with_an_author_written_metacharacter_keeps_globbing_on()
         {"source": "lines.txt"}, {"source": "File"},
     ))
 
-    assert "path \"${source.name}*.txt\", arity: '1', emit: result" in rendered
+    assert "path \"${source.toString().tokenize('/').last()}*.txt\", arity: '1', emit: result" in rendered
 
 
 @pytest.mark.fast

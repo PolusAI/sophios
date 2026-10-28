@@ -202,8 +202,8 @@ _ARRAY_ONLY = "array-marked inputs may only be referenced by array bindings"
     (lambda: _proc(NfPort("v", "val", is_array=True), _PLAIN), _ARRAY_ONLY),
     (lambda: _proc(NfPort("v", "val", is_array=True), stdout=_PLAIN), _ARRAY_ONLY),
     (lambda: _proc(NfPort("v", "val", is_array=True), outputs=(NfPort("out", "path", "out", _PLAIN),)), _ARRAY_ONLY),
-    # values.name.toString() is a GPath spread over the list, so a File[] read as a basename renders
-    # --tag=[a.txt, b.txt]; in glob position the rendered name is a list, breaking the literal-name rule.
+    # A basename is the last part of the staged path's text, and a File[]'s text is the whole list's, so a
+    # File[] read as a basename renders the tail of [v1/a.txt, v2/b.txt]; in glob position it names no one file.
     (
         lambda: _proc(NfPort("v", "path", is_array=True), NfTemplate((NfLiteral("--tag="), NfBasenameReference("v")))),
         _ARRAY_ONLY,

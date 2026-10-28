@@ -1069,7 +1069,7 @@ def test_a_writable_output_directory_entry_is_a_copy_the_tool_writes_into(tmp_pa
     """The image-workflows plugin shape: `--outDir $(inputs.outDir)`, writable, captured by its own basename.
 
     design §6, Inputs and channels: the copy is independent of the staged input, and a reference to the
-    input names the entry.
+    input names the entry, so the output its glob captures is the copy the tool wrote into.
     """
     out_dir = tmp_path / "plugin_out"
     out_dir.mkdir()
@@ -1095,6 +1095,8 @@ def test_a_writable_output_directory_entry_is_a_copy_the_tool_writes_into(tmp_pa
     assert written.read_text(encoding="utf-8") == "written"
     assert (written.parent / "keep.txt").read_text(encoding="utf-8") == "kept\n"
     assert sorted(path.name for path in out_dir.iterdir()) == ["keep.txt"]
+    [emitted] = _recorded(result.stdout).values()
+    assert (Path(emitted["path"]) / "result.txt").read_text(encoding="utf-8") == "written"
 
 
 @pytest.mark.nextflow
@@ -2009,7 +2011,8 @@ arguments:
 @pytest.mark.serial
 def test_the_command_line_runs_the_nextflow_target_with_paths_read_beside_the_workflow(tmp_path: Path) -> None:
     """Started from elsewhere, the run reads a relative path beside the `.wic` file, makes the output directory
-    named there, and writes the output object under the Sophios name of the output."""
+    named there, which the tool's writable copy leaves empty, and writes the output object under the Sophios
+    name of the output."""
     (tmp_path / "copy_into.cwl").write_text(_COPY_INTO, encoding="utf-8")
     (tmp_path / "source.txt").write_text("copied text\n", encoding="utf-8")
     (tmp_path / "w.wic").write_text(
@@ -2032,7 +2035,7 @@ def test_the_command_line_runs_the_nextflow_target_with_paths_read_beside_the_wo
         text=True, capture_output=True, timeout=180, check=False,
     )
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    assert (tmp_path / "made").is_dir()
+    assert (tmp_path / "made").is_dir() and not any((tmp_path / "made").iterdir())
     outputs = json.loads((elsewhere / "out" / "output_w.json").read_text(encoding="utf-8"))
     made = outputs["copy_into~outDir"]
     assert (made["class"], made["basename"]) == ("Directory", "made")

@@ -271,8 +271,10 @@ class Idioms:  # pylint: disable=too-few-public-methods
     OPTIONAL: Final = Idiom("${{{name} == [] ? '' : {words}}}")
     SEPARATE: Final = Idiom(f"{_QUOTE}({{prefix}}) + ' ' + {_QUOTE}({{value}})")
     JOINED: Final = Idiom(f"{_QUOTE}({{prefix}} + {{value}})")
-    #: A reference's value: an input's staged file name, an entry's name, a float's text.
-    STAGED_NAME: Final = Idiom("{name}.name")
+    #: A reference's value: an input's staged file name, an entry's name, a float's text. The staged file name
+    #: is the last part of the staged path: Nextflow's `.name` of a path staged under a directory, as an
+    #: entry's input is, is the whole staged path.
+    STAGED_NAME: Final = Idiom("{name}.toString().tokenize('/').last()")
     ENTRY_NAME: Final = Idiom("({name}.toString() - {literal})")
     FLOAT_TEXT: Final = Idiom(f"{NF_FLOAT_TEXT_HELPER}({{name}})")
     STRING: Final = Idiom("{value}.toString()")
