@@ -380,6 +380,11 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # runner is checked on every leg by the file's other tests.
     'tests/core/test_quiet.py::test_a_failing_step_is_named_with_its_status_below_its_own_messages',
     'tests/core/test_quiet.py::test_a_quiet_run_keeps_a_file_the_tool_names_as_its_stdout',
+    # One six-step workflow run under Nextflow and under cwltool, in about four seconds. Only the Nextflow
+    # lane, on Linux, collects it, so the Windows leg gives up nothing it ran; what the references render
+    # is checked on every leg by the renderer's tests.
+    'tests/core/nextflow/test_reference_differential.py::'
+    'test_a_path_inputs_references_mean_under_nextflow_what_they_mean_under_cwltool',
 })
 
 
