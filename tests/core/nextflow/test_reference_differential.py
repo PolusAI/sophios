@@ -61,7 +61,8 @@ def _probe(name: str, kind: Any, mode: str) -> CommandLineTool:
         "made": Output(kind, glob="$(inputs.x.basename).made"),
     }
     if mode != "plain":
-        # An entry under its own basename is the one input a glob may name, by basename or by path (design §6).
+        # An entry under its own basename is the one input a glob may name, by basename or by path (design §6);
+        # by its plain reference, the object, neither runner takes it: the last test below.
         outputs |= {"own": Output(kind, glob="$(inputs.x.basename)"), "own_path": Output(kind, glob="$(inputs.x.path)")}
     tool = (
         CommandLineTool(name, Inputs(x=Input(kind)), Outputs(**outputs))
@@ -194,3 +195,30 @@ def test_a_path_inputs_references_mean_under_nextflow_what_they_mean_under_cwlto
         for name in sorted(nf.keys() | cw.keys()) if nf.get(name) != cw.get(name)
     ]
     assert not problems, "\n".join(problems)
+
+
+@pytest.mark.needs_cwltool
+def test_neither_runner_takes_an_entrys_object_as_a_glob(tmp_path: Path) -> None:
+    """The one cell the workflow above leaves out: an entry under its own basename globbed by its plain reference.
+    CWL reads `$(inputs.x)` as the Directory object, and a glob must be a string, so cwltool fails the step; the
+    Nextflow target refuses it when compiling instead of running what CWL does not (design §6)."""
+    import cwltool.main  # pylint: disable=import-outside-toplevel
+
+    fill = CommandLineTool("fill", Inputs(x=Input(cwl.directory, position=1)),
+                           Outputs(o=Output(cwl.directory, glob="$(inputs.x)"))).base_command("touch")
+    step = Step(fill.stage(fill.inputs.x, writable=True), step_name="fill")
+    (tmp_path / "in.d").mkdir()
+    step.inputs.x = tmp_path / "in.d"
+    workflow = Workflow([step], "object_glob")
+    workflow.outputs.o = step.outputs.o
+    with pytest.raises(ValueError, match=r"\$\(inputs\.x\) is the File or Directory object, which CWL does not"):
+        workflow.compile(target="nextflow")
+    compiled = workflow.compile()
+    document, job = compiled.write_cwl(tmp_path / "cwl"), compiled.write_job_inputs(tmp_path / "cwl")
+    stderr = io.StringIO()
+    code = cwltool.main.main(
+        ["--quiet", "--outdir", str(tmp_path / "out"), "--tmpdir-prefix", f"{tmp_path}/tmp/",
+         "--tmp-outdir-prefix", f"{tmp_path}/tmp_out/", str(document), str(job)],
+        stdout=io.StringIO(), stderr=stderr,
+    )
+    assert code != 0 and "Resolved glob patterns must be strings" in stderr.getvalue(), stderr.getvalue()

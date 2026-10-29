@@ -2,7 +2,7 @@
 
 # pylint: disable=missing-function-docstring
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 import re
@@ -398,8 +398,9 @@ def test_an_accelerator_count_is_a_positive_integer(value: Any) -> None:
 
 def _entry_workflow(
     *inputs: NfPort, outputs: tuple[NfPort, ...] = (), tokens: tuple[str | NfTemplate, ...] = ("true",),
+    streams: Mapping[str, NfTemplate] | None = None,
 ) -> ExecutableNextflowWorkflow:
-    process = NfProcess("STAGE", inputs, outputs, command(*tokens))
+    process = NfProcess("STAGE", inputs, outputs, command(*tokens, **(streams or {})))
     connections = [NfWorkflowInputConnection(port.name, "STAGE", port.name) for port in inputs]
     return ExecutableNextflowWorkflow(
         "wf", [process], connections, {port.name: "in.txt" for port in inputs}, {port.name: "File" for port in inputs}
@@ -450,16 +451,35 @@ def test_only_an_entry_under_its_own_basename_is_referenced(segment: NfInputRefe
 
 @pytest.mark.fast
 @pytest.mark.parametrize("segment", [NfInputReference("source"), NfBasenameReference("source")])
-def test_a_glob_of_only_a_staged_input_is_rejected_unless_the_input_is_an_entry(
-    segment: NfInputReference | NfBasenameReference,
+@pytest.mark.parametrize(("before", "after"), [("", ""), ("./", ""), ("", "/keep.txt"), ("a/../", "/")])
+def test_a_glob_at_a_staged_input_is_rejected_unless_the_input_is_an_entry(
+    segment: NfInputReference | NfBasenameReference, before: str, after: str,
 ) -> None:
-    """design §6, Outputs and globs: a staged input is not a file a CWL glob matches; an entry is."""
-    output = NfPort("result", "path", "result", NfTemplate((segment,)))
-    with pytest.raises(ValueError, match="output 'result' globs only the staged input 'source'"):
+    """design §6, Basename references: a staged input, or a name inside it, is not a file a CWL glob matches; an
+    entry is, and a name derived from the input's is a new one."""
+    output = NfPort("result", "path", "result", NfTemplate((NfLiteral(before), segment, NfLiteral(after))))
+    with pytest.raises(ValueError, match="output 'result' globs the staged input 'source', or a name inside it"):
         _entry_workflow(NfPort("source", "path"), outputs=(output,))
     _entry_workflow(NfPort("source", "path", entry=NfEntry()), outputs=(output,))
-    derived = replace(output, glob=NfTemplate((segment, NfLiteral(".copy"))))
-    _entry_workflow(NfPort("source", "path"), outputs=(derived,))
+    for derived in (NfTemplate((segment, NfLiteral(".copy"))), NfTemplate((NfLiteral("out/"), segment))):
+        _entry_workflow(NfPort("source", "path"), outputs=(replace(output, glob=derived),))
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+@pytest.mark.parametrize("segment", [NfInputReference("source"), NfBasenameReference("source")])
+@pytest.mark.parametrize("after", ["", "/keep.txt"])
+def test_a_stream_writing_a_staged_input_is_rejected_unless_the_input_is_a_copy(
+    stream: str, segment: NfInputReference | NfBasenameReference, after: str,
+) -> None:
+    """design §6, Basename references: writing the link an input is staged under, or a name inside it, writes
+    through the link into the input; a writable entry is a copy, and a name derived from the input's is a new one."""
+    target = NfTemplate((segment, NfLiteral(after)))
+    for entry in (None, NfEntry()):
+        with pytest.raises(ValueError, match=f"{stream} writes through the link input 'source' is staged under"):
+            _entry_workflow(NfPort("source", "path", entry=entry), streams={stream: target})
+    _entry_workflow(NfPort("source", "path", entry=NfEntry(copy=True)), streams={stream: target})
+    _entry_workflow(NfPort("source", "path"), streams={stream: NfTemplate((segment, NfLiteral(".log")))})
 
 
 @pytest.mark.fast

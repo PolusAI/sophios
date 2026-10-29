@@ -5,6 +5,7 @@ from dataclasses import dataclass, field, replace
 from graphlib import CycleError, TopologicalSorter
 import json
 import math
+import posixpath
 import re
 from types import MappingProxyType
 from typing import Any, ClassVar, Generic, TypeVar, get_args
@@ -562,6 +563,37 @@ class NfEntry:
         return {"name": self.name, "copy": self.copy}
 
 
+def linked_reference(template: NfTemplate | None) -> str | None:
+    """The input whose staged name a path is, or lies inside: a reference to it, alone or before a path.
+
+    The path is normalised as a literal output name is, so ``./`` before the
+    reference changes nothing; a literal holds no NUL byte to mark one with.
+    """
+    if template is None:
+        return None
+    marks = [segment.value if isinstance(segment, NfLiteral) else f"\x00{index}\x00"
+             for index, segment in enumerate(template.segments)]
+    names = {mark: segment.name for mark, segment in zip(marks, template.segments, strict=True)
+             if not isinstance(segment, NfLiteral)}
+    return names.get(posixpath.normpath("".join(marks)).split("/")[0])
+
+
+def link_refusal(entry: NfEntry | None, *, writes: bool) -> str | None:
+    """What to write instead of a path at or inside an input's staged name, or None where CWL takes it.
+
+    The task links an input that is not an entry under its name, where
+    cwltool stages it outside the output directory, so a CWL glob there
+    matches nothing; the task makes an entry, which a glob collects. Writing
+    there writes through the link into what the input names, unless the
+    entry is a copy (design §6, Basename references).
+    """
+    if entry is not None and (entry.copy or not writes):
+        return None
+    return "derive a new name from it, or make the input " + (
+        "a writable InitialWorkDirRequirement entry" if writes else "an InitialWorkDirRequirement entry"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class NfPort:
     """A typed Nextflow process port.
@@ -792,19 +824,22 @@ class NfProcess:
             )
         if len(entry_names) != len(set(entry_names)):
             raise ValueError(f"process {self.name!r} makes two InitialWorkDirRequirement entries with one literal name")
-        # A glob that is one reference to a staged input names that input, which
-        # a CWL glob does not match; the task makes an entry's own file.
-        staged = {port.name for port in inputs if port.qualifier == "path" and port.entry is None}
+        # A glob, stdout or stderr at or inside an input's staged name names the
+        # link the input is staged under, whatever that name is.
+        paths = {port.name: port.entry for port in inputs if port.qualifier == "path"}
         for port in outputs:
-            match port.glob:
-                case NfTemplate(segments=[NfInputReference(name=name) | NfBasenameReference(name=name)]) if (
-                    name in staged
-                ):
-                    raise ValueError(
-                        f"process {self.name!r} output {port.name!r} globs only the staged input {name!r}, which a "
-                        "CWL glob does not match: derive a new name from it, or make the input an "
-                        "InitialWorkDirRequirement entry"
-                    )
+            if (name := linked_reference(port.glob)) in paths and (advice := link_refusal(paths[name], writes=False)):
+                raise ValueError(
+                    f"process {self.name!r} output {port.name!r} globs the staged input {name!r}, or a name inside "
+                    f"it, which a CWL glob does not match: {advice}"
+                )
+        for stream in ("stdout", "stderr"):
+            name = linked_reference(getattr(self.command, stream))
+            if name in paths and (advice := link_refusal(paths[name], writes=True)):
+                raise ValueError(
+                    f"process {self.name!r} {stream} writes through the link input {name!r} is staged under, into "
+                    f"what the input names: {advice}"
+                )
         match self.container:
             case None:
                 pass

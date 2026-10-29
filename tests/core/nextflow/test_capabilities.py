@@ -1409,6 +1409,84 @@ def test_a_file_reference_embedded_in_text_is_rejected(argument: str, admitted: 
     ]
 
 
+def _object(position: str, instead: str) -> str:
+    return f"$(inputs.f) is the File or Directory object, which CWL does not take as {position}; {instead}"
+
+
+_BASENAME, _PATH_ALONE = "use $(inputs.f.basename)", "use $(inputs.f.path) alone"
+# Where $(inputs.f.basename) alone, or before a path, would name the link f is staged under.
+_NEW_NAME = "derive a new name from it, or make the input an InitialWorkDirRequirement entry"
+_NEW_WRITE = "derive a new name from it, or make the input a writable InitialWorkDirRequirement entry"
+_LINKED, _WRITABLE = ["$(inputs.f)"], [{"entry": "$(inputs.f)", "writable": True}]
+_ABSOLUTE = "$(inputs.f.path) is an absolute path, and CWL takes only a relative name as {}; {}"
+_JSON = "$(inputs.f) embedded in other text renders a File object as JSON in CWL; {}"
+_OUTSIDE = "$(inputs.f.path) is an absolute path outside the output directory, which no CWL glob matches; {}"
+_IN_STDIN = "stdin reads a staged file by its whole path, which $(inputs.f.{}) inside other text is not; {}"
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("where", "kind", "value", "listing", "finding"), [
+    ("glob", "File", "$(inputs.f)", None, _object("a glob", _NEW_NAME)),
+    ("glob", "File", "$(inputs.f)", _LINKED, _object("a glob", _BASENAME)),
+    ("glob", "Directory", "$(inputs.f)", _WRITABLE, _object("a glob", _BASENAME)),
+    ("glob", "File", "$(inputs.f).out", None, _JSON.format(_BASENAME)),
+    ("glob", "Directory", "$(inputs.f)/keep.txt", None, _JSON.format(_NEW_NAME)),
+    ("glob", "File", "$(inputs.f.path)", None, _OUTSIDE.format(_NEW_NAME)),
+    ("glob", "File", "$(inputs.f.path).out", None, _OUTSIDE.format(_BASENAME)),
+    ("glob", "Directory", "$(inputs.f.path)/keep.txt", None, _OUTSIDE.format(_NEW_NAME)),
+    ("glob", "File", "$(inputs.f.basename).out", None, None),
+    ("glob", "File", "$(inputs.f.basename)", _LINKED, None),
+    ("glob", "Directory", "$(inputs.f.basename)/keep.txt", _LINKED, None),
+    ("glob", "Directory", "$(inputs.f.path)", _WRITABLE, None),
+    ("glob", "File", "$(inputs.f.path).out", _LINKED, None),
+    ("stdin", "File", "$(inputs.f)", None, _object("stdin", _PATH_ALONE)),
+    ("stdin", "File", "$(inputs.f.basename)", _LINKED,
+     f"stdin names a file by its path, and $(inputs.f.basename) is only its name; {_PATH_ALONE}"),
+    ("stdin", "File", "$(inputs.f.path).gz", None, _IN_STDIN.format("path", _PATH_ALONE)),
+    ("stdin", "Directory", "$(inputs.f.basename)/keep.txt", _LINKED, _IN_STDIN.format("basename", _PATH_ALONE)),
+    ("stdin", "Directory", "$(inputs.f.path)", _WRITABLE, "stdin reads a file, and $(inputs.f.path) names a Directory"),
+    ("stdin", "File", "$(inputs.f.path)", None, None),
+    ("stdout", "File", "$(inputs.f)", None, _object("a stdout target", _NEW_WRITE)),
+    ("stdout", "File", "$(inputs.f)", _WRITABLE, _object("a stdout target", _BASENAME)),
+    ("stdout", "File", "$(inputs.f.path)", _LINKED, _ABSOLUTE.format("a stdout target", _NEW_WRITE)),
+    ("stdout", "File", "$(inputs.f.path).log", None, _ABSOLUTE.format("a stdout target", _BASENAME)),
+    # CWL would name the file after the object's JSON; the target refuses rather than do that.
+    ("stdout", "File", "$(inputs.f).log", None, _JSON.format(_BASENAME)),
+    ("stdout", "File", "$(inputs.f.basename).log", None, None),
+    ("stdout", "File", "$(inputs.f.basename)", _WRITABLE, None),
+    ("stderr", "File", "$(inputs.f)", _LINKED, _object("a stderr target", _NEW_WRITE)),
+    ("stderr", "File", "$(inputs.f.path)", None, _ABSOLUTE.format("a stderr target", _NEW_WRITE)),
+], ids=lambda value: None)
+def test_a_reference_reads_where_it_stands_as_cwl_reads_it(
+        where: str, kind: str, value: str, listing: list[Any] | None, finding: str | None) -> None:
+    """design §6, Basename references: a plain File or Directory reference is the object, which no glob or stream
+    target takes; `.path` is absolute, so stdout and stderr take a basename, and a glob a `.path` only of an entry,
+    the one input under the output directory; stdin reads one staged File by its whole `.path`. Each row is a cell
+    of cwltool's own run of the tool. What a finding offers instead is what the target then takes: not the input's
+    own staged name, or a path inside it, where the link the input is staged under would be named."""
+    requirements = {} if listing is None else {"requirements": {"InitialWorkDirRequirement": {"listing": listing}}}
+    glob = value if where == "glob" else "done.txt"
+    streams = {} if where == "glob" else {where: value}
+    rose = one_step(tool("REF", inputs={"f": {"type": kind}},
+                         outputs={"result": {"type": kind if where == "glob" else "File",
+                                             "outputBinding": {"glob": glob}}}, **requirements, **streams),
+                    ["result"], f={"class": kind, "path": "in"})
+    if finding is None:
+        compiled_source_to_nextflow(rose)
+        return
+    position = "outputs.result.outputBinding.glob" if where == "glob" else where
+    assert _findings(rose) == [f"steps[0].run.{position}: {finding}"]
+
+
+@pytest.mark.fast
+def test_a_list_of_globs_is_refused_for_being_a_list() -> None:
+    """Not for a reference in it: each item of a list is a whole value, which no other text surrounds."""
+    rose = one_step(tool("REF", inputs={"f": {"type": "File"}},
+                         outputs={"result": {"type": "File", "outputBinding": {"glob": ["$(inputs.f)"]}}}),
+                    ["result"], f={"class": "File", "path": "in"})
+    assert _findings(rose) == ["steps[0]: CWL output glob lists for 'result' are not supported by the Nextflow target"]
+
+
 @pytest.mark.fast
 @pytest.mark.parametrize("number", ["long", "double"])
 @pytest.mark.parametrize(("where", "path"), [
@@ -1608,17 +1686,57 @@ FINDINGS = [
         )
         for writable in ("true", 1, "$(inputs.flag)")
     ),
-    # F84: the task directory holds the staged input under that name, which a CWL glob does not match.
+    # F84: the task directory holds the staged input under that name, which a CWL glob does not match, and a
+    # name inside a staged Directory is inside the input. A plain reference, the object, and `.path`, an absolute
+    # path, are refused before this: test_a_reference_reads_where_it_stands_as_cwl_reads_it.
     *(
-        pytest.param(lambda glob=glob: one_step(tool(
-            "copy", inputs={"source": {"type": "File"}},
+        pytest.param(lambda kind=kind, glob=glob: one_step(tool(
+            "copy", inputs={"source": {"type": kind}},
             outputs={"result": {"type": "File", "outputBinding": {"glob": glob}}},
-        ), ["result"], source={"class": "File", "path": "in.txt"}), [
-            "steps[0]: process 'copy' output 'result' globs only the staged input 'source', which a CWL glob "
-            "does not match: derive a new name from it, or make the input an InitialWorkDirRequirement entry"
-        ], id=f"a_glob_of_only_a_staged_input-{glob.strip()}")
-        for glob in ("$(inputs.source)", "$(inputs.source.basename)", " $(inputs.source.path) ")
+        ), ["result"], source={"class": kind, "path": "in.txt"}), [
+            "steps[0]: process 'copy' output 'result' globs the staged input 'source', or a name inside it, which a "
+            "CWL glob does not match: derive a new name from it, or make the input an InitialWorkDirRequirement entry"
+        ], id=f"a_glob_at_a_staged_input-{glob.strip()}")
+        for kind, glob in (("File", "$(inputs.source.basename)"), ("File", " $(inputs.source.basename) "),
+                           ("File", "./$(inputs.source.basename)"),
+                           ("Directory", "$(inputs.source.basename)/keep.txt"))
     ),
+    # Writing the link the task stages an input under writes through it into the input: cwltool writes a new file
+    # in its output directory, and an entry the task links is linked by cwltool too, so both overwrite it.
+    *(
+        pytest.param(lambda stream=stream, kind=kind, target=target, listing=listing: one_step(tool(
+            "write", inputs={"source": {"type": kind}},
+            outputs={"result": {"type": "File", "outputBinding": {"glob": "done.txt"}}}, **{stream: target},
+            **({"requirements": {"InitialWorkDirRequirement": {"listing": listing}}} if listing else {}),
+        ), ["result"], source={"class": kind, "path": "in.txt"}), [
+            f"steps[0]: process 'write' {stream} writes through the link input 'source' is staged under, into what "
+            "the input names: derive a new name from it, or make the input a writable InitialWorkDirRequirement entry"
+        ], id=f"a_{stream}_at_a_staged_input-{kind}-{target}-{'entry' if listing else 'staged'}")
+        for stream in ("stdout", "stderr")
+        for kind, target, listing in (("File", "$(inputs.source.basename)", None),
+                                      ("Directory", "$(inputs.source.basename)/keep.txt", None),
+                                      ("File", "$(inputs.source.basename)", ["$(inputs.source)"]))
+    ),
+    # Every reference to a renamed entry is refused for being one; a finding of where it stands would offer what
+    # that refusal then refuses.
+    pytest.param(lambda: one_step(tool(
+        "REF", inputs={"f": {"type": "File"}}, outputs={"result": {"type": "File", "outputBinding": {"glob": "o"}}},
+        stdout="$(inputs.f)",
+        requirements={"InitialWorkDirRequirement": {"listing": [{"entry": "$(inputs.f)", "entryname": "x.txt"}]}},
+    ), ["result"], f={"class": "File", "path": "in.txt"}), [
+        "steps[0].run.requirements.InitialWorkDirRequirement: input 'f' has an InitialWorkDirRequirement entry with "
+        "a literal name and cannot also be referenced in the command, stream targets, or output globs; name the "
+        "entry by its literal"
+    ], id="a_reference_to_a_renamed_entry_has_the_renames_finding_alone"),
+    # A malformed listing stages what no finding can know: neither the entry's glob nor a link is checked.
+    pytest.param(lambda: one_step(tool(
+        "REF", inputs={"f": {"type": "File"}},
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "$(inputs.f.path)"}}},
+        requirements={"InitialWorkDirRequirement": {"listing": ["$(inputs.f)", 5]}},
+    ), ["result"], f={"class": "File", "path": "in.txt"}), [
+        "steps[0].run.requirements.InitialWorkDirRequirement.listing[1]: must be a bare $(inputs.<name>) reference "
+        "or a Dirent mapping"
+    ], id="a_malformed_listing_checks_no_reference_against_it"),
     pytest.param(lambda: one_step(tool("SHELL", requirements={**_DOCKER, "ShellCommandRequirement": {}})), [
         "steps[0].run: ShellCommandRequirement beside a DockerRequirement is not supported: CWL runs the command "
         "as /bin/sh -c after the image's ENTRYPOINT, which the Nextflow task does not"
@@ -2002,3 +2120,13 @@ def test_accepts_an_output_whose_name_no_link_is_known_to_share(rose: CompiledNe
     """A copy is the task's own; a workflow input's or a pattern's name is known only when the task runs; a glob
     collects an entry, which cwltool stages in the output directory as well."""
     assert len(compiled_source_to_nextflow(rose).processes) == 2
+
+
+@pytest.mark.fast
+def test_a_malformed_listing_has_its_own_finding_alone() -> None:
+    """What a malformed listing stages is unknown: src may be an entry, whose link is not its upstream's name."""
+    rose = _chain("sorted.txt", listing=[{"entry": "$(inputs.src)", "entryname": "renamed.txt"}, 5])
+    assert _findings(rose) == [
+        "steps[1].run.requirements.InitialWorkDirRequirement.listing[1]: must be a bare $(inputs.<name>) reference "
+        "or a Dirent mapping"
+    ]

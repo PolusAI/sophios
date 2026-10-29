@@ -50,6 +50,8 @@ from .nf_types import (
     NfTemplateSegment,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
+    link_refusal,
+    linked_reference,
 )
 from .utils_cwl import desugar_into_canonical_normal_form
 
@@ -1481,25 +1483,41 @@ def _computed_value_from_findings(value_from: Any, *, path: str) -> list[str]:
     return []
 
 
-def _path_reference_findings(tool: Mapping[str, Any], *, path: str) -> list[str]:
-    """Check every input reference against the type it reads (design §6).
+#: Where CWL needs a string, what it calls the value there; every other templated value is a command word.
+_STRING_POSITIONS = {"glob": "a glob", "stdin": "stdin", "stdout": "a stdout target", "stderr": "a stderr target"}
+
+
+def _path_reference_findings(tool: Mapping[str, Any], entries: Mapping[str, NfEntry], *, path: str) -> list[str]:
+    """Check every input reference against what CWL reads it as where it stands (design §6).
 
     ``.path`` and ``.basename`` need a File or Directory input. A bare File or
-    Directory reference must be the whole value: embedded in other text, CWL
-    renders the File object as JSON where the backend would render its staged
-    name. Read from the authored text, because ``_template`` lowers ``.path``
-    to a plain reference and the model could no longer tell the two apart.
+    Directory reference is the object: in a command word it renders as its
+    path, embedded in other text as JSON, and a glob or a stream target, which
+    must be a string, does not take it. ``.path`` is absolute: stdout and stderr
+    must be relative names, and a glob matches only under the output directory,
+    where only an entry is. stdin reads one staged file, named by its whole
+    ``.path``. A renamed entry is left to its own finding, which refuses every
+    reference to it. Read from the authored text, because ``_template`` lowers
+    ``.path`` to a plain reference and the model could no longer tell the two
+    apart.
     """
     inputs = tool.get("inputs", {})
     if not isinstance(inputs, Mapping):
         return []
     findings: list[str] = []
     for value, position in _template_positions(tool, path=path):
-        whole = isinstance(value, str) and _INPUT_EXPRESSION.fullmatch(value.strip()) is not None
-        references = (match.group("name", "suffix") for match in _INTERPOLATION.finditer(str(value)))
+        if not isinstance(value, str):
+            continue  # a list of globs has a finding of its own
+        whole = _INPUT_EXPRESSION.fullmatch(value.strip()) is not None
+        kind = next((kind for kind in _STRING_POSITIONS if position.endswith(f".{kind}")), None)
+        try:
+            linked = linked_reference(_template(value, context=position))
+        except ValueError:
+            linked = None  # an expression, which has a finding of its own
+        references = (match.group("name", "suffix") for match in _INTERPOLATION.finditer(value))
         for name, suffix in dict.fromkeys(reference for reference in references if reference[0]):
-            definition = inputs.get(name)
-            if not isinstance(definition, Mapping):
+            definition, entry = inputs.get(name), entries.get(name)
+            if not isinstance(definition, Mapping) or entry is not None and entry.name is not None:
                 continue
             try:
                 is_path = cwl_type_to_nf_qualifier(definition.get("type")) == "path"
@@ -1510,10 +1528,45 @@ def _path_reference_findings(tool: Mapping[str, Any], *, path: str) -> list[str]
                     f"{position}: $(inputs.{name}.{suffix}) requires a File or Directory input, "
                     f"and {name} is declared {definition.get('type')!r}"
                 )
-            elif suffix is None and is_path and not whole:
+                continue
+            if not is_path:
+                continue
+            # What the model takes in its place: .basename, unless it is the input's staged name or a path inside it.
+            refusal = link_refusal(entry, writes=kind != "glob") if linked == name else None
+            instead = (f"use $(inputs.{name}.path) or $(inputs.{name}.basename), or the reference alone"
+                       if kind is None else f"use $(inputs.{name}.path) alone" if kind == "stdin"
+                       else refusal or f"use $(inputs.{name}.basename)")
+            if suffix is None and not whole:
                 findings.append(
                     f"{position}: $(inputs.{name}) embedded in other text renders a File object as JSON in "
-                    f"CWL; use $(inputs.{name}.path) or $(inputs.{name}.basename), or the reference alone"
+                    f"CWL; {instead}"
+                )
+            elif suffix is None and kind is not None:
+                findings.append(
+                    f"{position}: $(inputs.{name}) is the File or Directory object, which CWL does not take as "
+                    f"{_STRING_POSITIONS[kind]}; {instead}"
+                )
+            elif kind == "stdin" and not whole:
+                findings.append(
+                    f"{position}: stdin reads a staged file by its whole path, which $(inputs.{name}.{suffix}) "
+                    f"inside other text is not; {instead}"
+                )
+            elif kind == "stdin" and suffix == "basename":
+                findings.append(
+                    f"{position}: stdin names a file by its path, and $(inputs.{name}.basename) is only its "
+                    f"name; {instead}"
+                )
+            elif kind == "stdin" and _required_type(definition.get("type")) == "Directory":
+                findings.append(f"{position}: stdin reads a file, and $(inputs.{name}.path) names a Directory")
+            elif suffix == "path" and kind in ("stdout", "stderr"):
+                findings.append(
+                    f"{position}: $(inputs.{name}.path) is an absolute path, and CWL takes only a relative name "
+                    f"as {_STRING_POSITIONS[kind]}; {instead}"
+                )
+            elif suffix == "path" and kind == "glob" and entry is None:
+                findings.append(
+                    f"{position}: $(inputs.{name}.path) is an absolute path outside the output directory, which no "
+                    f"CWL glob matches; {instead}"
                 )
     return findings
 
@@ -1870,7 +1923,12 @@ def _tool_capability_findings(
     findings.extend(
         _unconsumed_field_findings(tool, "CommandLineTool", path=f"{path}.run", kept=_TOOL_CONSUMED_FIELDS)
     )
-    findings.extend(_path_reference_findings(tool, path=path))
+    try:
+        entries: dict[str, NfEntry] | None = _iwdr_entries(tool)
+    except ValueError:
+        entries = None  # the listing's own findings report it; what it stages is unknown, so no reference is checked
+    if entries is not None:
+        findings.extend(_path_reference_findings(tool, entries, path=path))
 
     for section_name in ("requirements", "hints"):
         findings.extend(
@@ -1879,10 +1937,7 @@ def _tool_capability_findings(
                 otherwise="{} is not supported by the Nextflow target", tool=tool,
             )
         )
-    try:
-        renamed_names = {name for name, entry in _iwdr_entries(tool).items() if entry.name is not None}
-    except ValueError:
-        renamed_names = set()
+    renamed_names = {name for name, entry in (entries or {}).items() if entry.name is not None}
     findings.extend(_iwdr_rename_reference_findings(tool, renamed_names, path=path))
     shell_mode_active = _requirement(tool, "ShellCommandRequirement") is not None
     if shell_mode_active and _requirement(tool, "DockerRequirement") is not None:
@@ -2784,8 +2839,8 @@ def _staged_names(
         return {}
     try:
         entries = _iwdr_entries(tool)
-    except ValueError:  # its own finding
-        entries = {}
+    except ValueError:  # its own finding; what it stages is unknown
+        return {}
     staged: dict[str, tuple[set[str], bool]] = {}
     for raw_name, definition in inputs.items():
         try:

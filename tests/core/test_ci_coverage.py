@@ -385,6 +385,9 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # is checked on every leg by the renderer's tests.
     'tests/core/nextflow/test_reference_differential.py::'
     'test_a_path_inputs_references_mean_under_nextflow_what_they_mean_under_cwltool',
+    # One cwltool run of a one-step tool that fails, in about two seconds. That the Nextflow target refuses the
+    # glob is checked on every leg by test_capabilities.py; only cwltool shows CWL refuses it too.
+    'tests/core/nextflow/test_reference_differential.py::test_neither_runner_takes_an_entrys_object_as_a_glob',
 })
 
 

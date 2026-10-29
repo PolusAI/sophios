@@ -300,6 +300,20 @@ def _conditions() -> Workflow:
     return workflow
 
 
+def _file_references() -> Workflow:
+    """`.path` references, which the import writes back with `.path`, since CWL reads a plain File or Directory
+    reference as the object: an argument that starts with one, and an entry's glob, alone and inside text."""
+    fill = CommandLineTool("fill", Inputs(src=Input(cwl.file), out=Input(cwl.directory)), Outputs(
+        filled=Output(cwl.directory, glob="$(inputs.out.path)"),
+        copy=Output(cwl.file, glob="$(inputs.out.path)/copy.txt"))).base_command("cp").argument(
+        "$(inputs.src.path)", position=1).argument("$(inputs.out.path)/copy.txt", position=2)
+    step = fill.stage(fill.inputs.out, writable=True).to_step()
+    step.inputs.src, step.inputs.out = "/data/in.txt", "/data/out"
+    workflow = Workflow([step], "file_references")
+    workflow.outputs.filled, workflow.outputs.copy = step.outputs.filled, step.outputs.copy
+    return workflow
+
+
 def _example(name: str) -> Callable[[], Workflow]:
     def build() -> Workflow:
         path = REPO_ROOT / "examples" / "scripts" / f"{name}.py"
@@ -313,6 +327,7 @@ CASES: dict[str, Callable[[], Workflow]] = {
     "flat_crossproduct": _scatters("flat_crossproduct"), "nested_crossproduct": _scatters("nested_crossproduct"),
     "resources": _resources, "directories": _directories, "unary_whens": _unary_whens, "streams": _streams,
     "merged": _merged, "valued": _valued, "renamed": _renamed, "nested": _nested, "conditions": _conditions,
+    "file_references": _file_references,
     # The one workflow in examples/ the Nextflow target compiles.
     "helloworld_pyapi": _example("helloworld_pyapi"),
     "plan": plan_workflow, "months": lambda: months_workflow(Path("/data")), "summaries": summaries_workflow,

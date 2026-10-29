@@ -34,8 +34,9 @@ What the compile does not keep does not come back:
 - every choice that lowers to the same model: where a value came from (a tool
   or step default, an unbound optional input and a value written on a step
   each become a workflow input ``<step>_<port>`` holding it); a maximum
-  resource; ``dockerImageId``; whether a requirement was a hint;
-  ``$(inputs.<name>.path)``; ``type: stdout``; whether a token came from an
+  resource; ``dockerImageId``; whether a requirement was a hint; whether a File
+  or Directory reference was plain or ``.path``, which it is written as;
+  ``type: stdout``; whether a token came from an
   argument or an input's own binding, and its position; a single-input
   scatter's method; a ``when``'s spelling; adjacent ``shellQuote: false``
   texts; and a tool's input order.
@@ -159,26 +160,29 @@ def _stop(span: SourceSpan, what: str) -> NoReturn:
     raise SophiosError.error(SophiosErrorCode.IMPORT_UNWRITABLE, what, span=span)
 
 
-def _text(template: NfTemplate) -> str:
-    """The CWL text a template lowers from; literal text is escaped when the text interpolates."""
+def _text(template: NfTemplate, paths: frozenset[str]) -> str:
+    """The CWL text a template lowers from; literal text is escaped when the text interpolates. A reference to
+    one of ``paths``, the File and Directory inputs, is written with ``.path``: plain, CWL reads it as the object,
+    which it renders as JSON inside text and which no glob takes, while ``.path`` lowers to the same reference."""
     interpolates = any(not isinstance(segment, NfLiteral) or "$(" in segment.value or "${" in segment.value
                        for segment in template.segments)
     return "".join(
         (segment.value.replace("\\", "\\\\").replace("$(", "\\$(").replace("${", "\\${") if interpolates
          else segment.value) if isinstance(segment, NfLiteral)
         else f"$(inputs.{segment.name}.basename)" if isinstance(segment, NfBasenameReference)
+        else f"$(inputs.{segment.name}.path)" if segment.name in paths
         else f"$(inputs.{segment.name})"
         for segment in template.segments)
 
 
-def _argument(template: NfTemplate, position: int) -> dict[str, Any]:
+def _argument(template: NfTemplate, position: int, paths: frozenset[str]) -> dict[str, Any]:
     """An argument that lowers to ``template``: a leading literal is a prefix joined to the rest, as an input's own
     binding writes one, which CWL neither interpolates nor strips."""
     first, *rest = template.segments
     if isinstance(first, NfLiteral) and rest:
-        return {"value": _text(NfTemplate(tuple(rest))), "prefix": first.value, "separate": False,
+        return {"value": _text(NfTemplate(tuple(rest)), paths), "prefix": first.value, "separate": False,
                 "position": position}
-    return {"value": _text(template), "position": position}
+    return {"value": _text(template, paths), "position": position}
 
 
 def _item(model: ExecutableNextflowWorkflow, edge: _Incoming) -> str:
@@ -222,8 +226,8 @@ def _input(model: ExecutableNextflowWorkflow, process: NfProcess, port: NfPort, 
                  **binding)
 
 
-def _output(port: NfPort) -> Output:
-    glob = _text(port.glob or NfTemplate(()))
+def _output(port: NfPort, paths: frozenset[str]) -> Output:
+    glob = _text(port.glob or NfTemplate(()), paths)
     if port.capture == "text":
         return Output(cwl.string, glob=glob, load_contents=True, output_eval="$(self[0].contents)")
     return Output(_KINDS[port.path_kind or "file"], glob=glob, required=not port.optional,
@@ -235,6 +239,7 @@ def _tool(model: ExecutableNextflowWorkflow, process: NfProcess,
     """The tool that lowers to ``process``: leading literal words are its base command, and every other token
     has its index among the rest as its position."""
     command = process.command
+    paths = frozenset(port.name for port in process.inputs if port.qualifier == "path")
     lead = 0
     while lead < len(command.tokens) and isinstance(token := command.tokens[lead], NfTemplate) and all(
             isinstance(segment, NfLiteral) for segment in token.segments):
@@ -255,11 +260,12 @@ def _tool(model: ExecutableNextflowWorkflow, process: NfProcess,
             case NfShellLiteral(text=text):
                 arguments.append({"value": text, "shell_quote": False, "position": position})
             case NfTemplate():
-                arguments.append(_argument(token, position))
+                arguments.append(_argument(token, position, paths))
     inputs = Inputs(**{port.name: _input(model, process, port, incoming[(process.name, port.name)],
                                          bindings.get(port.name, {}))
                        for port in process.inputs})
-    tool = CommandLineTool(process.name, inputs, Outputs(**{port.name: _output(port) for port in process.outputs}))
+    tool = CommandLineTool(process.name, inputs, Outputs(
+        **{port.name: _output(port, paths) for port in process.outputs}))
     if words:
         tool.base_command(*words)
     for argument in arguments:
@@ -268,9 +274,9 @@ def _tool(model: ExecutableNextflowWorkflow, process: NfProcess,
         tool.shell_command()
     for stream, target in (("stdin", command.stdin), ("stdout", command.stdout), ("stderr", command.stderr)):
         if target is not None:
-            getattr(tool, stream)(_text(target))
+            getattr(tool, stream)(_text(target, paths))
     for variable in command.env:
-        tool.env_var(variable.name, _text(variable.value))
+        tool.env_var(variable.name, _text(variable.value, paths))
     for port in process.inputs:
         if port.entry is not None:
             tool.stage(inputs[port.name], writable=port.entry.copy, entryname=port.entry.name)
