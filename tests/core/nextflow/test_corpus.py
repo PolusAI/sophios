@@ -1,8 +1,8 @@
 """The corpus workflows the Nextflow target runs: each is compiled, run under Nextflow with Docker, and checked.
 
-Only the manual lane `.github/workflows/nextflow_corpus.yml` collects these tests. It checks out
-mm-workflows and image-workflows beside sophios, as `run_workflows.yml` does, and
-`.github/update_sophios_config.py` writes the config that reaches them.
+Only `.github/workflows/run_workflows.yml` collects these tests, on a push. It checks out
+mm-workflows and image-workflows beside sophios, and `.github/update_sophios_config.py` writes
+the config that reaches them.
 """
 from pathlib import Path
 import subprocess

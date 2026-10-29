@@ -185,12 +185,12 @@ def test_package_lanes_leave_nextflow_runtime_to_its_runtime_lane(workflow_name:
 
 @pytest.mark.fast
 def test_only_the_corpus_lane_runs_the_nextflow_corpus() -> None:
-    """The corpus runs need its checkouts, images and data; only the manual lane has them."""
+    """The corpus runs need its checkouts, images and data; only run_workflows.yml has them."""
     lanes = [(lane.name, argv) for lane in sorted(WORKFLOWS.glob('*.yml')) for argv in _invocations(lane)]
     corpus, *selected = _collect_all([['tests/core/nextflow', '-m', 'nextflow_corpus'], *(argv for _, argv in lanes)])
     assert corpus
-    assert {name for (name, _), tests in zip(lanes, selected) if tests & corpus} == {'nextflow_corpus.yml'}
-    assert corpus <= set().union(*(tests for (name, _), tests in zip(lanes, selected) if name == 'nextflow_corpus.yml'))
+    assert {name for (name, _), tests in zip(lanes, selected) if tests & corpus} == {'run_workflows.yml'}
+    assert corpus <= set().union(*(tests for (name, _), tests in zip(lanes, selected) if name == 'run_workflows.yml'))
 
 
 @pytest.mark.fast
