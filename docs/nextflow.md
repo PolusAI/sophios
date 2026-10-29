@@ -306,8 +306,9 @@ from. What the compile does not keep does not come back:
   tool's default, a step's default, an unbound optional input and a value
   written on a step each become a workflow input holding it); a maximum
   resource, read as the count it lowered to; `dockerImageId`, read as
-  `dockerPull`; whether a requirement was a hint; `$(inputs.<name>.path)`,
-  read as `$(inputs.<name>)`; `type: stdout`, read as a `File` output that
+  `dockerPull`; whether a requirement was a hint; a plain `$(inputs.<name>)`
+  of a `File` or `Directory` input, read as `$(inputs.<name>.path)`, which CWL
+  reads as text wherever it stands; `type: stdout`, read as a `File` output that
   globs the `stdout` name; whether a token came from an argument or an
   input's own binding, and its position; a single-input scatter's method;
   the spelling of a `when`; adjacent `shellQuote: false` texts, read as one;
@@ -356,8 +357,9 @@ array input, is rejected.
 
 ## Basename references
 
-`$(inputs.<name>.basename)` is supported in command arguments, stream targets,
-and output globs, so a tool can name its outputs after a staged input:
+`$(inputs.<name>.basename)` is supported in command arguments, stdout and
+stderr targets, and output globs, so a tool can name its outputs after a staged
+input:
 
 ```yaml
 outputs:
@@ -369,23 +371,37 @@ outputs:
 
 The reference must target a `File` or `Directory` input. Nextflow stages an
 input under its original file name, so the staged name is exactly the CWL
-`basename`. `$(inputs.<name>.path)` is the same reference as `$(inputs.<name>)`
-and is likewise admitted only on a `File` or `Directory` input. A bare
-`$(inputs.<name>)` of a `File` or `Directory` input must be the whole value:
-embedded in other text, such as `--input=$(inputs.f)`, CWL renders the File
-object as JSON, so it is rejected; write `$(inputs.f.path)` there instead.
+`basename`. `$(inputs.<name>.path)` is likewise admitted only on a `File` or
+`Directory` input. In a command argument it reads as a bare
+`$(inputs.<name>)` does, which there must be the whole value: embedded in
+other text, such as `--input=$(inputs.f)`, CWL renders the File object as
+JSON, so it is rejected; write `$(inputs.f.path)` there instead.
+
+A glob and a stream target must be strings, and each takes what CWL takes
+there, as a cwltool run of each form shows:
+
+| Reference to a `File` or `Directory` input | output glob | `stdin` | `stdout`, `stderr` |
+|---|---|---|---|
+| `$(inputs.f)` | rejected: the object | rejected: the object | rejected: the object |
+| `$(inputs.f.path)` | an entry's only: an absolute path is matched only under the output directory | alone, of a `File` only: stdin reads one staged file | rejected: an absolute path, where a relative name is needed |
+| `$(inputs.f.basename)` | yes; alone or before a path inside it, an entry's only | rejected: stdin names a file by its path | yes; alone or before a path inside it, a writable entry's only |
+
+The `.copy` suffix above is load-bearing: a glob, `stdout` or `stderr` that
+is only an input's own name, or a path inside it such as
+`$(inputs.d.basename)/listing.txt`, names the link the input is staged under,
+whatever the name is. A glob there would collect the input itself, which a
+CWL glob, matching only the output directory, does not; a `stdout` or
+`stderr` there writes through the link into the input, an upstream output or
+a workflow input, where cwltool writes a new file. Each is rejected. Derive a
+new name, as `$(inputs.f.basename).sorted`, or make the input an
+`InitialWorkDirRequirement` entry, below: a glob then collects the entry the
+task made, and a writable entry is a copy a stream may overwrite.
 
 A string holding a `$(…)` reference is interpolated as cwltool does: it is
 stripped of surrounding whitespace, `\$(` writes a literal `$(`, and `\\`
 writes one backslash. A string with no reference is used exactly as written.
 A `$` that is not followed by `(` or `{` is plain text, so a literal argument
 such as `mv a "$1"` reaches the command as written.
-
-The `.copy` suffix above is load-bearing: a basename glob must derive a **new**
-name. A glob that is only a reference to a `File` or `Directory` input names
-the staged input, which a CWL glob does not match, so it is rejected. The
-exception is an input made an `InitialWorkDirRequirement` entry under its own
-name, below: the glob then names the entry.
 
 A glob built only from basename references is matched literally, so a staged
 name containing `*`, `?`, `[`, `{` or `}` still finds the file. A `*`, `?` or
@@ -519,7 +535,9 @@ change it without touching the input, and a symlink otherwise. Because the
 task makes the entry, an output glob matches it as a CWL glob does.
 
 An entry under the input's own name is what the input names: a reference to
-the input, plain, `.path` or `.basename`, names the entry. This is how a tool
+the input names the entry, plain, `.path` or `.basename` in the command, and
+in a glob or a stream target as the table in Basename references allows. This
+is how a tool
 writes into an output directory it is given:
 
 ```yaml
@@ -589,8 +607,11 @@ from. An entry is checked against `stdout` and `stderr` only: a glob that
 names an entry collects it, as cwltool does, which is how a tool renames or
 passes on a file. A writable entry is the task's own copy, so writing it is
 not checked. A name that a workflow input gives, or that a pattern or a
-reference makes, is known only when the task runs, and is not checked; give
-a tool's outputs names distinct from its inputs' basenames.
+reference to another input makes, is known only when the task runs, and is
+not checked; give a tool's outputs names distinct from its inputs'
+basenames. A reference to the input itself is the name it is linked under,
+whatever that is, and is rejected as [Basename references](#basename-references)
+says.
 
 ## Scatter
 
