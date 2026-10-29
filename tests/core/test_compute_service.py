@@ -60,14 +60,21 @@ class Cluster:
         """Make Slurm say `line`, `<name>|<state>|<exit code>|<start>|<end>|<time limit>`, of `job`."""
         (self.slurm / f'{job}.sacct').write_text(line + '\n', encoding='utf-8')
 
+    def exit_of(self, run: compute.Run) -> str:
+        """The exit status of `run`'s job script, once it has ended: the fake `sbatch` writes it to `<job>.exit`."""
+        ended = self.slurm / f'{run.slurm_job}.exit'
+        for _ in range(1800):
+            if ended.exists() and ended.read_text('utf-8').strip():
+                return ended.read_text('utf-8').strip()
+            time.sleep(0.1)
+        raise AssertionError(f'the job script of {run.id} did not end')
+
     def leader(self, run: compute.Run, state: str) -> None:
-        """Make Slurm say `run`'s leader is `state`, once its job script has written the output object."""
-        if state == 'COMPLETED':
-            for _ in range(100):
-                if (self.runs / run.id / 'outputs.json').exists():
-                    break
-                time.sleep(0.1)
-        self.says(run.slurm_job, f'{run.id}|{state}|0:0|2026-10-26T10:00:00|2026-10-26T10:05:00|1-00:00:00')
+        """Make Slurm say `run`'s leader is `state`: an end only once its job script has ended, with the status it
+        ended with, as Slurm does. The driver cancels what a run left in Slurm's queue once it records the end, so an
+        end said earlier would cancel the job script before it has written what the test reads."""
+        status = '0' if state in ('PENDING', 'RUNNING') else self.exit_of(run)
+        self.says(run.slurm_job, f'{run.id}|{state}|{status}:0|2026-10-26T10:00:00|2026-10-26T10:05:00|1-00:00:00')
 
 
 def _free_port() -> int:
@@ -211,13 +218,14 @@ def test_a_run_that_fails_is_a_status_from_wait_naming_why_and_its_log_says_so(c
     """`wait` returns the FAILED run's status, raising nothing, with the service's reason; `leader.log` has why."""
     jobs = cluster.slurm / 'jobs'
     after = 1000 + (len(jobs.read_text('utf-8').splitlines()) if jobs.exists() else 0)
-    cluster.says(str(after), 'svc|FAILED|1:0|2026-10-26T10:00:00|2026-10-26T10:05:00|1-00:00:00')
-    (cluster.slurm.parent / 'toil' / 'bin' / 'toil-cwl-runner.fail').write_text('', encoding='utf-8')
+    failing = cluster.slurm.parent / 'toil' / 'bin' / 'toil-cwl-runner.fail'
+    failing.write_text('', encoding='utf-8')
     try:
         run = compute.Service(cluster.url).submit(_workflow(cluster))
-        status = run.wait()
+        cluster.leader(run, 'FAILED')
     finally:
-        (cluster.slurm.parent / 'toil' / 'bin' / 'toil-cwl-runner.fail').unlink()
+        failing.unlink()
+    status = run.wait()
     assert (status.state, status.reason, run.slurm_job) == (
         RunState.FAILED, 'the workflow failed; see leader.log', str(after))
     assert 'the workflow failed' in run.logs()
@@ -337,12 +345,7 @@ def _writes(directory: Path, out: str) -> Workflow:
 
 def _ended(cluster: Cluster, run: compute.Run) -> RunStatus:
     """Once real Toil has run the job to its end, the run's status: Slurm says COMPLETED for exit 0, else FAILED."""
-    ended = cluster.slurm / f'{run.slurm_job}.exit'
-    for _ in range(1800):
-        if ended.exists() and ended.read_text('utf-8').strip():
-            break
-        time.sleep(0.1)
-    cluster.leader(run, 'COMPLETED' if ended.read_text('utf-8').strip() == '0' else 'FAILED')
+    cluster.leader(run, 'COMPLETED' if cluster.exit_of(run) == '0' else 'FAILED')
     return run.wait()
 
 
