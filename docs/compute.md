@@ -172,7 +172,7 @@ print(run.logs())
 | | Local, `workflow.start()` | On the cluster, `service.submit(workflow, config)` |
 |---|---|---|
 | `status()` | Where the run is, without blocking: a `RunStatus` | The same, asked anew of the service |
-| `wait(timeout=None)` | Blocks until the run ends, and returns its `RunStatus`: a run that failed or was cancelled is returned, not raised. After `timeout` seconds it raises `TimeoutError`, and the run goes on | The same, asking every 10 s and printing a line per change of the run's state and of each step's; Ctrl-C leaves the run going |
+| `wait(timeout=None)` | Blocks until the run ends, and returns its `RunStatus`: a run that failed or was cancelled is returned, not raised. After `timeout` seconds it raises `TimeoutError`, and the run goes on | The same, asking every 10 s and printing a line per change of the run's state and of each step's, the run's end last; Ctrl-C leaves the run going |
 | `outputs()` | The workflow's output object once the run has completed; `None` until then | The same |
 | `logs()` | Everything the runner has printed so far | `leader.log`, Toil's log of the whole run, so far; `''` until Slurm has started the leader |
 | `cancel()` | Stops the run: `True` once it is `CANCELLED`, by this call or before; `False` when it had ended `COMPLETED` or `FAILED`, which it stays | The same, for a run you submitted and every job of it in Slurm's queue: sent once, then waited for as `wait(300)` waits: a run that has not ended within five minutes raises `TimeoutError`, its cancel still recorded |

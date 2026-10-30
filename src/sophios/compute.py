@@ -553,8 +553,9 @@ class Run:
     def wait(self, timeout: float | None = None) -> RunStatus:
         """Ask every POLL seconds until the run ends, printing a line per change of its state and of each step's.
 
-        A run that FAILED or was CANCELLED is returned as one: nothing is raised for it. On Ctrl-C the run goes on,
-        and how to follow it again is printed.
+        A poll's run line comes before its step lines, but the run's end after them, so the end is the last line
+        printed. A run that FAILED or was CANCELLED is returned as one: nothing is raised for it. On Ctrl-C the run
+        goes on, and how to follow it again is printed.
 
         Raises:
             TimeoutError: It had not ended within `timeout` seconds; it goes on.
@@ -566,14 +567,16 @@ class Run:
         try:
             while True:
                 status = self.status()
-                if (status.state, status.reason) != shown:
+                line = f'{self.id}: {status.state.value}' + (f' ({status.reason})' if status.reason else '')
+                if status.state not in _ENDED and (status.state, status.reason) != shown:
                     shown = (status.state, status.reason)
-                    print(f'{self.id}: {status.state.value}' + (f' ({status.reason})' if status.reason else ''))
+                    print(line)
                 for entry in self._answer.get('steps') or ():
                     if steps.get(str(entry.get('slurmJobId'))) != entry.get('state'):
                         steps[str(entry.get('slurmJobId'))] = str(entry.get('state'))
                         print(f'{self.id}: step {_step_name(entry)} {entry.get("state")}')
                 if status.state in _ENDED:
+                    print(line)
                     return status
                 left = POLL if deadline is None else deadline - time.monotonic()
                 if left <= 0:

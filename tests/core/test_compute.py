@@ -408,6 +408,22 @@ def test_wait_returns_a_run_that_did_not_complete_as_its_status_and_raises_nothi
 
 
 @pytest.mark.fast
+def test_wait_prints_the_runs_start_before_its_steps_lines_and_its_end_after_them(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A step and the run that change in one poll: the run's line comes first while it goes on, last once it ended."""
+    monkeypatch.setattr(compute.time, 'sleep', lambda _seconds: None)
+
+    def answer(state: str, step: str) -> requests.Response:
+        return _answer(200, {'id': 'r1', 'state': state, 'reason': None,
+                             'steps': [{'name': 'show', 'state': step, 'slurmJobId': '8'}]})
+    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): [
+        _run('QUEUED'), answer('RUNNING', 'RUNNING'), answer('COMPLETED', 'COMPLETED')]})
+    assert compute.Service('unix:///api.sock').attach('r1').wait().state is RunState.COMPLETED
+    assert capsys.readouterr().out.splitlines() == [
+        'r1: RUNNING', 'r1: step show RUNNING', 'r1: step show COMPLETED', 'r1: COMPLETED']
+
+
+@pytest.mark.fast
 def test_logs_are_the_leaders_log_of_the_whole_run_never_a_steps(monkeypatch: pytest.MonkeyPatch) -> None:
     """`leader.log`, even when a step failed with logs of its own, as the local handle's `logs` is the runner's."""
     failed = {'id': 'r1', 'state': 'FAILED', 'reason': 'step show failed (exit code 1:0); see its logs',
