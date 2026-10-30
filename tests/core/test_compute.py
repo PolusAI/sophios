@@ -517,7 +517,7 @@ def _run(state: str, reason: str | None = None) -> requests.Response:
 @pytest.mark.parametrize(('answers', 'cancelled'), [
     ([_run('CANCELLED', 'cancelled by request')], True),
     ([_run('COMPLETED')], False),
-    ([_run('FAILED', 'the workflow failed; see leader.log')], False),
+    ([_run('FAILED', "the workflow failed; see the run's log, GET /runs/r1/logs/leader.log")], False),
     ([_run('RUNNING', 'cancel requested at 2026-10-27T10:00:00Z'), _run('CANCELLED', 'cancelled by request')], True)])
 def test_cancel_is_sent_once_and_says_whether_the_run_is_cancelled_as_future_cancel_does(
         monkeypatch: pytest.MonkeyPatch, answers: list[requests.Response], cancelled: bool) -> None:

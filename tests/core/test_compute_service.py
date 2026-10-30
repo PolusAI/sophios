@@ -2,9 +2,9 @@
 
 The driver runs as it does on a cluster, `node src/main.ts` on a Unix socket, which the tests reach as
 `unix:///socket`, from the checkout `SOPHIOS_SLURM_DRIVER` names: the `packages/slurm-driver` directory of
-vjaganat90/compute, branch vasu_revamp, at the commit this client is written against, f766539. Its fake `sbatch`
-runs each leader's job script, whose fake Toil prints an output object; what Slurm says of a job is the line a test
-writes into `<job>.sacct` beside the fakes, as the driver's own tests do. Node 26 or later must be on PATH.
+vjaganat90/compute, branch vasu_revamp. Its fake `sbatch` runs each leader's job script, whose fake Toil prints an
+output object; what Slurm says of a job is the line a test writes into `<job>.sacct` beside the fakes, as the
+driver's own tests do. Node 26 or later must be on PATH.
 
 The driver's repository is private, so no CI lane runs this file: it is a local lane, run by hand,
 
@@ -42,8 +42,8 @@ from sophios.python_cwl_adapter import import_python_file
 
 pytestmark = [pytest.mark.skip_pypi_ci, pytest.mark.skipif(
     'SOPHIOS_SLURM_DRIVER' not in os.environ,
-    reason='set SOPHIOS_SLURM_DRIVER to the packages/slurm-driver directory of a vjaganat90/compute checkout at '
-    'f766539, on its branch vasu_revamp, the commit this client is written against'),
+    reason='set SOPHIOS_SLURM_DRIVER to the packages/slurm-driver directory of a vjaganat90/compute checkout, on '
+    'its branch vasu_revamp'),
     pytest.mark.skipif(sys.platform == 'win32', reason='the compute client needs macOS, Linux or WSL')]
 
 
@@ -232,7 +232,7 @@ def test_a_run_that_fails_is_a_status_from_wait_naming_why_and_its_log_says_so(c
         failing.unlink()
     status = run.wait()
     assert (status.state, status.reason, run.slurm_job) == (
-        RunState.FAILED, 'the workflow failed; see leader.log', str(after))
+        RunState.FAILED, f"the workflow failed; see the run's log, GET /runs/{run.id}/logs/leader.log", str(after))
     assert 'the workflow failed' in run.logs()
 
 
