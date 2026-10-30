@@ -782,3 +782,16 @@ def test_ssh_that_does_not_forward_fails_at_once_with_its_own_error_and_leaves_n
         said)
     assert arguments[-2] == f'{directory / "api.sock"}:/run/slurm-driver/api.sock'
     assert _ended(pid) and not directory.exists()
+
+
+@pytest.mark.fast
+@pytest.mark.skipif(sys.platform == 'win32', reason=_WINDOWS)
+def test_an_ssh_that_cannot_be_run_is_unavailable_in_the_systems_words_and_leaves_nothing(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """None on PATH: cmp002 naming ssh, never a bare FileNotFoundError, and no directory left of its forward."""
+    monkeypatch.setenv('PATH', str(tmp_path / 'bin'))
+    monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+    with pytest.raises(compute.ServiceUnavailable) as unavailable:
+        compute.Service('ssh://cluster')
+    assert unavailable.value.messages == ("ssh could not be run: [Errno 2] No such file or directory: 'ssh'",)
+    assert not list(tmp_path.iterdir())

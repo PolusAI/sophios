@@ -36,7 +36,8 @@ on your machine, on a connection of its own (a ControlMaster's is never
 shared, so each `Service` logs in once), and closes the forward when the
 `Service` is closed (`with Service(url) as service:`) or Python exits; a
 Ctrl-C leaves it open. An ssh that fails, say an unknown host or a refused
-key, fails `Service(url)` at once, with ssh's own error, and so does the
+key, fails `Service(url)` at once, with ssh's own error, as does one that
+cannot be run, say none on PATH, with the system's; and so does the
 next call once ssh has ended, say on a dropped connection: a new
 `Service(url)` forwards again. Sophios stores neither the URL nor anything
 else of a service.
@@ -208,16 +209,16 @@ codes belong to the compute client alone: a `ComputeError` is never a
   use, or a real-time analysis; or a cancel of a run another account
   submitted. Each problem is a line, at the input or field it is about; do
   what it says. A relative path sent without `basepath` says to give one.
-- `cmp002`, `ServiceUnavailable`: Sophios runs on Windows itself, the URL
-  is not one the service is reached at, ssh failed before it forwarded the
-  socket or has ended since, the
-  `Service` is closed, or the service could not be reached, stayed busy for five minutes (Sophios asks again every 5 s
-  meanwhile, which never starts a second run), failed, or speaks another
-  version of the contract; or something other than the service answered at
-  the URL. Check that the URL names the socket the service listens on, and
-  that the service runs, then make the same call again; when the versions
-  differ, upgrade Sophios or the service. A submission cut short this way
-  says the run may exist, and how to attach.
+- `cmp002`, `ServiceUnavailable`: Sophios runs on Windows itself, the URL is
+  not one the service is reached at, ssh could not be run, failed before it
+  forwarded the socket or has ended since, the `Service` is closed, or the
+  service could not be reached, stayed busy for five minutes (Sophios asks
+  again every 5 s meanwhile, which never starts a second run), failed, or
+  speaks another version of the contract; or something other than the service
+  answered at the URL. Check that the URL names the socket the service
+  listens on, and that the service runs, then make the same call again; when
+  the versions differ, upgrade Sophios or the service. A submission cut short
+  this way says the run may exist, and how to attach.
 
 A run that fails raises nothing, as a local one started with `start()`
 does: `wait()` returns its status, `FAILED`, whose `reason` says why, and

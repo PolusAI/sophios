@@ -107,9 +107,9 @@ class RequestRefused(ComputeError):
 
 
 class ServiceUnavailable(ComputeError):
-    """Sophios runs on Windows itself, the URL is not one the service is reached at, ssh failed before it forwarded
-    the socket or has ended since, the `Service` is closed, or the service could not be reached, stayed busy, failed,
-    speaks another contract, or something else answered in its place."""
+    """Sophios runs on Windows itself, the URL is not one the service is reached at, ssh could not be run, failed
+    before it forwarded the socket or has ended since, the `Service` is closed, or the service could not be reached,
+    stayed busy, failed, speaks another contract, or something else answered in its place."""
 
     code = 'cmp002'
 
@@ -248,19 +248,23 @@ def _forward(url: str) -> tuple['subprocess.Popen[bytes]', str]:
     outlives a Ctrl-C in the session.
 
     Raises:
-        ServiceUnavailable: ssh ended first, or nothing answered through it, with ssh's own error.
+        ServiceUnavailable: ssh could not be run, ended first, or nothing answered through it, with its own error.
     """
     parts = urlsplit(url)
     remote = parts.path or SOCKET
     directory = tempfile.mkdtemp(prefix='sophios-')  # only its owner may open it, and the socket in it
     local = os.path.join(directory, 'api.sock')
-    with open(os.path.join(directory, 'ssh.log'), 'wb') as log:
-        ssh = subprocess.Popen(  # pylint: disable=consider-using-with,subprocess-popen-preexec-fn  # see above
-            ['ssh', '-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'StreamLocalBindUnlink=yes', '-o', 'ControlPath=none',
-             '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4',
-             '-L', f'{local}:{remote}', f'ssh://{parts.netloc}'], stdin=subprocess.DEVNULL, stderr=log,
-            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_IGN))
+    ssh: 'subprocess.Popen[bytes] | None' = None
     try:
+        with open(os.path.join(directory, 'ssh.log'), 'wb') as log:
+            try:
+                ssh = subprocess.Popen(  # pylint: disable=consider-using-with,subprocess-popen-preexec-fn  # see above
+                    ['ssh', '-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'StreamLocalBindUnlink=yes',
+                     '-o', 'ControlPath=none', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4',
+                     '-L', f'{local}:{remote}', f'ssh://{parts.netloc}'], stdin=subprocess.DEVNULL, stderr=log,
+                    preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_IGN))
+            except OSError as error:  # no ssh to run, as when none is on PATH
+                raise ServiceUnavailable(f'ssh could not be run: {error}') from error
         while ssh.poll() is None:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
                 try:
@@ -280,7 +284,7 @@ def _forward(url: str) -> tuple['subprocess.Popen[bytes]', str]:
         ssh.wait()
         raise ServiceUnavailable(f'ssh to {parts.netloc} did not forward the compute service\'s socket {remote}:',
                                  *_said_by(directory))
-    except BaseException:  # Ctrl-C at a prompt too: ssh, which ignores it, would go on asking
+    except BaseException:  # whatever it is, Ctrl-C at a prompt too: ssh, which ignores it, would go on asking
         _unforward(ssh, directory)
         raise
 
@@ -291,12 +295,13 @@ def _said_by(directory: str) -> list[str]:
         return log.read().splitlines()
 
 
-def _unforward(ssh: 'subprocess.Popen[bytes]', directory: str, http: requests.Session | None = None) -> None:
-    """End `ssh`'s forward and its directory, once `http`'s connections through it are closed."""
+def _unforward(ssh: 'subprocess.Popen[bytes] | None', directory: str, http: requests.Session | None = None) -> None:
+    """End `ssh`'s forward, when ssh was run, and its directory, once `http`'s connections through it are closed."""
     if http is not None:
         http.close()
-    ssh.terminate()
-    ssh.wait()
+    if ssh is not None:
+        ssh.terminate()
+        ssh.wait()
     shutil.rmtree(directory)
 
 
@@ -451,7 +456,7 @@ class Service:
     Raises:
         ServiceUnavailable: This is Windows itself, whatever `url` is: the compute client needs macOS, Linux or WSL;
             `url` is neither, http:// and https:// included, which need an HTTPS gateway in front of the service,
-            which there is not yet; or ssh ended before it forwarded the socket, with its error.
+            which there is not yet; or ssh could not be run, or ended before it forwarded the socket, with its error.
     """
 
     def __init__(self, url: str) -> None:
