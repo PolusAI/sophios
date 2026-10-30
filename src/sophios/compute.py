@@ -107,8 +107,9 @@ class RequestRefused(ComputeError):
 
 
 class ServiceUnavailable(ComputeError):
-    """The service could not be reached, stayed busy, failed, speaks another contract, or something else answered in
-    its place."""
+    """Sophios runs on Windows itself, the URL is not one the service is reached at, ssh failed before it forwarded
+    the socket or has ended since, the `Service` is closed, or the service could not be reached, stayed busy, failed,
+    speaks another contract, or something else answered in its place."""
 
     code = 'cmp002'
 
@@ -341,6 +342,9 @@ class _Client:
     the local end of an SSH forward to it, which `close` closes."""
 
     def __init__(self, url: str) -> None:
+        if sys.platform == 'win32':  # no Unix socket there, nor the preexec_fn the forward's ssh is started with
+            raise ServiceUnavailable('the compute client needs macOS, Linux or WSL: it reaches the service over a Unix '
+                                     'socket, which Python on Windows itself cannot open; run Sophios inside WSL')
         self.url = url
         self.http = requests.Session()
         self.http.trust_env = False  # no proxy, nor .netrc: nothing but the socket is between Sophios and the service
@@ -445,8 +449,9 @@ class Service:
     nor anything else of a service.
 
     Raises:
-        ServiceUnavailable: `url` is neither, http:// and https:// included, which need an HTTPS gateway in front of
-            the service, which there is not yet; or ssh ended before it forwarded the socket, with its error.
+        ServiceUnavailable: This is Windows itself, whatever `url` is: the compute client needs macOS, Linux or WSL;
+            `url` is neither, http:// and https:// included, which need an HTTPS gateway in front of the service,
+            which there is not yet; or ssh ended before it forwarded the socket, with its error.
     """
 
     def __init__(self, url: str) -> None:

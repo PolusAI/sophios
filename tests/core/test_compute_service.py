@@ -43,7 +43,8 @@ from sophios.python_cwl_adapter import import_python_file
 pytestmark = [pytest.mark.skip_pypi_ci, pytest.mark.skipif(
     'SOPHIOS_SLURM_DRIVER' not in os.environ,
     reason='set SOPHIOS_SLURM_DRIVER to the packages/slurm-driver directory of a vjaganat90/compute checkout at '
-    'f766539, on its branch vasu_revamp, the commit this client is written against')]
+    'f766539, on its branch vasu_revamp, the commit this client is written against'),
+    pytest.mark.skipif(sys.platform == 'win32', reason='the compute client needs macOS, Linux or WSL')]
 
 
 @dataclass(frozen=True)

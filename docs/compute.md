@@ -44,6 +44,10 @@ else of a service.
 `http://` and `https://` are refused: they need an HTTPS gateway in front of
 the service, which there is not yet.
 
+The compute client needs macOS, Linux or WSL. On Windows itself, Python
+cannot open a Unix socket, and `Service(url)` raises `cmp002` for every URL,
+saying so: run Sophios inside WSL.
+
 Who may do what is the service's, and follows from who may log into its
 host:
 
@@ -204,8 +208,9 @@ codes belong to the compute client alone: a `ComputeError` is never a
   use, or a real-time analysis; or a cancel of a run another account
   submitted. Each problem is a line, at the input or field it is about; do
   what it says. A relative path sent without `basepath` says to give one.
-- `cmp002`, `ServiceUnavailable`: the URL is not one the service is reached
-  at, ssh failed before it forwarded the socket or has ended since, the
+- `cmp002`, `ServiceUnavailable`: Sophios runs on Windows itself, the URL
+  is not one the service is reached at, ssh failed before it forwarded the
+  socket or has ended since, the
   `Service` is closed, or the service could not be reached, stayed busy for five minutes (Sophios asks again every 5 s
   meanwhile, which never starts a second run), failed, or speaks another
   version of the contract; or something other than the service answered at

@@ -281,11 +281,18 @@ def _text(text: str) -> requests.Response:
     return _raw(200, text, _SERVICE)
 
 
+#: Why a test that makes a Service skips on Windows itself, where Service refuses every URL. The fake service, its
+#: socket and the stand-in for ssh each skip so, and so does a test that makes one without them.
+_WINDOWS: typing.Final = 'the compute client needs macOS, Linux or WSL'
+
+
 def _serving(monkeypatch: pytest.MonkeyPatch,
              answers: dict[tuple[str, str], requests.Response | Exception | list[requests.Response | Exception]]
              ) -> list[tuple[str, str, object]]:
     """Have every HTTP call answered from `answers`, by method and path, a list's answers one per call in turn; each
     call is appended to the list returned, as its method, path and timeout."""
+    if sys.platform == 'win32':
+        pytest.skip(_WINDOWS)
     calls: list[tuple[str, str, object]] = []
 
     def request(_: requests.Session, method: str, url: str, **options: object) -> requests.Response:
@@ -583,6 +590,8 @@ class _Driver(BaseHTTPRequestHandler):
 @pytest.fixture(name='driver')
 def _driver() -> Iterator[Path]:
     """The socket `_Driver` answers on, in a directory whose path is short enough for a Unix socket's."""
+    if sys.platform == 'win32':
+        pytest.skip(_WINDOWS)
     with tempfile.TemporaryDirectory() as directory, \
             socketserver.ThreadingUnixStreamServer(os.path.join(directory, 'api.sock'), _Driver) as server:
         threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -632,6 +641,8 @@ while True:
 @pytest.fixture(name='ssh_calls')
 def _ssh_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Where the stand-in for ssh, first on PATH, records each run of it."""
+    if sys.platform == 'win32':
+        pytest.skip(_WINDOWS)
     ssh = tmp_path / 'ssh'
     ssh.write_text(_SSH.replace('{python}', sys.executable), encoding='utf-8')
     ssh.chmod(0o755)
@@ -673,6 +684,7 @@ def test_a_cancel_the_service_refuses_is_raised_in_its_words(driver: Path) -> No
 
 
 @pytest.mark.fast
+@pytest.mark.skipif(sys.platform == 'win32', reason=_WINDOWS)
 @pytest.mark.parametrize('url', ['http://cluster:7998', 'https://compute.example.org', 'cluster'])
 def test_a_url_but_ssh_and_unix_is_refused_there_being_no_https_gateway(url: str) -> None:
     """http:// and https:// need an HTTPS gateway in front of the service, which there is not yet."""

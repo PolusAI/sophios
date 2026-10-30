@@ -325,7 +325,9 @@ jobs:
         run: cd sophios/ && pytest tests/core/test_plain_cwl.py
 
       # No runner runs on Windows, so a run there stops at the pre-flight (wic029)
-      # and starts nothing. The tests run on the Windows leg and skip elsewhere.
+      # and starts nothing; nor does the compute client, which needs a Unix
+      # socket, reach a service (cmp002). The tests run on the Windows leg and
+      # skip elsewhere.
       - name: PyTest Runs Where No Runner Runs
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: cd sophios/ && pytest tests/core/test_run_on_windows.py
