@@ -1,75 +1,56 @@
-"""Canonical end-to-end example: tool_builder -> Workflow -> compute request."""
+"""Canonical end-to-end example: tool_builder -> Workflow -> the compute service.
 
-from datetime import datetime
-from pathlib import Path
+The outputs are copied into a folder on the cluster, the one `RunConfig` is made with (the output mode
+`workflowOutDir`): the supported way.
+"""
 
-from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
+import json
+import sys
+
+from sophios.api.python.workflow import RunState, Step, Workflow
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.compute_request import (
-    ComputeExecutionConfig,
-    ComputeOutputConfig,
-    ComputeRequest,
-    SlurmJobConfig,
-    ToilRuntimeConfig,
-)
+from sophios.compute import RunConfig, Service, build_request
 
-
-SUBMIT_URL: str | None = None
+#: The compute service: the host it runs on, over your own ssh, such as 'ssh://login.cluster.example.org'. None
+#: only builds and prints the request.
+SERVICE_URL: str | None = None
+#: The directory on the cluster the paths below are relative to.
+BASEPATH = '/projects/collabs/mock_common'
 
 
 def build_autoseg_CLT() -> CommandLineTool:
-    """Create the SAM3 autosegmentation CLT using the declarative API."""
+    """Create the SAM2.1 autosegmentation CLT, the ichnaea segmentation plugin's, using the declarative API."""
     inputs = Inputs(
-        input=Input(cwl.directory, position=1).label(
-            "Input Zarr dataset").doc("Path to input zarr dataset"),
-        output=Input(cwl.directory, position=2).label("Output segmentation Zarr").doc(
-            "Path for output segmentation zarr"
+        input=Input(cwl.directory, flag="--inpDir", position=1).label(
+            "Input OME-Zarr").doc("The OME-Zarr volume: its root, which holds .zattrs"),
+        output=Input(cwl.directory, flag="--outDir", position=2).label("Output segmentation OME-Zarr").doc(
+            "An empty folder; filled with a copy of the input whose level 0 holds the labels"
         ),
-        model=Input(cwl.file, flag="--model", required=False)
-        .label("Model override file")
-        .doc("Path containing sam3.pt to override baked-in models/sam3"),
-        tile_size=Input(cwl.int, flag="--tile-size", required=False)
-        .label("Tile size")
-        .doc("Tile size for large slices (default 1024)"),
-        overlap=Input(cwl.int, flag="--overlap", required=False)
-        .label("Tile overlap")
-        .doc("Overlap between adjacent tiles in pixels (default 128)"),
-        iou_threshold=Input(cwl.float, flag="--iou-threshold", required=False)
-        .label("IoU threshold")
-        .doc("IoU threshold for matching labels across tiles (default 0.5)"),
-        batch_size=Input(cwl.int, flag="--batch-size", required=False)
-        .label("Batch size")
-        .doc("Number of tiles per GPU forward pass (default 8)"),
-        lora_weights=Input(cwl.file, flag="--lora-weights", required=False)
-        .label("LoRA weights")
-        .doc("Path to LoRA adapter weights (.pt file) - optional"),
-        lora_rank=Input(cwl.int, flag="--lora-rank", required=False)
-        .label("LoRA rank")
-        .doc("LoRA rank used when lora_weights is set (default 16)"),
-        lora_alpha=Input(cwl.int, flag="--lora-alpha", required=False)
-        .label("LoRA alpha")
-        .doc("LoRA alpha scaling factor used when lora_weights is set (default 32)"),
+        model=Input(cwl.directory)
+        .label("Models folder")
+        .doc("Staged as ./models, from which the plugin loads sam2.1_hiera_small.pt"),
     )
     outputs = Outputs(output=Output(
-        cwl.directory, glob="$(inputs.output.basename)").label("Output segmentation Zarr"))
+        cwl.directory, glob="$(inputs.output.basename)").label("Output segmentation OME-Zarr"))
 
     return (
-        CommandLineTool("sam3_ome_zarr_autosegmentation", inputs, outputs)
+        CommandLineTool("ichnaea_segmentation", inputs, outputs)
         .describe(
-            "SAM3 OME Zarr autosegmentation",
-            "Run SAM3 autosegmentation on a zarr volume.\n",
+            "ichnaea segmentation",
+            "SAM2.1 autosegmentation of an OME-Zarr volume, one Z slice at a time.\n",
         )
         .edam()
-        .gpu(cuda_version_min="11.7", compute_capability="3.0", device_count_min=2)
-        .docker("polusai/ichnaea-api:latest")
+        # One device: it runs on torch.device("cuda"); its torch wheels are built for CUDA 12.6.
+        .gpu(cuda_version_min="12.6", compute_capability="3.0", device_count_min=1)
+        .docker("vjaganat90/ichnaea-segmentation-plugin:devn")
         .stage(inputs.output, writable=True)
-        .stage(inputs.input)
+        # It opens models/sam2.1_hiera_small.pt relative to its working directory, the job's output folder.
+        .stage(inputs.model, entryname="models")
         .resources(cores=4, ram=64000)
-        .base_command(
-            "/backend/.venv/bin/python",
-            "/backend/dagster_pipelines/jobs/autosegmentation/logic.py",
-        )
+        # No base command: the image's ENTRYPOINT, python3 -m ichnaea.segmentation, is the command. Docker and
+        # `singularity run` put it in front of these options, and CWL cannot override it, so this tool relies on it
+        # (see docs/running.md, Images that rely on an entrypoint).
     )
 
 
@@ -83,7 +64,7 @@ def workflow(input_dicts: dict[str, str], workflow_name: str) -> Workflow:
     # assign input values to the step
     autoseg.output = input_dicts['output_dir']
     autoseg.input = input_dicts['input_dir']
-    autoseg.model = input_dicts['model_file']
+    autoseg.model = input_dicts['model_dir']
     # =========== CREATE A SOPHIOS WORKFLOW ==========
     # arrange steps
     steps = [autoseg]
@@ -93,50 +74,36 @@ def workflow(input_dicts: dict[str, str], workflow_name: str) -> Workflow:
     return wkflw
 
 
-def create_compute_request(workflow_id: str, compiled_workflow: CompiledWorkflow) -> ComputeRequest:
-    """Return a compute request object for the compiled workflow."""
-    return ComputeRequest(
-        compiled_workflow,
-        workflow_id=workflow_id,
-        compute_config=ComputeExecutionConfig(
-            toil=ToilRuntimeConfig(log_level="INFO"),
-            output=ComputeOutputConfig.workflow_declared(),
-            slurm=SlurmJobConfig(partition="normal_gpu", cpus_per_task=4),
-        ),
-    )
-
-
 def main() -> int:
-    """Build the workflow, create the compute request, and optionally submit it."""
+    """Build the workflow and its request; run it on the compute service when SERVICE_URL is set."""
     # ========== INPUTS TO WORKFLOW ==================
-    # The main directory constants
-    inputs_dir = Path('/projects/collabs/mock_common/')
-    input_dicts = {}
-    input_dicts['input_dir'] = str(inputs_dir / 'input_directory')
-    input_dicts['output_dir'] = str(inputs_dir / 'output_directory_compact')
-    input_dicts['model_file'] = str(inputs_dir / 'model_directory' / 'sam3.pt')
+    # What the tool reads: paths on the cluster, relative to BASEPATH, as written; Sophios never looks at them.
+    # The input is the OME-Zarr volume's root; the models folder holds sam2.1_hiera_small.pt.
+    # The output folder is just a name: the service makes it in the run, and copies it into the RunConfig's folder
+    # under that name.
+    input_dicts = {'input_dir': 'input_directory', 'output_dir': 'segmentation_compact',
+                   'model_dir': 'model_directory'}
 
     # ========== BUILD WORKFLOW ======================
     autoseg_workflow = workflow(input_dicts, "autoseg_workflow")
-    compiled_workflow = autoseg_workflow.compile()
+    # The outputs are copied into results_compact: the output folder lands in results_compact/segmentation_compact.
+    config = (RunConfig(f'{BASEPATH}/results_compact')
+              .basepath(BASEPATH)
+              .steps(partition='normal', gpu_partition='normal_gpu'))
 
-    # ========== COMPUTE INPUT =======================
-    # workflow Name
-    workflow_name = compiled_workflow.name
-    # adjust workflow name/id to distinguish after submit using a timestamp
-    workflow_name = workflow_name + '__' + \
-        datetime.now().strftime('%Y_%m_%d_%H.%M.%S') + '__'
-
-    # ========== CONSTRUCT COMPUTE OBJECT ============
-    compute_request = create_compute_request(workflow_name, compiled_workflow)
-
-    if SUBMIT_URL is None:
-        print("Built compute request object in memory. Set SUBMIT_URL to submit it.")
+    if SERVICE_URL is None:
+        request = build_request(autoseg_workflow, config)
+        print(json.dumps(request, indent=4))
+        print("Set SERVICE_URL to run it.")
         return 0
 
-    # =========  SUBMIT TO COMPUTE ===================
-    submission = compute_request.submit(SUBMIT_URL)
-    return submission.exit_code
+    # =========  RUN ON THE COMPUTE SERVICE ===========
+    run = Service(SERVICE_URL).submit(autoseg_workflow, config)
+    if run.wait().state is not RunState.COMPLETED:
+        print(run.logs(), file=sys.stderr)  # Toil's log of the whole run
+        return 1
+    print(f'{run.id} COMPLETED: {run.outputs()}')
+    return 0
 
 
 if __name__ == '__main__':

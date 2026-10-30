@@ -24,7 +24,6 @@ import yaml
 import sophios
 import sophios.api.python._workflow_runtime as python_runtime
 import sophios.compiler
-import sophios.compute_request as compute_request_module
 import sophios.plugins
 import sophios.post_compile
 from sophios import input_output as io
@@ -38,7 +37,6 @@ from sophios.api.python.workflow import (_python_api_types_match, ApiError, Comp
                                          SophiosErrorCode, Step, StepInput, Workflow)
 from sophios.cli import default_compilation_settings
 from sophios.lang import CwlRecord, InlineLiteral, parse, to_json, wic_schema
-from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest, ComputeSubmission
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.post_compile import inline_artifact_runs
 from sophios.python_cwl_adapter import import_python_file
@@ -474,123 +472,6 @@ def test_output_target_directories_reject_absolute_locations(tmp_path: Path) -> 
 
 
 @pytest.mark.fast
-def test_compute_request_accepts_compiled_python_workflow() -> None:
-    """A compiled workflow becomes a compute request whose JSON round-trips."""
-    emit_step = Step(_emit_text_tool(), step_name="emit_text")
-    emit_step.inputs.message = "hello from compute"
-
-    workflow = Workflow([emit_step], "compute_request_workflow_demo")
-    compiled = workflow.compile()
-    request = ComputeRequest(
-        compiled,
-        workflow_id="compute_request_workflow_demo",
-        compute_config=ComputeExecutionConfig(output=ComputeOutputConfig.workflow_declared()),
-    )
-    request_mapping = request.to_mapping()
-    request_json = request.to_json()
-
-    assert isinstance(request_json, str)
-    assert json.loads(request_json) == request_mapping
-    assert request_mapping["id"] == "compute_request_workflow_demo"
-    assert request_mapping["cwlWorkflow"]["class"] == "Workflow"
-    assert request_mapping["cwlWorkflow"]["steps"][0]["run"]["class"] == "CommandLineTool"
-    assert request_mapping["computeConfig"]["outputConfig"]["mode"] == "workflowDeclared"
-    input_key = next(iter(request_mapping["cwlJobInputs"]))
-    assert input_key.endswith("emit_text~message")
-    assert request_mapping["cwlJobInputs"][input_key] == "hello from compute"
-
-
-@pytest.mark.fast
-def test_compute_request_submit_returns_structured_submission(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Submission returns a typed result, not a raw response to be parsed again."""
-    posted: dict[str, Any] = {}
-    log_path = tmp_path / "compute.log"
-
-    class FakeResponse:
-        def __init__(self, body: Json, *, ok: bool = True, status_code: int = 200) -> None:
-            self._body = body
-            self.ok = ok
-            self.status_code = status_code
-            self.text = json.dumps(body)
-
-        def json(self) -> Json:
-            """The decoded body this stub was constructed with."""
-            return self._body
-
-    class FakeSession:
-        def __enter__(self) -> "FakeSession":
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            return None
-
-        def post(
-            self,
-            url: str,
-            *,
-            data: str,
-            headers: dict[str, str],
-            timeout: tuple[int, int],
-        ) -> FakeResponse:
-            """Record the submission and return the canned response."""
-            posted.update(
-                {
-                    "url": url,
-                    "data": json.loads(data),
-                    "headers": headers,
-                    "timeout": timeout,
-                }
-            )
-            return FakeResponse({"ok": True})
-
-        def get(self, url: str, *, timeout: tuple[int, int]) -> FakeResponse:
-            """Return the canned response for a polled workflow."""
-            del timeout
-            posted.setdefault("get_urls", []).append(url)
-            if url.endswith("/logs/"):
-                return FakeResponse({"log": "hello"})
-            return FakeResponse({"status": "RUNNING"})
-
-    monkeypatch.setattr(compute_request_module.requests, "Session", FakeSession)
-
-    compiled = CompiledWorkflow("workflow-1", {"class": "Workflow", "inputs": {}, "outputs": {}, "steps": []}, {})
-    request = ComputeRequest(compiled)
-    submission = request.submit("http://example.test/compute", poll_interval_seconds=0, log_path=log_path)
-
-    assert submission == ComputeSubmission(
-        workflow_id="workflow-1",
-        phase="RUNNING",
-        accepted=True,
-        submit_response={"ok": True},
-        status_response={"status": "RUNNING"},
-        logs={"log": "hello"},
-    )
-    assert submission.ok
-    assert submission.exit_code == 0
-    assert posted["url"] == "http://example.test/compute/"
-    assert posted["data"]["id"] == "workflow-1"
-    assert posted["headers"] == {"Content-Type": "application/json"}
-    assert posted["get_urls"] == [
-        "http://example.test/compute/workflow-1/status/",
-        "http://example.test/compute/workflow-1/logs/",
-    ]
-    assert log_path.read_text(encoding="utf-8") == "{'log': 'hello'}"
-
-
-@pytest.mark.fast
-def test_compute_request_submit_requires_workflow_id() -> None:
-    """A submission without a workflow id is refused before any request is made."""
-    compiled = CompiledWorkflow("", {"class": "Workflow", "inputs": {}, "outputs": {}, "steps": []}, {})
-    request = ComputeRequest(compiled)
-
-    with pytest.raises(ValueError, match="requires workflow_id"):
-        request.submit("http://example.test/compute")
-
-
-@pytest.mark.fast
 def test_workflow_compile_boundary_hides_compiler_info() -> None:
     """`compile()` hands back a `CompiledWorkflow` and nothing of the compiler.
 
@@ -973,36 +854,6 @@ def test_workflow_run_quiet_run_arg(
     cmd = _api_run_command(monkeypatch, tmp_path, {"quiet": quiet})
     assert ("--quiet" in cmd) is expected
     assert not {"yes", "no", "true", "false", "True", "False"} & set(cmd)
-
-
-@pytest.mark.fast
-def test_run_compute_does_not_apply_local_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A compute submission carries the workflow and its inputs, and no local environment."""
-    submitted: dict[str, Any] = {}
-
-    def fake_submit(
-        request: ComputeRequest,
-        submit_url: str,
-        *,
-        log_path: Path,
-    ) -> ComputeSubmission:
-        submitted["request"] = request
-        submitted["submit_url"] = submit_url
-        submitted["log_path"] = log_path
-        return ComputeSubmission("wf", "RUNNING", True)
-
-    monkeypatch.setattr(run_local.utils, "is_valid_url", lambda _url: True)
-    monkeypatch.setattr(ComputeRequest, "submit", fake_submit)
-
-    workflow: Json = {"class": "Workflow", "inputs": {}, "outputs": [], "steps": []}
-    workflow_inputs: Json = {}
-
-    assert run_local.run_compute("wf", workflow, workflow_inputs, "http://compute.test") == 0
-
-    assert submitted["request"].cwl_workflow == workflow
-    assert submitted["request"].cwl_job_inputs == workflow_inputs
-    assert submitted["submit_url"] == "http://compute.test"
-    assert str(submitted["log_path"]).startswith("compute_logs_wf__")
 
 
 @pytest.mark.fast

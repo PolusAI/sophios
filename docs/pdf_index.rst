@@ -84,6 +84,6 @@ Sophios documentation
 
 .. toctree::
    :maxdepth: 2
-   :caption: Compute client
+   :caption: Compute service
 
    compute

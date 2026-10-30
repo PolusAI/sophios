@@ -255,8 +255,8 @@ Run it later on this machine, or read it to see what a run does.
 `cwltool_filterlog` is cwltool, started with two noisy log messages
 filtered out. The compiled workflow and job file it names are standard CWL,
 so a CWL runner on another machine needs only them, the step files beside
-them, and the files the job and the tools name. To send a workflow to a separate compute
-service instead, see [The compute client](compute.md).
+them, and the files the job and the tools name. To send a workflow to the cluster's compute
+service instead, see [The compute service](compute.md).
 
 ## Images that rely on an entrypoint
 
