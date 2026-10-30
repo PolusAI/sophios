@@ -1,10 +1,10 @@
 """`sophios.compute` against the compute service itself: the slurm driver, under its own fake Slurm and fake Toil.
 
-The driver runs as it does on a cluster, `node src/main.ts`, from the checkout `SOPHIOS_SLURM_DRIVER` names: the
-`packages/slurm-driver` directory of vjaganat90/compute, branch vasu_revamp, at the commit this client is written
-against, 02e2a23. Its fake `sbatch` runs each leader's job script, whose fake Toil prints an output object; what
-Slurm says of a job is the line a test writes into `<job>.sacct` beside the fakes, as the driver's own tests do.
-Node 26 or later must be on PATH.
+The driver runs as it does on a cluster, `node src/main.ts` on a Unix socket, which the tests reach as
+`unix:///socket`, from the checkout `SOPHIOS_SLURM_DRIVER` names: the `packages/slurm-driver` directory of
+vjaganat90/compute, branch vasu_revamp, at the commit this client is written against, f766539. Its fake `sbatch`
+runs each leader's job script, whose fake Toil prints an output object; what Slurm says of a job is the line a test
+writes into `<job>.sacct` beside the fakes, as the driver's own tests do. Node 26 or later must be on PATH.
 
 The driver's repository is private, so no CI lane runs this file: it is a local lane, run by hand,
 
@@ -18,9 +18,9 @@ passes by skipping.
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -43,12 +43,13 @@ from sophios.python_cwl_adapter import import_python_file
 pytestmark = [pytest.mark.skip_pypi_ci, pytest.mark.skipif(
     'SOPHIOS_SLURM_DRIVER' not in os.environ,
     reason='set SOPHIOS_SLURM_DRIVER to the packages/slurm-driver directory of a vjaganat90/compute checkout at '
-    '02e2a23, on its branch vasu_revamp, the commit this client is written against')]
+    'f766539, on its branch vasu_revamp, the commit this client is written against')]
 
 
 @dataclass(frozen=True)
 class Cluster:
-    """A driver running under fake Slurm: its URL, and the directories a test reads and steers."""
+    """A driver running under fake Slurm: its URL, unix:// and its socket, and the directories a test reads and
+    steers."""
 
     url: str
     driver: Path
@@ -77,39 +78,42 @@ class Cluster:
         self.says(run.slurm_job, f'{run.id}|{state}|{status}:0|2026-10-26T10:00:00|2026-10-26T10:05:00|1-00:00:00')
 
 
-def _free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(('127.0.0.1', 0))
-        return int(probe.getsockname()[1])
+def _get(cluster: Cluster, path: str) -> requests.Response:
+    """`GET path` of the driver, over its socket, as Sophios makes every call."""
+    return compute._Client(cluster.url).call('GET', path)  # pylint: disable=protected-access
 
 
 @contextmanager
 def _serving(root: Path, toil_env: Path) -> Iterator[Cluster]:
     """The driver of `SOPHIOS_SLURM_DRIVER`, over the fakes copied into `root` and the Toil env `toil_env`,
-    listening on a free port of 127.0.0.1; its log is `root/driver.log`."""
+    listening on a socket in a directory of its own, whose path is short enough for a Unix socket's; its log is
+    `root/driver.log`."""
     driver = Path(os.environ['SOPHIOS_SLURM_DRIVER']).resolve()
     node = shutil.which('node')
     assert node is not None, 'the slurm driver needs Node 26 or later on PATH'
     shutil.copytree(driver / 'test' / 'fake', root, dirs_exist_ok=True)
     for name in ('data', 'shared', 'images', 'home'):
         (root / name).mkdir()
-    port = _free_port()
+    sockets = Path(tempfile.mkdtemp())
     env = {'HOME': str(root / 'home'), 'PATH': f'{root / "slurm"}:/usr/bin:/bin', 'DATA_DIR': str(root / 'data'),
            'SHARED_ROOTS': str(root / 'shared'), 'TOIL_ENV': str(toil_env), 'IMAGE_CACHE': str(root / 'images'),
            'LEADER_PARTITION': 'normal', 'LEADER_TIME': '1-00:00:00', 'LEADER_MEMORY': '8G', 'LEADER_CPUS': '2',
-           'PORT': str(port)}
+           'SOCKET_PATH': str(sockets / 'api.sock')}
     log = root / 'driver.log'
     with log.open('w', encoding='utf-8') as stderr, \
             subprocess.Popen([node, 'src/main.ts'], cwd=driver, env=env, stderr=stderr) as process:
         try:
             for _ in range(300):
-                if 'listening on http://127.0.0.1' in log.read_text('utf-8') or process.poll() is not None:
+                if 'listening on' in log.read_text('utf-8') or process.poll() is not None:
                     break
                 time.sleep(0.1)
             assert process.poll() is None, log.read_text('utf-8')
-            yield Cluster(f'http://127.0.0.1:{port}', driver, root / 'slurm', root / 'shared', root / 'data' / 'runs')
+            yield Cluster(f'unix://{sockets / "api.sock"}', driver, root / 'slurm', root / 'shared',
+                          root / 'data' / 'runs')
         finally:
             process.terminate()
+            process.wait()
+            shutil.rmtree(sockets)
 
 
 @pytest.fixture(scope='module', name='cluster')
@@ -151,9 +155,9 @@ def _workflow(cluster: Cluster, location: str | None = None, name: str = 'svc') 
 
 def test_the_client_runs_on_the_contract_and_the_schema_the_driver_serves(cluster: Cluster) -> None:
     """Sophios's copy of the schema is the driver's, and so is the major version of the contract it speaks."""
-    served = requests.get(f'{cluster.url}/run-request.schema.json', timeout=10).json()
+    served = _get(cluster, '/run-request.schema.json').json()
     assert served == compute.SCHEMA == json.loads((cluster.driver / 'run-request.schema.json').read_text('utf-8'))
-    contract = requests.get(f'{cluster.url}/openapi.json', timeout=10).json()
+    contract = _get(cluster, '/openapi.json').json()
     assert contract['info']['version'].split('.')[0] == str(compute.CONTRACT)
 
 
@@ -173,7 +177,7 @@ def test_a_run_is_submitted_followed_and_reattached_and_its_answers_are_the_cont
     assert compute.Service(cluster.url).attach(run.id).status().state is RunState.COMPLETED
     assert 'fake toil-cwl-runner' in run.logs()
 
-    contract = requests.get(f'{cluster.url}/openapi.json', timeout=10).json()
+    contract = _get(cluster, '/openapi.json').json()
     registry = Registry().with_resources([
         ('openapi.json', Resource.from_contents(contract, default_specification=DRAFT202012)),
         ('run-request.schema.json', Resource.from_contents(compute.SCHEMA))])
@@ -182,8 +186,8 @@ def test_a_run_is_submitted_followed_and_reattached_and_its_answers_are_the_cont
         validator = Draft202012Validator({'$ref': f'openapi.json#/components/schemas/{schema}'}, registry=registry)
         assert not list(validator.iter_errors(answer.json())), answer.text
 
-    valid(requests.get(f'{cluster.url}/runs/{run.id}', timeout=10), 'Run')
-    valid(requests.get(f'{cluster.url}/runs/nope', timeout=10), 'Errors')
+    valid(_get(cluster, f'/runs/{run.id}'), 'Run')
+    valid(_get(cluster, '/runs/nope'), 'Errors')
 
 
 def test_a_request_the_driver_refuses_names_each_input_and_says_to_send_basepath(cluster: Cluster) -> None:

@@ -31,7 +31,9 @@ dependencies = [
     "jsonschema",
     "pyyaml",
     "ruamel.yaml",
-    "requests",
+    # 2.32.2 gives an adapter its pool through get_connection_with_tls_context,
+    # which sophios.compute overrides to make every call over a Unix socket.
+    "requests>=2.32.2",
     "mergedeep",
     "cwl-utils>=0.32",
     # CommandInputParameter attr changed from `type_` to `type` and back to `type_`

@@ -196,8 +196,9 @@ for a `StepInput` default against the working directory.
   slurm driver. It compiles through the runtime adapter's `service_document`,
   which is `compile()` without the local run's rewrite of output folders,
   checks the request against its copy of the service's
-  `run-request.schema.json`, and follows the run over HTTP. It is not part of
-  the Python API, and never goes through the pre-flight.
+  `run-request.schema.json`, and follows the run over HTTP on the service's
+  Unix socket, reached through the user's own `ssh`. It is not part of the
+  Python API, and never goes through the pre-flight.
 
 ## Compatibility contract
 

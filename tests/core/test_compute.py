@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """The compute service's request, as Sophios builds it: `sophios.compute.build_request`, and its run, as a `Run`
 follows it.
 
@@ -8,10 +9,16 @@ import inspect
 import json
 import os
 import re
+import socketserver
+import stat
 import subprocess
 import sys
+import tempfile
+import threading
 import typing
+from collections.abc import Iterator
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 import pytest
@@ -239,7 +246,7 @@ def test_a_workflow_that_does_not_compile_is_a_sophios_error_and_nothing_is_sent
     step = Step(CommandLineTool('count', Inputs(n=Input(cwl.int, position=1)), Outputs()).base_command('echo'))
     step.inputs.n = 'not an int'
     with pytest.raises(SophiosError) as raised:
-        compute.Service('http://127.0.0.1:1').submit(Workflow([step], 'count'))
+        compute.Service('unix:///api.sock').submit(Workflow([step], 'count'))
     assert [diagnostic.code for diagnostic in raised.value.diagnostics] == [SophiosErrorCode.LITERAL_TYPE_MISMATCH]
     assert not calls
 
@@ -303,7 +310,7 @@ def test_a_service_that_speaks_another_contract_is_refused_before_anything_is_se
     """The major version is read once, from openapi.json."""
     _serving(monkeypatch, {('GET', 'openapi.json'): _answer(200, {'info': {'version': '3.1.0'}})})
     with pytest.raises(compute.ServiceUnavailable, match='speaks contract 3.1.0, and this Sophios speaks 2'):
-        compute.Service('http://127.0.0.1:1').submit(_workflow())
+        compute.Service('unix:///api.sock').submit(_workflow())
 
 
 @pytest.mark.fast
@@ -313,10 +320,10 @@ def test_a_submission_lost_on_the_way_says_the_run_may_exist_and_how_to_follow_i
     monkeypatch.setattr(compute, 'PATIENCE', 0.0)
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('POST', 'runs'): requests.ConnectionError('gone')})
     with pytest.raises(compute.ServiceUnavailable) as unavailable:
-        compute.Service('http://127.0.0.1:1').submit(_workflow())
+        compute.Service('unix:///api.sock').submit(_workflow())
     could_not, may_exist = unavailable.value.messages
-    assert could_not == 'the compute service at http://127.0.0.1:1 could not be reached (ConnectionError), for 0 s'
-    assert re.fullmatch(r"run (segment-\S+) may exist all the same: Service\('http://127.0.0.1:1'\)\.attach\('\1'\) "
+    assert could_not == 'the compute service at unix:///api.sock could not be reached (ConnectionError), for 0 s'
+    assert re.fullmatch(r"run (segment-\S+) may exist all the same: Service\('unix:///api.sock'\)\.attach\('\1'\) "
                         r'follows it, and the same request sent again never starts a second one', may_exist)
 
 
@@ -326,7 +333,7 @@ def test_an_answer_the_contract_does_not_document_is_the_services_failure(monkey
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT,
                            ('GET', 'runs/r1'): _answer(500, {'errors': [{'message': 'the driver failed'}]})})
     with pytest.raises(compute.ServiceUnavailable, match='answered 500: the driver failed'):
-        compute.Service('http://127.0.0.1:1').attach('r1')
+        compute.Service('unix:///api.sock').attach('r1')
 
 
 @pytest.mark.fast
@@ -337,7 +344,7 @@ def test_a_refusal_is_each_problem_of_the_service_in_its_words_at_the_authored_i
                'message': 'models/sam3.pt is relative: send basepath, the cluster directory it is relative to'}
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('POST', 'runs'): _answer(400, {'errors': [refusal]})})
     with pytest.raises(compute.RequestRefused) as refused:
-        compute.Service('http://127.0.0.1:1').submit(_workflow())
+        compute.Service('unix:///api.sock').submit(_workflow())
     assert refused.value.messages == (
         'input write~model: models/sam3.pt is relative: send basepath, the cluster directory it is relative to',)
 
@@ -353,7 +360,7 @@ def test_a_status_takes_what_it_knows_and_leaves_the_rest(monkeypatch: pytest.Mo
         'steps': [{'name': None, 'state': 'FAILED', 'exitCode': '1:0', 'slurmJobId': '8', 'logs': []}],
         'warnings': [{'pointer': '/inputs/write~out/location', 'message': 'is empty; the run writes into it'}]}
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _answer(200, answer)})
-    run = compute.Service('http://127.0.0.1:1').attach('r1')
+    run = compute.Service('unix:///api.sock').attach('r1')
     assert capsys.readouterr().err == ('WARNING from the compute service: input write~out: is empty; the run '
                                        'writes into it\n')
     status = run.status()
@@ -368,7 +375,7 @@ def test_ctrl_c_while_waiting_leaves_the_run_going_and_says_how_to_follow_it(
     """The interrupt goes on up, after one line on how to attach again."""
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT,
                            ('GET', 'runs/r1'): _answer(200, {'id': 'r1', 'state': 'QUEUED'})})
-    run = compute.Service('http://127.0.0.1:1').attach('r1')
+    run = compute.Service('unix:///api.sock').attach('r1')
 
     def interrupted() -> None:
         raise KeyboardInterrupt
@@ -376,7 +383,7 @@ def test_ctrl_c_while_waiting_leaves_the_run_going_and_says_how_to_follow_it(
     with pytest.raises(KeyboardInterrupt):
         run.wait()
     assert capsys.readouterr().err.strip() == (
-        "Run r1 goes on in Slurm: Service('http://127.0.0.1:1').attach('r1') follows it again, and its cancel() "
+        "Run r1 goes on in Slurm: Service('unix:///api.sock').attach('r1') follows it again, and its cancel() "
         'stops it.')
 
 
@@ -387,7 +394,7 @@ def test_wait_returns_a_run_that_did_not_complete_as_its_status_and_raises_nothi
     """As the local handle's `wait`: the run's status however it ended, with the service's reason, printed once."""
     ended = {'id': 'r1', 'state': state.value, 'reason': 'Slurm will never start the leader (PartitionTimeLimit)'}
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _answer(200, ended)})
-    status = compute.Service('http://127.0.0.1:1').attach('r1').wait()
+    status = compute.Service('unix:///api.sock').attach('r1').wait()
     assert (status.state, status.reason, status.outputs) == (
         state, 'Slurm will never start the leader (PartitionTimeLimit)', None)
     assert capsys.readouterr().out == f'r1: {state.value} (Slurm will never start the leader (PartitionTimeLimit))\n'
@@ -401,7 +408,7 @@ def test_logs_are_the_leaders_log_of_the_whole_run_never_a_steps(monkeypatch: py
     calls = _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _answer(200, failed),
                                    ('GET', 'runs/r1/logs/leader.log'): _text('the leader\n'),
                                    ('GET', 'runs/r1/logs/failed_CWLJob_show_000.log'): _text('boom\n')})
-    run = compute.Service('http://127.0.0.1:1').attach('r1')
+    run = compute.Service('unix:///api.sock').attach('r1')
     assert run.wait().steps[0].name == 'show'
     assert run.logs() == 'the leader\n'
     assert calls[-1][:2] == ('GET', 'runs/r1/logs/leader.log')
@@ -415,7 +422,7 @@ def test_a_run_whose_leader_slurm_never_started_has_no_log_and_logs_is_empty(mon
     missing = {'errors': [{'message': 'the run has no log leader.log, or not yet'}]}
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _answer(200, never),
                            ('GET', 'runs/r1/logs/leader.log'): _answer(404, missing)})
-    assert compute.Service('http://127.0.0.1:1').attach('r1').logs() == ''
+    assert compute.Service('unix:///api.sock').attach('r1').logs() == ''
 
 
 @pytest.mark.fast
@@ -430,22 +437,23 @@ def test_a_compute_run_is_the_local_handle_but_for_what_each_has_alone() -> None
 
 @pytest.mark.fast
 @pytest.mark.parametrize('page', [_raw(404, '<html>Not Found</html>', {}), _raw(200, '<html>It works!</html>', {})])
-def test_anything_but_the_service_answering_is_unavailable_and_names_the_tunnel(
+def test_anything_but_the_service_answering_is_unavailable_and_names_the_socket(
         monkeypatch: pytest.MonkeyPatch, page: requests.Response) -> None:
     """The service names itself in every answer's Server header: a page from anything else, a 404 or a 200, is
     neither a refusal nor a run nor a log, for submit, status and logs alike."""
-    tunnel = ('http://127.0.0.1:1 answered, but not as the compute service: check that your tunnel reaches its socket',)
+    stranger = ('unix:///api.sock answered, but not as the compute service: check that it names the socket the '
+                'service listens on',)
     _serving(monkeypatch, {('GET', 'openapi.json'): page})
     with pytest.raises(compute.ServiceUnavailable) as unavailable:
-        compute.Service('http://127.0.0.1:1').submit(_workflow())
-    assert unavailable.value.messages == tunnel
+        compute.Service('unix:///api.sock').submit(_workflow())
+    assert unavailable.value.messages == stranger
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): [_run('RUNNING'), page],
                            ('GET', 'runs/r1/logs/leader.log'): page})
-    run = compute.Service('http://127.0.0.1:1').attach('r1')
+    run = compute.Service('unix:///api.sock').attach('r1')
     for asked in (run.status, run.logs):
         with pytest.raises(compute.ServiceUnavailable) as unavailable:
             asked()
-        assert unavailable.value.messages == tunnel
+        assert unavailable.value.messages == stranger
 
 
 @pytest.mark.fast
@@ -453,8 +461,8 @@ def test_an_answer_of_the_service_that_is_not_json_is_its_failure(monkeypatch: p
     """Every answer of the service but a log is JSON; one that is not is the service's failure, not a crash."""
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _text('<html>oops</html>')})
     with pytest.raises(compute.ServiceUnavailable) as unavailable:
-        compute.Service('http://127.0.0.1:1').attach('r1')
-    assert unavailable.value.messages == ('the compute service at http://127.0.0.1:1 answered 200, not in JSON',)
+        compute.Service('unix:///api.sock').attach('r1')
+    assert unavailable.value.messages == ('the compute service at unix:///api.sock answered 200, not in JSON',)
 
 
 @pytest.mark.fast
@@ -467,20 +475,20 @@ def test_a_busy_service_is_asked_again_every_5_s_whatever_its_retry_after_says(
     busy = _answer(503, {'errors': [{'message': 'sacct failed'}]}, {'Retry-After': 'Wed, 28 Oct 2026 07:28:00 GMT'})
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT,
                            ('GET', 'runs/r1'): [busy, _raw(502, '<html>Bad Gateway</html>', {}), _run('QUEUED')]})
-    assert compute.Service('http://127.0.0.1:1').attach('r1').id == 'r1'
+    assert compute.Service('unix:///api.sock').attach('r1').id == 'r1'
     assert pauses == [5.0, 5.0]
 
 
 @pytest.mark.fast
 def test_an_answer_cut_short_is_asked_for_again(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The service cuts the connection when it fails after the headers, as a log read may, and so does a tunnel
+    """The service cuts the connection when it fails after the headers, as a log read may, and so does an SSH forward
     that drops: the call is made again, as when the service cannot be reached."""
     pauses: list[float] = []
     monkeypatch.setattr(compute.time, 'sleep', pauses.append)
     cut = requests.exceptions.ChunkedEncodingError('cut')
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _run('RUNNING'),
                            ('GET', 'runs/r1/logs/leader.log'): [cut, _text('x')]})
-    assert compute.Service('http://127.0.0.1:1').attach('r1').logs() == 'x'
+    assert compute.Service('unix:///api.sock').attach('r1').logs() == 'x'
     assert pauses == [5.0]
 
 
@@ -513,7 +521,7 @@ def test_cancel_is_sent_once_and_says_whether_the_run_is_cancelled_as_future_can
     monkeypatch.setattr(compute.time, 'sleep', pauses.append)
     calls = _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('POST', 'runs/r1/cancel'): [answers[0]],
                                    ('GET', 'runs/r1'): [_run('RUNNING'), *answers]})
-    run = compute.Service('http://127.0.0.1:1').attach('r1')
+    run = compute.Service('unix:///api.sock').attach('r1')
     assert run.cancel() is cancelled
     assert [path for method, path, _ in calls if method == 'POST'] == ['runs/r1/cancel']
     assert pauses == [compute.POLL] * (len(answers) - 1)
@@ -529,7 +537,7 @@ def test_a_cancel_slurm_never_acts_on_is_waited_for_as_wait_patience_and_never_s
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): running,
                            ('POST', 'runs/r1/cancel'): [running]})
     with pytest.raises(TimeoutError, match='run r1 has not ended within 0 s; it goes on'):
-        compute.Service('http://127.0.0.1:1').attach('r1').cancel()
+        compute.Service('unix:///api.sock').attach('r1').cancel()
 
 
 @pytest.mark.fast
@@ -540,6 +548,225 @@ def test_a_submission_may_take_longer_than_a_status_read_before_it_is_sent_again
     accepted = _answer(201, {'id': 'x', 'state': 'QUEUED', 'slurmJobId': '7'})
     calls = _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('POST', 'runs'): accepted,
                                    ('GET', 'runs/x'): _answer(200, {'id': 'x', 'state': 'QUEUED'})})
-    compute.Service('http://127.0.0.1:1').submit(_workflow()).status()
+    compute.Service('unix:///api.sock').submit(_workflow()).status()
     assert [(method, path, timeout) for method, path, timeout in calls] == [
         ('GET', 'openapi.json', (10.0, 60.0)), ('POST', 'runs', (10.0, 300.0)), ('GET', 'runs/x', (10.0, 60.0))]
+
+
+class _Driver(BaseHTTPRequestHandler):
+    """The service, as far as these tests ask it, on a Unix socket: its contract, the run r1, and a cancel of r1
+    refused, as the service refuses one by an account that did not submit the run."""
+
+    server_version, sys_version = 'slurm-driver/2.0.0', ''
+    answers: typing.ClassVar = {
+        ('GET', '/openapi.json'): (200, {'openapi': '3.1.0', 'info': {'version': '2.0.0'}}),
+        ('GET', '/runs/r1'): (200, {'id': 'r1', 'state': 'RUNNING'}),
+        ('POST', '/runs/r1/cancel'): (403, {'errors': [{'message': 'run r1 was submitted by alice: only alice, or '
+                                                                   'the service account, may cancel it'}]})}
+
+    def _answer(self) -> None:
+        """Answer the call as `answers` says."""
+        status, body = self.answers[(self.command, self.path)]
+        data = json.dumps(body).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    do_GET = do_POST = _answer
+
+    def log_message(self, *_: object) -> None:  # pylint: disable=arguments-differ  # quiet
+        pass
+
+
+@pytest.fixture(name='driver')
+def _driver() -> Iterator[Path]:
+    """The socket `_Driver` answers on, in a directory whose path is short enough for a Unix socket's."""
+    with tempfile.TemporaryDirectory() as directory, \
+            socketserver.ThreadingUnixStreamServer(os.path.join(directory, 'api.sock'), _Driver) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        yield Path(directory) / 'api.sock'
+        server.shutdown()
+
+
+#: A stand-in for ssh, on PATH: it records its pid, whether it ignores Ctrl-C, and its arguments, a JSON line each
+#: run, then forwards each connection to the local socket of `-L local:remote` to its "remote" socket, on this
+#: machine, as ssh does, saying why and closing the connection when there is nothing to connect to there; or fails as
+#: ssh fails to reach a host called nowhere; or, for a host called slow, waits as ssh waits for a password.
+_SSH = """#!{python}
+import json, os, signal, socket, sys, threading, time
+with open(os.path.join(os.path.dirname(__file__), 'calls'), 'a', encoding='utf-8') as calls:
+    print(json.dumps([os.getpid(), signal.getsignal(signal.SIGINT) == signal.SIG_IGN, *sys.argv[1:]]), file=calls)
+if sys.argv[-1].endswith('nowhere'):
+    sys.exit(print('ssh: Could not resolve hostname nowhere: Name or service not known', file=sys.stderr) or 255)
+if sys.argv[-1].endswith('slow'):
+    time.sleep(60)
+local, remote = sys.argv[sys.argv.index('-L') + 1].split(':')
+
+def relay(source, sink):
+    try:
+        while data := source.recv(65536):
+            sink.sendall(data)
+        sink.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass
+
+listener = socket.socket(socket.AF_UNIX)
+listener.bind(local)
+listener.listen()
+while True:
+    near, _ = listener.accept()
+    far = socket.socket(socket.AF_UNIX)
+    try:
+        far.connect(remote)
+    except OSError as error:
+        print(f'channel 2: open failed: connect failed: {error.strerror}', file=sys.stderr)
+        near.close()
+        continue
+    for ends in ((near, far), (far, near)):
+        threading.Thread(target=relay, args=ends, daemon=True).start()
+"""
+
+
+@pytest.fixture(name='ssh_calls')
+def _ssh_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Where the stand-in for ssh, first on PATH, records each run of it."""
+    ssh = tmp_path / 'ssh'
+    ssh.write_text(_SSH.replace('{python}', sys.executable), encoding='utf-8')
+    ssh.chmod(0o755)
+    monkeypatch.setenv('PATH', f'{tmp_path}{os.pathsep}{os.environ["PATH"]}')
+    return tmp_path / 'calls'
+
+
+def _ssh_run(calls: Path) -> tuple[int, bool, list[str], Path]:
+    """The one run of ssh: its pid, whether it ignores Ctrl-C, its arguments and the directory of its local socket."""
+    (line,) = calls.read_text('utf-8').splitlines()
+    pid, ignores_ctrl_c, *arguments = json.loads(line)
+    return pid, ignores_ctrl_c, arguments, Path(arguments[arguments.index('-L') + 1].split(':')[0]).parent
+
+
+def _ended(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+@pytest.mark.fast
+def test_a_service_on_this_host_is_reached_at_its_socket(driver: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """unix:///socket: every call goes over the socket, the Server header read as from any service, and never by
+    way of the proxy the environment names."""
+    monkeypatch.setenv('HTTP_PROXY', 'http://proxy.invalid:3128')
+    with compute.Service(f'unix://{driver}') as service:
+        assert service.attach('r1').status().state is RunState.RUNNING
+
+
+@pytest.mark.fast
+def test_a_cancel_the_service_refuses_is_raised_in_its_words(driver: Path) -> None:
+    """403, a run another account submitted: refused in the service's words, never taken for a run that ended."""
+    with pytest.raises(compute.RequestRefused) as refused:
+        compute.Service(f'unix://{driver}').attach('r1').cancel()
+    assert refused.value.messages == ('run r1 was submitted by alice: only alice, or the service account, may '
+                                      'cancel it',)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('url', ['http://cluster:7998', 'https://compute.example.org', 'cluster'])
+def test_a_url_but_ssh_and_unix_is_refused_there_being_no_https_gateway(url: str) -> None:
+    """http:// and https:// need an HTTPS gateway in front of the service, which there is not yet."""
+    with pytest.raises(compute.ServiceUnavailable) as unavailable:
+        compute.Service(url)
+    assert unavailable.value.messages == (
+        f'{url} is not where the compute service is: it is reached over SSH, as ssh://[user@]host[:port][/socket] '
+        '(the socket by default /run/slurm-driver/api.sock), or on its own host, as unix:///socket; http:// and '
+        'https:// need an HTTPS gateway in front of the service, which there is not yet',)
+
+
+@pytest.mark.fast
+def test_ssh_forwards_a_private_socket_to_the_services_until_the_service_is_closed(
+        ssh_calls: Path, driver: Path) -> None:
+    """The user's own ssh, its prompts left to the terminal (no BatchMode), on a connection no ControlMaster holds,
+    deaf to the Ctrl-C the terminal sends Python too: a socket in a directory only its owner may open, no TCP port,
+    forwarded to the socket the URL names; closed, ssh has ended, the directory is gone, and a run of it is refused at
+    once, never asked again for PATIENCE seconds as a service that cannot be reached is."""
+    with compute.Service(f'ssh://alice@cluster:2222{driver}') as service:
+        run = service.attach('r1')
+        assert run.status().state is RunState.RUNNING
+        pid, ignores_ctrl_c, arguments, directory = _ssh_run(ssh_calls)
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    assert arguments == ['-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'StreamLocalBindUnlink=yes',
+                         '-o', 'ControlPath=none', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4',
+                         '-L', f'{directory / "api.sock"}:{driver}', 'ssh://alice@cluster:2222']
+    assert ignores_ctrl_c
+    assert _ended(pid) and not directory.exists()
+    with pytest.raises(compute.ServiceUnavailable) as unavailable:
+        run.status()
+    assert unavailable.value.messages == (
+        f"Service('ssh://alice@cluster:2222{driver}') is closed: a new one follows its runs again, as "
+        f"Service('ssh://alice@cluster:2222{driver}').attach(run id)",)
+
+
+@pytest.mark.fast
+@pytest.mark.usefixtures('ssh_calls')
+def test_a_forward_that_ended_fails_the_next_call_at_once_and_says_so(driver: Path) -> None:
+    """ssh gone, a dropped connection or a laptop asleep: nothing reaches the service through it again, and the call
+    says so with ssh's own words, without asking again for PATIENCE seconds."""
+    with compute.Service(f'ssh://cluster{driver}') as service:
+        forward = service._client.forward  # pylint: disable=protected-access
+        assert forward is not None
+        ssh, directory = forward
+        ssh.kill()
+        ssh.wait()
+        (Path(directory) / 'ssh.log').write_text('Timeout, server cluster not responding.\n', 'utf-8')
+        with pytest.raises(compute.ServiceUnavailable) as unavailable:
+            service.attach('r1')
+    assert unavailable.value.messages == (
+        f'the compute service at ssh://cluster{driver} could not be reached: ssh ended, and its forward with it; a '
+        'new Service forwards it again', 'Timeout, server cluster not responding.')
+    assert not Path(directory).exists()
+
+
+@pytest.mark.fast
+def test_ctrl_c_before_ssh_forwards_ends_it_and_leaves_nothing(ssh_calls: Path,
+                                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    """At a password prompt, say: ssh, which ignores the Ctrl-C, would otherwise go on asking."""
+    sleep = compute.time.sleep
+
+    def interrupted(_: float) -> None:
+        while not ssh_calls.exists() or not ssh_calls.read_text('utf-8'):  # until ssh is up, and asks
+            sleep(0.01)
+        raise KeyboardInterrupt
+    monkeypatch.setattr(compute.time, 'sleep', interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        compute.Service('ssh://slow')
+    pid, _, _, directory = _ssh_run(ssh_calls)
+    assert _ended(pid) and not directory.exists()
+
+
+@pytest.mark.fast
+def test_a_forward_a_process_never_closes_ends_as_the_process_does(ssh_calls: Path, driver: Path) -> None:
+    """Python exiting closes every Service it left open."""
+    subprocess.run([sys.executable, '-c', f"from sophios.compute import Service; Service('ssh://cluster{driver}')"],
+                   check=True, timeout=60)
+    pid, _, _, directory = _ssh_run(ssh_calls)
+    assert _ended(pid) and not directory.exists()
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('url', 'said'), [
+    ('ssh://alice@nowhere', 'ssh: Could not resolve hostname nowhere: Name or service not known'),
+    ('ssh://cluster', 'channel 2: open failed: connect failed: No such file or directory')])
+def test_ssh_that_does_not_forward_fails_at_once_with_its_own_error_and_leaves_nothing(
+        ssh_calls: Path, url: str, said: str) -> None:
+    """An unreachable host, a refused key, or nothing on the socket the URL names, by default the service node's,
+    /run/slurm-driver/api.sock: ssh's own words, no ssh left running and no directory left."""
+    with pytest.raises(compute.ServiceUnavailable) as unavailable:
+        compute.Service(url)
+    pid, _, arguments, directory = _ssh_run(ssh_calls)
+    assert unavailable.value.messages == (
+        f"ssh to {url.removeprefix('ssh://')} did not forward the compute service's socket /run/slurm-driver/api.sock:",
+        said)
+    assert arguments[-2] == f'{directory / "api.sock"}:/run/slurm-driver/api.sock'
+    assert _ended(pid) and not directory.exists()

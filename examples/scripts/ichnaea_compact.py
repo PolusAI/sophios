@@ -12,8 +12,8 @@ from sophios.api.python.workflow import RunState, Step, Workflow
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.compute import RunConfig, Service, build_request
 
-#: The compute service: the local end of an SSH tunnel to it, such as 'http://127.0.0.1:7998'. None only builds
-#: and prints the request.
+#: The compute service: the host it runs on, over your own ssh, such as 'ssh://login.cluster.example.org'. None
+#: only builds and prints the request.
 SERVICE_URL: str | None = None
 #: The directory on the cluster the paths below are relative to.
 BASEPATH = '/projects/collabs/mock_common'

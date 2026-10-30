@@ -14,28 +14,47 @@ deployed is in the service's own README.
 ## Reaching the service
 
 The service listens on a Unix socket on a host of the cluster set aside for
-services. Open a tunnel to that socket, one command, and leave it running
-while you work:
-
-```bash
-ssh -N -L 127.0.0.1:7998:<socket> <driver host>
-```
-
-with `-J <login node>` where the driver's host is reached through a login
-node. `<socket>` is the path the service listens on, its `SOCKET_PATH`:
-`/run/slurm-driver/api.sock` where the service is set up as the driver's
-README shows. The compute service's `start-polus-compute.sh`, which starts
-one from a checkout for testing, prints the whole command, its socket in it.
-Sophios then takes the tunnel's local end:
+services, never on a TCP port. Name that host:
 
 ```python
 from sophios.compute import Service
 
-service = Service('http://127.0.0.1:7998')
+service = Service('ssh://login.cluster.example.org')
 ```
 
-The tunnel is yours: Sophios opens none, reads nothing of your SSH
-configuration, and stores neither the URL nor anything else of a service.
+`ssh://[user@]host[:port][/socket]` reaches the socket on `host`, by
+default `/run/slurm-driver/api.sock`, where the service is set up as its
+README shows; a service listening elsewhere, such as one started from a
+checkout for testing, is reached with its socket after the host, as
+`ssh://host/scratch/me/api.sock`. `unix:///socket` reaches one on the host
+Sophios runs on.
+Sophios runs your own `ssh`, so your keys, agent, `~/.ssh/config`, jump
+hosts and VPN apply as they do in a terminal, and a password or a second
+factor is asked for there; Sophios never sees a credential. It forwards a
+socket in a private temporary directory to the service's, no TCP port even
+on your machine, on a connection of its own (a ControlMaster's is never
+shared, so each `Service` logs in once), and closes the forward when the
+`Service` is closed (`with Service(url) as service:`) or Python exits; a
+Ctrl-C leaves it open. An ssh that fails, say an unknown host or a refused
+key, fails `Service(url)` at once, with ssh's own error, and so does the
+next call once ssh has ended, say on a dropped connection: a new
+`Service(url)` forwards again. Sophios stores neither the URL nor anything
+else of a service.
+
+`http://` and `https://` are refused: they need an HTTPS gateway in front of
+the service, which there is not yet.
+
+Who may do what is the service's, and follows from who may log into its
+host:
+
+- Whoever may log into the host and open the socket may submit, and every
+  run records the account that submitted it.
+- Every allowed user may read every run: its status, outputs and logs.
+- Only the account that submitted a run, or the service's own, may cancel
+  it: `cancel()` on anyone else's run raises `cmp001`.
+- Every run runs as the service's account, so every allowed user reaches
+  what that account can: it should reach only the shared data and output
+  folders.
 
 ## Running a workflow
 
@@ -151,7 +170,7 @@ print(run.logs())
 | `wait(timeout=None)` | Blocks until the run ends, and returns its `RunStatus`: a run that failed or was cancelled is returned, not raised. After `timeout` seconds it raises `TimeoutError`, and the run goes on | The same, asking every 10 s and printing a line per change of the run's state and of each step's; Ctrl-C leaves the run going |
 | `outputs()` | The workflow's output object once the run has completed; `None` until then | The same |
 | `logs()` | Everything the runner has printed so far | `leader.log`, Toil's log of the whole run, so far; `''` until Slurm has started the leader |
-| `cancel()` | Stops the run: `True` once it is `CANCELLED`, by this call or before; `False` when it had ended `COMPLETED` or `FAILED`, which it stays | The same, for the run and every job of it in Slurm's queue: sent once, then waited for as `wait(300)` waits: a run that has not ended within five minutes raises `TimeoutError`, its cancel still recorded |
+| `cancel()` | Stops the run: `True` once it is `CANCELLED`, by this call or before; `False` when it had ended `COMPLETED` or `FAILED`, which it stays | The same, for a run you submitted and every job of it in Slurm's queue: sent once, then waited for as `wait(300)` waits: a run that has not ended within five minutes raises `TimeoutError`, its cancel still recorded |
 | `collect(timeout=None)`, `workflow.run()` | `wait()`, then the run's `RunResult`; a run that did not complete raises `WorkflowRunError` | Local only |
 | `id`, `Service.attach(id)` | None | On the cluster only: the run's id, the workflow's name, the UTC time and four hex digits, which `attach` follows from any session or machine |
 | `warnings` | None | On the cluster only: what the service warned of when it accepted the run, also printed then |
@@ -182,17 +201,18 @@ codes belong to the compute client alone: a `ComputeError` is never a
 
 - `cmp001`, `RequestRefused`: Sophios or the service refused the request: a
   path, a name, an output folder, a partition or a time the cluster cannot
-  use, or a real-time analysis. Each problem is a line, at the input or
-  field it is about; do what it says. A relative path sent without
-  `basepath` says to give one.
-- `cmp002`, `ServiceUnavailable`: the service could not be reached, stayed
-  busy for five minutes (Sophios asks again every 5 s meanwhile, which never
-  starts a second run), failed, or speaks another version of the contract;
-  or something other than the service answered at the URL. Check that your
-  tunnel runs, to the socket the service listens on, and that the service
-  runs, then make the same call again; when the versions differ, upgrade
-  Sophios or the service. A submission cut short this way says the run may
-  exist, and how to attach.
+  use, or a real-time analysis; or a cancel of a run another account
+  submitted. Each problem is a line, at the input or field it is about; do
+  what it says. A relative path sent without `basepath` says to give one.
+- `cmp002`, `ServiceUnavailable`: the URL is not one the service is reached
+  at, ssh failed before it forwarded the socket or has ended since, the
+  `Service` is closed, or the service could not be reached, stayed busy for five minutes (Sophios asks again every 5 s
+  meanwhile, which never starts a second run), failed, or speaks another
+  version of the contract; or something other than the service answered at
+  the URL. Check that the URL names the socket the service listens on, and
+  that the service runs, then make the same call again; when the versions
+  differ, upgrade Sophios or the service. A submission cut short this way
+  says the run may exist, and how to attach.
 
 A run that fails raises nothing, as a local one started with `start()`
 does: `wait()` returns its status, `FAILED`, whose `reason` says why, and
