@@ -64,6 +64,7 @@ host:
 ## Running a workflow
 
 ```python
+from sophios.api.python.workflow import RunState
 from sophios.compute import RunConfig
 
 config = (RunConfig('/shared/lab/results')    # the folder the outputs are copied into
@@ -71,8 +72,8 @@ config = (RunConfig('/shared/lab/results')    # the folder the outputs are copie
           .leader(time='2:00:00', memory='4G')
           .steps(time='30:00'))
 run = service.submit(workflow, config)
-status = run.wait()
-print(status.state, run.outputs())
+if run.wait().state is RunState.COMPLETED:    # wait() prints each change, and why
+    print(run.outputs())
 ```
 
 A `RunConfig` is made with the folder on the cluster the outputs are copied
@@ -165,7 +166,10 @@ run = workflow.start()                    # a local run, or
 run = service.submit(workflow, config)    # a run on the cluster
 
 status = run.wait()                       # how it ended; nothing is raised
-print(status.state, status.reason, run.outputs())
+if status.state is RunState.COMPLETED:
+    print(run.outputs())
+else:                                     # FAILED or CANCELLED, and why
+    print(status.state, status.reason)
 print(run.logs())
 ```
 
