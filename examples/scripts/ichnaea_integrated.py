@@ -23,57 +23,37 @@ BASEPATH = '/projects/collabs/mock_common'
 
 
 def build_autoseg_CLT() -> CommandLineTool:
-    """Create the SAM3 autosegmentation CLT using the declarative API."""
+    """Create the SAM2.1 autosegmentation CLT, the ichnaea segmentation plugin's, using the declarative API."""
     inputs = Inputs(
-        input=Input(cwl.directory, position=1).label(
-            "Input Zarr dataset").doc("Path to input zarr dataset"),
-        output=Input(cwl.directory, position=2).label("Output segmentation Zarr").doc(
-            "Path for output segmentation zarr"
+        input=Input(cwl.directory, flag="--inpDir", position=1).label(
+            "Input OME-Zarr").doc("The OME-Zarr volume: its root, which holds .zattrs"),
+        output=Input(cwl.directory, flag="--outDir", position=2).label("Output segmentation OME-Zarr").doc(
+            "An empty folder; filled with a copy of the input whose level 0 holds the labels"
         ),
-        model=Input(cwl.file, flag="--model", required=False)
-        .label("Model override file")
-        .doc("Path containing sam3.pt to override baked-in models/sam3"),
-        tile_size=Input(cwl.int, flag="--tile-size", required=False)
-        .label("Tile size")
-        .doc("Tile size for large slices (default 1024)"),
-        overlap=Input(cwl.int, flag="--overlap", required=False)
-        .label("Tile overlap")
-        .doc("Overlap between adjacent tiles in pixels (default 128)"),
-        iou_threshold=Input(cwl.float, flag="--iou-threshold", required=False)
-        .label("IoU threshold")
-        .doc("IoU threshold for matching labels across tiles (default 0.5)"),
-        batch_size=Input(cwl.int, flag="--batch-size", required=False)
-        .label("Batch size")
-        .doc("Number of tiles per GPU forward pass (default 8)"),
-        lora_weights=Input(cwl.file, flag="--lora-weights", required=False)
-        .label("LoRA weights")
-        .doc("Path to LoRA adapter weights (.pt file) - optional"),
-        lora_rank=Input(cwl.int, flag="--lora-rank", required=False)
-        .label("LoRA rank")
-        .doc("LoRA rank used when lora_weights is set (default 16)"),
-        lora_alpha=Input(cwl.int, flag="--lora-alpha", required=False)
-        .label("LoRA alpha")
-        .doc("LoRA alpha scaling factor used when lora_weights is set (default 32)"),
+        model=Input(cwl.directory)
+        .label("Models folder")
+        .doc("Staged as ./models, from which the plugin loads sam2.1_hiera_small.pt"),
     )
     outputs = Outputs(output=Output(
-        cwl.directory, glob="$(inputs.output.basename)").label("Output segmentation Zarr"))
+        cwl.directory, glob="$(inputs.output.basename)").label("Output segmentation OME-Zarr"))
 
     return (
-        CommandLineTool("sam3_ome_zarr_autosegmentation", inputs, outputs)
+        CommandLineTool("ichnaea_segmentation", inputs, outputs)
         .describe(
-            "SAM3 OME Zarr autosegmentation",
-            "Run SAM3 autosegmentation on a zarr volume.\n",
+            "ichnaea segmentation",
+            "SAM2.1 autosegmentation of an OME-Zarr volume, one Z slice at a time.\n",
         )
         .edam()
-        .gpu(cuda_version_min="11.7", compute_capability="3.0", device_count_min=2)
-        .docker("polusai/ichnaea-api:latest")
+        # One device: it runs on torch.device("cuda"); its torch wheels are built for CUDA 12.6.
+        .gpu(cuda_version_min="12.6", compute_capability="3.0", device_count_min=1)
+        .docker("vjaganat90/ichnaea-segmentation-plugin:devn")
         .stage(inputs.output, writable=True)
-        .stage(inputs.input)
+        # It opens models/sam2.1_hiera_small.pt relative to its working directory, the job's output folder.
+        .stage(inputs.model, entryname="models")
         .resources(cores=4, ram=64000)
-        .base_command(
-            "/backend/.venv/bin/python",
-            "/backend/dagster_pipelines/jobs/autosegmentation/logic.py",
-        )
+        # No base command: the image's ENTRYPOINT, python3 -m ichnaea.segmentation, is the command. Docker and
+        # `singularity run` put it in front of these options, and CWL cannot override it, so this tool relies on it
+        # (see docs/running.md, Images that rely on an entrypoint).
     )
 
 
@@ -90,7 +70,7 @@ def workflow(input_dicts: dict[str, str], workflow_name: str) -> Workflow:
     # assign input values to the step
     autoseg.output = input_dicts['output_dir']
     autoseg.input = input_dicts['input_dir']
-    autoseg.model = input_dicts['model_file']
+    autoseg.model = input_dicts['model_dir']
     # =========== CREATE A SOPHIOS WORKFLOW ==========
     # arrange steps
     steps = [autoseg]
@@ -104,9 +84,10 @@ def main() -> int:
     """Write the built tool, the compiled workflow and its request to disk; run it when SERVICE_URL is set."""
     # ========== INPUTS TO WORKFLOW ==================
     # What the tool reads: paths on the cluster, relative to BASEPATH, as written; Sophios never looks at them.
+    # The input is the OME-Zarr volume's root; the models folder holds sam2.1_hiera_small.pt.
     # The output folder is written in place, so it is an absolute path: the service creates it, or it must be empty.
     input_dicts = {'input_dir': 'input_directory', 'output_dir': f'{BASEPATH}/output_directory3',
-                   'model_file': 'model_directory/sam3.pt'}
+                   'model_dir': 'model_directory'}
 
     # ========== BUILD WORKFLOW ======================
     autoseg_workflow = workflow(input_dicts, "autoseg_workflow")

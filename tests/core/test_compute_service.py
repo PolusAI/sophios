@@ -395,7 +395,7 @@ def test_the_ichnaea_examples_run_on_the_service(cluster: Cluster, script: str, 
     monkeypatch.setattr(compute, 'POLL', 0.2)
     for name in ('input_directory', 'model_directory'):
         (cluster.shared / name).mkdir(exist_ok=True)
-    (cluster.shared / 'model_directory' / 'sam3.pt').write_text('weights\n', encoding='utf-8')
+    (cluster.shared / 'model_directory' / 'sam2.1_hiera_small.pt').write_text('weights\n', encoding='utf-8')
     source = tmp_path / f'{script}.py'
     shutil.copyfile(Path(__file__).resolve().parents[2] / 'examples' / 'scripts' / f'{script}.py', source)
     example = import_python_file(script, source)

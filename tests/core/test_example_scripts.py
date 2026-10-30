@@ -151,7 +151,7 @@ def test_two_in_memory_tools_chain_and_keep_their_output_binding() -> None:
     assert emitted['outputSource'] == f"{steps['read_text']['id']}/result"
 
 
-_INPUTS = {'input_dir': '/data/in', 'output_dir': '/data/out', 'model_file': '/data/sam3.pt'}
+_INPUTS = {'input_dir': '/data/in', 'output_dir': '/data/out', 'model_dir': '/data/models'}
 
 
 def _compile_ichnaea_script(script: str, tmp_path: Path) -> None:
@@ -183,6 +183,21 @@ def test_the_integrated_ichnaea_script_compiles_its_hinted_tool(tmp_path: Path) 
     """The hinted tool compiles; see `_compile_ichnaea_script`. The script also
     writes the tool with `validate=True`, which runs cwltool in-process."""
     _compile_ichnaea_script('ichnaea_integrated', tmp_path)
+
+
+@pytest.mark.fast
+def test_the_ichnaea_scripts_build_one_tool_with_no_base_command() -> None:
+    """The three scripts build the same tool, but for its doc. The image's ENTRYPOINT is its command, which the
+    runner puts in front of the tool's command line, so a base command would reach it as arguments."""
+    tools = []
+    for script, build in (('ichnaea_compact', 'build_autoseg_CLT'), ('ichnaea_integrated', 'build_autoseg_CLT'),
+                          ('ichnaea_tool_builder', 'build_tool')):
+        example = REPO_ROOT / 'examples' / 'scripts' / f'{script}.py'
+        document = getattr(import_python_file(script, example.resolve()), build)().to_cwl_document()
+        document.pop('doc')
+        tools.append(document)
+    assert 'baseCommand' not in tools[0]
+    assert tools[1:] == [tools[0], tools[0]]
 
 
 @pytest.mark.fast
