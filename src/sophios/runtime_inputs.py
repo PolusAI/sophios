@@ -38,13 +38,20 @@ def _runs_by_artifact_id(artifact: CompilationArtifact) -> dict[str, Mapping[str
             if child.namespace}
 
 
+def resolve_file_formats(job_inputs: Mapping[str, Any]) -> Json:
+    """A copy of `job_inputs` in which each File's list of possible formats is the one its file has, or none:
+    what every runner needs, local or not."""
+    resolved = copy.deepcopy(dict(job_inputs))
+    _normalize_file_formats(resolved)
+    return resolved
+
+
 def _normalize_job_inputs(
     cwl_workflow: Mapping[str, Any],
     run_by_step_id: Mapping[str, Mapping[str, Any]],
     job_inputs: Mapping[str, Any],
 ) -> Json:
-    normalized = copy.deepcopy(dict(job_inputs))
-    _normalize_file_formats(normalized)
+    normalized = resolve_file_formats(job_inputs)
     for source_key in _output_target_source_keys(cwl_workflow, run_by_step_id):
         if source_key in normalized:
             normalized[source_key] = _normalize_output_target_name(normalized[source_key], source_key)

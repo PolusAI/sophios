@@ -1,4 +1,4 @@
-"""Every test in the repository is collected by some configured lane.
+"""Every test in the repository is collected by some configured lane, but those of a `LOCAL_ONLY` file, run by hand.
 
 A test that no lane names is a test that never runs, and nothing else notices:
 the suite is green, the file is present, and the claim it makes is unchecked.
@@ -208,16 +208,37 @@ def test_collection_is_pytests_answer_and_not_ours() -> None:
     assert not none
 
 
+#: The test files no lane can run, each run by hand instead. The set is the
+#: claim: every entry is a file CI never checks, so it is named here whole,
+#: never matched by a pattern, and the census below fails once a lane does
+#: collect it, so the entry cannot outlive its reason.
+#:
+#: `test_compute_service.py` runs `sophios.compute` against the slurm driver,
+#: which lives in a private repository Sophios CI cannot check out. Its lane is
+#: local: `SOPHIOS_SLURM_DRIVER=<driver checkout>/packages/slurm-driver pytest
+#: tests/core/test_compute_service.py -m skip_pypi_ci`. It expires when Sophios
+#: CI can check the driver out: then a lane step names the file, and the entry
+#: goes.
+LOCAL_ONLY: Final = frozenset({'tests/core/test_compute_service.py'})
+
+
 @pytest.mark.slow
 def test_no_test_is_collected_by_nothing() -> None:
-    """Every test the repository defines is selected by some lane.
+    """Every test the repository defines is selected by some lane, but those
+    of a `LOCAL_ONLY` file, which no lane selects.
 
     Slow because it asks pytest once per distinct invocation -- about thirty
     collections, in one interpreter. That is the price of the answer being
     pytest's rather than a model's, and a model is what this file used to be.
     """
     everything, *lanes = _collect_all([[], *_lane_argvs()])
-    orphans = sorted(everything - set().union(*lanes))
+    collected = set().union(*lanes)
+    local = {node for node in everything if node.split('::')[0] in LOCAL_ONLY}
+    assert {node.split('::')[0] for node in local} == LOCAL_ONLY, 'a LOCAL_ONLY file has no test left'
+    assert not local & collected, (
+        'a lane now collects a LOCAL_ONLY file; take it out of LOCAL_ONLY:\n  '
+        + '\n  '.join(sorted(local & collected)))
+    orphans = sorted(everything - collected - local)
     assert not orphans, (
         'these tests are collected by no configured lane, so they never run:\n  '
         + '\n  '.join(orphans)

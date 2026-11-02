@@ -171,7 +171,8 @@ and a pointer to WSL. Validating a tool you build in Python,
 whose cause, a `ModuleNotFoundError` about `cwltool/schema_salad`, is
 misleading: cwltool is installed, and what fails is an import that exists only
 on POSIX. `sophios --validate_plugins` fails on Windows too, with a
-`NotImplementedError`.
+`NotImplementedError`. A run on the cluster needs WSL too:
+`sophios.compute`'s `Service(url)` raises `cmp002` on Windows itself.
 
 ## Troubleshooting
 

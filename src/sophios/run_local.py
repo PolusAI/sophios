@@ -23,18 +23,9 @@ from typing import IO, Final
 
 from sophios.wic_types import Json
 from . import auto_gen_header, backends, preflight, realtime
-from . import utils
 from .backends import Backend, Launch, RunRequest
-from .compute_request import ComputeRequest
 from .run_status import RunResult, RunState, RunStatus, StepStatus, WorkflowRunError
 from .plugins import logging_filters
-
-
-@dataclass(frozen=True, slots=True)
-class _CompiledWorkflowForCompute:
-    name: str
-    cwl_workflow: Json
-    cwl_job_inputs: Json
 
 
 def generate_run_script(cmdline: str) -> None:
@@ -511,38 +502,6 @@ def run(request: RunRequest) -> int:
     status = start(request).wait()
     assert status.exit_code is not None
     return status.exit_code
-
-
-def run_compute(workflow_name: str, workflow: Json, workflow_inputs: Json,
-                submit_url: str) -> int | None:
-    """Submit a compiled workflow to compute-slurm.
-
-    Args:
-        workflow_name (str): The name of the workflow.
-        workflow (Json): The compiled CWL workflow.
-        workflow_inputs (Json): The inputs for compiled CWL workflow.
-        submit_url (str): URL of Compute where the job is to be submitted.
-    Returns:
-        int | None: The return value indicating if submission succeeded (`0`) or not.
-    """
-    now = datetime.now()
-    date_time = now.strftime("%Y_%m_%d_%H.%M.%S")
-    jobid = workflow_name + '__' + str(date_time) + '__'
-    compute_request = ComputeRequest(
-        _CompiledWorkflowForCompute(workflow_name, workflow, workflow_inputs),
-        workflow_id=jobid,
-    )
-
-    # sanity check if the string has the form of an URL
-    if not utils.is_valid_url(submit_url):
-        print("Ill-formed URL string detected! Please provide a valid URL")
-        return 1
-
-    submission = compute_request.submit(
-        submit_url,
-        log_path=Path(f'compute_logs_{jobid}.txt'),
-    )
-    return submission.exit_code
 
 
 def cwltool_main() -> int:
