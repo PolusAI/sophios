@@ -22,6 +22,12 @@ def normalize_artifact_job_inputs(artifact: CompilationArtifact,
     return _normalize_job_inputs(artifact.cwl, _runs_by_artifact_id(artifact), job_inputs)
 
 
+def output_target_inputs(artifact: CompilationArtifact) -> set[str]:
+    """The workflow inputs that name an output-target Directory: one a step's tool writes into through a
+    writable InitialWorkDirRequirement entry and captures as a Directory output."""
+    return _output_target_source_keys(artifact.cwl, _runs_by_artifact_id(artifact))
+
+
 def normalize_artifact_cwl(artifact: CompilationArtifact) -> Json:
     """Normalize generated CWL from the graph-derived artifact tree."""
     return _normalize_cwl_document(artifact.cwl, _runs_by_artifact_id(artifact))

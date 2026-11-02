@@ -270,6 +270,16 @@ jobs:
       if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
       run: cd sophios/ && pytest tests/core/test_examples.py -k test_run_partial_failures_pass --cwl_runner cwltool
 
+    # The corpus workflows the Nextflow target supports, compiled with it and
+    # run under Nextflow with Docker: tests/core/nextflow/test_corpus.py. The
+    # steps above run them under cwltool, which never reaches the Nextflow
+    # backend. On a push only: the runs pull the tools' images and download
+    # their data. Nextflow and its Java are in the environment the setup
+    # installs (install/system_deps_ci.yml).
+    - name: PyTest Run Workflows under Nextflow
+      if: ${{ !cancelled() && steps.setup.outcome == 'success' && inputs.event_type == 'push' }}
+      run: cd sophios/ && pytest tests/core/nextflow/test_corpus.py -m nextflow_corpus --durations=0
+
     # NOTE: The steps below are for repository_dispatch only. For all other steps, please insert above
     # this comment.
 

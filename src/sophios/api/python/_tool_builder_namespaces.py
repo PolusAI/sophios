@@ -11,6 +11,7 @@ The builder surface is intentionally small:
 from collections.abc import Iterator, Mapping
 from typing import Any, TypeVar
 
+from ._ports import _validate_namespace_name
 from ._tool_builder_specs import FieldSpec, InputSpec, OutputSpec
 from ._tool_builder_support import (
     _canonicalize_type,
@@ -18,6 +19,7 @@ from ._tool_builder_support import (
     _record_type_payload,
     _validate_api_name,
 )
+from ._utils import is_reserved_name
 
 
 class _CWLNamespace:
@@ -120,14 +122,16 @@ SpecT = TypeVar("SpecT", FieldSpec, InputSpec, OutputSpec)
 
 def _validate_collection_name(name: str, *, owner: type[Any]) -> str:
     valid_name = _validate_api_name(name, context="API name")
-    if valid_name.startswith("_") or valid_name in dir(owner):
+    if is_reserved_name(valid_name, owner):
         raise ValueError(
             f"API name {valid_name!r} is reserved by {owner.__name__}; choose a different name"
         )
-    return valid_name
+    # An input or output is a port of each step that runs the tool; a record field is no port.
+    return valid_name if owner is Fields else _validate_namespace_name(valid_name, context="API name")
 
 
 class _NamedCollection(Mapping[str, SpecT]):
+    __slots__ = ("_items",)
     _items: dict[str, SpecT]
 
     def __init__(self, **specs: SpecT) -> None:
@@ -170,8 +174,9 @@ class Inputs(_NamedCollection[InputSpec]):
         specs (InputSpec): The inputs, each an `Input(...)`.
 
     Raises:
-        ValueError: If a name is not a Python identifier, starts with `_`, or is
-            the name of a method of the collection, such as `keys`.
+        ValueError: If a name is not a Python identifier, is a special name such
+            as `__len__`, or names an attribute of the collection, such as `keys`,
+            or of a step's `inputs`, such as `_store`.
     """
 
 
@@ -184,8 +189,9 @@ class Outputs(_NamedCollection[OutputSpec]):
         specs (OutputSpec): The outputs, each an `Output(...)`.
 
     Raises:
-        ValueError: If a name is not a Python identifier, starts with `_`, or is
-            the name of a method of the collection, such as `keys`.
+        ValueError: If a name is not a Python identifier, is a special name such
+            as `__len__`, or names an attribute of the collection, such as `keys`,
+            or of a step's `outputs`, such as `_store`.
     """
 
 
@@ -198,6 +204,6 @@ class Fields(_NamedCollection[FieldSpec]):
         specs (FieldSpec): The fields, each a `Field(...)`.
 
     Raises:
-        ValueError: If a name is not a Python identifier, starts with `_`, or is
-            the name of a method of the collection, such as `keys`.
+        ValueError: If a name is not a Python identifier, is a special name such
+            as `__len__`, or names an attribute of the collection, such as `keys`.
     """

@@ -1,9 +1,10 @@
 # What the CI lanes on the self-hosted runner (Run Workflows, its weekly lane
 # and the benchmarks) install, fresh on every job: system_deps.yml without
 # graphviz, which only drawing needs and which brings in more than half of its
-# packages, and without the tools nothing in these lanes runs.
+# packages, and without the tools nothing in these lanes runs, plus Nextflow.
 channels:
   - conda-forge
+  - bioconda
   - defaults
 
 dependencies:
@@ -21,3 +22,9 @@ dependencies:
   - ruamel.yaml.clib
   - cryptography
   - zstandard
+# Run Workflows runs the corpus under Nextflow on a push, with the Nextflow and
+# the Java the Nextflow lane pins (NXF_VER and java-version in nextflow.yml).
+# The package runs its own jar, so nothing it needs lives outside this
+# environment.
+  - nextflow=26.04.2
+  - openjdk=17

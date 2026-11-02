@@ -13,7 +13,8 @@ lazily so this module stays cheap to import. A branch that adds a `SophiosErrorC
 extends this registry in the same commit, or the meta-test says so.
 """
 from collections.abc import Callable
-from typing import Final
+from functools import partial
+from typing import Any, Final
 
 from sophios.lang.error_codes import SophiosErrorCode
 
@@ -532,3 +533,77 @@ def _provoke_image_unavailable() -> None:
 
 
 COMPILED.update({SophiosErrorCode.IMAGE_UNAVAILABLE: _provoke_image_unavailable})
+
+
+def _provoke_unchecked_cuda_field() -> None:
+    """A GPU tool lowered to Nextflow with a `cudaVersionMin`. A note stops nothing, so it is raised here."""
+    # pylint: disable=import-outside-toplevel
+    from sophios.api.python._workflow_runtime import compile_workflow_result
+    from sophios.api.python.tool_builder import CommandLineTool, Inputs, Output, Outputs, cwl
+    from sophios.api.python.workflow import Step, Workflow
+    from sophios.lang.diagnostics import SophiosError
+    from sophios.utils_nf import compiled_source_to_nextflow_with_notes
+
+    gpu = CommandLineTool('gpu', Inputs(), Outputs(out=Output(cwl.file, glob='out'))).gpu(cuda_version_min='11.4')
+    _, notes = compiled_source_to_nextflow_with_notes(compile_workflow_result(Workflow([Step(gpu)], 'provoke')))
+    raise SophiosError(notes)
+
+
+COMPILED.update({SophiosErrorCode.UNCHECKED_CUDA_FIELD: _provoke_unchecked_cuda_field})
+
+
+#: One edit of the pipeline `import_edited` writes, for each import code: the file, the text replaced (every
+#: occurrence), its replacement, and text on the line the diagnostic names.
+IMPORT_EDITS: Final[dict[SophiosErrorCode, tuple[str, str, str, str]]] = {
+    # An edited helper; a directive Sophios does not write; a hand-written tuple input; a plain shell script.
+    SophiosErrorCode.IMPORT_EDITED_HELPER: (
+        'workflow.nf', 'value.toString().replace(', 'value.replace(', 'def __sophios_shell_quote_9f72e'),
+    SophiosErrorCode.IMPORT_FOREIGN_STATEMENT: (
+        'workflow.nf', '    input:\n', "    errorStrategy 'retry'\n    input:\n", 'errorStrategy'),
+    SophiosErrorCode.IMPORT_FOREIGN_DECLARATION: (
+        'workflow.nf', '    val message\n', '    tuple val(id), path(reads)\n', 'tuple val(id)'),
+    SophiosErrorCode.IMPORT_FOREIGN_SCRIPT: (
+        'workflow.nf', "    ${__sophios_shell_quote_9f72e('echo')}", '    echo hello\n    echo', 'echo hello'),
+    # A parameter the pipeline does not check; Docker enabled for a pipeline with no container.
+    SophiosErrorCode.IMPORT_PARAMS: ('nextflow_params.json', '{', '{\n  "extra": 1,', '"extra"'),
+    SophiosErrorCode.IMPORT_CONFIG: ('nextflow.config', 'false', 'true', 'docker.enabled'),
+    # A `take:` name the workflow does not use, which the text shows only through its calls.
+    SophiosErrorCode.IMPORT_MISMATCH: ('workflow.nf', '    take:\n    message\n', '    take:\n    msg\n', 'msg'),
+    # A capitalized process name, which the compile writes with a leading `_`.
+    SophiosErrorCode.IMPORT_UNWRITABLE: ('workflow.nf', 'greet', 'Greet', 'process Greet'),
+}
+
+
+def import_edited(directory: str, file: str, old: str, new: str, workflow: Any = None) -> Any:
+    """Write the pipeline of `workflow`, by default a one-step workflow, into `directory`, replace `old` in one of
+    its files with `new`, and import it. A surrogate such as `\\udcff` in `new` is written as the byte it escapes."""
+    # pylint: disable=import-outside-toplevel
+    from pathlib import Path
+
+    from sophios.api.python.nextflow import import_nextflow
+    from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+    from sophios.api.python.workflow import Workflow
+
+    if workflow is None:
+        greet = CommandLineTool('greet', Inputs(message=Input(cwl.string, position=1)),
+                                Outputs(out=Output(cwl.file, glob='o'))).base_command('echo').stdout('o').to_step()
+        workflow = Workflow([greet], 'provoke')
+        greet.inputs.message = workflow.inputs.message.as_type('string')
+        workflow.inputs.message = 'hi'
+        workflow.outputs.out = greet.outputs.out
+    workflow.compile(target='nextflow').write(directory)
+    path = Path(directory) / file
+    text = path.read_text(encoding='utf-8')
+    assert old in text, old
+    path.write_text(text.replace(old, new), encoding='utf-8', errors='surrogateescape')
+    return import_nextflow(directory)
+
+
+def _import_edited(code: SophiosErrorCode) -> None:
+    import tempfile  # pylint: disable=import-outside-toplevel
+
+    with tempfile.TemporaryDirectory() as root:
+        import_edited(root, *IMPORT_EDITS[code][:3])
+
+
+COMPILED.update({code: partial(_import_edited, code) for code in IMPORT_EDITS})

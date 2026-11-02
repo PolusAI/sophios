@@ -2,4 +2,5 @@ equil
 Equil
 nin
 namd
+nd
 strat

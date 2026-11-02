@@ -31,6 +31,12 @@ def validate_python_identifier_name(name: str, *, context: str = "parameter name
     return name
 
 
+def is_reserved_name(name: str, owner: type) -> bool:
+    """Whether attribute access on an ``owner`` cannot reach a port called ``name``: ``owner`` has an attribute of
+    that name, or Python looks it up as a special name, such as ``__deepcopy__``."""
+    return name in dir(owner) or (len(name) > 4 and name[:2] == name[-2:] == "__")
+
+
 def normalize_parameter_type(parameter_type: Any) -> tuple[Any, bool]:
     """Return the canonicalized parameter type and whether it is required."""
     if parameter_type is None:

@@ -730,7 +730,8 @@ def test_a_directory_sophios_cannot_write_is_wic021(monkeypatch: pytest.MonkeyPa
 # The container engine is checked when a step runs in a container, and the line says why it cannot be used
 # --------------------------------------------------------------------------
 
-_TOUCH = 'steps:\n- id: touch\n  in:\n    filename: !ii a.txt\n'   # touch.cwl runs in docker.io/bash:4.4
+# touch.cwl runs in docker.io/library/debian:bookworm-slim
+_TOUCH = 'steps:\n- id: touch\n  in:\n    filename: !ii a.txt\n'
 
 
 @pytest.fixture(name='machine')
@@ -799,7 +800,7 @@ def test_a_missing_engine_names_the_image_that_needs_it(
     assert caught.value.code == 1
     line, = _wic015(capsys.readouterr().err)
     assert ('docker is not installed (it is not on PATH), and this workflow runs tools in containers '
-            '(docker.io/bash:4.4): install docker') in line
+            '(docker.io/library/debian:bookworm-slim): install docker') in line
     assert not _pulled(calls)
 
 

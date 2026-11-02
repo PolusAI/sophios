@@ -13,6 +13,7 @@ from ._errors import InvalidLinkError
 from ._utils import (contains_any_type,
                      infer_literal_parameter_type,
                      is_array_type,
+                     is_reserved_name,
                      normalize_parameter_name,
                      normalize_parameter_type,
                      serialize_value,
@@ -393,6 +394,7 @@ class ParameterNamespace(Generic[ParameterT, ViewT]):
     near-duplicate wrapper classes.
     """
 
+    __slots__ = ("_store", "_getter", "_setter", "_read_only_error")
     _store: ParameterStore[ParameterT]
     _getter: Callable[[str], ViewT]
     _setter: Callable[[str, Any], None] | None
@@ -426,9 +428,6 @@ class ParameterNamespace(Generic[ParameterT, ViewT]):
         return self._getter(name)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        if name.startswith("_"):
-            object.__setattr__(self, name, value)
-            return
         if self._setter is None:
             raise AttributeError(self._read_only_error.format(name=name))
         self._setter(name, value)
@@ -438,7 +437,7 @@ class ParameterNamespace(Generic[ParameterT, ViewT]):
 
 
 def _validate_namespace_name(name: str, *, context: str) -> str:
-    if name.startswith("_") or name in dir(ParameterNamespace):
+    if is_reserved_name(name, ParameterNamespace):
         raise ValueError(
             f"{context} {name!r} is reserved by port namespaces; choose a different name"
         )

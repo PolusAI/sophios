@@ -7,7 +7,7 @@ import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Final, cast, overload
+from typing import Any, ClassVar, Final, Literal, cast, overload
 
 import graphviz
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
@@ -22,7 +22,7 @@ from sophios.lang.versions import KNOWN_VERSIONS
 from sophios.run_status import RunResult, RunState, RunStatus, StepStatus, WorkflowRunError
 from sophios.wic_types import DEFAULT_BASEPATH, Tools
 
-from ._compiled import CompiledWorkflow
+from ._compiled import CompiledNextflowWorkflow, CompiledWorkflow
 from ._inference import Inference
 from ._errors import (
     ApiError,
@@ -53,6 +53,7 @@ from ._workflow_runtime import (
     RunHandle,
     RunOptions as _RunOptions,
     coerce_path as _coerce_path,
+    compiled_nextflow_workflow as _compiled_nextflow_workflow,
     compiled_workflow as _compiled_workflow,
     draw_workflow as _draw_workflow,
     load_clt_document as _load_clt_document,
@@ -81,6 +82,7 @@ StrPath = str | Path
 #: fails. Ordinary Python call-contract errors remain built-in exceptions.
 __all__ = [
     "ApiError",
+    "CompiledNextflowWorkflow",
     "CompiledWorkflow",
     "Inference",
     "InvalidCLTError",
@@ -818,7 +820,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         )
         self.outputs = ParameterNamespace(
             self._outputs,
-            self._add_output,
+            self._read_output,
             self._bind_output_from_namespace,
             read_only_error="",
         )
@@ -933,6 +935,13 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         self._add_output(name, implicit=False)
         _bind_workflow_output(self, name, value)
 
+    def _read_output(self, name: str) -> OutputParameter:
+        """The output ``name``, which reading declares, unless the name has a leading ``_``: binding alone declares
+        such a name, since a probe of private names reads them, as IPython's display does."""
+        if name.startswith("_") and name not in self._outputs:
+            raise AttributeError(f"workflow {self.process_name!r} has no output {name!r}; bind it to declare it")
+        return self._add_output(name)
+
     def _get_input(self, name: str) -> InputParameter:
         """Return a named workflow input, creating it if needed."""
         return self._ensure_input(name)
@@ -1009,6 +1018,9 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         ``$import``) are not copied. Raises if ``<stem>.cwl`` already exists in
         the directory with a different tool.
 
+        A value bound on one of this workflow's own inputs is not written: the
+        input stays open, and the value is in the job :meth:`compile` returns.
+
         Args:
             path (StrPath | None): Destination ``.wic`` path or output
                 directory. When omitted, writes ``<workflow>.wic`` in the
@@ -1073,21 +1085,45 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         """Return this workflow and all nested subworkflows."""
         return [self, *[workflow for child in self.steps for workflow in child._flatten_subworkflows()]]
 
+    @overload
     def compile(
         self,
         *,
+        target: Literal["cwl"] = "cwl",
         tool_registry: Tools | None = None,
         lang_version: str | None = None,
         inference: Inference = Inference(),
     ) -> CompiledWorkflow:
-        """Compile this workflow into CWL and generated job inputs.
+        ...
+
+    @overload
+    def compile(
+        self,
+        *,
+        target: Literal["nextflow"],
+        tool_registry: Tools | None = None,
+        lang_version: str | None = None,
+        inference: Inference = Inference(),
+    ) -> CompiledNextflowWorkflow:
+        ...
+
+    def compile(
+        self,
+        *,
+        target: Literal["cwl", "nextflow"] = "cwl",
+        tool_registry: Tools | None = None,
+        lang_version: str | None = None,
+        inference: Inference = Inference(),
+    ) -> CompiledWorkflow | CompiledNextflowWorkflow:
+        """Compile this workflow into the selected target representation.
 
         Args:
+            target (Literal["cwl", "nextflow"]): Compilation target.
             tool_registry (Tools | None): Optional tool registry override.
             lang_version (str | None): Pin the Sophios language version for
                 this compilation; None (the default) infers it. An explicit
                 setting beats any file tag. The resolved version is reported
-                on the result as ``CompiledWorkflow.lang_version``.
+                on the result as its ``lang_version``.
             inference (Inference): How an unbound input is connected to an
                 earlier output. Unlike the command line, the Python API
                 reads no configuration: renamings and format rules are empty
@@ -1096,10 +1132,18 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 for each option and its flag.
 
         Returns:
-            CompiledWorkflow: Public compiled workflow boundary object.
+            CompiledWorkflow | CompiledNextflowWorkflow: The CWL workflow and its job
+            inputs, or the Nextflow IR, ``nextflow_workflow``, that ``write()`` writes
+            the four files from. Either keeps every note the compile made in
+            ``diagnostics``, and compiling warns with none of them.
         """
-        return _compiled_workflow(self, tool_registry=tool_registry, lang_version=lang_version,
-                                  inference=inference)
+        if target == "cwl":
+            return _compiled_workflow(self, tool_registry=tool_registry, lang_version=lang_version,
+                                      inference=inference)
+        if target == "nextflow":
+            return _compiled_nextflow_workflow(self, tool_registry=tool_registry, lang_version=lang_version,
+                                               inference=inference)
+        raise ValueError(f"unsupported compilation target {target!r}")
 
     def draw(  # pylint: disable=too-many-arguments
         self,
@@ -1167,6 +1211,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         *,
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
+        target: Literal["cwl", "nextflow"] = "cwl",
     ) -> RunResult | None:
         """Compile and execute this workflow locally, and wait for it: :meth:`start`, then ``collect()``.
 
@@ -1178,12 +1223,18 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
 
         The run writes the one document ``compile()`` returns to
         ``<basepath>/<name>.cwl``, with its job file beside it, and runs exactly
-        that.
+        that. With ``target="nextflow"`` it writes the pipeline to ``<basepath>/nextflow_<name>``,
+        runs it with Nextflow and warns with each note the lowering made; the outputs are in
+        ``<basepath>/nextflow_<name>/work``, Nextflow's work directory.
 
         Args:
             run_args_dict (dict[str, str] | None): Runtime CLI options for local execution,
                 by flag name without the dashes. ``quiet`` (``'yes'`` by default) and
-                ``no_provenance`` (``'no'`` by default) are yes/no switches.
+                ``no_provenance`` (``'no'`` by default) are yes/no switches. Under
+                ``target="nextflow"`` a key only a CWL run reads is refused, and each key
+                Sophios does not read reaches ``nextflow run`` as ``-<key> <value>``, or
+                ``-<key>`` alone for an empty value:
+                ``{'process.executor': 'slurm', 'resume': ''}``.
             user_env_vars (dict[str, str] | None): Environment variables to expose to the run.
             basepath (str): Directory used for generated files and execution artifacts.
             tool_registry (Tools | None): Optional tool registry override.
@@ -1191,6 +1242,8 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 ``.wic`` files a real-time analysis may be.
             inference (Inference): How an unbound input is connected; the run
                 infers the same edges ``compile(inference=...)`` does.
+            target (Literal["cwl", "nextflow"]): What the workflow is run as: CWL, by
+                ``cwl_runner``, or the pipeline the Nextflow target lowers it to, by Nextflow.
 
         Returns:
             RunResult | None: The completed run: its outputs, output directory and log
@@ -1199,12 +1252,14 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         Raises:
             SophiosError: The workflow does not compile, or this machine cannot run it.
             ValueError: If a `user_env_vars` key is not an environment variable name, or
-                `run_args_dict` names a `cwl_runner` Sophios cannot run.
+                `run_args_dict` names a `cwl_runner` Sophios cannot run, or under
+                ``target="nextflow"`` `run_args_dict` has a key only a CWL run reads or
+                the workflow has no Nextflow lowering.
             WorkflowRunError: If the runner exits non-zero. Its `exit_code` is the runner's.
             KeyboardInterrupt: On Ctrl-C, after the runner was stopped.
         """
         return _run_workflow(self, _RunOptions(run_args_dict, user_env_vars, basepath, tool_registry,
-                                               workflow_paths, inference))
+                                               workflow_paths, inference, target))
 
     def start(  # pylint: disable=too-many-arguments
         self,
@@ -1215,6 +1270,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         *,
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
+        target: Literal["cwl", "nextflow"] = "cwl",
     ) -> RunHandle:
         """Compile this workflow, prepare its run, start its runner, and return without waiting for it.
 
@@ -1236,6 +1292,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             workflow_paths (Mapping[str, Mapping[str, Path]] | None): The
                 ``.wic`` files a real-time analysis may be.
             inference (Inference): How an unbound input is connected.
+            target (Literal["cwl", "nextflow"]): As :meth:`run` takes it.
 
         Returns:
             RunHandle: The started run.
@@ -1245,7 +1302,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             ValueError: As :meth:`run` raises it, and for ``generate_run_script``.
         """
         return _start_workflow(self, _RunOptions(run_args_dict, user_env_vars, basepath, tool_registry,
-                                                 workflow_paths, inference))
+                                                 workflow_paths, inference, target))
 
     async def run_async(  # pylint: disable=too-many-arguments
         self,
@@ -1256,6 +1313,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         *,
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
+        target: Literal["cwl", "nextflow"] = "cwl",
     ) -> RunResult | None:
         """:meth:`run`, as a coroutine that never blocks the event loop.
 
@@ -1276,6 +1334,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             workflow_paths (Mapping[str, Mapping[str, Path]] | None): Unused here: they
                 name real-time analyses, which are refused.
             inference (Inference): How an unbound input is connected.
+            target (Literal["cwl", "nextflow"]): As :meth:`run` takes it.
 
         Returns:
             RunResult | None: As :meth:`run` returns it.
@@ -1287,7 +1346,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             asyncio.CancelledError: When the awaiting task is cancelled, after the runner was stopped.
         """
         return await _run_workflow_async(self, _RunOptions(run_args_dict, user_env_vars, basepath, tool_registry,
-                                                           workflow_paths, inference))
+                                                           workflow_paths, inference, target))
 
     def _as_workflow_step(self) -> nodes.Step:
         """Return this workflow as a step naming its own ``.wic`` document, with its anchored outputs."""

@@ -51,6 +51,7 @@ Sophios documentation
 
    workflow-model
    compiling-to-cwl
+   nextflow
 
 .. toctree::
    :maxdepth: 2

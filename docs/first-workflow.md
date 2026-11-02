@@ -42,14 +42,14 @@ describes `touch`:
 :caption: ~/wic/cwl_adapters/touch.cwl
 ```
 
-It runs `touch` in the container image `docker.io/bash:4.4`. It takes one
-input, `filename`, a string, and it has one output, `file`, the file that
-`touch` creates. Tools are written in the
-[Common Workflow Language](https://www.commonwl.org/) (CWL), and many
-scientific programs already have one. You will not write a tool until
-[Writing tools in Python](tool-builder.md); this chapter uses three that
-ship with Sophios: `touch`, `append`, which adds a line of text to a file,
-and `cat`, which reads a file back.
+It runs `touch` in the container image
+`docker.io/library/debian:bookworm-slim`. It takes one input, `filename`, a
+string, and it has one output, `file`, the file that `touch` creates. Tools
+are written in the [Common Workflow Language](https://www.commonwl.org/)
+(CWL), and many scientific programs already have one. You will not write a
+tool until [Writing tools in Python](tool-builder.md); this chapter uses
+three that ship with Sophios: `touch`, `append`, which adds a line of text
+to a file, and `cat`, which reads a file back.
 
 The `.wic` form of the workflow refers to a tool by its name alone, and
 Sophios finds it among the tools it ships. The Python form refers to each
@@ -141,7 +141,7 @@ INFO [step touch] start
 INFO [job touch] /private/tmp/docker_tmpdc0ozv4p$ docker \
     run \
     ...
-    docker.io/bash:4.4 \
+    docker.io/library/debian:bookworm-slim \
     touch \
     greeting.txt
 INFO [job touch] completed success
@@ -169,16 +169,17 @@ work between `starting compilation` and `finishing compilation`.
 
 Second, it checked that this machine can run the result: that Docker is
 running and that every file the workflow reads exists. Then it fetched
-`docker.io/bash:4.4`, the image `touch` and `cat` name. Sophios asks for the
-image before every run, so the first run downloads it and later runs only
-confirm it is current.
+`docker.io/library/debian:bookworm-slim`, the image `touch` and `cat` name.
+Sophios asks for the image before every run, so the first run downloads it
+and later runs only confirm it is current.
 
-Third, it handed the compiled workflow to **cwltool**, a CWL runner; that is
-the line that begins `Running`. Each `INFO` line is cwltool's log: a step
-starting, the exact command it ran, and whether it succeeded. `touch` and
-`cat` ran inside `docker.io/bash:4.4`. `append`'s tool names no container,
-so it ran directly on your machine, as `/bin/sh -c echo ...`. The log names
-every step by the id you gave it, `[step append]`.
+Third, it handed the compiled workflow to **cwltool**, a CWL runner; that
+is the line that begins `Running`. Each `INFO` line is cwltool's log: a
+step starting, the exact command it ran, and whether it succeeded. `touch`
+and `cat` ran inside `docker.io/library/debian:bookworm-slim`. `append`'s
+tool names no container, so it ran directly on your machine, as
+`/bin/sh -c echo ...`. The log names every step by the id you gave it,
+`[step append]`.
 
 Fourth, it reported where the results are, on the last line.
 

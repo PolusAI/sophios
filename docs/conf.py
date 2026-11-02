@@ -2,6 +2,8 @@ from pathlib import Path
 import os
 import sys
 from typing import Dict
+
+from sphinx.application import Sphinx
 # Configuration file for the Sphinx documentation builder.
 #
 # This file only contains a selection of the most common options. For a full
@@ -74,6 +76,7 @@ autodoc_default_options = {
 autodoc_type_aliases: Dict[str, str] = {
 }
 napoleon_use_param = True
+napoleon_preprocess_types = True  # `optional` in a type is a keyword, never a cross-reference
 napoleon_type_aliases: Dict[str, str] = {
 }
 
@@ -110,3 +113,82 @@ html_context = {'building_pdf': building_pdf}
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
+
+
+# -- The Nextflow support table ----------------------------------------------
+
+# docs/nextflow.md holds this marker where src/sophios/nf_support.py's table is rendered.
+NF_SUPPORT_MARKER = '<!-- nf-support-table -->'
+
+# Where a class's fields are written, for a class whose name does not say.
+_NF_SUPPORT_PLACES = {
+    'WorkflowStep': 'a workflow step',
+    'WorkflowStepInput': "an entry of a step's `in`",
+    'WorkflowInputParameter': 'a workflow input',
+    'InputArraySchema': "a workflow input's array type",
+    'WorkflowOutputParameter': 'a workflow output',
+    'OutputArraySchema': "a workflow output's array type",
+    'CommandInputParameter': 'a tool input',
+    'CommandInputArraySchema': "a tool input's array type",
+    'CommandLineBinding': 'an `inputBinding`, or an `arguments` entry',
+    'CommandOutputParameter': 'a tool output',
+    'CommandOutputBinding': 'an `outputBinding`',
+    'Dirent': 'an entry of an `InitialWorkDirRequirement` listing',
+    'EnvironmentDef': 'an `envDef` entry of an `EnvVarRequirement`',
+}
+
+
+def _nf_support_table(head: str, rows: list[tuple[str, ...]]) -> list[str]:
+    columns = head.split(' | ')
+    return [f'| {head} |', '|' + '---|' * len(columns), *(f"| {' | '.join(row)} |" for row in rows)]
+
+
+def nf_support_markdown() -> str:
+    """The support table as Markdown: a summary line, then one table per class."""
+    from collections import Counter  # pylint: disable=import-outside-toplevel
+    from sophios.lang import SUPPORT_MATRIX, Support  # pylint: disable=import-outside-toplevel
+    from sophios.nf_support import FIELDS, REQUIREMENT_CLASSES, State  # pylint: disable=import-outside-toplevel
+
+    native = Counter(FIELDS[cwl_class][name].state for cwl_class, rows in SUPPORT_MATRIX.items()
+                     for name, row in rows.items() if row.support is Support.NATIVE)
+    lines = [
+        f'Of the {native.total()} fields Sophios supports natively, the Nextflow target lowers '
+        f'{native[State.LOWERED]}, uses {native[State.COMPILE_TIME]} at compile time only, and rejects '
+        f'{native[State.REJECTED]}.',
+    ]
+    requirements = {name for classes in REQUIREMENT_CLASSES.values() for name in classes}
+    for cwl_class, rows in FIELDS.items():
+        if cwl_class in requirements:
+            continue
+        place = _NF_SUPPORT_PLACES.get(cwl_class)
+        lines += ['', f'### `{cwl_class}`' + (f', {place}' if place else ''), '']
+        if (sophios := SUPPORT_MATRIX.get(cwl_class)) is None:
+            lines += _nf_support_table('Field | Nextflow | Note', [
+                (f'`{name}`', row.state, row.note) for name, row in rows.items()])
+        else:
+            lines += _nf_support_table('Field | Sophios | Nextflow | Note', [
+                (f'`{name}`', sophios[name].support, row.state, row.note) for name, row in rows.items()])
+    for level, classes in REQUIREMENT_CLASSES.items():
+        kinds = 'Requirement and hint' if level == 'CommandLineTool' else 'Requirement'
+        lines += ['', f'### {kinds} classes of a `{level}`', '']
+        lines += _nf_support_table('Class | Nextflow | Note', [
+            (f'`{name}`', row.state, row.note) for name, row in classes.items()])
+        lines += ['', 'Any other class is rejected.']
+    for cwl_class, rows in FIELDS.items():
+        if cwl_class in requirements:
+            lines += ['', f'### `{cwl_class}` fields', '']
+            lines += _nf_support_table('Field | Nextflow | Note', [
+                (f'`{name}`', row.state, row.note) for name, row in rows.items()])
+    return '\n'.join(lines) + '\n'
+
+
+def _render_nf_support(_app: Sphinx, docname: str, source: list[str]) -> None:
+    if docname == 'nextflow':
+        if NF_SUPPORT_MARKER not in source[0]:
+            raise ValueError(f'docs/nextflow.md has no {NF_SUPPORT_MARKER} for the support table')
+        source[0] = source[0].replace(NF_SUPPORT_MARKER, nf_support_markdown())
+
+
+def setup(app: Sphinx) -> None:
+    """Render the Nextflow support table into docs/nextflow.md as Sphinx reads it."""
+    app.connect('source-read', _render_nf_support)

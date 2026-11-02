@@ -176,7 +176,8 @@ With `--allow_raw_cwl`, a file whose top level is a CWL `Workflow` and that
 holds no Sophios syntax is handed to the runner as it is, with the inputs
 file as its job file. Nothing is parsed, rewritten or copied, so the flags
 that rewrite compiled CWL, such as `--partial_failure_enable`, are an error
-here. The Python API builds workflows and has no call that takes a finished
+here. Under `--target nextflow` the file is compiled like any other workflow.
+The Python API builds workflows and has no call that takes a finished
 CWL workflow; use the command line. The
 [command-line reference](cli-reference.md) lists what each flag does in this
 mode.

@@ -6,7 +6,8 @@ import subprocess as sub
 import traceback
 import json
 from collections.abc import Iterable
-from typing import Final, Iterator
+from dataclasses import replace
+from typing import Final, Iterator, NoReturn
 
 import graphviz
 import yaml
@@ -16,10 +17,12 @@ from sophios.lang.diagnostics import Diagnostic, Diagnostics, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.ir.artifacts import CompilationResult
 from . import input_output as io
+from . import input_output_nf as io_nf
 from . import post_compile as pc
 from . import backends, cli, compiler, drawing, plugins, preflight, realtime, run_local, run_setup
 from .ir import frontdoor
 from .ir.frontdoor import SourceBundle
+from .utils_nf import compiled_source_to_nextflow_with_notes
 from .wic_types import CompilerOptions, Json, Tools
 
 
@@ -75,6 +78,47 @@ def _compile_loaded_document(yaml_path: str, bundle: SourceBundle,
     # file was read as.
     print('Sophios lang_version:', result.lang_version)
     return result, analyses
+
+
+def _write_nextflow_target(
+    compilation: CompilationResult,
+    yaml_stem: str,
+    basepath: Path,
+    diagnostics_form: str,
+) -> tuple[Path, Path, Path, Path]:
+    """Lower the completed semantic graph, write Nextflow artifacts under `basepath`, and report the notes."""
+    io_nf.remove_nextflow_artifacts(basepath)
+    try:
+        workflow, notes = compiled_source_to_nextflow_with_notes(compilation)
+        paths = io_nf.write_nextflow_artifacts(workflow, basepath)
+    except ValueError as error:
+        _not_lowered(error, yaml_stem)
+    _report(notes, diagnostics_form)
+    return paths
+
+
+def _not_lowered(error: ValueError, yaml_stem: str) -> NoReturn:
+    """Exit 1 for a workflow the Nextflow target does not lower, its findings in `error_<stem>.txt`."""
+    error_path = Path(f'error_{yaml_stem}.txt')
+    error_path.write_text(f'{error}\n', encoding='utf-8')
+    print(f'Failed to generate Nextflow artifacts. See {error_path}.')
+    raise SystemExit(1) from None
+
+
+def _run_nextflow(args: argparse.Namespace, unknown_args: list[str], compilation: CompilationResult,
+                  analyses: tuple[realtime.Analysis, ...], yaml_stem: str) -> None:
+    """`--run_local`, `--generate_run_script` or `--check` under `--target nextflow`."""
+    settings = run_setup.Settings(_run_settings(args), Path(args.yaml).parent.absolute(), check=args.check)
+    try:
+        prepared = backends.backend('nextflow', 'nextflow').prepare(compilation, analyses, Path(args.basepath),
+                                                                    settings)
+    except ValueError as error:
+        _not_lowered(error, yaml_stem)
+    _report(prepared.notes, args.diagnostics)
+    if args.check:
+        _checked(prepared.artifact.name)
+        return
+    _run(args, unknown_args, prepared.artifact.name, realtime_plans=prepared.plans)
 
 
 #: Flags that rewrite the CWL Sophios compiled. A plain CWL workflow is not
@@ -185,9 +229,14 @@ def _preflight(args: argparse.Namespace, documents: list[Path], jobs: tuple[pref
         preflight.prepare(documents, settings, jobs)
         return True
     backends.backend('cwl', args.cwl_runner).check(documents, jobs, settings)
-    print(f'Checked {documents[0]}: nothing in the way of a local run on this machine. '
-          'Nothing was written, pulled or run.')
+    _checked(documents[0])
     return False
+
+
+def _checked(name: Path | str) -> None:
+    """Say that `--check` found nothing in the way of running `name`."""
+    print(f'Checked {name}: nothing in the way of a local run on this machine. '
+          'Nothing was written, pulled or run.')
 
 
 def _run_settings(args: argparse.Namespace) -> preflight.RunSettings:
@@ -195,8 +244,13 @@ def _run_settings(args: argparse.Namespace) -> preflight.RunSettings:
     writes = ((Path(args.outdir), "the run's outputs", 'give --outdir a directory you can write to'),) \
         if args.outdir else ()
     return preflight.RunSettings(args.container_engine, args.pull_dir, ignore_install=args.ignore_docker_install,
-                                 ignore_processes=args.ignore_docker_processes, runner=args.cwl_runner,
+                                 ignore_processes=args.ignore_docker_processes, runner=_runner(args),
                                  run_script=args.generate_run_script, writes=writes)
+
+
+def _runner(args: argparse.Namespace) -> str:
+    """The program that runs the workflow: `--cwl_runner`, or Nextflow under `--target nextflow`."""
+    return 'nextflow' if args.target == 'nextflow' else args.cwl_runner
 
 
 def _run(args: argparse.Namespace, unknown_args: list[str], workflow_name: str,
@@ -207,7 +261,7 @@ def _run(args: argparse.Namespace, unknown_args: list[str], workflow_name: str,
     Exits with the runner's exit code when it is not 0, and with 130 on Ctrl-C.
     """
     request = backends.RunRequest(
-        workflow_name, Path(args.basepath), runner=args.cwl_runner, documents=documents,
+        workflow_name, Path(args.basepath), runner=_runner(args), target=args.target, documents=documents,
         container_engine=args.container_engine, cachedir=args.cachedir, outdir=args.outdir, quiet=args.quiet,
         provenance=not args.no_provenance, passthrough_args=tuple(unknown_args), realtime_plans=realtime_plans,
         generate_run_script=args.generate_run_script)
@@ -281,6 +335,7 @@ def _report_crash(error: Exception, stem: str) -> None:
 def main() -> None:
     """CLI entry point: run, and convert a reported failure to its diagnostics and exit code 1."""
     args, unknown_args = cli.parser.parse_known_args()
+    cli.validate_target_args(args)
     try:
         _main(args, unknown_args)
     except SophiosError as e:
@@ -294,10 +349,10 @@ def main() -> None:
 def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     """The command line, as docs/cli-reference.md describes it."""
     if unknown_args and args.passthrough_flags != 'yes':
-        cli.parser.error(f'unrecognized arguments: {" ".join(unknown_args)}. '
-                         'Flags for the CWL runner need --passthrough_flags yes')
+        cli.parser.error(f'unrecognized arguments: {" ".join(unknown_args)}. Flags for the runner need '
+                         '--passthrough_flags yes')
     if unknown_args and not (args.run_local or args.generate_run_script):
-        cli.parser.error(f'{" ".join(unknown_args)} would go to the CWL runner, which this command does not run. '
+        cli.parser.error(f'{" ".join(unknown_args)} would go to the runner, which this command does not run. '
                          'Add --run_local or --generate_run_script, or remove them')
     plugins.logging_filters()
 
@@ -337,7 +392,7 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     if args.check and args.graphviz:
         cli.parser.error('--graphviz writes drawings and --check writes nothing: '
                          'draw with --generate_cwl_workflow --graphviz')
-    if args.allow_raw_cwl and _is_plain_cwl_workflow(Path(args.yaml)):
+    if args.allow_raw_cwl and args.target == 'cwl' and _is_plain_cwl_workflow(Path(args.yaml)):
         _pass_through(args, unknown_args)
         return
     global_config: Json = io.get_config(args.config_file, Path(args.homedir))
@@ -355,6 +410,12 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     compiler_options['renaming_conventions'] = global_config.get('renaming_conventions', [])
     compilation, analyses = _compile_loaded_document(yaml_path, bundle, yml_paths, tools_cwl, compiler_options)
     _report(compilation.diagnostics, args.diagnostics)
+    if args.target == 'nextflow':
+        if _is_local_run(args):
+            _run_nextflow(args, unknown_args, compilation, analyses, yaml_stem)
+        else:
+            _write_nextflow_target(compilation, yaml_stem, Path(args.basepath), args.diagnostics)
+        return
     root_dir = Path(args.yaml).parent.absolute()
     artifact = compilation.artifact
 
@@ -378,13 +439,12 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
 
     if _is_local_run(args):
         prepared = backends.backend('cwl', args.cwl_runner).prepare(
-            artifact, analyses, Path(args.basepath),
+            replace(compilation, artifact=artifact), analyses, Path(args.basepath),
             run_setup.Settings(_run_settings(args), root_dir, args.inputs_file, check=args.check,
                                remove_entrypoints=args.docker_remove_entrypoints))
         draw_after_write()
         if args.check:
-            print(f'Checked {prepared.artifact.name}: nothing in the way of a local run on this machine. '
-                  'Nothing was written, pulled or run.')
+            _checked(prepared.artifact.name)
             return
         _run(args, unknown_args, prepared.artifact.name, realtime_plans=prepared.plans)
 

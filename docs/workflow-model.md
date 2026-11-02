@@ -158,8 +158,9 @@ The model belongs to Sophios, not to any workflow language. Both forms build
 it, the compiler completes it, with inference, and checks it, and then a
 **backend** writes it out in a language a runner understands. That split is
 what makes Sophios multi-backend: the model and its checks would stay the
-same for another backend. CWL is currently the only backend, and
-[Compiling to CWL](compiling-to-cwl.md) reads, line by line, what it writes.
+same for another backend. There are two, CWL and [Nextflow](nextflow.md),
+and [Compiling to CWL](compiling-to-cwl.md) reads, line by line, what the
+CWL one writes.
 
 ## Checks, in order
 

@@ -10,20 +10,28 @@ four questions about it and runs nothing itself:
 - outcome: after the runner exits, its outputs and the steps that failed.
 
 `run_local` starts the launch as a child process and reports the outcome. A target
-is the language a workflow is handed to its runner in; only CWL exists.
+is the language a workflow is handed to its runner in: `cwl`, run by cwltool or Toil,
+or `nextflow`, run by Nextflow.
 """
 import json
 import os
 import re
 import sys
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+import tempfile
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Final, Protocol
+from typing import Any, Final, Protocol
 
+from . import input_output_nf as io_nf
 from . import preflight, realtime, run_setup
-from .ir.artifacts import CompilationArtifact
+from .ir.artifacts import CompilationResult
+from .ir.locations import absolute_paths
+from .lang.diagnostics import SophiosError
+from .nf_reader import read_nextflow
+from .runtime_inputs import output_target_inputs
+from .utils_nf import compiled_source_to_nextflow_with_notes, local_locations_as_paths, nextflow_names
 from .wic_types import Json
 
 _ENV_VAR_NAME: Final = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
@@ -49,10 +57,11 @@ class RunRequest:  # pylint: disable=too-many-instance-attributes
     Attributes:
         workflow_name: The workflow's name: its files are `<name>.cwl`, `output_<name>.json`, ...
         basepath: The directory the workflow was written to, and the run's files go.
-        runner: `cwltool` or `toil-cwl-runner`.
-        target: The language the runner is given the workflow in: `cwl`.
-        documents: The workflow, then its job file if it has one, as the runner is given them.
+        runner: `cwltool`, `toil-cwl-runner`, or `nextflow` for the target `nextflow`.
+        target: The language the runner is given the workflow in: `cwl` or `nextflow`.
+        documents: The workflow, then its job file if it has one, as a CWL runner is given them.
             None: the files `prepare` wrote, `<basepath>/<name>.cwl` and `<basepath>/<name>_inputs.yml`.
+            Nextflow is always given the files `prepare` wrote.
         container_engine: `docker`, `podman`, `singularity`, or another docker-compatible command.
         cachedir: Where cwltool caches a job whose tool and inputs are unchanged; '' for no cache.
         outdir: The runner's output directory; '' for `<basepath>/outdir_<runner>_<name>_<time>`.
@@ -122,9 +131,9 @@ class Backend(Protocol):
               settings: preflight.RunSettings) -> None:
         """Raise every problem running `documents` with `jobs` would hit on this machine."""
 
-    def prepare(self, artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path,
+    def prepare(self, compilation: CompilationResult, analyses: tuple[realtime.Analysis, ...], basepath: Path,
                 settings: run_setup.Settings) -> run_setup.Prepared:
-        """Write what the runner reads under `basepath`, and make the machine ready to run it."""
+        """Write what the runner reads of `compilation` under `basepath`, and make the machine ready to run it."""
 
     def launch(self, request: RunRequest) -> Launch:
         """The runner's command line, environment and working directory for `request`."""
@@ -217,10 +226,13 @@ class _Cwl:
         """The pre-flight's checks: paths, programs and the container engine."""
         preflight.check(preflight.needs(documents, jobs), settings)
 
-    def prepare(self, artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path,
+    def prepare(self, compilation: CompilationResult, analyses: tuple[realtime.Analysis, ...], basepath: Path,
                 settings: run_setup.Settings) -> run_setup.Prepared:
-        """The workflow and its job under `basepath`, its analyses beside it, and its images pulled."""
-        return run_setup.prepare(artifact, analyses, basepath, settings)
+        """The workflow and its job under `basepath`, its analyses beside it, and its images pulled.
+
+        The artifact written is `compilation.artifact`, as the front door rewrote it.
+        """
+        return run_setup.prepare(compilation.artifact, analyses, basepath, settings)
 
 
 class CwltoolBackend(_Cwl):
@@ -303,7 +315,12 @@ class ToilBackend(_Cwl):
 
     def realtime_command(self, request: RunRequest) -> str:
         """Why none can: an analysis watches cwltool's job directories, and Toil has none."""
-        return f'Real-time analysis needs cwltool; {request.runner} runs the workflow without it.'
+        return _without_cwltool(request)
+
+
+def _without_cwltool(request: RunRequest) -> str:
+    """The line that says a run's real-time analyses do not run, since its runner is not cwltool."""
+    return f'Real-time analysis needs cwltool; {request.runner} runs the workflow without it.'
 
 
 def _last_json_object(text: str) -> Json | None:
@@ -318,10 +335,168 @@ def _last_json_object(text: str) -> Json | None:
     return found if isinstance(found, dict) else None
 
 
+def nextflow_directory(basepath: Path, workflow_name: str) -> Path:
+    """Where `NextflowBackend` writes and runs `workflow_name`'s pipeline: the four artifacts, `nextflow_names.json`
+    with the Sophios name of each process and workflow output by its Nextflow name, the work directory `work`, and
+    Nextflow's own log and cache.
+
+    Named after the workflow, as a CWL run's `<name>.cwl` and `<name>_inputs.yml` are, so two workflows run
+    together from one base path never read or overwrite each other's pipeline.
+    """
+    return basepath / f'nextflow_{workflow_name}'
+
+
+#: The file in a workflow's `nextflow_directory` that maps each Nextflow name back to its Sophios one.
+_NEXTFLOW_NAMES: Final = 'nextflow_names.json'
+
+
+#: Nextflow's lines for a failed task, as its log prints them: `Error executing process > '<task>'`, then, for a
+#: task that exited non-zero, `Process `<task>` terminated with an error exit status (<n>)`.
+_NEXTFLOW_FAILED: Final = re.compile(r"Error executing process > '(?P<failed>[^']+)'"
+                                     r"|Process `(?P<exited>[^`]+)` terminated with an error exit status "
+                                     r"\((?P<status>-?\d+)\)")
+
+
+def nextflow_failed_steps(lines: Iterable[str]) -> dict[str, int | None]:
+    """Each process Nextflow's log says failed, in the order it failed, with its exit status when Nextflow gives one.
+
+    A task is named `<workflow>:<process>`, followed by ` (<index>)` for a task of a scattered process.
+    """
+    failed: dict[str, int | None] = {}
+    for line in lines:
+        found = _NEXTFLOW_FAILED.search(line)
+        if found is None:
+            continue
+        process = (found['failed'] or found['exited']).split(' (', 1)[0].rsplit(':', 1)[-1]
+        if found['status'] is None:
+            failed.setdefault(process, None)
+        else:
+            failed[process] = int(found['status'])
+    return failed
+
+
+def _recorded_outputs(stdout: str) -> Iterator[tuple[str, Json]]:
+    """Each workflow output the pipeline printed, by its Nextflow name, as `input_output_nf` renders the record."""
+    marker = f'{io_nf.NF_OUTPUT_MARKER} '
+    for line in stdout.splitlines():
+        if line.startswith(marker):
+            name, value = json.loads(line[len(marker):])
+            yield name, value
+
+
+def _cwl_objects(value: Any) -> Any:
+    """`value` with each path the pipeline recorded made a CWL File or Directory object."""
+    match value:
+        case {'class': 'File' | 'Directory' as kind, 'path': str() as path}:
+            return {'class': kind, 'location': Path(path).as_uri(), 'path': path, 'basename': Path(path).name}
+        case list():
+            return [_cwl_objects(item) for item in value]
+    return value
+
+
+class NextflowBackend:
+    """Nextflow, which runs the pipeline the Nextflow target lowers the workflow to."""
+
+    def check(self, documents: Sequence[Path], jobs: Sequence[preflight.Job],
+              settings: preflight.RunSettings) -> None:
+        """The paths `jobs` name, `nextflow`, starting with a Java it can run, and the container engine when a
+        process has a container.
+
+        `documents` are the artifacts `prepare` wrote, in one directory; the processes are read from the pipeline
+        there, as the import reads them.
+        """
+        workflow, _ = read_nextflow(documents[0].parent)
+        problems = preflight.path_problems(jobs) + preflight.nextflow_problems(settings)
+        images = [process.container for process in workflow.processes if process.container is not None]
+        if images:
+            problems += preflight.engine_problems(images, settings)
+        if problems:
+            raise SophiosError(problems)
+
+    def prepare(self, compilation: CompilationResult, analyses: tuple[realtime.Analysis, ...], basepath: Path,
+                settings: run_setup.Settings) -> run_setup.Prepared:
+        """The four artifacts and `nextflow_names.json` in the workflow's `nextflow_directory`, the analyses under
+        `basepath`, the check, and each output-target Directory input that names nothing yet made.
+
+        The workflow is lowered from its bound values, each relative File or Directory path read against
+        `settings.root_dir` and written absolute: Nextflow runs from its `nextflow_directory`.
+
+        A check (`settings.check`) writes them into a temporary directory instead, removed when the check ends,
+        so it leaves `basepath` as it found it.
+
+        Raises:
+            ValueError: The workflow has no Nextflow lowering; no artifact is left.
+            SophiosError: What the check found in the way.
+        """
+        if not settings.check:
+            return self._prepare(compilation, analyses, basepath, settings)
+        with tempfile.TemporaryDirectory(prefix='sophios-check-') as scratch:
+            return self._prepare(compilation, analyses, Path(scratch), settings)
+
+    def _prepare(self, compilation: CompilationResult, analyses: tuple[realtime.Analysis, ...], basepath: Path,
+                 settings: run_setup.Settings) -> run_setup.Prepared:
+        """`prepare`, writing under `basepath`."""
+        artifact = compilation.artifact
+        bound = absolute_paths(local_locations_as_paths(artifact.job_inputs), settings.root_dir)
+        compilation = replace(compilation, artifact=replace(artifact, job_inputs=bound))
+        directory = nextflow_directory(basepath, artifact.name)
+        io_nf.remove_nextflow_artifacts(directory)
+        workflow, notes = compiled_source_to_nextflow_with_notes(compilation)
+        documents = io_nf.write_nextflow_artifacts(workflow, directory)
+        (directory / _NEXTFLOW_NAMES).write_text(json.dumps(nextflow_names(compilation), indent=2) + '\n',
+                                                 encoding='utf-8')
+        plans = realtime.write(analyses, basepath, artifact.name, settings.root_dir)
+        targets = output_target_inputs(artifact)
+        # An output-target Directory need not exist yet: it is made below.
+        job = preflight.Job({name: value for name, value in bound.items() if name not in targets}, settings.root_dir,
+                            'the workflow')
+        self.check(documents, (job,), settings.run)
+        if not settings.check:
+            # The pipeline stages an output-target Directory as an input, so it must exist; a CWL runner makes it.
+            for name in targets:
+                match bound.get(name):
+                    case {'class': 'Directory', 'path': str() as path} if not Path(path).exists():
+                        Path(path).mkdir(parents=True)
+        return run_setup.Prepared(artifact, plans, documents, notes)
+
+    def launch(self, request: RunRequest) -> Launch:
+        """`nextflow` reading only the generated configuration, with the pipeline, its parameters, its work directory
+        and no ANSI log, then the passthrough arguments, from the workflow's `nextflow_directory`.
+
+        From there, Nextflow's own log and cache are with the pipeline they belong to.
+        """
+        directory = nextflow_directory(request.basepath.absolute().resolve(), request.workflow_name)
+        workdir = str(directory / 'work')
+        argv = ['nextflow', '-C', str(directory / io_nf.NEXTFLOW_CONFIG), 'run',
+                str(directory / io_nf.NEXTFLOW_SCRIPT), '-params-file', str(directory / io_nf.NEXTFLOW_PARAMS),
+                '-work-dir', workdir, '-ansi-log', 'false', *request.passthrough_args]
+        return Launch(tuple(argv), {**_environment(request), 'NXF_SYNTAX_PARSER': 'v2'}, directory, workdir)
+
+    def outcome(self, request: RunRequest, exit_code: int, stdout: str, log: Path) -> Outcome:
+        """The outputs the pipeline recorded, by their Sophios names and written to the summary as cwltool's are;
+        the failed processes from Nextflow's log, by their Sophios step names."""
+        basepath = request.basepath.absolute().resolve()
+        names = json.loads((nextflow_directory(basepath, request.workflow_name) / _NEXTFLOW_NAMES)
+                           .read_text(encoding='utf-8'))
+        failed = {names['processes'][process]: status
+                  for process, status in nextflow_failed_steps(_log_lines(log)).items()}
+        if exit_code != 0:
+            return Outcome(None, None, failed)
+        outputs = {names['outputs'][name]: _cwl_objects(value) for name, value in _recorded_outputs(stdout)}
+        summary = basepath / f'output_{request.workflow_name}.json'
+        summary.write_text(json.dumps(outputs, indent=4) + '\n', encoding='utf-8')
+        return Outcome(outputs, summary, failed)
+
+    def realtime_command(self, request: RunRequest) -> str:
+        """Why none can: an analysis watches cwltool's job directories, and a Nextflow run has none."""
+        return _without_cwltool(request)
+
+
 #: The backend of each (target, runner).
 BACKENDS: Final[Mapping[tuple[str, str], Backend]] = {
     ('cwl', 'cwltool'): CwltoolBackend(),
     ('cwl', 'toil-cwl-runner'): ToilBackend(),
+    ('nextflow', 'nextflow'): NextflowBackend(),
 }
 
 

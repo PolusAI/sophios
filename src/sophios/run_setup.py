@@ -12,6 +12,7 @@ import tempfile
 from sophios import input_output, post_compile, preflight, realtime
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.locations import absolute_paths
+from sophios.lang.diagnostics import Diagnostic
 from sophios.runtime_inputs import normalize_artifact_job_inputs
 
 
@@ -41,11 +42,13 @@ class Settings:
 
 @dataclass(frozen=True, slots=True)
 class Prepared:
-    """A run ready to start: the workflow as the runner gets it, and its analyses' plans."""
+    """A run ready to start: the workflow as the runner gets it, its analyses' plans, and the notes
+    preparing it made, for the front door to report."""
 
     artifact: CompilationArtifact
     plans: tuple[realtime.Plan, ...]
     documents: tuple[Path, ...]
+    notes: tuple[Diagnostic, ...] = ()
 
 
 def prepare(artifact: CompilationArtifact, analyses: tuple[realtime.Analysis, ...], basepath: Path,

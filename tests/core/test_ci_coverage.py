@@ -173,6 +173,27 @@ def test_the_census_sees_the_repo() -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize('workflow_name', ['build_wheel.yml', 'test_and_publish_pypi.yml'])
+def test_package_lanes_leave_nextflow_runtime_to_its_runtime_lane(workflow_name: str) -> None:
+    """Package lanes do not collect tests whose executable they do not install."""
+    runtime_tests, *package_tests = _collect_all(
+        [['tests/core/nextflow', '-m', 'nextflow'], *_invocations(WORKFLOWS / workflow_name)]
+    )
+    assert runtime_tests
+    assert runtime_tests.isdisjoint(set().union(*package_tests))
+
+
+@pytest.mark.fast
+def test_only_the_corpus_lane_runs_the_nextflow_corpus() -> None:
+    """The corpus runs need its checkouts, images and data; only run_workflows.yml has them."""
+    lanes = [(lane.name, argv) for lane in sorted(WORKFLOWS.glob('*.yml')) for argv in _invocations(lane)]
+    corpus, *selected = _collect_all([['tests/core/nextflow', '-m', 'nextflow_corpus'], *(argv for _, argv in lanes)])
+    assert corpus
+    assert {name for (name, _), tests in zip(lanes, selected) if tests & corpus} == {'run_workflows.yml'}
+    assert corpus <= set().union(*(tests for (name, _), tests in zip(lanes, selected) if name == 'run_workflows.yml'))
+
+
+@pytest.mark.fast
 def test_collection_is_pytests_answer_and_not_ours() -> None:
     """The helper really asks pytest, and pytest really narrows.
 
@@ -380,6 +401,14 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # runner is checked on every leg by the file's other tests.
     'tests/core/test_quiet.py::test_a_failing_step_is_named_with_its_status_below_its_own_messages',
     'tests/core/test_quiet.py::test_a_quiet_run_keeps_a_file_the_tool_names_as_its_stdout',
+    # One six-step workflow run under Nextflow and under cwltool, in about four seconds. Only the Nextflow
+    # lane, on Linux, collects it, so the Windows leg gives up nothing it ran; what the references render
+    # is checked on every leg by the renderer's tests.
+    'tests/core/nextflow/test_reference_differential.py::'
+    'test_a_path_inputs_references_mean_under_nextflow_what_they_mean_under_cwltool',
+    # One cwltool run of a one-step tool that fails, in about two seconds. That the Nextflow target refuses the
+    # glob is checked on every leg by test_capabilities.py; only cwltool shows CWL refuses it too.
+    'tests/core/nextflow/test_reference_differential.py::test_neither_runner_takes_an_entrys_object_as_a_glob',
 })
 
 

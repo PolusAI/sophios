@@ -3,7 +3,7 @@ cwlVersion: v1.0
 
 requirements:
   DockerRequirement:
-    dockerPull: docker.io/bash:4.4
+    dockerPull: docker.io/library/debian:bookworm-slim
   InlineJavascriptRequirement: {}
 
 baseCommand: [cat]

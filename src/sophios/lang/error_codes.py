@@ -104,6 +104,30 @@ class SophiosErrorCode(StrEnum):
     #: (`sophios.lang.names`).
     INVALID_NAME = 'wic045'
 
+    #: A note, not an error: under ``--target nextflow``, a ``cwltool:CUDARequirement``
+    #: field the generated pipeline does not check, ``cudaVersionMin`` or
+    #: ``cudaComputeCapability``.
+    UNCHECKED_CUDA_FIELD = 'wic046'
+
+    #: Importing a Nextflow pipeline (docs/nextflow.md): text in its three
+    #: files that is not what Sophios's renderer writes, at its line.
+    #: wic047: a `def` that is not a generated helper, byte for byte.
+    IMPORT_EDITED_HELPER = 'wic047'
+    #: wic048: a statement, directive or channel operator the renderer does not write.
+    IMPORT_FOREIGN_STATEMENT = 'wic048'
+    #: wic049: a process input or output declaration the renderer does not write.
+    IMPORT_FOREIGN_DECLARATION = 'wic049'
+    #: wic050: a process script or stub that is not the command or stub the renderer writes.
+    IMPORT_FOREIGN_SCRIPT = 'wic050'
+    #: wic051: a `nextflow_params.json` that does not hold the values of the parameters the pipeline checks.
+    IMPORT_PARAMS = 'wic051'
+    #: wic052: a `nextflow.config` other than the one the renderer writes for the pipeline.
+    IMPORT_CONFIG = 'wic052'
+    #: wic053: text in the renderer's forms that is not what it writes for the workflow the text describes.
+    IMPORT_MISMATCH = 'wic053'
+    #: wic054: a pipeline no workflow built through the Python API compiles to, as it is written.
+    IMPORT_UNWRITABLE = 'wic054'
+
     #: --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = 'api001'
     INVALID_STEP = 'api002'
@@ -139,7 +163,7 @@ class SophiosErrorCode(StrEnum):
 class Kind(StrEnum):
     """What a reader changes when a code is reported."""
 
-    DOCUMENT = 'document'  #: the .wic file or the Python workflow
+    DOCUMENT = 'document'  #: the .wic file, the Python workflow, or an imported Nextflow pipeline
     CALL = 'call'          #: the Python API call
     MACHINE = 'machine'    #: this machine: what is installed, running, readable or writable
     RUN = 'run'            #: nothing in Sophios: a tool failed while it ran
@@ -223,7 +247,8 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         'The container engine cannot be used: not installed, not running, not yours to use, or overloaded. '
         'Checked only when a step runs in a container.',
         'Do what the message says: install the engine, start it, or give your user access to it; '
-        '`--container_engine` names another engine, and `--ignore_docker_install` skips the check.'),
+        'under `--target cwl`, `--container_engine` names another engine, and `--ignore_docker_install` skips the '
+        'check.'),
     SophiosErrorCode.MISSING_INPUT_FILE: Explanation(
         Kind.MACHINE,
         'An input file or directory cannot be used: it does not exist, it is the other kind, or you may not read it.',
@@ -352,6 +377,53 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         '`_`, `.` and `-`, or starting with `.`.',
         'Rename it with letters, digits, `_`, `.` and `-`: the name becomes part of file names and of the names '
         'Sophios makes with `~` and `@`.'),
+    SophiosErrorCode.UNCHECKED_CUDA_FIELD: Explanation(
+        Kind.DOCUMENT,
+        'Note: under `--target nextflow`, a `cwltool:CUDARequirement` names a `cudaVersionMin` or '
+        '`cudaComputeCapability`, which the generated pipeline does not check; it asks only for a number of GPUs.',
+        'Run the pipeline where the GPUs and the container image provide that CUDA version and compute '
+        'capability, or remove the field.'),
+    SophiosErrorCode.IMPORT_EDITED_HELPER: Explanation(
+        Kind.DOCUMENT,
+        'Importing Nextflow: a `def` in `workflow.nf` that is not a helper Sophios generates, byte for byte.',
+        'Restore the helper as Sophios wrote it, or remove the `def`: the import reads only what Sophios writes.'),
+    SophiosErrorCode.IMPORT_FOREIGN_STATEMENT: Explanation(
+        Kind.DOCUMENT,
+        'Importing Nextflow: a statement, directive or channel operator Sophios does not write, such as an '
+        '`include`, an `errorStrategy` directive or a `.view()` call.',
+        'Remove the construct the message names: the import reads only the pipelines Sophios writes '
+        '(docs/nextflow.md).'),
+    SophiosErrorCode.IMPORT_FOREIGN_DECLARATION: Explanation(
+        Kind.DOCUMENT,
+        'Importing Nextflow: a process input or output declaration Sophios does not write, such as '
+        '`tuple val(id), path(reads)`.',
+        'Write the process as a Sophios tool and compile it to Nextflow; the import reads only what Sophios writes.'),
+    SophiosErrorCode.IMPORT_FOREIGN_SCRIPT: Explanation(
+        Kind.DOCUMENT,
+        'Importing Nextflow: a process script or stub that is not the command or stub Sophios writes, such as a '
+        'hand-written shell script.',
+        'Write the command as a Sophios tool and compile it to Nextflow; the import reads only what Sophios writes.'),
+    SophiosErrorCode.IMPORT_PARAMS: Explanation(
+        Kind.DOCUMENT,
+        'Importing Nextflow: a `nextflow_params.json` that does not hold the values of the parameters the pipeline '
+        'checks, as Sophios writes them.',
+        'Give each parameter the entry workflow checks one value, and no other key, in the form Sophios writes.'),
+    SophiosErrorCode.IMPORT_CONFIG: Explanation(
+        Kind.DOCUMENT,
+        'Importing Nextflow: a `nextflow.config` other than the one Sophios writes for the pipeline.',
+        'Restore the line Sophios wrote: `docker.enabled` is true exactly when a process has a container.'),
+    SophiosErrorCode.IMPORT_MISMATCH: Explanation(
+        Kind.DOCUMENT,
+        'Importing Nextflow: text in the forms Sophios writes that is not what it writes for the workflow the '
+        'text describes, such as a derived form that disagrees with the rest.',
+        'Restore the line the message names as Sophios wrote it, or regenerate the pipeline from its workflow.'),
+    SophiosErrorCode.IMPORT_UNWRITABLE: Explanation(
+        Kind.DOCUMENT,
+        'Importing Nextflow: a pipeline no workflow built through the Python API compiles to as it is written, '
+        'such as one with a capitalized process name, which the compile would give a leading `_`, or with a port '
+        'of a CWL tool named like an attribute of the tool builder\'s `Inputs` or `Outputs`, such as `keys`.',
+        'Rename what the message names in the workflow the pipeline was compiled from, to a name the compile keeps, '
+        'and compile it again.'),
     SophiosErrorCode.INVALID_INPUT_VALUE: Explanation(
         Kind.CALL,
         'A value bound to a step input that the input cannot take.',
