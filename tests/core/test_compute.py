@@ -108,6 +108,21 @@ baseCommand: touch
 
 
 @pytest.mark.fast
+def test_a_value_bound_on_a_workflow_input_is_sent_as_a_value_written_on_a_step_is() -> None:
+    """`flow.inputs.x = v` is the job's value of `x` (docs/inputs-and-values.md), so the service is sent it, each path
+    as written, as it is sent a step's."""
+    step = Step(_writer(), step_name='write')
+    workflow = Workflow([step], 'segment')
+    step.inputs.out = workflow.inputs.out
+    step.inputs.model = workflow.inputs.model
+    workflow.inputs.out = 'results/run7'
+    workflow.inputs.model = 'models/sam3.pt'
+    assert compute.build_request(workflow)['inputs'] == {
+        'out': {'class': 'Directory', 'location': 'results/run7'},
+        'model': {'class': 'File', 'location': 'models/sam3.pt'}}
+
+
+@pytest.mark.fast
 def test_a_run_id_is_the_workflow_name_the_time_and_four_hex_digits_within_the_services_rule() -> None:
     """`<name>-<UTC yyyymmddThhmmss>-<4 hex>`; a name outside the rule is fitted to it."""
     rule = Draft202012Validator(compute.SCHEMA['$defs']['Id'])
