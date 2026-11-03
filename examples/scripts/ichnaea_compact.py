@@ -1,7 +1,7 @@
 """Canonical end-to-end example: tool_builder -> Workflow -> the compute service.
 
-The outputs are copied into a folder on the cluster, the one `RunConfig` is made with (the output mode
-`workflowOutDir`): the supported way.
+Every output lands in the run's own folder on the cluster, under its own name: `RunConfig()` names no folder, so each
+run gets a new one, which `run.outputs()` names, and the example runs again unchanged.
 """
 
 import json
@@ -79,17 +79,15 @@ def main() -> int:
     # ========== INPUTS TO WORKFLOW ==================
     # What the tool reads: paths on the cluster, relative to BASEPATH, as written; Sophios never looks at them.
     # The input is the OME-Zarr volume's root; the models folder holds sam2.1_hiera_small.pt.
-    # The output folder is just a name: the service makes it in the run, and copies it into the RunConfig's folder
+    # The output folder is just a name: the service makes it in the run, and copies it into the run's own folder
     # under that name.
     input_dicts = {'input_dir': 'input_directory', 'output_dir': 'segmentation_compact',
                    'model_dir': 'model_directory'}
 
     # ========== BUILD WORKFLOW ======================
     autoseg_workflow = workflow(input_dicts, "autoseg_workflow")
-    # The outputs are copied into results_compact: the output folder lands in results_compact/segmentation_compact.
-    config = (RunConfig(f'{BASEPATH}/results_compact')
-              .basepath(BASEPATH)
-              .steps(partition='normal', gpu_partition='normal_gpu'))
+    # No outputs folder: the output folder lands in the run's own, <run>/out/segmentation_compact, a new one each run.
+    config = RunConfig().basepath(BASEPATH).steps(partition='normal', gpu_partition='normal_gpu')
 
     if SERVICE_URL is None:
         request = build_request(autoseg_workflow, config)

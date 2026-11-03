@@ -15,6 +15,7 @@ Without SOPHIOS_SLURM_DRIVER the module is skipped, as the repository's other en
 plain `pytest tests/core` passes where there is no driver; the lane's command always sets it, so the lane never
 passes by skipping.
 """
+import getpass
 import json
 import os
 import shutil
@@ -57,6 +58,10 @@ class Cluster:
     slurm: Path
     shared: Path
     runs: Path
+
+    def directory(self, run: compute.Run) -> Path:
+        """`run`'s own folder, under the account that submitted it: this test's."""
+        return self.runs / getpass.getuser() / run.id
 
     def says(self, job: str | None, line: str) -> None:
         """Make Slurm say `line`, `<name>|<state>|<exit code>|<start>|<end>|<time limit>`, of `job`."""
@@ -240,7 +245,7 @@ def test_a_failed_step_is_named_in_the_status_and_the_logs_stay_the_leaders(clus
     """The step's name as the author wrote it, with its exit code in the reason; `logs` is `leader.log`, Toil's log
     of the whole run, not the step's."""
     run = compute.Service(cluster.url).submit(_workflow(cluster))
-    directory = cluster.runs / run.id
+    directory = cluster.directory(run)
     processes = json.loads((directory / 'run.json').read_text('utf-8'))['processes']
     (process,) = (key for key, path in processes.items() if path == 'show')
     unit = f'workflow.json.show.{process}'
@@ -354,35 +359,69 @@ def _ended(cluster: Cluster, run: compute.Run) -> RunStatus:
     return run.wait()
 
 
-def test_workflow_out_dir_takes_an_output_folder_given_as_a_name_and_files_its_result_under_that_name(
+def test_workflow_out_dir_files_an_output_folder_given_as_a_name_under_that_name_and_takes_no_second_run(
         toil_cluster: Cluster, tmp_path: Path) -> None:
     """With real Toil: an output folder sent as just a name is made in the run, never read against basepath, and
-    lands in <the RunConfig's folder>/<name>; that folder is created when missing."""
+    lands in <the RunConfig's folder>/<name>; that folder is created when missing. Once it holds the outputs, the same
+    RunConfig is refused for a new run, which would replace them."""
     results = toil_cluster.shared / 'results'
     config = RunConfig(str(results)).basepath(str(toil_cluster.shared))
-    run = compute.Service(toil_cluster.url).submit(_writes(tmp_path, 'segmentation'), config)
+    service = compute.Service(toil_cluster.url)
+    run = service.submit(_writes(tmp_path, 'segmentation'), config)
     status = _ended(toil_cluster, run)
     assert status.state is RunState.COMPLETED, run.logs()
     assert (results / 'segmentation' / 'result.txt').read_text('utf-8') == 'segmented\n'
     assert not (toil_cluster.shared / 'segmentation').exists()
+    with pytest.raises(compute.RequestRefused) as refused:
+        service.submit(_writes(tmp_path, 'segmentation'), config)
+    assert refused.value.messages == (
+        f'workflowOutDir: {results} is not empty, and what a run writes there replaces same-named files and merges '
+        'into same-named folders; name a new or an empty folder',)
 
 
-def test_workflow_in_place_writes_an_absolute_output_folder_there_without_a_copy_and_warns_it_is_advanced(
+def test_without_a_folder_the_outputs_land_in_the_runs_own_folder_under_the_submitters_account(
+        toil_cluster: Cluster, tmp_path: Path) -> None:
+    """With real Toil: `RunConfig()` names no folder, so the output folder given as a name lands in the run's own,
+    `runs/<account>/<id>/out`, which `outputs()` names."""
+    run = compute.Service(toil_cluster.url).submit(_writes(tmp_path, 'segmentation'), RunConfig())
+    status = _ended(toil_cluster, run)
+    assert status.state is RunState.COMPLETED, run.logs()
+    folder = toil_cluster.directory(run) / 'out' / 'segmentation'
+    assert (folder / 'result.txt').read_text('utf-8') == 'segmented\n'
+    outputs = run.outputs()
+    assert outputs is not None and outputs['write~out']['path'] == str(folder)
+
+
+def test_an_absolute_output_folder_is_written_there_in_place_without_a_copy_or_a_warning(
         toil_cluster: Cluster, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """With real Toil: the folder, created by the service, holds the result, and `outputs()` names it there, under its
-    output's id; nothing is copied into the run's own folder; and the service's ADVANCED warning is printed when the
-    run is submitted."""
+    """With real Toil, and no RunConfig: the folder, created by the service, holds the result, and `outputs()` names
+    it there, under its output's id; nothing is copied into the run's own folder, and nothing is warned of."""
     folder = toil_cluster.shared / 'in_place'
-    run = compute.Service(toil_cluster.url).submit(_writes(tmp_path, str(folder)),
-                                                   RunConfig.in_place())
-    assert ('WARNING from the compute service: outputMode workflowInPlace is an ADVANCED feature'
-            in capsys.readouterr().err)
+    run = compute.Service(toil_cluster.url).submit(_writes(tmp_path, str(folder)))
+    assert 'WARNING' not in capsys.readouterr().err
     status = _ended(toil_cluster, run)
     assert status.state is RunState.COMPLETED, run.logs()
     assert (folder / 'result.txt').read_text('utf-8') == 'segmented\n'
     assert run.outputs() == {'write~out': {'class': 'Directory', 'location': folder.as_uri(), 'path': str(folder),
                                            'basename': 'in_place'}}
-    assert not list((toil_cluster.runs / run.id / 'out').rglob('result.txt'))
+    assert not list((toil_cluster.directory(run) / 'out').rglob('result.txt'))
+
+
+def test_one_run_config_sent_again_while_its_first_run_goes_on_is_refused_naming_that_run(cluster: Cluster) -> None:
+    """Toil fills the folder only once a run has succeeded, so it is empty while the run goes on: the driver refuses
+    a second run there all the same, at workflowOutDir, and takes it once the first has ended, here cancelled, which
+    left the folder empty."""
+    config = RunConfig(str(cluster.shared / 'busy'))
+    service = compute.Service(cluster.url)
+    first = service.submit(_workflow(cluster), config)
+    with pytest.raises(compute.RequestRefused) as refused:
+        service.submit(_workflow(cluster), config)
+    assert refused.value.messages == (
+        f'workflowOutDir: {cluster.shared / "busy"} is in use by run {first.id}, which is still going; name another '
+        'folder',)
+    cluster.leader(first, 'RUNNING')
+    assert first.cancel() is True
+    assert service.submit(_workflow(cluster), config).id != first.id
 
 
 @pytest.mark.parametrize('script', ['ichnaea_compact', 'ichnaea_integrated'])
@@ -413,8 +452,6 @@ def test_the_ichnaea_examples_run_on_the_service(cluster: Cluster, script: str, 
         (cluster.slurm / 'sbatch.then').unlink()
     printed = capsys.readouterr()
     assert printed.out.endswith(" COMPLETED: {'answer': 42}\n")
-    if script == 'ichnaea_compact':
-        assert (cluster.shared / 'results_compact').is_dir()
-    else:
+    if script == 'ichnaea_integrated':
         assert (cluster.shared / 'output_directory3').is_dir()
-        assert 'outputMode workflowInPlace is an ADVANCED feature' in printed.err
+        assert 'WARNING' not in printed.err

@@ -226,7 +226,7 @@ def test_every_compiled_workflow_makes_a_request_the_compute_service_schema_take
     """`request_for` builds and checks the request for everything this oracle compiles, against Sophios's copy of
     the service's `run-request.schema.json`; it raises `RequestRefused` on a mismatch. Nothing is sent.
 
-    BLIND SPOTS: the default output mode, and no `leader`, `steps` or `logLevel`; whether the copy is the service's
+    BLIND SPOTS: no `workflowOutDir`, `leader`, `steps` or `logLevel`; whether the copy is the service's
     own is `test_compute_service.py`'s.
     """
     info = compile_hermetic(yml, 'oracle')

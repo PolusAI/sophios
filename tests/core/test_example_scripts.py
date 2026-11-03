@@ -178,6 +178,20 @@ def test_the_compact_ichnaea_script_compiles_its_hinted_tool(tmp_path: Path) -> 
 
 
 @pytest.mark.fast
+def test_the_compact_ichnaea_script_names_no_folder_so_it_runs_again_unchanged(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """The compute service refuses a folder a request names once a run has filled it, so the canonical example names
+    none: no outputs folder, and its output folder just a name, which lands in the run's own folder, a new one each
+    run."""
+    example = REPO_ROOT / 'examples' / 'scripts' / 'ichnaea_compact.py'
+    assert import_python_file(example.stem, example.resolve()).main() == 0
+    printed = capsys.readouterr().out  # the compiler's progress, then the request
+    request, _ = json.JSONDecoder().raw_decode(printed, printed.index('{'))
+    assert 'workflowOutDir' not in request
+    assert request['inputs']['autoseg~output'] == {'class': 'Directory', 'location': 'segmentation_compact'}
+
+
+@pytest.mark.fast
 @pytest.mark.needs_cwltool
 def test_the_integrated_ichnaea_script_compiles_its_hinted_tool(tmp_path: Path) -> None:
     """The hinted tool compiles; see `_compile_ichnaea_script`. The script also

@@ -60,7 +60,7 @@ def test_the_request_carries_the_compiled_workflow_and_every_path_as_written() -
     `$HOME` included: the service is the one authority on paths."""
     config = RunConfig('/projects/lab/results').basepath('/projects/lab')
     request = compute.build_request(_workflow(model='https://example.org/sam3.pt'), config)
-    assert set(request) == {'id', 'workflow', 'inputs', 'basepath', 'outputMode', 'workflowOutDir'}
+    assert set(request) == {'id', 'workflow', 'inputs', 'basepath', 'workflowOutDir'}
     assert request['basepath'] == '/projects/lab'
     assert request['workflow']['class'] == 'Workflow' and request['workflow']['cwlVersion'] == 'v1.2'
     assert all(isinstance(step['run'], dict) for step in request['workflow']['steps'])
@@ -96,7 +96,7 @@ baseCommand: touch
 """, encoding='utf-8')
     step = Step(clt_path=tool, step_name='write')
     step.inputs.out = 'results'
-    workflow = Workflow([step], 'in_place')
+    workflow = Workflow([step], 'writes')
     assert workflow.compile().cwl_job_inputs['write~out'] == 'results'
     request = compute.build_request(workflow)
     assert request['inputs']['write~out'] == {'class': 'Directory', 'location': 'results'}
@@ -182,9 +182,9 @@ _VALID: typing.Final[dict[str, typing.Any]] = {
 
 
 def _setters() -> dict[str, inspect.Signature]:
-    """RunConfig's setters, each named as the field of the request it sets: its public methods but `in_place`."""
-    return {name: inspect.signature(method) for name, method in vars(RunConfig).items()
-            if inspect.isfunction(method) and not name.startswith('_')}
+    """RunConfig's setters, each named as the field of the request it sets: every public attribute of it, so that one
+    which is not a setter fails `_set_every_field`."""
+    return {name: inspect.signature(getattr(RunConfig, name)) for name in vars(RunConfig) if not name.startswith('_')}
 
 
 def _set_every_field(config: RunConfig) -> RunConfig:
@@ -201,21 +201,19 @@ def _set_every_field(config: RunConfig) -> RunConfig:
 
 @pytest.mark.fast
 def test_run_config_reaches_every_field_of_the_request_but_its_workflow_and_inputs_as_the_schema_says() -> None:
-    """Both constructors and every setter, each given a valid value, reach exactly the vendored schema's top-level
+    """The constructor and every setter, each given a valid value, reach exactly the vendored schema's top-level
     properties but id, workflow and inputs, each under its own name; the keywords of `leader` and `steps` are the
-    properties of the schema's Leader and Steps, camelCased; the output modes are the two constructors' and none's;
-    and no setter touches where the outputs go. The vendored schema and RunConfig cannot drift apart."""
+    properties of the schema's Leader and Steps, camelCased; the folder is left out of the request without one, for
+    the run's own folder; and no setter touches where the outputs go. The vendored schema and RunConfig cannot drift
+    apart."""
     properties, defs = compute.SCHEMA['properties'], compute.SCHEMA['$defs']
     workflow = {'class': 'Workflow', 'cwlVersion': 'v1.2'}
     core = {'id': 'r1', 'workflow': workflow, 'inputs': {}}
-    copied = compute.request_for('r1', workflow, {}, _set_every_field(RunConfig('results')))
-    in_place = compute.request_for('r1', workflow, {}, _set_every_field(RunConfig.in_place()))
-    assert set(copied) | set(in_place) == set(properties)
-    assert copied == core | {'outputMode': 'workflowOutDir', 'workflowOutDir': 'results'} | _VALID
-    assert in_place == core | {'outputMode': 'workflowInPlace'} | _VALID
-    assert compute.request_for('r1', workflow, {}) == core
-    # Without a RunConfig, outputMode is left out: serviceOutDir, the service's default.
-    assert {copied['outputMode'], in_place['outputMode'], 'serviceOutDir'} == set(properties['outputMode']['enum'])
+    named = compute.request_for('r1', workflow, {}, _set_every_field(RunConfig(workflow_out_dir='results')))
+    assert set(named) == set(properties)
+    assert named == core | {'workflowOutDir': 'results'} | _VALID
+    assert compute.request_for('r1', workflow, {}, _set_every_field(RunConfig())) == core | _VALID
+    assert compute.request_for('r1', workflow, {}, RunConfig()) == compute.request_for('r1', workflow, {}) == core
     for name in ('leader', 'steps'):
         keywords = {_camel(parameter.name) for parameter in _setters()[name].parameters.values()
                     if parameter.kind is parameter.KEYWORD_ONLY}
@@ -232,7 +230,7 @@ def test_each_setter_sets_just_what_it_is_passed_and_leaves_the_rest() -> None:
     config.steps(time='30:00').leader(memory='8G', partition='normal').basepath('/shared/lab2')
     request = compute.request_for('r1', {'class': 'Workflow', 'cwlVersion': 'v1.2'}, {}, config)
     assert request == {'id': 'r1', 'workflow': {'class': 'Workflow', 'cwlVersion': 'v1.2'}, 'inputs': {},
-                       'outputMode': 'workflowOutDir', 'workflowOutDir': '/shared/lab/results',
+                       'workflowOutDir': '/shared/lab/results',
                        'basepath': '/shared/lab2', 'leader': {'time': '2:00:00', 'memory': '8G', 'partition': 'normal'},
                        'steps': {'time': '30:00'}}
 
@@ -274,7 +272,7 @@ def test_the_vendored_schema_is_a_json_schema_2020_12_document_and_its_example_a
 
 
 #: The header the service names itself in, on every answer.
-_SERVICE: typing.Final = {'Server': 'slurm-driver/2.0.0'}
+_SERVICE: typing.Final = {'Server': 'slurm-driver/3.0.0'}
 
 
 def _raw(status: int, text: str, headers: dict[str, str]) -> requests.Response:
@@ -323,15 +321,16 @@ def _serving(monkeypatch: pytest.MonkeyPatch,
     return calls
 
 
-_CONTRACT = _answer(200, {'openapi': '3.1.0', 'info': {'version': '2.0.0'}})
+_CONTRACT = _answer(200, {'openapi': '3.1.0', 'info': {'version': '3.0.0'}})
 
 
 @pytest.mark.fast
 def test_a_service_that_speaks_another_contract_is_refused_before_anything_is_sent(
         monkeypatch: pytest.MonkeyPatch) -> None:
-    """The major version is read once, from openapi.json."""
-    _serving(monkeypatch, {('GET', 'openapi.json'): _answer(200, {'info': {'version': '3.1.0'}})})
-    with pytest.raises(compute.ServiceUnavailable, match='speaks contract 3.1.0, and this Sophios speaks 2'):
+    """The major version is read once, from openapi.json: a service of contract 2, which takes outputMode, is told to
+    upgrade."""
+    _serving(monkeypatch, {('GET', 'openapi.json'): _answer(200, {'info': {'version': '2.1.0'}})})
+    with pytest.raises(compute.ServiceUnavailable, match='speaks contract 2.1.0, and this Sophios speaks 3: upgrade'):
         compute.Service('unix:///api.sock').submit(_workflow())
 
 
@@ -380,11 +379,11 @@ def test_a_status_takes_what_it_knows_and_leaves_the_rest(monkeypatch: pytest.Mo
         'id': 'r1', 'state': 'RUNNING', 'reason': None, 'slurmJobId': '7', 'startedAt': '2026-10-26T10:00:00-04:00',
         'endedAt': None, 'outputs': None, 'new': 'field',
         'steps': [{'name': None, 'state': 'FAILED', 'exitCode': '1:0', 'slurmJobId': '8', 'logs': []}],
-        'warnings': [{'pointer': '/inputs/write~out/location', 'message': 'is empty; the run writes into it'}]}
+        'warnings': [{'pointer': '/inputs/write~out/location', 'message': 'did not keep its setgid bit'}]}
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _answer(200, answer)})
     run = compute.Service('unix:///api.sock').attach('r1')
-    assert capsys.readouterr().err == ('WARNING from the compute service: input write~out: is empty; the run '
-                                       'writes into it\n')
+    assert capsys.readouterr().err == ('WARNING from the compute service: input write~out: did not keep its setgid '
+                                       'bit\n')
     status = run.status()
     assert status.state is RunState.RUNNING and status.started_at == datetime.fromisoformat('2026-10-26T10:00:00-04:00')
     assert [(s.name, s.state, s.exit_status, s.signal) for s in status.steps] == [
@@ -461,6 +460,20 @@ def test_a_run_whose_leader_slurm_never_started_has_no_log_and_logs_is_empty(mon
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _answer(200, never),
                            ('GET', 'runs/r1/logs/leader.log'): _answer(404, missing)})
     assert compute.Service('unix:///api.sock').attach('r1').logs() == ''
+
+
+@pytest.mark.fast
+def test_a_run_the_service_has_deleted_is_refused_in_its_words_and_its_log_is_never_taken_for_empty(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """The service deletes a run some days after it ends, and answers 404 for it and its logs alike, saying so: `logs`
+    raises that, as `status` does, rather than '' for a log Slurm never made."""
+    gone = _answer(404, {'errors': [{'message': 'there is no run r1; a run is deleted 14 days after it ends'}]})
+    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): [_run('COMPLETED'), gone],
+                           ('GET', 'runs/r1/logs/leader.log'): gone})
+    run = compute.Service('unix:///api.sock').attach('r1')
+    with pytest.raises(compute.RequestRefused) as refused:
+        run.logs()
+    assert refused.value.messages == ('there is no run r1; a run is deleted 14 days after it ends',)
 
 
 @pytest.mark.fast
@@ -595,9 +608,9 @@ class _Driver(BaseHTTPRequestHandler):
     """The service, as far as these tests ask it, on a Unix socket: its contract, the run r1, and a cancel of r1
     refused, as the service refuses one by an account that did not submit the run."""
 
-    server_version, sys_version = 'slurm-driver/2.0.0', ''
+    server_version, sys_version = 'slurm-driver/3.0.0', ''
     answers: typing.ClassVar = {
-        ('GET', '/openapi.json'): (200, {'openapi': '3.1.0', 'info': {'version': '2.0.0'}}),
+        ('GET', '/openapi.json'): (200, {'openapi': '3.1.0', 'info': {'version': '3.0.0'}}),
         ('GET', '/runs/r1'): (200, {'id': 'r1', 'state': 'RUNNING'}),
         ('POST', '/runs/r1/cancel'): (403, {'errors': [{'message': 'run r1 was submitted by alice: only alice, or '
                                                                    'the service account, may cancel it'}]})}
