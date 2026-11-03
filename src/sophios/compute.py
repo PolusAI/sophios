@@ -10,7 +10,7 @@ A core feature, but not part of the Python API: `sophios.api.python` neither exp
     run = service.submit(workflow, config)
     status = run.wait()
 
-A `RunConfig` is everything of the request but the workflow and its inputs: the folder it is made with is where
+A `RunConfig` is everything of the request but the workflow and its inputs: the folder it may be made with is where
 the outputs go, and each of its setters sets a field more; without one, the run takes the service's settings.
 
 A `Run` is followed as the local `RunHandle` of `Workflow.start()` is: `status`, `wait`, `outputs`, `logs` and
@@ -19,14 +19,12 @@ the session.
 
 Every path goes as written, and the service, not Sophios, reads it on the cluster and refuses what it cannot read
 there, `~` and `$VARIABLE`s included. A path a tool reads is a path on the cluster, absolute or relative to
-`basepath`, or an http(s) URL. An output folder (a Directory input a tool writes into and returns) given as a name,
-such as `segmentation`, is made in the run, never read against `basepath`, and its result lands in the outputs'
-folder under that name; one given as an absolute path is that folder. The outputs' folder is the one
-`RunConfig(folder)` names (output mode `workflowOutDir`, the supported way: the outputs are copied into it), or the
-run's own folder on the cluster without a config; `RunConfig.in_place()` (output mode `workflowInPlace`), an advanced
-choice, has each tool write an output folder with an absolute path there, once, without a copy. The request's shape
-is `run-request.schema.json`, a copy of the service's own: Sophios checks every request against it before sending,
-and the service again on arrival.
+`basepath`, or an http(s) URL. Every output lands in one folder, the outputs folder, under its own name: the one
+`RunConfig(folder)` names, or the run's own folder on the cluster without one. An output folder (a Directory input a
+tool writes into and returns) given as a name, such as `segmentation`, is made in the run, never read against
+`basepath`, and lands in the outputs folder under that name; one given as an absolute path is written there by its
+tool, in place, never copied. The request's shape is `run-request.schema.json`, a copy of the service's own: Sophios
+checks every request against it before sending, and the service again on arrival.
 """
 import json
 import os
@@ -59,7 +57,7 @@ if TYPE_CHECKING:
     from .api.python.workflow import Workflow
 
 #: The major version of the service's contract (its openapi.json's `info.version`) this Sophios speaks.
-CONTRACT: Final = 2
+CONTRACT: Final = 3
 #: How often a waiting run's status is read, in seconds: the service asks clients to wait at least 10 s.
 POLL: Final = 10.0
 #: How long a call is made again while the service cannot be reached or is busy, and `Run.cancel` waits for the run
@@ -122,24 +120,17 @@ class RunConfig:
 
     Each setter sets just what it is passed, and leaves the rest as it was; what no setter sets is left out of the
     request, so the service's own settings apply. The values are strings in Slurm's own forms, which the schema
-    checks when the request is built. Without any `RunConfig`, the outputs go into the run's own folder on the
-    cluster (output mode `serviceOutDir`), with every setting the service's.
+    checks when the request is built. Without a folder, the outputs land in the run's own folder on the cluster; so
+    they do without any `RunConfig`, with every setting the service's.
 
     Args:
-        workflow_out_dir: The folder on the cluster the outputs are copied into, absolute or relative to `basepath`,
-            created when missing: output mode `workflowOutDir`, the supported way.
+        workflow_out_dir: The outputs folder: the folder on the cluster every output lands in, under its own name,
+            absolute or relative to `basepath`. It must be missing (the service creates it) or empty, and used by no
+            run that has not ended. None for the run's own folder.
     """
 
-    def __init__(self, workflow_out_dir: str) -> None:
-        self._fields: Json = {'outputMode': 'workflowOutDir', 'workflowOutDir': workflow_out_dir}
-
-    @classmethod
-    def in_place(cls) -> 'RunConfig':
-        """Output mode `workflowInPlace`, an advanced choice the service warns of: each output folder given as an
-        absolute path is written there, once, without a copy."""
-        config = cls.__new__(cls)
-        config._fields = {'outputMode': 'workflowInPlace'}
-        return config
+    def __init__(self, workflow_out_dir: str | None = None) -> None:
+        self._fields: Json = {} if workflow_out_dir is None else {'workflowOutDir': workflow_out_dir}
 
     def basepath(self, path: str) -> 'RunConfig':
         """The directory on the cluster that the relative paths of what the tools read are relative to; an output
@@ -545,6 +536,7 @@ class Run:
         """Where the run is now, as the service says.
 
         Raises:
+            RequestRefused: The run is no longer there: the service deletes a run some days after it ends, and says so.
             ServiceUnavailable: The service could not be asked.
         """
         self._answer = self._client.answer(self._client.call('GET', f'/runs/{self.id}'))
@@ -559,6 +551,7 @@ class Run:
 
         Raises:
             TimeoutError: It had not ended within `timeout` seconds; it goes on.
+            RequestRefused: As `status` raises it.
             ServiceUnavailable: The service could not be asked.
         """
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -597,11 +590,14 @@ class Run:
         when it never does, as the local handle's is '' with no log.
 
         Raises:
+            RequestRefused: As `status` raises it.
             ServiceUnavailable: The service could not be asked.
         """
         response = self._client.call('GET', f'/runs/{self.id}/logs/leader.log')
-        # A Run is one the service answered for: a 404 is its log alone, which Slurm makes as it starts the leader.
+        # A 404 is its log alone, which Slurm makes as it starts the leader, while the run is there: the service deletes
+        # a run some days after it ends, which `status` raises.
         if response.status_code == 404:
+            self.status()
             return ''
         if not response.ok:
             self._client.answer(response)
@@ -617,7 +613,7 @@ class Run:
 
         Raises:
             RequestRefused: The run is another account's: only the account that submitted it, or the service's own,
-                may cancel it.
+                may cancel it; or it is no longer there, as `status` raises it.
             TimeoutError: It had not ended within PATIENCE seconds; the cancel stays recorded, and the run goes on.
             ServiceUnavailable: The service could not be asked; sending the cancel again finishes it.
         """

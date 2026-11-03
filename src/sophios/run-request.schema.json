@@ -1,7 +1,7 @@
 {
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"title": "RunRequest",
-	"description": "What to run and where. id names the run: the client chooses it, new for each run, and the same request sent again under the same id is the same run. Only id, workflow and inputs are required; outputMode defaults to serviceOutDir, and leader, steps and logLevel to the driver's settings. The driver checks every POST /runs body against this schema, served at GET /run-request.schema.json, before anything else; a request of the right shape is then checked against the cluster.",
+	"description": "What to run and where. id names the run: the client chooses it, new for each run, and the same request sent again under the same id is the same run. Only id, workflow and inputs are required; the outputs go into the run's own folder unless workflowOutDir names one, and leader, steps and logLevel default to the driver's settings. The driver checks every POST /runs body against this schema, served at GET /run-request.schema.json, before anything else; a request of the right shape is then checked against the cluster.",
 	"$comment": "Each pattern ends with (?!\\n)$, not $: in Python's re, which jsonschema uses, $ also matches before a final line break, and in JavaScript it does not. Written so, a pattern takes the same strings in both.",
 	"type": "object",
 	"required": ["id", "workflow", "inputs"],
@@ -31,15 +31,11 @@
 			}
 		},
 		"inputs": {
-			"description": "the CWL job: the workflow's inputs by name. Every File and Directory location is a path on the cluster (absolute, or relative to basepath), a file:// URL, or an http(s) URL",
+			"description": "the CWL job: the workflow's inputs by name. Every File and Directory location is a path on the cluster (absolute, or relative to basepath), a file:// URL, or an http(s) URL. An output folder is a Directory input that a tool stages writable and returns as an output. Given a name, one folder name such as segmentation, it is made empty in the run and lands in the outputs folder under that name, never read against basepath. Given an absolute path, its tool writes it there, in place, never copied: it must be missing (its parent exists, and the driver creates it) or empty, used by no run that has not ended, and needs cwlVersion v1.1 or later; a tool that cannot write it in place without changing what else the run reads is refused, saying why. An array of output folders is all names or all absolute paths",
 			"type": "object"
 		},
-		"outputMode": {
-			"description": "where the outputs go. serviceOutDir (the default): Toil copies them into the run's own folder. workflowOutDir, the supported way: Toil copies them into the folder workflowOutDir names. workflowInPlace, an advanced feature the driver warns of: each output folder (a Directory input that a tool stages writable and returns as an output) with an absolute location is written there, once, without a copy; the rest is copied into the run's own folder, and so are the outputs of a tool that cannot write its folder in place safely, with a warning that says why. In every mode the driver makes the output folders: one with a relative location in the run, copied into the outputs' folder under its name; one with an absolute location there, when missing, inside an existing folder it can write. Under workflowInPlace an existing one must be empty, and in an array of output folders every one has an absolute location, or none does",
-			"enum": ["serviceOutDir", "workflowOutDir", "workflowInPlace"]
-		},
 		"workflowOutDir": {
-			"description": "with outputMode workflowOutDir, and only with it: the folder on the cluster the outputs are copied into, absolute or relative to basepath",
+			"description": "the outputs folder: the folder on the cluster every output lands in, under its own name, absolute or relative to basepath. It must be missing (its parent exists, and the driver creates it) or empty, and used by no run that has not ended. Without it, the outputs land in the run's own folder",
 			"type": "string"
 		},
 		"leader": {
@@ -131,7 +127,6 @@
 					"location": "output_directory_compact"
 				}
 			},
-			"outputMode": "workflowOutDir",
 			"workflowOutDir": "results/autoseg-20261020T142205-7f3a",
 			"leader": {
 				"time": "1-00:00:00"
