@@ -67,7 +67,7 @@ host:
 from sophios.api.python.workflow import RunState
 from sophios.compute import RunConfig
 
-config = (RunConfig('/shared/lab/results')    # the folder the outputs are copied into
+config = (RunConfig('/shared/lab/results')    # the outputs folder: every output lands in it
           .basepath('/shared/lab')
           .leader(time='2:00:00', memory='4G')
           .steps(time='30:00'))
@@ -76,10 +76,13 @@ if run.wait().state is RunState.COMPLETED:    # wait() prints each change, and w
     print(run.outputs())
 ```
 
-A `RunConfig` is made with the folder on the cluster the outputs are copied
-into, absolute or relative to `basepath`: the supported way. For a quick
-try, leave it out: `service.submit(workflow)` copies the outputs into the
-run's own folder on the cluster, with every setting the service's.
+A `RunConfig` may be made with the outputs folder: the folder on the
+cluster every output lands in, absolute or relative to `basepath`, new or
+empty. Without one, the outputs land in the run's own folder on the
+cluster, which the service deletes some days after the run ends: so they do
+with `RunConfig()`, and with no `RunConfig` at all,
+`service.submit(workflow)`, which takes every setting from the service
+([Where the outputs go](#where-the-outputs-go)).
 
 Every path goes as written; the service, not Sophios, reads it on the
 cluster, before anything is queued, refuses what it cannot read, and
@@ -108,9 +111,9 @@ the request, each problem at the request's field, such as `leader.time`.
 
 | `RunConfig` | What it sets |
 |---|---|
-| `RunConfig(folder)` | Output mode `workflowOutDir`: the folder on the cluster the outputs are copied into, absolute or relative to `basepath`, created when missing |
-| `RunConfig.in_place()` | Output mode `workflowInPlace`, an advanced choice: see below |
-| `.basepath(path)` | The directory on the cluster that the relative paths of what the tools read are relative to; required when there is one |
+| `RunConfig(folder)` | The outputs folder, the request's `workflowOutDir`: the folder on the cluster every output lands in, absolute or relative to `basepath`; missing (the service creates it) or empty, and used by no run that has not ended |
+| `RunConfig()` | No outputs folder: the outputs land in the run's own folder |
+| `.basepath(path)` | The directory on the cluster that relative paths are relative to: those the tools read, and the outputs folder's; required when there is one. An output folder given a name is made in the run, never there |
 | `.leader(partition=, time=, memory=)` | The Toil leader's Slurm job, which lasts as long as the run |
 | `.steps(partition=, gpu_partition=, time=)` | Where step jobs go, those that ask for a GPU to `gpu_partition`, and how long each may run |
 | `.log_level(level)` | Toil's log level: `DEBUG`, `INFO` (the default), `WARNING` or `ERROR` |
@@ -121,38 +124,108 @@ besides, `tool_registry=` and `inference=` say how the workflow compiles, as
 
 ## Where the outputs go
 
-An output folder is a `Directory` input that a tool writes into and returns,
-such as the folder a segmentation tool fills; the service finds them itself,
-whatever they are called and however deep in the workflow. Give one **just a
-name**, such as `step.inputs.output = 'segmentation'`: the service makes it,
-empty, in the run, and its result lands in the outputs' folder under that
-name, never anywhere `basepath` points. Give one an absolute path only to
-have it written in place (below), or to hand the tool an existing folder as
-its input: the tool then works on a copy of it, and the folder is left as it
-is, which the service warns of.
+Every output lands in one folder, the **outputs folder**, under its own
+name: the folder `RunConfig(folder)` names or, without one, the run's own
+folder on the cluster, `<run>/out` below. The one exception is an output
+folder given an absolute path, which its tool writes there, in place, and
+which is never copied.
 
-- **`RunConfig('<folder>')`, output mode `workflowOutDir`: the supported
-  way.** Toil copies the workflow's outputs into that folder on the
-  cluster, an output folder given as `segmentation` as
-  `<folder>/segmentation`. The folder may exist, empty, or the service
-  creates it, in a parent it can write to.
-- **No `RunConfig`, output mode `serviceOutDir`: the quick try.** The
-  outputs are copied, as above, into the run's own folder on the cluster;
-  the output object says where. Without a `RunConfig` there is no
-  `basepath` either, so every path a tool reads is absolute.
-- **`RunConfig.in_place()`, output mode `workflowInPlace`: an advanced
-  choice, which the service warns of on every run.** Each output folder
-  given as an absolute path is written there, once, without a copy, which
-  is what very large outputs need; the
-  service creates it when it is missing (one folder, in a parent it can
-  write), and an existing one must be empty. An output folder given as a
-  name is copied into the run's own folder, with a warning. So is the output
-  of a tool that also stages another input writable, since writing in place
-  would change that input too, and of a step scattered over something other
-  than its output folders: each falls back to copying, with a warning that
-  says why it is slower. An array of output folders is all absolute paths
-  or all names, since a tool writes them all in place or none: the service
-  refuses a mix.
+| The workflow gives | Without a folder | `RunConfig('/lab/run7')` |
+|---|---|---|
+| A file output, `glob='hello.txt'`, or stdout `hello.txt` | `<run>/out/hello.txt` | `/lab/run7/hello.txt` |
+| A file output, `glob='results/p1/out.tsv'` | `<run>/out/out.tsv` | `/lab/run7/out.tsv` |
+| A directory output, `glob='tiles'` | `<run>/out/tiles/` | `/lab/run7/tiles/` |
+| An output folder given a name, `'masks'` | `<run>/out/masks/` | `/lab/run7/masks/` |
+| An output folder given an absolute path, `'/lab/masks/p1'` | `/lab/masks/p1/`, in place | `/lab/masks/p1/`, in place |
+
+Toil copies the outputs into the outputs folder once, after the whole run
+has succeeded. The copy keeps each output's own name alone, so
+`results/p1/out.tsv` lands as `out.tsv`, and two outputs of one run with
+one name land as `out.tsv` and `out.tsv_2`. A completed run's `outputs()`
+names where each output is.
+
+An **output folder** is a `Directory` input that a tool writes into and
+returns, such as the folder a segmentation tool fills; the service finds
+them itself, whatever they are called and however deep in the workflow.
+
+- **Given just a name**, such as `step.inputs.output = 'masks'`, it is made
+  empty in the run, never anywhere `basepath` points, and copied into the
+  outputs folder under that name. The name is one folder name: `seg/p1`
+  would land as `p1`, and is refused.
+- **Given an absolute path**, it is written there by its tool, once, in
+  place, and never copied: what very large outputs need, and the path means
+  the same in every run. It needs `cwlVersion` v1.1 or later; Sophios
+  compiles to v1.2. A tool that cannot write it in place without changing
+  what else the run reads is refused, naming the step and the folder, why,
+  and what to change: the instances of a scattered step sharing one folder,
+  another step that also takes the folder, a tool that also stages another
+  input writable, or a step or workflow output that reads the folder
+  through `linkMerge`, `pickValue`, `valueFrom`, several sources or a step
+  with `when`. The way out is always the same: give the folder a name
+  instead of a path, and it is copied into the outputs folder.
+- An array of output folders is all names or all absolute paths: a tool
+  writes them all in place, or none.
+
+A folder that is not empty is never written into: to update one, read it
+as an input and write a new one.
+
+### A folder you name
+
+Each folder you name, the outputs folder of `RunConfig(folder)` and every
+output folder given an absolute path, is checked when the run is
+submitted, before anything is queued:
+
+| At submission, the folder is | What happens |
+|---|---|
+| missing, in a folder that exists | created, one level, mode `2775` |
+| missing, and so is the folder it would be in | refused |
+| empty, and used by no run that has not ended | taken as it is |
+| used by a run that has not ended: that folder, one inside it, or one around it | refused, naming that run, which is still going |
+| not empty | refused: a run writing there would replace same-named files and merge into same-named folders |
+
+So a folder made beforehand works, and so does the same `RunConfig` again
+after a run that failed there, which left it empty; after a run that
+succeeded, the folder holds its outputs: name a new one. Two runs sent at
+once with one `RunConfig` are never both taken, though the folder stays
+empty until the first has succeeded: the second is refused, naming the
+first. No folder you name may be inside or around an input or another
+folder of the run, so an output folder given an absolute path inside the
+outputs folder, which Toil's copy would merge into, is refused too.
+
+### The run's own folder
+
+Without a folder, the outputs land in the run's own folder on the cluster,
+`<runs>/<account>/<run id>/out`, where `<runs>` is where the service keeps
+its runs and `<account>` the account you reach the service as: a new
+folder for every run, with no name to invent, so that each rerun, each
+repetition of a stochastic workflow and each attempt to reproduce one keeps
+its own. `outputs()` names it:
+
+```python
+{'autoseg~output': {'class': 'Directory', 'basename': 'segmentation',
+                    'location': 'file:///projects/compute/runs/alice/segment-20261102T142205-7f3a/out/segmentation',
+                    'path': '/projects/compute/runs/alice/segment-20261102T142205-7f3a/out/segmentation',
+                    'listing': [...]}}
+```
+
+That folder is the service's: every file in it belongs to the service's
+account, and the service deletes the run, its logs with it, some days after
+it ended, 14 by default (the service's `RETENTION_DAYS`): copy what you
+keep. A deleted run is gone for `Service.attach` and every method of a
+`Run` of it, which raise `cmp001` saying so. The service never deletes a
+run that has not ended, nor any folder you named.
+
+### When a run fails
+
+A run that fails or is cancelled leaves its outputs folder empty: Toil
+copies the outputs only once the whole run has succeeded. A folder written
+in place keeps what its tool wrote, whatever becomes of the run; as Toil
+runs a failed step again once, it may also hold what a failed attempt
+wrote.
+
+The service refuses any new run while the disk that holds its runs is
+full, 90% by default (its `MAX_DISK_PERCENT`), saying so; it makes room as
+it deletes the runs that ended long enough ago.
 
 ## Following a run
 
@@ -210,8 +283,10 @@ codes belong to the compute client alone: a `ComputeError` is never a
 
 - `cmp001`, `RequestRefused`: Sophios or the service refused the request: a
   path, a name, an output folder, a partition or a time the cluster cannot
-  use, or a real-time analysis; or a cancel of a run another account
-  submitted. Each problem is a line, at the input or field it is about; do
+  use, a folder that is not empty or that a run going on uses, a disk too
+  full for a new run, or a real-time analysis; or a cancel of a run another
+  account submitted; or there is no such run, as when the service has
+  deleted it. Each problem is a line, at the input or field it is about; do
   what it says. A relative path sent without `basepath` says to give one.
 - `cmp002`, `ServiceUnavailable`: Sophios runs on Windows itself, the URL is
   not one the service is reached at, ssh could not be run, failed before it
