@@ -198,7 +198,7 @@ def test_a_run_is_submitted_followed_and_reattached_and_its_answers_are_the_cont
 
 def test_a_request_the_driver_refuses_names_each_input_and_says_to_send_basepath(cluster: Cluster) -> None:
     """Every problem at once, each at its authored input, in the driver's words: a relative path sent without
-    basepath is told to send one."""
+    basepath is told to send it, and the outputs folder relative to it."""
     service = compute.Service(cluster.url)
     with pytest.raises(compute.RequestRefused) as refused:
         service.submit(_workflow(cluster, location='data/missing.txt'),
@@ -208,7 +208,8 @@ def test_a_request_the_driver_refuses_names_each_input_and_says_to_send_basepath
     with pytest.raises(compute.RequestRefused) as refused:
         service.submit(_workflow(cluster, location='data/a.txt'))
     assert refused.value.messages == (
-        'input show~file: data/a.txt is relative: send basepath, the cluster directory it is relative to',)
+        'input show~file: data/a.txt is relative: send basepath, the cluster directory it is relative to, and '
+        'workflowOutDir, the outputs folder relative to basepath',)
     with pytest.raises(compute.RequestRefused, match='there is no run nope'):
         service.attach('nope')
 
@@ -362,10 +363,10 @@ def _ended(cluster: Cluster, run: compute.Run) -> RunStatus:
 def test_workflow_out_dir_files_an_output_folder_given_as_a_name_under_that_name_and_takes_no_second_run(
         toil_cluster: Cluster, tmp_path: Path) -> None:
     """With real Toil: an output folder sent as just a name is made in the run, never read against basepath, and
-    lands in <the RunConfig's folder>/<name>; that folder is created when missing. Once it holds the outputs, the same
-    RunConfig is refused for a new run, which would replace them."""
+    lands in <the RunConfig's folder, relative to basepath>/<name>; that folder is created when missing. Once it holds
+    the outputs, the same RunConfig is refused for a new run, which would replace them."""
     results = toil_cluster.shared / 'results'
-    config = RunConfig(str(results)).basepath(str(toil_cluster.shared))
+    config = RunConfig('results').basepath(str(toil_cluster.shared))
     service = compute.Service(toil_cluster.url)
     run = service.submit(_writes(tmp_path, 'segmentation'), config)
     status = _ended(toil_cluster, run)
@@ -375,8 +376,8 @@ def test_workflow_out_dir_files_an_output_folder_given_as_a_name_under_that_name
     with pytest.raises(compute.RequestRefused) as refused:
         service.submit(_writes(tmp_path, 'segmentation'), config)
     assert refused.value.messages == (
-        f'workflowOutDir: {results} is not empty, and what a run writes there replaces same-named files and merges '
-        'into same-named folders; name a new or an empty folder',)
+        f'workflowOutDir: results (against {toil_cluster.shared}: {results}) is not empty, and what a run writes '
+        'there replaces same-named files and merges into same-named folders; name a new or an empty folder',)
 
 
 def test_without_a_folder_the_outputs_land_in_the_runs_own_folder_under_the_submitters_account(

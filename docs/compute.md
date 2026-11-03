@@ -67,8 +67,8 @@ host:
 from sophios.api.python.workflow import RunState
 from sophios.compute import RunConfig
 
-config = (RunConfig('/shared/lab/results')    # the outputs folder: every output lands in it
-          .basepath('/shared/lab')
+config = (RunConfig('results')                # the outputs folder: every output lands in it
+          .basepath('/shared/lab')            # so the outputs folder is /shared/lab/results
           .leader(time='2:00:00', memory='4G')
           .steps(time='30:00'))
 run = service.submit(workflow, config)
@@ -77,10 +77,13 @@ if run.wait().state is RunState.COMPLETED:    # wait() prints each change, and w
 ```
 
 A `RunConfig` may be made with the outputs folder: the folder on the
-cluster every output lands in, absolute or relative to `basepath`, new or
-empty. Without one, the outputs land in the run's own folder on the
-cluster, which the service deletes some days after the run ends: so they do
-with `RunConfig()`, and with no `RunConfig` at all,
+cluster every output lands in, new or empty, relative to `basepath` when
+the config sets one, else absolute. `basepath` and the outputs folder are
+a pair, the project's root and the outputs folder under it: a config that
+sets `basepath` without the folder is refused before anything is sent.
+Without a folder, and so without `basepath`, the outputs land in the run's
+own folder on the cluster, which the service deletes some days after the
+run ends: so they do with `RunConfig()`, and with no `RunConfig` at all,
 `service.submit(workflow)`, which takes every setting from the service
 ([Where the outputs go](#where-the-outputs-go)).
 
@@ -111,9 +114,9 @@ the request, each problem at the request's field, such as `leader.time`.
 
 | `RunConfig` | What it sets |
 |---|---|
-| `RunConfig(folder)` | The outputs folder, the request's `workflowOutDir`: the folder on the cluster every output lands in, absolute or relative to `basepath`; missing (the service creates it) or empty, and used by no run that has not ended |
-| `RunConfig()` | No outputs folder: the outputs land in the run's own folder |
-| `.basepath(path)` | The directory on the cluster that relative paths are relative to: those the tools read, and the outputs folder's; required when there is one. An output folder given a name is made in the run, never there |
+| `RunConfig(folder)` | The outputs folder, the request's `workflowOutDir`: the folder on the cluster every output lands in, relative to `basepath` when one is set, and then required, else absolute; missing (the service creates it) or empty, and used by no run that has not ended |
+| `RunConfig()` | No outputs folder, and so no `basepath`: the outputs land in the run's own folder |
+| `.basepath(path)` | The directory on the cluster that relative paths are relative to: those the tools read, and the outputs folder, which it requires, and which is then never absolute; required when a tool reads a relative path. An output folder given a name is made in the run, never there |
 | `.leader(partition=, time=, memory=)` | The Toil leader's Slurm job, which lasts as long as the run |
 | `.steps(partition=, gpu_partition=, time=)` | Where step jobs go, those that ask for a GPU to `gpu_partition`, and how long each may run |
 | `.log_level(level)` | Toil's log level: `DEBUG`, `INFO` (the default), `WARNING` or `ERROR` |
@@ -125,10 +128,10 @@ besides, `tool_registry=` and `inference=` say how the workflow compiles, as
 ## Where the outputs go
 
 Every output lands in one folder, the **outputs folder**, under its own
-name: the folder `RunConfig(folder)` names or, without one, the run's own
-folder on the cluster, `<run>/out` below. The one exception is an output
-folder given an absolute path, which its tool writes there, in place, and
-which is never copied.
+name: the folder `RunConfig(folder)` names, which `basepath` requires, or,
+without one, the run's own folder on the cluster, `<run>/out` below. The
+one exception is an output folder given an absolute path, which its tool
+writes there, in place, and which is never copied.
 
 | The workflow gives | Without a folder | `RunConfig('/lab/run7')` |
 |---|---|---|
@@ -163,8 +166,8 @@ them itself, whatever they are called and however deep in the workflow.
   through `linkMerge`, `pickValue`, `valueFrom`, several sources or a step
   with `when`. The way out is always the same: give the folder a name
   instead of a path, and it is copied into the outputs folder.
-- An array of output folders is all names or all absolute paths: a tool
-  writes them all in place, or none.
+- A run's output folders are all names or all absolute paths, with
+  `basepath` or without: its tools write them all in place, or none.
 
 A folder that is not empty is never written into: to update one, read it
 as an input and write a new one.
@@ -192,14 +195,21 @@ first. No folder you name may be inside or around an input or another
 folder of the run, so an output folder given an absolute path inside the
 outputs folder, which Toil's copy would merge into, is refused too.
 
+Every file a run writes belongs to the service's account. As the run ends,
+what it wrote in each folder, the outputs folder and every output folder
+written in place, is given to that folder's group, readable and writable,
+whatever modes its tools left: anyone in the group can move or delete it.
+Only a run whose leader was killed outright, out of memory or on a node
+that failed, misses this step.
+
 ### The run's own folder
 
-Without a folder, the outputs land in the run's own folder on the cluster,
-`<runs>/<account>/<run id>/out`, where `<runs>` is where the service keeps
-its runs and `<account>` the account you reach the service as: a new
-folder for every run, with no name to invent, so that each rerun, each
-repetition of a stochastic workflow and each attempt to reproduce one keeps
-its own. `outputs()` names it:
+Without a folder, and so without `basepath`, the outputs land in the run's
+own folder on the cluster, `<runs>/<account>/<run id>/out`, where `<runs>`
+is where the service keeps its runs and `<account>` the account you reach
+the service as: a new folder for every run, with no name to invent, so
+that each rerun, each repetition of a stochastic workflow and each attempt
+to reproduce one keeps its own. `outputs()` names it:
 
 ```python
 {'autoseg~output': {'class': 'Directory', 'basename': 'segmentation',
@@ -287,7 +297,9 @@ codes belong to the compute client alone: a `ComputeError` is never a
   full for a new run, or a real-time analysis; or a cancel of a run another
   account submitted; or there is no such run, as when the service has
   deleted it. Each problem is a line, at the input or field it is about; do
-  what it says. A relative path sent without `basepath` says to give one.
+  what it says. A relative path sent without `basepath` says to give it, and
+  the outputs folder relative to it; `basepath` without the outputs folder
+  says to give the folder, or no `basepath`.
 - `cmp002`, `ServiceUnavailable`: Sophios runs on Windows itself, the URL is
   not one the service is reached at, ssh could not be run, failed before it
   forwarded the socket or has ended since, the `Service` is closed, or the

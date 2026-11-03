@@ -6,7 +6,7 @@ A core feature, but not part of the Python API: `sophios.api.python` neither exp
     from sophios.compute import RunConfig, Service
 
     service = Service('ssh://login.cluster.example.org')  # your own ssh, to the service's socket there
-    config = RunConfig('/projects/lab/results/run7').basepath('/projects/lab/data').leader(time='2:00:00')
+    config = RunConfig('results/run7').basepath('/projects/lab').leader(time='2:00:00')
     run = service.submit(workflow, config)
     status = run.wait()
 
@@ -20,11 +20,13 @@ the session.
 Every path goes as written, and the service, not Sophios, reads it on the cluster and refuses what it cannot read
 there, `~` and `$VARIABLE`s included. A path a tool reads is a path on the cluster, absolute or relative to
 `basepath`, or an http(s) URL. Every output lands in one folder, the outputs folder, under its own name: the one
-`RunConfig(folder)` names, or the run's own folder on the cluster without one. An output folder (a Directory input a
-tool writes into and returns) given as a name, such as `segmentation`, is made in the run, never read against
-`basepath`, and lands in the outputs folder under that name; one given as an absolute path is written there by its
-tool, in place, never copied. The request's shape is `run-request.schema.json`, a copy of the service's own: Sophios
-checks every request against it before sending, and the service again on arrival.
+`RunConfig(folder)` names, relative to `basepath` when one is set, which then requires it, else absolute; or, without
+one, and so without `basepath`, the run's own folder on the cluster. An output folder (a Directory input a tool
+writes into and returns) given as a name, such as `segmentation`, is made in the run, never read against `basepath`,
+and lands in the outputs folder under that name; one given as an absolute path is written there by its tool, in
+place, never copied. A run's output folders are all names or all absolute paths. The request's shape is
+`run-request.schema.json`, a copy of the service's own: Sophios checks every request against it before sending, and
+the service again on arrival.
 """
 import json
 import os
@@ -116,25 +118,28 @@ class RunConfig:
     """Everything of a request but `id`, `workflow` and `inputs`: made with where the outputs go, which nothing
     changes after, and given the rest by setters that set and return it, so the calls chain.
 
-        RunConfig('/shared/lab/results').basepath('/shared/lab').leader(time='2:00:00', memory='4G')
+        RunConfig('results').basepath('/shared/lab').leader(time='2:00:00', memory='4G')
 
     Each setter sets just what it is passed, and leaves the rest as it was; what no setter sets is left out of the
     request, so the service's own settings apply. The values are strings in Slurm's own forms, which the schema
-    checks when the request is built. Without a folder, the outputs land in the run's own folder on the cluster; so
-    they do without any `RunConfig`, with every setting the service's.
+    checks when the request is built. Without a folder, and so without `basepath`, which requires one, the outputs
+    land in the run's own folder on the cluster; so they do without any `RunConfig`, with every setting the service's.
 
     Args:
         workflow_out_dir: The outputs folder: the folder on the cluster every output lands in, under its own name,
-            absolute or relative to `basepath`. It must be missing (the service creates it) or empty, and used by no
-            run that has not ended. None for the run's own folder.
+            relative to `basepath` when one is set, and then required, else absolute. It must be missing (the service
+            creates it) or empty, and used by no run that has not ended. None for the run's own folder, without
+            `basepath`. An output folder given an absolute path is written in place instead, and a run's output
+            folders are all names or all absolute paths.
     """
 
     def __init__(self, workflow_out_dir: str | None = None) -> None:
         self._fields: Json = {} if workflow_out_dir is None else {'workflowOutDir': workflow_out_dir}
 
     def basepath(self, path: str) -> 'RunConfig':
-        """The directory on the cluster that the relative paths of what the tools read are relative to; an output
-        folder given as a name is made in the run instead."""
+        """The directory on the cluster that the relative paths of what the tools read are relative to, and the
+        outputs folder, which is then required, and never absolute; an output folder given as a name is made in the
+        run instead."""
         self._fields['basepath'] = path
         return self
 
@@ -219,6 +224,9 @@ def _schema_problem(error: Any) -> str:
     what = error.schema.get('description') if isinstance(error.schema, dict) else None
     if what and error.validator in ('type', 'enum', 'pattern'):
         return f'{where}: {error.instance!r} is not {what}'
+    if error.validator == 'dependentRequired':  # jsonschema's line names neither the field to send nor the way out
+        ((field, (need,)),) = error.validator_value.items()  # the schema's one pair: basepath needs workflowOutDir
+        return f'{need}: required with {field}: send {need}, or send no {field}'
     return f'{where}: {error.message}'
 
 

@@ -178,16 +178,16 @@ def test_the_compact_ichnaea_script_compiles_its_hinted_tool(tmp_path: Path) -> 
 
 
 @pytest.mark.fast
-def test_the_compact_ichnaea_script_names_no_folder_so_it_runs_again_unchanged(
+def test_the_compact_ichnaea_script_names_its_outputs_folder_relative_to_basepath(
         capsys: pytest.CaptureFixture[str]) -> None:
-    """The compute service refuses a folder a request names once a run has filled it, so the canonical example names
-    none: no outputs folder, and its output folder just a name, which lands in the run's own folder, a new one each
-    run."""
+    """With basepath, the compute service requires the outputs folder, relative to it, so the canonical example names
+    one; its output folder is just a name, which lands in that folder."""
     example = REPO_ROOT / 'examples' / 'scripts' / 'ichnaea_compact.py'
-    assert import_python_file(example.stem, example.resolve()).main() == 0
+    module = import_python_file(example.stem, example.resolve())
+    assert module.main() == 0
     printed = capsys.readouterr().out  # the compiler's progress, then the request
     request, _ = json.JSONDecoder().raw_decode(printed, printed.index('{'))
-    assert 'workflowOutDir' not in request
+    assert (request['basepath'], request['workflowOutDir']) == (module.BASEPATH, 'results_compact')
     assert request['inputs']['autoseg~output'] == {'class': 'Directory', 'location': 'segmentation_compact'}
 
 

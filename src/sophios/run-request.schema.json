@@ -1,17 +1,18 @@
 {
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"title": "RunRequest",
-	"description": "What to run and where. id names the run: the client chooses it, new for each run, and the same request sent again under the same id is the same run. Only id, workflow and inputs are required; the outputs go into the run's own folder unless workflowOutDir names one, and leader, steps and logLevel default to the driver's settings. The driver checks every POST /runs body against this schema, served at GET /run-request.schema.json, before anything else; a request of the right shape is then checked against the cluster.",
+	"description": "What to run and where. id names the run: the client chooses it, new for each run, and the same request sent again under the same id is the same run. Only id, workflow and inputs are required, and workflowOutDir with basepath; the outputs go into the run's own folder unless workflowOutDir names one, and leader, steps and logLevel default to the driver's settings. The driver checks every POST /runs body against this schema, served at GET /run-request.schema.json, before anything else; a request of the right shape is then checked against the cluster.",
 	"$comment": "Each pattern ends with (?!\\n)$, not $: in Python's re, which jsonschema uses, $ also matches before a final line break, and in JavaScript it does not. Written so, a pattern takes the same strings in both.",
 	"type": "object",
 	"required": ["id", "workflow", "inputs"],
+	"dependentRequired": { "basepath": ["workflowOutDir"] },
 	"additionalProperties": false,
 	"properties": {
 		"id": {
 			"$ref": "#/$defs/Id"
 		},
 		"basepath": {
-			"description": "an absolute directory on the cluster, which every relative location in workflow and inputs is relative to; required when one is",
+			"description": "an absolute directory on the cluster, which every relative location in workflow and inputs, and workflowOutDir, is relative to; required when a location is relative, and sent only with workflowOutDir",
 			"type": "string",
 			"pattern": "^/"
 		},
@@ -31,11 +32,11 @@
 			}
 		},
 		"inputs": {
-			"description": "the CWL job: the workflow's inputs by name. Every File and Directory location is a path on the cluster (absolute, or relative to basepath), a file:// URL, or an http(s) URL. An output folder is a Directory input that a tool stages writable and returns as an output. Given a name, one folder name such as segmentation, it is made empty in the run and lands in the outputs folder under that name, never read against basepath. Given an absolute path, its tool writes it there, in place, never copied: it must be missing (its parent exists, and the driver creates it) or empty, used by no run that has not ended, and needs cwlVersion v1.1 or later; a tool that cannot write it in place without changing what else the run reads is refused, saying why. An array of output folders is all names or all absolute paths",
+			"description": "the CWL job: the workflow's inputs by name. Every File and Directory location is a path on the cluster (absolute, or relative to basepath), a file:// URL, or an http(s) URL. An output folder is a Directory input that a tool stages writable and returns as an output, and a run's output folders are all names or all absolute paths. Given a name, one folder name such as segmentation, it is made empty in the run and lands in the outputs folder under that name, never read against basepath. Given an absolute path, its tool writes it there, in place, never copied: it must be missing (its parent exists, and the driver creates it) or empty, used by no run that has not ended, and needs cwlVersion v1.1 or later; a tool that cannot write it in place without changing what else the run reads is refused, saying why. Every other output, each File among them, lands in the outputs folder",
 			"type": "object"
 		},
 		"workflowOutDir": {
-			"description": "the outputs folder: the folder on the cluster every output lands in, under its own name, absolute or relative to basepath. It must be missing (its parent exists, and the driver creates it) or empty, and used by no run that has not ended. Without it, the outputs land in the run's own folder",
+			"description": "the outputs folder: the folder on the cluster every output lands in, under its own name: relative to basepath, and required, when the request sends one, else absolute. It must be missing (its parent exists, and the driver creates it) or empty, and used by no run that has not ended. Without it, and so without basepath, the outputs land in the run's own folder",
 			"type": "string"
 		},
 		"leader": {
