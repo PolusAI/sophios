@@ -58,7 +58,7 @@ def _workflow(out: str = 'results/run7', model: str = 'models/sam3.pt', name: st
 def test_the_request_carries_the_compiled_workflow_and_every_path_as_written() -> None:
     """One inline document, its inputs, and `basepath` only when given; nothing is joined or checked, `~` and
     `$HOME` included: the service is the one authority on paths."""
-    config = RunConfig('/projects/lab/results').basepath('/projects/lab')
+    config = RunConfig('results').basepath('/projects/lab')
     request = compute.build_request(_workflow(model='https://example.org/sam3.pt'), config)
     assert set(request) == {'id', 'workflow', 'inputs', 'basepath', 'workflowOutDir'}
     assert request['basepath'] == '/projects/lab'
@@ -204,15 +204,18 @@ def test_run_config_reaches_every_field_of_the_request_but_its_workflow_and_inpu
     """The constructor and every setter, each given a valid value, reach exactly the vendored schema's top-level
     properties but id, workflow and inputs, each under its own name; the keywords of `leader` and `steps` are the
     properties of the schema's Leader and Steps, camelCased; the folder is left out of the request without one, for
-    the run's own folder; and no setter touches where the outputs go. The vendored schema and RunConfig cannot drift
-    apart."""
+    the run's own folder, so `basepath`, which requires it, is then refused before sending, saying what to do; and no
+    setter touches where the outputs go. The vendored schema and RunConfig cannot drift apart."""
     properties, defs = compute.SCHEMA['properties'], compute.SCHEMA['$defs']
     workflow = {'class': 'Workflow', 'cwlVersion': 'v1.2'}
     core = {'id': 'r1', 'workflow': workflow, 'inputs': {}}
     named = compute.request_for('r1', workflow, {}, _set_every_field(RunConfig(workflow_out_dir='results')))
     assert set(named) == set(properties)
     assert named == core | {'workflowOutDir': 'results'} | _VALID
-    assert compute.request_for('r1', workflow, {}, _set_every_field(RunConfig())) == core | _VALID
+    with pytest.raises(compute.RequestRefused) as refused:
+        compute.request_for('r1', workflow, {}, _set_every_field(RunConfig()))
+    assert refused.value.messages == (
+        'workflowOutDir: required with basepath: send workflowOutDir, or send no basepath',)
     assert compute.request_for('r1', workflow, {}, RunConfig()) == compute.request_for('r1', workflow, {}) == core
     for name in ('leader', 'steps'):
         keywords = {_camel(parameter.name) for parameter in _setters()[name].parameters.values()
@@ -226,11 +229,11 @@ def test_run_config_reaches_every_field_of_the_request_but_its_workflow_and_inpu
 def test_each_setter_sets_just_what_it_is_passed_and_leaves_the_rest() -> None:
     """Called again, a setter replaces what it is passed again and keeps the rest; what no setter sets is left out
     of the request, for the service's own settings."""
-    config = RunConfig('/shared/lab/results').basepath('/shared/lab').leader(time='2:00:00', memory='4G')
+    config = RunConfig('results').basepath('/shared/lab').leader(time='2:00:00', memory='4G')
     config.steps(time='30:00').leader(memory='8G', partition='normal').basepath('/shared/lab2')
     request = compute.request_for('r1', {'class': 'Workflow', 'cwlVersion': 'v1.2'}, {}, config)
     assert request == {'id': 'r1', 'workflow': {'class': 'Workflow', 'cwlVersion': 'v1.2'}, 'inputs': {},
-                       'workflowOutDir': '/shared/lab/results',
+                       'workflowOutDir': 'results',
                        'basepath': '/shared/lab2', 'leader': {'time': '2:00:00', 'memory': '8G', 'partition': 'normal'},
                        'steps': {'time': '30:00'}}
 
@@ -362,12 +365,14 @@ def test_a_refusal_is_each_problem_of_the_service_in_its_words_at_the_authored_i
         monkeypatch: pytest.MonkeyPatch) -> None:
     """A pointer into the request is named as the author wrote it; Sophios adds no line of its own."""
     refusal = {'pointer': '/inputs/write~0model/location',
-               'message': 'models/sam3.pt is relative: send basepath, the cluster directory it is relative to'}
+               'message': 'models/sam3.pt is relative: send basepath, the cluster directory it is relative to, and '
+               'workflowOutDir, the outputs folder relative to basepath'}
     _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('POST', 'runs'): _answer(400, {'errors': [refusal]})})
     with pytest.raises(compute.RequestRefused) as refused:
         compute.Service('unix:///api.sock').submit(_workflow())
     assert refused.value.messages == (
-        'input write~model: models/sam3.pt is relative: send basepath, the cluster directory it is relative to',)
+        'input write~model: models/sam3.pt is relative: send basepath, the cluster directory it is relative to, and '
+        'workflowOutDir, the outputs folder relative to basepath',)
 
 
 @pytest.mark.fast
