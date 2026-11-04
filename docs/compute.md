@@ -127,11 +127,12 @@ besides, `tool_registry=` and `inference=` say how the workflow compiles, as
 
 ## Where the outputs go
 
-Every output lands in one folder, the **outputs folder**, under its own
-name: the folder `RunConfig(folder)` names, which `basepath` requires, or,
-without one, the run's own folder on the cluster, `<run>/out` below. The
-one exception is an output folder given an absolute path, which its tool
-writes there, in place, and which is never copied.
+Everything a run returns lands in one place. Usually that is one folder,
+the **outputs folder**, under each output's own name: the folder
+`RunConfig(folder)` names, which `basepath` requires, or, without one, the
+run's own folder on the cluster, `<run>/out` below. A run whose output
+folders are given absolute paths is written in place instead: everything
+it returns is in those folders, where they are, and nothing is copied.
 
 | The workflow gives | Without a folder | `RunConfig('/lab/run7')` |
 |---|---|---|
@@ -139,7 +140,7 @@ writes there, in place, and which is never copied.
 | A file output, `glob='results/p1/out.tsv'` | `<run>/out/out.tsv` | `/lab/run7/out.tsv` |
 | A directory output, `glob='tiles'` | `<run>/out/tiles/` | `/lab/run7/tiles/` |
 | An output folder given a name, `'masks'` | `<run>/out/masks/` | `/lab/run7/masks/` |
-| An output folder given an absolute path, `'/lab/masks/p1'` | `/lab/masks/p1/`, in place | `/lab/masks/p1/`, in place |
+| An output folder given an absolute path, `'/lab/masks/p1'` | `/lab/masks/p1/`, in place | refused: a run written in place names no outputs folder |
 
 Toil copies the outputs into the outputs folder once, after the whole run
 has succeeded. The copy keeps each output's own name alone, so
@@ -166,8 +167,16 @@ them itself, whatever they are called and however deep in the workflow.
   through `linkMerge`, `pickValue`, `valueFrom`, several sources or a step
   with `when`. The way out is always the same: give the folder a name
   instead of a path, and it is copied into the outputs folder.
-- A run's output folders are all names or all absolute paths, with
-  `basepath` or without: its tools write them all in place, or none.
+- A run's output folders are all names or all absolute paths: its tools
+  write them all in place, or none.
+- **A run written in place returns its output folders alone**, and plain
+  values (strings, numbers, booleans); any other file or folder it returned
+  would land in an outputs folder, apart from the rest, so it is refused.
+  A tool writes such files inside its output folder instead. A Sophios
+  workflow returns every step's outputs unless it declares its own, so
+  declare them: `workflow.outputs.masks = segment.outputs.output`. Such a
+  run names no outputs folder, `RunConfig()` with no folder, and so no
+  `basepath`: its paths are absolute.
 
 A folder that is not empty is never written into: to update one, read it
 as an input and write a new one.
@@ -192,8 +201,8 @@ succeeded, the folder holds its outputs: name a new one. Two runs sent at
 once with one `RunConfig` are never both taken, though the folder stays
 empty until the first has succeeded: the second is refused, naming the
 first. No folder you name may be inside or around an input or another
-folder of the run, so an output folder given an absolute path inside the
-outputs folder, which Toil's copy would merge into, is refused too.
+folder of the run: an output folder for a plate goes beside it,
+`/lab/plate1_masks` beside `/lab/plate1`, never inside it.
 
 Every file a run writes belongs to the service's account. As the run ends,
 what it wrote in each folder, the outputs folder and every output folder

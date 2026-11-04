@@ -24,7 +24,8 @@ there, `~` and `$VARIABLE`s included. A path a tool reads is a path on the clust
 one, and so without `basepath`, the run's own folder on the cluster. An output folder (a Directory input a tool
 writes into and returns) given as a name, such as `segmentation`, is made in the run, never read against `basepath`,
 and lands in the outputs folder under that name; one given as an absolute path is written there by its tool, in
-place, never copied. A run's output folders are all names or all absolute paths. The request's shape is
+place, never copied. A run's output folders are all names or all absolute paths, and a run that writes them in place
+returns them alone, and plain values, and names no outputs folder, so no `basepath`. The request's shape is
 `run-request.schema.json`, a copy of the service's own: Sophios checks every request against it before sending, and
 the service again on arrival.
 """
@@ -130,7 +131,7 @@ class RunConfig:
             relative to `basepath` when one is set, and then required, else absolute. It must be missing (the service
             creates it) or empty, and used by no run that has not ended. None for the run's own folder, without
             `basepath`. An output folder given an absolute path is written in place instead, and a run's output
-            folders are all names or all absolute paths.
+            folders are all names or all absolute paths; a run that writes them in place takes no folder here.
     """
 
     def __init__(self, workflow_out_dir: str | None = None) -> None:
