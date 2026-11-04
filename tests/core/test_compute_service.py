@@ -429,9 +429,9 @@ def test_one_run_config_sent_again_while_its_first_run_goes_on_is_refused_naming
 def test_the_ichnaea_examples_run_on_the_service(cluster: Cluster, script: str, tmp_path: Path,
                                                  monkeypatch: pytest.MonkeyPatch,
                                                  capsys: pytest.CaptureFixture[str]) -> None:
-    """Each example's `main()`, its BASEPATH and SERVICE_URL pointed at this service, submits a request the service
-    accepts and follows the run to its end, then prints its outputs (the fake Toil's); Slurm says COMPLETED once the
-    job script has ended."""
+    """Each example's `main()`, its folder on the cluster (BASEPATH, or ROOT) and SERVICE_URL pointed at this service,
+    submits a request the service accepts and follows the run to its end, then prints its outputs (the fake Toil's);
+    Slurm says COMPLETED once the job script has ended."""
     monkeypatch.setattr(compute, 'POLL', 0.2)
     for name in ('input_directory', 'model_directory'):
         (cluster.shared / name).mkdir(exist_ok=True)
@@ -439,7 +439,7 @@ def test_the_ichnaea_examples_run_on_the_service(cluster: Cluster, script: str, 
     source = tmp_path / f'{script}.py'
     shutil.copyfile(Path(__file__).resolve().parents[2] / 'examples' / 'scripts' / f'{script}.py', source)
     example = import_python_file(script, source)
-    monkeypatch.setattr(example, 'BASEPATH', str(cluster.shared))
+    monkeypatch.setattr(example, 'BASEPATH' if hasattr(example, 'BASEPATH') else 'ROOT', str(cluster.shared))
     monkeypatch.setattr(example, 'SERVICE_URL', cluster.url)
     monkeypatch.chdir(tmp_path)
     # The job ends by writing Slurm's word on it: the id the fake sbatch is about to give, COMPLETED.
