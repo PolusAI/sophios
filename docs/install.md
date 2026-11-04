@@ -145,6 +145,33 @@ That directory holds `empty.txt`, which now contains two lines, `Hello` and
 If the run stops with a line that has a code in brackets, such as
 `error [wic015]`, find the code under [Troubleshooting](#troubleshooting).
 
+## 5. Optional: run workflows with Nextflow
+
+Sophios can also compile a workflow to a Nextflow pipeline and run it with
+Nextflow instead of cwltool; see [Nextflow DSL2 target](nextflow.md). That
+needs Nextflow and a Java it runs on, which conda installs into the same
+environment. Install the Nextflow version Sophios is tested with, then
+activate the environment again, so that it points `JAVA_HOME` at its own
+Java rather than any other Java on the computer:
+
+```bash
+conda install --channel conda-forge --channel bioconda nextflow=26.04.2 openjdk=17
+conda activate sophios
+```
+
+To check it, run the example that ships with Sophios that the Nextflow
+target supports, again from a new, empty directory:
+
+```bash
+mkdir sophios-nextflow-check
+cd sophios-nextflow-check
+sophios --yaml ~/wic/examples/helloworld.wic --target nextflow --run_local
+```
+
+The last line starts with `Success! Runner outputs are under`. The other
+shipped examples use CWL features the Nextflow target does not support:
+compiling one of them stops and names each feature.
+
 ## Platform notes
 
 ### macOS
