@@ -409,6 +409,9 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # One cwltool run of a one-step tool that fails, in about two seconds. That the Nextflow target refuses the
     # glob is checked on every leg by test_capabilities.py; only cwltool shows CWL refuses it too.
     'tests/core/nextflow/test_reference_differential.py::test_neither_runner_takes_an_entrys_object_as_a_glob',
+    # Both cwltool entry points, called in-process with cwltool's run stood in for, well under a second.
+    # test_run_local.py is POSIX-only already, so the Windows leg gives up nothing it ran.
+    'tests/core/test_run_local.py::test_the_runner_prints_no_rdflib_encoding_warning',
 })
 
 
