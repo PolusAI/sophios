@@ -5,6 +5,7 @@ everything between the front door and the child process is the code users run.
 """
 import _thread
 import asyncio
+import io
 import json
 import os
 import shlex
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 
@@ -689,6 +691,27 @@ def test_python_api_runs_go_through_the_same_path(monkeypatch: pytest.MonkeyPatc
     out = capsys.readouterr().out
     assert 'Running cwltool_filterlog ' in out and 'from the runner' in out and 'Success! ' in out
     assert 'python API' not in out
+
+
+@pytest.mark.fast
+@pytest.mark.needs_cwltool
+@pytest.mark.parametrize('entry_point', [run_local.cwltool_main, run_local.cwltool_main_pf])
+def test_the_runner_prints_no_rdflib_encoding_warning(monkeypatch: pytest.MonkeyPatch,
+                                                      entry_point: Callable[[], int]) -> None:
+    """cwltool writes provenance as N-Triples naming no encoding; rdflib's warning about it is noise."""
+    import cwltool.main  # pylint: disable=import-outside-toplevel
+    import rdflib  # pylint: disable=import-outside-toplevel
+
+    def provenance_run(argv: list[str]) -> int:
+        del argv
+        rdflib.Graph().serialize(destination=io.BytesIO(), format='nt', encoding=None)
+        return 0
+
+    monkeypatch.setattr(cwltool.main, 'run', provenance_run)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        assert entry_point() == 0
+    assert not [w for w in caught if 'NTSerializer' in str(w.message)]
 
 
 #: The record a stand-in Nextflow prints for the echo workflow's one output, and what the run reports for it.
