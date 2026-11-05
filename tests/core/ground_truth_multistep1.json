@@ -64,31 +64,32 @@
         "class": "CommandLineTool",
         "requirements": {
           "ShellCommandRequirement": {},
-          "InlineJavascriptRequirement": {},
           "InitialWorkDirRequirement": {
             "listing": [
-              "$(inputs.file)"
+              {
+                "entry": "$(inputs.file)",
+                "writable": true
+              }
             ]
           }
         },
         "inputs": {
           "str": {
-            "type": "string",
-            "inputBinding": {
-              "shellQuote": false,
-              "position": 1,
-              "prefix": "echo"
-            }
+            "type": "string"
           },
           "file": {
-            "type": "File",
-            "inputBinding": {
-              "shellQuote": false,
-              "position": 2,
-              "prefix": ">>"
-            }
+            "type": "File"
           }
         },
+        "arguments": [
+          "echo",
+          "$(inputs.str)",
+          {
+            "valueFrom": ">>",
+            "shellQuote": false
+          },
+          "$(inputs.file.basename)"
+        ],
         "outputs": {
           "file": {
             "type": "File",

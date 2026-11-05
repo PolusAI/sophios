@@ -150,7 +150,7 @@ INFO [workflow ] starting step append
 INFO [step append] start
 INFO [job append] /private/tmp/docker_tmp20b16wra$ /bin/sh \
     -c \
-    echo Hello, Sophios >> /private/tmp/docker_tmp20b16wra/greeting.txt
+    echo 'Hello, Sophios' >> greeting.txt
 INFO [job append] completed success
 ...
 INFO [workflow ] completed success
