@@ -159,8 +159,8 @@ conda install --channel conda-forge --channel bioconda nextflow=26.04.2 openjdk=
 conda activate sophios
 ```
 
-To check it, run the example that ships with Sophios that the Nextflow
-target supports, again from a new, empty directory:
+To check it, run the simplest example that ships with Sophios, again from a
+new, empty directory:
 
 ```bash
 mkdir sophios-nextflow-check
@@ -168,9 +168,11 @@ cd sophios-nextflow-check
 sophios --yaml ~/wic/examples/helloworld.wic --target nextflow --run_local
 ```
 
-The last line starts with `Success! Runner outputs are under`. The other
-shipped examples use CWL features the Nextflow target does not support:
-compiling one of them stops and names each feature.
+The last line starts with `Success! Runner outputs are under`. The
+`multistep` examples run on it too. Of the others, `append_twice.wic` is a
+part of `multistep3.wic` and does not run alone, and the rest use CWL
+features the Nextflow target does not support: compiling one of them stops
+and names each feature.
 
 ## Platform notes
 
