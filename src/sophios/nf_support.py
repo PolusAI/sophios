@@ -77,7 +77,8 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
     'WorkflowStepInput': MappingProxyType({
         'default': Row(_L, 'a string, int, float or boolean: the value when there is no source, or in place of a '
                            'null source'),
-        'id': Row(_L, 'the tool input it binds'),
+        'id': Row(_L, 'the tool input it binds; one the tool does not declare, fed only by workflow inputs and '
+                      'read by neither `when` nor `scatter`, is left out'),
         'label': _DOC,
         'linkMerge': Row(_L, 'joins the sources in order, `merge_nested` or `merge_flattened`'),
         'loadContents': Row(_R, "a step input's loadContents is not supported"),

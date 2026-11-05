@@ -892,19 +892,104 @@ def test_a_nested_workflow_steps_input_takes_one_source_as_it_is() -> None:
     ]
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize("when", [None, "$(inputs.enabled)"], ids=["unread", "read-by-when"])
-def test_a_step_input_its_tool_does_not_declare_is_rejected_by_name(when: str | None) -> None:
-    """The cookbook's when.wic: a step-only input that a when reads."""
-    echo = Step(clt_path=REPO_ROOT / "cwl_adapters" / "echo.cwl")
+def _echo(name: str = "echo") -> Step:
+    echo = Step(clt_path=REPO_ROOT / "cwl_adapters" / "echo.cwl", step_name=name)
     echo.inputs.message = "Hello"
-    flow = Workflow([echo], "when")
+    return echo
+
+
+def _echo_with(extend: Callable[[Workflow, Step], None] | None) -> CompilationResult:
+    """One echo step, which `extend(flow, echo)` gives a step input its tool does not declare."""
+    echo = _echo()
+    flow = Workflow([echo], "flow")
+    if extend is not None:
+        extend(flow, echo)
+    return compile_workflow_result(flow)
+
+
+def _unread_from_a_workflow_input(flow: Workflow, echo: Step) -> None:
     echo.inputs.enabled = StepInput(source=flow.inputs.loud.as_type("boolean?"))
-    if when is not None:
-        echo.when = when
-    assert _findings(compile_workflow_result(flow)) == [
-        "steps[0].in.enabled: an input the step's tool does not declare is not supported"
+
+
+def _unread_from_merged_workflow_inputs(flow: Workflow, echo: Step) -> None:
+    echo.inputs.enabled = StepInput(
+        source=[flow.inputs.loud.as_type("boolean?"), flow.inputs.quiet.as_type("boolean?")],
+        link_merge="merge_flattened", pick_value="first_non_null", default=True,
+    )
+
+
+def _unread_without_a_source(_flow: Workflow, echo: Step) -> None:
+    echo.inputs.enabled = StepInput(default=True)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("extend, workflow_inputs", [
+    pytest.param(_unread_from_a_workflow_input, ["loud"], id="workflow_input"),
+    pytest.param(_unread_from_merged_workflow_inputs, ["loud", "quiet"], id="merged_workflow_inputs_with_a_default"),
+    pytest.param(_unread_without_a_source, [], id="no_source"),
+])
+def test_a_step_input_its_tool_does_not_declare_and_nothing_reads_generates_nothing(
+    extend: Callable[[Workflow, Step], None], workflow_inputs: list[str],
+) -> None:
+    """CWL: a step input the tool does not declare, and that nothing reads, is no error; it changes no run."""
+    plain = compiled_source_to_nextflow(_echo_with(None))
+    extended = compiled_source_to_nextflow(_echo_with(extend))
+    assert extended.processes == plain.processes
+    assert extended.connections == plain.connections
+    # The workflow inputs it names stay parameters of the workflow, each checked like any other.
+    plain_lines, extended_lines = render_nextflow(plain).splitlines(), render_nextflow(extended).splitlines()
+    added = [line for line in extended_lines if line not in plain_lines]
+    assert [line for line in plain_lines if line not in extended_lines] == []
+    assert [re.fullmatch(r"    __sophios_input_\w+\('(\w+)', params\.\1, 'boolean\?'\)", line) is not None
+            for line in added] == [True] * len(workflow_inputs)
+    assert sorted(set(extended.params) - set(plain.params)) == workflow_inputs
+
+
+@pytest.mark.fast
+def test_a_when_that_reads_an_input_its_tool_does_not_declare_is_rejected_by_name() -> None:
+    """The cookbook's when.wic: a step-only input that a when reads."""
+    def read_by_when(flow: Workflow, echo: Step) -> None:
+        echo.inputs.enabled = StepInput(source=flow.inputs.loud.as_type("boolean?"))
+        echo.when = "$(inputs.enabled)"
+
+    assert _findings(_echo_with(read_by_when)) == [
+        "steps[0].in.enabled: the step's when reads an input its tool does not declare, which is not supported"
     ]
+
+
+@pytest.mark.fast
+def test_a_scatter_over_an_input_its_tool_does_not_declare_is_rejected_by_name() -> None:
+    def scattered(flow: Workflow, echo: Step) -> None:
+        echo.inputs.enabled = StepInput(source=flow.inputs.loud.as_type("boolean[]"))
+        echo.scatter_on(echo.inputs.enabled)
+
+    assert [line for line in _findings(_echo_with(scattered)) if line.startswith("steps[0].in.")] == [
+        "steps[0].in.enabled: scatter over an input the step's tool does not declare is not supported"
+    ]
+
+
+_FROM_A_STEP_OUTPUT = (
+    "an input the step's {} does not declare is not supported from a step output: CWL runs this step "
+    "only after that step finishes, and the Nextflow target would not wait for it"
+)
+
+
+@pytest.mark.fast
+def test_an_input_its_tool_does_not_declare_fed_by_a_step_output_is_rejected_by_name() -> None:
+    first, second = _echo("first"), _echo("second")
+    second.inputs.after = StepInput(source=first.outputs.stdout)
+    assert _findings(compile_workflow_result(Workflow([first, second], "flow"))) == [
+        f"steps[1].in.after: {_FROM_A_STEP_OUTPUT.format('tool')}"
+    ]
+
+
+@pytest.mark.fast
+def test_a_nested_workflow_steps_undeclared_input_fed_by_a_step_output_is_rejected_by_name() -> None:
+    result = _nested_result()
+    index = _workflow_call_index(result)
+    wrapper = result.artifact.cwl["steps"][index]
+    changed = _with_wrapper_semantic(result, **{"in": {**wrapper["in"], "after": "write/result"}})
+    assert _findings(changed) == [f"workflow.steps[{index}].in.after: {_FROM_A_STEP_OUTPUT.format('workflow')}"]
 
 
 @pytest.mark.fast
