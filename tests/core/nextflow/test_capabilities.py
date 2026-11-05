@@ -62,22 +62,10 @@ from .testkit import (
 
 
 @pytest.mark.fast
-def test_real_unsupported_compilation_aggregates_capability_errors(
-    unsupported_real_linear_result: CompilationResult,
-) -> None:
-    with pytest.raises(ValueError) as error:
-        compiled_source_to_nextflow(unsupported_real_linear_result)
-    message = str(error.value)
-    # append.cwl's InitialWorkDirRequirement listing ($(inputs.file), staging
-    # under its own basename) is the approved self-staging no-op shape, so it
-    # no longer produces a finding; its two dynamic-value shellQuote:false
-    # bindings still do.
-    assert "steps[1].run.inputs.str.inputBinding.shellQuote" in message
-    assert "steps[1].run.inputs.file.inputBinding.shellQuote" in message
-    # cat.cwl's string output is the approved file-text capture shape
-    # (loadContents: true, outputEval: $(self[0].contents), literal glob), so
-    # it no longer produces a finding at all.
-    assert "steps[2].run.outputs.output" not in message
+def test_the_shipped_touch_append_cat_workflow_compiles(real_linear_result: CompilationResult) -> None:
+    """The tutorials' tools: append's quoted message and its writable entry, cat's file-text capture."""
+    executable = compiled_source_to_nextflow(real_linear_result)
+    assert [process.name for process in executable.processes] == ["touch", "append", "cat"]
 
 
 @pytest.mark.fast
