@@ -68,7 +68,7 @@ FOUR_FILES = {"nextflow_workflow.json", "workflow.nf", "nextflow.config", "nextf
 @pytest.mark.filterwarnings("error::UserWarning")
 def test_a_nextflow_compile_keeps_every_note_and_warns_with_none() -> None:
     """The CWL compile's version and notes, then the lowering's notes; only a run warns (test_run_local)."""
-    consume = CommandLineTool("consume", Inputs(file=Input(cwl.file, position=1)),
+    consume = CommandLineTool("consume", Inputs(data=Input(cwl.file, position=1)),
                               Outputs(result=Output(cwl.file, glob="result.txt"))).base_command("cat")
     workflow = Workflow([*gpu_workflow().steps, Step(consume)], "nextflow_noted")
     compiled = workflow.compile(target="nextflow")

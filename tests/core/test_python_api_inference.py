@@ -22,7 +22,7 @@ RENAMINGS = (("data", "file"),)
 def _workflow(consumer_input: str) -> Workflow:
     """One producer with two File outputs, `file` then `other`, and a consumer whose File input is left to inference.
 
-    Without naming conventions the later output, `other`, feeds the consumer.
+    With the naming conventions off the later output, `other`, feeds the consumer.
     An input called `file` pairs with the output `file`; an input called `data`
     pairs with it only through a `data` -> `file` renaming.
     """
@@ -68,25 +68,28 @@ def _cli(workflow: Workflow, directory: Path, monkeypatch: pytest.MonkeyPatch, *
 def test_naming_conventions_pick_the_edge_the_cli_picks(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         consumer_input: str, renamings: tuple[tuple[str, str], ...]) -> None:
-    """Without conventions the later output feeds the input; with them the output its name pairs with does."""
-    default = _workflow(consumer_input).compile()
-    chosen = _workflow(consumer_input).compile(inference=Inference(naming_conventions=True, renamings=renamings))
-    from_cli = _cli(_workflow(consumer_input), tmp_path, monkeypatch, "--inference_use_naming_conventions",
-                    renamings=renamings)
+    """With no setting the output the input's name pairs with feeds it; switched off, the later output does."""
+    (tmp_path / "on").mkdir()
+    (tmp_path / "off").mkdir()
+    chosen = _workflow(consumer_input).compile(inference=Inference(renamings=renamings))
+    from_cli = _cli(_workflow(consumer_input), tmp_path / "on", monkeypatch, renamings=renamings)
+    off = _workflow(consumer_input).compile(inference=Inference(naming_conventions=False))
+    off_cli = _cli(_workflow(consumer_input), tmp_path / "off", monkeypatch, "--no_inference_naming_conventions")
 
-    assert _feeds(chosen.cwl_workflow) == _feeds(from_cli) != _feeds(default.cwl_workflow)
+    assert _feeds(chosen.cwl_workflow) == _feeds(from_cli) != _feeds(off.cwl_workflow) == _feeds(off_cli)
 
 
 @pytest.mark.fast
 def test_strict_refuses_a_choice_between_equals_as_the_cli_does(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """`--inference_strict` and `Inference(strict=True)` turn the note into the same error."""
-    assert [str(d) for d in _workflow("file").compile().diagnostics if "wic042" in str(d)]
+    tied = Inference(naming_conventions=False)
+    assert [str(d) for d in _workflow("file").compile(inference=tied).diagnostics if "wic042" in str(d)]
 
     with pytest.raises(SophiosError) as raised:
-        _workflow("file").compile(inference=Inference(strict=True))
+        _workflow("file").compile(inference=Inference(naming_conventions=False, strict=True))
     with pytest.raises(SystemExit):
-        _cli(_workflow("file"), tmp_path, monkeypatch, "--inference_strict")
+        _cli(_workflow("file"), tmp_path, monkeypatch, "--inference_strict", "--no_inference_naming_conventions")
 
     assert [d.code for d in raised.value.diagnostics] == [SophiosErrorCode.INFERENCE_TIE]
     assert "error [wic042]" in capsys.readouterr().err
@@ -104,7 +107,7 @@ def test_disabled_inference_leaves_the_input_unconnected_as_the_cli_does(
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("inference", [Inference(), Inference(naming_conventions=True, renamings=RENAMINGS)])
+@pytest.mark.parametrize("inference", [Inference(naming_conventions=False), Inference(renamings=RENAMINGS)])
 def test_the_nextflow_target_connects_an_input_as_the_cwl_target_does(inference: Inference) -> None:
     """`compile(target="nextflow", inference=)` lowers the edge `compile(inference=)` infers."""
     workflow = _workflow("data")
@@ -120,7 +123,7 @@ def test_the_nextflow_target_connects_an_input_as_the_cwl_target_does(inference:
     ({"naming_conventions": True, "renamings": [("a", "b", "c")]}, "(before, after)"),
     ({"naming_conventions": True, "renamings": ["ab"]}, "(before, after)"),
     ({"naming_conventions": True, "renamings": [("a", 1)]}, "(before, after)"),
-    ({"renamings": RENAMINGS}, "naming_conventions=True"),
+    ({"naming_conventions": False, "renamings": RENAMINGS}, "naming_conventions=True"),
     ({"format_rules": {"edam:format_2": "break"}}, "insert_steps=True"),
 ], ids=["format-rule", "triple", "string", "non-string", "renamings-without-conventions",
         "format-rules-without-insertion"])
@@ -138,7 +141,7 @@ def test_an_invalid_inference_is_refused_at_construction(settings: dict[str, Any
 def test_an_inference_keeps_what_it_was_given_immutably() -> None:
     """A list of renamings becomes a tuple, and the rules are a copy the caller cannot change under it."""
     rules = {"tiff": "break"}
-    inference = Inference(naming_conventions=True, renamings=[("data", "file")], insert_steps=True, format_rules=rules)
+    inference = Inference(renamings=[("data", "file")], insert_steps=True, format_rules=rules)
     rules["tiff"] = "continue"
 
     assert inference.renamings == (("data", "file"),)
@@ -159,7 +162,7 @@ def test_run_infers_the_edge_its_compile_does(tmp_path: Path, monkeypatch: pytes
     """The workflow `run()` writes for an `Inference` is the one `compile()` returns for it."""
     monkeypatch.setattr(python_runtime.preflight, "prepare", lambda *args, **kwargs: None)
     monkeypatch.setattr(python_runtime.run_local, "start", lambda request: _Completed())
-    inference = Inference(naming_conventions=True)
+    inference = Inference(naming_conventions=False)
 
     _workflow("file").run(basepath=str(tmp_path / "named"), inference=inference)
     _workflow("file").run(basepath=str(tmp_path / "default"))
