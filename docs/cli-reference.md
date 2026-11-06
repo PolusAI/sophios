@@ -49,7 +49,7 @@ Without one of them the command compiles and then asks for one. Under
 | Flag | Default | Effect |
 |---|---|---|
 | `--inference_disable` | off | compile without edge inference; an unbound input stays unbound |
-| `--inference_use_naming_conventions` | off | among outputs that match by type, prefer the one whose name pairs with the input's, after the configuration's `renaming_conventions` |
+| `--no_inference_naming_conventions` | naming on | by default, among outputs of one step that match by type, the one whose name pairs with the input's wins, after the configuration's `renaming_conventions`; this flag leaves the choice to the output declared last |
 | `--inference_strict` | off | an inference choice between equal candidates (`wic042`, `wic043`) is an error rather than a note |
 | `--insert_steps_automatically` | off | when nothing matches an input by format, insert one converter step from the tools named `insert_steps_automatically_*` on the search paths |
 | `--validate_plugins` | off | validate every tool on the search paths with cwltool before compiling |
