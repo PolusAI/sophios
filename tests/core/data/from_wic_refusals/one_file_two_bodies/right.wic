@@ -1,0 +1,2 @@
+wic: {steps: {'(1, child.wic)': {wic: {steps: {'(1, mk_file)': {in: {name: !ii from_right}}}}}}}
+steps: [{id: child.wic}]

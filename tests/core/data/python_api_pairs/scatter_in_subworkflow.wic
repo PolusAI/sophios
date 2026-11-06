@@ -1,0 +1,2 @@
+steps: [{id: scattered.wic, out: [{out: !& said}]}, {id: cat, scatter: [file], scatterMethod: dotproduct,
+    in: {file: !* said}}]

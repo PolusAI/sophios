@@ -1,14 +1,17 @@
 """Real-time analysis: a `cwl_subinterpreter` step declares an analysis Sophios runs beside the workflow."""
 import json
 import os
+import string
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Final
 
 import pytest
 import yaml
+from hypothesis import example, given, strategies as st
 
 import sophios.main
 import sophios.preflight
@@ -23,6 +26,7 @@ from sophios.lang.error_codes import SophiosErrorCode
 from sophios.realtime import Analysis
 from sophios.wic_types import StepId, Tool, Tools, Yaml
 
+from .budgets import budget
 from .fake_runner import POSIX_ONLY, install
 from .hermetic import compile_hermetic, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
@@ -51,25 +55,85 @@ def _step_ids(cwl: Yaml) -> list[str]:
     return [step['id'] for step in cwl['steps']]
 
 
-def _declaration_line(document: Yaml) -> int:
-    """The line the declaration step starts on in `document` as `hermetic.bundle` writes it."""
+def _declaration_lines(document: Yaml) -> list[int]:
+    """The line each declaration step starts on in `document` as `hermetic.bundle` writes it."""
     text = yaml.dump(document, Dumper=NoAliasDumper, sort_keys=False, line_break='\n', indent=2)
-    return next(number for number, line in enumerate(text.splitlines(), start=1)
-                if line.strip() == '- id: cwl_subinterpreter')
+    return [number for number, line in enumerate(text.splitlines(), start=1)
+            if line.strip() == '- id: cwl_subinterpreter']
+
+
+_UNREADABLE, _REFUSED = object(), object()
+_POSITIVE = st.integers(1, 10**6).flatmap(lambda n: st.sampled_from([n, str(n), f' {n} ']).map(lambda v: (v, n)))
+#: Not positive whole numbers. Digits other than ASCII ones are left out: `int()` raises on '²' (reported).
+_NOT_POSITIVE = (st.integers(max_value=0) | st.booleans() | st.floats(allow_nan=False) | st.sampled_from(['0', '00'])
+                 | st.text(string.ascii_letters + ' -.+', max_size=3))
+#: Per port, values `ir/realtime.py` documents it takes, with what the declaration holds, and values it refuses.
+_PORTS: Final = {
+    'file_pattern': (st.text(min_size=1).map(lambda text: (text, text)), st.just('') | st.integers() | st.none()),
+    'cwl_tool': (st.text(min_size=1).map(lambda text: (text, text)), st.just('') | st.lists(st.text(), max_size=1)),
+    'max_times': (_POSITIVE, _NOT_POSITIVE),
+    'interval': (_POSITIVE, _NOT_POSITIVE),
+    'config': (st.dictionaries(st.text(min_size=1), st.text(), max_size=2).map(lambda config: (config, config)),
+               st.text() | st.lists(st.text(), max_size=1) | st.integers()),
+}
+
+
+@st.composite
+def _declaration(draw: st.DrawFn) -> dict[str, tuple[Yaml | None, Any]]:
+    """Each port's binding, None when not written, and what the declaration holds; at most two written wrong."""
+    wrong = draw(st.sets(st.sampled_from(sorted(_PORTS)), max_size=2))
+    return {port: draw(st.one_of(st.just((None, 60 if port == 'interval' else _UNREADABLE)),
+                                 st.just(({'wic_alias': 'made'}, _UNREADABLE)),
+                                 refused.map(lambda value: (_ii(value), _REFUSED)))
+                       if port in wrong else taken.map(lambda pair: (_ii(pair[0]), pair[1])))
+            for port, (taken, refused) in _PORTS.items()}
+
+
+def _held(**overrides: tuple[Yaml | None, Any]) -> dict[str, tuple[Yaml | None, Any]]:
+    return {'file_pattern': (_ii('*.txt'), '*.txt'), 'cwl_tool': (_ii('count'), 'count'), 'max_times': (_ii('3'), 3),
+            'interval': (None, 60), 'config': (_ii({'in': {'file': 'a.txt'}}), {'in': {'file': 'a.txt'}}), **overrides}
+
+
+_PRODUCER: Final = {'id': 'mk_file', 'in': {'name': _ii('a.txt')}, 'out': [{'file': {'wic_anchor': 'made'}}]}
 
 
 @pytest.mark.fast
-def test_a_declaration_is_not_emitted_and_is_returned_instead() -> None:
-    """The declaration step leaves the CWL, and what it declares is in the result."""
-    document = {'steps': [{'id': 'mk_file', 'in': {'name': _ii('a.txt')}}, _declaration_step()]}
-    result = compile_hermetic(document, tools=TOOLS)
-
-    assert _step_ids(result.artifact.cwl) == ['mk_file']
-    assert result.artifact.job_inputs == {'mk_file~name': 'a.txt'}
-    (declaration,) = result.realtime
-    assert declaration == Declaration('oracle', 'count', '*.txt', 3, 60, {'in': {'file': 'a.txt'}},
-                                      declaration.span)
-    assert declaration.span is not None and declaration.span.start_line == _declaration_line(document)
+@given(st.lists(_declaration(), min_size=1, max_size=2))
+@example([_held()])
+@example([_held(file_pattern=({'wic_alias': 'made'}, _UNREADABLE))])
+@example([_held(cwl_tool=(None, _UNREADABLE))])
+@example([_held(cwl_tool=(_ii(''), _REFUSED))])
+@example([_held(max_times=(_ii('many'), _REFUSED))])
+@example([_held(max_times=(_ii(0), _REFUSED))])
+@example([_held(max_times=(_ii(True), _REFUSED))])  # `true` is no count, though Python's bool is an int
+@example([_held(interval=(_ii(-1), _REFUSED))])
+@example([_held(config=(_ii('in: a.txt'), _REFUSED))])
+@budget(30)
+def test_a_declaration_is_returned_instead_of_emitted_or_is_wic044_at_each_port(
+        declarations: list[dict[str, tuple[Yaml | None, Any]]]) -> None:
+    """Declarations leave the CWL as it is without them and are returned as written, at their lines; one written
+    wrong is `wic044` at each port not written or not a literal or, when all are literals, refusing its value."""
+    document = {'steps': [_PRODUCER, *({'id': 'cwl_subinterpreter', 'in': {
+        port: binding for port, (binding, _) in declaration.items() if binding is not None}}
+        for declaration in declarations)]}
+    lines = _declaration_lines(document)
+    wrong = [[port for port, (_, held) in declaration.items() if held is _UNREADABLE]
+             or [port for port, (_, held) in declaration.items() if held is _REFUSED] for declaration in declarations]
+    if any(wrong):
+        with pytest.raises(SophiosError) as raised:
+            compile_hermetic(document, tools=TOOLS)
+        assert {diagnostic.code for diagnostic in raised.value.diagnostics} == {SophiosErrorCode.REALTIME_DECLARATION}
+        assert sorted((d.span.start_line if d.span else None, d.locator.port if d.locator else None)
+                      for d in raised.value.diagnostics) == sorted(
+            (line, port) for line, ports in zip(lines, wrong) for port in ports)
+        return
+    result, alone = compile_hermetic(document, tools=TOOLS), compile_hermetic({'steps': [_PRODUCER]}, tools=TOOLS)
+    assert (result.artifact.cwl, result.artifact.job_inputs, list(map(str, result.diagnostics))) == (
+        alone.artifact.cwl, alone.artifact.job_inputs, list(map(str, alone.diagnostics)))
+    assert [(declaration.span.start_line if declaration.span else None, replace(declaration, span=None))
+            for declaration in result.realtime] == [(line, Declaration('oracle', *(
+                held[port][1] for port in ('cwl_tool', 'file_pattern', 'max_times', 'interval', 'config'))))
+        for line, held in zip(lines, declarations)]
 
 
 @pytest.mark.fast
@@ -90,29 +154,6 @@ def test_a_workflow_of_only_a_declaration_compiles_to_no_steps() -> None:
     result = compile_hermetic({'steps': [_declaration_step()]}, tools=TOOLS)
     assert result.artifact.cwl['steps'] == []
     assert len(result.realtime) == 1
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('port', 'overrides'), [
-    ('file_pattern', {'file_pattern': {'wic_alias': 'made'}}),
-    ('cwl_tool', {'cwl_tool': None}),
-    ('cwl_tool', {'cwl_tool': _ii('')}),
-    ('max_times', {'max_times': _ii('many')}),
-    ('max_times', {'max_times': _ii(0)}),
-    ('interval', {'interval': _ii(-1)}),
-    ('config', {'config': _ii('in: a.txt')}),
-])
-def test_a_malformed_declaration_is_wic044_at_its_step(port: str, overrides: Yaml) -> None:
-    """Each malformed input is reported at compile time, at the step and port, before anything runs."""
-    producer = {'id': 'mk_file', 'in': {'name': _ii('a.txt')}, 'out': [{'file': {'wic_anchor': 'made'}}]}
-    document = {'steps': [producer, _declaration_step(**overrides)]}
-    with pytest.raises(SophiosError) as raised:
-        compile_hermetic(document, tools=TOOLS)
-
-    (diagnostic,) = raised.value.diagnostics
-    assert diagnostic.code is SophiosErrorCode.REALTIME_DECLARATION
-    assert diagnostic.span is not None and diagnostic.span.start_line == _declaration_line(document)
-    assert diagnostic.locator is not None and diagnostic.locator.port == port
 
 
 def _analyses(document: Yaml, yml_paths: dict[str, dict[str, Path]] | None = None) -> tuple[Analysis, ...]:
@@ -176,8 +217,8 @@ def test_an_analysis_that_does_not_compile_is_wic044_at_the_declaration() -> Non
         _analyses(document)
 
     assert {diagnostic.code for diagnostic in raised.value.diagnostics} == {SophiosErrorCode.REALTIME_DECLARATION}
-    assert all(diagnostic.span is not None and diagnostic.span.start_line == _declaration_line(document)
-               for diagnostic in raised.value.diagnostics)
+    assert {diagnostic.span.start_line if diagnostic.span else None
+            for diagnostic in raised.value.diagnostics} == set(_declaration_lines(document))
     assert "'nope'" in str(raised.value)
 
 

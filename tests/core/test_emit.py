@@ -15,7 +15,8 @@ import tempfile
 from typing import Any, Final
 
 import pytest
-from hypothesis import example, given
+from cwl_utils.parser import cwl_v1_2
+from hypothesis import assume, example, given, strategies as st
 from schema_salad.utils import yaml_no_ts  # pylint: disable=no-name-in-module
 
 import sophios.post_compile
@@ -50,25 +51,8 @@ from . import ast_strategies as strat
 from .cwl_validation import validate_cwl
 from .equivalence import Strength, equivalent
 from .hermetic import ORACLE, compile_hermetic, compile_hermetic_cwl, network_refused, subworkflow_step
+from .strategies import pinned
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('authored, emitted', [
-    ([{'class': 'ResourceRequirement', 'coresMin': 1}], {'ResourceRequirement': {'coresMin': 1}}),
-    (None, None),
-], ids=['list-form', 'bare'])
-def test_authored_requirements_are_emitted_as_the_mapping_form(authored: object, emitted: object) -> None:
-    """CWL's list form of `requirements:` is emitted as the mapping the compiler writes.
-
-    Pinned rather than generated: `ast_strategies.workflows` has no
-    `requirements:` dimension. A bare `requirements:` has no entries to lift and
-    reaches CWL as written.
-    """
-    workflow = {'requirements': authored,
-                'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]}
-    compiled = compile_hermetic(copy.deepcopy(workflow)).artifact.cwl
-    assert compiled['requirements'] == emitted
 
 
 @pytest.mark.skip_pypi_ci
@@ -215,7 +199,13 @@ def _cwltool_validates(workflow: Yaml) -> bool:
 @pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @given(strat.workflows().filter(lambda w: not {s['id'] for s in w['steps']} & NOT_YET_VALID.keys()))
+# A string input bound to a value YAML 1.2 would retype still validates as a string.
 @example({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': '._'}}}]})
+@example({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': '._5'}}}]})
+@example({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': '1e3'}}}]})
+@example({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': '1E3'}}}]})
+@example({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': '0o17'}}}]})
+@example({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': '0o7'}}}]})
 @ORACLE
 def test_emit_validates_as_cwl_v1_2(workflow: Yaml) -> None:
     """CWL's external validator accepts each emitted workflow and its job inputs."""
@@ -231,23 +221,13 @@ _STRINGS_YAML_RETYPES: Final[list[str]] = [
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('text', _STRINGS_CWLTOOL_RETYPES + _STRINGS_YAML_RETYPES)
-def test_a_string_job_value_is_a_string_to_cwltool(text: str) -> None:
-    """A job file keeps each string a string when read the way cwltool reads it."""
-    for document in ({'x': text}, {'x': [text]}, {text: text}):
-        read = yaml_no_ts().load(dump_wic_yaml(document))
-        assert read == document
-        assert all(isinstance(key, str) for key in read)
-        assert all(isinstance(member, str) for value in read.values()
-                   for member in (value if isinstance(value, list) else [value]))
-
-
-@pytest.mark.needs_cwltool
-@pytest.mark.fast
-@pytest.mark.parametrize('text', _STRINGS_CWLTOOL_RETYPES)
-def test_a_compiled_string_job_input_validates(text: str) -> None:
-    """A string input bound to a value YAML 1.2 would retype still validates as a string."""
-    assert _cwltool_validates({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': text}}}]})
+@given(st.lists(st.text() | st.text(' :#-?![]{}&*|>\'"%@`,.0123456789eExoOtTyYnN~+=<_')))
+@example(_STRINGS_CWLTOOL_RETYPES + _STRINGS_YAML_RETYPES)
+@ORACLE
+def test_a_string_job_value_is_a_string_to_cwltool(texts: list[str]) -> None:
+    """A job file keeps each string a string, as a value, in a list and as a key, when read the way cwltool reads it."""
+    for document in ({f'x{i}': text for i, text in enumerate(texts)}, {'x': texts}, dict(zip(texts, texts))):
+        assert yaml_no_ts().load(dump_wic_yaml(document)) == document, document
 
 
 @pytest.mark.needs_cwltool
@@ -367,85 +347,126 @@ def _tools_with_probe(inputs: Yaml, outputs: Yaml, namespaces: Yaml | None = Non
     return registry
 
 
-@pytest.mark.fast
-def test_a_promoted_input_keeps_the_fields_a_workflow_input_may_state() -> None:
-    """A tool input promoted to the boundary keeps what `WorkflowInputParameter` allows, not its `inputBinding`."""
-    tools = _tools_with_probe(
-        {'f': {'type': 'File', 'secondaryFiles': ['.idx'], 'streamable': True, 'loadContents': True,
-               'loadListing': 'shallow_listing', 'inputBinding': {'position': 1}}}, {})
-    compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
-    assert compiled['inputs'] == {'probe~f': {
-        'type': 'File', 'secondaryFiles': ['.idx'], 'streamable': True, 'loadContents': True,
-        'loadListing': 'shallow_listing'}}
-
-
+#: How a tool may declare `secondaryFiles`: each entry static or an expression, in its pattern or its `required`, and
+#: the field bare, a mapping or a list. `_SECONDARY_CASES` are the declarations the properties below were written from.
 _EXPRESSION_ENTRY: Final = {'pattern': '$(self.basename + ".bai")', 'required': False}
-_REQUIRED_EXPRESSION_ENTRY: Final = {'pattern': '.fai', 'required': '$(inputs.strict)'}
+_SECONDARY: Final = st.sampled_from(['.idx', '$(self.basename + ".idx")', '${return self.basename + ".idx";}',
+                                     {'pattern': '.crai', 'required': False}, _EXPRESSION_ENTRY,
+                                     {'pattern': '.fai', 'required': '$(inputs.strict)'},
+                                     {'pattern': '${return self.basename + ".bai";}', 'required': False}])
+_SECONDARY_CASES: Final = ([_EXPRESSION_ENTRY], '$(self.basename + ".idx")', '${return self.basename + ".idx";}',
+                           ['.idx', _EXPRESSION_ENTRY, {'pattern': '.crai', 'required': False},
+                            {'pattern': '.fai', 'required': '$(inputs.strict)'},
+                            {'pattern': '${return self.basename + ".bai";}', 'required': False}],
+                           '.bai', {'pattern': '.bai', 'required': False}, ['.bai'], None)
+_PORT_FIELDS: Final = {'secondaryFiles': st.none() | _SECONDARY | st.lists(_SECONDARY, max_size=4),
+                       'streamable': st.booleans(), 'doc': st.sampled_from(['a doc', ['two', 'lines']]),
+                       'label': st.just('a label'), 'format': st.just('http://example.org/format')}
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize('declared, promoted', [
-    ([_EXPRESSION_ENTRY], None),
-    ('$(self.basename + ".idx")', None),
-    ('${return self.basename + ".idx";}', None),
-    (['.idx', _EXPRESSION_ENTRY, {'pattern': '.crai', 'required': False}, _REQUIRED_EXPRESSION_ENTRY,
-      {'pattern': '${return self.basename + ".bai";}', 'required': False}],
-     ['.idx', {'pattern': '.crai', 'required': False}]),
-], ids=['only-expression', 'single-string-expression', 'single-string-script',
-        'static-entries-beside-expressions'])
-def test_a_promoted_port_leaves_a_secondary_files_expression_to_its_tool(declared: Any, promoted: Any) -> None:
-    """The boundary states the static `secondaryFiles` entries and no expression.
+def _promoted(port: Yaml, schema: Any) -> Yaml:
+    """What the boundary may state of a tool port: each field the CWL v1.2 `schema` class has, but a binding, and of
+    `secondaryFiles` the static entries, as a list. An expression is evaluated against its tool's `inputs` and
+    `expressionLib`, which the workflow does not have, so a promoted one fails in cwltool at run time; and cwltool's
+    checker reads each workflow-level entry as a mapping, so the bare form crashes it."""
+    kept = {key: value for key, value in port.items() if key in schema.attrs and key != 'inputBinding'}
+    declared = kept.pop('secondaryFiles', None)
+    static = [entry for entry in (declared if isinstance(declared, list) else [declared] * (declared is not None))
+              if not any('$(' in str(text) or '${' in str(text)
+                         for text in (entry.values() if isinstance(entry, dict) else [entry]))]
+    return kept | ({'secondaryFiles': static} if static else {})
 
-    An expression is evaluated against its tool's `inputs` and `expressionLib`,
-    which the workflow does not have, and the tool's `InlineJavascriptRequirement`
-    is not the workflow's: a promoted expression fails in cwltool at run time.
-    `plain` is the control: a port with a static entry, promoted beside it.
-    """
-    tools = _tools_with_probe(
-        {'f': {'type': 'File', 'secondaryFiles': declared, 'inputBinding': {'position': 1}},
-         'plain': {'type': 'File', 'secondaryFiles': ['.dict'], 'inputBinding': {'position': 2}}},
-        {'o': {'type': 'File', 'secondaryFiles': declared, 'outputBinding': {'glob': 'o'}},
-         'plain': {'type': 'File', 'secondaryFiles': ['.dict'], 'outputBinding': {'glob': 'p'}}})
-    compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
-    inputs, outputs = compiled['inputs'], compiled['outputs']
-    assert inputs['probe~plain']['secondaryFiles'] == ['.dict']
-    assert outputs['probe~plain']['secondaryFiles'] == ['.dict']
-    assert inputs['probe~f'].get('secondaryFiles') == promoted
-    assert outputs['probe~o'].get('secondaryFiles') == promoted
+
+#: The control: a port with a static entry, promoted beside the drawn one.
+_PLAIN: Final = {'type': 'File', 'secondaryFiles': ['.dict']}
+
+
+def _boundary(inputs: Yaml, outputs: Yaml) -> Yaml:
+    """The workflow `probe`, a tool with these ports and `plain`, compiles to; the tool's
+    `InlineJavascriptRequirement`, which an expression needs, is not the workflow's."""
+    compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=_tools_with_probe(
+        {**inputs, 'plain': {**_PLAIN, 'inputBinding': {'position': 2}}},
+        {**outputs, 'plain': {**_PLAIN, 'outputBinding': {'glob': 'p'}}}))
     assert 'InlineJavascriptRequirement' not in (compiled.get('requirements') or {})
+    return compiled
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('declared, promoted', [
-    ('.bai', ['.bai']),
-    ({'pattern': '.bai', 'required': False}, [{'pattern': '.bai', 'required': False}]),
-    (['.bai'], ['.bai']),
-    (None, None),
-], ids=['bare-string', 'single-mapping', 'list', 'null'])
-def test_a_promoted_port_states_secondary_files_as_a_list(declared: Any, promoted: Any) -> None:
-    """A bare pattern or a single mapping is promoted as a one-element list.
-
-    cwltool's checker reads each workflow-level `secondaryFiles` entry as a
-    mapping, so the bare form crashes it; the list form is the same declaration.
-    """
-    tools = _tools_with_probe(
-        {'f': {'type': 'File', 'secondaryFiles': declared, 'inputBinding': {'position': 1}}},
-        {'o': {'type': 'File', 'secondaryFiles': declared, 'outputBinding': {'glob': 'o'}}})
-    compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
-    assert compiled['inputs']['probe~f'].get('secondaryFiles') == promoted
-    assert compiled['outputs']['probe~o'].get('secondaryFiles') == promoted
+@given(st.fixed_dictionaries({'type': st.just('File'), 'inputBinding': st.just({'position': 1})}, optional={
+    **_PORT_FIELDS, 'loadContents': st.booleans(),
+    'loadListing': st.sampled_from(['no_listing', 'shallow_listing', 'deep_listing'])}))
+@pinned({'type': 'File', 'secondaryFiles': ['.idx'], 'streamable': True, 'loadContents': True,
+         'loadListing': 'shallow_listing', 'inputBinding': {'position': 1}},
+        *({'type': 'File', 'secondaryFiles': declared, 'inputBinding': {'position': 1}}
+          for declared in _SECONDARY_CASES))
+@ORACLE
+def test_a_promoted_input_keeps_the_fields_a_workflow_input_may_state(port: Yaml) -> None:
+    """A tool input promoted to the boundary keeps what `WorkflowInputParameter` allows, not its `inputBinding`, and
+    of its `secondaryFiles` the static entries, as a list."""
+    promoted = _boundary({'f': port}, {})['inputs']
+    assert promoted == {'probe~f': _promoted(port, cwl_v1_2.WorkflowInputParameter), 'probe~plain': _PLAIN}
 
 
 @pytest.mark.fast
-def test_a_promoted_output_keeps_the_fields_a_workflow_output_may_state() -> None:
-    """A tool output promoted to the boundary keeps what `WorkflowOutputParameter` allows, not its `outputBinding`."""
-    tools = _tools_with_probe(
-        {}, {'o': {'type': 'File', 'secondaryFiles': ['.bai'], 'streamable': True,
-                   'outputBinding': {'glob': 'o.bam'}}})
-    compiled = compile_hermetic_cwl({'steps': [{'id': 'probe'}]}, tools=tools)
-    assert compiled['outputs'] == {'probe~o': {
-        'type': 'File', 'secondaryFiles': ['.bai'], 'streamable': True,
-        'outputSource': 'probe/o'}}
+@given(st.fixed_dictionaries({'type': st.just('File'), 'outputBinding': st.just({'glob': 'o.bam'})},
+                             optional=_PORT_FIELDS))
+@pinned({'type': 'File', 'secondaryFiles': ['.bai'], 'streamable': True, 'outputBinding': {'glob': 'o.bam'}},
+        *({'type': 'File', 'secondaryFiles': declared, 'outputBinding': {'glob': 'o'}}
+          for declared in _SECONDARY_CASES))
+@ORACLE
+def test_a_promoted_output_keeps_the_fields_a_workflow_output_may_state(port: Yaml) -> None:
+    """A tool output promoted to the boundary keeps what `WorkflowOutputParameter` allows, not its `outputBinding`, and
+    of its `secondaryFiles` the static entries, as a list."""
+    promoted = _boundary({}, {'o': port})['outputs']
+    assert promoted == {'probe~o': {**_promoted(port, cwl_v1_2.WorkflowOutputParameter), 'outputSource': 'probe/o'},
+                        'probe~plain': {**_PLAIN, 'outputSource': 'probe/plain'}}
+
+
+_REQUIREMENTS = st.sampled_from(['ResourceRequirement', 'InlineJavascriptRequirement', 'ScatterFeatureRequirement',
+                                 'DockerRequirement'])
+_BODIES = st.sampled_from([None, {'coresMin': 4}, {'expressionLib': ['function f(){}']}])
+
+
+def _written(entries: dict[str, Any], listed: bool) -> Any:
+    """`entries` as the document writes them: CWL's list form, or the mapping."""
+    return [{'class': name, **(body or {})} for name, body in entries.items()] if listed else copy.deepcopy(entries)
+
+
+@pytest.mark.fast
+@given(st.dictionaries(_REQUIREMENTS, _BODIES, max_size=3), st.dictionaries(_REQUIREMENTS, _BODIES.filter(bool),
+                                                                            max_size=2),
+       st.booleans(), st.booleans(), st.booleans())
+@example({'ResourceRequirement': {'coresMin': 4}, 'InlineJavascriptRequirement': {'expressionLib': ['function f(){}']}},
+         {}, False, True, True)
+@example({'ScatterFeatureRequirement': None, 'InlineJavascriptRequirement': None}, {}, False, True, True)
+@example({'ResourceRequirement': {'coresMin': 1}}, {'DockerRequirement': {'coresMin': 4}}, True, False, False)
+@example(None, {}, False, False, False).xfail(raises=AssertionError, reason='a bare requirements: reaches CWL as '
+                                              'null, which cwltool refuses')
+@example(None, {}, False, True, False).xfail(raises=AssertionError, reason='a bare requirements: drops the '
+                                             'ScatterFeatureRequirement a scatter needs')
+@example({'ResourceRequirement': None}, {}, False, False, False).xfail(
+    raises=AssertionError, reason='a class with no body the workflow does not need stays null, which cwltool refuses')
+@ORACLE
+def test_user_requirements_are_merged_into_not_copied(  # pylint: disable=too-many-positional-arguments
+        authored: dict[str, Any] | None, hints: dict[str, Any], listed: bool, scatter: bool, when: bool) -> None:
+    """`requirements` keeps what you wrote and gains what the workflow needs (language spec §1.1).
+
+    The third compiler-owned key, and the one the reference used to list as an example of pure passthrough. Each
+    class the workflow needs, `ScatterFeatureRequirement` for a scatter and `InlineJavascriptRequirement` for `when`,
+    is added only when it is not already there, so a class the user already wrote keeps its body, and one written with
+    no body, YAML null, which cwltool rejects, is an empty one. CWL's list form is read as the mapping, of
+    `requirements:` and of `hints:` on the document and the step, and nothing to write is no key."""
+    needs = {name for name, needed in (('ScatterFeatureRequirement', scatter), ('InlineJavascriptRequirement', when))
+             if needed}
+    assume(authored is None or all(body is not None or name in needs for name, body in authored.items()))
+    step = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': ['a', 'b'] if scatter else 'a'}},
+            **({'scatter': ['name']} if scatter else {}), **({'when': '$(true)'} if when else {})}
+    hinted = {'hints': _written(hints, listed)} if hints else {}
+    cwl = compile_hermetic({'requirements': None if authored is None else _written(authored, listed),
+                            'steps': [{**step, **hinted}], **hinted}).artifact.cwl
+    assert cwl.get('requirements', {}) == {**{name: body or {} for name, body in (authored or {}).items()},
+                                           **{name: {} for name in needs - set(authored or {})}}
+    assert not hints or cwl['hints'] == cwl['steps'][0]['hints'] == hints
 
 
 _MYNS: Final = 'http://tool.example/'

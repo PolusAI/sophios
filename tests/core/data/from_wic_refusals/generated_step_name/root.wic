@@ -1,0 +1,2 @@
+steps: [{id: mk_file, in: {name: !ii a}, out: [{file: !& f}]}, {id: xform, in: {file: !* f, name: !ii b}}]
+outputs: {o: {type: File, outputSource: root__step__2__xform/file}}

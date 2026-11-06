@@ -1,0 +1,4 @@
+steps: [{id: t, run: {class: CommandLineTool, cwlVersion: v1.2, baseCommand: echo, inputs: {a: string}, outputs: {}},
+    in: {a: !ii x}},
+        {id: t, run: {class: CommandLineTool, cwlVersion: v1.2, baseCommand: rm, inputs: {a: string}, outputs: {}},
+            in: {a: !ii y}}]

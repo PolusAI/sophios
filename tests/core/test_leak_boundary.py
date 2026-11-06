@@ -11,16 +11,14 @@ partition is checked exhaustively over the declared set as well, since
 that is what the schema and the language spec derive from.
 
 The keys the compiler owns are the documented exceptions. Their normative
-statement lives in language spec §1.2 — the single home — and each is
-enforced by a named test below rather than by a property: `requirements`,
-`inputs` and `outputs` are merged into, `$schemas` is append-only,
+statement lives in language spec §1.2 — the single home. How `requirements`
+is merged into, and `hints` read in either form, is a property of its own
+(`test_emit.py`), over a model of that statement. The rest are pinned one at a
+time below: a list of either holding an `$import` or `$include` is emitted as
+written, `inputs` and `outputs` are merged into, `$schemas` is append-only,
 `$namespaces` reserves the `edam` and `sophios` prefixes, and `class` and
-`cwlVersion` are written. `hints` is the one other exception: its list form is
-read as a mapping, unless the list holds an `$import` or `$include`, so the
-properties generate only the mapping.
-A property broad enough to cover them would have to be weak enough to say
-nothing, so the properties quantify over the keys that really are untouched
-and the exceptions are pinned one at a time.
+`cwlVersion` are written. The properties here generate `hints` only as the
+mapping, and quantify over the keys that really are untouched.
 """
 import copy
 import tempfile
@@ -129,16 +127,6 @@ def test_hints_survive_on_the_document_and_the_step_and_change_nothing_else(hint
 
 @pytest.mark.skip_pypi_ci
 @pytest.mark.fast
-def test_list_form_hints_are_emitted_as_a_mapping_on_the_document_and_the_step() -> None:
-    """CWL's list form of `hints:` reaches the emitted document as the mapping form, at both levels."""
-    hints = [{'class': 'DockerRequirement', 'dockerPull': 'x'}]
-    compiled = _compile(_touch_workflow({'hints': hints}, {'hints': hints}))
-    assert compiled['hints'] == {'DockerRequirement': {'dockerPull': 'x'}}
-    assert _step(compiled)['hints'] == {'DockerRequirement': {'dockerPull': 'x'}}
-
-
-@pytest.mark.skip_pypi_ci
-@pytest.mark.fast
 @pytest.mark.parametrize('key', ['requirements', 'hints'])
 def test_a_list_holding_an_import_is_emitted_as_authored_on_the_document_and_the_step(key: str) -> None:
     """cwltool resolves an `$import` entry, so a list holding one reaches the emitted document untouched."""
@@ -234,49 +222,6 @@ def test_class_is_written_while_inputs_outputs_and_version_are_not() -> None:
     # with a warning rather than refused — a stale pin should not stop a
     # workflow compiling.
     assert compiled['cwlVersion'] == CWL_VERSION, 'a supplied cwlVersion must not win'
-
-
-@pytest.mark.skip_pypi_ci
-@pytest.mark.fast
-def test_user_requirements_are_merged_into_not_copied() -> None:
-    """`requirements` keeps what you wrote and gains what the workflow needs.
-
-    The third compiler-owned key, and the one the reference used to list as an
-    example of pure passthrough. `ir/complete.py` adds a requirement whenever a
-    step scatters, uses `when`, or names a `.wic` subworkflow — so a
-    workflow that supplies its own `requirements` gets them back extended, not
-    unchanged. The generated properties never see it: their one step is a plain
-    tool step, so the requirement set is empty and the merge is skipped on
-    every example. A class the user already wrote keeps its body.
-    """
-    compiled = _compile({
-        'requirements': {'ResourceRequirement': {'coresMin': 4},
-                         'InlineJavascriptRequirement': {'expressionLib': ['function f(){}']}},
-        'steps': [{'id': 'touch',
-                   'in': {'filename': {'wic_inline_input': ['empty.txt']}},
-                   'scatter': ['filename'],
-                   'when': '$(true)'}],
-    })
-    requirements = compiled['requirements']
-    assert requirements['ResourceRequirement'] == {'coresMin': 4}, 'user entry lost'
-    assert 'ScatterFeatureRequirement' in requirements, 'scatter requirement not added'
-    assert requirements['InlineJavascriptRequirement'] == {'expressionLib': ['function f(){}']}, \
-        'the compiler needing the same class must not wipe the body the user wrote'
-
-
-@pytest.mark.skip_pypi_ci
-@pytest.mark.fast
-def test_an_authored_requirement_with_no_body_is_emitted_as_an_empty_one() -> None:
-    """`ScatterFeatureRequirement:` written with no value is YAML null, which cwltool rejects."""
-    compiled = _compile({
-        'requirements': {'ScatterFeatureRequirement': None, 'InlineJavascriptRequirement': None},
-        'steps': [{'id': 'touch',
-                   'in': {'filename': {'wic_inline_input': ['empty.txt']}},
-                   'scatter': ['filename'],
-                   'when': '$(true)'}],
-    })
-    assert compiled['requirements']['ScatterFeatureRequirement'] == {}
-    assert compiled['requirements']['InlineJavascriptRequirement'] == {}
 
 
 @pytest.mark.skip_pypi_ci

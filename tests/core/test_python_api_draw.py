@@ -1,6 +1,7 @@
 """`Workflow.draw` returns the drawing `--graphviz` makes, on a background of its own, from the same compile."""
 import re
 from pathlib import Path
+from typing import Any
 
 import graphviz
 import pytest
@@ -34,34 +35,20 @@ def _edge_colours(drawing: graphviz.Digraph) -> dict[tuple[str, str], str]:
 
 
 @pytest.mark.fast
-def test_draw_paints_a_white_page_and_colours_the_edges_by_who_made_them() -> None:
-    """By default the drawing is on an opaque white background, in black, and an edge written
-    in the workflow is blue where one inference added is black."""
-    drawing = _workflow().draw()
-    assert isinstance(drawing, graphviz.Digraph)
-    assert 'bgcolor=white' in drawing.source
-    assert 'fontcolor=black' in drawing.source
-    assert _edge_colours(drawing) == {('touch', 'append'): 'blue', ('append', 'cat'): 'black'}
-    assert 'transparent' not in drawing.source
-
-
-@pytest.mark.fast
-def test_draw_dark_paints_a_dark_page_in_white_with_a_lighter_blue() -> None:
-    """`dark=True` is an opaque near-black background, white text and outlines, a white inferred edge
-    and a lighter blue for the edge written in the workflow."""
-    drawing = _workflow().draw(dark=True)
-    assert 'bgcolor="#1e1e1e"' in drawing.source
-    assert 'fontcolor=white' in drawing.source
-    assert re.findall(r'\[label=\w+ color=(\w+) fontcolor=(\w+) shape=box', drawing.source) == [
-        ('white', 'white')] * 3
-    assert _edge_colours(drawing) == {('touch', 'append'): 'lightskyblue', ('append', 'cat'): 'white'}
-
-
-@pytest.mark.fast
-def test_draw_infers_as_compile_does() -> None:
-    """With `Inference(enabled=False)` the edge inference adds is not drawn; the one written is."""
-    assert _edge_colours(_workflow().draw()) == {('touch', 'append'): 'blue', ('append', 'cat'): 'black'}
-    assert _edge_colours(_workflow().draw(inference=Inference(enabled=False))) == {('touch', 'append'): 'blue'}
+@pytest.mark.parametrize('options, page, text, edges', [
+    ({}, 'white', 'black', {('touch', 'append'): 'blue', ('append', 'cat'): 'black'}),
+    ({'dark': True}, '"#1e1e1e"', 'white', {('touch', 'append'): 'lightskyblue', ('append', 'cat'): 'white'}),
+    ({'inference': Inference(enabled=False)}, 'white', 'black', {('touch', 'append'): 'blue'}),
+], ids=['default', 'dark', 'no-inference'])
+def test_draw_paints_an_opaque_page_and_colours_the_edges_by_who_made_them(
+        options: dict[str, Any], page: str, text: str, edges: dict[tuple[str, str], str]) -> None:
+    """An opaque white page in black, or with `dark=True` a near-black one in white; a written edge blue, lighter on
+    the dark page, and one inference added the text's colour, none with `Inference(enabled=False)`."""
+    drawing = _workflow().draw(**options)
+    assert isinstance(drawing, graphviz.Digraph) and 'transparent' not in drawing.source
+    assert f'bgcolor={page}' in drawing.source and f'fontcolor={text}' in drawing.source
+    assert re.findall(r'\[label=\w+ color=(\w+) fontcolor=(\w+) shape=box', drawing.source) == [(text, text)] * 3
+    assert _edge_colours(drawing) == edges
 
 
 @pytest.mark.fast

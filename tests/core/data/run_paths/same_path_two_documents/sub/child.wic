@@ -1,0 +1,1 @@
+steps: [{id: s, run: t.cwl, in: {a: !ii x}}]

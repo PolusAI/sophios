@@ -373,7 +373,7 @@ def _dataflow(document: Yaml) -> nx.DiGraph:
 
     A reference to a step this document does not contain becomes a node of its
     own rather than being dropped. Dropping it is what makes the "an edge
-    points somewhere else" case in `MUST_DIFFER` invisible: with the target
+    points somewhere else" case in `data/equivalence/` invisible: with the target
     discarded, a document whose edge went nowhere looks the same as one with
     no edge at all. Such a node is labelled `('external', name)` with the whole
     name it is referenced by — it has no `run:` to read, and the whole name is

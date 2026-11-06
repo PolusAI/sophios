@@ -79,31 +79,36 @@ def _as_compile_returns(cwl: Json, wic_path: Path) -> Json:
     return {**cwl, 'outputs': {name: cwl['outputs'][name] for name in named}}
 
 
+def _bodies(diagnostics: Iterable[object]) -> list[str]:
+    """Each diagnostic as it is printed, but for the place it points at."""
+    return [re.sub(r'^.+?:\d+:\d+: ', '', str(diagnostic)) for diagnostic in diagnostics]
+
+
+def _compile_wic(root: Path, settings: CompilerOptions | None = None) -> CompilationResult:
+    """`root` compiled as the CLI reads it, with the shipped tools and the `.wic` files beside it, a `run:` path read
+    from beside the document."""
+    return sophios.compiler.compile_source(
+        bundle_from_disk(root, {'global': {path.stem: path for path in root.parent.glob('*.wic')}}, _shipped_tools()),
+        settings or default_compilation_settings(), testing=True)
+
+
+def _through_the_file(root: Path) -> tuple[Json, Json, list[str]]:
+    """CWL (outputs narrowed as `compile()` returns them), job and diagnostics of `root`, compiled by `_compile_wic`."""
+    result = _compile_wic(root)
+    artifact = inline_artifact_runs(result.artifact)
+    return (_as_compile_returns(normalize_artifact_cwl(artifact), root),
+            normalize_artifact_job_inputs(artifact, artifact.job_inputs), _bodies(result.diagnostics))
+
+
 @pytest.mark.fast
 @pytest.mark.parametrize('stem', [stem for stem in PAIRS if stem != REFUSED])
 def test_both_surfaces_compile_to_the_same_cwl(stem: str) -> None:
     """The `.py` and the `.wic` of a pair emit one workflow, one job and one set of notes."""
     module = import_python_file(f'cookbook_{stem}', COOKBOOK / f'{stem}.py')
     python_side = module.workflow().compile()
-
-    wic_path = COOKBOOK / f'{stem}.wic'
-    workflows = {'global': {path.stem: path for path in COOKBOOK.glob('*.wic')}}
-    bundle = bundle_from_disk(wic_path, workflows, _shipped_tools())
-    result = sophios.compiler.compile_source(bundle, default_compilation_settings(),
-                                             testing=True)
-    artifact = inline_artifact_runs(result.artifact)
-
-    assert _as_compile_returns(normalize_artifact_cwl(artifact), wic_path) == python_side.cwl_workflow
-    assert normalize_artifact_job_inputs(artifact, artifact.job_inputs) == python_side.cwl_job_inputs
-    assert _codes(result.diagnostics) == _codes(python_side.diagnostics)
-
-
-def _compile_wic(stem: str) -> CompilationResult:
-    """The `.wic` of a cookbook pair, compiled as the command line compiles it."""
-    wic_path = COOKBOOK / f'{stem}.wic'
-    workflows = {'global': {path.stem: path for path in COOKBOOK.glob('*.wic')}}
-    bundle = bundle_from_disk(wic_path, workflows, _shipped_tools())
-    return sophios.compiler.compile_source(bundle, default_compilation_settings(), testing=True)
+    cwl, job, notes = _through_the_file(COOKBOOK / f'{stem}.wic')
+    assert (cwl, job) == (python_side.cwl_workflow, python_side.cwl_job_inputs)
+    assert _codes(notes) == _codes(python_side.diagnostics)
 
 
 @pytest.mark.fast
@@ -114,7 +119,7 @@ def test_the_inferred_graph_stops_at_the_join() -> None:
     with pytest.raises(SophiosError) as from_python:
         module.workflow().compile()
     with pytest.raises(SophiosError) as from_wic:
-        _compile_wic(REFUSED)
+        _compile_wic(COOKBOOK / f'{REFUSED}.wic')
     for caught in (from_python, from_wic):
         (error,) = [d for d in caught.value.diagnostics if d.severity is Severity.ERROR]
         assert error.code is SophiosErrorCode.INFERENCE_DUPLICATE
@@ -127,35 +132,29 @@ def test_the_partial_graph_is_the_explicit_graph() -> None:
     """Two written edges, at the branch and at the join, leave inference the other three; the compiled
     workflow has every step reading what `greeting_graph.wic` writes out."""
     def reads(stem: str) -> dict[str, dict[str, str]]:
-        steps = normalize_artifact_cwl(inline_artifact_runs(_compile_wic(stem).artifact))['steps']
         return {step['id']: {port: source['source'] if isinstance(source, dict) else source
-                             for port, source in step['in'].items()} for step in steps}
+                             for port, source in step['in'].items()}
+                for step in _through_the_file(COOKBOOK / f'{stem}.wic')[0]['steps']}
 
     assert reads('greeting_graph_partial') == reads('greeting_graph')
 
 
 @pytest.mark.fast
-def test_the_inference_pair_prints_its_note() -> None:
-    """The inference entry shows a note; a pair that stopped making one would show nothing."""
-    module = import_python_file('cookbook_inference', COOKBOOK / 'inference.py')
-    assert _codes(module.workflow().compile().diagnostics) == ['wic043']
-
-
-@pytest.mark.fast
 def test_both_surfaces_print_the_inference_note_alike(capsys: pytest.CaptureFixture[str]) -> None:
-    """The Python compile prints its notes on stderr, as the command line does, and returns the same objects;
-    nothing is a warning. The two surfaces print the same block, each row at its own file's line."""
+    """The inference entry shows a note; a pair that stopped making one would show nothing. The Python compile prints
+    its notes on stderr, as the command line does, and returns the same objects; nothing is a warning. The two
+    surfaces print the same block, each row at its own file's line."""
     module = import_python_file('cookbook_inference', COOKBOOK / 'inference.py')
     capsys.readouterr()
     with warnings.catch_warnings():
         warnings.simplefilter('error')
         compiled = module.workflow().compile()
     from_python = capsys.readouterr().err.splitlines()
-    report(_compile_wic('inference').diagnostics)
+    report(_compile_wic(COOKBOOK / 'inference.wic').diagnostics)
     from_wic = capsys.readouterr().err.splitlines()
 
     (note,) = compiled.diagnostics
-    (from_the_file,) = tuple(_compile_wic('inference').diagnostics)
+    (from_the_file,) = tuple(_compile_wic(COOKBOOK / 'inference.wic').diagnostics)
     assert from_python == lines(compiled.diagnostics) and from_wic == lines([from_the_file])
     assert from_python[0] == from_wic[0] == ('note [wic043] 1 edge was guessed; draw the workflow to check it '
                                              '(--graphviz, or Workflow.draw() in Python)')
@@ -190,41 +189,13 @@ def test_the_readme_shows_the_files_as_they_are() -> None:
 
 @pytest.mark.fast
 @pytest.mark.parametrize(('stem', 'consumer', 'port', 'renamings'), [
-    ('naming', 'report', 'input_summary', []),
-    ('naming_renamed', 'abstract', 'input_abstract', [('abstract', 'summary')]),
+    ('naming', 'report', 'input_summary', None),
+    ('naming_renamed', 'abstract', 'input_abstract', (('abstract', 'summary'),)),
 ])
 def test_naming_conventions_give_the_summary_to_the_step_that_wants_it(
-        stem: str, consumer: str, port: str, renamings: list[tuple[str, str]]) -> None:
-    """By type alone the consumer takes `output_details`, the first of two files; with the naming conventions,
-    and the renaming where the names differ, `docs/edge-inference.md` says it takes `output_summary`."""
-    wic_path = COOKBOOK / f'{stem}.wic'
-    workflows = {'global': {path.stem: path for path in COOKBOOK.glob('*.wic')}}
-
-    def source(settings: CompilerOptions) -> str:
-        bundle = bundle_from_disk(wic_path, workflows, _shipped_tools())
-        result = sophios.compiler.compile_source(bundle, settings, testing=True)
-        (step,) = [step for step in normalize_artifact_cwl(inline_artifact_runs(result.artifact))['steps']
-                   if step['id'] == consumer]
-        binding = step['in'][port]
-        return str(binding['source'] if isinstance(binding, dict) else binding)
-
-    without_conventions = default_compilation_settings()
-    without_conventions['inference_use_naming_conventions'] = False
-    assert source(without_conventions) == 'summarize/output_details'
-    with_conventions = default_compilation_settings()
-    with_conventions['renaming_conventions'] = renamings
-    assert source(with_conventions) == 'summarize/output_summary'
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('stem', 'consumer', 'port', 'inference'), [
-    ('naming', 'report', 'input_summary', Inference()),
-    ('naming_renamed', 'abstract', 'input_abstract', Inference(renamings=(('abstract', 'summary'),))),
-])
-def test_python_naming_conventions_give_the_summary_to_the_step_that_wants_it(
-        stem: str, consumer: str, port: str, inference: Inference) -> None:
-    """The Python half of the naming pairs: by type alone the consumer takes `output_details`; with the
-    `Inference` docs/edge-inference.md shows, it takes `output_summary`, as the command line does."""
+        stem: str, consumer: str, port: str, renamings: tuple[tuple[str, str], ...] | None) -> None:
+    """With the naming conventions off the consumer takes `output_details`, the first of two files; by default, with the
+    renaming where names differ, docs/edge-inference.md says it takes `output_summary`, from the `.wic` and `.py`."""
     module = import_python_file(f'cookbook_{stem}', COOKBOOK / f'{stem}.py')
 
     def source(compiled: Json) -> str:
@@ -232,7 +203,15 @@ def test_python_naming_conventions_give_the_summary_to_the_step_that_wants_it(
         binding = step['in'][port]
         return str(binding['source'] if isinstance(binding, dict) else binding)
 
-    assert source(module.workflow().compile(
+    def from_the_file(settings: CompilerOptions) -> str:
+        if renamings is not None:
+            settings['renaming_conventions'] = list(renamings)
+        return source(normalize_artifact_cwl(inline_artifact_runs(_compile_wic(COOKBOOK / f'{stem}.wic',
+                                                                               settings).artifact)))
+
+    off = default_compilation_settings()
+    off['inference_use_naming_conventions'] = False
+    assert from_the_file(off) == source(module.workflow().compile(
         inference=Inference(naming_conventions=False)).cwl_workflow) == 'summarize/output_details'
-    with_conventions = module.workflow().compile(inference=inference).cwl_workflow
-    assert source(with_conventions) == 'summarize/output_summary'
+    assert from_the_file(default_compilation_settings()) == source(module.workflow().compile(
+        inference=Inference(renamings=renamings)).cwl_workflow) == 'summarize/output_summary'

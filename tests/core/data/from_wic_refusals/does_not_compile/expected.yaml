@@ -1,0 +1,2 @@
+{why: "the file's own error, the one sophios --yaml gives, and nothing built",
+    diagnostics: [{code: UNDEFINED_EDGE, file: root.wic, message: {contains: ['nowhere']}}]}
