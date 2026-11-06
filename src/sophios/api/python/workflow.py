@@ -1126,8 +1126,8 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 on the result as its ``lang_version``.
             inference (Inference): How an unbound input is connected to an
                 earlier output. Unlike the command line, the Python API
-                reads no configuration: renamings and format rules are empty
-                unless passed, and ``insert_steps=True`` inserts only
+                reads no configuration: renamings start from the ones Sophios
+                ships and format rules are empty unless passed, and ``insert_steps=True`` inserts only
                 converters among ``tool_registry``. See :class:`Inference`
                 for each option and its flag.
 
@@ -1189,7 +1189,8 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 every level.
             inference (Inference): How an unbound input is connected to an
                 earlier output; the Python API reads no configuration, so
-                renamings and format rules are empty unless passed. See
+                renamings start from the ones Sophios ships and format rules
+                are empty unless passed. See
                 :class:`Inference`.
             tool_registry (Tools | None): Optional tool registry override.
             lang_version (str | None): Pin the Sophios language version for

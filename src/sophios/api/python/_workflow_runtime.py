@@ -25,6 +25,7 @@ from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
 from sophios import backends, compiler, drawing, input_output, plugins, post_compile as pc, preflight, realtime
 from sophios import run_local, run_setup
+from sophios.input_output import SHIPPED_RENAMINGS
 from sophios.run_local import RunHandle
 from sophios.run_status import RunResult
 from sophios.ir.artifacts import CompilationArtifact, CompilationResult
@@ -428,7 +429,9 @@ def compiler_options(inference: Inference, lang_version: str | None = None) -> C
         'inference_use_naming_conventions': inference.naming_conventions,
         'insert_steps_automatically': inference.insert_steps,
         'inference_rules': dict(inference.format_rules),
-        'renaming_conventions': list(inference.renamings),
+        'renaming_conventions': list(
+            SHIPPED_RENAMINGS if inference.renamings is None and inference.naming_conventions
+            else inference.renamings or ()),
     }
     if lang_version is not None:
         options['lang_version'] = lang_version
