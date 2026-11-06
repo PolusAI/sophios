@@ -1135,7 +1135,8 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             CompiledWorkflow | CompiledNextflowWorkflow: The CWL workflow and its job
             inputs, or the Nextflow IR, ``nextflow_workflow``, that ``write()`` writes
             the four files from. Either keeps every note the compile made in
-            ``diagnostics``, and compiling warns with none of them.
+            ``diagnostics`` as ``Diagnostic`` objects. Compiling prints each on
+            stderr, as the command line does, and warns with none of them.
         """
         if target == "cwl":
             return _compiled_workflow(self, tool_registry=tool_registry, lang_version=lang_version,
@@ -1225,7 +1226,8 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         The run writes the one document ``compile()`` returns to
         ``<basepath>/<name>.cwl``, with its job file beside it, and runs exactly
         that. With ``target="nextflow"`` it writes the pipeline to ``<basepath>/nextflow_<name>``,
-        runs it with Nextflow and warns with each note the lowering made; the outputs are in
+        runs it with Nextflow and prints each note the compile and the lowering made on stderr, as the
+        command line does; the outputs are in
         ``<basepath>/nextflow_<name>/work``, Nextflow's work directory.
 
         Args:
@@ -1247,8 +1249,10 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 ``cwl_runner``, or the pipeline the Nextflow target lowers it to, by Nextflow.
 
         Returns:
-            RunResult | None: The completed run: its outputs, output directory and log
-            file. None when ``generate_run_script`` wrote ``run.sh`` instead of running.
+            RunResult | None: The completed run: its outputs, output directory, log
+            file, and the notes compiling and preparing it made, as ``diagnostics``
+            (they were printed on stderr first, as the command line prints them). None
+            when ``generate_run_script`` wrote ``run.sh`` instead of running.
 
         Raises:
             SophiosError: The workflow does not compile, or this machine cannot run it.

@@ -16,7 +16,7 @@ The kind says what to change:
 - `machine`: this machine, what is installed, running, readable or writable;
 - `run`: nothing in Sophios, a tool failed while it ran.
 
-`wic040` and `wic041` are not assigned. Section numbers (§) refer to the
+`wic040`, `wic041`, `wic042` and `wic056` are not assigned. Section numbers (§) refer to the
 [`.wic` reference](wic-reference.md). [Checks and errors](checks-and-errors.md)
 explains when each kind of check runs and how a diagnostic is laid out.
 
@@ -61,8 +61,7 @@ explains when each kind of check runs and how a diagnostic is laid out.
 | `wic037` | machine | An image the run needs could not be pulled, loaded or imported before the run; the message quotes the engine's last line. | Check the image name or source, the network and your registry login, then run again. |
 | `wic038` | document | CWL's step input written where Sophios does not read it: an untagged mapping of step-input fields, a malformed `!cwl {...}` record, or a list `outputSource`, `linkMerge` or `pickValue` on a workflow output. | Write step-input fields as a `!cwl {...}` record (.wic reference §3.5); a workflow output names one step output. |
 | `wic039` | document | A positional `(index, name)` `outputSource` that names the wrong step. | Use the index and id of the step the output comes from, or write `step/port` (.wic reference §5.2). |
-| `wic042` | document | Note: one step offered several matching outputs and inference took the last. | Pin the choice the note shows, with `!&` on the output and `!*` on the input (.wic reference §8); `--inference_strict` makes this an error. |
-| `wic043` | document | Note: an earlier step also matched and inference took the most recent. | Pin the choice the note shows, with `!&` on the output and `!*` on the input (.wic reference §8); `--inference_strict` makes this an error. |
+| `wic043` | document | Note: inference guessed an edge, as another output also fitted the input. | Draw the workflow and check the guessed edges, with `--graphviz` or `Workflow.draw()`; write the ones that are wrong with `!&` on the output and `!*` on the input (.wic reference §8). `--inference_strict` makes each guess an error. |
 | `wic044` | document | A real-time analysis declaration (a `cwl_subinterpreter` step) with an input that is not a literal or has the wrong shape, or whose analysis does not compile. | Write each input of the step as a literal of the shape the message names, and fix the analysis it names (docs/realtime-analysis.md). |
 | `wic045` | document | A step id, workflow input or output, or workflow name with a character other than letters, digits, `_`, `.` and `-`, or starting with `.`. | Rename it with letters, digits, `_`, `.` and `-`: the name becomes part of file names and of the names Sophios makes with `~` and `@`. |
 | `wic046` | document | Note: under `--target nextflow`, a `cwltool:CUDARequirement` names a `cudaVersionMin` or `cudaComputeCapability`, which the generated pipeline does not check; it asks only for a number of GPUs. | Run the pipeline where the GPUs and the container image provide that CUDA version and compute capability, or remove the field. |
@@ -83,3 +82,17 @@ explains when each kind of check runs and how a diagnostic is laid out.
 | `api006` | call | A `.wic` construct the Python API has no spelling for, met by `Workflow.from_wic`. | Write the workflow in the Python API in the way the message names, or keep it as a `.wic` file. |
 | `api007` | call | An `Inference` the compiler cannot be given: a format rule other than `continue` or `break`, a renaming that is not a pair of strings, renamings with naming conventions off, or format rules with step insertion off. | Do what the message names: use `continue` or `break`, write each renaming as `(before, after)`, set `naming_conventions=True` for renamings, or set `insert_steps=True` for format rules. |
 | `api008` | call | A workflow that declares real-time analyses, given to `Workflow.run_async`, which never runs them. | Run it with `Workflow.run()` or `Workflow.start()`; from a coroutine, `await asyncio.to_thread(workflow.run)` keeps the event loop free. |
+
+## Pinning an inference choice
+
+A `wic043` note lists the edges inference guessed, one row each, as
+`sink <- source`, and `wic055` says which inputs would read one output. To
+settle one, write the edge yourself: mark the output with `!&` and read it on
+the input with `!*`. For `word_count.text <- shout.shouted` that is
+`out: - shouted: !& text` on `shout` and `in: text: !* text` on
+`word_count`. For `wic055`, write the edge each of the named inputs should
+read. An output inside a subworkflow is pinned on the inner step its path
+names, as `sub.wic/inner.file`, and an input that a row names at a
+subworkflow, as `sub.wic.file`, on the inner step that declares that port. A
+written edge is not a guess, so its row goes away.
+[Edge inference](edge-inference.md) walks through each case.

@@ -40,52 +40,72 @@ Sophios connected `append`'s `file` to the file `touch` made, and `cat`'s
 `file` to the file `append` wrote. The compiled workflow is the one you
 wrote by hand in chapter 1.
 
-The command line also printed one line before the run:
+Both also printed a note on stderr before the run:
 
 ```text
-greeting_inferred.wic:8:3: note [wic043] step 'cat' input 'file' was inferred from the most recent match step 2 'append' output 'file'; earlier steps also match: step 1 'touch' output 'file'; pin it: `out: - file: !& <name>` on step 2 'append' and `in: file: !* <name>` here (step 3 'cat', port 'file')
+note [wic043] 1 edge was guessed; draw the workflow to check it (--graphviz, or Workflow.draw() in Python)
+  greeting_inferred.wic:8:3  cat.file <- append.file (1 other fits)
 ```
 
 ## Read the note
 
 A **note** is Sophios telling you about a choice it made. It never stops
-anything. Read this one in four parts:
+anything. This one, `wic043`, lists the edges Sophios guessed: inputs that
+another output would also have fitted. The first line counts them and says
+how to check them. Each row under it is one edge, in three parts:
 
 - **where:** `greeting_inferred.wic:8:3`, the `cat` step;
-- **what it chose:** `append`'s output `file`, the most recent match;
-- **what else matched:** `touch`'s output `file`, which is also a file;
-- **how to choose yourself:** the two lines to write, `!&` on the output and
-  `!*` on the input.
+- **the edge:** `cat.file <- append.file`, `cat`'s `file` reads `append`'s `file`;
+- **what else fit:** one other output, `touch`'s `file`, which is also a file.
 
-`append`'s own input gets no note: only one earlier step, `touch`, made a
+The step and port names are the ones you wrote. An output inside a workflow
+used as a step is named by the steps down to it, as `sub.wic/inner.file`, and
+a step whose name repeats in its workflow carries its position, as
+`touch@2`, as in the compiled CWL.
+
+`append`'s own input gets no row: only one earlier step, `touch`, made a
 file, so there was nothing to choose.
 
-The Python run prints no notes. They are kept on the compiled workflow, at
-the line of your script that made the step:
+To see which step reads which, draw the workflow: `--graphviz` on the
+command line, or `Workflow.draw()` in Python, as [Drawing](drawing.md)
+shows. When an error stops the compile there is nothing to draw, and the
+first line only counts the edges.
+
+The Python API prints the same note on stderr when you compile or run, each
+row at the line of your script that made the step, and keeps one
+`Diagnostic` per edge on the result, so code can read the data rather than
+the text:
 
 ```python
 from greeting_inferred import workflow
 
-for note in workflow().compile().diagnostics:
-    print(note)
+compiled = workflow().compile()
+for note in compiled.diagnostics:
+    print(note.code, note.message)
 ```
 
 ```text
-/home/you/sophios-tutorial/greeting_inferred.py:17:1: note [wic043] step 'cat' input 'file' was inferred from the most recent match step 2 'append' output 'file'; earlier steps also match: step 1 'touch' output 'file'; pin it: `out: - file: !& <name>` on step 2 'append' and `in: file: !* <name>` here (step 3 'cat', port 'file')
+note [wic043] 1 edge was guessed; draw the workflow to check it (--graphviz, or Workflow.draw() in Python)
+  /home/you/sophios-tutorial/greeting_inferred.py:17:1  cat.file <- append.file (1 other fits)
+wic043 cat.file <- append.file (1 other fits)
 ```
+
+The first two lines are the compile's stderr; the last one is the `print`. A
+run returns its notes the same way, as `diagnostics` on the `RunResult`.
 
 ## Choose yourself
 
 When the choice is the wrong one, or when it matters enough that a reader
-should see it in the file, write the edge. That is what the note's
-last part says to do, and it is exactly what `greeting.wic` from chapter 1
-does. In Python, write the assignment, `cat.inputs.file =
-append.outputs.file`. Sophios never infers an input you connected, so the
+should see it in the file, write the edge. In `.wic`, mark the output with
+`!&` and read it with `!*`, as in `out: - file: !& greeting_file` on `append`
+and `in: file: !* greeting_file` on `cat`; that is exactly what
+`greeting.wic` from chapter 1 does. In Python, write the assignment,
+`cat.inputs.file = append.outputs.file`. Sophios never infers an input you connected, so the
 note goes away, and connecting one input changes nothing for the others.
 You can mix the two freely: write the edges that matter and leave the
 rest.
 
-To make Sophios refuse to choose, turn every note into an error. On the
+To make Sophios refuse to guess, turn every guessed edge into an error. On the
 command line that is `--inference_strict`; in Python it is
 `Inference(strict=True)`, from `sophios.api.python.workflow`, given to
 `compile()` or `run()`:
@@ -96,7 +116,7 @@ sophios --yaml greeting_inferred.wic --generate_cwl_workflow --inference_strict
 
 ```text
 Failed to compile greeting_inferred.wic
-greeting_inferred.wic:8:3: error [wic043] step 'cat' input 'file' was inferred from the most recent match step 2 'append' output 'file'; earlier steps also match: step 1 'touch' output 'file'; pin it: `out: - file: !& <name>` on step 2 'append' and `in: file: !* <name>` here (step 3 'cat', port 'file')
+greeting_inferred.wic:8:3: error [wic043] cat.file <- append.file was guessed, 1 other fits; write the edge it should read
 ```
 
 ```python
@@ -111,7 +131,7 @@ In Python, `compile()` raises `SophiosError` with the same error, at the line
 of your script that made `cat`:
 
 ```text
-sophios.lang.diagnostics.SophiosError: /home/you/sophios-tutorial/greeting_inferred.py:17:1: error [wic043] step 'cat' input 'file' was inferred from the most recent match step 2 'append' output 'file'; earlier steps also match: step 1 'touch' output 'file'; pin it: `out: - file: !& <name>` on step 2 'append' and `in: file: !* <name>` here (step 3 'cat', port 'file')
+sophios.lang.diagnostics.SophiosError: /home/you/sophios-tutorial/greeting_inferred.py:17:1: error [wic043] cat.file <- append.file was guessed, 1 other fits; write the edge it should read
 ```
 
 Use it for a workflow that must not depend on the order of its steps. To
@@ -139,8 +159,8 @@ steps, the most recent first, for an output that fits:
 2. The most recent step with a fitting output wins. Within that step, an
    output whose name pairs with the input's wins, as the next section shows;
    if none does, the output declared first wins.
-3. If an earlier step also had a fitting output, Sophios notes the choice,
-   as `wic043`. If the winning step had several, it notes that, as `wic042`.
+3. If another output also fitted, from an earlier step or from the winning
+   step itself, Sophios notes the edge as a guess, `wic043`.
 4. If nothing fits, the input becomes an input of the compiled workflow, for
    the run to supply, and the runner asks for it.
 5. A duplicate needs evidence. When two or more inputs of one tool step read
@@ -180,15 +200,27 @@ file above it, instead of the greeting, and then `combine` would read the
 counts twice, as its `text` and as its `counts`. Sophios stops there:
 
 ```text
-greeting_graph_inferred.wic:12:3: error [wic055] step 5 'combine' inputs 'text' and 'counts' would both read step 4 'word_count' output 'counts', and nothing says they should (two inputs may read one output without a written edge only when each declares a file format that output carries). Write the edge each input should read: mark the output each one takes with `out: - <port>: !& <name>` on the step that makes it, and read it with `in: text: !* <name>` and `in: counts: !* <name>` on step 5 'combine' (step 5 'combine', port 'text')
+greeting_graph_inferred.wic:12:3: error [wic055] combine.text and combine.counts would both read word_count.counts; write the edge each should read
+note [wic043] 2 edges were guessed:
+  greeting_graph_inferred.wic:8:3   shout.text <- append.file (1 other fits)
+  greeting_graph_inferred.wic:10:3  word_count.text <- shout.shouted (2 others fit)
 ```
 
-In Python, `compile()` and `run()` raise `SophiosError` with the same error,
-at the line of your script that made `combine`:
+The error comes first, then the edges inference guessed on the way to it; the
+two the error names are not repeated. In Python, `compile()` and `run()`
+raise `SophiosError` with the same lines, the error at the line of your
+script that made `combine`:
 
 ```text
-sophios.lang.diagnostics.SophiosError: /home/you/sophios-tutorial/greeting_graph_inferred.py:19:1: error [wic055] step 5 'combine' inputs 'text' and 'counts' would both read step 4 'word_count' output 'counts', and nothing says they should (two inputs may read one output without a written edge only when each declares a file format that output carries). Write the edge each input should read: mark the output each one takes with `out: - <port>: !& <name>` on the step that makes it, and read it with `in: text: !* <name>` and `in: counts: !* <name>` on step 5 'combine' (step 5 'combine', port 'text')
+sophios.lang.diagnostics.SophiosError: /home/you/sophios-tutorial/greeting_graph_inferred.py:19:1: error [wic055] combine.text and combine.counts would both read word_count.counts; write the edge each should read
+note [wic043] 2 edges were guessed:
+  /home/you/sophios-tutorial/greeting_graph_inferred.py:17:1  shout.text <- append.file (1 other fits)
+  /home/you/sophios-tutorial/greeting_graph_inferred.py:18:1  word_count.text <- shout.shouted (2 others fit)
 ```
+
+Write the edge each input should read, as `in: text: !* shouted` and
+`in: counts: !* counts` on `combine`, with `out: - shouted: !& shouted` and
+`out: - counts: !& counts` on the steps that make them.
 
 Two inputs of one step that read the same file are almost always a mistake,
 and nothing in the file says this one is meant. Sophios accepts it only when
@@ -212,11 +244,12 @@ branch and the one at the join, and leave the rest to inference. Here
 
 Both forms compile to the graph of `greeting_graph.wic`. Inference fills in
 three edges: `append`'s file from `touch`, `shout`'s text and `combine`'s
-counts. It notes the last two as the choices they are:
+counts. It notes the last two as the guesses they are, and says how to check them:
 
 ```text
-greeting_graph_partial.wic:10:3: note [wic043] step 'shout' input 'text' was inferred from the most recent match step 2 'append' output 'file'; earlier steps also match: step 1 'touch' output 'file'; pin it: `out: - file: !& <name>` on step 2 'append' and `in: text: !* <name>` here (step 3 'shout', port 'text')
-greeting_graph_partial.wic:18:3: note [wic043] step 'combine' input 'counts' was inferred from the most recent match step 4 'word_count' output 'counts'; earlier steps also match: step 3 'shout' output 'shouted', step 2 'append' output 'file', step 1 'touch' output 'file'; pin it: `out: - counts: !& <name>` on step 4 'word_count' and `in: counts: !* <name>` here (step 5 'combine', port 'counts')
+note [wic043] 2 edges were guessed; draw the workflow to check them (--graphviz, or Workflow.draw() in Python)
+  greeting_graph_partial.wic:10:3  shout.text <- append.file (1 other fits)
+  greeting_graph_partial.wic:18:3  combine.counts <- word_count.counts (3 others fit)
 ```
 
 Drawn, the graph is the diamond, with the edges you wrote in blue and the
@@ -276,11 +309,13 @@ output's, so `input_summary` pairs with `output_summary`. The names never
 move the choice to another step: the most recent step with a fitting output
 still wins. A call to a
 subworkflow counts as one step here, so names choose among the outputs of the
-steps inside it, and may pick one that is not from its most recent inner step. One note remains, saying that `echo`'s file came earlier and lost
-to the most recent step, which is the choice you want:
+steps inside it, and may pick one that is not from its most recent inner step.
+One note remains, as `echo`'s file came earlier and also fits; the most recent
+step won, which is the choice you want:
 
 ```text
-naming.wic:7:3: note [wic043] step 'report' input 'input_summary' was inferred from the most recent match step 2 'summarize' output 'output_summary'; earlier steps also match: step 1 'echo' output 'stdout'; pin it: `out: - output_summary: !& <name>` on step 2 'summarize' and `in: input_summary: !* <name>` here (step 3 'report', port 'input_summary')
+note [wic043] 1 edge was guessed; draw the workflow to check it (--graphviz, or Workflow.draw() in Python)
+  naming.wic:7:3  report.input_summary <- summarize.output_summary (1 other fits)
 ```
 
 `report.txt` holds the summary, the text's word count:
@@ -314,8 +349,8 @@ By type alone the tie goes to the output declared first, `output_details`, and
 the command line says so:
 
 ```text
-naming.wic:7:3: note [wic042] step 'report' input 'input_summary' was inferred from step 2 'summarize' output 'output_details', but that step also offers step 2 'summarize' output 'output_summary'; pin it: `out: - output_details: !& <name>` on step 2 'summarize' and `in: input_summary: !* <name>` here (step 3 'report', port 'input_summary')
-naming.wic:7:3: note [wic043] step 'report' input 'input_summary' was inferred from the most recent match step 2 'summarize' output 'output_details'; earlier steps also match: step 1 'echo' output 'stdout'; pin it: `out: - output_details: !& <name>` on step 2 'summarize' and `in: input_summary: !* <name>` here (step 3 'report', port 'input_summary')
+note [wic043] 1 edge was guessed; draw the workflow to check it (--graphviz, or Workflow.draw() in Python)
+  naming.wic:7:3  report.input_summary <- summarize.output_details (2 others fit)
 ```
 
 `report.txt` then holds the line-numbered copy, not the summary:
@@ -345,7 +380,7 @@ wants the summary calls it an abstract, on an input `input_abstract`:
 ```
 
 `abstract` pairs with neither output, so the names alone fall back to the
-output declared first, and the `wic042` note appears. A **renaming** tells Sophios how
+output declared first, `output_details`. A **renaming** tells Sophios how
 the two conventions correspond. It is a `[before, after]` pair, applied to
 the input's name, after `input_` is stripped and before the names are
 compared: with `['abstract', 'summary']`, `input_abstract` pairs with
@@ -380,7 +415,8 @@ workflow().run(inference=Inference(renamings=(('abstract', 'summary'),)))
 ```
 
 ```text
-naming_renamed.wic:7:3: note [wic043] step 'abstract' input 'input_abstract' was inferred from the most recent match step 2 'summarize' output 'output_summary'; earlier steps also match: step 1 'echo' output 'stdout'; pin it: `out: - output_summary: !& <name>` on step 2 'summarize' and `in: input_abstract: !* <name>` here (step 3 'abstract', port 'input_abstract')
+note [wic043] 1 edge was guessed; draw the workflow to check it (--graphviz, or Workflow.draw() in Python)
+  naming_renamed.wic:7:3  abstract.input_abstract <- summarize.output_summary (1 other fits)
 ```
 
 and `abstract.txt` holds the summary, `9`, from either form. Renamings are
@@ -424,8 +460,9 @@ inserted step, so `format_rules=` without `insert_steps=True` is an error
 
 Leave out an input's edge and Sophios connects it to the most recent
 earlier output that fits, unless that would give two inputs of one step the
-same file with nothing to say so (`wic055`). When another output also fitted, it says so in a
-note that names the alternative. Write an edge to choose for yourself. `--inference_strict`, or
+same file with nothing to say so (`wic055`). When another output also fitted, it lists the
+edge in a note, `wic043`, and says how to draw the workflow and check it. Write an edge to
+choose for yourself. `--inference_strict`, or
 `Inference(strict=True)` in Python, forbids choices, and
 `--inference_disable`, or `Inference(enabled=False)`, turns inference off.
 When outputs tie by type, naming conventions let names decide, with

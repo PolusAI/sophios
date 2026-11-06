@@ -24,12 +24,13 @@ from sophios.ir import (
     infer,
     link,
 )
+from sophios.ir.infer import Inferred
 from sophios.ir.names import Names
 from sophios.ir.declarations import input_rank, layered, output_rank
 from sophios.ir.types import (DerivedName, EdgeOrigin, Port, PortDeclaration, PortId, PortName,
                               StepNode, WorkflowGraph)
 from sophios.lang import SophiosErrorCode
-from sophios.lang.diagnostics import Locator, Severity, SophiosError
+from sophios.lang.diagnostics import Diagnostic, Locator, Severity, SophiosError
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
@@ -94,6 +95,11 @@ def _multi_file_tools() -> Tools:
             LegacyStepId('multi_file', SYNTHETIC_NS): Tool('/synthetic/multi_file.cwl', multi)}
 
 
+def _notes(result: Inferred, code: SophiosErrorCode) -> list[Diagnostic]:
+    """The diagnostics of `result` with `code`."""
+    return [d for d in result.diagnostics if d.code is code]
+
+
 _TWO_PRODUCERS: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}},
                                   {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'b'}}},
                                   {'id': 'count'}]}
@@ -101,13 +107,12 @@ _TWO_PRODUCERS: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_
 
 @pytest.mark.fast
 def test_a_tie_within_one_producer_is_noted_with_the_alternatives() -> None:
-    """The losing output and the pin that would make the choice explicit are named."""
+    """One line names the input, the output it reads and the output that also fit."""
     _, linked, _ = _typed({'steps': [{'id': 'multi_file'}, {'id': 'count'}]}, _multi_file_tools())
     result = infer(linked)
     assert result.graph is not None
-    (note,) = [d for d in result.diagnostics if d.severity is Severity.NOTE]
-    assert note.code is SophiosErrorCode.INFERENCE_TIE
-    assert "'first'" in note.message and '!&' in note.message
+    (note,) = _notes(result, SophiosErrorCode.INFERENCE_GUESS)
+    assert note.message == 'count.file <- multi_file.first (1 other fits)'
     assert note.locator == Locator(step='count', index=2, port='file')
 
 
@@ -117,11 +122,8 @@ def test_recency_between_producers_is_noted() -> None:
     _, linked, _ = _typed(_TWO_PRODUCERS)
     result = infer(linked)
     assert result.graph is not None
-    (note,) = [d for d in result.diagnostics if d.severity is Severity.NOTE]
-    assert note.code is SophiosErrorCode.INFERENCE_RECENCY
-    assert ("most recent match step 2 'mk_file' output 'file'; earlier steps also match: "
-            "step 1 'mk_file' output 'file'; pin it: `out: - file: !& <name>` on step 2 'mk_file'"
-            in note.message)
+    (note,) = _notes(result, SophiosErrorCode.INFERENCE_GUESS)
+    assert note.message == 'count.file <- mk_file@2.file (1 other fits)', 'a repeated name carries its position'
     edge = next(e for e in result.graph.linked_edges if e.sink.step.name == 'count')
     assert edge.source.step.index == 2, 'the choice itself is unchanged'
 
@@ -139,17 +141,13 @@ def _across_calls(pinned: bool) -> Yaml:
 
 
 @pytest.mark.fast
-def test_a_note_across_subworkflow_calls_names_the_steps_an_author_can_pin() -> None:
-    """A call exposes inner ports under names nobody can write, so the note
-    points at the inner steps, and writing exactly the pin it gives compiles
-    without a note."""
+def test_a_note_across_subworkflow_calls_names_the_call_and_the_inner_output() -> None:
+    """The input is named at the call the author wrote, and the output by the
+    steps down to the one that makes it; writing the edge between the inner
+    steps compiles without a note."""
     result = compile_hermetic(_across_calls(pinned=False), tools=_multi_file_tools())
-    (note,) = list(result.diagnostics)
-    assert note.code is SophiosErrorCode.INFERENCE_TIE
-    assert "inferred from step 1 'make.wic' > step 1 'multi_file' output 'first'" in note.message
-    assert "also offers step 1 'make.wic' > step 1 'multi_file' output 'last'" in note.message
-    assert ("`out: - first: !& <name>` on step 1 'make.wic' > step 1 'multi_file' and "
-            "`in: file: !* <name>` on step 2 'use.wic' > step 1 'count'") in note.message
+    (note,) = [d for d in result.diagnostics if d.code is SophiosErrorCode.INFERENCE_GUESS]
+    assert note.message == 'use.wic.file <- make.wic/multi_file.first (1 other fits)'
 
     pinned = compile_hermetic(_across_calls(pinned=True), tools=_multi_file_tools())
     assert not list(pinned.diagnostics)
@@ -161,7 +159,18 @@ def test_strict_mode_turns_notes_into_errors() -> None:
     _, linked, _ = _typed(_TWO_PRODUCERS)
     result = infer(linked, InferencePolicy(strict=True))
     assert result.graph is None and result.diagnostics.has_errors
-    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.INFERENCE_RECENCY]
+    assert [(d.severity, d.code, d.message) for d in result.diagnostics] == [
+        (Severity.ERROR, SophiosErrorCode.INFERENCE_GUESS,
+         'count.file <- mk_file@2.file was guessed, 1 other fits; write the edge it should read')]
+
+
+@pytest.mark.fast
+def test_one_guess_fanned_out_inside_a_call_is_one_note() -> None:
+    """Two inner steps read the guessed output through the one call the author wrote, so one note says it."""
+    workflow: Yaml = {'steps': [subworkflow_step('make.wic', {'steps': [{'id': 'multi_file'}]}),
+                                subworkflow_step('use.wic', {'steps': [{'id': 'count'}, {'id': 'count'}]})]}
+    result = compile_hermetic(workflow, tools=_multi_file_tools())
+    assert [d.message for d in result.diagnostics] == ['use.wic.file <- make.wic/multi_file.first (1 other fits)']
 
 
 @pytest.mark.fast
@@ -257,10 +266,10 @@ def test_a_list_literal_under_scatter_is_scattered_over() -> None:
 def test_strict_compile_refuses_and_lenient_compile_carries_the_note() -> None:
     """The compiler forwards the strict flag and returns the notes with its result."""
     result = compile_hermetic(_TWO_PRODUCERS)
-    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.INFERENCE_RECENCY]
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.INFERENCE_GUESS]
     with pytest.raises(SophiosError) as caught:
         compile_hermetic(_TWO_PRODUCERS, inference_strict=True)
-    assert caught.value.diagnostics[0].code is SophiosErrorCode.INFERENCE_RECENCY
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.INFERENCE_GUESS
 
 
 @pytest.mark.fast
@@ -639,9 +648,7 @@ def test_two_inferred_bare_file_inputs_reading_one_output_are_refused() -> None:
     (error,) = [d for d in result.diagnostics if d.severity is Severity.ERROR]
     assert error.code is SophiosErrorCode.INFERENCE_DUPLICATE
     assert error.locator == Locator(step='join', index=2, port='left')
-    assert error.message.startswith("step 2 'join' inputs 'left' and 'right' would both read "
-                                    "step 1 'mk_file' output 'file'")
-    assert 'out: - <port>: !& <name>' in error.message and '`in: right: !* <name>`' in error.message
+    assert error.message == 'join.left and join.right would both read mk_file.file; write the edge each should read'
 
 
 @pytest.mark.fast
@@ -650,7 +657,7 @@ def test_a_written_edge_and_an_inferred_one_reading_one_output_are_refused() -> 
     workflow: Yaml = {'steps': [_MAKE, {'id': 'join', 'in': {'name': {'wic_inline_input': 'o.txt'},
                                                              'left': {'wic_alias': 'f'}}}]}
     (message,) = _refusal(workflow, SYNTHETIC_TOOLS)
-    assert "inputs 'left' and 'right' would both read step 1 'mk_file' output 'file'" in message
+    assert message == 'join.left and join.right would both read mk_file.file; write the edge each should read'
 
 
 @pytest.mark.fast
@@ -672,7 +679,7 @@ def test_inputs_that_declare_the_format_the_output_carries_may_read_it_twice() -
 def test_one_input_without_the_evidence_refuses_the_group() -> None:
     """Every input has to declare a format the output carries: a bare `right` does not."""
     (message,) = _refusal({'steps': [_MAKE, {'id': 'pair'}]}, _pair_tools(_TXT, None))
-    assert "inputs 'left' and 'right' would both read" in message
+    assert message == 'pair.left and pair.right would both read mk_file.file; write the edge each should read'
 
 
 @pytest.mark.fast
@@ -692,7 +699,8 @@ def test_an_output_read_through_its_inner_port_and_the_calls_twin_is_one_output(
                                 {'id': 'join', 'in': {'name': {'wic_inline_input': 'o.txt'},
                                                       'left': {'wic_alias': 'f'}}}]}
     (message,) = _refusal(workflow, SYNTHETIC_TOOLS)
-    assert "inputs 'left' and 'right' would both read" in message
+    assert message == ('join.left and join.right would both read src.wic/mk_file.file; '
+                       "write the edge each should read")
 
 
 @pytest.mark.fast
@@ -715,7 +723,7 @@ def test_a_written_edge_to_an_anchor_in_a_call_and_the_calls_exposed_port_are_on
         compile_hermetic(workflow, tools=_pair_tools(None, None))
     (error,) = caught.value.diagnostics
     assert error.code is SophiosErrorCode.INFERENCE_DUPLICATE
-    assert error.message == ("pair's left and right would both read src.wic > mk_file's file; "
+    assert error.message == ('pair.left and pair.right would both read src.wic/mk_file.file; '
                              "write the edge each should read")
 
 

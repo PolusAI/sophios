@@ -28,7 +28,7 @@ class Inference:  # pylint: disable=too-many-instance-attributes
     Args:
         enabled (bool): Infer at all; False is ``--inference_disable``.
         strict (bool): Make a choice between equally good outputs an error
-            (``wic042``, ``wic043``) instead of a note; ``--inference_strict``.
+            (``wic043``) instead of a note; ``--inference_strict``.
         naming_conventions (bool): Prefer the output whose name matches the
             input's: ``input_x`` takes ``output_x``, and ``x`` takes ``x``.
             On by default; False is ``--no_inference_naming_conventions``.
