@@ -780,6 +780,16 @@ step match, `wic043` when an earlier step also matched. Notes do not fail the
 compile; `--inference_strict` makes them errors. An input that nothing
 matches becomes an input of the compiled workflow.
 
+A duplicate needs evidence. Group the inputs of each tool step by the output
+they read, once inference has chosen: the edges you wrote and the edges it
+inferred. For a step inside a subworkflow the tool step is the inner step that
+declares the input, so a file that fans out to several inner steps is not a
+duplicate. Where two or more inputs of one tool step read the same output and at
+least one was inferred, inference refuses with `wic055` unless every input in the
+group declares file formats and the output's declared formats include one of
+them. The inferred inputs of a refused group are not connected. Two written
+edges to one output are never refused.
+
 Pin a choice with an edge (§4) and the note goes away. For a port inside a
 subworkflow the pin goes on the inner step, and the note names it.
 `--inference_disable` turns inference off. Among several fitting outputs of
@@ -812,5 +822,6 @@ steps:
 |---|---|---|
 | `wic043` | a note: an earlier step also matched, and the most recent was taken | pin the choice with `!&` and `!*`; `--inference_strict` makes it an error |
 | `wic042` | a note: the chosen step offered several matching outputs, and the last was taken | pin the choice with `!&` and `!*` |
+| `wic055` | two inputs of one tool step would read one output, and an inferred one lacks the format evidence | write the edge each input should read, with `!&` and `!*` |
 | `wic022` | inference did not settle within its iteration limit | bind the inputs explicitly, or drop `--insert_steps_automatically` |
 
