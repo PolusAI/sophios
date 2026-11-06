@@ -1,0 +1,4 @@
+inputs: {source: {type: File}}
+steps:
+- id: copy_file
+  in: {source: source}

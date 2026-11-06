@@ -1,0 +1,3 @@
+steps:
+- id: plugin
+  in: {outDir: !ii plugin_out}

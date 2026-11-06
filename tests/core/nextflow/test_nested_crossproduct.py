@@ -25,39 +25,8 @@ from sophios.nf_types import (
 from sophios.utils_nf import compiled_source_to_nextflow
 
 from .test_composition import FILES, STRINGS, _tools, _two_gathered_arrays_into_use
-from .test_dotproduct import _sink, _sleep_then_pair, _text_port, _write_and_sink
+from .test_dotproduct import _sink, _sleep_then_pair, _text_port
 from .testkit import command, execute_nextflow, output_port, step, synthetic_source, workflow_doc
-
-
-def _run(names: list[str], params: dict[str, list[str]], directory: Path) -> list[str]:
-    process = NfProcess("NEST", [NfPort(name, "val") for name in names], [_text_port("line")], _sleep_then_pair(*names))
-    connections: list[NfConnection] = [
-        NfWorkflowInputConnection(f"{name}s", "NEST", name, "nested_crossproduct") for name in names
-    ]
-    connections.append(NfWorkflowOutputConnection("NEST", "line", "line"))
-    types = {f"{name}s": "string[]" for name in names}
-    result = _write_and_sink(process, connections, params, types, directory, emit_name="line")
-    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    return (directory / "gathered.txt").read_text(encoding="utf-8").split("\x01")
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_two_input_nested_crossproduct_value_shape(tmp_path: Path) -> None:
-    """S7: one outer element per first input, each an array over the second, in order."""
-    params = {"items": ["a", "b"], "delays": ["1", "0", "0"]}
-    assert _run(["item", "delay"], params, tmp_path) == ["[a-1, a-0, a-0]", "[b-1, b-0, b-0]"]
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_three_input_nested_crossproduct_rank_order_and_empty_dimension(tmp_path: Path) -> None:
-    """S8: rank three in declared-input order; an empty inner dimension keeps its outer shape."""
-    names = ["item", "tag", "delay"]
-    params = {"items": ["a", "b"], "tags": ["x", "y"], "delays": ["0"]}
-    assert _run(names, params, tmp_path / "full") == ["[[a-x-0], [a-y-0]]", "[[b-x-0], [b-y-0]]"]
-    params = {"items": ["a", "b"], "tags": [], "delays": ["0"]}
-    assert _run(names, params, tmp_path / "empty") == ["[]", "[]"]
 
 
 @pytest.mark.nextflow
@@ -160,47 +129,27 @@ def test_a_nested_step_over_gathered_arrays_regroups_its_output_by_the_recorded_
 
 @pytest.mark.nextflow
 @pytest.mark.serial
-@pytest.mark.parametrize(
-    ("second", "expected"),
-    [
-        ("gathered", ["[a-1a-1, a-1b-0]", "[b-0a-1, b-0b-0]"]),
-        ("workflow_input", ["[a-1x, a-1y, a-1z]", "[b-0x, b-0y, b-0z]"]),
-    ],
-)
-def test_a_nested_step_over_gathered_arrays_emits_one_array_per_outer_element(
-    tmp_path: Path, second: str, expected: list[str]
-) -> None:
-    """PAIR's two files, finishing out of order, are rescattered: the first input is the outer dimension."""
-    pair = NfProcess(
-        "PAIR",
-        [NfPort("item", "val"), NfPort("delay", "val")],
-        [output_port("line", "out.txt")],
-        _sleep_then_pair("item", "delay"),
-    )
-    # Each file is an entry under its own name: every gathered file is called out.txt.
+def test_a_nested_step_over_one_gathered_array_twice_emits_one_array_per_outer_element(tmp_path: Path) -> None:
+    """PAIR's two files, finishing out of order, are rescattered twice: the first input is the outer dimension. Each
+    is an entry under its own name, as every gathered file is called out.txt (test_runtime.py's scatter property
+    rescatters one gathered array beside an input array)."""
+    pair = NfProcess("PAIR", [NfPort("item", "val"), NfPort("delay", "val")], [output_port("line", "out.txt")],
+                     _sleep_then_pair("item", "delay"))
     join = NfProcess(
         "JOIN",
         [NfPort("f", "path", entry=NfEntry("f.txt")), NfPort("g", "path", entry=NfEntry("g.txt"))],
         [_text_port("line", "joined.txt")],
         command("cat", "f.txt", "g.txt", stdout="joined.txt"),
     )
-    params: dict[str, list[str]] = {"items": ["a", "b"], "delays": ["1", "0"]}
-    g_connection: NfConnection = NfProcessConnection("PAIR", "line", "JOIN", "g", "nested_crossproduct")
-    if second == "workflow_input":
-        for name in "xyz":
-            (tmp_path / f"{name}.txt").write_text(name, encoding="utf-8")
-        params["gs"] = [str(tmp_path / f"{name}.txt") for name in "xyz"]
-        g_connection = NfWorkflowInputConnection("gs", "JOIN", "g", "nested_crossproduct")
     connections: list[NfConnection] = [
         NfWorkflowInputConnection("items", "PAIR", "item", "dotproduct"),
         NfWorkflowInputConnection("delays", "PAIR", "delay", "dotproduct"),
-        NfProcessConnection("PAIR", "line", "JOIN", "f", "nested_crossproduct"),
-        g_connection,
+        *(NfProcessConnection("PAIR", "line", "JOIN", port, "nested_crossproduct") for port in "fg"),
         NfWorkflowOutputConnection("JOIN", "line", "all"),
     ]
-    run = tmp_path / "run"
-    types = {"items": "string[]", "delays": "string[]", **({"gs": "File[]"} if "gs" in params else {})}
-    workflow = ExecutableNextflowWorkflow("PIPELINE", [pair, join], connections, params, types)
-    result = _sink(workflow, run, emit_name="all")
+    workflow = ExecutableNextflowWorkflow("PIPELINE", [pair, join], connections, {"items": ["a", "b"], "delays": [
+        "1", "0"]}, {"items": "string[]", "delays": "string[]"})
+    result = _sink(workflow, tmp_path / "run", emit_name="all")
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    assert (run / "gathered.txt").read_text(encoding="utf-8").split("\x01") == expected
+    assert (tmp_path / "run" / "gathered.txt").read_text(encoding="utf-8").split("\x01") == [
+        "[a-1a-1, a-1b-0]", "[b-0a-1, b-0b-0]"]

@@ -1,0 +1,6 @@
+steps:
+- {id: emit_single_1, run: echo, in: {message: !ii Sophios reaches Nextflow}}
+- {id: emit_triplet_1, run: echo_3, in: {message1: !ii spaces remain, message2: !ii one, message3: !ii argument}}
+- {id: emit_single_2, run: echo, in: {message: !ii a literal costs $5}}
+- {id: emit_triplet_2, run: echo_3, in: {message1: !ii literal, message2: !ii '&&',
+    message3: !ii text is not shell syntax}}

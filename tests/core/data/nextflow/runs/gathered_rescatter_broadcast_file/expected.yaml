@@ -1,0 +1,3 @@
+why: A workflow input is one value, passed to every job of a scattered step, in the order CWL scatters.
+outputs: {cat_pair~out: [{class: File, basename: b.txt, contents: "1\nREF\n"}, {class: File, basename: b.txt, contents:
+          "2\nREF\n"}, {class: File, basename: b.txt, contents: "3\nREF\n"}]}

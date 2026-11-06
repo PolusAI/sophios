@@ -1,0 +1,4 @@
+steps:
+- id: write_source
+  in: {message: !ii own basename staging}
+- id: stage_own_basename
