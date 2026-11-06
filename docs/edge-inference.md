@@ -143,6 +143,13 @@ steps, the most recent first, for an output that fits:
    as `wic043`. If the winning step had several, it notes that, as `wic042`.
 4. If nothing fits, the input becomes an input of the compiled workflow, for
    the run to supply, and the runner asks for it.
+5. A duplicate needs evidence. When two or more inputs of one tool step read
+   the same output and at least one of them was inferred, Sophios refuses,
+   as `wic055`, unless every one of those inputs declares file formats and
+   the output's format is among them. The inferred inputs are then not
+   connected. A file read by several steps, or by several steps inside one
+   subworkflow, is not a duplicate: the rule counts the inputs of one tool
+   step. Two edges you wrote are never refused.
 
 Optional inputs are never inferred. Inference also reaches into a workflow
 used as a step and out of it, as [Subworkflows](subworkflows.md) shows. The
@@ -151,10 +158,12 @@ complete rule, with how types, formats and scattered steps are compared, is
 
 ## When the graph branches
 
-"Most recent" means the nearest step above in your list, not the branch you
-had in mind. Inference reads the list; it cannot know that two steps were
-meant to sit side by side. Here is the greeting graph from
-[Connecting steps](connecting-steps.md) with its connections deleted:
+Each step reads from the nearest step above it that makes the right kind of
+file. When a step should read from further up, write that edge.
+
+Inference reads your list of steps in order; it cannot know that two steps
+were meant to sit side by side. Here is the greeting graph from
+[Connecting steps](connecting-steps.md) with every edge deleted:
 
 ```{literalinclude} cookbook/greeting_graph_inferred.wic
 :language: yaml
@@ -166,35 +175,61 @@ meant to sit side by side. Here is the greeting graph from
 :caption: greeting_graph_inferred.py
 ```
 
-Both forms run, and the command line explains every choice it made:
+Neither form compiles. `word_count` would read `shout`'s file, the nearest
+file above it, instead of the greeting, and then `combine` would read the
+counts twice, as its `text` and as its `counts`. Sophios stops there:
 
 ```text
-greeting_graph_inferred.wic:8:3: note [wic043] step 'shout' input 'text' was inferred from the most recent match step 2 'append' output 'file'; earlier steps also match: step 1 'touch' output 'file'; pin it: `out: - file: !& <name>` on step 2 'append' and `in: text: !* <name>` here (step 3 'shout', port 'text')
-greeting_graph_inferred.wic:10:3: note [wic043] step 'word_count' input 'text' was inferred from the most recent match step 3 'shout' output 'shouted'; earlier steps also match: step 2 'append' output 'file', step 1 'touch' output 'file'; pin it: `out: - shouted: !& <name>` on step 3 'shout' and `in: text: !* <name>` here (step 4 'word_count', port 'text')
-greeting_graph_inferred.wic:12:3: note [wic043] step 'combine' input 'text' was inferred from the most recent match step 4 'word_count' output 'counts'; earlier steps also match: step 3 'shout' output 'shouted', step 2 'append' output 'file', step 1 'touch' output 'file'; pin it: `out: - counts: !& <name>` on step 4 'word_count' and `in: text: !* <name>` here (step 5 'combine', port 'text')
-greeting_graph_inferred.wic:12:3: note [wic043] step 'combine' input 'counts' was inferred from the most recent match step 4 'word_count' output 'counts'; earlier steps also match: step 3 'shout' output 'shouted', step 2 'append' output 'file', step 1 'touch' output 'file'; pin it: `out: - counts: !& <name>` on step 4 'word_count' and `in: counts: !* <name>` here (step 5 'combine', port 'counts')
+greeting_graph_inferred.wic:12:3: error [wic055] step 5 'combine' inputs 'text' and 'counts' would both read step 4 'word_count' output 'counts', and nothing says they should (two inputs may read one output without a written edge only when each declares a file format that output carries). Write the edge each input should read: mark the output each one takes with `out: - <port>: !& <name>` on the step that makes it, and read it with `in: text: !* <name>` and `in: counts: !* <name>` on step 5 'combine' (step 5 'combine', port 'text')
 ```
 
-The first note is the choice you wanted. The second is not: `word_count`
-took `shout`'s file, the nearest file above it, instead of the greeting. The
-last two give both of `combine`'s inputs the counts. Drawn, the graph has
-become a line:
-
-![greeting_graph_inferred.wic: inference turned the branch into a line](cookbook/greeting_graph_inferred.wic.gv.png)
-
-and `report.txt` holds the count of the shouted file, twice:
+In Python, `compile()` and `run()` raise `SophiosError` with the same error,
+at the line of your script that made `combine`:
 
 ```text
-2 /var/lib/cwl/stg2f9ef4f9-e17a-44c3-aa96-da5d815535cd/shouted.txt
-2 /var/lib/cwl/stg2f9ef4f9-e17a-44c3-aa96-da5d815535cd/shouted.txt
+sophios.lang.diagnostics.SophiosError: /home/you/sophios-tutorial/greeting_graph_inferred.py:19:1: error [wic055] step 5 'combine' inputs 'text' and 'counts' would both read step 4 'word_count' output 'counts', and nothing says they should (two inputs may read one output without a written edge only when each declares a file format that output carries). Write the edge each input should read: mark the output each one takes with `out: - <port>: !& <name>` on the step that makes it, and read it with `in: text: !* <name>` and `in: counts: !* <name>` on step 5 'combine' (step 5 'combine', port 'text')
 ```
 
-Nothing failed, because every connection had the right type, which is why
-the notes matter: read them, or draw the workflow, before a long run. The
-rule of thumb is to leave out connections along straight stretches, and to
-write them wherever the graph branches or joins, as `greeting_graph.wic`
-does. A written connection is never second-guessed, so you can write just
-the ones at the branch and leave the rest to inference.
+Two inputs of one step that read the same file are almost always a mistake,
+and nothing in the file says this one is meant. Sophios accepts it only when
+the tool says so: when both inputs declare file formats and the file's
+format is one of them, as with a tool whose two inputs both take a table.
+Two edges you wrote yourself are never refused.
+
+The fix is to write the two edges that decide the graph, the one at the
+branch and the one at the join, and leave the rest to inference. Here
+`word_count` reads `append`'s file, and `combine` reads `shout`'s:
+
+```{literalinclude} cookbook/greeting_graph_partial.wic
+:language: yaml
+:caption: greeting_graph_partial.wic
+```
+
+```{literalinclude} cookbook/greeting_graph_partial.py
+:language: python
+:caption: greeting_graph_partial.py
+```
+
+Both forms compile to the graph of `greeting_graph.wic`. Inference fills in
+three edges: `append`'s file from `touch`, `shout`'s text and `combine`'s
+counts. It notes the last two as the choices they are:
+
+```text
+greeting_graph_partial.wic:10:3: note [wic043] step 'shout' input 'text' was inferred from the most recent match step 2 'append' output 'file'; earlier steps also match: step 1 'touch' output 'file'; pin it: `out: - file: !& <name>` on step 2 'append' and `in: text: !* <name>` here (step 3 'shout', port 'text')
+greeting_graph_partial.wic:18:3: note [wic043] step 'combine' input 'counts' was inferred from the most recent match step 4 'word_count' output 'counts'; earlier steps also match: step 3 'shout' output 'shouted', step 2 'append' output 'file', step 1 'touch' output 'file'; pin it: `out: - counts: !& <name>` on step 4 'word_count' and `in: counts: !* <name>` here (step 5 'combine', port 'counts')
+```
+
+Drawn, the graph is the diamond, with the edges you wrote in blue and the
+edges Sophios inferred in black:
+
+![greeting_graph_partial.wic: the two written edges are blue, the two inferred ones black](cookbook/greeting_graph_partial.wic.gv.png)
+
+The error caught this graph only because `combine` joins both branches. A
+branch that never joins still compiles, with its input read from the nearest
+file above it and nothing to say it is the wrong one. Read the notes, or draw
+the workflow before a long run: the drawing shows at once which step reads
+which. Write the edges wherever the graph branches or joins, as
+`greeting_graph.wic` does, and leave the straight stretches to inference.
 
 ## When names should decide
 
@@ -388,9 +423,9 @@ inserted step, so `format_rules=` without `insert_steps=True` is an error
 ## Recap
 
 Leave out an input's connection and Sophios connects it to the most recent
-earlier output that fits. When another output also fitted, it says so in a
-note that names the alternative and the two lines that would make the
-choice yours. Write a connection to choose for yourself. `--inference_strict`, or
+earlier output that fits, unless that would give two inputs of one step the
+same file with nothing to say so (`wic055`). When another output also fitted, it says so in a
+note that names the alternative. Write a connection to choose for yourself. `--inference_strict`, or
 `Inference(strict=True)` in Python, forbids choices, and
 `--inference_disable`, or `Inference(enabled=False)`, turns inference off.
 When outputs tie by type, naming conventions let names decide, with
