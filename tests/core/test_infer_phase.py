@@ -26,7 +26,7 @@ from sophios.ir import (
 )
 from sophios.ir.names import Names
 from sophios.ir.declarations import input_rank, layered, output_rank
-from sophios.ir.types import (DerivedName, EdgeOrigin, Port, PortDeclaration, PortId, PortName,
+from sophios.ir.types import (EdgeOrigin, Port, PortDeclaration, PortId, PortName,
                               StepNode, WorkflowGraph)
 from sophios.lang import SophiosErrorCode
 from sophios.lang.diagnostics import Locator, Severity, SophiosError
@@ -206,6 +206,33 @@ def test_an_input_pairs_by_its_own_name_when_its_renamed_name_pairs_with_nothing
 
     assert chosen(['output_structure_file', 'output_report_file']) == 'output_structure_file'
     assert chosen(['output_structure_file', 'output_tpr_file', 'output_report_file']) == 'output_tpr_file'
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('producers, consumer_input, expected', [
+    # Names decide nothing against an output that fits: `output_log_path` feeds `input_log_path`, the
+    # sander_mdrun to process_mdout pattern.
+    ([('logger', 'output_log_path')], 'input_log_path', ('logger', 'output_log_path')),
+    # A log is a File like any other: the nearest step with a fitting output wins, and a step that
+    # makes only a log is not skipped for its name.
+    ([('make', 'output_crd_path'), ('logger', 'output_log_path')], 'input_crd_path',
+     ('logger', 'output_log_path')),
+], ids=['log-to-log', 'nearest-step-is-a-logger'])
+def test_an_output_named_log_is_an_output_like_any_other(
+        producers: list[tuple[str, str]], consumer_input: str, expected: tuple[str, str]) -> None:
+    """No output is left out because of its name."""
+    tools = dict(SYNTHETIC_TOOLS)
+    for name, output in producers:
+        tool = clt({}, {output: {'type': 'File', 'outputBinding': {'glob': 'a'}}})
+        tools[LegacyStepId(name, SYNTHETIC_NS)] = Tool(f'/synthetic/{name}.cwl', tool)
+    tools[LegacyStepId('reader', SYNTHETIC_NS)] = Tool(
+        '/synthetic/reader.cwl', clt({consumer_input: {'type': 'File'}}, {}))
+    steps = [{'id': name} for name, _ in producers] + [{'id': 'reader'}]
+    _, linked, _ = _typed({'steps': steps}, tools)
+    result = infer(linked, InferencePolicy(use_naming_conventions=True))
+    assert result.graph is not None
+    (edge,) = [edge for edge in result.graph.linked_edges if edge.origin is EdgeOrigin.INFERRED]
+    assert (edge.source.step.name, edge.source.port) == expected
 
 
 @pytest.mark.fast
@@ -445,8 +472,7 @@ def _model_candidate(steps: tuple[StepNode, ...], position: int,
         for output in reversed(producer.outputs):
             source_type = _model_source_type(producer, output)
             source_formats = _model_formats(output.declaration)
-            if (not any('_log_' in name for name in _model_names(output.id.port))
-                    and _model_types_match(sink_type, source_type)
+            if (_model_types_match(sink_type, source_type)
                     and _model_formats_match(sink_formats, source_formats, source_type)):
                 return output.id
     return None
@@ -495,10 +521,6 @@ def _model_source_type(step: StepNode, port: Port) -> Any:
 def _model_sink_type(step: StepNode, port: Port) -> Any:
     """One array per time `scatter:` names the input, which is `input_rank`."""
     return layered(port.type, input_rank(step, port.id.port)).canonical
-
-
-def _model_names(name: PortName) -> tuple[str, ...]:
-    return (name.step.name, *_model_names(name.port)) if isinstance(name, DerivedName) else (name,)
 
 
 def _port(ports: tuple[Port, ...], name: PortName) -> Port:

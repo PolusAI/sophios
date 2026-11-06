@@ -113,7 +113,8 @@ def test_python_starts_from_the_shipped_renamings_the_cli_starts_from(
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("renamings, edge", [(None, "output_edr_path")], ids=["key-missing-ships"])
+@pytest.mark.parametrize("renamings, edge", [(None, "output_edr_path"), ((), "output_log_path")],
+                         ids=["key-missing-ships", "empty-list-is-none"])
 def test_cli_config_without_renamings_uses_the_shipped_ones(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         renamings: tuple[tuple[str, str], ...] | None, edge: str) -> None:

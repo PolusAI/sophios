@@ -132,7 +132,10 @@ steps, the most recent first, for an output that fits:
 
 1. An output fits when its type matches the input's type, and its file
    format matches the input's when the input declares one. `File` matches
-   `File`; an optional `File?` matches `File`; `Any` matches only `Any`.
+   `File`; an optional `File?` matches `File`; `Any` matches only `Any`. No
+   output is left out because of its name: a log is a `File` like any other.
+   An input that declares a format never reads a `File` output that declares
+   none, so one `format:` on the input keeps logs out.
 2. The most recent step with a fitting output wins. Within that step, an
    output whose name pairs with the input's wins, as the next section shows;
    if none does, the output declared last wins.

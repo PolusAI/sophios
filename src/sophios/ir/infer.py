@@ -252,9 +252,7 @@ def _candidate(steps: list[StepNode], position: int, sink: Port, policy: Inferen
             output_type = _effective_source_type(producer, output)
             output_formats = _formats(output.declaration)
             if (types_match(sink_type, output_type)
-                    and _formats_match(sink_formats, output_formats, output_type)
-                    and not any('_log_' in part
-                                for part in (*(s.name for s in _steps(output.id.port)), _leaf(output.id.port)))):
+                    and _formats_match(sink_formats, output_formats, output_type)):
                 matches.append(output)
             if _rule(producer, output.id.port) == 'break':
                 break_inference = True
