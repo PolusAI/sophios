@@ -123,7 +123,8 @@ tool collections that keep GPU variants apart.
 `renaming_conventions` and `inference_rules` refine edge inference on the
 command line. The first is a list of `[before, after]` renamings that
 the naming conventions, on unless `--no_inference_naming_conventions` is given,
-apply to an input's name before pairing it with an output's; [Edge inference](edge-inference.md) shows one
+apply to an input's name when no output pairs with it as written (a configuration
+without the key gets the shipped renamings, one with `[]` gets none); [Edge inference](edge-inference.md) shows one
 at work. The second maps a file format to `break` or `continue`, the
 default, for the converter steps `--insert_steps_automatically` adds, and
 stops the backwards search at them. A step you wrote carries its own
@@ -139,8 +140,10 @@ as `Path.home() / 'wic' / 'cwl_adapters' / <tool>`. The inference settings are a
 `Workflow.compile()` and `Workflow.run()` take
 `inference=Inference(...)`, where `renamings=` holds the renamings and
 `format_rules=` the format rules, as [Edge inference](edge-inference.md)
-shows. They are empty unless you pass them, where the command line takes
-both from the configuration file, and `format_rules=` needs
+shows. The renamings start from the three Sophios ships, the same the command
+line starts from, and `renamings=` replaces them; the format rules are empty
+unless you pass them, where the command line takes both from the
+configuration file. `format_rules=` needs
 `insert_steps=True`, as the rules are read only for an inserted step.
 
 To name tools by stem in Python, as `.wic` does, build a registry from the

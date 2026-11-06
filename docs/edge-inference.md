@@ -311,7 +311,8 @@ output declared last, and the `wic042` note appears. A **renaming** tells Sophio
 the two conventions correspond. It is a `[before, after]` pair, applied to
 the input's name, after `input_` is stripped and before the names are
 compared: with `['abstract', 'summary']`, `input_abstract` pairs with
-`output_summary`. On the command line, add the pair to `renaming_conventions`
+`output_summary`. A renaming applies only when the input's own name pairs with no output, so
+`input_structure_file` takes an `output_structure_file` over an `output_tpr_file`. On the command line, add the pair to `renaming_conventions`
 in `~/wic/global_config.json`:
 
 ```json
@@ -329,7 +330,8 @@ and run it:
 sophios --yaml naming_renamed.wic --run_local
 ```
 
-In Python, give the pair to `Inference`:
+In Python, give the pair to `Inference`. A pair you give replaces the three
+Sophios ships, which Python otherwise starts from, as the command line does:
 
 ```python
 from sophios.api.python.workflow import Inference
@@ -371,7 +373,8 @@ One more refinement exists for collections whose file formats are declared:
 `--insert_steps_automatically`, `insert_steps=True` in Python, inserts a
 converter step when no output's format fits, steered by the configuration's
 `inference_rules`, `format_rules=` in Python. Python reads no configuration:
-its format rules and renamings are empty unless you pass them, and it inserts
+its format rules are empty unless you pass them, its renamings start from the
+three Sophios ships, and it inserts
 only the converters among the tools in `tool_registry=`, where the command
 line searches every tool on its search paths. The rules are read only for an
 inserted step, so `format_rules=` without `insert_steps=True` is an error

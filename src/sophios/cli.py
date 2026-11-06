@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .input_output import SHIPPED_RENAMINGS
 from .lang.error_codes import SophiosErrorCode
 from .wic_types import DEFAULT_BASEPATH, CompilerOptions, GraphSettings
 
@@ -285,7 +286,7 @@ def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions
         'allow_raw_cwl': args.allow_raw_cwl,
         'lang_version': args.lang_version,
         'inference_rules': {},
-        'renaming_conventions': [],
+        'renaming_conventions': list(SHIPPED_RENAMINGS),
     }
 
     # for drawing.draw, after the compile

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import subprocess as sub
 import traceback
+from typing import Any
 
 from fastapi import Request
 import pytest
@@ -13,7 +14,7 @@ from sophios import preflight
 from sophios.contrib.converter import wfb_to_wic
 from sophios.contrib.rest import api
 from sophios.utils_yaml import Key
-from sophios.wic_types import Json
+from sophios.wic_types import CompilerOptions, Json
 
 try:
     import cwltool.main
@@ -210,6 +211,27 @@ def test_rest_core_blank_plugin_id_uses_node_name() -> None:
     res = prepare_call_rest_api(inp_path)
     assert int(res["retval"]) == 0
     assert "bbbcdownload" in res["steps"]
+
+
+def test_rest_compile_infers_with_the_configurations_renamings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The renamings the compiler gets are the configuration's, not the shipped ones the options start with."""
+    seen: list[Json] = []
+    real_compile = api.compiler.compile_source
+    real_config = api.input_output.get_config
+    custom = [["tpr_", "gro_"]]
+
+    def config(*args: Any, **kwargs: Any) -> Json:
+        return {**real_config(*args, **kwargs), "renaming_conventions": custom}
+
+    def spy(bundle: Any, options: CompilerOptions, *args: Any, **kwargs: Any) -> Any:
+        seen.append(dict(options))
+        return real_compile(bundle, options, *args, **kwargs)
+
+    monkeypatch.setattr(api.input_output, "get_config", config)
+    monkeypatch.setattr(api.compiler, "compile_source", spy)
+    res = prepare_call_rest_api(REST_OBJECTS / "multi_node_wfb.json")
+    assert int(res["retval"]) == 0
+    assert [list(pair) for pair in seen[0]["renaming_conventions"]] == custom
 
 
 def test_rest_compile_says_a_real_time_analysis_is_not_in_the_returned_workflow(

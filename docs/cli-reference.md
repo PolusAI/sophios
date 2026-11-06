@@ -130,7 +130,7 @@ and `main: error: argument --diagnostics: invalid choice`, after the workflow
 has been written. `Workflow.compile()`
 takes `target=`, `lang_version=`, `tool_registry=` and `inference=`, and nothing else.
 The inference flags map onto `Inference(enabled=, strict=, naming_conventions=, insert_steps=)`, and the
-configuration file's `renaming_conventions` and `inference_rules` onto its `renamings=` and `format_rules=`, which are empty in Python unless passed, as it reads no configuration file;
+configuration file's `renaming_conventions` and `inference_rules` onto its `renamings=` and `format_rules=`, where Python starts from the three renamings Sophios ships and has no format rules unless passed, as it reads no configuration file;
 `Workflow.run()`, `start()` and `run_async()` take the same `inference=`, and `target='nextflow'` to run the
 [Nextflow](nextflow.md#running-on-the-nextflow-target) pipeline instead, where the CWL defaults above do not apply,
 an option only a CWL run reads is refused, and any other key becomes `-<key> <value>` for Nextflow. The rewriting and partial-failure options are command-line only;
