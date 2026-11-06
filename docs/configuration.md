@@ -122,8 +122,8 @@ tool collections that keep GPU variants apart.
 
 `renaming_conventions` and `inference_rules` refine edge inference on the
 command line. The first is a list of `[before, after]` renamings that
-`--inference_use_naming_conventions` applies to an input's name before
-pairing it with an output's; [Edge inference](edge-inference.md) shows one
+the naming conventions, on unless `--no_inference_naming_conventions` is given,
+apply to an input's name before pairing it with an output's; [Edge inference](edge-inference.md) shows one
 at work. The second maps a file format to `break` or `continue`, the
 default, for the converter steps `--insert_steps_automatically` adds, and
 stops the backwards search at them. A step you wrote carries its own

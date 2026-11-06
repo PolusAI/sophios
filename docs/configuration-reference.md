@@ -46,8 +46,8 @@ when a workflow calls it; a path containing `_inputs` is skipped.
 ### `renaming_conventions`
 
 A list of `[before, after]` pairs, applied in order to an input's name
-(after `input_` is removed) before `--inference_use_naming_conventions`
-compares it with an output's name (after `output_` is removed).
+(after `input_` is removed) before the naming conventions
+compare it with an output's name (after `output_` is removed).
 
 ```json
 "renaming_conventions": [
