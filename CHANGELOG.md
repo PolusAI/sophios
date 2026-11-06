@@ -21,6 +21,8 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   `structure_` to `tpr_`, `traj_` to `trr_`), as the command line does, so a
   Python workflow infers the edges its `.wic` twin does; `renamings=` replaces
   them. A renaming applies only when an input's own name pairs with no output.
+- An output with `_log_` in its name is no longer skipped: a log is a `File`
+  like any other. Give the input a `format:` to keep logs out of its edge.
 
 ## [0.7.0](https://github.com/PolusAI/sophios/compare/v0.6.0...v0.7.0) (2026-11-04)
 
