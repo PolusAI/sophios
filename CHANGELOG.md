@@ -6,6 +6,19 @@ Each release's generated notes list what changed. Where a release breaks
 something that worked in the one before it, an upgrade section beneath its
 notes says what to change in your files and code.
 
+## [0.7.1](https://github.com/PolusAI/sophios/compare/v0.7.0...v0.7.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* a cwltool run prints no rdflib warning about its N-Triples encoding ([9687e58](https://github.com/PolusAI/sophios/commit/9687e583ae10f573e5d8749ed32de36c7587dce7))
+
+
+### Documentation
+
+* host verified LMS course lab downloads ([3a06ed6](https://github.com/PolusAI/sophios/commit/3a06ed67af15537cb0a9c5c28c78ce54fa35703a))
+* install Nextflow, and the shipped example the Nextflow target runs ([304eb21](https://github.com/PolusAI/sophios/commit/304eb21126dd6e5546812607bfc737039fbdccf5))
+
 ## [0.7.0](https://github.com/PolusAI/sophios/compare/v0.6.0...v0.7.0) (2026-11-04)
 
 
