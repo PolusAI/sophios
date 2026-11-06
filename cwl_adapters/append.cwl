@@ -16,7 +16,8 @@ inputs:
     type: File
 
 arguments:
-- echo
+- printf
+- '%s\n'
 - $(inputs.str)
 - valueFrom: ">>"
   shellQuote: false
