@@ -1,0 +1,3 @@
+steps:
+- id: make
+  in: {names: !ii [a.txt]}

@@ -1,0 +1,202 @@
+# Outputs the target refuses (design §6, Outputs): an outputEval is one of two capture declarations, and nothing is
+# evaluated. Each `findings` or `error` is the diagnostic the replaced test wrote by hand, copied verbatim.
+- id: internal_variation_of_the_admitted_literal-$( self[0] )
+  why: &variation Only surrounding whitespace is trimmed; any other variation is a text outside the admitted set.
+  tool: &make {id: make, inputs: {message: {type: string, inputBinding: {position: 1}}}, outputs: {result: {type: File,
+    outputBinding: {glob: out.txt, outputEval: '$( self[0] )'}}}}
+  out: &out [result]
+  job: &hi {message: hi}
+  findings: ["steps[0].run.outputs.result.outputBinding: unsupported outputEval '$( self[0] )'; the approved set is
+    exactly '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other expression is
+    evaluated"]
+- {id: 'internal_variation_of_the_admitted_literal-$(self[ 0 ])', why: *variation, out: *out, job: *hi, tool: {<<:
+   *make, outputs: {result: {type: File, outputBinding: {glob: out.txt, outputEval: '$(self[ 0 ])'}}}}, findings: [
+   "steps[0].run.outputs.result.outputBinding: unsupported outputEval '$(self[ 0 ])'; the approved set is exactly
+   '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other expression is evaluated"]}
+- {id: 'internal_variation_of_the_admitted_literal-$(self[0] )', why: *variation, out: *out, job: *hi, tool: {<<: *make,
+   outputs: {result: {type: File, outputBinding: {glob: out.txt, outputEval: '$(self[0] )'}}}}, findings: [
+   "steps[0].run.outputs.result.outputBinding: unsupported outputEval '$(self[0] )'; the approved set is exactly
+   '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other expression is evaluated"]}
+- {id: 'internal_variation_of_the_admitted_literal-$(self [0])', why: *variation, out: *out, job: *hi, tool: {<<: *make,
+   outputs: {result: {type: File, outputBinding: {glob: out.txt, outputEval: '$(self [0])'}}}}, findings: [
+   "steps[0].run.outputs.result.outputBinding: unsupported outputEval '$(self [0])'; the approved set is exactly
+   '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other expression is evaluated"]}
+- {id: 'unadmitted_output_eval-$(self[0].size + 1)', why: &unadmitted 'No expression is evaluated, composed, or
+   partially recognized.', out: *out, job: *hi, tool: {<<: *make, outputs: {result: {type: File, outputBinding: {glob:
+   out.txt, outputEval: '$(self[0].size + 1)'}}}}, findings: ["steps[0].run.outputs.result.outputBinding: unsupported
+   outputEval '$(self[0].size + 1)'; the approved set is exactly '$(self[0])', '$(self[0].contents)', recognized as
+   capture declarations, and no other expression is evaluated"]}
+- {id: 'unadmitted_output_eval-$(self[0].basename.toUpperCase())', why: *unadmitted, out: *out, job: *hi, tool: {<<:
+   *make, outputs: {result: {type: File, outputBinding: {glob: out.txt, outputEval:
+   '$(self[0].basename.toUpperCase())'}}}}, findings: ["steps[0].run.outputs.result.outputBinding: unsupported
+   outputEval '$(self[0].basename.toUpperCase())'; the approved set is exactly '$(self[0])', '$(self[0].contents)',
+   recognized as capture declarations, and no other expression is evaluated"]}
+- {id: unadmitted_output_eval-$(self.length), why: *unadmitted, out: *out, job: *hi, tool: {<<: *make, outputs: {result:
+   {type: File, outputBinding: {glob: out.txt, outputEval: $(self.length)}}}}, findings:
+   ["steps[0].run.outputs.result.outputBinding: unsupported outputEval '$(self.length)'; the approved set is exactly
+   '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other expression is evaluated"]}
+- {id: 'unadmitted_output_eval-$(self[1])', why: *unadmitted, out: *out, job: *hi, tool: {<<: *make, outputs: {result:
+   {type: File, outputBinding: {glob: out.txt, outputEval: '$(self[1])'}}}}, findings:
+   ["steps[0].run.outputs.result.outputBinding: unsupported outputEval '$(self[1])'; the approved set is exactly
+   '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other expression is evaluated"]}
+- {id: 'unadmitted_output_eval-$(self[0] ? self[0] : null)', why: *unadmitted, out: *out, job: *hi, tool: {<<: *make,
+   outputs: {result: {type: File, outputBinding: {glob: out.txt, outputEval: '$(self[0] ? self[0] : null)'}}}},
+   findings: ["steps[0].run.outputs.result.outputBinding: unsupported outputEval '$(self[0] ? self[0] : null)'; the
+   approved set is exactly '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other
+   expression is evaluated"]}
+- {id: unadmitted_output_eval-$(inputs.message), why: *unadmitted, out: *out, job: *hi, tool: {<<: *make, outputs: {
+   result: {type: File, outputBinding: {glob: out.txt, outputEval: $(inputs.message)}}}}, findings:
+   ["steps[0].run.outputs.result.outputBinding: unsupported outputEval '$(inputs.message)'; the approved set is exactly
+   '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other expression is evaluated"]}
+- {id: 'unadmitted_output_eval-${return self[0];}', why: *unadmitted, out: *out, job: *hi, tool: {<<: *make, outputs: {
+   result: {type: File, outputBinding: {glob: out.txt, outputEval: '${return self[0];}'}}}}, findings:
+   ["steps[0].run.outputs.result.outputBinding: unsupported outputEval '${return self[0];}'; the approved set is exactly
+   '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other expression is evaluated"]}
+- {id: 'unadmitted_output_eval-${ return self[0].contents.trim(); }', why: *unadmitted, out: *out, job: *hi, tool: {<<:
+   *make, outputs: {result: {type: File, outputBinding: {glob: out.txt, outputEval: '${ return self[0].contents.trim();
+   }'}}}}, findings: ["steps[0].run.outputs.result.outputBinding: unsupported outputEval '${ return
+   self[0].contents.trim(); }'; the approved set is exactly '$(self[0])', '$(self[0].contents)', recognized as capture
+   declarations, and no other expression is evaluated"]}
+- {id: "unadmitted_output_eval-$(self[0].contents.split('\\n'))", why: *unadmitted, out: *out, job: *hi, tool: {<<:
+   *make, outputs: {result: {type: File, outputBinding: {glob: out.txt, outputEval:
+   "$(self[0].contents.split('\\n'))"}}}}, findings: ["steps[0].run.outputs.result.outputBinding: unsupported outputEval
+   \"$(self[0].contents.split('\\\\n'))\"; the approved set is exactly '$(self[0])', '$(self[0].contents)', recognized
+   as capture declarations, and no other expression is evaluated"]}
+- {id: 'unadmitted_output_eval-$(self[0] .contents)', why: *unadmitted, out: *out, job: *hi, tool: {<<: *make, outputs:
+   { result: {type: File, outputBinding: {glob: out.txt, outputEval: '$(self[0] .contents)'}}}}, findings:
+   ["steps[0].run.outputs.result.outputBinding: unsupported outputEval '$(self[0] .contents)'; the approved set is
+   exactly '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other expression is
+   evaluated"]}
+- {id: 'unadmitted_output_eval-$(self[0].contents())', why: *unadmitted, out: *out, job: *hi, tool: {<<: *make, outputs:
+   { result: {type: File, outputBinding: {glob: out.txt, outputEval: '$(self[0].contents())'}}}}, findings:
+   ["steps[0].run.outputs.result.outputBinding: unsupported outputEval '$(self[0].contents())'; the approved set is
+   exactly '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other expression is
+   evaluated"]}
+- {id: 'unadmitted_output_eval-prefix-$(self[0])', why: *unadmitted, out: *out, job: *hi, tool: {<<: *make, outputs: {
+   result: {type: File, outputBinding: {glob: out.txt, outputEval: 'prefix-$(self[0])'}}}}, findings:
+   ["steps[0].run.outputs.result.outputBinding: unsupported outputEval 'prefix-$(self[0])'; the approved set is exactly
+   '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other expression is evaluated"]}
+- {id: 'unadmitted_output_eval-$(self[0])$(self[0])', why: *unadmitted, out: *out, job: *hi, tool: {<<: *make, outputs:
+   { result: {type: File, outputBinding: {glob: out.txt, outputEval: '$(self[0])$(self[0])'}}}}, findings:
+   ["steps[0].run.outputs.result.outputBinding: unsupported outputEval '$(self[0])$(self[0])'; the approved set is
+   exactly '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other expression is
+   evaluated"]}
+- {id: 'unadmitted_output_eval-$(JSON.parse(self[0].contents))', why: *unadmitted, out: *out, job: *hi, tool: {<<:
+   *make, outputs: {result: {type: File, outputBinding: {glob: out.txt, outputEval:
+   '$(JSON.parse(self[0].contents))'}}}}, findings: ["steps[0].run.outputs.result.outputBinding: unsupported outputEval
+   '$(JSON.parse(self[0].contents))'; the approved set is exactly '$(self[0])', '$(self[0].contents)', recognized as
+   capture declarations, and no other expression is evaluated"]}
+- {id: 'unadmitted_output_eval-$(parseInt(self[0].contents))', why: *unadmitted, out: *out, job: *hi, tool: {<<: *make,
+   outputs: {result: {type: File, outputBinding: {glob: out.txt, outputEval: '$(parseInt(self[0].contents))'}}}},
+   findings: ["steps[0].run.outputs.result.outputBinding: unsupported outputEval '$(parseInt(self[0].contents))'; the
+   approved set is exactly '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other
+   expression is evaluated"]}
+- {id: 'unadmitted_output_eval-$(self[0].nameroot)', why: *unadmitted, out: *out, job: *hi, tool: {<<: *make, outputs: {
+   result: {type: File, outputBinding: {glob: out.txt, outputEval: '$(self[0].nameroot)'}}}}, findings:
+   ["steps[0].run.outputs.result.outputBinding: unsupported outputEval '$(self[0].nameroot)'; the approved set is
+   exactly '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other expression is
+   evaluated"]}
+- {id: 'unadmitted_output_eval-$(self[0].nameext)', why: *unadmitted, out: *out, job: *hi, tool: {<<: *make, outputs: {
+   result: {type: File, outputBinding: {glob: out.txt, outputEval: '$(self[0].nameext)'}}}}, findings:
+   ["steps[0].run.outputs.result.outputBinding: unsupported outputEval '$(self[0].nameext)'; the approved set is exactly
+   '$(self[0])', '$(self[0].contents)', recognized as capture declarations, and no other expression is evaluated"]}
+- {id: 'named_projection-$(self[0].dirname)', why: &projection A named projection is refused explaining itself., out:
+   *out, job: *hi, tool: {<<: *make, outputs: {result: {type: File, outputBinding: {glob: out.txt, outputEval:
+   '$(self[0].dirname)'}}}}, findings: [{re: '^steps\[0\]\.run\.outputs\.result\.outputBinding: outputEval
+   ''\$\(self\[0\]\.dirname\)'' is not representable: .*is the Nextflow task work directory'}]}
+- {id: 'named_projection-$(self[0].path)', why: *projection, out: *out, job: *hi, tool: {<<: *make, outputs: {result: {
+   type: File, outputBinding: {glob: out.txt, outputEval: '$(self[0].path)'}}}}, findings: [{re:
+   '^steps\[0\]\.run\.outputs\.result\.outputBinding: outputEval ''\$\(self\[0\]\.path\)'' is not representable: .*is
+   the Nextflow task work directory'}]}
+- {id: 'named_projection-$(self[0].location)', why: *projection, out: *out, job: *hi, tool: {<<: *make, outputs:
+   {result: { type: File, outputBinding: {glob: out.txt, outputEval: '$(self[0].location)'}}}}, findings: [{re:
+   '^steps\[0\]\.run\.outputs\.result\.outputBinding: outputEval ''\$\(self\[0\]\.location\)'' is not representable: .*a
+   CWL location is a URI'}]}
+- {id: 'named_projection-$(self[0].checksum)', why: *projection, out: *out, job: *hi, tool: {<<: *make, outputs:
+   {result: { type: File, outputBinding: {glob: out.txt, outputEval: '$(self[0].checksum)'}}}}, findings: [{re:
+   '^steps\[0\]\.run\.outputs\.result\.outputBinding: outputEval ''\$\(self\[0\]\.checksum\)'' is not representable:
+   .*computing a checksum is computation'}]}
+- {id: 'named_projection-$(self[0].secondaryFiles)', why: *projection, out: *out, job: *hi, tool: {<<: *make, outputs: {
+   result: {type: File, outputBinding: {glob: out.txt, outputEval: '$(self[0].secondaryFiles)'}}}}, findings: [{re:
+   '^steps\[0\]\.run\.outputs\.result\.outputBinding: outputEval ''\$\(self\[0\]\.secondaryFiles\)'' is not
+   representable: .*secondary files have no approved lowering'}]}
+- {id: 'named_projection-$(self[0].format)', why: *projection, out: *out, job: *hi, tool: {<<: *make, outputs: {result:
+   { type: File, outputBinding: {glob: out.txt, outputEval: '$(self[0].format)'}}}}, findings: [{re:
+   '^steps\[0\]\.run\.outputs\.result\.outputBinding: outputEval ''\$\(self\[0\]\.format\)'' is not representable:
+   .*output format annotations have no approved lowering'}]}
+- {id: a_wildcard_glob_beside_a_cardinality_declaration-*.txt, why: &first_match 'Projecting the first match is provable
+   only when one match exists.', out: *out, job: *hi, tool: {<<: *make, outputs: {result: {type: File, outputBinding: {
+   glob: '*.txt', outputEval: '$(self[0])'}}}}, findings: &wildcard_capture [{re:
+   '^steps\[0\]\.run\.outputs\.result\.outputBinding: outputEval(?=.*requires a glob with no wildcard
+   character)(?=.*glob match ordering load-bearing, which is unproven)'}]}
+- {id: 'a_wildcard_glob_beside_a_cardinality_declaration-out?.txt', why: *first_match, out: *out, job: *hi, tool: {<<:
+   *make, outputs: {result: {type: File, outputBinding: {glob: 'out?.txt', outputEval: '$(self[0])'}}}}, findings:
+   *wildcard_capture}
+- {id: 'a_wildcard_glob_beside_a_cardinality_declaration-out[0-9].txt', why: *first_match, out: *out, job: *hi, tool: {
+   <<: *make, outputs: {result: {type: File, outputBinding: {glob: 'out[0-9].txt', outputEval: '$(self[0])'}}}},
+   findings: *wildcard_capture}
+- {id: an_input_reference_glob_beside_a_cardinality_declaration, why: "A reference's runtime value cannot be shown
+   wildcard-free at compile time.", out: *out, job: *hi, tool: {<<: *make, outputs: {result: {type: File, outputBinding:
+   {glob: $(inputs.message), outputEval: '$(self[0])'}}}}, findings: ["steps[0].run.outputs.result.outputBinding:
+   outputEval '$(self[0])' requires a glob with no input reference; a reference's runtime value cannot be shown
+   wildcard-free at compile time"]}
+- {id: load_contents_without_its_paired_output_eval, why: &paired loadContents and the text capture are one
+   declaration., out: *out, job: *hi, tool: {<<: *make, outputs: {result: {type: File, outputBinding: {glob: out.txt,
+   loadContents: true}}}}, findings: ["steps[0].run.outputs.result.outputBinding: loadContents on output 'result' has no
+   approved lowering without its paired outputEval capture declaration"]}
+- {id: the_cardinality_declaration_is_not_paired_with_load_contents, why: *paired, out: *out, job: *hi, tool: {<<:
+   *make, outputs: {result: {type: File, outputBinding: {glob: out.txt, loadContents: true, outputEval:
+   '$(self[0])'}}}}, findings: ["steps[0].run.outputs.result.outputBinding: outputEval '$(self[0])' declares output
+   cardinality and is not paired with loadContents"]}
+- {id: file_text_capture_requires_load_contents_true-absent, why: *paired, out: *out, job: *hi, tool: {<<: *make,
+   outputs: {result: {type: string, outputBinding: {glob: out.txt, outputEval: '$(self[0].contents)'}}}}, findings:
+   &needs_load_contents ["steps[0].run.outputs.result.outputBinding: outputEval '$(self[0].contents)' captures file text
+   and requires loadContents: true beside it"]}
+- {id: file_text_capture_requires_load_contents_true-false, why: *paired, out: *out, job: *hi, tool: {<<: *make,
+   outputs: {result: {type: string, outputBinding: {glob: out.txt, loadContents: false, outputEval:
+   '$(self[0].contents)'}}}}, findings: *needs_load_contents}
+- {id: file_text_capture_requires_load_contents_true-text, why: *paired, out: *out, job: *hi, tool: {<<: *make, outputs:
+   {result: {type: string, outputBinding: {glob: out.txt, loadContents: 'true', outputEval: '$(self[0].contents)'}}}},
+   findings: *needs_load_contents}
+- {id: a_numeric_file_text_capture-int, why: &parse Parsing text into a number is computation., out: *out, job: *hi,
+   tool: {<<: *make, outputs: {result: {type: int, outputBinding: &text_capture {glob: out.txt, loadContents: true,
+   outputEval: '$(self[0].contents)'}}}}, findings: &numeric [{re: '^steps\[0\]\.run\.outputs\.result\.outputBinding:
+   outputEval(?=.*parsing that text into a number is computation rather than a projection)(?=.*Declare type: string and
+   parse downstream)'}]}
+- {id: a_numeric_file_text_capture-float, why: *parse, out: *out, job: *hi, findings: *numeric, tool: {<<: *make,
+   outputs: {result: {type: float, outputBinding: *text_capture}}}}
+- {id: file_text_capture_on_a_non_string_non_numeric_output, why: Text is captured only as a string., out: *out, job:
+   *hi, tool: {<<: *make, outputs: {result: {type: File, outputBinding: *text_capture}}}, findings:
+   ["steps[0].run.outputs.result.outputBinding: outputEval '$(self[0].contents)' captures file text and is admitted only
+   on a type: string output; output 'result' declares 'File'"]}
+- {id: a_wildcard_glob_beside_a_file_text_capture-*.txt, why: *first_match, out: *out, job: *hi, tool: {<<: *make,
+   outputs: {result: {type: string, outputBinding: {<<: *text_capture, glob: '*.txt'}}}}, findings: &wildcard_text [{re:
+   requires a glob with no wildcard character}]}
+- {id: 'a_wildcard_glob_beside_a_file_text_capture-out?.txt', why: *first_match, out: *out, job: *hi, findings:
+   *wildcard_text, tool: {<<: *make, outputs: {result: {type: string, outputBinding: {<<: *text_capture, glob:
+   'out?.txt'}}}}}
+- {id: 'a_wildcard_glob_beside_a_file_text_capture-out[0-9].txt', why: *first_match, out: *out, job: *hi, findings:
+   *wildcard_text, tool: {<<: *make, outputs: {result: {type: string, outputBinding: {<<: *text_capture, glob:
+   'out[0-9].txt'}}}}}
+- id: a_captured_value_cannot_feed_another_process
+  why: No qualifier agreement check exists for process edges, so this rejects.
+  workflow: {steps: [{id: produce, in: {message: message}, out: [text]}, {id: consume, in: {text: produce/text}, out:
+    [result]}], inputs: {message: string}, outputs: {result: {type: File, outputSource: consume/result}}}
+  tools: [{id: produce, inputs: {message: {type: string, inputBinding: {position: 1}}}, outputs: {text: {type: string,
+    outputBinding: *text_capture}}}, {id: consume, inputs: {text: {type: string, inputBinding: {position: 1}}}, outputs:
+    {result: {type: File, outputBinding: {glob: copy.txt}}}}]
+  job: *hi
+  findings: ["steps[1].in.text: 'produce/text' captures file text; its only approved sink is a workflow output, because
+    the executable graph has no qualifier agreement check for process edges"]
+- {id: an_optional_output_with_a_pattern_glob_must_reach_a_workflow_output, why: 'An optional output of a pattern glob
+   is checked at its workflow output, so it must reach one.', workflow: {steps: [{id: LOGS, out: [o]}]}, tools: [{id:
+   LOGS, baseCommand: 'true', outputs: {o: {type: 'File?', outputBinding: {glob: '*.log'}}}}], error: {re: optional
+   outputs o must match at most one file and must reach a workflow}}
+- {id: a_step_consuming_an_optional_output_is_a_finding, why: An optional output may be null; only a workflow output
+   takes it., workflow: {steps: [{id: MAYBE, out: [o]}, {id: CONSUME, in: {source: MAYBE/o}}]}, tools: [{id: MAYBE,
+   outputs: {o: {type: 'File?', outputBinding: {glob: maybe.txt}}}}, {id: CONSUME, inputs: {source: {type: 'File?',
+   inputBinding: {position: 1}}}}], findings: ['workflow: connection _MAYBE.o -> _CONSUME.source consumes an optional
+   output, which may be null; only a workflow output can take it']}
+- {id: array_typed_outputs, why: An output is collected by glob as one File or Directory., workflow: {steps: [{id: MAKE,
+   out: [results]}]}, tools: [{id: MAKE, outputs: {results: {type: {type: array, items: File}, outputBinding: {glob:
+   '*.txt'}}}}], error: {re: 'results\.type: an output is collected by glob as a File or Directory'}}

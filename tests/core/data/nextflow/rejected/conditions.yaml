@@ -1,0 +1,47 @@
+# Conditional steps the target refuses (design §6, Topology: a `when` lowers to a branch/mix skip with CWL null). Each
+# `error` is the refusal the replaced test wrote by hand.
+- id: when_cannot_read_a_tool_default_the_step_does_not_bind
+  why: A `when` reads the step's own inputs, and a tool default is not one.
+  workflow: {steps: [{id: GATED, in: {a: a}, when: $(inputs.n > 3)}], inputs: {a: int}}
+  tools: [{id: GATED, inputs: {a: {type: int}, n: {type: int, default: 5}}, baseCommand: 'true'}]
+  job: &a1 {a: 1}
+  error: {re: 'reads inputs\.n, which the step does not bind'}
+- id: an_array_typed_port_cannot_consume_a_conditional_scatter
+  why: A skipped scatter position has no element for an array-typed port to gather.
+  workflow: {steps: [{id: PRODUCE, in: {x: xs}, out: [r], scatter: [x], when: "$(inputs.x == 'a')"}, {id: CONSUME, in:
+    {rs: PRODUCE/r}}], inputs: {xs: {type: array, items: string}}}
+  tools: [{id: PRODUCE, inputs: {x: {type: string}}, baseCommand: echo, stdout: out.txt, outputs: {r: {type: string,
+    outputBinding: &text {glob: out.txt, loadContents: true, outputEval: '$(self[0].contents)'}}}}, {id: CONSUME,
+    inputs: {rs: {type: {type: array, items: string}}}, baseCommand: 'true'}]
+  job: {xs: [a]}
+  error: {re: 'in\.rs: an array-typed port cannot consume a conditional step''s output'}
+- id: when_requires_a_boolean_result
+  why: &when_subset A `when` is a boolean in the safe expression subset.
+  workflow: &when_wf {steps: [{id: PRODUCE, in: {a: a}, out: [result], when: $(inputs.a + 1)}], inputs: {a: int},
+    outputs: {result: {type: 'string?', outputSource: PRODUCE/result}}}
+  tools: [&produce_text {id: PRODUCE, inputs: {a: {type: int}}, baseCommand: echo, arguments: [{position: 1, valueFrom:
+    ok}], stdout: out.txt, outputs: {result: {type: string, outputBinding: *text}}}]
+  job: &a3 {a: 3}
+  error: {re: 'must compute a boolean, not a number'}
+- {id: when_outside_the_safe_subset_is_rejected_by_name, why: *when_subset, tools: [*produce_text], job: *a3, workflow:
+   {<<: *when_wf, steps: [{id: PRODUCE, in: {a: a}, out: [result], when: $(inputs.a ** 2)}]}, error: {re: "unsupported
+   construct '\\*\\*'"}}
+- id: non_optional_consumer_of_a_conditional_output
+  why: A skipped step's output is null, which only an optional port takes.
+  workflow: &consumed {steps: [{id: PRODUCE, in: {a: a}, out: [result], when: $(inputs.a > 0)}, {id: CONSUME, in:
+    {result: PRODUCE/result}, out: [done]}], inputs: {a: int}, outputs: {done: {type: File, outputSource:
+    CONSUME/done}}}
+  tools: [{id: PRODUCE, inputs: {a: {type: int}}, baseCommand: echo, outputs: {result: {type: string, outputBinding:
+    *text}}}, &consume {id: CONSUME, inputs: {result: {type: string}}, baseCommand: 'true', outputs: {done: {type: File,
+    outputBinding: {glob: done.txt}}}}]
+  job: *a1
+  error: {re: non-optional port cannot consume a possibly-null}
+- {id: path_consumer_of_a_conditional_output, why: 'Path channel construction always stages, so a null cannot reach
+   it.', workflow: *consumed, job: *a1, tools: [&produce_file {id: PRODUCE, inputs: {a: {type: int}}, baseCommand: echo,
+   outputs: {result: {type: File, outputBinding: {glob: out.txt}}}}, {<<: *consume, inputs: {result: {type: 'File?'}}}],
+   error: {re: a path consumer of a possibly-null}}
+- {id: array_typed_output_of_a_conditional_step, why: An array-typed output has no null to stand for a skipped step.,
+   job: *a1, tools: [{<<: *produce_file, outputs: {result: {type: {type: array, items: File}, outputBinding: {glob:
+   '*.txt'}}}}], workflow: {steps: [{id: PRODUCE, in: {a: a}, out: [result], when: $(inputs.a > 0)}], inputs: {a: int},
+   outputs: {result: {type: {type: array, items: File}, outputSource: PRODUCE/result}}}, error: {re: array-typed output
+   of a conditional step}}

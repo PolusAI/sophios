@@ -1,0 +1,2 @@
+why: cp and ln would make the entry inside the directory holding its name, so the task stops, saying so.
+fails: 'InitialWorkDirRequirement entry already exists in the task directory: data'

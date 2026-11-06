@@ -1,0 +1,97 @@
+# Scattered steps the target refuses (design §6, Topology). Each `findings` or `error` is the diagnostic the
+# replaced test wrote by hand from that rule, copied verbatim; nothing here was read off a run.
+- id: multi_input_scatter_without_a_scatter_method
+  why: A multi-input scatter has no method to default to.
+  workflow: {steps: [{id: SCATTER, in: {first: firsts, second: seconds}, out: [result], scatter: [first, second]}],
+    inputs: {firsts: {type: &strings {type: array, items: string}}, seconds: {type: *strings}}}
+  tools: [{id: SCATTER, inputs: {first: {type: string, inputBinding: {position: 1}}, second: {type: string,
+    inputBinding: {position: 2}}}, outputs: &result {result: {type: File, outputBinding: {glob: out.txt}}}}]
+  job: {firsts: [a], seconds: [b]}
+  findings: ['steps[0].scatterMethod: multi-input scatter over 2 inputs requires an explicit scatterMethod']
+- id: a_scatter_field_that_does_not_name_one_input-empty-list
+  why: &one_input A scatter names one input, as a string or a non-empty list.
+  workflow: {steps: [{<<: &step {id: SCATTER, in: {item: items}, out: [result], scatter: [item]}, scatter: []}], inputs:
+    &items {items: {type: *strings}}}
+  tools: [&scatter {id: SCATTER, inputs: {item: {type: string, inputBinding: {position: 1}}}, outputs: *result}]
+  job: &ab {items: [a, b]}
+  findings: &not_one ['steps[0].scatter: scatter must name one input, as a string or a non-empty list']
+- {id: a_scatter_field_that_does_not_name_one_input-mapping, why: *one_input, tools: [*scatter], job: *ab, workflow:
+   {steps: [{<<: *step, scatter: {item: true}}], inputs: *items}, findings: *not_one}
+- {id: a_scatter_field_that_does_not_name_one_input-empty-string, why: *one_input, tools: [*scatter], job: *ab,
+   workflow: {steps: [{<<: *step, scatter: ''}], inputs: *items}, findings: *not_one}
+- {id: a_scatter_field_that_does_not_name_one_input-empty-name, why: *one_input, tools: [*scatter], job: *ab, workflow:
+   {steps: [{<<: *step, scatter: [item, '']}], inputs: *items}, findings: *not_one}
+- {id: an_unsupported_scatter_method, why: The methods are CWL's three., tools: [*scatter], job: *ab, workflow: {steps:
+   [{<<: *step, scatterMethod: product}], inputs: *items}, findings: ["steps[0].scatterMethod: unsupported CWL scatter
+   method 'product'"]}
+- id: scatter_over_a_non_array_workflow_input
+  why: A scattered input's source is an array.
+  workflow: {steps: [*step], inputs: {items: {type: string}}}
+  tools: [*scatter]
+  job: {items: a}
+  findings: ["steps[0].in.item: a scattered input needs an array-typed source; 'items' declares 'string'"]
+- id: scatter_over_an_unscattered_steps_output
+  why: An unscattered step's output is one value, and no tool output is an array to scatter over.
+  workflow: {steps: [{id: PRODUCER, out: [out]}, {<<: *step, in: {item: PRODUCER/out}}]}
+  tools: [&producer {id: PRODUCER, outputs: {out: {type: File, outputBinding: {glob: produced.txt}}}}, {<<: *scatter,
+    inputs: {item: {type: File, inputBinding: {position: 1}}}}]
+  findings: ["steps[1].in.item: a scattered input needs an array-typed source; 'PRODUCER/out', from a step that is not
+    scattered, is one value"]
+- id: scatter_over_an_array_typed_port
+  why: Scattering over an array of arrays is deferred.
+  workflow: &scatter_items {steps: [*step], inputs: *items}
+  tools: [{<<: *scatter, inputs: {item: {type: *strings, inputBinding: {position: 1}}}}]
+  job: *ab
+  findings: ["steps[0].scatter: scattered input 'item' is array-typed; scattering over an array of arrays is deferred
+    beyond this lowering"]
+- {id: scatter_whose_element_type_mismatches_its_port, why: An element of the source is what the port takes., workflow:
+   *scatter_items, tools: [{<<: *scatter, inputs: {item: {type: File, inputBinding: {position: 1}}}}], job: *ab,
+   findings: ["steps[0].in.item: scattered source 'items' carries 'val' elements but the port takes 'path[file]'"]}
+- {id: scatter_naming_an_undeclared_input, why: A scattered input is one the tool declares., tools: [*scatter], job:
+   *ab, workflow: {steps: [{<<: *step, scatter: [missing]}], inputs: *items}, findings: ["steps[0].scatter: scattered
+   input 'missing' is not declared by the step's tool"]}
+- id: an_unwired_scattered_input
+  why: A scattered input has a source.
+  workflow: {steps: [{id: SCATTER, out: [result], scatter: [item]}], inputs: *items}
+  tools: [*scatter]
+  job: &a {items: [a]}
+  findings: ["steps[0].scatter: scattered input 'item' has no source; wire it to an array-typed workflow input or a
+    scattered step's output"]
+- id: a_step_id_that_is_not_a_string-missing
+  why: &step_id A step id that is not a string is a finding beside the rest, not a crash of a pass keyed by step id.
+  workflow: {steps: [{run: S.cwl, in: {item: items}, out: [result], scatter: [item]}], inputs: *items}
+  tools: [&text_tool {id: S, inputs: {item: {type: string}}, outputs: {result: {type: string, outputBinding: {glob:
+    out.txt, loadContents: true, outputEval: '$(self[0].contents)'}}}}]
+  job: *a
+  findings: &step_id_findings ['steps[0]: workflow step id must be a non-empty string', 'workflow.steps: workflow step
+    identifier must be a non-empty string']
+- id: a_step_id_that_is_not_a_string-list-in-a-when-step
+  why: *step_id
+  workflow: {steps: [{run: S.cwl, id: [a], when: "$(inputs.item == 'a')", in: {item: items}, out: [result], scatter:
+    [item]}], inputs: *items}
+  tools: [*text_tool]
+  job: *a
+  findings: *step_id_findings
+- id: a_scalar_consumer_of_a_scattered_step
+  why: A scattered step's output is an array; a scalar port cannot take it.
+  workflow: {steps: [*step, {id: CONSUMER, in: {source: SCATTER/result}, out: [result]}], inputs: *items}
+  tools: [*scatter, {id: CONSUMER, inputs: {source: {type: File, inputBinding: {position: 1}}}, outputs: {result: {type:
+    File, outputBinding: {glob: copy.txt}}}}]
+  job: *a
+  error: {re: gathers into a port that is not array-typed}
+- id: workflow_requirement_with_an_unconsumed_field
+  why: &workflow_requirements A workflow-level requirement is consumed, or refused naming itself.
+  workflow: {<<: *scatter_items, requirements: {ScatterFeatureRequirement: {method: dotproduct}}}
+  tools: [*scatter]
+  job: *ab
+  findings: ['workflow.requirements.ScatterFeatureRequirement.method: method is not consumed by the Nextflow lowering']
+- {id: workflow_requirement_of_an_unsupported_class, why: *workflow_requirements, tools: [*scatter], job: *ab, workflow:
+   {<<: *scatter_items, requirements: {StepInputExpressionRequirement: {}}}, findings:
+   ['workflow.requirements.StepInputExpressionRequirement: StepInputExpressionRequirement is not supported at the
+   Nextflow workflow level']}
+- {id: workflow_requirements_of_the_wrong_shape, why: *workflow_requirements, tools: [*scatter], job: *ab, workflow:
+   {<<: *scatter_items, requirements: ScatterFeatureRequirement}, findings: ['workflow.requirements: CWL Workflow
+   requirements must be a mapping or list']}
+- {id: workflow_requirement_without_a_class, why: *workflow_requirements, tools: [*scatter], job: *ab, workflow: {<<:
+   *scatter_items, requirements: [{directive: '${System.exit(3)}'}]}, findings: ['workflow.requirements.0: a requirement
+   or hint needs a string `class`']}

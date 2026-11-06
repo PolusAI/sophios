@@ -1,27 +1,65 @@
-"""The safe JavaScript subset: JavaScript and the fixed Groovy rendering agree.
+"""The safe JavaScript subset: a when decides under Nextflow as JavaScript decides it.
 
 design_docs/sophios_nextflow_backend.md §6, Expressions, requires the two
-authorities to agree over generated expressions. ``TABLE`` is that
-comparison frozen: each expression's expected text is what node computes,
-printed as JSON, so CI needs only Nextflow. A number agrees when it is the
-same binary64 value. Rows mix chosen edge cases with a seeded sample of the
-grammar; every subexpression is finite, since non-finite results fail by
-design and are covered by the A11 cell. Regenerate after changing the subset:
-
-    python tests/core/nextflow/test_subset_differential.py > /tmp/table.py
+authorities to agree over generated expressions. node evaluates each one with
+its step's input values; the step's when is that expression, or, for a number,
+the expression `=== ` the number node prints, so the step runs under the pinned
+Nextflow exactly when node gives true. node drops an expression with a
+non-finite subexpression, which fails by design (A11, test_phase3_cells.py).
+The generated grammar leaves out `Math.pow` and `Math.sqrt`, as the sample of
+the frozen table this replaces did; the pinned edges and cells hold them.
 """
 
 # pylint: disable=missing-function-docstring
 
 import json
-import os
-from pathlib import Path
-import random
+import re
 import subprocess
-import sys
+from typing import Any
 
+from hypothesis import assume, example, given, strategies as st
 import pytest
 
+from sophios.input_output_nf import write_nextflow_artifacts
+from sophios.utils_nf import compiled_source_to_nextflow
+
+from ..budgets import budget
+from .test_phase3_cells import CALCULATIONS, PREDICATES
+from .testkit import execute_nextflow, step, synthetic_source, tool, workflow_doc
+
+#: Each input a case may read, by its CWL type.
+TYPES = {"i": "int", "n": "int", "x": "float", "flag": "boolean", "s": "string", "maybe": "int?"}
+
+_NUMBER = st.recursive(
+    st.sampled_from(["0", "1", "2", "3", "7", "10", "0.5", "1.25", "2.5", "100", "0.1", "1.0", "0.0001", "12345678.9",
+                     "0.49999999999999994", "1e15", "1e19", "9007199254740993", "inputs.i", "inputs.n", "inputs.x"]),
+    lambda inner: st.one_of(
+        st.tuples(st.sampled_from(["-", "+"]), inner).map(lambda c: f"{c[0]}({c[1]})"),
+        st.tuples(st.sampled_from(["Math.abs", "Math.floor", "Math.ceil", "Math.round"]), inner).map(
+            lambda c: f"{c[0]}({c[1]})"),
+        st.tuples(st.sampled_from(["Math.min", "Math.max"]), st.lists(inner, min_size=2, max_size=3)).map(
+            lambda call: f"{call[0]}({', '.join(call[1])})"),
+        st.tuples(inner, st.sampled_from(["+", "-", "*", "/", "%"]), inner).map(lambda c: f"({c[0]} {c[1]} {c[2]})"),
+    ),
+    max_leaves=6,
+)
+_COMPARISON = st.tuples(_NUMBER, st.sampled_from(["<", "<=", ">", ">=", "==", "!=", "===", "!=="]), _NUMBER).map(
+    " ".join)
+_BOOLEAN = st.recursive(
+    _COMPARISON | st.sampled_from(["true", "false", "inputs.flag", "inputs.s === 'x'", "inputs.s != 'y'", "'a' === 'a'",
+                                   "inputs.s !== 'it\"s'", "inputs.maybe === null", "null != inputs.maybe"]),
+    lambda inner: st.one_of(inner.map(lambda e: f"!({e})"), st.tuples(inner, st.sampled_from(["&&", "||"]), inner).map(
+        " ".join)),
+    max_leaves=3,
+)
+#: Each input's value: an int in the entry check's range, a float with its sign, and an absent optional.
+_VALUES = st.fixed_dictionaries({
+    "i": st.integers(-2**31, 2**31 - 1) | st.integers(-9, 9), "n": st.integers(-9, 9),
+    "x": st.sampled_from([0.0, -0.0, -0.5, 2.25, 1e-7, 1e15 + 0.5]), "flag": st.booleans(),
+    "s": st.sampled_from(["x", "y", 'it"s', ""]), "maybe": st.none() | st.integers(-3, 3)})
+_CASE = st.tuples((_NUMBER | _BOOLEAN).map(lambda e: f"$({e})"), _VALUES)
+
+#: Edge cases where digits, rounding, precedence or a sign could slip, each with no input.
 EDGES = [
     "$(1 + 2 * 3 - 4 / 8)", "$((1 + 2) * (3 - 4) / 8)", "$(-7 % 3)", "$(7 % -3)", "$(-7.5 % 2)",
     "$(0.1 + 0.2)", "$(1 / 3)", "$(2 / 3 * 3)", "$(9007199254740993)", "$(1e15 + 0.3)",
@@ -32,44 +70,28 @@ EDGES = [
     "$(1 < 2 && 2 <= 2 && !(3 > 4) || false)", "$(1 == 1.0 && 1 === 1.0)", "$('a' === 'a' && 'a' != 'b')",
     "$(true != false)", "$(0.1 + 0.2 == 0.3)", "$(Math.round(-0.5) === 0)",
 ]
-
-_CALLS1 = ["Math.abs", "Math.floor", "Math.ceil", "Math.round"]
-_OPS = ["+", "-", "*", "/", "%"]
-
-
-def _number(rng: random.Random, depth: int) -> str:
-    choice = rng.randrange(6 if depth > 0 else 1)
-    if choice == 0:
-        return rng.choice(["0", "1", "2", "3", "7", "10", "0.5", "1.25", "2.5", "100", "0.1"])
-    if choice == 1:
-        return f"-({_number(rng, depth - 1)})"
-    if choice == 2:
-        return f"{rng.choice(_CALLS1)}({_number(rng, depth - 1)})"
-    if choice == 3:
-        return f"Math.{rng.choice(['min', 'max'])}({_number(rng, depth - 1)}, {_number(rng, depth - 1)})"
-    return f"({_number(rng, depth - 1)} {rng.choice(_OPS)} {_number(rng, depth - 1)})"
+_CELLS = {"i": 7, "x": 2.25, "flag": True, "s": "x", "n": 3}
+#: The edges; the calculator (A1-A9) and predicate (W1-W7) cells; each of whose left sides is -0 in JavaScript,
+#: which == and != treat as 0; a null check on an optional input, absent and present; and int inputs whose quotient
+#: and product JavaScript takes as doubles.
+PINNED = [
+    *((text, {}) for text in EDGES),
+    *((text, _CELLS) for texts in CALCULATIONS.values() for text in texts),
+    *((text, _CELLS) for text in [*PREDICATES, "$(inputs.s === 'x')"]), ("$(inputs.n > 0)", {"n": 1}),
+    ("$(inputs.n % 2 == 0)", {"n": -4}), ("$(inputs.n * -1 != 0)", {"n": 0}),
+    ("$(Math.ceil(inputs.x) == 0)", {"x": -0.5}),
+    *((text, {"maybe": maybe}) for text in ("$(inputs.maybe === null)", "$(inputs.maybe !== null)")
+      for maybe in (None, 1)),
+    ("$(inputs.i / inputs.n)", {"i": 1, "n": 3}), ("$(inputs.i * inputs.i)", {"i": 2**31 - 1}),
+]
 
 
-def _boolean(rng: random.Random) -> str:
-    left, right = _number(rng, 2), _number(rng, 2)
-    comparison = f"{left} {rng.choice(['<', '<=', '>', '>=', '==', '!=', '===', '!=='])} {right}"
-    return rng.choice([comparison, f"!({comparison})", f"{comparison} && true", f"false || {comparison}"])
-
-
-def _candidates() -> list[str]:
-    rng = random.Random(20260928)
-    sample = [f"$({_number(rng, 3)})" for _ in range(60)] + [f"$({_boolean(rng)})" for _ in range(20)]
-    return EDGES + sample
-
-
-def _node_table(texts: list[str]) -> list[tuple[str, str]]:
-    """Evaluate in node, dropping any expression with a non-finite subexpression."""
+def _node(cases: list[tuple[str, dict[str, Any]]]) -> list[Any]:
+    """What node gives for each case's expression, or None when it or a parenthesized subexpression is not finite."""
     script = r"""
-const texts = JSON.parse(require('fs').readFileSync(0, 'utf8'));
-const out = texts.map(t => {
-  const body = t.slice(2, -1);
-  const finite = v => typeof v !== 'number' || Number.isFinite(v);
-  // Every parenthesized subexpression and call must stay finite, as the Groovy rendering checks each.
+const cases = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+console.log(JSON.stringify(cases.map(([text, inputs]) => {
+  const body = text.slice(2, -1);
   const parts = [];
   for (let i = 0; i < body.length; i++) if (body[i] === '(') {
     let depth = 0, j = i;
@@ -78,179 +100,47 @@ const out = texts.map(t => {
     while (k > 0 && /[A-Za-z.]/.test(body[k - 1])) k--;
     parts.push(body.slice(k, j + 1));
   }
-  const run = text => Function('return (' + text + ')')();
-  const ok = [body, ...parts].every(p => { try { return finite(run(p)); } catch (e) { return true; } });
-  return ok ? JSON.stringify(run(body)) : null;
-});
-console.log(JSON.stringify(out));
+  const run = part => Function('inputs', 'return (' + part + ')')(inputs);
+  const finite = [body, ...parts].every(part => { try { const v = run(part); return typeof v !== 'number' || Number.isFinite(v); } catch (e) { return true; } });
+  return finite ? JSON.stringify(run(body)) : null;
+})));
 """
-    result = subprocess.run(["node", "-e", script], input=json.dumps(texts), text=True, capture_output=True, check=True)
-    printed = json.loads(result.stdout)
-    rows = []
-    for text, value in zip(texts, printed):
-        if value is None:
-            continue
-        decoded = json.loads(value)
-        rows.append((text, str(decoded).lower() if isinstance(decoded, bool) else str(decoded)))
-    return rows
-
-
-# Generated by running this module; see the module docstring.
-TABLE: list[tuple[str, str]] = [
-    ('$(1 + 2 * 3 - 4 / 8)', '6.5'),
-    ('$((1 + 2) * (3 - 4) / 8)', '-0.375'),
-    ('$(-7 % 3)', '-1'),
-    ('$(7 % -3)', '1'),
-    ('$(-7.5 % 2)', '-1.5'),
-    ('$(0.1 + 0.2)', '0.30000000000000004'),
-    ('$(1 / 3)', '0.3333333333333333'),
-    ('$(2 / 3 * 3)', '2'),
-    ('$(9007199254740993)', '9007199254740992'),
-    ('$(1e15 + 0.3)', '1000000000000000.2'),
-    ('$(Math.round(2.5))', '3'),
-    ('$(Math.round(-2.5))', '-2'),
-    ('$(Math.round(-0.4))', '0'),
-    ('$(Math.round(0.49999999999999994))', '0'),
-    ('$(Math.round(1e19))', '10000000000000000000'),
-    ('$(Math.floor(-1.5))', '-2'),
-    ('$(Math.ceil(-1.5))', '-1'),
-    ('$(Math.abs(-0))', '0'),
-    ('$(Math.sqrt(2))', '1.4142135623730951'),
-    ('$(Math.pow(2, 10))', '1024'),
-    ('$(Math.pow(2, -2))', '0.25'),
-    ('$(Math.min(3, -1, 2))', '-1'),
-    ('$(Math.max(3, -1, 2.5))', '3'),
-    ('$(-(-3))', '3'),
-    ('$(+-+3)', '-3'),
-    ('$(- -3)', '3'),
-    ('$(12345678.9)', '12345678.9'),
-    ('$(0.0001)', '0.0001'),
-    ('$(1 < 2 && 2 <= 2 && !(3 > 4) || false)', 'true'),
-    ('$(1 == 1.0 && 1 === 1.0)', 'true'),
-    ("$('a' === 'a' && 'a' != 'b')", 'true'),
-    ('$(true != false)', 'true'),
-    ('$(0.1 + 0.2 == 0.3)', 'false'),
-    ('$(Math.round(-0.5) === 0)', 'true'),
-    ('$(((Math.abs(1) / Math.floor(2.5)) + Math.min(Math.round(0), -(2.5))))', '-2'),
-    ('$(3)', '3'),
-    ('$(((Math.abs(100) - 100) / ((0.5 + 10) * -(1))))', '0'),
-    ('$(0.1)', '0.1'),
-    ('$(((Math.ceil(1) % (2.5 + 2)) + ((0 % 10) % 2)))', '1'),
-    ('$(((2 % Math.abs(10)) * (Math.ceil(3) + -(7))))', '-8'),
-    ('$(0.5)', '0.5'),
-    ('$(3)', '3'),
-    ('$(-(Math.min(Math.max(1, 7), (2 / 100))))', '-0.02'),
-    ('$((((0.5 % 1) / 0.5) - Math.max(7, (100 * 0))))', '-6'),
-    ('$(2.5)', '2.5'),
-    ('$(Math.ceil(0))', '0'),
-    ('$(Math.min(Math.max((3 - 100), (2.5 / 1.25)), Math.min(Math.max(1, 2), (100 - 0.1))))', '2'),
-    ('$(-(Math.min(Math.max(2, 7), Math.max(0.1, 2))))', '-2'),
-    ('$(-((Math.max(2.5, 0.5) * (100 % 0.1))))', '-0.24999999999998612'),
-    ('$(-((Math.floor(0.5) + (2.5 - 7))))', '4.5'),
-    ('$(0.5)', '0.5'),
-    ('$((((1 + 0.5) * 1) + Math.max(2.5, Math.ceil(2.5))))', '4.5'),
-    ('$(-(((2 % 0.1) % (1.25 / 0.5))))', '-0.0999999999999999'),
-    ('$(Math.abs(Math.min(3, (0 * 2.5))))', '0'),
-    ('$(Math.ceil((0.1 % 2.5)))', '1'),
-    ('$((-((3 * 2.5)) - 2.5))', '-10'),
-    ('$(Math.floor(Math.min(-(7), Math.max(0.5, 2.5))))', '-7'),
-    ('$(-(Math.ceil(Math.min(2, 7))))', '-2'),
-    ('$((Math.max(Math.min(1.25, 2.5), Math.max(7, 100)) + ((1 / 2.5) * 2)))', '100.8'),
-    ('$(((3 % Math.ceil(0.1)) * ((1 - 100) - (100 % 100))))', '0'),
-    ('$(Math.round(2))', '2'),
-    ('$((-(Math.max(1.25, 1)) - (2.5 * -(2))))', '3.75'),
-    ('$((-(-(2.5)) - (100 * (100 % 100))))', '2.5'),
-    ('$(1)', '1'),
-    ('$((-(Math.max(0.1, 0.1)) * 2.5))', '-0.25'),
-    ('$((Math.min(Math.max(0, 2.5), -(2.5)) / -(-(1.25))))', '-2'),
-    ('$(-((Math.min(0, 0) + (3 / 0.5))))', '-6'),
-    ('$(-((Math.min(3, 100) + (100 - 0.1))))', '-102.9'),
-    ('$(Math.max(Math.min(-(0), (0 * 3)), 1))', '1'),
-    ('$(Math.ceil(-(Math.abs(0))))', '0'),
-    ('$(Math.round(Math.floor(Math.max(10, 2.5))))', '10'),
-    ('$(2)', '2'),
-    ('$((((3 * 2) / Math.max(2.5, 100)) + (Math.round(2.5) * Math.max(2.5, 0))))', '7.56'),
-    ('$(0.5)', '0.5'),
-    ('$(Math.round(((0.1 % 10) - 100)))', '-100'),
-    ('$((Math.ceil(Math.ceil(2)) / -(-(7))))', '0.2857142857142857'),
-    ('$(100)', '100'),
-    ('$(-(Math.min(Math.min(0.1, 10), Math.min(0.5, 0.1))))', '-0.1'),
-    ('$(Math.min(((2 - 1) % Math.min(1.25, 1)), 1))', '0'),
-    ('$(Math.ceil(-((100 % 7))))', '-2'),
-    ('$((-(Math.ceil(7)) + Math.max(Math.abs(2), 100)))', '93'),
-    ('$(Math.floor(-(Math.max(0.5, 1))))', '-1'),
-    ('$(Math.ceil(((10 * 10) + Math.max(3, 2.5))))', '103'),
-    ('$(Math.max(Math.max((0.1 % 0.1), (100 + 0.1)), (2.5 + Math.max(0, 1))))', '100.1'),
-    ('$(10)', '10'),
-    ('$((Math.min((1 + 0.5), Math.floor(0.1)) * ((100 * 0.1) % (2.5 / 2))))', '0'),
-    ('$(Math.max(-(Math.min(1, 2.5)), Math.min(Math.max(2.5, 1), (7 * 10))))', '2.5'),
-    ('$(Math.floor((Math.floor(100) * Math.max(100, 10))))', '10000'),
-    ('$(!(Math.min(Math.max(0.1, 1.25), -(10)) != Math.ceil(10)))', 'false'),
-    ('$(!(Math.min(7, Math.round(2.5)) == ((1.25 + 0.1) + 7)))', 'true'),
-    ('$((-(0) - Math.floor(2)) == -(1.25) && true)', 'false'),
-    ('$(!((10 + -(10)) <= -(2)))', 'true'),
-    ('$(-(2.5) == 10 && true)', 'false'),
-    ('$(false || (Math.max(2.5, 1) / Math.abs(2.5)) <= Math.abs((7 - 7)))', 'false'),
-    ('$(((100 / 10) / Math.max(2.5, 0.1)) === (Math.round(1.25) * (1 - 10)))', 'false'),
-    ('$(-(Math.round(1)) > Math.ceil(-(7)) && true)', 'true'),
-    ('$(Math.floor(1.25) >= -(Math.abs(100)))', 'true'),
-    ('$(false || (3 / 0.1) == Math.max(Math.round(10), 2.5))', 'false'),
-    ('$(-(0) >= (2 - 100))', 'true'),
-    ('$(!(-((3 * 0.1)) >= Math.abs((100 * 7))))', 'true'),
-    ('$(false || Math.abs((10 * 100)) === Math.floor(Math.min(7, 3)))', 'false'),
-    ('$(!(Math.floor((0.5 * 10)) < Math.min(Math.floor(1.25), Math.abs(2.5))))', 'true'),
-    ('$(!(-((1.25 + 7)) !== (Math.abs(1) - -(7))))', 'false'),
-    ('$(!((-(3) / Math.abs(7)) >= Math.min(Math.min(100, 0), Math.max(3, 2))))', 'true'),
-    ('$(Math.ceil((1 % 1)) <= (Math.min(2, 0.1) * Math.round(3)))', 'true'),
-    ('$(!((Math.round(2) - -(0.1)) > ((2.5 / 1.25) + (100 + 2.5))))', 'true'),
-    ('$(-(-(100)) !== ((0.1 % 3) / Math.floor(7)))', 'true'),
-]
-
-
-def _agrees(printed: str | None, expected: str) -> bool:
-    if printed is None or expected in ("true", "false"):
-        return printed == expected
-    return printed not in ("true", "false") and float(printed) == float(expected)
+    printed = subprocess.run(["node", "-e", script], input=json.dumps(cases), text=True, capture_output=True,
+                             check=True)
+    return [None if value is None else json.loads(value) if value in ("true", "false") else value
+            for value in json.loads(printed.stdout)]
 
 
 @pytest.mark.nextflow
 @pytest.mark.serial
-def test_groovy_rendering_matches_javascript(tmp_path: Path) -> None:
-    from sophios.nf_expr import (  # pylint: disable=import-outside-toplevel
-        NF_EXPRESSION_FUNCTIONS, parse, render_groovy,
-    )
-    lines = [NF_EXPRESSION_FUNCTIONS, "workflow {"]
-    for index, (text, _expected) in enumerate(TABLE):
-        rendered = render_groovy(parse(text), where=f"row {index}", inputs="[:]")
-        lines.append(f"    println('ROW{index}=' + ({rendered}).toString())")
-    lines.append("}")
-    (tmp_path / "main.nf").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    result = subprocess.run(
-        ["nextflow", "run", "main.nf"], cwd=tmp_path, text=True, capture_output=True, timeout=120, check=False,
-        env={**os.environ, "NXF_ANSI_LOG": "false", "NXF_HOME": str(tmp_path / ".nxf")},
-    )
+@budget(3)
+@given(st.lists(_CASE, min_size=1, max_size=12))
+@example(PINNED)
+def test_a_when_decides_as_javascript_does(tmp_path_factory: pytest.TempPathFactory,
+                                           cases: list[tuple[str, dict[str, Any]]]) -> None:
+    """Each case is a step that reads the inputs its expression names, with the values the case gives them."""
+    tools, steps, inputs, job = list[Any](), list[Any](), dict[str, str](), dict[str, Any]()
+    decided: list[tuple[str, dict[str, Any], bool]] = []
+    for (text, values), value in zip(cases, _node(cases)):
+        if value is None:
+            continue
+        index = len(decided)
+        when = text if isinstance(value, bool) else f"$(({text[2:-1]}) === {value})"
+        decided.append((when, values, value is not False))
+        read = sorted(set(re.findall(r"inputs\.(\w+)", text))) or ["i"]
+        tools.append(tool(f"P{index}", inputs={name: {"type": TYPES[name]} for name in read}, baseCommand="touch",
+                          arguments=[f"ran_{index}.txt"],
+                          outputs={"out": {"type": "File", "outputBinding": {"glob": f"ran_{index}.txt"}}}))
+        steps.append(step(f"P{index}", **{"in": {name: f"p{index}_{name}" for name in read}, "out": ["out"],
+                                          "when": when}))
+        inputs |= {f"p{index}_{name}": TYPES[name] for name in read}
+        job |= {f"p{index}_{name}": values.get(name, 1) for name in read if values.get(name, 1) is not None}
+    assume(decided)
+    root = tmp_path_factory.mktemp("when")
+    outputs = {f"out_{index}": {"type": "File?", "outputSource": f"P{index}/out"} for index in range(len(decided))}
+    write_nextflow_artifacts(compiled_source_to_nextflow(synthetic_source(
+        workflow_doc(steps, inputs=inputs, outputs=outputs), tools, workflow_inputs=job)), root)
+    result = execute_nextflow(root)
     assert result.returncode == 0, result.stdout + result.stderr
-    printed = dict(line.split("=", 1) for line in result.stdout.splitlines() if line.startswith("ROW"))
-    mismatches = [
-        (text, expected, printed.get(f"ROW{index}"))
-        for index, (text, expected) in enumerate(TABLE)
-        if not _agrees(printed.get(f"ROW{index}"), expected)
-    ]
-    assert not mismatches
-
-
-@pytest.mark.fast
-def test_the_table_is_not_empty_and_covers_every_operator_and_call() -> None:
-    joined = " ".join(text for text, _ in TABLE)
-    for token in ["+", "-", "*", "/", "%", "<", "<=", ">", ">=", "===", "!==", "==", "!=", "&&", "||", "!",
-                  "Math.abs", "Math.sqrt", "Math.floor", "Math.ceil", "Math.round", "Math.pow", "Math.min", "Math.max"]:
-        assert token in joined, token
-    assert len(TABLE) >= 60
-
-
-if __name__ == "__main__":
-    print("TABLE = [")
-    for row in _node_table(_candidates()):
-        print(f"    {row!r},")
-    print("]")
-    sys.exit(0)
+    ran = {int(path.stem.removeprefix("ran_")) for path in (root / "work").glob("*/*/ran_*.txt")}
+    assert [(when, values, index in ran) for index, (when, values, _) in enumerate(decided)] == decided

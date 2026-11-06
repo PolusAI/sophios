@@ -1,0 +1,2 @@
+why: An approved shellQuote false literal reaches the shell as real redirect syntax; printf writes its one quoted word.
+outputs: {shell_redirect~result: {class: File, basename: redirected.txt, contents: payload; not a separate command}}

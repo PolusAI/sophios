@@ -1,0 +1,2 @@
+why: The bare $(inputs.<name>) listing makes the entry, which the command reads.
+outputs: {stage_own_basename~result: {class: File, basename: out.txt, contents: "own basename staging\n"}}

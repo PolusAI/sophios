@@ -121,6 +121,14 @@ jobs:
           tests/contrib/test_rest_api.py::test_wfb_to_wic_keeps_settings_as_sent
           --hypothesis-seed="$HYPOTHESIS_SEED" --junitxml=property-reports/api-runtime.xml
 
+      # The Nextflow target's compile-side properties: lowering, the executable
+      # model, rendering and reading a pipeline back. Runs under Nextflow stay
+      # in nextflow.yml, which installs it.
+      - name: PyTest Nextflow Target Properties
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        timeout-minutes: 30
+        run: pytest tests/core/nextflow/test_properties.py tests/core/nextflow/test_executable_ir.py tests/core/nextflow/test_lowering.py tests/core/nextflow/test_import.py --hypothesis-seed="$HYPOTHESIS_SEED" --junitxml=property-reports/nextflow.xml
+
       - name: Upload pytest reports
         if: failure()
         uses: actions/upload-artifact@v6

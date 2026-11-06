@@ -1,0 +1,156 @@
+# Parameters, scatter, wiring and resources the target lowers (design §5.2, §6). `lowered` is the replaced test's IR
+# literal in payload form; a `contains` list is what the test asserted holds among the connections.
+- id: applies_unwired_scalar_default_before_lowering
+  why: An unwired tool input with a default becomes a parameter holding the default.
+  workflow: {steps: [{id: DEFAULT, out: [result]}], outputs: {result: {type: File, outputSource: DEFAULT/result}}}
+  tools: [{id: DEFAULT, inputs: {message: {type: string, default: hello default, inputBinding: {position: 1}}},
+           outputs: {result: {type: File, outputBinding: {glob: result.txt}}}, arguments: [{position: 2, valueFrom:
+           result.txt}]}]
+  lowered: {params: {exact: {_DEFAULT_message: hello default}}, connections: {contains: [{kind: workflow_input,
+            from_port: _DEFAULT_message, to_process: _DEFAULT, to_port: message, adapter: null}]}}
+  render: ["Channel.value(__sophios_input_9f72e('_DEFAULT_message', params._DEFAULT_message, 'string'))"]
+- id: a_default_is_held_as_a_value_written_on_a_step_is
+  why: A workflow input's default, which only a .wic file writes, and a tool's are held as a value written on a step
+    is, so an int given for a float is the float, written as its text, and a path given as text is the File there.
+  workflow: {steps: [{id: take, in: {x: y}, out: [result]}], inputs: {y: {type: float, default: 5}}, outputs: {result:
+             {type: File, outputSource: take/result}}}
+  tools: [{id: take, inputs: {x: {type: float, inputBinding: {position: 1}}, r: {type: ['null', float], default: 7,
+           inputBinding: {position: 2}}, f: {type: File, default: /data/a.txt}}, outputs: {result: {type: File,
+           outputBinding: {glob: result.txt}}}}]
+  params_file: {y: '5.0', take_r: '7.0', take_f: {class: File, path: /data/a.txt}}
+- id: every_parameter_records_its_declared_type
+  why: Workflow inputs carry their own declarations; a tool default carries its tool input's.
+  workflow: {steps: [{id: TAKE, in: {name: name, count: count, files: files, dirs: dirs}, out: [result]}],
+      inputs: {name:
+             {type: string}, count: {type: ['null', int]}, files: {type: {type: array, items: File}}, dirs: {type:
+             ['null', {type: array, items: Directory}]}, unread: {type: boolean}}, outputs: {result: {type: File,
+             outputSource: TAKE/result}}}
+  tools: [{id: TAKE, inputs: {name: {type: string, inputBinding: {position: 1}}, count: {type: ['null', int]}, files:
+           {type: {type: array, items: File}, inputBinding: {position: 2}}, dirs: {type: ['null', {type: array, items:
+           Directory}], inputBinding: {position: 3}}, ratio: {type: float, default: 0.5}}, outputs: {result: {type:
+           File, outputBinding: {glob: result.txt}}}}]
+  job: {name: n, count: 1, files: [], dirs: [], unread: true}
+  lowered: {param_types: {exact: {name: string, count: 'int?', files: 'File[]', dirs: 'Directory[]?', unread: boolean,
+            _TAKE_ratio: float}}}
+- {id: accepts_a_boolean_source_wired_into_a_boolean_flag, why: 'The supported wiring stays supported: a boolean source
+   into a flag input.', workflow: {steps: [{id: SORT, in: {reverse: flagval}}], inputs: {flagval: {type: boolean}}},
+   tools: [{id: SORT, inputs: {reverse: {type: boolean, inputBinding: {position: 1, prefix: -r}}}}], job: {flagval:
+   false}, lowered: {params: {exact: {flagval: false}}}}
+- {id: maps_docker_requirement, why: A DockerRequirement is the process's container., tool: {id: CONTAINER,
+   requirements: {DockerRequirement: {dockerPull: 'ubuntu:24.04'}}},
+       lowered: {processes: [{container: 'ubuntu:24.04'}]}}
+- {id: host_and_container_tools_lower_into_one_workflow, why: A host tool and a containerized tool lower side by side.,
+   workflow: {steps: [{id: CONTAINERIZED}, {id: HOST}]}, tools: [{id: CONTAINERIZED, requirements: {DockerRequirement:
+   {dockerPull: 'ubuntu:24.04'}}}, {id: HOST}], lowered: {processes: [{container: 'ubuntu:24.04'}, {container: null}]}}
+- {id: maps_cpu_and_memory_requirements, why: 'CWL reserves the minimum; a maximum alone is all there is to request.',
+   workflow: {steps: [{id: RESOURCES}, {id: CEILING_ONLY}]}, tools: [{id: RESOURCES, requirements: {ResourceRequirement:
+   {coresMin: 1, coresMax: 2, ramMin: 512, ramMax: 1024}}}, {id: CEILING_ONLY, requirements: {ResourceRequirement:
+   {coresMax: 2, ramMax: 1024}}}], lowered: {processes: [{resources: {cpus: 1, memory_mb: 512, accelerator: null,
+   cuda_version_min: null, cuda_compute_capability: null}}, {resources: {cpus: 2, memory_mb: 1024, accelerator: null,
+   cuda_version_min: null, cuda_compute_capability: null}}]}}
+- {id: preserves_fanout, why: One output feeds every step that reads it., workflow: {steps: [{id: A, out: [out]}, {id:
+   B, in: {value: A/out}}, {id: C, in: {value: A/out}}]}, tools: [{id: A, outputs: {out: {type: File, outputBinding:
+   {glob: out.txt}}}}, {id: B, inputs: {value: {type: File}}}, {id: C, inputs: {value: {type: File}}}], lowered: {
+   connections: {contains: [{kind: process, from_process: _A, from_port: out, to_process: _B, to_port: value}, {kind:
+   process, from_process: _A, from_port: out, to_process: _C, to_port: value}]}}}
+- id: cuda_requirement_lowers_to_the_accelerator_directive-requirements-none
+  why: &cuda 'The count cwltool''s job requests: the minimum, else the maximum, else 1 (design §6).'
+  tool: {id: GPU, requirements: {'cwltool:CUDARequirement': {}}}
+  lowered: &gpu1 {processes: [{resources: {cpus: null, memory_mb: null, accelerator: 1, cuda_version_min: null,
+                  cuda_compute_capability: null}}]}
+  render: &accelerator1 ["\n    accelerator 1\n"]
+  notes: []
+- {id: cuda_requirement_lowers_to_the_accelerator_directive-hints-none, why: *cuda, tool: {id: GPU, hints:
+   {'cwltool:CUDARequirement': {}}}, lowered: *gpu1, render: *accelerator1, notes: []}
+- {id: cuda_requirement_lowers_to_the_accelerator_directive-requirements-min, why: *cuda,
+    tool: {id: GPU, requirements: {
+   'cwltool:CUDARequirement': {cudaDeviceCountMin: 2}}}, lowered: &gpu2 {processes: [{resources: {cpus: null, memory_mb:
+   null, accelerator: 2, cuda_version_min: null, cuda_compute_capability: null}}]},
+       render: &accelerator2 ["\n    accelerator 2\n"], notes: []}
+- {id: cuda_requirement_lowers_to_the_accelerator_directive-hints-min, why: *cuda, tool: {id: GPU, hints: {
+   'cwltool:CUDARequirement': {cudaDeviceCountMin: 2}}}, lowered: *gpu2, render: *accelerator2, notes: []}
+- {id: cuda_requirement_lowers_to_the_accelerator_directive-requirements-max, why: *cuda,
+    tool: {id: GPU, requirements: {
+   'cwltool:CUDARequirement': {cudaDeviceCountMax: 3}}}, lowered: &gpu3 {processes: [{resources: {cpus: null, memory_mb:
+   null, accelerator: 3, cuda_version_min: null, cuda_compute_capability: null}}]},
+       render: &accelerator3 ["\n    accelerator 3\n"], notes: []}
+- {id: cuda_requirement_lowers_to_the_accelerator_directive-hints-max, why: *cuda, tool: {id: GPU, hints: {
+   'cwltool:CUDARequirement': {cudaDeviceCountMax: 3}}}, lowered: *gpu3, render: *accelerator3, notes: []}
+- {id: cuda_requirement_lowers_to_the_accelerator_directive-requirements-min-and-max, why: *cuda, tool: {id: GPU,
+   requirements: {'cwltool:CUDARequirement': {cudaDeviceCountMin: 2, cudaDeviceCountMax: 4}}}, lowered: *gpu2, render:
+   *accelerator2, notes: []}
+- {id: cuda_requirement_lowers_to_the_accelerator_directive-hints-min-and-max, why: *cuda, tool: {id: GPU, hints: {
+   'cwltool:CUDARequirement': {cudaDeviceCountMin: 2, cudaDeviceCountMax: 4}}}, lowered: *gpu2, render: *accelerator2,
+   notes: []}
+- id: the_unchecked_cuda_fields_are_notes_and_ride_in_the_ext_directive
+  why: The fields the target does not check are notes, and the process carries them in its ext directive.
+  tool: {id: GPU, hints: {'cwltool:CUDARequirement': {cudaDeviceCountMin: 1, cudaVersionMin: '11.4',
+         cudaComputeCapability: ['3.0', '7.5']}}}
+  lowered: {processes: [{resources: {cpus: null, memory_mb: null, accelerator: 1, cuda_version_min: '11.4',
+            cuda_compute_capability: ['3.0', '7.5']}}]}
+  render: ["\n    accelerator 1\n    ext cudaVersionMin: '11.4', cudaComputeCapability: ['3.0', '7.5']\n"]
+  notes: [{severity: note, code: UNCHECKED_CUDA_FIELD, step: GPU, index: null, port: null, message: {startswith:
+          "cwltool:CUDARequirement cudaVersionMin '11.4' is not checked"}}, {severity: note, code: UNCHECKED_CUDA_FIELD,
+          step: GPU, index: null, port: null, message: {startswith: "cwltool:CUDARequirement cudaComputeCapability
+          ['3.0', '7.5'] is not checked"}}]
+- id: accepts_multi_input_scatter-dotproduct
+  why: &every_method A multi-input scatter lowers under each of CWL's three methods.
+  workflow: &pair {steps: [{id: SCATTER, in: {first: firsts, second: seconds}, out: [result], scatter: [first, second],
+                   scatterMethod: dotproduct}], inputs: {firsts: {type: &strings {type: array, items: string}},
+                   seconds: {type: *strings}}}
+  tools: &pair_tools [{id: SCATTER, inputs: {first: {type: string, inputBinding: {position: 1}}, second: {type: string,
+                       inputBinding: {position: 2}}}, outputs: &result {result: {type: File, outputBinding: {glob:
+                       out.txt}}}}]
+  job: {firsts: [a], seconds: [b]}
+  lowered: {connections: {contains: [{kind: workflow_input, from_port: firsts, to_process: _SCATTER, to_port: first,
+            adapter: dotproduct}, {kind: workflow_input, from_port: seconds, to_process: _SCATTER, to_port: second,
+            adapter: dotproduct}]}}
+- {id: accepts_multi_input_scatter-flat_crossproduct, why: *every_method, tools: *pair_tools,
+    job: {firsts: [a], seconds:
+   [b]}, workflow: {<<: *pair, steps: [{id: SCATTER, in: {first: firsts, second: seconds}, out: [result], scatter:
+   [first, second], scatterMethod: flat_crossproduct}]}}
+- {id: accepts_multi_input_scatter-nested_crossproduct, why: *every_method, tools: *pair_tools, job: {firsts: [a],
+   seconds: [b]}, workflow: {<<: *pair, steps: [{id: SCATTER, in: {first: firsts, second: seconds}, out: [result],
+   scatter: [first, second], scatterMethod: nested_crossproduct}]}}
+- id: an_inert_scatter_method_at_one_scattered_input-absent
+  why: &inert All three methods coincide at one scattered input, so each is inert, as is either spelling of one input.
+  workflow: &one {steps: [&scatter_step {id: SCATTER, in: {item: items}, out: [result], scatter: [item]}], inputs:
+                  {items: {type: *strings}}}
+  tools: &one_tool [{id: SCATTER, inputs: {item: {type: string, inputBinding: {position: 1}}}, outputs: *result}]
+  job: &ab {items: [a, b]}
+  lowered: &one_edge {connections: [{kind: workflow_input, from_port: items, to_process: _SCATTER, to_port: item,
+                      adapter: dotproduct}]}
+- {id: an_inert_scatter_method_at_one_scattered_input-dotproduct, why: *inert, tools: *one_tool, job: *ab, lowered:
+   *one_edge, workflow: {<<: *one, steps: [{<<: *scatter_step, scatterMethod: dotproduct}]}}
+- {id: an_inert_scatter_method_at_one_scattered_input-flat_crossproduct, why: *inert, tools: *one_tool, job: *ab,
+   lowered: *one_edge, workflow: {<<: *one, steps: [{<<: *scatter_step, scatterMethod: flat_crossproduct}]}}
+- {id: an_inert_scatter_method_at_one_scattered_input-nested_crossproduct, why: *inert, tools: *one_tool, job: *ab,
+   lowered: *one_edge, workflow: {<<: *one, steps: [{<<: *scatter_step, scatterMethod: nested_crossproduct}]}}
+- {id: both_single_input_scatter_spellings-string-form, why: *inert, tools: *one_tool, job: *ab, lowered: *one_edge,
+   workflow: {<<: *one, steps: [{<<: *scatter_step, scatter: item}]}}
+- {id: inert_workflow_level_scatter_requirement-mapping, why: A ScatterFeatureRequirement on the workflow is inert.,
+   tools: *one_tool, job: *ab, lowered: *one_edge, workflow: {<<: *one, requirements: {ScatterFeatureRequirement: {}}}}
+- {id: inert_workflow_level_scatter_requirement-list, why: A ScatterFeatureRequirement on the workflow is inert., tools:
+   *one_tool, job: *ab, lowered: *one_edge, workflow: {<<: *one, requirements: [{class: ScatterFeatureRequirement}]}}
+- id: an_unscattered_steps_output_reaches_a_scattered_steps_other_input_as_one_value
+  why: An unscattered step's output is one value, which each scattered task takes whole.
+  workflow: {steps: [{id: PRODUCER, out: [out]}, {id: SCATTER, in: {item: items, extra: PRODUCER/out}, out: [result],
+             scatter: [item]}], inputs: {items: {type: *strings}}}
+  tools: [{id: PRODUCER, outputs: {out: {type: File, outputBinding: {glob: produced.txt}}}},
+      {id: SCATTER, inputs: {item:
+           {type: string, inputBinding: {position: 1}}, extra: {type: File, inputBinding: {position: 2}}}, outputs:
+           *result}]
+  job: {items: [a]}
+  lowered: {connections: {contains: [{kind: process, from_process: _PRODUCER, from_port: out, to_process: _SCATTER,
+            to_port: extra}]}}
+  render: ['_SCATTER(ch__SCATTER_scatter, _PRODUCER.out.out.first())']
+- {id: accepts_a_workflow_output_of_a_scattered_step, why: A scattered step's output is an array a workflow output
+    takes.,
+   tools: *one_tool, job: *ab, workflow: {<<: *one, outputs: {each: {type: {type: array, items: File}, outputSource:
+   SCATTER/result}}}, lowered: {connections: {contains: [{kind: workflow_output, from_process: _SCATTER, from_port:
+   result, to_port: each}]}}}
+- {id: accepts_a_scattered_boolean_flag_source, why: 'A scattered flag port receives one element, so the element type is
+   what must be boolean.', workflow: {<<: *one, inputs: {items: {type: {type: array, items: boolean}}}}, job: {items:
+   [true, false]}, tools: [{id: SCATTER, inputs: {item: {type: boolean, inputBinding: {prefix: --flag}}}, outputs:
+   *result}], lowered: {processes: [{command: {tokens: [{segments: [{kind: literal, value: SCATTER}]}, {kind: flag,
+   name: item, prefix: --flag}]}}]}}

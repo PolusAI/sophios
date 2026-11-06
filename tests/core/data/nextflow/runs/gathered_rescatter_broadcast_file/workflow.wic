@@ -1,0 +1,10 @@
+steps:
+- id: echo_item
+  scatter: [item]
+  scatterMethod: dotproduct
+  in: {item: !ii ['1', '2', '3']}
+  out: [out: !& items]
+- id: cat_pair
+  scatter: [f]
+  scatterMethod: dotproduct
+  in: {f: !* items, r: !ii ref.txt}

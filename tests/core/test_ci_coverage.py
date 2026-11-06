@@ -419,8 +419,8 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # Both cwltool entry points, called in-process with cwltool's run stood in for, well under a second.
     # test_run_local.py is POSIX-only already, so the Windows leg gives up nothing it ran.
     'tests/core/test_run_local.py::test_the_runner_prints_no_rdflib_encoding_warning',
-    # Five runs of a one-step tool under Nextflow and under cwltool, in about eight seconds. Only the Nextflow lane,
-    # on Linux, collects it, so the Windows leg gives up nothing it ran.
+    # Seven runs (four pinned, three drawn) of a one-step tool under Nextflow and under cwltool, in about twelve
+    # seconds. Only the Nextflow lane, on Linux, collects it, so the Windows leg gives up nothing it ran.
     'tests/core/nextflow/test_runtime.py::test_a_command_receives_the_arguments_cwltool_gives_it',
 })
 

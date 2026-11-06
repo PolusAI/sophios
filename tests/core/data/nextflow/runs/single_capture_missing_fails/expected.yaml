@@ -1,0 +1,2 @@
+why: Zero matches of a declared single output fail the run, naming the glob, never an empty channel.
+fails: out.txt

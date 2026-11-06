@@ -1,0 +1,2 @@
+why: A CWL glob has no brace expansion, so the one capture is the file named with braces.
+outputs: {write_one~result: {class: File, basename: 'out{1,2}.txt', contents: "one match only\n"}}

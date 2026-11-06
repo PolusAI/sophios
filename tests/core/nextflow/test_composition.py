@@ -67,26 +67,6 @@ def _tools() -> list[dict[str, Any]]:
     return [pair, join, concat]
 
 
-def _composed(params: dict[str, Any]) -> Any:
-    steps = [
-        step("PAIR", **{
-            "in": {"a": "as", "b": "bs", "n": "n"}, "out": ["out"],
-            "scatter": ["a", "b"], "scatterMethod": "dotproduct",
-        }),
-        step("JOIN", **{
-            "in": {"f": "PAIR/out", "g": "gs"}, "out": ["out"],
-            "scatter": ["f", "g"], "scatterMethod": "dotproduct",
-        }),
-        step("CONCAT", **{"in": {"files": "JOIN/out"}, "out": ["all"]}),
-    ]
-    workflow = workflow_doc(
-        steps,
-        inputs={"as": {"type": STRINGS}, "bs": {"type": STRINGS}, "n": {"type": "int"}, "gs": {"type": FILES}},
-        outputs={"all": {"type": "File", "outputSource": "CONCAT/all"}},
-    )
-    return compiled_source_to_nextflow(synthetic_source(workflow, _tools(), workflow_inputs=params))
-
-
 def _use_tool(file_ports: tuple[str, ...] = ("files",)) -> dict[str, Any]:
     arrays = {
         name: {"type": FILES, "inputBinding": {"position": position}}
@@ -163,39 +143,6 @@ def _two_gathered_arrays_into_use(second: str, method: str = "dotproduct") -> Ex
     return compiled_source_to_nextflow(synthetic_source(workflow, tools, workflow_inputs=_PAIR_THEN_USE_PARAMS))
 
 
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_gathered_scatter_rescatters_and_gathers_again_in_order(tmp_path: Path) -> None:
-    """S12, S13, S14: calculator binding, dotproduct, gather into a later scatter, gather into one step."""
-    gs = []
-    for digit in "123":
-        path = tmp_path / f"g{digit}.txt"
-        path.write_text(f"{digit}\n", encoding="utf-8")
-        gs.append(str(path))
-    workflow = _composed({"as": ["a", "b", "c"], "bs": ["x", "y", "z"], "n": 2, "gs": gs})
-    run = tmp_path / "run"
-    write_nextflow_artifacts(workflow, run)
-    result = execute_nextflow(run)
-    assert result.returncode == 0, result.stdout + result.stderr
-    [combined] = list((run / "work").glob("*/*/all.txt"))
-    assert combined.read_text(encoding="utf-8") == "a x 20\n1\nb y 20\n2\nc z 20\n3\n"
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_a_gathered_array_of_one_file_reaches_its_consumer_as_a_list(tmp_path: Path) -> None:
-    """A scatter of length one gathers one file, which Nextflow delivers as a bare Path unless the arity is declared."""
-    extra = tmp_path / "g1.txt"
-    extra.write_text("1\n", encoding="utf-8")
-    workflow = _composed({"as": ["a"], "bs": ["b"], "n": 1, "gs": [str(extra)]})
-    run = tmp_path / "run"
-    write_nextflow_artifacts(workflow, run)
-    result = execute_nextflow(run)
-    assert result.returncode == 0, result.stdout + result.stderr
-    [combined] = list((run / "work").glob("*/*/all.txt"))
-    assert combined.read_text(encoding="utf-8") == "a b 10\n1\n"
-
-
 @pytest.mark.fast
 @pytest.mark.parametrize("method", ["dotproduct", "flat_crossproduct"])
 def test_a_gathered_array_on_a_scattered_steps_unscattered_port_stages_in_numbered_directories(method: str) -> None:
@@ -204,36 +151,6 @@ def test_a_gathered_array_on_a_scattered_steps_unscattered_port_stages_in_number
         "tuple val(__sophios_scatter_index_9f72e), val(x), val(y)\n"
         "    path files, arity: '0..*', stageAs: 'gather_files_*/*'\n"
     ) in rendered
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-@pytest.mark.parametrize(("method", "tasks"), [("dotproduct", 2), ("flat_crossproduct", 4)])
-def test_every_task_of_a_scattered_step_stages_all_the_same_named_gathered_files(
-    tmp_path: Path, method: str, tasks: int
-) -> None:
-    run = tmp_path / "run"
-    write_nextflow_artifacts(_pair_then_use(method, _PAIR_THEN_USE_PARAMS), run)
-    result = execute_nextflow(run)
-    assert result.returncode == 0, result.stdout + result.stderr
-    used = list((run / "work").glob("*/*/used.txt"))
-    assert len(used) == tasks
-    assert {path.read_text(encoding="utf-8") for path in used} == {"a x 20\nb y 20\nc z 20\n"}
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-@pytest.mark.parametrize(("method", "tasks"), [("dotproduct", 2), ("flat_crossproduct", 4)])
-def test_a_gathered_array_of_one_file_reaches_every_task_of_a_scattered_step_as_a_list(
-    tmp_path: Path, method: str, tasks: int
-) -> None:
-    run = tmp_path / "run"
-    write_nextflow_artifacts(_pair_then_use(method, {**_PAIR_THEN_USE_PARAMS, "as": ["a"], "bs": ["x"]}), run)
-    result = execute_nextflow(run)
-    assert result.returncode == 0, result.stdout + result.stderr
-    used = list((run / "work").glob("*/*/used.txt"))
-    assert len(used) == tasks
-    assert {path.read_text(encoding="utf-8") for path in used} == {"a x 20\n"}
 
 
 @pytest.mark.fast

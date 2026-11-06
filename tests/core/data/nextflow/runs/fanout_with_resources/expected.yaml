@@ -1,0 +1,3 @@
+why: One output feeds two steps, each of which cats it whole, under a process that requests cpus and memory.
+outputs: {consume_a~result: {class: File, basename: a.txt, contents: fanout}, consume_b~result: {class: File, basename:
+          b.txt, contents: fanout}}
