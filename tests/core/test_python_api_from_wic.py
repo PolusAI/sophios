@@ -307,7 +307,7 @@ def test_a_note_from_a_loaded_workflow_names_the_wic_line(tmp_path: Path) -> Non
     root = 'steps:\n- id: mk_file\n  in:\n    name: !ii a\n- id: xform\n  in:\n    name: !ii b\n- id: count\n'
     workflow = _from_wic(tmp_path, root=root)
     (note,) = workflow.compile().diagnostics
-    assert note.startswith('root.wic:8:3: note [wic043]'), note
+    assert str(note).startswith('root.wic:8:3: note [wic043]'), note
 
 
 @pytest.mark.fast

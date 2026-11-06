@@ -778,22 +778,24 @@ def test_python_run_args_reach_nextflow_with_one_dash_and_a_cwl_only_option_is_r
 
 
 @pytest.mark.fast
-def test_each_python_front_door_warns_with_the_nextflow_notes_at_its_caller(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, nextflow_ready: None) -> None:
-    """Each note the lowering made is a `UserWarning` at the line that called the method, a coroutine's caller
-    included."""
+@pytest.mark.filterwarnings('error::UserWarning')
+def test_each_python_front_door_prints_the_nextflow_notes_and_the_run_carries_them(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, nextflow_ready: None,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """Each note the lowering made is a line on stderr, as the command line prints it, and never a warning; the
+    result of the run carries the same notes."""
     del nextflow_ready
     install(monkeypatch, tmp_path)
 
     async def run_async() -> None:
         await gpu_workflow().run_async(target='nextflow')
-    with pytest.warns(UserWarning) as caught:
-        gpu_workflow().run(target='nextflow')
-        gpu_workflow().start(target='nextflow').wait()
-        asyncio.run(run_async())
-    notes = [warning for warning in caught if '[wic046]' in str(warning.message)]
-    assert [str(warning.message) for warning in notes] == CUDA_NOTES * 3
-    assert {warning.filename for warning in notes} == {__file__}
+    result = gpu_workflow().run(target='nextflow')
+    gpu_workflow().start(target='nextflow').wait()
+    asyncio.run(run_async())
+    assert [line for line in capsys.readouterr().err.splitlines() if '[wic046]' in line] == CUDA_NOTES * 3
+    assert result is not None
+    cuda = [note for note in result.diagnostics if note.code is SophiosErrorCode.UNCHECKED_CUDA_FIELD]
+    assert [str(note) for note in cuda] == CUDA_NOTES
 
 
 @pytest.mark.fast

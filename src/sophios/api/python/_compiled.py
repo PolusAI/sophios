@@ -5,6 +5,7 @@ from pathlib import Path
 
 from sophios.input_output import dump_wic_yaml
 from sophios.input_output_nf import write_nextflow_artifacts
+from sophios.lang.diagnostics import Diagnostic
 from sophios.nf_types import ExecutableNextflowWorkflow
 from sophios.wic_types import Json
 
@@ -42,8 +43,8 @@ class CompiledWorkflow:
     cwl_job_inputs: Json
     #: The Sophios language version this workflow was compiled under.
     lang_version: str = ''
-    #: The notes the compile made, rendered (e.g. an inference choice between equals).
-    diagnostics: tuple[str, ...] = ()
+    #: The notes the compile made (e.g. an inference choice between equals), as the objects that were printed.
+    diagnostics: tuple[Diagnostic, ...] = ()
 
     def write(self, path: str | Path | None = None) -> Path:
         """Write everything a CWL runner needs, `<name>.cwl` and `<name>_inputs.yml`, into the directory `path`.
@@ -89,8 +90,9 @@ class CompiledNextflowWorkflow:
     nextflow_workflow: ExecutableNextflowWorkflow
     #: The Sophios language version this workflow was compiled under.
     lang_version: str
-    #: The notes the compile made, then the lowering's, rendered (e.g. a CUDA field the pipeline does not check).
-    diagnostics: tuple[str, ...]
+    #: The notes the compile made, then the lowering's (e.g. a CUDA field the pipeline does not check), as the
+    #: objects that were printed.
+    diagnostics: tuple[Diagnostic, ...]
 
     def write(self, path: str | Path | None = None) -> Path:
         """Write everything Nextflow needs, `workflow.nf`, `nextflow.config` and `nextflow_params.json`, and the

@@ -8,6 +8,7 @@ drifts apart is a cookbook entry that tells one surface's reader something
 false.
 """
 import re
+import warnings
 from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
@@ -18,7 +19,7 @@ import sophios.compiler
 import sophios.plugins
 from sophios.api.python.workflow import Inference
 from sophios.lang import SophiosErrorCode
-from sophios.lang.diagnostics import Severity, SophiosError
+from sophios.lang.diagnostics import Severity, SophiosError, lines, report
 from sophios.cli import default_compilation_settings
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import bundle_from_disk
@@ -117,8 +118,8 @@ def test_the_inferred_graph_stops_at_the_join() -> None:
     for caught in (from_python, from_wic):
         (error,) = [d for d in caught.value.diagnostics if d.severity is Severity.ERROR]
         assert error.code is SophiosErrorCode.INFERENCE_DUPLICATE
-        assert error.message.startswith("step 5 'combine' inputs 'text' and 'counts' would both read "
-                                        "step 4 'word_count' output 'counts'")
+        assert error.message == ('combine.text and combine.counts would both read word_count.counts; '
+                                 'write the edge each should read')
 
 
 @pytest.mark.fast
@@ -141,13 +142,38 @@ def test_the_inference_pair_prints_its_note() -> None:
 
 
 @pytest.mark.fast
+def test_both_surfaces_print_the_inference_note_alike(capsys: pytest.CaptureFixture[str]) -> None:
+    """The Python compile prints its notes on stderr, as the command line does, and returns the same objects;
+    nothing is a warning. The two surfaces print the same block, each row at its own file's line."""
+    module = import_python_file('cookbook_inference', COOKBOOK / 'inference.py')
+    capsys.readouterr()
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        compiled = module.workflow().compile()
+    from_python = capsys.readouterr().err.splitlines()
+    report(_compile_wic('inference').diagnostics)
+    from_wic = capsys.readouterr().err.splitlines()
+
+    (note,) = compiled.diagnostics
+    (from_the_file,) = tuple(_compile_wic('inference').diagnostics)
+    assert from_python == lines(compiled.diagnostics) and from_wic == lines([from_the_file])
+    assert from_python[0] == from_wic[0] == ('note [wic043] 1 edge was guessed; draw the workflow to check it '
+                                             '(--graphviz, or Workflow.draw() in Python)')
+    assert note.message == from_the_file.message == 'cat.file <- echo.stdout (1 other fits)'
+
+
+@pytest.mark.fast
 def test_the_note_the_docs_quote_is_the_one_the_compiler_prints() -> None:
-    """`docs/edge-inference.md` quotes the note of the greeting with its connections left out; the quote
-    must be the compiler's text."""
+    """`docs/edge-inference.md` quotes the note of the greeting with its edges left out, as Python prints it;
+    the quote must be the compiler's text."""
     module = import_python_file('cookbook_greeting_inferred', COOKBOOK / 'greeting_inferred.py')
-    (note,) = map(str, module.workflow().compile().diagnostics)
-    message = note.split(' note ', 1)[1]
-    assert f'note {message}' in (REPO_ROOT / 'docs' / 'edge-inference.md').read_text(encoding='utf-8')
+    diagnostics = module.workflow().compile().diagnostics
+    (note,) = diagnostics
+    assert note.span is not None
+    header = lines(diagnostics)[0]
+    row = f'greeting_inferred.py:{note.span.start_line}:{note.span.start_column}  {note.message}\n'
+    page = (REPO_ROOT / 'docs' / 'edge-inference.md').read_text(encoding='utf-8')
+    assert f'{header}\n  /home/you/sophios-tutorial/{row}' in page
 
 
 @pytest.mark.fast

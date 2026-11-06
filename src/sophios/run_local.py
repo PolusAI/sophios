@@ -320,7 +320,7 @@ class RunHandle:  # pylint: disable=too-many-instance-attributes
             assert status.reason is not None
             raise WorkflowRunError(self._request.workflow_name, status.exit_code, status.reason)
         return RunResult(status.state, status.outputs, self._launch.cwd / self._launch.outdir, self._log,
-                         status.exit_code)
+                         status.exit_code, self._request.diagnostics)
 
     def status(self) -> RunStatus:
         """Where the run is now, without blocking. A runner that has exited, its output read to the end,

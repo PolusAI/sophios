@@ -142,15 +142,16 @@ def test_strict_refuses_a_choice_between_equals_as_the_cli_does(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """`--inference_strict` and `Inference(strict=True)` turn the note into the same error."""
     tied = Inference(naming_conventions=False)
-    assert [str(d) for d in _workflow("file").compile(inference=tied).diagnostics if "wic042" in str(d)]
+    tied_codes = [d.code for d in _workflow("file").compile(inference=tied).diagnostics]
+    assert SophiosErrorCode.INFERENCE_GUESS in tied_codes
 
     with pytest.raises(SophiosError) as raised:
         _workflow("file").compile(inference=Inference(naming_conventions=False, strict=True))
     with pytest.raises(SystemExit):
         _cli(_workflow("file"), tmp_path, monkeypatch, "--inference_strict", "--no_inference_naming_conventions")
 
-    assert [d.code for d in raised.value.diagnostics] == [SophiosErrorCode.INFERENCE_TIE]
-    assert "error [wic042]" in capsys.readouterr().err
+    assert [d.code for d in raised.value.diagnostics] == [SophiosErrorCode.INFERENCE_GUESS]
+    assert "error [wic043]" in capsys.readouterr().err
 
 
 @pytest.mark.fast

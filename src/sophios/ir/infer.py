@@ -1,4 +1,5 @@
 """Pure fixed-point edge inference over a linked workflow graph."""
+from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Any
@@ -177,11 +178,12 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy, catalog: Inserti
                 shorthand_relays.append(input_name)
             bound.add(port.id)
 
-    linked_edges = _refuse_duplicates(graph, steps, linked_edges, diagnostics)
+    repeated = _repeated(steps)
+    linked_edges = _refuse_duplicates(graph, steps, linked_edges, diagnostics, repeated)
+    wired = {edge.sink for edge in linked_edges}
     for step, port, source, alternatives in choices:
-        _note_choice(diagnostics, policy, step, port, source,
-                     tuple(alt for alt in alternatives if alt.step == source.step),
-                     tuple(alt for alt in alternatives if alt.step != source.step))
+        if port.id in wired:
+            _note_choice(diagnostics, policy, step, port, source, len(alternatives), repeated)
     return replace(graph, steps=tuple(steps), linked_edges=tuple(linked_edges),
                    workflow_inputs=tuple(workflow_inputs),
                    input_mapping=tuple(input_mapping),
@@ -190,7 +192,7 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy, catalog: Inserti
 
 # pylint: disable-next=too-many-locals
 def _refuse_duplicates(graph: WorkflowGraph, steps: list[StepNode], edges: list[Edge],
-                       diagnostics: Diagnostics) -> list[Edge]:
+                       diagnostics: Diagnostics, repeated: set[StepId]) -> list[Edge]:
     """`edges` without the inferred edges of every refused duplicate.
 
     Inputs of one tool step that read the same output are a duplicate. When
@@ -223,7 +225,7 @@ def _refuse_duplicates(graph: WorkflowGraph, steps: list[StepNode], edges: list[
         if refused.issuperset(edge for _, edge in inferred):
             continue
         refused.update(edge for _, edge in inferred)
-        _note_duplicate(diagnostics, members, inferred[0])
+        _note_duplicate(diagnostics, members, inferred[0], repeated)
     return [edge for edge in edges if edge not in refused]
 
 
@@ -261,22 +263,16 @@ def _leaf_steps(calls: dict[StepId, WorkflowGraph], local: PortId) -> tuple[Step
 
 
 def _note_duplicate(diagnostics: Diagnostics, members: list[tuple[Port, Edge]],
-                    first: tuple[Port, Edge]) -> None:
-    """Report the inputs of one tool step that would read one output, and how to write what each should read."""
-    source_step, source = _declared_at(first[1].source.step, first[1].source.port)
-    sinks = [_declared_at(sink.id.step, sink.id.port) for sink, _ in members]
-    names = [name for _, name in sinks]
-    tool = sinks[0][0]
-    spelled = ' and '.join(f"'{name}'" for name in names)
-    reads = ' and '.join(f'`in: {name}: !* <name>`' for name in names)
+                    first: tuple[Port, Edge], repeated: set[StepId]) -> None:
+    """Report the inputs of one tool step that would read one output, and that each needs the edge it should read."""
+    source = _spelled(*_declared_at(first[1].source.step, first[1].source.port), repeated)
+    sinks = [_spelled(*_declared_at(sink.id.step, sink.id.port), repeated) for sink, _ in members]
     step = members[0][0].id.step
     first_name = _declared_at(first[0].id.step, first[0].id.port)[1]
     diagnostics.error(
         SophiosErrorCode.INFERENCE_DUPLICATE,
-        f"{tool} inputs {spelled} would both read {source_step} output '{source}', and nothing says they should "
-        "(two inputs may read one output without a written edge only when each declares a file format that "
-        "output carries). Write the edge each input should read: mark the output each one takes with "
-        f"`out: - <port>: !& <name>` on the step that makes it, and read it with {reads} on {tool}",
+        f"{', '.join(sinks[:-1])} and {sinks[-1]} would {'both' if len(sinks) == 2 else 'all'} read {source}; "
+        "write the edge each should read",
         first[1].span, Locator(step=step.name, index=step.index, port=first_name))
 
 
@@ -390,54 +386,45 @@ def _named(matches: list[Port], sink: Port, policy: InferencePolicy) -> list[Por
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def _note_choice(diagnostics: Diagnostics, policy: InferencePolicy, step: StepNode, port: Port,
-                 chosen: PortId, ties: tuple[PortId, ...], earlier: tuple[PortId, ...]) -> None:
-    """Say which equal candidates lost, and how to pin the choice.
+                 chosen: PortId, others: int, repeated: set[StepId]) -> None:
+    """Note an edge inference guessed, as `sink <- source`, and how many other outputs also fitted.
 
-    A subworkflow call exposes its steps' ports under derived names that an
-    author cannot write, so each port is shown by the path of steps down to
-    the one that declares it, and the pin goes on that step.
+    The input is named at the step the author wrote, a call's input by the port
+    its tool declares, so one guess fanned out inside a call is one note. The
+    output is named by the path of steps down to the one that declares it, as
+    the outputs that fit may differ only inside a call.
     """
-    sink_step, sink = _declared_at(step.id, port.id.port)
-    source_step, source = _declared_at(chosen.step, chosen.port)
+    sink = _leaf(port.id.port)
+    edge = f'{_spelled((step.id,), sink, repeated)} <- {_spelled(*_declared_at(chosen.step, chosen.port), repeated)}'
+    fit = f"{others} {'other fits' if others == 1 else 'others fit'}"
     locator = Locator(step=step.id.name, index=step.id.index, port=sink)
-    sink_at = 'here' if sink_step == _label(step.id) else f'on {sink_step}'
-    pin = (f"pin it: `out: - {source}: !& <name>` on {source_step} and "
-           f"`in: {sink}: !* <name>` {sink_at}")
-    report = diagnostics.error if policy.strict else diagnostics.note
-    if ties:
-        report(SophiosErrorCode.INFERENCE_TIE,
-               f"step '{step.id.name}' input '{_below(port.id.port)}' was inferred from "
-               f"{_where(chosen.step, chosen.port)}, but that step also offers "
-               + ', '.join(_where(chosen.step, alt.port) for alt in ties) + '; ' + pin,
-               port.span, locator)
-    if earlier:
-        report(SophiosErrorCode.INFERENCE_RECENCY,
-               f"step '{step.id.name}' input '{_below(port.id.port)}' was inferred from the most recent "
-               f"match {_where(chosen.step, chosen.port)}; earlier steps also match: "
-               + ', '.join(_where(alt.step, alt.port) for alt in earlier) + '; ' + pin,
-               port.span, locator)
+    if policy.strict:
+        diagnostics.error(SophiosErrorCode.INFERENCE_GUESS, f'{edge} was guessed, {fit}; write the edge it should read',
+                          port.span, locator)
+    else:
+        diagnostics.note(SophiosErrorCode.INFERENCE_GUESS, f'{edge} ({fit})', port.span, locator)
 
 
-def _label(step: StepId) -> str:
-    """A step as its position and id: an id may repeat, the position does not."""
-    return f"step {step.index} '{step.name}'"
-
-
-def _declared_at(step: StepId, name: PortName) -> tuple[str, str]:
+def _declared_at(step: StepId, name: PortName) -> tuple[tuple[StepId, ...], str]:
     """The path of steps from `step` down to the one that declares `name`,
     and the name that step declares it under."""
-    return ' > '.join(_label(s) for s in (step, *_steps(name))), _leaf(name)
+    return (step, *_steps(name)), _leaf(name)
 
 
-def _where(step: StepId, name: PortName) -> str:
-    """The step that declares `name`, reached from `step`, and its port."""
-    declaring, declared = _declared_at(step, name)
-    return f"{declaring} output '{declared}'"
+def _repeated(steps: list[StepNode]) -> set[StepId]:
+    """The steps whose name another step of the same workflow also has, down through every call."""
+    counts = Counter(step.id.name for step in steps)
+    found = {step.id for step in steps if counts[step.id.name] > 1}
+    for step in steps:
+        if step.run is not None and step.run.child is not None:
+            found |= _repeated(list(step.run.child.steps))
+    return found
 
 
-def _below(name: PortName) -> str:
-    """`name` as the path of steps it was exposed through, then the port."""
-    return '/'.join((*(s.name for s in _steps(name)), _leaf(name)))
+def _spelled(owner: tuple[StepId, ...], port: str, repeated: set[StepId]) -> str:
+    """`port` of the last step of `owner`, as `call.wic/tool.port`: the steps by name, outermost first,
+    and a step whose name repeats in its workflow by its position as well, as `touch@2`, as in the emitted CWL."""
+    return '/'.join(f'{step.name}@{step.index}' if step in repeated else step.name for step in owner) + f'.{port}'
 
 
 def _authored(port: Port) -> str:

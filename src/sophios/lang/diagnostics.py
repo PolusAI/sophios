@@ -4,10 +4,12 @@ Parsing reports problems as values rather than raising, so a caller can
 decide what to do with them and a malformed document can yield several
 errors in one pass instead of one per run.
 """
+import json
+import sys
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, overload
+from typing import Any, Final, overload
 
 from . import error_codes as _error_codes
 from .spans import SourceSpan
@@ -65,7 +67,8 @@ class Diagnostic:
 
     def __str__(self) -> str:
         prefix = f'{self.span}: ' if self.span is not None else ''
-        suffix = f' ({self.locator})' if self.locator is not None else ''
+        shown = self.locator is not None and self.code not in _NAMES_ITS_PORT
+        suffix = f' ({self.locator})' if shown else ''
         return f'{prefix}{self.severity} [{self.code}] {self.message}{suffix}'
 
     def to_json(self) -> dict[str, Any]:
@@ -145,6 +148,44 @@ class Diagnostics(Sequence[Diagnostic]):
         return f'Diagnostics({self._items!r})'
 
 
+#: Codes whose every message names the step and port, so text leaves the locator off; JSON keeps it.
+_NAMES_ITS_PORT: Final = frozenset({_error_codes.SophiosErrorCode.INFERENCE_GUESS,
+                                    _error_codes.SophiosErrorCode.INFERENCE_DUPLICATE})
+
+
+def lines(diagnostics: Iterable[Diagnostic]) -> list[str]:
+    """`diagnostics` as text: one line each, except the edges inference guessed.
+
+    Those follow as one block, a header that counts them and then one row per
+    edge. The header says how to draw the workflow and check them, unless an
+    error stopped the compile and there is nothing to draw.
+    """
+    items = list(diagnostics)
+    code = _error_codes.SophiosErrorCode.INFERENCE_GUESS
+    guessed = [d for d in items if d.code is code and d.severity is Severity.NOTE]
+    shown = [str(d) for d in items if d not in guessed]
+    if not guessed:
+        return shown
+    one = len(guessed) == 1
+    count = f"{len(guessed)} {'edge was' if one else 'edges were'} guessed"
+    check = f"; draw the workflow to check {'it' if one else 'them'} (--graphviz, or Workflow.draw() in Python)"
+    failed = any(d.severity is Severity.ERROR for d in items)
+    places = [str(d.span) if d.span is not None else '' for d in guessed]
+    width = max(len(place) for place in places)
+    return [*shown, f"{Severity.NOTE} [{code}] {count}{':' if failed else check}",
+            *(f'  {place:<{width}}  {d.message}' if width else f'  {d.message}' for place, d in zip(places, guessed))]
+
+
+def report(diagnostics: Iterable[Diagnostic], form: str = 'text') -> None:
+    """Print diagnostics on stderr, as `lines` or, for `form` 'json', as one JSON object per line.
+
+    The command line and the Python API print through this, so a note reads the same on both.
+    """
+    items = list(diagnostics)
+    for line in ([json.dumps(d.to_json()) for d in items] if form == 'json' else lines(items)):
+        print(line, file=sys.stderr)
+
+
 class SophiosError(Exception):
     """A failure the library reports, never a process it terminates.
 
@@ -156,7 +197,7 @@ class SophiosError(Exception):
         items = Diagnostics(diagnostics)
         if not len(items):
             raise ValueError('SophiosError requires at least one diagnostic')
-        super().__init__('\n'.join(str(d) for d in items))
+        super().__init__('\n'.join(lines(items)))
         self.diagnostics: Diagnostics = items
 
     @classmethod
