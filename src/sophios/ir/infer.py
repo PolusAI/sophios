@@ -35,7 +35,7 @@ class InferencePolicy:
     """Every choice that can alter inference, supplied by the caller."""
 
     disabled: bool = False
-    use_naming_conventions: bool = False
+    use_naming_conventions: bool = True
     renaming_conventions: tuple[tuple[str, str], ...] = ()
     insert_steps_automatically: bool = False
     format_rules: tuple[tuple[str, str], ...] = ()

@@ -531,8 +531,8 @@ def test_a_positional_output_source_compiles_in_a_fully_explicit_workflow() -> N
 
 @pytest.mark.fast
 def test_naming_conventions_pick_the_name_matched_output_over_the_last_declared() -> None:
-    """With conventions on, `input_structure` takes `output_structure` although
-    `output_other` is declared last, which is the one taken with them off."""
+    """With no setting, `input_structure` takes `output_structure` although
+    `output_other` is declared last, which is the one taken with conventions off."""
     producer = clt({}, {'output_structure': {'type': 'File', 'outputBinding': {'glob': 's'}},
                         'output_other': {'type': 'File', 'outputBinding': {'glob': 'o'}}}, canonical=True)
     consumer = clt({'input_structure': {'type': 'File', 'inputBinding': {'position': 1}}}, {}, canonical=True)
@@ -543,7 +543,8 @@ def test_naming_conventions_pick_the_name_matched_output_over_the_last_declared(
     chosen: dict[bool, PortName] = {}
     for conventions in (True, False):
         _, linked, _ = _typed(copy.deepcopy(workflow), tools)
-        result = infer(linked, InferencePolicy(use_naming_conventions=conventions))
+        policy = InferencePolicy() if conventions else InferencePolicy(use_naming_conventions=False)
+        result = infer(linked, policy)
         assert result.graph is not None, list(result.diagnostics)
         (edge,) = [edge for edge in result.graph.linked_edges if edge.sink.step.name == 'consumer']
         chosen[conventions] = edge.source.port
