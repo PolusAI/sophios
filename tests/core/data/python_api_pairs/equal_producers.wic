@@ -1,0 +1,2 @@
+steps: [{id: first, run: touch, in: {filename: !ii a.txt}}, {id: second, run: touch, in: {filename: !ii b.txt}},
+    {id: cat}]

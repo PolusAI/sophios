@@ -1,0 +1,2 @@
+{diagnostics: [{code: NO_PYTHON_SPELLING, file: right.wic, message: {contains: ['child.wic is called here and at
+    left.wic:']}}]}

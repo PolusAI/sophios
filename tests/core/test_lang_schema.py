@@ -18,19 +18,19 @@ this here rather than asserting a stronger equivalence that is not true.
 import json
 from dataclasses import fields
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import jsonschema
 import pytest
 import yaml
-from hypothesis import given
+from hypothesis import example, given
 
 from sophios.lang import SophiosErrorCode, Forms, Grammar, parse, to_json, wic_schema
 from sophios.lang.nodes import Shape, Step, WicSidecar, surface_of
 
 from .budgets import budget
-from .strategies import documents
-from .test_lang_parser import MALFORMED_WIC_VALUES, WIC_VALUES
+from .cases import cases
+from .strategies import WIC_VALUES, documents, pinned, shapes
 from .wic_corpus import CORPUS, corpus_id
 
 FAST = budget(200)
@@ -146,46 +146,83 @@ def test_accepts_the_whole_corpus(path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# Reverse: the structural mistakes the parser reports, the schema rejects
+# Both ways: the schema refuses exactly the shapes the parser reports
 # --------------------------------------------------------------------------
-#
-# Each case is a shape the parser emits a diagnostic for. Both halves are
-# asserted together, so the pair cannot silently drift apart.
 
-STRUCTURAL_VIOLATIONS: list[tuple[str, str, Any]] = [
-    ('steps must be a mapping or sequence', 'steps: nope\n', {'steps': 'nope'}),
-    ('step body must be a mapping or null', 'steps:\n  s: 3\n', {'steps': {'s': 3}}),
-    ('in must be a mapping', 'steps:\n  s:\n    in: 3\n', {'steps': {'s': {'in': 3}}}),
-    ('out must be a sequence', 'steps:\n  s:\n    out: 3\n', {'steps': {'s': {'out': 3}}}),
-    ('wic must be a mapping', 'wic: 3\n', {'wic': 3}),
-    ('wic steps must be a mapping', 'wic:\n  steps: 3\n', {'wic': {'steps': 3}}),
-    ('wic step keys have the form (index, name) or are a step id',
-     'wic:\n  steps:\n    "not a key":\n      x: 1\n', {'wic': {'steps': {'not a key': {'x': 1}}}}),
-    ('a sequence step carries its name in an id: key',
-     'steps:\n- touch:\n    in:\n      f: x\n', {'steps': [{'touch': {'in': {'f': 'x'}}}]}),
-    ('a sequence step with a null body still needs an id:',
-     'steps:\n- touch:\n', {'steps': [{'touch': None}]}),
-    ('a sequence entry keyed by a step key is not an identity',
-     'steps:\n- in:\n    value: something\n', {'steps': [{'in': {'value': 'something'}}]}),
-]
+#: What the parser reports about a document's shape, as distinct from what it says about names, tags and edges.
+_SHAPE_CODES: Final = frozenset({
+    SophiosErrorCode.EXPECTED_MAPPING, SophiosErrorCode.EXPECTED_SEQUENCE, SophiosErrorCode.EXPECTED_SCALAR,
+    SophiosErrorCode.MISSING_STEP_ID, SophiosErrorCode.EMPTY_STEP_ID, SophiosErrorCode.MALFORMED_WIC_STEP_KEY,
+    SophiosErrorCode.UNKNOWN_WIC_KEY, SophiosErrorCode.MALFORMED_WIC_VALUE})
+
+#: Shapes the parser reports, each with what the language says there.
+REFUSED: Final = {
+    'steps must be a mapping or sequence': {'steps': 'nope'},
+    'step body must be a mapping or null': {'steps': {'s': 3}},
+    'in must be a mapping': {'steps': {'s': {'in': 3}}},
+    'out must be a sequence': {'steps': {'s': {'out': 3}}},
+    'an out: entry is a name or a single-key mapping': {'steps': {'s': {'out': [['s']]}}},
+    'wic must be a mapping': {'wic': 3},
+    'wic steps must be a mapping': {'wic': {'steps': 3}},
+    'wic step keys have the form (index, name) or are a step id': {'wic': {'steps': {'not a key': {'x': 1}}}},
+    'a sequence step carries its name in an id: key': {'steps': [{'touch': {'in': {'f': 'x'}}}]},
+    'a sequence step with a null body still needs an id:': {'steps': [{'touch': None}]},
+    'a sequence entry keyed by a step key is not an identity': {'steps': [{'in': {'value': 'something'}}]},
+    'an empty step id is wic007': {'steps': [{'id': ''}]},
+    **{f'{key} is not a top-level wic: key': {'wic': {key: yaml.safe_load(value)}}
+       for key, value in WIC_VALUES.items() if key not in Grammar.SIDECAR_KEYS},
+}
+
+#: Shapes the language admits, each with why.
+ADMITTED: Final = {
+    'a step may have no body (.wic reference §2.1)': {'steps': {'sub.wic': None}},
+    'nor a wic: block': {'wic': None},
+    'unknown keys are passthrough CWL, not errors (language spec §1)': {
+        '$namespaces': {'edam': 'http://edamontology.org/'},
+        'steps': {'s': {'in': {'f': 'name'}, 'hints': [{'class': 'X'}]}}},
+    **{f'{key} is an input value': {'steps': {'s': {'in': {'f': {key: 'x'}}}}} for key in sorted(Forms.DESUGARED_KEYS)},
+    # Both Step.id and OutputBinding.name are IDENTITY-shaped: a non-empty constraint written onto the shape made the
+    # schema stricter than the language for outputs, invisible while the generator's names were all non-empty.
+    "out: [''] parses without a diagnostic": {'steps': [{'id': 's', 'out': ['']}]},
+    # The parser's reading of `(1, a): {wic: , in: ...}`: wicStepBlock admits null, so both take the siblings alone.
+    'an empty sidecar wrapper beside siblings': {'wic': {'steps': {'(1, a)': {'wic': None, 'in': {'x': 1}}}},
+                                                 'steps': [{'id': 'a'}]},
+    **{f'{key} is a wic: steps: key': {'wic': {'steps': {'(1, s)': {key: yaml.safe_load(value)}}}}
+       for key, value in WIC_VALUES.items()},
+    **{f'{key} is a top-level wic: key': {'wic': {key: yaml.safe_load(value)}}
+       for key, value in WIC_VALUES.items() if key in Grammar.SIDECAR_KEYS},
+}
+#: Each row's outcome, by the JSON text of its document: `True` and `1` are equal in Python, not as the parser reads.
+_ACCEPTS: Final = {json.dumps(document): accepted for accepted, table in ((False, REFUSED), (True, ADMITTED))
+                   for document in table.values()}
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('label,source,projection', STRUCTURAL_VIOLATIONS, ids=[c[0] for c in STRUCTURAL_VIOLATIONS])
-def test_rejects_what_the_parser_reports(label: str, source: str, projection: Any) -> None:
-    """Reverse direction: parser and schema agree on the structural mistakes."""
-    assert not parse(source, 'bad.wic').ok, f'parser accepted {label!r}'
-    assert not _accepts(projection), f'schema accepted {label!r}'
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('source', '_line', '_column'), MALFORMED_WIC_VALUES,
-                         ids=[c[0] for c in MALFORMED_WIC_VALUES])
-def test_rejects_every_wic_value_the_parser_reports(source: str, _line: int, _column: int) -> None:
-    """A `wic:` value of the wrong shape is refused by both readers of its
-    declaration. The sources carry no tags, so loading one is its projection."""
-    assert not parse(source, 'bad.wic').ok
-    assert not _accepts(yaml.safe_load(source))
+@given(shapes())
+@pinned(*REFUSED.values(), *ADMITTED.values(),
+        *(yaml.safe_load(case.values[0]['source']) for case in cases('parse/wic_values.yaml')))
+@example({'steps': [{'id': 1}]}).xfail(raises=AssertionError, reason="the parser reads the id as the name '1', the "
+                                       'schema wants a string')
+@example({'steps': {'s': {'out': [{'f': 'x'}]}}}).xfail(raises=AssertionError, reason='wic005: an out: entry binds '
+                                                        'only !&, which the schema does not say')
+@example({'wic': {'steps': {'s': {'out': 3}}}}).xfail(raises=AssertionError, reason='wic004: the schema leaves out: '
+                                                      'under wic: steps: open')
+@example({'steps': {'s': {'in': {'f': {'wic_alias': ['x']}}}}}).xfail(raises=AssertionError, reason='wic005: the '
+                                                                      'schema leaves a construct open')
+@budget(100)
+def test_the_schema_refuses_exactly_the_shapes_the_parser_reports(document: dict[str, Any]) -> None:
+    """Two readers of one declaration, over tag-free documents, where loading one is its projection: the schema
+    refuses a document, as an editor loads it, exactly when the parser reports its shape, and a row as its table
+    says. And what the parser accepts projects to JSON the schema accepts, as for `documents()` above."""
+    result = parse(json.dumps(document), 'shape.wic')
+    reported = [str(d) for d in result.diagnostics if d.code in _SHAPE_CODES]
+    assert _accepts(document) == (not reported), ([str(d) for d in result.diagnostics],
+                                                  list(VALIDATOR.iter_errors(document)))
+    assert _ACCEPTS.get(json.dumps(document), not reported) == (not reported)
+    if result.ok and result.document is not None:
+        projection = to_json(result.document)
+        json.dumps(projection)
+        assert _accepts(projection), list(VALIDATOR.iter_errors(projection))
 
 
 @pytest.mark.fast
@@ -197,41 +234,7 @@ def test_the_wic_block_is_closed_and_complete_for_editors() -> None:
     for form, keys in forms.items():
         assert set(SCHEMA['$defs'][form]['properties']) == keys, form
         assert SCHEMA['$defs'][form]['additionalProperties'] is False, form
-    for key, value in WIC_VALUES.items():
-        entry = {'wic': {'steps': {'(1, s)': {key: yaml.safe_load(value)}}}}
-        assert _accepts(entry), (key, list(VALIDATOR.iter_errors(entry)))
-        if key in Grammar.SIDECAR_KEYS:
-            assert _accepts({'wic': {key: yaml.safe_load(value)}}), key
-        else:
-            assert not _accepts({'wic': {key: yaml.safe_load(value)}}), key
 
-
-# --------------------------------------------------------------------------
-# Sanity checks
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('key', sorted(Forms.DESUGARED_KEYS))
-def test_each_construct_validates(key: str) -> None:
-    """Every desugared construct is accepted where an input value is expected."""
-    assert _accepts({'steps': {'s': {'in': {'f': {key: 'x'}}}}})
-
-
-@pytest.mark.fast
-def test_passthrough_is_admitted_everywhere() -> None:
-    """Unknown keys are passthrough CWL, not errors (language spec §1)."""
-    assert _accepts({
-        '$namespaces': {'edam': 'http://edamontology.org/'},
-        'steps': {'s': {'in': {'f': 'name'}, 'hints': [{'class': 'X'}]}},
-    })
-
-
-@pytest.mark.fast
-def test_a_step_may_have_no_body() -> None:
-    """`some_subworkflow.wic:` with nothing under it is well-formed (.wic reference §2.1)."""
-    assert _accepts({'steps': {'sub.wic': None}})
-    assert _accepts({'wic': None})
 
 # --------------------------------------------------------------------------
 # The AST is the source of truth
@@ -305,41 +308,3 @@ def test_editing_an_export_cannot_affect_a_later_one() -> None:
     assert second['$defs']['stepBody']['properties']['in']['additionalProperties']['$ref'] \
         == '#/$defs/inputValue'
     assert second['$defs']['outputEntry']['oneOf'][0]['type'] == 'string'
-
-
-# --------------------------------------------------------------------------
-# A field's constraints are the field's, not its shape's
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.fast
-def test_an_empty_output_name_validates_because_the_parser_accepts_it() -> None:
-    """`out: ['']` parses without a diagnostic, so it must validate.
-
-    Both `Step.id` and `OutputBinding.name` are IDENTITY-shaped. A non-empty
-    constraint written onto the shape reached both and made the schema
-    stricter than the language for outputs — the forward direction's exact
-    failure mode, invisible while the generator's names were all non-empty.
-    """
-    result = parse("steps:\n- id: s\n  out:\n  - ''\n", 'empty_out.wic')
-    assert result.ok, [str(d) for d in result.diagnostics]
-    assert result.document is not None
-    assert _accepts(json.loads(json.dumps(to_json(result.document))))
-
-
-@pytest.mark.fast
-def test_an_empty_step_id_is_rejected_because_the_parser_reports_it() -> None:
-    """The other direction, for the field that does carry the rule: an empty
-    step id is `wic007`, so the schema must not accept it either."""
-    result = parse("steps:\n- id: ''\n", 'empty_id.wic')
-    assert any(d.code is SophiosErrorCode.EMPTY_STEP_ID for d in result.diagnostics)
-    assert not _accepts({'steps': [{'id': ''}]})
-
-
-@pytest.mark.fast
-def test_an_empty_sidecar_wrapper_beside_siblings_is_accepted() -> None:
-    """The schema half of the parser's reading of `(1, a): {wic: , in: ...}`:
-    `wicStepBlock` admits null, so both surfaces accept the siblings alone."""
-    data = yaml.safe_load('wic:\n  steps:\n    (1, a):\n      wic:\n      in: {x: 1}\nsteps:\n- id: a\n')
-
-    assert _accepts(data), list(VALIDATOR.iter_errors(data))

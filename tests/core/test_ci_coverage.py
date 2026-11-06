@@ -328,9 +328,11 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 #: The list is the claim. Growing it is a deliberate edit here, not a marker
 #: added in passing, because every entry is Windows coverage given up.
 WINDOWS_EXCLUDED: Final = frozenset({
+    # cwltool's and Toil's own parsers read the command line, and both import `pwd`. Windows runs neither
+    # runner (preflight.PLATFORM_LACKS_RUNNERS), so it never uses the command line built for them.
+    'tests/core/test_backends.py::test_each_cwl_runner_reads_its_command_line_as_the_request_says',
     'tests/core/test_emit.py::test_emit_validates_as_cwl_v1_2',
     'tests/core/test_emit.py::test_validator_rejects_the_independent_invalid_control',
-    'tests/core/test_emit.py::test_a_compiled_string_job_input_validates',
     # A strict xfail on one cwltool validation of a `schemed` workflow, under a
     # second. It states the SchemaDefRequirement gap the generators exclude,
     # which only cwltool's validator can show, so it runs where the pair does.

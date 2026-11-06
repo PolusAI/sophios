@@ -1,12 +1,16 @@
 """What each backend gives a run: the runner's command line, and what it reads back from the runner."""
 import json
+import os
+import signal
 import subprocess
-import sys
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import pytest
+from hypothesis import example, given, strategies as st
 
 from sophios import backends, preflight, run_setup
 from sophios.api.python._workflow_runtime import compile_workflow_result
@@ -16,6 +20,7 @@ from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.lang.diagnostics import Diagnostic, Severity, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 
+from .budgets import budget
 from .nextflow.testkit import REPO_ROOT, runtime_workflow
 
 
@@ -23,58 +28,75 @@ def _argv(request: RunRequest) -> list[str]:
     return list(backends.backend(request.target, request.runner).launch(request).argv)
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize('runner', ['cwltool', 'toil-cwl-runner'])
-def test_a_given_outdir_is_used_once_and_clean_follows_the_runner(tmp_path: Path, runner: str) -> None:
-    outdir = tmp_path / 'workflow_output'
-    cmd = _argv(RunRequest('wf', tmp_path / 'exec', runner=runner, outdir=str(outdir)))
-    assert cmd.count('--outdir') == 1
-    assert cmd[cmd.index('--outdir') + 1] == str(outdir.resolve())
-    if runner == 'toil-cwl-runner':
-        assert cmd[cmd.index('--clean') + 1] == 'always'
-    else:
-        assert '--clean' not in cmd
+class _Frozen(backends.datetime):
+    @classmethod
+    def now(cls, tz: Any = None) -> '_Frozen':
+        return cls(2026, 10, 9, 12, 2, 16)
+
+
+#: Arguments each runner takes, with the option each sets as its parser reads it.
+_PASSTHROUGH: dict[str, list[tuple[tuple[str, ...], str, Any]]] = {
+    'cwltool': [(('--parallel',), 'parallel', True), (('--timestamps',), 'timestamps', True),
+                (('--no-read-only',), 'no_read_only', True)],
+    'toil-cwl-runner': [(('--maxCores', '2'), 'maxCores', 2), (('--retryCount', '3'), 'retryCount', 3),
+                        (('--logLevel', 'DEBUG'), 'logLevel', 'DEBUG')]}
+#: What a request leaves out, as RunRequest's docstring says.
+_DEFAULTS: dict[str, Any] = {'outdir': '', 'cachedir': '', 'quiet': True, 'provenance': True,
+                             'container_engine': 'docker', 'documents': None}
+_PATHS = st.builds(lambda root, parts: os.path.join(root, *parts), st.sampled_from(['', '/tmp']),
+                   st.lists(st.from_regex('[a-z_]{1,6}', fullmatch=True), min_size=1, max_size=2))
+_REQUESTS = st.tuples(
+    st.from_regex('[A-Za-z0-9_][A-Za-z0-9_.-]{0,11}', fullmatch=True), _PATHS,
+    st.sampled_from(sorted(_PASSTHROUGH)).flatmap(lambda runner: st.tuples(
+        st.just(runner), st.lists(st.sampled_from(_PASSTHROUGH[runner]), unique=True))),
+    st.fixed_dictionaries({}, optional={
+        'outdir': st.one_of(st.just(''), _PATHS), 'cachedir': st.one_of(st.just(''), _PATHS), 'quiet': st.booleans(),
+        'provenance': st.booleans(),
+        'container_engine': st.sampled_from(['docker', 'singularity', 'podman', 'udocker']),
+        'documents': st.lists(_PATHS, min_size=1, max_size=2).map(tuple)}))
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(('runner', 'name'), [('cwltool', 'cwltool'), ('toil-cwl-runner', 'toil')])
-def test_two_workflows_started_in_the_same_second_get_their_own_outdirs(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runner: str, name: str) -> None:
-    """The default output directory is named after the workflow, as provenance, the summary and the
-    job store are, so two workflows started in the same second from one basepath never share it."""
-    class Frozen(backends.datetime):
-        @classmethod
-        def now(cls, tz: Any = None) -> 'Frozen':
-            return cls(2026, 10, 9, 12, 2, 16)
-
-    monkeypatch.setattr(backends, 'datetime', Frozen)
-    base = tmp_path.resolve()
-    outdirs = []
-    for workflow in ('bbbc', 'python_script_demo'):
-        cmd = _argv(RunRequest(workflow, base, runner=runner))
-        outdirs.append(cmd[cmd.index('--outdir') + 1])
-    assert outdirs == [f'{base}/outdir_{name}_bbbc_2026_10_09_12.02.16',
-                       f'{base}/outdir_{name}_python_script_demo_2026_10_09_12.02.16']
-
-
-@pytest.mark.fast
-def test_cwltool_is_quiet_unless_told_otherwise_and_toil_never_is(tmp_path: Path) -> None:
-    """`--quiet` is on for callers that say nothing and off when `quiet=False`, so `--debug` can be heard."""
-    assert '--quiet' in _argv(RunRequest('wf', tmp_path))
-    assert '--quiet' not in _argv(RunRequest('wf', tmp_path, quiet=False))
-    assert '--quiet' not in _argv(RunRequest('wf', tmp_path, runner='toil-cwl-runner'))
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('cachedir', 'given'), [('', None), ('cache', 'cache')])
-def test_cwltool_gets_the_cachedir_it_was_given_made_absolute(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-                                                              cachedir: str, given: str | None) -> None:
-    monkeypatch.chdir(tmp_path)
-    cmd = _argv(RunRequest('wf', tmp_path, cachedir=cachedir))
-    if given is None:
-        assert '--cachedir' not in cmd
-    else:
-        assert cmd[cmd.index('--cachedir') + 1] == str(tmp_path / given)
+@pytest.mark.needs_cwltool
+@budget(50)
+@given(_REQUESTS)
+@example(('wf', 'exec', ('cwltool', []), {'outdir': 'workflow_output'}))
+@example(('wf', 'exec', ('toil-cwl-runner', []), {'outdir': 'workflow_output'}))
+@example(('bbbc', 'base', ('cwltool', []), {}))
+@example(('python_script_demo', 'base', ('cwltool', []), {}))
+@example(('bbbc', 'base', ('toil-cwl-runner', []), {}))
+@example(('python_script_demo', 'base', ('toil-cwl-runner', []), {}))
+@example(('wf', 'base', ('cwltool', []), {'quiet': False, 'cachedir': 'cache'}))
+def test_each_cwl_runner_reads_its_command_line_as_the_request_says(
+        drawn: tuple[str, str, tuple[str, list[Any]], dict[str, Any]]) -> None:
+    """As each runner's own parser reads it. The default outdir is named after the workflow, as provenance, the
+    summary and the job store are, so two workflows started in the same second from one basepath never share it.
+    `--quiet` is on for callers that say nothing and off when `quiet=False`, so `--debug` can be heard; Toil is never
+    quiet. The passthrough arguments come before the documents."""
+    name, basepath, (runner, passthrough), fields = drawn
+    asked = _DEFAULTS | fields
+    with mock.patch.object(backends, 'datetime', _Frozen):
+        argv = _argv(RunRequest(name, Path(basepath), runner=runner, passthrough_args=tuple(
+            argument for arguments, _, _ in passthrough for argument in arguments), **fields))
+    import cwltool.argparser  # pylint: disable=import-outside-toplevel  # it and Toil import `pwd`
+    from toil.cwl.cwltoil import get_options  # pylint: disable=import-outside-toplevel
+    read = {'cwltool': cwltool.argparser.arg_parser().parse_args, 'toil-cwl-runner': get_options}[runner](
+        argv[1:])
+    base, cwl = os.path.realpath(basepath), runner == 'cwltool'
+    assert argv.count('--outdir') == 1
+    assert read.outdir == (os.path.realpath(asked['outdir']) if asked['outdir'] else
+                           f"{base}/outdir_{'cwltool' if cwl else 'toil'}_{name}_2026_10_09_12.02.16")
+    assert read.quiet is (cwl and asked['quiet'])
+    assert (read.cachedir or None) == (os.path.abspath(asked['cachedir']) if cwl and asked['cachedir'] else None)
+    assert read.provenance == (f'{base}/provenance/{name}' if asked['provenance'] else None)
+    docker = read.user_space_docker_cmd or ('podman' if read.podman else 'docker')
+    assert (read.singularity, 'singularity' if read.singularity else docker) == (
+        asked['container_engine'] == 'singularity', asked['container_engine'])
+    documents = [read.workflow, *read.job_order] if cwl else [read.cwltool, *read.cwljob]
+    assert documents == list(asked['documents'] or [f'{base}/{name}.cwl', f'{base}/{name}_inputs.yml'])
+    assert [getattr(read, option) for _, option, _ in passthrough] == [value for _, _, value in passthrough]
+    assert ((read.write_summary,) if cwl else (read.jobStore, read.clean)) == (
+        (f'{base}/output_{name}.json',) if cwl else (f'file:{base}/jobStore_{name}', 'always'))
 
 
 @pytest.mark.fast
@@ -103,23 +125,87 @@ def test_an_unknown_runner_is_refused_naming_the_runners() -> None:
         backends.backend('cwl', 'cwl-runner')
 
 
-@pytest.mark.fast
-def test_failed_steps_are_read_from_the_runners_log_lines() -> None:
-    lines = ['WARNING [job a] exited with status: 3', 'WARNING [job a] completed permanentFail',
-             'INFO [job b] completed success',
-             '\x1b[1;30mWARNING\x1b[0m \x1b[33m[job c] was terminated by signal: SIGKILL\x1b[0m',
-             '\x1b[1;30mWARNING\x1b[0m \x1b[33m[job c] completed permanentFail\x1b[0m',
-             '[2026-10-22 10:00:00] WARNING [job d] completed permanentFail']
-    assert backends.failed_steps(lines) == {'a': 3, 'c': 'SIGKILL', 'd': None}
+#: Lines that end no run: any text with no `[` (cwltool's lines start with one) and no line break.
+_TEXT = st.text(st.characters(exclude_characters='[\n\r'), max_size=20)
+
+
+@st.composite
+def _interleaved(draw: st.DrawFn, runs: list[list[tuple[str, Any]]], others: st.SearchStrategy[str],
+                 dressed: st.SearchStrategy[str]) -> tuple[list[str], dict[str, Any]]:
+    """The runs' lines interleaved, each in its order, among `others`, dressed; and what their tags say, in order."""
+    queues = [list(run) for run in runs] + [[(line, None)] for line in draw(st.lists(others, max_size=4))]
+    lines: list[str] = []
+    said: dict[str, Any] = {}
+    while any(queues):
+        line, tag = draw(st.sampled_from([queue for queue in queues if queue])).pop(0)
+        lines.append(draw(dressed).format(line))
+        if tag is not None:
+            said.setdefault(*tag)
+    return lines, said
+
+
+@st.composite
+def _cwltool_logs(draw: st.DrawFn) -> tuple[list[str], dict[str, Any]]:
+    """A cwltool log, and each job it says did not succeed with how it ended, as cwltool/job.py prints a job: its exit
+    status or the signal that ended it when it did not succeed, then `completed <status>`; or neither line yet."""
+    runs = []
+    for job in draw(st.lists(st.text('ab_~@.:-0', min_size=1, max_size=6), unique=True, max_size=4)):
+        ended = draw(st.one_of(st.none(), st.integers(1, 255), st.sampled_from([kind.name for kind in signal.Signals])))
+        completed = draw(st.sampled_from([None, 'success', 'permanentFail', 'temporaryFail']))
+        said = [] if ended is None else [f'[job {job}] exited with status: {ended}' if isinstance(ended, int)
+                                         else f'[job {job}] was terminated by signal: {ended}']
+        runs.append([(line, None) for line in said] + ([] if completed is None else [
+            (f'[job {job}] completed {completed}', None if completed == 'success' else (job, ended))]))
+    # Bare, after its level and a time, or in colour; among others, cwltool/workflow_job.py's that end no job.
+    return draw(_interleaved(runs, st.one_of(_TEXT, st.sampled_from([
+        '[step a] completed permanentFail', '[workflow wf] completed success',
+        '[a] Iteration 1 completed permanentFail'])), st.sampled_from([
+            '{}', 'INFO {}', 'WARNING {}', '[2026-10-22 10:00:00] WARNING {}',
+            '\x1b[1;30mWARNING\x1b[0m \x1b[33m{}\x1b[0m'])))
 
 
 @pytest.mark.fast
-def test_toil_writes_no_summary_when_it_printed_no_output_object(tmp_path: Path) -> None:
-    request = RunRequest('wf', tmp_path, runner='toil-cwl-runner')
-    backend = backends.backend('cwl', 'toil-cwl-runner')
-    outcome = backend.outcome(request, 0, 'no object here\n', tmp_path / 'absent.log')
-    assert outcome.outputs is None and outcome.summary is None
-    assert not (tmp_path / 'output_wf.json').exists()
+@budget(100)
+@given(_cwltool_logs())
+@example((['WARNING [job a] exited with status: 3', 'WARNING [job a] completed permanentFail',
+           'INFO [job b] completed success',
+           '\x1b[1;30mWARNING\x1b[0m \x1b[33m[job c] was terminated by signal: SIGKILL\x1b[0m',
+           '\x1b[1;30mWARNING\x1b[0m \x1b[33m[job c] completed permanentFail\x1b[0m',
+           '[2026-10-22 10:00:00] WARNING [job d] completed permanentFail'], {'a': 3, 'c': 'SIGKILL', 'd': None}))
+def test_failed_steps_are_read_from_the_runners_log_lines(log: tuple[list[str], dict[str, Any]]) -> None:
+    """A job is failed by its `completed` line, in that line's order, with the exit status or signal it ended with,
+    else None; a job that succeeded, or has not completed, is not, and nor is a step's or a workflow's line."""
+    lines, failed = log
+    assert list(backends.failed_steps(lines).items()) == list(failed.items())
+
+
+#: What Toil prints, as printed and read back: a line, never blank nor starting with `{`, or an object.
+_PRINTED = st.one_of(st.text(st.characters(exclude_characters='\n\r'), min_size=1, max_size=20).filter(
+    lambda line: line.strip(' \t') and not line.startswith('{')).map(lambda line: (line, None)), st.builds(
+    lambda value, indent: (json.dumps(value, indent=indent), value), st.dictionaries(st.text(max_size=4), st.recursive(
+        st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False, allow_infinity=False) | st.text(),
+        lambda inner: st.lists(inner, max_size=3) | st.dictionaries(st.text(max_size=4), inner, max_size=3),
+        max_leaves=6), max_size=3), st.sampled_from([None, 4])))
+_ECHOED = {'echo~stdout': {'class': 'File', 'path': '/out/stdout'}}
+
+
+@pytest.mark.fast
+@budget(100)
+@given(st.lists(_PRINTED, max_size=4), st.sampled_from([0, 1, 2]))
+@example([('no object here', None)], 0)
+@example([('INFO a line before', None), (json.dumps(_ECHOED, indent=4), _ECHOED)], 0)
+def test_toil_writes_the_output_object_it_printed_last_and_no_other(printed: list[tuple[str, Any]],
+                                                                    exit_code: int) -> None:
+    """Toil prints the output object and writes no summary, so it is written where cwltool's is: the object a run
+    that succeeded printed last, and nothing for a run that failed or printed none last."""
+    stdout = ''.join(f'{line}\n' for line, _ in printed)
+    expected = printed[-1][1] if printed and exit_code == 0 else None
+    with tempfile.TemporaryDirectory() as base:
+        request = RunRequest('wf', Path(base), runner='toil-cwl-runner')
+        outcome = backends.backend('cwl', 'toil-cwl-runner').outcome(request, exit_code, stdout, Path(base, 'no.log'))
+        summary = Path(base).resolve() / 'output_wf.json'
+        assert (outcome.outputs, outcome.summary) == (expected, None if expected is None else summary)
+        assert (json.loads(summary.read_text(encoding='utf-8')) if summary.exists() else None) == expected
 
 
 #: What Nextflow prints for a failed task of a scattered process, as the pinned version prints it.
@@ -164,11 +250,34 @@ def test_nextflow_reads_only_the_generated_configuration_from_the_workflows_own_
     assert launch.env['NXF_SYNTAX_PARSER'] == 'v2'
 
 
+@st.composite
+def _nextflow_logs(draw: st.DrawFn) -> tuple[list[str], dict[str, Any]]:
+    """A Nextflow log, as the pinned version prints a failed task, and each process it says failed, in the order of
+    its first line, with its exit status, or None for missing outputs."""
+    runs = []
+    for process in draw(st.lists(st.from_regex('[a-z_][a-z0-9_]{0,5}', fullmatch=True), unique=True, max_size=4)):
+        workflow = ':'.join(draw(st.lists(st.from_regex('[a-z][a-z0-9_]{0,5}', fullmatch=True), min_size=1,
+                                          max_size=3)))
+        task = f"{workflow}:{process}{draw(st.sampled_from(['', ' (1)', ' (12)']))}"
+        status = draw(st.one_of(st.none(), st.integers(1, 255)))
+        said = ([f'  Missing output file(s) `out.txt` expected by process `{workflow}:{process}`'] if status is None
+                else ['Caused by:', f'  Process `{task}` terminated with an error exit status ({status})',
+                      f'[ERROR] {task}', f'exit: {status}'])
+        runs.append([(f'[PROCESS 72/fd70aa] {task}', None),
+                     (f"[ERROR] ERROR ~ Error executing process > '{task}'", (process, status)),
+                     *[(line, None) for line in said]])
+    return draw(_interleaved(runs, _TEXT, st.just('{}')))
+
+
 @pytest.mark.fast
-def test_failed_nextflow_processes_are_read_from_its_log_lines() -> None:
+@budget(100)
+@given(_nextflow_logs())
+@example((_NEXTFLOW_FAILED_LOG, {'bad_step': 7, 'copy': None}))
+def test_failed_nextflow_processes_are_read_from_its_log_lines(log: tuple[list[str], dict[str, Any]]) -> None:
     """A task names its process after the workflow and before a scattered task's index; a task that exited
     non-zero has its status, and one whose outputs were missing none."""
-    assert backends.nextflow_failed_steps(_NEXTFLOW_FAILED_LOG) == {'bad_step': 7, 'copy': None}
+    lines, failed = log
+    assert list(backends.nextflow_failed_steps(lines).items()) == list(failed.items())
 
 
 @pytest.mark.fast
@@ -207,13 +316,6 @@ def test_a_failed_nextflow_run_names_each_failed_step_and_no_outputs(tmp_path: P
     assert (outcome.outputs, outcome.summary) == (None, None)
     assert outcome.failed == {'bad-step': 7, 'child~copy': None}
     assert not (tmp_path / 'output_wf.json').exists()
-
-
-@pytest.mark.fast
-def test_real_time_analysis_does_not_run_beside_nextflow(tmp_path: Path) -> None:
-    request = RunRequest('wf', tmp_path, runner='nextflow', target='nextflow')
-    assert backends.backend('nextflow', 'nextflow').realtime_command(request) == (
-        'Real-time analysis needs cwltool; nextflow runs the workflow without it.')
 
 
 #: A tool that writes into an output-target Directory: an entry it may write, captured as its output.
@@ -336,43 +438,32 @@ def test_the_nextflow_check_asks_for_the_engine_only_when_a_process_has_a_contai
     assert list(raised.value.diagnostics) == [engine_down]
 
 
-#: The two ways Nextflow may be missing: from where a run looks for it, and from PATH, where run.sh does.
-_NO_NEXTFLOW = ('error [wic029] the run calls nextflow, which is neither in this Python environment nor on PATH: '
-                'install Nextflow (https://www.nextflow.io/docs/latest/install.html).')
-_NO_NEXTFLOW_ON_PATH = ('error [wic029] run.sh calls nextflow, which is not on PATH: '
-                        'install Nextflow (https://www.nextflow.io/docs/latest/install.html).')
-
-
 @pytest.mark.fast
-@pytest.mark.parametrize(('script', 'run_script', 'expected'), [
-    (None, False, _NO_NEXTFLOW),
-    ('printf "\\033[31mERROR: Cannot find Java or it\'s a wrong version\\033(B\\033[m\\n"; exit 1', False,
+@pytest.mark.parametrize(('platform', 'script', 'run_script', 'expected'), [
+    (None, None, False, 'error [wic029] the run calls nextflow, which is neither in this Python environment nor on '
+     'PATH: install Nextflow (https://www.nextflow.io/docs/latest/install.html).'),
+    (None, 'printf "\\033[31mERROR: Cannot find Java or it\'s a wrong version\\033(B\\033[m\\n"; exit 1', False,
      "error [wic029] nextflow -version exited with status 1 (ERROR: Cannot find Java or it's a wrong version): "
      'Nextflow needs a Java it can run; install one and point JAVA_HOME at it.'),
-    ('echo "nextflow version 26.04.2"', False, None),
-    ('echo "nextflow version 26.04.2"', True, _NO_NEXTFLOW_ON_PATH),
-], ids=['missing', 'no-java', 'starts', 'run-script-not-on-path'])
-def test_nextflow_must_start_for_a_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    (None, 'echo "nextflow version 26.04.2"', False, None),
+    (None, 'echo "nextflow version 26.04.2"', True, 'error [wic029] run.sh calls nextflow, which is not on PATH: '
+     'install Nextflow (https://www.nextflow.io/docs/latest/install.html).'),
+    ('Windows', 'echo "nextflow version 26.04.2"', False, 'error [wic029] nextflow cannot run here (Nextflow needs a '
+     'POSIX system, which Windows is not): run Sophios inside WSL (https://learn.microsoft.com/windows/wsl/install).'),
+], ids=['missing', 'no-java', 'starts', 'run-script-not-on-path', 'windows'])
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def test_nextflow_must_start_for_a_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str | None,
                                        script: str | None, run_script: bool, expected: str | None) -> None:
-    """A run looks where `runner_program` looks; `run.sh` calls the `nextflow` on PATH."""
+    """A run looks where `runner_program` looks; `run.sh` calls the `nextflow` on PATH; and, as for a CWL run,
+    Sophios runs a runner on POSIX only, so a Nextflow that starts is no help on Windows."""
     program = tmp_path / 'nextflow'
     program.write_text(f'#!/bin/sh\n{script}\n', encoding='utf-8')
     program.chmod(0o755)
     monkeypatch.setattr(preflight, 'runner_program', lambda _name: None if script is None else str(program))
-    monkeypatch.setattr(preflight, 'PLATFORM_LACKS_RUNNERS', None)
+    monkeypatch.setattr(preflight, 'PLATFORM_LACKS_RUNNERS', platform)
     monkeypatch.setenv('PATH', str(tmp_path / 'empty'))
     settings = replace(_NEXTFLOW_SETTINGS, run_script=run_script)
     assert [str(problem) for problem in preflight.nextflow_problems(settings)] == ([expected] if expected else [])
-
-
-@pytest.mark.fast
-def test_a_nextflow_run_on_windows_is_sent_to_wsl(monkeypatch: pytest.MonkeyPatch) -> None:
-    """As a CWL run is: Sophios runs a runner on POSIX only."""
-    monkeypatch.setattr(preflight, 'PLATFORM_LACKS_RUNNERS', 'Windows')
-    monkeypatch.setattr(preflight, 'runner_program', lambda _name: sys.executable)
-    assert [str(problem) for problem in preflight.nextflow_problems(_NEXTFLOW_SETTINGS)] == [
-        'error [wic029] nextflow cannot run here (Nextflow needs a POSIX system, which Windows is not): run Sophios '
-        'inside WSL (https://learn.microsoft.com/windows/wsl/install).']
 
 
 @pytest.mark.fast

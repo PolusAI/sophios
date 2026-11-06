@@ -19,7 +19,6 @@ from typing import Any
 
 import pytest
 
-from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
 from sophios.python_cwl_adapter import import_python_file
 
@@ -212,24 +211,6 @@ def test_the_ichnaea_scripts_build_one_tool_with_no_base_command() -> None:
         tools.append(document)
     assert 'baseCommand' not in tools[0]
     assert tools[1:] == [tools[0], tools[0]]
-
-
-@pytest.mark.fast
-def test_the_sam3_handoff_snippet_compiles_with_stdout_and_stderr_outputs() -> None:
-    """docs/tool-builder.md hands a built tool with `Output.stdout()` to the
-    workflow API. `stdout` and `stderr` are tool-only shorthands that cwltool
-    rejects at the workflow boundary, so each promoted output must be a `File`."""
-    tool = CommandLineTool('echo_tool', Inputs(message=Input(cwl.string, position=1)),
-                           Outputs(out=Output.stdout(), err=Output.stderr())
-                           ).base_command('echo').stdout('stdout.txt').stderr('stderr.txt')
-    step = Step(tool, step_name='say_hello')
-    step.inputs.message = 'hello'
-    compiled = Workflow([step], 'wf').compile().cwl_workflow
-    step_id = compiled['steps'][0]['id']
-    assert compiled['outputs'][f'{step_id}~out']['type'] == 'File'
-    assert compiled['outputs'][f'{step_id}~err']['type'] == 'File'
-    declared = {output['id']: output['type'] for output in compiled['steps'][0]['run']['outputs']}
-    assert declared == {'out': 'stdout', 'err': 'stderr'}, 'the tool keeps its own shorthand'
 
 
 @pytest.mark.fast

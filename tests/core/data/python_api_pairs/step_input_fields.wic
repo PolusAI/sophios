@@ -1,0 +1,1 @@
+steps: [{id: echo, in: {message: !cwl {default: 3, valueFrom: '$(String(self + 1))', label: n}}}]

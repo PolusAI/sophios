@@ -1,11 +1,11 @@
 """Language-version resolution, surfacing, and override.
 
-The claims under test, one property each: the resolved version is the highest
-that satisfies the source; no lower version is ever silently selected;
-untagged files resolve rather than fail; every successful compile reports a
-resolved version, while the compiled CWL carries no `sophios` key or prefix;
-an explicit setting always beats a file tag; and one compilation yields
-exactly one version, tree-wide.
+The claims under test: the resolved version is the highest that satisfies the
+source; no lower version is ever silently selected; untagged files resolve
+rather than fail; an explicit setting always beats a file tag; and one
+compilation yields exactly one version, tree-wide -- one property, over
+fabricated histories. And every successful compile reports a resolved version,
+while the compiled CWL carries no `sophios` key or prefix.
 
 The mechanism is exercised against fabricated version histories as well as the
 real single-entry list — `sophios.lang.versions` states why, once. The claims
@@ -15,11 +15,11 @@ import sys
 from pathlib import Path
 import pytest
 import yaml
-from hypothesis import given
+from hypothesis import example, given
 from hypothesis import strategies as st
 
 from sophios.ir.frontdoor import bundle_from_disk
-from sophios.lang import LANG_VERSION, resolve_lang_version
+from sophios.lang import KNOWN_VERSIONS, LANG_VERSION, resolve_lang_version
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 import sophios.cli
@@ -46,79 +46,37 @@ def _compile(yml: Yaml, lang_version: str | None = None) -> Yaml:
 
 
 # --------------------------------------------------------------------------
-# The resolution rule, over fabricated histories
+# The resolution rule, over fabricated histories, and precedence
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.fast
-@given(histories)
+@given(histories.flatmap(lambda known: st.tuples(
+    st.just(known), st.none() | st.sampled_from(known) | st.just('9.9.9'),
+    st.lists(st.sampled_from(known) | st.just('9.9.9'), max_size=4).map(tuple))))
+@example((KNOWN_VERSIONS, '9.9.9', ()))
+@example((KNOWN_VERSIONS, None, ('9.9.9',)))
 @FAST
-def test_untagged_resolves_to_the_newest(known: tuple[str, ...]) -> None:
-    """With nothing to satisfy, the highest known version is chosen."""
-    assert resolve_lang_version(None, (), known=known) == known[-1]
-
-
-@pytest.mark.fast
-@given(histories, st.data())
-@FAST
-def test_no_lower_version_is_silently_selected(known: tuple[str, ...], data: st.DataObject) -> None:
-    """A pin is the only thing that moves resolution below the newest,
-    and a pin is the author's word, not silence."""
-    pin = data.draw(st.sampled_from(known))
-    resolved = resolve_lang_version(None, (pin,), known=known)
-    assert resolved == pin
-    # Order is history position, not string order: '0.0.10' is newer than '0.0.2'.
-    untagged = resolve_lang_version(None, (), known=known)
-    assert known.index(untagged) >= known.index(resolved)
-
-
-@pytest.mark.fast
-@given(histories)
-@FAST
-def test_untagged_never_fails(known: tuple[str, ...]) -> None:
-    """Resolution of an untagged tree cannot fail."""
-    resolve_lang_version(None, (), known=known)  # must not raise
-
-
-@pytest.mark.fast
-def test_unknown_versions_are_reported_not_coerced() -> None:
-    """Asking for a version that does not exist is an error naming the known
-    ones — never a silent fallback to something else."""
-    for request, pins in (('9.9.9', ()), (None, ('9.9.9',))):
-        with pytest.raises(SophiosError) as caught:
-            resolve_lang_version(request, pins)
-        assert caught.value.diagnostics[0].code is SophiosErrorCode.UNKNOWN_LANG_VERSION
-        assert LANG_VERSION in caught.value.diagnostics[0].message
-
-
-# --------------------------------------------------------------------------
-# Precedence, and tree-wide oneness
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.fast
-@given(histories, st.data())
-@FAST
-def test_explicit_beats_any_tag(known: tuple[str, ...], data: st.DataObject) -> None:
-    """The explicit setting wins regardless of what the tree pins."""
-    explicit = data.draw(st.sampled_from(known))
-    pins = tuple(data.draw(st.lists(st.sampled_from(known), max_size=4)))
-    assert resolve_lang_version(explicit, pins, known=known) == explicit
-
-
-@pytest.mark.fast
-@given(histories, st.data())
-@FAST
-def test_one_version_or_a_conflict_report(known: tuple[str, ...], data: st.DataObject) -> None:
-    """Agreeing pins resolve to their one version; disagreeing pins are
-    a reported conflict, never an average or a quiet winner."""
-    pins = tuple(data.draw(st.lists(st.sampled_from(known), min_size=1, max_size=4)))
-    if len(set(pins)) == 1:
-        assert resolve_lang_version(None, pins, known=known) == pins[0]
+def test_resolution_follows_the_rule_the_spec_states(case: tuple[tuple[str, ...], str | None, tuple[str, ...]]) -> None:
+    """Language spec §6. The explicit setting wins regardless of what the tree pins. A version that does not exist,
+    asked for or pinned, is an error naming the known ones, never a silent fallback to something else (wic017).
+    Agreeing pins resolve to their one version; disagreeing pins are a reported conflict, never an average or a quiet
+    winner (wic018). With nothing to satisfy, the newest: a pin is the only thing that moves resolution below it,
+    and order is history position, not string order: '0.0.10' is newer than '0.0.2'. So untagged never fails."""
+    known, requested, pins = case
+    if requested is not None:
+        expected: object = requested if requested in known else SophiosErrorCode.UNKNOWN_LANG_VERSION
+    elif set(pins) - set(known):
+        expected = SophiosErrorCode.UNKNOWN_LANG_VERSION
     else:
-        with pytest.raises(SophiosError) as caught:
-            resolve_lang_version(None, pins, known=known)
-        assert caught.value.diagnostics[0].code is SophiosErrorCode.LANG_VERSION_CONFLICT
+        expected = SophiosErrorCode.LANG_VERSION_CONFLICT if len(set(pins)) > 1 else (pins or known)[-1]
+    try:
+        assert resolve_lang_version(requested, pins, known=known) == expected
+    except SophiosError as caught:
+        first = list(caught.diagnostics)[0]
+        assert first.code is expected, caught
+        assert expected is not SophiosErrorCode.UNKNOWN_LANG_VERSION or all(
+            version in first.message for version in known), caught
 
 
 @pytest.mark.skip_pypi_ci

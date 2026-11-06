@@ -1,0 +1,2 @@
+why: a run path with no file beside the document is looked up by its stem
+steps: [{baseCommand: 'true', inputs: {name: {type: string, inputBinding: {position: 1}}}}]

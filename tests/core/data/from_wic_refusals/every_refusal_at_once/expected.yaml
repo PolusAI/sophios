@@ -1,0 +1,4 @@
+{why: 'two constructs, two diagnostics, one raise', diagnostics: [{code: NO_PYTHON_SPELLING, file: root.wic,
+    message: {contains: ['top-level']}},
+                                                                {code: NO_PYTHON_SPELLING, file: root.wic,
+                                                                    message: {contains: ['both called']}}]}

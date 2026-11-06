@@ -1,0 +1,58 @@
+- {id: "an edge definition in input position names the position (.wic reference §3.6)",
+   source: "steps:\n- id: s\n  in:\n    f: !& e\n",
+   report: [{code: MISPLACED_EDGE_DEF, line: 4, message: {contains: ["out:"]}}], recovers: true,
+   why: &w0 "Each diagnosed shape reports exactly one diagnostic, at its line, and a document survives beside it:
+       recovery is the norm, and only unparsable YAML leaves nothing to return."}
+- {id: the desugared spelling is reported the same way, source: "steps:\n- id: s\n  in:\n    f: {wic_anchor: e}\n",
+   report: [{code: MISPLACED_EDGE_DEF, line: 4, message: {contains: ["out:"]}}], recovers: true, why: *w0}
+- {id: an anchor nested in a literal payload is reported too, source: "steps:\n- id: s\n  in:\n    f: !ii {k: !& e}\n",
+   report: [{code: MISPLACED_EDGE_DEF, line: 4, message: {contains: ["out:"]}}], recovers: true, why: *w0}
+- {id: "the rule is positional: an anchor at the top level is reported", source: "top: !& e\n",
+   report: [{code: MISPLACED_EDGE_DEF, line: 1, message: {contains: ["out:"]}}], recovers: true, why: *w0}
+- {id: "and inside the wic: block, which is not a step at all", source: "wic:\n  graphviz:\n    label: !& e\n",
+   report: [{code: MISPLACED_EDGE_DEF, line: 3, message: {contains: ["out:"]}}], recovers: true, why: *w0}
+- {id: "the desugared spelling is reported in the same positions (language spec §2)", source: "top: {wic_anchor: e}\n",
+   report: [{code: MISPLACED_EDGE_DEF, line: 1, message: {contains: ["out:"]}}], recovers: true, why: *w0}
+- {id: a malformed name does not earn spelling advice for a construct that may not appear here at all,
+   source: "steps:\n- id: s\n  in:\n    f: !& [a]\n",
+   report: [{code: MISPLACED_EDGE_DEF, line: 4, message: {contains: ["out:"]}}], recovers: true, why: *w0}
+- {id: "an out: entry that is neither name nor single-key mapping", source: "steps:\n  s:\n    out: [[a, b]]\n",
+   report: [{code: EXPECTED_SCALAR, line: 3, message: {contains: ["each out: entry must be"]}}], recovers: true,
+   why: *w0}
+- {id: a sidecar steps out accepts an edge definition,
+   source: "wic:\n  steps:\n    (1, s):\n      out:\n      - output_tpr_path: !& min.tpr\nsteps:\n- id: s\n", ok: true,
+   why: &w1 "`!&` is legal under `wic.steps.(N, name).out`, exactly as on a step's own `out:` (.wic reference §3.6) — a
+       sidecar `(N, name): out:` block *is* a step's `out:` entry, just written at a distance (see `basic.wic`, which
+       places the corpus's only definition of `min.tpr` here rather than in the nested file, precisely to avoid a
+       `wic026 DUPLICATE_EDGE_DEF`)."}
+- {id: a sidecar steps out accepts a desugared edge definition,
+   source: "wic:\n  steps:\n    (1, s):\n      out:\n      - output_tpr_path: {wic_anchor: min.tpr}\nsteps:\n- id: s\n",
+   ok: true, why: *w1}
+- {id: "!& e is refused in input", source: "steps:\n- id: s\n  in:\n    f: !& e\n",
+   report: {contains: [{code: MISPLACED_EDGE_DEF}]},
+   why: &w2 "One construct, one verdict, in both spellings and every position. The narrower unknown-tag version above
+       quantifies only over `SophiosErrorCode.UNKNOWN_TAG`, so it cannot see a `wic019` divergence — and there was one:
+       `_opaque` routed on the tag, so `{wic_anchor: e}` was plain data exactly where `!& e` was refused."}
+- {id: "{wic_anchor: e} is refused in input", source: "steps:\n- id: s\n  in:\n    f: {wic_anchor: e}\n",
+   report: {contains: [{code: MISPLACED_EDGE_DEF}]}, why: *w2}
+- {id: "!& e is refused in nested in a literal", source: "steps:\n- id: s\n  in:\n    f: !ii {k: !& e}\n",
+   report: {contains: [{code: MISPLACED_EDGE_DEF}]}, why: *w2}
+- {id: "{wic_anchor: e} is refused in nested in a literal",
+   source: "steps:\n- id: s\n  in:\n    f: !ii {k: {wic_anchor: e}}\n",
+   report: {contains: [{code: MISPLACED_EDGE_DEF}]}, why: *w2}
+- {id: "!& e is refused in step passthrough", source: "steps:\n- id: s\n  label: !& e\n",
+   report: {contains: [{code: MISPLACED_EDGE_DEF}]}, why: *w2}
+- {id: "{wic_anchor: e} is refused in step passthrough", source: "steps:\n- id: s\n  label: {wic_anchor: e}\n",
+   report: {contains: [{code: MISPLACED_EDGE_DEF}]}, why: *w2}
+- {id: "!& e is refused in top level", source: "top: !& e\n", report: {contains: [{code: MISPLACED_EDGE_DEF}]},
+   why: *w2}
+- {id: "{wic_anchor: e} is refused in top level", source: "top: {wic_anchor: e}\n",
+   report: {contains: [{code: MISPLACED_EDGE_DEF}]}, why: *w2}
+- {id: "!& e is refused in wic block", source: "wic:\n  graphviz:\n    label: !& e\n",
+   report: {contains: [{code: MISPLACED_EDGE_DEF}]}, why: *w2}
+- {id: "{wic_anchor: e} is refused in wic block", source: "wic:\n  graphviz:\n    label: {wic_anchor: e}\n",
+   report: {contains: [{code: MISPLACED_EDGE_DEF}]}, why: *w2}
+- {id: the tagged edge definition on out, source: "steps:\n- id: s\n  out:\n  - f: !& e\n", report: [], recovers: true,
+   why: &w3 "The other half: refusing everywhere would satisfy the test above."}
+- {id: the desugared edge definition on out, source: "steps:\n- id: s\n  out:\n  - f:\n      wic_anchor: e\n",
+   report: [], recovers: true, why: *w3}

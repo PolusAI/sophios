@@ -1,0 +1,2 @@
+{diagnostics: [{code: NO_PYTHON_SPELLING, file: root.wic, message: {contains: ["no Python port can be
+    called 'ref-t'"]}}]}

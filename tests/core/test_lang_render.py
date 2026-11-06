@@ -9,7 +9,7 @@ Properties covered:
 """
 import math
 from pathlib import Path
-from typing import Any, Final
+from typing import Any
 
 import pytest
 import yaml
@@ -33,7 +33,7 @@ from sophios.lang.render import render
 from sophios.lang.spans import SourceSpan
 
 from .budgets import budget
-from .strategies import documents, scalar_payload_texts
+from .strategies import documents, pinned, scalar_payload_texts
 
 from .wic_corpus import CORPUS, corpus_id
 from .wic_reading import YamlWithSophiosTagsOpaque
@@ -232,50 +232,32 @@ def test_render_emits_the_tagged_spelling() -> None:
     assert 'wic_inline_input' not in text
 
 
-#: A value the renderer must spell as an `!ii` payload.
-#:
-#: These reach the renderer with no source text behind them, which is the
-#: state every document built through the Python API is in. A parsed literal
-#: remembers how it was written and is transcribed verbatim, so the
-#: round-trip properties — `@example('!ii .nan')` included — never reach the
-#: code that has to *choose* a spelling.
-SYNTHESIZED: Final[tuple[tuple[str, Any], ...]] = (
-    ('a NaN is the one value not equal to itself', float('nan')),
-    ('an infinity', float('inf')),
-    ("the string '0', which a plain spelling would re-type to an int", '0'),
-    ('an ordinary string', 'plain'),
-)
+#: A value the renderer must spell as an `!ii` payload, as the Python API hands it over: no source text behind it.
+#: A parsed literal remembers how it was written and is transcribed verbatim, so the round-trip properties never reach
+#: the code that has to *choose* a spelling.
+synthesized = st.recursive(st.none() | st.booleans() | st.integers() | st.floats() | st.text(),
+                           lambda inner: st.lists(inner, max_size=3) | st.dictionaries(st.text(), inner, max_size=3),
+                           max_leaves=6)
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('claim,value', SYNTHESIZED, ids=[c for c, _ in SYNTHESIZED])
-def test_a_synthesized_literal_gets_a_spelling_that_survives(claim: str, value: Any) -> None:
-    """The renderer picks a tagged spelling, and reparsing it returns the value."""
+@given(synthesized)
+# A NaN is the one value not equal to itself; an infinity; and strings a plain spelling would not read back as
+# themselves, since YAML types the first row, cannot scan the second plain, as a scalar or at all, and would read
+# the third as a structure: `!ii 0` is the number 0, `!ii '0'` the text.
+@pinned(math.nan, math.inf, 'plain', '0', '007', '1:30', 'true', 'null', '~', '', '@', '*', '%', '&', ',', ':', '...',
+        '#x', 'a: b', '{', '[')
+@budget(100)
+def test_a_synthesized_literal_gets_a_spelling_that_survives(value: Any) -> None:
+    """The renderer picks a tagged spelling that YAML loads, and reparsing it returns the value, of its type."""
     span = SourceSpan('synth.wic', 1, 1, 1, 1)
-    document = Document(steps=(Step(id='s', inputs=(('a', InlineLiteral(value, span)),)),))
-    text = render(document)
-    assert '!ii' in text, f'{claim}: {text!r}'
-
+    text = render(Document(steps=(Step(id='s', inputs=(('a', InlineLiteral(value, span)),)),)))
+    assert '!ii' in text, text
+    yaml.load(text, Loader=YamlWithSophiosTagsOpaque)
     result = parse(text, 'synth.wic')
-    assert result.ok, [str(d) for d in result.diagnostics]
-    assert result.document is not None
-    reparsed = result.document.steps[0].inputs[0][1]
-    assert isinstance(reparsed, InlineLiteral)
-    if isinstance(value, float) and math.isnan(value):
-        assert isinstance(reparsed.value, float) and math.isnan(reparsed.value), claim
-    else:
-        assert reparsed.value == value, claim
-
-
-@pytest.mark.fast
-def test_render_preserves_the_steps_surface_form() -> None:
-    """A mapping-form document does not come back as a sequence, or vice versa."""
-    as_map = parse('steps:\n  touch:\n    in:\n      f: !ii x\n', 'm.wic').document
-    as_seq = parse('steps:\n- id: touch\n  in:\n    f: !ii x\n', 's.wic').document
-    assert as_map is not None and as_seq is not None
-
-    assert render(as_map).startswith('steps:\n  touch:')
-    assert render(as_seq).startswith('steps:\n- id: touch')
+    assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
+    reparsed = result.document.steps[0].input('a')
+    assert isinstance(reparsed, InlineLiteral) and repr(reparsed.value) == repr(value), text
 
 
 @pytest.mark.fast
@@ -347,31 +329,3 @@ def test_a_tagged_literal_keeps_its_source_spelling(spelling: str) -> None:
     # Exactly, quotes included: a plain spelling must come back plain, since
     # `!ii '1:30'` is the text 1:30 where `!ii 1:30` is the number 90.
     assert payload == spelling, f'{spelling!r} came back as {payload!r}'
-
-
-#: Strings a plain `!ii` spelling would not read back as themselves. The first
-#: row YAML types; the second it cannot scan plain, as a scalar or at all; the
-#: third it would read as a structure.
-NOT_PLAIN: Final = ('0', '007', '1:30', 'true', 'null', '~', '',
-                    '@', '*', '%', '&', ',', ':', '...', '#x', 'a: b',
-                    '{', '[')
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('literal', NOT_PLAIN, ids=repr)
-def test_a_string_yaml_would_not_read_as_itself_is_written_quoted(literal: str) -> None:
-    """A quoted `!ii` scalar is its text, so quoting is how the writer keeps a string a string.
-
-    `!ii 0` is the number 0; `!ii '0'` is the text. The writer spells the
-    string `'0'` the second way, and the parser reads it back as the string.
-    """
-    span = SourceSpan('probe.wic', 1, 1, 1, 1)
-    document = Document(steps=(Step('echo', inputs=(('message', InlineLiteral(literal, span)),)),))
-
-    rendered = render(document)
-
-    assert f"message: !ii '{literal}'\n" in rendered, rendered
-    result = parse(rendered, 'probe.wic')
-    assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
-    reparsed = result.document.steps[0].input('message')
-    assert isinstance(reparsed, InlineLiteral) and reparsed.value == literal

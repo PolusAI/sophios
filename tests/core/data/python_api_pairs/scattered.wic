@@ -1,0 +1,2 @@
+steps: [{id: echo, scatter: [message], scatterMethod: dotproduct, in: {message: !ii [a, b]}}]
+outputs: {out: {type: {type: array, items: File}, outputSource: echo/stdout}}

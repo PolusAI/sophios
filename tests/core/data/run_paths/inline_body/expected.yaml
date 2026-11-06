@@ -1,0 +1,2 @@
+why: an inline `run:` mapping is the step's tool, emitted as its own file
+steps: [{run: w~mytool.cwl, baseCommand: true, inputs: {x: {type: string}}}]

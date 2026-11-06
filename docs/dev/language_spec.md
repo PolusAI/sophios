@@ -86,7 +86,7 @@ step's tool is passthrough wholesale: Sophios does not classify
 | `label` | passthrough | | `test_step_passthrough_is_byte_identical` |
 | `out` | native | | `test_the_two_spellings_of_an_edge_definition_agree_on_an_output` (`test_lang_parser.py`) |
 | `requirements` | passthrough | | `test_step_passthrough_is_byte_identical` |
-| `run` | native | a registry stem, a path relative to the document, or an inline body | `test_an_inline_run_body_is_registered_and_emitted_as_its_own_tool` (`test_frontdoor.py`) |
+| `run` | native | a registry stem, a path relative to the document, or an inline body | `test_each_step_runs_the_tool_its_run_names` (`test_frontdoor.py`) |
 | `scatter` | native | | `test_every_declared_key_is_interpreted` |
 | `scatterMethod` | native | | `test_every_declared_key_is_interpreted` |
 | `when` | native | | `test_every_declared_key_is_interpreted` |
@@ -97,7 +97,7 @@ step's tool is passthrough wholesale: Sophios does not classify
 |---|---|---|---|
 | `id` | native | the `in:` key | `test_input_values_are_closed` (`test_lang_parser.py`) |
 | `source` | native | `!*`, a bare workflow-input name, or a list of them inside `!cwl {source: [...]}` | `test_input_values_are_closed` (`test_lang_parser.py`) |
-| `default` | native | through `!cwl {...}`; a relative File or Directory `location`/`path` is written absolute against the `.wic`'s directory | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`), `test_a_wic_step_default_is_written_absolute_against_the_wic` (`test_wic_defaults.py`) |
+| `default` | native | through `!cwl {...}`; a relative File or Directory `location`/`path` is written absolute against the `.wic`'s directory | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`), `test_a_wic_file_default_is_written_absolute_against_the_wic` (`test_wic_defaults.py`) |
 | `label` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
 | `linkMerge` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
 | `loadContents` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
