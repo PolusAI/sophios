@@ -1,22 +1,15 @@
 """The Phase 3 acceptance cells, each authored with the Python API and run under pinned Nextflow.
 
-Cells are defined in the offline Phase 3 design; the lowerings in
-design_docs/sophios_nextflow_backend.md §6. Expected values are what node
-computes, printed as JSON. Compatible cells share one run to
-keep the runtime lane lean; ``CELLS`` maps every cell to the test that runs it,
-and ``test_every_cell_is_claimed_by_a_runtime_test`` keeps that map total.
-The calculator and predicate cells are each built by a function of their own,
-which the import's fixed point (test_import.py) reads as well.
-A10, a computed ``valueFrom`` reaching a tool argument, has no runtime
-test: the backend rejects a computed ``valueFrom``.
+Cells are defined in the offline Phase 3 design; the lowerings in design_docs/sophios_nextflow_backend.md §6. The
+calculator (A1-A9) and predicate (W1-W7) cells, built here for the import's fixed point (test_import.py), are decided
+by node and the pinned Nextflow in test_subset_differential.py, and S1-S14 are examples of test_runtime.py's scatter
+property. A10, a computed ``valueFrom`` reaching a tool argument, has no runtime test: the backend rejects it.
 """
 
 # pylint: disable=missing-function-docstring
 
-import inspect
 from pathlib import Path
 import subprocess
-import sys
 from typing import Any
 
 import pytest
@@ -121,19 +114,6 @@ def calculator_workflow() -> Workflow:
 
 @pytest.mark.nextflow
 @pytest.mark.serial
-def test_calculator(tmp_path: Path) -> None:
-    """A1-A9: each calculation, compared in a when with what node computes, runs its step.
-
-    Compared with twice that value, which no calculation yields since none is zero, it skips its step.
-    """
-    result, _ = _run(calculator_workflow(), tmp_path)
-    assert result.returncode == 0, result.stdout + result.stderr
-    count = len(CALCULATED.split())
-    assert [_ran(tmp_path, f"c{index}.txt") for index in range(2 * count)] == [True] * count + [False] * count
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
 def test_calculator_failures(tmp_path: Path) -> None:
     """A11: a non-finite subexpression fails the run, named; no task output is produced."""
     result, _ = _run(_calc_workflow(["$(inputs.i / (inputs.i - 7) > 0)"], "fail_cells"), tmp_path)
@@ -156,8 +136,6 @@ PREDICATES = {
     "$(inputs.flag && !(inputs.n < 0) || false)": True,      # W5
     "$(Math.round(inputs.n / 2) >= 2)": True,                # W6
 }
-# W7 (null checks) needs an optional input bound and absent, which these steps
-# cannot express; test_phase3_conformance runs it.
 
 
 def _when_tool(name: str) -> CommandLineTool:
@@ -175,15 +153,6 @@ def predicates_workflow() -> Workflow:
         step.when = predicate
         steps.append(step)
     return Workflow(steps, "when_cells")
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_predicates(tmp_path: Path) -> None:
-    """W1-W6: every predicate kind decides the step, without truthiness."""
-    result, _ = _run(predicates_workflow(), tmp_path)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert [_ran(tmp_path, f"p{index}.txt") for index in range(len(PREDICATES))] == list(PREDICATES.values())
 
 
 @pytest.mark.nextflow
@@ -236,184 +205,3 @@ def test_condition_inside_an_inlined_subworkflow(tmp_path: Path) -> None:
     result, _ = _run(Workflow([child, outer], "inline_cells"), tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     assert (_ran(tmp_path, "inner.txt"), _ran(tmp_path, "outer.txt")) == (False, True)
-
-
-# S1-S14 ------------------------------------------------------------------
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_dotproduct_alignment_and_broadcast(tmp_path: Path) -> None:
-    """S1, S2, S9: two and three inputs pair by index, in invocation order; a scalar broadcasts."""
-    two = _scatter_step("TWO", "dotproduct", {"a": ["a", "b"], "b": ["x", "y"]})
-    three = _scatter_step("THREE", "dotproduct", {"a": ["a", "b"], "b": ["x", "y"], "c": ["1", "2"]})
-    broadcast = _scatter_step("BCAST", "dotproduct", {"a": ["a", "b"], "b": ["x", "y"], "k": "same"})
-    root = Workflow([two, three, broadcast], "dot_cells")
-    root.outputs.two, root.outputs.three, root.outputs.bcast = (
-        two.outputs.line, three.outputs.line, broadcast.outputs.line
-    )
-    result, observed = _run(root, tmp_path, "two", "three", "bcast")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed == {"two": ["a-x", "b-y"], "three": ["a-x-1", "b-y-2"], "bcast": ["a-x-same", "b-y-same"]}
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_dotproduct_length_mismatch(tmp_path: Path) -> None:
-    """S3: the run fails naming each input and its length; no task runs truncated."""
-    step = _scatter_step("PAIR", "dotproduct", {"a": ["a", "b"], "b": ["x"]})
-    result, _ = _run(Workflow([step], "mismatch_cells"), tmp_path)
-    assert result.returncode != 0
-    assert "dotproduct scatter inputs have mismatched lengths" in result.stdout + result.stderr
-    assert "=2" in result.stdout + result.stderr and "=1" in result.stdout + result.stderr
-    assert not _ran(tmp_path, "out.txt")
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_empty_scatter_inputs(tmp_path: Path) -> None:
-    """S4: empty arrays run zero invocations and the run succeeds."""
-    step = _scatter_step("PAIR", "dotproduct", {"a": [], "b": []})
-    root = Workflow([step], "empty_cells")
-    root.outputs.line = step.outputs.line
-    result, observed = _run(root, tmp_path, "line")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed["line"] == [""]
-    assert not _ran(tmp_path, "out.txt")
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_flat_crossproduct(tmp_path: Path) -> None:
-    """S5, S6, S11: first input outermost, product cardinality, every output per invocation."""
-    two = _scatter_step("TWO", "flat_crossproduct", {"a": ["a", "b"], "b": ["1", "0"]})
-    three = _scatter_step("THREE", "flat_crossproduct", {"a": ["a", "b"], "b": ["x", "y", "z"], "c": ["1"]})
-    root = Workflow([two, three], "flat_cells")
-    root.outputs.two, root.outputs.three = two.outputs.line, three.outputs.line
-    result, observed = _run(root, tmp_path, "two", "three")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed["two"] == ["a-1", "a-0", "b-1", "b-0"]
-    assert observed["three"] == [f"{a}-{b}-1" for a in "ab" for b in "xyz"]
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_nested_crossproduct(tmp_path: Path) -> None:
-    """S7, S8: one dimension per input in declared order; an empty dimension keeps its outer shape."""
-    two = _scatter_step("TWO", "nested_crossproduct", {"a": ["a", "b"], "b": ["x", "y", "z"]})
-    three = _scatter_step("THREE", "nested_crossproduct", {"a": ["a", "b"], "b": ["x", "y"], "c": ["1"]})
-    empty = _scatter_step("EMPTY", "nested_crossproduct", {"a": ["a", "b"], "b": []})
-    root = Workflow([two, three, empty], "nested_cells")
-    root.outputs.two, root.outputs.three, root.outputs.empty = two.outputs.line, three.outputs.line, empty.outputs.line
-    result, observed = _run(root, tmp_path, "two", "three", "empty")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed == {
-        "two": ["[a-x, a-y, a-z]", "[b-x, b-y, b-z]"],
-        "three": ["[[a-x-1], [a-y-1]]", "[[b-x-1], [b-y-1]]"],
-        "empty": ["[]", "[]"],
-    }
-
-
-def _files(directory: Path, *contents: str, stem: str = "in") -> list[str]:
-    paths = []
-    for index, content in enumerate(contents):
-        path = directory / f"{stem}{index}.txt"
-        path.write_text(content, encoding="utf-8")
-        paths.append(str(path))
-    return paths
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_file_arrays_scatter_and_a_file_broadcasts(tmp_path: Path) -> None:
-    """S10: each File element stages per invocation; an unscattered File reaches every invocation."""
-    tool = CommandLineTool(
-        "join", Inputs(f=Input(cwl.file, position=1), g=Input(cwl.file, position=2)),
-        Outputs(line=Output(cwl.string, glob="joined.txt", load_contents=True, output_eval="$(self[0].contents)")),
-    )
-    step = Step(tool.base_command("cat").stdout("joined.txt"), step_name="join")
-    step.inputs.f = _files(tmp_path, "a\n", "b\n")
-    step.inputs.g = _files(tmp_path, "shared\n", stem="shared")[0]
-    step.scatter_on(step.inputs.f, method="dotproduct")
-    root = Workflow([step], "file_cells")
-    root.outputs.line = step.outputs.line
-    result, observed = _run(root, tmp_path / "run", "line")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed["line"] == ["a\nshared\n", "b\nshared\n"]
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_gather_rescatter_and_composition(tmp_path: Path) -> None:
-    """S12, S13, S14: a templated argument and dotproduct, gathered into a later scatter over Files,
-    gathered again into one step and, independently, into a second consumer; each gather keeps order."""
-    pair = CommandLineTool(
-        "pair", Inputs(a=Input(cwl.string, position=1), b=Input(cwl.string, position=2), n=Input(cwl.int)),
-        Outputs(out=Output(cwl.file, glob="out.txt")),
-    ).base_command("echo").stdout("out.txt").argument("$(inputs.n)0", position=3)
-    join = CommandLineTool(
-        "join", Inputs(f=Input(cwl.file, position=1), g=Input(cwl.file, position=2)),
-        Outputs(out=Output(cwl.file, glob="joined.txt")),
-    ).base_command("cat").stdout("joined.txt")
-
-    def concat(name: str) -> CommandLineTool:
-        return CommandLineTool(
-            name, Inputs(files=Input(cwl.array(cwl.file), position=1)),
-            Outputs(all=Output(cwl.file, glob=f"{name}.txt")),
-        ).base_command("cat").stdout(f"{name}.txt")
-
-    first = Step(pair, step_name="pair")
-    first.inputs.a, first.inputs.b, first.inputs.n = ["a", "b"], ["x", "y"], 2
-    first.scatter_on(first.inputs.a, first.inputs.b, method="dotproduct")
-    second = Step(join, step_name="join")
-    second.inputs.f = first.outputs.out
-    second.inputs.g = _files(tmp_path, "1\n", "2\n")
-    second.scatter_on(second.inputs.f, second.inputs.g, method="dotproduct")
-    gathered = Step(concat("all"), step_name="all")
-    gathered.inputs.files = second.outputs.out
-    independent = Step(concat("raw"), step_name="raw")
-    independent.inputs.files = first.outputs.out
-    result, _ = _run(Workflow([first, second, gathered, independent], "compose_cells"), tmp_path / "run")
-    assert result.returncode == 0, result.stdout + result.stderr
-    [combined] = list((tmp_path / "run" / "work").glob("*/*/all.txt"))
-    [raw] = list((tmp_path / "run" / "work").glob("*/*/raw.txt"))
-    assert combined.read_text(encoding="utf-8") == "a x 20\n1\nb y 20\n2\n"
-    assert raw.read_text(encoding="utf-8") == "a x 20\nb y 20\n"
-
-
-CELLS = {
-    **{f"A{index}": test_calculator for index in range(1, 10)},
-    "A11": test_calculator_failures,
-    **{f"W{index}": test_predicates for index in range(1, 8)},
-    "W8": test_skipped_step_yields_null_and_downstream_completes,
-    "W9": test_skipped_step_yields_null_and_downstream_completes,
-    "W10": test_per_invocation_when_under_scatter,
-    "W11": test_condition_inside_an_inlined_subworkflow,
-    "S1": test_dotproduct_alignment_and_broadcast,
-    "S2": test_dotproduct_alignment_and_broadcast,
-    "S3": test_dotproduct_length_mismatch,
-    "S4": test_empty_scatter_inputs,
-    "S5": test_flat_crossproduct,
-    "S6": test_flat_crossproduct,
-    "S7": test_nested_crossproduct,
-    "S8": test_nested_crossproduct,
-    "S9": test_dotproduct_alignment_and_broadcast,
-    "S10": test_file_arrays_scatter_and_a_file_broadcasts,
-    "S11": test_flat_crossproduct,
-    "S12": test_gather_rescatter_and_composition,
-    "S13": test_gather_rescatter_and_composition,
-    "S14": test_gather_rescatter_and_composition,
-}
-
-
-@pytest.mark.fast
-def test_every_cell_is_claimed_by_a_runtime_test() -> None:
-    expected = (
-        {f"A{n}" for n in (*range(1, 10), 11)} | {f"W{n}" for n in range(1, 12)} | {f"S{n}" for n in range(1, 15)}
-    )
-    assert set(CELLS) == expected
-    module = sys.modules[__name__]
-    for test in set(CELLS.values()):
-        assert getattr(module, test.__name__) is test
-        marks = {mark.name for mark in getattr(test, "pytestmark", [])}
-        assert {"nextflow", "serial"} <= marks, test.__name__
-        assert "tmp_path" in inspect.signature(test).parameters

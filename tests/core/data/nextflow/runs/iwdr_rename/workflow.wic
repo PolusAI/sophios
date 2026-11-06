@@ -1,0 +1,4 @@
+steps:
+- id: write_source
+  in: {message: !ii iwdr staged content}
+- id: stage_and_read

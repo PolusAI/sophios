@@ -1,0 +1,3 @@
+why: A `$` before no `(` or `{` is text, and a backtick beside a reference is text, so each glob names the file made.
+outputs: {literal~result: {class: File, basename: out$name.txt, contents: ''}, mixed~result: {class: File, basename:
+          '`report.txt', contents: ''}}

@@ -1,0 +1,2 @@
+why: A File? output is null for no match and the file for one; more fail the run, as in CWL.
+fails: matched 2 files; it takes at most one

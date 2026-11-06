@@ -1,0 +1,3 @@
+why: 'The image-workflows plugin shape: a writable entry is a copy the tool writes into, which its own-basename glob
+  captures, and the input it was copied from is left as it was.'
+outputs: {plugin~outDir: {class: Directory, basename: plugin_out, contents: {keep.txt: "kept\n", result.txt: written}}}
