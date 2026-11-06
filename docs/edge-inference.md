@@ -133,8 +133,9 @@ steps, the most recent first, for an output that fits:
 1. An output fits when its type matches the input's type, and its file
    format matches the input's when the input declares one. `File` matches
    `File`; an optional `File?` matches `File`; `Any` matches only `Any`.
-2. The most recent step with a fitting output wins. Within that step, the
-   output declared last wins.
+2. The most recent step with a fitting output wins. Within that step, an
+   output whose name pairs with the input's wins, as the next section shows;
+   if none does, the output declared last wins.
 3. If an earlier step also had a fitting output, Sophios notes the choice,
    as `wic043`. If the winning step had several, it notes that, as `wic042`.
 4. If nothing fits, the input becomes an input of the compiled workflow, for
@@ -227,31 +228,40 @@ workflow. Save the workflow, with every connection left to inference:
 :caption: naming.py
 ```
 
-### By type alone, a tie
+### The name decides
 
-Both of `summarize`'s outputs are files, so by type alone they tie. Run
-`sophios --yaml naming.wic --run_local`, or `python naming.py`, and the
-command line explains what it did:
+Both of `summarize`'s outputs are files, so by type they tie. Run
+`sophios --yaml naming.wic --run_local`, or `python naming.py`. Among tied
+outputs of the same step, Sophios takes the one whose name pairs with the
+input's. It strips `input_` from the input's name and `output_` from each
+output's, so `input_summary` pairs with `output_summary`. The names never
+move the choice to another step: the most recent step with a fitting output
+still wins. A call to a
+subworkflow counts as one step here, so names choose among the outputs of the
+steps inside it, and may pick one that is not from its most recent inner step. One note remains, saying that `echo`'s file came earlier and lost
+to the most recent step, which is the choice you want:
 
 ```text
-naming.wic:7:3: note [wic042] step 'report' input 'input_summary' was inferred from step 2 'summarize' output 'output_details', but that step also offers step 2 'summarize' output 'output_summary'; pin it: `out: - output_details: !& <name>` on step 2 'summarize' and `in: input_summary: !* <name>` here (step 3 'report', port 'input_summary')
-naming.wic:7:3: note [wic043] step 'report' input 'input_summary' was inferred from the most recent match step 2 'summarize' output 'output_details'; earlier steps also match: step 1 'echo' output 'stdout'; pin it: `out: - output_details: !& <name>` on step 2 'summarize' and `in: input_summary: !* <name>` here (step 3 'report', port 'input_summary')
+naming.wic:7:3: note [wic043] step 'report' input 'input_summary' was inferred from the most recent match step 2 'summarize' output 'output_summary'; earlier steps also match: step 1 'echo' output 'stdout'; pin it: `out: - output_summary: !& <name>` on step 2 'summarize' and `in: input_summary: !* <name>` here (step 3 'report', port 'input_summary')
 ```
 
-The rule took the output declared last, `output_details`, and `report.txt`
-holds the line-numbered copy, not the summary:
+`report.txt` holds the summary, the text's word count:
 
 ```text
-     1	The quick brown fox jumps over the lazy dog
+9
 ```
 
-### With naming conventions, the name decides
+When no output's name pairs with the input's, or several do, the output
+declared last wins.
 
-Turn on the naming conventions, with `--inference_use_naming_conventions` on
-the command line or `Inference(naming_conventions=True)` in Python:
+### Turning the names off
+
+If your tools' names mean nothing, or you want the plain rule, switch the
+names off with `--no_inference_naming_conventions` on the command line or
+`Inference(naming_conventions=False)` in Python:
 
 ```bash
-sophios --yaml naming.wic --run_local --inference_use_naming_conventions
+sophios --yaml naming.wic --run_local --no_inference_naming_conventions
 ```
 
 ```python
@@ -259,28 +269,22 @@ from sophios.api.python.workflow import Inference
 
 from naming import workflow
 
-workflow().run(inference=Inference(naming_conventions=True))
+workflow().run(inference=Inference(naming_conventions=False))
 ```
 
-Among outputs that tie by type, Sophios now takes the one whose name pairs
-with the input's. It strips `input_` from the input's name and `output_`
-from each output's, so `input_summary` pairs with `output_summary`. The
-command line's tie note is gone; one note remains:
+By type alone the tie goes to the output declared last, `output_details`, and
+the command line says so:
 
 ```text
-naming.wic:7:3: note [wic043] step 'report' input 'input_summary' was inferred from the most recent match step 2 'summarize' output 'output_summary'; earlier steps also match: step 1 'echo' output 'stdout'; pin it: `out: - output_summary: !& <name>` on step 2 'summarize' and `in: input_summary: !* <name>` here (step 3 'report', port 'input_summary')
+naming.wic:7:3: note [wic042] step 'report' input 'input_summary' was inferred from step 2 'summarize' output 'output_details', but that step also offers step 2 'summarize' output 'output_summary'; pin it: `out: - output_details: !& <name>` on step 2 'summarize' and `in: input_summary: !* <name>` here (step 3 'report', port 'input_summary')
+naming.wic:7:3: note [wic043] step 'report' input 'input_summary' was inferred from the most recent match step 2 'summarize' output 'output_details'; earlier steps also match: step 1 'echo' output 'stdout'; pin it: `out: - output_details: !& <name>` on step 2 'summarize' and `in: input_summary: !* <name>` here (step 3 'report', port 'input_summary')
 ```
 
-It says only that `echo`'s file came earlier and lost to the most recent
-step, which is the choice you want. In either form, `report.txt` now holds
-the summary, the text's word count:
+`report.txt` then holds the line-numbered copy, not the summary:
 
 ```text
-9
+     1	The quick brown fox jumps over the lazy dog
 ```
-
-When no output's name pairs with the input's, or several do, the rule above
-decides as before.
 
 ### A renaming, when the names follow different conventions
 
@@ -302,12 +306,13 @@ wants the summary calls it an abstract, on an input `input_abstract`:
 :caption: naming_renamed.py
 ```
 
-`abstract` pairs with neither output, so the conventions alone fall back to
-the tie, and the `wic042` note returns. A **renaming** tells Sophios how
+`abstract` pairs with neither output, so the names alone fall back to the
+output declared last, and the `wic042` note appears. A **renaming** tells Sophios how
 the two conventions correspond. It is a `[before, after]` pair, applied to
 the input's name, after `input_` is stripped and before the names are
 compared: with `['abstract', 'summary']`, `input_abstract` pairs with
-`output_summary`. On the command line, add the pair to `renaming_conventions`
+`output_summary`. When the renamed name pairs with no output, the input's own name is tried, so
+`input_structure_file` still pairs with `output_structure_file`. On the command line, add the pair to `renaming_conventions`
 in `~/wic/global_config.json`:
 
 ```json
@@ -319,10 +324,10 @@ in `~/wic/global_config.json`:
 ]
 ```
 
-and run with the flag as before:
+and run it:
 
 ```bash
-sophios --yaml naming_renamed.wic --run_local --inference_use_naming_conventions
+sophios --yaml naming_renamed.wic --run_local
 ```
 
 In Python, give the pair to `Inference`:
@@ -332,15 +337,16 @@ from sophios.api.python.workflow import Inference
 
 from naming_renamed import workflow
 
-workflow().run(inference=Inference(naming_conventions=True, renamings=(('abstract', 'summary'),)))
+workflow().run(inference=Inference(renamings=(('abstract', 'summary'),)))
 ```
 
 ```text
 naming_renamed.wic:7:3: note [wic043] step 'abstract' input 'input_abstract' was inferred from the most recent match step 2 'summarize' output 'output_summary'; earlier steps also match: step 1 'echo' output 'stdout'; pin it: `out: - output_summary: !& <name>` on step 2 'summarize' and `in: input_abstract: !* <name>` here (step 3 'abstract', port 'input_abstract')
 ```
 
-and `abstract.txt` holds the summary, `9`, from either form. Renamings need
-the conventions turned on, and `Inference` says so when they are not:
+and `abstract.txt` holds the summary, `9`, from either form. Renamings are
+part of the naming conventions, so `Inference` refuses them when the
+conventions are off:
 
 ```text
 sophios.api.python._errors.InvalidInferenceError: error [api007] Inference.renamings is given but naming_conventions is False, so the renamings would do nothing
