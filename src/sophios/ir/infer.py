@@ -177,6 +177,7 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy, catalog: Inserti
                 shorthand_relays.append(input_name)
             bound.add(port.id)
 
+    linked_edges = _refuse_duplicates(graph, steps, linked_edges, diagnostics)
     for step, port, source, alternatives in choices:
         _note_choice(diagnostics, policy, step, port, source,
                      tuple(alt for alt in alternatives if alt.step == source.step),
@@ -185,6 +186,98 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy, catalog: Inserti
                    workflow_inputs=tuple(workflow_inputs),
                    input_mapping=tuple(input_mapping),
                    shorthand_relays=tuple(shorthand_relays)), False
+
+
+# pylint: disable-next=too-many-locals
+def _refuse_duplicates(graph: WorkflowGraph, steps: list[StepNode], edges: list[Edge],
+                       diagnostics: Diagnostics) -> list[Edge]:
+    """`edges` without the inferred edges of every refused duplicate.
+
+    Inputs of one tool step that read the same output are a duplicate. When
+    one of them was inferred, it stands only if every input declares file
+    formats that the output's declared formats intersect; two written edges
+    are never refused. A refused group is reported once, and its inferred
+    members are not wired. The tool step is the leaf step that declares the
+    input, and the output is the leaf port, however a call exposes it.
+    """
+    ports = {port.id: port for step in steps for port in (*step.inputs, *step.outputs)}
+    calls = {step.id: step.run.child for step in steps if step.run is not None and step.run.child is not None}
+    groups: dict[tuple[StepId, PortId], list[tuple[Port, Edge]]] = {}
+    written = [binding.resolution for step in steps for binding in step.bindings
+               if isinstance(binding.resolution, Edge)]
+    for edge in (*written, *edges):
+        target, name = direct_sink(graph, edge.sink)
+        sink = ports[PortId(target, Direction.INPUT, name)]
+        source = _underlying_output(ports, edge.source)
+        for leaf in _leaf_steps(calls, PortId(target, Direction.INPUT, name)):
+            groups.setdefault((leaf, source), []).append((sink, edge))
+    refused: set[Edge] = set()
+    for members in groups.values():
+        if len(members) < 2 or all(edge.origin is not EdgeOrigin.INFERRED for _, edge in members):
+            continue
+        output_formats = {value for _, edge in members if edge.source in ports
+                          for value in _formats(ports[edge.source].declaration)}
+        if all(output_formats & set(_formats(sink.declaration)) for sink, _ in members):
+            continue
+        inferred = [(sink, edge) for sink, edge in members if edge.origin is EdgeOrigin.INFERRED]
+        if refused.issuperset(edge for _, edge in inferred):
+            continue
+        refused.update(edge for _, edge in inferred)
+        _note_duplicate(diagnostics, members, inferred[0])
+    return [edge for edge in edges if edge not in refused]
+
+
+def _underlying_output(ports: dict[PortId, Port], source: PortId) -> PortId:
+    """The leaf output `source` stands for: a call's exposed port, a derived
+    name or an origin, followed down to the tool step that makes it."""
+    while True:
+        port = ports.get(source)
+        if port is not None and port.origin is not None:
+            source = port.origin
+        elif isinstance(source.port, DerivedName):
+            source = PortId(source.port.step, Direction.OUTPUT, source.port.port)
+        else:
+            return source
+
+
+def _leaf_steps(calls: dict[StepId, WorkflowGraph], local: PortId) -> tuple[StepId, ...]:
+    """The leaf steps that declare the input `local` of a step of this
+    workflow: a call's input belongs to every inner step its input mapping
+    sends it to, down through calls inside calls."""
+    child = calls.get(local.step)
+    if child is None:
+        return (local.step,)
+    inner = {step.id: step.run.child for step in child.steps
+             if step.run is not None and step.run.child is not None}
+    leaves: dict[StepId, None] = {}
+    for name, sinks in child.input_mapping:
+        if name != local.port:
+            continue
+        for sink in sinks:
+            target, port_name = direct_sink(child, sink)
+            leaves.update(dict.fromkeys(
+                _leaf_steps(inner, PortId(target, Direction.INPUT, port_name))))
+    return tuple(leaves) or (local.step,)
+
+
+def _note_duplicate(diagnostics: Diagnostics, members: list[tuple[Port, Edge]],
+                    first: tuple[Port, Edge]) -> None:
+    """Report the inputs of one tool step that would read one output, and how to write what each should read."""
+    source_step, source = _declared_at(first[1].source.step, first[1].source.port)
+    sinks = [_declared_at(sink.id.step, sink.id.port) for sink, _ in members]
+    names = [name for _, name in sinks]
+    tool = sinks[0][0]
+    spelled = ' and '.join(f"'{name}'" for name in names)
+    reads = ' and '.join(f'`in: {name}: !* <name>`' for name in names)
+    step = members[0][0].id.step
+    first_name = _declared_at(first[0].id.step, first[0].id.port)[1]
+    diagnostics.error(
+        SophiosErrorCode.INFERENCE_DUPLICATE,
+        f"{tool} inputs {spelled} would both read {source_step} output '{source}', and nothing says they should "
+        "(two inputs may read one output without a written edge only when each declares a file format that "
+        "output carries). Write the edge each input should read: mark the output each one takes with "
+        f"`out: - <port>: !& <name>` on the step that makes it, and read it with {reads} on {tool}",
+        first[1].span, Locator(step=step.name, index=step.index, port=first_name))
 
 
 def _bound(graph: WorkflowGraph) -> set[PortId]:
