@@ -175,11 +175,11 @@ def test_renders_each_entry_staged_hidden_and_made_by_the_task() -> None:
     exists = "InitialWorkDirRequirement entry already exists in the task directory:"
     renamed, own = f"${{{quote}('renamed.txt')}}", f"${{{quote}({entry})}}"
     assert (
-        f"    if [ -e {renamed} ] || [ -L {renamed} ]; then echo '{exists}' {renamed} >&2; exit 1; fi\n"
-        f"    ln -s -- ${{{quote}(source.toString())}} {renamed}\n"
-        f"    if [ -e {own} ] || [ -L {own} ]; then echo '{exists}' {own} >&2; exit 1; fi\n"
-        f"    cp -RL -- ${{{quote}(outDir.toString())}} {own}\n"
-        f"    ${{{quote}('cat')}} ${{{quote}('renamed.txt')}} ${{{quote}('--outDir')}} ${{{quote}({entry})}}\n"
+        f"if [ -e {renamed} ] || [ -L {renamed} ]; then echo '{exists}' {renamed} >&2; exit 1; fi\n"
+        f"ln -s -- ${{{quote}(source.toString())}} {renamed}\n"
+        f"if [ -e {own} ] || [ -L {own} ]; then echo '{exists}' {own} >&2; exit 1; fi\n"
+        f"cp -RL -- ${{{quote}(outDir.toString())}} {own}\n"
+        f"${{{quote}('cat')}} ${{{quote}('renamed.txt')}} ${{{quote}('--outDir')}} ${{{quote}({entry})}}\n"
     ) in rendered
 
 
@@ -198,7 +198,7 @@ def test_a_scattered_entry_is_staged_hidden_in_its_tuple() -> None:
         {"sources": ["a.txt", "b.txt"]}, {"sources": "File[]"},
     ))
     assert "    tuple val(__sophios_scatter_index_9f72e), path(source, stageAs: '.sophios_entry_source/*')\n" in rendered
-    assert "    cp -RL -- ${__sophios_shell_quote_9f72e(source.toString())} " in rendered
+    assert "\ncp -RL -- ${__sophios_shell_quote_9f72e(source.toString())} " in rendered
 
 
 @pytest.mark.serial

@@ -322,12 +322,20 @@ def _example(name: str) -> Callable[[], Workflow]:
     return build
 
 
+def _flag_first() -> Workflow:
+    """A command that starts with a flag, which renders nothing when it is false."""
+    step = CommandLineTool("first", Inputs(env=Input(cwl.boolean, position=0, flag="env")), Outputs()).argument(
+        "true", position=1).to_step()
+    step.inputs.env = False
+    return Workflow([step], "flag_first")
+
+
 CASES: dict[str, Callable[[], Workflow]] = {
     "bindings": _bindings, "crossproduct": _crossproduct, "dotproduct": _scatters("dotproduct"),
     "flat_crossproduct": _scatters("flat_crossproduct"), "nested_crossproduct": _scatters("nested_crossproduct"),
     "resources": _resources, "directories": _directories, "unary_whens": _unary_whens, "streams": _streams,
     "merged": _merged, "valued": _valued, "renamed": _renamed, "nested": _nested, "conditions": _conditions,
-    "file_references": _file_references,
+    "file_references": _file_references, "flag_first": _flag_first,
     # The one workflow in examples/ the Nextflow target compiles.
     "helloworld_pyapi": _example("helloworld_pyapi"),
     "plan": plan_workflow, "months": lambda: months_workflow(Path("/data")), "summaries": summaries_workflow,
@@ -350,6 +358,11 @@ def test_the_import_of_a_compiled_pipeline_compiles_to_its_model(name: str, tmp_
     model = _compiled(name)
     write_nextflow_artifacts(model, tmp_path)
     assert _imported(tmp_path) == model
+
+
+def test_a_pipeline_v0_7_0_wrote_imports() -> None:
+    """v0.7.0 indented a script's lines, and wrote a command that starts with a flag without parentheses."""
+    assert _imported(Path(__file__).parents[1] / "data" / "nextflow" / "v0.7.0") == _compiled("flag_first")
 
 
 # Text with what CWL, Groovy and the shell each escape. A base command is not interpolated, so any text is
@@ -640,6 +653,8 @@ _EDITS = [
      '\nprocess greet {\n    script:\n    """\n    rm o\n    """\n}\n\nworkflow provoke {\n', "process greet"),
     (_CODE.IMPORT_FOREIGN_SCRIPT, NEXTFLOW_SCRIPT, "    exit 1\n", "    exit 0\n", "stub:"),
     (_CODE.IMPORT_MISMATCH, NEXTFLOW_SCRIPT, "    val message\n", "    val message, arity: '1'\n", "arity"),
+    # Only a command with no shell literal is written on one line, where a literal's `;` would end the command.
+    (_CODE.IMPORT_MISMATCH, NEXTFLOW_SCRIPT, "('echo')} ", "('echo')} ; ", "('echo')} ;"),
     # Text after a script's opening quotes is in the script, quotes open one only after `script:` or `stub:`, and a
     # lone carriage return ends no line.
     (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, '    script:\n    """\n', '    script:\n    """ \n', '"""'),
