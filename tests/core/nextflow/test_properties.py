@@ -6,8 +6,9 @@ from decimal import Decimal
 import shlex
 from typing import Any, Literal, cast
 
+from cwl_utils.errors import JavascriptException, SubstitutionError
 from cwl_utils.expression import interpolate
-from hypothesis import assume, given, settings, strategies as st
+from hypothesis import example, given, settings, strategies as st
 import pytest
 
 from sophios.input_output_nf import (
@@ -156,14 +157,20 @@ def test_every_single_quoted_groovy_position_uses_the_one_escaper(value: str) ->
 
 @settings(max_examples=300, deadline=None)
 @given(st.lists(st.sampled_from(INTERPOLATION_PIECES), max_size=8).map("".join))
+# Once refused: the text on the two sides of a token joined into `${`, `$(`.
+@example("{$$(inputs.x){$")
+@example("($$(inputs.x)($")
+@example("$\\$((")
 def test_template_interpolation_agrees_with_cwltool(text: str) -> None:
     try:
-        template = lower_template(text, context="property")
-    except ValueError:
-        assume(False)  # outside the lowering's subset, which rejects it by name
+        # cwltool interpolates a string only when it contains an expression.
+        expected = interpolate(text, {"inputs": {"x": "VALUE"}}) if "$(" in text or "${" in text else text
+    except (JavascriptException, SubstitutionError):
+        with pytest.raises(ValueError, match="unsupported CWL expression"):
+            lower_template(text, context="property")
+        return
+    template = lower_template(text, context="property")
     lowered = "".join(segment.value if isinstance(segment, NfLiteral) else "VALUE" for segment in template.segments)
-    # cwltool interpolates a string only when it contains an expression.
-    expected = interpolate(text, {"inputs": {"x": "VALUE"}}) if "$(" in text or "${" in text else text
     assert lowered == expected
 
 

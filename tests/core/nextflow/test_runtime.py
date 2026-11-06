@@ -2,6 +2,7 @@
 
 # pylint: disable=missing-function-docstring,protected-access
 
+from functools import partial
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import subprocess
 import sys
 from typing import Any
 
+from hypothesis import example, given, strategies as st
 import pytest
 
 import sophios.main as sophios_main
@@ -30,7 +32,9 @@ from sophios.nf_types import (
 )
 from sophios.utils_nf import compiled_source_to_nextflow
 
+from ..budgets import budget
 from .test_public_api import supported_workflow
+from .test_reference_differential import _run_cwltool, _run_nextflow
 from .testkit import (
     REPO_ROOT,
     command,
@@ -61,6 +65,39 @@ def test_actual_nextflow_golden_path(
     outputs = list((tmp_path / "work").rglob("copy.txt"))
     assert len(outputs) == 1
     assert outputs[0].read_text(encoding="utf-8") == ""
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+@pytest.mark.needs_cwltool
+@budget(3)
+@given(env=st.none() | st.booleans(),
+       values=st.lists(st.text(st.characters(codec="utf-8", exclude_characters="\x00")), min_size=1, max_size=3))
+# A value's indented lines once lost their indentation, and `\r` became `\n`: Nextflow strips the indentation the
+# script's lines share. With `env` false, a token that renders nothing comes first.
+@example(env=None, values=["a\n  b", "x\r\tb"])
+@example(env=False, values=["a\n  b", "x\r\tb"])
+def test_a_command_receives_the_arguments_cwltool_gives_it(
+        env: bool | None, values: list[str], tmp_path_factory: pytest.TempPathFactory) -> None:
+    """A tool's string values reach its command byte for byte, as under cwltool, with or without an `env` flag first."""
+    import cwltool.main  # pylint: disable=import-outside-toplevel
+
+    bound: dict[str, Any] = {f"v{index}": value for index, value in enumerate(values)}
+    inputs = {name: Input(cwl.string, position=5 + index) for index, name in enumerate(bound)}
+    if env is not None:
+        bound["env"], inputs["env"] = env, Input(cwl.boolean, position=0, flag="env")
+    tool = CommandLineTool("argv", Inputs(**inputs), Outputs(out=Output(cwl.file, glob="out.txt"))).stdout("out.txt")
+    for position, word in enumerate(("sh", "-c", 'for a; do printf "%s\\0" "$a"; done', "sh"), start=1):
+        tool = tool.argument(word, position=position)
+    step = Step(tool, step_name="argv")
+    for name, value in bound.items():
+        setattr(step.inputs, name, value)
+    workflow = Workflow([step], "argv")
+    workflow.outputs.out = step.outputs.out
+    root = tmp_path_factory.mktemp("argv")
+    printed = {runner: Path(run(workflow, root / runner)["out"]["path"]).read_bytes()
+               for runner, run in (("nextflow", _run_nextflow), ("cwltool", partial(_run_cwltool, cwltool.main.main)))}
+    assert printed["nextflow"] == printed["cwltool"]
 
 
 @pytest.mark.nextflow

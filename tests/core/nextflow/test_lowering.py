@@ -233,6 +233,21 @@ def test_array_binding_without_a_prefix_lowers_correctly() -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize(("shorthand", "expanded", "value"), [
+    ("string[]", {"type": "array", "items": "string"}, ["a", "b"]),
+    ("File[]", {"type": "array", "items": "File"}, [{"class": "File", "path": "a.txt"}]),
+    ("int[]?", ["null", {"type": "array", "items": "int"}], [1]),
+    (["null", "string[]"], ["null", {"type": "array", "items": "string"}], []),
+])
+def test_an_array_type_in_shorthand_lowers_as_written_out(shorthand: Any, expanded: Any, value: Any) -> None:
+    """CWL reads `T[]` as `{type: array, items: T}` (CWL v1.2, Type DSL); a .cwl tool may declare either."""
+    def lowered(cwl_type: Any) -> Any:
+        return compiled_source_to_nextflow(one_step(tool("T", inputs={"x": {"type": cwl_type, "inputBinding": {}}}),
+                                                    x=value))
+    assert lowered(shorthand) == lowered(expanded)
+
+
+@pytest.mark.fast
 def test_empty_array_value_is_accepted_and_distinct_from_absent() -> None:
     """A supplied [] is a present, valid, zero-length value, not absence."""
     names_tool = tool(
@@ -610,8 +625,8 @@ def test_env_var_requirement_lowers_each_variable_to_an_export(env_def: Any) -> 
     )
     script = render_nextflow(workflow).split('    """\n')[1]
     assert script.splitlines()[:2] == [
-        "    export A=${__sophios_shell_quote_9f72e('cost $5')}",
-        "    export B=${__sophios_shell_quote_9f72e(s.toString())}",
+        "export A=${__sophios_shell_quote_9f72e('cost $5')}",
+        "export B=${__sophios_shell_quote_9f72e(s.toString())}",
     ]
 
 

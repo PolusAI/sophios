@@ -150,7 +150,7 @@ def import_nextflow(directory: str | Path) -> Workflow:
     for written, process in zip(compiled.processes, model.processes):
         if written != process:
             _stop(heads[process.name], f"process {process.name}, which no Python workflow compiles to as it is "
-                                       f"written; the compile writes process {written.name}")
+                  f"written; the compile writes process {written.name}")
     if compiled != model:
         _stop(heads[model.name], f"workflow {model.name}, which no Python workflow compiles to as it is written")
     return workflow
