@@ -28,8 +28,8 @@ class Inference:  # pylint: disable=too-many-instance-attributes
         strict (bool): Make a choice between equally good outputs an error
             (``wic042``, ``wic043``) instead of a note; ``--inference_strict``.
         naming_conventions (bool): Prefer the output whose name matches the
-            input's: ``input_x`` takes ``output_x``, and ``x`` takes ``x``;
-            ``--inference_use_naming_conventions``.
+            input's: ``input_x`` takes ``output_x``, and ``x`` takes ``x``.
+            On by default; False is ``--no_inference_naming_conventions``.
         renamings (Sequence[tuple[str, str]]): ``(before, after)`` pairs applied
             to an input's name before it is matched to an output name, as the
             configuration file's ``renaming_conventions`` are. They need
@@ -51,7 +51,7 @@ class Inference:  # pylint: disable=too-many-instance-attributes
 
     enabled: bool = True
     strict: bool = False
-    naming_conventions: bool = False
+    naming_conventions: bool = True
     renamings: Sequence[tuple[str, str]] = ()
     insert_steps: bool = False
     format_rules: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))

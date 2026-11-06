@@ -77,8 +77,10 @@ neutral.add_argument('--target', choices=tuple(target_options), default='cwl',
                      help='Compilation artifact target. Defaults to cwl.')
 neutral.add_argument('--inference_disable', default=False, action="store_true",
                      help='Disables use of the inference algorithm when compiling.')
-neutral.add_argument('--inference_use_naming_conventions', default=False, action="store_true",
-                     help='Enables the use of naming conventions in the inference algorithm')
+neutral.add_argument('--no_inference_naming_conventions', dest='inference_use_naming_conventions',
+                     default=True, action="store_false",
+                     help='Do not let an input\'s name decide between equally typed outputs of the same step; '
+                     'the output declared last wins')
 neutral.add_argument('--inference_strict', default=False, action="store_true",
                      help='Treat an inference choice between equal candidates (wic042, wic043) as an error.')
 neutral.add_argument('--validate_plugins', default=False, action="store_true",

@@ -6,6 +6,18 @@ Each release's generated notes list what changed. Where a release breaks
 something that worked in the one before it, an upgrade section beneath its
 notes says what to change in your files and code.
 
+## 0.8.0: upgrading from 0.7.0
+
+Codes in parentheses are the codes Sophios prints with each diagnostic.
+
+### Edge inference
+
+- Naming conventions are on by default: when the nearest step has several
+  outputs that fit an input, the one whose name pairs with the input's wins.
+  `--inference_use_naming_conventions` is gone; drop it from your scripts.
+  `--no_inference_naming_conventions`, or `Inference(naming_conventions=False)`
+  in Python, turns them off. Write the edge where you relied on the other output.
+
 ## [0.7.0](https://github.com/PolusAI/sophios/compare/v0.6.0...v0.7.0) (2026-11-04)
 
 
