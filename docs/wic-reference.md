@@ -775,9 +775,9 @@ back through the earlier steps, most recent first, for outputs whose type and
 format match the input's, and the most recent step with one supplies the edge.
 Within that step, an output whose name pairs with the input's wins, and
 otherwise the one declared first. When more than one candidate matched it still takes
-that one and says so with a note: `wic042` when several outputs of the chosen
-step match, `wic043` when an earlier step also matched. Notes do not fail the
-compile; `--inference_strict` makes them errors. An input that nothing
+that one and lists the edge in a `wic043` note, which counts the guessed edges
+and says to draw the workflow to check them. Notes do not fail the compile;
+`--inference_strict` makes each guess an error. An input that nothing
 matches becomes an input of the compiled workflow.
 
 A duplicate needs evidence. Group the inputs of each tool step by the output
@@ -790,8 +790,8 @@ group declares file formats and the output's declared formats include one of
 them. The inferred inputs of a refused group are not connected. Two written
 edges to one output are never refused.
 
-Pin a choice with an edge (§4) and the note goes away. For a port inside a
-subworkflow the pin goes on the inner step, and the note names it.
+Pin a choice with an edge (§4) and its row goes away. For an output inside a
+subworkflow the pin goes on the inner step the row's path names.
 `--inference_disable` turns inference off, and
 `--no_inference_naming_conventions` turns the names off. The
 configuration's `inference_rules` refine inference too;
@@ -803,7 +803,7 @@ Inference exists because, in the straight stretches of a workflow, writing
 every connection says nothing a reader could not guess. It reads the steps in
 the order you list them, so where the graph branches, write the edges: the
 nearest earlier output is not always the branch you meant. This compiles,
-with `cat` connected to `append`'s file and a `wic043` note naming `touch`'s
+with `cat` connected to `append`'s file and a `wic043` note counting `touch`'s
 file as the other candidate:
 
 ```yaml
@@ -819,8 +819,7 @@ steps:
 
 | Code | When | Fix |
 |---|---|---|
-| `wic043` | a note: an earlier step also matched, and the most recent was taken | pin the choice with `!&` and `!*`; `--inference_strict` makes it an error |
-| `wic042` | a note: the chosen step offered several matching outputs, and the first declared was taken | pin the choice with `!&` and `!*` |
+| `wic043` | a note: another output also fitted, so the edge was guessed | draw the workflow, with `--graphviz` or `Workflow.draw()`, and pin the wrong ones with `!&` and `!*`; `--inference_strict` makes it an error |
 | `wic055` | two inputs of one tool step would read one output, and an inferred one lacks the format evidence | write the edge each input should read, with `!&` and `!*` |
 | `wic022` | inference did not settle within its iteration limit | bind the inputs explicitly, or drop `--insert_steps_automatically` |
 

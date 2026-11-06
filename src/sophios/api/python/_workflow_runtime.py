@@ -12,7 +12,6 @@ Python-facing workflow authoring.
 import asyncio
 import copy
 import logging
-import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePath
@@ -36,6 +35,7 @@ from sophios.ir.realtime import ADAPTER, Declaration
 from sophios.ir.resolve import RegistrySnapshot
 from sophios.ir.types import AuthoredName
 from sophios.lang import CwlRecord, Diagnostic, Diagnostics, Document, ParseResult, Severity, SophiosError, render
+from sophios.lang.diagnostics import report
 from sophios.lang import Step as LangStep
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.cli import default_compilation_settings, get_args, get_known_and_unknown_args, target_options
@@ -570,7 +570,7 @@ def compiled_workflow_from_result(
         cwl_workflow=normalize_artifact_cwl(artifact),
         cwl_job_inputs=normalize_artifact_job_inputs(artifact, artifact.job_inputs),
         lang_version=result.lang_version,
-        diagnostics=tuple(str(diagnostic) for diagnostic in result.diagnostics),
+        diagnostics=tuple(result.diagnostics),
     )
 
 
@@ -599,6 +599,7 @@ def compiled_workflow(
         lang_version=lang_version,
         inference=inference,
     )
+    report(result.diagnostics)
     return compiled_workflow_from_result(workflow, result)
 
 
@@ -618,10 +619,11 @@ def compiled_nextflow_workflow(
     )
     executable, notes = compiled_source_to_nextflow_with_notes(
         replace(result, artifact=_declared_outputs(workflow, result.artifact)))
+    report((*result.diagnostics, *notes))
     return CompiledNextflowWorkflow(
         nextflow_workflow=executable,
         lang_version=result.lang_version,
-        diagnostics=tuple(str(diagnostic) for diagnostic in (*result.diagnostics, *notes)),
+        diagnostics=(*result.diagnostics, *notes),
     )
 
 
@@ -666,9 +668,9 @@ def _realtime_refused(declarations: tuple[Declaration, ...]) -> SophiosError:
 
 
 def _run_request(workflow: "Workflow", options: RunOptions, *,
-                 refuse_realtime: bool) -> tuple[backends.RunRequest, tuple[Diagnostic, ...]]:
-    """Compile `workflow`, check this machine, write what the runner reads and pull its images: the run, ready,
-    and the notes preparing it made, for the front door to warn with (`_warn`).
+                 refuse_realtime: bool) -> backends.RunRequest:
+    """Compile `workflow`, check this machine, write what the runner reads and pull its images: the run, ready.
+    Its notes are printed on stderr, as the command line prints them, and the request carries them.
 
     Raises:
         SophiosError: The workflow does not compile, this machine cannot run it, or it declares real-time
@@ -683,6 +685,7 @@ def _run_request(workflow: "Workflow", options: RunOptions, *,
     resolved_run_args = _run_args(options.run_args_dict, options.target)
     basepath = options.basepath
     result = compile_workflow_result(workflow, tool_registry=options.tool_registry, inference=options.inference)
+    report(result.diagnostics)
     if refuse_realtime and result.realtime:
         raise _realtime_refused(result.realtime)
     analyses = realtime.compile_analyses(
@@ -713,18 +716,18 @@ def _run_request(workflow: "Workflow", options: RunOptions, *,
     )
 
     _, unknown_args = get_known_and_unknown_args(workflow.process_name, user_args)
-    return (backends.RunRequest(
+    return _noted(result, prepared.notes, backends.RunRequest(
         workflow.process_name, Path(basepath), runner=resolved_run_args["cwl_runner"],
         container_engine=resolved_run_args["container_engine"], cachedir=resolved_run_args.get("cachedir", ""),
         outdir=resolved_run_args.get("outdir", ""), quiet=resolved_run_args.get("quiet", "yes") == "yes",
         provenance=resolved_run_args.get("no_provenance", "no") != "yes",
         passthrough_args=tuple(unknown_args), env=dict(options.user_env_vars or {}), realtime_plans=prepared.plans,
-        generate_run_script=resolved_run_args.get("generate_run_script", "no") == "yes"), prepared.notes)
+        generate_run_script=resolved_run_args.get("generate_run_script", "no") == "yes"))
 
 
 def _nextflow_run_request(workflow: "Workflow", options: RunOptions, result: CompilationResult,
                           analyses: tuple[realtime.Analysis, ...],
-                          run_args: dict[str, str]) -> tuple[backends.RunRequest, tuple[Diagnostic, ...]]:
+                          run_args: dict[str, str]) -> backends.RunRequest:
     """`_run_request` for the Nextflow target, which lowers the outputs `compile()` returns: each `run_args` key
     Sophios does not read reaches Nextflow as `-<key> <value>`, or `-<key>` alone for an empty value, and one
     only a CWL run reads is refused.
@@ -743,32 +746,31 @@ def _nextflow_run_request(workflow: "Workflow", options: RunOptions, result: Com
     prepared = backends.backend("nextflow", "nextflow").prepare(
         replace(result, artifact=_declared_outputs(workflow, result.artifact)), analyses, Path(options.basepath),
         run_setup.Settings(preflight.RunSettings("docker", "", runner="nextflow", run_script=run_script), Path.cwd()))
-    return (backends.RunRequest(
+    return _noted(result, prepared.notes, backends.RunRequest(
         workflow.process_name, Path(options.basepath), runner="nextflow", target="nextflow",
         passthrough_args=passthrough, env=dict(options.user_env_vars or {}), realtime_plans=prepared.plans,
-        generate_run_script=run_script), prepared.notes)
+        generate_run_script=run_script))
 
 
-def _warn(notes: tuple[Diagnostic, ...]) -> None:
-    """Each note preparing the run made, as a `UserWarning` at the line that called the `Workflow` method: a
-    front door here, called by that method, calls this."""
-    for note in notes:
-        warnings.warn(str(note), UserWarning, stacklevel=4)
+def _noted(result: CompilationResult, notes: tuple[Diagnostic, ...], request: backends.RunRequest
+           ) -> backends.RunRequest:
+    """`request` carrying the notes compiling and preparing the run made; the preparing ones are printed on
+    stderr here, as the command line prints them."""
+    report(notes)
+    return replace(request, diagnostics=(*result.diagnostics, *notes))
 
 
 def start_workflow(workflow: "Workflow", options: RunOptions) -> RunHandle:
     """Compile and prepare `workflow`, start its runner, and return the run's handle: see `Workflow.start`."""
     if _enabled(_run_args(options.run_args_dict, options.target).get("generate_run_script", "no")):
         raise ValueError("generate_run_script writes run.sh instead of starting the run: call run() for it")
-    request, notes = _run_request(workflow, options, refuse_realtime=False)
-    _warn(notes)
+    request = _run_request(workflow, options, refuse_realtime=False)
     return run_local.start(request)
 
 
 def run_workflow(workflow: "Workflow", options: RunOptions) -> RunResult | None:
     """Compile and run `workflow`, and wait for it: see `Workflow.run`."""
-    request, notes = _run_request(workflow, options, refuse_realtime=False)
-    _warn(notes)
+    request = _run_request(workflow, options, refuse_realtime=False)
     if request.generate_run_script:
         run_local.run(request)
         return None
@@ -777,8 +779,7 @@ def run_workflow(workflow: "Workflow", options: RunOptions) -> RunResult | None:
 
 async def run_workflow_async(workflow: "Workflow", options: RunOptions) -> RunResult | None:
     """`run_workflow`, awaited: see `Workflow.run_async`."""
-    request, notes = await asyncio.to_thread(_run_request, workflow, options, refuse_realtime=True)
-    _warn(notes)
+    request = await asyncio.to_thread(_run_request, workflow, options, refuse_realtime=True)
     if request.generate_run_script:
         run_local.run(request)
         return None

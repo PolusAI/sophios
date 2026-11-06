@@ -28,6 +28,8 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
 - Two inputs of one tool step that read one output, one of them inferred, are
   refused (wic055) unless each declares a format the output carries. Write the
   edge each input should read.
+- Every guessed edge is one row of one note (wic043), and wic042 is retired:
+  under `--inference_strict` a guess fails as wic043.
 
 ## [0.7.0](https://github.com/PolusAI/sophios/compare/v0.6.0...v0.7.0) (2026-11-04)
 

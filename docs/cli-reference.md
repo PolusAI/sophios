@@ -50,7 +50,7 @@ Without one of them the command compiles and then asks for one. Under
 |---|---|---|
 | `--inference_disable` | off | compile without edge inference; an unbound input stays unbound |
 | `--no_inference_naming_conventions` | naming on | by default, among outputs of one step that match by type, the one whose name pairs with the input's wins, after the configuration's `renaming_conventions`; this flag leaves the choice to the output declared first |
-| `--inference_strict` | off | an inference choice between equal candidates (`wic042`, `wic043`) is an error rather than a note |
+| `--inference_strict` | off | a guessed edge (`wic043`) is an error rather than a note |
 | `--insert_steps_automatically` | off | when nothing matches an input by format, insert one converter step from the tools named `insert_steps_automatically_*` on the search paths |
 | `--validate_plugins` | off | validate every tool on the search paths with cwltool before compiling |
 | `--cwl_inline_subworkflows` | off | write one flat workflow: each subworkflow call with nothing but `in` and `out`, whose child is not `wic: inlineable: false`, is replaced by the child's steps; the tools stay separate files, and each call that stays nested is named on stderr |

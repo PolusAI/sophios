@@ -43,6 +43,8 @@ class RunResult:
     log_file: Path
     #: The runner's exit code, 0.
     exit_code: int
+    #: The notes compiling and preparing the run made: what was printed on stderr before it started.
+    diagnostics: tuple[Diagnostic, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

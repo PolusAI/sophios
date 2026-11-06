@@ -31,7 +31,7 @@ without compiling again. The versioned JSON form of the model,
 `nextflow_workflow.json`, is a record of it that nothing reads back. The
 compiled workflow's `diagnostics` holds every note the compile made, the core compile's and then
 the lowering's, as `CompiledWorkflow.diagnostics` holds the CWL compile's;
-compiling warns with none of them.
+compiling prints each on stderr, as the command line does, and warns with none of them.
 
 ## Command line
 
@@ -518,9 +518,9 @@ number; an expression is rejected. `cudaVersionMin` and
 each one present, as written, in its `ext` directive, which no generated
 script reads. The generated pipeline does not check them, and compiling
 reports each one with the note [`wic046`](error_codes.md). The command line prints the note with the other
-diagnostics. In Python, `compile(target="nextflow")` keeps it in
-`diagnostics`, and a run, `run()`, `start()` or `run_async()`, gives it as a
-`UserWarning`. Where a task runs is
+diagnostics. In Python, `compile(target="nextflow")` prints it on stderr, in the
+same words, and keeps it in `diagnostics`; a run, `run()`, `start()` or
+`run_async()`, prints it too and keeps it on the result. Where a task runs is
 the executor's choice: the local executor accepts the directive and runs the
 task on the machine as it is.
 

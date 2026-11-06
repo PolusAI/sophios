@@ -105,8 +105,7 @@ Connections and edge inference see through the call. A step after the call
 may be connected to an output of a step inside the child, and a step inside
 the child to an output of a step before the call. A note about such a choice
 names the inner step by the path to it, as in
-`step 1 'make_greeting.wic' > step 2 'append' output 'file'`, and you pin it
-in the child's file. Splitting a workflow into subworkflows changes the
+`make_greeting.wic > append`'s file, and you pin it in the child's file. Splitting a workflow into subworkflows changes the
 names in the compiled CWL and nothing else: the same steps, connections and
 values. [Drawing a workflow](drawing.md) draws each subworkflow as a box
 around its steps, which is a quick way to check the connections across it.

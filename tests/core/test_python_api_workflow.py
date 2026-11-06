@@ -36,7 +36,7 @@ from sophios.api.python.workflow import (_python_api_types_match, ApiError, Comp
                                          InvalidStepError, RunResult, RunState, RunStatus, SophiosError,
                                          SophiosErrorCode, Step, StepInput, Workflow)
 from sophios.cli import default_compilation_settings
-from sophios.lang import CwlRecord, InlineLiteral, parse, to_json, wic_schema
+from sophios.lang import CwlRecord, InlineLiteral, Severity, parse, to_json, wic_schema
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.post_compile import inline_artifact_runs
 from sophios.python_cwl_adapter import import_python_file
@@ -210,7 +210,7 @@ def test_linear_python_workflow_reuses_compiler_edge_inference(tmp_path: Path) -
 
 @pytest.mark.fast
 def test_compiled_workflow_carries_the_inference_notes() -> None:
-    """A choice between equal producers is on the compiled object, not a warning."""
+    """A guessed edge is on the compiled object, not a warning."""
     first = Step(clt_path=_adapter("touch"), step_name="first")
     first.inputs.filename = "a.txt"
     second = Step(clt_path=_adapter("touch"), step_name="second")
@@ -220,8 +220,8 @@ def test_compiled_workflow_carries_the_inference_notes() -> None:
     compiled = Workflow([first, second, cat], "wf").compile()
 
     (note,) = compiled.diagnostics
-    assert "note [wic043]" in note
-    assert "'cat'" in note and "step 1 'first' output 'file'" in note
+    assert (note.severity, note.code) == (Severity.NOTE, SophiosErrorCode.INFERENCE_GUESS)
+    assert note.message == 'cat.file <- second.file (1 other fits)'
 
 
 @pytest.mark.fast
