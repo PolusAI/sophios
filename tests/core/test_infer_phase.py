@@ -187,6 +187,28 @@ def test_a_tie_settled_by_naming_conventions_is_not_noted() -> None:
 
 
 @pytest.mark.fast
+def test_an_input_pairs_by_its_own_name_when_its_renamed_name_pairs_with_nothing() -> None:
+    """`input_structure_file` is renamed to `tpr_file`; with no `output_tpr_file` it still takes
+    `output_structure_file` over the later `output_report_file`, and a renamed pairing wins when it exists."""
+    policy = InferencePolicy(use_naming_conventions=True, renaming_conventions=(('structure_', 'tpr_'),))
+
+    def chosen(outputs: list[str]) -> str:
+        producer = clt({}, {name: {'type': 'File', 'outputBinding': {'glob': name}} for name in outputs})
+        consumer = clt({'input_structure_file': {'type': 'File'}}, {})
+        tools = {**SYNTHETIC_TOOLS,
+                 LegacyStepId('maker', SYNTHETIC_NS): Tool('/synthetic/maker.cwl', producer),
+                 LegacyStepId('reader', SYNTHETIC_NS): Tool('/synthetic/reader.cwl', consumer)}
+        _, linked, _ = _typed({'steps': [{'id': 'maker'}, {'id': 'reader'}]}, tools)
+        result = infer(linked, policy)
+        assert result.graph is not None
+        (edge,) = [edge for edge in result.graph.linked_edges if edge.origin is EdgeOrigin.INFERRED]
+        return str(edge.source.port)
+
+    assert chosen(['output_structure_file', 'output_report_file']) == 'output_structure_file'
+    assert chosen(['output_structure_file', 'output_tpr_file', 'output_report_file']) == 'output_tpr_file'
+
+
+@pytest.mark.fast
 def test_a_scalar_literal_under_scatter_is_wic020() -> None:
     """A scatter splits its value; a scalar is not wrapped into a one-element list."""
     with pytest.raises(SophiosError) as caught:

@@ -13,9 +13,11 @@ class Inference:  # pylint: disable=too-many-instance-attributes
     """Every choice that alters how an unbound input is connected to an earlier output.
 
     Each field is one of the command line's options, but the Python API reads
-    no configuration file: ``renamings`` and ``format_rules`` are empty unless
-    you pass them, where the command line takes its renamings and format rules
-    from the configuration. Likewise ``insert_steps=True`` inserts only the
+    no configuration file of yours: ``renamings`` starts from the ones Sophios
+    ships (``energy_`` to ``edr_``, ``structure_`` to ``tpr_``, ``traj_`` to
+    ``trr_``), the same the command line starts from, and ``format_rules`` is
+    empty unless you pass it, where the command line takes both from the
+    configuration. Likewise ``insert_steps=True`` inserts only the
     converters among the tools in ``tool_registry=`` (those named
     ``insert_steps_automatically_*``), where the command line searches every
     tool on its search paths; pass ``plugins.get_tools_cwl(config)`` to give
@@ -32,8 +34,9 @@ class Inference:  # pylint: disable=too-many-instance-attributes
             On by default; False is ``--no_inference_naming_conventions``.
         renamings (Sequence[tuple[str, str]]): ``(before, after)`` pairs applied
             to an input's name before it is matched to an output name, as the
-            configuration file's ``renaming_conventions`` are. They need
-            ``naming_conventions=True``.
+            configuration file's ``renaming_conventions`` are. Given, they
+            replace the shipped ones; they need ``naming_conventions=True``.
+            None, the default, means the shipped ones.
         insert_steps (bool): Let inference insert a step that would make a
             connection possible; ``--insert_steps_automatically``.
         format_rules (Mapping[str, str]): Per output format, ``'continue'`` or
@@ -52,12 +55,12 @@ class Inference:  # pylint: disable=too-many-instance-attributes
     enabled: bool = True
     strict: bool = False
     naming_conventions: bool = True
-    renamings: Sequence[tuple[str, str]] = ()
+    renamings: Sequence[tuple[str, str]] | None = None
     insert_steps: bool = False
     format_rules: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:
-        for renaming in self.renamings:
+        for renaming in self.renamings or ():
             if not (isinstance(renaming, (tuple, list)) and len(renaming) == 2
                     and all(isinstance(part, str) for part in renaming)):
                 raise InvalidInferenceError(
@@ -76,5 +79,6 @@ class Inference:  # pylint: disable=too-many-instance-attributes
                 raise InvalidInferenceError(
                     f"Inference.format_rules maps {name!r} to {rule!r}, which is not 'continue' or 'break'",
                     "map each format to 'continue' or 'break'")
-        object.__setattr__(self, "renamings", tuple((before, after) for before, after in self.renamings))
+        if self.renamings is not None:
+            object.__setattr__(self, "renamings", tuple((before, after) for before, after in self.renamings))
         object.__setattr__(self, "format_rules", MappingProxyType(dict(self.format_rules)))

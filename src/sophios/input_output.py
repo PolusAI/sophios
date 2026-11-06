@@ -125,6 +125,20 @@ def write_config_to_disk(config: Json, config_file: Path) -> None:
         json.dump(config, f, indent=4, sort_keys=True)
 
 
+#: The renamings Sophios ships, read from the packaged configuration.
+SHIPPED_RENAMINGS: tuple[tuple[str, str], ...] = tuple(
+    (before, after) for before, after in
+    json.loads((Path(__file__).parent / 'config_basic.json').read_text('utf-8'))['renaming_conventions'])
+
+
+def renamings_of(config: Json) -> list[tuple[str, str]]:
+    """The renamings a configuration asks for: its `renaming_conventions` as given
+    (an empty list means none), or the shipped ones when the key is missing."""
+    if 'renaming_conventions' not in config:
+        return list(SHIPPED_RENAMINGS)
+    return [tuple(pair) for pair in config['renaming_conventions']]
+
+
 def default_config_file(homedir: Path) -> Path:
     """The config file Sophios uses when the user does not name one."""
     return homedir / 'wic' / 'global_config.json'

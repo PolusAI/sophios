@@ -407,7 +407,7 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     # Everything below this line takes values; no Namespace goes further.
     compiler_options, graph_settings = cli.get_dicts_for_compilation(args)
     compiler_options['inference_rules'] = global_config.get('inference_rules', {})
-    compiler_options['renaming_conventions'] = global_config.get('renaming_conventions', [])
+    compiler_options['renaming_conventions'] = io.renamings_of(global_config)
     compilation, analyses = _compile_loaded_document(yaml_path, bundle, yml_paths, tools_cwl, compiler_options)
     _report(compilation.diagnostics, args.diagnostics)
     if args.target == 'nextflow':

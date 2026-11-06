@@ -47,7 +47,10 @@ when a workflow calls it; a path containing `_inputs` is skipped.
 
 A list of `[before, after]` pairs, applied in order to an input's name
 (after `input_` is removed) before the naming conventions
-compare it with an output's name (after `output_` is removed).
+compare it with an output's name (after `output_` is removed). A
+configuration without the key uses the three renamings Sophios ships, shown
+below, the same ones the Python API starts from; a list you write, an empty one
+included, is used as given.
 
 ```json
 "renaming_conventions": [

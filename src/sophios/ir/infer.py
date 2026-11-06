@@ -275,14 +275,19 @@ def _candidate(steps: list[StepNode], position: int, sink: Port, policy: Inferen
 
 def _named(matches: list[Port], sink: Port, policy: InferencePolicy) -> list[Port]:
     """The matches whose name the naming conventions pair with `sink`; none
-    when the conventions are off."""
+    when the conventions are off. The renamed name is tried first; when it
+    pairs with nothing, the input's own name is."""
     if not policy.use_naming_conventions:
         return []
-    wanted = _authored(sink).replace('input_', '')
+    plain = _authored(sink).replace('input_', '')
+    renamed = plain
     for before, after in policy.renaming_conventions:
-        wanted = wanted.replace(before, after)
-    return [port for port in matches
-            if _authored(port).replace('output_', '') == wanted]
+        renamed = renamed.replace(before, after)
+    for wanted in (renamed, plain):
+        paired = [port for port in matches if _authored(port).replace('output_', '') == wanted]
+        if paired:
+            return paired
+    return []
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
