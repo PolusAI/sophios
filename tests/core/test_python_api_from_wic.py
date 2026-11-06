@@ -36,7 +36,7 @@ from sophios.utils_cwl import canonicalize_type
 from sophios.wic_types import Json, StepId, Tool, Tools
 
 from .equivalence import Strength, equivalent
-from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
+from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
 from .test_examples import _is_includer_fragment, yml_paths_tuples_not_large
 from .test_frontdoor import PYTHON_SCRIPT
 # pylint: disable-next=unused-import  # `corpus_registry` is a pytest fixture
@@ -174,6 +174,26 @@ def test_a_wic_call_becomes_a_nested_workflow(tmp_path: Path) -> None:
     assert [step.process_name for step in child.steps] == ['mk_file']
     assert child.inputs[0].value == 'made.txt'
     _assert_compiles_alike(tmp_path, workflow)
+
+
+@pytest.mark.fast
+def test_from_wic_pairs_outputs_by_the_shipped_renamings(tmp_path: Path) -> None:
+    """The file's own compile pairs `energy_x` with `edr_x` and `energy_y` with `edr_y` through the shipped
+    renamings; loading it for Python must not refuse it (`wic055`) by starting from none."""
+    pair_src = clt({'name': {'type': 'string', 'inputBinding': {'position': 1}}},
+                   {'edr_x': {'type': 'File', 'outputBinding': {'glob': '$(inputs.name)'}},
+                    'edr_y': {'type': 'File', 'outputBinding': {'glob': '$(inputs.name)'}}}, canonical=True)
+    pair_sink = clt({'energy_x': {'type': 'File', 'inputBinding': {'position': 1}},
+                     'energy_y': {'type': 'File', 'inputBinding': {'position': 2}}},
+                    {'out': {'type': 'File', 'outputBinding': {'glob': 'out.txt'}}}, canonical=True)
+    tools = {StepId('pair_src', SYNTHETIC_NS): Tool('/synthetic/pair_src.cwl', pair_src),
+             StepId('pair_sink', SYNTHETIC_NS): Tool('/synthetic/pair_sink.cwl', pair_sink)}
+    workflow_paths = _documents(tmp_path, root='steps:\n- id: pair_src\n  in:\n    name: !ii a.txt\n- id: pair_sink\n')
+
+    loaded = Workflow.from_wic(tmp_path / 'root.wic', tool_registry=tools, workflow_paths=workflow_paths)
+
+    sink_inputs = loaded.compile().cwl_workflow['steps'][1]['in']
+    assert sink_inputs['energy_x'].endswith('/edr_x') and sink_inputs['energy_y'].endswith('/edr_y')
 
 
 @pytest.mark.fast

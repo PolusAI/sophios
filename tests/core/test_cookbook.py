@@ -17,7 +17,10 @@ import pytest
 import sophios.compiler
 import sophios.plugins
 from sophios.api.python.workflow import Inference
+from sophios.lang import SophiosErrorCode
+from sophios.lang.diagnostics import Severity, SophiosError
 from sophios.cli import default_compilation_settings
+from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.post_compile import inline_artifact_runs
 from sophios.python_cwl_adapter import import_python_file
@@ -32,6 +35,8 @@ COOKBOOK = REPO_ROOT / 'docs' / 'cookbook'
 #: A pair is a `.py` beside a `.wic` of the same stem. A `.wic` without a `.py`
 #: is a subworkflow a pair calls; its Python lives in the caller's script.
 PAIRS = sorted(path.stem for path in COOKBOOK.glob('*.py'))
+#: The pair that stops with an error, which `test_the_inferred_graph_stops_at_the_join` pins on both surfaces.
+REFUSED = 'greeting_graph_inferred'
 
 
 @pytest.fixture(scope='module', name='shipped_tools_home')
@@ -74,7 +79,7 @@ def _as_compile_returns(cwl: Json, wic_path: Path) -> Json:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('stem', PAIRS)
+@pytest.mark.parametrize('stem', [stem for stem in PAIRS if stem != REFUSED])
 def test_both_surfaces_compile_to_the_same_cwl(stem: str) -> None:
     """The `.py` and the `.wic` of a pair emit one workflow, one job and one set of notes."""
     module = import_python_file(f'cookbook_{stem}', COOKBOOK / f'{stem}.py')
@@ -90,6 +95,42 @@ def test_both_surfaces_compile_to_the_same_cwl(stem: str) -> None:
     assert _as_compile_returns(normalize_artifact_cwl(artifact), wic_path) == python_side.cwl_workflow
     assert normalize_artifact_job_inputs(artifact, artifact.job_inputs) == python_side.cwl_job_inputs
     assert _codes(result.diagnostics) == _codes(python_side.diagnostics)
+
+
+def _compile_wic(stem: str) -> CompilationResult:
+    """The `.wic` of a cookbook pair, compiled as the command line compiles it."""
+    wic_path = COOKBOOK / f'{stem}.wic'
+    workflows = {'global': {path.stem: path for path in COOKBOOK.glob('*.wic')}}
+    bundle = bundle_from_disk(wic_path, workflows, _shipped_tools())
+    return sophios.compiler.compile_source(bundle, default_compilation_settings(), testing=True)
+
+
+@pytest.mark.fast
+def test_the_inferred_graph_stops_at_the_join() -> None:
+    """With every edge left out, `combine` would read the counts as its text and as its counts; both surfaces
+    stop there with `wic055`, naming the step, the inputs and the output."""
+    module = import_python_file(f'cookbook_{REFUSED}', COOKBOOK / f'{REFUSED}.py')
+    with pytest.raises(SophiosError) as from_python:
+        module.workflow().compile()
+    with pytest.raises(SophiosError) as from_wic:
+        _compile_wic(REFUSED)
+    for caught in (from_python, from_wic):
+        (error,) = [d for d in caught.value.diagnostics if d.severity is Severity.ERROR]
+        assert error.code is SophiosErrorCode.INFERENCE_DUPLICATE
+        assert error.message.startswith("step 5 'combine' inputs 'text' and 'counts' would both read "
+                                        "step 4 'word_count' output 'counts'")
+
+
+@pytest.mark.fast
+def test_the_partial_graph_is_the_explicit_graph() -> None:
+    """Two written edges, at the branch and at the join, leave inference the other three; the compiled
+    workflow has every step reading what `greeting_graph.wic` writes out."""
+    def reads(stem: str) -> dict[str, dict[str, str]]:
+        steps = normalize_artifact_cwl(inline_artifact_runs(_compile_wic(stem).artifact))['steps']
+        return {step['id']: {port: source['source'] if isinstance(source, dict) else source
+                             for port, source in step['in'].items()} for step in steps}
+
+    assert reads('greeting_graph_partial') == reads('greeting_graph')
 
 
 @pytest.mark.fast

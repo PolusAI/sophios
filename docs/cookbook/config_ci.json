@@ -12,5 +12,9 @@
         "raw_cwl",
         "when",
         "workflow_input"
+    ],
+    // Stops with wic055 on purpose: docs/edge-inference.md shows why.
+    "refused": [
+        "greeting_graph_inferred"
     ]
 }

@@ -458,9 +458,18 @@ def _provoke_inference_recency() -> None:
                      'provoke', inference_strict=True)
 
 
+def _provoke_inference_duplicate() -> None:
+    """Two inputs of one step that inference would both give the same file."""
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+
+    compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}},
+                                {'id': 'join', 'in': {'name': {'wic_inline_input': 'b'}}}]}, 'provoke')
+
+
 COMPILED.update({
     SophiosErrorCode.INFERENCE_TIE: _provoke_inference_tie,
     SophiosErrorCode.INFERENCE_RECENCY: _provoke_inference_recency,
+    SophiosErrorCode.INFERENCE_DUPLICATE: _provoke_inference_duplicate,
 })
 
 
