@@ -82,7 +82,8 @@
           }
         },
         "arguments": [
-          "echo",
+          "printf",
+          "%s\\n",
           "$(inputs.str)",
           {
             "valueFrom": ">>",
