@@ -1,8 +1,8 @@
 """The shipped `append.cwl` appends the message as written, under Nextflow and under cwltool alike.
 
-The tutorials and most cookbook workflows build on it. The message reaches `echo` as one quoted argument, so
-shell syntax in it is text, and the tool appends to its own copy of the file, so the file it was given keeps
-its contents.
+The tutorials and most cookbook workflows build on it. The message reaches `printf` as one quoted argument, so
+shell syntax and backslashes in it are text, and the tool appends to its own copy of the file, so the file it
+was given keeps its contents.
 """
 
 from functools import partial
@@ -16,7 +16,7 @@ from .test_reference_differential import _run_cwltool, _run_nextflow
 from .testkit import REPO_ROOT
 
 #: What an unquoting shell would act on: a separator, a run of spaces, a quote, a substitution, a glob.
-MESSAGE = "Hello;  it's $(echo substituted) *"
+MESSAGE = "Hello;  it's $(echo substituted) * a\\tb\\nc 100%s"
 
 
 @pytest.mark.nextflow
