@@ -1,0 +1,29 @@
+- {id: "a wrong-shaped wic value: inlineable: sometimes", source: "wic:\n  inlineable: sometimes\n",
+   report: [{code: MALFORMED_WIC_VALUE, line: 2, column: 15}],
+   why: &w0 "Each declared value shape refuses what the generated jsonschema used to refuse, as `wic034`, at the node
+       that is wrong -- a nested one included."}
+- {id: "a wrong-shaped wic value: driver: pbs", source: "wic:\n  driver: pbs\n",
+   report: [{code: MALFORMED_WIC_VALUE, line: 2, column: 11}], why: *w0}
+- {id: "a wrong-shaped wic value: namespace: \"\"", source: "wic:\n  namespace: \"\"\n",
+   report: [{code: MALFORMED_WIC_VALUE, line: 2, column: 14}], why: *w0}
+- {id: "a wrong-shaped wic value: lang_version: 1.0", source: "wic:\n  lang_version: 1.0\n",
+   report: [{code: MALFORMED_WIC_VALUE, line: 2, column: 17}], why: *w0}
+- {id: "a wrong-shaped wic value: implementations: [a]", source: "wic:\n  implementations: [a]\n",
+   report: [{code: MALFORMED_WIC_VALUE, line: 2, column: 20}], why: *w0}
+- {id: "a wrong-shaped wic value: graphviz: x", source: "wic:\n  graphviz: x\n",
+   report: [{code: MALFORMED_WIC_VALUE, line: 2, column: 13}], why: *w0}
+- {id: "a wrong-shaped wic value: graphviz: label: \"\"", source: "wic:\n  graphviz:\n    label: \"\"\n",
+   report: [{code: MALFORMED_WIC_VALUE, line: 3, column: 12}], why: *w0}
+- {id: "a wrong-shaped wic value: graphviz: style: bogus", source: "wic:\n  graphviz:\n    style: bogus\n",
+   report: [{code: MALFORMED_WIC_VALUE, line: 3, column: 12}], why: *w0}
+- {id: "a wrong-shaped wic value: graphviz: color: red", source: "wic:\n  graphviz:\n    color: red\n",
+   report: [{code: MALFORMED_WIC_VALUE, line: 3, column: 5}], why: *w0}
+- {id: "a wrong-shaped wic value: graphviz: ranksame: [\"(1, a)\", zz]",
+   source: "wic:\n  graphviz:\n    ranksame: [\"(1, a)\", zz]\n",
+   report: [{code: MALFORMED_WIC_VALUE, line: 3, column: 26}], why: *w0}
+- {id: "a wrong-shaped wic value: steps: (1, s): scatterMethod: dot",
+   source: "wic:\n  steps:\n    (1, s):\n      scatterMethod: dot\n",
+   report: [{code: MALFORMED_WIC_VALUE, line: 4, column: 22}], why: *w0}
+- {id: "a wrong-shaped wic value: steps: (1, s): wic: inlineable: 1",
+   source: "wic:\n  steps:\n    (1, s):\n      wic:\n        inlineable: 1\n",
+   report: [{code: MALFORMED_WIC_VALUE, line: 5, column: 21}], why: *w0}

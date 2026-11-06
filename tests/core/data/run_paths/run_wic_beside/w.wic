@@ -1,0 +1,1 @@
+steps: {call: {run: sub/child.wic}}

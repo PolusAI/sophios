@@ -20,8 +20,8 @@ def _compile_wic(wic: Path) -> CompilationArtifact:
 @pytest.mark.fast
 def test_a_wic_file_default_is_written_absolute_against_the_wic(tmp_path: Path,
                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
-    """A workflow input's relative `default:` names a file beside the `.wic` that wrote it, a called one's too,
-    wherever Sophios runs and wherever it writes the document: a `location` as a URI, a `path` as a path."""
+    """A relative `default:` of a workflow input, a called one's and a step input's names a file beside the `.wic`
+    that wrote it, wherever Sophios runs and writes: a `location` as a URI, a `path` as a path."""
     project = tmp_path / 'project'
     (project / 'sub').mkdir(parents=True)
     (project / 'sub' / 'child.wic').write_text(
@@ -33,7 +33,8 @@ def test_a_wic_file_default_is_written_absolute_against_the_wic(tmp_path: Path,
         '  far: {type: File, default: {class: File, location: "file:///elsewhere/far.txt"}}\n'
         'steps:\n- id: xform\n  in: {file: cfg, name: !ii a.txt}\n- id: again\n  run: xform\n'
         '  in: {file: ref, name: !ii b.txt}\n- id: third\n  run: xform\n  in: {file: far, name: !ii c.txt}\n'
-        '- id: call\n  run: sub/child.wic\n', encoding='utf-8')
+        '- id: call\n  run: sub/child.wic\n- id: fourth\n  run: xform\n'
+        '  in: {file: !cwl {default: {class: File, location: data/step.txt}}, name: !ii d.txt}\n', encoding='utf-8')
     monkeypatch.chdir(tmp_path)
     artifact = _compile_wic(project / 'w.wic')
     inputs = artifact.cwl['inputs']
@@ -42,18 +43,5 @@ def test_a_wic_file_default_is_written_absolute_against_the_wic(tmp_path: Path,
     assert inputs['far']['default'] == {'class': 'File', 'location': 'file:///elsewhere/far.txt'}
     (child,) = (document for document in artifact.children if document.graph is not None)
     assert child.cwl['inputs']['cfg']['default']['location'] == (project / 'sub' / 'other.txt').as_uri()
-
-
-@pytest.mark.fast
-def test_a_wic_step_default_is_written_absolute_against_the_wic(tmp_path: Path,
-                                                                monkeypatch: pytest.MonkeyPatch) -> None:
-    """A step input's `!cwl {default: ...}` names a file beside the `.wic`, as a workflow input's does."""
-    project = tmp_path / 'project'
-    project.mkdir()
-    (project / 'w.wic').write_text(
-        'steps:\n- id: xform\n  in:\n    file: !cwl {default: {class: File, location: data/config.txt}}\n'
-        '    name: !ii a.txt\n', encoding='utf-8')
-    monkeypatch.chdir(tmp_path)
-    (step,) = _compile_wic(project / 'w.wic').cwl['steps']
-    config = (project / 'data' / 'config.txt').as_uri()
-    assert step['in']['file'] == {'default': {'class': 'File', 'location': config}}
+    assert artifact.cwl['steps'][-1]['in']['file'] == {
+        'default': {'class': 'File', 'location': (project / 'data' / 'step.txt').as_uri()}}

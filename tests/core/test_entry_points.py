@@ -28,16 +28,11 @@ PYPROJECT = REPO_ROOT / 'pyproject.toml'
 UVICORN_TARGET = re.compile(r'uvicorn"?,?\s*"?([\w.]+):(\w+)"?')
 
 
-def _console_scripts() -> list[tuple[str, str, str]]:
-    """Return (name, module, attribute) for each declared console script."""
+def _console_scripts() -> list[Any]:
+    """A parameter per declared console script: `[project.scripts]` in pyproject.toml."""
     with PYPROJECT.open('rb') as f:
-        data = tomllib.load(f)
-    scripts = data.get('project', {}).get('scripts', {})
-    out = []
-    for name, target in scripts.items():
-        module, _, attr = target.partition(':')
-        out.append((name, module, attr))
-    return out
+        scripts = tomllib.load(f).get('project', {}).get('scripts', {})
+    return [pytest.param(f'console script {name!r}', *target.split(':', 1)) for name, target in scripts.items()]
 
 
 def _in_contrib(module: str) -> bool:
@@ -59,25 +54,14 @@ def _container_targets() -> list[Any]:
             continue
         for module, attr in UVICORN_TARGET.findall(path.read_text(encoding='utf-8')):
             marks = [pytest.mark.contrib] if _in_contrib(module) else []
-            out.append(pytest.param(path.name, module, attr, marks=marks))
+            out.append(pytest.param(f'{path.name} runs "uvicorn {module}:{attr}"', module, attr, marks=marks))
     return out
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('name,module,attr', _console_scripts())
-def test_console_script_targets_resolve(name: str, module: str, attr: str) -> None:
-    """Every `[project.scripts]` entry names an importable module and attribute."""
-    mod = importlib.import_module(module)
-    assert hasattr(mod, attr), (
-        f'console script {name!r} points at {module}:{attr}, '
-        f'but {module} has no attribute {attr!r}'
-    )
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('source,module,attr', _container_targets())
-def test_container_entry_points_resolve(source: str, module: str, attr: str) -> None:
-    """Every container entry point names an importable module and attribute.
+@pytest.mark.parametrize('declared,module,attr', _console_scripts() + _container_targets())
+def test_each_entry_point_names_an_importable_module_and_attribute(declared: str, module: str, attr: str) -> None:
+    """Every `[project.scripts]` entry and every container entry point names an importable module and attribute.
 
     A container whose CMD names a missing module cannot start, and nothing else
     in the suite would notice.
@@ -85,14 +69,8 @@ def test_container_entry_points_resolve(source: str, module: str, attr: str) -> 
     try:
         mod = importlib.import_module(module)
     except ModuleNotFoundError as exc:
-        pytest.fail(
-            f'{source} runs "uvicorn {module}:{attr}", but {module} '
-            f'does not exist ({exc}). The container would fail at startup.'
-        )
-    assert hasattr(mod, attr), (
-        f'{source} runs "uvicorn {module}:{attr}", '
-        f'but {module} has no attribute {attr!r}'
-    )
+        pytest.fail(f'{declared}, but {module} does not exist ({exc}): it would fail at startup.')
+    assert hasattr(mod, attr), f'{declared}, but {module} has no attribute {attr!r}'
 
 
 @pytest.mark.fast

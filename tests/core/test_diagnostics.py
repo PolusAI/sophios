@@ -19,32 +19,36 @@ import math
 import os
 import re
 import shutil
+import string
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import ModuleType
-from typing import Final
+from typing import Any, Final
 
 import pytest
 import yaml
+from hypothesis import assume, example, given, strategies as st
 
 from sophios import main as cli
 from sophios import preflight, run_local
 from sophios.ir.complete import coerce_job_value
 from sophios.ir.declarations import port_declaration
 from sophios.ir.types import AuthoredName
-from sophios.lang import InlineLiteral, parse
 from sophios.lang.diagnostics import Diagnostic, Diagnostics, Locator, Severity, SophiosError
 from sophios.lang.error_codes import EXPLANATIONS, SophiosErrorCode
 from sophios.lang.spans import SourceSpan
 from sophios.python_cwl_adapter import check_args_match_inputs
 from sophios.wic_types import StepId, Tool
 
+from .budgets import budget
 from .fake_runner import POSIX_ONLY
 from .hermetic import compile_hermetic, compile_hermetic_source
 from .provocations import _provoke_duplicate_document_name
+from .strategies import pinned
 from .synthetic_tools import SYNTHETIC_NS, clt
+from .test_lang_parser import FAST
 
 
 # --------------------------------------------------------------------------
@@ -68,23 +72,6 @@ def test_str_carries_every_message() -> None:
     assert len(error.diagnostics) == 2
 
 
-@pytest.mark.fast
-def test_spanless_diagnostics_print_without_a_location() -> None:
-    """Compile-phase failures may not know a line; the string form must not
-    invent one."""
-    diagnostic = Diagnostic(Severity.ERROR, SophiosErrorCode.MISSING_INPUT_FILE, 'gone.txt missing')
-    assert str(diagnostic) == 'error [wic016] gone.txt missing'
-
-
-@pytest.mark.fast
-def test_a_note_is_reported_without_being_an_error() -> None:
-    """A note says something the reader should know; it does not fail anything."""
-    diagnostics = Diagnostics()
-    diagnostics.note(SophiosErrorCode.UNRESOLVED_INPUT, 'worth knowing')
-    assert not diagnostics.has_errors
-    assert [str(d) for d in diagnostics] == ['note [wic011] worth knowing']
-
-
 # --- the converted sites, one by one ---------------------------------------
 
 
@@ -103,28 +90,68 @@ def test_script_argument_mismatch_reports(tmp_path: Path) -> None:
     assert all(d.code is SophiosErrorCode.SCRIPT_ARGUMENT_MISMATCH for d in caught.value.diagnostics)
 
 
+_TYPES: Final = {'int': int, 'long': int, 'float': float, 'double': float, 'boolean': bool, 'string': str}
+_TEXTS = st.text('07.e+-:axy', max_size=4)
+_READ_BACK: Final[dict[type, Callable[[str], Any]]] = {str: str, int: int, float: float,
+                                                       datetime.date: datetime.date.fromisoformat}
+_OWN: Final = {int: st.integers(-2**70, 2**70), float: st.floats(), bool: st.booleans(), str: _TEXTS}
+_LITERALS = st.recursive(
+    st.one_of(st.integers(-2**70, 2**70), st.floats(), st.booleans(), _TEXTS, st.dates(), st.none()),
+    lambda inner: st.lists(inner, max_size=3) | st.dictionaries(st.sampled_from(['k', 'seen']), inner, max_size=2),
+    max_leaves=4)
+_PORTS_AND_LITERALS = st.sampled_from(sorted(_TYPES)).flatmap(lambda name: st.tuples(
+    st.sampled_from([name, {'type': 'array', 'items': name}]),
+    _OWN[_TYPES[name]] | st.lists(_OWN[_TYPES[name]] | st.none(), max_size=3) | _LITERALS))
+
+
+def _binds(name: str, value: Any) -> bool:
+    """Whether a port of the scalar CWL type `name` takes `value`: a value whose class is the JSON type `_TYPES` gives
+    it (a bool is no int), an int a float holds exactly, and for a string any scalar but null, or a list or mapping
+    JSON can write."""
+    wanted = _TYPES[name]
+    if wanted is float and value.__class__ is int:
+        return -2**1024 < value < 2**1024 and float(value) == value
+    if wanted is str and isinstance(value, (list, dict)):
+        try:
+            return bool(json.dumps(value))
+        except TypeError:
+            return False
+    return value.__class__ is wanted or wanted is str and isinstance(value, (int, float, datetime.date))
+
+
 @pytest.mark.fast
-def test_literal_type_mismatch_reports_a_null_array_element() -> None:
-    """A null inside an array literal is diagnosed, not raised as a bare
-    `TypeError`.
-
-    `populate_input_value`'s null guard inspects only the top-level value, so
-    `[1, null]` against an `int[]` passes it and reaches `populate_scalar_val`
-    one element down, where `int(None)` is a `TypeError` rather than the
-    `ValueError` a non-numeric string gives. Both are the same user error and
-    get the same diagnostic.
-    """
-    with pytest.raises(SophiosError) as caught:
-        coerce_job_value(
-            AuthoredName('xs'), port_declaration({'type': {'type': 'array', 'items': 'int'}}),
-            [1, None])
-
-    assert len(caught.value.diagnostics) == 1
-    assert caught.value.diagnostics[0].code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
-    message = caught.value.diagnostics[0].message
-    assert 'xs' in message
-    assert 'int' in message
-    assert 'None' in message
+@given(_PORTS_AND_LITERALS)
+@pinned(('int', 2.9), ('int', '007'), ('int', True), ('long', 2.9), ('boolean', 'yes'), ('boolean', 2),
+        ('float', '1e3'), ('float', True), ('double', 'x'), ('float', 2**53 + 1), ('float', 10**400),
+        ('string', {'seen': datetime.date(2024, 1, 15)}), ({'type': 'array', 'items': 'string'}, ['a', None]),
+        ('string', 20), ('string', 1.5), ('string', True), ('string', False), ('string', datetime.date(2024, 1, 15)),
+        ('string', {'seen': 'a'}), ('float', 1), ('double', 2**53), ('float', 1.0e-5), ('int', 3), ('long', 3),
+        ('boolean', False), ('float', math.nan), ({'type': 'array', 'items': 'int'}, [1, None]))
+@FAST
+def test_a_literal_binds_only_as_the_value_it_is(case: Any) -> None:
+    """`int('007')` and `bool('yes')` used to succeed, an int above 2**53 rounded silently, and a null inside an array
+    raised a bare `TypeError`. A literal binds only as the port type's own value, an exact int into a float, or a
+    string's text that reads back to it; else one wic020 names the input, the type and the literal (null, wic012)."""
+    declared, value = case
+    name = declared['items'] if isinstance(declared, dict) else declared
+    items = value if isinstance(declared, dict) and isinstance(value, list) else [value]
+    refused = [item for item in items if not _binds(name, item)]
+    try:
+        bound: Any = _job_value(declared, value)
+    except SophiosError as caught:
+        [diagnostic] = list(caught.diagnostics)
+        assert refused and diagnostic.code is (SophiosErrorCode.LITERAL_TYPE_MISMATCH if value is not None
+                                               else SophiosErrorCode.MISSING_REQUIRED_INPUT), diagnostic
+        assert value is None or all(repr(part) in diagnostic.message for part in ('x', name, refused[0])), diagnostic
+        assert (refused[0].__class__ is not int or _TYPES[name] is not float
+                or 'cannot hold exactly' in diagnostic.message), diagnostic
+        return
+    assert value is not None and not refused, bound
+    for item, held in zip(items, bound if isinstance(declared, dict) else [bound]):
+        if _TYPES[name] is str:
+            assert isinstance(held, str) and repr(_READ_BACK.get(type(item), json.loads)(held)) == repr(item), held
+        else:
+            assert held.__class__ is _TYPES[name] and repr(held) == repr(_TYPES[name](item)), held
 
 
 def _job_value(declared: object, literal: object) -> object:
@@ -165,40 +192,6 @@ def test_a_number_on_a_string_input_is_its_text_quoted_or_not(spelling: str, exp
     assert _job_value_written('string', spelling) == expected
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize('declared, literal', [
-    ('int', 2.9), ('int', '007'), ('int', True), ('long', 2.9),
-    ('boolean', 'yes'), ('boolean', 2),
-    ('float', '1e3'), ('float', True), ('double', 'x'),
-    ('float', 2**53 + 1), ('float', 10**400),
-    ('string', {'seen': datetime.date(2024, 1, 15)}), ({'type': 'array', 'items': 'string'}, ['a', None]),
-], ids=['float-into-int', 'text-into-int', 'bool-into-int', 'float-into-long',
-        'text-into-bool', 'int-into-bool',
-        'text-into-float', 'bool-into-float', 'text-into-double',
-        'int-a-float-rounds', 'int-a-float-overflows',
-        'date-in-a-mapping-into-string', 'null-in-a-list-into-string'])
-def test_a_literal_of_the_wrong_type_is_wic020_not_converted(declared: object, literal: object) -> None:
-    """`int('007')` and `bool('yes')` used to succeed, and the job carried a value
-    the author never wrote."""
-    with pytest.raises(SophiosError) as caught:
-        _job_value(declared, literal)
-    assert caught.value.diagnostics[0].code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('declared, literal, expected', [
-    ('string', 20, '20'), ('string', 1.5, '1.5'), ('string', True, 'true'), ('string', False, 'false'),
-    ('string', datetime.date(2024, 1, 15), '2024-01-15'),
-    ('string', {'seen': 'a'}, '{"seen": "a"}'),
-    ('float', 1, 1.0), ('double', 2**53, float(2**53)), ('float', 1.0e-5, 1.0e-5),
-    ('int', 3, 3), ('long', 3, 3), ('boolean', False, False),
-])
-def test_the_lossless_conversions_still_hold(declared: object, literal: object, expected: object) -> None:
-    """YAML reads an unquoted 2024-01-15 as a date; bound to a string it is the text the author wrote."""
-    value = _job_value(declared, literal)
-    assert (value, type(value)) == (expected, type(expected))
-
-
 _ENUM: Final = {'type': 'enum', 'symbols': ['a', 'b']}
 _BOOL_OR_STRINGS: Final = ['null', 'boolean', {'type': 'array', 'items': 'string'}]
 
@@ -228,33 +221,19 @@ def test_a_scalar_given_to_a_union_with_an_array_takes_the_scalar_member(
 
 
 @pytest.mark.fast
-def test_a_float_port_takes_not_a_number() -> None:
-    """`!ii .nan` is a float, and NaN is not equal to itself, so equality cannot be what accepts it."""
-    value = _job_value('float', float('nan'))
-    assert isinstance(value, float) and math.isnan(value)
-
-
-def _parsed_literal(text: str) -> object:
-    """The value the parser gives `!ii <text>`."""
-    document = parse(f'steps:\n- id: probe\n  in:\n    x: !ii {text}\n', 'probe.wic').document
-    assert document is not None
-    literal = dict(document.steps[0].inputs)['x']
-    assert isinstance(literal, InlineLiteral)
-    return literal.value
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('text', ['1e-5', '1E3', '2.5e10'])
+@given(st.from_regex(r'[-+]?[0-9]+(\.[0-9]*)?[eE][-+]?[0-9]+', fullmatch=True))
+@pinned('1e-5', '1E3', '2.5e10')
+@example('.5e3').xfail(raises=AssertionError, reason='no advice for a mantissa with no digit before its point')
+@example('1_0e3').xfail(raises=AssertionError, reason='no advice for a mantissa with an underscore')
+@FAST
 def test_scientific_notation_yaml_reads_as_text_says_how_to_write_a_float(text: str) -> None:
-    """YAML reads a float with no signed exponent as text, so it is wic020. The message
-    gives the spelling the parser does read as a float, with the value the author meant."""
-    assert _parsed_literal(text) == text
+    """YAML reads a float with no signed exponent as text, so it is wic020. The message gives the spelling YAML, and
+    so the parser, reads as a float, with the value the author meant: the same float, infinity included."""
+    assume(isinstance(yaml.safe_load(text), str))
     with pytest.raises(SophiosError) as caught:
         _job_value('float', text)
-    message = caught.value.diagnostics[0].message
-    advised = re.search(r'Write (\S+)\.$', message)
-    assert advised is not None, message
-    assert _parsed_literal(advised[1]) == float(text)
+    advised = re.search(r'Write (\S+)\.$', caught.value.diagnostics[0].message)
+    assert advised is not None and yaml.safe_load(advised[1]) == float(text), caught.value.diagnostics[0].message
 
 
 @pytest.mark.fast
@@ -263,14 +242,6 @@ def test_a_literal_of_another_python_type_says_which_python_type_the_port_wants(
     with pytest.raises(SophiosError) as caught:
         _job_value('string', b'abc')
     assert caught.value.diagnostics[0].message.endswith("its literal b'abc' is of type bytes, not a Python str.")
-
-
-@pytest.mark.fast
-def test_a_float_the_literal_cannot_hold_exactly_says_so() -> None:
-    """An int above 2**53 used to round silently; the message names why it is rejected."""
-    with pytest.raises(SophiosError) as caught:
-        _job_value('float', 2**53 + 1)
-    assert 'cannot hold exactly' in caught.value.diagnostics[0].message
 
 
 # --------------------------------------------------------------------------
@@ -445,72 +416,65 @@ def _cli_on_helloworld(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Calla
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('mode', ['--generate_cwl_workflow', '--generate_run_script'])
-def test_unknown_cli_flags_are_rejected(mode: str, cli_on_helloworld: Callable[..., None],
-                                        capsys: pytest.CaptureFixture[str]) -> None:
-    """A flag Sophios does not know is an error, not a silent gift to the runner."""
+@pytest.mark.parametrize(('argv', 'said'), [
+    (['--yaml', '{hello}', '--generate_cwl_workflow', '--no_such_flag'], '--no_such_flag'),
+    (['--yaml', '{hello}', '--generate_run_script', '--no_such_flag'], '--no_such_flag'),
+    (['--yaml', '{hello}', '--generate_cwl_workflow', '--passthrough_flags', 'yes', '--debug'], '--run_local'),
+    (['--yaml', '{tmp}/nope.wic', '--generate_cwl_workflow'], 'no workflow file at'),
+    (['--yaml', '{hello}', '--inputs_file', '{tmp}/nope.yml', '--generate_cwl_workflow'], 'no inputs file at'),
+    (['--explain', 'wic999'], 'wic999 is not a Sophios error code'),
+], ids=['an unknown flag compiling', 'an unknown flag writing run.sh', 'passthrough flags with no runner',
+        'no such workflow file', 'no such inputs file', 'no such code'])
+def test_a_usage_error_exits_2_naming_it_without_a_traceback(
+        argv: list[str], said: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """A flag Sophios does not know is an error, not a silent gift to the runner, and `--passthrough_flags yes`
+    with no runner to send the arguments to is one too. A mistyped `--yaml` or `--inputs_file`, or a code Sophios
+    does not report, is a usage error that names it and exit 2, not a traceback."""
+    hello = Path(__file__).resolve().parents[2] / 'docs' / 'tutorials' / 'helloworld.wic'
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('sys.argv', ['sophios', *(arg.format(hello=hello, tmp=tmp_path) for arg in argv)])
     with pytest.raises(SystemExit) as caught:
-        cli_on_helloworld(mode, '--no_such_flag')
-    assert caught.value.code == 2
-    assert '--no_such_flag' in capsys.readouterr().err
+        cli.main()
+    printed = capsys.readouterr().err
+    assert caught.value.code == 2 and said in printed and 'Traceback' not in printed
 
 
 @pytest.mark.fast
-def test_passthrough_flags_yes_sends_unrecognised_arguments_to_the_runner(
-        cli_on_helloworld: Callable[..., None]) -> None:
-    cli_on_helloworld('--generate_run_script', '--passthrough_flags', 'yes', '--debug')
-    assert '--debug' in Path('run.sh').read_text(encoding='utf-8').split()
-
-
-@pytest.mark.fast
-def test_a_runner_flag_is_not_read_as_an_abbreviated_sophios_flag(cli_on_helloworld: Callable[..., None]) -> None:
-    """cwltool's `--validate` reaches the runner; it is not a prefix of `--validate_plugins`."""
-    cli_on_helloworld('--generate_run_script', '--passthrough_flags', 'yes', '--validate')
-    assert '--validate' in Path('run.sh').read_text(encoding='utf-8').split()
-
-
-@pytest.mark.fast
-def test_passthrough_flags_need_a_command_that_runs_the_runner(cli_on_helloworld: Callable[..., None],
-                                                               capsys: pytest.CaptureFixture[str]) -> None:
-    """`--passthrough_flags yes` sends arguments to the runner; with no runner to send them to, they are an error."""
-    with pytest.raises(SystemExit) as caught:
-        cli_on_helloworld('--generate_cwl_workflow', '--passthrough_flags', 'yes', '--debug')
-    assert caught.value.code == 2
-    assert '--run_local' in capsys.readouterr().err
-
-
-@pytest.mark.fast
-def test_run_local_exits_with_the_runners_exit_code(monkeypatch: pytest.MonkeyPatch,
-                                                    cli_on_helloworld: Callable[..., None]) -> None:
-    monkeypatch.setattr(run_local, 'run', lambda _request: 3)
-    with pytest.raises(SystemExit) as caught:
-        cli_on_helloworld('--run_local')
-    assert caught.value.code == 3
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('flags', 'quiet'), [([], False), (['--quiet'], True)])
-def test_cli_asks_the_runner_to_be_quiet_only_with_quiet(cli_on_helloworld: Callable[..., None],
-                                                         flags: list[str], quiet: bool) -> None:
-    """Without `--quiet` the runner keeps its own log level, so `--debug` can be heard."""
+@pytest.mark.parametrize(('flags', 'token', 'present'), [
+    (['--passthrough_flags', 'yes', '--debug'], '--debug', True),
+    (['--passthrough_flags', 'yes', '--validate'], '--validate', True),
+    ([], '--quiet', False),
+    (['--quiet'], '--quiet', True),
+], ids=['passthrough sends an unrecognised argument to the runner',
+        'runner --validate is not a prefix of --validate_plugins', 'no --quiet', '--quiet'])
+def test_run_sh_carries_a_runner_flag_exactly_when_asked(cli_on_helloworld: Callable[..., None], flags: list[str],
+                                                         token: str, present: bool) -> None:
+    """cwltool's `--validate` reaches the runner; it is not a prefix of `--validate_plugins`. Without `--quiet` the
+    runner keeps its own log level, so `--debug` can be heard."""
     cli_on_helloworld('--generate_run_script', *flags)
-    assert ('--quiet' in Path('run.sh').read_text(encoding='utf-8').split()) is quiet
+    assert (token in Path('run.sh').read_text(encoding='utf-8').split()) is present
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('cwl_runner', ['cwltool', 'toil-cwl-runner'])
-def test_ctrl_c_during_run_local_exits_130(monkeypatch: pytest.MonkeyPatch,
-                                           cli_on_helloworld: Callable[..., None], cwl_runner: str) -> None:
-    """The CLI turns the interrupt the run lets through into the shell's SIGINT code, whichever runner ran."""
-    def interrupted(_request: object) -> int:
-        raise KeyboardInterrupt
+@pytest.mark.parametrize(('outcome', 'cwl_runner', 'code'), [
+    (3, 'cwltool', 3), (KeyboardInterrupt, 'cwltool', 130), (KeyboardInterrupt, 'toil-cwl-runner', 130),
+], ids=['the runners exit code', 'ctrl-c under cwltool', 'ctrl-c under toil'])
+def test_run_local_exits_with_the_runners_code_or_130_on_ctrl_c(
+        monkeypatch: pytest.MonkeyPatch, cli_on_helloworld: Callable[..., None], outcome: object, cwl_runner: str,
+        code: int) -> None:
+    """The CLI turns the interrupt the run lets through into the shell's SIGINT code, whichever runner ran.
 
-    monkeypatch.setattr(run_local, 'run', interrupted)
-    # KeyboardInterrupt is listed so a regression fails this test instead of aborting the session.
+    KeyboardInterrupt is listed so a regression fails this test instead of aborting the session."""
+    def run(_request: object) -> object:
+        if outcome is KeyboardInterrupt:
+            raise KeyboardInterrupt
+        return outcome
+
+    monkeypatch.setattr(run_local, 'run', run)
     with pytest.raises((SystemExit, KeyboardInterrupt)) as caught:
         cli_on_helloworld('--run_local', '--cwl_runner', cwl_runner)
-    assert isinstance(caught.value, SystemExit)
-    assert caught.value.code == 130
+    assert isinstance(caught.value, SystemExit) and caught.value.code == code
 
 
 @pytest.mark.fast
@@ -615,17 +579,6 @@ def test_explain_prints_what_a_code_means_and_the_fix(monkeypatch: pytest.Monkey
     assert printed.startswith('wic011 (document): ') and '\nFix: ' in printed and '!ii' in printed
 
 
-@pytest.mark.fast
-def test_explain_names_a_code_that_does_not_exist(monkeypatch: pytest.MonkeyPatch,
-                                                  capsys: pytest.CaptureFixture[str]) -> None:
-    """A code Sophios does not report is a usage error that names it."""
-    monkeypatch.setattr('sys.argv', ['sophios', '--explain', 'wic999'])
-    with pytest.raises(SystemExit) as caught:
-        cli.main()
-    assert caught.value.code == 2
-    assert 'wic999 is not a Sophios error code' in capsys.readouterr().err
-
-
 _ROW = re.compile(r'^\| `(?P<code>[a-z]{3}\d{3})` \| (?P<kind>[a-z]+) \| (?P<meaning>.+) \| (?P<fix>.+) \|$')
 
 
@@ -638,25 +591,40 @@ def test_the_error_codes_page_says_what_the_code_says() -> None:
     assert rows == {str(code): (str(e.kind), e.meaning, e.fix) for code, e in EXPLANATIONS.items()}
 
 
-@pytest.mark.fast
-def test_to_json_has_every_key_when_nothing_is_known() -> None:
-    """A reader never tests for a key: an unknown value is null."""
-    found = Diagnostic(Severity.ERROR, SophiosErrorCode.MISSING_INPUT_FILE, 'gone.txt').to_json()
-    assert set(found) == {'severity', 'code', 'kind', 'message', 'fix', 'file', 'line', 'column',
-                          'end_line', 'end_column', 'step', 'index', 'port'}
-    assert found['kind'] == 'machine' and found['file'] is None and found['step'] is None
+_SPANS = st.builds(SourceSpan, st.text('aw.', min_size=1, max_size=4), *[st.integers(1, 9)] * 4)
 
 
 @pytest.mark.fast
-def test_to_json_carries_the_position_the_step_and_the_catalog_fix() -> None:
-    """The object holds where, which step and port, and what to do."""
-    span = SourceSpan('w.wic', 2, 7, 2, 9)
-    found = Diagnostic(Severity.NOTE, SophiosErrorCode.INFERENCE_GUESS, 'cat.file <- touch.file (1 other fits)', span,
-                       Locator(step='cat', index=3, port='file')).to_json()
-    assert (found['severity'], found['code'], found['file'], found['line'], found['column'],
-            found['end_line'], found['end_column'], found['step'], found['index'], found['port']) == (
-        'note', 'wic043', 'w.wic', 2, 7, 2, 9, 'cat', 3, 'file')
-    assert found['fix'] == SophiosErrorCode.INFERENCE_GUESS.explanation.fix
+@given(st.sampled_from(Severity), st.sampled_from(SophiosErrorCode), st.text(max_size=8), st.none() | _SPANS,
+       st.none() | st.builds(Locator, st.text('ab', min_size=1, max_size=2), st.none() | st.integers(1, 9),
+                             st.none() | st.text('fp', min_size=1, max_size=2)))
+@example(Severity.ERROR, SophiosErrorCode.MISSING_INPUT_FILE, 'gone.txt missing', None, None)
+@example(Severity.NOTE, SophiosErrorCode.UNRESOLVED_INPUT, 'worth knowing', None, None)
+@example(Severity.NOTE, SophiosErrorCode.INFERENCE_GUESS, 'cat.file <- touch.file (1 other fits)',
+         SourceSpan('w.wic', 2, 7, 2, 9), Locator(step='cat', index=3, port='file'))
+@FAST
+def test_a_diagnostic_is_one_json_object_it_can_be_rebuilt_from(
+        severity: Severity, code: SophiosErrorCode, message: str, span: SourceSpan | None,
+        locator: Locator | None) -> None:
+    """The object `--diagnostics json` prints has every key docs/cli-reference.md lists, null where Sophios does not
+    know the value, so a reader never tests for a key; it carries the position, the step and port, and the catalog's
+    kind and fix, so a reader rebuilds the diagnostic from it. The text form reads where, how serious, the code and
+    the message, and a compile-phase failure that knows no line invents none. A note does not fail anything."""
+    diagnostics = Diagnostics()
+    (diagnostics.error if severity is Severity.ERROR else diagnostics.note)(code, message, span, locator)
+    [found] = list(diagnostics)
+    written = json.loads(json.dumps(found.to_json()))
+    assert set(written) == {'severity', 'code', 'kind', 'message', 'fix', 'file', 'line', 'column', 'end_line',
+                            'end_column', 'step', 'index', 'port'}
+    assert (written['kind'], written['fix']) == (str(code.explanation.kind), code.explanation.fix)
+    where = [written[key] for key in ('file', 'line', 'column', 'end_line', 'end_column')]
+    assert Diagnostic(Severity(written['severity']), SophiosErrorCode(written['code']), written['message'],
+                      None if where[0] is None else SourceSpan(*where),
+                      None if written['step'] is None else Locator(written['step'], written['index'], written['port'])
+                      ) == found
+    said = f'{where[0]}:{where[1]}:{where[2]}: ' * (span is not None) + f'{severity} [{code}] {message}'
+    assert str(found) == said if locator is None else str(found).startswith(said)
+    assert diagnostics.has_errors is (severity is Severity.ERROR)
 
 
 @pytest.mark.fast
@@ -691,24 +659,6 @@ def test_a_json_note_names_its_step_and_port_and_the_compile_succeeds(
     note, = [json.loads(line) for line in capsys.readouterr().err.splitlines() if line.startswith('{')]
     assert (note['severity'], note['code'], note['message'], note['step'], note['index'], note['port']) == (
         'note', 'wic043', 'cat.file <- touch@2.file (1 other fits)', 'cat', 3, 'file')
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('flag, message', [('--yaml', 'no workflow file at'), ('--inputs_file', 'no inputs file at')])
-def test_a_named_file_that_does_not_exist_is_a_usage_error(
-        flag: str, message: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    """A mistyped `--yaml` or `--inputs_file` is one usage line and exit 2, not a traceback."""
-    workflow = Path(__file__).resolve().parents[2] / 'docs' / 'tutorials' / 'helloworld.wic'
-    argv = {'--yaml': ['--yaml', str(tmp_path / 'nope.wic')],
-            '--inputs_file': ['--yaml', str(workflow), '--inputs_file', str(tmp_path / 'nope.yml')]}[flag]
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr('sys.argv', ['sophios', *argv, '--generate_cwl_workflow'])
-    with pytest.raises(SystemExit) as caught:
-        cli.main()
-    assert caught.value.code == 2
-    printed = capsys.readouterr().err
-    assert message in printed and 'Traceback' not in printed
 
 
 @pytest.mark.fast
@@ -795,45 +745,43 @@ def test_a_workflow_without_containers_needs_no_engine(machine: Callable[..., li
 
 
 @pytest.mark.fast
-def test_a_missing_engine_names_the_image_that_needs_it(
+@pytest.mark.parametrize('row', [
+    ({'engine': 'missing'}, None, None, ['docker is not installed (it is not on PATH), and this workflow runs tools in '
+                                         'containers (docker.io/library/debian:bookworm-slim): install docker'], []),
+    ({'engine': 'fails', 'said': b'failed to connect to the docker API\nsecond line'},
+     'unix:///nonexistent/sophios.sock', None,
+     ['its engine is not reachable: the socket /nonexistent/sophios.sock does not exist ',
+      '(failed to connect to the docker API): start the engine'], []),
+    ({'engine': 'fails', 'said': b'Is the docker daemon running?'}, None, None,
+     ['`docker info` exited with status 1 (Is the docker daemon running?)'], ['usermod']),
+    ({'engine': 'fails', 'said': b'  whatever the engine said\n'}, 'tcp://engine.invalid:2375',
+     '--ignore_docker_install',
+     ['`docker info` exited with status 1 (whatever the engine said): run `docker info` to see why'], []),
+    ({'processes': 1001}, None, '--ignore_docker_processes',
+     ['1001 docker processes are running', '--ignore_docker_processes'], ['Warning']),
+], ids=['a missing engine names the image that needs it', 'a missing socket is named and the engine quoted',
+        'a stopped engine with no default socket is not blamed on permissions',
+        'an engine that fails for another reason is quoted with its status, unless ignored',
+        'too many docker processes is one line, unless ignored'])
+def test_an_engine_that_cannot_be_used_is_one_wic015_line(
         machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    calls = machine('missing')
+        capsys: pytest.CaptureFixture[str], row: tuple[Any, ...]) -> None:
+    """A step running in a container needs a usable engine; the line says why this one is not, and nothing is pulled.
+    The flag that waives the check skips it, and the images are still pulled."""
+    machine_is, host, waiver, says, never = row
+    calls = machine(**machine_is)
+    monkeypatch.delenv('DOCKER_HOST', raising=False)
+    if host:
+        monkeypatch.setenv('DOCKER_HOST', host)
+    monkeypatch.setattr(preflight, 'DEFAULT_DOCKER_SOCKET', tmp_path / 'absent.sock')
     with pytest.raises(SystemExit) as caught:
         _cli(monkeypatch, tmp_path, _TOUCH)
-    assert caught.value.code == 1
     line, = _wic015(capsys.readouterr().err)
-    assert ('docker is not installed (it is not on PATH), and this workflow runs tools in containers '
-            '(docker.io/library/debian:bookworm-slim): install docker') in line
-    assert not _pulled(calls)
-
-
-@pytest.mark.fast
-def test_an_engine_whose_socket_is_missing_says_so_and_quotes_the_engine(
-        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    calls = machine('fails', said=b'failed to connect to the docker API\nsecond line')
-    monkeypatch.setenv('DOCKER_HOST', 'unix:///nonexistent/sophios.sock')
-    with pytest.raises(SystemExit):
-        _cli(monkeypatch, tmp_path, _TOUCH)
-    line, = _wic015(capsys.readouterr().err)
-    assert 'its engine is not reachable: the socket /nonexistent/sophios.sock does not exist ' in line
-    assert '(failed to connect to the docker API): start the engine' in line
-    assert not _pulled(calls)
-
-
-@pytest.mark.fast
-def test_a_stopped_engine_with_no_default_socket_is_not_blamed_on_permissions(
-        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    machine('fails', said=b'Is the docker daemon running?')
-    monkeypatch.delenv('DOCKER_HOST', raising=False)
-    monkeypatch.setattr(preflight, 'DEFAULT_DOCKER_SOCKET', tmp_path / 'absent.sock')
-    with pytest.raises(SystemExit):
-        _cli(monkeypatch, tmp_path, _TOUCH)
-    line, = _wic015(capsys.readouterr().err)
-    assert 'usermod' not in line
-    assert '`docker info` exited with status 1 (Is the docker daemon running?)' in line
+    assert caught.value.code == 1 and not _pulled(calls)
+    assert all(text in line for text in says) and not any(text in line for text in never), line
+    if waiver:
+        _cli(monkeypatch, tmp_path, _TOUCH, waiver)   # returns
+        assert _pulled(calls)
 
 
 @pytest.mark.fast
@@ -865,40 +813,6 @@ def test_an_engine_whose_socket_is_not_yours_says_so(
     assert f'you may not use its socket {socket} (denied): add your user to the docker group' in line
 
 
-@pytest.mark.fast
-def test_an_engine_that_fails_for_another_reason_is_quoted_with_its_status(
-        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    machine('fails', said=b'  whatever the engine said\n')
-    monkeypatch.setenv('DOCKER_HOST', 'tcp://engine.invalid:2375')
-    with pytest.raises(SystemExit):
-        _cli(monkeypatch, tmp_path, _TOUCH)
-    line, = _wic015(capsys.readouterr().err)
-    assert '`docker info` exited with status 1 (whatever the engine said): run `docker info` to see why' in line
-
-
-@pytest.mark.fast
-def test_too_many_docker_processes_is_one_line_unless_ignored(
-        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    machine('running', processes=1001)
-    with pytest.raises(SystemExit):
-        _cli(monkeypatch, tmp_path, _TOUCH)
-    line, = _wic015(capsys.readouterr().err)
-    assert '1001 docker processes are running' in line and '--ignore_docker_processes' in line
-    assert 'Warning' not in line
-    _cli(monkeypatch, tmp_path, _TOUCH, '--ignore_docker_processes')   # returns
-
-
-@pytest.mark.fast
-def test_ignore_docker_install_skips_the_engine_check_and_still_pulls(
-        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    calls = machine('fails', said=b'stopped')
-    monkeypatch.setenv('DOCKER_HOST', 'tcp://engine.invalid:2375')
-    _cli(monkeypatch, tmp_path, _TOUCH, '--ignore_docker_install')    # returns
-    assert _pulled(calls)
-
-
 @pytest.mark.skipif(shutil.which('docker') is None, reason='needs the docker CLI')
 def test_the_docker_cli_with_no_daemon_is_named_not_reachable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     tool = tmp_path / 'tool.cwl'
@@ -927,28 +841,23 @@ def _wic016(err: str) -> list[str]:
 
 
 @pytest.mark.fast
-def test_a_missing_input_is_named_before_any_image_is_pulled(
+@pytest.mark.parametrize('row', [
+    (_CAT.format('absent.txt'), None, ["input 'cat~file' (from the workflow, whose relative paths are read from ",
+                                       "names 'absent.txt', which does not exist at ", 'create the file']),
+    (_CAT_INPUT, 'file:\n  class: File\n  location: absent.txt\nn: 3\n',
+     ["input 'file' (from --inputs_file, whose relative paths are read from "]),
+], ids=['a missing input is named before any image is pulled', 'a missing path in the inputs file is named'])
+def test_a_missing_input_is_one_wic016_line_naming_where_it_was_read(
         machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        capsys: pytest.CaptureFixture[str]) -> None:
+        capsys: pytest.CaptureFixture[str], row: tuple[Any, ...]) -> None:
+    source, job, said = row
     calls = machine('running')
-    with pytest.raises(SystemExit):
-        _cli(monkeypatch, tmp_path, _CAT.format('absent.txt'))
+    if job:
+        (tmp_path / 'job.yml').write_text(job, encoding='utf-8')
+    with pytest.raises(SystemExit) as caught:
+        _cli(monkeypatch, tmp_path, source, *(['--inputs_file', str(tmp_path / 'job.yml')] if job else []))
     line, = _wic016(capsys.readouterr().err)
-    assert "input 'cat~file' (from the workflow, whose relative paths are read from " in line
-    assert "names 'absent.txt', which does not exist at " in line and 'create the file' in line
-    assert not _pulled(calls)
-
-
-@pytest.mark.fast
-def test_a_missing_path_in_the_inputs_file_is_named(
-        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    machine('running')
-    (tmp_path / 'job.yml').write_text('file:\n  class: File\n  location: absent.txt\nn: 3\n', encoding='utf-8')
-    with pytest.raises(SystemExit):
-        _cli(monkeypatch, tmp_path, _CAT_INPUT, '--inputs_file', str(tmp_path / 'job.yml'))
-    line, = _wic016(capsys.readouterr().err)
-    assert "input 'file' (from --inputs_file, whose relative paths are read from " in line
+    assert caught.value.code == 1 and all(text in line for text in said) and not _pulled(calls)
 
 
 @pytest.mark.fast
@@ -1035,15 +944,22 @@ def test_an_unreadable_input_is_named_with_the_fix(
 
 
 @pytest.mark.fast
-def test_a_missing_input_and_a_stopped_engine_are_reported_together(
+@pytest.mark.parametrize('row', [
+    ({'engine': 'fails', 'said': b'stopped'}, 'tcp://engine.invalid:2375', '--generate_run_script'),
+    ({'engine': 'missing'}, None, '--check'),
+], ids=['a missing input and a stopped engine are reported together', 'check reports what a run would hit'])
+def test_a_missing_input_and_an_unusable_engine_are_reported_in_one_pass(
         machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    machine('fails', said=b'stopped')
-    monkeypatch.setenv('DOCKER_HOST', 'tcp://engine.invalid:2375')
-    with pytest.raises(SystemExit):
-        _cli(monkeypatch, tmp_path, _CAT.format('absent.txt'))
+        capsys: pytest.CaptureFixture[str], row: tuple[Any, ...]) -> None:
+    """Both problems are one line each, under --check as under a run."""
+    machine_is, host, mode = row
+    machine(**machine_is)
+    if host:
+        monkeypatch.setenv('DOCKER_HOST', host)
+    with pytest.raises(SystemExit) as caught:
+        _cli(monkeypatch, tmp_path, _CAT.format('absent.txt'), mode=mode)
     err = capsys.readouterr().err
-    assert len(_wic016(err)) == 1 and len(_wic015(err)) == 1
+    assert caught.value.code == 1 and len(_wic016(err)) == 1 and len(_wic015(err)) == 1
 
 
 @pytest.mark.fast
@@ -1067,41 +983,26 @@ def test_a_directory_beside_the_workflow_reaches_the_run_where_it_is(
 
 
 @pytest.mark.fast
-def test_a_run_script_whose_runner_is_missing_is_wic029(
+@pytest.mark.parametrize('row', [
+    ('cwltool_filterlog', None, '--generate_run_script', (),
+     'error [wic029] run.sh calls cwltool_filterlog, which is not on PATH: install Sophios'),
+    ('toil-cwl-runner', None, '--run_local', ('--cwl_runner', 'toil-cwl-runner'),
+     'error [wic029] the run calls toil-cwl-runner, which is neither in this Python environment nor on PATH: '
+     'install Toil'),
+    ('cwl-docker-extract', _TOUCH, '--generate_run_script', ('--container_engine', 'singularity'),
+     'error [wic029] pulling the images for singularity needs cwl-docker-extract'),
+], ids=['a run script whose runner is missing', 'a run whose runner is missing', 'a missing image puller'])
+def test_a_program_the_run_calls_that_is_missing_is_wic029(
         machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    machine(missing=('cwltool_filterlog',))
-    with pytest.raises(SystemExit) as caught:
-        _cli(monkeypatch, tmp_path, None)
-    assert caught.value.code == 1
-    assert ('error [wic029] run.sh calls cwltool_filterlog, which is not on PATH: install Sophios'
-            in capsys.readouterr().err)
-    assert not (tmp_path / 'run.sh').exists()
-
-
-@pytest.mark.fast
-def test_a_run_whose_runner_is_missing_is_wic029(
-        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        capsys: pytest.CaptureFixture[str]) -> None:
+        capsys: pytest.CaptureFixture[str], row: tuple[Any, ...]) -> None:
     """The runner is a program: one that is not installed is named before anything is pulled or started."""
-    calls = machine(missing=('toil-cwl-runner',))
+    program, source, mode, flags, said = row
+    calls = machine(missing=(program,))
     monkeypatch.setattr(preflight, 'PLATFORM_LACKS_RUNNERS', None)
     with pytest.raises(SystemExit) as caught:
-        _cli(monkeypatch, tmp_path, None, '--cwl_runner', 'toil-cwl-runner', mode='--run_local')
-    assert caught.value.code == 1
-    assert ('error [wic029] the run calls toil-cwl-runner, which is neither in this Python environment nor on '
-            'PATH: install Toil' in capsys.readouterr().err)
-    assert not _pulled(calls)
-
-
-@pytest.mark.fast
-def test_a_missing_image_puller_is_wic029(
-        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    machine(missing=('cwl-docker-extract',))
-    with pytest.raises(SystemExit):
-        _cli(monkeypatch, tmp_path, _TOUCH, '--container_engine', 'singularity')
-    assert 'error [wic029] pulling the images for singularity needs cwl-docker-extract' in capsys.readouterr().err
+        _cli(monkeypatch, tmp_path, source, *flags, mode=mode)
+    assert caught.value.code == 1 and said in capsys.readouterr().err
+    assert not (tmp_path / 'run.sh').exists() and not _pulled(calls)
 
 
 # --------------------------------------------------------------------------
@@ -1144,18 +1045,6 @@ def test_a_check_leaves_an_earlier_compile_as_it_was(
             _cli(monkeypatch, tmp_path, source, *flags, mode='--check')
         assert caught.value.code == exit_code
     assert {path: path.read_bytes() for path in basepath.rglob('*')} == before
-
-
-@pytest.mark.fast
-def test_check_reports_what_a_run_would_hit(
-        machine: Callable[..., list[object]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    machine('missing')
-    with pytest.raises(SystemExit) as caught:
-        _cli(monkeypatch, tmp_path, _CAT.format('absent.txt'), mode='--check')
-    assert caught.value.code == 1
-    err = capsys.readouterr().err
-    assert len(_wic016(err)) == 1 and len(_wic015(err)) == 1
 
 
 @pytest.mark.fast
@@ -1216,38 +1105,34 @@ def _prepare(tool: Path, tmp_path: Path, engine: str = 'docker') -> None:
     preflight.prepare([tool], preflight.RunSettings(engine, str(tmp_path)))
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize('engine_name', ['docker', 'podman'])
-def test_images_are_pulled_with_the_chosen_engine(engine: Callable[..., list[list[str]]], tmp_path: Path,
-                                                  engine_name: str) -> None:
-    """Podman pulls with podman: the engine reaches cwl-docker-extract."""
-    calls = engine()
-    tool = _tool(tmp_path, {'dockerPull': 'docker.io/bash:4.4'})
-    _prepare(tool, tmp_path, engine_name)
-    assert ['cwl-docker-extract', '--force-download', '--container-engine', engine_name, str(tool)] in calls
-    assert not [cmd for cmd in calls if cmd[:2] in ([engine_name, 'load'], [engine_name, 'import'])]
+_PULL: Final = ['cwl-docker-extract', '--force-download', '--container-engine', '{engine}', '{tool}']
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('engine_name', ['docker', 'podman'])
-def test_a_docker_load_image_is_loaded_before_the_run(engine: Callable[..., list[list[str]]], tmp_path: Path,
-                                                      engine_name: str) -> None:
-    """A dockerLoad file is loaded with the chosen engine."""
+@pytest.mark.parametrize(('docker', 'engine_name', 'fetched'), [
+    ({'dockerPull': 'docker.io/bash:4.4'}, 'docker', [_PULL]),
+    ({'dockerPull': 'docker.io/bash:4.4'}, 'podman', [_PULL]),
+    ({'dockerPull': 'docker.io/bash:4.4', 'dockerImageId': 'bash:4.4'}, 'docker', []),
+    ({'dockerLoad': '{archive}'}, 'docker', [['docker', 'load', '-i', '{archive}']]),
+    ({'dockerLoad': '{archive}'}, 'podman', [['podman', 'load', '-i', '{archive}']]),
+    ({'dockerImport': 'https://example.org/rootfs.tar', 'dockerImageId': 'rootfs:1'}, 'podman',
+     [['podman', 'import', 'https://example.org/rootfs.tar', 'rootfs:1']]),
+], ids=['pull with docker', 'pull with podman', 'a pull loads and imports nothing', 'load with docker',
+        'load with podman', 'import under its image id'])
+def test_images_are_fetched_with_the_chosen_engine(engine: Callable[..., list[list[str]]], tmp_path: Path,
+                                                   docker: dict[str, str], engine_name: str,
+                                                   fetched: list[list[str]]) -> None:
+    """Podman pulls with podman: the engine reaches cwl-docker-extract. A dockerLoad file is loaded, and a
+    dockerImport imported as its dockerImageId, with the chosen engine; a dockerPull needs the pull and nothing else."""
     calls = engine()
     archive = tmp_path / 'image.tar'
     archive.write_bytes(b'')
-    _prepare(_tool(tmp_path, {'dockerLoad': str(archive)}), tmp_path, engine_name)
-    assert [engine_name, 'load', '-i', str(archive)] in calls
-
-
-@pytest.mark.fast
-def test_a_docker_import_image_is_imported_under_its_image_id(engine: Callable[..., list[list[str]]],
-                                                              tmp_path: Path) -> None:
-    """A dockerImport is imported as its dockerImageId."""
-    calls = engine()
-    _prepare(_tool(tmp_path, {'dockerImport': 'https://example.org/rootfs.tar', 'dockerImageId': 'rootfs:1'}),
-             tmp_path, 'podman')
-    assert ['podman', 'import', 'https://example.org/rootfs.tar', 'rootfs:1'] in calls
+    tool = _tool(tmp_path, {key: value.format(archive=archive) for key, value in docker.items()})
+    _prepare(tool, tmp_path, engine_name)
+    fetched = [[part.format(engine=engine_name, tool=tool, archive=archive) for part in cmd] for cmd in fetched]
+    assert all(cmd in calls for cmd in fetched)
+    loaded_or_imported = [cmd for cmd in calls if cmd[1:2] in (['load'], ['import'])]
+    assert loaded_or_imported == [cmd for cmd in fetched if cmd[0] != 'cwl-docker-extract']
 
 
 @pytest.mark.fast
@@ -1275,15 +1160,6 @@ def test_a_docker_load_url_is_downloaded_then_loaded(engine: Callable[..., list[
     _prepare(_tool(tmp_path, {'dockerLoad': 'https://example.org/image.tar'}), tmp_path)
     loads = [cmd for cmd in calls if cmd[:3] == ['docker', 'load', '-i']]
     assert len(loads) == 1
-
-
-@pytest.mark.fast
-def test_a_requirement_with_only_a_docker_pull_loads_and_imports_nothing(
-        engine: Callable[..., list[list[str]]], tmp_path: Path) -> None:
-    """A dockerPull needs the pull and nothing else."""
-    calls = engine()
-    _prepare(_tool(tmp_path, {'dockerPull': 'docker.io/bash:4.4', 'dockerImageId': 'bash:4.4'}), tmp_path)
-    assert not [cmd for cmd in calls if len(cmd) > 1 and cmd[1] in ('load', 'import')]
 
 
 @pytest.mark.fast
@@ -1337,54 +1213,44 @@ def test_check_loads_and_imports_nothing(engine: Callable[..., list[list[str]]],
     assert not _pulled(calls)
 
 
-_UNWRITABLE: Final = ['a~b', 'echo@2', 'a/b', 'a b', 'a#b', '.', '..', '.hidden']
-_STEP_FORMS: Final = {
-    'sequence': "steps:\n- id: mk_file\n  in:\n    name: !ii a\n"
-                "- id: '{name}'\n  run: mk_file\n  in:\n    name: !ii b\n",
-    'mapping': "steps:\n  mk_file:\n    in:\n      name: !ii a\n"
-               "  '{name}':\n    run: mk_file\n    in:\n      name: !ii b\n",
+#: Where a document writes a name, as text with a `{name}` slot, and what the refusal calls it.
+_NAMED: Final = {
+    'step id': "steps:\n- id: mk_file\n  in:\n    name: !ii a\n- id: '{name}'\n  run: mk_file\n  in:\n"
+               "    name: !ii b\n",
+    'mapping step id': "steps:\n  mk_file:\n    in:\n      name: !ii a\n  '{name}':\n    run: mk_file\n    in:\n"
+                       "      name: !ii b\n",
+    'workflow input': "inputs:\n  '{name}': string\nsteps:\n- id: mk_file\n  in:\n    name: !ii a\n",
+    'workflow output': "outputs:\n  '{name}': {{outputSource: mk_file/file}}\nsteps:\n- id: mk_file\n  in:\n"
+                       "    name: !ii a\n",
+    'workflow name': "steps:\n- id: mk_file\n  in:\n    name: !ii a\n",
 }
 
 
-def _refusals(text: str, name: str = 'oracle') -> list[Diagnostic]:
-    with pytest.raises(SophiosError) as caught:
-        compile_hermetic_source(text, name)
-    return list(caught.value.diagnostics)
-
-
 @pytest.mark.fast
-@pytest.mark.parametrize('form', sorted(_STEP_FORMS))
-@pytest.mark.parametrize('name', _UNWRITABLE)
-def test_a_step_id_outside_the_allowed_characters_is_refused_at_its_line(name: str, form: str) -> None:
-    """A step id is part of the compiled ids, of the names made with `~` and `@`, and of a file name."""
-    found = _refusals(_STEP_FORMS[form].format(name=name))
-    assert [(d.code, str(d.span)) for d in found] == [(SophiosErrorCode.INVALID_NAME, 'oracle.wic:5:3')]
-    assert f'step id {name!r} is not a name Sophios can write' in found[0].message
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('side, declaration', [('inputs', 'string'), ('outputs', '{outputSource: mk_file/file}')])
-@pytest.mark.parametrize('name', ['a~b', '.hidden'])
-def test_a_workflow_input_or_output_outside_the_allowed_characters_is_refused(
-        name: str, side: str, declaration: str) -> None:
-    """A workflow input or output is an id of the compiled CWL, as a step is."""
-    found = _refusals(f"{side}:\n  '{name}': {declaration}\nsteps:\n- id: mk_file\n  in:\n    name: !ii a\n")
-    assert [(d.code, d.span.file if d.span else None) for d in found] == [
-        (SophiosErrorCode.INVALID_NAME, 'oracle.wic')]
-    assert f'workflow {side[:-1]} {name!r} is not a name Sophios can write' in found[0].message
-
-
-@pytest.mark.fast
-def test_a_workflow_named_outside_the_allowed_characters_is_refused() -> None:
-    """A workflow's name is the stem of the files it is written to."""
-    found = _refusals("steps:\n- id: mk_file\n  in:\n    name: !ii a\n", 'a~b')
-    assert [d.code for d in found] == [SophiosErrorCode.INVALID_NAME]
-    assert "workflow name 'a~b' is not a name Sophios can write" in found[0].message
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('name', ['con', 'aux', 'nul', 'com1'])
-def test_a_step_named_like_a_windows_device_compiles(name: str) -> None:
-    """A step's file name always starts with its workflow's, so no step name is a device name alone."""
-    compiled = compile_hermetic_source(_STEP_FORMS['sequence'].format(name=name))
-    assert [step['id'] for step in compiled.artifact.cwl['steps']] == ['mk_file', name]
+@given(st.tuples(st.sampled_from(sorted(_NAMED)), st.text('aZ09_.-~@/\\ #?%:*"<>|\xe9', min_size=1, max_size=6)))
+@pinned(*[(where, name) for where in ('step id', 'mapping step id')
+          for name in ['a~b', 'echo@2', 'a/b', 'a b', 'a#b', '.', '..', '.hidden', 'con', 'aux', 'nul', 'com1']],
+        *[(where, name) for where in ('workflow input', 'workflow output', 'workflow name')
+          for name in ['a~b', '.hidden']])
+@budget(100)
+def test_a_step_id_outside_the_allowed_characters_is_refused_at_its_line(case: tuple[str, str]) -> None:
+    """A step id is part of the compiled ids, of the names made with `~` and `@`, and of a file name; a workflow input
+    or output is an id of the compiled CWL as a step is, and a workflow's name the stem of the files it is written to.
+    So each is letters, digits, `_`, `.` and `-`, not starting with `.` (docs/wic-reference.md), or one wic045 at the
+    step's line naming it; else it compiles as written. A step named like a Windows device (`con`, `aux`) compiles:
+    its file name starts with its workflow's."""
+    where, name = case
+    try:
+        compiled = compile_hermetic_source(_NAMED[where].format(name=name), name if where == 'workflow name' else 'w')
+    except SophiosError as caught:
+        [found] = list(caught.diagnostics)
+        assert name[0] == '.' or set(name) - set(string.ascii_letters + string.digits + '_.-'), name
+        assert found.code is SophiosErrorCode.INVALID_NAME, found
+        assert f"{where.removeprefix('mapping ')} {name!r} is not a name Sophios can write" in found.message, found
+        assert found.span is not None and found.span.file.endswith('.wic'), found
+        assert where not in ('step id', 'mapping step id') or (found.span.start_line, found.span.start_column) == (
+            5, 3), found
+        return
+    assert name[0] != '.' and not set(name) - set(string.ascii_letters + string.digits + '_.-'), name
+    assert where not in ('step id', 'mapping step id') or [
+        step['id'] for step in compiled.artifact.cwl['steps']] == ['mk_file', name]

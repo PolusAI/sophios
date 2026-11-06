@@ -1,0 +1,2 @@
+steps: [{id: inner.wic, out: [{made: !& made}]}, {id: cat, in: {file: !* made}}]
+outputs: {made: {type: File, outputSource: inner/made}}

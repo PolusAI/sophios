@@ -1,0 +1,53 @@
+- id: '127'
+  why: The steps are read from the lines cwltool prints, here coloured as its log colours them,
+      and the exit code is the runner's (checks-and-errors, Run).
+  stderr: ["\e[1;30mWARNING\e[0m \e[33m[job echo_2] exited with status: 127\e[0m",
+      "\e[1;30mWARNING\e[0m \e[33m[job echo_2] completed permanentFail\e[0m"]
+  exit: 5
+  failures: ["Failure! step 'echo_2' exited with status 127, which means its command was not found: the tool's
+      baseCommand is not installed in its container image, or on this machine for a tool with none. Its own messages are
+      above, under its name."]
+- id: each-ending
+  why: &cwltool The steps are read from the lines cwltool prints, and the exit code is the runner's (checks-and-errors,
+      Run).
+  stderr: ['WARNING [job a] exited with status: 3', 'WARNING [job a] completed permanentFail',
+      'INFO [job b] completed success', 'WARNING [job c] was terminated by signal: SIGKILL',
+      'WARNING [job c] completed permanentFail', 'WARNING [job d] completed permanentFail']
+  exit: 5
+  failures:
+  - "Failure! step 'a' exited with status 3. Its own messages are above, under its name."
+  - "Failure! step 'c' was ended by SIGKILL, which means it was killed, usually for running out of memory: give the
+      container engine more memory (Docker Desktop: Settings, Resources), or the step less input. Its own messages are
+      above, under its name."
+  - "Failure! step 'd' could not run, or its outputs could not be collected. Its own messages are above, under its
+      name."
+- id: no-step
+  why: *cwltool
+  exit: 5
+  failures: &generic ['Failure! Above, the first ERROR line, or the error the runner itself raised, says why the run
+      failed.']
+- id: toil-names-no-step
+  why: The job lines Toil relays from its workers name Toil's own jobs, not the workflow's steps (ToilBackend).
+  flags: [--cwl_runner, toil-cwl-runner]
+  stderr: ['[job fails.cwl.exits_3._:0f66dde2-813e-4d1b-a20d-385dbcf1f906] exited with status: 3',
+      '[job fails.cwl.exits_3._:0f66dde2-813e-4d1b-a20d-385dbcf1f906] completed permanentFail']
+  exit: 1
+  failures: *generic
+- id: toil-writes-the-output-object-it-prints
+  why: Toil prints the output object instead of writing a summary; it is echoed,
+      and written where cwltool's is (ToilBackend).
+  flags: [--cwl_runner, toil-cwl-runner]
+  stdout: [INFO a line before, '{', '    "echo~stdout": {', '        "class": "File",', '        "path": "/out/stdout"',
+      '    }', '}']
+  exit: 0
+  summary: {echo~stdout: {class: File, path: /out/stdout}}
+- id: nextflow-127
+  why: The step is read from Nextflow's lines, by its Sophios name,
+      and the exit code is Nextflow's (nextflow_failed_steps).
+  flags: [--target, nextflow]
+  stderr: ["[ERROR] ERROR ~ Error executing process > 'helloworld:echo'",
+      '  Process `helloworld:echo` terminated with an error exit status (127)']
+  exit: 1
+  failures: ["Failure! step 'echo' exited with status 127, which means its command was not found: the tool's baseCommand
+      is not installed in its container image, or on this machine for a tool with none. Its own messages are above,
+      under its name."]

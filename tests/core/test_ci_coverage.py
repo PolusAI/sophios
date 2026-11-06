@@ -330,7 +330,6 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 WINDOWS_EXCLUDED: Final = frozenset({
     'tests/core/test_emit.py::test_emit_validates_as_cwl_v1_2',
     'tests/core/test_emit.py::test_validator_rejects_the_independent_invalid_control',
-    'tests/core/test_emit.py::test_a_compiled_string_job_input_validates',
     # A strict xfail on one cwltool validation of a `schemed` workflow, under a
     # second. It states the SchemaDefRequirement gap the generators exclude,
     # which only cwltool's validator can show, so it runs where the pair does.

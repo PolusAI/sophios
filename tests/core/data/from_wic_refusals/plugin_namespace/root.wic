@@ -1,0 +1,2 @@
+wic: {steps: {'(1, mk_file)': {wic: {namespace: gpu}}}}
+steps: [{id: mk_file, in: {name: !ii a}}]

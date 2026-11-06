@@ -17,138 +17,29 @@ from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.wic_types import Yaml
 
+from .cases import cases
 from .hermetic import compile_hermetic, subworkflow_step
 from .test_setup import workflow_paths
 
 MK_FILE: Yaml = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}
 
 
-def _one_tool(**tool_fields: Any) -> CompilationArtifact:
-    """A compiled one-step workflow whose tool is rewritten with `tool_fields`."""
+@pytest.mark.fast
+@pytest.mark.parametrize('case', cases('embedded_tools'))
+def test_an_embedded_tool_keeps_the_defaults_its_own_version_gave_it(case: Yaml) -> None:
+    """Embedded, a tool loses its `cwlVersion`, and nothing updates it as cwltool updates a file it loads: what its
+    version implied is written out, what it declares itself is kept, or a version Sophios cannot read is refused."""
     artifact = compile_hermetic({'steps': [MK_FILE]}).artifact
-    (tool,) = artifact.children
-    return replace(artifact, children=(replace(tool, cwl={**tool.cwl, **tool_fields}),))
-
-
-def _embedded(artifact: CompilationArtifact) -> Yaml:
+    artifact = replace(artifact, children=(replace(artifact.children[0], cwl=case['tool']),))
+    if 'says' in case:
+        with pytest.raises(SophiosError) as caught:
+            post_compile.inline_artifact_runs(artifact)
+        (diagnostic,) = caught.value.diagnostics
+        assert diagnostic.code is SophiosErrorCode.UNSUPPORTED_CWL_VERSION and case['says'] in diagnostic.message
+        return
     (step,) = post_compile.inline_artifact_runs(artifact).cwl['steps']
-    embedded: Yaml = step['run']
-    return embedded
-
-
-@pytest.mark.fast
-def test_a_v1_0_tool_keeps_its_network_and_listing_defaults_when_embedded() -> None:
-    """cwltool gives a v1.0 file network access and a deep listing; embedded, it must still get both."""
-    embedded = _embedded(_one_tool(cwlVersion='v1.0', hints={}))
-    assert embedded['hints'] == {'LoadListingRequirement': {'loadListing': 'deep_listing'},
-                                 'NetworkAccess': {'networkAccess': True}}
-    assert 'cwlVersion' not in embedded
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('version', ['v1.1', 'v1.2'])
-def test_a_tool_written_for_v1_1_or_later_gains_nothing_when_embedded(version: str) -> None:
-    """Only v1.0 implied anything the newer defaults take away."""
-    hints = {'ResourceRequirement': {'ramMin': 8}}
-    assert _embedded(_one_tool(cwlVersion=version, hints=hints))['hints'] == hints
-
-
-@pytest.mark.fast
-def test_what_a_v1_0_tool_declares_itself_is_not_overridden() -> None:
-    """A hint or requirement the tool wrote wins, in whichever form it wrote it."""
-    hinted = _embedded(_one_tool(cwlVersion='v1.0', hints={'NetworkAccess': {'networkAccess': False}}))
-    assert hinted['hints']['NetworkAccess'] == {'networkAccess': False}
-    assert hinted['hints']['LoadListingRequirement'] == {'loadListing': 'deep_listing'}
-    required = _embedded(_one_tool(cwlVersion='v1.0', hints={},
-                                   requirements={'LoadListingRequirement': {'loadListing': 'no_listing'}}))
-    assert 'LoadListingRequirement' not in required['hints']
-    listed = _embedded(_one_tool(cwlVersion='v1.0', hints={},
-                                 requirements=[{'class': 'NetworkAccess', 'networkAccess': False}]))
-    assert list(listed['hints']) == ['LoadListingRequirement']
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('namespace', ['cwltool:', 'http://commonwl.org/cwltool#'])
-def test_a_namespaced_declaration_is_renamed_to_the_class_cwltool_looks_for(namespace: str) -> None:
-    """cwltool renames the namespaced class when it loads a v1.0 file; embedded, nothing does,
-    so the tool's own value, whatever it is, must be written under the plain name and no default added."""
-    hinted = _embedded(_one_tool(cwlVersion='v1.0', hints={f'{namespace}LoadListingRequirement':
-                                                           {'loadListing': 'shallow_listing'},
-                                                           f'{namespace}NetworkAccess':
-                                                           {'networkAccess': False}}))
-    assert hinted['hints'] == {'LoadListingRequirement': {'loadListing': 'shallow_listing'},
-                               'NetworkAccess': {'networkAccess': False}}
-    listed = _embedded(_one_tool(cwlVersion='v1.0',
-                                 hints=[{'class': f'{namespace}LoadListingRequirement',
-                                         'loadListing': 'no_listing'}],
-                                 requirements=[{'class': f'{namespace}NetworkAccess', 'networkAccess': True}]))
-    assert listed['hints'] == [{'class': 'LoadListingRequirement', 'loadListing': 'no_listing'}]
-    assert listed['requirements'] == [{'class': 'NetworkAccess', 'networkAccess': True}]
-
-
-@pytest.mark.fast
-def test_a_v1_0_tool_with_no_hints_at_all_gets_them() -> None:
-    """No `hints` key is the usual case, not an exception."""
-    artifact = _one_tool(cwlVersion='v1.0')
-    (tool,) = artifact.children
-    tool.cwl.pop('hints', None)
-    assert 'NetworkAccess' in _embedded(artifact)['hints']
-
-
-@pytest.mark.fast
-def test_hints_written_as_a_list_are_extended_as_a_list() -> None:
-    """A packed tool writes its hints as a list of `{class: ...}` entries."""
-    process = {'cwlVersion': 'v1.0', 'hints': [{'class': 'ResourceRequirement', 'ramMin': 8}]}
-    extended = post_compile._keeping_version_defaults(process, 'tool.cwl')  # pylint: disable=protected-access
-    assert extended['hints'] == [{'class': 'LoadListingRequirement', 'loadListing': 'deep_listing'},
-                                 {'class': 'NetworkAccess', 'networkAccess': True},
-                                 {'class': 'ResourceRequirement', 'ramMin': 8}]
-
-
-@pytest.mark.fast
-def test_a_single_secondary_files_pattern_is_embedded_as_a_list() -> None:
-    """cwltool's v1.0 updater lists a single pattern, and its checker indexes the list;
-    embedded, nothing updates the tool, so the list must already be written."""
-    embedded = _embedded(_one_tool(
-        cwlVersion='v1.0',
-        inputs={'name': {'type': 'File', 'secondaryFiles': {'pattern': '.fai'}},
-                'other': {'type': 'File', 'secondaryFiles': ['.crai', '.csi']},
-                'plain': 'string'},
-        outputs={'file': {'type': 'File', 'secondaryFiles': '.bai'}}))
-    assert embedded['inputs'] == {'name': {'type': 'File', 'secondaryFiles': [{'pattern': '.fai'}]},
-                                  'other': {'type': 'File', 'secondaryFiles': ['.crai', '.csi']},
-                                  'plain': 'string'}
-    assert embedded['outputs'] == {'file': {'type': 'File', 'secondaryFiles': ['.bai']}}
-
-
-@pytest.mark.fast
-def test_ports_written_as_a_list_have_their_secondary_files_listed() -> None:
-    """The same for a tool that writes `inputs` and `outputs` as lists of ports."""
-    embedded = _embedded(_one_tool(
-        cwlVersion='v1.0',
-        inputs=[{'id': 'name', 'type': 'File', 'secondaryFiles': '.fai'}],
-        outputs=[{'id': 'file', 'type': 'File', 'secondaryFiles': '.bai'}]))
-    assert embedded['inputs'] == [{'id': 'name', 'type': 'File', 'secondaryFiles': ['.fai']}]
-    assert embedded['outputs'] == [{'id': 'file', 'type': 'File', 'secondaryFiles': ['.bai']}]
-
-
-@pytest.mark.fast
-def test_embedding_a_tool_of_a_version_sophios_does_not_run_is_refused() -> None:
-    """Embedding would otherwise guess what a version Sophios has never seen implied."""
-    with pytest.raises(SophiosError) as caught:
-        post_compile.inline_artifact_runs(_one_tool(cwlVersion='v1.3.0-dev1'))
-    assert caught.value.diagnostics[0].code is SophiosErrorCode.UNSUPPORTED_CWL_VERSION
-
-
-@pytest.mark.fast
-def test_embedding_a_tool_without_a_version_says_it_declares_none() -> None:
-    """A tool that omits `cwlVersion` is refused, and the message does not claim it declared one."""
-    with pytest.raises(SophiosError) as caught:
-        post_compile._keeping_version_defaults({'class': 'CommandLineTool'},  # pylint: disable=protected-access
-                                               'tool.cwl')
-    (diagnostic,) = caught.value.diagnostics
-    assert diagnostic.code is SophiosErrorCode.UNSUPPORTED_CWL_VERSION
-    assert 'declares no cwlVersion' in diagnostic.message
+    assert 'cwlVersion' not in step['run']
+    assert {key: step['run'][key] for key in case['embedded']} == case['embedded']
 
 
 def _cli(directory: Path, monkeypatch: pytest.MonkeyPatch, workflow: str, *flags: str) -> Path:
@@ -170,15 +61,6 @@ def test_inline_runtag_embeds_a_tool_with_the_defaults_it_was_written_for(
     loaded = yaml.safe_load((written / 'helloworld.cwl').read_text(encoding='utf-8'))
     (step,) = loaded['steps']
     assert step['run']['hints']['NetworkAccess'] == {'networkAccess': True}
-
-
-@pytest.mark.fast
-def test_an_embedded_tree_is_one_document_and_its_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`--cwl_inline_runtag` writes the root, which carries every process, and its job: nothing beside them."""
-    written = _cli(tmp_path / 'embedded', monkeypatch, 'multistep3', '--cwl_inline_runtag')
-    assert sorted(path.name for path in written.iterdir()) == ['multistep3.cwl', 'multistep3_inputs.yml']
-    loaded = yaml.safe_load((written / 'multistep3.cwl').read_text(encoding='utf-8'))
-    assert all(isinstance(step['run'], dict) for step in loaded['steps'])
 
 
 # --------------------------------------------------------------------------
@@ -220,28 +102,24 @@ def test_inline_subworkflows_writes_one_flat_workflow(tmp_path: Path, monkeypatc
 
 
 @pytest.mark.fast
-def test_inline_runtag_embeds_every_process_and_keeps_the_shape(tmp_path: Path,
-                                                                monkeypatch: pytest.MonkeyPatch) -> None:
-    """Packaging: every `run:` carries its process, and a subworkflow step still runs a Workflow."""
-    embedded = _document(_cli(tmp_path / 'embedded', monkeypatch, 'multistep3', '--cwl_inline_runtag'),
-                         'multistep3')
-    assert [step['id'] for step in embedded['steps']] == NESTED_IDS
-    touch, call, cat = (step['run'] for step in embedded['steps'])
-    assert touch['class'] == cat['class'] == 'CommandLineTool'
-    assert call['class'] == 'Workflow', 'a subworkflow step embeds its Workflow'
-    assert [inner['run']['class'] for inner in call['steps']] == ['CommandLineTool', 'CommandLineTool']
-    assert embedded['requirements'] == {'SubworkflowFeatureRequirement': {}}
-
-
-@pytest.mark.fast
-def test_the_two_flags_together_write_one_flat_self_contained_file(tmp_path: Path,
-                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
-    """The flags are orthogonal: both give the flat shape with every process embedded."""
-    document = _document(_cli(tmp_path / 'both', monkeypatch, 'multistep3',
-                              '--cwl_inline_subworkflows', '--cwl_inline_runtag'), 'multistep3')
-    assert [step['id'] for step in document['steps']] == FLAT_IDS
-    assert [step['run']['class'] for step in document['steps']] == ['CommandLineTool'] * 4
-    assert 'SubworkflowFeatureRequirement' not in document.get('requirements', {})
+@pytest.mark.parametrize('flags, ids, runs, requirements', [
+    (['--cwl_inline_runtag'], NESTED_IDS, ['CommandLineTool', ['CommandLineTool'] * 2, 'CommandLineTool'],
+     {'SubworkflowFeatureRequirement': {}}),
+    (['--cwl_inline_subworkflows', '--cwl_inline_runtag'], FLAT_IDS, ['CommandLineTool'] * 4, None)])
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def test_inline_runtag_writes_one_document_that_carries_every_process(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+        flags: list[str], ids: list[str], runs: list[Any], requirements: Yaml | None) -> None:
+    """The root and its job, nothing beside them; a subworkflow step embeds its Workflow, here the classes of its
+    steps. The flags are orthogonal: with `--cwl_inline_subworkflows`, the flat shape with every process embedded."""
+    written = _cli(tmp_path / 'embedded', monkeypatch, 'multistep3', *flags)
+    assert sorted(path.name for path in written.iterdir()) == ['multistep3.cwl', 'multistep3_inputs.yml']
+    document = _document(written, 'multistep3')
+    assert [step['id'] for step in document['steps']] == ids
+    assert [[inner['run']['class'] for inner in step['run']['steps']] if step['run']['class'] == 'Workflow'
+            else step['run']['class'] for step in document['steps']] == runs
+    assert document.get('requirements') == requirements
+    assert 'Warning!' not in capsys.readouterr().err
 
 
 @pytest.mark.fast
@@ -295,30 +173,21 @@ def _stays(artifact: CompilationArtifact, capsys: pytest.CaptureFixture[str]) ->
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('call, carries', [({'when': '$(inputs.file != null)'}, '`when`'),
-                                           ({'requirements': {'ResourceRequirement': {'ramMin': 1}}},
-                                            '`requirements`'),
-                                           ({'label': 'a call'}, '`label`')],
-                         ids=['when', 'requirements', 'label'])
-def test_a_call_that_carries_anything_but_in_and_out_stays_nested(
-        call: Yaml, carries: str, capsys: pytest.CaptureFixture[str]) -> None:
-    """The call's boundary is proved removable only when the author wrote `in` and `out` and nothing else.
-
-    `scatter` is the same rule and is pinned end to end by `test_a_scattered_call_stays_nested...`.
-    """
-    said = _stays(_nested(**call), capsys)
-    assert f"step 'child.wic' stays a subworkflow under --cwl_inline_subworkflows: it carries {carries}" in said
-
-
-@pytest.mark.fast
-def test_a_child_that_opts_out_stays_nested(capsys: pytest.CaptureFixture[str]) -> None:
-    """`wic: inlineable: false` in the child's own file is honoured again."""
-    child = {'wic': {'inlineable': False}, 'steps': [XFORM]}
-    artifact = compile_hermetic({'steps': [MK_FILE, _called(child)]}, 'wf').artifact
-    assert "it is marked `wic: inlineable: false`" in _stays(artifact, capsys)
-    opted_in = compile_hermetic({'steps': [MK_FILE, _called({'wic': {'inlineable': True}, 'steps': [XFORM]})]},
+@pytest.mark.parametrize('case', cases('kept_calls'))
+def test_a_call_dissolves_unless_it_or_its_child_says_otherwise(case: Yaml, capsys: pytest.CaptureFixture[str]) -> None:
+    """A kept call keeps its place as a Workflow and the root its requirements, and one line says why; a dissolved
+    call says nothing. `scatter` is pinned end to end by `test_a_scattered_call_stays_nested...`."""
+    child = {**case.get('child', {}), 'steps': [XFORM]}
+    artifact = compile_hermetic({**case.get('root', {}), 'steps': [MK_FILE, _called(child, **case.get('call', {}))]},
                                 'wf').artifact
-    assert all(child.cwl['class'] != 'Workflow' for child in post_compile.flatten_subworkflows(opted_in).children)
+    if case['kept']:
+        assert f"step 'child.wic' stays a subworkflow under --cwl_inline_subworkflows: {case['kept']}" in _stays(
+            artifact, capsys)
+        assert post_compile.flatten_subworkflows(artifact).cwl['requirements'] == artifact.cwl['requirements']
+    else:
+        capsys.readouterr()
+        assert all(child.cwl['class'] != 'Workflow' for child in post_compile.flatten_subworkflows(artifact).children)
+        assert 'Warning!' not in capsys.readouterr().err
 
 
 @pytest.mark.fast
@@ -351,19 +220,6 @@ def test_a_kept_call_does_not_stop_the_others_from_flattening(capsys: pytest.Cap
     assert kinds == [('mk_file', 'CommandLineTool'), ('child', 'Workflow'),
                      ('other~xform', 'CommandLineTool')]
     assert capsys.readouterr().err.count('Warning!') == 1
-
-
-@pytest.mark.fast
-def test_a_document_feature_declared_differently_keeps_the_call(capsys: pytest.CaptureFixture[str]) -> None:
-    """Two bodies cannot both be the root's, and nothing is half moved when the call stays."""
-    caller = {'requirements': {'InlineJavascriptRequirement': {'expressionLib': ['var a = 1;']}},
-              'steps': [MK_FILE, _called({
-                  'requirements': {'InlineJavascriptRequirement': {'expressionLib': ['var a = 2;']}},
-                  'steps': [XFORM]})]}
-    artifact = compile_hermetic(caller, 'wf').artifact
-    assert 'it declares a different InlineJavascriptRequirement from its caller' in _stays(artifact, capsys)
-    assert post_compile.flatten_subworkflows(artifact).cwl['requirements'][
-        'InlineJavascriptRequirement'] == {'expressionLib': ['var a = 1;']}
 
 
 @pytest.mark.fast

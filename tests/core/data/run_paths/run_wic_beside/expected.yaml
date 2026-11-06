@@ -1,0 +1,2 @@
+why: a run .wic path is read from beside the document, not looked up in the search paths
+steps: [{steps: [{baseCommand: 'true', inputs: {name: {type: string, inputBinding: {position: 1}}}}]}]

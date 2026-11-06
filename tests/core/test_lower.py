@@ -7,11 +7,12 @@ and the result does not depend on iteration order.
 The test-side resolver constructs fully typed phase input without calling the
 production resolver, so these need no registry, filesystem, or config.
 """
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
-from hypothesis import given
+from hypothesis import example, given
 
 from sophios.ir import (
     Direction,
@@ -34,7 +35,9 @@ from sophios.lang.nodes import Document, Step
 from sophios.lang.parser import parse
 
 from . import ast_strategies as strat
+from .cases import cases, diagnostic, match
 from .hermetic import COVERAGE, ORACLE, compile_hermetic, compile_hermetic_cwl, subworkflow_step
+from .strategies import shapes
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -72,6 +75,16 @@ def _lower(source: str) -> Any:
     document = parse(source, 'probe.wic').document
     assert document is not None
     return lower(_resolved(document))
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('case', cases('lower'))
+def test_lower_case(case: dict[str, Any]) -> None:
+    """`source` lowers to exactly `diagnostics`, and to no graph where `graph` is false, for the case's `why`."""
+    result = _lower(case['source'])
+    assert match(case['diagnostics'], [diagnostic(d) for d in result.diagnostics]), list(result.diagnostics)
+    if 'graph' in case:
+        assert (result.graph is not None) is case['graph']
 
 
 @pytest.mark.fast
@@ -169,62 +182,21 @@ def test_a_step_may_be_invoked_twice() -> None:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(('where', 'source'), [
-    ('an input', 'steps:\n- id: s\n  in:\n    "": !* e\n'),
-    ('an out: entry', 'steps:\n- id: s\n  out:\n  - "": f\n'),
-    ('an edge definition', 'steps:\n- id: s\n  out:\n  - f: !& ""\n'),
-    ('an edge reference', 'steps:\n- id: s\n  in:\n    f: !* ""\n'),
-])
-def test_a_name_the_document_left_empty_is_reported(where: str, source: str) -> None:
-    """`parse` accepts these; the types refuse them. Lowering has to bridge that.
-
-    Refusing an unnamed port is right, but the refusal is a `ValueError`, and
-    every one of these is a document the parser hands back. Reported here, the
-    caller gets a diagnostic rather than a traceback -- the same treatment an
-    unnamed step already had.
-
-    Out of reach of `documents()`, which draws names from the synthetic
-    registry and so never draws an empty one. That is the right generator for
-    a workflow the compiler can resolve, so these stay examples.
-    """
-    result = _lower(source)
-    assert result.graph is None, where
-    assert [d.code.value for d in result.diagnostics] == ['wic027'], where
-
-
-@pytest.mark.fast
-def test_both_edge_positions_treat_an_empty_name_the_same() -> None:
-    """`!& ""` and `!* ""` agree.
-
-    They did not: the reference raised while the definition was accepted and
-    put `''` into the edge table as a live producer name, where it would match
-    any later `!* ""` that managed not to raise first.
-    """
-    definition = _lower('steps:\n- id: s\n  out:\n  - f: !& ""\n')
-    reference = _lower('steps:\n- id: s\n  in:\n    f: !* ""\n')
-    assert (definition.graph is None) == (reference.graph is None)
-    assert {d.code for d in definition.diagnostics} == {d.code for d in reference.diagnostics}
-
-
-@pytest.mark.fast
-def test_a_document_the_parser_recovered_never_raises() -> None:
-    """Totality over what `parse` returns, not over what it accepts.
+@given(shapes().map(lambda shape: parse(json.dumps(shape), 'recovered.wic').document))
+@example(parse('steps:\n- id: ""\n  in: {}\n', 'recovered.wic').document)
+@example(parse('steps:\n- \n', 'recovered.wic').document)
+@example(parse('steps:\n- id:\n', 'recovered.wic').document)
+@example(Document(steps=(Step(id=''),)))   # a step the parser never built, so it carries no span at all
+@ORACLE
+def test_a_document_the_parser_recovered_never_raises(document: Document) -> None:
+    """Totality over what `parse` returns, not over what it accepts: a graph exactly when nothing reported is an error.
 
     A recovered document is exactly when a caller is least able to handle an
     exception, and a result carrying neither a graph nor a diagnostic is worse
     than the exception it replaced -- `ok` is False and nothing says why.
     """
-    for source in ('steps:\n- id: ""\n  in: {}\n', 'steps:\n- \n', 'steps:\n- id:\n'):
-        document = parse(source, 'recovered.wic').document
-        if document is None:
-            continue
-        result = lower(_resolved(document))
-        assert result.graph is not None or len(result.diagnostics) > 0, source
-
-    # A step the parser never built, so it carries no span at all.
-    handmade_document = Document(steps=(Step(id=''),))
-    handmade = lower(_resolved(handmade_document))
-    assert handmade.graph is None and len(handmade.diagnostics) > 0
+    result = lower(_resolved(document))
+    assert (result.graph is None) is result.diagnostics.has_errors, [str(d) for d in result.diagnostics]
 
 
 @pytest.mark.fast
@@ -241,52 +213,6 @@ def test_a_union_member_written_either_way_parses_the_same() -> None:
     assert not record.optional
     assert record.canonical == [
         {'type': 'array', 'items': ['null', 'string']}, 'int']
-
-
-@pytest.mark.fast
-def test_a_reference_before_its_definition_is_reported() -> None:
-    """`!* e` above its `!& e` is `wic025`, as the .wic reference and compiler say.
-
-    Resolving it by pre-scanning every definition would make Lower accept a
-    document the compiler refuses, and silently change an ordering rule.
-    """
-    result = _lower('steps:\n- id: use\n  in:\n    f: !* e\n- id: mk\n  out:\n  - file: !& e\n')
-    assert [d.code.value for d in result.diagnostics] == ['wic025']
-
-
-@pytest.mark.fast
-def test_a_name_defined_twice_is_reported() -> None:
-    """Keeping the first definition and dropping the second leaves nothing to
-    report it with, here or in any later phase."""
-    result = _lower('steps:\n- id: a\n  out:\n  - f: !& e\n- id: b\n  out:\n  - f: !& e\n')
-    assert [d.code.value for d in result.diagnostics] == ['wic026']
-
-
-@pytest.mark.fast
-def test_a_sidecar_out_mentioning_the_name_does_not_mask_a_real_duplicate() -> None:
-    """A `wic:` sidecar `out:` entry (.wic reference §3.6, accepted since `wic019` no
-    longer rejects it there) is inert passthrough, never itself a second
-    definition — `basic.wic` relies on exactly this to place `min.tpr`'s one
-    definition at a distance without it colliding with anything. A real
-    duplicate among the document's own steps must still be reported once,
-    whether or not a sidecar block happens to mention the same name.
-    """
-    result = _lower(
-        'wic:\n  steps:\n    (1, a):\n      out:\n      - f: {wic_anchor: e}\n'
-        'steps:\n- id: a\n  out:\n  - f: !& e\n- id: b\n  out:\n  - f: !& e\n')
-    assert [d.code.value for d in result.diagnostics] == ['wic026']
-
-
-@pytest.mark.fast
-def test_a_step_with_no_id_is_reported_not_raised() -> None:
-    """The parser recovers such a document, which is exactly when a caller is
-    least able to handle an exception.
-
-    `wic007` rather than `wic006`, matching what the parser already reports for
-    the same document: the id is present and empty, not missing.
-    """
-    result = _lower('steps:\n- id: ""\n  in: {}\n')
-    assert result.graph is None and [d.code.value for d in result.diagnostics] == ['wic007']
 
 
 @pytest.mark.fast
@@ -328,18 +254,6 @@ def test_a_reference_to_a_port_no_step_declares_is_reported_where_it_is_held(
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('scatter', ['[1]', '[null]', '5', '{a: 1}', '[name, 1]'])
-def test_a_scatter_entry_that_is_not_a_name_is_wic032(scatter: str) -> None:
-    """`scatter:` names inputs. An entry that is no name at all, or a
-    `scatter:` that is neither a name nor a list, names none of them: it is
-    reported rather than dropped or emitted verbatim."""
-    result = _lower(f'steps:\n- id: mk_file\n  in: {{name: !ii [a, b]}}\n  scatter: {scatter}\n')
-
-    codes = [diagnostic.code for diagnostic in result.diagnostics]
-    assert SophiosErrorCode.UNKNOWN_SCATTER_PORT in codes, codes
-
-
-@pytest.mark.fast
 def test_an_anchor_on_an_undeclared_call_output_is_reported_not_raised() -> None:
     """A call step anchoring a name its child never declares is wic028; the graph
     is not built from a document the phase rejected, so no ValueError escapes."""
@@ -374,38 +288,6 @@ def test_a_positional_output_source_addresses_the_occurrence_at_that_index() -> 
     assert result.graph is not None, list(result.diagnostics)
     (_name, source), = result.graph.output_mapping
     assert source.step.index == 2
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('address', ['(2, t)/f', '(3, s)/f'], ids=['wrong-name', 'out-of-range'])
-def test_a_positional_output_source_that_disagrees_with_the_document_is_wic039(address: str) -> None:
-    """A wrong name or an index past the last step is refused as wic039."""
-    result = _lower('steps:\n- id: s\n  out: [f]\n- id: s\n  out: [f]\n'
-                    f'outputs:\n  o:\n    type: File\n    outputSource: {address}\n')
-    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE]
-
-
-@pytest.mark.fast
-def test_a_positional_output_source_naming_a_port_the_step_lacks_is_wic028() -> None:
-    """The step is known, so the missing port is reported with the step's outputs."""
-    result = _lower('steps:\n- id: s\n  out: [f]\n- id: s\n  out: [f]\n'
-                    'outputs:\n  o:\n    type: File\n    outputSource: (2, s)/nope\n')
-    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.UNDECLARED_PORT]
-    assert all("'nope'" in d.message and 'its outputs are: f' in d.message for d in result.diagnostics)
-
-
-@pytest.mark.fast
-def test_a_record_source_before_its_definition_is_reported() -> None:
-    """A record's `!*` source resolves as a bare `!*` does: above its `!& e` it is `wic025`."""
-    result = _lower('steps:\n- id: use\n  in:\n    f: !cwl {source: !* e}\n- id: mk\n  out:\n  - file: !& e\n')
-    assert [d.code.value for d in result.diagnostics] == ['wic025']
-
-
-@pytest.mark.fast
-def test_a_record_with_several_sources_takes_none_from_outside_its_document() -> None:
-    """One input crosses a workflow boundary through one relay, so it cannot carry several outside sources."""
-    result = _lower('inputs:\n  w: string\nsteps:\n- id: use\n  in:\n    f: !cwl {source: [!* e, w]}\n')
-    assert [d.code.value for d in result.diagnostics] == ['wic025']
 
 
 @pytest.mark.fast

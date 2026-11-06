@@ -1,0 +1,2 @@
+steps: {mytool: {run: {class: CommandLineTool, cwlVersion: v1.2, baseCommand: true, inputs: {x: string}, outputs: {}},
+    in: {x: !ii hi}}}

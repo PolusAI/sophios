@@ -11,19 +11,20 @@ import re
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import traceback
 import warnings
 from types import SimpleNamespace
-from typing import Any, Callable, Iterator, cast
-from unittest.mock import patch
+from typing import Any, Callable, Final, Iterator, cast
+from unittest.mock import Mock, patch
 
+from hypothesis import example, given, strategies as st
 from jsonschema import Draft202012Validator
 import pytest
 import yaml
 
 import sophios
 import sophios.api.python._workflow_runtime as python_runtime
-import sophios.compiler
 import sophios.plugins
 import sophios.post_compile
 from sophios import input_output as io
@@ -34,15 +35,14 @@ from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outp
 from sophios.api.python.workflow import (_python_api_types_match, ApiError, CompiledWorkflow,
                                          InvalidCLTError, InvalidInputValueError, InvalidLinkError,
                                          InvalidStepError, RunResult, RunState, RunStatus, SophiosError,
-                                         SophiosErrorCode, Step, StepInput, Workflow)
-from sophios.cli import default_compilation_settings
-from sophios.lang import CwlRecord, InlineLiteral, Severity, parse, to_json, wic_schema
-from sophios.ir.frontdoor import bundle_from_disk
-from sophios.post_compile import inline_artifact_runs
+                                         SophiosErrorCode, Step, StepInput, Workflow, WorkflowRunError)
+from sophios.lang import InlineLiteral, parse, to_json, wic_schema
 from sophios.python_cwl_adapter import import_python_file
-from sophios.runtime_inputs import normalize_artifact_cwl
 from sophios.wic_types import Json, Tools
 
+from .budgets import budget
+from .reference_model import ReferenceExpectation, reference_expectation
+from .test_cookbook import _bodies, _through_the_file
 from .wic_reading import read_wic
 
 
@@ -153,132 +153,81 @@ def _write_manifest(workflow_paths: list[Path]) -> None:
         json.dumps(manifest, indent=2), encoding="utf-8")
 
 
-@pytest.mark.fast
-def test_explicit_ports_and_attribute_sugar_produce_one_document(tmp_path: Path) -> None:
-    """`step.inputs.x` and the bare `step.x` sugar are the same binding.
-
-    Both spellings are the Python API's -- this compares them to each other,
-    not to the YAML front end. The sugar resolves through `__getattr__`, so it
-    is the spelling that can silently diverge.
-    """
-    touch_legacy = Step(clt_path=_adapter("touch"))
-    touch_legacy.filename = "empty.txt"
-    append_legacy = Step(clt_path=_adapter("append"))
-    append_legacy.file = touch_legacy.file
-    append_legacy.str = "Hello"
-
-    touch_explicit = Step(clt_path=_adapter("touch"))
-    touch_explicit.inputs.filename = "empty.txt"
-    append_explicit = Step(clt_path=_adapter("append"))
-    append_explicit.inputs.file = touch_explicit.outputs.file
-    append_explicit.inputs.str = "Hello"
-
-    legacy_yaml = _written(Workflow([touch_legacy, append_legacy], "wf"), tmp_path / "a")
-    explicit_yaml = _written(Workflow([touch_explicit, append_explicit], "wf"), tmp_path / "b")
-
-    assert legacy_yaml == explicit_yaml
+PAIRS = Path(__file__).resolve().parent / "data" / "python_api_pairs"
+_PAIRED = import_python_file("python_api_pairs", PAIRS / "pairs.py")
+#: Each pair's notes, written by hand from the inference rule: the nearest step's output, the others that fit counted.
+_NOTES = {"linear_inference": ["cat.file <- append.file (1 other fits)"],
+          "equal_producers": ["cat.file <- second.file (1 other fits)"]}
 
 
 @pytest.mark.fast
-def test_linear_python_workflow_reuses_compiler_edge_inference(tmp_path: Path) -> None:
-    """An unbound input is left for inference, not guessed by the API.
-
-    The exported document omits `file` entirely and the compiled one names the
-    producing step, so inference ran rather than the API pre-resolving it."""
-    touch = Step(clt_path=_adapter("touch"))
-    touch.inputs.filename = "empty.txt"
-
-    append = Step(clt_path=_adapter("append"))
-    append.inputs.str = "Hello"
-
-    cat = Step(clt_path=_adapter("cat"))
-
-    workflow = Workflow([touch, append, cat], "wf")
-    workflow_yaml = _written(workflow, tmp_path)
-    assert "file" not in workflow_yaml["steps"][1]["in"]
-    assert "file" not in workflow_yaml["steps"][2].get("in", {})
-
+@pytest.mark.parametrize("stem", [name for name, value in vars(_PAIRED).items()
+                                  if inspect.isfunction(value) and not name.startswith("_")])
+def test_a_python_workflow_compiles_as_the_wic_beside_it_and_as_the_wic_it_writes(stem: str, tmp_path: Path) -> None:
+    """The objects compile to the notes written for them and to the CWL, job and notes of the hand-written `.wic` of the
+    same name, a note but for where it points; and the bundle `write_wic` writes compiles, through the file door, to
+    the objects' CWL and job."""
+    workflow = getattr(_PAIRED, stem)()
     compiled = workflow.compile()
-
-    assert compiled.cwl_workflow["steps"][1]["in"]["file"] == "touch/file"
-    assert compiled.cwl_workflow["steps"][2]["in"]["file"] == "append/file"
-    assert compiled.cwl_job_inputs == {
-        "touch~filename": "empty.txt",
-        "append~str": "Hello",
-    }
+    assert [note.message for note in compiled.diagnostics] == _NOTES.get(stem, [])
+    assert _through_the_file(PAIRS / f"{stem}.wic") == (
+        compiled.cwl_workflow, compiled.cwl_job_inputs, _bodies(compiled.diagnostics))
+    assert _through_the_file(workflow.write_wic(tmp_path))[:2] == (compiled.cwl_workflow, compiled.cwl_job_inputs)
 
 
 @pytest.mark.fast
-def test_compiled_workflow_carries_the_inference_notes() -> None:
-    """A guessed edge is on the compiled object, not a warning."""
-    first = Step(clt_path=_adapter("touch"), step_name="first")
-    first.inputs.filename = "a.txt"
-    second = Step(clt_path=_adapter("touch"), step_name="second")
-    second.inputs.filename = "b.txt"
-    cat = Step(clt_path=_adapter("cat"))
-
-    compiled = Workflow([first, second, cat], "wf").compile()
-
-    (note,) = compiled.diagnostics
-    assert (note.severity, note.code) == (Severity.NOTE, SophiosErrorCode.INFERENCE_GUESS)
-    assert note.message == 'cat.file <- second.file (1 other fits)'
+@pytest.mark.parametrize("kind, make, name", [
+    *(("step", lambda name: Step(clt_path=_adapter("touch"), step_name=name), name)
+      for name in ["a~b", "a@2", "a#b", ".hidden", ".."]),
+    ("workflow", lambda name: Workflow([Step(clt_path=_adapter("touch"))], name), "..")])
+def test_a_name_sophios_cannot_write_is_refused(kind: str, make: Callable[[str], object], name: str) -> None:
+    """A step's name is an id of the compiled CWL and part of the names made from it, as in a `.wic`; a workflow's
+    is the stem of the files it is written to, and `..` would name the directory above."""
+    with pytest.raises(ValueError, match="^" + re.escape(f"{kind} name {name!r} is not a name Sophios can write: use "
+                                                         "letters")):
+        make(name)
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize("name", ["a~b", "a@2", "a#b", ".hidden", ".."])
-def test_a_step_name_outside_the_allowed_characters_is_refused(name: str) -> None:
-    """A step's name is an id of the compiled CWL and part of the names made from it, as in a `.wic`."""
-    refusal = f"step name {name!r} is not a name Sophios can write: use letters"
-    with pytest.raises(ValueError, match="^" + re.escape(refusal)):
-        Step(clt_path=_adapter("touch"), step_name=name)
+_BINDABLE: Final = {'string': st.text(max_size=5), 'int': st.integers(-2**31, 2**31 - 1),
+                    'float': st.floats(allow_nan=False, allow_infinity=False), 'boolean': st.booleans()}
 
 
-@pytest.mark.fast
-def test_a_workflow_named_dot_dot_is_refused() -> None:
-    """A workflow's name is the stem of the files it is written to, and `..` would name the directory above."""
-    with pytest.raises(ValueError, match="^" + re.escape("workflow name '..' is not a name Sophios can write")):
-        Workflow([Step(clt_path=_adapter("touch"))], "..")
+@st.composite
+def _built_tools(draw: st.DrawFn) -> tuple[CommandLineTool, dict[str, Any]]:
+    """A tool echoing up to three inputs, and the values bound to those not left to the workflow."""
+    names = draw(st.lists(st.sampled_from(['message', 'n', 'size', 'flag']), unique=True, min_size=1, max_size=3))
+    types = {name: draw(st.sampled_from(sorted(_BINDABLE))) for name in names}
+    bindings: list[dict[str, Any]] = [draw(st.sampled_from([{'position': 1}, {'flag': f'--{name}'}])) for name in types]
+    inputs = Inputs(**{name: Input(declared, **binding) for (name, declared), binding in zip(types.items(), bindings)})
+    tool = (CommandLineTool(draw(st.sampled_from(['echo_tool', 'emit'])), inputs, Outputs(out=Output.stdout()))
+            .base_command('echo').stdout('stdout.txt'))
+    return tool, {name: draw(_BINDABLE[declared]) for name, declared in types.items() if draw(st.booleans())}
 
 
 @pytest.mark.fast
-def test_in_memory_cwl_step_compiles_through_workflow_api() -> None:
-    """A tool given as a document compiles without ever being written to disk."""
-    tool = (
-        CommandLineTool(
-            "echo_tool",
-            Inputs(message=Input(cwl.string, position=1)),
-            Outputs(out=Output.stdout()),
-        )
-        .base_command("echo")
-        .stdout("stdout.txt")
-    )
-    step = Step.from_cwl_document(tool.to_cwl_document(), process_name="say_hello")
-    step.inputs.message = "hello"
-
-    compiled = Workflow([step], "wf").compile()
-
-    assert compiled.cwl_workflow["class"] == "Workflow"
-    assert compiled.cwl_workflow["steps"][0]["id"].endswith("say_hello")
-    assert compiled.cwl_workflow["steps"][0]["run"]["class"] == "CommandLineTool"
-    assert compiled.cwl_workflow["steps"][0]["run"]["baseCommand"] == "echo"
-
-
-@pytest.mark.fast
-def test_step_inputs_bind_values_on_a_tool_given_in_memory() -> None:
-    """`step_inputs=` binds input values by name, on a document and on a built tool alike; `config=` is gone."""
-    tool = (
-        CommandLineTool("echo_tool", Inputs(message=Input(cwl.string, position=1)), Outputs(out=Output.stdout()))
-        .base_command("echo")
-        .stdout("stdout.txt")
-    )
-
-    from_document = Step.from_cwl_document(tool.to_cwl_document(), process_name="say", step_inputs={"message": "hi"})
-    from_tool = tool.to_step(step_name="say", step_inputs={"message": "hi"})
-
-    for step in (from_document, from_tool):
-        assert Workflow([step], "wf").compile().cwl_job_inputs == {"say~message": "hi"}
-    with pytest.raises(TypeError, match="config"):
-        tool.to_step(config={"message": "hi"})  # type: ignore[call-arg]  # pylint: disable=unexpected-keyword-arg
+@given(_built_tools(), st.sampled_from([None, 'say']))
+@example((_emit_text_tool(), {'message': 'hello'}), None)  # a built tool becomes a step named for it
+@example((CommandLineTool('echo_tool', Inputs(message=Input(cwl.string, position=1)), Outputs(out=Output.stdout()))
+          .base_command('echo').stdout('stdout.txt'), {'message': 'hi'}), 'say')  # `step_name` renames it and its path
+@budget(15)
+def test_a_built_tool_is_one_step_through_every_door(drawn: tuple[CommandLineTool, dict[str, Any]],
+                                                     step_name: str | None) -> None:
+    """Each in-memory door, binding by attribute or `step_inputs=`, writes nothing and makes the step `Step(clt_path=)`
+    makes of the tool's file: named `step_name` or for the tool, with a path of that name, compiling alike."""
+    tool, values = drawn
+    name = step_name or tool.name
+    with tempfile.TemporaryDirectory() as directory, pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.chdir(directory)
+        steps = [_bind(Step(tool, step_name=step_name), **values), _bind(tool.to_step(step_name=step_name), **values),
+                 _bind(Step.from_cwl_document(tool.to_cwl_document(), process_name=step_name), **values),
+                 tool.to_step(step_name=step_name, step_inputs=values),
+                 Step.from_cwl_document(tool.to_cwl_document(), process_name=step_name, step_inputs=values)]
+        assert not list(Path(directory).iterdir())
+        steps.append(_bind(Step(clt_path=tool.write_cwl(Path(directory) / f'{name}.cwl')), **values))
+        compiled = [Workflow([step], 'wf').compile() for step in steps]
+    assert {(step.process_name, step.clt_path.name) for step in steps} == {(name, f'{name}.cwl')}
+    assert all((each.cwl_workflow, each.cwl_job_inputs) == (compiled[-1].cwl_workflow, compiled[-1].cwl_job_inputs)
+               for each in compiled)
 
 
 @pytest.mark.fast
@@ -357,27 +306,6 @@ def test_a_value_of_another_python_type_is_wic020_naming_the_type_the_port_holds
     diagnostic = caught.value.diagnostics[0]
     assert diagnostic.code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
     assert diagnostic.message.endswith(f"is of type decimal.Decimal, not a Python {python_type}.")
-
-
-@pytest.mark.fast
-def test_step_constructor_accepts_tool_builder_command_line_tool() -> None:
-    """A built tool becomes a step, and `step_name` renames both it and its path."""
-    tool = _emit_text_tool()
-
-    default_step = Step(tool)
-    renamed_step = Step(tool, step_name="say_hello")
-    renamed_step.inputs.message = "hello"
-
-    compiled = Workflow([renamed_step], "wf").compile()
-
-    assert default_step.process_name == "emit_text"
-    assert default_step.clt_path.name == "emit_text.cwl"
-    assert renamed_step.process_name == "say_hello"
-    assert renamed_step.clt_path.name == "say_hello.cwl"
-    assert renamed_step.yaml["class"] == "CommandLineTool"
-    assert compiled.cwl_workflow["steps"][0]["id"].endswith("say_hello")
-    assert compiled.cwl_workflow["steps"][0]["run"]["class"] == "CommandLineTool"
-    assert compiled.cwl_workflow["steps"][0]["run"]["baseCommand"] == "echo"
 
 
 @pytest.mark.fast
@@ -492,19 +420,6 @@ def test_workflow_compile_boundary_hides_compiler_info() -> None:
 
 
 @pytest.mark.fast
-def test_falsey_inline_values_are_preserved(tmp_path: Path) -> None:
-    """An empty string is a value, not an absent one.
-
-    A truthiness test anywhere on this path would drop it silently."""
-    echo = Step(clt_path=_adapter("echo"))
-    echo.inputs.message = ""
-
-    workflow_yaml = _written(Workflow([echo], "wf"), tmp_path)
-    assert workflow_yaml["steps"][0]["in"]["message"] == {
-        "wic_inline_input": ""}
-
-
-@pytest.mark.fast
 def test_subworkflow_inputs_use_child_workflow_name_and_formal_parameters(tmp_path: Path) -> None:
     """A subworkflow step names the child and passes its formal parameters.
 
@@ -540,151 +455,142 @@ def test_subworkflow_inputs_use_child_workflow_name_and_formal_parameters(tmp_pa
     assert child_yaml["steps"][0]["in"]["str"] == "str"
 
 
-@pytest.mark.fast
-def test_step_unknown_attribute_raises_immediately() -> None:
-    """Binding an input the tool does not declare fails where it is written."""
-    append = Step(clt_path=_adapter("append"))
-
-    with pytest.raises(AttributeError, match="has no input named"):
-        append.misspelled = "Hello"
-
-
-@pytest.mark.fast
-def test_incompatible_step_link_raises_invalid_link_error() -> None:
-    """A link between incompatible types is refused at construction."""
-    touch = Step(clt_path=_adapter("touch"))
-    touch.inputs.filename = "empty.txt"
-    append = Step(clt_path=_adapter("append"))
-
-    with pytest.raises(InvalidLinkError, match="incompatible types"):
-        append.inputs.str = touch.outputs.file
+_ATOM = st.sampled_from(['null', 'boolean', 'int', 'long', 'float', 'double', 'string', 'File', 'Directory', 'Any',
+                         'stdout', 'example.org#Thing'])
+_CWL_TYPES = st.recursive(
+    _ATOM | _ATOM.map(lambda atom: f'{atom}?') | _ATOM.map(lambda atom: f'{atom}[]') | st.sampled_from(
+        [{'type': 'record', 'fields': []}, {'type': 'enum', 'symbols': ['a']}, {'type': 'array'}]),
+    lambda inner: st.lists(inner, min_size=1, max_size=3) | inner.map(lambda items: {'type': 'array', 'items': items}),
+    max_leaves=5)
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('parameter_type, candidate_type, expected', [
-    ('string', 'File', False),
-    ('string', 'string', True),
-    ('string[]', 'Any', True),
-    ({'type': 'array', 'items': 'string'}, {'type': 'array', 'items': 'Any'}, True),
-    ('string', {'type': 'record', 'fields': []}, True),
+@given(_CWL_TYPES, _CWL_TYPES)
+@example('string', 'File')
+@example('string', 'string')
+@example('string[]', 'Any')
+@example({'type': 'array', 'items': 'string'}, {'type': 'array', 'items': 'Any'})
+@example('string', {'type': 'record', 'fields': []})
+@budget(200)
+def test_python_api_uses_the_conservative_language_judgment(parameter_type: Any, candidate_type: Any) -> None:
+    """The eager API rejects proven disjointness and defers every unknown: it refuses only what the independent model
+    judges disjoint from the port as declared and lifted one array level, as a later `scatter_on()` would."""
+    def disjoint(sink: Any) -> bool:
+        return reference_expectation(candidate_type, sink) is ReferenceExpectation.DISJOINT
+    assert _python_api_types_match(parameter_type, candidate_type) is not (
+        disjoint(parameter_type) and disjoint({'type': 'array', 'items': parameter_type}))
+
+
+def _bind(step: Step, **values: Any) -> Step:
+    """`step`, with `values` bound to its inputs."""
+    for name, value in values.items():
+        setattr(step.inputs, name, value)
+    return step
+
+
+def _sink(declared: str) -> Step:
+    """A step that takes `x`, declared `declared`, and does nothing."""
+    return Step.from_cwl_document({"cwlVersion": "v1.2", "class": "CommandLineTool", "baseCommand": "true",
+                                   "inputs": {"x": {"type": declared}}, "outputs": {}}, process_name="sink")
+
+
+def _touched() -> tuple[Step, Step]:
+    """Steps `a` and `b`, each touching a file of its name."""
+    a, b = (_bind(Step(clt_path=_adapter("touch"), step_name=name), filename=f"{name}.txt") for name in "ab")
+    return a, b
+
+
+def _bindable() -> SimpleNamespace:
+    """Fresh steps in one workflow whose input `text` is a `string`, and an `echo` whose undeclared `go` a
+    `StepInput` bound."""
+    a, b = _touched()
+    steps = SimpleNamespace(a=a, b=b, append=Step(clt_path=_adapter("append")), cat=Step(clt_path=_adapter("cat")),
+                            echo=Step(clt_path=_adapter("echo")), sink=_sink("int"))
+    steps.workflow = Workflow([a, b, steps.append, steps.cat, steps.echo, steps.sink], "w")
+    steps.workflow.inputs.text.as_type("string")
+    steps.defaulted = _bind(Step(clt_path=_adapter("echo")), go=StepInput(default=True))
+    return steps
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("binding, error, fragment", [
+    (lambda s: (s.append, "misspelled", "Hello"), AttributeError, "has no input named"),
+    (lambda s: (s.append.inputs, "str", s.a.outputs.file), InvalidLinkError, "incompatible types"),
+    (lambda s: (s.append.inputs, "file", s.workflow.inputs.text), InvalidLinkError,
+     "append.file has incompatible types"),
+    (lambda s: (s.echo.inputs, "go", True), AttributeError, "no input named 'go'"),
+    (lambda s: (s.defaulted.inputs, "go", True), AttributeError, "no input named 'go'"),
+    (lambda s: (s.cat.inputs, "file", [s.a.outputs.file]), InvalidInputValueError, "StepInput"),
+    (lambda s: (s.cat.inputs, "file", (s.workflow.inputs.f,)), InvalidInputValueError, "StepInput"),
+    (lambda s: (s.cat.inputs, "file", [[s.a.outputs.file]]), InvalidInputValueError, "StepInput"),
+    (lambda s: (s.cat.inputs, "file", {"x": s.a.outputs.file}), InvalidInputValueError, "StepInput"),
+    (lambda s: (s.cat.inputs, "file", [{"x": [s.a.outputs.file]}]), InvalidInputValueError, "StepInput"),
+    (lambda s: (s.cat.inputs, "file", [StepInput(source=s.a.outputs.file)]), InvalidInputValueError,
+     "a StepInput is never a literal"),
+    *((lambda s, record=record: (s.sink.inputs, "x", StepInput(source=[s.a.outputs.file, s.b.outputs.file], **record)),
+       InvalidLinkError, "incompatible types")
+      for record in ({"link_merge": "merge_flattened"}, {"pick_value": "first_non_null"})),
 ])
-def test_python_api_uses_the_conservative_language_judgment(
-        parameter_type: Any, candidate_type: Any, expected: bool) -> None:
-    """The eager API rejects proven disjointness and defers every unknown."""
-    assert _python_api_types_match(parameter_type, candidate_type) is expected
+def test_a_binding_the_api_can_prove_wrong_is_refused_where_it_is_written(
+        binding: Callable[[SimpleNamespace], tuple[object, str, Any]], error: type[Exception], fragment: str) -> None:
+    """An input the tool does not declare, which only a `StepInput` may bind, a source of a type the input cannot
+    take, scattered or not, or a port where a literal goes, anywhere inside a list or mapping, which names
+    `StepInput` instead of passing for a literal."""
+    target, name, value = binding(_bindable())
+    with pytest.raises(error, match=fragment):
+        setattr(target, name, value)
+
+
+def _reading_its_own_output(a: Step) -> Workflow:
+    """A workflow of `a` and a `cat` that reads the workflow's own output, which is `a`'s."""
+    cat = Step(clt_path=_adapter("cat"))
+    workflow = Workflow([a, cat], "loop")
+    workflow.outputs.made = a.outputs.file
+    cat.inputs.file = workflow.outputs.made
+    return workflow
 
 
 @pytest.mark.fast
-def test_explicit_links_must_point_to_prior_steps_in_workflow_list() -> None:
-    """A step may only consume what an earlier step produced.
+@pytest.mark.parametrize("build, error, code, fragment", [
+    (lambda a, b: Workflow([_bind(Step(clt_path=_adapter("append")), file=a.outputs.file, str="Hello"), a], "w"),
+     InvalidStepError, SophiosErrorCode.INVALID_STEP, "must appear earlier"),
+    (lambda a, b: Workflow([_bind(Step(clt_path=_adapter("append")), file=a.outputs.file, str="Hello")], "w"),
+     InvalidStepError, SophiosErrorCode.INVALID_STEP, "not a child"),
+    (lambda a, b: Workflow([_bind(Step(clt_path=_adapter("cat")), file=StepInput(
+        source=[a.outputs.file], pick_value="first_non_null")), a], "w"),
+     InvalidStepError, SophiosErrorCode.INVALID_STEP, "earlier in the workflow step list"),
+    (lambda a, b: _reading_its_own_output(a), InvalidLinkError, SophiosErrorCode.INVALID_LINK, "own output"),
+    *((lambda a, b, declared=declared: Workflow([a, b, _bind(_sink(declared), x=StepInput(
+        source=[a.outputs.file, b.outputs.file], link_merge="merge_flattened"))], "w"),
+       SophiosError, SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE, "wic023") for declared in ("File", "int[]")),
+])
+def test_compile_refuses_a_workflow_wired_wrong(build: Callable[[Step, Step], Workflow], error: type[SophiosError],
+                                                code: SophiosErrorCode, fragment: str) -> None:
+    """Order is meaning, as inference scans backwards: a step may read only an earlier step of its own workflow, by a
+    link or a record, and never its workflow's own output. A merge the bind cannot judge is the compiler's to refuse.
 
-    Order is meaning here: inference scans backwards, so a forward reference
-    would describe a workflow that cannot run."""
-    touch = Step(clt_path=_adapter("touch"))
-    touch.inputs.filename = "empty.txt"
-
-    append = Step(clt_path=_adapter("append"))
-    append.inputs.file = touch.outputs.file
-    append.inputs.str = "Hello"
-
-    with pytest.raises(InvalidStepError, match="must appear earlier"):
-        Workflow([append, touch], "wf").compile()
-
-
-@pytest.mark.fast
-def test_explicit_links_must_point_to_workflow_children() -> None:
-    """A link may not reach a step outside the workflow that owns it."""
-    external_touch = Step(clt_path=_adapter("touch"))
-    external_touch.inputs.filename = "empty.txt"
-
-    append = Step(clt_path=_adapter("append"))
-    append.inputs.file = external_touch.outputs.file
-    append.inputs.str = "Hello"
-
-    with pytest.raises(InvalidStepError, match="not a child"):
-        Workflow([append], "wf").compile()
-
-
-@pytest.mark.fast
-def test_scattering_over_two_ports_records_both_and_the_method(tmp_path: Path) -> None:
-    """`scatter_on` records every port it is given, and the method beside them.
-
-    Named for what it asserts. `echo_3`'s ports are `string`, so nothing here
-    exercises a CWL `Any`.
+    A caller writes one `except SophiosError` and reads `.diagnostics`, whatever failed: the API used to raise
+    bare `Exception` subclasses of its own beside the compiler's `SophiosError`, neither importable from where a
+    user of `compile()` would look (issue 111).
     """
-    array_indices = Step(clt_path=_adapter("array_indices"))
-    array_indices.inputs.input_array = ["hello world", "not", "what world?"]
-    array_indices.inputs.input_indices = [0, 2]
-
-    echo = Step(clt_path=_adapter("echo_3"))
-    echo.inputs.message1 = array_indices.outputs.output_array
-    echo.inputs.message2 = array_indices.outputs.output_array
-    echo.inputs.message3 = "scalar"
-    echo.scatter_on(
-        echo.inputs.message1,
-        echo.inputs.message2,
-        method="flat_crossproduct",
-    )
-
-    workflow_yaml = _written(Workflow([array_indices, echo], "wf"), tmp_path)
-    assert workflow_yaml["steps"][1]["scatter"] == ["message1", "message2"]
-    assert workflow_yaml["steps"][1]["scatterMethod"] == "flat_crossproduct"
+    workflow = build(*_touched())
+    with pytest.raises(SophiosError) as caught:
+        workflow.compile()
+    assert isinstance(caught.value, error) and fragment in str(caught.value)
+    assert [diagnostic.code for diagnostic in caught.value.diagnostics] == [code]
 
 
 @pytest.mark.fast
-def test_a_declared_array_workflow_input_scatters_over_a_scalar_port() -> None:
-    """A workflow input is the source of its binding: a `string[]` input binds to a `string`
-    port its step then scatters over, and the CWL scatters that port over the array input."""
-    touch = Step(clt_path=_adapter("touch"))
-    workflow = Workflow([touch], "scatter_names")
-    touch.inputs.filename = workflow.inputs.names.as_type("string[]")
-    touch.scatter_on(touch.inputs.filename)
-
-    compiled = workflow.compile()
-
-    assert compiled.cwl_workflow["inputs"]["names"]["type"] == {"type": "array", "items": "string"}
-    (step,) = compiled.cwl_workflow["steps"]
-    assert step["scatter"] == ["filename"] and step["in"]["filename"] == "names"
-
-
-@pytest.mark.fast
-def test_a_declared_workflow_input_no_scatter_can_fit_its_port_is_refused() -> None:
-    """A `string` input cannot feed a `File` port, scattered or not: refused where it is bound."""
-    append = Step(clt_path=_adapter("append"))
-    workflow = Workflow([append], "wrong_input")
-    workflow.inputs.text.as_type("string")
-
-    with pytest.raises(InvalidLinkError, match="append.file has incompatible types"):
-        append.inputs.file = workflow.inputs.text
-
-
-@pytest.mark.fast
-def test_compiled_workflow_writes_cwl_and_job_inputs(tmp_path: Path) -> None:
-    """Writing produces two files, and their text matches the in-memory document."""
-    compiled = CompiledWorkflow(
-        "wf",
-        {"class": "Workflow", "inputs": {}, "outputs": {}, "steps": []},
-        {"message": "hello"},
-    )
-
-    cwl_path = compiled.write_cwl(tmp_path)
-    inputs_path = compiled.write_job_inputs(tmp_path)
-
-    assert cwl_path == tmp_path / "wf.cwl"
-    assert inputs_path == tmp_path / "wf_inputs.yml"
-    assert yaml.safe_load(compiled.to_cwl_yaml()) == compiled.cwl_workflow
-    assert yaml.safe_load(compiled.to_job_inputs_yaml()) == compiled.cwl_job_inputs
-    assert yaml.safe_load(cwl_path.read_text(encoding="utf-8")) == compiled.cwl_workflow
-    assert yaml.safe_load(inputs_path.read_text(encoding="utf-8")) == compiled.cwl_job_inputs
-
-
-@pytest.mark.fast
-def test_compiled_workflow_writes_both_files_with_one_call(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """`write()` puts the workflow and its job inputs in one directory, the current one by default."""
+def test_compiled_workflow_writes_files_that_read_back_as_its_documents(monkeypatch: pytest.MonkeyPatch,
+                                                                        tmp_path: Path) -> None:
+    """Each writer writes the in-memory document; `write()` both to one directory, the current one by default."""
     compiled = CompiledWorkflow("wf", {"class": "Workflow", "inputs": {}, "outputs": {}, "steps": []},
                                 {"message": "hello"})
     monkeypatch.chdir(tmp_path)
-
+    assert (compiled.write_cwl(tmp_path), compiled.write_job_inputs(tmp_path)) == (tmp_path / "wf.cwl",
+                                                                                   tmp_path / "wf_inputs.yml")
+    assert (yaml.safe_load(compiled.to_cwl_yaml()), yaml.safe_load(compiled.to_job_inputs_yaml())) == (
+        compiled.cwl_workflow, compiled.cwl_job_inputs)
     for path, directory in ((None, Path(".")), (tmp_path / "out", tmp_path / "out")):
         assert compiled.write(path) == directory
         assert yaml.safe_load((directory / "wf.cwl").read_text(encoding="utf-8")) == compiled.cwl_workflow
@@ -717,13 +623,16 @@ def test_workflow_write_wic_exports_source_workflow_with_inferred_edges(tmp_path
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("removed", ["yaml", "to_wic_yaml"])
-def test_removed_wic_accessors_point_at_write_wic(removed: str) -> None:
-    """The removed `.wic` accessors fail loudly instead of resolving to a workflow input."""
-    workflow = Workflow([], "wf")
-
-    with pytest.raises(AttributeError, match=r"write_wic"):
-        getattr(workflow, removed)
+@pytest.mark.parametrize("removed, error, fix", [
+    (lambda: Workflow([], "wf").yaml, AttributeError, "write_wic"),
+    (lambda: Workflow([], "wf").to_wic_yaml, AttributeError, "write_wic"),
+    (lambda: _emit_text_tool().to_step(config={}),  # type: ignore[call-arg]  # pylint: disable=unexpected-keyword-arg
+     TypeError, "config"),
+], ids=["yaml", "to_wic_yaml", "config"])
+def test_a_removed_api_fails_loudly(removed: Callable[[], object], error: type[Exception], fix: str) -> None:
+    """The removed `.wic` accessors, and `to_step`'s `config=`, fail loudly instead of meaning something else."""
+    with pytest.raises(error, match=fix):
+        removed()
 
 
 @pytest.mark.fast
@@ -784,27 +693,6 @@ def test_a_step_inputs_file_binds_each_value_as_written(tmp_path: Path) -> None:
     assert file.value == {"class": "File", "location": "/cluster/project/in.txt"}
 
 
-@pytest.mark.fast
-def test_scatter_rejects_unbound_foreign_or_scalar_inputs() -> None:
-    """Scatter needs a bound, array-valued port belonging to the step itself.
-
-    Three refusals, because each would otherwise produce a document that
-    compiles and then fails at runtime for a different reason."""
-    echo = Step(clt_path=_adapter("echo"))
-    other_echo = Step(clt_path=_adapter("echo"))
-
-    with pytest.raises(ValueError, match="bound before scattering"):
-        echo.scatter = [echo.inputs.message]
-
-    echo.inputs.message = "hello"
-    with pytest.raises(ValueError, match="array-valued data"):
-        echo.scatter = [echo.inputs.message]
-
-    other_echo.inputs.message = ["a", "b"]
-    with pytest.raises(ValueError, match="belong to the same step"):
-        echo.scatter = [other_echo.inputs.message]
-
-
 class _Ended:  # pylint: disable=too-few-public-methods
     """A started run that has completed: for a test of what `run()` does around the run, not of the run."""
 
@@ -825,9 +713,15 @@ def _api_run_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, run_args: 
 
 
 @pytest.mark.fast
-def test_workflow_run_is_quiet_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The Python API has always run `cwltool` with `--quiet`, and still does unless told otherwise."""
-    assert "--quiet" in _api_run_command(monkeypatch, tmp_path, {})
+@pytest.mark.parametrize("run_args, expected", [({}, True), *(({"quiet": quiet}, quiet in ("yes", "true", True))
+                                                for quiet in ("yes", "true", True, "no", "false", False))])
+def test_workflow_run_is_quiet_unless_told_otherwise(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                     run_args: dict[str, Any], expected: bool) -> None:
+    """The Python API has always run `cwltool` with `--quiet`; `run_args_dict={'quiet': ...}` switches it, and its
+    value never reaches `cwltool` as a positional."""
+    cmd = _api_run_command(monkeypatch, tmp_path, run_args)
+    assert ("--quiet" in cmd) is expected
+    assert not {"yes", "no", "true", "false", "True", "False"} & set(cmd)
 
 
 @pytest.mark.fast
@@ -837,23 +731,6 @@ def test_workflow_run_generate_run_script_run_arg(
 ) -> None:
     """Any spelling of yes for `generate_run_script` writes `run.sh`; it does not run the workflow."""
     assert _api_run_command(monkeypatch, tmp_path, {"generate_run_script": value})
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(
-    ("quiet", "expected"),
-    [("yes", True), ("true", True), (True, True), ("no", False), ("false", False), (False, False)],
-)
-def test_workflow_run_quiet_run_arg(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    quiet: str | bool,
-    expected: bool,
-) -> None:
-    """`run_args_dict={'quiet': ...}` switches `--quiet` and its value never reaches `cwltool` as a positional."""
-    cmd = _api_run_command(monkeypatch, tmp_path, {"quiet": quiet})
-    assert ("--quiet" in cmd) is expected
-    assert not {"yes", "no", "true", "false", "True", "False"} & set(cmd)
 
 
 @pytest.mark.fast
@@ -1101,29 +978,6 @@ def test_validate_generated_python_workflows() -> None:
 
 
 @pytest.mark.fast
-def test_every_api_failure_is_catchable_as_one_type() -> None:
-    """A caller writes one `except` and reads `.diagnostics`, whatever failed.
-
-    The Python API used to raise two unrelated vocabularies: four bare
-    `Exception` subclasses of its own, and `SophiosError` escaping from the
-    compiler underneath. Neither was importable from anywhere a user of
-    `Workflow.compile()` would look, which is what issue 111 is about -- the
-    CLI has caught and reported this since it existed.
-    """
-    external = Step(clt_path=_adapter("touch"))
-    external.inputs.filename = "empty.txt"
-    append = Step(clt_path=_adapter("append"))
-    append.inputs.file = external.outputs.file
-    append.inputs.str = "Hello"
-
-    with pytest.raises(SophiosError) as caught:
-        Workflow([append], "wf").compile()
-
-    assert isinstance(caught.value, InvalidStepError)
-    assert [d.code for d in caught.value.diagnostics] == [SophiosErrorCode.INVALID_STEP]
-
-
-@pytest.mark.fast
 @pytest.mark.parametrize('error', [
     InvalidInputValueError, InvalidStepError, InvalidLinkError, InvalidCLTError])
 def test_an_api_failure_carries_an_api_code_not_a_language_one(error: type[ApiError]) -> None:
@@ -1166,30 +1020,20 @@ def _failed_run(monkeypatch: pytest.MonkeyPatch, exit_code: int) -> SophiosError
 
 
 @pytest.mark.fast
-def test_run_raises_workflow_run_error_on_a_failed_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`Workflow.run()` reports a failed run, with the runner's exit code, instead of returning."""
-    raised = _failed_run(monkeypatch, 7)
-    assert raised.diagnostics[0].code is SophiosErrorCode.WORKFLOW_RUN_FAILED
-    assert "'failing'" in str(raised)
-    from sophios.api.python.workflow import WorkflowRunError
-    assert isinstance(raised, WorkflowRunError)
-    assert raised.exit_code == 7
-
-
-@pytest.mark.fast
 @pytest.mark.parametrize('duplicate', [
+    lambda error: error,
     lambda error: pickle.loads(pickle.dumps(error)),
     copy.copy,
     copy.deepcopy,
-], ids=['pickle', 'copy', 'deepcopy'])
-def test_a_failed_run_error_survives_being_duplicated(monkeypatch: pytest.MonkeyPatch,
-                                                      duplicate: Callable[[SophiosError], SophiosError]) -> None:
-    """So it can come back from a worker process or be re-raised elsewhere with its exit code."""
+], ids=['as-raised', 'pickle', 'copy', 'deepcopy'])
+def test_run_raises_workflow_run_error_on_a_failed_run(monkeypatch: pytest.MonkeyPatch,
+                                                       duplicate: Callable[[SophiosError], SophiosError]) -> None:
+    """`Workflow.run()` reports a failed run, with the runner's exit code, instead of returning; the error survives
+    being duplicated, so it can come back from a worker process or be re-raised elsewhere with its exit code."""
     raised = _failed_run(monkeypatch, 7)
     clone = duplicate(raised)
-    assert str(clone) == str(raised)
-    assert list(clone.diagnostics) == list(raised.diagnostics)
-    from sophios.api.python.workflow import WorkflowRunError
+    assert (str(clone), list(clone.diagnostics)) == (str(raised), list(raised.diagnostics))
+    assert clone.diagnostics[0].code is SophiosErrorCode.WORKFLOW_RUN_FAILED and "'failing'" in str(clone)
     assert isinstance(clone, WorkflowRunError)
     assert (clone.exit_code, clone.reason) == (7, 'the runner exited with status 7')
 
@@ -1280,18 +1124,6 @@ def test_a_step_input_default_path_is_resolved_against_the_working_directory(
     assert step['in']['f']['default'] == {'class': 'File', 'location': (tmp_path / 'data.txt').as_uri()}
 
 
-@pytest.mark.fast
-def test_a_relative_path_bound_in_python_is_read_from_the_working_directory(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The job names it absolute: the runner reads the job from the basepath, not from here."""
-    monkeypatch.chdir(tmp_path)
-    Path('data.txt').write_text('hello\n', encoding='utf-8')
-    cat = _cat()
-    cat.inputs.f = 'data.txt'
-    job = _job_written_by_run(monkeypatch, Workflow([cat], 'wf'))
-    assert job['cat~f'] == {'class': 'File', 'location': (Path.cwd() / 'data.txt').as_uri()}
-
-
 def _missing_paths(monkeypatch: pytest.MonkeyPatch, workflow: Workflow) -> list[str]:
     """The `wic016` lines `workflow.run()` raises, which it must raise before the runner starts."""
     ran: list[bool] = []
@@ -1308,87 +1140,57 @@ def _missing_paths(monkeypatch: pytest.MonkeyPatch, workflow: Workflow) -> list[
 
 
 @pytest.mark.fast
-def test_a_missing_path_bound_in_python_is_named_before_the_run(monkeypatch: pytest.MonkeyPatch,
-                                                                tmp_path: Path) -> None:
-    """The pre-flight checks the values bound in Python, as it checks an inputs file's."""
+@pytest.mark.parametrize("tool, bound, files, step_inputs_file, inputs_file, fragments", [
+    ("cat", {"f": "{cwd}/gone.txt"}, {}, None, None, ["names '{cwd}/gone.txt', which does not exist"]),
+    ("cat", {"f": "gone.txt"}, {}, None, None,
+     ["whose relative paths are read from {cwd}) names 'gone.txt'", "does not exist at {cwd}/gone.txt"]),
+    ("cat", {}, {"cat.yml": "f: {class: File, location: gone.txt}"}, "cat.yml", None, ["names 'gone.txt'"]),
+    ("cat", {"f": "gone.txt"}, {"data.txt": "hello", "in.yml": "cat~f: {class: File, location: data.txt}"}, None,
+     "in.yml", []),
+    ("write_dir", {"outDir": Path("result.outDir")}, {}, None, None, []),
+    ("write_dir", {}, {"in.yml": "write_dir~outDir: {class: Directory, location: result.outDir}"}, None, "in.yml", []),
+], ids=["absolute", "relative", "in-a-step-inputs-file", "replaced-by-an-inputs-file", "output-directory",
+        "output-directory-in-an-inputs-file"])
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def test_the_pre_flight_checks_exactly_the_paths_the_runner_reads(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tool: str, bound: dict[str, Any], files: dict[str, str],
+        step_inputs_file: str | None, inputs_file: str | None, fragments: list[str]) -> None:
+    """A path bound in Python or in a step inputs file is checked before the run starts, as an inputs file's is, from
+    the working directory the run reads it from. A value an inputs file replaces is not the one the runner gets, and
+    an output directory names one the step creates: neither is looked for."""
     monkeypatch.chdir(tmp_path)
-    cat = _cat()
-    cat.inputs.f = str(tmp_path / 'gone.txt')
-    line, = _missing_paths(monkeypatch, Workflow([cat], 'wf'))
-    assert line.startswith("error [wic016] input 'cat~f' (from the workflow, ")
-    assert f"names {str(tmp_path / 'gone.txt')!r}, which does not exist" in line
+    for name, text in files.items():
+        Path(name).write_text(text, encoding="utf-8")
+    _cat_tool(tmp_path)
+    _output_directory_tool(tmp_path / "write_dir.cwl")
+    step = _bind(Step(clt_path=tmp_path / f"{tool}.cwl", step_inputs_file=step_inputs_file),
+                 **{port: value.format(cwd=Path.cwd()) if isinstance(value, str) else value
+                    for port, value in bound.items()})
+    if fragments:
+        line, = _missing_paths(monkeypatch, Workflow([step], "wf"))
+        assert line.startswith("error [wic016] input 'cat~f' (from the workflow, ")
+        assert all(fragment.format(cwd=Path.cwd()) in line for fragment in fragments), line
+        return
+    start = Mock(return_value=_Ended())
+    monkeypatch.setattr(python_runtime.run_local, "start", start)
+    Workflow([step], "wf").run(run_args_dict={"inputs_file": inputs_file} if inputs_file else {})
+    start.assert_called_once()
 
 
 @pytest.mark.fast
-def test_a_missing_relative_path_bound_in_python_says_where_it_was_looked_for(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """It was looked for in the working directory, where the run reads it from."""
+@pytest.mark.parametrize("bound, step_inputs_file", [({"f": "data.txt"}, None), ({}, "inputs/cat.yml")])
+def test_a_relative_path_is_read_from_the_working_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                            bound: dict[str, str],
+                                                            step_inputs_file: str | None) -> None:
+    """The job names it absolute, as the runner reads the job from the basepath, not from here; one in a step inputs
+    file too, not from the file's directory: the file binds values as written."""
     monkeypatch.chdir(tmp_path)
-    cat = _cat()
-    cat.inputs.f = 'gone.txt'
-    line, = _missing_paths(monkeypatch, Workflow([cat], 'wf'))
-    assert f"whose relative paths are read from {Path.cwd()}) names 'gone.txt'" in line
-    assert f"does not exist at {Path.cwd() / 'gone.txt'}" in line
-
-
-@pytest.mark.fast
-def test_an_inputs_file_value_is_checked_instead_of_the_one_bound_in_python(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The inputs file's value is the one the runner gets, so the one it replaces is not checked."""
-    monkeypatch.chdir(tmp_path)
-    Path('data.txt').write_text('hello\n', encoding='utf-8')
-    Path('in.yml').write_text('cat~f: {class: File, location: data.txt}\n', encoding='utf-8')
-    cat = _cat()
-    cat.inputs.f = 'gone.txt'
-    monkeypatch.setattr(python_runtime.run_local, 'start', lambda _request: _Ended())
-    Workflow([cat], 'wf').run(run_args_dict={'inputs_file': 'in.yml'})
-
-
-@pytest.mark.fast
-def test_an_output_target_directory_bound_in_python_is_not_looked_for(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The runner gets it as the name of a directory the step creates, which does not exist yet."""
-    monkeypatch.chdir(tmp_path)
-    step = Step(clt_path=_output_directory_tool(tmp_path / 'write_dir.cwl'))
-    step.inputs.outDir = Path('result.outDir')
-    monkeypatch.setattr(python_runtime.run_local, 'start', lambda _request: _Ended())
-    Workflow([step], 'wf').run()
-
-
-@pytest.mark.fast
-def test_an_output_target_directory_in_the_inputs_file_is_not_looked_for(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Written as CWL writes a Directory, it still names the directory the step creates."""
-    monkeypatch.chdir(tmp_path)
-    step = Step(clt_path=_output_directory_tool(tmp_path / 'write_dir.cwl'))
-    Path('in.yml').write_text('write_dir~outDir: {class: Directory, location: result.outDir}\n',
-                              encoding='utf-8')
-    monkeypatch.setattr(python_runtime.run_local, 'start', lambda _request: _Ended())
-    Workflow([step], 'wf').run(run_args_dict={'inputs_file': 'in.yml'})
-
-
-@pytest.mark.fast
-def test_a_missing_path_in_a_step_inputs_file_is_named_before_the_run(monkeypatch: pytest.MonkeyPatch,
-                                                                      tmp_path: Path) -> None:
-    """The step is built; the pre-flight of the local run names the path."""
-    monkeypatch.chdir(tmp_path)
-    Path('cat.yml').write_text('f: {class: File, location: gone.txt}\n', encoding='utf-8')
-    cat = Step(clt_path=_cat_tool(tmp_path), step_inputs_file='cat.yml')
-    line, = _missing_paths(monkeypatch, Workflow([cat], 'wf'))
-    assert "input 'cat~f' (from the workflow, " in line and "names 'gone.txt'" in line
-
-
-@pytest.mark.fast
-def test_a_relative_path_in_a_step_inputs_file_is_read_from_the_working_directory(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """As a path bound in Python is, not from the file's directory: the file binds values as written."""
-    monkeypatch.chdir(tmp_path)
-    Path('data.txt').write_text('hello\n', encoding='utf-8')
-    Path('inputs').mkdir()
-    Path('inputs/cat.yml').write_text('f: {class: File, location: data.txt}\n', encoding='utf-8')
-    cat = Step(clt_path=_cat_tool(tmp_path), step_inputs_file='inputs/cat.yml')
-    job = _job_written_by_run(monkeypatch, Workflow([cat], 'wf'))
-    assert job['cat~f'] == {'class': 'File', 'location': (Path.cwd() / 'data.txt').as_uri()}
+    Path("data.txt").write_text("hello\n", encoding="utf-8")
+    Path("inputs").mkdir()
+    Path("inputs/cat.yml").write_text("f: {class: File, location: data.txt}\n", encoding="utf-8")
+    cat = _bind(Step(clt_path=_cat_tool(tmp_path), step_inputs_file=step_inputs_file), **bound)
+    job = _job_written_by_run(monkeypatch, Workflow([cat], "wf"))
+    assert job["cat~f"] == {"class": "File", "location": (Path.cwd() / "data.txt").as_uri()}
 
 
 @pytest.mark.fast
@@ -1410,7 +1212,6 @@ def test_a_real_failed_step_is_named_with_its_status(monkeypatch: pytest.MonkeyP
 
     capfd, not capsys: cwltool hands the real stderr's file descriptor to the step.
     """
-    from sophios.api.python.workflow import WorkflowRunError  # pylint: disable=import-outside-toplevel
     tool = tmp_path / "exits_3.cwl"
     tool.write_text("cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: [sh, -c, 'exit 3']\n"
                     "inputs:\n  message: string\noutputs: {}\n", encoding="utf-8")
@@ -1470,19 +1271,6 @@ def test_write_wic_rejects_a_different_tool_under_the_same_stem(tmp_path: Path) 
 
 
 @pytest.mark.fast
-def test_workflow_outputs_are_addressed_by_authored_step(tmp_path: Path) -> None:
-    """A workflow output names the step that produces it as the user named it."""
-    touch = Step(clt_path=_adapter('touch'))
-    touch.inputs.filename = 'empty.txt'
-    append = Step(clt_path=_adapter('append'), step_name='add')
-    append.inputs.file = touch.outputs.file
-    append.inputs.str = 'Hello'
-    wf = Workflow([touch, append], 'wf')
-    wf.outputs.file = append.outputs.file
-    assert _written(wf, tmp_path)['outputs']['file']['outputSource'] == 'add/file'
-
-
-@pytest.mark.fast
 def test_two_tools_sharing_a_file_stem_are_rejected(tmp_path: Path) -> None:
     """A document names a tool by its file stem, so two different tools under one stem are ambiguous."""
     def tool(command: str) -> dict[str, Any]:
@@ -1509,73 +1297,34 @@ def _inner_and_sibling() -> tuple[Workflow, Step]:
     return inner, cat
 
 
-@pytest.mark.fast
-def test_a_sibling_step_consumes_a_subworkflows_output() -> None:
-    """A nested workflow's output feeds a later sibling step, as a step's output does."""
-    inner, cat = _inner_and_sibling()
-    compiled = Workflow([inner, cat], 'outer').compile()
-    cat_step = compiled.cwl_workflow['steps'][1]
-    assert cat_step['in']['file'] == {'source': 'inner/made'}
+def _own(step: Step, port: str) -> tuple[Step, list[Any]]:
+    """`step` and its input `port`, to scatter over."""
+    return step, [getattr(step.inputs, port)]
 
 
 @pytest.mark.fast
-def test_a_parent_re_exports_a_subworkflows_output() -> None:
-    """A parent workflow output may be backed by a nested workflow's output."""
-    inner, cat = _inner_and_sibling()
-    outer = Workflow([inner, cat], 'outer')
-    outer.outputs.made = inner.outputs.made
-    compiled = outer.compile()
-    assert compiled.cwl_workflow['outputs']['made']['outputSource'] == 'inner/made'
-
-
-@pytest.mark.fast
-def test_a_workflow_cannot_consume_its_own_output() -> None:
-    """One of a workflow's own steps reading that workflow's output is a cycle, refused by name."""
-    touch = Step(clt_path=_adapter('touch'))
-    touch.inputs.filename = 'empty.txt'
-    cat = Step(clt_path=_adapter('cat'))
-    wf = Workflow([touch, cat], 'loop')
-    wf.outputs.made = touch.outputs.file
-    cat.inputs.file = wf.outputs.made
-    with pytest.raises(InvalidLinkError, match="own output"):
-        wf.compile()
-
-
-@pytest.mark.fast
-def test_the_written_bundle_of_a_nested_workflow_compiles_to_the_same_cwl(tmp_path: Path) -> None:
-    """The bundle `write_wic` writes for a nested workflow compiles to what the API compiles."""
-    inner, cat = _inner_and_sibling()
-    outer = Workflow([inner, cat], 'outer')
-    direct = outer.compile().cwl_workflow
-    root = outer.write_wic(tmp_path)
-    assert parse(root.read_text(encoding='utf-8'), root.name).ok
-    bundle = bundle_from_disk(root, {'global': {path.stem: path for path in tmp_path.glob('*.wic')}},
-                              sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}}))
-    result = sophios.compiler.compile_source(bundle, default_compilation_settings(),
-                                             testing=True)
-    assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct
-
-
-def _chain() -> tuple[Step, Step]:
-    """`echo` over two messages feeding `cat`, bound before `echo` is scattered."""
-    echo = Step(clt_path=_adapter('echo'))
-    echo.inputs.message = ['a', 'b']
-    cat = Step(clt_path=_adapter('cat'))
-    cat.inputs.file = echo.outputs.stdout
-    echo.scatter_on(echo.inputs.message)
-    return echo, cat
-
-
-@pytest.mark.fast
-def test_a_step_scattered_after_binding_lifts_its_consumers_input() -> None:
-    """The DSL compiles a chained scatter; the Python API refused it because the
-    bound type was captured before `scatter_on` ran."""
-    echo, cat = _chain()
-    assert cat.inputs.file.effective_source_type() == {'type': 'array', 'items': 'File'}
-    cat.scatter_on(cat.inputs.file)
-    compiled = Workflow([echo, cat], 'chain').compile()
-    steps = {s['id'].rsplit('__', 1)[-1]: s for s in compiled.cwl_workflow['steps']}
-    assert steps['echo']['scatter'] == ['message'] and steps['cat']['scatter'] == ['file']
+@pytest.mark.parametrize("build, setter, fragment", [
+    (lambda: _own(Step(clt_path=_adapter("echo")), "message"), True, "bound before scattering"),
+    (lambda: _own(_bind(Step(clt_path=_adapter("echo")), message="hello"), "message"), True, "array-valued data"),
+    (lambda: (Step(clt_path=_adapter("echo")),
+              [_bind(Step(clt_path=_adapter("echo")), message=["a", "b"]).inputs.message]),
+     True, "belong to the same step"),
+    *((lambda pick=pick: _own(_bind(_sink("File"), x=StepInput(source=[step.outputs.file for step in _touched()],
+                                                               pick_value=pick)), "x"), False, "array-valued data")
+      for pick in ("first_non_null", "the_only_non_null")),
+    (lambda: _own(_inner_and_sibling()[1], "file"), False, "array-valued data"),
+])
+def test_a_port_that_cannot_be_scattered_is_refused(build: Callable[[], tuple[Step, list[Any]]], setter: bool,
+                                                    fragment: str) -> None:
+    """Scatter needs a bound, array-valued port of the step itself; any other compiles and then fails at runtime.
+    A `pickValue` that picks one source delivers one value, and a nested workflow adds no array layer of its own:
+    over an unscattered step its output stays a `File`."""
+    step, ports = build()
+    with pytest.raises(ValueError, match=fragment):
+        if setter:
+            step.scatter = ports
+        else:
+            step.scatter_on(*ports)
 
 
 @pytest.mark.fast
@@ -1600,15 +1349,6 @@ def test_nested_crossproduct_lifts_one_level_per_scattered_port() -> None:
 
 
 @pytest.mark.fast
-def test_a_subworkflows_output_is_not_lifted() -> None:
-    """A nested workflow adds no array layer of its own: over an unscattered step its output stays `File`."""
-    _inner, cat = _inner_and_sibling()
-    assert cat.inputs.file.effective_source_type() == 'File'
-    with pytest.raises(ValueError, match="array-valued data"):
-        cat.scatter_on(cat.inputs.file)
-
-
-@pytest.mark.fast
 def test_binding_a_path_reads_nothing_from_the_disk(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A path is bound as written; it may name a place on another machine, such as a cluster."""
     monkeypatch.chdir(tmp_path)
@@ -1621,247 +1361,11 @@ def test_binding_a_path_reads_nothing_from_the_disk(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.fast
-def test_a_scatter_inside_a_subworkflow_lifts_its_output(tmp_path: Path) -> None:
-    """A subworkflow output typed at bind time stayed `File` once its step was scattered,
-    so a sibling could neither scatter over it nor consume it unscattered."""
-    echo = Step(clt_path=_adapter('echo'))
-    echo.inputs.message = ['a', 'b']
-    inner = Workflow([echo], 'inner')
-    inner.outputs.out = echo.outputs.stdout
-    cat = Step(clt_path=_adapter('cat'))
-    file = cat.inputs.file
-    cat.inputs.file = inner.outputs.out
-    echo.scatter_on(echo.inputs.message)
-    assert file.effective_source_type() == {'type': 'array', 'items': 'File'}
-    assert _written(inner, tmp_path)['outputs']['out']['type'] == {'type': 'array', 'items': 'File'}
-    cat.scatter_on(file)
-    compiled = Workflow([inner, cat], 'outer').compile()
-    steps = {s['id'].rsplit('__', 1)[-1]: s for s in compiled.cwl_workflow['steps']}
-    assert steps['cat']['scatter'] == ['file']
-
-
-@pytest.mark.fast
-def test_the_chained_scatter_agrees_with_the_dsl(tmp_path: Path) -> None:
-    """The written bundle of a chained scatter compiles to what the API compiles."""
-    echo, cat = _chain()
-    cat.scatter_on(cat.inputs.file)
-    wf = Workflow([echo, cat], 'chain')
-    direct = wf.compile().cwl_workflow
-    root = wf.write_wic(tmp_path)
-    assert parse(root.read_text(encoding='utf-8'), root.name).ok
-    bundle = bundle_from_disk(root, {'global': {path.stem: path for path in tmp_path.glob('*.wic')}},
-                              sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}}))
-    result = sophios.compiler.compile_source(bundle, default_compilation_settings(),
-                                             testing=True)
-    assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct
-
-
-def _merge(declared: str = 'File[]') -> Workflow:
-    """`a` and `b` each touch a file; `sink` takes both, merged into one list, as `declared`."""
-    a = Step(clt_path=_adapter('touch'), step_name='a')
-    a.inputs.filename = 'a.txt'
-    b = Step(clt_path=_adapter('touch'), step_name='b')
-    b.inputs.filename = 'b.txt'
-    sink = Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',
-                                   'inputs': {'files': {'type': declared}}, 'outputs': {}}, process_name='sink')
-    sink.inputs.files = StepInput(source=[a.outputs.file, b.outputs.file], link_merge='merge_flattened')
-    return Workflow([a, b, sink], 'merge')
-
-
-@pytest.mark.fast
-def test_step_input_merges_two_sources() -> None:
-    """Several sources and `linkMerge` on one step input, written from Python as objects."""
-    compiled = _merge().compile()
-    step = compiled.cwl_workflow['steps'][2]
-    assert step['in']['files'] == {'source': ['a/file', 'b/file'],
-                                   'linkMerge': 'merge_flattened'}
-    assert 'MultipleInputFeatureRequirement' in compiled.cwl_workflow['requirements']
-
-
-@pytest.mark.fast
-def test_step_input_binds_an_undeclared_input_for_when() -> None:
-    """A record may bind an input the tool does not declare, which `when:` then reads."""
-    echo = Step(clt_path=_adapter('echo'))
-    echo.inputs.message = 'hi'
-    wf = Workflow([echo], 'guarded')
-    echo.inputs.go = StepInput(source=wf.inputs.go)
-    echo.when = '$(inputs.go)'
-    compiled = wf.compile()
-    assert compiled.cwl_workflow['steps'][0]['in']['go'] == {'source': 'go'}
-
-
-@pytest.mark.fast
-def test_only_a_step_input_binds_an_undeclared_input() -> None:
-    """A plain value on a name the tool does not declare is still an unknown input."""
-    echo = Step(clt_path=_adapter('echo'))
-    with pytest.raises(AttributeError, match="no input named 'go'"):
-        echo.inputs.go = True
-    echo.inputs.go = StepInput(default=True)
-    with pytest.raises(AttributeError, match="no input named 'go'"):
-        echo.inputs.go = True
-
-
-@pytest.mark.fast
-def test_step_input_fields_are_written_in_cwl_spelling() -> None:
-    """Every field but `source` is copied to the emitted step input as CWL spells it."""
-    echo = Step(clt_path=_adapter('echo'))
-    echo.inputs.message = StepInput(default=3, value_from='$(String(self + 1))', label='n')
-    compiled = Workflow([echo], 'fields').compile()
-    assert compiled.cwl_workflow['steps'][0]['in']['message'] == {
-        'default': 3, 'valueFrom': '$(String(self + 1))', 'label': 'n'}
-
-
-@pytest.mark.fast
 @pytest.mark.parametrize('source', ['go', ['go']])
 def test_a_string_is_never_a_step_input_source(source: Any) -> None:
     """A bare string is never a reference: sources are port objects."""
     with pytest.raises(InvalidInputValueError, match='str'):
         StepInput(source=source)
-
-
-@pytest.mark.fast
-def test_a_list_of_ports_is_never_a_literal() -> None:
-    """A list of ports bound as a plain value was taken for a literal; it names `StepInput` instead."""
-    a = Step(clt_path=_adapter('touch'))
-    a.inputs.filename = 'a.txt'
-    cat = Step(clt_path=_adapter('cat'))
-    with pytest.raises(InvalidInputValueError, match='StepInput'):
-        cat.inputs.file = [a.outputs.file]
-    wf = Workflow([a, cat], 'listed')
-    with pytest.raises(InvalidInputValueError, match='StepInput'):
-        cat.inputs.file = (wf.inputs.f,)
-
-
-@pytest.mark.fast
-def test_a_merged_step_input_is_scatterable() -> None:
-    """Merged sources arrive as one list, so an input of their element type can be scattered over it."""
-    wf = _merge('File')
-    sink = cast(Step, wf.steps[2])
-    sink.scatter_on(sink.inputs.files)
-    assert wf.compile().cwl_workflow['steps'][2]['scatter'] == ['files']
-
-
-@pytest.mark.fast
-def test_a_step_input_is_checked_like_a_link() -> None:
-    """A record's source must come from an earlier step, as a plain link's must."""
-    a = Step(clt_path=_adapter('touch'))
-    a.inputs.filename = 'a.txt'
-    cat = Step(clt_path=_adapter('cat'))
-    cat.inputs.file = StepInput(source=[a.outputs.file], pick_value='first_non_null')
-    with pytest.raises(InvalidStepError, match='earlier in the workflow step list'):
-        Workflow([cat, a], 'backwards').compile()
-
-
-@pytest.mark.fast
-def test_step_input_round_trips_through_write_wic(tmp_path: Path) -> None:
-    """The written bundle carries the record and compiles to what the API compiles."""
-    wf = _merge()
-    direct = wf.compile().cwl_workflow
-    root = wf.write_wic(tmp_path)
-    parsed = parse(root.read_text(encoding='utf-8'), root.name)
-    assert parsed.document is not None
-    assert isinstance(parsed.document.steps[2].input('files'), CwlRecord)
-    bundle = bundle_from_disk(root, {'global': {path.stem: path for path in tmp_path.glob('*.wic')}},
-                              sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}}))
-    result = sophios.compiler.compile_source(bundle, default_compilation_settings(),
-                                             testing=True)
-    assert normalize_artifact_cwl(inline_artifact_runs(result.artifact)) == direct
-
-
-def _picked(pick_value: str) -> tuple[Workflow, Step]:
-    """`a` and `b` each touch a file; `sink`, which takes one `File`, gets them through `pick_value`."""
-    a = Step(clt_path=_adapter('touch'), step_name='a')
-    a.inputs.filename = 'a.txt'
-    b = Step(clt_path=_adapter('touch'), step_name='b')
-    b.inputs.filename = 'b.txt'
-    sink = Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',
-                                   'inputs': {'files': {'type': 'File'}}, 'outputs': {}}, process_name='sink')
-    sink.inputs.files = StepInput(source=[a.outputs.file, b.outputs.file], pick_value=pick_value)
-    return Workflow([a, b, sink], 'pick'), sink
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('pick_value', ['first_non_null', 'the_only_non_null'])
-def test_a_picked_step_input_delivers_one_value(pick_value: str) -> None:
-    """A `pickValue` that picks one of the sources delivers that one value, not a list to scatter."""
-    _, sink = _picked(pick_value)
-    with pytest.raises(ValueError, match='array-valued'):
-        sink.scatter_on(sink.inputs.files)
-
-
-@pytest.mark.fast
-def test_all_non_null_still_delivers_a_list() -> None:
-    """`all_non_null` keeps the list the sources make, so its input can be scattered."""
-    wf, sink = _picked('all_non_null')
-    sink.scatter_on(sink.inputs.files)
-    assert wf.compile().cwl_workflow['steps'][2]['scatter'] == ['files']
-
-
-@pytest.mark.fast
-def test_a_step_input_and_a_plain_link_on_similarly_named_steps_compile() -> None:
-    """A record's edges on step `sink` never take the name of a plain link to step `sink1`."""
-    wf = _merge()
-    c = Step(clt_path=_adapter('touch'), step_name='c')
-    c.inputs.filename = 'c.txt'
-    sink1 = Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',
-                                    'inputs': {'files': {'type': 'File'}}, 'outputs': {}}, process_name='sink1')
-    sink1.inputs.files = c.outputs.file
-    wf = Workflow([*wf.steps, c, sink1], 'similar')
-    steps = wf.compile().cwl_workflow['steps']
-    assert steps[4]['in']['files'] == {'source': 'c/file'}
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('nest', [lambda port: [[port]], lambda port: {'x': port}, lambda port: [{'x': [port]}]])
-def test_a_port_nested_in_a_literal_is_never_a_literal(nest: Any) -> None:
-    """A port anywhere inside a list or mapping is refused, not passed through as a literal."""
-    a = Step(clt_path=_adapter('touch'))
-    a.inputs.filename = 'a.txt'
-    cat = Step(clt_path=_adapter('cat'))
-    with pytest.raises(InvalidInputValueError, match='StepInput'):
-        cat.inputs.file = nest(a.outputs.file)
-
-
-@pytest.mark.fast
-def test_a_step_input_nested_in_a_literal_is_never_a_literal() -> None:
-    """A `StepInput` inside a list is refused at bind time, naming `StepInput`, not left to the compiler."""
-    a = Step(clt_path=_adapter('touch'))
-    a.inputs.filename = 'a.txt'
-    cat = Step(clt_path=_adapter('cat'))
-    with pytest.raises(InvalidInputValueError, match='a StepInput is never a literal'):
-        cat.inputs.file = [StepInput(source=a.outputs.file)]
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('declared, record', [
-    ('int', dict(link_merge='merge_flattened')),
-    ('int', dict(pick_value='first_non_null')),
-])
-def test_a_multi_source_step_input_is_type_checked(declared: str, record: dict[str, Any]) -> None:
-    """Two `File` outputs merged into an input of an incompatible type fail at bind time."""
-    a = Step(clt_path=_adapter('touch'), step_name='a')
-    a.inputs.filename = 'a.txt'
-    b = Step(clt_path=_adapter('touch'), step_name='b')
-    b.inputs.filename = 'b.txt'
-    sink = Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',
-                                   'inputs': {'x': {'type': declared}}, 'outputs': {}}, process_name='sink')
-    with pytest.raises(InvalidLinkError, match='incompatible types'):
-        sink.inputs.x = StepInput(source=[a.outputs.file, b.outputs.file], **record)
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('declared', ['File', 'int[]'])
-def test_a_merged_step_input_the_bind_cannot_judge_is_wic023_at_compile(declared: str) -> None:
-    """A merge into an unscattered `File`, or into an `int[]` a CWL document declares, is the compiler's to refuse."""
-    a = Step(clt_path=_adapter('touch'), step_name='a')
-    a.inputs.filename = 'a.txt'
-    b = Step(clt_path=_adapter('touch'), step_name='b')
-    b.inputs.filename = 'b.txt'
-    sink = Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',
-                                   'inputs': {'x': {'type': declared}}, 'outputs': {}}, process_name='sink')
-    sink.inputs.x = StepInput(source=[a.outputs.file, b.outputs.file], link_merge='merge_flattened')
-    with pytest.raises(SophiosError, match='wic023'):
-        Workflow([a, b, sink], 'w').compile()
 
 
 def _guard_and_message(record_first: bool) -> dict[str, Any]:
@@ -1886,36 +1390,58 @@ def test_a_record_on_an_undeclared_input_does_not_type_the_workflow_input() -> N
     assert _guard_and_message(True)['go']['type'] == _guard_and_message(False)['go']['type'] == 'string'
 
 
+#: Statements of a user's script, `# here` on the line its diagnostic, or the step it makes, must name.
+_SPANNED: Final = {
+    'literal': ('scale = Step.from_cwl_document(SCALE, process_name="scale")',
+                'scale.inputs.n = "not an int"  # here', 'workflow = Workflow([scale], "wf")'),
+    'bind': ('touch = Step(clt_path=TOUCH)', 'cat = Step(clt_path=CAT)',
+             'cat.inputs.file = [touch.outputs.file]  # here'),
+    'order': ('touch = Step(clt_path=TOUCH)', 'cat = Step(clt_path=CAT)  # here',
+              'cat.inputs.file = touch.outputs.file', 'workflow = Workflow([cat, touch], "backwards")'),
+    'made': ('step = Step(clt_path=TOUCH)  # here',),
+}
+
+
+def _script(kind: str, depth: int, padding: list[str]) -> str:
+    lines = [*_SPANNED[kind], 'made.update(locals())']
+    for _ in range(depth):
+        lines = ['def build():', *(f'    {line}' for line in lines), 'build()']
+    return '\n'.join([*padding, *lines]) + '\n'
+
+
 @pytest.mark.fast
-def test_a_workflow_input_only_a_transforming_record_reads_is_any() -> None:
-    """A workflow input read only through a `valueFrom` has no type to borrow, so it is `Any`."""
-    echo = Step(clt_path=_adapter('echo'))
-    wf = Workflow([echo], 'transformed')
-    echo.inputs.message = StepInput(source=wf.inputs.n, value_from='$(String(self))')
-    assert wf.compile().cwl_workflow['inputs']['n']['type'] == 'Any'
-
-
-def _line_above() -> int:
-    """The line above the caller's current line: the statement a test just ran."""
-    frame = sys._getframe(1)  # pylint: disable=protected-access
-    return frame.f_lineno - 1
-
-
-@pytest.mark.fast
-def test_a_compile_diagnostic_names_the_python_line_of_the_binding() -> None:
-    """A literal of the wrong type bound in Python is reported at the line that bound it."""
-    scale = Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',
-                                    'inputs': {'n': 'int'}, 'outputs': {}}, process_name='scale')
-    scale.inputs.n = 'not an int'
-    expected_line = _line_above()
-    with pytest.raises(SophiosError) as caught:
-        Workflow([scale], 'wf').compile()
-    diagnostic = caught.value.diagnostics[0]
-    assert diagnostic.code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
-    assert diagnostic.span is not None
-    assert Path(diagnostic.span.file) == Path(__file__).resolve()
-    assert diagnostic.span.start_line == expected_line
-    assert str(diagnostic).startswith(f'{Path(__file__).resolve()}:{expected_line}:1: ')
+@given(st.sampled_from(sorted(_SPANNED)), st.integers(0, 2),
+       st.lists(st.sampled_from(['', '# note', 'pass']), max_size=3),
+       st.sampled_from(['<string>', '<ipython-input-3-abc>', 'build.py', str(Path(__file__).with_name('built.py'))]))
+@example('literal', 1, [], __file__)  # a literal of the wrong type bound in a function is reported where it is bound
+@example('literal', 0, ['import sophios'], 'build.py')  # one bound at a script's top level, at the script's line
+@example('bind', 1, [], __file__)  # an error raised while binding names the bind, not a line inside Sophios
+@example('order', 1, [], __file__)  # a step listed before the step it reads from, where that step was made
+@example('made', 0, [''], '<string>')  # code without a file keeps its pseudo-name, not a path under the cwd
+@budget(20)
+def test_a_diagnostic_names_the_python_line_that_made_its_object(kind: str, depth: int, padding: list[str],
+                                                                 file: str) -> None:
+    """A diagnostic names the line of the user's innermost frame that bound the port or made the step, under the
+    name its code was compiled with: a path resolved, a pseudo-name such as `<string>` kept."""
+    source = _script(kind, depth, padding)
+    line = next(number for number, text in enumerate(source.splitlines(), start=1) if text.endswith('# here'))
+    made: dict[str, Any] = {}
+    names = {'Step': Step, 'Workflow': Workflow, 'TOUCH': _adapter('touch'), 'CAT': _adapter('cat'), 'made': made,
+             'SCALE': {'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true', 'inputs': {'n': 'int'},
+                       'outputs': {}}}
+    named = file if file.startswith('<') else str(Path(file).resolve())
+    if kind == 'made':
+        exec(compile(source, file, 'exec'), names)  # pylint: disable=exec-used
+        span = made['step']._span  # pylint: disable=protected-access
+    else:
+        with pytest.raises({'literal': SophiosError, 'bind': InvalidInputValueError,
+                            'order': InvalidStepError}[kind]) as caught:
+            exec(compile(source, file, 'exec'), names)  # pylint: disable=exec-used
+            made['workflow'].compile()
+        diagnostic = cast(SophiosError, caught.value).diagnostics[0]
+        span = diagnostic.span
+        assert kind != 'literal' or str(diagnostic).startswith(f'{named}:{line}:1: error [wic020]')
+    assert span is not None and (span.file, span.start_line) == (named, line)
 
 
 @pytest.mark.fast
@@ -1939,104 +1465,6 @@ def test_a_cwl_workflow_as_a_step_clt_path_is_refused_with_python_advice(tmp_pat
         f'Workflow on its own with sophios --yaml {say} --allow_raw_cwl')
 
 
-#: A packed document whose main is a tool, beside a process nothing runs.
-_PACKED_TOOL: dict[str, Any] = {
-    'cwlVersion': 'v1.2', '$namespaces': {'edam': 'https://edamontology.org/'},
-    '$graph': [
-        {'id': 'main', 'class': 'CommandLineTool', 'baseCommand': 'echo',
-         'inputs': [{'id': '#main/text', 'type': 'string', 'inputBinding': {'position': 1}}],
-         'outputs': [{'id': '#main/out', 'type': 'stdout', 'format': 'edam:format_1964'}]},
-        {'id': 'other', 'class': 'CommandLineTool', 'baseCommand': 'true', 'inputs': {}, 'outputs': {}},
-    ]}
-
-#: What `cwltool --pack` writes for a single tool: no `$graph`, the tool itself as `#main`.
-_PACKED_SINGLE_TOOL: dict[str, Any] = {
-    'cwlVersion': 'v1.2', '$namespaces': {'edam': 'https://edamontology.org/'},
-    **{**_PACKED_TOOL['$graph'][0], 'id': '#main'}}
-
-_NO_MAIN = ('is a packed CWL document ($graph) with no main process; it holds: say, other. CWL runs a packed '
-            'document through its main, so name the process to run main, or unpack it into a file of its own')
-
-
-def _with_main(main: str) -> dict[str, Any]:
-    """`_PACKED_TOOL` with its main's id spelled `main`."""
-    return {**_PACKED_TOOL, '$graph': [{**_PACKED_TOOL['$graph'][0], 'id': main}, _PACKED_TOOL['$graph'][1]]}
-
-
-def _packed_tool(directory: Path, document: dict[str, Any]) -> Path:
-    """`document` written to `directory` as `packed.cwl`."""
-    path = directory / 'packed.cwl'
-    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding='utf-8')
-    return path
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('document', [_with_main('main'), _with_main('#main'), _PACKED_SINGLE_TOOL],
-                         ids=['main', '#main', 'single-tool'])
-def test_a_packed_tool_as_a_clt_path_is_its_main(tmp_path: Path, document: dict[str, Any]) -> None:
-    """A `Step` whose `clt_path` packs a CommandLineTool as `main` is that tool: main's ports, and main alone as
-    the step's CWL, with the document's `cwlVersion` and `$namespaces`."""
-    step = Step(clt_path=_packed_tool(tmp_path, document))
-    assert ([p.name for p in step.inputs], [p.name for p in step.outputs]) == (['text'], ['out'])
-    assert step.yaml['class'] == 'CommandLineTool' and '$graph' not in step.yaml and 'id' not in step.yaml
-    assert (step.yaml['cwlVersion'], step.yaml['$namespaces']) == ('v1.2', {'edam': 'https://edamontology.org/'})
-    step.inputs.text = 'hi'
-    compiled, = Workflow([step], 'w').compile().cwl_workflow['steps']
-    assert (list(compiled['in']), compiled['out']) == (['text'], ['out'])
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('document', [_PACKED_TOOL, _PACKED_SINGLE_TOOL], ids=['graph', 'single-tool'])
-def test_a_packed_document_as_a_cwl_document_is_its_main(document: dict[str, Any]) -> None:
-    """`Step.from_cwl_document` reads a packed document the same way as a file: through its main."""
-    step = Step.from_cwl_document(document, process_name='packed')
-    assert ([p.name for p in step.inputs], [p.name for p in step.outputs]) == (['text'], ['out'])
-    assert step.yaml['baseCommand'] == 'echo' and '$graph' not in step.yaml
-    step.inputs.text = 'hi'
-    compiled, = Workflow([step], 'w').compile().cwl_workflow['steps']
-    assert compiled['out'] == ['out']
-
-
-@pytest.mark.fast
-def test_a_packed_clt_path_with_no_main_is_refused(tmp_path: Path) -> None:
-    """A `$graph` with no `main` names no process to run: the file and its processes are named, with the fix."""
-    packed = _packed_tool(tmp_path, _with_main('say'))
-    with pytest.raises(SophiosError) as caught:
-        Step(clt_path=packed)
-    diagnostic, = caught.value.diagnostics
-    assert diagnostic.code is SophiosErrorCode.SUBWORKFLOW_INVALID
-    assert diagnostic.message == f'{packed} {_NO_MAIN}'
-
-
-@pytest.mark.fast
-def test_a_packed_cwl_document_with_no_main_is_refused() -> None:
-    """The same refusal for a packed document given to `Step.from_cwl_document`, named by its process name."""
-    document = _with_main('say')
-    with pytest.raises(SophiosError) as caught:
-        Step.from_cwl_document(document, process_name='packed')
-    diagnostic, = caught.value.diagnostics
-    assert diagnostic.code is SophiosErrorCode.SUBWORKFLOW_INVALID
-    assert diagnostic.message == f'packed.cwl {_NO_MAIN}'
-
-
-@pytest.mark.fast
-def test_a_script_diagnostic_names_its_module_level_line(tmp_path: Path) -> None:
-    """A workflow built at a script's top level is reported at the script's own line."""
-    script = tmp_path / 'build.py'
-    script.write_text(
-        'from sophios.api.python.workflow import SophiosError, Step, Workflow\n'
-        "scale = Step.from_cwl_document({'cwlVersion': 'v1.2', 'class': 'CommandLineTool', 'baseCommand': 'true',\n"
-        "                                'inputs': {'n': 'int'}, 'outputs': {}}, process_name='scale')\n"
-        "scale.inputs.n = 'not an int'\n"
-        'try:\n'
-        "    Workflow([scale], 'wf').compile()\n"
-        'except SophiosError as error:\n'
-        '    print(error.diagnostics[0])\n',
-        encoding='utf-8')
-    run = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=True)
-    assert f'{script.resolve()}:4:1: error [wic020]' in run.stdout
-
-
 @pytest.mark.fast
 def test_the_written_wic_carries_no_python_paths(tmp_path: Path) -> None:
     """Spans are internal: the written document never names the script that built it."""
@@ -2044,44 +1472,6 @@ def test_the_written_wic_carries_no_python_paths(tmp_path: Path) -> None:
     echo.inputs.message = 'hi'
     root = Workflow([echo], 'wf').write_wic(tmp_path)
     assert str(Path(__file__).resolve()) not in root.read_text(encoding='utf-8')
-
-
-@pytest.mark.fast
-def test_an_api_error_names_the_python_line_of_the_bind() -> None:
-    """An error raised while binding names the line of the bind, not a line inside Sophios."""
-    touch = Step(clt_path=_adapter('touch'))
-    touch.inputs.filename = 'a.txt'
-    cat = Step(clt_path=_adapter('cat'))
-    with pytest.raises(InvalidInputValueError) as caught:
-        cat.inputs.file = [touch.outputs.file]
-    expected_line = _line_above()
-    span = caught.value.diagnostics[0].span
-    assert span is not None
-    assert (Path(span.file), span.start_line) == (Path(__file__).resolve(), expected_line)
-
-
-@pytest.mark.fast
-def test_a_misordered_step_is_reported_at_the_line_that_made_it() -> None:
-    """A step listed before the step it reads from is reported where that step was made."""
-    touch = Step(clt_path=_adapter('touch'))
-    touch.inputs.filename = 'a.txt'
-    cat = Step(clt_path=_adapter('cat'))
-    expected_line = _line_above()
-    cat.inputs.file = touch.outputs.file
-    with pytest.raises(InvalidStepError) as caught:
-        Workflow([cat, touch], 'backwards').compile()
-    span = caught.value.diagnostics[0].span
-    assert span is not None
-    assert (Path(span.file), span.start_line) == (Path(__file__).resolve(), expected_line)
-
-
-@pytest.mark.fast
-def test_code_without_a_file_keeps_its_pseudo_name_in_the_span() -> None:
-    """A step made by `exec` is placed at `<string>`, not at a path under the working directory."""
-    namespace: dict[str, Any] = {'Step': Step, 'clt_path': _adapter('touch')}
-    exec(compile("\nstep = Step(clt_path=clt_path)\n", '<string>', 'exec'), namespace)  # pylint: disable=exec-used
-    span = namespace['step']._span  # pylint: disable=protected-access
-    assert (span.file, span.start_line) == ('<string>', 2)
 
 
 def _this_line() -> int:

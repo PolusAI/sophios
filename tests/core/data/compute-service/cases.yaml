@@ -1,0 +1,189 @@
+- id: another-contract
+  why: 'The major version is read once, from openapi.json: a service of contract 2, which takes outputMode, is told to
+      upgrade.'
+  do: [submit]
+  answers: {GET openapi.json: {json: {info: {version: '2.1.0'}}}}
+  raises: {ServiceUnavailable: [{re: 'speaks contract 2.1.0, and this Sophios speaks 3: upgrade'}]}
+- id: a-submission-lost-on-the-way
+  why: Sent again until PATIENCE runs out; then the id it was sent under, and `attach`.
+  do: [submit]
+  patience: 0
+  answers: {POST runs: {raise: ConnectionError}}
+  raises: {ServiceUnavailable: ['the compute service at unix:///api.sock could not be reached (ConnectionError), for
+      0 s', {re: '^run (segment-\S+) may exist all the same: Service\(''unix:///api.sock''\)\.attach\(''\1''\) follows
+      it, and the same request sent again never starts a second one$'}]}
+- id: an-undocumented-answer
+  why: 500 is the service's; its message is shown.
+  do: [attach]
+  answers: {GET runs/r1: {status: 500, json: {errors: [{message: the driver failed}]}}}
+  raises: {ServiceUnavailable: [{re: 'answered 500: the driver failed'}]}
+- id: a-refusal-at-the-authored-input
+  why: A pointer into the request is named as the author wrote it; Sophios adds no line of its own.
+  do: [submit]
+  answers: {POST runs: {status: 400, json: {errors: [{pointer: /inputs/write~0model/location,
+      message: 'models/sam3.pt is relative: send basepath, the cluster directory it is relative to, and workflowOutDir,
+      the outputs folder relative to basepath'}]}}}
+  raises: {RequestRefused: ['input write~model: models/sam3.pt is relative: send basepath, the cluster directory it is
+      relative to, and workflowOutDir, the outputs folder relative to basepath']}
+- id: a-status-takes-what-it-knows
+  why: 'Unknown fields are ignored, a step without a name is its Slurm job, nothing is parsed out of a message; the
+      warnings are printed where they cannot be missed, at the input they name.'
+  do: [attach, status]
+  answers: {GET runs/r1: {json: {id: r1, state: RUNNING, reason: null, slurmJobId: '7',
+      startedAt: '2026-10-26T10:00:00-04:00', endedAt: null, outputs: null, new: field,
+      steps: [{name: null, state: FAILED, exitCode: '1:0', slurmJobId: '8', logs: []}],
+      warnings: [{pointer: /inputs/write~out/location, message: did not keep its setgid bit}]}}}
+  stderr: "WARNING from the compute service: input write~out: did not keep its setgid bit\n"
+  returns: [r1, {state: RUNNING, started_at: '2026-10-26T10:00:00-04:00',
+      steps: [{name: (Slurm job 8), state: FAILED, exit_status: null, signal: null}]}]
+- id: ctrl-c-while-waiting
+  why: The interrupt goes on up, after one line on how to attach again.
+  do: [attach, wait]
+  answers: {GET runs/r1: [&queued {json: {id: r1, state: QUEUED}}, {raise: KeyboardInterrupt}]}
+  raises: {KeyboardInterrupt: ['']}
+  stderr: "\nRun r1 goes on in Slurm: Service('unix:///api.sock').attach('r1') follows it again, and its cancel() stops
+      it.\n"
+- id: wait-returns-a-failed-run
+  why: &wait "As the local handle's `wait`: the run's status however it ended, with the service's reason, printed once."
+  do: [attach, wait]
+  answers: {GET runs/r1: {json: {id: r1, state: FAILED, reason: &never Slurm will never start the leader
+      (PartitionTimeLimit)}}}
+  returns: [r1, {state: FAILED, reason: *never, outputs: null}]
+  stdout: "r1: FAILED (Slurm will never start the leader (PartitionTimeLimit))\n"
+- id: wait-returns-a-cancelled-run
+  why: *wait
+  do: [attach, wait]
+  answers: {GET runs/r1: {json: {id: r1, state: CANCELLED, reason: *never}}}
+  returns: [r1, {state: CANCELLED, reason: *never, outputs: null}]
+  stdout: "r1: CANCELLED (Slurm will never start the leader (PartitionTimeLimit))\n"
+- id: wait-prints-the-runs-start-first-and-its-end-last
+  why: "A step and the run that change in one poll: the run's line comes first while it goes on, last once it ended."
+  do: [attach, wait]
+  answers: {GET runs/r1: [*queued, {json: {id: r1, state: RUNNING,
+      steps: [{name: show, state: RUNNING, slurmJobId: '8'}]}},
+      {json: {id: r1, state: COMPLETED, steps: [{name: show, state: COMPLETED, slurmJobId: '8'}]}}]}
+  returns: [r1, {state: COMPLETED}]
+  stdout: "r1: RUNNING\nr1: step show RUNNING\nr1: step show COMPLETED\nr1: COMPLETED\n"
+- id: logs-are-the-leaders
+  why: "`leader.log`, even when a step failed with logs of its own, as the local handle's `logs` is the runner's."
+  do: [attach, wait, logs]
+  answers: {GET runs/r1: {json: {id: r1, state: FAILED, reason: 'step show failed (exit code 1:0); see its logs',
+      steps: [{name: show, state: FAILED, slurmJobId: '8', logs: [failed_CWLJob_show_000.log]}]}},
+      GET runs/r1/logs/leader.log: {text: "the leader\n"}}
+  returns: [r1, {steps: [{name: show}]}, "the leader\n"]
+- id: no-log-before-slurm-starts-the-leader
+  why: "Slurm makes `leader.log` as it starts the leader, so the service answers 404 for a run it never started; `logs`
+      is '', as the local handle's is with no log."
+  do: [attach, logs]
+  answers: {GET runs/r1: {json: {id: r1, state: FAILED, reason: *never}},
+      GET runs/r1/logs/leader.log: {status: 404, json: {errors: [{message: 'the run has no log leader.log, or not
+      yet'}]}}}
+  returns: [r1, '']
+- id: a-deleted-run
+  why: "The service deletes a run some days after it ends, and answers 404 for it and its logs alike, saying so: `logs`
+      raises that, as `status` does, rather than '' for a log Slurm never made."
+  do: [attach, logs]
+  answers: {GET runs/r1: [{json: {id: r1, state: COMPLETED}},
+      &gone {status: 404, json: {errors: [{message: there is no run r1; a run is deleted 14 days after it ends}]}}],
+      GET runs/r1/logs/leader.log: *gone}
+  raises: {RequestRefused: [there is no run r1; a run is deleted 14 days after it ends]}
+- id: a-strangers-404-to-submit
+  why: &stranger "The service names itself in every answer's Server header: a page from anything else, a 404 or a 200,
+      is neither a refusal nor a run nor a log, for submit, status and logs alike."
+  do: [submit]
+  answers: {GET openapi.json: &404 {status: 404, page: <html>Not Found</html>}}
+  raises: &not-the-service {ServiceUnavailable: ['unix:///api.sock answered, but not as the compute service: check that
+      it names the socket the service listens on']}
+- id: a-strangers-404-to-status
+  why: *stranger
+  do: [attach, status]
+  answers: {GET runs/r1: [&running {json: {id: r1, state: RUNNING}}, *404]}
+  raises: *not-the-service
+- id: a-strangers-404-to-logs
+  why: *stranger
+  do: [attach, logs]
+  answers: {GET runs/r1/logs/leader.log: *404}
+  raises: *not-the-service
+- id: a-strangers-200-to-submit
+  why: *stranger
+  do: [submit]
+  answers: {GET openapi.json: &200 {page: <html>It works!</html>}}
+  raises: *not-the-service
+- id: a-strangers-200-to-status
+  why: *stranger
+  do: [attach, status]
+  answers: {GET runs/r1: [*running, *200]}
+  raises: *not-the-service
+- id: a-strangers-200-to-logs
+  why: *stranger
+  do: [attach, logs]
+  answers: {GET runs/r1/logs/leader.log: *200}
+  raises: *not-the-service
+- id: an-answer-not-in-json
+  why: Every answer of the service but a log is JSON; one that is not is the service's failure, not a crash.
+  do: [attach]
+  answers: {GET runs/r1: {text: <html>oops</html>}}
+  raises: {ServiceUnavailable: ['the compute service at unix:///api.sock answered 200, not in JSON']}
+- id: a-busy-service-is-asked-again-every-5-s
+  why: 'Retry-After is not read: a date in it, as RFC 9110 allows, changes nothing. A call answered 502, 503 or 504 is
+      made again whoever sends it, a proxy or the service.'
+  do: [attach]
+  answers: {GET runs/r1: [{status: 503, json: {errors: [{message: sacct failed}]},
+      headers: {Retry-After: 'Wed, 28 Oct 2026 07:28:00 GMT'}}, {status: 502, page: <html>Bad Gateway</html>}, *queued]}
+  returns: [r1]
+  pauses: [5, 5]
+- id: an-answer-cut-short
+  why: 'The service cuts the connection when it fails after the headers, as a log read may, and so does an SSH forward
+      that drops: the call is made again, as when the service cannot be reached.'
+  do: [attach, logs]
+  answers: {GET runs/r1/logs/leader.log: [{raise: ChunkedEncodingError}, {text: x}]}
+  returns: [r1, x]
+  pauses: [5]
+- id: cancel-a-run-that-is-then-cancelled
+  why: &cancel True once the run is CANCELLED; False when it had ended COMPLETED or FAILED,
+      which the service answers unchanged. The service asks Slurm before it answers, so the cancel is sent once,
+      and the run waited for, every POLL seconds, until it has ended.
+  do: [attach, cancel]
+  answers: {POST runs/r1/cancel: [&cancelled {json: {id: r1, state: CANCELLED, reason: cancelled by request}}],
+      GET runs/r1: [*running, *cancelled]}
+  returns: [r1, true]
+  pauses: []
+  calls: &posted-once {contains: [[POST, runs/r1/cancel, 10, 60]]}
+- id: cancel-a-run-that-completed
+  why: *cancel
+  do: [attach, cancel]
+  answers: {POST runs/r1/cancel: [&completed {json: {id: r1, state: COMPLETED}}], GET runs/r1: [*running, *completed]}
+  returns: [r1, false]
+  pauses: []
+  calls: *posted-once
+- id: cancel-a-run-that-failed
+  why: *cancel
+  do: [attach, cancel]
+  answers: {POST runs/r1/cancel: [&failed {json: {id: r1, state: FAILED,
+      reason: "the workflow failed; see the run's log, GET /runs/r1/logs/leader.log"}}],
+      GET runs/r1: [*running, *failed]}
+  returns: [r1, false]
+  pauses: []
+  calls: *posted-once
+- id: cancel-a-run-that-ends-a-poll-later
+  why: *cancel
+  do: [attach, cancel]
+  answers: {POST runs/r1/cancel: [&requested {json: {id: r1, state: RUNNING,
+      reason: 'cancel requested at 2026-10-27T10:00:00Z'}}], GET runs/r1: [*running, *requested, *cancelled]}
+  returns: [r1, true]
+  pauses: [10]
+  calls: *posted-once
+- id: a-cancel-slurm-never-acts-on
+  why: 'A run that never ends: TimeoutError once PATIENCE is up, never later, saying it goes on, after one POST.'
+  do: [attach, cancel]
+  patience: 0
+  answers: {GET runs/r1: *requested, POST runs/r1/cancel: [*requested]}
+  raises: {TimeoutError: [{re: 'run r1 has not ended within 0 s; it goes on'}]}
+  pauses: []
+- id: a-submission-may-take-longer-than-a-status-read
+  why: 'The service asks Slurm several times, 30 s each at most, before it answers a POST /runs: a slow but healthy
+      submission is waited for, not sent again; every other call is given up on sooner.'
+  do: [submit, status]
+  answers: {POST runs: {status: 201, json: {id: x, state: QUEUED, slurmJobId: '7'}},
+      GET runs/x: {json: {id: x, state: QUEUED}}}
+  calls: [[GET, openapi.json, 10, 60], [POST, runs, 10, 300], [GET, runs/x, 10, 60]]

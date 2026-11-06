@@ -3,9 +3,11 @@ import copy
 import json
 import re
 from pathlib import Path
+from typing import Any, Final
 
 import pytest
 import yaml
+from hypothesis import example, given, strategies as st
 
 from sophios import post_compile
 from sophios.cli import default_compilation_settings
@@ -15,20 +17,27 @@ from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
-from sophios.wic_types import StepId, Tool
+from sophios.wic_types import StepId, Tool, Yaml
 
+from . import ast_strategies as strat
+from .budgets import budget
 from .hermetic import compile_hermetic, subworkflow_step
-from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
+from .strategies import pinned
+from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt, inputs_of
 
 
 def _steps(cwl: dict) -> list[str]:
     return [step['id'] for step in cwl['steps']]
 
 
+#: `child.wic` (mk_file, then xform twice) called from a root that counts its file.
+_NESTED: Final[Yaml] = {'steps': [subworkflow_step('child.wic', {'steps': [{'id': 'mk_file'}, {'id': 'xform'},
+                                                                           {'id': 'xform'}]}), {'id': 'count'}]}
+
+
 def _nested() -> CompilationArtifact:
-    """`child.wic` (mk_file, then xform twice) called from a root that counts its file."""
-    child = {'steps': [{'id': 'mk_file'}, {'id': 'xform'}, {'id': 'xform'}]}
-    return compile_hermetic({'steps': [subworkflow_step('child.wic', child), {'id': 'count'}]}, 'root').artifact
+    """`_NESTED`, compiled."""
+    return compile_hermetic(_NESTED, 'root').artifact
 
 
 @pytest.mark.fast
@@ -42,13 +51,6 @@ def test_a_step_is_called_by_its_id_and_a_call_without_its_wic() -> None:
 
 
 @pytest.mark.fast
-def test_an_id_two_steps_have_carries_each_ones_position_after_an_at() -> None:
-    """Every occurrence of a repeated id is numbered, the first too, so no name depends on what follows it."""
-    child, = (artifact for artifact in _nested().children if artifact.graph is not None)
-    assert _steps(child.cwl) == ['mk_file', 'xform@2', 'xform@3']
-
-
-@pytest.mark.fast
 def test_a_generated_name_joins_its_step_and_port_with_a_tilde() -> None:
     """A lifted input and a promoted output are `<step>~<port>`, nested once per call."""
     root = _nested().cwl
@@ -57,21 +59,33 @@ def test_a_generated_name_joins_its_step_and_port_with_a_tilde() -> None:
 
 
 @pytest.mark.fast
-def test_a_step_named_like_an_input_takes_its_position_and_the_input_keeps_its_name() -> None:
-    """Inputs, outputs and steps share one id space in CWL; the workflow's interface keeps what the author wrote."""
-    cwl = compile_hermetic({'inputs': {'mk_file': {'type': 'string'}},
-                            'steps': [{'id': 'mk_file', 'in': {'name': 'mk_file'}}]}).artifact.cwl
-    assert _steps(cwl) == ['mk_file@1']
-    assert list(cwl['inputs']) == ['mk_file']
-    assert cwl['steps'][0]['in'] == {'name': 'mk_file'}
-
-
-@pytest.mark.fast
-def test_ids_that_differ_only_in_case_are_numbered() -> None:
-    """`Fetch` and `fetch` would be one step directory on macOS and Windows."""
-    cwl = compile_hermetic({'steps': [{'id': 'Fetch', 'run': 'mk_file'},
-                                      {'id': 'fetch', 'run': 'mk_file'}]}).artifact.cwl
-    assert _steps(cwl) == ['Fetch@1', 'fetch@2']
+@given(st.tuples(st.lists(st.tuples(st.sampled_from(['mk_file', 'MK_File', 'xform', 'Xform', 'a', 'A']),
+                                    st.sampled_from(['mk_file', 'xform', 'count'])), min_size=1, max_size=4),
+                 st.lists(st.sampled_from(['mk_file', 'Xform', 'a']), max_size=2, unique=True)))
+@example(([('mk_file', 'mk_file'), ('xform', 'xform'), ('xform', 'xform')], []))
+@example(([('mk_file', 'mk_file')], ['mk_file']))
+@example(([('Fetch', 'mk_file'), ('fetch', 'mk_file')], []))
+@budget(100)
+def test_a_step_is_numbered_exactly_when_another_id_has_its_name(
+        case: tuple[list[tuple[str, str]], list[str]]) -> None:
+    """docs/compiling-to-cwl.md: a step keeps its id, but every occurrence of a repeated id carries its position after
+    an `@`, the first too, so no name depends on what follows it; so does a step named like a workflow input, since
+    CWL keeps the three in one id space; and ids that differ only in case count as one id (`Fetch` and `fetch` would be
+    one step directory on macOS and Windows). An input keeps the name its author wrote, and a made one is
+    `<step>~<port>`."""
+    steps, inputs = case
+    taken = [step_id.casefold() for step_id, _ in steps]
+    names = [f'{step_id}@{index}' if taken.count(step_id.casefold()) > 1 or step_id.casefold() in map(
+        str.casefold, inputs) else step_id for index, (step_id, _) in enumerate(steps, start=1)]
+    bound = {'in': {'name': inputs[0]}} if inputs else {}
+    cwl = compile_hermetic({'inputs': {name: {'type': 'string'} for name in inputs},
+                            'steps': [{'id': step_id, 'run': run, **(bound if run == 'mk_file' else {})}
+                                      for step_id, run in steps]}).artifact.cwl
+    assert _steps(cwl) == names
+    assert list(cwl['inputs'])[:len(inputs)] == inputs
+    assert set(cwl['inputs']) - set(inputs) <= {f'{name}~{port}' for name, (_, run) in zip(names, steps)
+                                                for port in inputs_of(run)}
+    assert all(step['in'] == bound['in'] for step, (_, run) in zip(cwl['steps'], steps) if bound and run == 'mk_file')
 
 
 def _clashes() -> CompilationArtifact:
@@ -241,19 +255,30 @@ def test_a_step_named_con_writes_an_ordinary_file(tmp_path: Path) -> None:
     assert all((tmp_path / name).is_file() for name in _runs(tmp_path / 'greeting.cwl'))
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize('form', ['nested', 'embedded', 'flat', 'flat_embedded'])
-def test_no_form_of_the_compiled_cwl_spells_a_name_of_its_own(form: str) -> None:
-    """Whichever way the tree is written, no id carries `__step__`, `.wic`, `___` or a hash."""
-    nested = _nested()
-    flat = post_compile.flatten_subworkflows(nested)
-    artifact = {'nested': nested, 'embedded': post_compile.inline_artifact_runs(nested),
-                'flat': flat, 'flat_embedded': post_compile.inline_artifact_runs(flat)}[form]
+def _addresses(node: CompilationArtifact) -> list[str]:
+    """Each step that runs a tool, beneath `node` at any depth, by its address: the calls above it and its name."""
+    calls = {child.namespace[-1]: child for child in node.children if child.graph is not None}
+    return [address for name in _steps(node.cwl)
+            for address in ([f'{name}~{inner}' for inner in _addresses(calls[name])] if name in calls else [name])]
 
-    def texts(node: CompilationArtifact) -> list[str]:
-        return [json.dumps(node.cwl), json.dumps(node.job_inputs),
-                *(text for child in node.children for text in texts(child))]
-    found = [hit for text in texts(artifact) for hit in re.findall(r'__step__|\.wic|___|_[0-9a-f]{8}\b', text)]
-    assert not found
-    if form.startswith('flat'):
-        assert _steps(artifact.cwl) == ['child~mk_file', 'child~xform@2', 'child~xform@3', 'count']
+
+@pytest.mark.fast
+@given(st.tuples(strat.workflows().filter(lambda workflow: '___' not in json.dumps(workflow)),
+                 st.sampled_from(['nested', 'embedded', 'flat', 'flat_embedded'])))
+@pinned(*((_NESTED, form) for form in ('nested', 'embedded', 'flat', 'flat_embedded')))
+@budget(50)
+def test_no_form_of_the_compiled_cwl_spells_a_name_of_its_own(case: tuple[Yaml, str]) -> None:
+    """Whichever way the tree is written, no id carries `__step__`, `.wic`, `___` or a hash, and nothing in it is
+    Sophios's own: no `sophios` key, or prefix; a literal is the author's, and `___` the one a drawn literal can spell.
+    Flattened, a step of a call, one deep as drawn, is named by its address from the root."""
+    workflow, form = case
+    nested = compile_hermetic(workflow, 'root').artifact
+    flat = post_compile.flatten_subworkflows(nested) if form.startswith('flat') else nested
+    artifact = post_compile.inline_artifact_runs(flat) if form.endswith('embedded') else flat
+
+    def documents(node: CompilationArtifact) -> list[Any]:
+        return [node.cwl, node.job_inputs, *(document for child in node.children for document in documents(child))]
+    found = [hit for document in documents(artifact)
+             for hit in re.findall(r'__step__|\.wic|___|_[0-9a-f]{8}\b|"sophios[^"]*":', json.dumps(document))]
+    assert not found, found
+    assert not form.startswith('flat') or _steps(artifact.cwl) == _addresses(nested)

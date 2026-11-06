@@ -12,11 +12,11 @@ choices in that generator.
 import builtins
 import copy
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 from unittest.mock import patch
 
 import pytest
-from hypothesis import given
+from hypothesis import example, given
 
 from sophios.ir import (
     RegistryKey,
@@ -34,6 +34,7 @@ from sophios.lang.error_codes import SophiosErrorCode
 from sophios.wic_types import StepId as LegacyStepId, Yaml
 
 from . import ast_strategies as strat
+from .cases import cases, match
 from .hermetic import ORACLE, bundle, compile_hermetic, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, inputs_of, outputs_of
 
@@ -67,6 +68,7 @@ def _assert_processes_match_the_registry(document: Any) -> None:
 
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows())
+@example({'steps': [{'id': 'join'}]})  # a resolver returning empty interfaces cannot satisfy this by accident
 @ORACLE
 def test_every_resolved_process_is_the_one_the_registry_holds(workflow: Yaml) -> None:
     """Resolution is compared where the bridged differential cannot see it.
@@ -84,18 +86,6 @@ def test_every_resolved_process_is_the_one_the_registry_holds(workflow: Yaml) ->
                        name='oracle')
     assert resolved.document is not None, list(resolved.diagnostics)
     _assert_processes_match_the_registry(resolved.document)
-
-
-@pytest.mark.fast
-def test_resolved_interfaces_match_an_independent_registry_model() -> None:
-    """A resolver returning empty interfaces cannot satisfy the differential by accident."""
-    parsed = parse('steps:\n- id: join\n', 'probe.wic')
-    assert parsed.document is not None
-    result = resolve(parsed.document, RegistrySnapshot.from_tools(SYNTHETIC_TOOLS))
-    assert result.document is not None
-    process = result.document.steps[0].process
-    assert tuple(port.name for port in process.inputs) == tuple(inputs_of('join'))
-    assert tuple(port.name for port in process.outputs) == tuple(outputs_of('join'))
 
 
 @pytest.mark.skip_pypi_ci
@@ -235,15 +225,6 @@ def test_raw_cwl_reference_needs_no_global_escape_hatch() -> None:
     assert compiled['steps'][0]['in']['name'] == 'wf_name'
 
 
-# Parameter passing: a document contributes to a step of a subworkflow it calls
-# by nesting `wic:` blocks, keyed `(index, name)` at every level. The corpus
-# uses three body shapes -- a bare `wic:` that only recurses, an `in:`, and an
-# `out:` carrying an edge definition -- and `mm-workflows`' `basic.wic` places
-# the only definition of one of its edges this way, so a contribution that goes
-# astray deletes an edge rather than reporting anything. One pin per shape,
-# plus the two rules that decide whether a contribution lands at all.
-
-
 def _resolved(source: str, **workflows: str) -> Any:
     """Resolve `source` against the synthetic tools plus the named child sources."""
     parsed = parse(source, 'root.wic')
@@ -266,438 +247,25 @@ def _descend(document: Any, depth: int) -> Any:
     return document
 
 
-@pytest.mark.fast
-def test_contributed_input_reaches_a_step_of_a_called_subworkflow() -> None:
-    """An `in:` written at a distance binds that step's input in the child."""
-    document = _resolved('''
-wic:
-  steps:
-    (1, child.wic):
-      wic:
-        steps:
-          (1, mk_file):
-            in:
-              name: !ii contributed.txt
-steps:
-- id: child.wic
-''', child='steps:\n- id: mk_file\n')
-    bound = _descend(document, 1).steps[0].source.input('name')
-    assert isinstance(bound, InlineLiteral) and bound.value == 'contributed.txt'
+_PAYLOAD: Final = {InlineLiteral: 'value', EdgeRef: 'name', RawCwlRef: 'expression', UnresolvedName: 'name'}
 
 
 @pytest.mark.fast
-def test_contributed_output_defines_an_edge_on_a_nested_step() -> None:
-    """`out:` carries `!&` to a step two subworkflows down, as `basic.wic` does.
+@pytest.mark.parametrize('case', cases('contributions'))
+def test_contribution_case(case: dict[str, Any], capsys: pytest.CaptureFixture[str]) -> None:
+    """A document contributes to a step of a subworkflow it calls by nesting `wic:` blocks keyed `(index, name)`,
+    and a contribution gone astray deletes an edge rather than reporting anything.
 
-    The definition exists nowhere else: writing it in the child would define it
-    twice when that child is called from a second root, which is the whole
-    reason the corpus places it from above.
+    `root` and its `children` resolve; each `expect` entry names the step at `step` (default 0) of the document
+    `depth` calls below the root, and what it binds: `inputs` as `[construct, payload]` and `outputs` as
+    `[name, edge defined]`. `stderr` is what is printed.
     """
-    document = _resolved('''
-wic:
-  steps:
-    (1, min.wic):
-      wic:
-        steps:
-          (1, cg.wic):
-            wic:
-              steps:
-                (1, mk_file):
-                  out:
-                  - file: !& min.tpr
-steps:
-- id: min.wic
-''', min='steps:\n- id: cg.wic\n', cg='steps:\n- id: mk_file\n  in:\n    name: !ii min.tpr\n')
-    outputs = _descend(document, 2).steps[0].source.outputs
-    assert [(binding.name, binding.edge_def and binding.edge_def.name)
-            for binding in outputs] == [('file', 'min.tpr')]
-
-
-@pytest.mark.fast
-def test_a_bare_wic_body_only_recurses_until_it_reaches_a_payload() -> None:
-    """Three nested `wic:` bodies carry nothing themselves; the fourth binds."""
-    document = _resolved('''
-wic:
-  steps:
-    (1, a.wic):
-      wic:
-        steps:
-          (1, b.wic):
-            wic:
-              steps:
-                (1, c.wic):
-                  wic:
-                    steps:
-                      (1, mk_file):
-                        in:
-                          name: !* deep.txt
-steps:
-- id: a.wic
-''', a='steps:\n- id: b.wic\n', b='steps:\n- id: c.wic\n', c='steps:\n- id: mk_file\n')
-    bound = _descend(document, 3).steps[0].source.input('name')
-    assert isinstance(bound, EdgeRef) and bound.name == 'deep.txt'
-
-
-@pytest.mark.fast
-def test_a_contributed_value_wins_over_the_child_s_own() -> None:
-    """Overriding is the point of parameter passing: the contributor wins."""
-    document = _resolved('''
-wic:
-  steps:
-    (1, child.wic):
-      wic:
-        steps:
-          (1, mk_file):
-            in:
-              name: !ii from_the_parent.txt
-steps:
-- id: child.wic
-''', child='steps:\n- id: mk_file\n  in:\n    name: !ii its_own.txt\n')
-    bound = _descend(document, 1).steps[0].source.input('name')
-    assert isinstance(bound, InlineLiteral) and bound.value == 'from_the_parent.txt'
-
-
-@pytest.mark.fast
-def test_a_contribution_whose_key_does_not_match_its_step_is_named_on_stderr(
-        capsys: pytest.CaptureFixture[str]) -> None:
-    """`(N, name)` addresses one step, so half a match is no match: the key is
-    ignored, and each such key is named once on stderr."""
-    document = _resolved('''
-wic:
-  steps:
-    (1, child.wic):
-      wic:
-        steps:
-          (2, mk_file):
-            in:
-              name: !ii wrong_index.txt
-          (1, mk_text):
-            in:
-              name: !ii wrong_name.txt
-steps:
-- id: child.wic
-''', child='steps:\n- id: mk_file\n  in:\n    name: !ii its_own.txt\n')
-    bound = _descend(document, 1).steps[0].source.input('name')
-    assert isinstance(bound, InlineLiteral) and bound.value == 'its_own.txt'
-    assert capsys.readouterr().err.splitlines() == [
-        "Warning! root.wic: wic: steps: key (2, mk_file) addresses no step of 'child': "
-        'there is no step 2; the document has 1 step. The key is ignored.',
-        "Warning! root.wic: wic: steps: key (1, mk_text) addresses no step of 'child': "
-        "step 1 is 'mk_file'; write (1, mk_file). The key is ignored."]
-
-
-@pytest.mark.fast
-def test_a_contribution_to_a_wic_step_addresses_the_subworkflow_not_the_call() -> None:
-    """A `.wic` step's body names steps inside it; nothing lands on the call site."""
-    document = _resolved('''
-wic:
-  steps:
-    (1, child.wic):
-      in:
-        name: !ii never_bound_here.txt
-      wic:
-        steps:
-          (1, mk_file):
-            in:
-              name: !ii contributed.txt
-steps:
-- id: child.wic
-''', child='steps:\n- id: mk_file\n')
-    assert document.steps[0].source.inputs == ()
-    bound = _descend(document, 1).steps[0].source.input('name')
-    assert isinstance(bound, InlineLiteral) and bound.value == 'contributed.txt'
-
-
-_CONTRIBUTED_TEMPLATE = '''
-wic:
-  steps:
-    (1, child.wic):
-      wic:
-        steps:
-          (1, mk_file):
-            in:
-              name: {spelling}
-steps:
-- id: child.wic
-'''
-
-
-def _contributed_construct(spelling: str) -> tuple[str, Any]:
-    """The construct and payload a contributed `name:` carries, spans aside."""
-    document = _resolved(_CONTRIBUTED_TEMPLATE.format(spelling=spelling),
-                         child='steps:\n- id: mk_file\n')
-    value = _descend(document, 1).steps[0].source.input('name')
-    payload = {InlineLiteral: 'value', EdgeRef: 'name',
-               RawCwlRef: 'expression', UnresolvedName: 'name'}[type(value)]
-    return type(value).__name__, getattr(value, payload)
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('tagged, desugared, construct', [
-    ('!ii shared.txt', '{wic_inline_input: shared.txt}', ('InlineLiteral', 'shared.txt')),
-    ('!* shared.txt', '{wic_alias: shared.txt}', ('EdgeRef', 'shared.txt')),
-    ('!cwl shared.txt', '{wic_raw_cwl: shared.txt}', ('RawCwlRef', 'shared.txt')),
-    ('shared.txt', 'shared.txt', ('UnresolvedName', 'shared.txt')),
-    ('{a: 1}', '{a: 1}', ('InlineLiteral', {'a': 1})),
-])
-def test_a_contributed_value_means_the_same_in_both_surfaces(
-        tagged: str, desugared: str, construct: tuple[str, Any]) -> None:
-    """A contribution is opaque content, where each construct has two spellings.
-
-    The tagged one is what a human writes and the desugared one is what the
-    Python API and `render` emit, so a contribution that only understood tags
-    would apply to a hand-written document and vanish from a round-tripped one.
-    """
-    assert _contributed_construct(tagged) == construct
-    assert _contributed_construct(desugared) == construct
-
-
-@pytest.mark.fast
-def test_a_contributed_out_replaces_the_step_s_own_sequence() -> None:
-    """`out:` is a sequence, and a sequence the contributor supplies replaces.
-
-    Merging the two instead would keep an edge definition the contributor
-    deliberately removed, and define it twice wherever the contributor put its
-    own back.
-    """
-    document = _resolved('''
-wic:
-  steps:
-    (1, child.wic):
-      wic:
-        steps:
-          (1, mk_file):
-            out:
-            - file
-steps:
-- id: child.wic
-''', child='steps:\n- id: mk_file\n  out:\n  - file: !& its_own_edge\n')
-    outputs = _descend(document, 1).steps[0].source.outputs
-    assert [(binding.name, binding.edge_def) for binding in outputs] == [('file', None)]
-
-
-@pytest.mark.fast
-def test_a_contribution_merges_with_the_child_s_own_body_for_the_same_step() -> None:
-    """Both bodies address `(1, xform)`; neither replaces the other wholesale.
-
-    A subworkflow that already parameterises one of its own steps is the
-    ordinary case -- `cg.wic` does -- so a contribution that overwrote the
-    whole `(N, name)` body would delete whatever the child had written there,
-    and one that overwrote the whole `in:` would delete the bindings it does
-    not itself mention.
-    """
-    document = _resolved('''
-wic:
-  steps:
-    (1, child.wic):
-      wic:
-        steps:
-          (1, xform):
-            in:
-              name: !ii contributed.txt
-steps:
-- id: child.wic
-''', child='''
-wic:
-  steps:
-    (1, xform):
-      in:
-        file: !* upstream
-      out:
-      - file: !& its_own_edge
-steps:
-- id: xform
-''')
-    step = _descend(document, 1).steps[0].source
-    upstream, contributed = step.input('file'), step.input('name')
-    assert isinstance(upstream, EdgeRef) and upstream.name == 'upstream'
-    assert isinstance(contributed, InlineLiteral) and contributed.value == 'contributed.txt'
-    assert [(binding.name, binding.edge_def and binding.edge_def.name)
-            for binding in step.outputs] == [('file', 'its_own_edge')]
-
-
-@pytest.mark.fast
-def test_an_id_keyed_contribution_reaches_the_one_step_with_that_id(
-        capsys: pytest.CaptureFixture[str]) -> None:
-    """A parent contributes to the one step with that id by its bare id."""
-    document = _resolved('''
-wic:
-  steps:
-    (1, child.wic):
-      wic:
-        steps:
-          mk_file:
-            in:
-              name: !ii from_root.txt
-steps:
-- id: child.wic
-''', child='steps:\n- id: mk_file\n')
-    bound = _descend(document, 1).steps[0].source.input('name')
-    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
-    assert capsys.readouterr().err == ''
-
-
-@pytest.mark.fast
-def test_an_id_keyed_entry_for_a_repeated_id_is_named_on_stderr_and_ignored(
-        capsys: pytest.CaptureFixture[str]) -> None:
-    """A bare id naming several steps is reported and ignored."""
-    document = _resolved('wic:\n  steps:\n    mk_file:\n      in:\n        name: !ii x.txt\n'
-                         'steps:\n- id: mk_file\n- id: mk_file\n')
-    assert all(step.source.input('name') is None for step in document.steps)
-    assert capsys.readouterr().err.splitlines() == [
-        "Warning! root.wic: wic: steps: key mk_file addresses no step of 'root': "
-        "'mk_file' names 2 steps; write (index, mk_file). The key is ignored."]
-
-
-@pytest.mark.fast
-def test_a_positional_key_wins_over_an_id_key_for_the_same_step() -> None:
-    """Within one sidecar a positional key wins over a bare id for the same step."""
-    document = _resolved('wic:\n  steps:\n    mk_file:\n      in:\n        name: !ii by_id.txt\n'
-                         '    (1, mk_file):\n      in:\n        name: !ii by_position.txt\n'
-                         'steps:\n- id: mk_file\n')
-    bound = document.steps[0].source.input('name')
-    assert isinstance(bound, InlineLiteral) and bound.value == 'by_position.txt'
-
-
-@pytest.mark.fast
-def test_a_stale_key_is_named_once_however_many_steps_call_the_workflow(
-        capsys: pytest.CaptureFixture[str]) -> None:
-    """A stale key is reported once however many steps call the workflow."""
-    _resolved('steps:\n- id: child.wic\n- id: child.wic\n',
-              child='wic:\n  steps:\n    (2, mk_file): {}\nsteps:\n- id: mk_file\n')
-    assert len(capsys.readouterr().err.splitlines()) == 1
-
-
-@pytest.mark.fast
-def test_an_id_key_from_the_parent_merges_over_the_childs_positional_entry(
-        capsys: pytest.CaptureFixture[str]) -> None:
-    """The calling step's contribution wins whichever spelling each side uses."""
-    document = _resolved('''
-wic:
-  steps:
-    (1, child.wic):
-      wic:
-        steps:
-          mk_file:
-            in:
-              name: !ii from_root.txt
-steps:
-- id: child.wic
-''', child='''
-wic:
-  steps:
-    (1, mk_file):
-      wic:
-        graphviz:
-          label: a label
-steps:
-- id: mk_file
-''')
-    bound = _descend(document, 1).steps[0].source.input('name')
-    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
-    assert capsys.readouterr().err == ''
-
-
-@pytest.mark.fast
-def test_an_id_key_from_the_parent_wins_when_the_child_has_both_spellings() -> None:
-    """The contribution wins over a child that spells the same step both ways."""
-    document = _resolved(
-        _PARENT_CONTRIBUTING.format(contribution='          mk_file:\n            in:\n'
-                                                 '              name: !ii from_root.txt'),
-        child='wic:\n  steps:\n    mk_file:\n      in:\n        other: !ii o\n'
-              '    (1, mk_file):\n      in:\n        name: !ii child_pos.txt\n'
-              'steps:\n- id: mk_file\n')
-    step = _descend(document, 1).steps[0].source
-    bound = step.input('name')
-    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
-    other = step.input('other')
-    assert isinstance(other, InlineLiteral) and other.value == 'o'
-
-
-@pytest.mark.fast
-def test_a_positional_key_from_the_parent_merges_over_the_childs_id_entry() -> None:
-    """The parent's (index, id) contribution overrides the child's own bare-id entry."""
-    document = _resolved('''
-wic:
-  steps:
-    (1, child.wic):
-      wic:
-        steps:
-          (1, mk_file):
-            in:
-              name: !ii from_root.txt
-steps:
-- id: child.wic
-''', child='''
-wic:
-  steps:
-    mk_file:
-      in:
-        name: !ii child_own.txt
-steps:
-- id: mk_file
-''')
-    bound = _descend(document, 1).steps[0].source.input('name')
-    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
-
-
-_PARENT_CONTRIBUTING = '''
-wic:
-  steps:
-    (1, child.wic):
-      wic:
-        steps:
-{contribution}
-steps:
-- id: child.wic
-'''
-
-
-@pytest.mark.fast
-def test_a_stale_positional_key_from_the_parent_does_not_swallow_the_childs_id_entry() -> None:
-    """A parent key that addresses no step leaves the child's valid bare-id entry alone."""
-    document = _resolved(
-        _PARENT_CONTRIBUTING.format(contribution='          (2, mk_file):\n            in:\n'
-                                                 '              name: !ii from_root.txt'),
-        child='wic:\n  steps:\n    mk_file:\n      in:\n        name: !ii child_own.txt\n'
-              'steps:\n- id: mk_file\n')
-    bound = _descend(document, 1).steps[0].source.input('name')
-    assert isinstance(bound, InlineLiteral) and bound.value == 'child_own.txt'
-
-
-@pytest.mark.fast
-def test_a_stale_positional_key_in_the_child_does_not_swallow_the_parents_id_contribution() -> None:
-    """A child key that addresses no step leaves the parent's valid bare-id contribution alone."""
-    document = _resolved(
-        _PARENT_CONTRIBUTING.format(contribution='          mk_file:\n            in:\n'
-                                                 '              name: !ii from_root.txt'),
-        child='wic:\n  steps:\n    (2, mk_file):\n      in:\n        name: !ii child_stale.txt\n'
-              'steps:\n- id: mk_file\n')
-    bound = _descend(document, 1).steps[0].source.input('name')
-    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
-
-
-@pytest.mark.fast
-def test_an_id_key_and_a_positional_key_for_the_same_step_merge_in_one_sidecar() -> None:
-    """Fields only the bare entry sets survive; the positional entry wins where both set one."""
-    document = _resolved('wic:\n  steps:\n    mk_file:\n      in:\n        a: !ii x.txt\n'
-                         '    (1, mk_file):\n      in:\n        b: !ii y.txt\n'
-                         'steps:\n- id: mk_file\n')
-    step = document.steps[0].source
-    a, b = step.input('a'), step.input('b')
-    assert isinstance(a, InlineLiteral) and a.value == 'x.txt'
-    assert isinstance(b, InlineLiteral) and b.value == 'y.txt'
-
-
-@pytest.mark.fast
-def test_a_stale_child_id_entry_does_not_pair_with_the_parents_positional_key() -> None:
-    """A child bare id naming two steps addresses none, so it is not merged under the parent's (1, id) key."""
-    document = _resolved(
-        _PARENT_CONTRIBUTING.format(contribution='          (1, mk_file):\n            in:\n'
-                                                 '              name: !ii from_root.txt'),
-        child='wic:\n  steps:\n    mk_file:\n      in:\n        extra: !ii stale_child.txt\n'
-              'steps:\n- id: mk_file\n- id: mk_file\n')
-    step = _descend(document, 1).steps[0].source
-    assert not isinstance(step.input('extra'), InlineLiteral)
-    bound = step.input('name')
-    assert isinstance(bound, InlineLiteral) and bound.value == 'from_root.txt'
+    document = _resolved(case['root'], **case.get('children', {}))
+    for expected in case['expect']:
+        step = _descend(document, expected.get('depth', 0)).steps[expected.get('step', 0)].source
+        found = {**expected, 'outputs': [[out.name, out.edge_def and out.edge_def.name] for out in step.outputs],
+                 'inputs': {name: [type(value).__name__, getattr(value, _PAYLOAD[type(value)])]
+                            for name, value in step.inputs}}
+        assert match(expected, found), (case['id'], found)
+    if 'stderr' in case:
+        assert match(case['stderr'], capsys.readouterr().err.splitlines())

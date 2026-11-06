@@ -9,7 +9,23 @@ The alphabets here are deliberate. Each was widened in response to a class of
 finding — spellings whose text differs from their value, keys carrying `$`,
 empty names — and narrowing one narrows every property downstream.
 """
-from hypothesis import strategies as st
+import json
+from calendar import monthrange
+from collections.abc import Callable
+from functools import reduce
+from typing import Any, Final
+
+import yaml
+from hypothesis import example, strategies as st
+from hypothesis.strategies import SearchStrategy
+
+from sophios.lang import Forms
+
+
+def pinned(*examples: Any) -> Callable[[Any], Any]:
+    """Each of `examples` as an `@example` of the property it decorates: a table too long for a decorator a case."""
+    return lambda test: reduce(lambda done, case: example(case)(done), examples, test)
+
 
 identifiers = st.text('abcdefghijklmnopqrstuvwxyz_', min_size=1, max_size=8)
 #: Scalar payloads as YAML source text, spelled to include exactly what a
@@ -150,3 +166,78 @@ def documents(draw: st.DrawFn) -> str:
                       '        steps:', f'          (1, {draw(identifiers)}):',
                       '            graphviz:', f"              label: '{draw(identifiers)}'"]
     return '\n'.join(lines) + '\n'
+
+
+@st.composite
+def scalar_spellings(draw: st.DrawFn) -> tuple[str, str | None]:
+    """A scalar as YAML text, and the tag YAML resolves it to but cannot construct, or None where YAML reads it:
+    integers in each YAML 1.1 base and form, floats, booleans, nulls, the shared payloads, dates with month 0-14 and
+    day 0-40, `0x_` and `0b_`. Any of them quoted, escaped, is text."""
+    n, year, month, day = (draw(st.integers(-2**70, 2**70)), draw(st.integers(1, 9999)), draw(st.integers(0, 14)),
+                           draw(st.integers(0, 40)))
+    text, tag = draw(st.sampled_from([
+        (str(n), None), (f'{n:+_}', None), (hex(n), None), (bin(n), None), (f'0{abs(n):o}', None),
+        (f'{abs(n) // 60}:{abs(n) % 60:02}', None), (repr(draw(st.floats())), None), (draw(scalar_payload_texts), None),
+        (draw(st.sampled_from(['Yes', 'NO', 'Off', '~', 'Null', '.NaN', '-.Inf', '1.', '1e3'])), None),
+        (f'{year:04}-{month:02}-{day:02}', None if 0 < month < 13 and 0 < day <= monthrange(year, month)[1]
+         else 'timestamp'), (draw(st.sampled_from(['0x_', '0b_'])), 'int')]))
+    quote = draw(st.sampled_from(['', "'", '"']))
+    return {'': (text, tag), "'": ("'" + text.replace("'", "''") + "'", None), '"': (json.dumps(text), None)}[quote]
+
+
+#: A well-formed value for every `wic:` key, as flow YAML. Keyed by the
+#: declaration, so a key added there without a row here fails the lookup.
+WIC_VALUES: Final = {
+    'graphviz': '{label: x, style: dashed, ranksame: ["(1, s)"]}', 'implementations': '{}',
+    'driver': 'slurm', 'inlineable': 'true', 'scatterMethod': 'dotproduct', 'in': '{}',
+    'scatter': '[x]', 'inference': '{}', 'implementation': 'x', 'default_implementation': 'x',
+    'version': 'x', 'lang_version': 'x', 'namespace': 'x',
+}
+
+#: What `shapes()` writes where the language reads a name: strings only.
+_SHAPE_NAMES = st.sampled_from(['s', 'in', 'out', 'id', '', 'a.wic', 'x y'])
+_SHAPE_SCALARS = st.one_of(st.none(), st.booleans(), st.integers(-1, 2), st.sampled_from(['', 'x', '(1, s)', 'slurm']))
+#: Any tag-free value. No key is `id` or `out`, so a value drawn where steps go holds no name of another type.
+_ANY = st.recursive(_SHAPE_SCALARS, lambda inner: st.lists(inner, max_size=2) | st.dictionaries(
+    st.sampled_from(['s', 'in', '', 'a.wic', 'x y']), inner, max_size=2), max_leaves=4)
+
+
+def _or_any(shape: SearchStrategy[Any]) -> SearchStrategy[Any]:
+    """The shape the language gives a place, or, a third of the time, any value."""
+    return st.one_of(shape, shape, _ANY)
+
+
+#: A step body: `in:` values are any value or a construct, and an `out:` entry a name, a list or one `!&`.
+_BODY = st.fixed_dictionaries({}, optional={
+    'in': _or_any(st.dictionaries(_SHAPE_NAMES, _ANY | st.sampled_from(sorted(Forms.DESUGARED_KEYS)).map(
+        lambda key: {key: 'x'}) | st.just({'wic_raw_cwl': {'source': 'x'}}), max_size=2)),
+    'out': _SHAPE_SCALARS | st.dictionaries(_SHAPE_NAMES, _ANY, max_size=1) | st.lists(
+        _SHAPE_NAMES | st.lists(_SHAPE_NAMES, max_size=1) | st.dictionaries(
+            _SHAPE_NAMES, st.just({'wic_anchor': 'e'}), max_size=1), max_size=2),
+    'run': _ANY, 'label': _ANY})
+_IDS = _SHAPE_NAMES | st.lists(_SHAPE_NAMES, max_size=1) | st.dictionaries(_SHAPE_NAMES, _ANY, max_size=1)
+_STEPS = _or_any(st.dictionaries(_SHAPE_NAMES, _or_any(_BODY), max_size=2) | st.lists(
+    st.builds(lambda name, body: {'id': name, **body}, _IDS, _BODY)
+    | st.dictionaries(_SHAPE_NAMES.filter(lambda name: name != 'id'), _or_any(_BODY), min_size=1, max_size=1),
+    max_size=2))
+
+
+def _wic(depth: int) -> SearchStrategy[Any]:
+    """A `wic:` block: each key with its well-formed value or any other, and `steps:` entries `depth` deep."""
+    entries = {key: st.just(yaml.safe_load(text)) | _ANY for key, text in WIC_VALUES.items()} | {'nonsense': _ANY}
+    if depth:
+        entry = _wic(depth - 1)
+        entries['steps'] = _or_any(st.dictionaries(st.sampled_from(['(1, s)', 's', 'not a key']), entry | st.builds(
+            lambda wic, rest: {'wic': wic, **rest}, entry, st.fixed_dictionaries({}, optional={'in': _ANY})),
+            max_size=2))
+    return _or_any(st.fixed_dictionaries({}, optional=entries))
+
+
+def shapes() -> SearchStrategy[dict[str, Any]]:
+    """A tag-free document over the parser's own keys, as YAML loads it: each place holds the shape the language
+    gives it or another, so most are malformed and some are well-formed. JSON writes it as YAML the parser reads.
+
+    Not drawn, the four places the two readers disagree, each pinned where it is tested: a name YAML types, as `1`,
+    which the parser reads as its text and the schema refuses; and an `out:` entry binding anything but an edge
+    definition, a construct around a collection, and `out:` under `wic: steps:`, which the parser refuses alone."""
+    return st.fixed_dictionaries({}, optional={'steps': _STEPS, 'wic': _wic(2), 'label': _ANY})
