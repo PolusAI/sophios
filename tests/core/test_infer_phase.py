@@ -605,3 +605,139 @@ def test_naming_conventions_pick_the_name_matched_output_over_the_first_declared
         (edge,) = [edge for edge in result.graph.linked_edges if edge.sink.step.name == 'consumer']
         chosen[conventions] = edge.source.port
     assert chosen == {True: 'output_structure', False: 'output_other'}
+
+
+_TXT = 'edam:format_2330'
+
+
+def _pair_tools(left: str | None, right: str | None) -> Tools:
+    """`pair`, a tool with two File inputs that declare the given formats (none when `None`)."""
+    def port(fmt: str | None) -> dict[str, Any]:
+        return {'type': 'File', 'inputBinding': {'position': 1}, **({'format': fmt} if fmt else {})}
+    pair = clt({'left': port(left), 'right': port(right)}, {}, canonical=True)
+    return {**SYNTHETIC_TOOLS, LegacyStepId('pair', SYNTHETIC_NS): Tool('/synthetic/pair.cwl', pair)}
+
+
+_MAKE: Yaml = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a.txt'}}, 'out': [{'file': {'wic_anchor': 'f'}}]}
+
+
+def _refusal(workflow: Yaml, tools: Tools) -> list[str]:
+    """The messages of the errors the compile of `workflow` stops with."""
+    _, linked, _ = _typed(workflow, tools)
+    result = infer(linked)
+    assert [d.code for d in result.diagnostics if d.severity is Severity.ERROR] in (
+        [], [SophiosErrorCode.INFERENCE_DUPLICATE])
+    return [d.message for d in result.diagnostics if d.severity is Severity.ERROR]
+
+
+@pytest.mark.fast
+def test_two_inferred_bare_file_inputs_reading_one_output_are_refused() -> None:
+    """`join` would take the one file as `left` and as `right`, and nothing says that is meant."""
+    _, linked, _ = _typed({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a.txt'}}},
+                                     {'id': 'join', 'in': {'name': {'wic_inline_input': 'o.txt'}}}]})
+    result = infer(linked)
+    assert result.graph is None
+    (error,) = [d for d in result.diagnostics if d.severity is Severity.ERROR]
+    assert error.code is SophiosErrorCode.INFERENCE_DUPLICATE
+    assert error.locator == Locator(step='join', index=2, port='left')
+    assert error.message.startswith("step 2 'join' inputs 'left' and 'right' would both read "
+                                    "step 1 'mk_file' output 'file'")
+    assert 'out: - <port>: !& <name>' in error.message and '`in: right: !* <name>`' in error.message
+
+
+@pytest.mark.fast
+def test_a_written_edge_and_an_inferred_one_reading_one_output_are_refused() -> None:
+    """The written `left` does not vouch for the inferred `right`."""
+    workflow: Yaml = {'steps': [_MAKE, {'id': 'join', 'in': {'name': {'wic_inline_input': 'o.txt'},
+                                                             'left': {'wic_alias': 'f'}}}]}
+    (message,) = _refusal(workflow, SYNTHETIC_TOOLS)
+    assert "inputs 'left' and 'right' would both read step 1 'mk_file' output 'file'" in message
+
+
+@pytest.mark.fast
+def test_two_written_edges_reading_one_output_are_never_refused() -> None:
+    """An author who wrote both edges meant both."""
+    workflow: Yaml = {'steps': [_MAKE, {'id': 'join', 'in': {'name': {'wic_inline_input': 'o.txt'},
+                                                             'left': {'wic_alias': 'f'},
+                                                             'right': {'wic_alias': 'f'}}}]}
+    assert not _refusal(workflow, SYNTHETIC_TOOLS)
+
+
+@pytest.mark.fast
+def test_inputs_that_declare_the_format_the_output_carries_may_read_it_twice() -> None:
+    """`mk_file` makes text; both inputs of `pair` declare text, which counts as saying so."""
+    assert not _refusal({'steps': [_MAKE, {'id': 'pair'}]}, _pair_tools(_TXT, _TXT))
+
+
+@pytest.mark.fast
+def test_one_input_without_the_evidence_refuses_the_group() -> None:
+    """Every input has to declare a format the output carries: a bare `right` does not."""
+    (message,) = _refusal({'steps': [_MAKE, {'id': 'pair'}]}, _pair_tools(_TXT, None))
+    assert "inputs 'left' and 'right' would both read" in message
+
+
+@pytest.mark.fast
+def test_a_file_fanned_out_to_two_inner_steps_of_a_subworkflow_is_not_a_duplicate() -> None:
+    """Each inner `count` is a tool step of its own, so each reads the file once."""
+    inner = {'steps': [{'id': 'count'}, {'id': 'count'}]}
+    workflow: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a.txt'}}},
+                                subworkflow_step('fan.wic', inner)]}
+    assert not _refusal(workflow, SYNTHETIC_TOOLS)
+
+
+@pytest.mark.fast
+def test_an_output_read_through_its_inner_port_and_the_calls_twin_is_one_output() -> None:
+    """`f` is anchored inside the subworkflow; `left` is written to it and `right` is inferred from the call's
+    exposed twin of the same file."""
+    workflow: Yaml = {'steps': [subworkflow_step('src.wic', {'steps': [_MAKE]}),
+                                {'id': 'join', 'in': {'name': {'wic_inline_input': 'o.txt'},
+                                                      'left': {'wic_alias': 'f'}}}]}
+    (message,) = _refusal(workflow, SYNTHETIC_TOOLS)
+    assert "inputs 'left' and 'right' would both read" in message
+
+
+@pytest.mark.fast
+def test_two_plain_inputs_of_a_subworkflow_for_different_inner_steps_are_not_a_duplicate() -> None:
+    """`a` goes to `count` and `b` to `xform`: two tool steps, each reading the one file once."""
+    inner = {'inputs': {'a': {'type': 'File'}, 'b': {'type': 'File'}},
+             'steps': [{'id': 'count', 'in': {'file': 'a'}}, {'id': 'xform', 'in': {'file': 'b'}}]}
+    workflow: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a.txt'}}},
+                                subworkflow_step('fan.wic', inner)]}
+    assert not _refusal(workflow, SYNTHETIC_TOOLS)
+
+
+@pytest.mark.fast
+def test_a_written_edge_to_an_anchor_in_a_call_and_the_calls_exposed_port_are_one_output() -> None:
+    """`left` is written to the anchor `f` inside the call; `right` is inferred from the call's exposed port.
+    Compiled whole, so the written edge reaches the deep output the way a document's does."""
+    workflow: Yaml = {'steps': [subworkflow_step('src.wic', {'steps': [_MAKE]}),
+                                {'id': 'pair', 'in': {'left': {'wic_alias': 'f'}}}]}
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic(workflow, tools=_pair_tools(None, None))
+    (error,) = caught.value.diagnostics
+    assert error.code is SophiosErrorCode.INFERENCE_DUPLICATE
+    assert error.message == ("pair's left and right would both read src.wic > mk_file's file; "
+                             "write the edge each should read")
+
+
+@pytest.mark.fast
+def test_a_file_fanned_out_through_nested_subworkflows_to_different_leaves_is_not_a_duplicate() -> None:
+    """`x` and `y` reach `count` and `xform` two calls down: two tool steps, each reading the file once."""
+    fan = subworkflow_step('fan.wic', {
+        'inputs': {'a': {'type': 'File'}, 'b': {'type': 'File'}},
+        'steps': [{'id': 'count', 'in': {'file': 'a'}}, {'id': 'xform', 'in': {'file': 'b'}}]})
+    mid = {'inputs': {'x': {'type': 'File'}, 'y': {'type': 'File'}},
+           'steps': [{**fan, 'parentargs': {'in': {'a': 'x', 'b': 'y'}}}]}
+    workflow: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a.txt'}}},
+                                subworkflow_step('mid.wic', mid)]}
+    assert not _refusal(workflow, SYNTHETIC_TOOLS)
+
+
+@pytest.mark.fast
+def test_the_refusal_points_at_the_first_inferred_input() -> None:
+    """The written `left` is not what was refused: the locator names `right`."""
+    workflow: Yaml = {'steps': [_MAKE, {'id': 'join', 'in': {'name': {'wic_inline_input': 'o.txt'},
+                                                             'left': {'wic_alias': 'f'}}}]}
+    _, linked, _ = _typed(workflow, SYNTHETIC_TOOLS)
+    (error,) = [d for d in infer(linked).diagnostics if d.severity is Severity.ERROR]
+    assert error.locator == Locator(step='join', index=2, port='right')

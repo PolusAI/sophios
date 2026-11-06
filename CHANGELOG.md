@@ -25,6 +25,9 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   like any other. Give the input a `format:` to keep logs out of its edge.
 - A tie that no name settles goes to the output declared first, where it went
   to the last. Write the edge where you relied on the last.
+- Two inputs of one tool step that read one output, one of them inferred, are
+  refused (wic055) unless each declares a format the output carries. Write the
+  edge each input should read.
 
 ## [0.7.0](https://github.com/PolusAI/sophios/compare/v0.6.0...v0.7.0) (2026-11-04)
 

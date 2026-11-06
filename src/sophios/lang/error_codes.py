@@ -128,6 +128,10 @@ class SophiosErrorCode(StrEnum):
     #: wic054: a pipeline no workflow built through the Python API compiles to, as it is written.
     IMPORT_UNWRITABLE = 'wic054'
 
+    #: Inference would wire two inputs of one tool step to the same output, and
+    #: not every input declares a file format that output carries.
+    INFERENCE_DUPLICATE = 'wic055'
+
     #: --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = 'api001'
     INVALID_STEP = 'api002'
@@ -424,6 +428,12 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         'of a CWL tool named like an attribute of the tool builder\'s `Inputs` or `Outputs`, such as `keys`.',
         'Rename what the message names in the workflow the pipeline was compiled from, to a name the compile keeps, '
         'and compile it again.'),
+    SophiosErrorCode.INFERENCE_DUPLICATE: Explanation(
+        Kind.DOCUMENT,
+        'Inference would give two inputs of one step the same output, and nothing says that is meant: the inputs '
+        'are not all written and do not all declare a file format that output carries.',
+        'Write the edge each input should read, with `!&` on the output and `!*` on the input (.wic reference §8); '
+        'two written edges to one output are always accepted.'),
     SophiosErrorCode.INVALID_INPUT_VALUE: Explanation(
         Kind.CALL,
         'A value bound to a step input that the input cannot take.',

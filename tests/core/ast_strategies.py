@@ -275,6 +275,9 @@ def _step(draw: st.DrawFn, stem: str, defined_edges: list[tuple[str, Any]],
     chosen = draw(st.lists(st.sampled_from(names), unique=True, max_size=len(names))) if names else []
     # Infer lifts only a required input, so a scattered one that is not must be bound.
     chosen += [name for name in ports if name not in chosen and name not in required_inputs_of(stem)]
+    # Two inferred File inputs of one step would read one output, which inference refuses (wic055).
+    if stem == 'join':
+        chosen += [name for name in ('left', 'right') if name not in chosen]
     connectable = [name for name in names
                    if any(_may_feed(carries, sink(name)) for _, carries in defined_edges)]
     forced: str | None = None
@@ -554,8 +557,9 @@ def workflows() -> SearchStrategy[Yaml]:
     return compilable_documents().map(to_yml)
 
 
+#: `join` is absent: its `left` and `right` would be inferred from one output, which inference refuses (wic055).
 _SCATTERABLE_STRING_INPUTS: Final[tuple[tuple[str, str], ...]] = (
-    ('mk_file', 'name'), ('mk_text', 'name'), ('xform', 'name'), ('join', 'name'),
+    ('mk_file', 'name'), ('mk_text', 'name'), ('xform', 'name'),
 )
 
 
