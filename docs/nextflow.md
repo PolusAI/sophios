@@ -422,7 +422,8 @@ inputs:
 ```
 
 An array input of `File`, `Directory`, `string`, `int`, `float`, or `boolean`
-items is supported. It carries the same qualifier its item type would carry
+items, written as above or as the shorthand `string[]`, is supported. It
+carries the same qualifier its item type would carry
 alone (`path` for File/Directory, `val` for scalars); a `path` array stages
 every element for one process call rather than fanning the channel out, and
 renders as `path <name>, arity: '0..*'` so the process always receives a list,
@@ -435,10 +436,9 @@ when the array is empty. An empty array is a present, valid value — distinct
 from an absent optional value above.
 
 `itemSeparator`, `separate: false`, and `valueFrom` on an array binding are
-not supported, nor are the shorthand `File[]` type form, nested arrays, a
-per-item `inputBinding`, or array-typed outputs. A binding on a `boolean`
-array is rejected: CWL adds only its prefix, when the array is not empty, and
-never an item's `true` or `false`.
+not supported, nor are nested arrays, a per-item `inputBinding`, or array-typed
+outputs. A binding on a `boolean` array is rejected: CWL adds only its prefix,
+when the array is not empty, and never an item's `true` or `false`.
 
 ## Shell mode
 

@@ -164,12 +164,15 @@ def _lines(file: str, text: str) -> list[_Line]:
     raw = text.split("\n")
     helpers = {helper.split("\n", 1)[0]: helper for helper in NF_HELPER_FUNCTIONS}
     lines: list[_Line] = []
-    index, comment, body = 0, False, False
+    index, comment, body, opened = 0, False, False, 0
     while index < len(raw):
         line = _Line(file, index + 1, raw[index], verbatim=True)
         start = len(line.text) - len(line.text.lstrip(" \t"))
         if body and line.text.startswith('"""', start):
             # The quotes that close a script or stub end its string; what follows them on their line is code.
+            # Nextflow strips the indentation every line of a script shares, as v0.7.0 wrote them.
+            shared = min((len(kept.text) - len(kept.text.lstrip(" ")) for kept in lines[opened:]), default=0)
+            lines[opened:] = [replace(kept, text=kept.text[shared:]) for kept in lines[opened:]]
             lines.append(_Line(file, line.number, line.text[:start + 3], verbatim=True))
             line, body = _Line(file, line.number, line.text[start + 3:]), False
         if body:
@@ -183,7 +186,7 @@ def _lines(file: str, text: str) -> list[_Line]:
         elif lines and lines[-1].text in ("script:", "stub:") and _opens(line.text, comment):
             # What precedes the quotes that open a script or stub is layout; what follows them is in its string.
             lines.append(_Line(file, line.number, '"""', verbatim=True))
-            body = True
+            body, opened = True, len(lines)
         else:
             try:
                 code, comment = _code(line.text, comment)
@@ -370,7 +373,7 @@ def _streams(pieces: list[tuple[bool, str]]) -> dict[str, NfTemplate]:
 
 def _command(body: list[_Line], head: _Line) -> tuple[NfCommand, dict[str, NfEntry]]:
     """The command a script body runs, and the entries it makes first."""
-    texts = [line.text.removeprefix("    ") for line in body]
+    texts = [line.text for line in body]
     entries: dict[str, NfEntry] = {}
     env: list[NfEnvVar] = []
     index = 0
@@ -483,7 +486,7 @@ def _process(block: list[_Line]) -> _Process:  # pylint: disable=too-many-branch
                 body = block[start + 1:index - 1]
                 if line.text == "script:":
                     script = body
-                elif [item.text for item in body] != [f"    {item}" for item in NF_STUB_LINES[2:-1]]:
+                elif [item.text for item in body] != list(NF_STUB_LINES[2:-1]):
                     line.stop(_Code.IMPORT_FOREIGN_SCRIPT, "a stub other than the one Sophios writes")
             elif section == "directive":
                 if found := Idioms.CONTAINER.match(line.text):
@@ -830,14 +833,21 @@ def read_nextflow(directory: str | Path) -> tuple[ExecutableNextflowWorkflow, di
     params_text = _read(folder / NEXTFLOW_PARAMS, _Code.IMPORT_PARAMS)
     params = _params(params_file, params_text, parameters)
     try:  # a condition its run: line reads that is too deep to build into the workflow or render, past that line
-        model = _workflow(workflows[0], {name: _process(block) for name, block in blocks.items()}, parameters, params)
+        model = _workflow(workflows[0], processes := {name: _process(block) for name, block in blocks.items()},
+                          parameters, params)
         rendered, written = render_nextflow(model), nextflow_params(model)
     except RecursionError as exc:
         workflows[0][0].stop(_Code.IMPORT_FOREIGN_STATEMENT, f"a condition Sophios does not write ({exc})")
     rendered_others, rendered_blocks, _ = _top(_lines(script_file, rendered))
     _same(others, rendered_others, _Code.IMPORT_MISMATCH, start)
     for name, block in blocks.items():
-        _same(block, rendered_blocks.get(name, []), _Code.IMPORT_MISMATCH, block[0])
+        expected = rendered_blocks.get(name, [])
+        # v0.7.0 wrote a command with no shell literal on one line, the parentheses' redirects after it.
+        if (at := next((at for at, line in enumerate(expected) if line.text == "("), None)) is not None and not any(
+                line.text == "(" for line in block) and not any(
+                isinstance(token, NfShellLiteral) for token in processes[name].command.tokens):
+            expected[at:at + 3] = [replace(expected[at + 1], text=expected[at + 1].text + expected[at + 2].text[1:])]
+        _same(block, expected, _Code.IMPORT_MISMATCH, block[0])
     given = json.loads(params_text)
     for name in sorted(given):
         if json.dumps(written[name], sort_keys=True) != json.dumps(given[name], sort_keys=True):

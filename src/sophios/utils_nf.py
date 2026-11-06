@@ -165,14 +165,17 @@ def _is_optional(cwl_type: Any) -> bool:
 
 
 def _required_type(cwl_type: Any) -> Any:
+    """``cwl_type`` without its null, an array written ``T[]`` read as CWL reads it: ``{type: array, items: T}``."""
     match cwl_type:
         case str() as type_name if type_name.endswith("?"):
-            return type_name[:-1]
+            return _required_type(type_name[:-1])
+        case str() as type_name if type_name.endswith("[]"):
+            return {"type": "array", "items": type_name[:-2]}
         case list() as union if "null" in union:
             remaining = [item for item in union if item != "null"]
             if len(remaining) != 1:
                 raise ValueError(f"unsupported optional CWL union {cwl_type!r}")
-            return remaining[0]
+            return _required_type(remaining[0])
         case _:
             return cwl_type
 
@@ -339,8 +342,9 @@ def _template(value: Any, *, context: str) -> NfTemplate:
             segments.append(NfBasenameReference(name) if match["suffix"] == "basename" else NfInputReference(name))
         offset = match.end()
     segments.append(NfLiteral(text[offset:]))
-    # A `$` not followed by `(` or `{` is plain text, as in CWL.
-    if interpolated and _EXPRESSION_START.search(_INTERPOLATION.sub("", text)):
+    # A `$` not followed by `(` or `{` is plain text, as in CWL. A space stands in for each token, so the text on
+    # its two sides cannot join into an expression's start: `{$$(inputs.x){$` is `{$`, a reference and `{$`.
+    if interpolated and _EXPRESSION_START.search(_INTERPOLATION.sub(" ", text)):
         raise ValueError(
             f"{context} contains an unsupported CWL expression; the supported forms are $(inputs.<name>) "
             "and, on a File or Directory input, $(inputs.<name>.path) and $(inputs.<name>.basename)"

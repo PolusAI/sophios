@@ -556,7 +556,7 @@ IMPORT_EDITS: Final[dict[SophiosErrorCode, tuple[str, str, str, str]]] = {
     SophiosErrorCode.IMPORT_FOREIGN_DECLARATION: (
         'workflow.nf', '    val message\n', '    tuple val(id), path(reads)\n', 'tuple val(id)'),
     SophiosErrorCode.IMPORT_FOREIGN_SCRIPT: (
-        'workflow.nf', "    ${__sophios_shell_quote_9f72e('echo')}", '    echo hello\n    echo', 'echo hello'),
+        'workflow.nf', "${__sophios_shell_quote_9f72e('echo')}", 'echo hello\necho', 'echo hello'),
     # A parameter the pipeline does not check; Docker enabled for a pipeline with no container.
     SophiosErrorCode.IMPORT_PARAMS: ('nextflow_params.json', '{', '{\n  "extra": 1,', '"extra"'),
     SophiosErrorCode.IMPORT_CONFIG: ('nextflow.config', 'false', 'true', 'docker.enabled'),
