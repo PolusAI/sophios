@@ -871,10 +871,16 @@ rejected by name — a non-optional port, a `path` consumer, an array-typed
 port, or an array-typed output of a conditional step outside scatter.
 
 `when` on a step whose `run` is a workflow is rejected, since skipping an
-inlined sub-DAG is not this lowering's single-process shape. A step input the
-step's tool does not declare, which CWL allows so that a `when` can read it, is
-rejected. A conditional step needs at least one input to gate on, so `when`
-on a tool that declares no inputs is rejected.
+inlined sub-DAG is not this lowering's single-process shape. CWL lets a step
+bind an input its tool does not declare. When only workflow inputs feed it (or
+nothing does) and neither the step's `when` nor its `scatter` reads it, it
+changes nothing the step runs, and the target leaves it out. One that the
+step's `when` reads is rejected, as is one the step scatters over. One fed by
+a step output is rejected too: CWL runs the step only after that step
+finishes, and the generated Nextflow would not wait for it. The same holds for
+a nested workflow step's input that its workflow does not declare. A
+conditional step needs at least one input to gate on, so `when` on a tool
+that declares no inputs is rejected.
 
 ## The corpus runs
 
