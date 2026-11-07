@@ -20,9 +20,7 @@ from .ir.resolved import (
 from .ir.types import AuthoredName, PortDeclaration, PortType
 from .lang.diagnostics import Diagnostic, Locator, Severity
 from .lang.error_codes import SophiosErrorCode
-from .lang.subset import (
-    Expr, check as check_safe_subset, is_safe_subset_text, references,
-)
+from .lang.subset import Expr, is_safe_subset_text, references
 from .nf_support import FIELDS, REQUIREMENT_CLASSES, Row, State, consumed
 from .nf_symbols import normalize_nextflow_identifier
 from .nf_types import (
@@ -31,6 +29,7 @@ from .nf_types import (
     LINK_MERGES,
     PICK_VALUES,
     NF_INTERNAL_IDENTIFIERS,
+    PARAM_TYPES,
     NfArrayBinding,
     NfBasenameReference,
     NfCommand,
@@ -1694,11 +1693,13 @@ def _tool_capability_findings(tool: Mapping[str, Any], *, path: str) -> list[str
 
 @dataclass(frozen=True, slots=True)
 class _Step:
-    """One tool step as the lowering reads it: the view's, at its index, its tool normalized on the lowering's copy."""
+    """One tool step as the lowering reads it: the view's, at its index, its tool normalized on the lowering's copy,
+    and the step-only inputs its process carries (design §9)."""
 
     index: int
     view: ToolStep
     tool: Mapping[str, Any]
+    carried: frozenset[str]
 
     @property
     def node(self) -> ResolvedStep:
@@ -1710,17 +1711,15 @@ class _Step:
         """Where a finding names the step."""
         return f"steps[{self.index}]"
 
-    def bound(self, *, declared: bool = True) -> Iterator[tuple[StepInput, tuple[Through | Crossing, ...]]]:
-        """Each step input and its sources, in `in:` order: those the tool declares, or every one.
-
-        An input the tool does not declare that passes the undeclared-input check is carried nowhere.
-        """
+    def bound(self) -> Iterator[tuple[StepInput, tuple[Through | Crossing, ...]]]:
+        """Each step input the process receives and its sources, in `in:` order: those the tool declares, and the
+        step-only ones it carries."""
         for port, sources in zip(self.node.inputs, self.view.sources, strict=True):
-            if port.declared is not None or not declared:
+            if port.declared is not None or port.name in self.carried:
                 yield port, sources
 
     def wired(self) -> Iterator[tuple[StepInput, list[str]]]:
-        """Each declared step input of a shape the idioms read, and its sources spelled."""
+        """Each step input the process receives, of a shape the idioms read, and its sources spelled."""
         for port, sources in self.bound():
             spelled = _wired(port, sources)
             if spelled is not None:
@@ -1879,44 +1878,24 @@ def _workflow_fields(workflow: ResolvedWorkflow) -> dict[str, Any]:
     return fields
 
 
-def _undeclared_input_findings(step: ResolvedStep, sources: tuple[tuple[Through | Crossing, ...], ...], *,
-                               path: str) -> list[str]:
-    """Reject each step input its tool does not declare that the lowering would have to carry.
-
-    CWL passes such an input to nothing but the step's ``when``, ``scatter`` and ``valueFrom``. One that none of
-    them reads and that only workflow inputs feed changes nothing the step runs, so the lowering leaves it out.
-    """
-    undeclared = [(port, found) for port, found in zip(step.inputs, sources, strict=True) if port.declared is None]
-    if not undeclared:
-        return []
-    read_by_when = references(step.condition.expr) if step.condition is not None and step.condition.expr else set()
-    scattered = set(step.scatter.inputs) if step.scatter is not None else set()
-    findings: list[str] = []
-    for port, found in undeclared:
-        input_path = f"{path}.in.{port.name}"
-        if port.name in read_by_when:
-            findings.append(f"{input_path}: the step's when reads an input its tool does not declare, which is not "
-                            "supported")
-        elif port.name in scattered:
-            findings.append(f"{input_path}: scatter over an input the step's tool does not declare is not supported")
-        elif any(isinstance(source, Through) and isinstance(source.ref, OutputRef) for source in found):
-            findings.append(
-                f"{input_path}: an input the step's tool does not declare is not supported from a step output: CWL "
-                "runs this step only after that step finishes, and the Nextflow target would not wait for it"
-            )
-    return findings
+def _carried(tool: ToolStep) -> frozenset[str]:
+    """The step-only inputs a step's process carries (design §9): each one but those fed only by root workflow
+    inputs, through every call, that neither the step's `when` nor its `scatter` reads. Such an input cannot change
+    what the step does or when it starts, so it is left out."""
+    step = tool.step
+    read = references(step.condition.expr) if step.condition is not None and step.condition.expr is not None else set()
+    read |= set(step.scatter.inputs) if step.scatter is not None else set()
+    return frozenset(port.name for port, sources in zip(step.inputs, tool.sources, strict=True)
+                     if port.declared is None and (port.name in read or any(
+                         not isinstance(found, Through) or not isinstance(found.ref, InputRef) for found in sources)))
 
 
-def _step_capability_findings(step: _Step) -> list[str]:
-    """What a step says that its tool step cannot lower, before its tool is judged."""
-    findings: list[str] = []
-    if step.node.condition is not None and not step.tool.get("inputs"):
-        findings.append(
-            f"{step.path}.when: a conditional step needs at least one input to gate on, and this step's tool declares "
-            "none"
-        )
-    findings.extend(_undeclared_input_findings(step.node, step.view.sources, path=step.path))
-    return findings
+def _lists(cwl_type: Any) -> bool:
+    """Whether a value of `cwl_type` is a list, null aside."""
+    try:
+        return _is_array_type(_required_type(cwl_type))
+    except ValueError:  # a union, which no source the lowering admits delivers
+        return False
 
 
 def _workflow_capability_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -> list[str]:
@@ -1956,7 +1935,7 @@ def _workflow_capability_findings(workflow: ResolvedWorkflow, steps: tuple[_Step
         findings.extend(_unconsumed_field_findings(fields, "WorkflowStep", path=step.path))
         if step.node.scatter is None and "scatterMethod" in fields:
             findings.append(f"{step.path}.scatterMethod: scatterMethod without scatter is not executable")
-        for port, _sources in step.bound(declared=False):
+        for port in step.node.inputs:
             if port.expression is None:
                 findings.extend(_unconsumed_field_findings({name: None for name in _record_fields(port)},
                                                            "WorkflowStepInput", path=f"{step.path}.in.{port.name}"))
@@ -2067,7 +2046,9 @@ def _scatter_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -> l
         for raw_name in names:
             definition = tool_inputs.get(raw_name)
             if not isinstance(definition, Mapping):
-                # The undeclared-input pass refuses a scatter over an input the tool does not declare.
+                # No process input receives the element: a step-only input is a val after the tool's own.
+                findings.append(f"{step.path}.in.{raw_name}: scatter over an input the step's tool does not declare "
+                                "is not supported")
                 continue
             if _is_array_type(_required_type(definition.get("type"))):
                 findings.append(
@@ -2162,11 +2143,16 @@ def _step_input_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -
             if pick_value is not None and merges is None:
                 findings.append(f"{path}.pickValue: pickValue picks from a list; one source with no linkMerge is not "
                                 "one")
-            declared = tool_inputs.get(port.name)
+            # A step-only input has no declaration: its type is what it delivers.
+            declared = tool_inputs.get(port.name) if port.declared is not None else {"type": port.type}
             declared_type = declared.get("type") if isinstance(declared, Mapping) else declared
             if port.has_default:
                 default = port.default
-                if sources and merges is not None:
+                if port.declared is None and _parameter_type(declared_type) not in PARAM_TYPES:
+                    findings.append(f"{path}.default: a default of an input the step's tool does not declare needs a "
+                                    "source of a scalar type to be checked against; give the value as a workflow "
+                                    "input")
+                elif sources and merges is not None:
                     findings.append(f"{path}.default: a default never applies beside a linkMerge or a pickValue: the "
                                     "joined value is not null")
                 elif _required_type(declared_type) in ("File", "Directory"):
@@ -2189,7 +2175,7 @@ def _step_input_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -
                 findings.append(f"{path}: {nullable[0]!r} may be null, and a joined list has no lowering of a null "
                                 "element; pick from it with pickValue")
             gives_list = pick_value not in _PICKS_ONE
-            if merges is not None and gives_list != _is_array_type(_required_type(declared_type)):
+            if merges is not None and port.declared is not None and gives_list != _lists(declared_type):
                 findings.append(f"{path}: the step input gives {'a list' if gives_list else 'one value'}, but its "
                                 f"tool input declares {declared_type!r}")
     return findings
@@ -2567,7 +2553,8 @@ class _WhenError(ValueError):
 
 
 def _condition_value(step: _Step) -> Expr:
-    """A step's ``when`` as a boolean tree over the inputs the step binds, as CWL types it, by the tool's declaration.
+    """A step's ``when`` as a boolean tree over the inputs the step binds, typed by what each one delivers (design
+    §5, §9): a step-only input as any other, and through every call.
 
     A step's when is evaluated once per invocation, after inputs are bound.
     """
@@ -2576,24 +2563,15 @@ def _condition_value(step: _Step) -> Expr:
     when = condition.written
     if not isinstance(when, str) or not is_safe_subset_text(when):
         raise _WhenError(f"{when!r} must be a safe JavaScript subset $( … ) expression")
-    inputs = _as_mapping(step.tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
-    bound = {port.name for port, _sources in step.bound()}
-    input_types = {
-        str(raw_name): definition.get("type") if isinstance(definition, Mapping) else definition
-        for raw_name, definition in inputs.items()
-        if str(raw_name) in bound
-    }
     if condition.expr is None:
         raise _WhenError(f"{when!r} is outside the safe JavaScript subset: {condition.problem}")
-    if unbound := sorted(references(condition.expr) - input_types.keys()):
+    if unbound := sorted(references(condition.expr) - {port.name for port in step.node.inputs}):
         names = ", ".join(f"inputs.{name}" for name in unbound)
         raise _WhenError(f"{when!r} reads {names}, which the step does not bind")
-    try:
-        result = check_safe_subset(condition.expr, input_types)
-    except ValueError as exc:
-        raise _WhenError(f"{when!r} is outside the safe JavaScript subset: {exc}") from exc
-    if result != "boolean":
-        raise _WhenError(f"{when!r} must compute a boolean, not a {result}")
+    if condition.type is None:
+        raise _WhenError(f"{when!r} is outside the safe JavaScript subset: {condition.problem}")
+    if condition.type != "boolean":
+        raise _WhenError(f"{when!r} must compute a boolean, not a {condition.type}")
     return condition.expr
 
 
@@ -2604,7 +2582,10 @@ def _process(step: _Step) -> tuple[NfProcess, Expr | None]:
     outputs = _ports(step.tool.get("outputs", {}), outputs=True)
     command, container, resources = _command(step.tool), _container(step.tool), _resources(step.tool)
     condition = _condition_value(step) if step.node.condition is not None else None
-    return NfProcess(name, inputs, outputs, command, container, resources), condition
+    # A carried input is a val, staging nothing, and a list where what it delivers is one.
+    carried = [NfPort(_identifier(port.name, context="step-only input"), "val", is_array=_lists(port.type))
+               for port, _sources in step.bound() if port.declared is None]
+    return NfProcess(name, inputs, outputs, command, container, resources, step_only_inputs=carried), condition
 
 
 def _typed(processes: list[NfProcess], connections: list[NfConnection], param_types: Mapping[str, str],
@@ -2762,6 +2743,9 @@ def _default_bindings(
     made: list[tuple[str, str, str, Any, str]] = []
     for step, process in zip(steps, processes, strict=True):
         bound = {port.name: port for port, _sources in step.bound()}
+        made.extend((f"{step.node.name}~{port.name}", process.name, _identifier(port.name, context="defaulted process "
+                     "input"), _json_value(port.default), _param_type(port.type))
+                    for port in bound.values() if port.declared is None and port.has_default)
         inputs = _as_mapping(step.tool.get("inputs", {}), error="tool inputs must be a mapping")
         for raw_name, definition in inputs.items():
             if not isinstance(definition, Mapping):
@@ -2789,6 +2773,14 @@ def _default_bindings(
         {names[name]: value for name, _process, _port, value, _type in made},
         {names[name]: param_type for name, *_, param_type in made},
     )
+
+
+def _parameter_type(cwl_type: Any) -> str | None:
+    """`_param_type`, or None for a type no parameter has."""
+    try:
+        return _param_type(cwl_type)
+    except ValueError:
+        return None
 
 
 def _param_type(cwl_type: Any) -> str:
@@ -2843,6 +2835,12 @@ def _apply_absent_sentinel(params: Mapping[str, Any]) -> dict[str, Any]:
     return {name: (ABSENT_VAL_SENTINEL if value is None else value) for name, value in params.items()}
 
 
+def _tool_of(run: ResolvedTool) -> dict[str, Any]:
+    """The tool a step runs, normalized on the lowering's own copy."""
+    return desugar_into_canonical_normal_form(copy.deepcopy(dict(
+        _as_mapping(run.document, error="a tool step's tool must be a CWL document"))))
+
+
 @dataclass(frozen=True, slots=True)
 class _Lowering:
     """A view as the lowering reads it: its tool steps, each tool on the lowering's own copy, and its outputs, each
@@ -2860,8 +2858,7 @@ class _Lowering:
         if not isinstance(view, ResolvedWorkflow):
             raise TypeError("Nextflow conversion requires a resolved view of a compilation")
         steps = tuple(
-            _Step(index, tool, desugar_into_canonical_normal_form(copy.deepcopy(dict(
-                _as_mapping(tool.step.run.document, error="a tool step's tool must be a CWL document")))))
+            _Step(index, tool, _tool_of(tool.step.run), _carried(tool))
             for index, tool in enumerate(tool_steps(view)) if isinstance(tool.step.run, ResolvedTool)
         )
         return cls(view, steps, tuple(zip(view.outputs, output_sources(view), strict=True)),
@@ -3011,7 +3008,7 @@ def _analysis(lowering: _Lowering) -> _Analysis:
     processes: list[NfProcess] = []
     conditions: dict[str, Expr] = {}
     for step in steps:
-        if step_findings := [*_step_capability_findings(step), *_tool_capability_findings(step.tool, path=step.path)]:
+        if step_findings := _tool_capability_findings(step.tool, path=step.path):
             findings.extend(step_findings)
             continue
         try:

@@ -9,7 +9,7 @@
 - id: an_array_typed_port_cannot_consume_a_conditional_scatter
   why: A skipped scatter position has no element for an array-typed port to gather.
   workflow: {steps: [{id: PRODUCE, in: {x: xs}, out: [{r: {wic_anchor: r}}], scatter: [x], when: "$(inputs.x == 'a')"},
-    {id: CONSUME, in: {rs: {wic_alias: r}}}], inputs: {xs: {type: array, items: string}}}
+    {id: CONSUME, in: {rs: {wic_alias: r}}}], inputs: {xs: {type: {type: array, items: string}}}}
   tools: [{id: PRODUCE, inputs: {x: {type: string}}, baseCommand: echo, stdout: out.txt, outputs: {r: {type: string,
     outputBinding: &text {glob: out.txt, loadContents: true, outputEval: '$(self[0].contents)'}}}}, {id: CONSUME,
     inputs: {rs: {type: {type: array, items: string}}}, baseCommand: 'true'}]
@@ -45,3 +45,9 @@
    '*.txt'}}}}], workflow: {steps: [{id: PRODUCE, in: {a: a}, out: [result], when: $(inputs.a > 0)}], inputs: {a: int},
    outputs: {result: {type: {type: array, items: File}, outputSource: PRODUCE/result}}}, error: {re: array-typed output
    of a conditional step}}
+- id: a_bare_read_of_a_value_that_may_be_null
+  why: A `when` is typed by what its input delivers; CWL fails a `when` that gives null, where Groovy would skip.
+  workflow: {steps: [{id: GATED, in: {a: a}, when: $(inputs.a > 1)}], inputs: {a: ['null', int]}}
+  tools: [{id: GATED, inputs: {a: {type: int}}, baseCommand: 'true'}]
+  job: {a: 2}
+  error: {re: 'optional inputs\.a may only be compared with null'}

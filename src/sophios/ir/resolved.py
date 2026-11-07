@@ -210,7 +210,7 @@ def resolve(graph: WorkflowGraph, tools: Mapping[StepId, ResolvedTool], *, polic
         ResolvedWorkflow: The root workflow, every nested workflow inside its calls.
     """
     names = Names.of(graph)
-    root = _workflow(graph, names, tools, policy, {step.id: step for step in graph.all_steps})
+    root = _workflow(graph, _Level(names, tools, policy, {step.id: step for step in graph.all_steps}, {}))
     bound = {names.port(binding.name): binding.value for binding in graph.job_bindings}
     for name in values or {}:
         if name not in {port.name for port in root.inputs}:
@@ -226,13 +226,16 @@ def resolve(graph: WorkflowGraph, tools: Mapping[StepId, ResolvedTool], *, polic
     return ResolvedWorkflow(root.name, inputs, kept, root.steps, root.requirements, root.fields, policy, root.span)
 
 
-def _workflow(graph: WorkflowGraph, names: Names, tools: Mapping[StepId, ResolvedTool], policy: RunPolicy,
-              everything: Mapping[StepId, StepNode]) -> ResolvedWorkflow:
+def _workflow(graph: WorkflowGraph, outer: '_Level', given: Mapping[str, OpaqueCwl] | None = None) -> ResolvedWorkflow:
+    """A workflow's view, inside the level `outer` of the call that runs it, or of nothing for the root; `given` is
+    the type each input the call binds holds, which is what its sources deliver (§5)."""
+    names = outer.names
     order = written_order(graph)
     inputs = tuple(WorkflowInput(names.port(port.name), port.declaration,
                                  made_from=_made_from(port.name, names), span=port.span or graph.span)
                    for port in sorted(graph.workflow_inputs, key=lambda port: order(port.name)))
-    level = _Level(names, tools, policy, everything, {port.name: port.declaration.type.canonical for port in inputs})
+    level = _Level(names, outer.tools, outer.policy, outer.everything, {
+        port.name: (given or {}).get(port.name, port.declaration.type.canonical) for port in inputs})
     ins = step_inputs(graph)
     steps = tuple(_step(step, ins[step.id], level) for step in graph.steps)
     mapped = dict(graph.output_mapping)
@@ -244,7 +247,8 @@ def _workflow(graph: WorkflowGraph, names: Names, tools: Mapping[StepId, Resolve
     documents: tuple[tuple[str, OpaqueCwl], ...] = (('$namespaces', dict(graph.namespaces)),) \
         if graph.namespaces else ()
     documents += (('$schemas', list(graph.schemas)),) if graph.schemas else ()
-    return ResolvedWorkflow(graph.name, inputs, outputs, steps, requirements, documents + fields, policy, graph.span)
+    return ResolvedWorkflow(graph.name, inputs, outputs, steps, requirements, documents + fields, level.policy,
+                            graph.span)
 
 
 def _made_from(name: PortName, names: Names) -> tuple[str, str] | None:
@@ -298,16 +302,17 @@ def _step(step: StepNode, ins: tuple[tuple[PortName, EmittedValue], ...], level:
         raise ValueError(f'step {step.id.name!r} of a finished graph has no run')
     names = level.names
     child = step.run.child
+    called = {names.port(port.name): port.declaration for port in child.workflow_inputs} if child is not None else {}
+    inputs = tuple(_step_input(name, value, step, called, level) for name, value in ins)
     run: ResolvedTool | ResolvedWorkflow = (
-        _workflow(child, names, level.tools, level.policy, level.everything) if child is not None
+        _workflow(child, level, {port.name: port.type for port in inputs}) if child is not None
         else level.tools[step.id])
-    inputs = tuple(_step_input(name, value, step, run, level) for name, value in ins)
     outputs = (tuple(port.name for port in run.outputs) if isinstance(run, ResolvedWorkflow)
                else tuple(names.port(name) for name in step_out(step)))
     interpreted = dict(step.interpreted)
     scatter = (Scatter(tuple(names.port(port) for port in step.scatter_ports), interpreted.get('scatterMethod'))
                if interpreted.get('scatter') is not None else None)
-    condition = _condition(interpreted['when'], inputs) if interpreted.get('when') is not None else None
+    condition = _condition(interpreted['when'], inputs, scatter) if interpreted.get('when') is not None else None
     requirements, fields = _requirements(step.passthrough)
     if scatter is None and 'scatterMethod' in interpreted:
         # A method with nothing to scatter is not a scatter: a key as written.
@@ -317,14 +322,13 @@ def _step(step: StepNode, ins: tuple[tuple[PortName, EmittedValue], ...], level:
 
 
 # pylint: disable-next=too-many-locals
-def _step_input(name: PortName, value: EmittedValue, step: StepNode, run: 'ResolvedTool | ResolvedWorkflow',
+def _step_input(name: PortName, value: EmittedValue, step: StepNode, called: Mapping[str, PortDeclaration],
                 level: _Level) -> StepInput:
-    """One `in:` entry as the CWL target writes it, its sources references at this level."""
+    """One `in:` entry as the CWL target writes it, its sources references at this level; `called` holds the
+    declaration of each input of the workflow a call runs."""
     spelled = level.names.port(name)
     port = next((port for port in step.inputs if port.id.port == name), None)
-    declared = port.declaration if port is not None else None
-    if isinstance(run, ResolvedWorkflow):
-        declared = next((input_.declaration for input_ in run.inputs if input_.name == spelled), declared)
+    declared = called.get(spelled, port.declaration if port is not None else None)
     binding = next((binding for binding in step.bindings if binding.sink.port == name), None)
     span = getattr(binding.value, 'span', None) if binding is not None else None
     refs: tuple[PortName | StepOutputRef, ...]
@@ -404,7 +408,15 @@ def _delivered_type(produced: list[OpaqueCwl], fields: Mapping[str, OpaqueCwl],
     return merged
 
 
-def _condition(when: OpaqueCwl, inputs: tuple[StepInput, ...]) -> Condition:
+def _seen(port: StepInput, scatter: Scatter | None) -> OpaqueCwl:
+    """What a `when` reads of a step input: its value, or one element of it in each job of a scatter (§5)."""
+    match port.type:
+        case {'type': 'array', 'items': items} if scatter is not None and port.name in scatter.inputs:
+            return items
+    return port.type
+
+
+def _condition(when: OpaqueCwl, inputs: tuple[StepInput, ...], scatter: Scatter | None) -> Condition:
     if not isinstance(when, str):
         return Condition(when, None, None, 'a when is a string')
     if not is_safe_subset_text(when):
@@ -415,7 +427,7 @@ def _condition(when: OpaqueCwl, inputs: tuple[StepInput, ...]) -> Condition:
     except ValueError as error:
         return Condition(when, None, None, str(error))
     try:
-        typed = check(expr, {port.name: port.type for port in inputs})
+        typed = check(expr, {port.name: _seen(port, scatter) for port in inputs})
     except ValueError as error:
         return Condition(when, expr, None, str(error))
     return Condition(when, expr, typed, None)

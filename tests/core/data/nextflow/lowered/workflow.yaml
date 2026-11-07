@@ -169,3 +169,8 @@
    [true, false]}, tools: [{id: SCATTER, inputs: {item: {type: boolean, inputBinding: {prefix: --flag}}}, outputs:
    *result}], lowered: {processes: [{command: {tokens: [{segments: [{kind: literal, value: SCATTER}]}, {kind: flag,
    name: item, prefix: --flag}]}}]}}
+- id: a_when_reads_an_optional_tool_input_a_required_source_feeds
+  why: A `when` is typed by what its input delivers, so a required source gives an optional tool input a value.
+  workflow: {steps: [{id: GATED, in: {a: a}, when: $(inputs.a > 1)}], inputs: {a: int}}
+  tools: [{id: GATED, inputs: {a: {type: ['null', int]}}, baseCommand: 'true'}]
+  job: {a: 2}
