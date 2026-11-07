@@ -241,3 +241,24 @@ def shapes() -> SearchStrategy[dict[str, Any]]:
     which the parser reads as its text and the schema refuses; and an `out:` entry binding anything but an edge
     definition, a construct around a collection, and `out:` under `wic: steps:`, which the parser refuses alone."""
     return st.fixed_dictionaries({}, optional={'steps': _STEPS, 'wic': _wic(2), 'label': _ANY})
+
+
+def cwl_types(*atoms: Any) -> SearchStrategy[Any]:
+    """A CWL v1.2 type over `atoms` as a document may write it (the Type DSL): an atom; a str atom with the
+    shorthand `?` or `[]`; and, recursively, a union list of 1 to 3 types and `{type: array, items: T}`."""
+    atom = st.sampled_from(atoms)
+    named = st.sampled_from([each for each in atoms if isinstance(each, str)])
+    return st.recursive(
+        atom | named.map(lambda each: f'{each}?') | named.map(lambda each: f'{each}[]'),
+        lambda inner: (st.lists(inner, min_size=1, max_size=3)
+                       | inner.map(lambda items: {'type': 'array', 'items': items})),
+        max_leaves=5)
+
+
+#: Names as an author writes a port, step or workflow: both cases (a and A meet where case does not count), digits,
+#: _ . -, each character Sophios or a file system refuses in a name, and a letter outside ASCII; and the names Python
+#: treats apart: keywords, a leading _, dunders, a port collection's attributes.
+#: No `'` (the step-id property writes each name inside single-quoted YAML) and no brace.
+author_names = st.text('aAzZ09_.-~@/\\ #?%:*"<>|\xe9', min_size=1, max_size=6) | st.sampled_from([
+    'class', 'in', 'lambda', '_', '_x', '_store', '_items', 'items', 'keys', 'to_dict', '__x__', '__deepcopy__',
+    'input-file', '\xe9', 'A', 'a'])

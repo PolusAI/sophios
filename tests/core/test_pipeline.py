@@ -30,6 +30,7 @@ from sophios.wic_types import Yaml
 from . import ast_strategies as strat
 from .equivalence import Strength, equivalent
 from .hermetic import COVERAGE, ORACLE, bundle, compile_hermetic
+from .strategies import cwl_types
 from .synthetic_tools import SYNTHETIC_TOOLS
 
 
@@ -80,12 +81,7 @@ def test_completing_twice_is_completing_once_for_any_workflow(workflow: Yaml) ->
     assert _render(complete(once)) == _render(once)
 
 
-_ATOMS = st.sampled_from(['string', 'int', 'float', 'boolean', 'File', 'Directory'])
-_TYPES = st.recursive(
-    st.one_of(_ATOMS, _ATOMS.map(lambda atom: atom + '?'), _ATOMS.map(lambda atom: atom + '[]')),
-    lambda inner: st.one_of(inner.map(lambda item: ['null', item]),
-                            inner.map(lambda item: {'type': 'array', 'items': item})),
-    max_leaves=3)
+_TYPES = cwl_types('null', 'string', 'int', 'float', 'boolean', 'File', 'Directory')
 _OBJECTS = st.fixed_dictionaries(
     {'class': st.sampled_from(['File', 'Directory']), 'location': st.text(max_size=2)},
     optional={'format': st.just('edam:format_2')})

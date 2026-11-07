@@ -139,6 +139,7 @@ _NAMES = NfPort("names", "val", is_array=True)
 
 #: Each IR idiom, built when its row runs, the fixed Nextflow text it renders as, and text it never renders.
 IDIOMS: dict[str, tuple[Callable[[], ExecutableNextflowWorkflow], list[str], list[str]]] = {
+    # Artifacts for models that predate the text capture stay byte-identical: no load-contents helper.
     "named-workflow-and-entry-wrapper": (runtime_workflow, [
         "workflow PIPELINE {", "take:\n    message", "COPY(PRODUCE.out.result)", "result = COPY.out.copy",
         f"workflow {{\n{NF_PARSER_CHECK}    PIPELINE({_ENTRY_CALL})\n{RESULT_RECORD}}}"], [NF_LOAD_CONTENTS_HELPER]),
@@ -170,6 +171,13 @@ IDIOMS: dict[str, tuple[Callable[[], ExecutableNextflowWorkflow], list[str], lis
         NfCommand((template("sort"), NfFlag("reverse", "-r")), stdout=template("sorted.txt"))),
         reverse=(True, "boolean")),
         [f"${{reverse ? {_Q}('-r') : ''}}"], []),
+    # A command whose first token can render nothing would start with a space; the `(` starts at column 0.
+    "a-command-led-by-a-flag-opens-its-parentheses-at-column-0": (partial(_fed, NfProcess(
+        "SORT", [NfPort("reverse", "val")], [output_port("result", "sorted.txt")],
+        NfCommand((NfFlag("reverse", "-r"), template("sort")), stdout=template("sorted.txt"))),
+        reverse=(True, "boolean")),
+        [f"    \"\"\"\n(\n${{reverse ? {_Q}('-r') : ''}} ${{{_Q}('sort')}}\n) > ${{{_Q}('sorted.txt')}}\n    \"\"\""],
+        []),
     "an-array-binding-with-a-prefix": (partial(_fed, NfProcess(
         "NAMES", [_NAMES], [], NfCommand((template("echo"), NfArrayBinding("names", "--name")))),
         names=(["alice", "bob"], "string[]")),
@@ -179,7 +187,8 @@ IDIOMS: dict[str, tuple[Callable[[], ExecutableNextflowWorkflow], list[str], lis
         [f"${{names.isEmpty() ? '' : names.collect{{ {_Q}(it.toString()) }}.join(' ')}}"], []),
     "a-shell-literal-as-raw-unquoted-text": (partial(_alone, tokens=(
         template("printf"), template("hi"), NfShellLiteral(">>"), template("out.txt"))),
-        [f"\n${{{_Q}('printf')}} ${{{_Q}('hi')}} >> ${{{_Q}('out.txt')}}\n"], [f"{_Q}('>>')"]),
+        [f"    \"\"\"\n(\n${{{_Q}('printf')}} ${{{_Q}('hi')}} >> ${{{_Q}('out.txt')}}\n)\n    \"\"\""],
+        [f"{_Q}('>>')"]),
     # The script block is a GString, so a literal $ must not trigger interpolation.
     "a-shell-literal-escapes-gstring-interpolation": (partial(_alone, tokens=(
         template("true"), NfShellLiteral("$HOME >> out.txt"))), [r"\$HOME >> out.txt"], []),

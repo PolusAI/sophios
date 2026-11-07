@@ -1,4 +1,4 @@
-from collections.abc import Callable
+import keyword
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,7 @@ from sophios.api.python.workflow import Step, Workflow
 from sophios.lang.cwl import CWL_VERSION
 
 from .budgets import budget
+from .strategies import author_names, pinned
 
 
 def _rich_tool(default: str = "hello") -> CommandLineTool:
@@ -71,63 +72,50 @@ def _rich_tool(default: str = "hello") -> CommandLineTool:
     )
 
 
-@pytest.mark.fast
-def test_tool_builder_names_are_python_identifiers() -> None:
-    """A port name must be usable as an attribute.
-
-    Ports are reached as `inputs.reads`, so a name like `input-file` would
-    build a tool nobody can reference. Rejected where it is written.
-    """
-    with pytest.raises(ValueError, match="valid Python identifier"):
-        Inputs(**{"input-file": Input(cwl.file)})
-
-    with pytest.raises(ValueError, match="valid Python identifier"):
-        Fields(**{"class": Field(cwl.string)})
+_PORTS = {Inputs: (Input(cwl.string), "inputs", "string"),
+          Outputs: (Output(cwl.file, glob="o"), "outputs", {"type": "File", "outputBinding": {"glob": "o"}}),
+          Fields: (Field(cwl.string), "", "")}
+_ATTRIBUTES = sorted({*dir(ParameterNamespace), *dir(Inputs), *dir(Outputs), *dir(Fields)})
 
 
 @pytest.mark.fast
-def test_tool_builder_names_reject_namespace_collisions() -> None:
-    """A port may not shadow the container's own API.
-
-    `Inputs` and friends are mappings with methods, so a port called `items` or
-    `to_dict` would make `inputs.items` ambiguous. The collection's own
-    attribute `_items` is reserved for the same reason.
-    """
-    with pytest.raises(ValueError, match="reserved"):
-        Inputs(items=Input(cwl.file))
-
-    with pytest.raises(ValueError, match="reserved"):
-        Outputs(to_dict=Output(cwl.file, glob="out.txt"))
-
-    with pytest.raises(ValueError, match="reserved"):
-        Fields(to_dict=Field(cwl.string))
-
-    with pytest.raises(ValueError, match="reserved"):
-        Inputs(_items=Input(cwl.file))
-
-
-def _refused(build: Callable[..., object], *args: Any, **kwargs: Any) -> bool:
-    """Whether `build(*args, **kwargs)` raises ValueError."""
+@given(st.tuples(st.sampled_from(list(_PORTS)), author_names | st.sampled_from(_ATTRIBUTES)))
+@pinned(
+    (Inputs, "input-file"), (Fields, "class"), (Inputs, "items"), (Outputs, "to_dict"), (Fields, "to_dict"),
+    (Inputs, "_items"), (Fields, "_store"),
+    *((collection, n) for collection in (Inputs, Outputs)
+      for n in sorted({*dir(ParameterNamespace), *dir(Inputs), "_", "_x", "_Out", "__x", "__x__"})))
+@budget(200)
+def test_a_port_name_is_accepted_when_python_can_write_and_reach_it(case: tuple[Any, str]) -> None:
+    """Ports are reached as `inputs.reads`, so a name like `input-file` would build a tool nobody can reference:
+    refused where it is written. `Inputs` and friends are mappings with methods, so a port called `items`,
+    `to_dict` or `_items` would make `inputs.items` ambiguous. A tool's port is also an attribute of each step's
+    port namespace, so the builder refuses, where the name is written, each name a step refuses, such as `_store`.
+    A record field is no port, so it may be called `_store`. For `Inputs` and `Outputs` the builder refuses a
+    writable name exactly when a step made from a tool document declaring that port refuses it, or when the name is
+    one of the collection's own attributes, such as `keys`, which a step accepts."""
+    collection, name = case
+    port, key, declared = _PORTS[collection]
+    owners = (collection,) if collection is Fields else (collection, ParameterNamespace)
+    writable = name.isidentifier() and not keyword.iskeyword(name)
+    reachable = not (name.startswith("__") and name.endswith("__") and len(name) > 4) and not any(
+        name in dir(owner) for owner in owners)
     try:
-        build(*args, **kwargs)
-    except ValueError:
-        return True
-    return False
-
-
-@pytest.mark.fast
-def test_tool_builder_refuses_a_port_name_where_it_is_written_when_a_step_would() -> None:
-    """A tool's input or output is a port of each step that runs the tool, so the builder refuses, where the name is
-    written, each name a step refuses, such as `_store`, an attribute of the step's port namespace, and else only
-    its collection's own attributes, such as `keys`. A record field is no port, so it may be called `_store`."""
-    tool = {"cwlVersion": "v1.2", "class": "CommandLineTool", "baseCommand": "true", "inputs": {}, "outputs": {}}
-    output = {"type": "File", "outputBinding": {"glob": "o"}}
-    for name in sorted({*dir(ParameterNamespace), *dir(Inputs), "_", "_x", "_Out", "__x", "__x__"}):
-        assert _refused(Inputs, **{name: Input(cwl.string)}) == (
-            name in dir(Inputs) or _refused(Step.from_cwl_document, {**tool, "inputs": {name: "string"}})), name
-        assert _refused(Outputs, **{name: Output(cwl.file, glob="o")}) == (
-            name in dir(Outputs) or _refused(Step.from_cwl_document, {**tool, "outputs": {name: output}})), name
-    assert list(Fields(_store=Field(cwl.string))) == ["_store"]
+        built = collection(**{name: port})
+    except ValueError as error:
+        assert not (writable and reachable) and ("reserved" if writable else "valid Python") in str(error), name
+        refused = True
+    else:
+        assert writable and reachable and getattr(built, name) is built[name], name
+        refused = False
+    if key and writable:
+        try:
+            Step.from_cwl_document({"cwlVersion": "v1.2", "class": "CommandLineTool", "baseCommand": "true",
+                                    "inputs": {}, "outputs": {}, key: {name: declared}})
+        except ValueError:
+            assert refused, name
+        else:
+            assert refused == (name in dir(collection)), name
 
 
 @pytest.mark.fast

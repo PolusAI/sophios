@@ -74,33 +74,21 @@ def test_an_untyped_output_naming_a_generated_step_name_is_wic036() -> None:
 
 
 @pytest.mark.fast
-def test_a_bare_id_shared_by_two_steps_is_named_on_stderr_and_still_means_the_first(
-        capsys: pytest.CaptureFixture[str]) -> None:
-    """`mk_file/file` with two `mk_file` steps resolves as before; the line gives `(index, id)`."""
-    compiled = compile_hermetic_cwl({
-        'outputs': {'o': {'type': 'File', 'outputSource': 'mk_file/file'}},
-        'steps': [_mk_file('x'), _mk_file('y')]})
-    assert compiled['outputs']['o']['outputSource'] == 'mk_file@1/file'
-    assert capsys.readouterr().err.splitlines() == [
-        "Warning! oracle.wic: output 'o' has outputSource 'mk_file/file', but 2 steps have the id "
-        "'mk_file' and it means the first. Write '(1, mk_file)/file' to say so."]
-
-
-@pytest.mark.fast
-def test_an_authored_output_source_prints_nothing(capsys: pytest.CaptureFixture[str]) -> None:
-    """The line is for the generated spelling only."""
-    compile_hermetic_cwl({'outputs': {'o': {'type': 'File', 'outputSource': 'mk_file/file'}},
-                          'steps': [_mk_file()]})
-    assert 'Warning!' not in capsys.readouterr().err
-
-
-@pytest.mark.fast
-def test_a_positional_output_source_prints_no_authored_spelling_line(capsys: pytest.CaptureFixture[str]) -> None:
-    """The `(index, name)/port` spelling is what the line recommends; it must not be reported."""
-    compile_hermetic_cwl({'outputs': {'o': {'type': 'File', 'outputSource': '(2, mk_file)/file'}},
-                          'steps': [_mk_file('x'), _mk_file('y')]})
-
-    assert 'Warning!' not in capsys.readouterr().err
+@pytest.mark.parametrize(('source', 'names', 'resolved', 'said'), [
+    ('mk_file/file', 'xy', 'mk_file@1/file',
+     ["Warning! oracle.wic: output 'o' has outputSource 'mk_file/file', but 2 steps have the id 'mk_file' and it "
+      "means the first. Write '(1, mk_file)/file' to say so."]),
+    ('mk_file/file', 'x', 'mk_file/file', []),
+    ('(2, mk_file)/file', 'xy', 'mk_file@2/file', [])], ids=['shared-bare-id', 'authored', 'positional'])
+def test_an_output_source_names_the_spelling_the_compiler_generated_and_only_that(
+        capsys: pytest.CaptureFixture[str], source: str, names: str, resolved: str, said: list[str]) -> None:
+    """A bare id shared by two steps still means the first, and the line gives `(index, id)`; it is for the generated
+    spelling only, so an authored one prints nothing; and the `(index, name)/port` spelling is what the line
+    recommends, so it is never reported."""
+    compiled = compile_hermetic_cwl({'outputs': {'o': {'type': 'File', 'outputSource': source}},
+                                     'steps': [_mk_file(name) for name in names]})
+    assert compiled['outputs']['o']['outputSource'] == resolved
+    assert capsys.readouterr().err.splitlines() == said
 
 
 @pytest.mark.fast
@@ -123,17 +111,16 @@ def _call_when(expression: str) -> Yaml:
 
 
 @pytest.mark.fast
-def test_a_when_in_bracket_form_on_a_call_draws_no_note(capsys: pytest.CaptureFixture[str]) -> None:
-    """A call declares the names its child exposes, `mk_file~name` among them, and the bracket form reads it."""
-    compiled = compile_hermetic_cwl(_call_when('$(inputs["mk_file~name"] != null)'))
+@pytest.mark.parametrize(('expression', 'said'), [
+    ('$(inputs["mk_file~name"] != null)', []),
+    ('$(inputs.mk_file~name != null)',
+     ["Warning! oracle.wic: step 'child.wic' reads inputs.mk_file in `when:`, which its process does not declare; "
+      "CWL evaluates it as null. Write inputs['mk_file~name'] to read one it declares."])], ids=['bracket', 'dotted'])
+def test_a_when_on_a_call_that_reads_a_made_name_dotted_is_told_the_bracket_form(
+        capsys: pytest.CaptureFixture[str], expression: str, said: list[str]) -> None:
+    """A call declares the names its child exposes, `mk_file~name` among them, and the bracket form reads it, so it
+    draws no note. `inputs.mk_file~name` is `inputs.mk_file`, then `~name`: the note names the input and how to
+    read it."""
+    compiled = compile_hermetic_cwl(_call_when(expression))
     assert 'mk_file~name' in compiled['steps'][0]['in']
-    assert 'Warning!' not in capsys.readouterr().err
-
-
-@pytest.mark.fast
-def test_a_when_that_reads_a_made_name_dotted_is_told_the_bracket_form(capsys: pytest.CaptureFixture[str]) -> None:
-    """`inputs.mk_file~name` is `inputs.mk_file`, then `~name`: the note names the input and how to read it."""
-    compile_hermetic_cwl(_call_when('$(inputs.mk_file~name != null)'))
-    assert capsys.readouterr().err.splitlines() == [
-        "Warning! oracle.wic: step 'child.wic' reads inputs.mk_file in `when:`, which its process does not "
-        'declare; CWL evaluates it as null. Write inputs[\'mk_file~name\'] to read one it declares.']
+    assert capsys.readouterr().err.splitlines() == said
