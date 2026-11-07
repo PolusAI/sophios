@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from ..lang.diagnostics import Diagnostics
 from ..wic_types import Cwl
+from .policy import RunPolicy
 from .realtime import Declaration
 from .types import WorkflowGraph
 
@@ -34,6 +35,8 @@ class CompilationResult:
     diagnostics: Diagnostics = field(default_factory=Diagnostics)
     #: The real-time analyses the workflow declares, taken out of `graph`.
     realtime: tuple[Declaration, ...] = ()
+    #: How the workflow runs: `artifact` is written for it, and the resolved view carries it to a target.
+    policy: RunPolicy = RunPolicy()
 
     @property
     def lang_version(self) -> str:

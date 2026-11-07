@@ -1,6 +1,7 @@
 """The typed compiler boundary over the phase pipeline."""
 import re
 import sys
+from collections.abc import Collection, Iterator, Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Final
@@ -21,10 +22,11 @@ from .ir.realtime import extract
 from .ir.resolve import RegistrySnapshot, ToolDefinition
 from .ir.names import NAMESPACE_SEPARATOR, Names
 from .ir.policy import RunPolicy, tolerant_tool
-from .ir.types import RegistryKey, StepNode, WorkflowGraph
+from .ir.resolved import ResolvedTool, ResolvedWorkflow, resolve
+from .ir.types import RegistryKey, StepId, StepNode, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import Locator, SophiosError
-from .lang.nodes import CwlRecord, UnresolvedName
+from .lang.nodes import CwlRecord, OpaqueCwl, UnresolvedName
 from .lang.parser import Grammar
 from .lang.error_codes import SophiosErrorCode
 from .wic_types import CompilerOptions, Cwl
@@ -81,7 +83,29 @@ def compile_source(bundle: SourceBundle,
     artifact = _artifact_tree(graph, graph.name, names, _Descriptions(bundle.registry), policy=run_policy)
     if not testing:
         print('finishing compilation of', bundle.name)
-    return CompilationResult(graph, artifact, inferred.diagnostics, realtime)
+    return CompilationResult(graph, artifact, inferred.diagnostics, realtime, policy=run_policy)
+
+
+def resolved_view(result: CompilationResult, *, values: Mapping[str, OpaqueCwl] | None = None,
+                  outputs: Collection[str] | None = None) -> ResolvedWorkflow:
+    """The resolved view of `result`'s graph, with `result.policy`, for a target to lower
+    (design_docs/resolved-view-design.md §4); `values` and `outputs` are `resolve`'s.
+
+    Each tool step is paired with the tool document the CWL target writes for it, its child artifact, so
+    nothing that reads the view reads the artifact tree.
+    """
+    return resolve(result.graph, dict(_tools(result.graph, result.artifact)), policy=result.policy,
+                   values=values, outputs=outputs)
+
+
+def _tools(graph: WorkflowGraph, artifact: CompilationArtifact) -> Iterator[tuple[StepId, ResolvedTool]]:
+    """Every tool step at any depth, with the tool its child artifact writes for it."""
+    for step, child in zip(graph.steps, artifact.children, strict=True):
+        assert step.run is not None, 'a finished graph has no unrun step'
+        if step.run.child is None:
+            yield step.id, ResolvedTool(child.run_path, child.cwl)
+        else:
+            yield from _tools(step.run.child, child)
 
 
 #: `inputs.name` and `inputs["name"]` inside a `when:` expression.

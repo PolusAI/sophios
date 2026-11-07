@@ -25,10 +25,11 @@ from typing import Any
 from ..lang import CwlRecord
 from ..lang.nodes import OpaqueCwl
 from ..wic_types import Cwl
+from .declarations import written_order
 from .names import Names
 from .policy import RunPolicy, effective_when
 from .stepin import step_inputs, step_out
-from .types import (DerivedName, EmissionDocument, EmittedValue, Expression, PortName, Record,
+from .types import (EmissionDocument, EmittedValue, Expression, PortName, Record,
                     Source, StepNode, StepOutputRef, WorkflowGraph, WorkflowPort)
 
 EDAM_NAMESPACE = ('edam', 'https://edamontology.org/')
@@ -90,18 +91,7 @@ def surface(graph: WorkflowGraph, names: Names, *, policy: RunPolicy = RunPolicy
     namespaces = dict(graph.namespaces)
     if _uses_edam(graph):
         namespaces[EDAM_NAMESPACE[0]] = EDAM_NAMESPACE[1]
-    positions = {step.id: index for index, step in enumerate(steps)}
-
-    def boundary_order(name: PortName) -> tuple[int, int]:
-        """Names exposing one of this document's steps last, in step order.
-
-        A name Link relays from a step nested further down exposes no step of
-        this document, and sorts with the authored names.
-        """
-        if isinstance(name, DerivedName) and name.step in positions:
-            return (1, positions[name.step])
-        return (0, 0)
-
+    boundary_order = written_order(graph)
     workflow_inputs = tuple(sorted(graph.workflow_inputs,
                                    key=lambda port: boundary_order(port.name)))
     job_bindings = tuple(sorted(graph.job_bindings,

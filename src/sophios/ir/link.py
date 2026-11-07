@@ -5,7 +5,7 @@ from typing import Any
 from ..lang import CwlRecord, SophiosErrorCode
 from ..lang.compatibility import TypeRelation, reference_relation
 from ..lang.diagnostics import Diagnostics, Locator
-from .declarations import boundary_declaration, input_rank, layered, output_rank
+from .declarations import boundary_declaration, delivered, input_rank, layered, output_rank
 from .names import Names
 from .types import (
     DerivedName,
@@ -305,35 +305,11 @@ def _compared_types(graph: WorkflowGraph, edge: Edge,
     or picks, the first is what it makes of the edge's source."""
     scope = _graph_at(graph, _owner_namespace(edge))
     produced = _effective_type(scope, edge.source, producing=True)
-    return (produced if record is None else _delivered(produced, record),
+    fields = dict(record.fields) if record is not None else {}
+    return (produced if record is None else delivered(produced, sources=len(record.sources),
+                                                      link_merge=fields.get('linkMerge'),
+                                                      pick_value=fields.get('pickValue')),
             _effective_type(scope, edge.sink, producing=False))
-
-
-def _delivered(produced: Any, record: CwlRecord) -> Any:
-    """The type `record` delivers from a source of type `produced`: the list CWL's `linkMerge`
-    makes of its sources (a merged array stays flat; one source with no `linkMerge` is not
-    wrapped) or, for a `pickValue` that picks one value, one element of it. `Any` where a
-    pick has no array to take an element of, so nothing is proved against it."""
-    fields = dict(record.fields)
-    link_merge = fields.get('linkMerge')
-    match produced:
-        case {'type': 'array'}:
-            flat = True
-        case _:
-            flat = False
-    if len(record.sources) == 1 and link_merge is None:
-        merged = produced
-    elif link_merge == 'merge_flattened' and flat:
-        merged = produced
-    else:
-        merged = {'type': 'array', 'items': produced}
-    if fields.get('pickValue') not in ('first_non_null', 'the_only_non_null'):
-        return merged
-    match merged:
-        case {'type': 'array', 'items': items}:
-            return items
-        case _:
-            return 'Any'
 
 
 def _relation(graph: WorkflowGraph, edge: Edge, record: CwlRecord | None = None) -> TypeRelation:
