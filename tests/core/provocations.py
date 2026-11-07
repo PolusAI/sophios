@@ -347,7 +347,7 @@ def _provoke_invalid_inference() -> None:
     """Renamings given while naming conventions are off."""
     from sophios.api.python.workflow import Inference  # pylint: disable=import-outside-toplevel
 
-    Inference(renamings=[('a', 'b')])
+    Inference(naming_conventions=False, renamings=[('a', 'b')])
 
 
 def _provoke_workflow_run_failed() -> None:

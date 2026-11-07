@@ -1,30 +1,27 @@
 class: CommandLineTool
 cwlVersion: v1.0
 
+# Appends str as one line to a copy of file, and returns the copy.
 requirements:
   ShellCommandRequirement: {}
-  InlineJavascriptRequirement: {}
   InitialWorkDirRequirement:
     listing:
-    - $(inputs.file)
-
-# NOTE: This mutates file in-place!
+    - entry: $(inputs.file)
+      writable: true
 
 inputs:
   str:
     type: string
-    inputBinding:
-      shellQuote: false
-      position: 1
-      prefix: echo
-
   file:
     type: File
-    inputBinding:
-      shellQuote: false
-      position: 2
-      prefix: ">>"
-      #prefix: "| tee --append"
+
+arguments:
+- printf
+- '%s\n'
+- $(inputs.str)
+- valueFrom: ">>"
+  shellQuote: false
+- $(inputs.file.basename)
 
 outputs:
   file:

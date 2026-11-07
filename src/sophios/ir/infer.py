@@ -35,7 +35,7 @@ class InferencePolicy:
     """Every choice that can alter inference, supplied by the caller."""
 
     disabled: bool = False
-    use_naming_conventions: bool = False
+    use_naming_conventions: bool = True
     renaming_conventions: tuple[tuple[str, str], ...] = ()
     insert_steps_automatically: bool = False
     format_rules: tuple[tuple[str, str], ...] = ()
@@ -229,8 +229,9 @@ def _candidate(steps: list[StepNode], position: int, sink: Port, policy: Inferen
     """The source inferred for `sink`, the equal candidates it was chosen over,
     and every output looked at.
 
-    The most recent producer with a match wins, and within it the last
-    declared match (unless naming conventions single one out). The scan goes
+    The most recent producer with a match wins, and within it the first
+    declared match (unless naming conventions single one out); a subworkflow
+    call counts its inner steps as producers, the most recent inner step first. The scan goes
     on past the winner only to collect the earlier producers' matches, so
     the choice can be reported; it never changes the choice.
     """
@@ -252,16 +253,14 @@ def _candidate(steps: list[StepNode], position: int, sink: Port, policy: Inferen
             output_type = _effective_source_type(producer, output)
             output_formats = _formats(output.declaration)
             if (types_match(sink_type, output_type)
-                    and _formats_match(sink_formats, output_formats, output_type)
-                    and not any('_log_' in part
-                                for part in (*(s.name for s in _steps(output.id.port)), _leaf(output.id.port)))):
+                    and _formats_match(sink_formats, output_formats, output_type)):
                 matches.append(output)
             if _rule(producer, output.id.port) == 'break':
                 break_inference = True
                 break_scope = scope
         if matches and chosen is None:
             named = _named(matches, sink, policy)
-            chosen = named[0] if named else matches[0]
+            chosen = _first_declared(named or matches)
             if len(named) != 1:
                 alternatives.extend(match.id for match in matches if match is not chosen)
         elif matches:
@@ -273,16 +272,27 @@ def _candidate(steps: list[StepNode], position: int, sink: Port, policy: Inferen
     return chosen.id, tuple(alternatives), tuple(attempted)
 
 
+def _first_declared(matches: list[Port]) -> Port:
+    """Of `matches`, listed last declared first: the first declared of the most recent step that declares one."""
+    leaf = _steps(matches[0].id.port)
+    return [match for match in matches if _steps(match.id.port) == leaf][-1]
+
+
 def _named(matches: list[Port], sink: Port, policy: InferencePolicy) -> list[Port]:
     """The matches whose name the naming conventions pair with `sink`; none
-    when the conventions are off."""
+    when the conventions are off. The renamed name is tried first; when it
+    pairs with nothing, the input's own name is."""
     if not policy.use_naming_conventions:
         return []
-    wanted = _authored(sink).replace('input_', '')
+    plain = _authored(sink).replace('input_', '')
+    renamed = plain
     for before, after in policy.renaming_conventions:
-        wanted = wanted.replace(before, after)
-    return [port for port in matches
-            if _authored(port).replace('output_', '') == wanted]
+        renamed = renamed.replace(before, after)
+    for wanted in (renamed, plain):
+        paired = [port for port in matches if _authored(port).replace('output_', '') == wanted]
+        if paired:
+            return paired
+    return []
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments

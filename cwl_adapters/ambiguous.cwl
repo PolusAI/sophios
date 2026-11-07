@@ -7,10 +7,12 @@ requirements:
 
 baseCommand: "true"
 
-# This CommandLineTool is solely to demonstrate the --inference_use_naming_conventions feature.
+# This CommandLineTool is solely to demonstrate the naming conventions.
 # Each output simply returns the corresponding input.
 # Since both outputs are of type string, inference (by default) cannot
-# distinguish between the two outputs, and will always choose uniquename2
+# distinguish between the two outputs by type. With the naming conventions on
+# (the default) the output with the matching name wins; with
+# --no_inference_naming_conventions inference always chooses uniquename2,
 # since the outputs are considered ordered and matched from bottom to top.
 
 inputs:

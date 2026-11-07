@@ -49,7 +49,7 @@ Without one of them the command compiles and then asks for one. Under
 | Flag | Default | Effect |
 |---|---|---|
 | `--inference_disable` | off | compile without edge inference; an unbound input stays unbound |
-| `--inference_use_naming_conventions` | off | among outputs that match by type, prefer the one whose name pairs with the input's, after the configuration's `renaming_conventions` |
+| `--no_inference_naming_conventions` | naming on | by default, among outputs of one step that match by type, the one whose name pairs with the input's wins, after the configuration's `renaming_conventions`; this flag leaves the choice to the output declared first |
 | `--inference_strict` | off | an inference choice between equal candidates (`wic042`, `wic043`) is an error rather than a note |
 | `--insert_steps_automatically` | off | when nothing matches an input by format, insert one converter step from the tools named `insert_steps_automatically_*` on the search paths |
 | `--validate_plugins` | off | validate every tool on the search paths with cwltool before compiling |
@@ -130,7 +130,7 @@ and `main: error: argument --diagnostics: invalid choice`, after the workflow
 has been written. `Workflow.compile()`
 takes `target=`, `lang_version=`, `tool_registry=` and `inference=`, and nothing else.
 The inference flags map onto `Inference(enabled=, strict=, naming_conventions=, insert_steps=)`, and the
-configuration file's `renaming_conventions` and `inference_rules` onto its `renamings=` and `format_rules=`, which are empty in Python unless passed, as it reads no configuration file;
+configuration file's `renaming_conventions` and `inference_rules` onto its `renamings=` and `format_rules=`, where Python starts from the three renamings Sophios ships and has no format rules unless passed, as it reads no configuration file;
 `Workflow.run()`, `start()` and `run_async()` take the same `inference=`, and `target='nextflow'` to run the
 [Nextflow](nextflow.md#running-on-the-nextflow-target) pipeline instead, where the CWL defaults above do not apply,
 an option only a CWL run reads is refused, and any other key becomes `-<key> <value>` for Nextflow. The rewriting and partial-failure options are command-line only;

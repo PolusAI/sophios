@@ -66,7 +66,7 @@ def test_every_inferred_edge_is_the_independent_models_choice(workflow: Yaml) ->
 
 
 @pytest.mark.fast
-def test_most_recent_step_and_last_declared_output_win() -> None:
+def test_most_recent_step_and_first_declared_output_win() -> None:
     """Candidate order is semantic, including ambiguity within one producer."""
     multi = clt({}, {
         'first': {'type': 'File', 'outputBinding': {'glob': 'first'}},
@@ -83,7 +83,7 @@ def test_most_recent_step_and_last_declared_output_win() -> None:
     count_edge = next(edge for edge in result.graph.linked_edges
                       if edge.origin is EdgeOrigin.INFERRED and edge.sink.step.name == 'count')
     assert count_edge.source.step.name == 'multi_file'
-    assert count_edge.source.port == 'last'
+    assert count_edge.source.port == 'first'
 
 
 def _multi_file_tools() -> Tools:
@@ -132,7 +132,7 @@ def _across_calls(pinned: bool) -> Yaml:
     producer: Yaml = {'id': 'multi_file'}
     consumer: Yaml = {'id': 'count'}
     if pinned:
-        producer['out'] = [{'last': {'wic_anchor': 'f'}}]
+        producer['out'] = [{'first': {'wic_anchor': 'f'}}]
         consumer['in'] = {'file': {'wic_alias': 'f'}}
     return {'steps': [subworkflow_step('make.wic', {'steps': [producer]}),
                       subworkflow_step('use.wic', {'steps': [consumer]})]}
@@ -146,9 +146,9 @@ def test_a_note_across_subworkflow_calls_names_the_steps_an_author_can_pin() -> 
     result = compile_hermetic(_across_calls(pinned=False), tools=_multi_file_tools())
     (note,) = list(result.diagnostics)
     assert note.code is SophiosErrorCode.INFERENCE_TIE
-    assert "inferred from step 1 'make.wic' > step 1 'multi_file' output 'last'" in note.message
-    assert "also offers step 1 'make.wic' > step 1 'multi_file' output 'first'" in note.message
-    assert ("`out: - last: !& <name>` on step 1 'make.wic' > step 1 'multi_file' and "
+    assert "inferred from step 1 'make.wic' > step 1 'multi_file' output 'first'" in note.message
+    assert "also offers step 1 'make.wic' > step 1 'multi_file' output 'last'" in note.message
+    assert ("`out: - first: !& <name>` on step 1 'make.wic' > step 1 'multi_file' and "
             "`in: file: !* <name>` on step 2 'use.wic' > step 1 'count'") in note.message
 
     pinned = compile_hermetic(_across_calls(pinned=True), tools=_multi_file_tools())
@@ -184,6 +184,55 @@ def test_a_tie_settled_by_naming_conventions_is_not_noted() -> None:
     result = infer(linked, InferencePolicy(use_naming_conventions=True))
     assert result.graph is not None
     assert not list(result.diagnostics)
+
+
+@pytest.mark.fast
+def test_an_input_pairs_by_its_own_name_when_its_renamed_name_pairs_with_nothing() -> None:
+    """`input_structure_file` is renamed to `tpr_file`; with no `output_tpr_file` it still takes
+    `output_structure_file` over the later `output_report_file`, and a renamed pairing wins when it exists."""
+    policy = InferencePolicy(use_naming_conventions=True, renaming_conventions=(('structure_', 'tpr_'),))
+
+    def chosen(outputs: list[str]) -> str:
+        producer = clt({}, {name: {'type': 'File', 'outputBinding': {'glob': name}} for name in outputs})
+        consumer = clt({'input_structure_file': {'type': 'File'}}, {})
+        tools = {**SYNTHETIC_TOOLS,
+                 LegacyStepId('maker', SYNTHETIC_NS): Tool('/synthetic/maker.cwl', producer),
+                 LegacyStepId('reader', SYNTHETIC_NS): Tool('/synthetic/reader.cwl', consumer)}
+        _, linked, _ = _typed({'steps': [{'id': 'maker'}, {'id': 'reader'}]}, tools)
+        result = infer(linked, policy)
+        assert result.graph is not None
+        (edge,) = [edge for edge in result.graph.linked_edges if edge.origin is EdgeOrigin.INFERRED]
+        return str(edge.source.port)
+
+    assert chosen(['output_structure_file', 'output_report_file']) == 'output_structure_file'
+    assert chosen(['output_structure_file', 'output_tpr_file', 'output_report_file']) == 'output_tpr_file'
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('producers, consumer_input, expected', [
+    # Names decide nothing against an output that fits: `output_log_path` feeds `input_log_path`, the
+    # sander_mdrun to process_mdout pattern.
+    ([('logger', 'output_log_path')], 'input_log_path', ('logger', 'output_log_path')),
+    # A log is a File like any other: the nearest step with a fitting output wins, and a step that
+    # makes only a log is not skipped for its name.
+    ([('make', 'output_crd_path'), ('logger', 'output_log_path')], 'input_crd_path',
+     ('logger', 'output_log_path')),
+], ids=['log-to-log', 'nearest-step-is-a-logger'])
+def test_an_output_named_log_is_an_output_like_any_other(
+        producers: list[tuple[str, str]], consumer_input: str, expected: tuple[str, str]) -> None:
+    """No output is left out because of its name."""
+    tools = dict(SYNTHETIC_TOOLS)
+    for name, output in producers:
+        tool = clt({}, {output: {'type': 'File', 'outputBinding': {'glob': 'a'}}})
+        tools[LegacyStepId(name, SYNTHETIC_NS)] = Tool(f'/synthetic/{name}.cwl', tool)
+    tools[LegacyStepId('reader', SYNTHETIC_NS)] = Tool(
+        '/synthetic/reader.cwl', clt({consumer_input: {'type': 'File'}}, {}))
+    steps = [{'id': name} for name, _ in producers] + [{'id': 'reader'}]
+    _, linked, _ = _typed({'steps': steps}, tools)
+    result = infer(linked, InferencePolicy(use_naming_conventions=True))
+    assert result.graph is not None
+    (edge,) = [edge for edge in result.graph.linked_edges if edge.origin is EdgeOrigin.INFERRED]
+    assert (edge.source.step.name, edge.source.port) == expected
 
 
 @pytest.mark.fast
@@ -420,14 +469,24 @@ def _model_candidate(steps: tuple[StepNode, ...], position: int,
     sink_type = _model_sink_type(steps[position], sink)
     sink_formats = _model_formats(sink.declaration)
     for producer in reversed(steps[:position]):
-        for output in reversed(producer.outputs):
-            source_type = _model_source_type(producer, output)
-            source_formats = _model_formats(output.declaration)
-            if (not any('_log_' in name for name in _model_names(output.id.port))
-                    and _model_types_match(sink_type, source_type)
-                    and _model_formats_match(sink_formats, source_formats, source_type)):
-                return output.id
+        matches = [output for output in producer.outputs
+                   if _model_types_match(sink_type, _model_source_type(producer, output))
+                   and _model_formats_match(sink_formats, _model_formats(output.declaration),
+                                            _model_source_type(producer, output))]
+        if matches:
+            through = _model_exposed_through(matches[-1].id.port)
+            return next(output.id for output in matches
+                        if _model_exposed_through(output.id.port) == through)
     return None
+
+
+def _model_exposed_through(name: PortName) -> list[object]:
+    """The steps a port name was exposed through, outermost first."""
+    steps: list[object] = []
+    while isinstance(name, DerivedName):
+        steps.append(name.step)
+        name = name.port
+    return steps
 
 
 def _model_types_match(sink: Any, source: Any) -> bool:
@@ -473,10 +532,6 @@ def _model_source_type(step: StepNode, port: Port) -> Any:
 def _model_sink_type(step: StepNode, port: Port) -> Any:
     """One array per time `scatter:` names the input, which is `input_rank`."""
     return layered(port.type, input_rank(step, port.id.port)).canonical
-
-
-def _model_names(name: PortName) -> tuple[str, ...]:
-    return (name.step.name, *_model_names(name.port)) if isinstance(name, DerivedName) else (name,)
 
 
 def _port(ports: tuple[Port, ...], name: PortName) -> Port:
@@ -530,11 +585,11 @@ def test_a_positional_output_source_compiles_in_a_fully_explicit_workflow() -> N
 
 
 @pytest.mark.fast
-def test_naming_conventions_pick_the_name_matched_output_over_the_last_declared() -> None:
-    """With conventions on, `input_structure` takes `output_structure` although
-    `output_other` is declared last, which is the one taken with them off."""
-    producer = clt({}, {'output_structure': {'type': 'File', 'outputBinding': {'glob': 's'}},
-                        'output_other': {'type': 'File', 'outputBinding': {'glob': 'o'}}}, canonical=True)
+def test_naming_conventions_pick_the_name_matched_output_over_the_first_declared() -> None:
+    """With no setting, `input_structure` takes `output_structure` although
+    `output_other` is declared first, which is the one taken with conventions off."""
+    producer = clt({}, {'output_other': {'type': 'File', 'outputBinding': {'glob': 'o'}},
+                        'output_structure': {'type': 'File', 'outputBinding': {'glob': 's'}}}, canonical=True)
     consumer = clt({'input_structure': {'type': 'File', 'inputBinding': {'position': 1}}}, {}, canonical=True)
     tools = {**SYNTHETIC_TOOLS,
              LegacyStepId('producer', SYNTHETIC_NS): Tool('/synthetic/producer.cwl', producer),
@@ -543,7 +598,8 @@ def test_naming_conventions_pick_the_name_matched_output_over_the_last_declared(
     chosen: dict[bool, PortName] = {}
     for conventions in (True, False):
         _, linked, _ = _typed(copy.deepcopy(workflow), tools)
-        result = infer(linked, InferencePolicy(use_naming_conventions=conventions))
+        policy = InferencePolicy() if conventions else InferencePolicy(use_naming_conventions=False)
+        result = infer(linked, policy)
         assert result.graph is not None, list(result.diagnostics)
         (edge,) = [edge for edge in result.graph.linked_edges if edge.sink.step.name == 'consumer']
         chosen[conventions] = edge.source.port

@@ -128,7 +128,7 @@ def test_the_readme_shows_the_files_as_they_are() -> None:
 ])
 def test_naming_conventions_give_the_summary_to_the_step_that_wants_it(
         stem: str, consumer: str, port: str, renamings: list[tuple[str, str]]) -> None:
-    """By type alone the consumer takes `output_details`, the last of two files; with the naming conventions,
+    """By type alone the consumer takes `output_details`, the first of two files; with the naming conventions,
     and the renaming where the names differ, `docs/edge-inference.md` says it takes `output_summary`."""
     wic_path = COOKBOOK / f'{stem}.wic'
     workflows = {'global': {path.stem: path for path in COOKBOOK.glob('*.wic')}}
@@ -141,18 +141,18 @@ def test_naming_conventions_give_the_summary_to_the_step_that_wants_it(
         binding = step['in'][port]
         return str(binding['source'] if isinstance(binding, dict) else binding)
 
-    assert source(default_compilation_settings()) == 'summarize/output_details'
+    without_conventions = default_compilation_settings()
+    without_conventions['inference_use_naming_conventions'] = False
+    assert source(without_conventions) == 'summarize/output_details'
     with_conventions = default_compilation_settings()
-    with_conventions['inference_use_naming_conventions'] = True
     with_conventions['renaming_conventions'] = renamings
     assert source(with_conventions) == 'summarize/output_summary'
 
 
 @pytest.mark.fast
 @pytest.mark.parametrize(('stem', 'consumer', 'port', 'inference'), [
-    ('naming', 'report', 'input_summary', Inference(naming_conventions=True)),
-    ('naming_renamed', 'abstract', 'input_abstract',
-     Inference(naming_conventions=True, renamings=(('abstract', 'summary'),))),
+    ('naming', 'report', 'input_summary', Inference()),
+    ('naming_renamed', 'abstract', 'input_abstract', Inference(renamings=(('abstract', 'summary'),))),
 ])
 def test_python_naming_conventions_give_the_summary_to_the_step_that_wants_it(
         stem: str, consumer: str, port: str, inference: Inference) -> None:
@@ -165,6 +165,7 @@ def test_python_naming_conventions_give_the_summary_to_the_step_that_wants_it(
         binding = step['in'][port]
         return str(binding['source'] if isinstance(binding, dict) else binding)
 
-    assert source(module.workflow().compile().cwl_workflow) == 'summarize/output_details'
+    assert source(module.workflow().compile(
+        inference=Inference(naming_conventions=False)).cwl_workflow) == 'summarize/output_details'
     with_conventions = module.workflow().compile(inference=inference).cwl_workflow
     assert source(with_conventions) == 'summarize/output_summary'

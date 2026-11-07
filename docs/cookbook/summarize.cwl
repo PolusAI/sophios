@@ -11,11 +11,11 @@ inputs:
   text:
     type: File
 outputs:
-  output_summary:
-    type: File
-    outputBinding:
-      glob: summary.txt
   output_details:
     type: File
     outputBinding:
       glob: details.txt
+  output_summary:
+    type: File
+    outputBinding:
+      glob: summary.txt
