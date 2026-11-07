@@ -297,7 +297,9 @@ From Python the first line starts with the script's path as Python gives it, the
 with the same path, `:16:1`, where `flow.inputs.loud` was made. PR B makes the first line go away.
 
 A view whose `policy.partial_failure` is set is refused as `POLICY`, subject `partial failure`, at the
-workflow's span: "partial failure is a policy of the CWL target". In A and B no public path reaches it: the command line stops first (`cli.py:198-207`), and the
+workflow's span: "partial failure is a policy of the CWL target". It is the one refusal: the tool documents the
+view carries are the CWL target's, written for the policy (§2, §4), so what the target would find in them, such as
+their `successCodes`, is the policy's and not their author's. In A and B no public path reaches it: the command line stops first (`cli.py:198-207`), and the
 Python API has no policy until C (§10).
 
 **Error codes do not change.** A Nextflow refusal carries no code today: it is a `ValueError` and not a
