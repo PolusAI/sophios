@@ -45,7 +45,8 @@ def test_a_cwl_type_has_its_qualifier_or_is_refused(cwl_type: Any, qualifier: st
 GOLDEN_GRAPHS = {
     "real_supported_result": (
         "wf",
-        [("touch", (NfPort("filename", "val"),)), ("copy", (NfPort("source", "path", path_kind="file"),))],
+        [("touch", (NfPort("filename", "val", scalar_type="string"),)),
+         ("copy", (NfPort("source", "path", path_kind="file"),))],
         (
             NfWorkflowInputConnection("touch_filename", "touch", "filename"),
             NfProcessConnection("touch", "result", "copy", "source"),
@@ -57,7 +58,7 @@ GOLDEN_GRAPHS = {
     # A scattered port stays a scalar element port; its parameter carries the whole source array.
     "real_scattered_result": (
         "wf",
-        [("echo_item", (NfPort("item", "val"),))],
+        [("echo_item", (NfPort("item", "val", scalar_type="string"),))],
         (
             NfWorkflowInputConnection("echo_item_item", "echo_item", "item", "dotproduct"),
             NfWorkflowOutputConnection("echo_item", "result", "echo_item_result"),
@@ -67,7 +68,8 @@ GOLDEN_GRAPHS = {
     # The subworkflow's step is a namespaced process that reads the outer producer.
     "real_nested_result": (
         "root",
-        [("write", (NfPort("message", "val"),)), ("child_inner_copy", (NfPort("source", "path", path_kind="file"),))],
+        [("write", (NfPort("message", "val", scalar_type="string"),)),
+         ("child_inner_copy", (NfPort("source", "path", path_kind="file"),))],
         (
             NfWorkflowInputConnection("write_message", "write", "message"),
             NfProcessConnection("write", "result", "child_inner_copy", "source"),

@@ -10,7 +10,7 @@ import re
 from types import MappingProxyType
 from typing import Any, ClassVar, Generic, TypeVar, get_args
 
-from .lang.subset import Expr, canonical, references, validate
+from .lang.subset import Expr, canonical, check, references, validate
 from .nf_expr import NF_FINITE_HELPER, NF_ROUND_HELPER
 from .nf_symbols import NEXTFLOW_SCRIPT_DECLARED_NAMES, validate_nextflow_identifier
 
@@ -39,6 +39,9 @@ PARAM_TYPES = frozenset(
     for array in ("", "[]")
     for optional in ("", "?")
 )
+#: The type a `val` port receives when that is one scalar (design §9): the CWL type, `?` when it may be null.
+SCALAR_TYPES = frozenset(f"{item}{optional}" for item in ("boolean", "int", "float", "string")
+                         for optional in ("", "?"))
 # An InitialWorkDirRequirement entry's input is staged under this prefix and
 # its port name, and the task makes the entry from it (design §6).
 NF_ENTRY_STAGING_PREFIX = ".sophios_entry_"
@@ -596,13 +599,17 @@ def link_refusal(entry: NfEntry | None, *, writes: bool) -> str | None:
 
 
 @dataclass(frozen=True, slots=True)
-class NfPort:
+class NfPort:  # pylint: disable=too-many-instance-attributes
     """A typed Nextflow process port.
 
     ``entry`` marks a path input made an ``InitialWorkDirRequirement`` entry.
 
     ``optional`` marks a File or Directory output CWL declares optional: no
     match yields null rather than failing the task.
+
+    ``scalar_type`` is the CWL type of what a ``val`` input receives when
+    that is one scalar, one of ``SCALAR_TYPES``, else None; a workflow fills
+    it from the input's connection, and refuses a value given that disagrees.
 
     ``capture`` names the approved output-capture declarations an
     ``outputBinding`` may carry. The approved set is closed data: ``"single"``
@@ -628,6 +635,7 @@ class NfPort:
     entry: NfEntry | None = None
     capture: str | None = None
     optional: bool = False
+    scalar_type: str | None = None
 
     def __post_init__(self) -> None:
         _validate_ir_identifier(self.name, field_name="port name")
@@ -651,6 +659,11 @@ class NfPort:
             raise TypeError("port optional must be a bool")
         if self.optional and (self.qualifier != "path" or self.glob is None):
             raise ValueError("only a path output may be optional")
+        if self.scalar_type is not None and (self.scalar_type not in SCALAR_TYPES or self.qualifier != "val"
+                                             or self.is_array or self.glob is not None):
+            raise ValueError(f"a scalar type is one of {', '.join(sorted(SCALAR_TYPES))} on a val input that is not "
+                             f"array-marked, not {self.scalar_type!r} on a {self.qualifier} "
+                             f"{'port' if self.glob is None else 'output'}")
         if self.entry is not None:
             if not isinstance(self.entry, NfEntry):
                 raise TypeError("port entry must be an NfEntry or None")
@@ -705,8 +718,8 @@ class NfPort:
 
         Returns:
             dict[str, Any]: The port's name, qualifier, emit, glob, path
-                kind, array marker, entry marker, capture marker, and
-                optional marker.
+                kind, array marker, entry marker, capture marker, optional
+                marker, and scalar type.
         """
         return {
             "name": self.name,
@@ -718,16 +731,18 @@ class NfPort:
             "entry": self.entry.to_dict() if self.entry else None,
             "capture": self.capture,
             "optional": self.optional,
+            "scalar_type": self.scalar_type,
         }
-
-
-# The tree roots that compute a boolean: logic, comparison, negation, a boolean literal or input.
-_BOOLEAN_ROOTS = frozenset({"||", "&&", "==", "!=", "===", "!==", "<", "<=", ">", ">=", "u!", "boolean", "ref"})
 
 
 @dataclass(frozen=True, slots=True)
 class NfProcess:
-    """An immutable executable Nextflow process."""
+    """An immutable executable Nextflow process.
+
+    ``step_only_inputs`` are the step inputs its tool does not declare that
+    the lowering carries (design §6, Step inputs): ``val`` inputs after the
+    tool's own, which only the condition may read.
+    """
 
     name: str
     inputs: Sequence[NfPort]
@@ -736,23 +751,34 @@ class NfProcess:
     container: str | None = None
     resources: NfResources = field(default_factory=NfResources)
     condition: Expr | None = None
+    step_only_inputs: Sequence[NfPort] = ()
+
+    @property
+    def all_inputs(self) -> tuple[NfPort, ...]:
+        """Every input the process receives, in the order its block declares them: the tool's, then the
+        step-only ones."""
+        return (*self.inputs, *self.step_only_inputs)
 
     def __post_init__(self) -> None:
         _validate_ir_declaration(self.name, field_name="process name")
         inputs = tuple(self.inputs)
         outputs = tuple(self.outputs)
-        if not all(isinstance(port, NfPort) for port in (*inputs, *outputs)):
+        step_only = tuple(self.step_only_inputs)
+        if not all(isinstance(port, NfPort) for port in (*inputs, *outputs, *step_only)):
             raise TypeError("process inputs and outputs must contain only NfPort values")
         object.__setattr__(self, "inputs", inputs)
         object.__setattr__(self, "outputs", outputs)
-        for kind, ports in (("input", inputs), ("output", outputs)):
+        object.__setattr__(self, "step_only_inputs", step_only)
+        for kind, ports in (("input", (*inputs, *step_only)), ("output", outputs)):
             names = [port.name for port in ports]
             if len(names) != len(set(names)):
                 raise ValueError(f"process {self.name!r} has duplicate {kind} port names")
+        if any(port.qualifier != "val" for port in step_only):
+            raise ValueError(f"process {self.name!r} step-only inputs must be val inputs, which stage nothing")
         output_emits = [port.emit or port.name for port in outputs]
         if len(output_emits) != len(set(output_emits)):
             raise ValueError(f"process {self.name!r} has duplicate output emit names")
-        if any(port.emit is not None or port.glob is not None for port in inputs):
+        if any(port.emit is not None or port.glob is not None for port in (*inputs, *step_only)):
             raise ValueError("process input ports cannot declare output metadata")
         # A text-capture output carries the globbed file's decoded text, so it
         # is the one output kind with the val qualifier; NfPort pairs each
@@ -785,15 +811,20 @@ class NfProcess:
         referenced_names = (
             flag_names | array_binding_names | optional_binding_names | basename_names | plain_reference_names
         )
-        if unknown := referenced_names - input_names:
-            raise ValueError(
-                f"process {self.name!r} templates reference unknown inputs: {', '.join(sorted(unknown))}"
-            )
-        input_ports = {port.name: port for port in inputs}
         env_names = {
             segment.name for variable in self.command.env for segment in variable.value.segments
             if isinstance(segment, NfInputReference)
         }
+        if carried := (referenced_names | env_names) & {port.name for port in step_only}:
+            raise ValueError(
+                f"process {self.name!r} command reads the step-only inputs {', '.join(sorted(carried))}, which "
+                "its tool does not declare"
+            )
+        if unknown := (referenced_names | env_names) - input_names:
+            raise ValueError(
+                f"process {self.name!r} templates reference unknown inputs: {', '.join(sorted(unknown))}"
+            )
+        input_ports = {port.name: port for port in inputs}
         rules: tuple[tuple[set[str], Callable[[NfPort], bool], str], ...] = (
             (flag_names, lambda port: port.qualifier == "val", "flag tokens must reference val inputs"),
             (
@@ -851,34 +882,39 @@ class NfProcess:
         if not isinstance(self.resources, NfResources):
             raise TypeError("process resources must be NfResources")
         if self.condition is not None:
-            if not isinstance(self.condition, Expr):
-                raise TypeError("process condition must be a typed Expr or None")
-            validate(self.condition)
-            if self.condition.op not in _BOOLEAN_ROOTS:
-                raise ValueError(f"process {self.name!r} condition must compute a boolean, not {self.condition.op!r}")
-            if not inputs:
-                raise ValueError(
-                    f"process {self.name!r} has a condition but no inputs: a conditional step "
-                    "is decided once per invocation of its inputs, so it needs at least one "
-                    "input to gate on"
-                )
-            condition_names = references(self.condition)
-            if invalid := sorted(
-                name for name in condition_names
-                if name not in input_ports or input_ports[name].qualifier != "val" or input_ports[name].is_array
-            ):
-                raise ValueError(
-                    f"process {self.name!r} condition must reference scalar val inputs: "
-                    f"{', '.join(invalid)}"
-                )
+            self._check_condition(self.condition)
             object.__setattr__(self, "condition", canonical(self.condition))
+
+    def _check_condition(self, condition: Expr) -> None:
+        """A condition is a valid tree over scalar val inputs, step-only ones included, that types as a boolean
+        over their scalar types once they have them."""
+        if not isinstance(condition, Expr):
+            raise TypeError("process condition must be a typed Expr or None")
+        validate(condition)
+        ports = {port.name: port for port in self.all_inputs}
+        if not ports:
+            raise ValueError(
+                f"process {self.name!r} has a condition but no inputs: a conditional step "
+                "is decided once per invocation of its inputs, so it needs at least one "
+                "input to gate on"
+            )
+        if invalid := sorted(
+            name for name in references(condition)
+            if name not in ports or ports[name].qualifier != "val" or ports[name].is_array
+        ):
+            raise ValueError(f"process {self.name!r} condition must reference scalar val inputs: {', '.join(invalid)}")
+        # The workflow gives a val input with no scalar type the one its connection gives, and types the condition
+        # then.
+        if all(ports[name].scalar_type is not None for name in references(condition)):
+            _type_condition(self.name, condition, ports.values())
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible representation.
 
         Returns:
             dict[str, Any]: The process name, ports, command, container,
-                resources, and optional condition.
+                resources, and the condition and step-only inputs of a
+                process that has them.
         """
         item: dict[str, Any] = {
             "name": self.name,
@@ -890,7 +926,19 @@ class NfProcess:
         }
         if self.condition is not None:
             item["condition"] = self.condition.to_dict()
+        if self.step_only_inputs:
+            item["step_only_inputs"] = [port.to_dict() for port in self.step_only_inputs]
         return item
+
+
+def _type_condition(name: str, condition: Expr, ports: Iterable[NfPort]) -> None:
+    """Refuse a process condition that does not type as a boolean over its inputs' scalar types."""
+    try:
+        typed = check(condition, {port.name: port.scalar_type for port in ports})
+    except ValueError as exc:
+        raise ValueError(f"process {name!r} condition does not type over its inputs: {exc}") from None
+    if typed != "boolean":
+        raise ValueError(f"process {name!r} condition must compute a boolean, not a {typed}")
 
 
 # Adapters that combine two or more scattered whole arrays into invocations
@@ -1110,6 +1158,45 @@ class NfStepInputConnection:
 NfConnection = NfWorkflowInputConnection | NfProcessConnection | NfWorkflowOutputConnection | NfStepInputConnection
 
 
+def scalar_type(connection: NfSourceConnection | NfStepInputConnection, param_types: Mapping[str, str],
+                processes: Mapping[str, NfProcess]) -> str | None:
+    """The type of the one scalar a ``val`` input receives over ``connection``, or None for a path or a list.
+
+    A parameter gives its declared type, and one element of it to a scattered
+    input; a process output gives the text it captures, which may be null
+    when its process has a condition; a step input's idioms give one value
+    only when its ``pickValue`` picks one, which is never null, and of the
+    type its sources share.
+
+    Args:
+        connection (NfSourceConnection | NfStepInputConnection): The connection into the input.
+        param_types (Mapping[str, str]): Each parameter's declared type.
+        processes (Mapping[str, NfProcess]): The processes a connection may come from, by name.
+
+    Returns:
+        str | None: One of ``SCALAR_TYPES``, or None.
+    """
+    match connection:
+        case NfStepInputConnection(sources=sources):
+            if connection.gives_list:
+                return None
+            picked = {scalar_type(source, param_types, processes) for source in sources}
+            shared = {found.removesuffix("?") for found in picked if found is not None}
+            return shared.pop() if None not in picked and len(shared) == 1 else None
+        case NfWorkflowInputConnection(from_port=name, adapter=adapter):
+            declared = param_types[name]
+            if adapter is not None:  # one element of the array
+                declared = declared.removesuffix("?").removesuffix("[]")
+            return declared if declared in SCALAR_TYPES else None
+        case NfProcessConnection(from_process=name, from_port=emit, adapter=adapter):
+            producer = processes[name]
+            output = next((port for port in producer.outputs if port.name == emit), None)
+            if adapter == "gather" or output is None or output.capture != "text":
+                return None
+            # A gathered array scattered again gives one element; a conditional process's array is never gathered.
+            return "string?" if producer.condition is not None and adapter is None else "string"
+
+
 def process_dependencies(
     names: Iterable[str],
     connections: Iterable[NfConnection],
@@ -1178,7 +1265,7 @@ class ExecutableNextflowWorkflow:
     """
 
     # Written into nextflow_workflow.json, which nothing reads back; any change to the payload bumps it (design §5.3).
-    SCHEMA_VERSION: ClassVar[int] = 20
+    SCHEMA_VERSION: ClassVar[int] = 21
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
     name: str
@@ -1225,6 +1312,7 @@ class ExecutableNextflowWorkflow:
                              "which has no lowering; give it a value")
         object.__setattr__(self, "param_types", FrozenMapping(self.param_types))
         self._validate_graph()
+        self._fill_scalar_types()
         self._canonicalize()
 
     @property
@@ -1259,6 +1347,8 @@ class ExecutableNextflowWorkflow:
             if optional := [port.name for port in process_by_name[name].outputs if port.optional]:
                 # A gather would drop the absent positions instead of keeping null there.
                 raise ValueError(f"scattered process {name!r} cannot have the optional outputs {', '.join(optional)}")
+        # A val input takes a path's value and stages nothing, so a step-only input takes any source.
+        carried = {(process.name, port.name) for process in self.processes for port in process.step_only_inputs}
         checked = {
             (connection.from_process, connection.from_port)
             for connection in self.connections if isinstance(connection, NfWorkflowOutputConnection)
@@ -1301,12 +1391,17 @@ class ExecutableNextflowWorkflow:
                         # connection order never picks it. A step input's idioms
                         # take the parameter's own value.
                         declared = param_channel(self.param_types[from_port])
+                        if adapter is not None and (to_process, to_port) in carried:
+                            raise ValueError(f"step-only input {to_process}.{to_port} cannot be scattered: no input "
+                                             "of the process receives the element")
                         if merge is not None:
-                            self._check_merged(merge, f"workflow input {from_port!r}", declared, destination)
+                            self._check_merged(merge, f"workflow input {from_port!r}", declared, destination,
+                                               (to_process, to_port) in carried)
                             continue
                         # The adapter belongs to the scattered process, not to the
                         # parameter, so it only means the whole array is taken.
-                        channel = NfChannel(destination.path_kind, destination.is_array or adapter is not None)
+                        channel = NfChannel(declared.path_kind if (to_process, to_port) in carried
+                                            else destination.path_kind, destination.is_array or adapter is not None)
                         if channel != declared:
                             raise ValueError(
                                 f"workflow input {from_port!r} of type {self.param_types[from_port]!r} cannot feed "
@@ -1347,6 +1442,9 @@ class ExecutableNextflowWorkflow:
                                 "into a port that is not array-typed"
                             )
                         if adapter in MULTI_INPUT_ADAPTERS:
+                            if (to_process, to_port) in carried:
+                                raise ValueError(f"step-only input {to_process}.{to_port} cannot be scattered: no "
+                                                 "input of the process receives the element")
                             if destination.is_array:
                                 raise ValueError(
                                     f"channel adapter {adapter!r} cannot target the array-marked port "
@@ -1363,7 +1461,8 @@ class ExecutableNextflowWorkflow:
                                 f"connection {from_process}.{from_port} -> {to_process}.{to_port} "
                                 "joins incompatible channel cardinalities"
                             )
-                        if merge is None and source.path_kind != destination.path_kind:
+                        if merge is None and source.path_kind != destination.path_kind \
+                                and (to_process, to_port) not in carried:
                             raise ValueError(
                                 f"connection {from_process}.{from_port} -> {to_process}.{to_port} joins a "
                                 f"{source.path_kind or 'value'} output to a {destination.path_kind or 'value'} input"
@@ -1393,6 +1492,7 @@ class ExecutableNextflowWorkflow:
                             self._check_merged(
                                 merge, f"process output {from_process}.{from_port}",
                                 NfChannel(source.path_kind, adapter == "gather"), destination,
+                                (to_process, to_port) in carried,
                             )
                         else:
                             self._record_incoming(incoming, to_process, to_port)
@@ -1412,11 +1512,36 @@ class ExecutableNextflowWorkflow:
         expected_inputs = {
             (process.name, port.name)
             for process in self.processes
-            for port in process.inputs
+            for port in process.all_inputs
         }
         if missing := expected_inputs - incoming:
             process_name, port_name = sorted(missing)[0]
             raise ValueError(f"process input {process_name}.{port_name} is not connected")
+
+    def _fill_scalar_types(self) -> None:
+        """Give each val input the scalar type its connection gives (design §9), refusing one given that disagrees,
+        and type each condition over the filled inputs."""
+        process_by_name = {process.name: process for process in self.processes}
+        incoming = {(connection.to_process, connection.to_port): connection for connection in self.connections
+                    if not isinstance(connection, NfWorkflowOutputConnection)}
+
+        def filled(process: NfProcess, port: NfPort) -> NfPort:
+            if port.qualifier != "val":
+                return port
+            received = scalar_type(incoming[(process.name, port.name)], self.param_types, process_by_name)
+            if port.scalar_type not in (None, received):
+                raise ValueError(f"process input {process.name}.{port.name} receives "
+                                 f"{'no one scalar' if received is None else repr(received)}, but its scalar type is "
+                                 f"{port.scalar_type!r}")
+            return replace(port, scalar_type=received)
+        processes = []
+        for process in self.processes:
+            process = replace(process, inputs=[filled(process, port) for port in process.inputs],
+                              step_only_inputs=[filled(process, port) for port in process.step_only_inputs])
+            if process.condition is not None:
+                _type_condition(process.name, process.condition, process.all_inputs)
+            processes.append(process)
+        object.__setattr__(self, "processes", tuple(processes))
 
     def _canonicalize(self) -> None:
         """Put the orders the rendering does not show in their one canonical form (design §5.2).
@@ -1444,7 +1569,7 @@ class ExecutableNextflowWorkflow:
             processes.append(process if inputs == list(process.inputs) else replace(process, inputs=inputs))
         destinations = {
             (process.name, port.name): (index, port_index)
-            for index, process in enumerate(processes) for port_index, port in enumerate(process.inputs)
+            for index, process in enumerate(processes) for port_index, port in enumerate(process.all_inputs)
         }
         outputs = [connection for connection in self.connections if isinstance(connection, NfWorkflowOutputConnection)]
         incoming = sorted(
@@ -1455,10 +1580,12 @@ class ExecutableNextflowWorkflow:
         object.__setattr__(self, "connections", (*incoming, *outputs))
 
     @staticmethod
-    def _check_merged(merge: NfStepInputConnection, source: str, channel: NfChannel, destination: NfPort) -> None:
-        """A step input's source has its port's path kind, and is an array only where the idioms keep one level."""
+    def _check_merged(merge: NfStepInputConnection, source: str, channel: NfChannel, destination: NfPort,
+                      carried: bool) -> None:
+        """A step input's source has its port's path kind, unless the port is a step-only input, which takes any;
+        and it is an array only where the idioms keep one level."""
         where = f"step input {merge.to_process}.{merge.to_port}"
-        if channel.path_kind != destination.path_kind:
+        if channel.path_kind != destination.path_kind and not carried:
             raise ValueError(f"{where}: {source} is {channel}, which its port's {destination.qualifier} cannot take")
         if channel.carries_list and (merge.link_merge != "merge_flattened" or merge.pick_value is not None):
             # merge_nested would nest arrays, and [] stands for both a null and an empty array.
@@ -1473,7 +1600,7 @@ class ExecutableNextflowWorkflow:
         process = process_by_name.get(process_name)
         if process is None:
             raise ValueError(f"connection references unknown destination process {process_name!r}")
-        for port in process.inputs:
+        for port in process.all_inputs:
             if port.name == port_name:
                 return port
         raise ValueError(f"connection references unknown input port {process_name}.{port_name}")

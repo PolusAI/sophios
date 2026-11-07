@@ -4,7 +4,8 @@
 ``workflow.nf``, ``nextflow_params.json`` and ``nextflow.config``, and builds
 one Sophios ``Workflow`` through this API: a ``CommandLineTool`` made a step
 for each process, in the order the pipeline calls them; each parameter a
-workflow input holding its value; and every edge bound on the input it feeds.
+workflow input holding its value; and every edge bound on the input it feeds,
+a step-only input as a ``StepInput`` on a name its tool does not declare.
 Compiled to Nextflow with inference disabled, the workflow gives back the
 model the files were written from (design §4.2). The import reads nothing
 else: not ``nextflow_workflow.json``, no tool registry, no network, and no
@@ -28,6 +29,8 @@ What the compile does not keep does not come back:
   keeps; normalization is idempotent, so a second round trip is exact;
 - nesting: subworkflows are inlined, so the workflow is flat;
 - labels, docs, the other compile-time fields, and Sophios-only hints;
+- a step-only input the compile does not carry: one fed only by workflow
+  inputs that neither the step's ``when`` nor its ``scatter`` reads;
 - ``cudaDeviceCountMax``: the ``accelerator`` count is read as
   ``cudaDeviceCountMin``;
 - comments and formatting;
@@ -308,6 +311,7 @@ def _bind(model: ExecutableNextflowWorkflow, workflow: Workflow, steps: dict[str
         # The [] of an optional scalar stands for its absence; an array's is the empty array.
         if not (declared.endswith("?") and not declared.endswith("[]?") and values[name] == []):
             setattr(workflow.inputs, name, values[name])
+    step_only = {(process.name, port.name) for process in model.processes for port in process.step_only_inputs}
     for edge in model.connections:
         match edge:
             case NfWorkflowOutputConnection(from_process=source, from_port=emit, to_port=name):
@@ -317,7 +321,9 @@ def _bind(model: ExecutableNextflowWorkflow, workflow: Workflow, steps: dict[str
                     source=[_source(workflow, steps, source) for source in sources], link_merge=link_merge,
                     pick_value=pick_value))
             case NfWorkflowInputConnection() | NfProcessConnection():
-                setattr(steps[edge.to_process].inputs, edge.to_port, _source(workflow, steps, edge))
+                source = _source(workflow, steps, edge)
+                setattr(steps[edge.to_process].inputs, edge.to_port,
+                        StepInput(source=source) if (edge.to_process, edge.to_port) in step_only else source)
     for process in model.processes:
         step = steps[process.name]
         scattered = [edge for edge in model.connections

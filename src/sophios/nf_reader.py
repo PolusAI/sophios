@@ -32,6 +32,7 @@ from .input_output_nf import (
     NF_ENTRYPOINT_READ,
     NF_ENTRYPOINT_WORDS,
     NF_HELPER_FUNCTIONS,
+    NF_STEP_INPUT_CARRIER,
     NF_STUB_LINES,
     Idioms,
     nextflow_params,
@@ -71,6 +72,7 @@ from .nf_types import (
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
     param_channel,
+    scalar_type,
 )
 
 _Code = SophiosErrorCode
@@ -420,11 +422,13 @@ def _glob(text: str, literal: bool) -> NfTemplate:
 
 
 @dataclass(frozen=True, slots=True)
-class _Process:
-    """What a process block states. An input's path kind and array mark are its source's, so they come later."""
+class _Process:  # pylint: disable=too-many-instance-attributes
+    """What a process block states. An input's path kind, array mark and scalar type are its source's, so they come
+    later. ``carried`` names the step-only inputs, the last of ``inputs``."""
 
     head: _Line
     inputs: tuple[tuple[str, str, NfEntry | None], ...]
+    carried: tuple[str, ...]
     scattered: tuple[str, ...]
     outputs: tuple[NfPort, ...]
     command: NfCommand
@@ -470,6 +474,8 @@ def _process(block: list[_Line]) -> _Process:  # pylint: disable=too-many-branch
     container: str | None = None
     resources = NfResources()
     directories: str | tuple[str, ...] = ()
+    carried: tuple[str, ...] = ()
+    carrier: _Line | None = None
     inputs: list[tuple[str, str, bool]] = []
     scattered: list[str] = []
     outputs: list[NfPort] = []
@@ -502,6 +508,8 @@ def _process(block: list[_Line]) -> _Process:  # pylint: disable=too-many-branch
                 elif found := Idioms.EXT.match(line.text):
                     ext: dict[str, Any] = {name: _strings(value) for name, value in _named(found["carriers"]).items()}
                     directories = ext.get(NF_DIRECTORY_CARRIER, ())
+                    named = ext.get(NF_STEP_INPUT_CARRIER, ())
+                    carried, carrier = ((named,) if isinstance(named, str) else named), line
                     resources = replace(resources, **{field: ext[key] for key, field in NF_CUDA_CARRIERS if key in ext})
                 elif not line.text.startswith(("containerOptions ", "beforeScript ")):
                     line.stop(_Code.IMPORT_FOREIGN_STATEMENT, "a process directive Sophios does not write")
@@ -521,10 +529,14 @@ def _process(block: list[_Line]) -> _Process:  # pylint: disable=too-many-branch
         except ValueError as exc:
             code = _Code.IMPORT_FOREIGN_STATEMENT if section == "directive" else _Code.IMPORT_FOREIGN_DECLARATION
             line.stop(code, str(exc))
+    last = inputs[len(inputs) - len(carried):]
+    if carrier is not None and last != [(name, "val", False) for name in carried]:
+        carrier.stop(_Code.IMPORT_MISMATCH, "a WorkflowStepInput carrier that does not name the process's last val "
+                     "inputs, in order")
     command, entries = _command(script, head)
     return _Process(
         head, tuple((name, qualifier, entries.get(name) if entry else None) for name, qualifier, entry in inputs),
-        tuple(scattered), tuple(outputs), command, container, resources,
+        carried, tuple(scattered), tuple(outputs), command, container, resources,
     )
 
 
@@ -537,10 +549,12 @@ def _chain(text: str) -> list[str]:
 
 
 class _Channels:
-    """The channels the workflow block names: the parameters, and each process output."""
+    """The channels the workflow block names: the parameters, and each process output; and the processes built so
+    far, which an input's scalar type reads."""
 
     def __init__(self, parameters: dict[str, str], processes: dict[str, _Process]) -> None:
         self.parameters, self.processes = parameters, processes
+        self.built: dict[str, NfProcess] = {}
         self.sources: dict[str, tuple[str | None, str]] = {
             idiom.fill(process=name, emit=port.name): (name, port.name)
             for name, process in processes.items() for port in process.outputs
@@ -619,7 +633,7 @@ def _statement(main: _Main, lines: list[_Line], index: int) -> int:
 
 
 def _port(name: str, qualifier: str, entry: NfEntry | None, connection: Any, channels: "_Channels") -> NfPort:
-    """An input port, whose path kind and array mark are its source's."""
+    """An input port, whose path kind, array mark and scalar type are its source's."""
     first = connection.sources[0] if isinstance(connection, NfStepInputConnection) else connection
     if isinstance(first, NfWorkflowInputConnection):
         channel = param_channel(channels.parameters[first.from_port])
@@ -630,7 +644,9 @@ def _port(name: str, qualifier: str, entry: NfEntry | None, connection: Any, cha
         array = first.adapter == "gather"
     if isinstance(connection, NfStepInputConnection):
         array = connection.gives_list
-    return NfPort(name, qualifier, path_kind=kind if qualifier == "path" else None, is_array=array, entry=entry)
+    return NfPort(name, qualifier, path_kind=kind if qualifier == "path" else None, is_array=array, entry=entry,
+                  scalar_type=scalar_type(connection, channels.parameters, channels.built) if qualifier == "val"
+                  else None)
 
 
 def _process_model(
@@ -660,7 +676,9 @@ def _process_model(
         at.stop(_Code.IMPORT_FOREIGN_STATEMENT, f"channels Sophios does not write ({exc})")
     try:
         inputs = [_port(port, qualifier, entry, incoming[port], channels) for port, qualifier, entry in process.inputs]
-        model = NfProcess(name, inputs, process.outputs, process.command, process.container, process.resources)
+        declared = len(inputs) - len(process.carried)
+        model = NfProcess(name, inputs[:declared], process.outputs, process.command, process.container,
+                          process.resources, step_only_inputs=inputs[declared:])
     except (ValueError, TypeError, KeyError) as exc:
         process.head.stop(_Code.IMPORT_MISMATCH, f"a process Sophios does not write ({exc})")
     if branch is None:
@@ -691,6 +709,7 @@ def _workflow(block: list[_Line], processes: dict[str, _Process], parameters: di
             line.stop(_Code.IMPORT_FOREIGN_STATEMENT, "a call of no process the pipeline declares")
         process, incoming = _process_model(name, processes[name], main, channels)
         built.append(process)
+        channels.built[process.name] = process
         connections.extend(incoming)
     for line in sections["emit"]:
         found = Idioms.EMIT.match(line.text)
