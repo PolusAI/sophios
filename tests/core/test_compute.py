@@ -371,7 +371,8 @@ def _seen(value: object) -> object:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('case', cases('compute-service'))
+@pytest.mark.parametrize('case', cases('compute-service', 'do', 'answers', 'raises', 'returns', 'stdout', 'stderr',
+                                       'pauses', 'calls', 'patience'))
 def test_a_run_makes_of_the_services_answers_what_its_contract_says(
         monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], case: Yaml) -> None:
     """Each case of data/compute-service: each call answered from `answers` by 'METHOD path', over `_SPOKEN`, a list's
