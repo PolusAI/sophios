@@ -6,7 +6,9 @@ name: Property Weekly
 #
 # Hermetic: every input is generated (workflows over tests/core/synthetic_tools.py),
 # so nothing here needs a plugin checkout, a config, a container or the
-# self-hosted runner. It replaces the weekly fuzz job, which sampled an
+# self-hosted runner. The nextflow-properties job alone installs Java and the
+# pinned Nextflow, as nextflow.yml does, and runs only the runtime properties.
+# It replaces the weekly fuzz job, which sampled an
 # environment-dependent schema that no longer exists.
 #
 # Each run draws fresh examples: the seed is the run id, recorded in the job
@@ -80,10 +82,19 @@ jobs:
       # The oracle suite (tests/core/test_hermeticity.py::ORACLE_FILES) and the
       # phase properties beside it, slow ones included: the `--validate`
       # property is slow-marked, and deepening it is the point of this lane.
+      # test_leak_boundary.py's other tests compile against a discovered
+      # registry, so its five hermetic properties are named.
       - name: PyTest Oracle and Phase Properties
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         timeout-minutes: 180
-        run: pytest tests/core/test_generators.py tests/core/test_equivalence.py tests/core/test_equivalences.py tests/core/test_predicates.py tests/core/test_reference_compatibility.py tests/core/test_canonical_path.py tests/core/test_emit.py tests/core/test_resolve.py tests/core/test_link.py tests/core/test_infer_phase.py tests/core/test_cwl_version.py tests/core/test_names_emitted.py tests/core/test_edge_binding.py tests/core/test_lower.py tests/core/test_pipeline.py --hypothesis-seed="$HYPOTHESIS_SEED" --junitxml=property-reports/oracle.xml
+        run: >-
+          pytest tests/core/test_generators.py tests/core/test_equivalence.py tests/core/test_equivalences.py tests/core/test_predicates.py tests/core/test_reference_compatibility.py tests/core/test_canonical_path.py tests/core/test_emit.py tests/core/test_resolve.py tests/core/test_link.py tests/core/test_infer_phase.py tests/core/test_cwl_version.py tests/core/test_names_emitted.py tests/core/test_edge_binding.py tests/core/test_lower.py tests/core/test_pipeline.py
+          tests/core/test_leak_boundary.py::test_step_passthrough_is_byte_identical
+          tests/core/test_leak_boundary.py::test_top_level_passthrough_is_byte_identical
+          tests/core/test_leak_boundary.py::test_hints_survive_on_the_document_and_the_step_and_change_nothing_else
+          tests/core/test_leak_boundary.py::test_unknown_keys_change_nothing_else
+          tests/core/test_leak_boundary.py::test_no_key_lands_on_both_sides
+          --hypothesis-seed="$HYPOTHESIS_SEED" --junitxml=property-reports/oracle.xml
 
       # The language layer's properties. Its skip_pypi_ci tests compile against
       # a discovered registry, which this lane does not have; lint_and_test
@@ -134,5 +145,62 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: property-weekly-reports
+          path: property-reports/
+          retention-days: 30
+
+  # The runtime properties need Java and the pinned Nextflow. nextflow.yml keeps
+  # running them at scale 1 on push and pull request.
+  nextflow-properties:
+    concurrency:
+      group: ${{ github.workflow }}-nextflow-${{ github.ref }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      SOPHIOS_PROPERTY_SCALE: ${{ inputs.scale || '20' }}
+      HYPOTHESIS_SEED: ${{ github.run_id }}
+      NXF_ANSI_LOG: 'false'
+      NXF_OFFLINE: 'true'
+      NXF_VER: '26.04.2'
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Sophios
+        run: pip install ".[test]"
+
+      - name: Install pinned Nextflow
+        run: |
+          curl --fail --silent --show-error https://get.nextflow.io | bash
+          install -m 0755 nextflow "${RUNNER_TEMP}/nextflow"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: Verify pinned runtime
+        run: nextflow -version | grep 'version 26.04.2'
+
+      - name: PyTest Nextflow Runtime Properties
+        run: >-
+          pytest
+          tests/core/nextflow/test_runtime.py::test_a_command_receives_the_arguments_cwltool_gives_it
+          tests/core/nextflow/test_runtime.py::test_a_scatter_records_what_cwl_defines_for_its_method
+          tests/core/nextflow/test_runtime.py::test_a_staged_path_reaches_its_task_whole_and_in_order
+          tests/core/nextflow/test_runtime.py::test_a_captured_text_is_the_files_utf8_up_to_the_cwl_limit
+          tests/core/nextflow/test_subset_differential.py::test_a_when_decides_as_javascript_does
+          --hypothesis-seed="$HYPOTHESIS_SEED" --junitxml=property-reports/nextflow-runtime.xml
+
+      - name: Upload pytest reports
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: property-weekly-nextflow-reports
           path: property-reports/
           retention-days: 30
