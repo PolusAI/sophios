@@ -86,3 +86,16 @@
   tools: {pair: {inputs: {left: string, right: string}}}
   workflows: {w: "steps:\n- id: pair\n  in:\n    left: !ii a\n    right: !ii b\n"}
   written: {w.cwl: {steps: [{id: pair, when: '$(inputs["left"] != null && inputs["right"] != null)'}]}}
+- id: a-when-of-its-own
+  why: a step's own when was replaced by the null checks, so a step its author switched off ran; it is evaluated
+    after them, once, and a when written as a function body returns false first unless every required input arrived
+  tools: {say: {inputs: {message: string}}, tell: {inputs: {message: string}}}
+  workflows: {w: "steps:\n- id: say\n  when: '$(inputs.message != \"skip\")'\n  in:\n    message: !ii skip\n- id: tell\n  when: '${ return inputs.message != \"skip\"; }'\n  in:\n    message: !ii skip\n"}
+  written: {w.cwl: {steps: [{id: say, when: '$(inputs["message"] != null && (inputs.message != "skip"))'},
+    {id: tell, when: '${if (!(inputs["message"] != null)) { return false; } return inputs.message != "skip"; }'}]}}
+- id: a-when-that-is-not-one-expression
+  why: a when that is not one $(...) or ${...} evaluates to no boolean, so cwltool refuses it as a when, and the null
+    checks were written over it; it is written as the author wrote it
+  tools: {say: {inputs: {message: string}}, tell: {inputs: {message: string}}}
+  workflows: {w: "steps:\n- id: say\n  when: 'on $(inputs.message)'\n  in:\n    message: !ii a\n- id: tell\n  when: true\n  in:\n    message: !ii b\n"}
+  written: {w.cwl: {steps: [{id: say, when: 'on $(inputs.message)'}, {id: tell, when: true}]}}
