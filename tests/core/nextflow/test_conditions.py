@@ -11,7 +11,7 @@ from sophios.lang.subset import parse
 from sophios.nf_types import ExecutableNextflowWorkflow, NfOptionalBinding, NfProcess
 from sophios.utils_nf import compiled_source_to_nextflow
 
-from .testkit import command, output_port, step, synthetic_source, tool, workflow_doc
+from .testkit import command, lowered_case, output_port, step, tool
 
 
 def _when_workflow(
@@ -38,7 +38,8 @@ def _when_workflow(
             }
         },
     )
-    steps = [step("PRODUCE", **{"in": {name: name for name in inputs}, "out": ["result"], "when": when})]
+    result: str | dict[str, Any] = {"result": {"wic_anchor": "result"}} if second_step else "result"
+    steps = [step("PRODUCE", **{"in": {name: name for name in inputs}, "out": [result], "when": when})]
     tools = [produce]
     outputs = {"result": {"type": "string?", "outputSource": "PRODUCE/result"}}
     if second_step:
@@ -48,18 +49,18 @@ def _when_workflow(
             baseCommand=["touch", "done.txt"],
             outputs={"done": {"type": "File", "outputBinding": {"glob": "done.txt"}}},
         )
-        steps.append(step("CONSUME", **{"in": {"maybe_result": "PRODUCE/result"}, "out": ["done"]}))
+        steps.append(step("CONSUME", **{"in": {"maybe_result": {"wic_alias": "result"}}, "out": ["done"]}))
         tools.append(consume)
         outputs = {
             "result": {"type": "string?", "outputSource": "PRODUCE/result"},
             "done": {"type": "File", "outputSource": "CONSUME/done"},
         }
-    workflow = workflow_doc(
-        steps,
-        inputs={name: definition["type"] for name, definition in declared.items()},
-        outputs=outputs,
-    )
-    return compiled_source_to_nextflow(synthetic_source(workflow, tools, workflow_inputs=params))
+    workflow = {
+        "steps": steps,
+        "inputs": {name: definition["type"] for name, definition in declared.items()},
+        "outputs": outputs,
+    }
+    return lowered_case({"workflow": workflow, "tools": tools, "job": params})[0]
 
 
 @pytest.mark.fast
@@ -126,14 +127,14 @@ def test_when_on_a_single_input_scattered_step_lowers() -> None:
         baseCommand="echo",
         outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
     )
-    workflow = workflow_doc(
-        [step("PRODUCE", **{
+    workflow = {
+        "steps": [step("PRODUCE", **{
             "in": {"a": "a"}, "out": ["result"], "when": "$(inputs.a > 0)", "scatter": "a",
         })],
-        inputs={"a": {"type": {"type": "array", "items": "int"}}},
-        outputs={"result": {"type": {"type": "array", "items": "File"}, "outputSource": "PRODUCE/result"}},
-    )
-    lowered = compiled_source_to_nextflow(synthetic_source(workflow, [produce], workflow_inputs={"a": [1, 2]}))
+        "inputs": {"a": {"type": {"type": "array", "items": "int"}}},
+        "outputs": {"result": {"type": {"type": "array", "items": "File"}, "outputSource": "PRODUCE/result"}},
+    }
+    lowered, _notes = lowered_case({"workflow": workflow, "tools": [produce], "job": {"a": [1, 2]}})
     assert lowered.processes[0].condition is not None
 
 
@@ -161,22 +162,21 @@ def test_optional_binding_consumer_of_a_conditional_output(arguments: list[Any],
         baseCommand="echo",
         outputs={"done": {"type": "File", "outputBinding": {"glob": "done.txt"}}},
     )
-    workflow = workflow_doc(
-        [
-            step("PRODUCE", **{"in": {"a": "a"}, "out": ["result"], "when": "$(inputs.a > 0)"}),
-            step("CONSUME", **{"in": {"result": "PRODUCE/result"}, "out": ["done"]}),
+    workflow = {
+        "steps": [
+            step("PRODUCE", **{"in": {"a": "a"}, "out": [{"result": {"wic_anchor": "result"}}],
+                               "when": "$(inputs.a > 0)"}),
+            step("CONSUME", **{"in": {"result": {"wic_alias": "result"}}, "out": ["done"]}),
         ],
-        inputs={"a": "int"},
-        outputs={"done": {"type": "File", "outputSource": "CONSUME/done"}},
-    )
-    source = synthetic_source(workflow, [produce, consume], workflow_inputs={"a": 1})
+        "inputs": {"a": "int"},
+        "outputs": {"done": {"type": "File", "outputSource": "CONSUME/done"}},
+    }
+    case = {"workflow": workflow, "tools": [produce, consume], "job": {"a": 1}}
     if admitted:
-        assert compiled_source_to_nextflow(source).processes[1].command.tokens[-1] == NfOptionalBinding(
-            "result", "--result"
-        )
+        assert lowered_case(case)[0].processes[1].command.tokens[-1] == NfOptionalBinding("result", "--result")
     else:
         with pytest.raises(ValueError, match="not one the absent-optional lowering admits"):
-            compiled_source_to_nextflow(source)
+            lowered_case(case)
 
 
 @pytest.mark.fast

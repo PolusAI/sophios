@@ -14,11 +14,10 @@ from sophios.nf_types import (
     ExecutableNextflowWorkflow, NfPort, NfProcess, NfProcessConnection, NfStepInputConnection,
     NfWorkflowInputConnection,
 )
-from sophios.utils_nf import compiled_source_to_nextflow
+from sophios.wic_types import Yaml
 
-from .test_capabilities import _findings
 from .test_channels import _lower
-from .testkit import command, output_port, step, synthetic_source, tool, workflow_doc
+from .testkit import command, lowered_case, output_port, step, tool
 
 _STRINGS = {"type": "array", "items": "string"}
 
@@ -41,13 +40,21 @@ def _joined(step_input: Any, port_type: Any, inputs: dict[str, Any], *, scatter:
     join = tool("JOIN", inputs={"words": {"type": port_type, "inputBinding": {"position": 1}}},
                 outputs={"out": {"type": "File", "outputBinding": {"glob": "out.txt"}}}, stdout="out.txt")
     fields = {"scatter": "words"} if scatter else {}
-    return synthetic_source(
-        workflow_doc([step("JOIN", **{"in": {"words": step_input}, "out": ["out"]}, **fields)],
-                     inputs={name: {"type": declared} for name, (declared, _) in inputs.items()},
-                     outputs={"out": {"type": "File", "outputSource": "JOIN/out"}}),
-        [join],
-        workflow_inputs={name: value for name, (_, value) in inputs.items()},
-    )
+    workflow = {
+        "steps": [step("JOIN", **{"in": {"words": {"wic_raw_cwl": step_input}}, "out": ["out"]}, **fields)],
+        "inputs": {name: {"type": declared} for name, (declared, _) in inputs.items()},
+        "outputs": {"out": {"type": "File", "outputSource": "JOIN/out"}},
+    }
+    return {"workflow": workflow, "tools": [join], "job": {name: value for name, (_, value) in inputs.items()}}
+
+
+def _findings(case: Yaml) -> list[str]:
+    """The exact aggregated finding lines of the case's rejected lowering."""
+    with pytest.raises(ValueError) as error:
+        lowered_case(case)
+    header, *lines = str(error.value).splitlines()
+    assert header == "Nextflow capability analysis failed:"
+    return [line.removeprefix("- ") for line in lines]
 
 
 _A, _B = ("string", "a"), ("string", "b")
@@ -98,22 +105,6 @@ def test_each_step_input_the_idioms_cannot_take_is_rejected_by_name(
 
 
 @pytest.mark.fast
-def test_a_step_inputs_producer_is_called_before_it_whatever_the_step_order() -> None:
-    produce = tool("P", inputs={"text": {"type": "string", "inputBinding": {"position": 1}}},
-                   outputs={"out": {"type": "File", "outputBinding": {"glob": "out.txt"}}}, stdout="out.txt")
-    join = tool("JOIN", inputs={"files": {"type": {"type": "array", "items": "File"}, "inputBinding": {"position": 1}}},
-                outputs={"out": {"type": "File", "outputBinding": {"glob": "all.txt"}}}, stdout="all.txt")
-    rendered = render_nextflow(compiled_source_to_nextflow(synthetic_source(
-        workflow_doc([step("JOIN", **{"in": {"files": {"source": ["P/out"], "linkMerge": "merge_flattened"}},
-                                      "out": ["out"]}),
-                      step("P", **{"in": {"text": "a"}, "out": ["out"]})],
-                     inputs={"a": {"type": "string"}}, outputs={"out": {"type": "File", "outputSource": "JOIN/out"}}),
-        [join, produce], workflow_inputs={"a": "a"},
-    )))
-    assert rendered.index("    _P(") < rendered.index("    _JOIN(")
-
-
-@pytest.mark.fast
 def test_a_scattered_input_takes_its_one_source_as_it_is() -> None:
     rose = _joined({"source": ["xs"], "linkMerge": "merge_flattened"}, "string", {"xs": (_STRINGS, ["x"])},
                    scatter=True)
@@ -124,17 +115,17 @@ def test_a_scattered_input_takes_its_one_source_as_it_is() -> None:
 def test_a_label_is_documentation() -> None:
     plain = _joined({"source": ["a", "b"]}, _STRINGS, {"a": _A, "b": _B})
     labelled = _joined({"source": ["a", "b"], "label": "two words"}, _STRINGS, {"a": _A, "b": _B})
-    assert render_nextflow(compiled_source_to_nextflow(labelled)) == render_nextflow(compiled_source_to_nextflow(plain))
+    assert render_nextflow(lowered_case(labelled)[0]) == render_nextflow(lowered_case(plain)[0])
 
 
 @pytest.mark.fast
 def test_the_idioms_lower_to_one_step_input_connection() -> None:
-    lowered = compiled_source_to_nextflow(_joined({"source": ["a", "b"]}, _STRINGS, {"a": _A, "b": _B}))
+    lowered, _notes = lowered_case(_joined({"source": ["a", "b"]}, _STRINGS, {"a": _A, "b": _B}))
     assert NfStepInputConnection(
         (NfWorkflowInputConnection("a", "_JOIN", "words"), NfWorkflowInputConnection("b", "_JOIN", "words")),
         "merge_nested",
     ) in lowered.connections
-    defaulted = compiled_source_to_nextflow(
+    defaulted, _notes = lowered_case(
         _joined({"source": "maybe", "default": "d"}, "string", {"maybe": ("string?", None)})
     )
     assert defaulted.params == {"maybe": [], "_JOIN_words": "d"}

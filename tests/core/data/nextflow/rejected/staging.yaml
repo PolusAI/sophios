@@ -207,8 +207,8 @@
    entry']}
 - id: an_output_named_like_a_link_its_task_stages-upstream-glob
   why: &link Writing a staged input's link writes through it, so the run succeeds and leaves every sorted.txt empty.
-  workflow: &chain {steps: [{id: EMIT, out: [out]}, {id: SORT, in: {src: EMIT/out}, out: [out]}], inputs: {given: {type:
-    File}}}
+  workflow: &chain {steps: [{id: EMIT, out: [{out: {wic_anchor: emitted}}]}, {id: SORT, in: {src: {wic_alias: emitted}},
+    out: [out]}], inputs: {given: {type: File}}}
   tools: [&emit {id: EMIT, outputs: {out: {type: File, outputBinding: {glob: sorted.txt}}}, stdout: sorted.txt}, &sort {
     id: SORT, inputs: {src: {type: File, inputBinding: {position: 1}}}, outputs: {out: {type: File, outputBinding:
     {glob: sorted.txt}}}, stdout: sorted.txt}]

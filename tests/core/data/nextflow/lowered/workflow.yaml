@@ -48,11 +48,12 @@
    {coresMax: 2, ramMax: 1024}}}], lowered: {processes: [{resources: {cpus: 1, memory_mb: 512, accelerator: null,
    cuda_version_min: null, cuda_compute_capability: null}}, {resources: {cpus: 2, memory_mb: 1024, accelerator: null,
    cuda_version_min: null, cuda_compute_capability: null}}]}}
-- {id: preserves_fanout, why: One output feeds every step that reads it., workflow: {steps: [{id: A, out: [out]}, {id:
-   B, in: {value: A/out}}, {id: C, in: {value: A/out}}]}, tools: [{id: A, outputs: {out: {type: File, outputBinding:
-   {glob: out.txt}}}}, {id: B, inputs: {value: {type: File}}}, {id: C, inputs: {value: {type: File}}}], lowered: {
-   connections: {contains: [{kind: process, from_process: _A, from_port: out, to_process: _B, to_port: value}, {kind:
-   process, from_process: _A, from_port: out, to_process: _C, to_port: value}]}}}
+- {id: preserves_fanout, why: One output feeds every step that reads it., workflow: {steps: [{id: A, out: [{out:
+   {wic_anchor: a_out}}]}, {id: B, in: {value: {wic_alias: a_out}}}, {id: C, in: {value: {wic_alias: a_out}}}]}, tools:
+   [{id: A, outputs: {out: {type: File, outputBinding: {glob: out.txt}}}}, {id: B, inputs: {value: {type: File}}}, {id:
+   C, inputs: {value: {type: File}}}], lowered: {connections: {contains: [{kind: process, from_process: _A, from_port:
+   out, to_process: _B, to_port: value}, {kind: process, from_process: _A, from_port: out, to_process: _C, to_port:
+   value}]}}}
 - id: cuda_requirement_lowers_to_the_accelerator_directive-requirements-none
   why: &cuda 'The count cwltool''s job requests: the minimum, else the maximum, else 1 (design §6).'
   tool: {requirements: {'cwltool:CUDARequirement': {}}}
@@ -93,6 +94,14 @@
           "cwltool:CUDARequirement cudaVersionMin '11.4' is not checked"}}, {severity: note, code: UNCHECKED_CUDA_FIELD,
           step: GPU, index: null, port: null, message: {startswith: "cwltool:CUDARequirement cudaComputeCapability
           ['3.0', '7.5'] is not checked"}}]
+- id: a_null_scatter_is_no_scatter
+  why: 'CWL reads `scatter: null` as no scatter, so the input takes its source as one value.'
+  workflow: {steps: [{id: ONE, in: {item: items}, out: [result], scatter: null}], inputs: {items: {type: string}}}
+  tools: [{id: ONE, inputs: {item: {type: string, inputBinding: {position: 1}}}, outputs: {result: {type: File,
+           outputBinding: {glob: out.txt}}}}]
+  job: {items: a}
+  lowered: {connections: {contains: [{kind: workflow_input, from_port: items, to_process: _ONE, to_port: item, adapter:
+            null}]}}
 - id: accepts_multi_input_scatter-dotproduct
   why: &every_method A multi-input scatter lowers under each of CWL's three methods.
   workflow: &pair {steps: [{id: SCATTER, in: {first: firsts, second: seconds}, out: [result], scatter: [first, second],
@@ -140,8 +149,8 @@
    *one_tool, job: *ab, lowered: *one_edge, workflow: {<<: *one, requirements: [{class: ScatterFeatureRequirement}]}}
 - id: an_unscattered_steps_output_reaches_a_scattered_steps_other_input_as_one_value
   why: An unscattered step's output is one value, which each scattered task takes whole.
-  workflow: {steps: [{id: PRODUCER, out: [out]}, {id: SCATTER, in: {item: items, extra: PRODUCER/out}, out: [result],
-             scatter: [item]}], inputs: {items: {type: *strings}}}
+  workflow: {steps: [{id: PRODUCER, out: [{out: {wic_anchor: produced}}]}, {id: SCATTER, in: {item: items, extra:
+             {wic_alias: produced}}, out: [result], scatter: [item]}], inputs: {items: {type: *strings}}}
   tools: [{id: PRODUCER, outputs: {out: {type: File, outputBinding: {glob: produced.txt}}}},
       {id: SCATTER, inputs: {item:
            {type: string, inputBinding: {position: 1}}, extra: {type: File, inputBinding: {position: 2}}}, outputs:

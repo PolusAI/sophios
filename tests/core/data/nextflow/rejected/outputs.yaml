@@ -180,8 +180,9 @@
    'out[0-9].txt'}}}}}
 - id: a_captured_value_cannot_feed_another_process
   why: No qualifier agreement check exists for process edges, so this rejects.
-  workflow: {steps: [{id: produce, in: {message: message}, out: [text]}, {id: consume, in: {text: produce/text}, out:
-    [result]}], inputs: {message: string}, outputs: {result: {type: File, outputSource: consume/result}}}
+  workflow: {steps: [{id: produce, in: {message: message}, out: [{text: {wic_anchor: text}}]}, {id: consume, in: {text:
+    {wic_alias: text}}, out: [result]}], inputs: {message: string}, outputs: {result: {type: File, outputSource:
+    consume/result}}}
   tools: [{id: produce, inputs: {message: {type: string, inputBinding: {position: 1}}}, outputs: {text: {type: string,
     outputBinding: *text_capture}}}, {id: consume, inputs: {text: {type: string, inputBinding: {position: 1}}}, outputs:
     {result: {type: File, outputBinding: {glob: copy.txt}}}}]
@@ -193,10 +194,10 @@
    LOGS, baseCommand: 'true', outputs: {o: {type: 'File?', outputBinding: {glob: '*.log'}}}}], error: {re: optional
    outputs o must match at most one file and must reach a workflow}}
 - {id: a_step_consuming_an_optional_output_is_a_finding, why: An optional output may be null; only a workflow output
-   takes it., workflow: {steps: [{id: MAYBE, out: [o]}, {id: CONSUME, in: {source: MAYBE/o}}]}, tools: [{id: MAYBE,
-   outputs: {o: {type: 'File?', outputBinding: {glob: maybe.txt}}}}, {id: CONSUME, inputs: {source: {type: 'File?',
-   inputBinding: {position: 1}}}}], findings: ['workflow: connection _MAYBE.o -> _CONSUME.source consumes an optional
-   output, which may be null; only a workflow output can take it']}
+   takes it., workflow: {steps: [{id: MAYBE, out: [{o: {wic_anchor: o}}]}, {id: CONSUME, in: {source: {wic_alias:
+   o}}}]}, tools: [{id: MAYBE, outputs: {o: {type: 'File?', outputBinding: {glob: maybe.txt}}}}, {id: CONSUME, inputs:
+   {source: {type: 'File?', inputBinding: {position: 1}}}}], findings: ['workflow: connection _MAYBE.o ->
+   _CONSUME.source consumes an optional output, which may be null; only a workflow output can take it']}
 - {id: array_typed_outputs, why: An output is collected by glob as one File or Directory., workflow: {steps: [{id: MAKE,
    out: [results]}]}, tools: [{id: MAKE, outputs: {results: {type: {type: array, items: File}, outputBinding: {glob:
    '*.txt'}}}}], error: {re: 'results\.type: an output is collected by glob as a File or Directory'}}

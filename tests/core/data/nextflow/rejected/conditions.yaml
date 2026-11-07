@@ -8,8 +8,8 @@
   error: {re: 'reads inputs\.n, which the step does not bind'}
 - id: an_array_typed_port_cannot_consume_a_conditional_scatter
   why: A skipped scatter position has no element for an array-typed port to gather.
-  workflow: {steps: [{id: PRODUCE, in: {x: xs}, out: [r], scatter: [x], when: "$(inputs.x == 'a')"}, {id: CONSUME, in:
-    {rs: PRODUCE/r}}], inputs: {xs: {type: array, items: string}}}
+  workflow: {steps: [{id: PRODUCE, in: {x: xs}, out: [{r: {wic_anchor: r}}], scatter: [x], when: "$(inputs.x == 'a')"},
+    {id: CONSUME, in: {rs: {wic_alias: r}}}], inputs: {xs: {type: array, items: string}}}
   tools: [{id: PRODUCE, inputs: {x: {type: string}}, baseCommand: echo, stdout: out.txt, outputs: {r: {type: string,
     outputBinding: &text {glob: out.txt, loadContents: true, outputEval: '$(self[0].contents)'}}}}, {id: CONSUME,
     inputs: {rs: {type: {type: array, items: string}}}, baseCommand: 'true'}]
@@ -28,9 +28,9 @@
    construct '\\*\\*'"}}
 - id: non_optional_consumer_of_a_conditional_output
   why: A skipped step's output is null, which only an optional port takes.
-  workflow: &consumed {steps: [{id: PRODUCE, in: {a: a}, out: [result], when: $(inputs.a > 0)}, {id: CONSUME, in:
-    {result: PRODUCE/result}, out: [done]}], inputs: {a: int}, outputs: {done: {type: File, outputSource:
-    CONSUME/done}}}
+  workflow: &consumed {steps: [{id: PRODUCE, in: {a: a}, out: [{result: {wic_anchor: result}}], when: $(inputs.a > 0)},
+    {id: CONSUME, in: {result: {wic_alias: result}}, out: [done]}], inputs: {a: int}, outputs: {done: {type: File,
+    outputSource: CONSUME/done}}}
   tools: [{id: PRODUCE, inputs: {a: {type: int}}, baseCommand: echo, outputs: {result: {type: string, outputBinding:
     *text}}}, &consume {id: CONSUME, inputs: {result: {type: string}}, baseCommand: 'true', outputs: {done: {type: File,
     outputBinding: {glob: done.txt}}}}]

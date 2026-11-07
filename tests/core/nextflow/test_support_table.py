@@ -14,10 +14,9 @@ from cwl_utils.parser import cwl_v1_2
 
 from sophios.lang import SUPPORT_MATRIX
 from sophios.nf_support import FIELDS, REQUIREMENT_CLASSES, State
-from sophios.utils_nf import compiled_source_to_nextflow
 from sophios.wic_types import Yaml
 
-from .testkit import step, synthetic_source, tool, workflow_doc
+from .testkit import lowered_case, step, tool
 
 
 @pytest.mark.fast
@@ -80,12 +79,13 @@ def _documents() -> tuple[Yaml, Yaml]:
         outputs={"o": {"type": "File", "outputBinding": {"glob": "o.txt"}}},
         requirements={},
     )
-    workflow = workflow_doc(
-        [step("T", **{"in": {"x": {"source": "x"}, "xs": {"source": "xs"}}, "out": ["o"], "scatter": ["x"]})],
-        inputs={"x": {"type": _strings()}, "xs": {"type": _strings()}},
-        outputs={"o": {"type": {"type": "array", "items": "File"}, "outputSource": "T/o"}},
-    )
-    workflow["requirements"] = {"ScatterFeatureRequirement": {}}
+    workflow = {
+        "steps": [step("T", **{"in": {"x": {"wic_raw_cwl": {"source": "x"}}, "xs": {"wic_raw_cwl": {"source": "xs"}}},
+                               "out": ["o"], "scatter": ["x"]})],
+        "inputs": {"x": {"type": _strings()}, "xs": {"type": _strings()}},
+        "outputs": {"o": {"type": {"type": "array", "items": "File"}, "outputSource": "T/o"}},
+        "requirements": {"ScatterFeatureRequirement": {}},
+    }
     return workflow, run
 
 
@@ -93,7 +93,7 @@ def _documents() -> tuple[Yaml, Yaml]:
 POSITIONS: dict[str, tuple[str, Callable[[Yaml, Yaml], Yaml]]] = {
     "Workflow": ("workflow", lambda workflow, _run: workflow),
     "WorkflowStep": ("steps[0]", lambda workflow, _run: workflow["steps"][0]),
-    "WorkflowStepInput": ("steps[0].in.x", lambda workflow, _run: workflow["steps"][0]["in"]["x"]),
+    "WorkflowStepInput": ("steps[0].in.x", lambda workflow, _run: workflow["steps"][0]["in"]["x"]["wic_raw_cwl"]),
     "WorkflowInputParameter": ("workflow.inputs.x", lambda workflow, _run: workflow["inputs"]["x"]),
     "WorkflowOutputParameter": ("workflow.outputs.o", lambda workflow, _run: workflow["outputs"]["o"]),
     "CommandLineTool": ("steps[0].run", lambda _workflow, run: run),
@@ -122,13 +122,14 @@ def _position(cwl_class: str) -> tuple[str, Callable[[Yaml, Yaml], Yaml]]:
 
 
 def _lower(workflow: Yaml, run: Yaml, **values: Any) -> Any:
-    source = synthetic_source(workflow, [run], workflow_inputs={"x": ["hi"], "xs": ["a", "b"], **values})
-    return compiled_source_to_nextflow(source)
+    return lowered_case({"workflow": workflow, "tools": [run], "job": {"x": ["hi"], "xs": ["a", "b"], **values}})[0]
 
 
+# The compiler refuses these itself (wic038), so no compiled workflow reaches the lowering with them.
+COMPILER_REFUSED = {("WorkflowOutputParameter", "linkMerge"), ("WorkflowOutputParameter", "pickValue")}
 REJECTED = [
     (cwl_class, name) for cwl_class, rows in FIELDS.items() for name, row in rows.items()
-    if row.state is State.REJECTED
+    if row.state is State.REJECTED and (cwl_class, name) not in COMPILER_REFUSED
 ]
 
 
@@ -155,7 +156,7 @@ def test_compile_time_fields_leave_the_executable_model_unchanged() -> None:
     # A File input, so its job value carries `format` too: a list, as a `.wic` file's `!ii` writes it.
     run["inputs"]["f"] = {"type": "File", "inputBinding": {"position": 3}}
     workflow["inputs"]["f"] = {"type": "File"}
-    workflow["steps"][0]["in"]["f"] = {"source": "f"}
+    workflow["steps"][0]["in"]["f"] = {"wic_raw_cwl": {"source": "f"}}
     plain = _lower(copy.deepcopy(workflow), copy.deepcopy(run), f={"class": "File", "path": "f.txt"})
     for cwl_class, (_path, place) in POSITIONS.items():
         place(workflow, run).update({name: SAMPLES[name] for name in COMPILE_TIME & set(FIELDS[cwl_class])})

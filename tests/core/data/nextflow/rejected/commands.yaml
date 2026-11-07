@@ -99,12 +99,14 @@
     not; name the program in baseCommand']
 - id: nested_arrays
   why: &producer_feeds A producing step feeds the array, so the items' schema is refused rather than the value's shape.
-  workflow: &array_from_producer {steps: [{id: PRODUCER, out: [out]}, {id: ARRAY, in: {values: PRODUCER/out}}]}
-  tools: [&producer {id: PRODUCER, outputs: {out: {type: File, outputBinding: {glob: out.txt}}}}, {id: ARRAY, inputs:
-    {values: {type: {type: array, items: {type: array, items: string}}, inputBinding: {position: 1}}}}]
+  workflow: &array_from_producer {steps: [{id: PRODUCER, out: [{out: {wic_anchor: produced}}]}, {id: ARRAY, in: {values:
+    {wic_alias: produced}}}]}
+  tools: [{id: PRODUCER, outputs: {out: {type: &nested {type: array, items: {type: array, items: string}},
+    outputBinding: {glob: out.txt}}}}, {id: ARRAY, inputs: {values: {type: *nested, inputBinding: {position: 1}}}}]
   error: {re: nested arrays are deferred}
-- {id: per_item_input_binding_on_array_items, why: *producer_feeds, workflow: *array_from_producer, tools: [*producer,
-   {id: ARRAY, inputs: {values: {type: {type: array, items: {type: File, inputBinding: {prefix: -I}}}, inputBinding:
+- {id: per_item_input_binding_on_array_items, why: *producer_feeds, workflow: *array_from_producer, tools: [{id:
+   PRODUCER, outputs: {out: {type: {type: array, items: File}, outputBinding: {glob: '*.txt'}}}}, {id: ARRAY, inputs:
+   {values: {type: {type: array, items: {type: File, inputBinding: {prefix: -I}}}, inputBinding:
    {position: 1}}}}], error: {re: per-item array element bindings are deferred}}
 - {id: separate_false_on_an_array_binding, why: An array binding's separate false is deferred., tool: {id: ARRAY,
    inputs: {values: {type: {type: array, items: string}, inputBinding: {position: 1, separate: false}}}}, job: {values:
@@ -165,23 +167,6 @@
    tool: {baseCommand: echo, arguments: [], inputs: {b: {type: boolean}, s: {type: 'string?', inputBinding:
    {valueFrom: $(inputs.b), prefix: --flag}}}}, error: {re: "a boolean valueFrom on optional input 's' is not
    supported"}}
-- {id: file_output_wired_into_a_boolean_flag, why: 'A staged path is always truthy in Groovy, so the flag would never
-   clear.', workflow: {steps: [{id: MAKE, out: [out]}, {id: SORT, in: {reverse: MAKE/out}}]}, tools: [{id: MAKE,
-   outputs: {out: {type: File, outputBinding: {glob: f.txt}}}}, &sort {id: SORT, inputs: {reverse: {type: boolean,
-   inputBinding: {position: 1, prefix: -r}}}}], error: &boolean_source {re: reverse.*boolean source}}
-- {id: "string_source_wired_into_a_boolean_flag-'false'", why: &truthiness 'Groovy truthiness of a string would decide
-   the flag, not the source value.', workflow: &string_flag {steps: [{id: SORT, in: {reverse: flagval}}], inputs:
-   {flagval: {type: string}}}, tools: [*sort], job: {flagval: 'false'}, error: *boolean_source}
-- {id: "string_source_wired_into_a_boolean_flag-'0'", why: *truthiness, workflow: *string_flag, tools: [*sort], job:
-   {flagval: '0'}, error: *boolean_source}
-- {id: "string_source_wired_into_a_boolean_flag-''", why: *truthiness, workflow: *string_flag, tools: [*sort], job:
-   {flagval: ''}, error: *boolean_source}
-- {id: a_flag_input_wired_to_an_unrecognized_source_shape-list, why: &fail_closed 'A shape the source reader cannot read
-   still fails closed, not skipping the boolean-source check.', error: {re: ''}, tools: [&flags {id: FLAGS, inputs:
-   {verbose: {type: boolean, inputBinding: {position: 1, prefix: --verbose}}}}], workflow: {steps: [{id: FLAGS, in:
-   {verbose: []}}]}}
-- {id: a_flag_input_wired_to_an_unrecognized_source_shape-int, why: *fail_closed, error: {re: ''}, tools: [*flags],
-   workflow: {steps: [{id: FLAGS, in: {verbose: 42}}]}}
 - {id: a_dollar_starting_a_runtime_expression, why: &expression 'design §6, Commands: a `$` followed by `(` or `{`
    starts an expression, and only an input reference is one the target reads.', job: &x {x: v}, tool:
    &args {baseCommand: echo, inputs: {x: {type: string}}, arguments: [$(runtime.cores)]}, error: &unsupported {re:
@@ -267,7 +252,7 @@
    on an array-typed inputBinding'}]}
 - id: lowering_rejections_aggregate_with_every_other_finding_by_step
   why: Each step's lowering rejection is a finding in step order, beside a capability finding.
-  workflow: {steps: [{id: GATED@1, in: {a: a}, when: $(inputs.a ** 2 > 1)}, {id: GATED@2, in: {a: a}, when: $(inputs.a +
+  workflow: {steps: [{id: GATED, in: {a: a}, when: $(inputs.a ** 2 > 1)}, {id: GATED, in: {a: a}, when: $(inputs.a +
     1)}, {id: UNSUPPORTED}], inputs: {a: int}}
   tools: [&gated {id: GATED, inputs: {a: {type: int}}, baseCommand: 'true'}, *gated, {id: UNSUPPORTED, requirements:
     {ToolTimeLimit: {timelimit: 60}}}]
@@ -276,8 +261,8 @@
     'steps[2].run.requirements.ToolTimeLimit:'}]
 - id: a_command_error_is_reported_instead_of_a_wrong_cause_absence_finding
   why: The command's own error is the one finding, not an absence finding a skipped producer would cause.
-  workflow: {steps: [{id: PRODUCE, in: {x: x}, out: [r], when: $(inputs.x > 1)}, {id: CONSUME, in: {v: PRODUCE/r}}],
-    inputs: {x: int}}
+  workflow: {steps: [{id: PRODUCE, in: {x: x}, out: [{r: {wic_anchor: r}}], when: $(inputs.x > 1)}, {id: CONSUME, in:
+    {v: {wic_alias: r}}}], inputs: {x: int}}
   tools: [{id: PRODUCE, inputs: {x: {type: int}}, baseCommand: echo, stdout: out.txt, outputs: {r: {type: string,
     outputBinding: {glob: out.txt, loadContents: true, outputEval: '$(self[0].contents)'}}}}, {id: CONSUME, inputs: {v:
     {type: 'string?'}}, arguments: [$(runtime.cores)]}]

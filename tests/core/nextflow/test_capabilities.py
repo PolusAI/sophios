@@ -39,7 +39,7 @@ from sophios.wic_types import Yaml
 
 from ..cases import cases, match
 from ..helpers import adapter_step
-from .testkit import case_source, workflow_doc
+from .testkit import lowered_case
 
 
 @pytest.mark.fast
@@ -70,7 +70,8 @@ def test_a_literal_file_into_a_format_declaring_input_lowers_to_its_path(tmp_pat
 
 @pytest.mark.fast
 def test_rejects_compiledworkflow_substitution() -> None:
-    compiled = CompiledWorkflow("wf", workflow_doc([]), {})
+    empty = {"class": "Workflow", "cwlVersion": "v1.2", "inputs": {}, "outputs": {}, "steps": []}
+    compiled = CompiledWorkflow("wf", empty, {})
     with pytest.raises(TypeError, match="CompilationResult"):
         compiled_source_to_nextflow(cast(Any, compiled))
 
@@ -448,7 +449,7 @@ def test_a_rejected_source_is_refused_as_its_case_says(case: Yaml) -> None:
     aggregated header, or with an `error` that is no aggregate (tests/core/cases.py reads both)."""
     documents = copy.deepcopy(case)
     with pytest.raises(ValueError) as raised:
-        compiled_source_to_nextflow(case_source(case))
+        lowered_case(case)
     assert case == documents
     if "error" in case:
         assert match(case["error"], str(raised.value)), str(raised.value)

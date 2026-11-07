@@ -460,6 +460,9 @@ WORKFLOWS: dict[str, tuple[Callable[[], Any], Any]] = {
         NfWorkflowOutputConnection("CONSUME", "result", "result"), message="hi"), r"PRODUCE.text captures file text"),
     "captured-text-into-a-workflow-output": (partial(_workflow, [_TEXT], _MESSAGE, NfWorkflowOutputConnection(
         "PRODUCE", "text", "captured"), message="hi"), None),
+    "a-connection-from-an-unknown-process": (partial(_workflow, [NfProcess(
+        "CONSUME", [NfPort("source", "path")], [], command("true"))], NfProcessConnection(
+        "ABSENT", "o", "CONSUME", "source")), "connection references unknown source process 'ABSENT'"),
     "workflow-named-like-a-process": (partial(ExecutableNextflowWorkflow, "echo", [NfProcess(
         "echo", [], [output_port("o", "o.txt")], command("true"))], [], {}),
         "workflow name 'echo' is also a process name"),

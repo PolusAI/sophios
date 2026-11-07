@@ -17,16 +17,14 @@ from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Outp
 from sophios.api.python.workflow import Step, Workflow
 from sophios.input_output_nf import NF_INPUT_FUNCTION, NF_PARSER_MESSAGE, NF_STUB_MESSAGE, write_nextflow_artifacts
 from sophios.nf_types import NF_INPUT_HELPER, ExecutableNextflowWorkflow, NfWorkflowInputConnection
-from sophios.utils_nf import compilation_result_source, compiled_source_to_nextflow
 
 from ..helpers import write_tree
-from .testkit import execute_nextflow, run_observed, runtime_workflow
+from .testkit import execute_nextflow, lowered, run_observed, runtime_workflow
 
 
 def _lower(flow: Workflow, params: dict[str, Any] | None = None) -> ExecutableNextflowWorkflow:
     """Lower ``flow``, with ``params`` among its workflow input values."""
-    source = compilation_result_source(compile_workflow_result(flow))
-    return compiled_source_to_nextflow(replace(source, params={**source.params, **(params or {})}))
+    return lowered(compile_workflow_result(flow), params)
 
 
 def _run(

@@ -12,11 +12,10 @@ from hypothesis import assume, example, given, strategies as st
 import pytest
 
 from sophios.input_output_nf import write_nextflow_artifacts
-from sophios.utils_nf import compiled_source_to_nextflow
 
 from ..budgets import budget
 from .test_phase3_cells import CALCULATIONS, PREDICATES
-from .testkit import execute_nextflow, step, synthetic_source, tool, workflow_doc
+from .testkit import execute_nextflow, lowered_case, step, tool
 
 #: Each input a case may read, by its CWL type.
 TYPES = {"i": "int", "n": "int", "x": "float", "flag": "boolean", "s": "string", "maybe": "int?"}
@@ -129,8 +128,8 @@ def test_a_when_decides_as_javascript_does(tmp_path_factory: pytest.TempPathFact
     assume(decided)
     root = tmp_path_factory.mktemp("when")
     outputs = {f"out_{index}": {"type": "File?", "outputSource": f"P{index}/out"} for index in range(len(decided))}
-    write_nextflow_artifacts(compiled_source_to_nextflow(synthetic_source(
-        workflow_doc(steps, inputs=inputs, outputs=outputs), tools, workflow_inputs=job)), root)
+    write_nextflow_artifacts(lowered_case({"workflow": {"steps": steps, "inputs": inputs, "outputs": outputs},
+                                           "tools": tools, "job": job})[0], root)
     result = execute_nextflow(root)
     assert result.returncode == 0, result.stdout + result.stderr
     ran = {int(path.stem.removeprefix("ran_")) for path in (root / "work").glob("*/*/ran_*.txt")}

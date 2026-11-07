@@ -75,8 +75,8 @@
 - id: an_output_whose_name_no_link_is_known_to_share-another-name
   why: &no_link A copy is the task's own; a workflow input's or a pattern's name is known only when the task runs; a
     glob collects an entry, which cwltool stages in the output directory as well.
-  workflow: &chain {steps: [{id: EMIT, out: [out]}, {id: SORT, in: {src: EMIT/out}, out: [out]}], inputs: {given: {type:
-             File}}}
+  workflow: &chain {steps: [{id: EMIT, out: [{out: {wic_anchor: emitted}}]}, {id: SORT, in: {src: {wic_alias: emitted}},
+             out: [out]}], inputs: {given: {type: File}}}
   tools: [&emitted {id: EMIT, outputs: {out: {type: File, outputBinding: {glob: emitted.txt}}}, stdout: emitted.txt},
           &sort {id: SORT, inputs: {src: {type: File, inputBinding: {position: 1}}}, outputs: {out: {type: File,
           outputBinding: {glob: sorted.txt}}}, stdout: sorted.txt}]

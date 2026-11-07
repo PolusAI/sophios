@@ -11,10 +11,9 @@ import pytest
 from sophios.lang.subset import Expr, check, parse
 from sophios.nf_expr import render_groovy
 from sophios.nf_types import ExecutableNextflowWorkflow, NfTemplate
-from sophios.utils_nf import compiled_source_to_nextflow
 
 from .test_conditions import _when_workflow
-from .testkit import step, synthetic_source, tool, workflow_doc
+from .testkit import lowered_case, step, tool
 
 TYPES = {
     "a": "int", "b": "float", "s": "string", "flag": "boolean", "maybe": ["null", "int"], "n": "long", "d": "double",
@@ -34,12 +33,12 @@ def _calc_workflow(arguments: list[Any], params: dict[str, Any], **inputs: Any) 
         stdout="out.txt",
         outputs={"out": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
     )
-    workflow = workflow_doc(
-        [step("CALC", **{"in": {name: name for name in inputs}, "out": ["out"]})],
-        inputs={name: definition["type"] for name, definition in declared.items()},
-        outputs={"out": {"type": "File", "outputSource": "CALC/out"}},
-    )
-    return compiled_source_to_nextflow(synthetic_source(workflow, [calc], workflow_inputs=params))
+    workflow = {
+        "steps": [step("CALC", **{"in": {name: name for name in inputs}, "out": ["out"]})],
+        "inputs": {name: definition["type"] for name, definition in declared.items()},
+        "outputs": {"out": {"type": "File", "outputSource": "CALC/out"}},
+    }
+    return lowered_case({"workflow": workflow, "tools": [calc], "job": params})[0]
 
 
 @pytest.mark.fast

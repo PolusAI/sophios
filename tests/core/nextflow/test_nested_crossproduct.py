@@ -6,51 +6,52 @@ import pytest
 
 from sophios.input_output_nf import render_nextflow
 from sophios.nf_types import NF_NEST_HELPER, ExecutableNextflowWorkflow
-from sophios.utils_nf import compiled_source_to_nextflow
 
 from .test_composition import FILES, STRINGS, _tools
-from .testkit import step, synthetic_source, workflow_doc
+from .testkit import lowered_case, step
 
 
 @pytest.mark.fast
 def test_a_nested_result_feeding_a_later_step_is_rejected_by_name() -> None:
     steps = [
         step("PAIR", **{
-            "in": {"a": "as", "b": "bs", "n": "n"}, "out": ["out"],
+            "in": {"a": "as", "b": "bs", "n": "n"}, "out": [{"out": {"wic_anchor": "pair_out"}}],
             "scatter": ["a", "b"], "scatterMethod": "nested_crossproduct",
         }),
-        step("CONCAT", **{"in": {"files": "PAIR/out"}, "out": ["all"]}),
+        step("CONCAT", **{"in": {"files": {"wic_alias": "pair_out"}}, "out": ["all"]}),
     ]
-    workflow = workflow_doc(
-        steps,
-        inputs={"as": {"type": STRINGS}, "bs": {"type": STRINGS}, "n": {"type": "int"}},
-        outputs={"all": {"type": "File", "outputSource": "CONCAT/all"}},
-    )
-    tools = [tool for tool in _tools() if tool["id"] != "JOIN"]
+    workflow = {
+        "steps": steps,
+        "inputs": {"as": {"type": STRINGS}, "bs": {"type": STRINGS}, "n": {"type": "int"}},
+        "outputs": {"all": {"type": "File", "outputSource": "CONCAT/all"}},
+    }
+    pair, _join, concat = _tools()
+    # A two-input nested result is a File[][], which a File[] port cannot take (wic023).
+    tools = [pair, {**concat, "inputs": {"files": {"type": {"type": "array", "items": FILES}, "inputBinding": {
+        "position": 1}}}}]
     message = "'PAIR/out' is a nested_crossproduct result, which reaches workflow outputs only"
     with pytest.raises(ValueError, match=message):
-        compiled_source_to_nextflow(
-            synthetic_source(workflow, tools, workflow_inputs={"as": ["a"], "bs": ["b"], "n": 1})
-        )
+        lowered_case({"workflow": workflow, "tools": tools, "job": {"as": ["a"], "bs": ["b"], "n": 1}})
 
 
 def _single_input_join(**method: str) -> ExecutableNextflowWorkflow:
     """JOIN scatters over PAIR's gathered output alone, and CONCAT gathers JOIN's."""
     steps = [
         step("PAIR", **{
-            "in": {"a": "xs", "b": "ys", "n": "n"}, "out": ["out"],
+            "in": {"a": "xs", "b": "ys", "n": "n"}, "out": [{"out": {"wic_anchor": "pair_out"}}],
             "scatter": ["a", "b"], "scatterMethod": "dotproduct",
         }),
-        step("JOIN", **{"in": {"f": "PAIR/out", "g": "g"}, "out": ["out"], "scatter": ["f"], **method}),
-        step("CONCAT", **{"in": {"files": "JOIN/out"}, "out": ["all"]}),
+        step("JOIN", **{"in": {"f": {"wic_alias": "pair_out"}, "g": "g"}, "out": [{"out": {"wic_anchor": "join_out"}}],
+                        "scatter": ["f"], **method}),
+        step("CONCAT", **{"in": {"files": {"wic_alias": "join_out"}}, "out": ["all"]}),
     ]
-    workflow = workflow_doc(
-        steps,
-        inputs={"xs": {"type": STRINGS}, "ys": {"type": STRINGS}, "n": {"type": "int"}, "g": {"type": "File"}},
-        outputs={"all": {"type": "File", "outputSource": "CONCAT/all"}},
-    )
+    workflow = {
+        "steps": steps,
+        "inputs": {"xs": {"type": STRINGS}, "ys": {"type": STRINGS}, "n": {"type": "int"}, "g": {"type": "File"}},
+        "outputs": {"all": {"type": "File", "outputSource": "CONCAT/all"}},
+    }
     params = {"xs": ["a"], "ys": ["b"], "n": 1, "g": "/tmp/g"}
-    return compiled_source_to_nextflow(synthetic_source(workflow, _tools(), workflow_inputs=params))
+    return lowered_case({"workflow": workflow, "tools": _tools(), "job": params})[0]
 
 
 @pytest.mark.fast
@@ -64,12 +65,12 @@ def _gathered_into_nested_join(second: str) -> ExecutableNextflowWorkflow:
     """JOIN nests over PAIR's gathered outputs ``f`` and ``second``: PAIR's again or the ``gs`` input."""
     steps = [
         step("PAIR", **{
-            "in": {"a": "as", "b": "bs", "n": "n"}, "out": ["out"],
+            "in": {"a": "as", "b": "bs", "n": "n"}, "out": [{"out": {"wic_anchor": "pair_out"}}],
             "scatter": ["a", "b"], "scatterMethod": "dotproduct",
         }),
         step("JOIN", **{
-            "in": {"f": "PAIR/out", "g": second}, "out": ["out"],
-            "scatter": ["f", "g"], "scatterMethod": "nested_crossproduct",
+            "in": {"f": {"wic_alias": "pair_out"}, "g": {"wic_alias": "pair_out"} if second == "PAIR/out" else second},
+            "out": ["out"], "scatter": ["f", "g"], "scatterMethod": "nested_crossproduct",
         }),
     ]
     inputs = {"as": {"type": STRINGS}, "bs": {"type": STRINGS}, "n": {"type": "int"}}
@@ -77,13 +78,13 @@ def _gathered_into_nested_join(second: str) -> ExecutableNextflowWorkflow:
     if second == "gs":
         inputs["gs"] = {"type": FILES}
         params["gs"] = ["/tmp/g1", "/tmp/g2", "/tmp/g3"]
-    workflow = workflow_doc(
-        steps,
-        inputs=inputs,
-        outputs={"all": {"type": {"type": "array", "items": FILES}, "outputSource": "JOIN/out"}},
-    )
+    workflow = {
+        "steps": steps,
+        "inputs": inputs,
+        "outputs": {"all": {"type": {"type": "array", "items": FILES}, "outputSource": "JOIN/out"}},
+    }
     tools = [tool for tool in _tools() if tool["id"] != "CONCAT"]
-    return compiled_source_to_nextflow(synthetic_source(workflow, tools, workflow_inputs=params))
+    return lowered_case({"workflow": workflow, "tools": tools, "job": params})[0]
 
 
 @pytest.mark.fast
