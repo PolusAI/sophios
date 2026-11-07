@@ -405,13 +405,14 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     compiler_options['inference_rules'] = global_config.get('inference_rules', {})
     compiler_options['renaming_conventions'] = io.renamings_of(global_config)
     compilation, analyses = _compile_loaded_document(yaml_path, bundle, yml_paths, tools_cwl, compiler_options)
-    report(compilation.diagnostics, args.diagnostics)
     if args.target == 'nextflow':
+        report(compilation.diagnostics, args.diagnostics)
         if _is_local_run(args):
             _run_nextflow(args, unknown_args, compilation, analyses, yaml_stem)
         else:
             _write_nextflow_target(compilation, yaml_stem, Path(args.basepath), args.diagnostics)
         return
+    report((*compilation.diagnostics, *compiler.cwl_notes(compilation)), args.diagnostics)
     root_dir = Path(args.yaml).parent.absolute()
     artifact = pc.apply_inline_options(compilation.artifact, subworkflows=args.cwl_inline_subworkflows,
                                        runtag=args.cwl_inline_runtag)

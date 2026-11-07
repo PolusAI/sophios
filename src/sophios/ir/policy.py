@@ -53,19 +53,27 @@ def effective_when(step: StepNode, names: Names, policy: RunPolicy) -> OpaqueCwl
     if authored is None:
         return f'$({checks})'
     text = authored.strip() if isinstance(authored, str) else ''  # as cwltool reads an expression
-    if _one_expression(text, '$('):
-        return f'$({checks} && ({text[2:-1]}))'
-    if _one_expression(text, '${'):
-        return f'${{if (!({checks})) {{ return false; }}{text[2:-1]}}}'
+    match one_expression(text):
+        case '$(':
+            return f'$({checks} && ({text[2:-1]}))'
+        case '${':
+            return f'${{if (!({checks})) {{ return false; }}{text[2:-1]}}}'
     return authored
 
 
-def _one_expression(text: str, opening: str) -> bool:
-    """Whether `text` is one CWL expression, opened by `opening`, from end to end, as cwltool scans it."""
+def one_expression(field: str) -> str | None:
+    """How `field` opens, `$(` or `${`, when it is one CWL expression from end to end; else None.
+
+    Read as cwltool reads an expression field: stripped of surrounding whitespace, then scanned by
+    `cwl_utils.expression.scanner`, as `interpolate` in cwl_utils/expression.py scans it. Anything else is a template,
+    text with or without expressions in it, which evaluates to text.
+    """
+    text = field.strip()
     try:
-        return text.startswith(opening) and scanner(text) == (0, len(text))
+        span = scanner(text)
     except SubstitutionError:
-        return False
+        return None
+    return text[:2] if span == (0, len(text)) and text[:2] in ('$(', '${') else None
 
 
 def tolerant_tool(document: Cwl, policy: RunPolicy) -> Cwl:

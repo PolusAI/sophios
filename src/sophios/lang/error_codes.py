@@ -130,6 +130,10 @@ class SophiosErrorCode(StrEnum):
     #: not every input declares a file format that output carries.
     INFERENCE_DUPLICATE = 'wic055'
 
+    #: A note, not an error: a step's `when` that cannot give `true` or `false`, which cwltool stops the run at.
+    #: Under ``--target nextflow`` it is refused instead.
+    WHEN_NOT_BOOLEAN = 'wic056'
+
     #: --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = 'api001'
     INVALID_STEP = 'api002'
@@ -428,6 +432,13 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         'are not all written and do not all declare a file format that output carries.',
         'Write the edge each input should read, with `!&` on the output and `!*` on the input (.wic reference §8); '
         'two written edges to one output are always accepted.'),
+    SophiosErrorCode.WHEN_NOT_BOOLEAN: Explanation(
+        Kind.DOCUMENT,
+        "Note: a step's `when` cannot give `true` or `false`: it computes a number, a string or `null`, or it is "
+        'not one `$(...)` or `${...}` expression but text, which CWL refuses or evaluates to text. cwltool stops '
+        'the run there, and `--target nextflow` refuses it.',
+        'Write the `when` as one expression that gives a boolean: `$(inputs.count > 0)` rather than '
+        '`$(inputs.count)`, and `$(inputs.ready)` rather than `inputs.ready`.'),
     SophiosErrorCode.INVALID_INPUT_VALUE: Explanation(
         Kind.CALL,
         'A value bound to a step input that the input cannot take.',

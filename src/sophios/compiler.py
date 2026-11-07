@@ -22,10 +22,10 @@ from .ir.realtime import extract
 from .ir.resolve import RegistrySnapshot, ToolDefinition
 from .ir.names import NAMESPACE_SEPARATOR, Names
 from .ir.policy import RunPolicy, tolerant_tool
-from .ir.resolved import ResolvedTool, ResolvedWorkflow, resolve
+from .ir.resolved import ResolvedTool, ResolvedWorkflow, non_boolean_whens, resolve
 from .ir.types import RegistryKey, StepId, StepNode, WorkflowGraph
 from .lang import versions
-from .lang.diagnostics import Locator, SophiosError
+from .lang.diagnostics import Diagnostic, Locator, Severity, SophiosError
 from .lang.nodes import CwlRecord, OpaqueCwl, UnresolvedName
 from .lang.parser import Grammar
 from .lang.error_codes import SophiosErrorCode
@@ -99,6 +99,17 @@ def resolved_view(result: CompilationResult, *, values: Mapping[str, OpaqueCwl] 
                    values=values, outputs=outputs)
 
 
+def cwl_notes(result: CompilationResult) -> tuple[Diagnostic, ...]:
+    """The notes the CWL target makes of `result`, which it never refuses and whose CWL it never changes: `wic056`
+    at each step whose authored `when` cannot give `true` or `false`, which cwltool stops the run at
+    (design_docs/resolved-view-design.md §10)."""
+    return tuple(
+        Diagnostic(Severity.NOTE, SophiosErrorCode.WHEN_NOT_BOOLEAN,
+                   f'when {problem}: cwltool stops the run when it gives anything but true or false',
+                   step.span, Locator(step=step.name))
+        for step, problem in non_boolean_whens(resolved_view(result)))
+
+
 def _tools(graph: WorkflowGraph, artifact: CompilationArtifact) -> Iterator[tuple[StepId, ResolvedTool]]:
     """Every tool step at any depth, with the tool its child artifact writes for it."""
     for step, child in zip(graph.steps, artifact.children, strict=True):
@@ -148,8 +159,8 @@ def _authored_spelling_notes(graph: WorkflowGraph) -> list[str]:
 
 
 def _when_notes(graph: WorkflowGraph, names: Names) -> list[str]:
-    """One plain line for each `when:` that reads an input its step does not declare: CWL
-    evaluates it as null.
+    """One plain line for each `when:` that reads an input its step does not declare: it has
+    no value there, and cwltool stops the run at a `when:` that gives anything but true or false.
 
     Read from the finished graph, where a call declares every name its child exposes, as
     `names` spells it. A dotted read of a made name (`inputs.touch~filename`) reads
@@ -168,7 +179,8 @@ def _when_notes(graph: WorkflowGraph, names: Names) -> list[str]:
                 hint = f" Write {' or '.join(f'inputs[{name!r}]' for name in made)} to read one it declares." \
                     if made else ''
                 notes.append(f"Warning! {file}: step {step.id.name!r} reads inputs.{read} in `when:`, which "
-                             f'its process does not declare; CWL evaluates it as null.{hint}')
+                             f'its process does not declare; it has no value there, and cwltool stops the run '
+                             f'at a `when:` that gives anything but true or false.{hint}')
     for child in graph.children:
         notes.extend(_when_notes(child, names))
     return notes

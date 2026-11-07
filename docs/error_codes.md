@@ -16,7 +16,7 @@ The kind says what to change:
 - `machine`: this machine, what is installed, running, readable or writable;
 - `run`: nothing in Sophios, a tool failed while it ran.
 
-`wic040`, `wic041`, `wic042` and `wic056` are not assigned. Section numbers (§) refer to the
+`wic040`, `wic041` and `wic042` are not assigned. Section numbers (§) refer to the
 [`.wic` reference](wic-reference.md). [Checks and errors](checks-and-errors.md)
 explains when each kind of check runs and how a diagnostic is laid out.
 
@@ -74,6 +74,7 @@ explains when each kind of check runs and how a diagnostic is laid out.
 | `wic053` | document | Importing Nextflow: text in the forms Sophios writes that is not what it writes for the workflow the text describes, such as a derived form that disagrees with the rest. | Restore the line the message names as Sophios wrote it, or regenerate the pipeline from its workflow. |
 | `wic054` | document | Importing Nextflow: a pipeline no workflow built through the Python API compiles to as it is written, such as one with a capitalized process name, which the compile would give a leading `_`, or with a port of a CWL tool named like an attribute of the tool builder's `Inputs` or `Outputs`, such as `keys`. | Rename what the message names in the workflow the pipeline was compiled from, to a name the compile keeps, and compile it again. |
 | `wic055` | document | Inference would give two inputs of one step the same output, and nothing says that is meant: the inputs are not all written and do not all declare a file format that output carries. | Write the edge each input should read, with `!&` on the output and `!*` on the input (.wic reference §8); two written edges to one output are always accepted. |
+| `wic056` | document | Note: a step's `when` cannot give `true` or `false`: it computes a number, a string or `null`, or it is not one `$(...)` or `${...}` expression but text, which CWL refuses or evaluates to text. cwltool stops the run there, and `--target nextflow` refuses it. | Write the `when` as one expression that gives a boolean: `$(inputs.count > 0)` rather than `$(inputs.count)`, and `$(inputs.ready)` rather than `inputs.ready`. |
 | `api001` | call | A value bound to a step input that the input cannot take. | Bind a port object directly, or several with `StepInput(source=[...])`; a string never names a port. |
 | `api002` | call | A step the workflow cannot place: a repeated step name, a link to a step outside the workflow or later in it, a workflow input with no type, or two tools that share a file stem. | Do what the message names: pass `step_name=` to a reused tool, list the source step earlier, or add it to this workflow. |
 | `api003` | call | A link from this workflow's own output, or between ports whose types do not match. | Bind the input to an earlier step's output, or to a workflow input, of a matching type. |

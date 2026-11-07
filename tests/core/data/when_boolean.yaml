@@ -1,0 +1,92 @@
+# The one check of a `when` both targets share: it must give `true` or `false` (CWL v1.2's WorkflowStep `when`, in
+# Workflow.yml), and cwltool stops the run at one that gives anything else (`WorkflowJob.try_make_job`, in
+# cwltool/workflow_job.py). `notes` is what the CWL target notes of a case, `refused` what the Nextflow target refuses,
+# [] where it lowers; each as it prints, less its span. Expected by hand from design_docs/resolved-view-design.md §10.
+- id: a-number
+  why: cwltool fails a when that gives 2; the Nextflow target refused it already, and now reads the same check
+  workflow: {inputs: {n: int}, steps: [{id: gated, in: {n: n}, when: $(inputs.n + 1)}]}
+  tools: [&gated {id: gated, inputs: {n: {type: int}}, baseCommand: 'true'}]
+  job: &one {n: 1}
+  notes: ["note [wic056] when '$(inputs.n + 1)' must compute a boolean, not a number: cwltool stops the run when it
+      gives anything but true or false (step 'gated')"]
+  refused: ["step 'gated': when: '$(inputs.n + 1)' must compute a boolean, not a number"]
+- id: a-string-the-tool-does-not-take
+  why: a when is typed by what each step input delivers, a step-only input among them
+  workflow: {inputs: {n: int, s: string}, steps: [{id: gated, in: {n: n, s: {wic_raw_cwl: {source: s}}},
+      when: $(inputs.s)}]}
+  tools: [*gated]
+  job: {n: 1, s: a}
+  notes: ["note [wic056] when '$(inputs.s)' must compute a boolean, not a string: cwltool stops the run when it gives
+      anything but true or false (step 'gated')"]
+  refused: ["step 'gated': when: '$(inputs.s)' must compute a boolean, not a string"]
+- id: a-null
+  why: null is neither true nor false
+  workflow: {inputs: {n: int}, steps: [{id: gated, in: {n: n}, when: $(null)}]}
+  tools: [*gated]
+  job: *one
+  notes: ["note [wic056] when '$(null)' must compute a boolean, not a null: cwltool stops the run when it gives
+      anything but true or false (step 'gated')"]
+  refused: ["step 'gated': when: '$(null)' must compute a boolean, not a null"]
+- id: an-element-of-a-scatter
+  why: a when is evaluated in each job of a scatter, over one element of a scattered input
+  workflow: {inputs: {n: {type: {type: array, items: int}}}, steps: [{id: gated, in: {n: n}, scatter: [n],
+      when: $(inputs.n)}]}
+  tools: [*gated]
+  job: {n: [1]}
+  notes: ["note [wic056] when '$(inputs.n)' must compute a boolean, not a number: cwltool stops the run when it gives
+      anything but true or false (step 'gated')"]
+  refused: ["step 'gated': when: '$(inputs.n)' must compute a boolean, not a number"]
+- id: text
+  why: a string with no expression in it is no CWL Expression, which cwltool's validation refuses
+  workflow: {inputs: {n: int}, steps: [{id: gated, in: {n: n}, when: 'true'}]}
+  tools: [*gated]
+  job: *one
+  notes: ["note [wic056] when 'true' is not one $(...) or ${...} expression: cwltool stops the run when it gives
+      anything but true or false (step 'gated')"]
+  refused: ["step 'gated': when: 'true' must be a safe JavaScript subset $( … ) expression"]
+- id: a-template
+  why: text around an expression is interpolated, so it gives a string however its expression types
+  workflow: {inputs: {n: int}, steps: [{id: gated, in: {n: n}, when: $(inputs.n > 0) or not}]}
+  tools: [*gated]
+  job: *one
+  notes: ["note [wic056] when '$(inputs.n > 0) or not' is not one $(...) or ${...} expression: cwltool stops the run
+      when it gives anything but true or false (step 'gated')"]
+  refused: ["step 'gated': when: '$(inputs.n > 0) or not' must be a safe JavaScript subset $( … ) expression"]
+- id: on-a-call
+  why: a call's when is a CWL when like any other; the Nextflow target refuses a when on a call before it reads one
+  workflow: {inputs: {n: int}, steps: [{id: child.wic, subtree: {inputs: {n: int}, steps: [{id: gated, in: {n: n}}]},
+      parentargs: {in: {n: n}, when: $(inputs.n)}}]}
+  tools: [*gated]
+  job: *one
+  notes: ["note [wic056] when '$(inputs.n)' must compute a boolean, not a number: cwltool stops the run when it gives
+      anything but true or false (step 'child')"]
+  refused: ["step 'child': when: a when on a nested-workflow step is not supported; put it on a tool step"]
+- id: a-boolean
+  why: a comparison gives true or false
+  workflow: {inputs: {n: int}, steps: [{id: gated, in: {n: n}, when: '  $(inputs.n > 0)  '}]}
+  tools: [*gated]
+  job: *one
+  notes: []
+  refused: []
+- id: outside-the-subset
+  why: a when the subset cannot read says nothing of what it gives, so the check says nothing of it
+  workflow: {inputs: {n: int}, steps: [{id: gated, in: {n: n}, when: $(inputs.n ** 2)}]}
+  tools: [*gated]
+  job: *one
+  notes: []
+  refused: ["step 'gated': when: '$(inputs.n ** 2)' is outside the safe JavaScript subset: unsupported construct
+      '**'"]
+- id: a-body
+  why: a ${...} body is one expression, which the subset does not read
+  workflow: {inputs: {n: int}, steps: [{id: gated, in: {n: n}, when: '${ return inputs.n; }'}]}
+  tools: [*gated]
+  job: *one
+  notes: []
+  refused: ["step 'gated': when: '${ return inputs.n; }' must be a safe JavaScript subset $( … ) expression"]
+- id: not-a-string
+  why: a when that is not a string is cwltool's schema validation's to refuse
+  workflow: {inputs: {n: int}, steps: [{id: gated, in: {n: n}, when: true}]}
+  tools: [*gated]
+  job: *one
+  notes: []
+  refused: ["step 'gated': when: True must be a safe JavaScript subset $( … ) expression"]
