@@ -19,12 +19,13 @@ from sophios.nf_types import (
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
-from sophios.utils_nf import compiled_source_to_nextflow, cwl_type_to_nf_qualifier, nextflow_names
+from sophios.compiler import resolved_view
+from sophios.utils_nf import cwl_type_to_nf_qualifier, nextflow_names
 from sophios.wic_types import Yaml
 
 from ..budgets import budget
 from ..cases import cases, diagnostic, match
-from .testkit import lowered_case, one_step, tool
+from .testkit import lowered, lowered_case, one_step, tool
 
 
 @pytest.mark.fast
@@ -82,7 +83,7 @@ GOLDEN_GRAPHS = {
 @pytest.mark.parametrize("fixture", sorted(GOLDEN_GRAPHS))
 def test_a_real_compilation_lowers_to_its_exact_graph(fixture: str, request: pytest.FixtureRequest) -> None:
     name, processes, connections, params = GOLDEN_GRAPHS[fixture]
-    workflow = compiled_source_to_nextflow(request.getfixturevalue(fixture))
+    workflow = lowered(request.getfixturevalue(fixture))
     assert workflow.name == name
     assert [(process.name, process.inputs) for process in workflow.processes] == processes
     assert workflow.connections == connections
@@ -153,9 +154,9 @@ def test_a_boolean_binding_is_a_flag_token_exactly_when_it_has_a_prefix(
 ])
 def test_an_array_type_in_shorthand_lowers_as_written_out(shorthand: Any, expanded: Any, value: Any) -> None:
     """CWL reads `T[]` as `{type: array, items: T}` (CWL v1.2, Type DSL); a .cwl tool may declare either."""
-    def lowered(cwl_type: Any) -> Any:
+    def lower(cwl_type: Any) -> Any:
         return lowered_case(one_step(tool("T", inputs={"x": {"type": cwl_type, "inputBinding": {}}}), x=value))[0]
-    assert lowered(shorthand) == lowered(expanded)
+    assert lower(shorthand) == lower(expanded)
 
 
 @pytest.mark.fast
@@ -167,7 +168,7 @@ def test_forward_conversion_uses_resolved_graph_edges(
     steps[1]["in"]["source"]["source"] = "not_the_resolved_edge/result"
     cwl = copy.deepcopy(compilation.artifact.cwl)
 
-    connections = compiled_source_to_nextflow(compilation).connections
+    connections = lowered(compilation).connections
 
     assert compilation.artifact.cwl == cwl, "lowering reads the compilation and never writes it"
     assert NfProcessConnection("touch", "result", "copy", "source") in connections
@@ -180,8 +181,8 @@ def test_the_names_a_run_maps_back_are_the_names_the_lowering_makes(
 ) -> None:
     """Each process and workflow output of the lowered model has exactly one Sophios name."""
     result: CompilationResult = request.getfixturevalue(fixture)
-    workflow = compiled_source_to_nextflow(result)
-    names = nextflow_names(result)
+    workflow = lowered(result)
+    names = nextflow_names(resolved_view(result))
     assert sorted(names["processes"]) == sorted(process.name for process in workflow.processes)
     assert sorted(names["outputs"]) == sorted(
         connection.to_port for connection in workflow.connections

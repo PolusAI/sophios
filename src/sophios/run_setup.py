@@ -12,12 +12,13 @@ import tempfile
 from sophios import input_output, post_compile, preflight, realtime
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.locations import absolute_paths
+from sophios.ir.resolved import ResolvedWorkflow
 from sophios.lang.diagnostics import Diagnostic
 from sophios.runtime_inputs import normalize_artifact_job_inputs
 
 
 @dataclass(frozen=True, slots=True)
-class Settings:
+class Settings:  # pylint: disable=too-many-instance-attributes
     """How one run is prepared.
 
     Attributes:
@@ -29,6 +30,8 @@ class Settings:
         check: Check the machine and stop: nothing is pulled.
         pull: Pull the images the run uses; off when an earlier step pulled them.
         remove_entrypoints: Run every image without its entrypoint.
+        view: The resolved view a target that lowers one runs: this run's values and the outputs it keeps.
+            `None` is the compilation's own, every value it binds and every output.
     """
 
     run: preflight.RunSettings
@@ -38,6 +41,7 @@ class Settings:
     check: bool = False
     pull: bool = True
     remove_entrypoints: bool = False
+    view: ResolvedWorkflow | None = None
 
 
 @dataclass(frozen=True, slots=True)

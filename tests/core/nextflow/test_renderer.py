@@ -36,10 +36,9 @@ from sophios.nf_types import (
     NfTemplate,
     NfWorkflowInputConnection,
 )
-from sophios.utils_nf import compiled_source_to_nextflow
 
 from .test_phase3_cells import _scatter_step
-from .testkit import command, flag_workflow, output_port, ref, runtime_workflow, template
+from .testkit import command, flag_workflow, lowered, output_port, ref, runtime_workflow, template
 
 
 @pytest.mark.serial
@@ -75,8 +74,8 @@ def test_an_output_record_has_one_array_level_per_scattered_dimension(
     nested = _scatter_step("NEST", "nested_crossproduct", {"a": ["a"], "b": ["x"]})
     shapes = {
         "unscattered": render_nextflow(runtime_workflow()),
-        "scattered": render_nextflow(compiled_source_to_nextflow(real_scattered_result)),
-        "nested": render_nextflow(compiled_source_to_nextflow(compile_workflow_result(Workflow([nested], "nest")))),
+        "scattered": render_nextflow(lowered(real_scattered_result)),
+        "nested": render_nextflow(lowered(compile_workflow_result(Workflow([nested], "nest")))),
     }
     values = {shape: [line.split("__sophios_output_9f72e(", 1)[1].split(")", 1)[0]
                       for line in rendered.splitlines() if "subscribe { items" in line]
@@ -88,7 +87,7 @@ def test_an_output_record_has_one_array_level_per_scattered_dimension(
 def test_renders_real_compiled_source_with_typed_glob(
     real_supported_result: CompilationResult,
 ) -> None:
-    rendered = render_nextflow(compiled_source_to_nextflow(real_supported_result))
+    rendered = render_nextflow(lowered(real_supported_result))
     assert "path \"${filename}\", arity: '1', emit: result" in rendered
     assert "copy(touch.out.result)" in rendered
 

@@ -2,14 +2,13 @@
 
 from collections.abc import Sequence
 import copy
-from dataclasses import replace
 import os
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from sophios.cli import default_compilation_settings
-from sophios.compiler import compile_source
+from sophios.compiler import compile_source, resolved_view
 from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.ir.artifacts import CompilationResult
 from sophios.lang.diagnostics import Diagnostic
@@ -27,7 +26,7 @@ from sophios.nf_types import (
     NfWorkflowOutputConnection,
 )
 from sophios.utils_cwl import desugar_into_canonical_normal_form
-from sophios.utils_nf import compiled_source_to_nextflow, compiled_source_to_nextflow_with_notes
+from sophios.utils_nf import NEXTFLOW
 from sophios.wic_types import StepId, Tool, Yaml
 
 from ..hermetic import bundle
@@ -125,31 +124,25 @@ def _case_document(data: Yaml) -> tuple[Yaml, list[Yaml]]:
 def compiled_case(data: Yaml) -> CompilationResult:
     """A case compiled through `compile_source`, against a registry of its tools, as `hermetic` compiles a document.
 
-    Each step runs the tool beside it, registered under the step's id, as the file door registers a tool by its
-    stem.
+    Each tool is registered under its `id`, as the file door registers a tool by its stem, and a step runs the tool
+    its id names. A step holding a `subtree` calls that nested workflow, as `hermetic.subworkflow_step` writes it.
     """
     document, tools = _case_document(data)
-    registry = {StepId(entry["id"], SYNTHETIC_NS): Tool(f"{run['id']}.cwl", desugar_into_canonical_normal_form(
-        copy.deepcopy(run))) for entry, run in zip(document["steps"], tools, strict=True)}
+    registry = {StepId(run["id"], SYNTHETIC_NS): Tool(f"{run['id']}.cwl", desugar_into_canonical_normal_form(
+        copy.deepcopy(run))) for run in tools}
     return compile_source(bundle(document, "wf", registry), default_compilation_settings(), testing=True)
 
 
 def lowered(result: CompilationResult, values: Yaml | None = None) -> ExecutableNextflowWorkflow:
     """The Nextflow model of `result`, its root inputs given `values` in place of the values the graph holds."""
-    if values is not None:
-        result = replace(result, artifact=replace(result.artifact, job_inputs={**result.artifact.job_inputs, **values}))
-    return compiled_source_to_nextflow(result)
+    return NEXTFLOW.lower(resolved_view(result, values=values))[0]
 
 
 def lowered_case(data: Yaml) -> tuple[ExecutableNextflowWorkflow, tuple[Diagnostic, ...]]:
     """A case's model and notes: compiled, given its `job` as the workflow's values, keeping the outputs it declares."""
     document, _tools = _case_document(data)
-    result = compiled_case(data)
-    declared = document.get("outputs", {})
-    cwl = {**result.artifact.cwl, "outputs": {name: definition for name, definition in result.artifact.cwl["outputs"]
-                                              .items() if name in declared}}
-    artifact = replace(result.artifact, cwl=cwl, job_inputs=copy.deepcopy(data.get("job", {})))
-    return compiled_source_to_nextflow_with_notes(replace(result, artifact=artifact))
+    return NEXTFLOW.lower(resolved_view(compiled_case(data), values=data.get("job", {}),
+                                        outputs=list(document.get("outputs", {}))))
 
 
 def runtime_workflow() -> ExecutableNextflowWorkflow:

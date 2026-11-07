@@ -4,7 +4,6 @@
 
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import replace
 from functools import partial
 import itertools
 import json
@@ -24,7 +23,8 @@ from sophios.backends import recorded_outputs
 from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.nf_symbols import NEXTFLOW_SCRIPT_NAMES
 from sophios.plugins import get_tools_cwl
-from sophios.utils_nf import compilation_result_source, compiled_source_to_nextflow, nextflow_names
+from sophios.compiler import resolved_view
+from sophios.utils_nf import nextflow_names
 
 from ..budgets import budget
 from ..cases import cases, match
@@ -32,7 +32,7 @@ from ..helpers import ADAPTERS, python_process, search_config, write_tree
 from .test_executable_ir import NAMES
 from .test_public_api import supported_workflow
 from .test_reference_differential import _observed, _run_cwltool, _run_nextflow, _tree
-from .testkit import assert_succeeded, execute_nextflow
+from .testkit import assert_succeeded, execute_nextflow, lowered
 
 
 @pytest.mark.nextflow
@@ -203,9 +203,7 @@ def test_a_workflow_runs_as_its_case_says(
     children = {"global": {path.stem: path for path in tmp_path.glob("*.wic") if path.name != "workflow.wic"}}
     compiled = compile_workflow_result(Workflow.from_wic(tmp_path / "workflow.wic", tool_registry=tools,
                                                          workflow_paths=children), tool_registry=tools)
-    source = compilation_result_source(compiled)
-    params = {**source.params, **case.get("params", {})}
-    write_nextflow_artifacts(compiled_source_to_nextflow(replace(source, params=params)), tmp_path)
+    write_nextflow_artifacts(lowered(compiled, case.get("params", {})), tmp_path)
     if "rendered" in case:
         assert match(case["rendered"], (tmp_path / "workflow.nf").read_text(encoding="utf-8"))
     result = execute_nextflow(tmp_path)
@@ -214,7 +212,7 @@ def test_a_workflow_runs_as_its_case_says(
         assert result.returncode != 0 and (case["fails"] is True or case["fails"] in output), output
     else:
         assert result.returncode == 0, output
-        names = nextflow_names(compiled)["outputs"]
+        names = nextflow_names(resolved_view(compiled))["outputs"]
         observed = {names[key]: _seen(value) for key, value in _recorded(result.stdout).items()}
         assert match(case["outputs"], observed) and observed.keys() == case["outputs"].keys()
     assert not [name for name in case.get("never", []) if list((tmp_path / "work").rglob(name))]

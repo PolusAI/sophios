@@ -22,7 +22,7 @@ from sophios.ir.resolved import (
 )
 from sophios.lang.diagnostics import SophiosError
 from sophios.utils_cwl import desugar_into_canonical_normal_form
-from sophios.utils_nf import compilation_result_source, compiled_source_to_nextflow
+from sophios.utils_nf import NEXTFLOW, compilation_result_source
 from sophios.wic_types import Yaml
 
 from ..cases import cases
@@ -84,13 +84,13 @@ def disagreements(result: CompilationResult) -> list[str]:  # pylint: disable=to
     """Where the view's tool steps, root inputs and outputs differ from the projection's, crossings aside.
 
     A projection that cannot be made, as for an edge from a nested output the core left unresolved, agrees with a
-    view that holds a crossing.
+    view that holds a crossing, or an output that relays an input nothing binds.
     """
     view: ResolvedWorkflow = compiler.resolved_view(result)
     try:
         projection = compilation_result_source(result)
     except ValueError as error:
-        return [] if _crossed(result) else [f'the projection fails, and the view holds no crossing: {error}']
+        return [] if _unresolved(result) else [f'the projection fails, and the view holds no crossing: {error}']
     found: list[str] = []
     steps, projected = tool_steps(view), projection.workflow['steps']
     if [tool.step.name for tool in steps] != [step['id'] for step in projected]:
@@ -133,18 +133,20 @@ def disagreements(result: CompilationResult) -> list[str]:  # pylint: disable=to
     return found
 
 
-def _crossed(result: CompilationResult) -> bool:
+def _unresolved(result: CompilationResult) -> bool:
+    """Whether the view holds a crossing, or a kept output that follows a nested output to an input nothing binds."""
     view = compiler.resolved_view(result)
-    return any(isinstance(source, Crossing) for sources in (*(found for tool in tool_steps(view) for found in
-                                                              tool.sources), *output_sources(view))
-               for source in sources)
+    sources = output_sources(view)
+    return any(isinstance(source, Crossing) for found in (*(found for tool in tool_steps(view) for found in
+                                                            tool.sources), *sources) for source in found) or any(
+        isinstance(port.source, OutputRef) and not found for port, found in zip(view.outputs, sources, strict=True))
 
 
 def _agrees(result: CompilationResult) -> None:
     assert not (found := disagreements(result)), found
-    if _crossed(result):
+    if _unresolved(result):
         with pytest.raises(ValueError):
-            compiled_source_to_nextflow(result)
+            NEXTFLOW.lower(compiler.resolved_view(result))
 
 
 #: Every key a case of either list holds, which the drivers in test_lowering and test_capabilities read.

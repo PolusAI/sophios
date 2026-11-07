@@ -10,6 +10,7 @@ from typing import Any
 
 from sophios.edam import resolve_file_format
 from sophios.ir.artifacts import CompilationArtifact
+from sophios.ir.resolved import InputRef, ResolvedTool, ResolvedWorkflow
 from sophios.wic_types import Json
 
 
@@ -22,10 +23,16 @@ def normalize_artifact_job_inputs(artifact: CompilationArtifact,
     return _normalize_job_inputs(artifact.cwl, _runs_by_artifact_id(artifact), job_inputs)
 
 
-def output_target_inputs(artifact: CompilationArtifact) -> set[str]:
+def output_target_inputs(workflow: ResolvedWorkflow) -> set[str]:
     """The workflow inputs that name an output-target Directory: one a step's tool writes into through a
     writable InitialWorkDirRequirement entry and captures as a Directory output."""
-    return _output_target_source_keys(artifact.cwl, _runs_by_artifact_id(artifact))
+    names: set[str] = set()
+    for step in workflow.steps:
+        if isinstance(step.run, ResolvedTool) and isinstance(step.run.document, Mapping):
+            targets = _output_target_inputs(step.run.document)
+            names.update(source.name for port in step.inputs if port.name in targets
+                         for source in port.sources if isinstance(source, InputRef))
+    return names
 
 
 def normalize_artifact_cwl(artifact: CompilationArtifact) -> Json:

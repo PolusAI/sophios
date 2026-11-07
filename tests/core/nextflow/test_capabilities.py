@@ -3,7 +3,7 @@
 # pylint: disable=missing-function-docstring
 
 import copy
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -31,21 +31,18 @@ from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.resolve import RegistrySnapshot
 from sophios.lang import Diagnostics, EdgeDef, EdgeRef, OutputBinding, ParseResult
 from sophios.nf_types import NfProcessConnection, NfWorkflowInputConnection
-from sophios.utils_nf import (
-    CompiledNextflowSource,
-    compiled_source_to_nextflow,
-)
+from sophios.utils_nf import NEXTFLOW
 from sophios.wic_types import Yaml
 
 from ..cases import cases, match
 from ..helpers import adapter_step
-from .testkit import lowered_case
+from .testkit import lowered, lowered_case
 
 
 @pytest.mark.fast
 def test_the_shipped_touch_append_cat_workflow_compiles(real_linear_result: CompilationResult) -> None:
     """The tutorials' tools: append's quoted message and its writable entry, cat's file-text capture."""
-    executable = compiled_source_to_nextflow(real_linear_result)
+    executable = lowered(real_linear_result)
     assert [process.name for process in executable.processes] == ["touch", "append", "cat"]
 
 
@@ -65,21 +62,21 @@ def test_a_literal_file_into_a_format_declaring_input_lowers_to_its_path(tmp_pat
     assert list(result.artifact.job_inputs.values()) == [
         {"class": "File", "location": str(source), "format": "edam:format_2330"}
     ]
-    assert list(compiled_source_to_nextflow(result).params.values()) == [{"class": "File", "path": str(source)}]
+    assert list(lowered(result).params.values()) == [{"class": "File", "path": str(source)}]
 
 
 @pytest.mark.fast
 def test_rejects_compiledworkflow_substitution() -> None:
     empty = {"class": "Workflow", "cwlVersion": "v1.2", "inputs": {}, "outputs": {}, "steps": []}
     compiled = CompiledWorkflow("wf", empty, {})
-    with pytest.raises(TypeError, match="CompilationResult"):
-        compiled_source_to_nextflow(cast(Any, compiled))
+    with pytest.raises(TypeError, match="resolved view"):
+        NEXTFLOW.lower(cast(Any, compiled))
 
 
-def _findings(source: CompiledNextflowSource | CompilationResult) -> list[str]:
+def _findings(source: CompilationResult) -> list[str]:
     """Return the exact aggregated finding lines of one rejected conversion."""
     with pytest.raises(ValueError) as error:
-        compiled_source_to_nextflow(source)
+        lowered(source)
     header, *lines = str(error.value).splitlines()
     assert header == "Nextflow capability analysis failed:"
     return [line.removeprefix("- ") for line in lines]
@@ -168,33 +165,15 @@ def _nested_artifacts(result: CompilationResult) -> list[Any]:
     return [artifact for artifact in result.artifact.children if artifact.graph is not None]
 
 
-def _workflow_call_index(result: CompilationResult) -> int:
-    return next(
-        index
-        for index, step_node in enumerate(result.graph.steps)
-        if step_node.run is not None and step_node.run.child is not None
-    )
-
-
-def _with_wrapper_semantic(
-    result: CompilationResult,
-    **changes: Any,
-) -> CompilationResult:
-    """A copy of `result` whose emitted workflow-call step carries `changes`."""
-    changed = copy.deepcopy(result)
-    changed.artifact.cwl["steps"][_workflow_call_index(changed)].update(changes)
-    return changed
-
-
 @pytest.mark.fast
 def test_an_empty_resolved_subworkflow_projects_to_no_processes() -> None:
     result = compile_workflow_result(Workflow([Workflow([], "child")], "root"))
-    assert compiled_source_to_nextflow(result).processes == ()
+    assert lowered(result).processes == ()
 
 
 @pytest.mark.fast
 def test_two_resolved_subworkflow_instances_do_not_collide() -> None:
-    workflow = compiled_source_to_nextflow(_nested_result(siblings=2))
+    workflow = lowered(_nested_result(siblings=2))
     child_names = [process.name for process in workflow.processes if "inner_copy" in process.name]
     assert len(child_names) == 2
     assert len(set(child_names)) == 2
@@ -202,7 +181,7 @@ def test_two_resolved_subworkflow_instances_do_not_collide() -> None:
 
 @pytest.mark.fast
 def test_a_resolved_subworkflow_output_reaches_a_downstream_outer_step() -> None:
-    workflow = compiled_source_to_nextflow(_nested_downstream_result())
+    workflow = lowered(_nested_downstream_result())
     connection = next(
         edge
         for edge in workflow.connections
@@ -213,24 +192,8 @@ def test_a_resolved_subworkflow_output_reaches_a_downstream_outer_step() -> None
 
 @pytest.mark.fast
 def test_resolved_nesting_deeper_than_one_level_projects_recursively() -> None:
-    workflow = compiled_source_to_nextflow(_deep_nested_result())
+    workflow = lowered(_deep_nested_result())
     assert [process.name for process in workflow.processes] == ["write", "middle_leaf_inner_copy"]
-
-
-@pytest.mark.fast
-def test_a_nested_workflow_steps_input_takes_one_source_as_it_is() -> None:
-    """The core compiler joins one source to each input a nested workflow step binds."""
-    result = _nested_result()
-    wrapper = result.artifact.cwl["steps"][_workflow_call_index(result)]
-    name, definition = next(iter(wrapper["in"].items()))
-    source = definition["source"] if isinstance(definition, Mapping) else definition
-    record = {"source": [source, source], "linkMerge": "merge_nested", "pickValue": "first_non_null", "default": 1}
-    findings = _findings(_with_wrapper_semantic(result, **{"in": {**wrapper["in"], name: record}}))
-    assert [finding for finding in findings if "takes one source" in finding] == [
-        f"workflow.steps[1].in.{name}.{field}: a nested workflow step's input takes one source as it is; "
-        "merge on a step inside the nested workflow"
-        for field in ("default", "linkMerge", "pickValue", "source")
-    ]
 
 
 def _echo(name: str = "echo") -> Step:
@@ -271,8 +234,8 @@ def test_a_step_input_its_tool_does_not_declare_and_nothing_reads_generates_noth
     extend: Callable[[Workflow, Step], None], workflow_inputs: list[str],
 ) -> None:
     """CWL: a step input the tool does not declare, and that nothing reads, is no error; it changes no run."""
-    plain = compiled_source_to_nextflow(_echo_with(None))
-    extended = compiled_source_to_nextflow(_echo_with(extend))
+    plain = lowered(_echo_with(None))
+    extended = lowered(_echo_with(extend))
     assert extended.processes == plain.processes
     assert extended.connections == plain.connections
     # The workflow inputs it names stay parameters of the workflow, each checked like any other.
@@ -302,7 +265,7 @@ def test_inner_input_source_is_taken_from_the_resolved_graph(
     result = copy.deepcopy(real_nested_result)
     nested = _nested_artifacts(result)[0]
     nested.cwl["steps"][0]["in"]["source"] = "ABSENT/result"
-    workflow = compiled_source_to_nextflow(result)
+    workflow = lowered(result)
     assert any(
         isinstance(edge, NfProcessConnection) and edge.from_process.endswith("write")
         for edge in workflow.connections
@@ -312,9 +275,11 @@ def test_inner_input_source_is_taken_from_the_resolved_graph(
 @pytest.mark.fast
 @pytest.mark.parametrize("requirement", ["SubworkflowFeatureRequirement", "MultipleInputFeatureRequirement"])
 def test_accepts_an_inert_nested_workflow_feature_requirement(requirement: str) -> None:
-    result = copy.deepcopy(_nested_result())
-    _nested_artifacts(result)[0].cwl["requirements"] = {requirement: {}}
-    assert compiled_source_to_nextflow(result).processes
+    write = {"id": "write", "baseCommand": ["echo", "hi"], "stdout": "message.txt",
+             "outputs": {"result": {"type": "File", "outputBinding": {"glob": "message.txt"}}}}
+    child = {"requirements": {requirement: {}}, "steps": [{"id": "write"}]}
+    workflow, _notes = lowered_case({"workflow": {"steps": [{"id": "child.wic", "subtree": child}]}, "tools": [write]})
+    assert [process.name for process in workflow.processes] == ["child_write"]
 
 
 @pytest.mark.fast
@@ -332,20 +297,13 @@ def test_a_scattered_step_inside_a_subworkflow_uses_the_outer_scatter_contract()
     echo.inputs.item = ["a", "b"]
     echo.scatter_on(echo.inputs.item)
     child = Workflow([echo], "child")
-    workflow = compiled_source_to_nextflow(
+    workflow = lowered(
         compile_workflow_result(Workflow([child], "root"))
     )
     assert any(
         isinstance(edge, NfWorkflowInputConnection) and edge.adapter == "dotproduct"
         for edge in workflow.connections
     )
-
-
-def _with_child(mutate: Callable[[Yaml], Any]) -> CompilationResult:
-    """A copy of the nested result whose child workflow document `mutate` changes."""
-    result = copy.deepcopy(_nested_result())
-    mutate(_nested_artifacts(result)[0].cwl)
-    return result
 
 
 def _read_by_when(flow: Workflow, echo: Step) -> None:
@@ -360,44 +318,10 @@ def _fed_by_a_step_output() -> CompilationResult:
     return compile_workflow_result(Workflow([first, second], "flow"))
 
 
-def _nested_input_fed_by_a_step_output() -> CompilationResult:
-    result = _nested_result()
-    wrapper = result.artifact.cwl["steps"][_workflow_call_index(result)]
-    return _with_wrapper_semantic(result, **{"in": {**wrapper["in"], "after": "write/result"}})
-
-
-def _unconsumed_port_fields(child: Yaml) -> None:
-    next(iter(child["inputs"].values()))["secondaryFiles"] = [".fai"]
-    next(iter(child["outputs"].values()))["pickValue"] = "first_non_null"
-    for section in ("inputs", "outputs"):
-        next(iter(child[section].values()))["type"] = {"type": "array", "items": "File", "name": section}
-
-
-def _value_from_on_a_call() -> CompilationResult:
-    result = _nested_result()
-    wrapper = result.artifact.cwl["steps"][_workflow_call_index(result)]
-    return _with_wrapper_semantic(result, **{"in": {
-        name: {**definition, "valueFrom": "$(self)"} if isinstance(definition, Mapping)
-        else {"source": definition, "valueFrom": "$(self)"} for name, definition in wrapper["in"].items()}})
-
-
-def _hinted_calls() -> CompilationResult:
-    result = copy.deepcopy(_nested_result(siblings=2))
-    for child in _nested_artifacts(result):
-        child.cwl["hints"] = {"ResourceRequirement": {}}
-    return result
-
-
 def _only(finding: str) -> list[str]:
     """The pattern of a refusal whose one finding is `finding`."""
     return [r"\A" + re.escape("Nextflow capability analysis failed:\n- " + finding) + r"\Z"]
 
-
-_FROM_A_STEP_OUTPUT = (
-    "an input the step's {} does not declare is not supported from a step output: CWL runs this step "
-    "only after that step finishes, and the Nextflow target would not wait for it"
-)
-_HINTS = "workflow hints are not supported"
 
 #: Each compilation the target cannot lower, built through the Python API when its row runs, and the patterns its
 #: refusal matches, one per cause.
@@ -405,30 +329,8 @@ API_REFUSALS: dict[str, tuple[Callable[[], CompilationResult], list[str]]] = {
     "a_when_that_reads_an_input_its_tool_does_not_declare": (partial(_echo_with, _read_by_when), _only(
         "steps[0].in.enabled: the step's when reads an input its tool does not declare, which is not supported")),
     "an_input_its_tool_does_not_declare_fed_by_a_step_output": (_fed_by_a_step_output, _only(
-        "steps[1].in.after: " + _FROM_A_STEP_OUTPUT.format("tool"))),
-    "a_nested_workflow_steps_undeclared_input_fed_by_a_step_output": (_nested_input_fed_by_a_step_output, _only(
-        "workflow.steps[1].in.after: " + _FROM_A_STEP_OUTPUT.format("workflow"))),
-    "unconsumed_nested_workflow_port_fields": (partial(_with_child, _unconsumed_port_fields), [
-        "secondaryFiles are not supported", "a workflow output's pickValue is not supported",
-        *(rf"\.run\.{section}\.\w+\.type\.name: an array schema's name" for section in ("inputs", "outputs"))]),
-    "unconsumed_workflow_call_input_semantics": (_value_from_on_a_call, ["a step input's valueFrom is not supported"]),
-    # One finding per call, and no third.
-    "nested_findings_aggregate_across_workflow_calls": (_hinted_calls,
-                                                        [rf"(?s)\A(?!(.*{_HINTS}){{3}})(.*{_HINTS}){{2}}"]),
-    "scatter_on_a_resolved_subworkflow_call": (lambda: _with_wrapper_semantic(_nested_result(), scatter=["source"]),
-                                               ["scatter on a nested workflow step"]),
-    "when_on_a_resolved_subworkflow_call": (lambda: _with_wrapper_semantic(_nested_result(), when="$(true)"),
-                                            ["a when on a nested-workflow step is not supported"]),
-    "unsupported_nested_workflow_requirements": (partial(_with_child, lambda cwl: cwl.update(
-        requirements={"StepInputExpressionRequirement": {}})), ["StepInputExpressionRequirement is not supported"]),
-    "every_unconsumed_nested_workflow_field": (partial(_with_child, lambda cwl: cwl.update(
-        hints={"ResourceRequirement": {}})), [rf"\.run\.hints: {_HINTS}"]),
-    "a_nested_workflow_input_default_before_projection": (partial(_with_child, lambda cwl: cwl["inputs"][
-        "source"].update(default="fallback.txt")), [r"\.run\.inputs\.\w+\.default: a nested workflow input's default"]),
-    "long_on_a_nested_workflow_port_is_rejected_naming_the_type-inputs": (partial(_with_child, lambda cwl: cwl[
-        "inputs"]["source"].update(type="long")), [re.escape(".run.inputs.source.type: long is not supported")]),
-    "long_on_a_nested_workflow_port_is_rejected_naming_the_type-outputs": (partial(_with_child, lambda cwl: cwl[
-        "outputs"]["result"].update(type="long")), [re.escape(".run.outputs.result.type: long is not supported")]),
+        "steps[1].in.after: an input the step's tool does not declare is not supported from a step output: CWL runs "
+        "this step only after that step finishes, and the Nextflow target would not wait for it")),
 }
 
 
@@ -437,7 +339,7 @@ API_REFUSALS: dict[str, tuple[Callable[[], CompilationResult], list[str]]] = {
 def test_a_compilation_the_target_cannot_lower_is_refused_naming_each_cause(
         build: Callable[[], CompilationResult], patterns: list[str]) -> None:
     with pytest.raises(ValueError) as raised:
-        compiled_source_to_nextflow(build())
+        lowered(build())
     assert [pattern for pattern in patterns if not re.search(pattern, str(raised.value))] == []
 
 
