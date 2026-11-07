@@ -153,6 +153,10 @@ class ResolvedStep:  # pylint: disable=too-many-instance-attributes
     #: Every other step key, verbatim (label, doc, ...).
     fields: tuple[tuple[str, OpaqueCwl], ...]
     span: SourceSpan | None
+    #: A tool step's requirements and hints from outside its tool, as cwltool gives them to it (§8): for each class,
+    #: the innermost requirement written on an enclosing workflow, a call or the step, else the innermost such hint;
+    #: requirements first. A call's is empty: its workflow's steps inherit.
+    inherited: tuple[Requirement, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,12 +234,14 @@ def _workflow(graph: WorkflowGraph, outer: '_Level', given: Mapping[str, OpaqueC
     """A workflow's view, inside the level `outer` of the call that runs it, or of nothing for the root; `given` is
     the type each input the call binds holds, which is what its sources deliver (§5)."""
     names = outer.names
+    requirements, fields = _requirements(graph.passthrough, graph.requirements)
     order = written_order(graph)
     inputs = tuple(WorkflowInput(names.port(port.name), port.declaration,
                                  made_from=_made_from(port.name, names), span=port.span or graph.span)
                    for port in sorted(graph.workflow_inputs, key=lambda port: order(port.name)))
     level = _Level(names, outer.tools, outer.policy, outer.everything, {
-        port.name: (given or {}).get(port.name, port.declaration.type.canonical) for port in inputs})
+        port.name: (given or {}).get(port.name, port.declaration.type.canonical) for port in inputs},
+        (*outer.outside, *requirements))
     ins = step_inputs(graph)
     steps = tuple(_step(step, ins[step.id], level) for step in graph.steps)
     mapped = dict(graph.output_mapping)
@@ -243,7 +249,6 @@ def _workflow(graph: WorkflowGraph, outer: '_Level', given: Mapping[str, OpaqueC
                                    _output_source(graph, port, mapped.get(port.name), level.inputs, names),
                                    port.span or graph.span)
                     for port in graph.workflow_outputs)
-    requirements, fields = _requirements(graph.passthrough, graph.requirements)
     documents: tuple[tuple[str, OpaqueCwl], ...] = (('$namespaces', dict(graph.namespaces)),) \
         if graph.namespaces else ()
     documents += (('$schemas', list(graph.schemas)),) if graph.schemas else ()
@@ -289,12 +294,28 @@ def _requirements(passthrough: tuple[tuple[str, OpaqueCwl], ...],
 
 
 class _Level:  # pylint: disable=too-few-public-methods
-    """What a step's sources are read against: the spelling, the tools, every step of the tree, and the
-    declared type of each input of the step's own workflow."""
+    """What a step's sources are read against: the spelling, the tools, every step of the tree, the type each input
+    of the step's own workflow holds; and the requirements and hints written outside the step, outermost first."""
 
+    # pylint: disable-next=too-many-arguments,too-many-positional-arguments
     def __init__(self, names: Names, tools: Mapping[StepId, ResolvedTool], policy: RunPolicy,
-                 everything: Mapping[StepId, StepNode], inputs: Mapping[str, OpaqueCwl]) -> None:
+                 everything: Mapping[StepId, StepNode], inputs: Mapping[str, OpaqueCwl],
+                 outside: tuple[Requirement, ...] = ()) -> None:
         self.names, self.tools, self.policy, self.everything, self.inputs = names, tools, policy, everything, inputs
+        self.outside = outside
+
+
+def _inherited(written: tuple[Requirement, ...]) -> tuple[Requirement, ...]:
+    """What a tool inherits of the requirements and hints written outside it, outermost first (§8): for each class,
+    the innermost requirement, else the innermost hint, as cwltool merges a step's with its workflow's and a lookup
+    takes the last requirement of a class, then the last hint (cwltool/workflow.py:202-223, cwltool/utils.py:481-489).
+    """
+    found: dict[str, Requirement] = {}
+    for requirement in written:
+        held = found.get(requirement.cls)
+        if held is None or held.hint or not requirement.hint:
+            found[requirement.cls] = requirement
+    return tuple(sorted(found.values(), key=lambda requirement: requirement.hint))
 
 
 def _step(step: StepNode, ins: tuple[tuple[PortName, EmittedValue], ...], level: _Level) -> ResolvedStep:
@@ -304,8 +325,10 @@ def _step(step: StepNode, ins: tuple[tuple[PortName, EmittedValue], ...], level:
     child = step.run.child
     called = {names.port(port.name): port.declaration for port in child.workflow_inputs} if child is not None else {}
     inputs = tuple(_step_input(name, value, step, called, level) for name, value in ins)
+    requirements, fields = _requirements(step.passthrough)
+    within = _Level(names, level.tools, level.policy, level.everything, level.inputs, (*level.outside, *requirements))
     run: ResolvedTool | ResolvedWorkflow = (
-        _workflow(child, level, {port.name: port.type for port in inputs}) if child is not None
+        _workflow(child, within, {port.name: port.type for port in inputs}) if child is not None
         else level.tools[step.id])
     outputs = (tuple(port.name for port in run.outputs) if isinstance(run, ResolvedWorkflow)
                else tuple(names.port(name) for name in step_out(step)))
@@ -313,12 +336,12 @@ def _step(step: StepNode, ins: tuple[tuple[PortName, EmittedValue], ...], level:
     scatter = (Scatter(tuple(names.port(port) for port in step.scatter_ports), interpreted.get('scatterMethod'))
                if interpreted.get('scatter') is not None else None)
     condition = _condition(interpreted['when'], inputs, scatter) if interpreted.get('when') is not None else None
-    requirements, fields = _requirements(step.passthrough)
     if scatter is None and 'scatterMethod' in interpreted:
         # A method with nothing to scatter is not a scatter: a key as written.
         fields = (('scatterMethod', interpreted['scatterMethod']), *fields)
     return ResolvedStep(step.id, names.step(step.id), names.qualified(step.id), run, inputs, outputs, scatter,
-                        condition, requirements, fields, step.span)
+                        condition, requirements, fields, step.span,
+                        _inherited(within.outside) if isinstance(run, ResolvedTool) else ())
 
 
 # pylint: disable-next=too-many-locals

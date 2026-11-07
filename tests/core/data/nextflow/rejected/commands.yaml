@@ -96,6 +96,14 @@
     {}}}
   findings: ['step ''SHELL'': tool ''SHELL.cwl'': ShellCommandRequirement beside a DockerRequirement is not supported:
     CWL runs the command as /bin/sh -c after the image''s ENTRYPOINT, which the Nextflow task does not']
+- id: shell_mode_inherited_beside_the_tools_own_container
+  why: The pair is refused where its inherited half is written, which the tool's file does not hold (resolved-view
+    design §8).
+  workflow: {steps: [{id: say}], requirements: {ShellCommandRequirement: {}}}
+  tools: [{id: say, baseCommand: [echo, hi], requirements: {DockerRequirement: {dockerPull: debian}}}]
+  findings: ['step ''say'': requirement ''ShellCommandRequirement'': ShellCommandRequirement beside a DockerRequirement
+    is not supported: CWL runs the command as /bin/sh -c after the image''s ENTRYPOINT, which the Nextflow task does
+    not']
 - id: a_containerized_command_that_can_render_empty
   why: CWL then gives the container no arguments, so the image runs its CMD, which the Nextflow task does not.
   tool: {id: ENTRY, baseCommand: null, requirements: {DockerRequirement: *ubuntu}, inputs: {name: {type: 'string?',

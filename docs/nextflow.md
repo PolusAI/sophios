@@ -704,11 +704,20 @@ resolved boundary is removed. In particular, `scatter` on a subworkflow call
 is not supported. A scattered leaf step *inside* a subworkflow is not a
 special case: after projection it follows the scatter rules above.
 
-Workflow-level `ScatterFeatureRequirement`, `SubworkflowFeatureRequirement`,
-`MultipleInputFeatureRequirement` and `InlineJavascriptRequirement` (which
-Sophios adds for `when`) are accepted as inert declarations, at the outer and
-subworkflow level alike; every other workflow-level requirement is rejected by
-name.
+A tool step inherits the requirements and hints written outside its tool, on
+the workflow, on a nested workflow and its call, and on the step itself, as
+cwltool gives them to the tool: for each class the tool's own requirement,
+else the innermost inherited requirement, else the tool's own hint, else the
+innermost inherited hint. An inherited entry is lowered, or rejected, as the
+same entry written on the tool; a rejection names the step and the class. So a
+workflow's `DockerRequirement` hint gives every tool without its own image one,
+and a step's `ResourceRequirement` inside a nested workflow wins over the
+root's. `ScatterFeatureRequirement`, `SubworkflowFeatureRequirement`,
+`MultipleInputFeatureRequirement` and `StepInputExpressionRequirement` only
+declare that a workflow uses a feature: on a workflow or a step each is an
+inert declaration, and a tool that inherits one gets nothing from it.
+`InlineJavascriptRequirement`, which Sophios adds for `when`, is inherited
+like any other class, and is a declaration on the tool too.
 
 ## Step inputs
 

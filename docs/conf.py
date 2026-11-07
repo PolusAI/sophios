@@ -178,11 +178,13 @@ def nf_support_markdown() -> str:
             lines += _nf_support_table('Field | Sophios | Nextflow | Note', [
                 (f'`{name}`', sophios[name].support, row.state, row.note) for name, row in rows.items()])
     for level, classes in REQUIREMENT_CLASSES.items():
-        kinds = 'Requirement and hint' if level == 'CommandLineTool' else 'Requirement'
-        lines += ['', f'### {kinds} classes of a `{level}`', '']
+        tool = level == 'CommandLineTool'
+        lines += ['', f'### Requirement and hint classes of a `{level}`' + ('' if tool else ' or a step'), '']
         lines += _nf_support_table('Class | Nextflow | Note', [
             (f'`{name}`', row.state, row.note) for name, row in classes.items()])
-        lines += ['', 'Any other class is rejected.']
+        lines += ['', 'Any other class is rejected.' if tool else
+                  'Any other class is inherited by each tool step inside, and lowered or rejected as the same '
+                  'entry written on its tool.']
     for cwl_class, rows in FIELDS.items():
         if cwl_class in requirements:
             lines += ['', f'### `{cwl_class}` fields', '']
