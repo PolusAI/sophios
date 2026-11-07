@@ -656,7 +656,8 @@ one run.
 ### 6.2 `when:`
 
 `when:` is written into the CWL as it is, and Sophios adds
-`InlineJavascriptRequirement`. CWL evaluates an `inputs.<name>` the step does
+`InlineJavascriptRequirement`. Under `--partial_failure_enable` it runs after
+the null checks [Partial failures](partial-failures.md) describes. CWL evaluates an `inputs.<name>` the step does
 not have as `null`; the compile prints a line on stderr when `when:` reads
 such a name. On a subworkflow call the names it can read include those the
 compiler makes for the inputs inside it, such as `touch~filename`; `~`

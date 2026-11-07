@@ -87,8 +87,7 @@ successCodes:
 ```
 
 - Every step with required inputs gets a `when:` over them that runs it only
-  when they are not `null`, replacing any `when:` it had. The compiled
-  `echo` step:
+  when they are not `null`. The compiled `echo` step:
 
 ```yaml
 - id: echo
@@ -108,6 +107,20 @@ skipped, and its own outputs are `null` in turn, so the skip travels along
 the arrows of the graph from the failed job, and no further. A step with several required inputs runs only when
 all of them are present. A step with no required inputs keeps its own
 `when:`, if it had one.
+
+A step that has a `when:` of its own keeps it, after the checks, so its
+condition is read only once every required input has arrived, and only
+once. In `conditional_example.wic`, another of the examples, `echo` runs
+`when: '$(inputs.message < "27")'`, and compiled with the flag:
+
+```yaml
+  when: $(inputs["message"] != null && (inputs.message < "27"))
+```
+
+Written as a body, `${ return inputs.message < "27"; }`, the same condition
+returns `false` first:
+`${if (!(inputs["message"] != null)) { return false; } return inputs.message < "27"; }`.
+A `when:` that is not one `$(...)` or one `${...}` is written as it is.
 
 The codes that count as success are `0` plus those you name:
 
@@ -154,6 +167,7 @@ it write a marker output instead.
 
 `--partial_failure_enable` lets the exit codes you name count as success,
 makes each tool's outputs optional, and gives every step with required
-inputs a `when:` that skips it when an input is missing. The run goes on
+inputs a `when:` that skips it when an input is missing, before any
+`when:` of its own. The run goes on
 past failed jobs, and `output_<workflow>.json` shows `null` where a job left
 nothing.
