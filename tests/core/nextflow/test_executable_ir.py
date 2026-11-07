@@ -221,6 +221,11 @@ UNREPRESENTABLE: dict[str, tuple[Callable[[], Any], Any]] = {
                                       "capture 'text' requires a val port"),
     "NfPort-capture-and-array": (partial(NfPort, "result", "path", "result", _OUT, is_array=True, capture="single"),
                                  "cannot combine with an array marker"),
+    # A scalar type is what a val input receives when that is one scalar: never a path's, a list's, or another type.
+    **{f"NfPort-scalar-type-{name}": (partial(NfPort, "v", qualifier, is_array=array, scalar_type=scalar),
+                                      "a scalar type is one of")
+       for name, qualifier, array, scalar in (("of-a-path", "path", False, "string"),
+                                              ("of-an-array", "val", True, "int"), ("File", "val", False, "File"))},
     **{f"NfEntry-{name!r}": (partial(NfEntry, name), reason) for name, reason in (
         ("", "non-empty"), ("   ", "non-empty"), ("sub/dir.txt", "path separator"), ("a\x00b", "NUL byte"),
         (".sophios_entry_x", "Sophios reserves"), (".", "names a directory"), ("..", "names a directory"))},
@@ -294,6 +299,24 @@ UNREPRESENTABLE: dict[str, tuple[Callable[[], Any], Any]] = {
         "o", "path", "o", NfTemplate((NfBasenameReference("v"), NfLiteral(".done")))),)), _ARRAY_ONLY),
     # A flag would let list truthiness decide whether its prefix appears.
     "NfProcess-ref-flag-to-an-array": (partial(_proc, _ARRAY, NfFlag("v", "--verbose")), f"{_ARRAY_ONLY}: v"),
+    # A step-only input is a val the command never reads; the condition may (design §9).
+    "NfProcess-step-only-path": (partial(NfProcess, "P", [], [], command("true"),
+                                         step_only_inputs=[NfPort("after", "path")]), "must be val inputs"),
+    "NfProcess-step-only-named-like-an-input": (partial(NfProcess, "P", [NfPort("v", "val")], [], command("true"),
+                                                        step_only_inputs=[NfPort("v", "val")]),
+                                                "duplicate input port names"),
+    **{f"NfProcess-step-only-read-by-{where}": (partial(NfProcess, "P", [], [], NfCommand(tokens, env=env),
+                                                        step_only_inputs=[NfPort("s", "val")]),
+                                                "command reads the step-only inputs s")
+       for where, tokens, env in (
+           ("a-token", (template("echo", ref("s")),), ()),
+           ("an-environment-variable", (template("true"),), (NfEnvVar("S", template(ref("s"))),)))},
+    "NfProcess-condition-over-a-step-only-input": (partial(
+        NfProcess, "P", [], [output_port("result", "out.txt")], command("true"), condition=parse("$(inputs.s)"),
+        step_only_inputs=[NfPort("s", "val", scalar_type="boolean")]), None),
+    "NfProcess-condition-over-a-value-that-may-be-null": (partial(
+        NfProcess, "P", [NfPort("s", "val", scalar_type="boolean?")], [], command("true"),
+        condition=parse("$(inputs.s)")), "optional inputs.s may only be compared with null"),
     "NfProcess-condition-false": (partial(_conditional, False), (_EITHER, "condition must be a typed Expr")),
     "NfProcess-condition-string": (partial(_conditional, Expr("string", value="false")),
                                    (_EITHER, "condition must compute a boolean")),
@@ -473,6 +496,33 @@ WORKFLOWS: dict[str, tuple[Callable[[], Any], Any]] = {
         NfProcessConnection("MAYBE", "o", "CONSUME", "source"), x=1), "optional output"),
     "optional-output-of-a-scatter": (partial(_workflow, [_optional_producer()], NfWorkflowInputConnection(
         "xs", "MAYBE", "x", "dotproduct"), NfWorkflowOutputConnection("MAYBE", "o", "o"), xs=["1"]), "optional output"),
+    # A val input's scalar type is what its connection gives (design §9): given none, it is given that one.
+    "val-inputs-given-no-scalar-type": (lambda: _workflow(
+        [NfProcess("ONE", [NfPort("v", "val")], [], command("true"), step_only_inputs=[NfPort("s", "val")])],
+        NfWorkflowInputConnection("v", "ONE", "v"), NfWorkflowInputConnection("s", "ONE", "s"), v="a", s=1,
+    ).processes[0], NfProcess("ONE", [NfPort("v", "val", scalar_type="string")], [], command("true"),
+                              step_only_inputs=[NfPort("s", "val", scalar_type="int")])),
+    "a-scalar-type-its-connection-does-not-give": (partial(_workflow, [NfProcess(
+        "ONE", [NfPort("v", "val", scalar_type="int")], [], command("true"))],
+        NfWorkflowInputConnection("v", "ONE", "v"), v="a"), "ONE.v receives 'string', but its scalar type is 'int'"),
+    # A condition types over the scalar types its inputs are given.
+    **{f"a-condition-over-{given}-input-given-no-scalar-type": (partial(lambda value: _workflow([_conditional(parse(
+        "$(inputs.a > 1)"))], NfWorkflowInputConnection("a", "TASK", "a"), a=value), value), outcome)
+       for given, value, outcome in (("an-int", 1, None),
+                                     ("a-string", "x", "TASK' condition does not type over its inputs"))},
+    "a-condition-over-a-step-only-input-after-a-path-output": (lambda: _workflow([
+        NfProcess("TOUCH", [], [output_port("f", "f.txt")], command("touch", "f.txt")),
+        NfProcess("ECHO", [], [output_port("result", "out.txt")], command("true"), condition=parse("$(inputs.after)"),
+                  step_only_inputs=[NfPort("after", "val")])],
+        NfProcessConnection("TOUCH", "f", "ECHO", "after")), "only scalar inputs are admitted"),
+    # A step-only input takes a step's path output as a value, staging nothing; it is never scattered.
+    "a-step-only-input-after-a-path-output": (partial(_workflow, [
+        NfProcess("TOUCH", [], [output_port("f", "f.txt")], command("touch", "f.txt")),
+        NfProcess("ECHO", [], [], command("true"), step_only_inputs=[NfPort("after", "val")])],
+        NfProcessConnection("TOUCH", "f", "ECHO", "after")), None),
+    "a-scattered-step-only-input": (partial(_workflow, [NfProcess("ECHO", [], [], command("true"), step_only_inputs=[
+        NfPort("s", "val", scalar_type="string")])], NfWorkflowInputConnection("ss", "ECHO", "s", "dotproduct"),
+        ss=["a"]), "step-only input ECHO.s cannot be scattered"),
 }
 
 

@@ -212,7 +212,7 @@ def _valued() -> Workflow:
     word = workflow.inputs.word.as_type("string")
     count.inputs.word, count.inputs.n, again.inputs.word = word, workflow.inputs.n.as_type("int"), word
     count.inputs.files, count.inputs.main = workflow.inputs.files.as_type("File[]"), "/data/main.txt"
-    count.inputs.tag, again.inputs.k = "t", workflow.inputs.k.as_type("int?")
+    count.inputs.tag, again.inputs.k = "t", workflow.inputs.k.as_type("int")
     count.inputs.extras = workflow.inputs.extras.as_type("string[]?")
     workflow.inputs.unread.as_type("string")
     workflow.inputs.word, workflow.inputs.n, workflow.inputs.k, workflow.inputs.unread = "w'\"$x", 3, 2, "kept"

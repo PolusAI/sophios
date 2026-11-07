@@ -238,9 +238,10 @@ class Idiom:
 _QUOTE = NF_SHELL_QUOTE_HELPER
 _INDEX = NF_SCATTER_INDEX_NAME
 #: The ``ext`` carriers (design §4.2), under their CWL names: each CUDA field with the ``NfResources`` field it
-#: carries, and the names of a process's Directory outputs.
+#: carries, the names of a process's Directory outputs, and the names of its step-only inputs.
 NF_CUDA_CARRIERS: Final = (("cudaVersionMin", "cuda_version_min"), ("cudaComputeCapability", "cuda_compute_capability"))
 NF_DIRECTORY_CARRIER: Final = "Directory"
+NF_STEP_INPUT_CARRIER: Final = "WorkflowStepInput"
 
 
 class Idioms:  # pylint: disable=too-few-public-methods
@@ -554,8 +555,9 @@ def _carriers(process: NfProcess) -> str:
         return groovy_literal(item) if isinstance(item, str) else f"[{', '.join(map(groovy_literal, item))}]"
 
     directories = tuple(port.name for port in process.outputs if port.path_kind == "directory")
+    step_only = tuple(port.name for port in process.step_only_inputs)
     carried = (*((key, getattr(process.resources, field)) for key, field in NF_CUDA_CARRIERS),
-               (NF_DIRECTORY_CARRIER, directories or None))
+               (NF_DIRECTORY_CARRIER, directories or None), (NF_STEP_INPUT_CARRIER, step_only or None))
     return ", ".join(Idioms.OPTION.fill(name=key, value=value(item)) for key, item in carried if item is not None)
 
 
@@ -575,16 +577,16 @@ def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...], floa
     if carriers := _carriers(process):
         lines.append(f"    {Idioms.EXT.fill(carriers=carriers)}")
 
-    if process.inputs:
+    if process.all_inputs:
         lines.extend(["", "    input:"])
         if multi_input_ports:
-            scattered = [port for port in process.inputs if port.name in multi_input_ports]
-            other = [port for port in process.inputs if port.name not in multi_input_ports]
+            scattered = [port for port in process.all_inputs if port.name in multi_input_ports]
+            other = [port for port in process.all_inputs if port.name not in multi_input_ports]
             elements = ", ".join(_process_input(port, tuple_element=True) for port in scattered)
             lines.append(f"    {Idioms.TUPLE_INPUT.fill(elements=elements)}")
             lines.extend(f"    {_unscattered_input(port)}" for port in other)
         else:
-            lines.extend(f"    {_unscattered_input(port)}" for port in process.inputs)
+            lines.extend(f"    {_unscattered_input(port)}" for port in process.all_inputs)
     if process.outputs:
         lines.extend(["", "    output:"])
         idiom = Idioms.TUPLE_OUTPUT if multi_input_ports else Idioms.OUTPUT
@@ -688,7 +690,7 @@ def _render_conditional_invocation(process: NfProcess, arguments: list[str]) -> 
     already-declared script variable, and every port name here is also the
     name of an outer take:/channel variable.
     """
-    ports = process.inputs
+    ports = process.all_inputs
     synthetic = [f"__w{index}" for index in range(len(ports))]
     in_channel = f"ch_{process.name}_in"
     lines: list[str] = []
@@ -993,7 +995,7 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
             multi_input_names = {name for name, _, _ in multi_input_sources}
             channel_name = f"ch_{process.name}_scatter"
             lines.append(_render_multi_input_channel(process.name, multi_input_sources, methods[process.name]))
-            other_ports = [port for port in process.inputs if port.name not in multi_input_names]
+            other_ports = [port for port in process.all_inputs if port.name not in multi_input_names]
             arguments = [channel_name] + [
                 _argument(workflow, incoming[(process.name, port.name)], methods)
                 for port in other_ports
@@ -1002,7 +1004,7 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
             # The executable IR guarantees every process input is connected.
             arguments = [
                 _argument(workflow, incoming[(process.name, port.name)])
-                for port in process.inputs
+                for port in process.all_inputs
             ]
         if process.condition is None:
             lines.append(f"    {Idioms.CALL.fill(process=process.name, arguments=', '.join(arguments))}")

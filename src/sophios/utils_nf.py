@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterable, Iterator, Mapping
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from os import PathLike
 from pathlib import Path
@@ -54,6 +54,9 @@ from .nf_types import (
     NfWorkflowOutputConnection,
     link_refusal,
     linked_reference,
+    process_dependencies,
+    scalar_type,
+    topological_order,
 )
 from .utils_cwl import desugar_into_canonical_normal_form
 
@@ -2594,16 +2597,43 @@ def _condition_value(step: _Step) -> Expr:
     return condition.expr
 
 
-def _process(step: _Step) -> NfProcess:
-    return NfProcess(
-        name=_identifier(step.node.name, context="workflow step id", variable=False),
-        inputs=_ports(step.tool.get("inputs", {}), outputs=False, entries=_iwdr_entries(step.tool)),
-        outputs=_ports(step.tool.get("outputs", {}), outputs=True),
-        command=_command(step.tool),
-        container=_container(step.tool),
-        resources=_resources(step.tool),
-        condition=_condition_value(step) if step.node.condition is not None else None,
-    )
+def _process(step: _Step) -> tuple[NfProcess, Expr | None]:
+    """A step's process, before the workflow types its inputs, and its condition, which needs them typed."""
+    name = _identifier(step.node.name, context="workflow step id", variable=False)
+    inputs = _ports(step.tool.get("inputs", {}), outputs=False, entries=_iwdr_entries(step.tool))
+    outputs = _ports(step.tool.get("outputs", {}), outputs=True)
+    command, container, resources = _command(step.tool), _container(step.tool), _resources(step.tool)
+    condition = _condition_value(step) if step.node.condition is not None else None
+    return NfProcess(name, inputs, outputs, command, container, resources), condition
+
+
+def _typed(processes: list[NfProcess], connections: list[NfConnection], param_types: Mapping[str, str],
+           conditions: Mapping[str, Expr]) -> tuple[list[NfProcess], dict[str, str]]:
+    """Each process with its inputs' scalar types (design §9) and its condition, in its place; and why each process
+    that is not, is not.
+
+    A process is typed after the processes it reads, since what an output gives depends on its process's condition.
+    """
+    incoming = {(connection.to_process, connection.to_port): connection for connection in connections
+                if not isinstance(connection, NfWorkflowOutputConnection)}
+    position = {process.name: index for index, process in enumerate(processes)}
+    done: dict[str, NfProcess] = {}
+    failed: dict[str, str] = {}
+    for name in topological_order(process_dependencies(position, connections), error="workflow connections contain "
+                                  "a cycle", key=position.__getitem__):
+        process = processes[position[name]]
+
+        def received(port: NfPort, process: NfProcess = process) -> NfPort:
+            if port.qualifier != "val":
+                return port
+            return replace(port, scalar_type=scalar_type(incoming[(process.name, port.name)], param_types, done))
+        try:
+            done[name] = replace(process, inputs=[received(port) for port in process.inputs],
+                                 step_only_inputs=[received(port) for port in process.step_only_inputs],
+                                 condition=conditions.get(name))
+        except ValueError as error:
+            done[name], failed[name] = process, str(error)
+    return [done[process.name] for process in processes], failed
 
 
 def _source_endpoint(source: str, step_names: Mapping[str, str]) -> tuple[str | None, str]:
@@ -2965,25 +2995,30 @@ def _refusal(finding: str, lowering: _Lowering) -> Refusal:
 
 @dataclass(frozen=True, slots=True)
 class _Analysis:
-    """What the analysis of a view found: every refusal, the processes it lowered, and the notes it made."""
+    """What the analysis of a view found: every refusal, the workflow it lowered when there is none, and the notes
+    it made."""
 
     refusals: tuple[Refusal, ...]
-    processes: tuple[NfProcess, ...]
+    workflow: ExecutableNextflowWorkflow | None
     notes: tuple[Diagnostic, ...]
 
 
 def _analysis(lowering: _Lowering) -> _Analysis:
-    """Every construct of the view the target cannot lower, and each tool step lowered to its process."""
+    """Every construct of the view the target cannot lower; with none, the workflow each tool step lowers into."""
     view, steps = lowering.view, lowering.steps
     findings = _call_findings(view)
     notes: list[Diagnostic] = []
     processes: list[NfProcess] = []
+    conditions: dict[str, Expr] = {}
     for step in steps:
         if step_findings := [*_step_capability_findings(step), *_tool_capability_findings(step.tool, path=step.path)]:
             findings.extend(step_findings)
             continue
         try:
-            processes.append(_process(step))
+            process, condition = _process(step)
+            processes.append(process)
+            if condition is not None:
+                conditions[process.name] = condition
         except _WhenError as error:
             findings.append(f"{step.path}.when: {error}")
         except ValueError as error:  # lowering and the model reject what no source pass can see
@@ -3002,7 +3037,47 @@ def _analysis(lowering: _Lowering) -> _Analysis:
     if view.policy.partial_failure:
         refusals.append(Refusal(Construct.POLICY, "partial failure", view.name, None, view.span,
                                 "partial failure is a policy of the CWL target"))
-    return _Analysis(tuple(refusals), tuple(processes), tuple(notes))
+    if refusals:
+        return _Analysis(tuple(refusals), None, tuple(notes))
+    return _assembled(lowering, processes, conditions, tuple(notes))
+
+
+def _assembled(lowering: _Lowering, processes: list[NfProcess], conditions: Mapping[str, Expr],
+               notes: tuple[Diagnostic, ...]) -> _Analysis:
+    """The workflow the processes make, once every source pass has admitted the view: each error the lowering or
+    the model raises a refusal, of the step it is about where there is one."""
+    view = lowering.view
+    try:
+        params = _workflow_params(view)
+        default_connections, default_params, default_types = _default_bindings(
+            lowering.steps, processes, [port.name for port in view.inputs])
+        params.update(default_params)
+        param_types = {**_workflow_param_types(view), **default_types}
+        connections = _connections(lowering, processes, default_connections)
+        processes, failed = _typed(processes, connections, param_types, conditions)
+        if failed:
+            return _Analysis(tuple(
+                _refusal(f"{step.path}{'.when' if process.name in conditions else ''}: {failed[process.name]}",
+                         lowering)
+                for step, process in zip(lowering.steps, processes, strict=True) if process.name in failed),
+                None, notes)
+        name = _identifier(view.name, context="workflow name", variable=False)
+        while name in {process.name for process in processes}:  # a step may share the workflow's name
+            name = f"_{name}"
+        return _Analysis((), ExecutableNextflowWorkflow(
+            name=name,
+            processes=processes,
+            connections=connections,
+            # A default is as authored; each value is held as a value written on a step is (design §4.2,
+            # Losses): coerced to its declared type, so an int given for a float is the float, and a local
+            # location a path.
+            params=_apply_absent_sentinel({key: local_locations_as_paths(coerce_job_value(
+                AuthoredName(key), PortDeclaration(PortType(param_types[key])), value))
+                for key, value in params.items()}),
+            param_types=param_types,
+        ), notes)
+    except ValueError as error:
+        return _Analysis((Refusal(Construct.WORKFLOW, None, view.name, None, view.span, str(error)),), None, notes)
 
 
 class NextflowTarget:  # pylint: disable=too-few-public-methods
@@ -3027,35 +3102,10 @@ class NextflowTarget:  # pylint: disable=too-few-public-methods
             tuple[ExecutableNextflowWorkflow, tuple[Diagnostic, ...]]: The validated executable representation, and
                 the notes the lowering made, such as a CUDA field it does not check.
         """
-        lowering = _Lowering.of(view)
-        analysis = _analysis(lowering)
-        if analysis.refusals:
+        analysis = _analysis(_Lowering.of(view))
+        if analysis.workflow is None:
             raise NotLowered("Nextflow", analysis.refusals)
-        processes = list(analysis.processes)
-        try:
-            params = _workflow_params(view)
-            default_connections, default_params, default_types = _default_bindings(
-                lowering.steps, processes, [port.name for port in view.inputs])
-            params.update(default_params)
-            param_types = {**_workflow_param_types(view), **default_types}
-            name = _identifier(view.name, context="workflow name", variable=False)
-            while name in {process.name for process in processes}:  # a step may share the workflow's name
-                name = f"_{name}"
-            return ExecutableNextflowWorkflow(
-                name=name,
-                processes=processes,
-                connections=_connections(lowering, processes, default_connections),
-                # A default is as authored; each value is held as a value written on a step is (design §4.2,
-                # Losses): coerced to its declared type, so an int given for a float is the float, and a local
-                # location a path.
-                params=_apply_absent_sentinel({key: local_locations_as_paths(coerce_job_value(
-                    AuthoredName(key), PortDeclaration(PortType(param_types[key])), value))
-                    for key, value in params.items()}),
-                param_types=param_types,
-            ), analysis.notes
-        except ValueError as error:
-            raise NotLowered("Nextflow", (Refusal(Construct.WORKFLOW, None, view.name, None, view.span,
-                                                  str(error)),)) from None
+        return analysis.workflow, analysis.notes
 
 
 #: The Nextflow target.

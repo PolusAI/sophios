@@ -391,15 +391,16 @@ works:
   - One function in `nf_types`, `scalar_type`, computes it from a port's connection: a parameter's declared
     type, one element of it for a scattered input; a process output's captured text, `string?` when its process
     has a condition; or what a step-input connection's `pickValue` picks, which is never `null`, when its
-    sources agree on one type. The lowering and the reader both fill it with that function, and the workflow's
-    validation holds every port to it. The lowering fills it as it assembles the workflow, each process after
-    the processes it reads and before its condition is attached; `refusals` assembles the workflow too once
-    nothing else is refused, so a refusal the model's validation raises, such as a condition on a process with
-    no input at all, is among them.
+    sources agree on one type. A `val` port built with `None`, as 0.7.0 code builds every one, is filled by the
+    workflow from its connection, and a value given that disagrees is refused. The lowering and the reader fill
+    it with the same function, since they type a condition before the workflow exists, to refuse it at its step
+    or its line; `refusals` assembles the workflow once nothing else is refused, so the model's own refusals,
+    such as a condition on a process with no input at all, are among them.
   - The workflow's validation does not hold a step-only input to its source's path kind: a `val` takes a path's
     value and stages nothing. It refuses a scatter adapter into one.
   - The process's validation types its condition with the subset's `check` over its ports' `scalar_type` and
-    requires `boolean`. This replaces the root-operator test (`nf_types.py:724`, `:856-857`).
+    requires `boolean`, once every port the condition reads has one; the workflow types it again over the ports
+    it filled. This replaces the root-operator test (`nf_types.py:724`, `:856-857`).
 
 `ExecutableNextflowWorkflow.SCHEMA_VERSION` goes from 20 to 21 (`nf_types.py:1180`), as backend design §5.3
 requires for any change to the serialized form.
