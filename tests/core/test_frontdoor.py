@@ -290,7 +290,7 @@ def _assert_runs(artifact: CompilationArtifact, written: Yaml, directory: Path, 
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('case, expected', case_dirs('run_paths'))
+@pytest.mark.parametrize('case, expected', case_dirs('run_paths', 'steps'))
 def test_each_step_runs_the_tool_its_run_names(tmp_path: Path, case: Path, expected: Yaml) -> None:
     """A `run:` path is read from beside the document that names it, else from the registry by its stem; an inline
     body is a tool of its own. Each tool is the one its step runs, compiled and written out."""
@@ -383,7 +383,7 @@ def _packed_step(door: str, packed: Path, tmp_path: Path) -> tuple[list[list[lis
 
 @pytest.mark.fast
 @pytest.mark.parametrize('door', ['clt_path', 'cwl_document', 'beside', 'search-paths'])
-@pytest.mark.parametrize('case', cases('packed_tools'))
+@pytest.mark.parametrize('case', cases('packed_tools', 'ports', 'refused'))
 def test_a_packed_document_as_a_step_runs_its_main(tmp_path: Path, case: Yaml, door: str) -> None:
     """A packed CommandLineTool, a `$graph`'s `main` or the one tool `cwltool --pack` writes, is that tool through each
     door a step has, Python's and the file's: main's ports, and main alone as the step's CWL, with the document's

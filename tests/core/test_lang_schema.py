@@ -31,6 +31,7 @@ from sophios.lang.nodes import Shape, Step, WicSidecar, surface_of
 from .budgets import budget
 from .cases import cases
 from .strategies import WIC_VALUES, documents, pinned, shapes
+from .test_lang_parser import PARSE_KEYS
 from .wic_corpus import CORPUS, corpus_id
 
 FAST = budget(200)
@@ -200,7 +201,7 @@ _ACCEPTS: Final = {json.dumps(document): accepted for accepted, table in ((False
 @pytest.mark.fast
 @given(shapes())
 @pinned(*REFUSED.values(), *ADMITTED.values(),
-        *(yaml.safe_load(case.values[0]['source']) for case in cases('parse/wic_values.yaml')))
+        *(yaml.safe_load(case.values[0]['source']) for case in cases('parse/wic_values.yaml', *PARSE_KEYS)))
 @example({'steps': [{'id': 1}]}).xfail(raises=AssertionError, reason="the parser reads the id as the name '1', the "
                                        'schema wants a string')
 @example({'steps': {'s': {'out': [{'f': 'x'}]}}}).xfail(raises=AssertionError, reason='wic005: an out: entry binds '

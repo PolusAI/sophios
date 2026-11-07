@@ -8,7 +8,7 @@ Everything here compiles through `compile_production`, which is `testing=False`.
 edge into a workflow input, so these diagnostics are unreachable through it.
 """
 import pytest
-from hypothesis import example, given, strategies as st
+from hypothesis import given, strategies as st
 
 from sophios.lang.diagnostics import Diagnostic, SophiosError
 from sophios.wic_types import Yaml
@@ -16,6 +16,7 @@ from sophios.wic_types import Yaml
 from .budgets import budget
 from .cases import cases
 from .hermetic import compile_production
+from .strategies import pinned
 
 
 def _step(kind: str, name: str | None) -> Yaml:
@@ -59,6 +60,7 @@ def _documents(draw: st.DrawFn) -> Yaml:
 @pytest.mark.fast
 @budget(50)
 @given(_documents())
+@pinned(*(case.values[0] for case in cases('edge-binding', 'steps', 'codes', 'says', 'sources')))
 def test_an_edge_reference_names_one_earlier_definition(case: Yaml) -> None:
     """Each case of data/edge-binding, and generated ones: the codes it raises, each message holding `says`; and,
     when it compiles, the source of each reference in the root is the port that defines its edge, and of each input
@@ -77,7 +79,3 @@ def test_an_edge_reference_names_one_earlier_definition(case: Yaml) -> None:
             assert compiled['steps'][index]['in'][key]['source'] == source
     assert [found.code.value for found in raised] == case['codes']
     assert all(case.get('says', '') in found.message for found in raised)
-
-
-for _case in cases('edge-binding'):
-    example(*_case.values)(test_an_edge_reference_names_one_earlier_definition)

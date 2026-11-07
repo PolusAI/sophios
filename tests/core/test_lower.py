@@ -78,7 +78,7 @@ def _lower(source: str) -> Any:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('case', cases('lower'))
+@pytest.mark.parametrize('case', cases('lower', 'source', 'graph', 'diagnostics'))
 def test_lower_case(case: dict[str, Any]) -> None:
     """`source` lowers to exactly `diagnostics`, and to no graph where `graph` is false, for the case's `why`."""
     result = _lower(case['source'])

@@ -214,11 +214,13 @@ def test_a_dollar_starting_no_expression_is_text_as_cwltool_reads_it(texts: list
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("case", cases("nextflow/lowered"))
+@pytest.mark.parametrize("case", cases(
+    "nextflow/lowered", "tool", "out", "job", "workflow", "tools", "lowered", "render", "notes", "params_file"))
 def test_a_supported_source_lowers_as_its_case_says(case: Yaml) -> None:
     """A case's source lowers, its documents left as they were, to a model whose payload holds `lowered`, with
     `params_file` as its params file, each `render` fragment in its script, and exactly its `notes` when it lists them
-    (tests/core/cases.py reads each form)."""
+    (tests/core/cases.py reads each form). A case with none of `lowered`, `render`, `notes` or `params_file` asserts
+    only that its source lowers."""
     documents = copy.deepcopy(case)
     workflow, notes = compiled_source_to_nextflow_with_notes(case_source(case))
     assert case == documents

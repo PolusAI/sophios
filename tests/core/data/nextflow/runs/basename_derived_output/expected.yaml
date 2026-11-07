@@ -1,2 +1,3 @@
 why: An output name derived from a staged input's basename names the copy the command made.
-outputs: {copy_named_after_source~result: {class: File, basename: lines.txt.copy, contents: "basename derived\n"}}
+outputs: {write_source~result: {class: File, basename: lines.txt, contents: "basename derived\n"},
+          copy_named_after_source~result: {class: File, basename: lines.txt.copy, contents: "basename derived\n"}}

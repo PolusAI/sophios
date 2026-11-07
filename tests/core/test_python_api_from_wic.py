@@ -312,7 +312,7 @@ ONE_STEP: Final = 'steps:\n- id: mk_file\n  in:\n    name: !ii a\n'
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('case, expected', case_dirs('from_wic_refusals'))
+@pytest.mark.parametrize('case, expected', case_dirs('from_wic_refusals', 'diagnostics'))
 def test_a_document_python_cannot_hold_is_refused_whole(case: Path, expected: dict[str, Any]) -> None:
     """A document that compiles but holds what the Python API cannot is `api006`, once per construct, each where it
     is written and saying what to write, in one raise; a document that does not compile raises its own error."""
