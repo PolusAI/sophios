@@ -6,7 +6,7 @@ greeting out as a `.wic` file, read `greeting.wic` back into Python objects,
 and learn what survives the trip. You will want this to hand a Python
 workflow to a colleague who works in files, to bring a shared `.wic`
 workflow into a Python program, or to use a command-line feature that has no
-Python spelling, such as `--partial_failure_enable`.
+Python spelling, such as `--cwl_inline_subworkflows`.
 
 `Workflow.write_wic()` writes a `.wic` bundle, and `Workflow.from_wic()`
 reads a `.wic` file into `Workflow` and `Step` objects. This is the one

@@ -6,9 +6,11 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
+from hypothesis import example, given, strategies as st
 
 import sophios.compiler
-from sophios.api.python.workflow import Inference
+from sophios import cli
+from sophios.api.python.workflow import Inference, RunPolicy
 from sophios.lang import SophiosErrorCode
 from sophios.lang.diagnostics import Severity, SophiosError, lines, report
 from sophios.cli import default_compilation_settings
@@ -19,6 +21,7 @@ from sophios.python_cwl_adapter import import_python_file
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
 from sophios.wic_types import CompilerOptions, Json
 
+from .budgets import budget
 from .helpers import REPO_ROOT, shipped_tools
 from .test_setup import home_with_shipped_tools, use_home
 from .wic_reading import read_wic
@@ -70,12 +73,12 @@ def _compile_wic(root: Path, settings: CompilerOptions | None = None) -> Compila
     from beside the document."""
     return sophios.compiler.compile_source(
         bundle_from_disk(root, {'global': {path.stem: path for path in root.parent.glob('*.wic')}}, shipped_tools()),
-        settings or default_compilation_settings(), testing=True)
+        settings or default_compilation_settings(), quiet=True)
 
 
-def _through_the_file(root: Path) -> tuple[Json, Json, list[str]]:
+def _through_the_file(root: Path, settings: CompilerOptions | None = None) -> tuple[Json, Json, list[str]]:
     """CWL (outputs narrowed as `compile()` returns them), job and diagnostics of `root`, compiled by `_compile_wic`."""
-    result = _compile_wic(root)
+    result = _compile_wic(root, settings)
     artifact = inline_artifact_runs(result.artifact)
     return (_as_compile_returns(normalize_artifact_cwl(artifact), root),
             normalize_artifact_job_inputs(artifact, artifact.job_inputs), _bodies(result.diagnostics))
@@ -88,6 +91,28 @@ def test_both_surfaces_compile_to_the_same_cwl(stem: str) -> None:
     module = import_python_file(f'cookbook_{stem}', COOKBOOK / f'{stem}.py')
     python_side = module.workflow().compile()
     cwl, job, notes = _through_the_file(COOKBOOK / f'{stem}.wic')
+    assert (cwl, job) == (python_side.cwl_workflow, python_side.cwl_job_inputs)
+    assert _codes(notes) == _codes(python_side.diagnostics)
+
+
+@pytest.mark.fast
+@given(st.sampled_from([stem for stem in PAIRS if stem != REFUSED]), st.booleans(),
+       st.lists(st.integers(0, 255), max_size=3), st.none() | st.tuples(st.integers(0, 9), st.integers(0, 9)))
+@example('when', True, [3], (2, 5))
+@example('greeting_if', True, [], None)
+@budget(10)
+def test_a_policy_writes_for_the_py_what_the_partial_failure_flags_write_for_the_wic(
+        stem: str, enabled: bool, codes: list[int], span: tuple[int, int] | None) -> None:
+    """`compile(policy=...)` on the `.py` of a pair writes the CWL the command line's partial-failure flags write for
+    its `.wic`: `RunPolicy(partial_failure=)` is `--partial_failure_enable`, and the codes it is given are those of
+    `--partial_failure_success_codes`, and of a `--partial_failure_success_codes_range`, lower bound included."""
+    low, high = sorted(span) if span is not None else (0, 0)
+    flags = [*(['--partial_failure_enable'] if enabled else []), '--partial_failure_success_codes', *map(str, codes),
+             *(['--partial_failure_success_codes_range', str(low), str(high)] if span is not None else [])]
+    settings = cli.get_dicts_for_compilation(cli.get_args('', flags))[0]
+    module = import_python_file(f'cookbook_{stem}', COOKBOOK / f'{stem}.py')
+    python_side = module.workflow().compile(policy=RunPolicy(enabled, (*codes, *range(low, high))))
+    cwl, job, notes = _through_the_file(COOKBOOK / f'{stem}.wic', settings)
     assert (cwl, job) == (python_side.cwl_workflow, python_side.cwl_job_inputs)
     assert _codes(notes) == _codes(python_side.diagnostics)
 

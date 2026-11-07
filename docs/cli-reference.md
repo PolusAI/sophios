@@ -128,10 +128,11 @@ value are both dropped without a message. For a flag with fixed choices, an
 invalid value such as `{'diagnostics': 'x'}` exits the process with status 2
 and `main: error: argument --diagnostics: invalid choice`, after the workflow
 has been written. `Workflow.compile()`
-takes `target=`, `lang_version=`, `tool_registry=` and `inference=`, and nothing else.
-The inference flags map onto `Inference(enabled=, strict=, naming_conventions=, insert_steps=)`, and the
+takes `target=`, `lang_version=`, `tool_registry=`, `inference=` and `policy=`, and nothing else.
+The partial-failure flags map onto `RunPolicy(partial_failure=, success_codes=)`
+([Partial failures](partial-failures.md#in-python)), and the inference flags onto `Inference(enabled=, strict=, naming_conventions=, insert_steps=)`, and the
 configuration file's `renaming_conventions` and `inference_rules` onto its `renamings=` and `format_rules=`, where Python starts from the three renamings Sophios ships and has no format rules unless passed, as it reads no configuration file;
-`Workflow.run()`, `start()` and `run_async()` take the same `inference=`, and `target='nextflow'` to run the
+`Workflow.run()`, `start()` and `run_async()` take the same `inference=` and `policy=`, and `target='nextflow'` to run the
 [Nextflow](nextflow.md#running-on-the-nextflow-target) pipeline instead, where the CWL defaults above do not apply,
-an option only a CWL run reads is refused, and any other key becomes `-<key> <value>` for Nextflow. The rewriting and partial-failure options are command-line only;
+an option only a CWL run reads is refused, and any other key becomes `-<key> <value>` for Nextflow. The rewriting options are command-line only;
 `Workflow.draw()` takes the drawing ones ([Drawing](drawing.md)).

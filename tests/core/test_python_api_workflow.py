@@ -31,7 +31,7 @@ from sophios.backends import RunRequest
 from sophios.api.python import nextflow
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import (_python_api_types_match, InvalidInputValueError, InvalidLinkError,
-                                         InvalidStepError, RunResult, RunState, RunStatus, SophiosError,
+                                         InvalidStepError, RunPolicy, RunResult, RunState, RunStatus, SophiosError,
                                          SophiosErrorCode, Step, StepInput, Workflow, WorkflowRunError)
 from sophios.lang.diagnostics import lines as printed_lines
 from sophios.python_cwl_adapter import import_python_file
@@ -260,23 +260,24 @@ def test_check_under_nextflow_reports_a_nextflow_that_is_not_installed(
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("target, build, raised, said", [
-    ("cwl", _ambiguous, SophiosError, "[wic055]"),
-    ("nextflow", _noted_on_cwl, nextflow.NotLowered,
-     "step 'echo': when: '$(inputs.message)' must compute a boolean, not a string")])
+@pytest.mark.parametrize("target, build, policy, raised, said", [
+    ("cwl", _ambiguous, RunPolicy(), SophiosError, "[wic055]"),
+    ("nextflow", _noted_on_nextflow, RunPolicy(partial_failure=True), nextflow.NotLowered,
+     "workflow 'noted': policy 'partial failure': partial failure is a policy of the CWL target")])
 def test_check_raises_what_compile_raises(target: Literal["cwl", "nextflow"], build: Callable[[], Workflow],
-                                          raised: type[Exception], said: str) -> None:
+                                          policy: RunPolicy, raised: type[Exception], said: str) -> None:
     """A workflow that does not compile is the same `SophiosError` from `check()` as from `compile()`, and one the
-    Nextflow target cannot lower the same `NotLowered`, holding every `Refusal` by its `Construct`."""
+    Nextflow target cannot lower the same `NotLowered`, holding every `Refusal` by its `Construct`: partial failure
+    is a policy of the CWL target."""
     workflow = build()
     with pytest.raises(raised) as from_check:
-        workflow.check(target=target)
+        workflow.check(target=target, policy=policy)
     with pytest.raises(raised) as from_compile:
-        workflow.compile(target=target)
+        workflow.compile(target=target, policy=policy)
     assert said in str(from_check.value) and str(from_check.value) == str(from_compile.value)
     if isinstance(from_check.value, nextflow.NotLowered):
         assert all(isinstance(refusal, nextflow.Refusal) for refusal in from_check.value.refusals)
-        assert [refusal.construct for refusal in from_check.value.refusals] == [nextflow.Construct.WHEN]
+        assert [refusal.construct for refusal in from_check.value.refusals] == [nextflow.Construct.POLICY]
 
 
 @pytest.mark.fast

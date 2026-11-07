@@ -3062,8 +3062,15 @@ class _Analysis:
 
 
 def _analysis(lowering: _Lowering) -> _Analysis:
-    """Every construct of the view the target cannot lower; with none, the workflow each tool step lowers into."""
+    """Every construct of the view the target cannot lower; with none, the workflow each tool step lowers into.
+
+    Under partial failure the policy is the one refusal: the tools the view carries are written for it (design §2),
+    so what the target would refuse in them, such as their `successCodes`, is the policy's, not their author's.
+    """
     view, steps = lowering.view, lowering.steps
+    if view.policy.partial_failure:
+        return _Analysis((Refusal(Construct.POLICY, "partial failure", view.name, None, view.span,
+                                  "partial failure is a policy of the CWL target"),), None, ())
     findings = _call_findings(view)
     notes: list[Diagnostic] = []
     processes: list[NfProcess] = []
@@ -3094,9 +3101,6 @@ def _analysis(lowering: _Lowering) -> _Analysis:
     findings.extend(_text_capture_sink_findings(steps))
     findings.extend(_staged_name_findings(steps))
     refusals = [_refusal(finding, lowering) for finding in findings]
-    if view.policy.partial_failure:
-        refusals.append(Refusal(Construct.POLICY, "partial failure", view.name, None, view.span,
-                                "partial failure is a policy of the CWL target"))
     if refusals:
         return _Analysis(tuple(refusals), None, tuple(notes))
     return _assembled(lowering, processes, conditions, tuple(notes))
