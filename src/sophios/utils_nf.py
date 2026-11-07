@@ -14,7 +14,8 @@ from typing import Any, Final
 from .ir.complete import coerce_job_value
 from .ir.resolved import (
     Construct, Crossing, InputRef, NotLowered, OutputRef, Refusal, Requirement, ResolvedStep, ResolvedTool,
-    ResolvedWorkflow, StepInput, Through, ToolStep, WorkflowInput, WorkflowOutput, output_sources, output_unbound,
+    ResolvedWorkflow, StepInput, Through, ToolStep, WorkflowInput, WorkflowOutput, boolean_problem, output_sources,
+    output_unbound,
     tool_steps,
 )
 from .ir.types import AuthoredName, PortDeclaration, PortType
@@ -2590,8 +2591,8 @@ def _condition_value(step: _Step) -> Expr:
         raise _WhenError(f"{when!r} reads {names}, which the step does not bind")
     if condition.type is None:
         raise _WhenError(f"{when!r} is outside the safe JavaScript subset: {condition.problem}")
-    if condition.type != "boolean":
-        raise _WhenError(f"{when!r} must compute a boolean, not a {condition.type}")
+    if (problem := boolean_problem(condition)) is not None:
+        raise _WhenError(problem)
     return condition.expr
 
 

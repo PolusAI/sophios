@@ -579,14 +579,15 @@ def compiled_workflow_from_result(
     workflow: "Workflow",
     result: CompilationResult,
 ) -> CompiledWorkflow:
-    """Build the public boundary from the typed internal result."""
+    """Build the public boundary from the typed internal result, with the notes the compile and the CWL target
+    made."""
     artifact = _one_document(workflow, result)
     return CompiledWorkflow(
         name=workflow.process_name,
         cwl_workflow=normalize_artifact_cwl(artifact),
         cwl_job_inputs=normalize_artifact_job_inputs(artifact, artifact.job_inputs),
         lang_version=result.lang_version,
-        diagnostics=tuple(result.diagnostics),
+        diagnostics=(*result.diagnostics, *compiler.cwl_notes(result)),
     )
 
 
@@ -597,7 +598,7 @@ def compiled_workflow(
     lang_version: str | None = None,
     inference: Inference = Inference(),
 ) -> CompiledWorkflow:
-    """Compile a workflow into the public compiled-workflow boundary object.
+    """Compile a workflow into the public compiled-workflow boundary object, and print its notes.
 
     Args:
         workflow (Workflow): Workflow to compile.
@@ -609,14 +610,10 @@ def compiled_workflow(
     Returns:
         CompiledWorkflow: Compiled CWL workflow plus generated job inputs.
     """
-    result = compile_workflow_result(
-        workflow,
-        tool_registry=tool_registry,
-        lang_version=lang_version,
-        inference=inference,
-    )
-    report(result.diagnostics)
-    return compiled_workflow_from_result(workflow, result)
+    compiled = compiled_workflow_from_result(workflow, compile_workflow_result(
+        workflow, tool_registry=tool_registry, lang_version=lang_version, inference=inference))
+    report(compiled.diagnostics)
+    return compiled
 
 
 def compiled_nextflow_workflow(
@@ -700,6 +697,8 @@ def _run_request(workflow: "Workflow", options: RunOptions, *,
     resolved_run_args = _run_args(options.run_args_dict, options.target)
     basepath = options.basepath
     result = compile_workflow_result(workflow, tool_registry=options.tool_registry, inference=options.inference)
+    if options.target == "cwl":
+        result = replace(result, diagnostics=Diagnostics([*result.diagnostics, *compiler.cwl_notes(result)]))
     report(result.diagnostics)
     if refuse_realtime and result.realtime:
         raise _realtime_refused(result.realtime)

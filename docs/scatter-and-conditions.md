@@ -156,9 +156,13 @@ expected and changes nothing.
 
 A step after a conditional one can read its outputs, and must cope with a
 `null`. Declare that input optional in its tool, or choose among several
-sources with `pickValue` in a [record](types-and-records.md). A `when:` that
-reads a name the step does not have is evaluated as `null`, which usually
-keeps the step from running, and the compile prints a line saying so.
+sources with `pickValue` in a [record](types-and-records.md). A `when:` must
+give `true` or `false`, and cwltool stops the run at one that gives anything
+else. One that computes a number, a string or `null`, such as
+`$(inputs.count)`, is a `wic056` note; write the comparison you mean,
+`$(inputs.count > 0)`. A name the step does not have has no value there, so a
+`when:` that reads it as it is stops the run too, and the compile prints a
+line saying so.
 
 ## Recap
 

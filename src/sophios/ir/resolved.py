@@ -20,10 +20,10 @@ from typing import NamedTuple, TypeAlias
 
 from ..lang.nodes import OpaqueCwl
 from ..lang.spans import SourceSpan
-from ..lang.subset import Expr, check, is_safe_subset_text, parse
+from ..lang.subset import BOOLEAN, Expr, check, is_safe_subset_text, parse
 from .declarations import delivered, layered, output_rank, written_order
 from .names import Names
-from .policy import RunPolicy
+from .policy import RunPolicy, one_expression
 from .stepin import direct_source, step_inputs, step_out
 from .types import (
     DerivedName, EmittedValue, Expression, PortDeclaration, PortId, PortName, Record, Source, StepId,
@@ -454,6 +454,30 @@ def _condition(when: OpaqueCwl, inputs: tuple[StepInput, ...], scatter: Scatter 
     except ValueError as error:
         return Condition(when, expr, None, str(error))
     return Condition(when, expr, typed, None)
+
+
+def boolean_problem(condition: Condition) -> str | None:
+    """Why `condition` cannot give `true` or `false`, which CWL requires of a `when` (§10), the `when` quoted first;
+    `None` when it gives one, and when nothing here can tell: the subset cannot parse or type it, or it is not a
+    string, which cwltool's schema validation refuses itself."""
+    written = condition.written
+    if isinstance(written, str) and one_expression(written) is None:
+        return f'{written!r} is not one $(...) or ${{...}} expression'
+    if condition.type not in (None, BOOLEAN):
+        return f'{written!r} must compute a boolean, not a {condition.type}'
+    return None
+
+
+def non_boolean_whens(workflow: ResolvedWorkflow) -> tuple[tuple[ResolvedStep, str], ...]:
+    """Each step of `workflow` at any depth, a call among them, in graph order, whose `when` cannot give `true` or
+    `false`, with why (`boolean_problem`): the one check of a `when` every target shares."""
+    found: list[tuple[ResolvedStep, str]] = []
+    for step in workflow.steps:
+        if step.condition is not None and (problem := boolean_problem(step.condition)) is not None:
+            found.append((step, problem))
+        if isinstance(step.run, ResolvedWorkflow):
+            found.extend(non_boolean_whens(step.run))
+    return tuple(found)
 
 
 @dataclass(frozen=True, slots=True)

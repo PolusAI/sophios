@@ -1,11 +1,16 @@
 """Regression coverage for `sophios.compiler` bugs that have no home elsewhere."""
 import copy
+from dataclasses import replace
 
 import pytest
 
+from sophios.compiler import cwl_notes
+from sophios.ir.resolved import NotLowered
 from sophios.wic_types import StepId, Yaml
 
+from .cases import cases
 from .hermetic import compile_hermetic_cwl, subworkflow_step
+from .nextflow.testkit import compiled_case, lowered_case, refusal_lines
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 
 pytestmark = pytest.mark.package
@@ -91,7 +96,8 @@ def test_an_output_source_names_the_spelling_the_compiler_generated_and_only_tha
     ids=['dot', 'bracket', 'declared', 'minus'])
 def test_a_when_that_reads_an_input_the_step_lacks_is_named_and_still_compiles(
         capsys: pytest.CaptureFixture[str], expression: str, prints: bool) -> None:
-    """CWL evaluates `inputs.nope` as null, so the step never ran and nothing said so."""
+    """`inputs.nope` has no value in a `when`, so the run stopped there or the step never ran, and nothing said
+    so."""
     compiled = compile_hermetic_cwl({'steps': [{**_mk_file(), 'when': expression}]})
     assert compiled['steps'][0]['when'] == expression
     assert ('in `when:`, which its process does not declare' in capsys.readouterr().err) is prints
@@ -108,7 +114,8 @@ def _call_when(expression: str) -> Yaml:
     ('$(inputs["mk_file~name"] != null)', []),
     ('$(inputs.mk_file~name != null)',
      ["Warning! oracle.wic: step 'child.wic' reads inputs.mk_file in `when:`, which its process does not declare; "
-      "CWL evaluates it as null. Write inputs['mk_file~name'] to read one it declares."])], ids=['bracket', 'dotted'])
+      "it has no value there, and cwltool stops the run at a `when:` that gives anything but true or false. "
+      "Write inputs['mk_file~name'] to read one it declares."])], ids=['bracket', 'dotted'])
 def test_a_when_on_a_call_that_reads_a_made_name_dotted_is_told_the_bracket_form(
         capsys: pytest.CaptureFixture[str], expression: str, said: list[str]) -> None:
     """A call declares the names its child exposes, `mk_file~name` among them, and the bracket form reads it, so it
@@ -117,3 +124,18 @@ def test_a_when_on_a_call_that_reads_a_made_name_dotted_is_told_the_bracket_form
     compiled = compile_hermetic_cwl(_call_when(expression))
     assert 'mk_file~name' in compiled['steps'][0]['in']
     assert capsys.readouterr().err.splitlines() == said
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('case', cases('when_boolean.yaml', 'workflow', 'tools', 'job', 'notes', 'refused'))
+def test_a_when_that_cannot_give_a_boolean_is_a_note_on_cwl_and_refused_on_nextflow(case: Yaml) -> None:
+    """Each case of data/when_boolean.yaml, compiled once: the CWL target notes what the shared check finds, at the
+    step, and refuses nothing; the Nextflow target refuses it."""
+    result = compiled_case(case)
+    assert [str(replace(note, span=None)) for note in cwl_notes(result)] == case['notes']
+    try:
+        lowered_case(case)
+        refused = []
+    except NotLowered as error:
+        refused = refusal_lines(error)
+    assert refused == case['refused']

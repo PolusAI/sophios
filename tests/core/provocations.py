@@ -264,6 +264,17 @@ def _provoke_unchecked_cuda_field() -> None:
     raise SophiosError(notes)
 
 
+def _provoke_when_not_boolean() -> None:
+    """A `when` that computes a string, compiled for CWL. A note stops nothing, so it is raised here."""
+    from sophios.compiler import cwl_notes
+
+    from .hermetic import compile_hermetic
+
+    raise SophiosError(cwl_notes(compile_hermetic(
+        {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}, 'when': '$(inputs.name)'}]},
+        'provoke')))
+
+
 #: One edit of the pipeline `import_edited` writes, for each import code: the file, the text replaced (every
 #: occurrence), its replacement, and text on the line the diagnostic names.
 IMPORT_EDITS: Final[dict[SophiosErrorCode, tuple[str, str, str, str]]] = {
@@ -380,5 +391,6 @@ COMPILED: Final[dict[SophiosErrorCode, Callable[[], object]]] = {
     SophiosErrorCode.PROGRAM_MISSING: _provoke_program_missing,
     SophiosErrorCode.IMAGE_UNAVAILABLE: _provoke_image_unavailable,
     SophiosErrorCode.UNCHECKED_CUDA_FIELD: _provoke_unchecked_cuda_field,
+    SophiosErrorCode.WHEN_NOT_BOOLEAN: _provoke_when_not_boolean,
     **{code: partial(_import_edited, code) for code in IMPORT_EDITS},
 }

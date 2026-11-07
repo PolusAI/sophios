@@ -360,7 +360,7 @@ for a document, or for what running it needs from the machine (kind
 `machine`: `wic015`, `wic016`, `wic021`, `wic029`, `wic037`), and `api0NN`
 for the Python API, where the document is fine and the call was not. A code
 is never renumbered, and a code that shipped in a release is never reused;
-`wic040`, `wic041`, `wic042` and `wic056` are unassigned. `wic043` is a note, an
+`wic040`, `wic041` and `wic042` are unassigned. `wic043` is a note, an
 error under `--inference_strict`.
 
 Every member is provoked in `tests/core/provocations.py`, in one of two
