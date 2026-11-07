@@ -20,6 +20,7 @@ from .ir.pipeline import front_end
 from .ir.realtime import extract
 from .ir.resolve import RegistrySnapshot, ToolDefinition
 from .ir.names import NAMESPACE_SEPARATOR, Names
+from .ir.policy import RunPolicy, tolerant_tool
 from .ir.types import RegistryKey, StepNode, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import Locator, SophiosError
@@ -75,8 +76,9 @@ def compile_source(bundle: SourceBundle,
     names = Names.of(graph)
     for note in dict.fromkeys(_when_notes(graph, names)):
         print(note, file=sys.stderr)
-    artifact = _artifact_tree(graph, graph.name, names, _Descriptions(bundle.registry),
-                              partial_failure=compiler_options['partial_failure_enable'])
+    run_policy = RunPolicy(compiler_options['partial_failure_enable'],
+                           compiler_options['partial_failure_success_codes'])
+    artifact = _artifact_tree(graph, graph.name, names, _Descriptions(bundle.registry), policy=run_policy)
     if not testing:
         print('finishing compilation of', bundle.name)
     return CompilationResult(graph, artifact, inferred.diagnostics, realtime)
@@ -171,22 +173,23 @@ def _check_unresolved_names(graph: WorkflowGraph, allow_raw_cwl: bool,
 
 
 def _artifact_tree(graph: WorkflowGraph, name: str, names: Names, descriptions: '_Descriptions', *,
-                   partial_failure: bool) -> CompilationArtifact:
+                   policy: RunPolicy) -> CompilationArtifact:
     """One artifact per emitted document, each surfaced exactly once, a child
-    named as the `run:` its parent emits, so the file written is the one it runs."""
-    document = surface(graph, names, partial_failure=partial_failure)
+    named as the `run:` its parent emits, so the file written is the one it runs,
+    and each written for `policy`."""
+    document = surface(graph, names, policy=policy)
     children: list[CompilationArtifact] = []
     for step in document.steps:
         assert step.run is not None
         child = step.run.child
         if child is not None:
-            children.append(_artifact_tree(child, names.file(step.id), names, descriptions,
-                                           partial_failure=partial_failure))
+            children.append(_artifact_tree(child, names.file(step.id), names, descriptions, policy=policy))
             continue
         tool = descriptions.tool(step)
         # Named by the `run:` the parent emits, so the file written is the one it runs.
         children.append(CompilationArtifact(
-            (names.step(step.id),), names.file(step.id), tool.run_path, descriptions.of(step, tool), {}, None,
+            (names.step(step.id),), names.file(step.id), tool.run_path,
+            tolerant_tool(descriptions.of(step, tool), policy), {}, None,
         ))
 
     return CompilationArtifact(

@@ -183,36 +183,6 @@ def get_tools_cwl(config: Json, validate_plugins: bool = False,
     return tools_cwl
 
 
-def cwl_update_outputs_optional(cwl: Cwl, failure_code_range: list[int],
-                                direct_failure_codes: list[int]) -> Cwl:
-    """Updates outputs as optional (if any)
-
-    Args:
-        cwl (Cwl): A CWL CommandLineTool
-        failure_code_range: A range of (u, l) allowed failure codes range
-        direct_failure_codes: A list of allowed failure codes
-
-    Returns:
-        Cwl: A CWL CommandLineTool with outputs optional (if any)
-    """
-    cwl_mod = copy.deepcopy(cwl)
-    # Update success codes to allow simple failures
-    # default value of cwl_mod['successCodes'] = 0 and 'partial_failure_success_codes' = [0,1]
-    # take the Union of 0 and partial_failure_success_codes, the 'successCodes' might not be set
-    # never discard 0 (actual success)
-    codes_from_range = list(range(failure_code_range[0], failure_code_range[1]))
-    assert failure_code_range[0] <= failure_code_range[1], \
-        f"lower {failure_code_range[0]}  value can't be greater than higher {failure_code_range[1]} value"
-    # sorted, not list(): this list is written into emitted CWL under
-    # --partial_failure_enable, so a set's iteration order would reach the output.
-    cwl_mod['successCodes'] = sorted(set([0] + direct_failure_codes + codes_from_range))
-    # Update outputs optional
-    for out_val_dict in cwl_mod['outputs'].values():
-        if isinstance(out_val_dict['type'], str) and out_val_dict['type'][-1] != '?':
-            out_val_dict['type'] += '?'
-    return cwl_mod
-
-
 Client: TypeAlias = docker.DockerClient | podman.PodmanClient  # type: ignore
 
 
@@ -264,19 +234,6 @@ def remove_entrypoints(client: Client, build: Any) -> None:
                         dockerfile="Dockerfile_tmp",
                         tag=f"{tag}-noentrypoint"
                     )
-
-
-def cwl_update_outputs_optional_artifact(
-        artifact: CompilationArtifact,
-        failure_code_range: list[int],
-        direct_failure_codes: list[int]) -> CompilationArtifact:
-    """Apply partial-failure output rewriting to graph-derived artifacts."""
-    cwl = cwl_update_outputs_optional(
-        artifact.cwl, failure_code_range, direct_failure_codes) \
-        if artifact.cwl.get('class') == 'CommandLineTool' else artifact.cwl
-    children = tuple(cwl_update_outputs_optional_artifact(
-        child, failure_code_range, direct_failure_codes) for child in artifact.children)
-    return replace(artifact, cwl=cwl, children=children)
 
 
 def _docker_requirement(cwl: Cwl, section: str) -> dict[str, Any] | None:

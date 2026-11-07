@@ -20,7 +20,6 @@ import sophios.input_output
 import sophios.run_local
 import sophios.utils
 from sophios.ir import frontdoor
-import sophios.plugins
 from sophios import backends, post_compile, preflight, realtime, run_setup
 from sophios import auto_gen_header
 from sophios.cli import get_args
@@ -258,10 +257,6 @@ def run_workflows(
     since an artifact is named for its workflow and the weekly job runs several steps in one directory."""
     Path(basepath).mkdir(parents=True, exist_ok=True)
     compilation = _compiled_for_run(yml_path, args, registry)
-    if args.partial_failure_enable:
-        compilation = replace(compilation, artifact=sophios.plugins.cwl_update_outputs_optional_artifact(
-            compilation.artifact, args.partial_failure_success_codes_range,
-            args.partial_failure_success_codes))
     backend = backends.backend('cwl', cwl_runner)
     settings = preflight.RunSettings(args.container_engine, args.pull_dir, ignore_install=args.ignore_docker_install,
                                      ignore_processes=args.ignore_docker_processes, runner=cwl_runner)
