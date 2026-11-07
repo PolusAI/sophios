@@ -221,8 +221,37 @@ into the base path; `compile()` prints the notes on stderr in the same words,
 raises `SophiosError` on an error, and keeps the notes in
 `compiled.diagnostics`, as [Edge inference](edge-inference.md) showed.
 
-`--check` goes one layer further: it compiles, then makes every machine
-check a run would make, and writes, pulls and runs nothing:
+`check()` is the Python form of `--check` (below): it asks the same question of
+either target, and only returns the answer:
+
+```python
+from when import workflow
+
+flow = workflow()
+for note in flow.check(target='nextflow'):
+    print(note)
+```
+
+It compiles once, as `compile()` does with the same arguments, then makes
+the target's checks: on CWL, that each `when:` can give `true` or `false`
+(`wic056`); on Nextflow, the whole lowering, in memory, with the values bound
+on the workflow's inputs. Then it makes every check of this machine that
+`run()` makes before it starts, with `run()`'s arguments (`run_args_dict`,
+`basepath`): the input paths, the directories Sophios writes, the programs the
+run calls and the container engine. It returns the notes `compile()` would keep and
+prints nothing, not even the compile's warning lines. It raises what
+`compile()` raises: `SophiosError`, or
+for Nextflow `NotLowered`, whose `refusals` hold every construct the target
+cannot lower at once; and `SophiosError` for what this machine lacks, every
+problem at once, as `--check` exits 1 on them. For `when.py` that is the input `loud`, which has no
+value; bind one with `flow.inputs.loud = True` and the check passes.
+`NotLowered`, `Refusal` and `Construct` are importable from
+`sophios.api.python.nextflow`. `check()` writes no file (what the runner would
+read goes to a temporary directory it removes), pulls no image and runs
+nothing.
+
+`--check` is the same from the command line: it compiles, then makes every
+machine check a run would make, and pulls and runs nothing:
 
 ```bash
 sophios --yaml greeting.wic --check
@@ -234,8 +263,8 @@ Checked greeting: nothing in the way of a local run on this machine. Nothing was
 
 It answers "would this run here?" in one pass, with every problem listed.
 Run it on a new machine before a long run; an agent that writes workflows
-can run it after each one. In Python, `run()` makes the same checks before
-it starts.
+can run it after each one. In Python, `Workflow.check()` makes them, and `run()` makes
+them before it starts.
 
 ## For programs: `--diagnostics json`
 

@@ -14,7 +14,7 @@ from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
 from sophios.lang import CwlRecord, EdgeRef, InputValue, OpaqueCwl, UnresolvedName, nodes
 from sophios.lang.compatibility import TypeRelation, reference_relation
-from sophios.lang.diagnostics import SophiosError
+from sophios.lang.diagnostics import Diagnostic, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.names import check_written_name
 from sophios.lang.spans import SourceSpan
@@ -52,6 +52,7 @@ from ._types import ScatterMethod
 from ._workflow_runtime import (
     RunHandle,
     RunOptions as _RunOptions,
+    check_workflow as _check_workflow,
     coerce_path as _coerce_path,
     compiled_nextflow_workflow as _compiled_nextflow_workflow,
     compiled_workflow as _compiled_workflow,
@@ -1139,6 +1140,12 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             the four files from. Either keeps every note the compile made in
             ``diagnostics`` as ``Diagnostic`` objects. Compiling prints each on
             stderr, as the command line does, and warns with none of them.
+
+        Raises:
+            SophiosError: The workflow does not compile.
+            NotLowered: Under ``target="nextflow"``, what the Nextflow target cannot
+                lower, every refusal at once; a ``ValueError``, importable from
+                ``sophios.api.python.nextflow``.
         """
         if target == "cwl":
             return _compiled_workflow(self, tool_registry=tool_registry, lang_version=lang_version,
@@ -1147,6 +1154,53 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             return _compiled_nextflow_workflow(self, tool_registry=tool_registry, lang_version=lang_version,
                                                inference=inference)
         raise ValueError(f"unsupported compilation target {target!r}")
+
+    def check(
+        self,
+        run_args_dict: dict[str, str] | None = None,
+        basepath: str = DEFAULT_BASEPATH,
+        tool_registry: Tools | None = None,
+        *,
+        workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
+        target: Literal["cwl", "nextflow"] = "cwl",
+        lang_version: str | None = None,
+        inference: Inference = Inference(),
+    ) -> tuple[Diagnostic, ...]:
+        """Check that this workflow compiles and that this machine can run it: the Python form of ``--check``.
+
+        It makes the compile and the checks of this machine that :meth:`run` makes before it starts, with
+        the arguments :meth:`run` takes: the target's own checks (on CWL, that each ``when`` can give ``true``
+        or ``false``, ``wic056``, a note; on Nextflow, the whole lowering); that every File and Directory
+        bound on the workflow exists and can be read; that ``basepath`` and the ``outdir`` can be written; that
+        the programs the run calls are installed (the CWL runner, or Nextflow with a Java it can run);
+        and, when a step uses a container, that the container engine works. What the runner would read
+        goes to a temporary directory, removed when the check ends. It writes nothing else, pulls no image,
+        runs nothing and prints nothing.
+
+        Args:
+            run_args_dict (dict[str, str] | None): As :meth:`run` takes it.
+            basepath (str): As :meth:`run` takes it: the directory the run would write into.
+            tool_registry (Tools | None): As :meth:`compile` takes it.
+            workflow_paths (Mapping[str, Mapping[str, Path]] | None): As :meth:`run` takes it.
+            target (Literal["cwl", "nextflow"]): The target to check for.
+            lang_version (str | None): As :meth:`compile` takes it.
+            inference (Inference): As :meth:`compile` takes it.
+
+        Returns:
+            tuple[Diagnostic, ...]: Every note the compile, the target's checks and, for Nextflow, the
+            lowering made: the ``diagnostics`` :meth:`compile` would return. Nothing is printed, so
+            ``check()`` and then ``run()`` show each note once.
+
+        Raises:
+            SophiosError: The workflow does not compile, or this machine cannot run it: one diagnostic
+                for each problem, all at once, as :meth:`run` raises them and ``--check`` exits 1 on them.
+            ValueError: As :meth:`run` raises it.
+            NotLowered: Under ``target="nextflow"``, as :meth:`compile` raises it.
+        """
+        if target not in ("cwl", "nextflow"):
+            raise ValueError(f"unsupported compilation target {target!r}")
+        return _check_workflow(self, _RunOptions(run_args_dict, None, basepath, tool_registry, workflow_paths,
+                                                 inference, target, lang_version=lang_version))
 
     def draw(  # pylint: disable=too-many-arguments
         self,
