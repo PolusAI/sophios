@@ -110,7 +110,8 @@ COMPUTED = ["$(inputs.a * 2 + 1)", "$(inputs.a > 1)", "$(Math.round(inputs.b))",
 @pytest.mark.fast
 @pytest.mark.parametrize("value_from", COMPUTED)
 def test_a_computed_argument_valuefrom_is_rejected_by_name(value_from: str) -> None:
-    with pytest.raises(ValueError, match=re.escape("run.arguments[0].valueFrom: a computed valueFrom is not supported")):
+    with pytest.raises(ValueError, match=re.escape(
+            "tool 'CALC.cwl: arguments[0].valueFrom': a computed valueFrom is not supported")):
         _calc_workflow([{"prefix": "-n", "valueFrom": value_from}], {"a": 3, "b": 1.5}, a="int", b="float")
 
 
@@ -118,7 +119,8 @@ def test_a_computed_argument_valuefrom_is_rejected_by_name(value_from: str) -> N
 @pytest.mark.parametrize("value_from", COMPUTED)
 def test_a_computed_input_binding_valuefrom_is_rejected_by_name(value_from: str) -> None:
     binding = {"type": "int", "inputBinding": {"position": 1, "valueFrom": value_from}}
-    with pytest.raises(ValueError, match=re.escape("run.inputs.a.inputBinding.valueFrom: a computed valueFrom")):
+    with pytest.raises(ValueError, match=re.escape(
+            "tool 'CALC.cwl: inputs.a.inputBinding.valueFrom': a computed valueFrom")):
         _calc_workflow([], {"a": 3, "b": 1.5}, a=binding, b="float")
 
 

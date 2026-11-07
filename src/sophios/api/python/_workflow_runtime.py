@@ -303,6 +303,9 @@ def workflow_document(workflow: "Workflow") -> Document:
         passthrough=tuple((key, value) for key, value in
                           (("inputs", workflow_inputs), ("outputs", workflow_outputs)) if value),
         span=workflow._span,
+        port_spans=tuple((section, parameter.name, parameter._span)
+                         for section, parameters in (("inputs", workflow._inputs), ("outputs", workflow._outputs))
+                         for parameter in parameters if parameter._span is not None),
     )
 
 

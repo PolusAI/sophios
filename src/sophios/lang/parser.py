@@ -423,6 +423,7 @@ def _document(root: yaml.nodes.MappingNode, file: str, diags: Diagnostics) -> Do
     steps_as_mapping = False
     sidecar: WicSidecar | None = None
     passthrough: list[tuple[str, OpaqueCwl]] = []
+    port_spans: list[tuple[str, str, SourceSpan]] = []
 
     for key, value_node in _unique_entries(root, file, diags, 'top-level key'):
         match key:
@@ -437,6 +438,9 @@ def _document(root: yaml.nodes.MappingNode, file: str, diags: Diagnostics) -> Do
                 passthrough.append((key, version))
             case key if key in Grammar.LISTED_BY:
                 passthrough.append((key, _listed(key, value_node, file, diags)))
+                if key in ('inputs', 'outputs') and isinstance(value_node, yaml.nodes.MappingNode):
+                    port_spans.extend((key, str(name.value), SourceSpan.of(file, name)) for name, _ in value_node.value
+                                      if isinstance(name, yaml.nodes.ScalarNode))
             case _:
                 passthrough.append((key, _opaque(value_node, file, diags)))
 
@@ -446,6 +450,7 @@ def _document(root: yaml.nodes.MappingNode, file: str, diags: Diagnostics) -> Do
         passthrough=tuple(passthrough),
         span=SourceSpan.of(file, root),
         steps_as_mapping=steps_as_mapping,
+        port_spans=tuple(port_spans),
     )
 
 

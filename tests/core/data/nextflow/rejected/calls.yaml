@@ -3,8 +3,8 @@
 # test wrote by hand, copied verbatim, or the pattern it matched.
 - id: a_nested_workflow_steps_input_takes_one_source_as_it_is
   why: The core compiler joins one source to each input a nested workflow step binds.
-  workflow: {steps: [&write {id: write, out: [{result: {wic_anchor: written}}]}, {id: child.wic, subtree: &child {inputs:
-    {source: File}, steps: [{id: copy, in: {source: source}}], outputs: {result: {type: File, outputSource:
+  workflow: {steps: [&write {id: write, out: [{result: {wic_anchor: written}}]}, {id: child.wic, subtree: &child
+    {inputs: {source: File}, steps: [{id: copy, in: {source: source}}], outputs: {result: {type: File, outputSource:
     copy/result}}}, parentargs: {in: {source: {wic_raw_cwl: {source: [{wic_alias: written}, {wic_alias: written}],
     linkMerge: merge_nested, pickValue: first_non_null, default: 1}}}}}]}
   tools: &tools
@@ -14,20 +14,20 @@
      valueFrom: copy.txt}], outputs: {result: {type: File, outputBinding: {glob: copy.txt}}}}
   - {id: write_all, baseCommand: [touch, a.txt], outputs: {result: {type: &files {type: array, items: File},
      outputBinding: {glob: '*.txt'}}}}
-  - {id: copy_all, baseCommand: cp, inputs: {source: {type: *files, inputBinding: {position: 1}}}, arguments: [{position:
-     2, valueFrom: out}], outputs: {result: {type: *files, outputBinding: {glob: 'out/*'}}}}
+  - {id: copy_all, baseCommand: cp, inputs: {source: {type: *files, inputBinding: {position: 1}}}, arguments:
+     [{position: 2, valueFrom: out}], outputs: {result: {type: *files, outputBinding: {glob: 'out/*'}}}}
   - {id: make_long, baseCommand: [echo, '1'], stdout: n.txt, outputs: {n: {type: long, outputBinding: {glob: n.txt,
      loadContents: true, outputEval: '$(self[0].contents)'}}}}
   - {id: take_long, baseCommand: echo, inputs: {n: {type: long, inputBinding: {position: 1}}}}
   findings:
-  - "workflow.steps[1].in.source.default: a nested workflow step's input takes one source as it is; merge on a step
-    inside the nested workflow"
-  - "workflow.steps[1].in.source.linkMerge: a nested workflow step's input takes one source as it is; merge on a step
-    inside the nested workflow"
-  - "workflow.steps[1].in.source.pickValue: a nested workflow step's input takes one source as it is; merge on a step
-    inside the nested workflow"
-  - "workflow.steps[1].in.source.source: a nested workflow step's input takes one source as it is; merge on a step
-    inside the nested workflow"
+  - 'step ''child'': input ''source'': default: a nested workflow step''s input takes one source as it is; merge on a
+    step inside the nested workflow'
+  - 'step ''child'': input ''source'': linkMerge: a nested workflow step''s input takes one source as it is; merge on a
+    step inside the nested workflow'
+  - 'step ''child'': input ''source'': pickValue: a nested workflow step''s input takes one source as it is; merge on a
+    step inside the nested workflow'
+  - 'step ''child'': input ''source'': source: a nested workflow step''s input takes one source as it is; merge on a
+    step inside the nested workflow'
 - id: unconsumed_nested_workflow_port_fields
   why: &ports A nested workflow's ports are judged as the root workflow's are, so a field cannot disappear in inlining.
   workflow: {steps: [{id: write_all, out: [{result: {wic_anchor: written}}]}, {id: child.wic, subtree: {inputs: {source:
@@ -35,8 +35,9 @@
     {result: {type: {<<: *files, name: outputs}, outputSource: copy_all/result}}}, parentargs: &bound {in: {source:
     {wic_alias: written}}}}]}
   tools: *tools
-  findings: {contains: [{re: secondaryFiles are not supported}, {re: '\.run\.inputs\.\w+\.type\.name: an array schema''s
-    name'}, {re: '\.run\.outputs\.\w+\.type\.name: an array schema''s name'}]}
+  findings: {contains: [{re: secondaryFiles are not supported}, {re: 'step ''child'': workflow input ''\w+'':
+    type\.name: an array schema''s name'}, {re: 'step ''child'': workflow output ''\w+'': type\.name: an array schema''s
+    name'}]}
 - id: unconsumed_workflow_call_input_semantics
   why: A call's binding is joined to the nested workflow's input as it is.
   workflow: {steps: [*write, {id: child.wic, subtree: *child, parentargs: {in: {source: {wic_raw_cwl: {source:
@@ -71,40 +72,39 @@
   why: *requirements
   workflow: {steps: [*write, {id: child.wic, subtree: *hinted, parentargs: *bound}]}
   tools: *tools
-  findings: {contains: [{re: '\.run\.hints: workflow hints are not supported'}]}
+  findings: {contains: [{re: 'step ''child'': requirement: workflow hints are not supported'}]}
 - id: a_nested_workflow_input_default_before_projection
   why: Inlining replaces a nested workflow's input with the call's binding, where CWL would apply the default to a null.
   workflow: {steps: [*write, {id: child.wic, subtree: {<<: *child, inputs: {source: {type: File, default:
     fallback.txt}}}, parentargs: *bound}]}
   tools: *tools
-  findings: {contains: [{re: '\.run\.inputs\.\w+\.default: a nested workflow input''s default'}]}
+  findings: {contains: [{re: 'step ''child'': workflow input ''\w+'': default: a nested workflow input''s default'}]}
 - id: long_on_a_nested_workflow_port_is_rejected_naming_the_type-inputs
   why: *ports
   workflow: {steps: [{id: make_long, out: [{n: {wic_anchor: written}}]}, {id: child.wic, subtree: {inputs: {source:
     long}, steps: [{id: take_long, in: {n: source}}]}, parentargs: *bound}]}
   tools: *tools
-  findings: {contains: [{re: '\.run\.inputs\.source\.type: long is not supported'}]}
+  findings: {contains: [{re: 'step ''child'': workflow input ''source'': type: long is not supported'}]}
 - id: long_on_a_nested_workflow_port_is_rejected_naming_the_type-outputs
   why: *ports
   workflow: {steps: [{id: child.wic, subtree: {steps: [{id: make_long}], outputs: {result: {type: long, outputSource:
     make_long/n}}}}]}
   tools: *tools
-  findings: {contains: [{re: '\.run\.outputs\.result\.type: long is not supported'}]}
+  findings: {contains: [{re: 'step ''child'': workflow output ''result'': type: long is not supported'}]}
 - id: a_root_output_relaying_a_nested_input_nothing_binds
   why: An output with no source would be dropped without a word, so its input is refused at the call.
   workflow: {steps: [{id: child.wic, subtree: &relay {inputs: {extra: 'File?'}, steps: [*write], outputs: {passed:
     {type: 'File?', outputSource: extra}}}}], outputs: {passed: {type: 'File?', outputSource: child.wic/passed}}}
   tools: *tools
   findings:
-  - "workflow.steps[0].in.extra: a workflow output relays it, but nothing binds it and it has no default"
+  - &unbound "step 'child': input 'extra': a workflow output relays it, but nothing binds it and it has no default"
 - id: a_relayed_nested_input_nothing_binds_is_refused_once_through_two_calls
   why: The input is refused at the call that leaves it unbound, however many calls surround it.
   workflow: {steps: [{id: mid.wic, subtree: {steps: [{id: child.wic, subtree: *relay}], outputs: {passed: {type:
     'File?', outputSource: child.wic/passed}}}}], outputs: {passed: {type: 'File?', outputSource: mid.wic/passed}}}
   tools: *tools
   findings:
-  - "workflow.steps[0].run.steps[0].in.extra: a workflow output relays it, but nothing binds it and it has no
-    default"
+  - "step 'mid~child': input 'extra': a workflow output relays it, but nothing binds it and it has no default"
 - id: a_relayed_input_bound_to_an_input_nothing_binds_names_that_input
   why: The call binds the input, but to an input the caller leaves unbound, so that is what is refused, once.
   workflow: {steps: [{id: mid.wic, subtree: {inputs: {x: 'File?'}, steps: [{id: child.wic, subtree: *relay,
@@ -112,7 +112,7 @@
     {passed: {type: 'File?', outputSource: mid.wic/passed}}}
   tools: *tools
   findings:
-  - "workflow.steps[0].in.x: a workflow output relays it, but nothing binds it and it has no default"
+  - "step 'mid': input 'x': a workflow output relays it, but nothing binds it and it has no default"
 - id: a_relayed_input_bound_to_another_calls_output_is_refused_at_the_unbound_input
   why: The chain runs through a step output and a second call, and the root output is the only thing that keeps it.
   workflow: {steps: [{id: child.wic, subtree: *relay, parentargs: {out: [{passed: {wic_anchor: passed}}]}}, {id:
@@ -120,4 +120,4 @@
     {in: {extra: {wic_alias: passed}}}}], outputs: {final: {type: 'File?', outputSource: fwd.wic/passed}}}
   tools: *tools
   findings:
-  - "workflow.steps[0].in.extra: a workflow output relays it, but nothing binds it and it has no default"
+  - *unbound

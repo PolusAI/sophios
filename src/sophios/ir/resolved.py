@@ -15,6 +15,7 @@ name in the view is the name the CWL target writes.
 """
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import NamedTuple, TypeAlias
 
 from ..lang.nodes import OpaqueCwl
@@ -229,14 +230,15 @@ def _workflow(graph: WorkflowGraph, names: Names, tools: Mapping[StepId, Resolve
               everything: Mapping[StepId, StepNode]) -> ResolvedWorkflow:
     order = written_order(graph)
     inputs = tuple(WorkflowInput(names.port(port.name), port.declaration,
-                                 made_from=_made_from(port.name, names), span=graph.span)
+                                 made_from=_made_from(port.name, names), span=port.span or graph.span)
                    for port in sorted(graph.workflow_inputs, key=lambda port: order(port.name)))
     level = _Level(names, tools, policy, everything, {port.name: port.declaration.type.canonical for port in inputs})
     ins = step_inputs(graph)
     steps = tuple(_step(step, ins[step.id], level) for step in graph.steps)
     mapped = dict(graph.output_mapping)
     outputs = tuple(WorkflowOutput(names.port(port.name), port.declaration,
-                                   _output_source(graph, port, mapped.get(port.name), level.inputs, names), graph.span)
+                                   _output_source(graph, port, mapped.get(port.name), level.inputs, names),
+                                   port.span or graph.span)
                     for port in graph.workflow_outputs)
     requirements, fields = _requirements(graph.passthrough, graph.requirements)
     documents: tuple[tuple[str, OpaqueCwl], ...] = (('$namespaces', dict(graph.namespaces)),) \
@@ -525,3 +527,56 @@ def _plain(port: StepInput) -> bool:
     """Whether a call's binding passes its one source as it is: no merge, pick, default or computed value."""
     return (len(port.sources) == 1 and port.expression is None and port.link_merge is None
             and port.pick_value is None and not port.has_default and port.value_from is None)
+
+
+class Construct(StrEnum):
+    """What a target refuses: the construct of the view a refusal is about."""
+
+    WORKFLOW = 'workflow'
+    WORKFLOW_INPUT = 'workflow input'
+    WORKFLOW_OUTPUT = 'workflow output'
+    STEP = 'step'
+    STEP_INPUT = 'input'
+    WHEN = 'when'
+    SCATTER = 'scatter'
+    CALL = 'call'
+    REQUIREMENT = 'requirement'
+    TOOL = 'tool'
+    POLICY = 'policy'
+
+
+@dataclass(frozen=True, slots=True)
+class Refusal:  # pylint: disable=too-many-instance-attributes
+    """One construct a target cannot lower, where its author wrote it.
+
+    It prints as `<span>: <owner>: <construct>[ '<subject>']: <reason>`, the span left out when there is none, and
+    the owner the step, or the workflow for a construct of the workflow's own.
+    """
+
+    construct: Construct
+    #: The construct's name: an input or output, a requirement class, a policy, or for a tool the tool's file and the
+    #: field's path in it, `echo.cwl: inputs.message.inputBinding`.
+    subject: str | None
+    #: The root workflow's name.
+    workflow: str
+    #: The qualified name of the step it is about; `None` for a construct of the workflow's own.
+    step: str | None
+    span: SourceSpan | None
+    reason: str
+
+    def __str__(self) -> str:
+        where = f'{self.span}: ' if self.span is not None else ''
+        owner = f'step {self.step!r}' if self.step is not None else f'workflow {self.workflow!r}'
+        subject = f' {self.subject!r}' if self.subject is not None else ''
+        return f'{where}{owner}: {self.construct}{subject}: {self.reason}'
+
+
+class NotLowered(ValueError):
+    """What a target refuses to lower: every refusal, all at once.
+
+    It prints as `<target> capability analysis failed:`, then one `- <refusal>` line per refusal.
+    """
+
+    def __init__(self, target: str, refusals: tuple[Refusal, ...]) -> None:
+        super().__init__('\n'.join([f'{target} capability analysis failed:', *(f'- {found}' for found in refusals)]))
+        self.refusals = refusals

@@ -119,12 +119,14 @@ def _lower_resolved(document: ResolvedDocument,
                 diagnostics._append(diagnostic)  # pylint: disable=protected-access
 
     passthrough = dict(document.source.passthrough)
+    spans = {side: {name: span for section, name, span in document.source.port_spans if section == side}
+             for side in ('inputs', 'outputs')}
     workflow_inputs = _workflow_ports(passthrough.get('inputs', {}), output=False,
                                       diagnostics=diagnostics, document_span=document.source.span,
-                                      directory=document.directory)
+                                      directory=document.directory, spans=spans['inputs'])
     workflow_outputs = _workflow_ports(passthrough.get('outputs', {}), output=True,
                                        diagnostics=diagnostics, document_span=document.source.span,
-                                       directory=document.directory)
+                                       directory=document.directory, spans=spans['outputs'])
     workflow_input_names = {port.name for port in workflow_inputs}
     input_mapping = tuple(
         (name, tuple(binding.sink for node in nodes for binding in node.bindings
@@ -328,8 +330,9 @@ def _with_defaults_resolved(value: InputValue, directory: Path | None) -> InputV
                                        for key, field in value.fields))
 
 
-def _workflow_ports(raw: object, *, output: bool, diagnostics: Diagnostics,
-                    document_span: SourceSpan | None, directory: Path | None) -> tuple[WorkflowPort, ...]:
+# pylint: disable-next=too-many-arguments
+def _workflow_ports(raw: object, *, output: bool, diagnostics: Diagnostics, document_span: SourceSpan | None,
+                    directory: Path | None, spans: Mapping[str, SourceSpan]) -> tuple[WorkflowPort, ...]:
     if not isinstance(raw, dict):
         return ()
     ports: list[WorkflowPort] = []
@@ -353,7 +356,8 @@ def _workflow_ports(raw: object, *, output: bool, diagnostics: Diagnostics,
         has_source = output and isinstance(declaration_raw, dict) \
             and 'outputSource' in declaration_raw
         source = declaration_raw.get('outputSource') if has_source else None
-        ports.append(WorkflowPort(AuthoredName(str(name)), declaration, source, has_source))
+        ports.append(WorkflowPort(AuthoredName(str(name)), declaration, source, has_source,
+                                  span=spans.get(str(name))))
     return tuple(ports)
 
 

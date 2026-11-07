@@ -29,14 +29,15 @@ from sophios.input_output_nf import render_nextflow
 from sophios.ir.artifacts import CompilationResult
 from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.resolve import RegistrySnapshot
+from sophios.ir.resolved import NotLowered
 from sophios.lang import Diagnostics, EdgeDef, EdgeRef, OutputBinding, ParseResult
 from sophios.nf_types import NfProcessConnection, NfWorkflowInputConnection
 from sophios.utils_nf import NEXTFLOW
 from sophios.wic_types import Yaml
 
 from ..cases import cases, match
-from ..helpers import adapter_step
-from .testkit import lowered, lowered_case
+from ..helpers import ADAPTERS, adapter_step
+from .testkit import lowered, lowered_case, refusal_lines
 
 
 @pytest.mark.fast
@@ -74,12 +75,10 @@ def test_rejects_compiledworkflow_substitution() -> None:
 
 
 def _findings(source: CompilationResult) -> list[str]:
-    """Return the exact aggregated finding lines of one rejected conversion."""
-    with pytest.raises(ValueError) as error:
+    """The refusals of one rejected lowering, as they print, less their spans."""
+    with pytest.raises(NotLowered) as error:
         lowered(source)
-    header, *lines = str(error.value).splitlines()
-    assert header == "Nextflow capability analysis failed:"
-    return [line.removeprefix("- ") for line in lines]
+    return refusal_lines(error.value)
 
 
 def _copy_tool(name: str = "copy.txt") -> CommandLineTool:
@@ -253,9 +252,25 @@ def test_a_scatter_over_an_input_its_tool_does_not_declare_is_rejected_by_name()
         echo.inputs.enabled = StepInput(source=flow.inputs.loud.as_type("boolean[]"))
         echo.scatter_on(echo.inputs.enabled)
 
-    assert [line for line in _findings(_echo_with(scattered)) if line.startswith("steps[0].in.")] == [
-        "steps[0].in.enabled: scatter over an input the step's tool does not declare is not supported"
+    assert _findings(_echo_with(scattered)) == [
+        "step 'echo': input 'enabled': scatter over an input the step's tool does not declare is not supported",
+        "workflow 'flow': workflow input 'loud': required workflow input value is missing",
     ]
+
+
+@pytest.mark.fast
+def test_a_refused_input_made_from_a_written_value_is_refused_where_the_value_was_written() -> None:
+    """A workflow input the compiler made from a value has no line of its own: the step owns its refusal, at the line
+    the value was written."""
+    pick = Step(clt_path=ADAPTERS / "array_indices.cwl", step_name="pick")
+    pick.inputs.input_indices = [0]
+    pick.inputs.input_array = ["a", "b"]
+    written = Path(__file__).read_text(encoding="utf-8").splitlines().index(
+        '    pick.inputs.input_array = ["a", "b"]') + 1
+    with pytest.raises(NotLowered) as raised:
+        lowered(compile_workflow_result(Workflow([pick], "flow")))
+    assert f"{__file__}:{written}:1: step 'pick': workflow input 'pick~input_array': supplied value does not match " \
+        "its supported CWL type" in [str(refusal) for refusal in raised.value.refusals]
 
 
 @pytest.mark.fast
@@ -319,18 +334,20 @@ def _fed_by_a_step_output() -> CompilationResult:
 
 
 def _only(finding: str) -> list[str]:
-    """The pattern of a refusal whose one finding is `finding`."""
-    return [r"\A" + re.escape("Nextflow capability analysis failed:\n- " + finding) + r"\Z"]
+    """The pattern of a refusal whose one finding is `finding`, at a line of this file, where the step was built."""
+    return [r"\A" + re.escape("Nextflow capability analysis failed:\n- ") + re.escape(__file__) + r":\d+:1: "
+            + re.escape(finding) + r"\Z"]
 
 
 #: Each compilation the target cannot lower, built through the Python API when its row runs, and the patterns its
 #: refusal matches, one per cause.
 API_REFUSALS: dict[str, tuple[Callable[[], CompilationResult], list[str]]] = {
     "a_when_that_reads_an_input_its_tool_does_not_declare": (partial(_echo_with, _read_by_when), _only(
-        "steps[0].in.enabled: the step's when reads an input its tool does not declare, which is not supported")),
+        "step 'echo': input 'enabled': the step's when reads an input its tool does not declare, which is not "
+        "supported")),
     "an_input_its_tool_does_not_declare_fed_by_a_step_output": (_fed_by_a_step_output, _only(
-        "steps[1].in.after: an input the step's tool does not declare is not supported from a step output: CWL runs "
-        "this step only after that step finishes, and the Nextflow target would not wait for it")),
+        "step 'second': input 'after': an input the step's tool does not declare is not supported from a step "
+        "output: CWL runs this step only after that step finishes, and the Nextflow target would not wait for it")),
 }
 
 
@@ -347,15 +364,15 @@ def test_a_compilation_the_target_cannot_lower_is_refused_naming_each_cause(
 @pytest.mark.parametrize("case", cases(
     "nextflow/rejected", "tool", "out", "job", "workflow", "tools", "error", "findings"))
 def test_a_rejected_source_is_refused_as_its_case_says(case: Yaml) -> None:
-    """A case's source, its documents left as they were, is refused with exactly its `findings` after the
-    aggregated header, or with an `error` that is no aggregate (tests/core/cases.py reads both)."""
+    """A case's source, its documents left as they were, is refused with exactly its `findings`, or with refusals
+    whose lines `error` matches (tests/core/cases.py reads both). A refusal is read without its span: a case's
+    document is written out by `hermetic.bundle`, which decides its lines."""
     documents = copy.deepcopy(case)
-    with pytest.raises(ValueError) as raised:
+    with pytest.raises(NotLowered) as raised:
         lowered_case(case)
     assert case == documents
+    lines = refusal_lines(raised.value)
     if "error" in case:
-        assert match(case["error"], str(raised.value)), str(raised.value)
+        assert match(case["error"], "\n".join(lines)), lines
     else:
-        header, *lines = str(raised.value).splitlines()
-        assert header == "Nextflow capability analysis failed:"
-        assert match(case["findings"], [line.removeprefix("- ") for line in lines]), lines
+        assert match(case["findings"], lines), lines

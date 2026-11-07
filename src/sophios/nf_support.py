@@ -294,6 +294,36 @@ REQUIREMENT_CLASSES: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
 })
 
 
+_TOOL_PARTS = ('CommandLineTool', 'CommandInputParameter', 'CommandInputArraySchema', 'CommandLineBinding',
+               'CommandOutputParameter', 'CommandOutputBinding', 'Dirent', 'EnvironmentDef')
+_REQUIREMENT_TABLES = tuple(sorted(name for classes in REQUIREMENT_CLASSES.values() for name in classes
+                                   if name in FIELDS))
+
+#: Each construct a refusal names (`sophios.ir.resolved.Construct`, by its value) and the rows of `FIELDS` it
+#: stands for: `(class, field)`, or `(class, None)` for every field of the class. A refusal of a field names the
+#: construct the field's row stands under, at the most specific row; a requirement class's fields are a workflow's
+#: or a step's `requirement`, and a tool's `tool`. `policy` stands for no CWL field: it is a compile option.
+CONSTRUCTS: Final[Mapping[str, tuple[tuple[str, str | None], ...]]] = MappingProxyType({
+    'workflow': (('Workflow', None),),
+    'workflow input': (('WorkflowInputParameter', None), ('InputArraySchema', None)),
+    'workflow output': (('WorkflowOutputParameter', None), ('OutputArraySchema', None)),
+    'step': tuple(('WorkflowStep', name) for name in ('doc', 'id', 'in', 'label', 'out')),
+    'input': (('WorkflowStepInput', None),),
+    'when': (('WorkflowStep', 'when'),),
+    'scatter': (('WorkflowStep', 'scatter'), ('WorkflowStep', 'scatterMethod')),
+    'call': (('WorkflowStep', 'run'),),
+    'requirement': (('Workflow', 'requirements'), ('Workflow', 'hints'), ('WorkflowStep', 'requirements'),
+                    ('WorkflowStep', 'hints'), *((name, None) for name in _REQUIREMENT_TABLES)),
+    'tool': (*((name, None) for name in _TOOL_PARTS), *((name, None) for name in _REQUIREMENT_TABLES)),
+    'policy': (),
+})
+
+
+def constructs_of(cwl_class: str) -> tuple[str, ...]:
+    """The constructs a refusal of a field of `cwl_class` may name, in the order `CONSTRUCTS` lists them."""
+    return tuple(construct for construct, rows in CONSTRUCTS.items() if any(name == cwl_class for name, _ in rows))
+
+
 def consumed(rows: Mapping[str, Row]) -> frozenset[str]:
     """The names a row lowers or uses at compile time: every one but the rejected."""
     return frozenset(name for name, row in rows.items() if row.state is not State.REJECTED)

@@ -310,3 +310,6 @@ class Document:
     span: SourceSpan | None = surface(Shape.INTERNAL, default=None)
     #: True when `steps:` was written as a mapping rather than a sequence.
     steps_as_mapping: bool = surface(Shape.INTERNAL, default=False)
+    #: Where each entry of `inputs:` and `outputs:` written as a mapping was written: (`inputs` or `outputs`,
+    #: its name, its span).
+    port_spans: tuple[tuple[str, str, SourceSpan], ...] = surface(Shape.INTERNAL, default=())

@@ -84,7 +84,8 @@ def test_admitted_when_cells_lower_to_a_process_condition(when: str, inputs: dic
 @pytest.mark.fast
 @pytest.mark.parametrize("when", ["$(true)", "$(false)"])
 def test_a_conditional_step_with_no_inputs_is_rejected_at_lowering(when: str) -> None:
-    with pytest.raises(ValueError, match=r"steps\[0\]\.when: a conditional step needs at least one input to gate on"):
+    with pytest.raises(ValueError, match="step 'PRODUCE': when: a conditional step needs at least one input to "
+                                         "gate on"):
         _when_workflow(when, {})
 
 

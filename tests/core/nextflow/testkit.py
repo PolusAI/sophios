@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 import copy
+from dataclasses import replace
 import os
 import subprocess
 from pathlib import Path
@@ -11,6 +12,7 @@ from sophios.cli import default_compilation_settings
 from sophios.compiler import compile_source, resolved_view
 from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.ir.artifacts import CompilationResult
+from sophios.ir.resolved import NotLowered
 from sophios.lang.diagnostics import Diagnostic
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
@@ -143,6 +145,11 @@ def lowered_case(data: Yaml) -> tuple[ExecutableNextflowWorkflow, tuple[Diagnost
     document, _tools = _case_document(data)
     return NEXTFLOW.lower(resolved_view(compiled_case(data), values=data.get("job", {}),
                                         outputs=list(document.get("outputs", {}))))
+
+
+def refusal_lines(refused: NotLowered) -> list[str]:
+    """Each refusal as it prints, less its span, which the line the document is written at decides."""
+    return [str(replace(refusal, span=None)) for refusal in refused.refusals]
 
 
 def runtime_workflow() -> ExecutableNextflowWorkflow:

@@ -5,6 +5,7 @@ import copy
 from dataclasses import dataclass
 import math
 from os import PathLike
+from pathlib import Path
 import posixpath
 import re
 from types import MappingProxyType
@@ -14,8 +15,9 @@ from .ir.artifacts import CompilationArtifact, CompilationResult
 from .ir.complete import coerce_job_value
 from .ir.names import Names
 from .ir.resolved import (
-    Crossing, InputRef, OutputRef, Requirement, ResolvedStep, ResolvedTool, ResolvedWorkflow, StepInput, Through,
-    ToolStep, WorkflowOutput, output_sources, output_unbound, tool_steps,
+    Construct, Crossing, InputRef, NotLowered, OutputRef, Refusal, Requirement, ResolvedStep, ResolvedTool,
+    ResolvedWorkflow, StepInput, Through, ToolStep, WorkflowInput, WorkflowOutput, output_sources, output_unbound,
+    tool_steps,
 )
 from .ir.types import (
     AuthoredName, Direction, Edge, PortDeclaration, PortId, PortType, SourceList, StepNode, WorkflowGraph,
@@ -1152,13 +1154,14 @@ def _output_capture(raw_name: Any, definition: Mapping[str, Any]) -> str | None:
                 f"outputEval {text!r} captures file text and requires loadContents: true "
                 "beside it"
             )
-        if _required_type(declared_type) in _NUMERIC_TEXT_CAPTURE_TYPES:
+        required = _required_type(declared_type)
+        if isinstance(required, str) and required in _NUMERIC_TEXT_CAPTURE_TYPES:
             raise ValueError(
                 f"outputEval {text!r} captures file text, and parsing that text into a "
                 f"number is computation rather than a projection; output {raw_name!r} "
                 f"declares {declared_type!r}. Declare type: string and parse downstream"
             )
-        if _required_type(declared_type) != _TEXT_CAPTURE_TYPE:
+        if required != _TEXT_CAPTURE_TYPE:
             raise ValueError(
                 f"outputEval {text!r} captures file text and is admitted only on a "
                 f"type: string output; output {raw_name!r} declares {declared_type!r}"
@@ -2325,7 +2328,7 @@ def _scatter_findings(workflow: ResolvedWorkflow, steps: tuple[_Step, ...]) -> l
         for raw_name in names:
             definition = tool_inputs.get(raw_name)
             if not isinstance(definition, Mapping):
-                findings.append(f"{step.path}.scatter: scattered input {raw_name!r} is not declared by the step's tool")
+                # The undeclared-input pass refuses a scatter over an input the tool does not declare.
                 continue
             if _is_array_type(_required_type(definition.get("type"))):
                 findings.append(
@@ -2820,14 +2823,8 @@ def _staged_name_findings(steps: tuple[_Step, ...]) -> list[str]:
     return findings
 
 
-def _capability_error(findings: list[str]) -> ValueError:
-    details = "\n".join(f"- {finding}" for finding in findings)
-    return ValueError(f"Nextflow capability analysis failed:\n{details}")
-
-
-def _raise_capability_findings(findings: list[str]) -> None:
-    if findings:
-        raise _capability_error(findings)
+class _WhenError(ValueError):
+    """A step's `when` the target cannot lower."""
 
 
 def _condition_value(step: _Step) -> Expr:
@@ -2839,7 +2836,7 @@ def _condition_value(step: _Step) -> Expr:
     assert condition is not None
     when = condition.written
     if not isinstance(when, str) or not is_safe_subset_text(when):
-        raise ValueError(f"step when {when!r} must be a safe JavaScript subset $( … ) expression")
+        raise _WhenError(f"{when!r} must be a safe JavaScript subset $( … ) expression")
     inputs = _as_mapping(step.tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
     bound = {port.name for port, _sources in step.bound()}
     input_types = {
@@ -2848,16 +2845,16 @@ def _condition_value(step: _Step) -> Expr:
         if str(raw_name) in bound
     }
     if condition.expr is None:
-        raise ValueError(f"step when {when!r} is outside the safe JavaScript subset: {condition.problem}")
+        raise _WhenError(f"{when!r} is outside the safe JavaScript subset: {condition.problem}")
     if unbound := sorted(references(condition.expr) - input_types.keys()):
         names = ", ".join(f"inputs.{name}" for name in unbound)
-        raise ValueError(f"step when {when!r} reads {names}, which the step does not bind")
+        raise _WhenError(f"{when!r} reads {names}, which the step does not bind")
     try:
         result = check_safe_subset(condition.expr, input_types)
     except ValueError as exc:
-        raise ValueError(f"step when {when!r} is outside the safe JavaScript subset: {exc}") from exc
+        raise _WhenError(f"{when!r} is outside the safe JavaScript subset: {exc}") from exc
     if result != "boolean":
-        raise ValueError(f"step when {when!r} must compute a boolean, not a {result}")
+        raise _WhenError(f"{when!r} must compute a boolean, not a {result}")
     return condition.expr
 
 
@@ -3105,6 +3102,96 @@ class _Lowering:
                    tuple(dict.fromkeys(pair for pairs in output_unbound(view) for pair in pairs)))
 
 
+_PATH_FIELD = re.compile(r"\.(?P<field>[^.\[]+)(?P<rest>.*)")
+_INDEX = re.compile(r"\.?steps\[(?P<index>\d+)\](?P<rest>.*)")
+
+
+def _with_field(rest: str, reason: str) -> str:
+    """`reason`, after the field the rest of a locator names, unless the reason names it first."""
+    field = rest.removeprefix(".")
+    return reason if not field or reason.startswith(field.rsplit(".", maxsplit=1)[-1]) else f"{field}: {reason}"
+
+
+def _tool_file(step: ResolvedStep) -> str:
+    """The file a step's tool was read from, as a refusal names it."""
+    return Path(step.run.path).name if isinstance(step.run, ResolvedTool) else step.name
+
+
+def _step_named(workflow: ResolvedWorkflow, name: str) -> ResolvedStep | None:
+    """The step of `workflow`, at any depth, whose qualified name is `name`."""
+    for step in workflow.steps:
+        if step.name == name:
+            return step
+        if isinstance(step.run, ResolvedWorkflow) and (inner := _step_named(step.run, name)) is not None:
+            return inner
+    return None
+
+
+def _workflow_refusal(workflow: ResolvedWorkflow, rest: str, reason: str, *, root: str,
+                      owner: ResolvedStep | None) -> Refusal:
+    """A refusal of a construct of `workflow`, the root or the workflow `owner` calls, at the locator `rest`."""
+    step = owner.name if owner is not None else None
+    found = _PATH_FIELD.fullmatch(rest)
+    field, after = (found["field"], found["rest"]) if found else ("", "")
+    if field in ("inputs", "outputs"):
+        construct = Construct.WORKFLOW_INPUT if field == "inputs" else Construct.WORKFLOW_OUTPUT
+        named = _PATH_FIELD.fullmatch(after)
+        if named is None:
+            return Refusal(construct, None, root, step, workflow.span, reason)
+        port = next((port for port in (workflow.inputs if field == "inputs" else workflow.outputs)
+                     if port.name == named["field"]), None)
+        made = port.made_from if isinstance(port, WorkflowInput) else None
+        if made is not None and (maker := _step_named(workflow, made[0])) is not None:
+            # A made input has no line of its own: its value was written on the step input it was made from.
+            written = next((each.span for each in maker.inputs if each.name == made[1]), None)
+            return Refusal(construct, named["field"], root, maker.name, written or maker.span,
+                           _with_field(named["rest"], reason))
+        return Refusal(construct, named["field"], root, step, (port.span if port is not None else None)
+                       or workflow.span, _with_field(named["rest"], reason))
+    if field in ("requirements", "hints"):
+        named = _PATH_FIELD.fullmatch(after)
+        return Refusal(Construct.REQUIREMENT, named["field"] if named else None, root, step, workflow.span,
+                       _with_field(named["rest"] if named else "", reason))
+    if field == "steps":
+        return Refusal(Construct.STEP, None, root, step, workflow.span, reason)
+    return Refusal(Construct.WORKFLOW, None, root, step, workflow.span, _with_field(rest, reason))
+
+
+# pylint: disable-next=too-many-return-statements
+def _step_refusal(node: ResolvedStep, rest: str, reason: str, *, root: str) -> Refusal:
+    """A refusal of `node` or a construct of it, at the locator `rest`."""
+    if isinstance(node.run, ResolvedWorkflow) and rest.startswith(".run"):
+        return _within(node.run, rest.removeprefix(".run"), reason, root=root, owner=node)
+    found = _PATH_FIELD.fullmatch(rest)
+    field, after = (found["field"], found["rest"]) if found else ("", "")
+    own = Construct.CALL if isinstance(node.run, ResolvedWorkflow) else Construct.STEP
+    match field:
+        case "when":
+            return Refusal(Construct.WHEN, None, root, node.name, node.span, _with_field(after, reason))
+        case "scatter" | "scatterMethod":
+            return Refusal(Construct.SCATTER, None, root, node.name, node.span, reason)
+        case "in":
+            named = _PATH_FIELD.fullmatch(after)
+            port = next((port for port in node.inputs if named and port.name == named["field"]), None)
+            return Refusal(Construct.STEP_INPUT, named["field"] if named else None, root, node.name,
+                           port.span or node.span if port is not None else node.span,
+                           _with_field(named["rest"] if named else "", reason))
+        case "run":
+            field_path = after.removeprefix(".")
+            subject = f"{_tool_file(node)}: {field_path}" if field_path else _tool_file(node)
+            return Refusal(Construct.TOOL, subject, root, node.name, node.span, reason)
+        case "requirements" | "hints":
+            return Refusal(Construct.REQUIREMENT, None, root, node.name, node.span, _with_field(after, reason))
+    return Refusal(own, None, root, node.name, node.span, _with_field(rest, reason))
+
+
+def _within(workflow: ResolvedWorkflow, rest: str, reason: str, *, root: str, owner: ResolvedStep | None) -> Refusal:
+    """A refusal at the locator `rest` within `workflow`: one of its steps', or its own."""
+    if (found := _INDEX.fullmatch(rest)) is not None:
+        return _step_refusal(workflow.steps[int(found["index"])], found["rest"], reason, root=root)
+    return _workflow_refusal(workflow, rest, reason, root=root, owner=owner)
+
+
 def _call_locator(workflow: ResolvedWorkflow, name: str, path: str = "workflow") -> str | None:
     """The locator of the call of `workflow`, at any depth, whose qualified name is `name`."""
     for index, step in enumerate(workflow.steps):
@@ -3126,8 +3213,64 @@ def _unbound_output_findings(lowering: _Lowering) -> list[str]:
     return [f"{_call_locator(lowering.view, call)}.in.{name}: {reason}" for call, name in lowering.unbound]
 
 
+def _refusal(finding: str, lowering: _Lowering) -> Refusal:
+    """A finding, which names what it refuses by its locator, as the refusal of that construct.
+
+    A locator is the construct's path in the view: `steps[i]` the i-th tool step, at any depth, as the lowering
+    numbers them; `workflow.steps[i]` the i-th step of a workflow, `.run` a call's workflow; then the construct's
+    fields. A refusal names the step and construct, by the names their author wrote, at the author's line.
+    """
+    locator, reason = finding.split(": ", maxsplit=1)
+    root = lowering.view.name
+    if (found := _INDEX.fullmatch(locator)) is not None:
+        return _step_refusal(lowering.steps[int(found["index"])].node, found["rest"], reason, root=root)
+    return _within(lowering.view, locator.removeprefix("workflow"), reason, root=root, owner=None)
+
+
+@dataclass(frozen=True, slots=True)
+class _Analysis:
+    """What the analysis of a view found: every refusal, the processes it lowered, and the notes it made."""
+
+    refusals: tuple[Refusal, ...]
+    processes: tuple[NfProcess, ...]
+    notes: tuple[Diagnostic, ...]
+
+
+def _analysis(lowering: _Lowering) -> _Analysis:
+    """Every construct of the view the target cannot lower, and each tool step lowered to its process."""
+    view, steps = lowering.view, lowering.steps
+    findings = _call_findings(view)
+    notes: list[Diagnostic] = []
+    processes: list[NfProcess] = []
+    for step in steps:
+        if step_findings := [*_step_capability_findings(step), *_tool_capability_findings(step.tool, path=step.path)]:
+            findings.extend(step_findings)
+            continue
+        try:
+            processes.append(_process(step))
+        except _WhenError as error:
+            findings.append(f"{step.path}.when: {error}")
+        except ValueError as error:  # lowering and the model reject what no source pass can see
+            findings.append(f"{step.path}: {error}")
+        notes.extend(_cuda_notes(step.node.name, step.tool))
+    findings.extend(_workflow_capability_findings(view, steps))
+    findings.extend(_unbound_output_findings(lowering))
+    findings.extend(_absent_optional_findings(view, steps))
+    findings.extend(_conditional_consumer_findings(steps))
+    findings.extend(_flag_source_findings(view, steps))
+    findings.extend(_scatter_findings(view, steps))
+    findings.extend(_step_input_findings(view, steps))
+    findings.extend(_text_capture_sink_findings(steps))
+    findings.extend(_staged_name_findings(steps))
+    refusals = [_refusal(finding, lowering) for finding in findings]
+    if view.policy.partial_failure:
+        refusals.append(Refusal(Construct.POLICY, "partial failure", view.name, None, view.span,
+                                "partial failure is a policy of the CWL target"))
+    return _Analysis(tuple(refusals), tuple(processes), tuple(notes))
+
+
 class NextflowTarget:  # pylint: disable=too-few-public-methods
-    """The Nextflow target: it lowers a resolved view to the executable Nextflow model."""
+    """The Nextflow target: it lowers a resolved view to the executable Nextflow model (design §7)."""
 
     name: Final = "nextflow"
 
@@ -3135,49 +3278,28 @@ class NextflowTarget:  # pylint: disable=too-few-public-methods
         """Lower `view` without repeating core semantics.
 
         Every unsupported source semantic, including one that only lowering or model validation detects, is
-        reported with its source path and aggregated with the rest before the workflow is assembled.
+        refused at its author's line and aggregated with the rest before the workflow is assembled.
 
         Args:
             view (ResolvedWorkflow): The resolved view of a finished compilation (`compiler.resolved_view`).
 
         Raises:
             TypeError: If the argument is not a resolved view.
-            ValueError: If capability analysis finds unsupported semantics, or lowering or validation rejects the
-                workflow.
+            NotLowered: If there is any refusal; it holds every one.
 
         Returns:
             tuple[ExecutableNextflowWorkflow, tuple[Diagnostic, ...]]: The validated executable representation, and
                 the notes the lowering made, such as a CUDA field it does not check.
         """
         lowering = _Lowering.of(view)
-        steps = lowering.steps
-        findings = _call_findings(view)
-        notes: list[Diagnostic] = []
-        processes: list[NfProcess] = []
-        for step in steps:
-            step_findings = [*_step_capability_findings(step), *_tool_capability_findings(step.tool, path=step.path)]
-            if step_findings:
-                findings.extend(step_findings)
-                continue
-            try:
-                processes.append(_process(step))
-            except ValueError as error:  # lowering and the model reject what no source pass can see
-                findings.append(f"{step.path}: {error}")
-            notes.extend(_cuda_notes(step.node.name, step.tool))
-        findings.extend(_workflow_capability_findings(view, steps))
-        findings.extend(_unbound_output_findings(lowering))
-        findings.extend(_absent_optional_findings(view, steps))
-        findings.extend(_conditional_consumer_findings(steps))
-        findings.extend(_flag_source_findings(view, steps))
-        findings.extend(_scatter_findings(view, steps))
-        findings.extend(_step_input_findings(view, steps))
-        findings.extend(_text_capture_sink_findings(steps))
-        findings.extend(_staged_name_findings(steps))
-        _raise_capability_findings(findings)
+        analysis = _analysis(lowering)
+        if analysis.refusals:
+            raise NotLowered("Nextflow", analysis.refusals)
+        processes = list(analysis.processes)
         try:
             params = _workflow_params(view)
             default_connections, default_params, default_types = _default_bindings(
-                steps, processes, [port.name for port in view.inputs])
+                lowering.steps, processes, [port.name for port in view.inputs])
             params.update(default_params)
             param_types = {**_workflow_param_types(view), **default_types}
             name = _identifier(view.name, context="workflow name", variable=False)
@@ -3194,9 +3316,10 @@ class NextflowTarget:  # pylint: disable=too-few-public-methods
                     AuthoredName(key), PortDeclaration(PortType(param_types[key])), value))
                     for key, value in params.items()}),
                 param_types=param_types,
-            ), tuple(notes)
+            ), analysis.notes
         except ValueError as error:
-            raise _capability_error([f"workflow: {error}"]) from None
+            raise NotLowered("Nextflow", (Refusal(Construct.WORKFLOW, None, view.name, None, view.span,
+                                                  str(error)),)) from None
 
 
 #: The Nextflow target.
