@@ -5,7 +5,6 @@
 import copy
 from collections.abc import Callable
 from dataclasses import replace
-from functools import partial
 from pathlib import Path
 import re
 from typing import Any, cast
@@ -253,8 +252,8 @@ def test_a_scatter_over_an_input_its_tool_does_not_declare_is_rejected_by_name()
         echo.scatter_on(echo.inputs.enabled)
 
     assert _findings(_echo_with(scattered)) == [
-        "step 'echo': input 'enabled': scatter over an input the step's tool does not declare is not supported",
         "workflow 'flow': workflow input 'loud': required workflow input value is missing",
+        "step 'echo': input 'enabled': scatter over an input the step's tool does not declare is not supported",
     ]
 
 
@@ -319,45 +318,6 @@ def test_a_scattered_step_inside_a_subworkflow_uses_the_outer_scatter_contract()
         isinstance(edge, NfWorkflowInputConnection) and edge.adapter == "dotproduct"
         for edge in workflow.connections
     )
-
-
-def _read_by_when(flow: Workflow, echo: Step) -> None:
-    """The cookbook's when.wic: a step-only input that a when reads."""
-    echo.inputs.enabled = StepInput(source=flow.inputs.loud.as_type("boolean?"))
-    echo.when = "$(inputs.enabled)"
-
-
-def _fed_by_a_step_output() -> CompilationResult:
-    first, second = _echo("first"), _echo("second")
-    second.inputs.after = StepInput(source=first.outputs.stdout)
-    return compile_workflow_result(Workflow([first, second], "flow"))
-
-
-def _only(finding: str) -> list[str]:
-    """The pattern of a refusal whose one finding is `finding`, at a line of this file, where the step was built."""
-    return [r"\A" + re.escape("Nextflow capability analysis failed:\n- ") + re.escape(__file__) + r":\d+:1: "
-            + re.escape(finding) + r"\Z"]
-
-
-#: Each compilation the target cannot lower, built through the Python API when its row runs, and the patterns its
-#: refusal matches, one per cause.
-API_REFUSALS: dict[str, tuple[Callable[[], CompilationResult], list[str]]] = {
-    "a_when_that_reads_an_input_its_tool_does_not_declare": (partial(_echo_with, _read_by_when), _only(
-        "step 'echo': input 'enabled': the step's when reads an input its tool does not declare, which is not "
-        "supported")),
-    "an_input_its_tool_does_not_declare_fed_by_a_step_output": (_fed_by_a_step_output, _only(
-        "step 'second': input 'after': an input the step's tool does not declare is not supported from a step "
-        "output: CWL runs this step only after that step finishes, and the Nextflow target would not wait for it")),
-}
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(("build", "patterns"), API_REFUSALS.values(), ids=API_REFUSALS)
-def test_a_compilation_the_target_cannot_lower_is_refused_naming_each_cause(
-        build: Callable[[], CompilationResult], patterns: list[str]) -> None:
-    with pytest.raises(ValueError) as raised:
-        lowered(build())
-    assert [pattern for pattern in patterns if not re.search(pattern, str(raised.value))] == []
 
 
 @pytest.mark.fast

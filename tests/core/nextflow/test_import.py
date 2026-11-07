@@ -287,12 +287,38 @@ def _flag_first() -> Workflow:
     return Workflow([step], "flag_first")
 
 
+def _cookbook(name: str, **values: Any) -> Callable[[], Workflow]:
+    """A cookbook workflow over this checkout's tools, its inputs given `values`."""
+    def build() -> Workflow:
+        module = import_python_file(f"cookbook_{name}", REPO_ROOT / "docs" / "cookbook" / f"{name}.py")
+        setattr(module, "ADAPTERS", REPO_ROOT / "cwl_adapters")
+        workflow: Workflow = module.workflow()
+        for key, value in values.items():
+            setattr(workflow.inputs, key, value)
+        return workflow
+    return build
+
+
+def _waits() -> Workflow:
+    """A step-only input fed by a step output (resolved-view design §9, example 2): echo reads nothing of touch's,
+    and runs after it."""
+    touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl")
+    echo = Step(clt_path=REPO_ROOT / "cwl_adapters" / "echo.cwl")
+    touch.inputs.filename, echo.inputs.message = "db", "query"
+    workflow = Workflow([touch, echo], "waits")
+    echo.inputs.after = StepInput(source=touch.outputs.file)
+    workflow.outputs.said = echo.outputs.stdout
+    return workflow
+
+
 CASES: dict[str, Callable[[], Workflow]] = {
     "bindings": _bindings, "crossproduct": _crossproduct, "dotproduct": _scatters("dotproduct"),
     "flat_crossproduct": _scatters("flat_crossproduct"), "nested_crossproduct": _scatters("nested_crossproduct"),
     "resources": _resources, "directories": _directories, "unary_whens": _unary_whens, "streams": _streams,
     "merged": _merged, "valued": _valued, "renamed": _renamed, "nested": _nested, "conditions": _conditions,
     "file_references": _file_references, "flag_first": _flag_first,
+    # Step-only inputs a process carries: one a when reads, and one fed by a step output.
+    "when": _cookbook("when", loud=True), "greeting_if": _cookbook("greeting_if", show=False), "waits": _waits,
     # The one workflow in examples/ the Nextflow target compiles.
     "helloworld_pyapi": lambda: import_python_file(
         "helloworld_pyapi", REPO_ROOT / "examples" / "scripts" / "helloworld_pyapi.py").workflow(),
@@ -676,6 +702,9 @@ _VALUE_EDITS = [
      "'bogus'", "crossproduct"),
     (_CODE.IMPORT_FOREIGN_STATEMENT, NEXTFLOW_SCRIPT, "params.word, 'string')", "params.word, 'strin')", "'strin'",
      "valued"),
+    # A carrier names exactly the process's last val inputs, in order.
+    (_CODE.IMPORT_MISMATCH, NEXTFLOW_SCRIPT, "WorkflowStepInput: ['enabled']", "WorkflowStepInput: ['message']",
+     "WorkflowStepInput", "when"),
     # A key another value names, and an absent optional File, which has no lowering.
     (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"a": [],\n  "b": []', '"a": "b",\n  "b": 3', '"b": 3', "crossproduct"),
     (_CODE.IMPORT_PARAMS, NEXTFLOW_PARAMS, '"f": {\n    "class": "File",\n    "path": "/data/f.txt"\n  }', '"f": []',

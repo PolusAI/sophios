@@ -8,9 +8,9 @@ import pytest
 
 from sophios.input_output_nf import render_nextflow
 from sophios.lang.subset import parse
-from sophios.nf_types import ExecutableNextflowWorkflow, NfOptionalBinding, NfProcess
+from sophios.nf_types import ExecutableNextflowWorkflow, NfOptionalBinding
 
-from .testkit import command, lowered, lowered_case, output_port, step, tool
+from .testkit import lowered, lowered_case, step, tool
 
 
 def _when_workflow(
@@ -82,20 +82,10 @@ def test_admitted_when_cells_lower_to_a_process_condition(when: str, inputs: dic
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("when", ["$(true)", "$(false)"])
-def test_a_conditional_step_with_no_inputs_is_rejected_at_lowering(when: str) -> None:
-    with pytest.raises(ValueError, match="step 'PRODUCE': when: a conditional step needs at least one input to "
-                                         "gate on"):
-        _when_workflow(when, {})
-
-
-@pytest.mark.fast
-def test_a_conditional_process_with_no_inputs_is_rejected_at_the_ir_boundary() -> None:
-    with pytest.raises(ValueError, match="process 'PRODUCE' has a condition but no inputs"):
-        NfProcess(
-            "PRODUCE", [], [output_port("result", "out.txt")], command("echo", stdout="out.txt"),
-            condition=parse("$(true)"),
-        )
+def test_a_conditional_step_whose_process_has_no_inputs_is_refused_at_its_when() -> None:
+    """A process decides its condition per invocation of its inputs; a step-only input counts as one (design §9)."""
+    with pytest.raises(ValueError, match="step 'PRODUCE': when: process '_PRODUCE' has a condition but no inputs"):
+        _when_workflow("$(true)", {})
 
 
 @pytest.mark.fast

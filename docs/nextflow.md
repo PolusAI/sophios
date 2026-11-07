@@ -837,8 +837,12 @@ agreement check for process edges yet.
 ## Conditional steps
 
 A `CommandLineTool` step's `when` may be a boolean-typed expression in the
-safe JavaScript subset, over the inputs the step binds and its tool declares.
-The whole field is one `$( … )`. It may use numbers, `true`, `false`, `null`
+safe JavaScript subset, over the inputs the step binds, its tool's and the
+ones only the step binds alike. Each input is typed by what its sources
+deliver, through every nested workflow, and a scattered one by its element: an
+input that may be `null`, such as an optional workflow input or a conditional
+step's output, is read only beside `null`, since CWL fails a `when` that gives
+`null`. The whole field is one `$( … )`. It may use numbers, `true`, `false`, `null`
 and quoted strings; `inputs.<name>` of a `boolean`, `int`, `float` or
 `string` input; parentheses; `! - +`; `* / % + -`; `== != === !== < <= > >=`;
 `&& ||`; and `Math.abs`, `sqrt`, `floor`, `ceil`, `round`, `pow`, `min` and
@@ -871,16 +875,22 @@ rejected by name — a non-optional port, a `path` consumer, an array-typed
 port, or an array-typed output of a conditional step outside scatter.
 
 `when` on a step whose `run` is a workflow is rejected, since skipping an
-inlined sub-DAG is not this lowering's single-process shape. CWL lets a step
-bind an input its tool does not declare. When only workflow inputs feed it (or
-nothing does) and neither the step's `when` nor its `scatter` reads it, it
-changes nothing the step runs, and the target leaves it out. One that the
-step's `when` reads is rejected, as is one the step scatters over. One fed by
-a step output is rejected too: CWL runs the step only after that step
-finishes, and the generated Nextflow would not wait for it. The same holds for
-a nested workflow step's input that its workflow does not declare. A
-conditional step needs at least one input to gate on, so `when` on a tool
-that declares no inputs is rejected.
+inlined sub-DAG is not this lowering's single-process shape.
+
+CWL lets a step bind an input its tool does not declare: the tool never
+receives it, but the step's `when` reads it, and the step starts only once
+its sources have values. The process carries such an input as a `val` input
+after the tool's own, which the command never reads and the call passes as
+it passes every other input, so a `when` reads it and the task waits for it;
+a `val` stages nothing, so an input fed by a `File` output only orders the
+tasks. The process's `ext` directive names these inputs,
+`ext WorkflowStepInput: ['enabled']`, so the import binds each one again as a
+`StepInput`. One fed only by workflow inputs, through every nested workflow,
+that neither the step's `when` nor its `scatter` reads changes nothing the
+step runs, and the target leaves it out. A `scatter` over one is rejected,
+since no process input receives the element. A conditional step's process
+decides once per invocation of its inputs, so a `when` on a step whose process
+receives no input at all is rejected.
 
 ## The corpus runs
 
