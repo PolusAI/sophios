@@ -329,6 +329,7 @@ def main() -> None:
     """CLI entry point: run, and convert a reported failure to its diagnostics and exit code 1."""
     args, unknown_args = cli.parser.parse_known_args()
     cli.validate_target_args(args)
+    cli.validate_success_code_range(args)
     try:
         _main(args, unknown_args)
     except SophiosError as e:
@@ -410,14 +411,7 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
             _write_nextflow_target(compilation, yaml_stem, Path(args.basepath), args.diagnostics)
         return
     root_dir = Path(args.yaml).parent.absolute()
-    artifact = compilation.artifact
-
-    if args.partial_failure_enable:
-        artifact = plugins.cwl_update_outputs_optional_artifact(
-            artifact, args.partial_failure_success_codes_range,
-            args.partial_failure_success_codes)
-
-    artifact = pc.apply_inline_options(artifact, subworkflows=args.cwl_inline_subworkflows,
+    artifact = pc.apply_inline_options(compilation.artifact, subworkflows=args.cwl_inline_subworkflows,
                                        runtag=args.cwl_inline_runtag)
 
     # A transparent background, for slides.

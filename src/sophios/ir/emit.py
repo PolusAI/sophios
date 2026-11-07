@@ -25,8 +25,8 @@ from typing import Any
 from ..lang import CwlRecord
 from ..lang.nodes import OpaqueCwl
 from ..wic_types import Cwl
-from .declarations import required
 from .names import Names
+from .policy import RunPolicy, effective_when
 from .stepin import step_inputs, step_out
 from .types import (DerivedName, EmissionDocument, EmittedValue, Expression, PortName, Record,
                     Source, StepNode, StepOutputRef, WorkflowGraph, WorkflowPort)
@@ -34,26 +34,20 @@ from .types import (DerivedName, EmissionDocument, EmittedValue, Expression, Por
 EDAM_NAMESPACE = ('edam', 'https://edamontology.org/')
 
 
-def _step_spelling(step: StepNode, names: Names, partial_failure: bool) -> StepNode:
+def _step_spelling(step: StepNode, names: Names, policy: RunPolicy) -> StepNode:
     """`step` with its `run:` path written: the file its process is written to,
-    beside every other document of the tree.
-
-    Under partial failure a step runs only when every required input arrived,
-    so its `when` is rewritten from the ports it declares.
+    beside every other document of the tree, and the `when` `policy` gives it.
     """
     run = step.run
     assert run is not None, 'surface refuses a graph with an unrun step'
     interpreted = dict(step.interpreted)
-    if partial_failure:
-        needed = [names.port(port.id.port) for port in step.inputs if required(port.declaration)]
-        if needed:
-            interpreted['when'] = '$(' + ' && '.join(
-                f'inputs["{name}"] != null' for name in needed) + ')'
+    if (when := effective_when(step, names, policy)) is not None:
+        interpreted['when'] = when
     target = f'{names.file(step.id)}.cwl'
     return replace(step, interpreted=tuple(interpreted.items()), run=replace(run, target=target))
 
 
-def surface(graph: WorkflowGraph, names: Names, *, partial_failure: bool = False) -> EmissionDocument:
+def surface(graph: WorkflowGraph, names: Names, *, policy: RunPolicy = RunPolicy()) -> EmissionDocument:
     """Spell `graph`'s facts as the document Emit renders, for this graph alone.
 
     Requirements implied by the steps, the EDAM namespace (only for a
@@ -66,8 +60,8 @@ def surface(graph: WorkflowGraph, names: Names, *, partial_failure: bool = False
     Args:
         graph (WorkflowGraph): One completed document, without its children.
         names (Names): The spelling of every step in the tree `graph` is in.
-        partial_failure (bool): Whether each step runs only when its required
-            inputs arrived.
+        policy (RunPolicy): How the workflow runs, which each step's `when`
+            is written for.
 
     Returns:
         EmissionDocument: The same graph, carrying the spelling Emit renders.
@@ -84,7 +78,7 @@ def surface(graph: WorkflowGraph, names: Names, *, partial_failure: bool = False
     if any(step.run is None for step in graph.steps):
         raise ValueError('every step in an emission graph needs a run')
 
-    steps = [_step_spelling(step, names, partial_failure) for step in graph.steps]
+    steps = [_step_spelling(step, names, policy) for step in graph.steps]
 
     requirements = dict(graph.requirements)
     for requirement in _implied_requirements(graph, steps):

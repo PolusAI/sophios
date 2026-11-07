@@ -41,6 +41,8 @@ Namespace: TypeAlias = str
 class CompilerOptions(TypedDict):
     """Core compiler flags needed for compilation and transformation into CWL."""
     partial_failure_enable: bool
+    #: The exit codes named to count as success under partial failure, as given; `RunPolicy` adds 0 and sorts them.
+    partial_failure_success_codes: tuple[int, ...]
     inference_use_naming_conventions: bool
     inference_strict: bool
     insert_steps_automatically: bool

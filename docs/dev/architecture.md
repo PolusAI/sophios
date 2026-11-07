@@ -132,12 +132,16 @@ never the source:
 - `inline_artifact_runs` (`--cwl_inline_runtag`, `Workflow.compile()` and
   `Workflow.run()`, the REST route) changes the packaging: every `run:`
   carries its process, and a v1.0 process keeps the defaults it had as a file
-  through two hints, as cwltool's updater adds them;
-- `cwl_update_outputs_optional_artifact` and the `when:` Emit writes under
-  `partial_failure` implement `--partial_failure_enable`.
+  through two hints, as cwltool's updater adds them.
 
 Neither packaging option is a second implementation of workflow-call
 semantics.
+
+Partial failure is no rewrite. `--partial_failure_enable` and its success
+codes are compile input, a `RunPolicy` (`sophios.ir.policy`), and
+`compiler._artifact_tree` writes for it: each step's `when` through
+`effective_when` and each tool through `tolerant_tool`. A real-time
+analysis, compiled under the same options, is written for it too.
 
 Each process an artifact carries is a description, never data. When
 `compiler._artifact_tree` emits a step, a tool whose text refers to a file
