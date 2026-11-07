@@ -40,6 +40,7 @@ from sophios.wic_types import Yaml
 from .ast_strategies import hints_values, passthrough_keys, passthrough_values
 from .compile_harness import COMPILED, FAST, compile_cwl, compile_info
 from .cwl_validation import validate_cwl
+from .hermetic import compile_hermetic_cwl
 
 #: Top-level keys the *compiler* owns, which is a larger set than the syntax
 #: layer's. `_document` claims only `steps` and `wic`; `compile_workflow` also
@@ -57,6 +58,7 @@ COMPILER_OWNED_TOP_KEYS = frozenset({
 
 #: `compile_cwl` under this file's name, so every call site reads the same.
 _compile = partial(compile_cwl, name='leak')
+_hermetic = partial(compile_hermetic_cwl, name='leak')
 
 
 def _step(cwl: Yaml) -> Yaml:
@@ -83,43 +85,46 @@ def _touch_workflow(extra_step_keys: dict[str, Any], extra_top_keys: dict[str, A
     }
 
 
+def _mk_file_workflow(extra_step_keys: dict[str, Any], extra_top_keys: dict[str, Any]) -> Yaml:
+    """The synthetic mk_file, for `_hermetic`; `_touch_workflow` is the real registry's tool, for `_compile`."""
+    return {**extra_top_keys, 'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'empty.txt'}},
+                                         **extra_step_keys}]}
+
+
 # --------------------------------------------------------------------------
 # Passthrough fidelity: unclaimed keys survive byte-identically
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @given(st.dictionaries(passthrough_keys, passthrough_values, min_size=1, max_size=4))
 @COMPILED
 def test_step_passthrough_is_byte_identical(freight: dict[str, Any]) -> None:
     """A step key outside the claimed set survives compilation unchanged."""
-    compiled = _compile(_touch_workflow(freight, {}))
+    compiled = _hermetic(_mk_file_workflow(freight, {}))
     step = _step(compiled)
     for key, value in freight.items():
         assert step[key] == value, f'{key} was altered by compilation'
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @given(st.dictionaries(passthrough_keys.filter(lambda k: k not in COMPILER_OWNED_TOP_KEYS),
                        passthrough_values, min_size=1, max_size=3))
 @COMPILED
 def test_top_level_passthrough_is_byte_identical(freight: dict[str, Any]) -> None:
     """An uninterpreted top-level key survives compilation unchanged."""
-    compiled = _compile(_touch_workflow({}, freight))
+    compiled = _hermetic(_mk_file_workflow({}, freight))
     for key, value in freight.items():
         assert compiled[key] == value, f'{key} was altered by compilation'
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @given(hints_values)
 @COMPILED
 def test_hints_survive_on_the_document_and_the_step_and_change_nothing_else(hints: dict[str, Any]) -> None:
     """`hints:` is read by the parser, so it is generated as the mapping the parser keeps."""
-    without = _compile(_touch_workflow({}, {}))
-    with_hints = _compile(_touch_workflow({'hints': hints}, {'hints': hints}))
+    without = _hermetic(_mk_file_workflow({}, {}))
+    with_hints = _hermetic(_mk_file_workflow({'hints': hints}, {'hints': hints}))
     assert _step(with_hints).pop('hints') == hints
     assert with_hints.pop('hints') == hints
     assert with_hints == without
@@ -267,7 +272,6 @@ def test_no_key_lands_on_both_sides(key: str) -> None:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @given(passthrough_keys, passthrough_values)
 @COMPILED
@@ -275,8 +279,8 @@ def test_unknown_keys_change_nothing_else(key: str, value: Any) -> None:
     """Adding an uninterpreted key changes exactly that key and nothing
     else in the output — the observable meaning of "not interpreted".
     """
-    without = _compile(_touch_workflow({}, {}))
-    with_key = _compile(_touch_workflow({key: value}, {}))
+    without = _hermetic(_mk_file_workflow({}, {}))
+    with_key = _hermetic(_mk_file_workflow({key: value}, {}))
 
     # The whole document, not just the step: the requirement merge reads
     # step facts and writes a *top-level* key, so a step key reaching that path

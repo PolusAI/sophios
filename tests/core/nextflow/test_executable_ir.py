@@ -62,6 +62,7 @@ def graphs(draw: st.DrawFn) -> tuple[Any, ...]:
             feeds[name, each.name] = (NfProcessConnection(source, "out", name, each.name) if source
                                       else NfWorkflowInputConnection(f"{name}_{each.name}", name, each.name))
     types = {edge.from_port: "File" for edge in feeds.values() if isinstance(edge, NfWorkflowInputConnection)}
+    # Parameters no step reads are listed in one order, whatever order the model holds them in.
     types |= {f"unread{index}": "int" for index in range(draw(st.integers(0, 2)))}
     emits = [NfWorkflowOutputConnection(n, "out", f"e{n}") for n in draw(st.lists(st.sampled_from(names), unique=True))]
     for rule in sorted(draw(st.lists(st.sampled_from(sorted(BROKEN_BY)), max_size=2, unique=True))):
@@ -238,6 +239,7 @@ UNREPRESENTABLE: dict[str, tuple[Callable[[], Any], Any]] = {
                                  "only a path input that is not array"),
     "NfPort-entry-on-an-output": (partial(NfPort, "source", "path", "source", template("out"), entry=NfEntry()),
                                   "only a path input that is not array"),
+    # A capture marker is closed data, so it can never hold expression text.
     **{f"NfPort-capture-{text!r}": (partial(NfPort, "result", "path", "result", _OUT, capture=text),
                                     "port capture must be one of")
        for text in ("$(self[0])", "$(self[0].contents)", "single_path", "contents", "")},
@@ -439,6 +441,7 @@ WORKFLOWS: dict[str, tuple[Callable[[], Any], Any]] = {
         NfProcess("JOIN", [NfPort("values", "path", is_array=True)], [],
                   NfCommand((template("cat"), NfArrayBinding("values"))))],
         NfProcessConnection("PRODUCE", "out", "JOIN", "values")), "incompatible channel cardinalities"),
+    # An array port and a scalar port must never share one workflow parameter.
     "one-param-into-a-scalar-and-an-array": (partial(_shared, NfPort("shared", "val"),
                                                      NfPort("shared", "val", is_array=True)), _QUALIFIERS),
     "one-param-into-a-val-and-a-path": (partial(_shared, NfPort("shared", "val"), NfPort("shared", "path")),

@@ -42,6 +42,7 @@ from sophios.wic_types import Json, Tools
 
 from .budgets import budget
 from .reference_model import ReferenceExpectation, reference_expectation
+from .strategies import cwl_types
 from .test_cookbook import _bodies, _through_the_file
 from .wic_reading import read_wic
 
@@ -455,13 +456,9 @@ def test_subworkflow_inputs_use_child_workflow_name_and_formal_parameters(tmp_pa
     assert child_yaml["steps"][0]["in"]["str"] == "str"
 
 
-_ATOM = st.sampled_from(['null', 'boolean', 'int', 'long', 'float', 'double', 'string', 'File', 'Directory', 'Any',
-                         'stdout', 'example.org#Thing'])
-_CWL_TYPES = st.recursive(
-    _ATOM | _ATOM.map(lambda atom: f'{atom}?') | _ATOM.map(lambda atom: f'{atom}[]') | st.sampled_from(
-        [{'type': 'record', 'fields': []}, {'type': 'enum', 'symbols': ['a']}, {'type': 'array'}]),
-    lambda inner: st.lists(inner, min_size=1, max_size=3) | inner.map(lambda items: {'type': 'array', 'items': items}),
-    max_leaves=5)
+_CWL_TYPES = cwl_types(
+    'null', 'boolean', 'int', 'long', 'float', 'double', 'string', 'File', 'Directory', 'Any', 'stdout',
+    'example.org#Thing', {'type': 'record', 'fields': []}, {'type': 'enum', 'symbols': ['a']}, {'type': 'array'})
 
 
 @pytest.mark.fast
