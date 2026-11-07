@@ -771,10 +771,10 @@ and [Configuration](configuration.md) explains namespaces.
 ## 8. Inference
 
 An input that no `in:` entry binds is connected by inference: Sophios looks
-back through the outputs of the earlier steps, most recent first and within a
-step last declared first (with a name that pairs with the input's taking
-precedence within a step), and connects the input to the first output whose
-type and format match. When more than one candidate matched it still takes
+back through the earlier steps, most recent first, for outputs whose type and
+format match the input's, and the most recent step with one supplies the edge.
+Within that step, an output whose name pairs with the input's wins, and
+otherwise the one declared first. When more than one candidate matched it still takes
 that one and says so with a note: `wic042` when several outputs of the chosen
 step match, `wic043` when an earlier step also matched. Notes do not fail the
 compile; `--inference_strict` makes them errors. An input that nothing
@@ -782,9 +782,8 @@ matches becomes an input of the compiled workflow.
 
 Pin a choice with an edge (§4) and the note goes away. For a port inside a
 subworkflow the pin goes on the inner step, and the note names it.
-`--inference_disable` turns inference off. Among several fitting outputs of
-the chosen step, the one whose name pairs with the input's wins before the
-last declared does; `--no_inference_naming_conventions` turns that off. The
+`--inference_disable` turns inference off, and
+`--no_inference_naming_conventions` turns the names off. The
 configuration's `inference_rules` refine inference too;
 `--insert_steps_automatically` lets it insert a converter step, and inference
 that does not settle within its iteration limit is `wic022`.
@@ -811,6 +810,6 @@ steps:
 | Code | When | Fix |
 |---|---|---|
 | `wic043` | a note: an earlier step also matched, and the most recent was taken | pin the choice with `!&` and `!*`; `--inference_strict` makes it an error |
-| `wic042` | a note: the chosen step offered several matching outputs, and the last was taken | pin the choice with `!&` and `!*` |
+| `wic042` | a note: the chosen step offered several matching outputs, and the first declared was taken | pin the choice with `!&` and `!*` |
 | `wic022` | inference did not settle within its iteration limit | bind the inputs explicitly, or drop `--insert_steps_automatically` |
 

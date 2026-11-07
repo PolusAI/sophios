@@ -12,8 +12,8 @@ baseCommand: "true"
 # Since both outputs are of type string, inference (by default) cannot
 # distinguish between the two outputs by type. With the naming conventions on
 # (the default) the output with the matching name wins; with
-# --no_inference_naming_conventions inference always chooses uniquename2,
-# since the outputs are considered ordered and matched from bottom to top.
+# --no_inference_naming_conventions inference chooses uniquename1, the output
+# declared first.
 
 inputs:
   uniquename1:

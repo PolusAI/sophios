@@ -357,7 +357,7 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         'Use the index and id of the step the output comes from, or write `step/port` (.wic reference §5.2).'),
     SophiosErrorCode.INFERENCE_TIE: Explanation(
         Kind.DOCUMENT,
-        'Note: one step offered several matching outputs and inference took the last.',
+        'Note: one step offered several matching outputs and inference took the first declared.',
         'Pin the choice the note shows, with `!&` on the output and `!*` on the input (.wic reference §8); '
         '`--inference_strict` makes this an error.'),
     SophiosErrorCode.INFERENCE_RECENCY: Explanation(
