@@ -10,7 +10,8 @@ import re
 from types import MappingProxyType
 from typing import Any, ClassVar, Generic, TypeVar, get_args
 
-from .nf_expr import NF_FINITE_HELPER, NF_ROUND_HELPER, Expr, canonical, references, validate
+from .lang.subset import Expr, canonical, references, validate
+from .nf_expr import NF_FINITE_HELPER, NF_ROUND_HELPER
 from .nf_symbols import NEXTFLOW_SCRIPT_DECLARED_NAMES, validate_nextflow_identifier
 
 

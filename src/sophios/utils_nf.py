@@ -18,7 +18,7 @@ from .ir.types import (
 )
 from .lang.diagnostics import Diagnostic, Locator, Severity
 from .lang.error_codes import SophiosErrorCode
-from .nf_expr import (
+from .lang.subset import (
     Expr, check as check_safe_subset, is_safe_subset_text, parse as parse_safe_subset, references,
 )
 from .nf_support import FIELDS, REQUIREMENT_CLASSES, Row, State, consumed

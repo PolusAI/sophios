@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from sophios.input_output_nf import render_nextflow
-from sophios.nf_expr import parse
+from sophios.lang.subset import parse
 from sophios.nf_types import ExecutableNextflowWorkflow, NfOptionalBinding, NfProcess
 from sophios.utils_nf import compiled_source_to_nextflow
 
