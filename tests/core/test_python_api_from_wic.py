@@ -70,7 +70,7 @@ def _compile_file(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> Co
     """`path` compiled as the CLI reads it, with the settings `Workflow.compile()` uses."""
     return sophios.compiler.compile_source(
         bundle_from_disk(path, workflow_paths, tools), default_compilation_settings(),
-        testing=False)
+        quiet=False)
 
 
 def _file_door(path: Path, workflow_paths: WorkflowPaths, tools: Tools) -> tuple[Json, Json, list[str]]:

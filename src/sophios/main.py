@@ -61,7 +61,7 @@ def _compile_loaded_document(yaml_path: str, bundle: SourceBundle,
                              ) -> tuple[CompilationResult, tuple[realtime.Analysis, ...]]:
     """Compile to a graph-derived result, and each real-time analysis it declares."""
     try:
-        result = compiler.compile_source(bundle, compiler_options, testing=False)
+        result = compiler.compile_source(bundle, compiler_options, quiet=False)
         analyses = realtime.compile_analyses(result.realtime, yml_paths, tools_cwl, compiler_options)
     except SophiosError:
         # The library reports; only this adapter is allowed to exit. The

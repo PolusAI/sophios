@@ -68,7 +68,7 @@ def compile_analyses(declarations: tuple[Declaration, ...],
         source = yaml.dump(_wrapper(declaration), Dumper=io.NoAliasDumper, sort_keys=False, line_break='\n')
         try:
             bundle = frontdoor.bundle_from_source(source, f'{Path(declaration.analysis).stem}_only', yml_paths, tools)
-            result = compiler.compile_source(bundle, compiler_options, testing=True)
+            result = compiler.compile_source(bundle, compiler_options, quiet=True)
         except SophiosError as e:
             raise SophiosError(Diagnostic(
                 Severity.ERROR, SophiosErrorCode.REALTIME_DECLARATION,

@@ -39,7 +39,7 @@ def _draw(document: Yaml = _DOCUMENT, *, label_edges: bool = False, label_stepna
           inline_depth: int = sys.maxsize, dark_theme: bool = False) -> str:
     """`document` compiled, then drawn with the given graph settings: the DOT source."""
     source = bundle(document, 'oracle', SYNTHETIC_TOOLS)
-    compiled = compiler.compile_source(source, default_compilation_settings(), testing=True)
+    compiled = compiler.compile_source(source, default_compilation_settings(), quiet=True)
     _options, settings = get_dicts_for_compilation(get_args())
     settings['graph_label_edges'] = label_edges
     settings['graph_label_stepname'] = label_stepname

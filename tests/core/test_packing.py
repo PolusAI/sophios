@@ -128,7 +128,7 @@ def _registry(*tools: Path) -> Tools:
 
 def _compile(wic: Path, tools: Tools | None = None) -> CompilationArtifact:
     return compile_source(bundle_from_disk(wic, {}, tools or {}), default_compilation_settings(),
-                          testing=True).artifact
+                          quiet=True).artifact
 
 
 def _tool(artifact: CompilationArtifact, step: str) -> dict[str, Any]:

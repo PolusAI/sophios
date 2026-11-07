@@ -99,7 +99,7 @@ def workflow_from_wic(path: Path, tool_registry: Tools,
     bundle = bundle_from_disk(path, {namespace: dict(paths) for namespace, paths in workflow_paths.items()},
                               tool_registry)
     compiler_options = default_compilation_settings()
-    compiler.compile_source(bundle, compiler_options, testing=False)
+    compiler.compile_source(bundle, compiler_options, quiet=False)
     assert bundle.parsed.document is not None  # the compile above raised otherwise
     version = resolve_lang_version(compiler_options.get('lang_version'), bundle.lang_version_pins)
     resolved = resolve(bundle.parsed.document, bundle.registry, name=bundle.name, lang_version=version)

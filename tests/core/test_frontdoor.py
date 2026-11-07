@@ -81,7 +81,7 @@ def _line_of(text: str, needle: str) -> int:
 
 def _compile(bundle: SourceBundle) -> CompilationResult:
     """Compile a bundle the file door built, with default settings."""
-    return compile_source(bundle, default_compilation_settings(), testing=True)
+    return compile_source(bundle, default_compilation_settings(), quiet=True)
 
 
 def _redump(text: str) -> str:

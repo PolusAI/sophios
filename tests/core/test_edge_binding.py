@@ -1,5 +1,5 @@
 """An edge reference names a definition, and a name is defined once; each fault carries a code.
-Compiles through `compile_production` (`testing=False`): `compile_hermetic` absorbs an undefined edge into an input."""
+Compiles through `compile_production` (`quiet=False`): `compile_hermetic` absorbs an undefined edge into an input."""
 import pytest
 from hypothesis import given, strategies as st
 

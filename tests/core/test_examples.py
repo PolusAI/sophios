@@ -235,7 +235,7 @@ def _compiled_for_run(yml_path: Path, args: argparse.Namespace, registry: Corpus
     """The compilation `run_workflows` writes and runs for `yml_path`: its artifact tree shaped by the inline flags."""
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, registry.tools)
     compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
-    result = sophios.compiler.compile_source(bundle, compiler_options, testing=True)
+    result = sophios.compiler.compile_source(bundle, compiler_options, quiet=True)
     return replace(result, artifact=apply_inline_options(result.artifact, subworkflows=args.cwl_inline_subworkflows,
                                                          runtag=args.cwl_inline_runtag))
 
@@ -318,7 +318,7 @@ def test_emitted_cwl_says_nothing_cwl_cannot_read(yml_path_str: str, yml_path: P
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, corpus_registry.tools)
     compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(get_args(str(yml_path)))
     try:
-        result = sophios.compiler.compile_source(bundle, compiler_options, testing=True)
+        result = sophios.compiler.compile_source(bundle, compiler_options, quiet=True)
     except SophiosError as error:
         if _is_includer_fragment(error):
             pytest.skip(f'{yml_path_str} consumes edges from an includer')
@@ -399,7 +399,7 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
     compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
 
     try:
-        result = sophios.compiler.compile_source(bundle, compiler_options, testing=True)
+        result = sophios.compiler.compile_source(bundle, compiler_options, quiet=True)
     except SophiosError as error:
         if _is_includer_fragment(error):
             pytest.skip(f'{yml_path_str} consumes edges from an includer')
@@ -434,7 +434,7 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path,
         try:
             fake_result = sophios.compiler.compile_source(
                 frontdoor.bundle_from_disk(sub_path, yml_paths, tools_cwl), compiler_options,
-                testing=True)
+                quiet=True)
         except SophiosError as error:
             if _is_includer_fragment(error):
                 continue
@@ -494,7 +494,7 @@ def _compile_corpus_workflow(yml_path_str: str, yml_path: Path, registry: Corpus
     bundle = frontdoor.bundle_from_disk(Path(yml_path), yml_paths, registry.tools)
     compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(args)
     try:
-        return sophios.compiler.compile_source(bundle, compiler_options, testing=True).artifact
+        return sophios.compiler.compile_source(bundle, compiler_options, quiet=True).artifact
     except SophiosError as error:
         if _is_includer_fragment(error):
             pytest.skip(f'{yml_path_str} consumes edges from an includer')
@@ -522,7 +522,7 @@ def test_a_corpus_declaration_compiles_its_analysis(stem: str, analysis: str,
         pytest.skip(f'{stem}.wic is not reachable from search_paths_wic')
     bundle = frontdoor.bundle_from_disk(yml_path, corpus_registry.workflows, corpus_registry.tools)
     compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(get_args(str(yml_path)))
-    result = sophios.compiler.compile_source(bundle, compiler_options, testing=True)
+    result = sophios.compiler.compile_source(bundle, compiler_options, quiet=True)
 
     analyses = realtime.compile_analyses(result.realtime, corpus_registry.workflows, corpus_registry.tools,
                                          compiler_options)
