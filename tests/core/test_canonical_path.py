@@ -79,11 +79,11 @@ def _build_workflow(spec: _BundleSpec) -> Workflow:
 
 def _compile_bundle(root: Path) -> CompilationResult:
     """Compile a written bundle through the file door as the CLI reads it, mirroring compile_workflow_result's call
-    (`testing=False` included) so the only variable between the arms is where the document came from."""
+    (`quiet=False` included) so the only variable between the arms is where the document came from."""
     yml_paths = {'global': {path.stem: path for path in root.parent.glob('*.wic')}}
     return sophios.compiler.compile_source(
         bundle_from_disk(root, yml_paths, SYNTHETIC_TOOLS), default_compilation_settings(),
-        testing=False)
+        quiet=False)
 
 
 @pytest.mark.fast

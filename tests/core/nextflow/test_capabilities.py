@@ -156,7 +156,7 @@ def _nested_downstream_result() -> CompilationResult:
             ),
         }),
     )
-    return compiler.compile_source(bundle, compiler_options, testing=True)
+    return compiler.compile_source(bundle, compiler_options, quiet=True)
 
 
 def _nested_artifacts(result: CompilationResult) -> list[Any]:

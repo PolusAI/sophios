@@ -481,7 +481,7 @@ def _compile_bundle(
         ParseResult(workflow_document(workflow), Diagnostics()),
         Path(workflow.process_name).stem,
         RegistrySnapshot.from_tools(merged_tools, workflows=_nested_documents(workflow)))
-    return bundle, _with_bound_values(workflow, compiler.compile_source(bundle, options, testing=False))
+    return bundle, _with_bound_values(workflow, compiler.compile_source(bundle, options, quiet=False))
 
 
 def _bound_values(workflow: "Workflow", graph: WorkflowGraph) -> dict[str, Any]:

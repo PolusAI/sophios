@@ -37,7 +37,7 @@ def _compile_corpus_file(path: Path) -> None:
     registry = load_test_registry()
     bundle = frontdoor.bundle_from_disk(path, registry.workflows, registry.tools)
     compiler_options, _graph_settings = sophios.cli.get_dicts_for_compilation(sophios.cli.get_args(str(path)))
-    sophios.compiler.compile_source(bundle, compiler_options, testing=True)
+    sophios.compiler.compile_source(bundle, compiler_options, quiet=True)
 
 
 _SPECULATIVE_YML, _SPECULATIVE_TOOLS = insertion_registry()

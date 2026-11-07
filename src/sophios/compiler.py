@@ -36,14 +36,15 @@ from .wic_types import CompilerOptions, Cwl
 def compile_source(bundle: SourceBundle,
                    compiler_options: CompilerOptions,
                    *,
-                   testing: bool) -> CompilationResult:
+                   quiet: bool) -> CompilationResult:
     """Compile a parsed root workflow and every workflow it reaches.
 
     The one door. A bundle read from files carries the spans of the text its
     author wrote, so a diagnostic names a position the reader can open; one
     the Python API built carries the span of the Python line that made each node.
+    `quiet` leaves out the lines that say the compile started and finished.
     """
-    if not testing:
+    if not quiet:
         print(' starting compilation of', bundle.name)
     selected_version = versions.resolve(
         compiler_options.get('lang_version'), bundle.lang_version_pins)
@@ -81,7 +82,7 @@ def compile_source(bundle: SourceBundle,
     run_policy = RunPolicy(compiler_options['partial_failure_enable'],
                            compiler_options['partial_failure_success_codes'])
     artifact = _artifact_tree(graph, graph.name, names, _Descriptions(bundle.registry), policy=run_policy)
-    if not testing:
+    if not quiet:
         print('finishing compilation of', bundle.name)
     return CompilationResult(graph, artifact, inferred.diagnostics, realtime, policy=run_policy)
 

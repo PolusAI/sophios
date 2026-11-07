@@ -132,7 +132,7 @@ def compiled_case(data: Yaml) -> CompilationResult:
     document, tools = _case_document(data)
     registry = {StepId(run["id"], SYNTHETIC_NS): Tool(f"{run['id']}.cwl", desugar_into_canonical_normal_form(
         copy.deepcopy(run))) for run in tools}
-    return compile_source(bundle(document, "wf", registry), default_compilation_settings(), testing=True)
+    return compile_source(bundle(document, "wf", registry), default_compilation_settings(), quiet=True)
 
 
 def lowered(result: CompilationResult, values: Yaml | None = None) -> ExecutableNextflowWorkflow:

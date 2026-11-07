@@ -27,7 +27,7 @@ def compile_info(yml: Yaml, name: str = 'harness', *,
         compiler_options['allow_raw_cwl'] = allow_raw_cwl
     return sophios.compiler.compile_source(
         bundle(yml, name, load_test_registry().tools), compiler_options,
-        testing=True)
+        quiet=True)
 
 
 def compile_cwl(yml: Yaml, name: str = 'harness', *,

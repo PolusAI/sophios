@@ -150,7 +150,7 @@ def _tool(path: Path, command: str) -> None:
 
 def _compile_file(wic: Path) -> CompilationArtifact:
     return compile_source(bundle_from_disk(wic, {}, SYNTHETIC_TOOLS), default_compilation_settings(),
-                          testing=True).artifact
+                          quiet=True).artifact
 
 
 def _runs(written: Path) -> list[str]:
