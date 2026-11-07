@@ -120,7 +120,7 @@ test keeps the two equal.
 | Where | What |
 |---|---|
 | `lang/` | the language: parser, AST, renderer, JSON Schema, diagnostics, error codes, versions, the CWL support matrix |
-| `ir/` | the compiler's phases: front door, resolve, lower, link, infer, namespaces, emit, and the graph types |
+| `ir/` | the compiler's phases: front door, resolve, lower, link, infer, namespaces, emit, the run policy, and the graph types |
 | `compiler.py` | `compile_source`, the one entry point |
 | `api/python/` | the public Python API: `workflow.py`, `tool_builder.py`, and the private modules behind them |
 | `main.py`, `cli.py` | the command line: argument parsing and the adapter from arguments to settings |
@@ -128,7 +128,7 @@ test keeps the two equal.
 | `preflight.py` | what a local run needs from this machine |
 | `backends.py` | a run as a `RunRequest`, and what each runner is given and leaves: check, prepare, launch, outcome |
 | `run_local.py`, `realtime.py` | running the runner as a child process and reporting how it ended, and the real-time analyses beside it |
-| `post_compile.py` | the rewrites of a compiled tree: flattening, embedding, partial failures |
+| `post_compile.py` | the rewrites of a compiled tree: flattening, embedding |
 | `drawing.py` | `--graphviz` and `Workflow.draw()` |
 | `contrib/` | see [Contrib](../contrib.md) |
 

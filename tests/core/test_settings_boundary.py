@@ -127,6 +127,8 @@ def _non_default(name: str, annotation: type) -> tuple[list[str], object]:
     """
     if name in OFF_SWITCHES:
         return [OFF_SWITCHES[name]], False
+    if name in SPELLED:
+        return SPELLED[name]
     if annotation is bool:
         return [f'--{name}'], True          # every bool setting is store_true/False
     if annotation is int:
@@ -136,6 +138,9 @@ def _non_default(name: str, annotation: type) -> tuple[list[str], object]:
 
 #: Settings that are on by default: the flag that turns each off, instead of `--<name>`.
 OFF_SWITCHES: Final = {'inference_use_naming_conventions': '--no_inference_naming_conventions'}
+#: Settings the compiler gets in another form than the flag's: the flags, and the value it gets. The success codes
+#: are the codes given, then those of the range, which by default holds 0 alone.
+SPELLED: Final = {'partial_failure_success_codes': (['--partial_failure_success_codes', '3'], (3, 0))}
 
 UNDELIVERABLE_BY_SENTINEL: Final = frozenset({
     # These are values in global_config.json, not CLI flags. They still travel
