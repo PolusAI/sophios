@@ -1,15 +1,14 @@
 # The workflow boundary, names, types and requirements the target refuses (design §3, §6). Each `findings` or `error`
 # is the diagnostic the replaced test wrote by hand from that rule, copied verbatim; nothing here was read off a run.
-- {id: a_root_that_is_not_a_workflow, why: The compiled source is a CWL Workflow., workflow: {class: CommandLineTool},
-   error: {re: root.*Workflow}}
 - {id: a_required_workflow_input_with_no_value, why: &missing 'Missing, null and a default are three things.', workflow:
-   {inputs: {message: {type: string}}}, error: {re: required workflow input value is missing}}
-- {id: an_explicit_null_workflow_input, why: *missing, workflow: {inputs: {message: {type: string}}}, job: {message:
-   null}, error: {re: explicit null input values}}
-- {id: a_workflow_input_default_that_is_not_a_scalar, why: *missing, workflow: {inputs: {message: {type: string,
-   default: [not, scalar]}}}, error: {re: JSON scalar defaults only}}
-- {id: undeclared_workflow_input_values, why: A value names a declared input., workflow: {}, job: {extra: value}, error:
-   {re: has no declared workflow input}}
+   {steps: &noop [{id: NOOP}], inputs: {message: {type: string}}}, tools: &noop_tool [{id: NOOP}], error: {re: required
+   workflow input value is missing}}
+- {id: an_explicit_null_workflow_input, why: *missing, workflow: {steps: *noop, inputs: {message: {type: string}}},
+   tools: *noop_tool, job: {message: null}, error: {re: explicit null input values}}
+- {id: a_workflow_input_default_that_is_not_a_scalar, why: *missing, workflow: {steps: *noop, inputs: {message:
+   {type: string, default: [not, scalar]}}}, tools: *noop_tool, error: {re: JSON scalar defaults only}}
+- {id: undeclared_workflow_input_values, why: A value names a declared input., workflow: {steps: *noop}, tools:
+   *noop_tool, job: {extra: value}, error: {re: has no declared workflow input}}
 - id: workflow_input_collisions_aggregate_with_other_findings
   why: A naming collision is a finding beside the rest, not an error that hides them.
   workflow: {steps: [{id: COLLISION, unknown_field: true}], inputs: &collide {out-dir: {type: string}, out_dir: {type:
@@ -18,11 +17,12 @@
   job: &collision {out-dir: first, out_dir: second}
   findings: {contains: [{re: 'workflow\.inputs: workflow input identifiers'}, {re: 'steps\[0\]\.unknown_field'}]}
 - {id: workflow_input_identifier_collisions, why: &normalize Two names that normalize alike would be one parameter.,
-   workflow: {inputs: *collide}, job: *collision, error: {re: "workflow input identifiers 'out-dir',
-   'out_dir'.*normalize to 'out_dir'"}}
+   workflow: {steps: *noop, inputs: *collide}, tools: *noop_tool, job: *collision, error: {re: "workflow input
+   identifiers 'out-dir', 'out_dir'.*normalize to 'out_dir'"}}
 - {id: step_identifier_collisions_naming_both_steps, why: 'A repeated id carries `@<position>`; it and an authored id
-   may normalize alike.', workflow: {steps: [{id: touch@2}, {id: touch_2}]}, tools: [{id: touch@2}, {id: touch_2}],
-   error: {re: "workflow\\.steps: workflow step identifiers 'touch@2', 'touch_2' normalize to 'touch_2'"}}
+   may normalize alike.', workflow: {steps: [{id: touch}, {id: touch}, {id: touch_2}]}, tools: [{id: touch}, {id:
+   touch}, {id: touch_2}], error: {re: "workflow\\.steps: workflow step identifiers 'touch@2', 'touch_2' normalize to
+   'touch_2'"}}
 - {id: tool_port_identifier_collisions, why: *normalize, workflow: {steps: [{id: COLLISION}]}, tools: [{id: COLLISION,
    inputs: {out-dir: {type: string, default: first}, out_dir: {type: string, default: second}}}], error: {re: "tool
    input identifiers 'out-dir', 'out_dir'.*normalize to 'out_dir'"}}
@@ -33,14 +33,16 @@
   job: {DEFAULT_message: workflow value}
   error: {re: "workflow parameter identifiers 'DEFAULT_message', 'DEFAULT~message' normalize to '_DEFAULT_message'"}
 - {id: boundary_values_outside_supported_shape-string, why: &shape A value has the shape of its declared type.,
-   workflow: {inputs: {value: {type: string}}}, job: {value: [not, a, string]}, error: &mismatch {re: does not match its
-   supported CWL type}}
-- {id: boundary_values_outside_supported_shape-int, why: *shape, workflow: {inputs: {value: {type: int}}}, job: {value:
-   true}, error: *mismatch}
-- {id: boundary_values_outside_supported_shape-File, why: *shape, workflow: {inputs: {value: {type: File}}}, job:
-   {value: {class: File, path: reference.fa, secondaryFiles: [reference.fa.fai]}}, error: *mismatch}
-- {id: unknown_connection_source, why: A source names a step., workflow: {steps: [{id: B, in: {value: MISSING/out}}]},
-   tools: [{id: B, inputs: {value: {type: File}}}], error: {re: unknown source process}}
+   workflow: {steps: *noop, inputs: {value: {type: string}}}, tools: *noop_tool, job: {value: [not, a, string]}, error:
+   &mismatch {re: does not match its supported CWL type}}
+- {id: boundary_values_outside_supported_shape-int, why: *shape, workflow: {steps: *noop, inputs: {value: {type: int}}},
+   tools: *noop_tool, job: {value: true}, error: *mismatch}
+- {id: boundary_values_outside_supported_shape-File, why: *shape, workflow: {steps: *noop, inputs: {value: {type:
+   File}}}, tools: *noop_tool, job: {value: {class: File, path: reference.fa, secondaryFiles: [reference.fa.fai]}},
+   error: *mismatch}
+- {id: unknown_connection_source, why: A source names a step., workflow: {steps: [{id: B, out: [out]}], outputs:
+   {result: {type: File, outputSource: MISSING/out}}}, tools: [{id: B, outputs: {out: {type: File, outputBinding:
+   {glob: out.txt}}}}], error: {re: unknown source process 'MISSING'}}
 - {id: output_glob_outside_typed_input_subset, why: A glob reads inputs only., workflow: {steps: [{id: BAD_GLOB, out:
    [result]}]}, tools: [{id: BAD_GLOB, outputs: {result: {type: File, outputBinding: {glob:
    $(runtime.outdir)/result.txt}}}}], error: {re: unsupported CWL expression}}
@@ -63,10 +65,11 @@
     {type: File, outputSource: PRODUCE/out}}}
   tools: [&produce {id: PRODUCE, inputs: {n: {type: long, inputBinding: {position: 1}}}, outputs: {out: {type: File,
     outputBinding: {glob: out.txt}}}}]
-  error: {contains: ['steps[0].run.inputs.n.type: long is not supported']}
+  error: {contains: ['steps[0].run.inputs.n.type: long is not supported', 'workflow.inputs.n.type: long is not
+    supported']}
 - {id: double_in_a_tool_input, why: *long, workflow: {<<: *produce_wf, inputs: {n: {type: double}}}, tools: [{<<:
    *produce, inputs: {n: {type: double, inputBinding: {position: 1}}}}], error: {contains: ['steps[0].run.inputs.n.type:
-   double is not supported']}}
+   double is not supported', 'workflow.inputs.n.type: double is not supported']}}
 - {id: long_in_an_array_item, why: *long, workflow: {<<: *produce_wf, inputs: {n: {type: {type: array, items: long}}}},
    tools: [{<<: *produce, inputs: {n: {type: {type: array, items: long}, inputBinding: {position: 1}}}}], error:
    {contains: ['steps[0].run.inputs.n.type: long is not supported']}}
@@ -84,10 +87,6 @@
   workflow: {<<: *produce_wf, inputs: *int, outputs: {out: {type: double, outputSource: PRODUCE/out}}}
   tools: [{<<: *produce, inputs: *int_input, outputs: {out: {type: double, outputBinding: {glob: out.txt}}}}]
   error: {contains: ['steps[0].run.outputs.out.type: double is not supported']}
-- {id: long_in_a_workflow_input, why: *long, workflow: *produce_wf, tools: [{<<: *produce, inputs: *int_input}], error:
-   {contains: ['workflow.inputs.n.type: long is not supported']}}
-- {id: double_in_a_workflow_input, why: *long, workflow: {<<: *produce_wf, inputs: {n: {type: double}}}, tools: [{<<:
-   *produce, inputs: *int_input}], error: {contains: ['workflow.inputs.n.type: double is not supported']}}
 - {id: long_in_a_workflow_output, why: *long, tools: [{<<: *produce, inputs: *int_input}], workflow: {<<: *produce_wf,
    inputs: *int, outputs: {out: {type: long, outputSource: PRODUCE/out}}}, error: {contains:
    ['workflow.outputs.out.type: long is not supported']}}

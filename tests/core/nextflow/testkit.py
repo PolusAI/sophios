@@ -1,12 +1,18 @@
 """Shared builders and the real-Nextflow harness for the backend suites: thin, removing repetition, never behavior."""
 
 from collections.abc import Sequence
+import copy
+from dataclasses import replace
 import os
 import subprocess
 from pathlib import Path
 from typing import Any
 
+from sophios.cli import default_compilation_settings
+from sophios.compiler import compile_source
 from sophios.input_output_nf import write_nextflow_artifacts
+from sophios.ir.artifacts import CompilationResult
+from sophios.lang.diagnostics import Diagnostic
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
     NfCommand,
@@ -20,8 +26,12 @@ from sophios.nf_types import (
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
-from sophios.utils_nf import CompiledNextflowSource
-from sophios.wic_types import Yaml
+from sophios.utils_cwl import desugar_into_canonical_normal_form
+from sophios.utils_nf import compiled_source_to_nextflow, compiled_source_to_nextflow_with_notes
+from sophios.wic_types import StepId, Tool, Yaml
+
+from ..hermetic import bundle
+from ..synthetic_tools import SYNTHETIC_NS
 
 ref = NfInputReference
 
@@ -59,21 +69,6 @@ def output_port(name: str, glob: str | NfTemplate | None = None) -> NfPort:
     return NfPort(name, "path", name, target)
 
 
-def synthetic_source(
-    workflow_cwl: Yaml,
-    tools: list[Yaml],
-    *,
-    workflow_inputs: Yaml | None = None,
-) -> CompiledNextflowSource:
-    """Construct the backend's compiled-document seam for capability tests."""
-    return CompiledNextflowSource(
-        str(workflow_cwl.get("id", "workflow")),
-        workflow_cwl,
-        tuple(tools),
-        workflow_inputs or {},
-    )
-
-
 def tool(
     name: str,
     *,
@@ -94,53 +89,67 @@ def tool(
 
 
 def step(name: str, **fields: Any) -> Yaml:
-    """Return a compact compiled workflow step entry."""
-    return {"id": name, "in": {}, "out": [], "run": f"{name}.cwl", **fields}
+    """Return a compact workflow step entry: the step that runs the tool `name`."""
+    return {"id": name, "in": {}, "out": [], **fields}
 
 
-def workflow_doc(
-    steps: list[Yaml],
-    *,
-    inputs: Yaml | None = None,
-    outputs: Yaml | None = None,
-) -> Yaml:
-    """Return a compact compiled CWL Workflow dictionary."""
-    return {
-        "id": "wf",
-        "class": "Workflow",
-        "cwlVersion": "v1.2",
-        "inputs": inputs or {},
-        "outputs": outputs or {},
-        "steps": steps,
-    }
+def one_step(run: Yaml, out: Sequence[str] = (), **values: Any) -> Yaml:
+    """The case of the tool `run` as a workflow's only step, each input wired from a same-named workflow input.
+
+    Each name in `out` is forwarded as a same-named workflow output, and `values` are the workflow's inputs.
+    """
+    return {"tool": run, "out": list(out), "job": values}
 
 
-def one_step(run: Yaml, out: Sequence[str] = (), **values: Any) -> CompiledNextflowSource:
-    """The tool `run` as a workflow's only step: each input wired from a same-named workflow input, each `out` name
-    forwarded."""
-    name = run["id"]
-    return synthetic_source(
-        workflow_doc(
-            [step(name, **{"in": {port: port for port in run["inputs"]}, "out": list(out)})],
-            inputs={port: {"type": definition["type"]} for port, definition in run["inputs"].items()},
-            outputs={port: {"type": run["outputs"][port]["type"], "outputSource": f"{name}/{port}"} for port in out},
-        ),
-        [run],
-        workflow_inputs=values,
-    )
+def _case_document(data: Yaml) -> tuple[Yaml, list[Yaml]]:
+    """A case as a Sophios document, and the tool each of its steps runs, in step order.
 
-
-def case_source(data: Yaml) -> CompiledNextflowSource:
-    """A data case's source: `{tool, out, job}` as one_step takes them, or `{workflow, tools, job}` (a `tool` without an
-    `id` is `make`); a key left out takes the builder's default, so a malformed document stays as written."""
-    job = data.get("job", {})
+    `{tool, out, job}` is the tool as a workflow's only step, as `one_step` says; `{workflow, tools, job}` is a
+    document and its steps' tools. A `tool` without an `id` is named `make`. Each tool takes tool()'s value only
+    for a key it leaves out.
+    """
     if "tool" in data:
         run = {"id": "make", **data["tool"]}
-        return one_step({**tool(run["id"]), **run}, data.get("out", ()), **job)
-    workflow = {**workflow_doc([]), **data["workflow"]}
-    workflow["steps"] = [{**step(entry["id"]), **entry} if "id" in entry else entry for entry in workflow["steps"]]
-    tools = [{**tool(run["id"]), **run} for run in data.get("tools", [])]
-    return synthetic_source(workflow, tools, workflow_inputs=job)
+        run = {**tool(run["id"]), **run}
+        name = run["id"]
+        document = {
+            "inputs": {port: {"type": definition["type"]} for port, definition in run["inputs"].items()},
+            "outputs": {port: {"type": run["outputs"][port]["type"], "outputSource": f"{name}/{port}"}
+                        for port in data.get("out", ())},
+            "steps": [{"id": name, "in": {port: port for port in run["inputs"]}}],
+        }
+        return document, [run]
+    return data["workflow"], [{**tool(run["id"]), **run} for run in data.get("tools", [])]
+
+
+def compiled_case(data: Yaml) -> CompilationResult:
+    """A case compiled through `compile_source`, against a registry of its tools, as `hermetic` compiles a document.
+
+    Each step runs the tool beside it, registered under the step's id, as the file door registers a tool by its
+    stem.
+    """
+    document, tools = _case_document(data)
+    registry = {StepId(entry["id"], SYNTHETIC_NS): Tool(f"{run['id']}.cwl", desugar_into_canonical_normal_form(
+        copy.deepcopy(run))) for entry, run in zip(document["steps"], tools, strict=True)}
+    return compile_source(bundle(document, "wf", registry), default_compilation_settings(), testing=True)
+
+
+def lowered(result: CompilationResult, values: Yaml | None = None) -> ExecutableNextflowWorkflow:
+    """The Nextflow model of `result`, its root inputs given `values` in place of the values the graph holds."""
+    if values is not None:
+        result = replace(result, artifact=replace(result.artifact, job_inputs={**result.artifact.job_inputs, **values}))
+    return compiled_source_to_nextflow(result)
+
+
+def lowered_case(data: Yaml) -> tuple[ExecutableNextflowWorkflow, tuple[Diagnostic, ...]]:
+    """A case's model and notes: compiled, given its `job` as the workflow's values, keeping the outputs it declares."""
+    document, _tools = _case_document(data)
+    result = compiled_case(data)
+    declared = document.get("outputs", {})
+    cwl = {**result.artifact.cwl, "outputs": {name: definition for name, definition in result.artifact.cwl["outputs"]
+                                              .items() if name in declared}}
+    artifact = replace(result.artifact, cwl=cwl, job_inputs=copy.deepcopy(data.get("job", {})))
+    return compiled_source_to_nextflow_with_notes(replace(result, artifact=artifact))
 
 
 def runtime_workflow() -> ExecutableNextflowWorkflow:

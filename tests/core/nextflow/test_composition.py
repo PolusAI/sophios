@@ -16,9 +16,8 @@ from sophios.nf_types import (
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
-from sophios.utils_nf import compiled_source_to_nextflow
 
-from .testkit import command, output_port, step, synthetic_source, tool, workflow_doc
+from .testkit import command, lowered_case, output_port, step, tool
 
 STRINGS = {"type": "array", "items": "string"}
 FILES = {"type": "array", "items": "File"}
@@ -78,23 +77,23 @@ def _pair_then_use(method: str, params: dict[str, Any]) -> ExecutableNextflowWor
     """PAIR's gathered outputs feed the unscattered ``files`` port of the scattered USE."""
     steps = [
         step("PAIR", **{
-            "in": {"a": "as", "b": "bs", "n": "n"}, "out": ["out"],
+            "in": {"a": "as", "b": "bs", "n": "n"}, "out": [{"out": {"wic_anchor": "pair_out"}}],
             "scatter": ["a", "b"], "scatterMethod": "dotproduct",
         }),
         step("USE", **{
-            "in": {"x": "xs", "y": "ys", "files": "PAIR/out"}, "out": ["used"],
+            "in": {"x": "xs", "y": "ys", "files": {"wic_alias": "pair_out"}}, "out": ["used"],
             "scatter": ["x", "y"], "scatterMethod": method,
         }),
     ]
-    workflow = workflow_doc(
-        steps,
-        inputs={
+    workflow = {
+        "steps": steps,
+        "inputs": {
             "as": {"type": STRINGS}, "bs": {"type": STRINGS}, "n": {"type": "int"},
             "xs": {"type": STRINGS}, "ys": {"type": STRINGS},
         },
-        outputs={"used": {"type": FILES, "outputSource": "USE/used"}},
-    )
-    return compiled_source_to_nextflow(synthetic_source(workflow, [_tools()[0], _use_tool()], workflow_inputs=params))
+        "outputs": {"used": {"type": FILES, "outputSource": "USE/used"}},
+    }
+    return lowered_case({"workflow": workflow, "tools": [_tools()[0], _use_tool()], "job": params})[0]
 
 
 _PAIR_THEN_USE_PARAMS = {"as": ["a", "b", "c"], "bs": ["x", "y", "z"], "n": 2, "xs": ["p", "q"], "ys": ["r", "s"]}
@@ -112,25 +111,25 @@ def _two_gathered_arrays_into_use(second: str, method: str = "dotproduct") -> Ex
     tools.append(_use_tool(("files", "more")))
     steps = [
         step(name, **{
-            "in": {"a": a, "b": b, "n": "n"}, "out": ["out"],
+            "in": {"a": a, "b": b, "n": "n"}, "out": [{"out": {"wic_anchor": f"{name}_out"}}],
             "scatter": ["a", "b"], "scatterMethod": "dotproduct",
         })
         for name, a, b in producers
     ]
     steps.append(step("USE", **{
-        "in": {"x": "xs", "y": "ys", "files": "PAIR/out", "more": f"{second}/out"}, "out": ["used"],
-        "scatter": ["x", "y"], "scatterMethod": method,
+        "in": {"x": "xs", "y": "ys", "files": {"wic_alias": "PAIR_out"}, "more": {"wic_alias": f"{second}_out"}},
+        "out": ["used"], "scatter": ["x", "y"], "scatterMethod": method,
     }))
     used = {"type": "array", "items": FILES} if method == "nested_crossproduct" else FILES
-    workflow = workflow_doc(
-        steps,
-        inputs={
+    workflow = {
+        "steps": steps,
+        "inputs": {
             "as": {"type": STRINGS}, "bs": {"type": STRINGS}, "n": {"type": "int"},
             "xs": {"type": STRINGS}, "ys": {"type": STRINGS},
         },
-        outputs={"used": {"type": used, "outputSource": "USE/used"}},
-    )
-    return compiled_source_to_nextflow(synthetic_source(workflow, tools, workflow_inputs=_PAIR_THEN_USE_PARAMS))
+        "outputs": {"used": {"type": used, "outputSource": "USE/used"}},
+    }
+    return lowered_case({"workflow": workflow, "tools": tools, "job": _PAIR_THEN_USE_PARAMS})[0]
 
 
 @pytest.mark.fast
@@ -249,22 +248,23 @@ def test_one_output_of_a_scattered_step_gathers_into_a_step_while_another_reache
 def test_a_gathered_array_feeds_a_single_input_scatter_staged_in_numbered_directories() -> None:
     steps = [
         step("PAIR", **{
-            "in": {"a": "as", "b": "bs", "n": "n"}, "out": ["out"],
+            "in": {"a": "as", "b": "bs", "n": "n"}, "out": [{"out": {"wic_anchor": "pair_out"}}],
             "scatter": ["a", "b"], "scatterMethod": "dotproduct",
         }),
-        step("USE", **{"in": {"x": "xs", "y": "y", "files": "PAIR/out"}, "out": ["used"], "scatter": ["x"]}),
+        step("USE", **{"in": {"x": "xs", "y": "y", "files": {"wic_alias": "pair_out"}}, "out": ["used"],
+                       "scatter": ["x"]}),
     ]
-    workflow = workflow_doc(
-        steps,
-        inputs={
+    workflow = {
+        "steps": steps,
+        "inputs": {
             "as": {"type": STRINGS}, "bs": {"type": STRINGS}, "n": {"type": "int"},
             "xs": {"type": STRINGS}, "y": {"type": "string"},
         },
-        outputs={"used": {"type": FILES, "outputSource": "USE/used"}},
-    )
+        "outputs": {"used": {"type": FILES, "outputSource": "USE/used"}},
+    }
     params = {"as": ["a"], "bs": ["x"], "n": 2, "xs": ["p"], "y": "r"}
     rendered = render_nextflow(
-        compiled_source_to_nextflow(synthetic_source(workflow, [_tools()[0], _use_tool()], workflow_inputs=params))
+        lowered_case({"workflow": workflow, "tools": [_tools()[0], _use_tool()], "job": params})[0]
     )
     assert (
         "tuple val(__sophios_scatter_index_9f72e), val(x)\n"

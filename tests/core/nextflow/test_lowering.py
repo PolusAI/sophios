@@ -19,14 +19,12 @@ from sophios.nf_types import (
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
-from sophios.utils_nf import (
-    compiled_source_to_nextflow, compiled_source_to_nextflow_with_notes, cwl_type_to_nf_qualifier, nextflow_names,
-)
+from sophios.utils_nf import compiled_source_to_nextflow, cwl_type_to_nf_qualifier, nextflow_names
 from sophios.wic_types import Yaml
 
 from ..budgets import budget
 from ..cases import cases, diagnostic, match
-from .testkit import case_source, one_step, tool
+from .testkit import lowered_case, one_step, tool
 
 
 @pytest.mark.fast
@@ -106,9 +104,10 @@ def test_composes_command_arguments_bindings_and_redirects() -> None:
         stdout="stdout.txt",
         stderr="stderr.txt",
     )
-    rose = one_step(run_tool, ["report"], message="hello", source={"class": "File", "path": "input.txt"})
-    process = compiled_source_to_nextflow(rose).processes[0]
-    rendered = render_nextflow(compiled_source_to_nextflow(rose))
+    workflow = lowered_case(one_step(run_tool, ["report"], message="hello",
+                                     source={"class": "File", "path": "input.txt"}))[0]
+    process = workflow.processes[0]
+    rendered = render_nextflow(workflow)
     command_line = next(line for line in rendered.splitlines() if " < " in line)
     assert command_line.count("__sophios_shell_quote_9f72e") == 9
     for fragment in ("'python'", "'script.py'", "'--mode'", "'fast'", "'--message'"):
@@ -138,8 +137,8 @@ def test_a_boolean_binding_is_a_flag_token_exactly_when_it_has_a_prefix(
     separate: true without a prefix; only a falsy separate rejects.
     """
     input_binding = {"position": 1, **binding, **({} if value_from is None else {"valueFrom": value_from})}
-    rose = one_step(tool("FLAGS", inputs={"verbose": {"type": declared, "inputBinding": input_binding}}), verbose=value)
-    workflow = compiled_source_to_nextflow(rose)
+    flag_tool = tool("FLAGS", inputs={"verbose": {"type": declared, "inputBinding": input_binding}})
+    workflow = lowered_case(one_step(flag_tool, verbose=value))[0]
     assert workflow.params == {"verbose": [] if value is None else value}
     flags = (NfFlag("verbose", "--verbose"),) if binding.get("prefix") else ()
     assert workflow.processes[0].command.tokens[1:] == flags
@@ -155,8 +154,7 @@ def test_a_boolean_binding_is_a_flag_token_exactly_when_it_has_a_prefix(
 def test_an_array_type_in_shorthand_lowers_as_written_out(shorthand: Any, expanded: Any, value: Any) -> None:
     """CWL reads `T[]` as `{type: array, items: T}` (CWL v1.2, Type DSL); a .cwl tool may declare either."""
     def lowered(cwl_type: Any) -> Any:
-        return compiled_source_to_nextflow(one_step(tool("T", inputs={"x": {"type": cwl_type, "inputBinding": {}}}),
-                                                    x=value))
+        return lowered_case(one_step(tool("T", inputs={"x": {"type": cwl_type, "inputBinding": {}}}), x=value))[0]
     assert lowered(shorthand) == lowered(expanded)
 
 
@@ -199,9 +197,9 @@ def test_the_names_a_run_maps_back_are_the_names_the_lowering_makes(
 @example(["$", "cost $5", "$HOME", "a $ b", "$$", ' mv a "$1" ', "trailing $\n", "$)", "$}", "{$", "($", ""])
 def test_a_dollar_starting_no_expression_is_text_as_cwltool_reads_it(texts: list[str]) -> None:
     for text in texts:  # cwltool passes a text with no expression through, and reads one beside a reference
-        rose = one_step(tool("ARGS", inputs={"x": {"type": "string"}}, baseCommand="echo",
-                             arguments=[text, {"valueFrom": text}, (joined := f"{text}$(inputs.x){text}")]), x="v")
-        _, *bare, beside = compiled_source_to_nextflow(rose).to_dict()["processes"][0]["command"]["tokens"]
+        workflow = lowered_case(one_step(tool("ARGS", inputs={"x": {"type": "string"}}, baseCommand="echo", arguments=[
+            text, {"valueFrom": text}, (joined := f"{text}$(inputs.x){text}")]), x="v"))[0]
+        _, *bare, beside = workflow.to_dict()["processes"][0]["command"]["tokens"]
         assert bare == [{"segments": [{"kind": "literal", "value": text}]}] * 2
         assert "".join(p.get("value", "V") for p in beside["segments"]) == interpolate(joined, {"inputs": {"x": "V"}})
 
@@ -215,7 +213,7 @@ def test_a_supported_source_lowers_as_its_case_says(case: Yaml) -> None:
     (tests/core/cases.py reads each form). A case with none of `lowered`, `render`, `notes` or `params_file` asserts
     only that its source lowers."""
     documents = copy.deepcopy(case)
-    workflow, notes = compiled_source_to_nextflow_with_notes(case_source(case))
+    workflow, notes = lowered_case(case)
     assert case == documents
     assert match(case.get("lowered", {}), workflow.to_dict())
     assert nextflow_params(workflow) == case.get("params_file", nextflow_params(workflow))

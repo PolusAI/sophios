@@ -10,12 +10,12 @@
             value: --stable}]}, {kind: flag, name: reverse, prefix: -r}, {segments: [{kind: input, name: source}]}]}}]}
 - id: array_of_scalars_lowers_to_a_val_array_port_with_a_binding
   why: &array An array input is one array-marked port, bound per item.
-  tool: &names {id: NAMES, inputs: {names: {type: {type: array, items: string}, inputBinding: {position: 1, prefix:
+  tool: &list {id: LIST, inputs: {names: {type: {type: array, items: string}, inputBinding: {position: 1, prefix:
          --name}}}}
   job: {names: [alice, bob]}
   lowered: {processes: [{inputs: [{name: names, qualifier: val, emit: null, glob: null, path_kind: null, is_array: true,
             entry: null, capture: null, optional: false}], command: {tokens: [{segments: [{kind: literal,
-                value: NAMES}]},
+                value: LIST}]},
             {kind: array, name: names, prefix: --name}]}}]}
 - id: array_of_files_lowers_to_a_path_array_port
   why: *array
@@ -28,7 +28,7 @@
    array, items: string}, inputBinding: {}}}}, job: {sources: [a, b]}, lowered: {processes: [{command: {tokens: [*cat,
    {kind: array, name: sources, prefix: null}]}}]}}
 - {id: empty_array_value_is_accepted_and_distinct_from_absent, why: 'A supplied [] is a present, valid, zero-length
-   value, not absence.', tool: *names, job: {names: []}, lowered: {params: {exact: {names: []}}}}
+   value, not absence.', tool: *list, job: {names: []}, lowered: {params: {exact: {names: []}}}}
 - id: shell_quote_false_literal_lowers_to_a_raw_shell_literal_token
   why: &unquoted 'design §6, Commands: a literal valueFrom under ShellCommandRequirement is unquoted text.'
   tool: {id: REDIRECT, outputs: &result {result: {type: File, outputBinding: {glob: out.txt}}}, requirements:
