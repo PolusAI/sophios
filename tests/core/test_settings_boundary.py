@@ -45,6 +45,7 @@ def test_defaults_are_available_without_a_command_line() -> None:
     """
     options = sophios.cli.default_compilation_settings()
     assert options['allow_raw_cwl'] is False
+    assert options['inference_use_naming_conventions'] is True
 
 
 # --------------------------------------------------------------------------
@@ -124,12 +125,22 @@ def _non_default(name: str, annotation: type) -> tuple[list[str], object]:
     The flag is the field name: argparse and the settings dicts use the same
     words, which is what makes this derivable at all.
     """
+    if name in OFF_SWITCHES:
+        return [OFF_SWITCHES[name]], False
+    if name in SPELLED:
+        return SPELLED[name]
     if annotation is bool:
         return [f'--{name}'], True          # every bool setting is store_true/False
     if annotation is int:
         return [f'--{name}', '3'], 3
     return [f'--{name}', f'chosen_{name}'], f'chosen_{name}'
 
+
+#: Settings that are on by default: the flag that turns each off, instead of `--<name>`.
+OFF_SWITCHES: Final = {'inference_use_naming_conventions': '--no_inference_naming_conventions'}
+#: Settings the compiler gets in another form than the flag's: the flags, and the value it gets. The success codes
+#: are the codes given, then those of the range, which by default holds 0 alone.
+SPELLED: Final = {'partial_failure_success_codes': (['--partial_failure_success_codes', '3'], (3, 0))}
 
 UNDELIVERABLE_BY_SENTINEL: Final = frozenset({
     # These are values in global_config.json, not CLI flags. They still travel

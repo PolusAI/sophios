@@ -370,7 +370,7 @@ def _streams(pieces: list[tuple[bool, str]]) -> dict[str, NfTemplate]:
 
 def _command(body: list[_Line], head: _Line) -> tuple[NfCommand, dict[str, NfEntry]]:
     """The command a script body runs, and the entries it makes first."""
-    texts = [line.text.removeprefix("    ") for line in body]
+    texts = [line.text for line in body]
     entries: dict[str, NfEntry] = {}
     env: list[NfEnvVar] = []
     index = 0

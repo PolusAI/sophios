@@ -11,16 +11,14 @@ partition is checked exhaustively over the declared set as well, since
 that is what the schema and the language spec derive from.
 
 The keys the compiler owns are the documented exceptions. Their normative
-statement lives in language spec §1.2 — the single home — and each is
-enforced by a named test below rather than by a property: `requirements`,
-`inputs` and `outputs` are merged into, `$schemas` is append-only,
+statement lives in language spec §1.2 — the single home. How `requirements`
+is merged into, and `hints` read in either form, is a property of its own
+(`test_emit.py`), over a model of that statement. The rest are pinned one at a
+time below: a list of either holding an `$import` or `$include` is emitted as
+written, `inputs` and `outputs` are merged into, `$schemas` is append-only,
 `$namespaces` reserves the `edam` and `sophios` prefixes, and `class` and
-`cwlVersion` are written. `hints` is the one other exception: its list form is
-read as a mapping, unless the list holds an `$import` or `$include`, so the
-properties generate only the mapping.
-A property broad enough to cover them would have to be weak enough to say
-nothing, so the properties quantify over the keys that really are untouched
-and the exceptions are pinned one at a time.
+`cwlVersion` are written. The properties here generate `hints` only as the
+mapping, and quantify over the keys that really are untouched.
 """
 import copy
 import tempfile
@@ -42,6 +40,7 @@ from sophios.wic_types import Yaml
 from .ast_strategies import hints_values, passthrough_keys, passthrough_values
 from .compile_harness import COMPILED, FAST, compile_cwl, compile_info
 from .cwl_validation import validate_cwl
+from .hermetic import compile_hermetic_cwl
 
 #: Top-level keys the *compiler* owns, which is a larger set than the syntax
 #: layer's. `_document` claims only `steps` and `wic`; `compile_workflow` also
@@ -59,6 +58,7 @@ COMPILER_OWNED_TOP_KEYS = frozenset({
 
 #: `compile_cwl` under this file's name, so every call site reads the same.
 _compile = partial(compile_cwl, name='leak')
+_hermetic = partial(compile_hermetic_cwl, name='leak')
 
 
 def _step(cwl: Yaml) -> Yaml:
@@ -85,56 +85,49 @@ def _touch_workflow(extra_step_keys: dict[str, Any], extra_top_keys: dict[str, A
     }
 
 
+def _mk_file_workflow(extra_step_keys: dict[str, Any], extra_top_keys: dict[str, Any]) -> Yaml:
+    """The synthetic mk_file, for `_hermetic`; `_touch_workflow` is the real registry's tool, for `_compile`."""
+    return {**extra_top_keys, 'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'empty.txt'}},
+                                         **extra_step_keys}]}
+
+
 # --------------------------------------------------------------------------
 # Passthrough fidelity: unclaimed keys survive byte-identically
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @given(st.dictionaries(passthrough_keys, passthrough_values, min_size=1, max_size=4))
 @COMPILED
 def test_step_passthrough_is_byte_identical(freight: dict[str, Any]) -> None:
     """A step key outside the claimed set survives compilation unchanged."""
-    compiled = _compile(_touch_workflow(freight, {}))
+    compiled = _hermetic(_mk_file_workflow(freight, {}))
     step = _step(compiled)
     for key, value in freight.items():
         assert step[key] == value, f'{key} was altered by compilation'
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @given(st.dictionaries(passthrough_keys.filter(lambda k: k not in COMPILER_OWNED_TOP_KEYS),
                        passthrough_values, min_size=1, max_size=3))
 @COMPILED
 def test_top_level_passthrough_is_byte_identical(freight: dict[str, Any]) -> None:
     """An uninterpreted top-level key survives compilation unchanged."""
-    compiled = _compile(_touch_workflow({}, freight))
+    compiled = _hermetic(_mk_file_workflow({}, freight))
     for key, value in freight.items():
         assert compiled[key] == value, f'{key} was altered by compilation'
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @given(hints_values)
 @COMPILED
 def test_hints_survive_on_the_document_and_the_step_and_change_nothing_else(hints: dict[str, Any]) -> None:
     """`hints:` is read by the parser, so it is generated as the mapping the parser keeps."""
-    without = _compile(_touch_workflow({}, {}))
-    with_hints = _compile(_touch_workflow({'hints': hints}, {'hints': hints}))
+    without = _hermetic(_mk_file_workflow({}, {}))
+    with_hints = _hermetic(_mk_file_workflow({'hints': hints}, {'hints': hints}))
     assert _step(with_hints).pop('hints') == hints
     assert with_hints.pop('hints') == hints
     assert with_hints == without
-
-
-@pytest.mark.skip_pypi_ci
-@pytest.mark.fast
-def test_list_form_hints_are_emitted_as_a_mapping_on_the_document_and_the_step() -> None:
-    """CWL's list form of `hints:` reaches the emitted document as the mapping form, at both levels."""
-    hints = [{'class': 'DockerRequirement', 'dockerPull': 'x'}]
-    compiled = _compile(_touch_workflow({'hints': hints}, {'hints': hints}))
-    assert compiled['hints'] == {'DockerRequirement': {'dockerPull': 'x'}}
-    assert _step(compiled)['hints'] == {'DockerRequirement': {'dockerPull': 'x'}}
 
 
 @pytest.mark.skip_pypi_ci
@@ -238,49 +231,6 @@ def test_class_is_written_while_inputs_outputs_and_version_are_not() -> None:
 
 @pytest.mark.skip_pypi_ci
 @pytest.mark.fast
-def test_user_requirements_are_merged_into_not_copied() -> None:
-    """`requirements` keeps what you wrote and gains what the workflow needs.
-
-    The third compiler-owned key, and the one the reference used to list as an
-    example of pure passthrough. `ir/complete.py` adds a requirement whenever a
-    step scatters, uses `when`, or names a `.wic` subworkflow — so a
-    workflow that supplies its own `requirements` gets them back extended, not
-    unchanged. The generated properties never see it: their one step is a plain
-    tool step, so the requirement set is empty and the merge is skipped on
-    every example. A class the user already wrote keeps its body.
-    """
-    compiled = _compile({
-        'requirements': {'ResourceRequirement': {'coresMin': 4},
-                         'InlineJavascriptRequirement': {'expressionLib': ['function f(){}']}},
-        'steps': [{'id': 'touch',
-                   'in': {'filename': {'wic_inline_input': ['empty.txt']}},
-                   'scatter': ['filename'],
-                   'when': '$(true)'}],
-    })
-    requirements = compiled['requirements']
-    assert requirements['ResourceRequirement'] == {'coresMin': 4}, 'user entry lost'
-    assert 'ScatterFeatureRequirement' in requirements, 'scatter requirement not added'
-    assert requirements['InlineJavascriptRequirement'] == {'expressionLib': ['function f(){}']}, \
-        'the compiler needing the same class must not wipe the body the user wrote'
-
-
-@pytest.mark.skip_pypi_ci
-@pytest.mark.fast
-def test_an_authored_requirement_with_no_body_is_emitted_as_an_empty_one() -> None:
-    """`ScatterFeatureRequirement:` written with no value is YAML null, which cwltool rejects."""
-    compiled = _compile({
-        'requirements': {'ScatterFeatureRequirement': None, 'InlineJavascriptRequirement': None},
-        'steps': [{'id': 'touch',
-                   'in': {'filename': {'wic_inline_input': ['empty.txt']}},
-                   'scatter': ['filename'],
-                   'when': '$(true)'}],
-    })
-    assert compiled['requirements']['ScatterFeatureRequirement'] == {}
-    assert compiled['requirements']['InlineJavascriptRequirement'] == {}
-
-
-@pytest.mark.skip_pypi_ci
-@pytest.mark.fast
 def test_user_schemas_are_kept_and_appended_to() -> None:
     """`$schemas` is append-only: user entries survive, Sophios adds its own."""
     compiled = _compile(_touch_workflow({}, {'$schemas': ['https://mine/schema.owl']}))
@@ -322,7 +272,6 @@ def test_no_key_lands_on_both_sides(key: str) -> None:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @given(passthrough_keys, passthrough_values)
 @COMPILED
@@ -330,8 +279,8 @@ def test_unknown_keys_change_nothing_else(key: str, value: Any) -> None:
     """Adding an uninterpreted key changes exactly that key and nothing
     else in the output — the observable meaning of "not interpreted".
     """
-    without = _compile(_touch_workflow({}, {}))
-    with_key = _compile(_touch_workflow({key: value}, {}))
+    without = _hermetic(_mk_file_workflow({}, {}))
+    with_key = _hermetic(_mk_file_workflow({key: value}, {}))
 
     # The whole document, not just the step: the requirement merge reads
     # step facts and writes a *top-level* key, so a step key reaching that path

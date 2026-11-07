@@ -89,11 +89,9 @@ class SophiosErrorCode(StrEnum):
     #: that step.
     POSITIONAL_OUTPUT_SOURCE = 'wic039'
 
-    #: Notes, not errors (errors under --inference_strict): inference chose
-    #: between equals. wic042: one producer offered several matching outputs.
-    #: wic043: an earlier producer also matched and recency decided.
-    INFERENCE_TIE = 'wic042'
-    INFERENCE_RECENCY = 'wic043'
+    #: A note, not an error (an error under --inference_strict): inference
+    #: guessed an edge, as another output also fitted the input.
+    INFERENCE_GUESS = 'wic043'
 
     #: A real-time analysis declaration (a `cwl_subinterpreter` step) that is
     #: not well formed, or whose analysis does not compile.
@@ -127,6 +125,10 @@ class SophiosErrorCode(StrEnum):
     IMPORT_MISMATCH = 'wic053'
     #: wic054: a pipeline no workflow built through the Python API compiles to, as it is written.
     IMPORT_UNWRITABLE = 'wic054'
+
+    #: Inference would wire two inputs of one tool step to the same output, and
+    #: not every input declares a file format that output carries.
+    INFERENCE_DUPLICATE = 'wic055'
 
     #: --- Python API. The document is valid; the call was not. ---
     INVALID_INPUT_VALUE = 'api001'
@@ -355,16 +357,12 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         Kind.DOCUMENT,
         'A positional `(index, name)` `outputSource` that names the wrong step.',
         'Use the index and id of the step the output comes from, or write `step/port` (.wic reference §5.2).'),
-    SophiosErrorCode.INFERENCE_TIE: Explanation(
+    SophiosErrorCode.INFERENCE_GUESS: Explanation(
         Kind.DOCUMENT,
-        'Note: one step offered several matching outputs and inference took the last.',
-        'Pin the choice the note shows, with `!&` on the output and `!*` on the input (.wic reference §8); '
-        '`--inference_strict` makes this an error.'),
-    SophiosErrorCode.INFERENCE_RECENCY: Explanation(
-        Kind.DOCUMENT,
-        'Note: an earlier step also matched and inference took the most recent.',
-        'Pin the choice the note shows, with `!&` on the output and `!*` on the input (.wic reference §8); '
-        '`--inference_strict` makes this an error.'),
+        'Note: inference guessed an edge, as another output also fitted the input.',
+        'Draw the workflow and check the guessed edges, with `--graphviz` or `Workflow.draw()`; write the ones that '
+        'are wrong with `!&` on the output and `!*` on the input (.wic reference §8). `--inference_strict` makes '
+        'each guess an error.'),
     SophiosErrorCode.REALTIME_DECLARATION: Explanation(
         Kind.DOCUMENT,
         'A real-time analysis declaration (a `cwl_subinterpreter` step) with an input that is not a literal or has '
@@ -424,6 +422,12 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         'of a CWL tool named like an attribute of the tool builder\'s `Inputs` or `Outputs`, such as `keys`.',
         'Rename what the message names in the workflow the pipeline was compiled from, to a name the compile keeps, '
         'and compile it again.'),
+    SophiosErrorCode.INFERENCE_DUPLICATE: Explanation(
+        Kind.DOCUMENT,
+        'Inference would give two inputs of one step the same output, and nothing says that is meant: the inputs '
+        'are not all written and do not all declare a file format that output carries.',
+        'Write the edge each input should read, with `!&` on the output and `!*` on the input (.wic reference §8); '
+        'two written edges to one output are always accepted.'),
     SophiosErrorCode.INVALID_INPUT_VALUE: Explanation(
         Kind.CALL,
         'A value bound to a step input that the input cannot take.',

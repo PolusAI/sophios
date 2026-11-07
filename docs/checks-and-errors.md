@@ -88,7 +88,7 @@ In detail, layer by layer:
 | Layer | When | What it checks | Codes |
 |---|---|---|---|
 | Parse | as each `.wic` file is read | it is YAML, a mapping, with keys of the right shape, known tags in the right places, a well-formed `wic:` block | `wic001`–`wic010`, `wic019`, `wic024`, `wic030`, `wic033`–`wic035`, `wic038` |
-| Compile | after every file is read | every step names a tool or subworkflow that exists, every input and output a port it declares, every reference something defined, every literal a value of its type, every version pin a known one | `wic011`–`wic014`, `wic017`, `wic018`, `wic020`, `wic022`–`wic028`, `wic031`, `wic032`, `wic036`, `wic039`, `wic044`; notes `wic042`, `wic043`, and under `--target nextflow` `wic046` |
+| Compile | after every file is read | every step names a tool or subworkflow that exists, every input and output a port it declares, every reference something defined, every literal a value of its type, every version pin a known one | `wic011`–`wic014`, `wic017`, `wic018`, `wic020`, `wic022`–`wic028`, `wic031`, `wic032`, `wic036`, `wic039`, `wic044`, `wic055`; note `wic043`, and under `--target nextflow` `wic046` |
 | Pre-flight | before a local run pulls or runs anything; the base path is checked before every compile | the container engine, input paths, writable directories, installed programs; then the image pulls | `wic015`, `wic016`, `wic021`, `wic029`, `wic037` |
 | Run | while the runner runs | nothing of Sophios's; a tool failed | `api005` in Python; `Failure!` lines on the command line |
 | The Python call | at the assignment or call | a value an input cannot take, a step the workflow cannot place, a link between mismatched ports, a tool that will not load, a `.wic` construct with no Python spelling, contradictory inference settings, real-time analyses given to `run_async` | `api001`–`api004`, `api006`–`api008` |
@@ -113,8 +113,9 @@ step whose tool is on no search path (`wic013`), an input the tool does not
 declare (`wic028`), a workflow input nothing declares (`wic011`), an edge
 reference nothing defines (`wic025`), a literal of the wrong type (`wic020`),
 a reference whose type can never fit (`wic023`). Inference runs here too, and
-its notes (`wic042`, `wic043`) report the choices it made; `--inference_strict`
-makes them errors. A real-time analysis that does not compile is `wic044` at
+its note (`wic043`) lists the edges it guessed and says to draw the workflow to check them; `--inference_strict`
+makes each guess an error, and it refuses two inputs of one step that would read
+the same output with nothing to say so (`wic055`). A real-time analysis that does not compile is `wic044` at
 its declaration.
 
 ### Pre-flight
@@ -214,9 +215,9 @@ for note in compiled.diagnostics:
 ```
 
 The command line prints every note and error on stderr and writes the CWL
-into the base path; `compile()` raises `SophiosError` on an error, and keeps
-the notes in `compiled.diagnostics`, as [Edge inference](edge-inference.md)
-showed.
+into the base path; `compile()` prints the notes on stderr in the same words,
+raises `SophiosError` on an error, and keeps the notes in
+`compiled.diagnostics`, as [Edge inference](edge-inference.md) showed.
 
 `--check` goes one layer further: it compiles, then makes every machine
 check a run would make, and writes, pulls and runs nothing:

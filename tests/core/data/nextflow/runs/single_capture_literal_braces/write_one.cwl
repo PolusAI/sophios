@@ -1,0 +1,3 @@
+{cwlVersion: v1.2, class: CommandLineTool, baseCommand: echo, inputs: {message: {type: string, inputBinding: {position:
+ 1}}}, stdout: 'out{1,2}.txt', outputs: {result: {type: File, outputBinding: {glob: 'out{1,2}.txt', outputEval:
+ '$(self[0])'}}}}

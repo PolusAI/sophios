@@ -78,6 +78,7 @@ async def compile_wf(request: Request) -> Json:
     # From the arguments this endpoint actually built, not a fresh default
     # parse: re-deriving configuration that is already in hand is how the two drift.
     compiler_options, _graph_settings = get_dicts_for_compilation(args)
+    compiler_options['renaming_conventions'] = input_output.renamings_of(global_config)
 
     # ========= COMPILE WORKFLOW ================
     bundle = frontdoor.bundle_from_source(

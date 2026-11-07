@@ -1,0 +1,294 @@
+- id: a step is missing
+  why: &differ "Pairs no strength may call equivalent: a relation that accepts any of these would make a differential
+      harness report zero divergences on a rewrite that changed behaviour."
+  left: {steps: [{id: a__step__1__mk, out: [file]}]}
+  right: {steps: []}
+  verdicts: {all: differs}
+- id: a step names a different tool
+  why: *differ
+  left: {steps: [{id: a__step__1__mk, run: a__step__1__mk/mk.cwl, out: [file]}]}
+  right: {steps: [{id: a__step__1__xf, run: a__step__1__xf/xf.cwl, out: [file]}]}
+  verdicts: {all: differs}
+- id: an edge points somewhere else
+  why: *differ
+  left: {steps: [{id: a__step__1__mk, in: {f: a__step__1__mk/file}}]}
+  right: {steps: [{id: a__step__1__mk, in: {f: a__step__2__xf/file}}]}
+  verdicts: {all: differs}
+- id: an output disappeared
+  why: *differ
+  left: {steps: [], outputs: {x: {type: File}}}
+  right: {steps: [], outputs: {}}
+  verdicts: {all: differs}
+- id: a requirement disappeared
+  why: *differ
+  left: {steps: [], requirements: {ScatterFeatureRequirement: {}}}
+  right: {steps: [], requirements: {}}
+  verdicts: {all: differs}
+- id: an output changed format
+  why: "`format` is the only thing separating `mk_file` from `mk_text` in the synthetic registry, so a relation
+      comparing `type` alone cannot tell a workflow ending in one from a workflow ending in the other. Drop `format`
+      from `_SHAPE_KEYS` and this case fails."
+  left: {steps: [], outputs: {x: {type: File, format: "edam:format_2330"}}}
+  right: {steps: [], outputs: {x: {type: File, format: "edam:format_3752"}}}
+  verdicts: {all: differs}
+- id: two workflow outputs swapped producers
+  why: "The case whose absence let `outputSource` stay dropped after the same argument had already been accepted for
+      `in[].source`. Nothing else can see it: `_port_shapes` reduces the outputs to a *sorted* multiset, which no
+      permutation of the pairing changes, and workflow outputs were not nodes, so the DAG check never saw them either."
+  left: {steps: [{id: a__step__1__mk_file, out: [file]}, {id: a__step__2__count, out: [n]}],
+      outputs: {p: {type: File, outputSource: a__step__1__mk_file/file},
+      q: {type: int, outputSource: a__step__2__count/n}}}
+  right: {steps: [{id: a__step__1__mk_file, out: [file]}, {id: a__step__2__count, out: [n]}],
+      outputs: {p: {type: File, outputSource: a__step__2__count/n},
+      q: {type: int, outputSource: a__step__1__mk_file/file}}}
+  verdicts: {all: differs}
+- id: the relation is reflexive
+  why: "Necessary, and nowhere near sufficient — the `all: differs` cases are what make this meaningful rather than a
+      property of the constant function None."
+  left: {steps: [{id: a__step__1__mk, in: {f: x}, out: [file]}], requirements: {ScatterFeatureRequirement: {}}}
+  verdicts: {all: null}
+- id: a divergence names where it found the difference
+  why: "A pipeline migration runs this over thousands of inputs. A report that says only \"not equivalent\" moves the
+      work to a human with two long documents."
+  left: {steps: [{id: a__step__1__mk, in: {f: left}}]}
+  right: {steps: [{id: a__step__1__mk, in: {f: right}}]}
+  verdicts: {IDENTICAL: {path: ".steps[0].in.f", left: left, right: right}}
+- id: a divergence names a missing key
+  why: &paths "The two paths the case 'a divergence names where it found the difference' does not reach. A walk that
+      reported `<root>` for these would still pass that case while being useless on the two shapes a real compiler diff
+      most often has: a key one side stopped emitting, and a step that vanished."
+  left: {steps: [], outputs: {x: {type: File}}}
+  right: {steps: [], outputs: {}}
+  verdicts: {IDENTICAL: {path: ".outputs.x", left: {type: File}, right: null}}
+- id: a divergence names a shorter list
+  why: *paths
+  left: {steps: [{id: a__step__1__mk}]}
+  right: {steps: []}
+  verdicts: {IDENTICAL: {path: ".steps[]", left: 1, right: 0}}
+- id: the DAG check sees a moved edge
+  why: "The companion for `_same_dag`'s derived graph. The `all: differs` case \"an edge points somewhere else\" is the
+      one that forced it to exist, so this asserts the mechanism directly rather than only through that verdict: two
+      documents with identical step ids and identical tool labels, differing only in where one `in:` source points, must
+      diverge at UP_TO_RENAMING with the DAG named as the place it happened."
+  left: {steps: [{id: a__step__1__mk, out: [file]}, {id: a__step__2__xform, in: {file: {source: a__step__1__mk/file}}}]}
+  right: {steps: [{id: a__step__1__mk, out: [file]}, {id: a__step__2__xform,
+      in: {file: {source: a__step__9__mk/file}}}]}
+  verdicts: {UP_TO_RENAMING: {path: "<dag>"}}
+- id: the DAG check sees the same tools wired up differently
+  why: "The companion for `_dataflow`'s node labels. Both documents hold the same three tools, so the process multiset
+      agrees, and both graphs are three nodes with one edge and one isolate, so a bare `DiGraphMatcher` maps them onto
+      each other. Only matching nodes by the process each runs sees that the edge runs `mk_file -> xform` on one side
+      and `join -> xform` on the other. Written as its own case because mutating `node_match` to `True` left every other
+      case here green."
+  left: {steps: [{id: a__step__1__mk_file, run: mk_file.cwl, out: [file]},
+      {id: a__step__2__join, run: join.cwl, out: [file]}, {id: a__step__3__xform, run: xform.cwl,
+      in: {file: {source: a__step__1__mk_file/file}}}]}
+  right: {steps: [{id: a__step__1__join, run: join.cwl, out: [file]},
+      {id: a__step__2__mk_file, run: mk_file.cwl, out: [file]},
+      {id: a__step__3__xform, run: xform.cwl, in: {file: {source: a__step__1__join/file}}}]}
+  verdicts: {UP_TO_RENAMING: {path: "<dag>"}}
+- id: the DAG check sees one of two edges replaced by an outside source
+  why: "`join` binds `left` and `right` in both documents, so its two nodes have identical labels; on the right
+      `join.right` comes from outside the workflow, a node of its own, so the graphs differ in shape. It once isolated
+      `edge_match`; it stopped when a workflow-level source became a node, and mutating `edge_match` to `True` now fails
+      only 'a port rewired onto a differently typed workflow input'."
+  left: {steps: [{id: a__step__1__mk_file, out: [file]}, {id: a__step__2__join,
+      in: {left: {source: a__step__1__mk_file/file}, right: {source: a__step__1__mk_file/file}}}]}
+  right: {steps: [{id: a__step__1__mk_file, out: [file]}, {id: a__step__2__join,
+      in: {left: {source: a__step__1__mk_file/file}, right: {source: outside___right}}}]}
+  verdicts: {UP_TO_RENAMING: {path: "<dag>"}}
+- id: an output port vanished from out
+  why: &meaning "Differences inside a step that carry meaning and that no renaming can produce: `UP_TO_RENAMING`
+      forgives a step's `id`, the directory of its `run` and the `source` inside each binding, and nothing else. Each
+      returned None once, when the relation looked only at `id` and `in[].source`."
+  left: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl, out: [file, text]}]}
+  right: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl, out: [file]}]}
+  verdicts: {UP_TO_RENAMING: differs}
+- id: a step became scattered
+  why: *meaning
+  left: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl, scatter: [name]}]}
+  right: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl}]}
+  verdicts: {UP_TO_RENAMING: differs}
+- id: the scatter method changed
+  why: *meaning
+  left: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl, scatter: [a, b], scatterMethod: dotproduct}]}
+  right: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl, scatter: [a, b], scatterMethod: flat_crossproduct}]}
+  verdicts: {UP_TO_RENAMING: differs}
+- id: a conditional flipped
+  why: *meaning
+  left: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl, when: "$(true)"}]}
+  right: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl, when: "$(false)"}]}
+  verdicts: {UP_TO_RENAMING: differs}
+- id: an input default changed
+  why: *meaning
+  left: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl, in: {name: {source: wf___name, default: 1}}}]}
+  right: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl, in: {name: {source: wf___name, default: 999}}}]}
+  verdicts: {UP_TO_RENAMING: differs}
+- id: a binding moved to another input
+  why: *meaning
+  left: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl, in: {name: {source: wf___name}}}]}
+  right: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl, in: {other: {source: wf___name}}}]}
+  verdicts: {UP_TO_RENAMING: differs}
+- id: a valueFrom appeared
+  why: *meaning
+  left: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl, in: {name: {source: wf___name}}}]}
+  right: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl,
+      in: {name: {source: wf___name, valueFrom: "$(self + 1)"}}}]}
+  verdicts: {UP_TO_RENAMING: differs}
+- id: embedding may move a child's ontology into its parent
+  why: "An embedded tool's `$schemas` can only be declared by the document holding it, so embedding moves it up, as it
+      moves `$namespaces`."
+  left: {class: Workflow, steps: [{id: echo, run: greeting~echo.cwl, out: []}]}
+  right: {class: Workflow, "$schemas": ["https://example.org/EDAM.owl"],
+      "$namespaces": {edam: "https://edamontology.org/"}, steps: [{id: echo, run: {class: CommandLineTool}, out: []}]}
+  verdicts: {UP_TO_EMBEDDING: null, UP_TO_ORDER: differs}
+- id: only IDENTICAL compares key order at the root
+  why: &order "IDENTICAL is a claim about bytes; the weaker strengths are claims about a workflow, and a YAML mapping is
+      unordered by its own specification. Emitted key order is the subject here — `requirements` built from a set, eight
+      hash seeds giving eight orders — so a relation that normalised order away at every strength would make the
+      regression that predicate exists to catch invisible to it."
+  left: {class: Workflow, steps: []}
+  right: {steps: [], class: Workflow}
+  verdicts: {IDENTICAL: {path: "<root> (key order)", left: [class, steps], right: [steps, class]}, UP_TO_ORDER: null,
+      UP_TO_EMBEDDING: null, UP_TO_RENAMING: null}
+- id: only IDENTICAL compares key order in a step
+  why: *order
+  left: {steps: [{id: a__step__1__mk, out: [f], run: r}]}
+  right: {steps: [{id: a__step__1__mk, run: r, out: [f]}]}
+  verdicts: {IDENTICAL: {path: ".steps[0] (key order)"}, UP_TO_ORDER: null, UP_TO_EMBEDDING: null}
+- id: the DAG check sees two edges dangling at different places
+  why: "The companion for `_dataflow` keeping absent producers as nodes. A reference to a step the document does not
+      contain is what a renaming that missed one site leaves behind, and it is the shape an IR migration fails at.
+      Discard those references and the two documents below are both \"one step, no edges\" and the relation calls them
+      equivalent; keep them and the tool at the far end of each edge is visibly different."
+  left: {steps: [{id: a__step__1__xform, in: {file: {source: a__step__7__mk_file/file}}}]}
+  right: {steps: [{id: a__step__1__xform, in: {file: {source: a__step__7__join/file}}}]}
+  verdicts: {UP_TO_RENAMING: {path: "<dag>"}}
+- id: a declared step is not the same as one only referenced
+  why: "The companion for `_dataflow`'s `('external', ...)` node marker. Left declares `mk_file` and consumes its
+      output. Right consumes the same output from a step it never declares — a dangling reference, which is what a
+      migration that dropped a step from `steps:` while leaving its consumers intact produces. Both graphs are two nodes
+      and one edge, and neither document has ports or requirements to compare, so nothing but the marker separates them.
+      Relabelling absent producers as if they were declared steps left every other case here green."
+  left: {steps: [{id: a__step__1__mk_file}, {id: a__step__2__xform, in: {file: {source: a__step__1__mk_file/file}}}]}
+  right: {steps: [{id: a__step__2__xform, in: {file: {source: a__step__1__mk_file/file}}}]}
+  verdicts: {UP_TO_RENAMING: {path: "<dag>"}}
+- id: the array forms of ports and requirements are read
+  why: &arrays "CWL admits `requirements` as a list of `{class: ...}` and ports as an array of records; the Sophios
+      compiler emits neither today, so without this those branches would be code no test reaches — and a migrated
+      pipeline that started emitting them would silently compare `repr` of a whole list against `repr` of another, i.e.
+      would still be \"working\"."
+  left: {steps: [], requirements: [{class: ScatterFeatureRequirement}], outputs: [{id: x, type: File}]}
+  right: {steps: [], requirements: {ScatterFeatureRequirement: {}}, outputs: {y: {type: File}}}
+  verdicts: {UP_TO_RENAMING: null}
+- id: the array forms of ports and requirements are compared
+  why: *arrays
+  left: {steps: [], requirements: [{class: ScatterFeatureRequirement}], outputs: [{id: x, type: File}]}
+  right: {steps: [], requirements: [], outputs: []}
+  verdicts: {UP_TO_RENAMING: differs}
+- id: isomorphism alone would not be enough
+  why: "Why the matcher is labelled rather than bare. The retired source-inlining regression compared two compilations
+      with a bare `DiGraphMatcher` and nothing else. These two documents have the same shape — two nodes, one edge — and
+      a different tool at every node, so a bare matcher calls them equivalent. That is precisely the kind of thing an IR
+      migration could get wrong, which is why the relation a migration imports must not be the one already in the tree.
+      Asserts the *verdict*, not the path string. Asserting `'tool multiset' in found.path` would be this project's
+      recurring failure written into the artifact everything imports: a separate tool-multiset check had by then been
+      subsumed by the labelled isomorphism, so the name of the test claimed a discrimination the code no longer
+      performed and only the string kept it green. The check was deleted; this is what remains, and it fails if
+      `node_match` stops looking at the label."
+  left: {steps: [{id: a__step__1__mk_file, run: mk_file.cwl, out: [file]},
+      {id: a__step__2__xform, run: xform.cwl, in: {file: {source: a__step__1__mk_file/file}}}]}
+  right: {steps: [{id: a__step__1__mk_text, run: mk_text.cwl, out: [file]},
+      {id: a__step__2__join, run: join.cwl, in: {file: {source: a__step__1__mk_text/file}}}]}
+  verdicts: {UP_TO_RENAMING: {path: "<dag>"}}
+- id: a port rewired onto a differently typed workflow input
+  why: &inputs "The companion for `_dataflow`'s workflow-level input nodes. Every argument a step does not receive from
+      another step is emitted as `in: {arg: {source: {step_id}___{arg}}}` against a declared workflow-level input -- the
+      majority of the bindings in any compiled document. Those sources name no producer, and skipping them on that
+      ground makes the two documents below UP_TO_RENAMING-equal: both declare a `File` input and a `string` input, both
+      have one step and no edges, and which port reads which is nowhere in the comparison. Both directions, because the
+      fix must not overshoot. Feeding `left` from the `string` input instead of the `File` one is a divergence; feeding
+      it from the *other* `File` input is not, because relabelling two ports of the same shape is precisely what
+      re-rooting a namespace does."
+  left: {steps: [{id: a__step__1__join, in: {left: {source: a___p}, right: {source: a___q}}}],
+      inputs: {a___p: {type: File}, a___q: {type: string}}, outputs: {}}
+  right: {steps: [{id: a__step__1__join, in: {left: {source: a___q}, right: {source: a___p}}}],
+      inputs: {a___p: {type: File}, a___q: {type: string}}, outputs: {}}
+  verdicts: {UP_TO_RENAMING: {path: "<dag>"}}
+- id: two ports swapped between workflow inputs of one type
+  why: *inputs
+  left: {steps: [{id: a__step__1__join, in: {left: {source: a___p}, right: {source: a___q}}}],
+      inputs: {a___p: {type: File}, a___q: {type: File}}, outputs: {}}
+  right: {steps: [{id: a__step__1__join, in: {left: {source: a___q}, right: {source: a___p}}}],
+      inputs: {a___p: {type: File}, a___q: {type: File}}, outputs: {}}
+  verdicts: {UP_TO_RENAMING: null}
+- id: a workflow output rewired onto a differently typed producer
+  why: &outputs "The companion for `_dataflow`'s workflow-level output nodes. The mirror of the input-side cases, and
+      written the same way because the fix must not overshoot in the same direction: rewiring an output onto a
+      differently-shaped producer is a divergence, and permuting two outputs of the *same* shape is not, that
+      permutation being what a renaming is. The `all: differs` case 'two workflow outputs swapped producers' carries the
+      swap as well. This exists beside it to assert the mechanism — that the pairing lives in the graph — rather than
+      only the verdict, and to pin the second direction, which no `all: differs` case can express."
+  left: {steps: [{id: a__step__1__mk_file, out: [file]}, {id: a__step__2__count, out: [n]}],
+      outputs: {p: {type: File, outputSource: a__step__1__mk_file/file},
+      q: {type: int, outputSource: a__step__2__count/n}}}
+  right: {steps: [{id: a__step__1__mk_file, out: [file]}, {id: a__step__2__count, out: [n]}],
+      outputs: {p: {type: File, outputSource: a__step__2__count/n},
+      q: {type: int, outputSource: a__step__1__mk_file/file}}}
+  verdicts: {UP_TO_RENAMING: {path: "<dag>"}}
+- id: two workflow outputs of one type swapped producers
+  why: *outputs
+  left: {steps: [{id: a__step__1__mk_file, out: [file]}, {id: a__step__2__count, out: [n]}],
+      outputs: {p: {type: File, outputSource: a__step__1__mk_file/file},
+      q: {type: File, outputSource: a__step__2__count/n}}}
+  right: {steps: [{id: a__step__1__mk_file, out: [file]}, {id: a__step__2__count, out: [n]}],
+      outputs: {p: {type: File, outputSource: a__step__2__count/n},
+      q: {type: File, outputSource: a__step__1__mk_file/file}}}
+  verdicts: {UP_TO_RENAMING: null}
+- id: an output that lost its producer is not the same document
+  why: "The companion for `_dataflow` giving an output no node without a source. An output whose `outputSource` vanished
+      — the shape of a lowering that stopped wiring one up — keeps its declared shape, so `_port_shapes` cannot see it
+      go. The graph can: the node and its edge are simply absent."
+  left: {steps: [{id: a__step__1__mk_file, out: [file]}], outputs: {p: {type: File,
+      outputSource: a__step__1__mk_file/file}}}
+  right: {steps: [{id: a__step__1__mk_file, out: [file]}], outputs: {p: {type: File}}}
+  verdicts: {UP_TO_RENAMING: {path: "<dag>"}}
+- id: mapping-form steps cannot be read
+  why: &loud "The module's WILL NOT READ contract, asserted rather than described. Each of these was previously read
+      as \"nothing here\" — a non-list `steps:` coerced to `[]`, a step without `id` filtered out, an array-form `in:`
+      forgiven by `_FORGIVEN_STEP_KEYS` and restored by neither reader — and so each made a pair of *different*
+      documents compare equal. Compared against an empty document, which is the pair that was equal, so a coercion
+      coming back returns this test to red rather than merely to a different exception."
+  left: {steps: {s: {run: r}}}
+  right: {steps: []}
+  verdicts: {UP_TO_RENAMING: TypeError}
+- id: a step with no id cannot be read
+  why: *loud
+  left: {steps: [{out: [file]}]}
+  right: {steps: []}
+  verdicts: {UP_TO_RENAMING: TypeError}
+- id: array-form in cannot be read
+  why: *loud
+  left: {steps: [{id: a__step__1__join, in: [{id: left, source: x}]}]}
+  right: {steps: []}
+  verdicts: {UP_TO_RENAMING: TypeError}
+- id: an unparsable producer keeps its whole name
+  why: "The companion for `_dataflow`'s `('external', name)` label. A producer the document does not declare has no
+      `run:` to read, so it is labelled by the whole name it is referenced by. That is the *stricter* choice — two
+      different absent producers have to be equal rather than being lumped together as one anonymous \"external\".
+      Nothing else pins it: a constant label leaves these two documents equivalent."
+  left: {steps: [{id: a__step__1__xform, in: {file: {source: handwritten_a/file}}}]}
+  right: {steps: [{id: a__step__1__xform, in: {file: {source: handwritten_b/file}}}]}
+  verdicts: {UP_TO_RENAMING: {path: "<dag>"}}
+- id: UP_TO_EMBEDDING forgives run
+  why: &run "`run` is the whole of what this strength ignores. `_rewrite_run_paths` shows the forgiveness happens; this
+      shows it stops there. A normalisation widened by one key — deleting `label` alongside `run`, say — is invisible to
+      every other case here, and that is the shape of change an IR migration makes when a key starts moving around."
+  left: {steps: [{id: a__step__1__mk_file, run: a__step__1__mk_file/mk_file.cwl, label: x}]}
+  right: {steps: [{id: a__step__1__mk_file, run: flat/mk_file.cwl, label: x}]}
+  verdicts: {UP_TO_EMBEDDING: null}
+- id: UP_TO_EMBEDDING forgives nothing else
+  why: *run
+  left: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl, label: x}]}
+  right: {steps: [{id: a__step__1__mk_file, run: a/mk_file.cwl, label: y}]}
+  verdicts: {UP_TO_EMBEDDING: {path: ".steps[0].label"}}

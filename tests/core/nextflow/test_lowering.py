@@ -5,56 +5,41 @@
 import copy
 from typing import Any
 
+from cwl_utils.expression import interpolate
+from hypothesis import example, given, strategies as st
 import pytest
 from sophios.input_output_nf import nextflow_params, render_nextflow
 from sophios.ir.artifacts import CompilationResult
 from sophios.nf_types import (
-    NfArrayBinding,
-    NfBasenameReference,
-    NfEnvVar,
     NfFlag,
-    NfInputReference,
     NfLiteral,
     NfPort,
-    NfResources,
-    NfShellLiteral,
     NfTemplate,
     NfProcessConnection,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
-from sophios.lang.diagnostics import Diagnostic, Locator, Severity
-from sophios.lang.error_codes import SophiosErrorCode
 from sophios.utils_nf import (
     compiled_source_to_nextflow, compiled_source_to_nextflow_with_notes, cwl_type_to_nf_qualifier, nextflow_names,
 )
+from sophios.wic_types import Yaml
 
-from .testkit import one_step, step, synthetic_source, tool, workflow_doc
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(
-    ("cwl_type", "qualifier"),
-    [
-        ("File", "path"),
-        ("Directory", "path"),
-        ("string", "val"),
-        ("int", "val"),
-        ("float", "val"),
-        ("boolean", "val"),
-        ("File?", "path"),
-    ],
-    ids=["file", "directory", "string", "int", "float", "boolean", "optional-file"],
-)
-def test_cwl_type_mapping(cwl_type: Any, qualifier: str) -> None:
-    assert cwl_type_to_nf_qualifier(cwl_type) == qualifier
+from ..budgets import budget
+from ..cases import cases, diagnostic, match
+from .testkit import case_source, one_step, tool
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("cwl_type", ["Any", "File[]", {"type": "array", "items": "File"}])
-def test_rejects_unbounded_and_collection_types(cwl_type: Any) -> None:
-    with pytest.raises(ValueError, match="unsupported CWL type"):
-        cwl_type_to_nf_qualifier(cwl_type)
+@pytest.mark.parametrize(("cwl_type", "qualifier"), [
+    ("File", "path"), ("Directory", "path"), ("string", "val"), ("int", "val"), ("float", "val"), ("boolean", "val"),
+    ("File?", "path"), ("Any", None), ("File[]", None), ({"type": "array", "items": "File"}, None),
+], ids=["file", "directory", "string", "int", "float", "boolean", "optional-file", "any", "array-shorthand", "array"])
+def test_a_cwl_type_has_its_qualifier_or_is_refused(cwl_type: Any, qualifier: str | None) -> None:
+    if qualifier is None:
+        with pytest.raises(ValueError, match="unsupported CWL type"):
+            cwl_type_to_nf_qualifier(cwl_type)
+    else:
+        assert cwl_type_to_nf_qualifier(cwl_type) == qualifier
 
 
 # Each real fixture's workflow name, (process, inputs) list, connections and params.
@@ -161,342 +146,18 @@ def test_a_boolean_binding_is_a_flag_token_exactly_when_it_has_a_prefix(
 
 
 @pytest.mark.fast
-def test_flag_tokens_take_their_cwl_position_among_other_bindings() -> None:
-    """A flag is ordered by position like any other binding, not appended."""
-    sort_tool = tool(
-        "SORT",
-        inputs={
-            "source": {"type": "File", "inputBinding": {"position": 3}},
-            "reverse": {"type": "boolean", "inputBinding": {"position": 2, "prefix": "-r"}},
-        },
-        arguments=[{"position": 1, "valueFrom": "--stable"}],
-    )
-    rose = one_step(sort_tool, source={"class": "File", "path": "in.txt"}, reverse=True)
-
-    tokens = compiled_source_to_nextflow(rose).processes[0].command.tokens
-
-    assert tokens[0] == NfTemplate((NfLiteral("SORT"),))
-    assert tokens[1] == NfTemplate((NfLiteral("--stable"),))
-    assert tokens[2] == NfFlag("reverse", "-r")
-    assert tokens[3] == NfTemplate((NfInputReference("source"),))
-
-
-@pytest.mark.fast
-def test_array_of_scalars_lowers_to_a_val_array_port_with_a_binding() -> None:
-    names_tool = tool(
-        "NAMES",
-        inputs={
-            "names": {
-                "type": {"type": "array", "items": "string"},
-                "inputBinding": {"position": 1, "prefix": "--name"},
-            }
-        },
-    )
-    rose = one_step(names_tool, names=["alice", "bob"])
-
-    process = compiled_source_to_nextflow(rose).processes[0]
-
-    assert process.inputs[0] == NfPort("names", "val", is_array=True)
-    assert process.command.tokens[-1] == NfArrayBinding("names", "--name")
-
-
-@pytest.mark.fast
-def test_array_of_files_lowers_to_a_path_array_port() -> None:
-    cat_tool = tool(
-        "CAT",
-        inputs={
-            "sources": {
-                "type": {"type": "array", "items": "File"},
-                "inputBinding": {"position": 1},
-            }
-        },
-    )
-    rose = one_step(cat_tool, sources=[{"class": "File", "path": "a.txt"}, {"class": "File", "path": "b.txt"}])
-
-    process = compiled_source_to_nextflow(rose).processes[0]
-
-    assert process.inputs[0] == NfPort("sources", "path", is_array=True)
-    assert process.command.tokens[-1] == NfArrayBinding("sources")
-
-
-@pytest.mark.fast
-def test_array_binding_without_a_prefix_lowers_correctly() -> None:
-    cat_tool = tool(
-        "CAT",
-        inputs={"sources": {"type": {"type": "array", "items": "string"}, "inputBinding": {}}},
-    )
-    rose = one_step(cat_tool, sources=["a", "b"])
-
-    process = compiled_source_to_nextflow(rose).processes[0]
-
-    assert process.command.tokens[-1] == NfArrayBinding("sources", None)
-
-
-@pytest.mark.fast
-def test_empty_array_value_is_accepted_and_distinct_from_absent() -> None:
-    """A supplied [] is a present, valid, zero-length value, not absence."""
-    names_tool = tool(
-        "NAMES",
-        inputs={
-            "names": {
-                "type": {"type": "array", "items": "string"},
-                "inputBinding": {"position": 1, "prefix": "--name"},
-            }
-        },
-    )
-    rose = one_step(names_tool, names=[])
-
-    assert compiled_source_to_nextflow(rose).params == {"names": []}
-
-
-@pytest.mark.fast
-def test_shell_quote_false_literal_lowers_to_a_raw_shell_literal_token() -> None:
-    redirect_tool = tool(
-        "REDIRECT",
-        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
-        requirements={"ShellCommandRequirement": {}},
-        arguments=[
-            {"position": 1, "valueFrom": "hello"},
-            {"position": 2, "valueFrom": ">>", "shellQuote": False},
-            {"position": 3, "valueFrom": "out.txt"},
-        ],
-    )
-    rose = one_step(redirect_tool, ["result"])
-
-    tokens = compiled_source_to_nextflow(rose).processes[0].command.tokens
-
-    assert tokens[0] == NfTemplate((NfLiteral("REDIRECT"),))
-    assert tokens[1] == NfTemplate((NfLiteral("hello"),))
-    assert tokens[2] == NfShellLiteral(">>")
-    assert tokens[3] == NfTemplate((NfLiteral("out.txt"),))
-
-
-@pytest.mark.fast
-def test_shell_quote_false_takes_precedence_over_boolean_flag_lowering() -> None:
-    """A literal valueFrom fully overrides type-specific binding, even on a boolean input."""
-    literal_tool = tool(
-        "LITERAL",
-        inputs={
-            "flag": {
-                "type": "boolean",
-                "inputBinding": {"position": 1, "valueFrom": "--literal", "shellQuote": False},
-            }
-        },
-        requirements={"ShellCommandRequirement": {}},
-    )
-    rose = one_step(literal_tool, flag=True)
-
-    tokens = compiled_source_to_nextflow(rose).processes[0].command.tokens
-
-    assert tokens[1] == NfShellLiteral("--literal")
-    assert not any(isinstance(token, NfFlag) for token in tokens)
-
-
-@pytest.mark.fast
-def test_command_of_only_shell_literals_still_runs_a_program() -> None:
-    """A shell literal is itself executable command text, not an empty command."""
-    literal_tool = tool(
-        "LITERAL",
-        requirements={"ShellCommandRequirement": {}},
-        baseCommand=None,
-        arguments=[{"position": 1, "valueFrom": "printf ok", "shellQuote": False}],
-    )
-    rose = one_step(literal_tool)
-
-    tokens = compiled_source_to_nextflow(rose).processes[0].command.tokens
-
-    assert tokens == (NfShellLiteral("printf ok"),)
-
-
-@pytest.mark.fast
-def test_basename_lowers_to_a_typed_segment_in_every_template_position() -> None:
-    copy_tool = tool(
-        "COPY",
-        inputs={"source": {"type": "File", "inputBinding": {"position": 1}}},
-        outputs={
-            "result": {
-                "type": "File",
-                "outputBinding": {"glob": "$(inputs.source.basename).copy"},
-            }
-        },
-        arguments=[{"position": 2, "valueFrom": "$(inputs.source.basename).copy"}],
-        stdout="$(inputs.source.basename).log",
-    )
-    rose = one_step(copy_tool, ["result"], source={"class": "File", "path": "lines.txt"})
-
-    process = compiled_source_to_nextflow(rose).processes[0]
-
-    expected = (NfBasenameReference("source"), NfLiteral(".copy"))
-    assert process.outputs[0].glob == NfTemplate(expected)
-    assert process.command.tokens[-1] == NfTemplate(expected)
-    assert process.command.stdout == NfTemplate(
-        (NfBasenameReference("source"), NfLiteral(".log"))
-    )
-
-
-@pytest.mark.fast
-def test_applies_unwired_scalar_default_before_lowering() -> None:
-    default_tool = tool(
-        "DEFAULT",
-        inputs={
-            "message": {
-                "type": "string",
-                "default": "hello default",
-                "inputBinding": {"position": 1},
-            }
-        },
-        outputs={"result": {"type": "File", "outputBinding": {"glob": "result.txt"}}},
-        arguments=[{"position": 2, "valueFrom": "result.txt"}],
-    )
-    rose = synthetic_source(
-        workflow_doc(
-            [step("DEFAULT", out=["result"])],
-            outputs={"result": {"type": "File", "outputSource": "DEFAULT/result"}},
-        ),
-        [default_tool],
-    )
-    workflow = compiled_source_to_nextflow(rose)
-    assert workflow.params == {"_DEFAULT_message": "hello default"}
-    assert NfWorkflowInputConnection("_DEFAULT_message", "_DEFAULT", "message") in workflow.connections
-    assert "Channel.value(__sophios_input_9f72e('_DEFAULT_message', params._DEFAULT_message, 'string'))" in (
-        render_nextflow(workflow)
-    )
-
-
-@pytest.mark.fast
-def test_a_default_is_held_as_a_value_written_on_a_step_is() -> None:
-    """A workflow input's default, which only a .wic file writes, and a tool's are held as a value written on a step
-    is: an int given for a float is the float, written as its text, and a path given as text is the File there."""
-    take = tool("take", inputs={"x": {"type": "float", "inputBinding": {"position": 1}},
-                                "r": {"type": ["null", "float"], "default": 7, "inputBinding": {"position": 2}},
-                                "f": {"type": "File", "default": "/data/a.txt"}},
-                outputs={"result": {"type": "File", "outputBinding": {"glob": "result.txt"}}})
-    workflow = compiled_source_to_nextflow(synthetic_source(workflow_doc(
-        [step("take", **{"in": {"x": "y"}, "out": ["result"]})], inputs={"y": {"type": "float", "default": 5}},
-        outputs={"result": {"type": "File", "outputSource": "take/result"}}), [take]))
-    assert nextflow_params(workflow) == {
-        "y": "5.0", "take_r": "7.0", "take_f": {"class": "File", "path": "/data/a.txt"}}
-
-
-@pytest.mark.fast
-def test_every_parameter_records_its_declared_type() -> None:
-    """Workflow inputs carry their own declarations; a tool default carries its tool input's."""
-    take = tool(
-        "TAKE",
-        inputs={
-            "name": {"type": "string", "inputBinding": {"position": 1}},
-            "count": {"type": ["null", "int"]},
-            "files": {"type": {"type": "array", "items": "File"}, "inputBinding": {"position": 2}},
-            "dirs": {"type": ["null", {"type": "array", "items": "Directory"}], "inputBinding": {"position": 3}},
-            "ratio": {"type": "float", "default": 0.5},
-        },
-        outputs={"result": {"type": "File", "outputBinding": {"glob": "result.txt"}}},
-    )
-    declared = {"name": "string", "count": ["null", "int"], "files": {"type": "array", "items": "File"},
-                "dirs": ["null", {"type": "array", "items": "Directory"}], "unread": "boolean"}
-    rose = synthetic_source(
-        workflow_doc(
-            [step("TAKE", **{"in": {name: name for name in ("name", "count", "files", "dirs")}, "out": ["result"]})],
-            inputs={name: {"type": cwl_type} for name, cwl_type in declared.items()},
-            outputs={"result": {"type": "File", "outputSource": "TAKE/result"}},
-        ),
-        [take],
-        workflow_inputs={"name": "n", "count": 1, "files": [], "dirs": [], "unread": True},
-    )
-    assert compiled_source_to_nextflow(rose).param_types == {
-        "name": "string", "count": "int?", "files": "File[]", "dirs": "Directory[]?", "unread": "boolean",
-        "_TAKE_ratio": "float",
-    }
-
-
-@pytest.mark.fast
-def test_rejects_collisions_between_source_and_default_params() -> None:
-    default_tool = tool(
-        "DEFAULT",
-        inputs={
-            "message": {
-                "type": "string",
-                "default": "tool default",
-                "inputBinding": {"position": 1},
-            }
-        },
-    )
-    rose = synthetic_source(
-        workflow_doc(
-            [step("DEFAULT")],
-            inputs={"DEFAULT_message": {"type": "string"}},
-        ),
-        [default_tool],
-        workflow_inputs={"DEFAULT_message": "workflow value"},
-    )
-    with pytest.raises(
-        ValueError,
-        match="workflow parameter identifiers 'DEFAULT_message', 'DEFAULT~message' normalize to '_DEFAULT_message'",
-    ):
-        compiled_source_to_nextflow(rose)
-
-
-@pytest.mark.fast
-def test_maps_docker_requirement() -> None:
-    container = tool(
-        "CONTAINER",
-        requirements={"DockerRequirement": {"dockerPull": "ubuntu:24.04"}},
-    )
-    rose = one_step(container)
-    assert compiled_source_to_nextflow(rose).processes[0].container == "ubuntu:24.04"
-
-
-@pytest.mark.fast
-def test_maps_cpu_and_memory_requirements() -> None:
-    resources = tool(
-        "RESOURCES",
-        requirements={
-            "ResourceRequirement": {
-                "coresMin": 1,
-                "coresMax": 2,
-                "ramMin": 512,
-                "ramMax": 1024,
-            }
-        },
-    )
-    ceiling_only = tool(
-        "CEILING_ONLY",
-        requirements={"ResourceRequirement": {"coresMax": 2, "ramMax": 1024}},
-    )
-    rose = synthetic_source(
-        workflow_doc([step("RESOURCES"), step("CEILING_ONLY")]),
-        [resources, ceiling_only],
-    )
-    # CWL reserves the minimum; a maximum alone is all there is to request.
-    assert [process.resources for process in compiled_source_to_nextflow(rose).processes] == [
-        NfResources(1, 512),
-        NfResources(2, 1024),
-    ]
-
-
-@pytest.mark.fast
-def test_preserves_fanout() -> None:
-    producer = tool(
-        "A", outputs={"out": {"type": "File", "outputBinding": {"glob": "out.txt"}}}
-    )
-    consumer_b = tool("B", inputs={"value": {"type": "File"}})
-    consumer_c = tool("C", inputs={"value": {"type": "File"}})
-    rose = synthetic_source(
-        workflow_doc([
-            step("A", out=["out"]),
-            step("B", **{"in": {"value": "A/out"}}),
-            step("C", **{"in": {"value": "A/out"}}),
-        ]),
-        [producer, consumer_b, consumer_c],
-    )
-    connections = compiled_source_to_nextflow(rose).connections
-    assert len([
-        edge
-        for edge in connections
-        if isinstance(edge, NfProcessConnection)
-        and edge.from_process == "_A"
-        and edge.from_port == "out"
-    ]) == 2
+@pytest.mark.parametrize(("shorthand", "expanded", "value"), [
+    ("string[]", {"type": "array", "items": "string"}, ["a", "b"]),
+    ("File[]", {"type": "array", "items": "File"}, [{"class": "File", "path": "a.txt"}]),
+    ("int[]?", ["null", {"type": "array", "items": "int"}], [1]),
+    (["null", "string[]"], ["null", {"type": "array", "items": "string"}], []),
+])
+def test_an_array_type_in_shorthand_lowers_as_written_out(shorthand: Any, expanded: Any, value: Any) -> None:
+    """CWL reads `T[]` as `{type: array, items: T}` (CWL v1.2, Type DSL); a .cwl tool may declare either."""
+    def lowered(cwl_type: Any) -> Any:
+        return compiled_source_to_nextflow(one_step(tool("T", inputs={"x": {"type": cwl_type, "inputBinding": {}}}),
+                                                    x=value))
+    assert lowered(shorthand) == lowered(expanded)
 
 
 @pytest.mark.fast
@@ -522,138 +183,6 @@ def test_conversion_does_not_mutate_compilation_result(
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("base_command", ["pre$(inputs.s)", ["pre$(inputs.s)"]], ids=["string", "list"])
-def test_base_command_and_prefix_are_literals(base_command: Any) -> None:
-    literal = tool(
-        "LITERAL",
-        inputs={"s": {"type": "string", "inputBinding": {"prefix": "-$(inputs.s)"}}},
-        baseCommand=base_command,
-    )
-    rose = one_step(literal, s="x")
-    tokens = compiled_source_to_nextflow(rose).processes[0].command.tokens
-    assert tokens == (
-        NfTemplate((NfLiteral("pre$(inputs.s)"),)),
-        NfTemplate((NfLiteral("-$(inputs.s)"),)),
-        NfTemplate((NfInputReference("s"),)),
-    )
-
-
-def _boolean_valuefrom_tokens(binding: dict[str, Any], *, owner: dict[str, Any] | None = None) -> tuple[Any, ...]:
-    inputs: dict[str, Any] = {"b": {"type": "boolean"}}
-    arguments: list[Any] = []
-    if owner is None:
-        arguments.append({"valueFrom": "$(inputs.b)", **binding})
-    else:
-        inputs["s"] = {**owner, "inputBinding": {"valueFrom": "$(inputs.b)", **binding}}
-    values: dict[str, Any] = {"b": True, "s": "x"}
-    rose = one_step(
-        tool("FLAG", inputs=inputs, baseCommand="echo", arguments=arguments), **{name: values[name] for name in inputs}
-    )
-    return tuple(compiled_source_to_nextflow(rose).processes[0].command.tokens[1:])
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize("owner", [None, {"type": "string"}], ids=["argument", "string-input-binding"])
-def test_a_whole_boolean_valuefrom_is_a_flag(owner: dict[str, Any] | None) -> None:
-    assert _boolean_valuefrom_tokens({"prefix": "--flag"}, owner=owner) == (NfFlag("b", "--flag"),)
-    assert _boolean_valuefrom_tokens({}, owner=owner) == ()
-
-
-@pytest.mark.fast
-def test_a_boolean_valuefrom_on_an_optional_input_is_rejected() -> None:
-    with pytest.raises(ValueError, match="a boolean valueFrom on optional input 's' is not supported"):
-        _boolean_valuefrom_tokens({"prefix": "--flag"}, owner={"type": "string?"})
-
-
-def _argument_tokens(*arguments: Any) -> tuple[Any, ...]:
-    rose = one_step(tool("ARGS", inputs={"x": {"type": "string"}}, baseCommand="echo", arguments=[*arguments]), x="v")
-    return tuple(compiled_source_to_nextflow(rose).processes[0].command.tokens[1:])
-
-
-# design §6, Commands: a `$` that is not followed by `(` or `{` is plain text.
-PLAIN_DOLLARS = ["$", "cost $5", "$HOME", "a $ b", "$$", ' mv a "$1" ', "trailing $\n", "$)", "$}"]
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize("text", PLAIN_DOLLARS)
-def test_a_dollar_not_starting_an_expression_is_plain_text(text: str) -> None:
-    assert _argument_tokens(text, {"valueFrom": text}) == (NfTemplate((NfLiteral(text),)),) * 2
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize("text", PLAIN_DOLLARS)
-def test_a_plain_dollar_stays_text_beside_a_reference(text: str) -> None:
-    [token] = _argument_tokens(f"{text}$(inputs.x){text}")
-    assert token == NfTemplate((NfLiteral(text.lstrip()), NfInputReference("x"), NfLiteral(text.rstrip())))
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize("text", ["$(runtime.cores)", "${return 1}", "cost $5 $(inputs.x.size)", "$$(self)"])
-def test_a_dollar_starting_any_other_expression_is_rejected(text: str) -> None:
-    with pytest.raises(ValueError, match="unsupported CWL expression"):
-        _argument_tokens(text)
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize("env_def", [
-    [{"envName": "A", "envValue": "cost $5"}, {"envName": "B", "envValue": " $(inputs.s) "}],
-    {"A": "cost $5", "B": {"envName": "C", "envValue": " $(inputs.s) "}},
-], ids=["list", "map"])
-def test_env_var_requirement_lowers_each_variable_to_an_export(env_def: Any) -> None:
-    """The map form's key names the variable, over an envName inside it, as schema-salad resolves it."""
-    rose = one_step(
-        tool("ENV", inputs={"s": {"type": "string"}}, requirements={"EnvVarRequirement": {"envDef": env_def}}), s="v"
-    )
-    workflow = compiled_source_to_nextflow(rose)
-    assert workflow.processes[0].command.env == (
-        NfEnvVar("A", NfTemplate((NfLiteral("cost $5"),))), NfEnvVar("B", NfTemplate((NfInputReference("s"),))),
-    )
-    script = render_nextflow(workflow).split('    """\n')[1]
-    assert script.splitlines()[:2] == [
-        "    export A=${__sophios_shell_quote_9f72e('cost $5')}",
-        "    export B=${__sophios_shell_quote_9f72e(s.toString())}",
-    ]
-
-
-def _gpu_lowering(cuda: Any, section: str = "hints") -> tuple[Any, tuple[Diagnostic, ...]]:
-    return compiled_source_to_nextflow_with_notes(one_step(tool("GPU", **{section: {"cwltool:CUDARequirement": cuda}})))
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize("section", ["requirements", "hints"])
-@pytest.mark.parametrize(("cuda", "count"), [
-    ({}, 1),
-    ({"cudaDeviceCountMin": 2}, 2),
-    ({"cudaDeviceCountMax": 3}, 3),
-    ({"cudaDeviceCountMin": 2, "cudaDeviceCountMax": 4}, 2),
-])
-def test_cuda_requirement_lowers_to_the_accelerator_directive(cuda: Any, count: int, section: str) -> None:
-    """The count cwltool's job requests: the minimum, else the maximum, else 1 (design §6)."""
-    workflow, notes = _gpu_lowering(cuda, section)
-    assert workflow.processes[0].resources == NfResources(accelerator=count)
-    assert f"\n    accelerator {count}\n" in render_nextflow(workflow)
-    assert notes == ()
-
-
-@pytest.mark.fast
-def test_the_unchecked_cuda_fields_are_notes_and_ride_in_the_ext_directive() -> None:
-    workflow, notes = _gpu_lowering(
-        {"cudaDeviceCountMin": 1, "cudaVersionMin": "11.4", "cudaComputeCapability": ["3.0", "7.5"]}
-    )
-    assert workflow.processes[0].resources == NfResources(
-        accelerator=1, cuda_version_min="11.4", cuda_compute_capability=("3.0", "7.5"))
-    assert "\n    accelerator 1\n    ext cudaVersionMin: '11.4', cudaComputeCapability: ['3.0', '7.5']\n" in (
-        render_nextflow(workflow))
-    assert [(note.severity, note.code, note.locator) for note in notes] == [
-        (Severity.NOTE, SophiosErrorCode.UNCHECKED_CUDA_FIELD, Locator("GPU"))
-    ] * 2
-    assert [note.message.split(" is not checked")[0] for note in notes] == [
-        "cwltool:CUDARequirement cudaVersionMin '11.4'",
-        "cwltool:CUDARequirement cudaComputeCapability ['3.0', '7.5']",
-    ]
-
-
-@pytest.mark.fast
 @pytest.mark.parametrize("fixture", ["real_supported_result", "real_scattered_result", "real_nested_result"])
 def test_the_names_a_run_maps_back_are_the_names_the_lowering_makes(
     fixture: str, request: pytest.FixtureRequest
@@ -667,3 +196,36 @@ def test_the_names_a_run_maps_back_are_the_names_the_lowering_makes(
         connection.to_port for connection in workflow.connections
         if isinstance(connection, NfWorkflowOutputConnection)
     )
+
+
+# design §6, Commands: a `$` before no `(` or `{` is text; the last two were once refused beside a reference, and
+# an empty argument is kept.
+@budget(200)
+@given(st.lists(st.text("$ \n\ta5HOME)}{(\\\"'é").filter(lambda t: "$(" not in t and "${" not in t),
+                min_size=1, max_size=3))
+@example(["$", "cost $5", "$HOME", "a $ b", "$$", ' mv a "$1" ', "trailing $\n", "$)", "$}", "{$", "($", ""])
+def test_a_dollar_starting_no_expression_is_text_as_cwltool_reads_it(texts: list[str]) -> None:
+    for text in texts:  # cwltool passes a text with no expression through, and reads one beside a reference
+        rose = one_step(tool("ARGS", inputs={"x": {"type": "string"}}, baseCommand="echo",
+                             arguments=[text, {"valueFrom": text}, (joined := f"{text}$(inputs.x){text}")]), x="v")
+        _, *bare, beside = compiled_source_to_nextflow(rose).to_dict()["processes"][0]["command"]["tokens"]
+        assert bare == [{"segments": [{"kind": "literal", "value": text}]}] * 2
+        assert "".join(p.get("value", "V") for p in beside["segments"]) == interpolate(joined, {"inputs": {"x": "V"}})
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("case", cases(
+    "nextflow/lowered", "tool", "out", "job", "workflow", "tools", "lowered", "render", "notes", "params_file"))
+def test_a_supported_source_lowers_as_its_case_says(case: Yaml) -> None:
+    """A case's source lowers, its documents left as they were, to a model whose payload holds `lowered`, with
+    `params_file` as its params file, each `render` fragment in its script, and exactly its `notes` when it lists them
+    (tests/core/cases.py reads each form). A case with none of `lowered`, `render`, `notes` or `params_file` asserts
+    only that its source lowers."""
+    documents = copy.deepcopy(case)
+    workflow, notes = compiled_source_to_nextflow_with_notes(case_source(case))
+    assert case == documents
+    assert match(case.get("lowered", {}), workflow.to_dict())
+    assert nextflow_params(workflow) == case.get("params_file", nextflow_params(workflow))
+    rendered = render_nextflow(workflow)
+    assert [text for text in case.get("render", []) if text not in rendered] == []
+    assert match(case.get("notes", [diagnostic(note) for note in notes]), [diagnostic(note) for note in notes])

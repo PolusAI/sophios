@@ -1,0 +1,2 @@
+steps: [{id: touch, in: {filename: !ii empty.txt}, out: [{file: !& made}]},
+    {id: append, in: {file: !* made, str: !ii Hello}}]

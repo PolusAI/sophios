@@ -1,4 +1,5 @@
 """Pure fixed-point edge inference over a linked workflow graph."""
+from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Any
@@ -35,7 +36,7 @@ class InferencePolicy:
     """Every choice that can alter inference, supplied by the caller."""
 
     disabled: bool = False
-    use_naming_conventions: bool = False
+    use_naming_conventions: bool = True
     renaming_conventions: tuple[tuple[str, str], ...] = ()
     insert_steps_automatically: bool = False
     format_rules: tuple[tuple[str, str], ...] = ()
@@ -177,14 +178,102 @@ def _infer_local(graph: WorkflowGraph, policy: InferencePolicy, catalog: Inserti
                 shorthand_relays.append(input_name)
             bound.add(port.id)
 
+    repeated = _repeated(steps)
+    linked_edges = _refuse_duplicates(graph, steps, linked_edges, diagnostics, repeated)
+    wired = {edge.sink for edge in linked_edges}
     for step, port, source, alternatives in choices:
-        _note_choice(diagnostics, policy, step, port, source,
-                     tuple(alt for alt in alternatives if alt.step == source.step),
-                     tuple(alt for alt in alternatives if alt.step != source.step))
+        if port.id in wired:
+            _note_choice(diagnostics, policy, step, port, source, len(alternatives), repeated)
     return replace(graph, steps=tuple(steps), linked_edges=tuple(linked_edges),
                    workflow_inputs=tuple(workflow_inputs),
                    input_mapping=tuple(input_mapping),
                    shorthand_relays=tuple(shorthand_relays)), False
+
+
+# pylint: disable-next=too-many-locals
+def _refuse_duplicates(graph: WorkflowGraph, steps: list[StepNode], edges: list[Edge],
+                       diagnostics: Diagnostics, repeated: set[StepId]) -> list[Edge]:
+    """`edges` without the inferred edges of every refused duplicate.
+
+    Inputs of one tool step that read the same output are a duplicate. When
+    one of them was inferred, it stands only if every input declares file
+    formats that the output's declared formats intersect; two written edges
+    are never refused. A refused group is reported once, and its inferred
+    members are not wired. The tool step is the leaf step that declares the
+    input, and the output is the leaf port, however a call exposes it.
+    """
+    ports = {port.id: port for step in steps for port in (*step.inputs, *step.outputs)}
+    calls = {step.id: step.run.child for step in steps if step.run is not None and step.run.child is not None}
+    groups: dict[tuple[StepId, PortId], list[tuple[Port, Edge]]] = {}
+    written = [binding.resolution for step in steps for binding in step.bindings
+               if isinstance(binding.resolution, Edge)]
+    for edge in (*written, *edges):
+        target, name = direct_sink(graph, edge.sink)
+        sink = ports[PortId(target, Direction.INPUT, name)]
+        source = _underlying_output(ports, edge.source)
+        for leaf in _leaf_steps(calls, PortId(target, Direction.INPUT, name)):
+            groups.setdefault((leaf, source), []).append((sink, edge))
+    refused: set[Edge] = set()
+    for members in groups.values():
+        if len(members) < 2 or all(edge.origin is not EdgeOrigin.INFERRED for _, edge in members):
+            continue
+        output_formats = {value for _, edge in members if edge.source in ports
+                          for value in _formats(ports[edge.source].declaration)}
+        if all(output_formats & set(_formats(sink.declaration)) for sink, _ in members):
+            continue
+        inferred = [(sink, edge) for sink, edge in members if edge.origin is EdgeOrigin.INFERRED]
+        if refused.issuperset(edge for _, edge in inferred):
+            continue
+        refused.update(edge for _, edge in inferred)
+        _note_duplicate(diagnostics, members, inferred[0], repeated)
+    return [edge for edge in edges if edge not in refused]
+
+
+def _underlying_output(ports: dict[PortId, Port], source: PortId) -> PortId:
+    """The leaf output `source` stands for: a call's exposed port, a derived
+    name or an origin, followed down to the tool step that makes it."""
+    while True:
+        port = ports.get(source)
+        if port is not None and port.origin is not None:
+            source = port.origin
+        elif isinstance(source.port, DerivedName):
+            source = PortId(source.port.step, Direction.OUTPUT, source.port.port)
+        else:
+            return source
+
+
+def _leaf_steps(calls: dict[StepId, WorkflowGraph], local: PortId) -> tuple[StepId, ...]:
+    """The leaf steps that declare the input `local` of a step of this
+    workflow: a call's input belongs to every inner step its input mapping
+    sends it to, down through calls inside calls."""
+    child = calls.get(local.step)
+    if child is None:
+        return (local.step,)
+    inner = {step.id: step.run.child for step in child.steps
+             if step.run is not None and step.run.child is not None}
+    leaves: dict[StepId, None] = {}
+    for name, sinks in child.input_mapping:
+        if name != local.port:
+            continue
+        for sink in sinks:
+            target, port_name = direct_sink(child, sink)
+            leaves.update(dict.fromkeys(
+                _leaf_steps(inner, PortId(target, Direction.INPUT, port_name))))
+    return tuple(leaves) or (local.step,)
+
+
+def _note_duplicate(diagnostics: Diagnostics, members: list[tuple[Port, Edge]],
+                    first: tuple[Port, Edge], repeated: set[StepId]) -> None:
+    """Report the inputs of one tool step that would read one output, and that each needs the edge it should read."""
+    source = _spelled(*_declared_at(first[1].source.step, first[1].source.port), repeated)
+    sinks = [_spelled(*_declared_at(sink.id.step, sink.id.port), repeated) for sink, _ in members]
+    step = members[0][0].id.step
+    first_name = _declared_at(first[0].id.step, first[0].id.port)[1]
+    diagnostics.error(
+        SophiosErrorCode.INFERENCE_DUPLICATE,
+        f"{', '.join(sinks[:-1])} and {sinks[-1]} would {'both' if len(sinks) == 2 else 'all'} read {source}; "
+        "write the edge each should read",
+        first[1].span, Locator(step=step.name, index=step.index, port=first_name))
 
 
 def _bound(graph: WorkflowGraph) -> set[PortId]:
@@ -229,8 +318,9 @@ def _candidate(steps: list[StepNode], position: int, sink: Port, policy: Inferen
     """The source inferred for `sink`, the equal candidates it was chosen over,
     and every output looked at.
 
-    The most recent producer with a match wins, and within it the last
-    declared match (unless naming conventions single one out). The scan goes
+    The most recent producer with a match wins, and within it the first
+    declared match (unless naming conventions single one out); a subworkflow
+    call counts its inner steps as producers, the most recent inner step first. The scan goes
     on past the winner only to collect the earlier producers' matches, so
     the choice can be reported; it never changes the choice.
     """
@@ -252,16 +342,14 @@ def _candidate(steps: list[StepNode], position: int, sink: Port, policy: Inferen
             output_type = _effective_source_type(producer, output)
             output_formats = _formats(output.declaration)
             if (types_match(sink_type, output_type)
-                    and _formats_match(sink_formats, output_formats, output_type)
-                    and not any('_log_' in part
-                                for part in (*(s.name for s in _steps(output.id.port)), _leaf(output.id.port)))):
+                    and _formats_match(sink_formats, output_formats, output_type)):
                 matches.append(output)
             if _rule(producer, output.id.port) == 'break':
                 break_inference = True
                 break_scope = scope
         if matches and chosen is None:
             named = _named(matches, sink, policy)
-            chosen = named[0] if named else matches[0]
+            chosen = _first_declared(named or matches)
             if len(named) != 1:
                 alternatives.extend(match.id for match in matches if match is not chosen)
         elif matches:
@@ -273,68 +361,70 @@ def _candidate(steps: list[StepNode], position: int, sink: Port, policy: Inferen
     return chosen.id, tuple(alternatives), tuple(attempted)
 
 
+def _first_declared(matches: list[Port]) -> Port:
+    """Of `matches`, listed last declared first: the first declared of the most recent step that declares one."""
+    leaf = _steps(matches[0].id.port)
+    return [match for match in matches if _steps(match.id.port) == leaf][-1]
+
+
 def _named(matches: list[Port], sink: Port, policy: InferencePolicy) -> list[Port]:
     """The matches whose name the naming conventions pair with `sink`; none
-    when the conventions are off."""
+    when the conventions are off. The renamed name is tried first; when it
+    pairs with nothing, the input's own name is."""
     if not policy.use_naming_conventions:
         return []
-    wanted = _authored(sink).replace('input_', '')
+    plain = _authored(sink).replace('input_', '')
+    renamed = plain
     for before, after in policy.renaming_conventions:
-        wanted = wanted.replace(before, after)
-    return [port for port in matches
-            if _authored(port).replace('output_', '') == wanted]
+        renamed = renamed.replace(before, after)
+    for wanted in (renamed, plain):
+        paired = [port for port in matches if _authored(port).replace('output_', '') == wanted]
+        if paired:
+            return paired
+    return []
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def _note_choice(diagnostics: Diagnostics, policy: InferencePolicy, step: StepNode, port: Port,
-                 chosen: PortId, ties: tuple[PortId, ...], earlier: tuple[PortId, ...]) -> None:
-    """Say which equal candidates lost, and how to pin the choice.
+                 chosen: PortId, others: int, repeated: set[StepId]) -> None:
+    """Note an edge inference guessed, as `sink <- source`, and how many other outputs also fitted.
 
-    A subworkflow call exposes its steps' ports under derived names that an
-    author cannot write, so each port is shown by the path of steps down to
-    the one that declares it, and the pin goes on that step.
+    The input is named at the step the author wrote, a call's input by the port
+    its tool declares, so one guess fanned out inside a call is one note. The
+    output is named by the path of steps down to the one that declares it, as
+    the outputs that fit may differ only inside a call.
     """
-    sink_step, sink = _declared_at(step.id, port.id.port)
-    source_step, source = _declared_at(chosen.step, chosen.port)
+    sink = _leaf(port.id.port)
+    edge = f'{_spelled((step.id,), sink, repeated)} <- {_spelled(*_declared_at(chosen.step, chosen.port), repeated)}'
+    fit = f"{others} {'other fits' if others == 1 else 'others fit'}"
     locator = Locator(step=step.id.name, index=step.id.index, port=sink)
-    sink_at = 'here' if sink_step == _label(step.id) else f'on {sink_step}'
-    pin = (f"pin it: `out: - {source}: !& <name>` on {source_step} and "
-           f"`in: {sink}: !* <name>` {sink_at}")
-    report = diagnostics.error if policy.strict else diagnostics.note
-    if ties:
-        report(SophiosErrorCode.INFERENCE_TIE,
-               f"step '{step.id.name}' input '{_below(port.id.port)}' was inferred from "
-               f"{_where(chosen.step, chosen.port)}, but that step also offers "
-               + ', '.join(_where(chosen.step, alt.port) for alt in ties) + '; ' + pin,
-               port.span, locator)
-    if earlier:
-        report(SophiosErrorCode.INFERENCE_RECENCY,
-               f"step '{step.id.name}' input '{_below(port.id.port)}' was inferred from the most recent "
-               f"match {_where(chosen.step, chosen.port)}; earlier steps also match: "
-               + ', '.join(_where(alt.step, alt.port) for alt in earlier) + '; ' + pin,
-               port.span, locator)
+    if policy.strict:
+        diagnostics.error(SophiosErrorCode.INFERENCE_GUESS, f'{edge} was guessed, {fit}; write the edge it should read',
+                          port.span, locator)
+    else:
+        diagnostics.note(SophiosErrorCode.INFERENCE_GUESS, f'{edge} ({fit})', port.span, locator)
 
 
-def _label(step: StepId) -> str:
-    """A step as its position and id: an id may repeat, the position does not."""
-    return f"step {step.index} '{step.name}'"
-
-
-def _declared_at(step: StepId, name: PortName) -> tuple[str, str]:
+def _declared_at(step: StepId, name: PortName) -> tuple[tuple[StepId, ...], str]:
     """The path of steps from `step` down to the one that declares `name`,
     and the name that step declares it under."""
-    return ' > '.join(_label(s) for s in (step, *_steps(name))), _leaf(name)
+    return (step, *_steps(name)), _leaf(name)
 
 
-def _where(step: StepId, name: PortName) -> str:
-    """The step that declares `name`, reached from `step`, and its port."""
-    declaring, declared = _declared_at(step, name)
-    return f"{declaring} output '{declared}'"
+def _repeated(steps: list[StepNode]) -> set[StepId]:
+    """The steps whose name another step of the same workflow also has, down through every call."""
+    counts = Counter(step.id.name for step in steps)
+    found = {step.id for step in steps if counts[step.id.name] > 1}
+    for step in steps:
+        if step.run is not None and step.run.child is not None:
+            found |= _repeated(list(step.run.child.steps))
+    return found
 
 
-def _below(name: PortName) -> str:
-    """`name` as the path of steps it was exposed through, then the port."""
-    return '/'.join((*(s.name for s in _steps(name)), _leaf(name)))
+def _spelled(owner: tuple[StepId, ...], port: str, repeated: set[StepId]) -> str:
+    """`port` of the last step of `owner`, as `call.wic/tool.port`: the steps by name, outermost first,
+    and a step whose name repeats in its workflow by its position as well, as `touch@2`, as in the emitted CWL."""
+    return '/'.join(f'{step.name}@{step.index}' if step in repeated else step.name for step in owner) + f'.{port}'
 
 
 def _authored(port: Port) -> str:

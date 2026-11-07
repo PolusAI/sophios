@@ -7,105 +7,75 @@ Everything here compiles through `compile_production`, which is `testing=False`.
 `compile_hermetic` passes `testing=True`, and that branch absorbs an undefined
 edge into a workflow input, so these diagnostics are unreachable through it.
 """
-from typing import Final
-
 import pytest
+from hypothesis import given, strategies as st
 
-from sophios.lang.diagnostics import SophiosError
-from sophios.lang.error_codes import SophiosErrorCode
+from sophios.lang.diagnostics import Diagnostic, SophiosError
+from sophios.wic_types import Yaml
 
-from .hermetic import compile_production, subworkflow_step
-
-#: A step that produces a File, optionally naming it as an edge.
-_SOURCE: Final = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}
-
-
-def _codes(excinfo: pytest.ExceptionInfo[SophiosError]) -> list[str]:
-    """The codes a raised `SophiosError` carries."""
-    return [d.code.value for d in excinfo.value.diagnostics]
+from .budgets import budget
+from .cases import cases
+from .hermetic import compile_production
+from .strategies import pinned
 
 
-@pytest.mark.fast
-def test_a_reference_to_a_defined_edge_compiles() -> None:
-    """The ordinary case, so the tests below are about the exception and not the rule."""
-    compile_production({'steps': [
-        {**_SOURCE, 'out': [{'file': {'wic_anchor': 'produced'}}]},
-        {'id': 'sink', 'in': {'file': {'wic_alias': 'produced'}}}]})
+def _step(kind: str, name: str | None) -> Yaml:
+    """sink reading its file from the edge `name` (R), or mk_file defining it on its file (D) or mk_text on its text
+    (T), unless it is None."""
+    if kind == 'R':
+        return {'id': 'sink', 'in': {'file': {'wic_alias': name}}}
+    stem, port = ('mk_file', 'file') if kind == 'D' else ('mk_text', 'text')
+    return {'id': stem, 'in': {'name': {'wic_inline_input': 'a'}},
+            **({} if name is None else {'out': [{port: {'wic_anchor': name}}]})}
 
 
-@pytest.mark.fast
-def test_a_reference_with_no_definition_is_reported() -> None:
-    """`wic025`, rather than a `ValueError` a caller cannot match on."""
-    with pytest.raises(SophiosError) as excinfo:
-        compile_production({'steps': [_SOURCE, {'id': 'sink', 'in': {'file': {'wic_alias': 'absent'}}}]})
-    assert SophiosErrorCode.UNDEFINED_EDGE.value in _codes(excinfo)
-    assert 'absent' in str(excinfo.value.diagnostics[0].message)
-
-
-@pytest.mark.fast
-def test_a_name_defined_twice_is_reported() -> None:
-    """`wic026`. An edge name identifies one producer, so a second definition
-    leaves no way to say which output a reference means."""
-    with pytest.raises(SophiosError) as excinfo:
-        compile_production({'steps': [
-            {**_SOURCE, 'out': [{'file': {'wic_anchor': 'twice'}}]},
-            {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'b'}},
-             'out': [{'file': {'wic_anchor': 'twice'}}]},
-            {'id': 'sink', 'in': {'file': {'wic_alias': 'twice'}}}]})
-    assert SophiosErrorCode.DUPLICATE_EDGE_DEF.value in _codes(excinfo)
-
-
-@pytest.mark.fast
-def test_a_definition_nothing_consumes_is_not_reported() -> None:
-    """The claim these rules deliberately do not make.
-
-    An `!&` with no `!*` is how a workflow names an artifact it produces, and
-    fifteen corpus documents rely on it. Without this test the rule reads as
-    "definitions and references must pair up", which is the natural next
-    tightening and would reject all fifteen.
-    """
-    compile_production({'steps': [{**_SOURCE, 'out': [{'file': {'wic_anchor': 'exported'}}]}]})
+@st.composite
+def _documents(draw: st.DrawFn) -> Yaml:
+    """A case as data/edge-binding writes one: a document whose every reference follows the one definition of its
+    name, with at most one fault added, a reference no step defines, one above its definition or a second one."""
+    steps: list[tuple[str, str | None]] = []
+    for index in range(draw(st.integers(1, 6))):
+        files = [name for kind, name in steps if kind == 'D' and name]
+        kind = draw(st.sampled_from('DTR' if files else 'DT'))
+        steps.append((kind, draw(st.sampled_from(files if kind == 'R' else [None, f'e{index}']))))
+    defined = [(index, kind, name) for index, (kind, name) in enumerate(steps) if kind != 'R' and name]
+    referable = [(index, str(name)) for index, kind, name in defined if kind == 'D']
+    fault = draw(st.sampled_from(['none', 'absent'] + ['twice'] * bool(defined) + ['early'] * bool(referable)))
+    codes, says = [], ''
+    if fault == 'absent':
+        steps.insert(draw(st.integers(0, len(steps))), ('R', 'absent'))
+        codes, says = ['wic025'], 'absent'
+    elif fault == 'early':
+        index, says = draw(st.sampled_from(referable))
+        steps.insert(draw(st.integers(0, index)), ('R', says))
+        codes = ['wic025']
+    elif fault == 'twice':
+        index, _, name = draw(st.sampled_from(defined))
+        steps.insert(draw(st.integers(index + 1, len(steps))), (draw(st.sampled_from('DT')), name))
+        says = str(name)
+        codes = ['wic026']
+    return {'steps': [_step(*step) for step in steps], 'codes': codes, 'says': says}
 
 
 @pytest.mark.fast
-def test_a_child_reference_binds_to_the_parents_definition() -> None:
-    """A real root, a real child: the edge crosses the boundary.
-
-    Compiling the child alone with `is_root=False` proves only that deferral is
-    allowed. It says nothing about the obligation being discharged, which is
-    the half that matters, so this builds the parent.
-    """
-    child = {'steps': [{'id': 'sink', 'in': {'file': {'wic_alias': 'shared'}}}]}
-    info = compile_production({'steps': [
-        {**_SOURCE, 'out': [{'file': {'wic_anchor': 'shared'}}]},
-        subworkflow_step('child.wic', child)]}, 'root')
-
-    bindings = info.artifact.cwl['steps'][1]['in']
-    source = bindings['sink~file']['source']
-    assert source == 'mk_file/file', (
-        f'the child bound to {source!r} rather than the parent output that defines it')
-
-
-@pytest.mark.fast
-def test_a_reference_must_follow_its_definition() -> None:
-    """`!&` comes before `!*`, and the compilation is ordered, not a set.
-
-    The definition exists in this document either way, so "it must exist" does
-    not decide this case. Reversing the two steps is `wic025`.
-    """
-    defined_first = [{**_SOURCE, 'out': [{'file': {'wic_anchor': 'e'}}]},
-                     {'id': 'sink', 'in': {'file': {'wic_alias': 'e'}}}]
-    compile_production({'steps': defined_first})
-
-    with pytest.raises(SophiosError) as excinfo:
-        compile_production({'steps': list(reversed(defined_first))})
-    assert SophiosErrorCode.UNDEFINED_EDGE.value in _codes(excinfo)
-
-
-@pytest.mark.fast
-def test_an_obligation_no_includer_discharges_is_reported() -> None:
-    """The root rejects a nested obligation no enclosing scope discharges."""
-    child = {'steps': [_SOURCE, {'id': 'sink', 'in': {'file': {'wic_alias': 'absent'}}}]}
-    with pytest.raises(SophiosError) as caught:
-        compile_production({'steps': [subworkflow_step('child.wic', child)]}, 'root')
-    assert caught.value.diagnostics[0].code is SophiosErrorCode.UNDEFINED_EDGE
+@budget(50)
+@given(_documents())
+@pinned(*(case.values[0] for case in cases('edge-binding', 'steps', 'codes', 'says', 'sources')))
+def test_an_edge_reference_names_one_earlier_definition(case: Yaml) -> None:
+    """Each case of data/edge-binding, and generated ones: the codes it raises, each message holding `says`; and,
+    when it compiles, the source of each reference in the root is the port that defines its edge, and of each input
+    `sources` names, as [step index, input, source]."""
+    raised: list[Diagnostic] = []
+    try:
+        compiled = compile_production({'steps': case['steps']}, 'root').artifact.cwl
+    except SophiosError as error:
+        raised = list(error.diagnostics)
+    else:
+        made = {anchor['wic_anchor']: f"{compiled['steps'][index]['id']}/{port}" for index, step
+                in enumerate(case['steps']) for out in step.get('out', []) for port, anchor in out.items()}
+        sources = [[index, key, made[value['wic_alias']]] for index, step in enumerate(case['steps'])
+                   for key, value in step.get('in', {}).items() if 'wic_alias' in value]
+        for index, key, source in sources + case.get('sources', []):
+            assert compiled['steps'][index]['in'][key]['source'] == source
+    assert [found.code.value for found in raised] == case['codes']
+    assert all(case.get('says', '') in found.message for found in raised)

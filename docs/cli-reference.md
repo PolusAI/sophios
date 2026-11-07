@@ -49,13 +49,13 @@ Without one of them the command compiles and then asks for one. Under
 | Flag | Default | Effect |
 |---|---|---|
 | `--inference_disable` | off | compile without edge inference; an unbound input stays unbound |
-| `--inference_use_naming_conventions` | off | among outputs that match by type, prefer the one whose name pairs with the input's, after the configuration's `renaming_conventions` |
-| `--inference_strict` | off | an inference choice between equal candidates (`wic042`, `wic043`) is an error rather than a note |
+| `--no_inference_naming_conventions` | naming on | by default, among outputs of one step that match by type, the one whose name pairs with the input's wins, after the configuration's `renaming_conventions`; this flag leaves the choice to the output declared first |
+| `--inference_strict` | off | a guessed edge (`wic043`) is an error rather than a note |
 | `--insert_steps_automatically` | off | when nothing matches an input by format, insert one converter step from the tools named `insert_steps_automatically_*` on the search paths |
 | `--validate_plugins` | off | validate every tool on the search paths with cwltool before compiling |
 | `--cwl_inline_subworkflows` | off | write one flat workflow: each subworkflow call with nothing but `in` and `out`, whose child is not `wic: inlineable: false`, is replaced by the child's steps; the tools stay separate files, and each call that stays nested is named on stderr |
 | `--cwl_inline_runtag` | off | write one self-contained file, `<workflow>.cwl`, in which every step's `run:` carries its process, tools and subworkflows alike; a local run runs that file |
-| `--partial_failure_enable` | off | rewrite the compiled CWL so that a job exiting with a success code counts as success with `null` outputs and every step with required inputs runs only when they are not `null` ([Partial failures](partial-failures.md)) |
+| `--partial_failure_enable` | off | compile the CWL so that a job exiting with a success code counts as success with `null` outputs, and every step with required inputs runs only when they are not `null`, then only if its own `when:` says so ([Partial failures](partial-failures.md)) |
 | `--partial_failure_success_codes CODE ...` | `0 1` | the exit codes that count as success under `--partial_failure_enable`; `0` is always one |
 | `--partial_failure_success_codes_range LOW HIGH` | `0 1` | a range of such codes, `LOW` included and `HIGH` excluded |
 | `--docker_remove_entrypoints` | off | a diagnostic, not for everyday runs: before a local run, rebuild every tagged local image without its `ENTRYPOINT`, to show which tools depend on one: a tool without its own `baseCommand` or `arguments` fails under it; it acts only on a local run, so it does nothing with `--generate_cwl_workflow` |
@@ -130,7 +130,7 @@ and `main: error: argument --diagnostics: invalid choice`, after the workflow
 has been written. `Workflow.compile()`
 takes `target=`, `lang_version=`, `tool_registry=` and `inference=`, and nothing else.
 The inference flags map onto `Inference(enabled=, strict=, naming_conventions=, insert_steps=)`, and the
-configuration file's `renaming_conventions` and `inference_rules` onto its `renamings=` and `format_rules=`, which are empty in Python unless passed, as it reads no configuration file;
+configuration file's `renaming_conventions` and `inference_rules` onto its `renamings=` and `format_rules=`, where Python starts from the three renamings Sophios ships and has no format rules unless passed, as it reads no configuration file;
 `Workflow.run()`, `start()` and `run_async()` take the same `inference=`, and `target='nextflow'` to run the
 [Nextflow](nextflow.md#running-on-the-nextflow-target) pipeline instead, where the CWL defaults above do not apply,
 an option only a CWL run reads is refused, and any other key becomes `-<key> <value>` for Nextflow. The rewriting and partial-failure options are command-line only;

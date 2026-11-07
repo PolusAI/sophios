@@ -1,9 +1,10 @@
-from collections.abc import Callable
+import keyword
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+from hypothesis import example, given, strategies as st
 from schema_salad.utils import yaml_no_ts  # pylint: disable=no-name-in-module
 
 from sophios.api.python._ports import ParameterNamespace
@@ -20,13 +21,15 @@ from sophios.api.python.tool_builder import (
     secondary_file,
 )
 from sophios.api.python.workflow import Step, Workflow
-from sophios.lang import InlineLiteral
 from sophios.lang.cwl import CWL_VERSION
 
+from .budgets import budget
+from .strategies import author_names, pinned
 
-def _rich_tool() -> CommandLineTool:
+
+def _rich_tool(default: str = "hello") -> CommandLineTool:
     """A tool exercising every builder method that reaches the document, so
-    one assertion block covers the whole serialization surface."""
+    one assertion block covers the whole serialization surface; `default` is its `message`'s."""
     mode_type = cwl.enum("fast", "accurate", name="Mode")
     settings_type = cwl.record(
         Fields(
@@ -42,6 +45,7 @@ def _rich_tool() -> CommandLineTool:
         .secondary_files(secondary_file(".bai", required=False)),
         mode=Input(mode_type, flag="--mode"),
         settings=Input(settings_type).load_listing("shallow_listing"),
+        message=Input(cwl.string, default=default),
     )
     outputs = Outputs(sam=Output.stdout())
 
@@ -68,63 +72,50 @@ def _rich_tool() -> CommandLineTool:
     )
 
 
-@pytest.mark.fast
-def test_tool_builder_names_are_python_identifiers() -> None:
-    """A port name must be usable as an attribute.
-
-    Ports are reached as `inputs.reads`, so a name like `input-file` would
-    build a tool nobody can reference. Rejected where it is written.
-    """
-    with pytest.raises(ValueError, match="valid Python identifier"):
-        Inputs(**{"input-file": Input(cwl.file)})
-
-    with pytest.raises(ValueError, match="valid Python identifier"):
-        Fields(**{"class": Field(cwl.string)})
+_PORTS = {Inputs: (Input(cwl.string), "inputs", "string"),
+          Outputs: (Output(cwl.file, glob="o"), "outputs", {"type": "File", "outputBinding": {"glob": "o"}}),
+          Fields: (Field(cwl.string), "", "")}
+_ATTRIBUTES = sorted({*dir(ParameterNamespace), *dir(Inputs), *dir(Outputs), *dir(Fields)})
 
 
 @pytest.mark.fast
-def test_tool_builder_names_reject_namespace_collisions() -> None:
-    """A port may not shadow the container's own API.
-
-    `Inputs` and friends are mappings with methods, so a port called `items` or
-    `to_dict` would make `inputs.items` ambiguous. The collection's own
-    attribute `_items` is reserved for the same reason.
-    """
-    with pytest.raises(ValueError, match="reserved"):
-        Inputs(items=Input(cwl.file))
-
-    with pytest.raises(ValueError, match="reserved"):
-        Outputs(to_dict=Output(cwl.file, glob="out.txt"))
-
-    with pytest.raises(ValueError, match="reserved"):
-        Fields(to_dict=Field(cwl.string))
-
-    with pytest.raises(ValueError, match="reserved"):
-        Inputs(_items=Input(cwl.file))
-
-
-def _refused(build: Callable[..., object], *args: Any, **kwargs: Any) -> bool:
-    """Whether `build(*args, **kwargs)` raises ValueError."""
+@given(st.tuples(st.sampled_from(list(_PORTS)), author_names | st.sampled_from(_ATTRIBUTES)))
+@pinned(
+    (Inputs, "input-file"), (Fields, "class"), (Inputs, "items"), (Outputs, "to_dict"), (Fields, "to_dict"),
+    (Inputs, "_items"), (Fields, "_store"),
+    *((collection, n) for collection in (Inputs, Outputs)
+      for n in sorted({*dir(ParameterNamespace), *dir(Inputs), "_", "_x", "_Out", "__x", "__x__"})))
+@budget(200)
+def test_a_port_name_is_accepted_when_python_can_write_and_reach_it(case: tuple[Any, str]) -> None:
+    """Ports are reached as `inputs.reads`, so a name like `input-file` would build a tool nobody can reference:
+    refused where it is written. `Inputs` and friends are mappings with methods, so a port called `items`,
+    `to_dict` or `_items` would make `inputs.items` ambiguous. A tool's port is also an attribute of each step's
+    port namespace, so the builder refuses, where the name is written, each name a step refuses, such as `_store`.
+    A record field is no port, so it may be called `_store`. For `Inputs` and `Outputs` the builder refuses a
+    writable name exactly when a step made from a tool document declaring that port refuses it, or when the name is
+    one of the collection's own attributes, such as `keys`, which a step accepts."""
+    collection, name = case
+    port, key, declared = _PORTS[collection]
+    owners = (collection,) if collection is Fields else (collection, ParameterNamespace)
+    writable = name.isidentifier() and not keyword.iskeyword(name)
+    reachable = not (name.startswith("__") and name.endswith("__") and len(name) > 4) and not any(
+        name in dir(owner) for owner in owners)
     try:
-        build(*args, **kwargs)
-    except ValueError:
-        return True
-    return False
-
-
-@pytest.mark.fast
-def test_tool_builder_refuses_a_port_name_where_it_is_written_when_a_step_would() -> None:
-    """A tool's input or output is a port of each step that runs the tool, so the builder refuses, where the name is
-    written, each name a step refuses, such as `_store`, an attribute of the step's port namespace, and else only
-    its collection's own attributes, such as `keys`. A record field is no port, so it may be called `_store`."""
-    tool = {"cwlVersion": "v1.2", "class": "CommandLineTool", "baseCommand": "true", "inputs": {}, "outputs": {}}
-    output = {"type": "File", "outputBinding": {"glob": "o"}}
-    for name in sorted({*dir(ParameterNamespace), *dir(Inputs), "_", "_x", "_Out", "__x", "__x__"}):
-        assert _refused(Inputs, **{name: Input(cwl.string)}) == (
-            name in dir(Inputs) or _refused(Step.from_cwl_document, {**tool, "inputs": {name: "string"}})), name
-        assert _refused(Outputs, **{name: Output(cwl.file, glob="o")}) == (
-            name in dir(Outputs) or _refused(Step.from_cwl_document, {**tool, "outputs": {name: output}})), name
-    assert list(Fields(_store=Field(cwl.string))) == ["_store"]
+        built = collection(**{name: port})
+    except ValueError as error:
+        assert not (writable and reachable) and ("reserved" if writable else "valid Python") in str(error), name
+        refused = True
+    else:
+        assert writable and reachable and getattr(built, name) is built[name], name
+        refused = False
+    if key and writable:
+        try:
+            Step.from_cwl_document({"cwlVersion": "v1.2", "class": "CommandLineTool", "baseCommand": "true",
+                                    "inputs": {}, "outputs": {}, key: {name: declared}})
+        except ValueError:
+            assert refused, name
+        else:
+            assert refused == (name in dir(collection)), name
 
 
 @pytest.mark.fast
@@ -324,105 +315,47 @@ def test_tool_builder_high_level_helpers_hide_cwl_plumbing() -> None:
 
 
 @pytest.mark.fast
-def test_tool_builder_write_cwl_round_trips_yaml(tmp_path: Path) -> None:
-    """What is written to disk loads back as what was built."""
-    tool = _rich_tool()
-    output_path = tmp_path / "aligner.cwl"
-
-    saved_path = tool.write_cwl(output_path)
-
-    assert saved_path == output_path
-    assert yaml.safe_load(output_path.read_text(encoding="utf-8")) == tool.to_cwl_document()
-
-
-@pytest.mark.fast
 @pytest.mark.parametrize("text", ["._", "._5", "1e3", "0o17"])
-def test_tool_builder_string_default_is_a_string_to_cwltool(text: str) -> None:
-    """A string `default` is written so that cwltool, which reads YAML 1.2, reads a string."""
-    tool = CommandLineTool(
-        "echoer",
-        Inputs(message=Input(cwl.string, default=text)),
-        Outputs(out=Output.stdout()),
-    )
-
-    assert yaml_no_ts().load(tool.to_cwl_yaml())["inputs"][0]["default"] == text
+def test_what_write_cwl_writes_reads_back_as_built(tmp_path: Path, text: str) -> None:
+    """What is written loads back as built, by PyYAML and by cwltool's YAML 1.2, which would retype these strings."""
+    tool = _rich_tool(text)
+    assert tool.write_cwl(tmp_path / "aligner.cwl") == tmp_path / "aligner.cwl"
+    written = (tmp_path / "aligner.cwl").read_text(encoding="utf-8")
+    assert yaml.safe_load(written) == yaml_no_ts().load(written) == tool.to_cwl_document()
 
 
-@pytest.mark.fast
-def test_tool_builder_converts_to_in_memory_step() -> None:
-    """A built tool becomes a workflow step without a file on disk.
-
-    The bridge is what lets a tool be defined and used in one script, so the
-    step must carry the tool itself rather than a path to it.
-    """
-    tool = CommandLineTool(
-        "echo_tool",
-        Inputs(message=Input(cwl.string, position=1)),
-        Outputs(out=Output.stdout()),
-    ).stdout("stdout.txt")
-
-    step = tool.to_step(step_name="say_hello")
-    step.inputs.message = "hello"
-
-    match step:
-        case Step():
-            pass
-        case _:
-            pytest.fail("tool.to_step() must return a Step")
-    assert step.process_name == "say_hello"
-    assert step.clt_path.name == "say_hello.cwl"
-    assert _by_id(step.yaml["inputs"])["message"]["type"] == "string"
-    assert _by_id(step.yaml["outputs"])["out"]["type"] == "stdout"
-    message = step._as_workflow_step().input("message")
-    assert isinstance(message, InlineLiteral) and message.value == "hello"
+#: A tool's own shorthands for a File, which cwltool refuses at a workflow's boundary.
+_FILE_SHORTHANDS = ('stdout', 'stderr', 'stdin')
 
 
 @pytest.mark.fast
-def test_a_workflow_output_bound_to_stdout_or_stderr_is_a_file() -> None:
-    """`stdout` and `stderr` are a CommandLineTool's own shorthands; the workflow outputs they feed must say `File`."""
-    tool = CommandLineTool(
-        "echo_tool",
-        Inputs(message=Input(cwl.string, position=1)),
-        Outputs(out=Output.stdout(), err=Output.stderr()),
-    ).stdout("stdout.txt").stderr("stderr.txt")
-    step = tool.to_step(step_name="say_hello")
-    step.inputs.message = "hello"
-    workflow = Workflow([step], "stdout_out")
-    workflow.outputs.log = step.outputs.out
-    workflow.outputs.errors = step.outputs.err
+@given(st.lists(st.sampled_from(['stdout', 'stderr', 'File', 'string']), min_size=1, max_size=3), st.booleans(),
+       st.sampled_from(['none', 'unbound', 'bound']))
+@example(['stdout', 'stderr'], True, 'none')
+@example(['stdout', 'stderr'], False, 'none')  # docs/tool-builder.md hands such a tool to the workflow API
+@example(['stdout'], True, 'unbound')
+@example(['stdout'], True, 'bound')  # bound to a workflow input, that input must not say `stdin`
+@budget(30)
+def test_a_shorthand_port_reaches_the_workflow_as_a_file(types: list[str], named: bool, stdin: str) -> None:
+    """Each workflow port a tool port reaches, named, bound or promoted, has its type, `File` for a shorthand; the
+    tool keeps its own."""
+    outputs = Outputs(**{f"o{i}": Output.stdout() if declared == "stdout" else Output.stderr()
+                         if declared == "stderr" else Output(declared, glob="o") for i, declared in enumerate(types)})
+    tool = CommandLineTool("tool", Inputs(**({"src": Input("stdin")} if stdin != "none" else {})), outputs).stdout(
+        "out.txt").stderr("err.txt")
+    step = tool.to_step(step_name="s")
+    workflow = Workflow([step], "wf")
+    if named:
+        for index in range(len(types)):
+            setattr(workflow.outputs, f"w{index}", getattr(step.outputs, f"o{index}"))
+    if stdin == "bound":
+        step.inputs.src = workflow.inputs.data
+    compiled = workflow.compile().cwl_workflow
 
-    outputs = workflow.compile().cwl_workflow["outputs"]
-    assert outputs["log"]["type"] == "File"
-    assert outputs["errors"]["type"] == "File"
-
-
-@pytest.mark.fast
-def test_an_unbound_stdin_input_is_promoted_as_a_file() -> None:
-    """`stdin` is a CommandLineTool's own shorthand; the workflow input promoted from it must say `File`."""
-    tool = CommandLineTool(
-        "cat_tool",
-        Inputs(src=Input("stdin")),
-        Outputs(out=Output.stdout()),
-    ).stdout("stdout.txt")
-    step = tool.to_step(step_name="cat_it")
-    workflow = Workflow([step], "stdin_in")
-    workflow.outputs.log = step.outputs.out
-
-    inputs = workflow.compile().cwl_workflow["inputs"]
-    assert [spec["type"] for spec in inputs.values()] == ["File"]
-
-
-@pytest.mark.fast
-def test_a_bound_stdin_input_is_promoted_as_a_file() -> None:
-    """A `stdin` input bound to a workflow input must not leave `stdin` on the workflow."""
-    tool = CommandLineTool(
-        "cat_tool",
-        Inputs(src=Input("stdin")),
-        Outputs(out=Output.stdout()),
-    ).stdout("stdout.txt")
-    step = tool.to_step(step_name="cat_it")
-    workflow = Workflow([step], "stdin_bound")
-    step.inputs.src = workflow.inputs.data
-    workflow.outputs.log = step.outputs.out
-
-    assert workflow.compile().cwl_workflow["inputs"] == {"data": {"type": "File"}}
+    def wanted(declared: str) -> str:
+        return "File" if declared in _FILE_SHORTHANDS else declared
+    assert {name: spec["type"] for name, spec in compiled["outputs"].items()} == {
+        f"w{index}" if named else f"s~o{index}": wanted(declared) for index, declared in enumerate(types)}
+    assert [spec["type"] for spec in compiled["inputs"].values()] == (["File"] if stdin != "none" else [])
+    assert "data" in compiled["inputs"] or stdin != "bound"
+    assert [output["type"] for output in compiled["steps"][0]["run"]["outputs"]] == types

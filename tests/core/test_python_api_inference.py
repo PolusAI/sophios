@@ -1,33 +1,35 @@
 """`Inference` configures the Python API's edge inference as the command-line flags configure the CLI's."""
+import io
 import json
+import tempfile
+from contextlib import redirect_stderr
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+from hypothesis import example, given, strategies as st
 
 import sophios.api.python._workflow_runtime as python_runtime
 from sophios import main as cli
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.input_output import SHIPPED_RENAMINGS
 from sophios.api.python.workflow import (Inference, InvalidInferenceError, RunResult, RunState, SophiosError,
                                          SophiosErrorCode, Step, Workflow)
 from sophios.nf_types import NfProcessConnection
 from sophios.wic_types import Json, StepId, Tool
 
+from .budgets import budget
 from .synthetic_tools import clt
 
 RENAMINGS = (("data", "file"),)
 
 
 def _workflow(consumer_input: str) -> Workflow:
-    """One producer with two File outputs, `file` then `other`, and a consumer whose File input is left to inference.
-
-    Without naming conventions the later output, `other`, feeds the consumer.
-    An input called `file` pairs with the output `file`; an input called `data`
-    pairs with it only through a `data` -> `file` renaming.
-    """
+    """One producer with two File outputs, `other` then `file`, and a consumer whose File input is left to inference."""
     emit = (CommandLineTool("emit", Inputs(message=Input(cwl.string, position=1)),
-                            Outputs(file=Output(cwl.file, glob="out.txt"), other=Output(cwl.file, glob="out.txt")))
+                            Outputs(other=Output(cwl.file, glob="out.txt"), file=Output(cwl.file, glob="out.txt")))
             .base_command("echo").stdout("out.txt"))
     consume = (CommandLineTool("consume", Inputs(**{consumer_input: Input(cwl.file, position=1)}),
                                Outputs(result=Output(cwl.file, glob="result.txt")))
@@ -35,6 +37,21 @@ def _workflow(consumer_input: str) -> Workflow:
     producer = Step(emit)
     producer.inputs.message = "hello"
     return Workflow([producer, Step(consume)], "wf")
+
+
+def _mdrun_workflow(other_output: str) -> Workflow:
+    """An mdrun-like producer with `other_output` then `output_edr_path`, both bare Files, and a consumer whose
+    `input_energy_path` is left to inference."""
+    mdrun = (CommandLineTool("mdrun", Inputs(message=Input(cwl.string, position=1)),
+                             Outputs(**{other_output: Output(cwl.file, glob="out.txt")},
+                                     output_edr_path=Output(cwl.file, glob="out.txt")))
+             .base_command("echo").stdout("out.txt"))
+    energy = (CommandLineTool("consume", Inputs(input_energy_path=Input(cwl.file, position=1)),
+                              Outputs(result=Output(cwl.file, glob="result.txt")))
+              .base_command("cat").stdout("result.txt"))
+    producer = Step(mdrun)
+    producer.inputs.message = "hello"
+    return Workflow([producer, Step(energy)], "wf")
 
 
 def _feeds(cwl_workflow: Json) -> list[Json]:
@@ -45,15 +62,17 @@ def _feeds(cwl_workflow: Json) -> list[Json]:
 
 
 def _cli(workflow: Workflow, directory: Path, monkeypatch: pytest.MonkeyPatch, *flags: str,
-         renamings: tuple[tuple[str, str], ...] = ()) -> Json:
-    """The CWL the command line writes for `workflow`'s `.wic`, with `flags` and a config holding `renamings`."""
+         renamings: tuple[tuple[str, str], ...] | None = ()) -> Json:
+    """The CWL the command line writes for `workflow`'s `.wic`, with `flags` and a config holding `renamings`
+    (`None` leaves the key out of the config)."""
     bundle = directory / "bundle"
     bundle.mkdir()
     wic = workflow.write_wic(bundle)
     config = directory / "config.json"
-    config.write_text(json.dumps({"search_paths_cwl": {"global": [str(bundle)]},
-                                  "search_paths_wic": {"global": [str(bundle)]},
-                                  "renaming_conventions": [list(pair) for pair in renamings]}), encoding="utf-8")
+    settings: Json = {"search_paths_cwl": {"global": [str(bundle)]}, "search_paths_wic": {"global": [str(bundle)]}}
+    if renamings is not None:
+        settings["renaming_conventions"] = [list(pair) for pair in renamings]
+    config.write_text(json.dumps(settings), encoding="utf-8")
     monkeypatch.chdir(directory)
     monkeypatch.setattr("sys.argv", ["sophios", "--yaml", str(wic), "--config_file", str(config),
                                      "--generate_cwl_workflow", "--basepath", "out", *flags])
@@ -63,88 +82,26 @@ def _cli(workflow: Workflow, directory: Path, monkeypatch: pytest.MonkeyPatch, *
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("consumer_input, renamings", [("file", ()), ("data", RENAMINGS)],
-                         ids=["name-pairs", "renaming-pairs"])
-def test_naming_conventions_pick_the_edge_the_cli_picks(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-        consumer_input: str, renamings: tuple[tuple[str, str], ...]) -> None:
-    """Without conventions the later output feeds the input; with them the output its name pairs with does."""
-    default = _workflow(consumer_input).compile()
-    chosen = _workflow(consumer_input).compile(inference=Inference(naming_conventions=True, renamings=renamings))
-    from_cli = _cli(_workflow(consumer_input), tmp_path, monkeypatch, "--inference_use_naming_conventions",
-                    renamings=renamings)
-
-    assert _feeds(chosen.cwl_workflow) == _feeds(from_cli) != _feeds(default.cwl_workflow)
-
-
-@pytest.mark.fast
-def test_strict_refuses_a_choice_between_equals_as_the_cli_does(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    """`--inference_strict` and `Inference(strict=True)` turn the note into the same error."""
-    assert [str(d) for d in _workflow("file").compile().diagnostics if "wic042" in str(d)]
-
-    with pytest.raises(SophiosError) as raised:
-        _workflow("file").compile(inference=Inference(strict=True))
-    with pytest.raises(SystemExit):
-        _cli(_workflow("file"), tmp_path, monkeypatch, "--inference_strict")
-
-    assert [d.code for d in raised.value.diagnostics] == [SophiosErrorCode.INFERENCE_TIE]
-    assert "error [wic042]" in capsys.readouterr().err
-
-
-@pytest.mark.fast
-def test_disabled_inference_leaves_the_input_unconnected_as_the_cli_does(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`--inference_disable` and `Inference(enabled=False)` compile to the same CWL, with no edge."""
-    off = _workflow("file").compile(inference=Inference(enabled=False))
-    from_cli = _cli(_workflow("file"), tmp_path, monkeypatch, "--inference_disable")
-
-    assert _feeds(off.cwl_workflow) == _feeds(from_cli) == [{}]
-    assert _feeds(off.cwl_workflow) != _feeds(_workflow("file").compile().cwl_workflow)
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize("inference", [Inference(), Inference(naming_conventions=True, renamings=RENAMINGS)])
-def test_the_nextflow_target_connects_an_input_as_the_cwl_target_does(inference: Inference) -> None:
-    """`compile(target="nextflow", inference=)` lowers the edge `compile(inference=)` infers."""
-    workflow = _workflow("data")
-    [feed] = _feeds(workflow.compile(inference=inference).cwl_workflow)
-    lowered = workflow.compile(target="nextflow", inference=inference).nextflow_workflow
-    assert [f"{edge.from_process}/{edge.from_port}" for edge in lowered.connections
-            if isinstance(edge, NfProcessConnection)] == [feed["data"]]
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize("settings, fix", [
-    ({"insert_steps": True, "format_rules": {"tiff": "stop"}}, "'continue' or 'break'"),
-    ({"naming_conventions": True, "renamings": [("a", "b", "c")]}, "(before, after)"),
-    ({"naming_conventions": True, "renamings": ["ab"]}, "(before, after)"),
-    ({"naming_conventions": True, "renamings": [("a", 1)]}, "(before, after)"),
-    ({"renamings": RENAMINGS}, "naming_conventions=True"),
-    ({"format_rules": {"edam:format_2": "break"}}, "insert_steps=True"),
-], ids=["format-rule", "triple", "string", "non-string", "renamings-without-conventions",
-        "format-rules-without-insertion"])
-def test_an_invalid_inference_is_refused_at_construction(settings: dict[str, Any], fix: str) -> None:
-    """Each mistake is `api007`, and its message says what to write instead."""
-    with pytest.raises(InvalidInferenceError) as raised:
-        Inference(**settings)
-
-    (code,) = {d.code for d in raised.value.diagnostics}
-    assert code == SophiosErrorCode.INVALID_INFERENCE == "api007"
-    assert fix in str(raised.value)
-
-
-@pytest.mark.fast
-def test_an_inference_keeps_what_it_was_given_immutably() -> None:
-    """A list of renamings becomes a tuple, and the rules are a copy the caller cannot change under it."""
-    rules = {"tiff": "break"}
-    inference = Inference(naming_conventions=True, renamings=[("data", "file")], insert_steps=True, format_rules=rules)
-    rules["tiff"] = "continue"
-
-    assert inference.renamings == (("data", "file"),)
-    assert dict(inference.format_rules) == {"tiff": "break"}
-    with pytest.raises(TypeError):
-        inference.format_rules["tiff"] = "continue"  # type: ignore[index]
+@pytest.mark.parametrize("surface, other_output, renamings, edge", [
+    ("python", "output_other_path", None, "output_edr_path"),
+    ("python", "output_log_path", None, "output_edr_path"),
+    ("python", "output_other_path", (), "output_other_path"),
+    ("cli", "output_log_path", None, "output_edr_path"),
+    ("cli", "output_log_path", (), "output_log_path"),
+    ("cli", "output_other_path", SHIPPED_RENAMINGS, "output_edr_path"),
+], ids=["python-ships", "python-ships-over-a-log", "python-empty-is-none", "cli-key-missing-ships",
+        "cli-empty-list-is-none", "cli-shipped-list"])
+def test_input_energy_path_reads_the_output_its_renamings_pair_it_with(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, surface: str, other_output: str,
+        renamings: tuple[tuple[str, str], ...] | None, edge: str) -> None:
+    """Both surfaces start from the shipped renamings when none are given (`None`: no argument, no config key), so
+    `energy_` pairs with `edr_` and `input_energy_path` reads `output_edr_path`, not the output declared first, a log
+    included. A list given is the whole list, so an empty one leaves the output declared first."""
+    workflow = _mdrun_workflow(other_output)
+    compiled = workflow.compile() if renamings is None else workflow.compile(inference=Inference(renamings=renamings))
+    cwl = _cli(workflow, tmp_path, monkeypatch, renamings=renamings) if surface == "cli" else compiled.cwl_workflow
+    [feed] = _feeds(cwl)
+    assert feed["input_energy_path"] == f"mdrun/{edge}"
 
 
 class _Completed:  # pylint: disable=too-few-public-methods
@@ -154,20 +111,141 @@ class _Completed:  # pylint: disable=too-few-public-methods
         return RunResult(RunState.COMPLETED, {}, Path("outdir"), Path("run.log"), 0)
 
 
+def _documented(consumer: str, inference: Inference) -> tuple[str | None, bool]:
+    """What docs/edge-inference.md says feeds `consumer`, and whether a tie: the File declared first, unless the naming
+    conventions pair one output with the input's name, `input_` stripped and the renamings applied; none when off."""
+    if not inference.enabled:
+        return None, False
+    wanted = consumer.removeprefix("input_")
+    for before, after in inference.renamings or ():
+        wanted = after if wanted == before else wanted
+    paired = [output for output in ("file", "other") if inference.naming_conventions and output == wanted]
+    return (paired[0], False) if len(paired) == 1 else ("other", True)
+
+
+#: Each `before` is a whole name after `input_` or in none, so the docs' wording decides.
+_CONSUMERS = ("file", "other", "data", "input_file", "input_data", "summary")
+_RENAMINGS = (("data", "file"), ("data", "other"), ("summary", "file"))
+
+
 @pytest.mark.fast
-def test_run_infers_the_edge_its_compile_does(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The workflow `run()` writes for an `Inference` is the one `compile()` returns for it."""
-    monkeypatch.setattr(python_runtime.preflight, "prepare", lambda *args, **kwargs: None)
-    monkeypatch.setattr(python_runtime.run_local, "start", lambda request: _Completed())
-    inference = Inference(naming_conventions=True)
+@given(st.sampled_from(_CONSUMERS), st.booleans(), st.booleans(),
+       st.lists(st.sampled_from(_RENAMINGS), unique=True, max_size=2), st.booleans())
+@example("file", True, False, [], True)  # an input called `file` pairs with the output `file`
+@example("data", True, False, list(RENAMINGS), True)  # `data` pairs with it only through a renaming
+@example("file", True, True, [], False)  # strict turns the tie note into the same error
+@example("file", False, False, [], False)  # disabled leaves the input unconnected
+@example("data", True, False, [], False)  # with the conventions off the first output, `other`, feeds the input
+@example("input_data", True, False, [("data", "file")], True)  # renamed once `input_` is stripped
+@budget(8)
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def test_each_door_connects_the_input_the_docs_say(consumer: str, enabled: bool, strict: bool,
+                                                   renamings: list[tuple[str, str]], naming: bool) -> None:
+    """`compile()`, its Nextflow target, `run()` and the command line with the matching flags connect what
+    `_documented` says, a tie noted as `wic043`, or refused as it in every door when strict. The naming conventions
+    are on unless switched off."""
+    inference = (Inference(enabled=enabled, strict=strict, renamings=renamings) if naming
+                 else Inference(enabled=enabled, strict=strict, naming_conventions=False))
+    flags = [flag for flag, on in (("--inference_disable", not enabled), ("--inference_strict", strict),
+                                   ("--no_inference_naming_conventions", not naming)) if on]
+    configured = tuple(inference.renamings or ())
+    feed, tie = _documented(consumer, inference)
+    with tempfile.TemporaryDirectory() as directory, pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(python_runtime.preflight, "prepare", lambda *args, **kwargs: None)
+        monkeypatch.setattr(python_runtime.run_local, "start", lambda request: _Completed())
+        if tie and strict:
+            for door in (lambda: _workflow(consumer).compile(inference=inference),
+                         lambda: _workflow(consumer).run(basepath=str(Path(directory, "run")), inference=inference)):
+                with pytest.raises(SophiosError) as raised:
+                    door()
+                assert [d.code for d in raised.value.diagnostics] == [SophiosErrorCode.INFERENCE_GUESS]
+            with redirect_stderr(io.StringIO()) as err, pytest.raises(SystemExit):
+                _cli(_workflow(consumer), Path(directory), monkeypatch, *flags, renamings=configured)
+            assert "error [wic043]" in err.getvalue()
+            return
+        compiled = _workflow(consumer).compile(inference=inference)
+        _workflow(consumer).run(basepath=str(Path(directory, "run")), inference=inference)
+        ran = yaml.safe_load(Path(directory, "run", "wf.cwl").read_text(encoding="utf-8"))
+        from_cli = _cli(_workflow(consumer), Path(directory), monkeypatch, *flags, renamings=configured)
+    wired = [{consumer: f"emit/{feed}"} if feed else {}]
+    assert _feeds(compiled.cwl_workflow) == _feeds(ran) == _feeds(from_cli) == wired
+    assert ("wic043" in "".join(map(str, compiled.diagnostics))) == tie
+    if feed is None:  # an input left unconnected the Nextflow target refuses
+        with pytest.raises(ValueError, match=f"consume.{consumer} is not connected"):
+            _workflow(consumer).compile(target="nextflow", inference=inference)
+        return
+    lowered = _workflow(consumer).compile(target="nextflow", inference=inference).nextflow_workflow
+    assert [f"{edge.from_process}/{edge.from_port}" for edge in lowered.connections
+            if isinstance(edge, NfProcessConnection)] == [f"emit/{feed}"]
 
-    _workflow("file").run(basepath=str(tmp_path / "named"), inference=inference)
-    _workflow("file").run(basepath=str(tmp_path / "default"))
 
-    named = yaml.safe_load((tmp_path / "named" / "wf.cwl").read_text(encoding="utf-8"))
-    default = yaml.safe_load((tmp_path / "default" / "wf.cwl").read_text(encoding="utf-8"))
-    assert _feeds(named) == _feeds(_workflow("file").compile(inference=inference).cwl_workflow)
-    assert _feeds(default) == _feeds(_workflow("file").compile().cwl_workflow) != _feeds(named)
+_PAIR = st.tuples(st.text(), st.text()) | st.lists(st.text(), min_size=2, max_size=2)
+_NOT_A_PAIR = (st.text() | st.tuples(st.text()) | st.tuples(st.text(), st.text(), st.text())
+               | st.tuples(st.text(), st.integers()))
+_RULE = st.sampled_from(["continue", "break"])
+_NOT_A_RULE = st.tuples(st.integers(), _RULE) | st.tuples(st.text(), st.text().filter(
+    lambda text: text not in ("continue", "break")) | st.none())
+_FIXES = ("(before, after)", "naming_conventions=True", "insert_steps=True", "'continue' or 'break'")
+
+
+@st.composite
+def _settings(draw: st.DrawFn) -> tuple[dict[str, Any], set[str]]:
+    """Settings for `Inference` breaking the docstring's rules drawn, each named by the fix its refusal names."""
+    broken = draw(st.sets(st.sampled_from(_FIXES), max_size=2))
+    renamings = draw(st.permutations(draw(st.lists(_PAIR, max_size=2)) + draw(
+        st.lists(_NOT_A_PAIR, min_size=1, max_size=1) if "(before, after)" in broken else st.just([]))))
+    renamings = renamings or ([draw(_PAIR)] if "naming_conventions=True" in broken else [])
+    rules = dict(draw(st.lists(st.tuples(st.text(), _RULE), max_size=2)) + draw(
+        st.lists(_NOT_A_RULE, min_size=1, max_size=1) if "'continue' or 'break'" in broken else st.just([])))
+    rules = rules or ({draw(st.text()): draw(_RULE)} if "insert_steps=True" in broken else {})
+    settings: dict[str, Any] = draw(st.fixed_dictionaries({}, optional=dict.fromkeys(("enabled", "strict"),
+                                                                                     st.booleans())))
+    for key, given_values, fix in (("renamings", renamings, "naming_conventions=True"),
+                                   ("format_rules", rules, "insert_steps=True")):
+        switch = fix.removesuffix("=True")
+        settings[switch] = fix not in broken and (bool(given_values) or draw(st.booleans()))
+        if given_values:
+            settings[key] = given_values
+    return settings, broken
+
+
+@pytest.mark.fast
+@given(_settings())
+@example(({"insert_steps": True, "format_rules": {"tiff": "stop"}}, {"'continue' or 'break'"}))
+@example(({"naming_conventions": True, "renamings": [("a", "b", "c")]}, {"(before, after)"}))
+@example(({"naming_conventions": True, "renamings": ["ab"]}, {"(before, after)"}))
+@example(({"naming_conventions": True, "renamings": [("a", 1)]}, {"(before, after)"}))
+@example(({"naming_conventions": False, "renamings": RENAMINGS}, {"naming_conventions=True"}))
+@example(({"format_rules": {"edam:format_2": "break"}}, {"insert_steps=True"}))
+@example(({"insert_steps": True, "format_rules": {2: "break"}}, {"'continue' or 'break'"}))  # a format is a string
+# A list of renamings becomes a tuple, and the rules are a copy the caller cannot change under it.
+@example(({"renamings": [("data", "file")], "insert_steps": True, "format_rules": {"tiff": "break"}}, set()))
+@example(({}, set()))  # renamings start from the shipped ones
+@example(({"naming_conventions": False}, set()))  # which conventions off leave unused, not an error
+@budget(40)
+def test_an_inference_is_refused_at_construction_or_keeps_what_it_was_given(
+        drawn: tuple[dict[str, Any], set[str]]) -> None:
+    """Settings breaking a rule are `api007`, saying what to write instead; others are kept, renamings as tuples, the
+    shipped ones unless given or the conventions are off, and the format rules as a copy the caller cannot change."""
+    settings, broken = drawn
+    if broken:
+        with pytest.raises(InvalidInferenceError) as raised:
+            Inference(**settings)
+        assert {d.code for d in raised.value.diagnostics} == {SophiosErrorCode.INVALID_INFERENCE} == {"api007"}
+        assert any(fix in str(raised.value) for fix in broken), str(raised.value)
+        return
+    inference = Inference(**settings)
+    rules = settings.get("format_rules", {})
+    given_rules = dict(rules)
+    rules.clear()
+    given_renamings = settings.get("renamings")
+    assert inference.renamings == (None if given_renamings is None else tuple(tuple(pair) for pair in given_renamings))
+    shipped = SHIPPED_RENAMINGS if settings.get("naming_conventions", True) else ()
+    expected = given_renamings if given_renamings is not None else shipped
+    assert python_runtime.compiler_options(inference)["renaming_conventions"] == [tuple(pair) for pair in expected]
+    assert dict(inference.format_rules) == given_rules
+    with pytest.raises(TypeError):
+        inference.format_rules["tiff"] = "continue"  # type: ignore[index]
 
 
 def _converting_workflow(directory: Path) -> tuple[Workflow, dict[StepId, Tool]]:
@@ -221,3 +299,11 @@ def test_format_rules_reach_the_inserted_step(tmp_path: Path) -> None:
 
     assert not any("need_a" in name for name in continued.cwl_workflow["inputs"])
     assert any("need_a" in name for name in stopped.cwl_workflow["inputs"])
+
+
+@pytest.mark.fast
+def test_a_copy_of_an_inference_keeps_its_default_renamings() -> None:
+    """Switching naming conventions on a copy neither raises for renamings nobody gave nor drops the shipped ones."""
+    assert replace(Inference(), naming_conventions=False).naming_conventions is False
+    switched_on = replace(Inference(naming_conventions=False), naming_conventions=True)
+    assert python_runtime.compiler_options(switched_on)['renaming_conventions'] == list(SHIPPED_RENAMINGS)

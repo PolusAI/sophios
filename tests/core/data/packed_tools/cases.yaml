@@ -1,0 +1,12 @@
+# Each packed document <id>.cwl beside this file, as a step runs it: main's ports, read off the document by hand, or
+# what the refusal says after the document's name.
+- {id: graph-main, ports: [[text], [out]], why: "a $graph's main, by the id main"}
+- {id: graph-hash-main, ports: [[text], [out]], why: "a $graph's main, by the id #main"}
+- {id: graph-map-ports, ports: [[text], [out]], why: "main's ports in map form, which a packed document may also use"}
+- {id: single-tool, ports: [[text], [out]], why: 'what cwltool --pack writes for a single tool: no $graph, the tool as
+    #main'}
+- {id: no-main, why: a $graph with no main names no process to run,
+    refused: 'is a packed CWL document ($graph) with no main
+   process; it holds: say, other. CWL runs a packed document through its main, so name the process to run main,
+       or unpack
+   it into a file of its own'}

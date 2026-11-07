@@ -86,7 +86,7 @@ step's tool is passthrough wholesale: Sophios does not classify
 | `label` | passthrough | | `test_step_passthrough_is_byte_identical` |
 | `out` | native | | `test_the_two_spellings_of_an_edge_definition_agree_on_an_output` (`test_lang_parser.py`) |
 | `requirements` | passthrough | | `test_step_passthrough_is_byte_identical` |
-| `run` | native | a registry stem, a path relative to the document, or an inline body | `test_an_inline_run_body_is_registered_and_emitted_as_its_own_tool` (`test_frontdoor.py`) |
+| `run` | native | a registry stem, a path relative to the document, or an inline body | `test_each_step_runs_the_tool_its_run_names` (`test_frontdoor.py`) |
 | `scatter` | native | | `test_every_declared_key_is_interpreted` |
 | `scatterMethod` | native | | `test_every_declared_key_is_interpreted` |
 | `when` | native | | `test_every_declared_key_is_interpreted` |
@@ -97,7 +97,7 @@ step's tool is passthrough wholesale: Sophios does not classify
 |---|---|---|---|
 | `id` | native | the `in:` key | `test_input_values_are_closed` (`test_lang_parser.py`) |
 | `source` | native | `!*`, a bare workflow-input name, or a list of them inside `!cwl {source: [...]}` | `test_input_values_are_closed` (`test_lang_parser.py`) |
-| `default` | native | through `!cwl {...}`; a relative File or Directory `location`/`path` is written absolute against the `.wic`'s directory | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`), `test_a_wic_step_default_is_written_absolute_against_the_wic` (`test_wic_defaults.py`) |
+| `default` | native | through `!cwl {...}`; a relative File or Directory `location`/`path` is written absolute against the `.wic`'s directory | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`), `test_a_wic_file_default_is_written_absolute_against_the_wic` (`test_wic_defaults.py`) |
 | `label` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
 | `linkMerge` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
 | `loadContents` | native | through `!cwl {...}` | `test_a_cwl_record_emits_the_fields_it_carries` (`test_emit.py`) |
@@ -360,8 +360,8 @@ for a document, or for what running it needs from the machine (kind
 `machine`: `wic015`, `wic016`, `wic021`, `wic029`, `wic037`), and `api0NN`
 for the Python API, where the document is fine and the call was not. A code
 is never renumbered, and a code that shipped in a release is never reused;
-`wic040` and `wic041` are unassigned. `wic042` and `wic043` are notes, errors
-under `--inference_strict`.
+`wic040`, `wic041`, `wic042` and `wic056` are unassigned. `wic043` is a note, an
+error under `--inference_strict`.
 
 Every member is provoked in `tests/core/provocations.py`, in one of two
 tiers: `PARSE` (source text through `parse()` alone) or `COMPILED` (a
@@ -414,8 +414,7 @@ Every member has an `Explanation` in `EXPLANATIONS` (kind, meaning, fix);
 | `wic037` | `IMAGE_UNAVAILABLE` | `COMPILED` |
 | `wic038` | `STEP_INPUT_RECORD` | `PARSE` |
 | `wic039` | `POSITIONAL_OUTPUT_SOURCE` | `COMPILED` |
-| `wic042` | `INFERENCE_TIE` | `COMPILED` |
-| `wic043` | `INFERENCE_RECENCY` | `COMPILED` |
+| `wic043` | `INFERENCE_GUESS` | `COMPILED` |
 | `wic044` | `REALTIME_DECLARATION` | `COMPILED` |
 | `api001` | `INVALID_INPUT_VALUE` | `COMPILED` |
 | `api002` | `INVALID_STEP` | `COMPILED` |

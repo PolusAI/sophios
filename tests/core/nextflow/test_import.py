@@ -50,7 +50,7 @@ import tempfile
 import time
 from typing import Any
 
-from hypothesis import given, settings, strategies as st
+from hypothesis import given, strategies as st
 import pytest
 
 from sophios.api.python._ports import ParameterNamespace
@@ -72,6 +72,7 @@ from sophios.nf_reader import read_nextflow
 from sophios.nf_types import ExecutableNextflowWorkflow
 from sophios.python_cwl_adapter import import_python_file
 
+from ..budgets import budget
 from ..hermetic import network_refused
 from ..provocations import IMPORT_EDITS, import_edited
 from .test_phase3_cells import calculator_workflow, predicates_workflow
@@ -435,7 +436,7 @@ def _generated(draw: st.DrawFn) -> Workflow:
     return workflow
 
 
-@settings(max_examples=100, deadline=None)
+@budget(100)
 @given(_generated())
 def test_the_import_of_a_generated_tool_compiles_to_its_model(workflow: Workflow) -> None:
     compiled = workflow.compile(target="nextflow")
@@ -788,7 +789,7 @@ def _corrupted(draw: st.DrawFn) -> tuple[str, str, bytes]:
     return case, file, data[:at] + inserted + data[at:]
 
 
-@settings(max_examples=300, deadline=None, derandomize=True)
+@budget(300)
 @given(_corrupted())
 def test_whatever_bytes_the_files_hold_the_read_returns_a_model_or_stops_with_a_code(
         corrupted: tuple[str, str, bytes]) -> None:

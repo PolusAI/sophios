@@ -4,16 +4,21 @@
 disagreed: the compiler emitted `v1.2`, a CommandLineTool generator emitted
 `v1.0`, and the schema accepted any non-empty string.
 """
+import json
 from typing import Final
 
 import pytest
-
 import yaml
+from cwltool.update import ALLUPDATES, UPDATES
+from hypothesis import given, strategies as st
 from jsonschema import Draft202012Validator
 
 from sophios.lang import SophiosErrorCode, parse, wic_schema
-from sophios.lang.cwl import CWL_VERSION, CWL_VERSIONS
+from sophios.lang.cwl import CWL_VERSION
 from sophios.python_cwl_adapter import generate_CWL_CommandLineTool
+
+from .budgets import budget
+from .strategies import pinned
 
 
 # --------------------------------------------------------------------------
@@ -51,8 +56,11 @@ _SCHEMA_VALIDATOR: Final = Draft202012Validator(wic_schema())
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('museum', ['draft-2', 'draft-3', 'v1.0.dev4', 'v1.2.0-dev5', 'v1.3', ''])
-def test_an_unrunnable_version_is_refused_by_the_parser_and_the_schema(museum: str) -> None:
+@given(st.one_of(st.sampled_from(sorted(ALLUPDATES)), st.text('v1.023-dev ', max_size=8), st.floats(0, 2), st.none(),
+                 st.lists(st.just('v1.2'), max_size=1)))
+@pinned('draft-2', 'draft-3', 'v1.0.dev4', 'v1.2.0-dev5', 'v1.3', '', *sorted(UPDATES))
+@budget(100)
+def test_a_version_is_accepted_by_the_parser_and_the_schema_exactly_when_cwltool_runs_it(version: object) -> None:
     """A version the toolchain cannot run is refused where it is written, not
     later inside the runner with a worse error.
 
@@ -62,20 +70,12 @@ def test_an_unrunnable_version_is_refused_by_the_parser_and_the_schema(museum: s
     to sail through an any-non-empty-string schema and die downstream.
     `v1.3` and the empty string stand in for plain typos.
 
-    Both readers of `Grammar.CWL_VERSION_VALUE` are checked, not this file's
-    own imports: asserting membership in the tuple imported above is a
-    tautology, and would pass with the check reverted in either place.
+    Both readers of `Grammar.CWL_VERSION_VALUE` are checked against what cwltool
+    runs without `--enable-dev`, not against this module's own tuple: asserting
+    membership in it is a tautology, and would pass with the check reverted in either place.
     """
+    runs = version in tuple(UPDATES)
     reported = [(d.code, d.span.start_line if d.span else None)
-                for d in parse(f"cwlVersion: '{museum}'\n", 'museum.wic').diagnostics]
-    assert reported == [(SophiosErrorCode.UNSUPPORTED_CWL_VERSION, 1)]
-    assert list(_SCHEMA_VALIDATOR.iter_errors({'cwlVersion': museum})), \
-        f'the schema accepted cwlVersion: {museum!r}'
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('version', sorted(CWL_VERSIONS))
-def test_every_supported_version_is_accepted_by_the_parser_and_the_schema(version: str) -> None:
-    """The same two readers admit each version the toolchain runs."""
-    assert parse(f'cwlVersion: {version}\n', 'supported.wic').ok
-    assert not list(_SCHEMA_VALIDATOR.iter_errors({'cwlVersion': version}))
+                for d in parse(f'cwlVersion: {json.dumps(version)}\n', 'version.wic').diagnostics]
+    assert reported == ([] if runs else [(SophiosErrorCode.UNSUPPORTED_CWL_VERSION, 1)])
+    assert _SCHEMA_VALIDATOR.is_valid({'cwlVersion': version}) is runs

@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .input_output import SHIPPED_RENAMINGS
 from .lang.error_codes import SophiosErrorCode
 from .wic_types import DEFAULT_BASEPATH, CompilerOptions, GraphSettings
 
@@ -77,10 +78,12 @@ neutral.add_argument('--target', choices=tuple(target_options), default='cwl',
                      help='Compilation artifact target. Defaults to cwl.')
 neutral.add_argument('--inference_disable', default=False, action="store_true",
                      help='Disables use of the inference algorithm when compiling.')
-neutral.add_argument('--inference_use_naming_conventions', default=False, action="store_true",
-                     help='Enables the use of naming conventions in the inference algorithm')
+neutral.add_argument('--no_inference_naming_conventions', dest='inference_use_naming_conventions',
+                     default=True, action="store_false",
+                     help='Do not let an input\'s name decide between equally typed outputs of the same step; '
+                     'the output declared first wins')
 neutral.add_argument('--inference_strict', default=False, action="store_true",
-                     help='Treat an inference choice between equal candidates (wic042, wic043) as an error.')
+                     help='Treat a guessed edge (wic043) as an error.')
 neutral.add_argument('--validate_plugins', default=False, action="store_true",
                      help='Validate all CWL CommandLineTools')
 neutral.add_argument('--ignore_validation_errors', default=False, action="store_true",
@@ -204,6 +207,13 @@ def validate_target_args(args: argparse.Namespace) -> None:
         parser.error(f"--target {args.target} cannot be combined with {', '.join(foreign)}")
 
 
+def validate_success_code_range(args: argparse.Namespace) -> None:
+    """Reject a success-code range whose lower bound is above its upper, which names no code."""
+    low, high = args.partial_failure_success_codes_range
+    if low > high:
+        parser.error(f'--partial_failure_success_codes_range {low} {high}: the lower bound is above the upper')
+
+
 def _argv(yaml_path: str = '', suppliedargs: list[str] | None = None) -> list[str]:
     """The argument list a synthesised parse should read.
 
@@ -225,6 +235,7 @@ def get_args(yaml_path: str = '', suppliedargs: list[str] | None = None) -> argp
     """
     args = parser.parse_args(_argv(yaml_path, suppliedargs))
     validate_target_args(args)
+    validate_success_code_range(args)
     return args
 
 
@@ -239,6 +250,7 @@ def get_known_and_unknown_args(
     """
     args, unknown = parser.parse_known_args(_argv(yaml_path, suppliedargs))
     validate_target_args(args)
+    validate_success_code_range(args)
     return args, unknown
 
 
@@ -273,9 +285,12 @@ def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions
     the way to the compiler. Callers that genuinely want defaults now say so
     with `default_compilation_settings()`.
     """
+    low, high = args.partial_failure_success_codes_range
     # core compiler options for transformation into CWL
     compiler_options: CompilerOptions = {
         'partial_failure_enable': args.partial_failure_enable,
+        # The codes given and the range, which keeps its lower bound and excludes its upper.
+        'partial_failure_success_codes': (*args.partial_failure_success_codes, *range(low, high)),
         'inference_use_naming_conventions': args.inference_use_naming_conventions,
         'inference_strict': args.inference_strict,
         'insert_steps_automatically': args.insert_steps_automatically,
@@ -283,7 +298,7 @@ def get_dicts_for_compilation(args: argparse.Namespace) -> tuple[CompilerOptions
         'allow_raw_cwl': args.allow_raw_cwl,
         'lang_version': args.lang_version,
         'inference_rules': {},
-        'renaming_conventions': [],
+        'renaming_conventions': list(SHIPPED_RENAMINGS),
     }
 
     # for drawing.draw, after the compile

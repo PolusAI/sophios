@@ -1,0 +1,2 @@
+inputs: {n: {type: Any}}
+steps: [{id: echo, in: {message: !cwl {source: n, valueFrom: '$(String(self))'}}}]

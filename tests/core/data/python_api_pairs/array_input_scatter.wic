@@ -1,0 +1,2 @@
+inputs: {names: {type: {type: array, items: string}}}
+steps: [{id: touch, scatter: [filename], scatterMethod: dotproduct, in: {filename: names}}]

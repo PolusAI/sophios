@@ -1,0 +1,2 @@
+steps: [{id: echo, scatter: [message], scatterMethod: dotproduct, in: {message: !ii [a, b]}, out: [{stdout: !& said}]},
+        {id: cat, scatter: [file], scatterMethod: dotproduct, in: {file: !* said}}]

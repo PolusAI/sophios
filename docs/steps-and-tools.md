@@ -70,12 +70,13 @@ sophios --yaml two_lines.wic --run_local
 python two_lines.py
 ```
 
-The command line notes two choices, since each later step had more than one
+The command line notes two guessed edges, and how to check them, since each later step had more than one
 file to choose from:
 
 ```text
-two_lines.wic:9:3: note [wic043] step 'goodbye' input 'file' was inferred from the most recent match step 2 'hello' output 'file'; earlier steps also match: step 1 'touch' output 'file'; pin it: `out: - file: !& <name>` on step 2 'hello' and `in: file: !* <name>` here (step 3 'goodbye', port 'file')
-two_lines.wic:13:3: note [wic043] step 'cat' input 'file' was inferred from the most recent match step 3 'goodbye' output 'file'; earlier steps also match: step 2 'hello' output 'file', step 1 'touch' output 'file'; pin it: `out: - file: !& <name>` on step 3 'goodbye' and `in: file: !* <name>` here (step 4 'cat', port 'file')
+note [wic043] 2 edges were guessed; draw the workflow to check them (--graphviz, or Workflow.draw() in Python)
+  two_lines.wic:9:3   goodbye.file <- hello.file (1 other fits)
+  two_lines.wic:13:3  cat.file <- goodbye.file (2 others fit)
 ```
 
 Both are the choices you want, and `greeting.txt` holds both lines:
@@ -132,7 +133,8 @@ The command line notes that it connected the counter's `text` to the file
 `append` wrote:
 
 ```text
-word_count.wic:8:3: note [wic043] step 'word_count' input 'text' was inferred from the most recent match step 2 'append' output 'file'; earlier steps also match: step 1 'touch' output 'file'; pin it: `out: - file: !& <name>` on step 2 'append' and `in: text: !* <name>` here (step 3 'word_count', port 'text')
+note [wic043] 1 edge was guessed; draw the workflow to check it (--graphviz, or Workflow.draw() in Python)
+  word_count.wic:8:3  word_count.text <- append.file (1 other fits)
 ```
 
 The output directory holds `counts.txt`, which reads `2` followed by the

@@ -1,0 +1,7 @@
+steps: [{id: a, run: touch, in: {filename: !ii a.txt}, out: [{file: !& a}]},
+    {id: b, run: touch, in: {filename: !ii b.txt}, out: [{file: !& b}]},
+        {id: sink, run: {cwlVersion: v1.2, class: CommandLineTool, baseCommand: 'true', inputs: {x: {type: 'File[]'}},
+            outputs: {}}, in: {x: !cwl {source: [!* a, !* b], linkMerge: merge_flattened}}},
+        {id: c, run: touch, in: {filename: !ii c.txt}, out: [{file: !& c}]},
+            {id: sink1, run: {cwlVersion: v1.2, class: CommandLineTool, baseCommand: 'true', inputs: {x: {type: File}},
+            outputs: {}}, in: {x: !* c}}]

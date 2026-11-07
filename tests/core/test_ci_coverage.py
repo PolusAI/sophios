@@ -330,7 +330,6 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 WINDOWS_EXCLUDED: Final = frozenset({
     'tests/core/test_emit.py::test_emit_validates_as_cwl_v1_2',
     'tests/core/test_emit.py::test_validator_rejects_the_independent_invalid_control',
-    'tests/core/test_emit.py::test_a_compiled_string_job_input_validates',
     # A strict xfail on one cwltool validation of a `schemed` workflow, under a
     # second. It states the SchemaDefRequirement gap the generators exclude,
     # which only cwltool's validator can show, so it runs where the pair does.
@@ -409,9 +408,17 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # One cwltool run of a one-step tool that fails, in about two seconds. That the Nextflow target refuses the
     # glob is checked on every leg by test_capabilities.py; only cwltool shows CWL refuses it too.
     'tests/core/nextflow/test_reference_differential.py::test_neither_runner_takes_an_entrys_object_as_a_glob',
+    # One append step run under Nextflow and under cwltool, in about two seconds. Only the Nextflow lane, on
+    # Linux, collects it, so the Windows leg gives up nothing it ran; the tool's compiled form is checked on
+    # every leg by test_example_scripts.py's ground truth and the cookbook pairs.
+    'tests/core/nextflow/test_shipped_append.py::'
+    'test_the_shipped_append_tool_appends_the_message_as_written_under_both_runners',
     # Both cwltool entry points, called in-process with cwltool's run stood in for, well under a second.
     # test_run_local.py is POSIX-only already, so the Windows leg gives up nothing it ran.
     'tests/core/test_run_local.py::test_the_runner_prints_no_rdflib_encoding_warning',
+    # Seven runs (four pinned, three drawn) of a one-step tool under Nextflow and under cwltool, in about twelve
+    # seconds. Only the Nextflow lane, on Linux, collects it, so the Windows leg gives up nothing it ran.
+    'tests/core/nextflow/test_runtime.py::test_a_command_receives_the_arguments_cwltool_gives_it',
 })
 
 

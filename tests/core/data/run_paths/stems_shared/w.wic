@@ -1,0 +1,1 @@
+steps: [{id: s, run: a/t.cwl, in: {a: !ii x}}, {id: s, run: b/t.cwl, in: {a: !ii y}}, {id: mk_file, in: {name: !ii z}}]

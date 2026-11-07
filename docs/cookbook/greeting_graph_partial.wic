@@ -1,0 +1,21 @@
+steps:
+- id: touch
+  in:
+    filename: !ii greeting.txt
+- id: append
+  in:
+    str: !ii Hello, Sophios
+  out:
+  - file: !& greeting_file
+- id: shout
+  run: shout.cwl
+  out:
+  - shouted: !& shouted_file
+- id: word_count
+  run: word_count.cwl
+  in:
+    text: !* greeting_file
+- id: combine
+  run: combine.cwl
+  in:
+    text: !* shouted_file

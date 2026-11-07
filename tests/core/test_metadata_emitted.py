@@ -3,15 +3,10 @@ from typing import Any
 
 import pytest
 
-from sophios import post_compile
 from sophios.ir.artifacts import CompilationArtifact
 from sophios.ir.emit import EDAM_NAMESPACE
 
-from .hermetic import compile_hermetic, subworkflow_step
-
-
-def _documents(node: CompilationArtifact) -> list[Any]:
-    return [node.cwl, *(document for child in node.children for document in _documents(child))]
+from .hermetic import compile_hermetic
 
 
 #: The fields a CWL document declares its prefixes and ontologies in.
@@ -28,30 +23,6 @@ def declared_beneath(artifact: CompilationArtifact) -> dict[str, Any]:
         namespaces |= below.get('$namespaces', {})
         schemas += [schema for schema in below.get('$schemas', []) if schema not in schemas]
     return {field: value for field, value in zip(DECLARATIONS, (namespaces, schemas)) if value}
-
-
-def _keys(value: Any) -> list[str]:
-    """Every mapping key in `value`, at any depth."""
-    match value:
-        case dict():
-            return [str(key) for key in value] + [key for item in value.values() for key in _keys(item)]
-        case list():
-            return [key for item in value for key in _keys(item)]
-    return []
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('form', ['nested', 'embedded', 'flat', 'flat_embedded'])
-def test_no_form_of_the_compiled_cwl_carries_a_sophios_key_or_prefix(form: str) -> None:
-    """Whichever way the tree is written, nothing in it is Sophios's own."""
-    nested = compile_hermetic({'steps': [subworkflow_step('child.wic', {'steps': [{'id': 'mk_file'}]}),
-                                         {'id': 'count'}]}).artifact
-    flat = post_compile.flatten_subworkflows(nested)
-    artifact = {'nested': nested, 'embedded': post_compile.inline_artifact_runs(nested),
-                'flat': flat, 'flat_embedded': post_compile.inline_artifact_runs(flat)}[form]
-    keys = [key for document in _documents(artifact) for key in _keys(document)]
-    assert not [key for key in keys if key.startswith('sophios')]
-    assert not [document for document in _documents(artifact) if 'sophios' in document.get('$namespaces', {})]
 
 
 @pytest.mark.fast

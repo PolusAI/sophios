@@ -1,0 +1,1 @@
+steps: {s: {run: elsewhere/mk_file.cwl, in: {name: !ii a}}}

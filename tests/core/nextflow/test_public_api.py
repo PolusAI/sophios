@@ -18,6 +18,8 @@ from sophios.api.python.workflow import (
     Step,
     Workflow,
 )
+from sophios.lang import SophiosErrorCode
+from sophios.lang.diagnostics import lines
 from sophios.nf_reader import read_nextflow
 from sophios.nf_types import NfWorkflowOutputConnection
 
@@ -66,15 +68,20 @@ FOUR_FILES = {"nextflow_workflow.json", "workflow.nf", "nextflow.config", "nextf
 
 @pytest.mark.fast
 @pytest.mark.filterwarnings("error::UserWarning")
-def test_a_nextflow_compile_keeps_every_note_and_warns_with_none() -> None:
-    """The CWL compile's version and notes, then the lowering's notes; only a run warns (test_run_local)."""
-    consume = CommandLineTool("consume", Inputs(file=Input(cwl.file, position=1)),
+def test_a_nextflow_compile_keeps_every_note_and_warns_with_none(capsys: pytest.CaptureFixture[str]) -> None:
+    """The CWL compile's version and notes, then the lowering's notes, kept on the result and printed on stderr;
+    nothing warns."""
+    consume = CommandLineTool("consume", Inputs(data=Input(cwl.file, position=1)),
                               Outputs(result=Output(cwl.file, glob="result.txt"))).base_command("cat")
     workflow = Workflow([*gpu_workflow().steps, Step(consume)], "nextflow_noted")
     compiled = workflow.compile(target="nextflow")
+    printed = capsys.readouterr().err.splitlines()
     core = workflow.compile()
-    assert [note for note in core.diagnostics if "note [wic042]" in note]
-    assert (compiled.lang_version, *compiled.diagnostics) == (core.lang_version, *core.diagnostics, *CUDA_NOTES)
+    assert [note for note in core.diagnostics if note.code is SophiosErrorCode.INFERENCE_GUESS]
+    assert (compiled.lang_version, *compiled.diagnostics) == (core.lang_version, *core.diagnostics,
+                                                              *compiled.diagnostics[len(core.diagnostics):])
+    assert [str(note) for note in compiled.diagnostics[len(core.diagnostics):]] == CUDA_NOTES
+    assert printed == lines(compiled.diagnostics)
     assert compiled.nextflow_workflow.processes[0].resources.accelerator == 2
 
 

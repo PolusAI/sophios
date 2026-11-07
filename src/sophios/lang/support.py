@@ -66,7 +66,7 @@ WORKFLOW_STEP: Final[Mapping[str, Row]] = MappingProxyType({
     'label': Row(_P, _STEP),
     'out': Row(_N, 'test_the_two_spellings_of_an_edge_definition_agree_on_an_output'),
     'requirements': Row(_P, _STEP),
-    'run': Row(_N, 'test_an_inline_run_body_is_registered_and_emitted_as_its_own_tool',
+    'run': Row(_N, 'test_each_step_runs_the_tool_its_run_names',
                'a registry stem, a path relative to the document, or an inline body'),
     'scatter': Row(_N, _INTERPRETED),
     'scatterMethod': Row(_N, _INTERPRETED),

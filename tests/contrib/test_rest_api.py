@@ -4,16 +4,19 @@ import json
 from pathlib import Path
 import subprocess as sub
 import traceback
+from typing import Any
 
 from fastapi import Request
+from hypothesis import example, given, strategies as st
 import pytest
 import yaml
 
+from core.budgets import budget
 from sophios import preflight
 from sophios.contrib.converter import wfb_to_wic
 from sophios.contrib.rest import api
 from sophios.utils_yaml import Key
-from sophios.wic_types import Json
+from sophios.wic_types import CompilerOptions, Json
 
 try:
     import cwltool.main
@@ -187,14 +190,20 @@ def test_rest_wfb_compile() -> None:
     assert int(res["retval"]) == 0
 
 
-def test_wfb_to_wic_keeps_settings_as_sent() -> None:
-    """A WFB setting reaches the inline input as sent, not re-read as YAML.
+#: A WFB setting: text, often what YAML would read as something else, or any JSON value holding it; but the empty
+#: string, which `wfb_to_wic` leaves as it is.
+_TEXT = st.lists(st.sampled_from(' \t#:-[]{},&*!|>\'"%@`') | st.text(max_size=3), min_size=1).map(''.join).filter(bool)
+_SETTINGS = _TEXT | st.recursive(st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False) | _TEXT,
+                                 lambda inner: st.lists(inner, max_size=3) | st.dictionaries(st.text(), inner,
+                                                                                             max_size=3), max_leaves=6)
 
-    Returns:
-        None: The assertions verify each value is unchanged.
-    """
-    settings = {'glob': '*.tif', 'layout': '{row:c}', 'note': 'x # y', 'count': '5', 'flag': 'true',
-                'indices': '[1, 2]', 'none': None, 'size': 5, 'numbers': [1, 2]}
+
+@budget(100)
+@given(st.dictionaries(st.text(min_size=1), _SETTINGS, max_size=5))
+@example({'glob': '*.tif', 'layout': '{row:c}', 'note': 'x # y', 'count': '5', 'flag': 'true', 'indices': '[1, 2]',
+          'none': None, 'size': 5, 'numbers': [1, 2]})
+def test_wfb_to_wic_keeps_settings_as_sent(settings: Json) -> None:
+    """A WFB setting reaches the inline input as sent, not re-read as YAML."""
     payload = {'nodes': [{'id': 1, 'pluginId': 'touch', 'settings': {'inputs': settings}}], 'links': []}
     wic = wfb_to_wic(payload, [])
     assert wic['steps'][0]['in'] == {k: {Key.INLINE_INPUT: v} for k, v in settings.items()}
@@ -210,6 +219,27 @@ def test_rest_core_blank_plugin_id_uses_node_name() -> None:
     res = prepare_call_rest_api(inp_path)
     assert int(res["retval"]) == 0
     assert "bbbcdownload" in res["steps"]
+
+
+def test_rest_compile_infers_with_the_configurations_renamings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The renamings the compiler gets are the configuration's, not the shipped ones the options start with."""
+    seen: list[Json] = []
+    real_compile = api.compiler.compile_source
+    real_config = api.input_output.get_config
+    custom = [["tpr_", "gro_"]]
+
+    def config(*args: Any, **kwargs: Any) -> Json:
+        return {**real_config(*args, **kwargs), "renaming_conventions": custom}
+
+    def spy(bundle: Any, options: CompilerOptions, *args: Any, **kwargs: Any) -> Any:
+        seen.append(dict(options))
+        return real_compile(bundle, options, *args, **kwargs)
+
+    monkeypatch.setattr(api.input_output, "get_config", config)
+    monkeypatch.setattr(api.compiler, "compile_source", spy)
+    res = prepare_call_rest_api(REST_OBJECTS / "multi_node_wfb.json")
+    assert int(res["retval"]) == 0
+    assert [list(pair) for pair in seen[0]["renaming_conventions"]] == custom
 
 
 def test_rest_compile_says_a_real_time_analysis_is_not_in_the_returned_workflow(
