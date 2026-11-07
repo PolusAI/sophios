@@ -21,7 +21,7 @@ from . import post_compile as pc
 from . import backends, cli, compiler, drawing, plugins, preflight, realtime, run_local, run_setup
 from .ir import frontdoor
 from .ir.frontdoor import SourceBundle
-from .utils_nf import compiled_source_to_nextflow_with_notes
+from .utils_nf import NEXTFLOW
 from .wic_types import CompilerOptions, Json, Tools
 
 
@@ -88,7 +88,7 @@ def _write_nextflow_target(
     """Lower the completed semantic graph, write Nextflow artifacts under `basepath`, and report the notes."""
     io_nf.remove_nextflow_artifacts(basepath)
     try:
-        workflow, notes = compiled_source_to_nextflow_with_notes(compilation)
+        workflow, notes = NEXTFLOW.lower(compiler.resolved_view(compilation))
         paths = io_nf.write_nextflow_artifacts(workflow, basepath)
     except ValueError as error:
         _not_lowered(error, yaml_stem)

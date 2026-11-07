@@ -33,7 +33,8 @@ from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.locations import absolute_paths
 from sophios.ir.realtime import ADAPTER, Declaration
 from sophios.ir.resolve import RegistrySnapshot
-from sophios.ir.types import AuthoredName
+from sophios.ir.resolved import ResolvedWorkflow
+from sophios.ir.types import AuthoredName, WorkflowGraph
 from sophios.lang import CwlRecord, Diagnostic, Diagnostics, Document, ParseResult, Severity, SophiosError, render
 from sophios.lang.diagnostics import report
 from sophios.lang import Step as LangStep
@@ -42,7 +43,7 @@ from sophios.cli import default_compilation_settings, get_args, get_known_and_un
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs, resolve_file_formats
 from sophios.utils import convert_args_dict_to_args_list
 from sophios.utils_cwl import tool_process
-from sophios.utils_nf import compiled_source_to_nextflow_with_notes
+from sophios.utils_nf import NEXTFLOW
 from sophios.wic_types import DEFAULT_BASEPATH, CompilerOptions, GraphSettings, Json, StepId, Tool, Tools
 
 from ._inference import Inference
@@ -480,14 +481,26 @@ def _compile_bundle(
     return bundle, _with_bound_values(workflow, compiler.compile_source(bundle, options, testing=False))
 
 
+def _bound_values(workflow: "Workflow", graph: WorkflowGraph) -> dict[str, Any]:
+    """Each value bound on one of the workflow's own inputs, as an inputs file gives it, in the form a value written
+    on a step takes (design §4.3)."""
+    declarations = {port.name: port.declaration for port in graph.workflow_inputs}
+    return {parameter.name: coerce_job_value(AuthoredName(parameter.name), declarations[AuthoredName(parameter.name)],
+                                             serialize_value(binding.value), span=binding.span)
+            for parameter in workflow._inputs if (binding := parameter._binding) is not None and not binding.linked}
+
+
 def _with_bound_values(workflow: "Workflow", result: CompilationResult) -> CompilationResult:
-    """`result`, whose job holds each value bound on one of the workflow's own inputs, as an inputs file gives it,
-    in the form a value written on a step takes (design §4.3)."""
-    declarations = {port.name: port.declaration for port in result.graph.workflow_inputs}
-    bound = {parameter.name: coerce_job_value(AuthoredName(parameter.name), declarations[AuthoredName(parameter.name)],
-                                              serialize_value(binding.value), span=binding.span)
-             for parameter in workflow._inputs if (binding := parameter._binding) is not None and not binding.linked}
+    """`result`, whose job holds each value bound on one of the workflow's own inputs (`_bound_values`)."""
+    bound = _bound_values(workflow, result.graph)
     return replace(result, artifact=replace(result.artifact, job_inputs={**result.artifact.job_inputs, **bound}))
+
+
+def _nextflow_view(workflow: "Workflow", result: CompilationResult) -> ResolvedWorkflow:
+    """The view the Nextflow target lowers: the workflow's bound values, and the outputs it declares, when it
+    declares any."""
+    return compiler.resolved_view(result, values=_bound_values(workflow, result.graph),
+                                  outputs=[output.name for output in workflow._outputs] or None)
 
 
 #: The background of a drawing from Python: opaque, so it reads in a light or a dark notebook,
@@ -617,8 +630,7 @@ def compiled_nextflow_workflow(
         lang_version=lang_version,
         inference=inference,
     )
-    executable, notes = compiled_source_to_nextflow_with_notes(
-        replace(result, artifact=_declared_outputs(workflow, result.artifact)))
+    executable, notes = NEXTFLOW.lower(_nextflow_view(workflow, result))
     report((*result.diagnostics, *notes))
     return CompiledNextflowWorkflow(
         nextflow_workflow=executable,
@@ -744,8 +756,9 @@ def _nextflow_run_request(workflow: "Workflow", options: RunOptions, result: Com
                         for token in (f"-{key}", *((value,) if value else ())))
     run_script = _enabled(run_args.get("generate_run_script", "no"))
     prepared = backends.backend("nextflow", "nextflow").prepare(
-        replace(result, artifact=_declared_outputs(workflow, result.artifact)), analyses, Path(options.basepath),
-        run_setup.Settings(preflight.RunSettings("docker", "", runner="nextflow", run_script=run_script), Path.cwd()))
+        result, analyses, Path(options.basepath),
+        run_setup.Settings(preflight.RunSettings("docker", "", runner="nextflow", run_script=run_script), Path.cwd(),
+                           view=_nextflow_view(workflow, result)))
     return _noted(result, prepared.notes, backends.RunRequest(
         workflow.process_name, Path(options.basepath), runner="nextflow", target="nextflow",
         passthrough_args=passthrough, env=dict(options.user_env_vars or {}), realtime_plans=prepared.plans,

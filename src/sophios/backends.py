@@ -30,8 +30,9 @@ from .ir.artifacts import CompilationResult
 from .ir.locations import absolute_paths
 from .lang.diagnostics import Diagnostic, SophiosError
 from .nf_reader import read_nextflow
+from .compiler import resolved_view
 from .runtime_inputs import output_target_inputs
-from .utils_nf import compiled_source_to_nextflow_with_notes, local_locations_as_paths, nextflow_names
+from .utils_nf import NEXTFLOW, local_locations_as_paths, nextflow_names
 from .wic_types import Json
 
 _ENV_VAR_NAME: Final = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
@@ -442,16 +443,19 @@ class NextflowBackend:
                  settings: run_setup.Settings) -> run_setup.Prepared:
         """`prepare`, writing under `basepath`."""
         artifact = compilation.artifact
-        bound = absolute_paths(local_locations_as_paths(artifact.job_inputs), settings.root_dir)
-        compilation = replace(compilation, artifact=replace(artifact, job_inputs=bound))
+        view = settings.view if settings.view is not None else resolved_view(compilation)
+        bound = absolute_paths(local_locations_as_paths({port.name: port.value for port in view.inputs
+                                                         if port.has_value}), settings.root_dir)
+        view = replace(view, inputs=tuple(replace(port, value=bound[port.name]) if port.name in bound else port
+                                          for port in view.inputs))
         directory = nextflow_directory(basepath, artifact.name)
         io_nf.remove_nextflow_artifacts(directory)
-        workflow, notes = compiled_source_to_nextflow_with_notes(compilation)
+        workflow, notes = NEXTFLOW.lower(view)
         documents = io_nf.write_nextflow_artifacts(workflow, directory)
-        (directory / _NEXTFLOW_NAMES).write_text(json.dumps(nextflow_names(compilation), indent=2) + '\n',
+        (directory / _NEXTFLOW_NAMES).write_text(json.dumps(nextflow_names(view), indent=2) + '\n',
                                                  encoding='utf-8')
         plans = realtime.write(analyses, basepath, artifact.name, settings.root_dir)
-        targets = output_target_inputs(artifact)
+        targets = output_target_inputs(view)
         # An output-target Directory need not exist yet: it is made below.
         job = preflight.Job({name: value for name, value in bound.items() if name not in targets}, settings.root_dir,
                             'the workflow')

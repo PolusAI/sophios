@@ -256,10 +256,11 @@ def _provoke_unchecked_cuda_field() -> None:
     from sophios.api.python._workflow_runtime import compile_workflow_result
     from sophios.api.python.tool_builder import CommandLineTool, Inputs, Output, Outputs, cwl
     from sophios.api.python.workflow import Step, Workflow
-    from sophios.utils_nf import compiled_source_to_nextflow_with_notes
+    from sophios.compiler import resolved_view
+    from sophios.utils_nf import NEXTFLOW
 
     gpu = CommandLineTool('gpu', Inputs(), Outputs(out=Output(cwl.file, glob='out'))).gpu(cuda_version_min='11.4')
-    _, notes = compiled_source_to_nextflow_with_notes(compile_workflow_result(Workflow([Step(gpu)], 'provoke')))
+    _, notes = NEXTFLOW.lower(resolved_view(compile_workflow_result(Workflow([Step(gpu)], 'provoke'))))
     raise SophiosError(notes)
 
 

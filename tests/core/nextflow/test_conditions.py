@@ -9,9 +9,8 @@ import pytest
 from sophios.input_output_nf import render_nextflow
 from sophios.lang.subset import parse
 from sophios.nf_types import ExecutableNextflowWorkflow, NfOptionalBinding, NfProcess
-from sophios.utils_nf import compiled_source_to_nextflow
 
-from .testkit import command, lowered_case, output_port, step, tool
+from .testkit import command, lowered, lowered_case, output_port, step, tool
 
 
 def _when_workflow(
@@ -134,8 +133,8 @@ def test_when_on_a_single_input_scattered_step_lowers() -> None:
         "inputs": {"a": {"type": {"type": "array", "items": "int"}}},
         "outputs": {"result": {"type": {"type": "array", "items": "File"}, "outputSource": "PRODUCE/result"}},
     }
-    lowered, _notes = lowered_case({"workflow": workflow, "tools": [produce], "job": {"a": [1, 2]}})
-    assert lowered.processes[0].condition is not None
+    workflow_model, _notes = lowered_case({"workflow": workflow, "tools": [produce], "job": {"a": [1, 2]}})
+    assert workflow_model.processes[0].condition is not None
 
 
 @pytest.mark.fast
@@ -192,7 +191,7 @@ def test_a_condition_inside_an_inlined_subworkflow_survives_inlining() -> None:
     inner.inputs.source = child.inputs.source
     child.outputs.result = inner.outputs.result
     child.inputs.source = write.outputs.result
-    workflow = compiled_source_to_nextflow(compile_workflow_result(Workflow([write, child], "root")))
+    workflow = lowered(compile_workflow_result(Workflow([write, child], "root")))
     conditions = {process.name: process.condition for process in workflow.processes}
     assert [name for name, condition in conditions.items() if condition == parse("$(false)")] == [
         name for name in conditions if "inner_copy" in name
