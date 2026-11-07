@@ -1,0 +1,64 @@
+- {id: an empty input name, source: "steps:\n- id: s\n  in:\n    \"\": !* e\n", graph: false,
+    diagnostics: [code: EMPTY_NAME],
+   why: &empty "`parse` accepts these; the types refuse them. Lowering has to bridge that. Refusing an unnamed port is
+       right, but the refusal is a `ValueError`, and every one of these is a document the parser hands back. Reported
+       here, the caller gets a diagnostic rather than a traceback -- the same treatment an unnamed step already had. Out
+       of reach of `documents()`, which draws names from the synthetic registry and so never draws an empty one."}
+- {id: an empty out entry name, source: "steps:\n- id: s\n  out:\n  - \"\": f\n", graph: false,
+    diagnostics: [code: EMPTY_NAME], why: *empty}
+- {id: an empty edge definition, source: "steps:\n- id: s\n  out:\n  - f: !& \"\"\n", graph: false,
+    diagnostics: [code: EMPTY_NAME],
+   why: &agree "`!& \"\"` and `!* \"\"` agree. They did not: the reference raised while the definition was accepted and
+       put `''` into the edge table as a live producer name, where it would match any later `!* \"\"` that managed not
+       to raise first."}
+- {id: an empty edge reference, source: "steps:\n- id: s\n  in:\n    f: !* \"\"\n", graph: false,
+    diagnostics: [code: EMPTY_NAME], why: *agree}
+- {id: a reference before its definition, source: "steps:\n- id: use\n  in:\n    f: !* e\n- id: mk\n  out:\n  - file: !&
+    e\n", diagnostics: [code: UNDEFINED_EDGE],
+   why: "`!* e` above its `!& e` is `wic025`, as the .wic reference and compiler say. Resolving it by pre-scanning every
+       definition would make Lower accept a document the compiler refuses, and silently change an ordering rule."}
+- {id: a name defined twice, source: "steps:\n- id: a\n  out:\n  - f: !& e\n- id: b\n  out:\n  - f: !& e\n",
+    diagnostics: [code: DUPLICATE_EDGE_DEF],
+   why: "Keeping the first definition and dropping the second leaves nothing to report it with, here or in any later
+       phase."}
+- {id: a sidecar out mentioning the name does not mask a real duplicate, diagnostics: [code: DUPLICATE_EDGE_DEF],
+   source: "wic:\n  steps:\n    (1, a):\n      out:\n      - f: {wic_anchor: e}\nsteps:\n- id: a\n  out:\n  - f: !& e\n-
+       id: b\n  out:\n  - f: !& e\n",
+   why: "A `wic:` sidecar `out:` entry (.wic reference §3.6) is inert passthrough, never itself a second definition --
+       `basic.wic` relies on exactly this to place `min.tpr`'s one definition at a distance. A real duplicate among the
+       document's own steps must still be reported once, whether or not a sidecar block happens to mention the same
+       name."}
+- {id: a step with no id, source: "steps:\n- id: \"\"\n  in: {}\n", graph: false, diagnostics: [code: EMPTY_STEP_ID],
+   why: "The parser recovers such a document, which is exactly when a caller is least able to handle an exception.
+       `wic007` rather than `wic006`, matching what the parser already reports for the same document: the id is present
+       and empty, not missing."}
+- {id: "scatter: [1]", source: "steps:\n- id: mk_file\n  in: {name: !ii [a, b]}\n  scatter: [1]\n",
+    diagnostics: {contains: [code: UNKNOWN_SCATTER_PORT]},
+   why: &scatter "`scatter:` names inputs. An entry that is no name at all, or a `scatter:` that is neither a name nor a
+       list, names none of them: it is reported rather than dropped or emitted verbatim."}
+- {id: "scatter: [null]", source: "steps:\n- id: mk_file\n  in: {name: !ii [a, b]}\n  scatter: [null]\n",
+    diagnostics: {contains: [code: UNKNOWN_SCATTER_PORT]}, why: *scatter}
+- {id: "scatter: 5", source: "steps:\n- id: mk_file\n  in: {name: !ii [a, b]}\n  scatter: 5\n",
+    diagnostics: {contains: [code: UNKNOWN_SCATTER_PORT]}, why: *scatter}
+- {id: "scatter: {a: 1}", source: "steps:\n- id: mk_file\n  in: {name: !ii [a, b]}\n  scatter: {a: 1}\n",
+    diagnostics: {contains: [code: UNKNOWN_SCATTER_PORT]}, why: *scatter}
+- {id: "scatter: [name, 1]", source: "steps:\n- id: mk_file\n  in: {name: !ii [a, b]}\n  scatter: [name, 1]\n",
+    diagnostics: {contains: [code: UNKNOWN_SCATTER_PORT]}, why: *scatter}
+- {id: a positional output source naming the wrong step, diagnostics: [code: POSITIONAL_OUTPUT_SOURCE],
+   source: "steps:\n- id: s\n  out: [f]\n- id: s\n  out: [f]\noutputs:\n  o:\n    type: File\n    outputSource: (2,
+       t)/f\n",
+   why: &positional "A wrong name or an index past the last step is refused as wic039."}
+- {id: a positional output source past the last step, diagnostics: [code: POSITIONAL_OUTPUT_SOURCE], why: *positional,
+   source: "steps:\n- id: s\n  out: [f]\n- id: s\n  out: [f]\noutputs:\n  o:\n    type: File\n    outputSource: (3,
+       s)/f\n"}
+- {id: a positional output source naming a port the step lacks,
+    diagnostics: [{code: UNDECLARED_PORT, message: {contains: ["'nope'", "its outputs are: f"]}}],
+   source: "steps:\n- id: s\n  out: [f]\n- id: s\n  out: [f]\noutputs:\n  o:\n    type: File\n    outputSource: (2,
+       s)/nope\n",
+   why: "The step is known, so the missing port is reported with the step's outputs."}
+- {id: a record source before its definition, diagnostics: [code: UNDEFINED_EDGE],
+   source: "steps:\n- id: use\n  in:\n    f: !cwl {source: !* e}\n- id: mk\n  out:\n  - file: !& e\n",
+   why: "A record's `!*` source resolves as a bare `!*` does: above its `!& e` it is `wic025`."}
+- {id: a record with several sources takes none from outside its document, diagnostics: [code: UNDEFINED_EDGE],
+   source: "inputs:\n  w: string\nsteps:\n- id: use\n  in:\n    f: !cwl {source: [!* e, w]}\n",
+   why: "One input crosses a workflow boundary through one relay, so it cannot carry several outside sources."}

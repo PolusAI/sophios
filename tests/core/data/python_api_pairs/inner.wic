@@ -1,0 +1,2 @@
+steps: [{id: touch, in: {filename: !ii empty.txt}}]
+outputs: {made: {type: File, outputSource: touch/file}}

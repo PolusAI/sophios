@@ -113,59 +113,10 @@ def test_a_null_check_renders_as_a_test_for_the_absent_sentinel(when: str, predi
 
 
 @pytest.mark.fast
-def test_when_cannot_read_a_tool_default_the_step_does_not_bind() -> None:
-    gated = tool(
-        "GATED",
-        inputs={"a": {"type": "int"}, "n": {"type": "int", "default": 5}},
-        baseCommand="true",
-    )
-    workflow = workflow_doc(
-        [step("GATED", **{"in": {"a": "a"}, "when": "$(inputs.n > 3)"})],
-        inputs={"a": "int"},
-    )
-    with pytest.raises(ValueError, match=r"reads inputs\.n, which the step does not bind"):
-        compiled_source_to_nextflow(synthetic_source(workflow, [gated], workflow_inputs={"a": 1}))
-
-
-@pytest.mark.fast
-def test_an_array_typed_port_cannot_consume_a_conditional_scatter() -> None:
-    produce = tool(
-        "PRODUCE",
-        inputs={"x": {"type": "string"}},
-        baseCommand="echo",
-        stdout="out.txt",
-        outputs={"r": {"type": "string", "outputBinding": {
-            "glob": "out.txt", "loadContents": True, "outputEval": "$(self[0].contents)"}}},
-    )
-    consume = tool("CONSUME", inputs={"rs": {"type": {"type": "array", "items": "string"}}}, baseCommand="true")
-    workflow = workflow_doc(
-        [
-            step("PRODUCE", **{"in": {"x": "xs"}, "out": ["r"], "scatter": ["x"], "when": "$(inputs.x == 'a')"}),
-            step("CONSUME", **{"in": {"rs": "PRODUCE/r"}}),
-        ],
-        inputs={"xs": {"type": "array", "items": "string"}},
-    )
-    with pytest.raises(ValueError, match=r"in\.rs: an array-typed port cannot consume a conditional step's output"):
-        compiled_source_to_nextflow(synthetic_source(workflow, [produce, consume], workflow_inputs={"xs": ["a"]}))
-
-
-@pytest.mark.fast
 def test_a_when_diagnostic_names_the_authored_inputs() -> None:
     rendered = render_nextflow(_when_workflow("$(inputs.n / inputs.d > 1)", {"n": 4, "d": 2}, n="int", d="int"))
     assert "'(inputs.n / inputs.d)', [d: __w1, n: __w0]" in rendered
     assert "inputs.__w" not in rendered
-
-
-@pytest.mark.fast
-def test_when_requires_a_boolean_result() -> None:
-    with pytest.raises(ValueError, match="must compute a boolean, not a number"):
-        _when_workflow("$(inputs.a + 1)", {"a": 3}, a="int")
-
-
-@pytest.mark.fast
-def test_when_outside_the_safe_subset_is_rejected_by_name() -> None:
-    with pytest.raises(ValueError, match=r"unsupported construct '\*\*'"):
-        _when_workflow("$(inputs.a ** 2)", {"a": 3}, a="int")
 
 
 @pytest.mark.fast
@@ -185,37 +136,6 @@ def test_when_on_a_single_input_scattered_step_lowers() -> None:
     )
     lowered = compiled_source_to_nextflow(synthetic_source(workflow, [produce], workflow_inputs={"a": [1, 2]}))
     assert lowered.processes[0].condition is not None
-
-
-@pytest.mark.fast
-def test_non_optional_consumer_of_a_conditional_output_is_rejected() -> None:
-    produce = tool(
-        "PRODUCE",
-        inputs={"a": {"type": "int"}},
-        baseCommand="echo",
-        outputs={
-            "result": {
-                "type": "string",
-                "outputBinding": {"glob": "out.txt", "loadContents": True, "outputEval": "$(self[0].contents)"},
-            }
-        },
-    )
-    consume = tool(
-        "CONSUME",
-        inputs={"result": {"type": "string"}},
-        baseCommand="true",
-        outputs={"done": {"type": "File", "outputBinding": {"glob": "done.txt"}}},
-    )
-    workflow = workflow_doc(
-        [
-            step("PRODUCE", **{"in": {"a": "a"}, "out": ["result"], "when": "$(inputs.a > 0)"}),
-            step("CONSUME", **{"in": {"result": "PRODUCE/result"}, "out": ["done"]}),
-        ],
-        inputs={"a": "int"},
-        outputs={"done": {"type": "File", "outputSource": "CONSUME/done"}},
-    )
-    with pytest.raises(ValueError, match="non-optional port cannot consume a possibly-null"):
-        compiled_source_to_nextflow(synthetic_source(workflow, [produce, consume], workflow_inputs={"a": 1}))
 
 
 @pytest.mark.fast
@@ -260,49 +180,6 @@ def test_optional_binding_consumer_of_a_conditional_output(arguments: list[Any],
             compiled_source_to_nextflow(source)
 
 
-@pytest.mark.fast
-def test_path_consumer_of_a_conditional_output_is_rejected() -> None:
-    produce = tool(
-        "PRODUCE",
-        inputs={"a": {"type": "int"}},
-        baseCommand="echo",
-        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
-    )
-    consume = tool(
-        "CONSUME",
-        inputs={"result": {"type": "File?"}},
-        baseCommand="true",
-        outputs={"done": {"type": "File", "outputBinding": {"glob": "done.txt"}}},
-    )
-    workflow = workflow_doc(
-        [
-            step("PRODUCE", **{"in": {"a": "a"}, "out": ["result"], "when": "$(inputs.a > 0)"}),
-            step("CONSUME", **{"in": {"result": "PRODUCE/result"}, "out": ["done"]}),
-        ],
-        inputs={"a": "int"},
-        outputs={"done": {"type": "File", "outputSource": "CONSUME/done"}},
-    )
-    with pytest.raises(ValueError, match="a path consumer of a possibly-null"):
-        compiled_source_to_nextflow(synthetic_source(workflow, [produce, consume], workflow_inputs={"a": 1}))
-
-
-@pytest.mark.fast
-def test_array_typed_output_of_a_conditional_step_is_rejected() -> None:
-    produce = tool(
-        "PRODUCE",
-        inputs={"a": {"type": "int"}},
-        baseCommand="echo",
-        outputs={"result": {"type": {"type": "array", "items": "File"}, "outputBinding": {"glob": "*.txt"}}},
-    )
-    workflow = workflow_doc(
-        [step("PRODUCE", **{"in": {"a": "a"}, "out": ["result"], "when": "$(inputs.a > 0)"})],
-        inputs={"a": "int"},
-        outputs={"result": {"type": {"type": "array", "items": "File"}, "outputSource": "PRODUCE/result"}},
-    )
-    with pytest.raises(ValueError, match="array-typed output of a conditional step"):
-        compiled_source_to_nextflow(synthetic_source(workflow, [produce], workflow_inputs={"a": 1}))
-
-
 def _run(workflow: ExecutableNextflowWorkflow, directory: Path) -> tuple[int, str]:
     from sophios.input_output_nf import write_nextflow_artifacts  # pylint: disable=import-outside-toplevel
     write_nextflow_artifacts(workflow, directory)
@@ -312,60 +189,6 @@ def _run(workflow: ExecutableNextflowWorkflow, directory: Path) -> tuple[int, st
 
 def _tasks(directory: Path) -> list[Path]:
     return [child for child in (directory / "work").glob("*/*") if child.is_dir()]
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_a_true_condition_runs_the_task(tmp_path: Path) -> None:
-    workflow = _when_workflow("$(inputs.a > 0)", {"a": 1}, a="int")
-    code, log = _run(workflow, tmp_path)
-    assert code == 0, log
-    assert (tmp_path / "work").exists()
-    assert len(_tasks(tmp_path)) == 1
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_a_false_condition_runs_no_task_and_downstream_completes(tmp_path: Path) -> None:
-    workflow = _when_workflow("$(inputs.a > 0)", {"a": 0}, second_step=True, a="int")
-    code, log = _run(workflow, tmp_path)
-    assert code == 0, log
-    # A zero exit with exactly one task means CONSUME ran and PRODUCE was skipped.
-    assert len(_tasks(tmp_path)) == 1
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-@pytest.mark.parametrize(("when", "params", "types", "runs"), [
-    # Each left side is -0 in JavaScript, which == and != treat as 0.
-    pytest.param("$(inputs.n % 2 == 0)", {"n": -4}, {"n": "int"}, True, id="remainder"),
-    pytest.param("$(inputs.n * -1 != 0)", {"n": 0}, {"n": "int"}, False, id="product"),
-    pytest.param("$(Math.ceil(inputs.x) == 0)", {"x": -0.5}, {"x": "float"}, True, id="ceil"),
-])
-def test_negative_zero_equals_zero_as_in_javascript(
-    tmp_path: Path, when: str, params: dict[str, Any], types: dict[str, Any], runs: bool,
-) -> None:
-    workflow = _when_workflow(when, params, **types)
-    code, log = _run(workflow, tmp_path)
-    assert code == 0, log
-    assert len(_tasks(tmp_path)) == int(runs)
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-@pytest.mark.parametrize(("when", "params", "runs"), [
-    pytest.param("$(inputs.maybe === null)", {}, True, id="absent-equals-null-runs"),
-    pytest.param("$(inputs.maybe !== null)", {}, False, id="absent-not-null-skips"),
-    pytest.param("$(inputs.maybe === null)", {"maybe": 1}, False, id="present-equals-null-skips"),
-    pytest.param("$(inputs.maybe !== null)", {"maybe": 1}, True, id="present-not-null-runs"),
-])
-def test_a_null_check_on_an_optional_input_decides_as_cwl_does(
-    tmp_path: Path, when: str, params: dict[str, Any], runs: bool,
-) -> None:
-    workflow = _when_workflow(when, params, maybe=["null", "int"])
-    code, log = _run(workflow, tmp_path)
-    assert code == 0, log
-    assert len(_tasks(tmp_path)) == int(runs)
 
 
 def _gated_chain_workflow(

@@ -1,0 +1,1 @@
+steps: [{id: s, run: mk_file.cwl, in: {a: !ii x}}]

@@ -28,11 +28,11 @@ from sophios.ir.names import Names
 from sophios.ir.declarations import input_rank, layered, output_rank
 from sophios.ir.types import (DerivedName, EdgeOrigin, Port, PortDeclaration, PortId, PortName,
                               StepNode, WorkflowGraph)
-from sophios.lang import SophiosErrorCode
-from sophios.lang.diagnostics import Locator, Severity, SophiosError
+from sophios.lang.diagnostics import Diagnostics, SophiosError
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
+from .cases import cases, diagnostic, match
 from .hermetic import ORACLE, bundle, compile_hermetic, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
 
@@ -65,153 +65,62 @@ def test_every_inferred_edge_is_the_independent_models_choice(workflow: Yaml) ->
             assert _model_candidate(original.steps, position, sink) == edge.source
 
 
-@pytest.mark.fast
-def test_most_recent_step_and_last_declared_output_win() -> None:
-    """Candidate order is semantic, including ambiguity within one producer."""
-    multi = clt({}, {
-        'first': {'type': 'File', 'outputBinding': {'glob': 'first'}},
-        'last': {'type': 'File', 'outputBinding': {'glob': 'last'}},
-    })
-    tools = {**SYNTHETIC_TOOLS,
-             LegacyStepId('multi_file', SYNTHETIC_NS):
-                 Tool('/synthetic/multi_file.cwl', multi)}
-    workflow = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}},
-                          {'id': 'multi_file'}, {'id': 'count'}]}
-    _, linked, _ = _typed(workflow, tools)
-    result = infer(linked)
-    assert result.graph is not None
-    count_edge = next(edge for edge in result.graph.linked_edges
-                      if edge.origin is EdgeOrigin.INFERRED and edge.sink.step.name == 'count')
-    assert count_edge.source.step.name == 'multi_file'
-    assert count_edge.source.port == 'last'
+def _built(value: Any) -> Any:
+    """`value`, each step with a `subtree` built as subworkflow_step builds a call."""
+    if isinstance(value, list):
+        return [_built(each) for each in value]
+    if isinstance(value, dict):
+        built = {key: _built(each) for key, each in value.items()}
+        return {**subworkflow_step(built['id'], built['subtree']), **built} if 'subtree' in built else built
+    return value
 
 
-def _multi_file_tools() -> Tools:
-    """The synthetic registry plus a tool offering two `File` outputs."""
-    multi = clt({}, {'first': {'type': 'File', 'outputBinding': {'glob': 'first'}},
-                     'last': {'type': 'File', 'outputBinding': {'glob': 'last'}}})
-    return {**SYNTHETIC_TOOLS,
-            LegacyStepId('multi_file', SYNTHETIC_NS): Tool('/synthetic/multi_file.cwl', multi)}
-
-
-_TWO_PRODUCERS: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}},
-                                  {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'b'}}},
-                                  {'id': 'count'}]}
-
-
-@pytest.mark.fast
-def test_a_tie_within_one_producer_is_noted_with_the_alternatives() -> None:
-    """The losing output and the pin that would make the choice explicit are named."""
-    _, linked, _ = _typed({'steps': [{'id': 'multi_file'}, {'id': 'count'}]}, _multi_file_tools())
-    result = infer(linked)
-    assert result.graph is not None
-    (note,) = [d for d in result.diagnostics if d.severity is Severity.NOTE]
-    assert note.code is SophiosErrorCode.INFERENCE_TIE
-    assert "'first'" in note.message and '!&' in note.message
-    assert note.locator == Locator(step='count', index=2, port='file')
+def _ran(case: dict[str, Any]) -> tuple[Any, Diagnostics]:
+    """What the case's door returns and every diagnostic it gives, the compile's error included."""
+    for stem, tool in case.get('tools', {}).items():
+        if unread := set(tool) - {'inputs', 'outputs', 'canonical'}:
+            raise ValueError(f"{case['id']}: tool {stem} has keys nothing reads: {sorted(unread)}")
+    if case.get('compiled') and (unread := set(case.get('policy', {})) - {'strict'}):
+        raise ValueError(f"{case['id']}: a compiled case reads only policy.strict, not {sorted(unread)}")
+    tools = {**SYNTHETIC_TOOLS, **{
+        LegacyStepId(stem, SYNTHETIC_NS): Tool(f'/synthetic/{stem}.cwl', clt(
+            tool.get('inputs', {}), tool.get('outputs', {}), canonical=tool.get('canonical', False)))
+        for stem, tool in case.get('tools', {}).items()}}
+    policy = case.get('policy', {})
+    workflow = {'steps': _built(case['steps'])}
+    if not case.get('compiled'):
+        _, linked, _ = _typed(workflow, tools)
+        result = infer(linked, InferencePolicy(**policy))
+        return result.graph, result.diagnostics
+    try:
+        compiled = compile_hermetic(workflow, tools=tools, inference_strict=policy.get('strict', False))
+    except SophiosError as error:
+        return None, error.diagnostics
+    return compiled, compiled.diagnostics
 
 
 @pytest.mark.fast
-def test_recency_between_producers_is_noted() -> None:
-    """An earlier producer that also matched is named; the choice itself is unchanged."""
-    _, linked, _ = _typed(_TWO_PRODUCERS)
-    result = infer(linked)
-    assert result.graph is not None
-    (note,) = [d for d in result.diagnostics if d.severity is Severity.NOTE]
-    assert note.code is SophiosErrorCode.INFERENCE_RECENCY
-    assert ("most recent match step 2 'mk_file' output 'file'; earlier steps also match: "
-            "step 1 'mk_file' output 'file'; pin it: `out: - file: !& <name>` on step 2 'mk_file'"
-            in note.message)
-    edge = next(e for e in result.graph.linked_edges if e.sink.step.name == 'count')
-    assert edge.source.step.index == 2, 'the choice itself is unchanged'
+@pytest.mark.parametrize('case', cases('infer', 'tools', 'steps', 'policy', 'compiled', 'refused', 'diagnostics',
+                                       'edges', 'job_inputs'))
+def test_inference_case(case: dict[str, Any]) -> None:
+    """`steps` are inferred over the synthetic registry plus `tools` (stem: inputs, outputs, canonical), under
+    `policy`, or compiled whole where `compiled` is set (which reads only `policy.strict`); a call is a step with a
+    `subtree`. A tool key other than those three, or a compiled policy key other than `strict`, is an error, so a
+    misspelling cannot pass without being read.
 
-
-def _across_calls(pinned: bool) -> Yaml:
-    """`multi_file` inside `make.wic` feeds `count` inside `use.wic`; pinned, the
-    edge is written on those two inner steps."""
-    producer: Yaml = {'id': 'multi_file'}
-    consumer: Yaml = {'id': 'count'}
-    if pinned:
-        producer['out'] = [{'last': {'wic_anchor': 'f'}}]
-        consumer['in'] = {'file': {'wic_alias': 'f'}}
-    return {'steps': [subworkflow_step('make.wic', {'steps': [producer]}),
-                      subworkflow_step('use.wic', {'steps': [consumer]})]}
-
-
-@pytest.mark.fast
-def test_a_note_across_subworkflow_calls_names_the_steps_an_author_can_pin() -> None:
-    """A call exposes inner ports under names nobody can write, so the note
-    points at the inner steps, and writing exactly the pin it gives compiles
-    without a note."""
-    result = compile_hermetic(_across_calls(pinned=False), tools=_multi_file_tools())
-    (note,) = list(result.diagnostics)
-    assert note.code is SophiosErrorCode.INFERENCE_TIE
-    assert "inferred from step 1 'make.wic' > step 1 'multi_file' output 'last'" in note.message
-    assert "also offers step 1 'make.wic' > step 1 'multi_file' output 'first'" in note.message
-    assert ("`out: - last: !& <name>` on step 1 'make.wic' > step 1 'multi_file' and "
-            "`in: file: !* <name>` on step 2 'use.wic' > step 1 'count'") in note.message
-
-    pinned = compile_hermetic(_across_calls(pinned=True), tools=_multi_file_tools())
-    assert not list(pinned.diagnostics)
-
-
-@pytest.mark.fast
-def test_strict_mode_turns_notes_into_errors() -> None:
-    """`InferencePolicy.strict` refuses a choice between equals."""
-    _, linked, _ = _typed(_TWO_PRODUCERS)
-    result = infer(linked, InferencePolicy(strict=True))
-    assert result.graph is None and result.diagnostics.has_errors
-    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.INFERENCE_RECENCY]
-
-
-@pytest.mark.fast
-def test_a_pinned_edge_is_not_noted() -> None:
-    """An explicit `!&`/`!*` edge is not a choice, so nothing is said."""
-    _, linked, _ = _typed({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}},
-                                     {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'b'}},
-                                      'out': [{'file': {'wic_anchor': 'f'}}]},
-                                     {'id': 'count', 'in': {'file': {'wic_alias': 'f'}}}]})
-    assert not list(infer(linked).diagnostics)
-
-
-@pytest.mark.fast
-def test_a_tie_settled_by_naming_conventions_is_not_noted() -> None:
-    """When the naming conventions single out one output, order did not decide."""
-    tool = clt({}, {'output_file': {'type': 'File', 'outputBinding': {'glob': 'a'}},
-                    'output_other': {'type': 'File', 'outputBinding': {'glob': 'b'}}})
-    tools = {**SYNTHETIC_TOOLS, LegacyStepId('named', SYNTHETIC_NS): Tool('/synthetic/named.cwl', tool)}
-    _, linked, _ = _typed({'steps': [{'id': 'named'}, {'id': 'count'}]}, tools)
-    result = infer(linked, InferencePolicy(use_naming_conventions=True))
-    assert result.graph is not None
-    assert not list(result.diagnostics)
-
-
-@pytest.mark.fast
-def test_a_scalar_literal_under_scatter_is_wic020() -> None:
-    """A scatter splits its value; a scalar is not wrapped into a one-element list."""
-    with pytest.raises(SophiosError) as caught:
-        compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}},
-                                     'scatter': ['name']}]})
-    assert caught.value.diagnostics[0].code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
-    assert 'scattered' in caught.value.diagnostics[0].message
-
-
-@pytest.mark.fast
-def test_a_list_literal_under_scatter_is_scattered_over() -> None:
-    """The list form is unchanged: each element is one scattered value."""
-    result = compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': ['a', 'b']}},
-                                          'scatter': ['name']}]})
-    assert list(result.artifact.job_inputs.values()) == [['a', 'b']]
-
-
-@pytest.mark.fast
-def test_strict_compile_refuses_and_lenient_compile_carries_the_note() -> None:
-    """The compiler forwards the strict flag and returns the notes with its result."""
-    result = compile_hermetic(_TWO_PRODUCERS)
-    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.INFERENCE_RECENCY]
-    with pytest.raises(SophiosError) as caught:
-        compile_hermetic(_TWO_PRODUCERS, inference_strict=True)
-    assert caught.value.diagnostics[0].code is SophiosErrorCode.INFERENCE_RECENCY
+    `diagnostics` is every diagnostic the door returns, in order; `refused` (default false) is no graph, or a compile
+    that raised; `edges` the inferred edges of the graph as sink: source, and `job_inputs` those of the compile.
+    """
+    ran, diagnostics = _ran(case)
+    assert (ran is None) is case.get('refused', False), list(diagnostics)
+    assert match(case.get('diagnostics', []), [diagnostic(d) for d in diagnostics]), list(diagnostics)
+    if 'edges' in case:
+        assert match(case['edges'], {
+            f'{e.sink.step.name}@{e.sink.step.index}.{e.sink.port}':
+                f'{e.source.step.name}@{e.source.step.index}.{e.source.port}'
+            for e in ran.linked_edges if e.origin is EdgeOrigin.INFERRED})
+    if 'job_inputs' in case:
+        assert match(case['job_inputs'], ran.artifact.job_inputs)
 
 
 @pytest.mark.fast
@@ -346,88 +255,30 @@ def test_converter_search_stops_at_the_candidate_break() -> None:
                    for step in live.artifact.cwl['steps'])
 
 
-@pytest.mark.fast
-def test_iteration_exhaustion_is_exactly_wic022() -> None:
-    """The limit cannot be removed or exhausted silently."""
-    _, linked, _ = _typed({'steps': [{'id': 'mk_file'}]})
-    result = infer(linked, InferencePolicy(iteration_limit=0))
-    assert result.graph is None
-    assert [item.code for item in result.diagnostics] == [
-        SophiosErrorCode.FIXED_POINT_NOT_REACHED]
-
-
-@pytest.mark.fast
-def test_format_substrings_do_not_match() -> None:
-    """A format name that is merely a substring is not a candidate."""
-    tools = {
-        LegacyStepId('producer', SYNTHETIC_NS): Tool(
-            '/synthetic/producer.cwl',
-            clt({}, {'file': {'type': 'File', 'format': 'edam:format_123'}},
-                canonical=True)),
-        LegacyStepId('consumer', SYNTHETIC_NS): Tool(
-            '/synthetic/consumer.cwl',
-            clt({'file': {'type': 'File', 'format': 'edam:format_1234'}}, {},
-                canonical=True)),
-    }
-    _, linked, _ = _typed({'steps': [{'id': 'producer'}, {'id': 'consumer'}]}, tools)
-    result = infer(linked)
-    assert result.graph is not None
-    assert not any(edge.origin is EdgeOrigin.INFERRED for edge in result.graph.linked_edges)
-
-
-@pytest.mark.fast
-def test_non_file_output_without_format_can_satisfy_formatted_input() -> None:
-    """A non-File cannot declare a format, so omission is unconstrained."""
-    tools = {
-        LegacyStepId('producer', SYNTHETIC_NS): Tool(
-            '/synthetic/producer.cwl', clt({}, {'value': {'type': 'string'}},
-                                           canonical=True)),
-        LegacyStepId('consumer', SYNTHETIC_NS): Tool(
-            '/synthetic/consumer.cwl',
-            clt({'value': {'type': 'string', 'format': 'someformat'}}, {},
-                canonical=True)),
-    }
-    _, linked, _ = _typed({'steps': [{'id': 'producer'}, {'id': 'consumer'}]}, tools)
-    result = infer(linked)
-    assert result.graph is not None
-    assert sum(edge.origin is EdgeOrigin.INFERRED for edge in result.graph.linked_edges) == 1
-
-
-@pytest.mark.fast
-def test_unknown_file_format_does_not_outrank_an_exact_match() -> None:
-    """A formatless File is unknown, not a wildcard over exact formats."""
-    fmt = 'edam:format_3816'
-    tools = {
-        LegacyStepId('producer', SYNTHETIC_NS): Tool(
-            '/synthetic/producer.cwl', clt({}, {
-                'matching': {'type': 'File', 'format': fmt},
-                'unknown': {'type': 'File'},
-            }, canonical=True)),
-        LegacyStepId('consumer', SYNTHETIC_NS): Tool(
-            '/synthetic/consumer.cwl',
-            clt({'file': {'type': 'File', 'format': [fmt]}}, {}, canonical=True)),
-    }
-    _, linked, _ = _typed({'steps': [{'id': 'producer'}, {'id': 'consumer'}]}, tools)
-    result = infer(linked)
-    assert result.graph is not None
-    assert next(edge for edge in result.graph.linked_edges
-                if edge.origin is EdgeOrigin.INFERRED).source.port == 'matching'
-
-
 def _model_candidate(steps: tuple[StepNode, ...], position: int,
                      sink: Port) -> PortId | None:
     """Independent, deliberately small model of default candidate selection."""
     sink_type = _model_sink_type(steps[position], sink)
     sink_formats = _model_formats(sink.declaration)
     for producer in reversed(steps[:position]):
-        for output in reversed(producer.outputs):
-            source_type = _model_source_type(producer, output)
-            source_formats = _model_formats(output.declaration)
-            if (not any('_log_' in name for name in _model_names(output.id.port))
-                    and _model_types_match(sink_type, source_type)
-                    and _model_formats_match(sink_formats, source_formats, source_type)):
-                return output.id
+        matches = [output for output in producer.outputs
+                   if _model_types_match(sink_type, _model_source_type(producer, output))
+                   and _model_formats_match(sink_formats, _model_formats(output.declaration),
+                                            _model_source_type(producer, output))]
+        if matches:
+            through = _model_exposed_through(matches[-1].id.port)
+            return next(output.id for output in matches
+                        if _model_exposed_through(output.id.port) == through)
     return None
+
+
+def _model_exposed_through(name: PortName) -> list[object]:
+    """The steps a port name was exposed through, outermost first."""
+    steps: list[object] = []
+    while isinstance(name, DerivedName):
+        steps.append(name.step)
+        name = name.port
+    return steps
 
 
 def _model_types_match(sink: Any, source: Any) -> bool:
@@ -473,10 +324,6 @@ def _model_source_type(step: StepNode, port: Port) -> Any:
 def _model_sink_type(step: StepNode, port: Port) -> Any:
     """One array per time `scatter:` names the input, which is `input_rank`."""
     return layered(port.type, input_rank(step, port.id.port)).canonical
-
-
-def _model_names(name: PortName) -> tuple[str, ...]:
-    return (name.step.name, *_model_names(name.port)) if isinstance(name, DerivedName) else (name,)
 
 
 def _port(ports: tuple[Port, ...], name: PortName) -> Port:
@@ -527,24 +374,3 @@ def test_a_positional_output_source_compiles_in_a_fully_explicit_workflow() -> N
                                             'out': [{'file': {'wic_anchor': 'f'}}]},
                                            {'id': 'count', 'in': {'file': {'wic_alias': 'f'}}}]})
     assert compiled.artifact.cwl['outputs']['n']['outputSource'] == 'count/n'
-
-
-@pytest.mark.fast
-def test_naming_conventions_pick_the_name_matched_output_over_the_last_declared() -> None:
-    """With conventions on, `input_structure` takes `output_structure` although
-    `output_other` is declared last, which is the one taken with them off."""
-    producer = clt({}, {'output_structure': {'type': 'File', 'outputBinding': {'glob': 's'}},
-                        'output_other': {'type': 'File', 'outputBinding': {'glob': 'o'}}}, canonical=True)
-    consumer = clt({'input_structure': {'type': 'File', 'inputBinding': {'position': 1}}}, {}, canonical=True)
-    tools = {**SYNTHETIC_TOOLS,
-             LegacyStepId('producer', SYNTHETIC_NS): Tool('/synthetic/producer.cwl', producer),
-             LegacyStepId('consumer', SYNTHETIC_NS): Tool('/synthetic/consumer.cwl', consumer)}
-    workflow: Yaml = {'steps': [{'id': 'producer'}, {'id': 'consumer'}]}
-    chosen: dict[bool, PortName] = {}
-    for conventions in (True, False):
-        _, linked, _ = _typed(copy.deepcopy(workflow), tools)
-        result = infer(linked, InferencePolicy(use_naming_conventions=conventions))
-        assert result.graph is not None, list(result.diagnostics)
-        (edge,) = [edge for edge in result.graph.linked_edges if edge.sink.step.name == 'consumer']
-        chosen[conventions] = edge.source.port
-    assert chosen == {True: 'output_structure', False: 'output_other'}

@@ -5,6 +5,7 @@ follows it.
 Fast and without a service: what the request holds, what Sophios refuses before sending, and what a `Run` makes of
 the service's answers. What the service answers is `test_compute_service.py`'s, against the service itself.
 """
+import dataclasses
 import inspect
 import json
 import os
@@ -23,6 +24,7 @@ from pathlib import Path
 
 import pytest
 import requests
+from hypothesis import example, given, strategies as st
 from jsonschema import Draft202012Validator
 
 from sophios import compute
@@ -32,7 +34,11 @@ from sophios.api.python.workflow import Step, Workflow
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.run_local import RunHandle
-from sophios.run_status import RunState
+from sophios.run_status import RunState, RunStatus
+from sophios.wic_types import Yaml
+
+from .budgets import budget
+from .cases import cases, match
 
 ROOT = Path(__file__).resolve().parents[2]
 ADAPTERS = ROOT / 'cwl_adapters'
@@ -55,20 +61,32 @@ def _workflow(out: str = 'results/run7', model: str = 'models/sam3.pt', name: st
 
 
 @pytest.mark.fast
-def test_the_request_carries_the_compiled_workflow_and_every_path_as_written() -> None:
+@budget(50)
+@given(*[st.lists(st.sampled_from('/.~$: ') | st.text(max_size=3), max_size=6).map(''.join)] * 2, st.booleans(),
+       st.booleans())
+@example('results/run7', 'https://example.org/sam3.pt', False, True)
+@example('/projects/lab/out', 'models/sam3.pt', False, False)
+@example('~/results', '$HOME/sam3.pt', False, False)
+@example('results/run7', 'models/sam3.pt', True, False)
+def test_the_request_carries_the_compiled_workflow_and_every_path_as_written(out: str, model: str, on_workflow: bool,
+                                                                             basepath: bool) -> None:
     """One inline document, its inputs, and `basepath` only when given; nothing is joined or checked, `~` and
-    `$HOME` included: the service is the one authority on paths."""
-    config = RunConfig('results').basepath('/projects/lab')
-    request = compute.build_request(_workflow(model='https://example.org/sam3.pt'), config)
-    assert set(request) == {'id', 'workflow', 'inputs', 'basepath', 'workflowOutDir'}
-    assert request['basepath'] == '/projects/lab'
+    `$HOME` included: the service is the one authority on paths. A value bound on a workflow input is the job's value
+    of it (docs/inputs-and-values.md), so the service is sent it as written, as it is sent a step's."""
+    workflow = _workflow(out, model)
+    if on_workflow:
+        step = workflow.steps[0]
+        step.inputs.out, step.inputs.model = workflow.inputs.out, workflow.inputs.model
+        workflow.inputs.out, workflow.inputs.model = out, model
+    config = RunConfig('results').basepath('/projects/lab') if basepath else None
+    request = compute.build_request(workflow, config)
+    assert set(request) == {'id', 'workflow', 'inputs', *(['basepath', 'workflowOutDir'] if basepath else [])}
+    assert request.get('basepath', '/projects/lab') == '/projects/lab'
     assert request['workflow']['class'] == 'Workflow' and request['workflow']['cwlVersion'] == 'v1.2'
     assert all(isinstance(step['run'], dict) for step in request['workflow']['steps'])
-    assert request['inputs'] == {'write~out': {'class': 'Directory', 'location': 'results/run7'},
-                                 'write~model': {'class': 'File', 'location': 'https://example.org/sam3.pt'}}
-    assert 'basepath' not in compute.build_request(_workflow(out='/projects/lab/out'))
-    shell = compute.build_request(_workflow(out='~/results', model='$HOME/sam3.pt'))['inputs']
-    assert [shell[name]['location'] for name in ('write~out', 'write~model')] == ['~/results', '$HOME/sam3.pt']
+    named = '' if on_workflow else 'write~'
+    assert request['inputs'] == {f'{named}out': {'class': 'Directory', 'location': out},
+                                 f'{named}model': {'class': 'File', 'location': model}}
 
 
 @pytest.mark.fast
@@ -107,33 +125,40 @@ baseCommand: touch
     assert compute.build_request(workflow)['inputs']['write~out']['location'] == '/projects/lab/results'
 
 
-@pytest.mark.fast
-def test_a_value_bound_on_a_workflow_input_is_sent_as_a_value_written_on_a_step_is() -> None:
-    """`flow.inputs.x = v` is the job's value of `x` (docs/inputs-and-values.md), so the service is sent it, each path
-    as written, as it is sent a step's."""
-    step = Step(_writer(), step_name='write')
-    workflow = Workflow([step], 'segment')
-    step.inputs.out = workflow.inputs.out
-    step.inputs.model = workflow.inputs.model
-    workflow.inputs.out = 'results/run7'
-    workflow.inputs.model = 'models/sam3.pt'
-    assert compute.build_request(workflow)['inputs'] == {
-        'out': {'class': 'Directory', 'location': 'results/run7'},
-        'model': {'class': 'File', 'location': 'models/sam3.pt'}}
+#: The service's id rule, and the fit of each name outside it a case pins, by hand from the rule.
+_ID: typing.Final = Draft202012Validator(compute.SCHEMA['$defs']['Id'])
+_FITTED: typing.Final = {'a b/c': 'a-b-c', '...': 'run'}
+_NOW: typing.Final = datetime(2026, 10, 26, 14, 22, 5, tzinfo=timezone.utc)
+#: Any text, and text of the rule's own kinds of character, at every length a cut may meet.
+_NAMES: typing.Final = st.one_of(st.integers(0, 300).flatmap(lambda size: st.text(min_size=size, max_size=size)),
+                                 st.integers(0, 130).flatmap(lambda size: st.text('aZ09._-', min_size=size,
+                                                                                  max_size=size)))
 
 
 @pytest.mark.fast
-def test_a_run_id_is_the_workflow_name_the_time_and_four_hex_digits_within_the_services_rule() -> None:
-    """`<name>-<UTC yyyymmddThhmmss>-<4 hex>`; a name outside the rule is fitted to it."""
-    rule = Draft202012Validator(compute.SCHEMA['$defs']['Id'])
-    now = datetime(2026, 10, 26, 14, 22, 5, tzinfo=timezone.utc)
-    assert re.fullmatch(r'segment-20261026T142205-[0-9a-f]{4}', compute.new_run_id('segment', now))
-    for name in ['segment', 'a b/c', '.hidden', '__x', 'é' * 5, '', 'x' * 300, '-', 'ok.name_1-2']:
-        made = compute.new_run_id(name, now)
-        assert rule.is_valid(made) and len(made) <= 128, (name, made)
-    assert compute.new_run_id('a b/c', now).startswith('a-b-c-2026')
-    assert compute.new_run_id('...', now).startswith('run-2026')
-    assert compute.new_run_id('a', now) != compute.new_run_id('a', now)
+@budget(100)
+@given(name=_NAMES, now=st.datetimes(datetime(1000, 1, 1), timezones=st.just(timezone.utc)))
+@example(name='segment', now=_NOW)
+@example(name='a b/c', now=_NOW)
+@example(name='...', now=_NOW)
+@example(name='.hidden', now=_NOW)
+@example(name='__x', now=_NOW)
+@example(name='é' * 5, now=_NOW)
+@example(name='', now=_NOW)
+@example(name='x' * 300, now=_NOW)
+@example(name='-', now=_NOW)
+@example(name='ok.name_1-2', now=_NOW)
+def test_a_run_id_is_the_workflow_name_the_time_and_four_hex_digits_within_the_services_rule(
+        name: str, now: datetime) -> None:
+    """`<name>-<UTC yyyymmddThhmmss>-<4 hex>` within the service's id rule: a name inside it that leaves the 21
+    characters the rest takes is kept as it is, and any other is fitted to it; the 4 hex differ between two runs."""
+    made = compute.new_run_id(name, now)
+    prefix, stamp, suffix = made.rsplit('-', 2)
+    assert _ID.is_valid(made) and re.fullmatch('[0-9a-f]{4}', suffix)
+    assert stamp == re.sub('[-:]', '', now.isoformat()[:19])
+    if name in _FITTED or _ID.is_valid(name) and len(name) <= 107:
+        assert prefix == _FITTED.get(name, name)
+    assert len({compute.new_run_id(name, now) for _ in range(8)}) > 1
 
 
 @pytest.mark.fast
@@ -292,24 +317,19 @@ def _answer(status: int, body: object, headers: dict[str, str] | None = None) ->
     return _raw(status, json.dumps(body), {'Content-Type': 'application/json', **_SERVICE, **(headers or {})})
 
 
-def _text(text: str) -> requests.Response:
-    """A log, as the service answers one."""
-    return _raw(200, text, _SERVICE)
-
-
 #: Why a test that makes a Service skips on Windows itself, where Service refuses every URL. The fake service, its
 #: socket and the stand-in for ssh each skip so, and so does a test that makes one without them.
 _WINDOWS: typing.Final = 'the compute client needs macOS, Linux or WSL'
 
 
 def _serving(monkeypatch: pytest.MonkeyPatch,
-             answers: dict[tuple[str, str], requests.Response | Exception | list[requests.Response | Exception]]
-             ) -> list[tuple[str, str, object]]:
+             answers: dict[tuple[str, ...], requests.Response | BaseException | list[requests.Response | BaseException]]
+             ) -> list[tuple[str, str, typing.Any]]:
     """Have every HTTP call answered from `answers`, by method and path, a list's answers one per call in turn; each
     call is appended to the list returned, as its method, path and timeout."""
     if sys.platform == 'win32':
         pytest.skip(_WINDOWS)
-    calls: list[tuple[str, str, object]] = []
+    calls: list[tuple[str, str, typing.Any]] = []
 
     def request(_: requests.Session, method: str, url: str, **options: object) -> requests.Response:
         path = url.split('://', 1)[1].split('/', 1)[1]
@@ -317,168 +337,69 @@ def _serving(monkeypatch: pytest.MonkeyPatch,
         found = answers[(method, path)]
         if isinstance(found, list):
             found = found.pop(0)
-        if isinstance(found, Exception):
+        if isinstance(found, BaseException):
             raise found
         return found
     monkeypatch.setattr(requests.Session, 'request', request)
     return calls
 
 
-_CONTRACT = _answer(200, {'openapi': '3.1.0', 'info': {'version': '3.0.0'}})
+#: What a case's calls are answered when it says nothing of them: the service's contract, and the run r1 RUNNING.
+_SPOKEN: typing.Final = {'GET openapi.json': {'json': {'openapi': '3.1.0', 'info': {'version': '3.0.0'}}},
+                         'GET runs/r1': {'json': {'id': 'r1', 'state': 'RUNNING'}}}
+
+
+def _given(answer: Yaml) -> requests.Response | BaseException:
+    """An answer as a case writes it: an exception it `raise`s, or a `status` (200 by default) with the service's
+    `json` and `headers`, a log's `text`, or the `page` of something else, which names no service."""
+    if 'raise' in answer:
+        name = answer['raise']
+        return KeyboardInterrupt() if name == 'KeyboardInterrupt' else getattr(requests.exceptions, name)(name)
+    status = answer.get('status', 200)
+    if 'json' in answer:
+        return _answer(status, answer['json'], answer.get('headers'))
+    return _raw(status, answer['text'], _SERVICE) if 'text' in answer else _raw(status, answer['page'], {})
+
+
+def _seen(value: object) -> object:
+    """What a verb returned, as a case writes it: a run as its id, a status as its fields, states by name and times in
+    ISO 8601."""
+    if isinstance(value, RunStatus):
+        return json.loads(json.dumps(dataclasses.asdict(value), default=lambda field: field.name
+                                     if isinstance(field, RunState) else field.isoformat()))
+    return value.id if isinstance(value, compute.Run) else value
 
 
 @pytest.mark.fast
-def test_a_service_that_speaks_another_contract_is_refused_before_anything_is_sent(
-        monkeypatch: pytest.MonkeyPatch) -> None:
-    """The major version is read once, from openapi.json: a service of contract 2, which takes outputMode, is told to
-    upgrade."""
-    _serving(monkeypatch, {('GET', 'openapi.json'): _answer(200, {'info': {'version': '2.1.0'}})})
-    with pytest.raises(compute.ServiceUnavailable, match='speaks contract 2.1.0, and this Sophios speaks 3: upgrade'):
-        compute.Service('unix:///api.sock').submit(_workflow())
-
-
-@pytest.mark.fast
-def test_a_submission_lost_on_the_way_says_the_run_may_exist_and_how_to_follow_it(
-        monkeypatch: pytest.MonkeyPatch) -> None:
-    """Sent again until PATIENCE runs out; then the id it was sent under, and `attach`."""
-    monkeypatch.setattr(compute, 'PATIENCE', 0.0)
-    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('POST', 'runs'): requests.ConnectionError('gone')})
-    with pytest.raises(compute.ServiceUnavailable) as unavailable:
-        compute.Service('unix:///api.sock').submit(_workflow())
-    could_not, may_exist = unavailable.value.messages
-    assert could_not == 'the compute service at unix:///api.sock could not be reached (ConnectionError), for 0 s'
-    assert re.fullmatch(r"run (segment-\S+) may exist all the same: Service\('unix:///api.sock'\)\.attach\('\1'\) "
-                        r'follows it, and the same request sent again never starts a second one', may_exist)
-
-
-@pytest.mark.fast
-def test_an_answer_the_contract_does_not_document_is_the_services_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """500 is the service's; its message is shown."""
-    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT,
-                           ('GET', 'runs/r1'): _answer(500, {'errors': [{'message': 'the driver failed'}]})})
-    with pytest.raises(compute.ServiceUnavailable, match='answered 500: the driver failed'):
-        compute.Service('unix:///api.sock').attach('r1')
-
-
-@pytest.mark.fast
-def test_a_refusal_is_each_problem_of_the_service_in_its_words_at_the_authored_input(
-        monkeypatch: pytest.MonkeyPatch) -> None:
-    """A pointer into the request is named as the author wrote it; Sophios adds no line of its own."""
-    refusal = {'pointer': '/inputs/write~0model/location',
-               'message': 'models/sam3.pt is relative: send basepath, the cluster directory it is relative to, and '
-               'workflowOutDir, the outputs folder relative to basepath'}
-    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('POST', 'runs'): _answer(400, {'errors': [refusal]})})
-    with pytest.raises(compute.RequestRefused) as refused:
-        compute.Service('unix:///api.sock').submit(_workflow())
-    assert refused.value.messages == (
-        'input write~model: models/sam3.pt is relative: send basepath, the cluster directory it is relative to, and '
-        'workflowOutDir, the outputs folder relative to basepath',)
-
-
-@pytest.mark.fast
-def test_a_status_takes_what_it_knows_and_leaves_the_rest(monkeypatch: pytest.MonkeyPatch,
-                                                          capsys: pytest.CaptureFixture[str]) -> None:
-    """Unknown fields are ignored, a step without a name is its Slurm job, nothing is parsed out of a message;
-    the warnings are printed where they cannot be missed, at the input they name."""
-    answer: dict[str, object] = {
-        'id': 'r1', 'state': 'RUNNING', 'reason': None, 'slurmJobId': '7', 'startedAt': '2026-10-26T10:00:00-04:00',
-        'endedAt': None, 'outputs': None, 'new': 'field',
-        'steps': [{'name': None, 'state': 'FAILED', 'exitCode': '1:0', 'slurmJobId': '8', 'logs': []}],
-        'warnings': [{'pointer': '/inputs/write~out/location', 'message': 'did not keep its setgid bit'}]}
-    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _answer(200, answer)})
-    run = compute.Service('unix:///api.sock').attach('r1')
-    assert capsys.readouterr().err == ('WARNING from the compute service: input write~out: did not keep its setgid '
-                                       'bit\n')
-    status = run.status()
-    assert status.state is RunState.RUNNING and status.started_at == datetime.fromisoformat('2026-10-26T10:00:00-04:00')
-    assert [(s.name, s.state, s.exit_status, s.signal) for s in status.steps] == [
-        ('(Slurm job 8)', RunState.FAILED, None, None)]
-
-
-@pytest.mark.fast
-def test_ctrl_c_while_waiting_leaves_the_run_going_and_says_how_to_follow_it(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    """The interrupt goes on up, after one line on how to attach again."""
-    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT,
-                           ('GET', 'runs/r1'): _answer(200, {'id': 'r1', 'state': 'QUEUED'})})
-    run = compute.Service('unix:///api.sock').attach('r1')
-
-    def interrupted() -> None:
-        raise KeyboardInterrupt
-    monkeypatch.setattr(run, 'status', interrupted)
-    with pytest.raises(KeyboardInterrupt):
-        run.wait()
-    assert capsys.readouterr().err.strip() == (
-        "Run r1 goes on in Slurm: Service('unix:///api.sock').attach('r1') follows it again, and its cancel() "
-        'stops it.')
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('state', [RunState.FAILED, RunState.CANCELLED])
-def test_wait_returns_a_run_that_did_not_complete_as_its_status_and_raises_nothing(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], state: RunState) -> None:
-    """As the local handle's `wait`: the run's status however it ended, with the service's reason, printed once."""
-    ended = {'id': 'r1', 'state': state.value, 'reason': 'Slurm will never start the leader (PartitionTimeLimit)'}
-    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _answer(200, ended)})
-    status = compute.Service('unix:///api.sock').attach('r1').wait()
-    assert (status.state, status.reason, status.outputs) == (
-        state, 'Slurm will never start the leader (PartitionTimeLimit)', None)
-    assert capsys.readouterr().out == f'r1: {state.value} (Slurm will never start the leader (PartitionTimeLimit))\n'
-
-
-@pytest.mark.fast
-def test_wait_prints_the_runs_start_before_its_steps_lines_and_its_end_after_them(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    """A step and the run that change in one poll: the run's line comes first while it goes on, last once it ended."""
-    monkeypatch.setattr(compute.time, 'sleep', lambda _seconds: None)
-
-    def answer(state: str, step: str) -> requests.Response:
-        return _answer(200, {'id': 'r1', 'state': state, 'reason': None,
-                             'steps': [{'name': 'show', 'state': step, 'slurmJobId': '8'}]})
-    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): [
-        _run('QUEUED'), answer('RUNNING', 'RUNNING'), answer('COMPLETED', 'COMPLETED')]})
-    assert compute.Service('unix:///api.sock').attach('r1').wait().state is RunState.COMPLETED
-    assert capsys.readouterr().out.splitlines() == [
-        'r1: RUNNING', 'r1: step show RUNNING', 'r1: step show COMPLETED', 'r1: COMPLETED']
-
-
-@pytest.mark.fast
-def test_logs_are_the_leaders_log_of_the_whole_run_never_a_steps(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`leader.log`, even when a step failed with logs of its own, as the local handle's `logs` is the runner's."""
-    failed = {'id': 'r1', 'state': 'FAILED', 'reason': 'step show failed (exit code 1:0); see its logs',
-              'steps': [{'name': 'show', 'state': 'FAILED', 'slurmJobId': '8', 'logs': ['failed_CWLJob_show_000.log']}]}
-    calls = _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _answer(200, failed),
-                                   ('GET', 'runs/r1/logs/leader.log'): _text('the leader\n'),
-                                   ('GET', 'runs/r1/logs/failed_CWLJob_show_000.log'): _text('boom\n')})
-    run = compute.Service('unix:///api.sock').attach('r1')
-    assert run.wait().steps[0].name == 'show'
-    assert run.logs() == 'the leader\n'
-    assert calls[-1][:2] == ('GET', 'runs/r1/logs/leader.log')
-
-
-@pytest.mark.fast
-def test_a_run_whose_leader_slurm_never_started_has_no_log_and_logs_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Slurm makes `leader.log` as it starts the leader, so the service answers 404 for a run it never started;
-    `logs` is '', as the local handle's is with no log."""
-    never = {'id': 'r1', 'state': 'FAILED', 'reason': 'Slurm will never start the leader (PartitionTimeLimit)'}
-    missing = {'errors': [{'message': 'the run has no log leader.log, or not yet'}]}
-    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _answer(200, never),
-                           ('GET', 'runs/r1/logs/leader.log'): _answer(404, missing)})
-    assert compute.Service('unix:///api.sock').attach('r1').logs() == ''
-
-
-@pytest.mark.fast
-def test_a_run_the_service_has_deleted_is_refused_in_its_words_and_its_log_is_never_taken_for_empty(
-        monkeypatch: pytest.MonkeyPatch) -> None:
-    """The service deletes a run some days after it ends, and answers 404 for it and its logs alike, saying so: `logs`
-    raises that, as `status` does, rather than '' for a log Slurm never made."""
-    gone = _answer(404, {'errors': [{'message': 'there is no run r1; a run is deleted 14 days after it ends'}]})
-    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): [_run('COMPLETED'), gone],
-                           ('GET', 'runs/r1/logs/leader.log'): gone})
-    run = compute.Service('unix:///api.sock').attach('r1')
-    with pytest.raises(compute.RequestRefused) as refused:
-        run.logs()
-    assert refused.value.messages == ('there is no run r1; a run is deleted 14 days after it ends',)
+@pytest.mark.parametrize('case', cases('compute-service', 'do', 'answers', 'raises', 'returns', 'stdout', 'stderr',
+                                       'pauses', 'calls', 'patience'))
+def test_a_run_makes_of_the_services_answers_what_its_contract_says(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], case: Yaml) -> None:
+    """Each case of data/compute-service: each call answered from `answers` by 'METHOD path', over `_SPOKEN`, a list's
+    answers one per call in turn, so a call past them or answered nothing fails the case; then `raises`
+    ({exception: [message, ...]}, nothing by default), and those it gives of `returns` (what each verb returned),
+    `stdout`, `stderr`, `pauses` and `calls` ([method, path, connect and read timeouts]). A key the test does not
+    read, or a case that expects none of these, fails."""
+    expected = {'raises', 'returns', 'stdout', 'stderr', 'pauses', 'calls'}
+    assert case.keys() - {'id', 'why', 'do', 'patience', 'answers'} <= expected and case.keys() & expected, case.keys()
+    pauses: list[float] = []
+    monkeypatch.setattr(compute.time, 'sleep', pauses.append)
+    monkeypatch.setattr(compute, 'PATIENCE', float(case.get('patience', compute.PATIENCE)))
+    calls = _serving(monkeypatch, {tuple(call.split(' ')): [_given(each) for each in answer] if isinstance(answer, list)
+                                   else _given(answer) for call, answer in {**_SPOKEN, **case['answers']}.items()})
+    returned: list[object] = []
+    raised: dict[str, list[str]] | None = None
+    first, *then = case['do']
+    try:
+        run = getattr(compute.Service('unix:///api.sock'), first)(_workflow() if first == 'submit' else 'r1')
+        returned = [run, *(getattr(run, verb)() for verb in then)]
+    except (compute.ComputeError, TimeoutError, KeyboardInterrupt) as error:
+        raised = {type(error).__name__: list(getattr(error, 'messages', [str(error)]))}
+    printed = capsys.readouterr()
+    seen = {'returns': [_seen(value) for value in returned], 'stdout': printed.out, 'stderr': printed.err,
+            'raises': raised, 'pauses': pauses, 'calls': [[method, path, *limits] for method, path, limits in calls]}
+    for key in case.keys() & seen.keys() | {'raises'}:
+        assert match(case.get(key), seen[key]), (key, seen[key])
 
 
 @pytest.mark.fast
@@ -492,63 +413,6 @@ def test_a_compute_run_is_the_local_handle_but_for_what_each_has_alone() -> None
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('page', [_raw(404, '<html>Not Found</html>', {}), _raw(200, '<html>It works!</html>', {})])
-def test_anything_but_the_service_answering_is_unavailable_and_names_the_socket(
-        monkeypatch: pytest.MonkeyPatch, page: requests.Response) -> None:
-    """The service names itself in every answer's Server header: a page from anything else, a 404 or a 200, is
-    neither a refusal nor a run nor a log, for submit, status and logs alike."""
-    stranger = ('unix:///api.sock answered, but not as the compute service: check that it names the socket the '
-                'service listens on',)
-    _serving(monkeypatch, {('GET', 'openapi.json'): page})
-    with pytest.raises(compute.ServiceUnavailable) as unavailable:
-        compute.Service('unix:///api.sock').submit(_workflow())
-    assert unavailable.value.messages == stranger
-    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): [_run('RUNNING'), page],
-                           ('GET', 'runs/r1/logs/leader.log'): page})
-    run = compute.Service('unix:///api.sock').attach('r1')
-    for asked in (run.status, run.logs):
-        with pytest.raises(compute.ServiceUnavailable) as unavailable:
-            asked()
-        assert unavailable.value.messages == stranger
-
-
-@pytest.mark.fast
-def test_an_answer_of_the_service_that_is_not_json_is_its_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every answer of the service but a log is JSON; one that is not is the service's failure, not a crash."""
-    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _text('<html>oops</html>')})
-    with pytest.raises(compute.ServiceUnavailable) as unavailable:
-        compute.Service('unix:///api.sock').attach('r1')
-    assert unavailable.value.messages == ('the compute service at unix:///api.sock answered 200, not in JSON',)
-
-
-@pytest.mark.fast
-def test_a_busy_service_is_asked_again_every_5_s_whatever_its_retry_after_says(
-        monkeypatch: pytest.MonkeyPatch) -> None:
-    """Retry-After is not read: a date in it, as RFC 9110 allows, changes nothing. A call answered 502, 503 or 504
-    is made again whoever sends it, a proxy or the service."""
-    pauses: list[float] = []
-    monkeypatch.setattr(compute.time, 'sleep', pauses.append)
-    busy = _answer(503, {'errors': [{'message': 'sacct failed'}]}, {'Retry-After': 'Wed, 28 Oct 2026 07:28:00 GMT'})
-    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT,
-                           ('GET', 'runs/r1'): [busy, _raw(502, '<html>Bad Gateway</html>', {}), _run('QUEUED')]})
-    assert compute.Service('unix:///api.sock').attach('r1').id == 'r1'
-    assert pauses == [5.0, 5.0]
-
-
-@pytest.mark.fast
-def test_an_answer_cut_short_is_asked_for_again(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The service cuts the connection when it fails after the headers, as a log read may, and so does an SSH forward
-    that drops: the call is made again, as when the service cannot be reached."""
-    pauses: list[float] = []
-    monkeypatch.setattr(compute.time, 'sleep', pauses.append)
-    cut = requests.exceptions.ChunkedEncodingError('cut')
-    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): _run('RUNNING'),
-                           ('GET', 'runs/r1/logs/leader.log'): [cut, _text('x')]})
-    assert compute.Service('unix:///api.sock').attach('r1').logs() == 'x'
-    assert pauses == [5.0]
-
-
-@pytest.mark.fast
 def test_the_service_lane_is_skipped_not_errored_without_the_driver() -> None:
     """A plain pytest on a machine without the driver checkout skips test_compute_service.py, saying what to set,
     as the repository's other environment-gated tests skip; the lane's own command always sets it."""
@@ -556,57 +420,6 @@ def test_the_service_lane_is_skipped_not_errored_without_the_driver() -> None:
     ran = subprocess.run([sys.executable, '-m', 'pytest', 'tests/core/test_compute_service.py', '-rs',
                           '-p', 'no:cacheprovider'], cwd=ROOT, env=env, capture_output=True, text=True, check=False)
     assert ran.returncode == 0 and 'set SOPHIOS_SLURM_DRIVER to the packages/slurm-driver' in ran.stdout, ran.stdout
-
-
-def _run(state: str, reason: str | None = None) -> requests.Response:
-    return _answer(200, {'id': 'r1', 'state': state, 'reason': reason})
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('answers', 'cancelled'), [
-    ([_run('CANCELLED', 'cancelled by request')], True),
-    ([_run('COMPLETED')], False),
-    ([_run('FAILED', "the workflow failed; see the run's log, GET /runs/r1/logs/leader.log")], False),
-    ([_run('RUNNING', 'cancel requested at 2026-10-27T10:00:00Z'), _run('CANCELLED', 'cancelled by request')], True)])
-def test_cancel_is_sent_once_and_says_whether_the_run_is_cancelled_as_future_cancel_does(
-        monkeypatch: pytest.MonkeyPatch, answers: list[requests.Response], cancelled: bool) -> None:
-    """True once the run is CANCELLED; False when it had ended COMPLETED or FAILED, which the service answers
-    unchanged. The service asks Slurm before it answers, so the cancel is sent once, and the run waited for, every
-    POLL seconds, until it has ended."""
-    pauses: list[float] = []
-    monkeypatch.setattr(compute.time, 'sleep', pauses.append)
-    calls = _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('POST', 'runs/r1/cancel'): [answers[0]],
-                                   ('GET', 'runs/r1'): [_run('RUNNING'), *answers]})
-    run = compute.Service('unix:///api.sock').attach('r1')
-    assert run.cancel() is cancelled
-    assert [path for method, path, _ in calls if method == 'POST'] == ['runs/r1/cancel']
-    assert pauses == [compute.POLL] * (len(answers) - 1)
-
-
-@pytest.mark.fast
-def test_a_cancel_slurm_never_acts_on_is_waited_for_as_wait_patience_and_never_sent_again(
-        monkeypatch: pytest.MonkeyPatch) -> None:
-    """A run that never ends: TimeoutError once PATIENCE is up, never later, saying it goes on, after one POST."""
-    monkeypatch.setattr(compute, 'PATIENCE', 0.0)
-    monkeypatch.setattr(compute.time, 'sleep', lambda _seconds: pytest.fail('waited on past PATIENCE'))
-    running = _run('RUNNING', 'cancel requested at 2026-10-27T10:00:00Z')
-    _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('GET', 'runs/r1'): running,
-                           ('POST', 'runs/r1/cancel'): [running]})
-    with pytest.raises(TimeoutError, match='run r1 has not ended within 0 s; it goes on'):
-        compute.Service('unix:///api.sock').attach('r1').cancel()
-
-
-@pytest.mark.fast
-def test_a_submission_may_take_longer_than_a_status_read_before_it_is_sent_again(
-        monkeypatch: pytest.MonkeyPatch) -> None:
-    """The service asks Slurm several times, 30 s each at most, before it answers a POST /runs: a slow but healthy
-    submission is waited for, not sent again; every other call is given up on sooner."""
-    accepted = _answer(201, {'id': 'x', 'state': 'QUEUED', 'slurmJobId': '7'})
-    calls = _serving(monkeypatch, {('GET', 'openapi.json'): _CONTRACT, ('POST', 'runs'): accepted,
-                                   ('GET', 'runs/x'): _answer(200, {'id': 'x', 'state': 'QUEUED'})})
-    compute.Service('unix:///api.sock').submit(_workflow()).status()
-    assert [(method, path, timeout) for method, path, timeout in calls] == [
-        ('GET', 'openapi.json', (10.0, 60.0)), ('POST', 'runs', (10.0, 300.0)), ('GET', 'runs/x', (10.0, 60.0))]
 
 
 class _Driver(BaseHTTPRequestHandler):

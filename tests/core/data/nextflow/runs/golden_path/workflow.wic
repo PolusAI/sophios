@@ -1,0 +1,4 @@
+steps:
+- id: touch_file
+  in: {filename: !ii message.txt}
+- id: copy_file

@@ -1,0 +1,2 @@
+wic: {lang_version: '0.0.1'}
+steps: [{id: mk_file, in: {name: !ii a}}]

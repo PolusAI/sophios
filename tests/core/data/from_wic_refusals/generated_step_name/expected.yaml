@@ -1,0 +1,3 @@
+{why: 'root__step__2__xform is no step id, so the output cannot be bound to an object',
+    diagnostics: [{code: NO_PYTHON_SPELLING, file: root.wic, message: {contains: ['outputSource:
+    root__step__2__xform/file names no step output and no declared input']}}]}

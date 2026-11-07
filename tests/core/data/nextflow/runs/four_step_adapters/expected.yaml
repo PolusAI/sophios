@@ -1,0 +1,6 @@
+why: The checked-in echo adapters print their message, and echo_3 its three joined into one word, each to its stdout.
+outputs: {emit_single_1~stdout: {class: File, basename: stdout, contents: "Sophios reaches Nextflow\n"},
+    emit_triplet_1~stdout:
+          {class: File, basename: stdout, contents: "spaces remain one argument\n"}, emit_single_2~stdout: {class: File,
+          basename: stdout, contents: "a literal costs $5\n"}, emit_triplet_2~stdout: {class: File, basename: stdout,
+          contents: "literal && text is not shell syntax\n"}}

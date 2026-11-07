@@ -1,0 +1,2 @@
+hints: {ResourceRequirement: {coresMin: 1}}
+steps: [{id: mk_file, in: {name: !ii a}}, {id: mk_file, in: {name: !ii b}}]

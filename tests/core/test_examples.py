@@ -40,7 +40,6 @@ from .equivalence import Strength, equivalent, flatten_model
 from .test_metadata_emitted import DECLARATIONS, declared_beneath
 
 yml_paths = workflow_paths()
-yml_paths_tuples = [(name, path) for paths in yml_paths.values() for name, path in paths.items()]
 
 # Look in each directory of search_paths_wic tag in global_config.json
 # for separate config_ci.json files and combine them.
@@ -59,6 +58,11 @@ for _yml_namespaces in search_paths_wic_tag:
                 config_ci_tmp = json.loads('\n'.join(contents))
             # Use the Additive Strategy to e.g. concatenate lists
             config_ci = merge(config_ci, config_ci_tmp, strategy=Strategy.TYPESAFE_ADDITIVE)
+
+# Each stops with an error on purpose, which the page showing it explains, so no lane compiles or runs it.
+refused: list[str] = config_ci.get("refused", [])
+yml_paths_tuples = [(name, path) for paths in yml_paths.values() for name, path in paths.items()
+                    if name not in refused]
 
 # Due to the computational complexity of the graph isomorphism problem, we
 # need to manually exclude large workflows.

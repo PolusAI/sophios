@@ -31,7 +31,7 @@ without compiling again. The versioned JSON form of the model,
 `nextflow_workflow.json`, is a record of it that nothing reads back. The
 compiled workflow's `diagnostics` holds every note the compile made, the core compile's and then
 the lowering's, as `CompiledWorkflow.diagnostics` holds the CWL compile's;
-compiling warns with none of them.
+compiling prints each on stderr, as the command line does, and warns with none of them.
 
 ## Command line
 
@@ -422,7 +422,8 @@ inputs:
 ```
 
 An array input of `File`, `Directory`, `string`, `int`, `float`, or `boolean`
-items is supported. It carries the same qualifier its item type would carry
+items, written as above or as the shorthand `string[]`, is supported. It
+carries the same qualifier its item type would carry
 alone (`path` for File/Directory, `val` for scalars); a `path` array stages
 every element for one process call rather than fanning the channel out, and
 renders as `path <name>, arity: '0..*'` so the process always receives a list,
@@ -435,10 +436,9 @@ when the array is empty. An empty array is a present, valid value — distinct
 from an absent optional value above.
 
 `itemSeparator`, `separate: false`, and `valueFrom` on an array binding are
-not supported, nor are the shorthand `File[]` type form, nested arrays, a
-per-item `inputBinding`, or array-typed outputs. A binding on a `boolean`
-array is rejected: CWL adds only its prefix, when the array is not empty, and
-never an item's `true` or `false`.
+not supported, nor are nested arrays, a per-item `inputBinding`, or array-typed
+outputs. A binding on a `boolean` array is rejected: CWL adds only its prefix,
+when the array is not empty, and never an item's `true` or `false`.
 
 ## Shell mode
 
@@ -518,9 +518,9 @@ number; an expression is rejected. `cudaVersionMin` and
 each one present, as written, in its `ext` directive, which no generated
 script reads. The generated pipeline does not check them, and compiling
 reports each one with the note [`wic046`](error_codes.md). The command line prints the note with the other
-diagnostics. In Python, `compile(target="nextflow")` keeps it in
-`diagnostics`, and a run, `run()`, `start()` or `run_async()`, gives it as a
-`UserWarning`. Where a task runs is
+diagnostics. In Python, `compile(target="nextflow")` prints it on stderr, in the
+same words, and keeps it in `diagnostics`; a run, `run()`, `start()` or
+`run_async()`, prints it too and keeps it on the result. Where a task runs is
 the executor's choice: the local executor accepts the directive and runs the
 task on the machine as it is.
 
@@ -871,10 +871,16 @@ rejected by name — a non-optional port, a `path` consumer, an array-typed
 port, or an array-typed output of a conditional step outside scatter.
 
 `when` on a step whose `run` is a workflow is rejected, since skipping an
-inlined sub-DAG is not this lowering's single-process shape. A step input the
-step's tool does not declare, which CWL allows so that a `when` can read it, is
-rejected. A conditional step needs at least one input to gate on, so `when`
-on a tool that declares no inputs is rejected.
+inlined sub-DAG is not this lowering's single-process shape. CWL lets a step
+bind an input its tool does not declare. When only workflow inputs feed it (or
+nothing does) and neither the step's `when` nor its `scatter` reads it, it
+changes nothing the step runs, and the target leaves it out. One that the
+step's `when` reads is rejected, as is one the step scatters over. One fed by
+a step output is rejected too: CWL runs the step only after that step
+finishes, and the generated Nextflow would not wait for it. The same holds for
+a nested workflow step's input that its workflow does not declare. A
+conditional step needs at least one input to gate on, so `when` on a tool
+that declares no inputs is rejected.
 
 ## The corpus runs
 

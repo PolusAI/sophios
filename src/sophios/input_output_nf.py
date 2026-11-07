@@ -601,6 +601,8 @@ def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...], floa
     redirects = "".join(
         f" {operator} {_render_template(stream, entries)}" for operator, stream in streams if stream is not None
     )
+    # Nextflow strips the indentation every line of a task's script shares once the values are in it, a value's
+    # own lines included, and rejoins each line it strips with a line feed; so the script's lines start at column 0.
     lines.extend(["", "    script:", '    \"\"\"'])
     # The task makes each entry before the command runs: a copy the command may change, or a symlink.
     # A name the task directory already holds stops the task, since cp and ln would make the entry inside it.
@@ -608,26 +610,28 @@ def _render_process(process: NfProcess, multi_input_ports: tuple[str, ...], floa
         if port.entry is not None:
             name = f"${{{NF_SHELL_QUOTE_HELPER}({entries[port.name]})}}"
             lines.extend([
-                f"    if [ -e {name} ] || [ -L {name} ]; then "
+                f"if [ -e {name} ] || [ -L {name} ]; then "
                 f"echo 'InitialWorkDirRequirement entry already exists in the task directory:' {name} >&2; "
                 "exit 1; fi",
-                "    " + Idioms.ENTRY.fill(
+                Idioms.ENTRY.fill(
                     operator="cp -RL" if port.entry.copy else "ln -s", name=port.name, entry=entries[port.name]),
             ])
     lines.extend(
-        f"    {Idioms.EXPORT.fill(name=variable.name, value=_render_template(variable.value, entries))}"
+        Idioms.EXPORT.fill(name=variable.name, value=_render_template(variable.value, entries))
         for variable in process.command.env
     )
     if process.container is not None:
-        lines.append(f"    {NF_ENTRYPOINT_READ}")
+        lines.append(NF_ENTRYPOINT_READ)
         command = f"{NF_ENTRYPOINT_WORDS} {command}"
-    if any(isinstance(token, NfShellLiteral) for token in process.command.tokens):
+    if not isinstance(process.command.tokens[0], NfTemplate) or any(
+            isinstance(token, NfShellLiteral) for token in process.command.tokens):
+        # A command whose first token can render nothing would start with a space; the `(` starts at column 0.
         # CWL redirects the whole command, not just the last one a shell literal starts; on separate lines, a
         # trailing `&` or `#` in the literal cannot swallow the `)`. Without redirects, the parentheses keep a
         # literal's own `>` from reading as one.
-        lines.extend(["    (", f"    {command}", f"    ){redirects}"])
+        lines.extend(["(", command, f"){redirects}"])
     else:
-        lines.append(f"    {command}{redirects}")
+        lines.append(f"{command}{redirects}")
     lines.extend(['    \"\"\"', "", *(f"    {line}" for line in NF_STUB_LINES), "}"])
     return "\n".join(lines)
 

@@ -1,0 +1,53 @@
+- {id: "a sequence step without an id: names both forms that exist (.wic reference §2.1)",
+   source: "steps:\n- touch:\n    in: {f: !ii x}\n",
+   report: [{code: MISSING_STEP_ID, line: 2, message: {contains: ["- id: touch"]}}], recovers: true,
+   why: &w0 "Each diagnosed shape reports exactly one diagnostic, at its line, and a document survives beside it:
+       recovery is the norm, and only unparsable YAML leaves nothing to return."}
+- {id: "and with no body either, which is the shape insertion used to write", source: "steps:\n- sub.wic:\n",
+   report: [{code: MISSING_STEP_ID, line: 2, message: {contains: ["- id: sub.wic"]}}], recovers: true, why: *w0}
+- {id: "a collection step key is reported, not stringified", source: "steps:\n  ? [a, b]\n  : {}\n",
+   report: [{code: EXPECTED_SCALAR, line: 2, message: {contains: [mapping keys must be scalars]}}], recovers: true,
+   why: *w0}
+- {id: "an input bound twice names the input (.wic reference §3.8)",
+   source: "steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n",
+   report: [{code: DUPLICATE_KEY, line: 5, message: {contains: ["'f'"]}}], recovers: true, why: *w0}
+- {id: a step that is not a mapping is reported, source: "steps:\n  - 42\n",
+   report: [{code: EXPECTED_MAPPING, line: 2, message: {contains: [each step must be a mapping]}}], recovers: true,
+   why: *w0}
+- {id: a step body key repeated names the key, source: "steps:\n- id: s\n  in: {a: !ii 1}\n  in: {b: !ii 2}\n",
+   report: [{code: DUPLICATE_KEY, line: 4, message: {contains: [step key 'in']}}], recovers: true, why: *w0}
+- {id: "a second id: inside a step body is contradictory, not a tiebreak", source: "steps:\n  s:\n    id: other\n",
+   report: [{code: DUPLICATE_KEY, line: 3, message: {contains: [already has its identity]}}], recovers: true, why: *w0}
+- {id: "a rejected step entry, a single-key mapping, still reports its body",
+   source: "steps:\n- touch:\n    in:\n      f: !bogus x\n      g: !& e\n",
+   report: [{code: MISSING_STEP_ID, line: 2}, {code: UNKNOWN_TAG, line: 4}, {code: MISPLACED_EDGE_DEF, line: 5}],
+   why: &w1 "A step with no identity is still walked, so one pass sees everything. Both rejected shapes must report the
+       same body problems the `id:` form does; otherwise fixing the entry's form hands back a fresh round of errors from
+       contents that were there all along."}
+- {id: "a rejected step entry, an entry with keys but no id:, still reports its body",
+   source: "steps:\n- name: touch\n  in:\n    f: !bogus x\n    g: !& e\n",
+   report: [{code: MISSING_STEP_ID, line: 2}, {code: UNKNOWN_TAG, line: 4}, {code: MISPLACED_EDGE_DEF, line: 5}],
+   why: *w1}
+- {id: the id form reports the same body problems, source: "steps:\n- id: touch\n  in:\n    f: !bogus x\n    g: !& e\n",
+   report: [{code: UNKNOWN_TAG, line: 4}, {code: MISPLACED_EDGE_DEF, line: 5}],
+   why: &w2 "The `id:` form is the baseline the two rejected shapes are held to."}
+- {id: a collection key is not quoted back, source: "steps:\n- ? [a]\n  : 1\n",
+   report: [{code: MISSING_STEP_ID, message: "a step in a sequence needs an id:"}, {code: EXPECTED_SCALAR}],
+   why: &w3 "Only a scalar key is a name the message can offer back. `_key_text` stringifies a collection key so parsing
+       can continue after wic005; that recovery value is not a name, and quoting it puts a node repr in front of the
+       user three times. A non-scalar key falls through to the plain message instead."}
+- {id: a repeated step id is reported, source: "steps:\n- id: first\n  id: second\n", ok: false,
+   report: [{code: DUPLICATE_KEY, line: 3}],
+   why: &w4 "Two `id:` keys on one step describe two different programs. This reader keeps the first and an ordinary
+       YAML load keeps the last, so resolving it either way hands the compiler a step the document does not
+       unambiguously name. Every other language-owned mapping reports a repeated key; identity is the one that can least
+       afford an exception."}
+- {id: a single-key step without an id, source: "steps:\n- touch:\n    in: {f: !ii x}\n",
+   report: [{code: MISSING_STEP_ID, message: "a step in a sequence carries its name in an id: key — write '- id: touch'
+       if 'touch' is the step's name; add the '- id:' line above if 'touch' is one of the step's own keys. Keying the
+       whole steps: block by name is the other form (.wic reference §2.1)"}],
+   why: &w5 "A sequence step with no `id:` is one code, wic006, whatever else is on it. Only the entry with a single key
+       has a name to quote, so only that arm can say more; the text is all that distinguishes the two, which is why both
+       are pinned whole here."}
+- {id: a step of several keys without an id, source: "steps:\n- in: {f: !ii x}\n  out: [g]\n",
+   report: [{code: MISSING_STEP_ID, message: "a step in a sequence needs an id:"}], why: *w5}

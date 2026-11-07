@@ -138,6 +138,21 @@ def one_step(run: Yaml, out: Sequence[str] = (), **values: Any) -> CompiledNextf
     )
 
 
+def case_source(data: Yaml) -> CompiledNextflowSource:
+    """A data case's source: `{tool, out, job}` as one_step takes them, or `{workflow, tools, job}`.
+
+    Each tool, the workflow and each entry of its `steps` list takes tool()'s, workflow_doc()'s or step()'s value
+    only for a key it leaves out, so a malformed document stays as written; a step without an `id` is taken as is.
+    """
+    job = data.get("job", {})
+    if "tool" in data:
+        return one_step({**tool(data["tool"]["id"]), **data["tool"]}, data.get("out", ()), **job)
+    workflow = {**workflow_doc([]), **data["workflow"]}
+    workflow["steps"] = [{**step(entry["id"]), **entry} if "id" in entry else entry for entry in workflow["steps"]]
+    tools = [{**tool(run["id"]), **run} for run in data.get("tools", [])]
+    return synthetic_source(workflow, tools, workflow_inputs=job)
+
+
 def runtime_workflow() -> ExecutableNextflowWorkflow:
     """A two-process produce/copy pipeline used across render and runtime tests."""
     produce = NfProcess(

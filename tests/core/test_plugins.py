@@ -8,93 +8,119 @@ whose output lands in an emitted document are covered here instead.
 Discovery is covered here too: which files are plugins, and which file a stem resolves to.
 """
 import copy
-from collections.abc import Callable
 import glob
+import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import yaml
+from hypothesis import example, given, strategies as st
 
 import sophios.main
 import sophios.plugins
 import sophios.post_compile
 import sophios.preflight
-from sophios.wic_types import StepId, Yaml
+from sophios.wic_types import Yaml
+
+from .budgets import budget
+from .cases import cases
 
 
 @pytest.mark.fast
-def test_partial_failure_success_codes_are_canonically_ordered() -> None:
-    """`successCodes` is emitted CWL, so no set's iteration order may reach it.
-
-    Under `--partial_failure_enable`, `main` transforms the emitted artifact
-    tree and writes the result to disk, which makes this list output rather
-    than an internal collection. The codes are
-    chosen so a set's iteration order is not accidentally the sorted one.
-    """
+@pytest.mark.parametrize(('code_range', 'direct', 'codes'), [
+    ([3, 6], [9, 4, 1, 32], [0, 1, 3, 4, 5, 9, 32]), ([0, 1], [], [0])])
+def test_partial_failure_takes_ordered_success_codes_and_makes_outputs_optional(
+        code_range: list[int], direct: list[int], codes: list[int]) -> None:
+    """`successCodes` is emitted CWL under `--partial_failure_enable`, so no set's iteration order may reach it: the
+    first row's codes are chosen so that a set's order is not the sorted one. Each row checks both halves of the
+    transform, so neither passes against a function that stopped doing the other."""
     tool: Yaml = {'class': 'CommandLineTool', 'baseCommand': 'true', 'inputs': {},
                   'outputs': {'o': {'type': 'File', 'outputBinding': {'glob': 'x'}}}}
-    updated = sophios.plugins.cwl_update_outputs_optional(tool, [3, 6], [9, 4, 1])
-    assert updated['successCodes'] == [0, 1, 3, 4, 5, 9]
+    updated = sophios.plugins.cwl_update_outputs_optional(tool, code_range, direct)
+    assert (updated['successCodes'], updated['outputs']['o']['type']) == (codes, 'File?')
+
+
+def _section(before: list[Yaml], fields: Yaml | None, after: list[Yaml], mapping: bool) -> Yaml | list[Yaml]:
+    """A `requirements` or `hints` holding `before`, a `DockerRequirement` of `fields` unless they are None, and
+    `after`: a mapping keyed by class (hand-written adapters) or a list of `{class: ...}` entries (cwl_utils)."""
+    entries = [*before, *([] if fields is None else [{'class': 'DockerRequirement', **fields}]), *after]
+    if mapping:
+        return {entry['class']: {k: v for k, v in entry.items() if k != 'class'} for entry in entries}
+    return entries
+
+
+def _tool(sections: Yaml) -> Yaml:
+    return {'class': 'CommandLineTool', 'baseCommand': 'true', 'inputs': {}, 'outputs': {}, **sections}
+
+
+def _workflow(runs: list[Any], mapping: bool, sections: Yaml) -> Yaml:
+    """A workflow running each of `runs`, an embedded process or a file, its steps a mapping or a list."""
+    steps = [{'id': f's{i}', 'in': {}, 'out': [], 'run': run} for i, run in enumerate(runs)]
+    return {'class': 'Workflow', 'inputs': {}, 'outputs': {}, **sections,
+            'steps': {step.pop('id'): step for step in steps} if mapping else steps}
+
+
+def _pulls(section: str, image: str, mapping: bool = True) -> Yaml:
+    return _tool({section: _section([], {'dockerPull': image}, [], mapping)})
+
+
+#: Image references: a registry, with a port or none, 1 to 3 path segments, a tag or none, and a digest or none.
+_IMAGES = st.from_regex(r'((docker\.io|localhost:5000|ghcr\.io)/)?([a-z0-9]+([._-][a-z0-9]+)?/){0,2}[a-z0-9]+'
+                        r'(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,9})?(@sha256:8{64})?', fullmatch=True)
+#: Requirements beside a `DockerRequirement`, which may itself name no image to pull.
+_OTHERS = st.lists(st.sampled_from([{'class': 'InlineJavascriptRequirement'},
+                                    {'class': 'ResourceRequirement', 'ramMin': 64}]), max_size=2)
+_DOCKER = st.one_of(st.none(), st.just({'dockerImageId': 'local'}), _IMAGES.map(lambda image: {'dockerPull': image}))
+_SECTIONS = st.dictionaries(st.sampled_from(['requirements', 'hints']),
+                            st.builds(_section, _OTHERS, _DOCKER, _OTHERS, st.booleans()))
+_PROCESSES = st.recursive(_SECTIONS.map(_tool), lambda processes: st.builds(
+    _workflow, st.lists(st.one_of(processes, st.just('elsewhere.cwl')), min_size=1, max_size=3), st.booleans(),
+    _SECTIONS), max_leaves=6)
+
+
+def _tagged(document: Any) -> Any:
+    """`document` with each `dockerPull` at any depth tagged as docker-py's own parser reads its image."""
+    if isinstance(document, list):
+        return [_tagged(value) for value in document]
+    if not isinstance(document, dict):
+        return document
+    tagged = {key: _tagged(value) for key, value in document.items()}
+    if 'dockerPull' in document and '@' not in document['dockerPull']:
+        repo, tag = sophios.post_compile.docker.utils.parse_repository_tag(  # type: ignore[attr-defined]
+            document['dockerPull'])
+        tagged['dockerPull'] = f"{repo}:{tag or 'latest'}-noentrypoint"
+    return tagged
+
+
+_DIGEST = 'polusai/openfold-tool@sha256:' + '8' * 64
 
 
 @pytest.mark.fast
-def test_partial_failure_makes_outputs_optional() -> None:
-    """The other half of the same transform, so the test above cannot pass alone
-    against a function that stopped doing its actual job."""
-    tool: Yaml = {'class': 'CommandLineTool', 'baseCommand': 'true', 'inputs': {},
-                  'outputs': {'o': {'type': 'File', 'outputBinding': {'glob': 'x'}}}}
-    updated = sophios.plugins.cwl_update_outputs_optional(tool, [0, 1], [])
-    assert updated['outputs']['o']['type'] == 'File?'
-
-
-def _docker(spelling: str, **fields: Any) -> Yaml | list[Yaml]:
-    """A fresh `requirements` holding one `DockerRequirement`: a mapping
-    keyed by class (hand-written adapters) or a list of `{class: ...}` entries (cwl_utils)."""
-    if spelling == 'map-form':
-        return {'DockerRequirement': fields}
-    return [{'class': 'DockerRequirement', **fields}]
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('spelling', ['map-form', 'list-form'])
-def test_the_noentrypoint_tag_is_appended_in_either_requirements_spelling(spelling: str) -> None:
-    """cwl_utils renders `requirements` as a list; hand-written adapters use a mapping.
-    Either gets the tag under `--docker_remove_entrypoints`."""
-    tool: Yaml = {'class': 'CommandLineTool', 'baseCommand': 'true', 'inputs': {}, 'outputs': {},
-                  'requirements': _docker(spelling, dockerPull='docker.io/bash:4.4')}
-    before = copy.deepcopy(tool)
-    updated = sophios.plugins.dockerPull_append_noentrypoint(tool)
-    assert updated['requirements'] == _docker(spelling, dockerPull='docker.io/bash:4.4-noentrypoint')
-    assert tool == before, 'the input document is not mutated'
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('spelling', ['map-form', 'list-form'])
-def test_the_noentrypoint_tag_is_appended_to_a_docker_hint(spelling: str) -> None:
-    """cwltool runs the image a `DockerRequirement` hint names, so the hint gets the tag too."""
-    tool: Yaml = {'class': 'CommandLineTool', 'baseCommand': 'true', 'inputs': {}, 'outputs': {},
-                  'hints': _docker(spelling, dockerPull='localhost:5000/tools/bash:4.4')}
-    updated = sophios.plugins.dockerPull_append_noentrypoint(tool)
-    assert updated['hints'] == _docker(spelling, dockerPull='localhost:5000/tools/bash:4.4-noentrypoint')
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('section', ['requirements', 'hints'])
-def test_a_digest_pinned_image_keeps_its_reference(section: str) -> None:
-    """An image pulled by digest has no tag and no -noentrypoint build; appending to it
-    would make an invalid reference."""
-    image = 'polusai/openfold-tool@sha256:' + '8' * 64
-    tool: Yaml = {'class': 'CommandLineTool', 'baseCommand': 'true', 'inputs': {}, 'outputs': {},
-                  section: {'DockerRequirement': {'dockerPull': image}}}
-    updated = sophios.plugins.dockerPull_append_noentrypoint(tool)
-    assert updated[section] == {'DockerRequirement': {'dockerPull': image}}
-
-
-def _docker_tool(section: str, image: str) -> Yaml:
-    return {'class': 'CommandLineTool', 'baseCommand': 'true', 'inputs': {}, 'outputs': {},
-            section: {'DockerRequirement': {'dockerPull': image}}}
+@budget(100)
+@given(_PROCESSES)
+@example(_pulls('requirements', 'docker.io/bash:4.4'))
+@example(_pulls('requirements', 'docker.io/bash:4.4', mapping=False))
+@example(_pulls('hints', 'localhost:5000/tools/bash:4.4'))
+@example(_pulls('hints', 'localhost:5000/tools/bash:4.4', mapping=False))
+@example(_pulls('requirements', _DIGEST))
+@example(_pulls('hints', _DIGEST))
+@example(_workflow([_pulls('requirements', 'docker.io/bash:4.4'),
+                    _workflow([_pulls('hints', 'bash:5')], True, {}), 'elsewhere.cwl'], False, {}))
+def test_every_image_the_runner_pulls_gets_the_noentrypoint_tag(document: Yaml) -> None:
+    """Under `--docker_remove_entrypoints` each `dockerPull` the runner reads, in `requirements` (which cwl_utils
+    renders as a list, and hand-written adapters as a mapping) or in `hints` (cwltool runs the image a hint names),
+    of the document and of each tool embedded in its steps, at any depth (as `--cwl_inline_runtag` and
+    `Workflow.run()` give the runner one), names the tag built; an image pulled by digest has no tag and no
+    -noentrypoint build, so appending to it would make an invalid reference. Tagging twice is tagging once, and the
+    document given is not changed."""
+    before = copy.deepcopy(document)
+    updated = sophios.plugins.dockerPull_append_noentrypoint(document)
+    assert document == before
+    assert updated == _tagged(document)
+    assert sophios.plugins.dockerPull_append_noentrypoint(updated) == updated
 
 
 def _docker_pulls(document: Any) -> list[str]:
@@ -105,22 +131,6 @@ def _docker_pulls(document: Any) -> list[str]:
     if isinstance(document, list):
         return [pull for value in document for pull in _docker_pulls(value)]
     return []
-
-
-@pytest.mark.fast
-def test_every_tool_embedded_in_an_inlined_document_gets_the_noentrypoint_tag() -> None:
-    """`--cwl_inline_runtag` and `Workflow.run()` give the runner one document whose tools are
-    embedded in its steps, in a subworkflow too, with steps as a list or a mapping."""
-    subworkflow: Yaml = {'class': 'Workflow', 'inputs': {}, 'outputs': {},
-                         'steps': {'inner': {'in': {}, 'out': [], 'run': _docker_tool('hints', 'bash:5')}}}
-    workflow: Yaml = {'class': 'Workflow', 'inputs': {}, 'outputs': {}, 'steps': [
-        {'id': 'outer', 'in': {}, 'out': [], 'run': _docker_tool('requirements', 'docker.io/bash:4.4')},
-        {'id': 'nested', 'in': {}, 'out': [], 'run': subworkflow},
-        {'id': 'by_file', 'in': {}, 'out': [], 'run': 'elsewhere.cwl'}]}
-    before = copy.deepcopy(workflow)
-    updated = sophios.plugins.dockerPull_append_noentrypoint(workflow)
-    assert _docker_pulls(updated) == ['docker.io/bash:4.4-noentrypoint', 'bash:5-noentrypoint']
-    assert workflow == before, 'the input document is not mutated'
 
 
 def _no_images() -> SimpleNamespace:
@@ -146,279 +156,72 @@ def test_the_cli_runs_the_noentrypoint_tags(monkeypatch: pytest.MonkeyPatch, tmp
     assert pulls == ['docker.io/library/debian:bookworm-slim-noentrypoint']
 
 
-def _tool(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: true\ninputs: {}\noutputs: {}\n',
-                    encoding='utf-8')
+#: A file every tool case writes for each of its `files`; a workflow case writes `steps: {}`.
+_TOOL = 'cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: true\ninputs: {}\noutputs: {}\n'
+
+#: A warning `_warn_duplicates` prints, read back as its stem, namespace, count, files and the file used.
+_WARNING = re.compile(r"Warning! (tool|workflow) '(.+)' in namespace '(.+)' is defined by (\d+) files:\n"
+                      r"((?:  .+\n)+)Using (.+?): it is the last one found .*\nTo use another.*\n")
+
+#: The filesystem's own listing.
+_LISTED = glob.glob
 
 
-def _workflow(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('steps: {}\n', encoding='utf-8')
+def _listed_in_reverse(pattern: str, *, recursive: bool = False) -> list[str]:
+    """A directory's entries in reverse, as some filesystems list them."""
+    return sorted(_LISTED(pattern, recursive=recursive), reverse=True)
 
 
-#: Search roots by namespace, each root listing its files without an extension. `twin` is defined more than
-#: once, and another search path is read after its last definition is found.
-_REPEAT_THEN_MORE_TO_READ = [
-    pytest.param({'global': [['a/twin', 'b/twin'], ['other']]}, id='twice-in-one-root-then-another-root'),
-    pytest.param({'global': [['twin'], ['twin'], ['other']]}, id='across-two-roots-then-a-third'),
-    pytest.param({'global': [['a/twin', 'b/twin']], 'gpu': [['other']]}, id='twice-in-one-root-then-another-namespace'),
-]
+def _relative(path: str | Path, base: Path) -> str:
+    return Path(os.path.relpath(path, base)).with_suffix('').as_posix()
 
 
-def _lay_out(base: Path, layout: dict[str, list[list[str]]], extension: str,
-             write: Callable[[Path], None]) -> tuple[dict[str, list[str]], list[Path]]:
-    """Write `layout` under `base`. Returns the search paths by namespace and the files that define `twin`."""
-    search_paths: dict[str, list[str]] = {}
-    twins: list[Path] = []
-    for namespace, roots in layout.items():
-        search_paths[namespace] = []
-        for index, names in enumerate(roots):
-            root = base / namespace / f'root{index}'
-            search_paths[namespace].append(str(root))
-            for name in names:
-                path = root / f'{name}.{extension}'
-                write(path)
-                if path.stem == 'twin':
-                    twins.append(path)
-    return search_paths, twins
+def _found(kind: str, roots: dict[str, list[str]], base: Path) -> dict[str, dict[str, str]]:
+    """The file each stem resolves to, by namespace, in the order discovery returns them."""
+    if kind == 'workflow':
+        return {ns: {stem: _relative(path, base) for stem, path in stems.items()}
+                for ns, stems in sophios.plugins.get_yml_paths({'search_paths_wic': roots}).items()}
+    found: dict[str, dict[str, str]] = {}
+    for key, tool in sophios.plugins.get_tools_cwl({'search_paths_cwl': roots}).items():
+        found.setdefault(key.plugin_ns, {})[key.stem] = _relative(tool.run_path, base)
+    return found
 
 
-@pytest.fixture
-def reversed_listing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The filesystem lists a directory's entries in reverse, as some do; discovery must not depend on it."""
-    real_glob = glob.glob
-
-    def listed_in_reverse(pattern: str, *, recursive: bool = False) -> list[str]:
-        return sorted(real_glob(pattern, recursive=recursive), reverse=True)
-
-    monkeypatch.setattr(glob, 'glob', listed_in_reverse)
+def _warnings(err: str, base: Path, kind: str) -> list[list[Any]]:
+    """Each warning on `err` as [namespace, stem, its files], which names `kind`, states their count and uses the last;
+    `err` holds nothing else."""
+    said = []
+    for named_kind, stem, namespace, count, files, used in _WARNING.findall(err):
+        named = [_relative(line[2:], base) for line in files.splitlines()]
+        assert (named_kind, int(count), _relative(used, base)) == (kind, len(named), named[-1])
+        said.append([namespace, stem, named])
+    assert _WARNING.sub('', err) == ''
+    return said
 
 
 @pytest.mark.fast
-@pytest.mark.usefixtures('reversed_listing')
-def test_tools_are_discovered_in_sorted_path_order(tmp_path: Path) -> None:
-    """Tools come back ordered by path, not by stem and not by the order the filesystem lists them."""
-    for name in ('b/zeta.cwl', 'c/mid.cwl', 'a/alpha.cwl'):
-        _tool(tmp_path / name)
-    tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}})
-    assert [key.stem for key in tools] == ['alpha', 'zeta', 'mid']
-
-
-@pytest.mark.fast
-def test_nothing_under_an_autogenerated_directory_is_a_tool(tmp_path: Path) -> None:
-    """`autogenerated/` is the compiler's own output, at the top of a search root or nested below it."""
-    for name in ('a/alpha.cwl', 'autogenerated/ghost.cwl', 'x/autogenerated/y/ghost2.cwl'):
-        _tool(tmp_path / name)
-    tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}})
-    assert [key.stem for key in tools] == ['alpha']
-
-
-@pytest.mark.fast
-def test_a_search_root_under_an_autogenerated_directory_still_finds_its_files(tmp_path: Path) -> None:
-    """Only the part of a path below its search root is checked for `autogenerated/`."""
-    root = tmp_path / 'autogenerated' / 'adapters'
-    for name in ('a/alpha.cwl', 'autogenerated/ghost.cwl'):
-        _tool(root / name)
-    _workflow(root / 'w.wic')
-    _workflow(root / 'autogenerated' / 'g.wic')
-    tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(root)]}})
-    assert [key.stem for key in tools] == ['alpha']
-    found = sophios.plugins.get_yml_paths({'search_paths_wic': {'global': [str(root)]}})
-    assert sorted(found['global']) == ['w']
-
-
-@pytest.mark.fast
-@pytest.mark.usefixtures('reversed_listing')
-def test_a_duplicate_tool_stem_warns_and_the_last_file_found_is_used(tmp_path: Path,
-                                                                     capsys: pytest.CaptureFixture[str]) -> None:
-    """Every file that defines the stem is named on stderr, with the one used; stdout stays clean."""
-    twins = [tmp_path / name / 'twin.cwl' for name in ('a', 'b', 'c')]
-    for path in [*twins, tmp_path / 'a' / 'single.cwl']:
-        _tool(path)
-    tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}})
-    assert tools[StepId('twin', 'global')].run_path == str(twins[-1])
-    captured = capsys.readouterr()
-    assert captured.out == ''
-    assert all(str(path) in captured.err for path in twins)
-    assert f'Using {twins[-1]}' in captured.err
-    assert 'single' not in captured.err
-
-
-@pytest.mark.fast
-def test_every_duplicate_tool_stem_gets_its_own_warning(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Discovery reads everything, then says so once per repeated stem."""
-    for stem in ('pair', 'twin'):
-        _tool(tmp_path / 'a' / f'{stem}.cwl')
-        _tool(tmp_path / 'b' / f'{stem}.cwl')
-    sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}})
-    warnings = capsys.readouterr().err
-    assert warnings.count('Warning! tool') == 2
-    assert warnings.index("'pair'") < warnings.index("'twin'")
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('layout', _REPEAT_THEN_MORE_TO_READ)
-def test_a_repeated_tool_stem_is_reported_once_after_every_search_path_is_read(
-        tmp_path: Path, capsys: pytest.CaptureFixture[str], layout: dict[str, list[list[str]]]) -> None:
-    """The warning waits for the last search path: it is not repeated, and it names every file."""
-    search_paths, twins = _lay_out(tmp_path, layout, 'cwl', _tool)
-    tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': search_paths})
-    assert tools[StepId('twin', 'global')].run_path == str(twins[-1])
-    warning = capsys.readouterr().err
-    assert warning.count("Warning! tool 'twin'") == 1
-    assert f'is defined by {len(twins)} files' in warning
-    assert all(f'  {path}\n' in warning for path in twins)
-    assert f'Using {twins[-1]}' in warning
-
-
-@pytest.mark.fast
-def test_a_later_search_path_overrides_an_earlier_one(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Search paths are taken in the order the config lists them, whatever their names sort to."""
-    _tool(tmp_path / 'z_stock' / 'twin.cwl')
-    _tool(tmp_path / 'a_mine' / 'twin.cwl')
-    roots = [str(tmp_path / 'z_stock'), str(tmp_path / 'a_mine')]
-    tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': roots}})
-    assert tools[StepId('twin', 'global')].run_path == str(tmp_path / 'a_mine' / 'twin.cwl')
-    assert f"Using {tmp_path / 'a_mine' / 'twin.cwl'}" in capsys.readouterr().err
-
-
-@pytest.mark.fast
-def test_the_same_stem_in_two_namespaces_is_not_a_duplicate(tmp_path: Path,
-                                                            capsys: pytest.CaptureFixture[str]) -> None:
-    """Namespaces keep their own stems, so the same stem in two of them is two tools and no warning."""
-    _tool(tmp_path / 'a' / 'twin.cwl')
-    _tool(tmp_path / 'b' / 'twin.cwl')
-    tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path / 'a')],
-                                                                'gpu': [str(tmp_path / 'b')]}})
-    assert {key.plugin_ns for key in tools} == {'global', 'gpu'}
-    assert capsys.readouterr().err == ''
-
-
-@pytest.mark.fast
-def test_the_deprecated_md_adapters_are_neither_discovered_nor_duplicates(
-        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """`biobb_md` is deprecated in favor of `biobb_gromacs`: its tools are skipped, so a shared stem is no duplicate.
-
-    The skip matches the substring on the whole path, so this test's own name must not contain it.
-    """
-    gromacs = tmp_path / 'biobb_gromacs' / 'grompp.cwl'
-    _tool(gromacs)
-    _tool(tmp_path / 'biobb_md' / 'grompp.cwl')
-    _tool(tmp_path / 'biobb_md' / 'only_here.cwl')
-    tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path)]}})
-    assert {key.stem: tool.run_path for key, tool in tools.items()} == {'grompp': str(gromacs)}
-    assert capsys.readouterr().err == ''
-
-
-@pytest.mark.fast
-def test_a_file_reached_through_overlapping_search_paths_is_one_file(tmp_path: Path,
-                                                                     capsys: pytest.CaptureFixture[str]) -> None:
-    """A root and its own subdirectory both find `a/one.cwl`; that is one tool and no duplicate."""
-    _tool(tmp_path / 'a' / 'one.cwl')
-    tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path), str(tmp_path / 'a')]}})
-    assert [key.stem for key in tools] == ['one']
-    assert capsys.readouterr().err == ''
-
-
-@pytest.mark.fast
-def test_a_file_reached_through_a_symlinked_search_path_is_one_file(tmp_path: Path,
-                                                                    capsys: pytest.CaptureFixture[str]) -> None:
-    """The same directory under two names is one set of files."""
-    _tool(tmp_path / 'real' / 'one.cwl')
-    link = tmp_path / 'link'
-    try:
-        link.symlink_to(tmp_path / 'real', target_is_directory=True)
-    except OSError:
-        pytest.skip('this platform does not let the test create a symlink')
-    tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': [str(tmp_path / 'real'), str(link)]}})
-    assert [key.stem for key in tools] == ['one']
-    assert capsys.readouterr().err == ''
-
-
-@pytest.mark.fast
-def test_overlapping_search_paths_do_not_misname_the_file_used(tmp_path: Path,
-                                                               capsys: pytest.CaptureFixture[str]) -> None:
-    """`sub/twin.cwl` is found last, by the root after the subdirectory; the warning lists it once and names it."""
-    _tool(tmp_path / 'a' / 'twin.cwl')
-    _tool(tmp_path / 'sub' / 'twin.cwl')
-    roots = [str(tmp_path / 'sub'), str(tmp_path)]
-    tools = sophios.plugins.get_tools_cwl({'search_paths_cwl': {'global': roots}})
-    used = tmp_path / 'sub' / 'twin.cwl'
-    assert tools[StepId('twin', 'global')].run_path == str(used)
-    warning = capsys.readouterr().err
-    assert warning.count(str(used)) == 2   # once in the list of files, once as the file used
-    assert f'Using {used}' in warning
-
-
-@pytest.mark.fast
-def test_workflow_discovery_skips_inputs_files_and_the_compilers_output(tmp_path: Path) -> None:
-    """`_inputs` files and anything under `autogenerated/` are not workflows."""
-    for name in ('b/z.wic', 'a/a.wic', 'autogenerated/g.wic', 'a/a_inputs.wic'):
-        _workflow(tmp_path / name)
-    found = sophios.plugins.get_yml_paths({'search_paths_wic': {'global': [str(tmp_path)]}})
-    assert sorted(found['global']) == ['a', 'z']
-
-
-@pytest.mark.fast
-@pytest.mark.usefixtures('reversed_listing')
-def test_the_last_workflow_in_sorted_path_order_wins_a_shared_stem(tmp_path: Path) -> None:
-    """Of two workflows with one stem in one search root, the last path in sorted order wins, not the shortest."""
-    for name in ('a/dup.wic', 'zz/sub/dup.wic'):
-        _workflow(tmp_path / name)
-    found = sophios.plugins.get_yml_paths({'search_paths_wic': {'global': [str(tmp_path)]}})
-    assert found['global'] == {'dup': tmp_path / 'zz' / 'sub' / 'dup.wic'}
-
-
-@pytest.mark.fast
-@pytest.mark.usefixtures('reversed_listing')
-def test_a_duplicate_workflow_stem_warns_and_names_the_file_used(tmp_path: Path,
-                                                                 capsys: pytest.CaptureFixture[str]) -> None:
-    """Workflows follow the tools' rule and say the same thing on stderr."""
-    for name in ('a/dup.wic', 'zz/sub/dup.wic'):
-        _workflow(tmp_path / name)
-    sophios.plugins.get_yml_paths({'search_paths_wic': {'global': [str(tmp_path)]}})
-    captured = capsys.readouterr()
-    assert captured.out == ''
-    assert 'Warning! workflow' in captured.err
-    assert str(tmp_path / 'a' / 'dup.wic') in captured.err
-    assert f"Using {tmp_path / 'zz' / 'sub' / 'dup.wic'}" in captured.err
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize('layout', _REPEAT_THEN_MORE_TO_READ)
-def test_a_repeated_workflow_stem_is_reported_once_after_every_search_path_is_read(
-        tmp_path: Path, capsys: pytest.CaptureFixture[str], layout: dict[str, list[list[str]]]) -> None:
-    """The warning waits for the last search path: it is not repeated, and it names every file."""
-    search_paths, twins = _lay_out(tmp_path, layout, 'wic', _workflow)
-    found = sophios.plugins.get_yml_paths({'search_paths_wic': search_paths})
-    assert found['global']['twin'] == twins[-1]
-    warning = capsys.readouterr().err
-    assert warning.count("Warning! workflow 'twin'") == 1
-    assert f'is defined by {len(twins)} files' in warning
-    assert all(f'  {path}\n' in warning for path in twins)
-    assert f'Using {twins[-1]}' in warning
-
-
-@pytest.mark.fast
-def test_a_later_workflow_search_path_overrides_an_earlier_one(tmp_path: Path,
-                                                               capsys: pytest.CaptureFixture[str]) -> None:
-    """Search paths are taken in the order the config lists them, whatever their names sort to."""
-    _workflow(tmp_path / 'z_stock' / 'dup.wic')
-    _workflow(tmp_path / 'a_mine' / 'dup.wic')
-    roots = [str(tmp_path / 'z_stock'), str(tmp_path / 'a_mine')]
-    found = sophios.plugins.get_yml_paths({'search_paths_wic': {'global': roots}})
-    assert found['global'] == {'dup': tmp_path / 'a_mine' / 'dup.wic'}
-    assert f"Using {tmp_path / 'a_mine' / 'dup.wic'}" in capsys.readouterr().err
-
-
-@pytest.mark.fast
-def test_the_same_workflow_stem_in_two_namespaces_is_not_a_duplicate(tmp_path: Path,
-                                                                     capsys: pytest.CaptureFixture[str]) -> None:
-    """Namespaces keep their own stems."""
-    _workflow(tmp_path / 'a' / 'dup.wic')
-    _workflow(tmp_path / 'b' / 'dup.wic')
-    found = sophios.plugins.get_yml_paths({'search_paths_wic': {'global': [str(tmp_path / 'a')],
-                                                                'other': [str(tmp_path / 'b')]}})
-    assert sorted(found) == ['global', 'other']
-    assert capsys.readouterr().err == ''
+@pytest.mark.parametrize('case', cases('discovery', 'files', 'found', 'kinds', 'roots', 'warnings', 'links'))
+def test_each_stem_resolves_to_the_last_file_found(case: Yaml, tmp_path_factory: pytest.TempPathFactory,
+                                                   monkeypatch: pytest.MonkeyPatch,
+                                                   capsys: pytest.CaptureFixture[str]) -> None:
+    """Each case of data/discovery (see its README), under the filesystem's own listing and under it reversed:
+    discovery must not depend on it."""
+    base = tmp_path_factory.mktemp('layout')   # not tmp_path, which holds the case id that biobb_md and _inputs read
+    for link, target in case.get('links', {}).items():
+        (base / link).symlink_to(base / target, target_is_directory=True)
+    for kind in case.get('kinds', ['tool']):
+        extension = 'cwl' if kind == 'tool' else 'wic'
+        for name in case['files']:
+            (base / name).parent.mkdir(parents=True, exist_ok=True)
+            (base / f'{name}.{extension}').write_text(_TOOL if kind == 'tool' else 'steps: {}\n', encoding='utf-8')
+        roots = {ns: [str(base / root) for root in paths] for ns, paths in case.get('roots', {'global': ['']}).items()}
+        for listing in (_LISTED, _listed_in_reverse):
+            monkeypatch.setattr(glob, 'glob', listing)
+            found = _found(kind, roots, base)
+            assert found == case['found']
+            if kind == 'tool':
+                assert [list(stems) for stems in found.values()] == [list(stems) for stems in case['found'].values()]
+            out, err = capsys.readouterr()
+            assert out == ''
+            assert _warnings(err, base, kind) == [[ns, stem, files] for ns, stems in case.get('warnings', {}).items()
+                                                  for stem, files in stems.items()]

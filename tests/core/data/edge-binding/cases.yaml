@@ -1,0 +1,54 @@
+# Each case's `steps` compile as the workflow `root`. `codes` is the exact list of codes the compilation raises, []
+# when it compiles: each document holds one fault or none. Every expectation is derived by hand from the rule its
+# `why` cites in docs/wic-reference.md, section 4 (Edges), never filled from a run.
+- id: defined-then-referenced
+  why: "'A reference comes after its definition': the ordinary case, so the others are about the error, not the rule."
+  codes: []
+  steps:
+  - {id: mk_file, in: {name: {wic_inline_input: a}}, out: [{file: {wic_anchor: e}}]}
+  - {id: sink, in: {file: {wic_alias: e}}}
+- id: undefined
+  why: "'A reference no document defines is wic025', rather than a ValueError a caller cannot match on."
+  codes: [wic025]
+  says: absent
+  steps:
+  - {id: mk_file, in: {name: {wic_inline_input: a}}}
+  - {id: sink, in: {file: {wic_alias: absent}}}
+- id: defined-twice
+  why: "'A second !& of it is wic026': an edge name identifies one producer, so a second definition leaves no way to
+    say which output a reference means."
+  codes: [wic026]
+  steps:
+  - {id: mk_file, in: {name: {wic_inline_input: a}}, out: [{file: {wic_anchor: twice}}]}
+  - {id: mk_text, in: {name: {wic_inline_input: b}}, out: [{text: {wic_anchor: twice}}]}
+  - {id: sink, in: {file: {wic_alias: twice}}}
+- id: never-consumed
+  why: "'A definition nothing uses is not an error': the claim these rules deliberately do not make. An !& with no !*
+    is how a workflow names an artifact it produces, and fifteen corpus documents rely on it. Without this case the
+    rule reads as 'definitions and references must pair up', the natural next tightening, which would reject all
+    fifteen."
+  codes: []
+  steps:
+  - {id: mk_file, in: {name: {wic_inline_input: a}}, out: [{file: {wic_anchor: exported}}]}
+- id: child-binds-to-parent
+  why: "'A subworkflow may use an edge its caller defined before the call': a real root and a real child. Compiling
+    the child alone with is_root=False proves only that deferral is allowed, not that the obligation is discharged,
+    which is the half that matters, so this builds the parent and reads where the child's input comes from."
+  codes: []
+  sources: [[1, sink~file, mk_file/file]]
+  steps:
+  - {id: mk_file, in: {name: {wic_inline_input: a}}, out: [{file: {wic_anchor: shared}}]}
+  - {id: child.wic, parentargs: {}, subtree: {steps: [{id: sink, in: {file: {wic_alias: shared}}}]}}
+- id: reference-before-definition
+  why: "'!* above its !& is wic025': the compilation is ordered, not a set. The definition exists in this document,
+    so 'it must exist' does not decide this case."
+  codes: [wic025]
+  steps:
+  - {id: sink, in: {file: {wic_alias: e}}}
+  - {id: mk_file, in: {name: {wic_inline_input: a}}, out: [{file: {wic_anchor: e}}]}
+- id: nested-obligation-undischarged
+  why: "'A reference no document defines is wic025, reported at the root': no enclosing scope discharges it."
+  codes: [wic025]
+  steps:
+  - {id: child.wic, parentargs: {}, subtree: {steps: [{id: mk_file, in: {name: {wic_inline_input: a}}},
+                                                      {id: sink, in: {file: {wic_alias: absent}}}]}}

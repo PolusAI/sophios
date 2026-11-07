@@ -192,22 +192,6 @@ def test_graphviz_writes_the_graph_of_the_compiled_workflow(cli_graph: Callable[
     assert re.findall(r'^\s*(\w+) -> (\w+) \[', drawn, re.MULTILINE) == [('touch', 'cat')]
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize(('flags', 'font'), [((), 'black'), (('--graph_dark_theme',), 'white')])
-def test_graph_dark_theme_sets_the_foreground_of_the_drawing(
-        cli_graph: Callable[..., str], flags: tuple[str, ...], font: str) -> None:
-    """The drawing's text, its box outlines and its inferred edges take one colour: black, or white with
-    `--graph_dark_theme`. The background is transparent either way, so a slide gives it its colour;
-    a box is not filled, so it takes that colour too."""
-    drawn = cli_graph(_TWO_STEPS, *flags)
-    assert 'bgcolor=transparent\n' in drawn
-    assert f'fontcolor={font}\n' in drawn
-    boxes = _nodes(drawn)
-    assert {(attrs['color'], attrs['fontcolor']) for attrs in boxes.values()} == {(font, font)}
-    assert not any('filled' in attrs['style'] or 'fillcolor' in attrs for attrs in boxes.values())
-    assert [attrs['color'] for _source, _sink, attrs in _edges(drawn)] == [font]
-
-
 _EXPLICIT_EDGE = """\
 steps:
 - id: touch
@@ -222,22 +206,22 @@ steps:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(('flags', 'blue'), [((), 'blue'), (('--graph_dark_theme',), 'lightskyblue')])
-def test_graph_dark_theme_draws_an_explicit_edge_in_a_lighter_blue(
-        cli_graph: Callable[..., str], flags: tuple[str, ...], blue: str) -> None:
-    """An edge the document wrote is `blue`, which does not read on a dark background, so
-    `--graph_dark_theme` draws it in a lighter blue."""
-    drawn = cli_graph(_EXPLICIT_EDGE, *flags)
-    assert [attrs['color'] for _source, _sink, attrs in _edges(drawn)] == [blue]
-
-
-@pytest.mark.fast
-@pytest.mark.parametrize(('flags', 'font'), [((), 'black'), (('--graph_dark_theme',), 'white')])
-def test_an_edge_label_takes_the_foreground_colour(
-        cli_graph: Callable[..., str], flags: tuple[str, ...], font: str) -> None:
-    """With `--graph_label_edges` an edge's label is written in the drawing's foreground colour."""
+@pytest.mark.parametrize(('flags', 'font', 'blue'), [((), 'black', 'blue'),
+                                                     (('--graph_dark_theme',), 'white', 'lightskyblue')])
+def test_the_drawing_takes_its_palette_from_the_theme(
+        cli_graph: Callable[..., str], flags: tuple[str, ...], font: str, blue: str) -> None:
+    """The drawing's text, its box outlines, its inferred edges and an edge's label take one colour: black, or white
+    with `--graph_dark_theme`. The background is transparent either way, so a slide gives it its colour; a box is
+    not filled, so it takes that colour too. An edge the document wrote is `blue`, which does not read on a dark
+    background, so the dark theme draws it in a lighter blue."""
     drawn = cli_graph(_TWO_STEPS, '--graph_label_edges', *flags)
-    assert [attrs['fontcolor'] for _source, _sink, attrs in _edges(drawn)] == [font]
+    assert 'bgcolor=transparent\n' in drawn
+    assert f'fontcolor={font}\n' in drawn
+    boxes = _nodes(drawn)
+    assert {(attrs['color'], attrs['fontcolor']) for attrs in boxes.values()} == {(font, font)}
+    assert not any('filled' in attrs['style'] or 'fillcolor' in attrs for attrs in boxes.values())
+    assert [(attrs['color'], attrs['fontcolor']) for *_, attrs in _edges(drawn)] == [(font, font)]
+    assert [attrs['color'] for *_, attrs in _edges(cli_graph(_EXPLICIT_EDGE, *flags))] == [blue]
 
 
 @pytest.mark.fast

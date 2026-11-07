@@ -165,14 +165,17 @@ def _is_optional(cwl_type: Any) -> bool:
 
 
 def _required_type(cwl_type: Any) -> Any:
+    """``cwl_type`` without its null, an array written ``T[]`` read as CWL reads it: ``{type: array, items: T}``."""
     match cwl_type:
         case str() as type_name if type_name.endswith("?"):
-            return type_name[:-1]
+            return _required_type(type_name[:-1])
+        case str() as type_name if type_name.endswith("[]"):
+            return {"type": "array", "items": type_name[:-2]}
         case list() as union if "null" in union:
             remaining = [item for item in union if item != "null"]
             if len(remaining) != 1:
                 raise ValueError(f"unsupported optional CWL union {cwl_type!r}")
-            return remaining[0]
+            return _required_type(remaining[0])
         case _:
             return cwl_type
 
@@ -339,8 +342,9 @@ def _template(value: Any, *, context: str) -> NfTemplate:
             segments.append(NfBasenameReference(name) if match["suffix"] == "basename" else NfInputReference(name))
         offset = match.end()
     segments.append(NfLiteral(text[offset:]))
-    # A `$` not followed by `(` or `{` is plain text, as in CWL.
-    if interpolated and _EXPRESSION_START.search(_INTERPOLATION.sub("", text)):
+    # A `$` not followed by `(` or `{` is plain text, as in CWL. A space stands in for each token, so the text on
+    # its two sides cannot join into an expression's start: `{$$(inputs.x){$` is `{$`, a reference and `{$`.
+    if interpolated and _EXPRESSION_START.search(_INTERPOLATION.sub(" ", text)):
         raise ValueError(
             f"{context} contains an unsupported CWL expression; the supported forms are $(inputs.<name>) "
             "and, on a File or Directory input, $(inputs.<name>.path) and $(inputs.<name>.basename)"
@@ -1837,6 +1841,7 @@ def _nested_workflow_capability_findings(
         findings.extend(
             _unconsumed_field_findings(emitted, "WorkflowStep", path=step_path)
         )
+        findings.extend(_undeclared_input_findings(emitted, child_artifact.cwl, path=step_path, run_kind="workflow"))
         for raw_name, definition in _as_mapping(
             emitted.get("in", {}), error="compiled step inputs must be a mapping"
         ).items():
@@ -1887,6 +1892,76 @@ def _nested_workflow_capability_findings(
     return findings
 
 
+def _undeclared_inputs(step: Mapping[str, Any], run: Mapping[str, Any]) -> dict[Any, Any]:
+    """The step inputs the step's ``run`` does not declare, by raw name."""
+    match step.get("in", {}), run.get("inputs", {}):
+        case Mapping() as step_inputs, Mapping() as declared:
+            return {raw_name: definition for raw_name, definition in step_inputs.items() if raw_name not in declared}
+        case _:
+            return {}
+
+
+def _named_sources(definition: Any) -> list[str]:
+    """The source names one step input binding lists, whatever else it carries."""
+    match definition:
+        case str() as source:
+            return [source]
+        case list() as sources:
+            return [source for source in sources if isinstance(source, str)]
+        case {"source": source}:
+            return _named_sources(source)
+        case _:
+            return []
+
+
+def _undeclared_input_findings(
+    step: Mapping[str, Any], run: Mapping[str, Any], *, path: str, run_kind: str = "tool"
+) -> list[str]:
+    """Reject each step input its ``run`` does not declare that the lowering would have to carry.
+
+    CWL passes such an input to nothing but the step's ``when``, ``scatter`` and
+    ``valueFrom``. One that none of them reads and that only workflow inputs feed
+    changes nothing the step runs, so ``_declared_inputs_only`` drops it.
+    """
+    undeclared = _undeclared_inputs(step, run)
+    if not undeclared:
+        return []
+    read_by_when: set[str] = set()
+    if isinstance(when := step.get("when"), str) and is_safe_subset_text(when):
+        try:
+            read_by_when = references(parse_safe_subset(when))
+        except ValueError:
+            pass  # lowering the step reports a when outside the subset
+    try:
+        scattered = set(_scatter_names(step)) if "scatter" in step else set()
+    except ValueError:
+        scattered = set()  # the scatter findings report its shape
+    findings: list[str] = []
+    for raw_name, definition in undeclared.items():
+        input_path = f"{path}.in.{raw_name}"
+        if raw_name in read_by_when:
+            findings.append(
+                f"{input_path}: the step's when reads an input its {run_kind} does not declare, which is not supported"
+            )
+        elif raw_name in scattered:
+            findings.append(
+                f"{input_path}: scatter over an input the step's {run_kind} does not declare is not supported"
+            )
+        elif any("/" in source for source in _named_sources(definition)):
+            findings.append(
+                f"{input_path}: an input the step's {run_kind} does not declare is not supported from a step output: "
+                "CWL runs this step only after that step finishes, and the Nextflow target would not wait for it"
+            )
+    return findings
+
+
+def _declared_inputs_only(step: Mapping[str, Any], tool: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The step without the inputs its tool does not declare, which the lowering carries nowhere."""
+    if not (undeclared := _undeclared_inputs(step, tool)):
+        return step
+    return {**step, "in": {name: value for name, value in step["in"].items() if name not in undeclared}}
+
+
 def _tool_capability_findings(
     step: Mapping[str, Any],
     tool: Mapping[str, Any],
@@ -1901,15 +1976,7 @@ def _tool_capability_findings(
             f"{path}.when: a conditional step needs at least one input to gate on, "
             "and this step's tool declares none"
         )
-    match step.get("in", {}), tool.get("inputs", {}):
-        case Mapping() as step_inputs, Mapping() as tool_inputs:
-            findings.extend(
-                f"{path}.in.{raw_name}: an input the step's tool does not declare is not supported"
-                for raw_name in step_inputs
-                if raw_name not in tool_inputs
-            )
-        case _:
-            pass
+    findings.extend(_undeclared_input_findings(step, tool, path=path))
 
     match tool.get("class"):
         case "CommandLineTool":
@@ -3337,12 +3404,15 @@ def compiled_source_to_nextflow_with_notes(
     compiled = replace(compiled, params=local_locations_as_paths(compiled.params))
     workflow = compiled.workflow
     tools = compiled.tools
-    steps = _workflow_steps(workflow)
+    authored_steps = _workflow_steps(workflow)
+    # A step's own checks and the field table read it as authored; every later pass and the lowering
+    # see only the inputs its tool declares, since an undeclared one that passes is carried nowhere.
+    steps = [_declared_inputs_only(step, tool) for step, tool in zip(authored_steps, tools, strict=True)]
     findings = list(nested_findings)
     notes: list[Diagnostic] = []
     processes: list[NfProcess] = []
-    for step_index, (step, tool) in enumerate(zip(steps, tools, strict=True)):
-        if step_findings := _tool_capability_findings(step, tool, step_index=step_index):
+    for step_index, (authored, step, tool) in enumerate(zip(authored_steps, steps, tools, strict=True)):
+        if step_findings := _tool_capability_findings(authored, tool, step_index=step_index):
             findings.extend(step_findings)
             continue
         try:
@@ -3350,7 +3420,7 @@ def compiled_source_to_nextflow_with_notes(
         except ValueError as error:  # lowering and the model reject what no source pass can see
             findings.append(f"steps[{step_index}]: {error}")
         notes.extend(_cuda_notes(step, tool))
-    findings.extend(_workflow_capability_findings(workflow, compiled.params, steps))
+    findings.extend(_workflow_capability_findings(workflow, compiled.params, authored_steps))
     findings.extend(_absent_optional_findings(workflow, compiled.params, steps, tools))
     findings.extend(_conditional_consumer_findings(list(steps), tools))
     findings.extend(_flag_source_findings(workflow, steps, tools))

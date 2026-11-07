@@ -1,0 +1,129 @@
+# Commands the target lowers (design §6, Commands). `lowered` is the replaced test's IR literal in payload form (the
+# fields test_executable_ir.py's payload table pins); a whole token list is the tool's bindings in CWL position order,
+# derived by hand from the document, never read off a lowering.
+- id: flag_tokens_take_their_cwl_position_among_other_bindings
+  why: A flag is ordered by position like any other binding, not appended.
+  tool: {id: SORT, inputs: {source: {type: File, inputBinding: {position: 3}}, reverse: {type: boolean, inputBinding:
+         {position: 2, prefix: -r}}}, arguments: [{position: 1, valueFrom: --stable}]}
+  job: {source: {class: File, path: in.txt}, reverse: true}
+  lowered: {processes: [{command: {tokens: [{segments: [{kind: literal, value: SORT}]}, {segments: [{kind: literal,
+            value: --stable}]}, {kind: flag, name: reverse, prefix: -r}, {segments: [{kind: input, name: source}]}]}}]}
+- id: array_of_scalars_lowers_to_a_val_array_port_with_a_binding
+  why: &array An array input is one array-marked port, bound per item.
+  tool: &names {id: NAMES, inputs: {names: {type: {type: array, items: string}, inputBinding: {position: 1, prefix:
+         --name}}}}
+  job: {names: [alice, bob]}
+  lowered: {processes: [{inputs: [{name: names, qualifier: val, emit: null, glob: null, path_kind: null, is_array: true,
+            entry: null, capture: null, optional: false}], command: {tokens: [{segments: [{kind: literal,
+                value: NAMES}]},
+            {kind: array, name: names, prefix: --name}]}}]}
+- id: array_of_files_lowers_to_a_path_array_port
+  why: *array
+  tool: {id: CAT, inputs: {sources: {type: {type: array, items: File}, inputBinding: {position: 1}}}}
+  job: {sources: [{class: File, path: a.txt}, {class: File, path: b.txt}]}
+  lowered: {processes: [{inputs: [{name: sources, qualifier: path, emit: null, glob: null, path_kind: file, is_array:
+            true, entry: null, capture: null, optional: false}], command: {tokens: [&cat {segments: [{kind: literal,
+            value: CAT}]}, {kind: array, name: sources, prefix: null}]}}]}
+- {id: array_binding_without_a_prefix_lowers_correctly, why: *array, tool: {id: CAT, inputs: {sources: {type: {type:
+   array, items: string}, inputBinding: {}}}}, job: {sources: [a, b]}, lowered: {processes: [{command: {tokens: [*cat,
+   {kind: array, name: sources, prefix: null}]}}]}}
+- {id: empty_array_value_is_accepted_and_distinct_from_absent, why: 'A supplied [] is a present, valid, zero-length
+   value, not absence.', tool: *names, job: {names: []}, lowered: {params: {exact: {names: []}}}}
+- id: shell_quote_false_literal_lowers_to_a_raw_shell_literal_token
+  why: &unquoted 'design §6, Commands: a literal valueFrom under ShellCommandRequirement is unquoted text.'
+  tool: {id: REDIRECT, outputs: &result {result: {type: File, outputBinding: {glob: out.txt}}}, requirements:
+         &shell_mode {ShellCommandRequirement: {}}, arguments: [{position: 1, valueFrom: hello},
+             {position: 2, valueFrom:
+         '>>', shellQuote: false}, {position: 3, valueFrom: out.txt}]}
+  out: &out [result]
+  lowered: {processes: [{command: {tokens: [{segments: [{kind: literal, value: REDIRECT}]}, &hello {segments: [{kind:
+            literal, value: hello}]}, &append {kind: shell_literal, text: '>>'}, &out_txt {segments: [{kind: literal,
+            value: out.txt}]}]}}]}
+- {id: shell_quote_false_takes_precedence_over_boolean_flag_lowering, why: 'A literal valueFrom fully overrides
+   type-specific binding, even on a boolean input.', job: {flag: true}, tool: {id: LITERAL, requirements: *shell_mode,
+   inputs: {flag: {type: boolean, inputBinding: {position: 1, valueFrom: --literal, shellQuote: false}}}}, lowered: {
+   processes: [{command: {tokens: [{segments: [{kind: literal, value: LITERAL}]}, {kind: shell_literal, text:
+   --literal}]}}]}}
+- {id: command_of_only_shell_literals_still_runs_a_program, why: 'A shell literal is itself executable command text,
+   not an empty command.', tool: {id: LITERAL, requirements: *shell_mode, baseCommand: null, arguments: [{position: 1,
+   valueFrom: printf ok, shellQuote: false}]}, lowered: {processes: [{command: {tokens: [{kind: shell_literal, text:
+   printf ok}]}}]}}
+- {id: accepts_shell_command_requirement_with_no_shell_quote_false, why: 'ShellCommandRequirement alone changes
+   nothing: no shellQuote:false, nothing to reject.', out: *out, tool: &shell {id: SHELL, outputs: *result,
+   requirements: *shell_mode, arguments: [hello]}, lowered: {processes: [{command: {tokens: [&shell_word {segments:
+   [{kind: literal, value: SHELL}]}, *hello]}}]}}
+- {id: accepts_literal_shell_quote_false_binding, why: *unquoted, out: *out, tool: {<<: *shell, arguments: [{valueFrom:
+   '>>', shellQuote: false}, out.txt]}, lowered: {processes: [{command: {tokens: [*shell_word, *append, *out_txt]}}]}}
+- {id: a_command_of_only_flags_still_runs_a_program, why: A flag-only argv would render an empty script that silently
+   exits zero., job: {verbose: true}, tool: {id: FLAGS, baseCommand: null, inputs: {verbose: {type: boolean,
+   inputBinding: {position: 1, prefix: --verbose}}}}, lowered: {processes: [{command: {tokens: [{segments: [{kind:
+   literal, value: 'true'}]}, {kind: flag, name: verbose, prefix: --verbose}]}}]}}
+- id: basename_lowers_to_a_typed_segment_in_every_template_position
+  why: 'design §6, Basename references: a basename is a typed segment wherever a template stands.'
+  tool: {id: COPY, inputs: {source: {type: File, inputBinding: {position: 1}}}, outputs: {result: {type: File,
+         outputBinding: {glob: $(inputs.source.basename).copy}}}, arguments: [{position: 2, valueFrom:
+         $(inputs.source.basename).copy}], stdout: $(inputs.source.basename).log}
+  out: *out
+  job: {source: {class: File, path: lines.txt}}
+  lowered: {processes: [{outputs: [{glob: {segments: &copy [{kind: basename, name: source}, {kind: literal, value:
+            .copy}]}}], command: {tokens: [{segments: [{kind: literal, value: COPY}]}, {segments: [{kind: input, name:
+            source}]}, {segments: *copy}], stdout: {segments: [{kind: basename, name: source}, {kind: literal, value:
+            .log}]}}}]}
+- id: base_command_and_prefix_are_literals-string
+  why: &literals A baseCommand and a prefix are literal text, never read for references.
+  tool: &literal {id: LITERAL, inputs: {s: {type: string, inputBinding: {prefix: -$(inputs.s)}}}, baseCommand:
+         pre$(inputs.s)}
+  job: &s {s: x}
+  lowered: &literal_tokens {processes: [{command: {tokens: [{segments: [{kind: literal, value: pre$(inputs.s)}]},
+                            {segments: [{kind: literal, value: -$(inputs.s)}]},
+                                {segments: [{kind: input, name: s}]}]}}]}
+- {id: base_command_and_prefix_are_literals-list, why: *literals, job: *s, lowered: *literal_tokens, tool: {<<:
+   *literal, baseCommand: [pre$(inputs.s)]}}
+- id: a_whole_boolean_valuefrom_is_a_flag-argument
+  why: &boolean_value_from A valueFrom that is exactly a boolean input is that input's flag, or nothing without a
+    prefix.
+  tool: &flag {id: FLAG, inputs: {b: {type: boolean}}, baseCommand: echo, arguments: [{valueFrom: $(inputs.b), prefix:
+         --flag}]}
+  job: &b {b: true}
+  lowered: &echo_flag {processes: [{command: {tokens: [&echo {segments: [{kind: literal, value: echo}]}, {kind: flag,
+                       name: b, prefix: --flag}]}}]}
+- {id: a_whole_boolean_valuefrom_is_a_flag-argument-without-a-prefix, why: *boolean_value_from, job: *b, tool: {<<:
+   *flag, arguments: [{valueFrom: $(inputs.b)}]}, lowered: &echo_alone {processes: [{command: {tokens: [*echo]}}]}}
+- {id: a_whole_boolean_valuefrom_is_a_flag-string-input-binding, why: *boolean_value_from, job: &bs {b: true, s: x},
+   lowered: *echo_flag, tool: {<<: *flag, arguments: [], inputs: {b: {type: boolean}, s: {type: string, inputBinding:
+   {valueFrom: $(inputs.b), prefix: --flag}}}}}
+- {id: a_whole_boolean_valuefrom_is_a_flag-string-input-binding-without-a-prefix, why: *boolean_value_from, job: *bs,
+   lowered: *echo_alone, tool: {<<: *flag, arguments: [], inputs: {b: {type: boolean}, s: {type: string, inputBinding:
+   {valueFrom: $(inputs.b)}}}}}
+- id: env_var_requirement_lowers_each_variable_to_an_export-list
+  why: &env The task exports each variable, shell-quoted, as the script's first lines; the map form's key names the
+    variable, over an envName inside it, as schema-salad resolves it.
+  tool: &env_tool {id: ENV, inputs: {s: {type: string}}, requirements: {EnvVarRequirement: {envDef: [{envName: A,
+         envValue: cost $5}, {envName: B, envValue: ' $(inputs.s) '}]}}}
+  job: {s: v}
+  lowered: &exports {processes: [{command: {env: [{name: A, value: {segments: [{kind: literal, value: cost $5}]}},
+                     {name: B, value: {segments: [{kind: input, name: s}]}}]}}]}
+  render: &export_lines ["    \"\"\"\nexport A=${__sophios_shell_quote_9f72e('cost $5')}\nexport
+    B=${__sophios_shell_quote_9f72e(s.toString())}\n"]
+- {id: env_var_requirement_lowers_each_variable_to_an_export-map, why: *env, job: {s: v}, lowered: *exports, render:
+   *export_lines, tool: {<<: *env_tool, requirements: {EnvVarRequirement: {envDef: {A: cost $5, B: {envName: C,
+   envValue: ' $(inputs.s) '}}}}}}
+- {id: absent_optional_input_bound_directly_into_the_command_lowers_to_an_optional_binding, why: 'CWL adds nothing for
+   a null input: its own binding is presence-gated, prefix included.', job: {message: null}, tool: {id: OPTIONAL,
+   inputs: {message: {type: ['null', string], inputBinding: {position: 1, prefix: --message}}}}, lowered: {processes:
+   [{command: {tokens: [{segments: [{kind: literal, value: OPTIONAL}]}, {kind: optional_binding, name: message, prefix:
+   --message, separate: true}]}}], params: {exact: {message: []}}}}
+- {id: accepts_unreferenced_absent_optional_input, why: 'An optional val input with no inputBinding is never
+   dereferenced, so absence is safe.', job: {message: null}, tool: {id: OPTIONAL, inputs: {message: {type: ['null',
+   string]}}}, lowered: {params: {exact: {message: []}}, connections: {contains: [{kind: workflow_input, from_port:
+   message, to_process: _OPTIONAL, to_port: message, adapter: null}]}}}
+- {id: a_file_reference_embedded_in_text-whole-file, why: &json 'design §6, Commands: CWL renders an embedded File
+   object as JSON; the reference alone, or its path or basename in text, is what the target takes.', job: &f_s {f:
+   {class: File, path: in.txt}, s: x}, tool: &embedded {id: EMBEDDED, inputs: {f: {type: File}, s: {type: string}},
+   arguments: [$(inputs.f)]}}
+- {id: a_file_reference_embedded_in_text-embedded-path, why: *json, job: *f_s, tool: {<<: *embedded, arguments:
+   ['--input=$(inputs.f.path)']}}
+- {id: a_file_reference_embedded_in_text-embedded-basename, why: *json, job: *f_s, tool: {<<: *embedded, arguments:
+   ['--input=$(inputs.f.basename)']}}
+- {id: a_file_reference_embedded_in_text-embedded-string, why: *json, job: *f_s, tool: {<<: *embedded, arguments:
+   ['--name=$(inputs.s)']}}

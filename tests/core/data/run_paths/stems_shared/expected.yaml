@@ -1,0 +1,3 @@
+why: run a/t.cwl and run b/t.cwl each run their own file, written apart, and a plain step keeps the registry's
+steps: [{baseCommand: echo, inputs: {a: {type: string}}}, {baseCommand: rm, inputs: {a: {type: string}}},
+    {baseCommand: 'true', inputs: {name: {type: string, inputBinding: {position: 1}}}}]

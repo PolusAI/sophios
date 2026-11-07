@@ -49,7 +49,8 @@ The guide's own story, in the order the chapters use it:
 | `greeting_output` | the greeting file as a named workflow output | [Connecting steps](connecting-steps.md) |
 | `greeting_graph` (with `shout.cwl`, `word_count.cwl`, `combine.cwl`) | a branch and a join: the greeting as a graph | [Connecting steps](connecting-steps.md) |
 | `greeting_inferred` | the greeting with every connection left to inference, and its note | [Edge inference](edge-inference.md) |
-| `greeting_graph_inferred` | the graph with its connections left out, which inference makes a line | [Edge inference](edge-inference.md) |
+| `greeting_graph_inferred` (with `shout.cwl`, `word_count.cwl`, `combine.cwl`) | the graph with every edge left out, which inference stops at the join | [Edge inference](edge-inference.md) |
+| `greeting_graph_partial` (with `shout.cwl`, `word_count.cwl`, `combine.cwl`) | the graph with the edges at the branch and at the join written, and the rest inferred | [Edge inference](edge-inference.md) |
 | `naming` (with `summarize.cwl`, `report.cwl`) | a tie by type that naming conventions decide | [Edge inference](edge-inference.md) |
 | `naming_renamed` (with `summarize.cwl`, `abstract.cwl`) | a renaming between two naming schemes | [Edge inference](edge-inference.md) |
 | `two_lines` | one tool used twice, each step under its own name | [Steps and tools](steps-and-tools.md) |
@@ -84,7 +85,7 @@ sophios --yaml greeting_if.wic --inputs_file job.yml --run_local
 python greeting_if.py
 ```
 
-`word_count`, `greeting_graph`, `greeting_graph_inferred`, `naming` and
+`word_count`, `greeting_graph`, `greeting_graph_inferred`, `greeting_graph_partial`, `naming` and
 `naming_renamed` need their `.cwl` files copied beside them, and `nested` needs `make_greeting.wic` beside it and your
 project directory on `search_paths_wic`. The others run as they are.
 

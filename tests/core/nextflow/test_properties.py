@@ -6,8 +6,9 @@ from decimal import Decimal
 import shlex
 from typing import Any, Literal, cast
 
+from cwl_utils.errors import JavascriptException, SubstitutionError
 from cwl_utils.expression import interpolate
-from hypothesis import assume, given, settings, strategies as st
+from hypothesis import example, given, strategies as st
 import pytest
 
 from sophios.input_output_nf import (
@@ -27,7 +28,6 @@ from sophios.nf_types import (
     NfLiteral,
     NfPort,
     NfProcess,
-    NfProcessConnection,
     NfResources,
     NfTemplate,
     NfWorkflowInputConnection,
@@ -35,6 +35,8 @@ from sophios.nf_types import (
 from sophios.utils_nf import _command as lower_command
 from sophios.utils_nf import _template as lower_template
 from sophios.utils_nf import _normalized_identifiers
+
+from ..budgets import budget
 
 
 SURROGATE_CATEGORIES: tuple[Literal["Cs"], ...] = ("Cs",)
@@ -49,7 +51,7 @@ SAFE_TEXT = st.text(
 )
 
 
-@settings(max_examples=300, deadline=None)
+@budget(300)
 @given(
     st.text(
         alphabet=st.characters(blacklist_categories=SURROGATE_CATEGORIES),
@@ -63,7 +65,7 @@ def test_identifier_normalization_is_valid_and_idempotent(value: str) -> None:
     assert normalize_nextflow_identifier(normalized) == normalized
 
 
-@settings(max_examples=120, deadline=None)
+@budget(120)
 @given(
     st.from_regex(r"[a-z][a-z0-9]{0,12}", fullmatch=True),
     st.from_regex(r"[a-z][a-z0-9]{0,12}", fullmatch=True),
@@ -79,7 +81,7 @@ def test_identifier_normalization_collisions_are_never_last_wins(
         )
 
 
-@settings(max_examples=200, deadline=None)
+@budget(200)
 @given(SAFE_TEXT | st.just(""))
 def test_literal_template_is_exactly_one_shell_argument(value: str) -> None:
     assert shlex.split(_shell_quote(value)) == [value]
@@ -88,7 +90,7 @@ def test_literal_template_is_exactly_one_shell_argument(value: str) -> None:
     )
 
 
-@settings(max_examples=200, deadline=None)
+@budget(200)
 @given(SAFE_TEXT, SAFE_TEXT)
 def test_interpolated_template_remains_one_argument(prefix: str, suffix: str) -> None:
     value = "adversarial ' value; $(touch SHOULD_NOT_EXIST)"
@@ -102,14 +104,14 @@ def test_interpolated_template_remains_one_argument(prefix: str, suffix: str) ->
     ]
 
 
-@settings(max_examples=150, deadline=None)
+@budget(150)
 @given(SAFE_TEXT | st.just(""))
 def test_literal_globs_never_become_gstrings(value: str) -> None:
     rendered = _render_glob(NfTemplate((NfLiteral(value),)), {})
     assert rendered.startswith("'") and rendered.endswith("'")
 
 
-@settings(max_examples=150, deadline=None)
+@budget(150)
 @given(SAFE_TEXT | st.just(""))
 def test_interpolated_glob_literals_use_only_valid_gstring_escapes(value: str) -> None:
     rendered = _render_glob(NfTemplate((
@@ -129,7 +131,7 @@ def test_interpolated_glob_literals_use_only_valid_gstring_escapes(value: str) -
     assert "${name}" in rendered
 
 
-@settings(max_examples=150, deadline=None)
+@budget(150)
 @given(st.text(alphabet=st.characters(blacklist_categories=SURROGATE_CATEGORIES)).filter(str.strip))
 def test_every_single_quoted_groovy_position_uses_the_one_escaper(value: str) -> None:
     # An entry name is one path component, and never `.`, `..` or the reserved staging prefix.
@@ -154,50 +156,32 @@ def test_every_single_quoted_groovy_position_uses_the_one_escaper(value: str) ->
     assert not any(ord(char) < 32 and char != "\n" or ord(char) == 127 for char in rendered)
 
 
-@settings(max_examples=300, deadline=None)
+@budget(300)
 @given(st.lists(st.sampled_from(INTERPOLATION_PIECES), max_size=8).map("".join))
+# Once refused: the text on the two sides of a token joined into `${`, `$(`.
+@example("{$$(inputs.x){$")
+@example("($$(inputs.x)($")
+@example("$\\$((")
 def test_template_interpolation_agrees_with_cwltool(text: str) -> None:
     try:
-        template = lower_template(text, context="property")
-    except ValueError:
-        assume(False)  # outside the lowering's subset, which rejects it by name
+        # cwltool interpolates a string only when it contains an expression.
+        expected = interpolate(text, {"inputs": {"x": "VALUE"}}) if "$(" in text or "${" in text else text
+    except (JavascriptException, SubstitutionError):
+        with pytest.raises(ValueError, match="unsupported CWL expression"):
+            lower_template(text, context="property")
+        return
+    template = lower_template(text, context="property")
     lowered = "".join(segment.value if isinstance(segment, NfLiteral) else "VALUE" for segment in template.segments)
-    # cwltool interpolates a string only when it contains an expression.
-    expected = interpolate(text, {"inputs": {"x": "VALUE"}}) if "$(" in text or "${" in text else text
     assert lowered == expected
 
 
-@settings(max_examples=120, deadline=None)
-@given(SAFE_TEXT)
-def test_path_parameter_script_does_not_depend_on_compiled_value_shape(path: str) -> None:
-    process = NfProcess(
-        "READ",
-        (NfPort("source", "path"),),
-        (),
-        NfCommand((NfTemplate((NfLiteral("true"),)),)),
-    )
-    connections = (NfWorkflowInputConnection("source", "READ", "source"),)
-    from_string = ExecutableNextflowWorkflow(
-        "wf",
-        (process,),
-        connections,
-        {"source": path}, {"source": "File"},
-    )
-    from_mapping = ExecutableNextflowWorkflow(
-        "wf",
-        (process,),
-        connections,
-        {"source": {"class": "File", "path": path}}, {"source": "File"},
-    )
-    assert render_nextflow(from_string) == render_nextflow(from_mapping)
-    assert "file(__sophios_input_9f72e('source', params.source, 'File'), glob: false)" in render_nextflow(from_string)
-
-
-@settings(max_examples=100, deadline=None)
-@given(st.sampled_from(("file", "directory")))
-def test_path_kind_is_serialized_and_controls_exact_channel_staging(
-    path_kind: str,
-) -> None:
+@budget(120)
+@given(SAFE_TEXT, st.sampled_from(("file", "directory")))
+@example("input.txt", "file")
+@example("input[1]", "directory")
+def test_a_path_parameter_is_one_channel_of_its_kind_whatever_its_value_shape(path: str, path_kind: str) -> None:
+    """A path parameter is a bare path or the object the compiler writes; either is one channel of the declared
+    kind, staged without globbing, and the port keeps its kind in the model."""
     declared = "Directory" if path_kind == "directory" else "File"
     process = NfProcess(
         "READ",
@@ -205,26 +189,26 @@ def test_path_kind_is_serialized_and_controls_exact_channel_staging(
         (),
         NfCommand((NfTemplate((NfLiteral("true"),)),)),
     )
-    workflow = ExecutableNextflowWorkflow(
-        "wf",
-        (process,),
-        (NfWorkflowInputConnection("source", "READ", "source"),),
-        {"source": "input[1]"}, {"source": declared},
+    connections = (NfWorkflowInputConnection("source", "READ", "source"),)
+    from_string = ExecutableNextflowWorkflow("wf", (process,), connections, {"source": path}, {"source": declared})
+    from_mapping = ExecutableNextflowWorkflow(
+        "wf", (process,), connections, {"source": {"class": declared, "path": path}}, {"source": declared},
     )
+    assert render_nextflow(from_string) == render_nextflow(from_mapping)
+    assert (f"Channel.value(file(__sophios_input_9f72e('source', params.source, '{declared}'), glob: false))"
+            in render_nextflow(from_string))
+    assert from_string.to_dict()["processes"][0]["inputs"][0]["path_kind"] == path_kind
 
-    assert workflow.to_dict()["processes"][0]["inputs"][0]["path_kind"] == path_kind
-    entry = f"file(__sophios_input_9f72e('source', params.source, '{declared}'), glob: false)"
-    assert entry in render_nextflow(workflow)
 
-
-@settings(max_examples=100, deadline=None)
+@budget(100)
 @given(st.integers(min_value=1, max_value=1_000_000).map(lambda value: value + 0.5))
+@example(2.5)
 def test_fractional_cpu_requests_are_unrepresentable(cpus: float) -> None:
     with pytest.raises(ValueError, match="positive integer"):
         NfResources(cpus=cast(Any, cpus))
 
 
-@settings(max_examples=150, deadline=None)
+@budget(150)
 @given(
     st.one_of(
         st.integers(min_value=1, max_value=10**30),
@@ -236,6 +220,7 @@ def test_fractional_cpu_requests_are_unrepresentable(cpus: float) -> None:
         ),
     )
 )
+@example(1234567)
 def test_memory_rendering_is_non_exponential_and_value_preserving(
     memory_mb: int | float,
 ) -> None:
@@ -254,8 +239,10 @@ def test_memory_rendering_is_non_exponential_and_value_preserving(
     assert Decimal(rendered_number) == Decimal(str(memory_mb))
 
 
-@settings(max_examples=60, deadline=None)
+@budget(60)
 @given(st.lists(st.booleans(), max_size=10))
+@example([False])
+@example([True])
 def test_docker_is_enabled_exactly_when_a_process_has_a_container(modes: list[bool]) -> None:
     processes = tuple(
         NfProcess(
@@ -271,7 +258,7 @@ def test_docker_is_enabled_exactly_when_a_process_has_a_container(modes: list[bo
     assert render_nextflow_config(workflow) == f"docker.enabled = {str(any(modes)).lower()}\n"
 
 
-@settings(max_examples=80, deadline=None)
+@budget(80)
 @given(st.permutations(("zeta", "alpha", "middle")))
 def test_equal_position_input_bindings_order_by_field_name(order: tuple[str, ...]) -> None:
     inputs = {
@@ -304,35 +291,3 @@ def test_value_from_literal_and_reference_is_one_typed_token() -> None:
     })
     rendered = _render_template(command.tokens[-1], {})
     assert "'my report ' + name.toString() + '.txt'" in rendered
-
-
-def test_empty_arguments_are_preserved_and_boolean_positions_are_rejected() -> None:
-    command = lower_command({"baseCommand": "printf", "arguments": [""]})
-    assert command.tokens[-1] == NfTemplate((NfLiteral(""),))
-    with pytest.raises(ValueError, match="non-integer CWL command position"):
-        lower_command({"baseCommand": "echo", "arguments": [{"valueFrom": "x", "position": True}]})
-
-
-@settings(max_examples=60, deadline=None)
-@given(st.integers(min_value=2, max_value=12))
-def test_linear_graph_accepts_exactly_until_a_cycle_is_added(size: int) -> None:
-    processes = []
-    connections = []
-    for index in range(size):
-        inputs = () if index == 0 else (NfPort("source", "path"),)
-        output = NfPort(
-            "result", "path", "result", NfTemplate((NfLiteral(f"{index}.txt"),))
-        )
-        processes.append(NfProcess(f"P{index}", inputs, (output,), NfCommand((NfTemplate((NfLiteral("true"),)),))))
-        if index:
-            connections.append(NfProcessConnection(f"P{index - 1}", "result", f"P{index}", "source"))
-    ExecutableNextflowWorkflow("wf", processes, connections, {})
-    first = processes[0]
-    processes[0] = NfProcess(first.name, (NfPort("source", "path"),), first.outputs, first.command)
-    with pytest.raises(ValueError, match="cycle"):
-        ExecutableNextflowWorkflow(
-            "wf",
-            processes,
-            [*connections, NfProcessConnection(f"P{size - 1}", "result", first.name, "source")],
-            {},
-        )

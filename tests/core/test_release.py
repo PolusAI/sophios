@@ -28,19 +28,14 @@ def _import_copy(root: Path, built_as: str | None) -> subprocess.CompletedProces
 
 
 @pytest.mark.fast
-def test_the_version_is_the_one_built_beside_the_code(tmp_path: Path) -> None:
-    """__version__ is what the _version.py next to the package says."""
-    run = _import_copy(tmp_path, built_as='1.2.3')
-    assert run.stdout.splitlines() == [str(tmp_path / 'sophios' / '__init__.py'), '1.2.3']
-    assert 'never built' not in run.stderr
-
-
-@pytest.mark.fast
-def test_a_copy_that_was_never_built_says_so(tmp_path: Path) -> None:
-    """Without a _version.py the version is unknown, and says why."""
-    run = _import_copy(tmp_path, built_as=None)
-    assert run.stdout.splitlines() == [str(tmp_path / 'sophios' / '__init__.py'), 'unknown']
-    assert "RuntimeWarning: this copy of sophios was never built, so __version__ is 'unknown'" in run.stderr
+@pytest.mark.parametrize(('built_as', 'version'), [('1.2.3', '1.2.3'), (None, 'unknown')])
+def test_the_version_is_the_one_built_beside_the_code(tmp_path: Path, built_as: str | None, version: str) -> None:
+    """__version__ is what the _version.py next to the package says; without one the version is unknown, and says
+    why."""
+    run = _import_copy(tmp_path, built_as)
+    assert run.stdout.splitlines() == [str(tmp_path / 'sophios' / '__init__.py'), version]
+    assert ('never built' in run.stderr) is (built_as is None)
+    assert built_as or "RuntimeWarning: this copy of sophios was never built, so __version__ is 'unknown'" in run.stderr
 
 
 @pytest.mark.fast

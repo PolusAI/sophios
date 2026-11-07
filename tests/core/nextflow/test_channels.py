@@ -236,41 +236,32 @@ def _param(workflow: ExecutableNextflowWorkflow, port: str) -> str:
     )
 
 
-@pytest.mark.nextflow
-@pytest.mark.serial
-def test_a_command_line_false_drops_a_flag(tmp_path: Path) -> None:
-    workflow = _lower(_echo_flow())
-    result, observed = _run(workflow, tmp_path / "default")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed["line"] == ["hi"]
-    result, observed = _run(workflow, tmp_path / "false", f"--{_param(workflow, 'trim')}", "false")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed["line"] == ["hi\n"]
+_WHEN = "$(inputs.n == 10)"
 
 
 @pytest.mark.nextflow
 @pytest.mark.serial
-def test_a_command_line_int_satisfies_a_when_that_compares_it(tmp_path: Path) -> None:
-    workflow = _lower(_echo_flow("$(inputs.n == 10)"))
-    n = _param(workflow, "n")
-    result, observed = _run(workflow, tmp_path / "default")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed["line"] == ["[]"]
-    result, observed = _run(workflow, tmp_path / "ten", f"--{n}", "10")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert observed["line"] == ["hi"]
-
-
-@pytest.mark.nextflow
-@pytest.mark.serial
-@pytest.mark.parametrize("value", ["ten", "1e1"])
-def test_a_mistyped_value_stops_the_run_naming_the_parameter(value: str, tmp_path: Path) -> None:
-    workflow = _lower(_echo_flow("$(inputs.n == 10)"))
-    n = _param(workflow, "n")
-    result, _ = _run(workflow, tmp_path, f"--{n}", value)
-    assert result.returncode != 0
-    assert f"Sophios workflow input '{n}' must be int, not '{value}'" in result.stdout + result.stderr
-    assert not (tmp_path / "work").exists() or not list((tmp_path / "work").glob("*/*"))
+@pytest.mark.parametrize(("when", "argv", "line", "stops"), [
+    pytest.param(None, (), ["hi"], None, id="the -n flag by default"),
+    pytest.param(None, ("trim", "false"), ["hi\n"], None, id="a command-line false drops it"),
+    pytest.param(_WHEN, (), ["[]"], None, id="an unmet when"),
+    pytest.param(_WHEN, ("n", "10"), ["hi"], None, id="a command-line int satisfies the when"),
+    pytest.param(_WHEN, ("n", "ten"), None, "ten", id="a mistyped value"),
+    pytest.param(_WHEN, ("n", "1e1"), None, "1e1", id="a mistyped value in exponent form"),
+])
+def test_a_command_line_value_reaches_the_run_as_its_type_or_stops_it(
+        when: str | None, argv: tuple[str, ...], line: list[str] | None, stops: str | None, tmp_path: Path) -> None:
+    workflow = _lower(_echo_flow(when))
+    arguments = (f"--{_param(workflow, argv[0])}", argv[1]) if argv else ()
+    result, observed = _run(workflow, tmp_path, *arguments)
+    if stops is None:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert observed["line"] == line
+    else:
+        assert result.returncode != 0
+        assert f"Sophios workflow input '{_param(workflow, 'n')}' must be int, not '{stops}'" in (
+            result.stdout + result.stderr)
+        assert not (tmp_path / "work").exists() or not list((tmp_path / "work").glob("*/*"))
 
 
 @pytest.mark.nextflow

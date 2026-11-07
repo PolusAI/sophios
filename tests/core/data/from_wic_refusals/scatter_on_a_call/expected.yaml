@@ -1,0 +1,2 @@
+{diagnostics: [{code: NO_PYTHON_SPELLING, file: root.wic, message: {contains: ['calls a workflow with scatter:,
+    scatterMethod:']}}]}

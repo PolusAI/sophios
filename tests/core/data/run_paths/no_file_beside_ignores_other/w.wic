@@ -1,0 +1,1 @@
+steps: [{id: s, run: mk_file.cwl, in: {name: !ii x}}, {id: c, run: sub/child.wic}]

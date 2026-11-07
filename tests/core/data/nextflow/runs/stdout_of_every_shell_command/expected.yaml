@@ -1,0 +1,2 @@
+why: CWL redirects stdout for the whole shell command, not its last part, so both echoes land in out.txt.
+outputs: {two_commands~result: {class: File, basename: out.txt, contents: "first\nsecond\n"}}

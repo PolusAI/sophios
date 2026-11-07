@@ -1,0 +1,1 @@
+steps: {s: {run: tools/mk_file.cwl, in: {label: !ii a}}}

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import pytest
+from cwltool.checker import check_types
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -18,8 +19,10 @@ from sophios.wic_types import StepId, Tool, Tools, Yaml
 
 from .synthetic_tools import clt
 
+from .budgets import budget
 from .hermetic import ORACLE, compile_hermetic
 from .reference_model import ReferenceExpectation, reference_expectation
+from .strategies import cwl_types, pinned
 from .wic_reading import read_wic
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
@@ -60,16 +63,47 @@ _CASES: Final = (
 )
 
 
+_ATOMS: Final = ('null', 'boolean', 'int', 'long', 'float', 'double', 'string', 'File', 'Directory', 'Any')
+#: Declarations as a tool may write them: atoms, `Any`, unions and arrays, the `?` and `[]` shorthands, and what the
+#: judge must survive without knowing: a record, an enum, a named schema, a malformed array, nothing.
+_DECLARATIONS: Final = cwl_types(
+    *_ATOMS, 'example.org#Thing', None, {'type': 'array'}, {'type': 'record', 'fields': []},
+    {'type': 'enum', 'symbols': ['a']})
+
+
+def _loaded(declared: Any) -> bool:
+    """Whether `declared` is spelled as CWL holds it once loaded, the one form cwltool's checker reads."""
+    if isinstance(declared, list):
+        return all(map(_loaded, declared))
+    if isinstance(declared, dict):
+        return set(declared) == {'type', 'items'} and declared['type'] == 'array' and _loaded(declared['items'])
+    return declared in _ATOMS
+
+
 @pytest.mark.fast
-@pytest.mark.parametrize('why, source, sink, expected', _CASES, ids=[case[0] for case in _CASES])
+@given(st.tuples(_DECLARATIONS, _DECLARATIONS, st.none()))
+@pinned(*[(source, sink, expected) for _, source, sink, expected in _CASES],
+        # cwltool's own verdicts, where Sophios claims to know
+        ('string', 'string', ReferenceExpectation.OVERLAPS), ('string', 'File', ReferenceExpectation.DISJOINT),
+        ({'type': 'array', 'items': 'string'}, {'type': 'array', 'items': 'string'}, ReferenceExpectation.OVERLAPS),
+        ({'type': 'array', 'items': 'string'}, 'File[]', ReferenceExpectation.DISJOINT))
+@budget(200)
 def test_the_versioned_judge_matches_the_independent_model(
-        why: str, source: Any, sink: Any, expected: ReferenceExpectation) -> None:
-    """Known incompatibility and uncertainty remain three distinct outcomes."""
+        case: tuple[Any, Any, ReferenceExpectation | None]) -> None:
+    """Known incompatibility and uncertainty remain three distinct outcomes, as the independent model judges them,
+    and as each pinned case says. Observing a passthrough declaration does not mutate it.
+
+    cwltool checks the boundary from outside; production never calls it. Where it reads the declarations, it refuses
+    what Sophios calls disjoint and takes what Sophios calls overlapping, but for values that meet only in null,
+    which cwltool refuses and Sophios, which refuses only what is provably disjoint, lets through."""
+    source, sink, expected = case
     before = copy.deepcopy((source, sink))
     found = reference_relation(source, sink, lang_version='0.0.1')
-    assert found.name == expected.name, why
     assert (source, sink) == before, 'observing a passthrough declaration mutated it'
-    assert reference_expectation(source, sink) is expected
+    assert found.name == reference_expectation(source, sink).name == (expected or found).name
+    if found is not TypeRelation.UNKNOWN and _loaded(source) and _loaded(sink):
+        refused = check_types(copy.deepcopy(source), copy.deepcopy(sink), None, None, None) == 'exception'
+        assert refused is (found is TypeRelation.DISJOINT) or refused and 'null' in repr((source, sink)), found
 
 
 @pytest.mark.fast
@@ -105,26 +139,6 @@ def test_the_eager_api_check_defers_what_scatter_could_rescue(
     declared and for the sink lifted one level.
     """
     assert _python_api_types_match(sink, source) is accepted, claim
-
-
-@pytest.mark.slow
-@pytest.mark.parametrize('source, sink, expected', [
-    ('string', 'string', TypeRelation.OVERLAPS),
-    ('string', 'File', TypeRelation.DISJOINT),
-    ({'type': 'array', 'items': 'string'}, {'type': 'array', 'items': 'string'},
-     TypeRelation.OVERLAPS),
-    ({'type': 'array', 'items': 'string'}, 'File[]', TypeRelation.DISJOINT),
-])
-def test_cwltool_agrees_where_sophios_claims_knowledge(
-        source: Any, sink: Any, expected: TypeRelation) -> None:
-    """cwltool checks the boundary from outside; production never calls it."""
-    from cwltool.checker import check_types  # pylint: disable=import-outside-toplevel
-
-    result = check_types(copy.deepcopy(source), copy.deepcopy(sink), None, None, None)
-    if expected is TypeRelation.DISJOINT:
-        assert result == 'exception'
-    else:
-        assert result in {'pass', 'warning'}
 
 
 _ENDPOINTS: Final = (
