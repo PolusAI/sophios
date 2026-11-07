@@ -204,6 +204,8 @@ class WorkflowPort:
     #: step id to a port name rather than written by hand. Recorded because the
     #: two halves are facts here and a guess once they are one string.
     origin: PortId | None = None
+    #: Where the port was written, when it was.
+    span: SourceSpan | None = None
 
     def __post_init__(self) -> None:
         if not self.name:

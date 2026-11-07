@@ -7,8 +7,8 @@
     [{entry: $(inputs.source), writable: 'true'}]}}}
   out: &out [result]
   job: &in_txt {source: {class: File, path: in.txt}}
-  findings: &not_literal ['steps[0].run.requirements.InitialWorkDirRequirement.listing[0]: writable must be a literal
-    boolean']
+  findings: &not_literal ['step ''STAGE'': tool ''STAGE.cwl: requirements.InitialWorkDirRequirement.listing[0]'':
+    writable must be a literal boolean']
 - {id: iwdr_writable_that_is_not_a_literal_boolean-1, why: *literal_writable, out: *out, job: *in_txt, findings:
    *not_literal, tool: {<<: *stage, requirements: {InitialWorkDirRequirement: {listing: [{entry: $(inputs.source),
    writable: 1}]}}}}
@@ -18,7 +18,7 @@
 - {id: iwdr_entryname_under_the_reserved_prefix, why: &entry_rules 'An entry is one input, staged under its own basename
    or one literal name the task makes.', out: *out, job: *in_txt, tool: {<<: *stage, requirements: {
    InitialWorkDirRequirement: {listing: [{entry: $(inputs.source), entryname: .sophios_entry_source}]}}}, error: {re:
-   'listing\[0\]: entryname must not begin with ''.sophios_entry_'''}}
+   'listing\[0\]'': entryname must not begin with ''.sophios_entry_'''}}
 - {id: iwdr_inline_content_entry, why: *entry_rules, out: *out, job: *in_txt, tool: {<<: *stage, requirements: {
    InitialWorkDirRequirement: {listing: [{entry: literal file content, entryname: x.txt}]}}}, error: {re: inline content
    construction is deferred}}
@@ -39,7 +39,7 @@
    InitialWorkDirRequirement: {listing: [$(inputs.files)]}}}]}
 - {id: iwdr_unsupported_dirent_field, why: *entry_rules, out: *out, job: *in_txt, tool: {<<: *stage, requirements: {
    InitialWorkDirRequirement: {listing: [{entry: $(inputs.source), entryname: x.txt, foo: 1}]}}}, error: {re:
-   'listing\[0\]\.foo: foo is not consumed'}}
+   'listing\[0\]\.foo'': foo is not consumed'}}
 - {id: iwdr_listing_entry_of_unsupported_shape, why: *entry_rules, out: *out, job: *in_txt, error: {re: 'bare .*
    reference or a Dirent mapping'}, tool: {<<: *stage, requirements: {InitialWorkDirRequirement: {listing: [123]}}}}
 - {id: iwdr_listing_that_is_not_a_list, why: *entry_rules, error: {re: listing must be a list}, workflow: {steps: [{id:
@@ -65,9 +65,9 @@
     $(inputs.source.basename)}}}}
   out: *out
   job: *in_txt
-  findings: &globs_staged ["steps[0]: process 'copy' output 'result' globs the staged input 'source', or a name inside
-    it, which a CWL glob does not match: derive a new name from it, or make the input an InitialWorkDirRequirement
-    entry"]
+  findings: &globs_staged ['step ''copy'': step: process ''copy'' output ''result'' globs the staged input ''source'',
+    or a name inside it, which a CWL glob does not match: derive a new name from it, or make the input an
+    InitialWorkDirRequirement entry']
 - {id: a_glob_at_a_staged_input-padded, why: *staged_glob, out: *out, job: *in_txt, findings: *globs_staged, tool: {<<:
    *copy, outputs: {result: {type: File, outputBinding: {glob: ' $(inputs.source.basename) '}}}}}
 - {id: a_glob_at_a_staged_input-./$(inputs.source.basename), why: *staged_glob, out: *out, job: *in_txt, findings:
@@ -83,8 +83,9 @@
     done.txt}}}, stdout: $(inputs.source.basename)}
   out: *out
   job: *in_txt
-  findings: &stdout_through ["steps[0]: process 'write' stdout writes through the link input 'source' is staged under,
-    into what the input names: derive a new name from it, or make the input a writable InitialWorkDirRequirement entry"]
+  findings: &stdout_through ['step ''write'': step: process ''write'' stdout writes through the link input ''source'' is
+    staged under, into what the input names: derive a new name from it, or make the input a writable
+    InitialWorkDirRequirement entry']
 - {id: a_stdout_at_a_staged_input-Directory-$(inputs.source.basename)/keep.txt-staged, why: *writes_through, out: *out,
    job: *in_dir, findings: *stdout_through, tool: {<<: *write, inputs: {source: {type: Directory}}, stdout:
    $(inputs.source.basename)/keep.txt}}
@@ -93,9 +94,9 @@
    [$(inputs.source)]}}}}
 - {id: a_stderr_at_a_staged_input-File-$(inputs.source.basename)-staged, why: *writes_through, out: *out, job: *in_txt,
    tool: &write_stderr {id: write, inputs: {source: {type: File}}, outputs: {result: {type: File, outputBinding: {glob:
-   done.txt}}}, stderr: $(inputs.source.basename)}, findings: &stderr_through ["steps[0]: process 'write' stderr writes
-   through the link input 'source' is staged under, into what the input names: derive a new name from it, or make the
-   input a writable InitialWorkDirRequirement entry"]}
+   done.txt}}}, stderr: $(inputs.source.basename)}, findings: &stderr_through ['step ''write'': step: process ''write''
+   stderr writes through the link input ''source'' is staged under, into what the input names: derive a new name from
+   it, or make the input a writable InitialWorkDirRequirement entry']}
 - {id: a_stderr_at_a_staged_input-Directory-$(inputs.source.basename)/keep.txt-staged, why: *writes_through, out: *out,
    job: *in_dir, findings: *stderr_through, tool: {<<: *write_stderr, inputs: {source: {type: Directory}}, stderr:
    $(inputs.source.basename)/keep.txt}}
@@ -105,19 +106,18 @@
    for being one; a finding of where it stands would offer what that refusal then refuses.', out: *out, job: &f_in {f:
    {class: File, path: in.txt}}, tool: {id: REF, inputs: {f: {type: File}}, outputs: {result: {type: File,
    outputBinding: {glob: o}}}, stdout: $(inputs.f), requirements: {InitialWorkDirRequirement: {listing: [{entry:
-   $(inputs.f), entryname: x.txt}]}}}, findings: ["steps[0].run.requirements.InitialWorkDirRequirement: input 'f' has an
-   InitialWorkDirRequirement entry with a literal name and cannot also be referenced in the command, stream targets, or
-   output globs; name the entry by its literal"]}
+   $(inputs.f), entryname: x.txt}]}}}, findings: ['step ''REF'': tool ''REF.cwl:
+   requirements.InitialWorkDirRequirement'': input ''f'' has an InitialWorkDirRequirement entry with a literal name and
+   cannot also be referenced in the command, stream targets, or output globs; name the entry by its literal']}
 - {id: a_malformed_listing_checks_no_reference_against_it, why: &malformed 'A malformed listing stages what no finding
    can know: neither the entry''s glob nor a link is checked.', out: *out, job: *f_in, tool: {id: REF, inputs: {f:
    {type: File}}, outputs: {result: {type: File, outputBinding: {glob: $(inputs.f.path)}}}, requirements: {
-   InitialWorkDirRequirement: {listing: [$(inputs.f), 5]}}}, findings:
-   ['steps[0].run.requirements.InitialWorkDirRequirement.listing[1]: must be a bare $(inputs.<name>) reference or a
-   Dirent mapping']}
+   InitialWorkDirRequirement: {listing: [$(inputs.f), 5]}}}, findings: ['step ''REF'': tool ''REF.cwl:
+   requirements.InitialWorkDirRequirement.listing[1]'': must be a bare $(inputs.<name>) reference or a Dirent mapping']}
 - {id: a_list_of_globs_is_refused_for_being_a_list, why: 'Not for a reference in it: each item of a list is a whole
-   value, which no other text surrounds.', out: *out, job: &f {f: {class: File, path: in}}, tool: {inputs: {f:
-   {type: File}}, outputs: {result: {type: File, outputBinding: {glob: [$(inputs.f)]}}}}, findings: ["steps[0]: CWL
-   output glob lists for 'result' are not supported by the Nextflow target"]}
+   value, which no other text surrounds.', out: *out, job: &f {f: {class: File, path: in}}, tool: {id: REF, inputs: {f:
+   {type: File}}, outputs: {result: {type: File, outputBinding: {glob: [$(inputs.f)]}}}}, findings: ['step ''REF'':
+   step: CWL output glob lists for ''result'' are not supported by the Nextflow target']}
 - id: a_reference_where_it_stands-glob-File-$(inputs.f)
   why: &stands 'design §6, Basename references: a plain File or Directory reference is the object, which no glob or
     stream target takes; `.path` is absolute, so stdout and stderr take a basename, and a glob a `.path` only of an
@@ -127,84 +127,86 @@
   tool: &ref {inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: $(inputs.f)}}}}
   out: *out
   job: *f
-  findings: ['steps[0].run.outputs.result.outputBinding.glob: $(inputs.f) is the File or Directory object, which CWL
-    does not take as a glob; derive a new name from it, or make the input an InitialWorkDirRequirement entry']
+  findings: ['step ''make'': tool ''make.cwl: outputs.result.outputBinding.glob'': $(inputs.f) is the File or Directory
+    object, which CWL does not take as a glob; derive a new name from it, or make the input an InitialWorkDirRequirement
+    entry']
 - {id: a_reference_where_it_stands-glob-File-$(inputs.f)-linked, why: *stands, out: *out, job: *f, tool: {<<: *ref,
-   requirements: &linked {InitialWorkDirRequirement: {listing: [$(inputs.f)]}}}, findings:
-   ['steps[0].run.outputs.result.outputBinding.glob: $(inputs.f) is the File or Directory object, which CWL does not
-   take as a glob; use $(inputs.f.basename)']}
+   requirements: &linked {InitialWorkDirRequirement: {listing: [$(inputs.f)]}}}, findings: ['step ''make'': tool
+   ''make.cwl: outputs.result.outputBinding.glob'': $(inputs.f) is the File or Directory object, which CWL does not take
+   as a glob; use $(inputs.f.basename)']}
 - {id: a_reference_where_it_stands-glob-Directory-$(inputs.f)-writable, why: *stands, out: *out, job: &d {f: {class:
    Directory, path: in}}, tool: &ref_dir {inputs: {f: {type: Directory}}, outputs: {result: {type: Directory,
    outputBinding: {glob: $(inputs.f)}}}, requirements: &writable {InitialWorkDirRequirement: {listing: [{entry:
-   $(inputs.f), writable: true}]}}}, findings: ['steps[0].run.outputs.result.outputBinding.glob: $(inputs.f) is the File
-   or Directory object, which CWL does not take as a glob; use $(inputs.f.basename)']}
+   $(inputs.f), writable: true}]}}}, findings: ['step ''make'': tool ''make.cwl: outputs.result.outputBinding.glob'':
+   $(inputs.f) is the File or Directory object, which CWL does not take as a glob; use $(inputs.f.basename)']}
 - {id: a_reference_where_it_stands-glob-File-$(inputs.f).out, why: *stands, out: *out, job: *f, tool: {<<: *ref,
-   outputs: {result: {type: File, outputBinding: {glob: $(inputs.f).out}}}}, findings:
-   ['steps[0].run.outputs.result.outputBinding.glob: $(inputs.f) embedded in other text renders a File object as JSON in
-   CWL; use $(inputs.f.basename)']}
-- {id: a_reference_where_it_stands-glob-Directory-$(inputs.f)/keep.txt, why: *stands, out: *out, job: *d, tool: {inputs:
-   {f: {type: Directory}}, outputs: {result: {type: Directory, outputBinding: {glob:
-   $(inputs.f)/keep.txt}}}}, findings: ['steps[0].run.outputs.result.outputBinding.glob: $(inputs.f) embedded in other
-   text renders a File object as JSON in CWL; derive a new name from it, or make the input an InitialWorkDirRequirement
-   entry']}
+   outputs: {result: {type: File, outputBinding: {glob: $(inputs.f).out}}}}, findings: ['step ''make'': tool ''make.cwl:
+   outputs.result.outputBinding.glob'': $(inputs.f) embedded in other text renders a File object as JSON in CWL; use
+   $(inputs.f.basename)']}
+- {id: a_reference_where_it_stands-glob-Directory-$(inputs.f)/keep.txt, why: *stands, out: *out, job: *d, tool: {id:
+   REF, inputs: {f: {type: Directory}}, outputs: {result: {type: Directory, outputBinding: {glob:
+   $(inputs.f)/keep.txt}}}}, findings: ['step ''REF'': tool ''REF.cwl: outputs.result.outputBinding.glob'': $(inputs.f)
+   embedded in other text renders a File object as JSON in CWL; derive a new name from it, or make the input an
+   InitialWorkDirRequirement entry']}
 - {id: a_reference_where_it_stands-glob-File-$(inputs.f.path), why: *stands, out: *out, job: *f, tool: {<<: *ref,
-   outputs: {result: {type: File, outputBinding: {glob: $(inputs.f.path)}}}}, findings:
-   ['steps[0].run.outputs.result.outputBinding.glob: $(inputs.f.path) is an absolute path outside the output directory,
-   which no CWL glob matches; derive a new name from it, or make the input an InitialWorkDirRequirement entry']}
+   outputs: {result: {type: File, outputBinding: {glob: $(inputs.f.path)}}}}, findings: ['step ''make'': tool ''make.cwl:
+   outputs.result.outputBinding.glob'': $(inputs.f.path) is an absolute path outside the output directory, which no CWL
+   glob matches; derive a new name from it, or make the input an InitialWorkDirRequirement entry']}
 - {id: a_reference_where_it_stands-glob-File-$(inputs.f.path).out, why: *stands, out: *out, job: *f, tool: {<<: *ref,
-   outputs: {result: {type: File, outputBinding: {glob: $(inputs.f.path).out}}}}, findings:
-   ['steps[0].run.outputs.result.outputBinding.glob: $(inputs.f.path) is an absolute path outside the output directory,
+   outputs: {result: {type: File, outputBinding: {glob: $(inputs.f.path).out}}}}, findings: ['step ''make'': tool
+   ''make.cwl: outputs.result.outputBinding.glob'': $(inputs.f.path) is an absolute path outside the output directory,
    which no CWL glob matches; use $(inputs.f.basename)']}
 - {id: a_reference_where_it_stands-glob-Directory-$(inputs.f.path)/keep.txt, why: *stands, out: *out, job: *d, tool: {
-   inputs: {f: {type: Directory}}, outputs: {result: {type: Directory, outputBinding: {glob:
-   $(inputs.f.path)/keep.txt}}}}, findings: ['steps[0].run.outputs.result.outputBinding.glob: $(inputs.f.path) is an
-   absolute path outside the output directory, which no CWL glob matches; derive a new name from it, or make the input
-   an InitialWorkDirRequirement entry']}
-- {id: a_reference_where_it_stands-stdin-File-$(inputs.f), why: *stands, out: *out, job: *f, tool: &ref_stream {inputs:
-   {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stdin: $(inputs.f)},
-   findings: ['steps[0].run.stdin: $(inputs.f) is the File or Directory object, which CWL does not take as stdin; use
-   $(inputs.f.path) alone']}
+   id: REF, inputs: {f: {type: Directory}}, outputs: {result: {type: Directory, outputBinding: {glob:
+   $(inputs.f.path)/keep.txt}}}}, findings: ['step ''REF'': tool ''REF.cwl: outputs.result.outputBinding.glob'':
+   $(inputs.f.path) is an absolute path outside the output directory, which no CWL glob matches; derive a new name from
+   it, or make the input an InitialWorkDirRequirement entry']}
+- {id: a_reference_where_it_stands-stdin-File-$(inputs.f), why: *stands, out: *out, job: *f, tool: &ref_stream {id: REF,
+   inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stdin: $(inputs.f)},
+   findings: ['step ''REF'': tool ''REF.cwl: stdin'': $(inputs.f) is the File or Directory object, which CWL does not
+   take as stdin; use $(inputs.f.path) alone']}
 - {id: a_reference_where_it_stands-stdin-File-$(inputs.f.basename)-linked, why: *stands, out: *out, job: *f, tool: {<<:
-   *ref_stream, stdin: $(inputs.f.basename), requirements: *linked}, findings: ['steps[0].run.stdin: stdin names a file
-   by its path, and $(inputs.f.basename) is only its name; use $(inputs.f.path) alone']}
+   *ref_stream, stdin: $(inputs.f.basename), requirements: *linked}, findings: ['step ''REF'': tool ''REF.cwl: stdin'':
+   stdin names a file by its path, and $(inputs.f.basename) is only its name; use $(inputs.f.path) alone']}
 - {id: a_reference_where_it_stands-stdin-File-$(inputs.f.path).gz, why: *stands, out: *out, job: *f, tool: {<<:
-   *ref_stream, stdin: $(inputs.f.path).gz}, findings: ['steps[0].run.stdin: stdin reads a staged file by its whole
-   path, which $(inputs.f.path) inside other text is not; use $(inputs.f.path) alone']}
+   *ref_stream, stdin: $(inputs.f.path).gz}, findings: ['step ''REF'': tool ''REF.cwl: stdin'': stdin reads a staged
+   file by its whole path, which $(inputs.f.path) inside other text is not; use $(inputs.f.path) alone']}
 - {id: a_reference_where_it_stands-stdin-Directory-$(inputs.f.basename)/keep.txt-linked, why: *stands, out: *out, job:
    *d, tool: &ref_stream_dir {<<: *ref_stream, inputs: {f: {type: Directory}}, stdin: $(inputs.f.basename)/keep.txt,
-   requirements: *linked}, findings: ['steps[0].run.stdin: stdin reads a staged file by its whole path, which
-   $(inputs.f.basename) inside other text is not; use $(inputs.f.path) alone']}
+   requirements: *linked}, findings: ['step ''REF'': tool ''REF.cwl: stdin'': stdin reads a staged file by its whole
+   path, which $(inputs.f.basename) inside other text is not; use $(inputs.f.path) alone']}
 - {id: a_reference_where_it_stands-stdin-Directory-$(inputs.f.path)-writable, why: *stands, out: *out, job: *d, tool: {
-   <<: *ref_stream_dir, stdin: $(inputs.f.path), requirements: *writable}, findings: ['steps[0].run.stdin: stdin reads a
-   file, and $(inputs.f.path) names a Directory']}
-- {id: a_reference_where_it_stands-stdout-File-$(inputs.f), why: *stands, out: *out, job: *f, tool: &ref_stdout {inputs:
-   {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stdout:
-   $(inputs.f)}, findings: ['steps[0].run.stdout: $(inputs.f) is the File or Directory object, which CWL does not take
-   as a stdout target; derive a new name from it, or make the input a writable InitialWorkDirRequirement entry']}
+   <<: *ref_stream_dir, stdin: $(inputs.f.path), requirements: *writable}, findings: ['step ''REF'': tool ''REF.cwl:
+   stdin'': stdin reads a file, and $(inputs.f.path) names a Directory']}
+- {id: a_reference_where_it_stands-stdout-File-$(inputs.f), why: *stands, out: *out, job: *f, tool: &ref_stdout {id:
+   REF, inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stdout:
+   $(inputs.f)}, findings: ['step ''REF'': tool ''REF.cwl: stdout'': $(inputs.f) is the File or Directory object, which
+   CWL does not take as a stdout target; derive a new name from it, or make the input a writable
+   InitialWorkDirRequirement entry']}
 - {id: a_reference_where_it_stands-stdout-File-$(inputs.f)-writable, why: *stands, out: *out, job: *f, tool: {<<:
-   *ref_stdout, requirements: *writable}, findings: ['steps[0].run.stdout: $(inputs.f) is the File or Directory object,
-   which CWL does not take as a stdout target; use $(inputs.f.basename)']}
+   *ref_stdout, requirements: *writable}, findings: ['step ''REF'': tool ''REF.cwl: stdout'': $(inputs.f) is the File or
+   Directory object, which CWL does not take as a stdout target; use $(inputs.f.basename)']}
 - {id: a_reference_where_it_stands-stdout-File-$(inputs.f.path)-linked, why: *stands, out: *out, job: *f, tool: {<<:
-   *ref_stdout, stdout: $(inputs.f.path), requirements: *linked}, findings: ['steps[0].run.stdout: $(inputs.f.path) is
-   an absolute path, and CWL takes only a relative name as a stdout target; derive a new name from it, or make the input
-   a writable InitialWorkDirRequirement entry']}
+   *ref_stdout, stdout: $(inputs.f.path), requirements: *linked}, findings: ['step ''REF'': tool ''REF.cwl: stdout'':
+   $(inputs.f.path) is an absolute path, and CWL takes only a relative name as a stdout target; derive a new name from
+   it, or make the input a writable InitialWorkDirRequirement entry']}
 - {id: a_reference_where_it_stands-stdout-File-$(inputs.f.path).log, why: *stands, out: *out, job: *f, tool: {<<:
-   *ref_stdout, stdout: $(inputs.f.path).log}, findings: ['steps[0].run.stdout: $(inputs.f.path) is an absolute path,
-   and CWL takes only a relative name as a stdout target; use $(inputs.f.basename)']}
+   *ref_stdout, stdout: $(inputs.f.path).log}, findings: ['step ''REF'': tool ''REF.cwl: stdout'': $(inputs.f.path) is
+   an absolute path, and CWL takes only a relative name as a stdout target; use $(inputs.f.basename)']}
 - {id: a_reference_where_it_stands-stdout-File-$(inputs.f).log, why: 'CWL would name the file after the object''s JSON;
    the target refuses rather than do that.', out: *out, job: *f, tool: {<<: *ref_stdout, stdout: $(inputs.f).log},
-   findings: ['steps[0].run.stdout: $(inputs.f) embedded in other text renders a File object as JSON in CWL; use
-   $(inputs.f.basename)']}
-- {id: a_reference_where_it_stands-stderr-File-$(inputs.f)-linked, why: *stands, out: *out, job: *f, tool: {inputs: {f:
-   {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stderr: $(inputs.f),
-   requirements: *linked}, findings: ['steps[0].run.stderr: $(inputs.f) is the File or Directory object, which CWL does
-   not take as a stderr target; derive a new name from it, or make the input a writable InitialWorkDirRequirement
-   entry']}
-- {id: a_reference_where_it_stands-stderr-File-$(inputs.f.path), why: *stands, out: *out, job: *f, tool: {inputs: {f:
-   {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stderr:
-   $(inputs.f.path)}, findings: ['steps[0].run.stderr: $(inputs.f.path) is an absolute path, and CWL takes only a
-   relative name as a stderr target; derive a new name from it, or make the input a writable InitialWorkDirRequirement
-   entry']}
+   findings: ['step ''REF'': tool ''REF.cwl: stdout'': $(inputs.f) embedded in other text renders a File object as JSON
+   in CWL; use $(inputs.f.basename)']}
+- {id: a_reference_where_it_stands-stderr-File-$(inputs.f)-linked, why: *stands, out: *out, job: *f, tool: {id: REF,
+   inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stderr: $(inputs.f),
+   requirements: *linked}, findings: ['step ''REF'': tool ''REF.cwl: stderr'': $(inputs.f) is the File or Directory
+   object, which CWL does not take as a stderr target; derive a new name from it, or make the input a writable
+   InitialWorkDirRequirement entry']}
+- {id: a_reference_where_it_stands-stderr-File-$(inputs.f.path), why: *stands, out: *out, job: *f, tool: {id: REF,
+   inputs: {f: {type: File}}, outputs: {result: {type: File, outputBinding: {glob: done.txt}}}, stderr:
+   $(inputs.f.path)}, findings: ['step ''REF'': tool ''REF.cwl: stderr'': $(inputs.f.path) is an absolute path, and CWL
+   takes only a relative name as a stderr target; derive a new name from it, or make the input a writable
+   InitialWorkDirRequirement entry']}
 - id: an_output_named_like_a_link_its_task_stages-upstream-glob
   why: &link Writing a staged input's link writes through it, so the run succeeds and leaves every sorted.txt empty.
   workflow: &chain {steps: [{id: EMIT, out: [{out: {wic_anchor: emitted}}]}, {id: SORT, in: {src: {wic_alias: emitted}},
@@ -213,36 +215,42 @@
     id: SORT, inputs: {src: {type: File, inputBinding: {position: 1}}}, outputs: {out: {type: File, outputBinding:
     {glob: sorted.txt}}}, stdout: sorted.txt}]
   job: &given {given: {class: File, path: in.txt}}
-  error: &sorted_through {re: "(?s)\\A(?!(.*writes through){2}).*steps\\[1\\]\\.run\\.stdout: writing 'sorted\\.txt'
-    writes through 'sorted\\.txt', the name input 'src' is linked under in the task directory"}
+  error: &sorted_through {re: '(?s)\A(?!(.*writes through){2}).*step ''SORT'': tool ''SORT\.cwl: stdout'': writing
+    ''sorted\.txt'' writes through ''sorted\.txt'', the name input ''src'' is linked under in the task directory'}
 - {id: an_output_named_like_a_link_its_task_stages-upstream-glob-in-a-directory, why: *link, workflow: *chain, job:
    *given, tools: [{id: EMIT, outputs: {out: {type: File, outputBinding: {glob: out/sorted.txt}}}, stdout:
-   out/sorted.txt}, *sort], error: *sorted_through}
+   out/sorted.txt}, *sort], error: {re: '(?s)\A(?!(.*writes through){2}).*step ''SORT'': tool ''SORT\.cwl: stdout'':
+   writing ''sorted\.txt'' writes through ''sorted\.txt'', the name input ''src'' is linked under in the task
+   directory'}}
 - {id: an_output_named_like_a_link_its_task_stages-dot-slash, why: *link, workflow: *chain, job: *given, tools: [*emit,
-   {<<: *sort, stdout: ./sorted.txt}], error: {re: "(?s)\\A(?!(.*writes through){2}).*steps\\[1\\]\\.run\\.stdout:
-   writing '\\./sorted\\.txt' writes through 'sorted\\.txt', the name input 'src' is linked under in the task
-   directory"}}
+   {<<: *sort, stdout: ./sorted.txt}], error: {re: '(?s)\A(?!(.*writes through){2}).*step ''SORT'': tool ''SORT\.cwl:
+   stdout'': writing ''\./sorted\.txt'' writes through ''sorted\.txt'', the name input ''src'' is linked under in the
+   task directory'}}
 - {id: an_output_named_like_a_link_its_task_stages-glob-written-by-the-command, why: *link, workflow: *chain, job:
    *given, tools: [*emit, {id: SORT, inputs: {src: {type: File, inputBinding: {position: 1}}}, outputs: {out: {type:
-   File, outputBinding: {glob: sorted.txt}}}, arguments: [-o, sorted.txt]}], error: {re: "(?s)\\A(?!(.*writes
-   through){2}).*steps\\[1\\]\\.run\\.outputs\\.out\\.outputBinding\\.glob: writing 'sorted\\.txt' writes through
-   'sorted\\.txt', the name input 'src' is linked under in the task directory"}}
+   File, outputBinding: {glob: sorted.txt}}}, arguments: [-o, sorted.txt]}], error: {re: '(?s)\A(?!(.*writes
+   through){2}).*step ''SORT'': tool ''SORT\.cwl: outputs\.out\.outputBinding\.glob'': writing ''sorted\.txt'' writes
+   through ''sorted\.txt'', the name input ''src'' is linked under in the task directory'}}
 - {id: an_output_named_like_a_link_its_task_stages-into-a-linked-directory, why: *link, job: {given: {class: Directory,
    path: in.txt}}, workflow: {<<: *chain, inputs: {given: {type: Directory}}}, tools: [{id: EMIT, outputs: {out: {type:
    Directory, outputBinding: {glob: outdir}}}, stdout: outdir}, {id: SORT, inputs: {src: {type: Directory, inputBinding:
    {position: 1}}}, outputs: {out: {type: File, outputBinding: {glob: outdir/listing.txt}}}, stdout:
-   outdir/listing.txt}], error: {re: "(?s)\\A(?!(.*writes through){2}).*steps\\[1\\]\\.run\\.stdout: writing
-   'outdir/listing\\.txt' writes through 'outdir', the name input 'src' is linked under in the task directory"}}
+   outdir/listing.txt}], error: {re: '(?s)\A(?!(.*writes through){2}).*step ''SORT'': tool ''SORT\.cwl: stdout'':
+   writing ''outdir/listing\.txt'' writes through ''outdir'', the name input ''src'' is linked under in the task
+   directory'}}
 - {id: an_output_named_like_a_link_its_task_stages-entry-name, why: *link, workflow: *chain, job: *given, tools:
    [&emitted {id: EMIT, outputs: {out: {type: File, outputBinding: {glob: emitted.txt}}}, stdout: emitted.txt},
    &renamed_sort {id: SORT, inputs: {src: {type: File}}, outputs: {out: {type: File, outputBinding: {glob:
    sorted.txt}}}, stdout: sorted.txt, requirements: {InitialWorkDirRequirement: {listing: [{entry: $(inputs.src),
-   entryname: sorted.txt}]}}}], error: *sorted_through}
+   entryname: sorted.txt}]}}}], error: {re: '(?s)\A(?!(.*writes through){2}).*step ''SORT'': tool ''SORT\.cwl: stdout'':
+   writing ''sorted\.txt'' writes through ''sorted\.txt'', the name input ''src'' is linked under in the task
+   directory'}}
 - {id: an_output_named_like_a_link_its_task_stages-entry-name-of-a-workflow-input, why: *link, job: *given, tools:
    [*emitted, *renamed_sort], workflow: {<<: *chain, steps: [{id: EMIT, out: [out]}, {id: SORT, in: {src: given}, out:
-   [out]}]}, error: *sorted_through}
+   [out]}]}, error: {re: '(?s)\A(?!(.*writes through){2}).*step ''SORT'': tool ''SORT\.cwl: stdout'': writing
+   ''sorted\.txt'' writes through ''sorted\.txt'', the name input ''src'' is linked under in the task directory'}}
 - {id: a_malformed_listing_has_its_own_finding_alone, why: *malformed, workflow: *chain, job: *given, tools: [*emit,
    {id: SORT, inputs: {src: {type: File}}, outputs: {out: {type: File, outputBinding: {glob: sorted.txt}}}, stdout:
    sorted.txt, requirements: {InitialWorkDirRequirement: {listing: [{entry: $(inputs.src), entryname: renamed.txt},
-   5]}}}], findings: ['steps[1].run.requirements.InitialWorkDirRequirement.listing[1]: must be a bare $(inputs.<name>)
-   reference or a Dirent mapping']}
+   5]}}}], findings: ['step ''SORT'': tool ''SORT.cwl: requirements.InitialWorkDirRequirement.listing[1]'': must be a
+   bare $(inputs.<name>) reference or a Dirent mapping']}

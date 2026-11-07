@@ -5,7 +5,6 @@
 from collections.abc import Callable
 import copy
 from importlib.resources import files
-import re
 from typing import Any
 
 import pytest
@@ -13,7 +12,8 @@ import yaml
 from cwl_utils.parser import cwl_v1_2
 
 from sophios.lang import SUPPORT_MATRIX
-from sophios.nf_support import FIELDS, REQUIREMENT_CLASSES, State
+from sophios.ir.resolved import Construct, NotLowered, Refusal
+from sophios.nf_support import CONSTRUCTS, FIELDS, REQUIREMENT_CLASSES, State
 from sophios.wic_types import Yaml
 
 from .testkit import lowered_case, step, tool
@@ -46,6 +46,16 @@ def test_every_requirement_class_is_a_cwl_class_and_an_admitted_one_has_its_fiel
         for name, row in classes.items():
             assert _declared_fields(name), name
             assert row.state is State.REJECTED or name in FIELDS, name
+
+
+@pytest.mark.fast
+def test_every_field_stands_under_a_construct_a_refusal_names() -> None:
+    """A refusal names a construct of the view; the join says which fields each stands for (resolved-view §7)."""
+    assert set(CONSTRUCTS) == {construct.value for construct in Construct}
+    rows = {row for joined in CONSTRUCTS.values() for row in joined}
+    assert {cwl_class for cwl_class, _name in rows} <= set(FIELDS)
+    assert [(cwl_class, name) for cwl_class, fields in FIELDS.items() for name in fields
+            if (cwl_class, None) not in rows and (cwl_class, name) not in rows] == []
 
 
 # Design §3 names the compile-time fields: these wherever CWL declares them, and NetworkAccess.
@@ -89,36 +99,64 @@ def _documents() -> tuple[Yaml, Yaml]:
     return workflow, run
 
 
-# Where each class's value sits in `_documents()`, and the path a finding names it by.
-POSITIONS: dict[str, tuple[str, Callable[[Yaml, Yaml], Yaml]]] = {
-    "Workflow": ("workflow", lambda workflow, _run: workflow),
-    "WorkflowStep": ("steps[0]", lambda workflow, _run: workflow["steps"][0]),
-    "WorkflowStepInput": ("steps[0].in.x", lambda workflow, _run: workflow["steps"][0]["in"]["x"]["wic_raw_cwl"]),
-    "WorkflowInputParameter": ("workflow.inputs.x", lambda workflow, _run: workflow["inputs"]["x"]),
-    "WorkflowOutputParameter": ("workflow.outputs.o", lambda workflow, _run: workflow["outputs"]["o"]),
-    "CommandLineTool": ("steps[0].run", lambda _workflow, run: run),
-    "CommandInputParameter": ("steps[0].run.inputs.x", lambda _workflow, run: run["inputs"]["x"]),
-    "CommandLineBinding": (
-        "steps[0].run.inputs.x.inputBinding", lambda _workflow, run: run["inputs"]["x"]["inputBinding"]
-    ),
-    "CommandOutputParameter": ("steps[0].run.outputs.o", lambda _workflow, run: run["outputs"]["o"]),
-    "CommandOutputBinding": (
-        "steps[0].run.outputs.o.outputBinding", lambda _workflow, run: run["outputs"]["o"]["outputBinding"]
-    ),
-    "InputArraySchema": ("workflow.inputs.x.type", lambda workflow, _run: workflow["inputs"]["x"]["type"]),
-    "CommandInputArraySchema": ("steps[0].run.inputs.xs.type", lambda _workflow, run: run["inputs"]["xs"]["type"]),
-    "OutputArraySchema": ("workflow.outputs.o.type", lambda workflow, _run: workflow["outputs"]["o"]["type"]),
+# Where each class's value sits in `_documents()`.
+POSITIONS: dict[str, Callable[[Yaml, Yaml], Yaml]] = {
+    "Workflow": lambda workflow, _run: workflow,
+    "WorkflowStep": lambda workflow, _run: workflow["steps"][0],
+    "WorkflowStepInput": lambda workflow, _run: workflow["steps"][0]["in"]["x"]["wic_raw_cwl"],
+    "WorkflowInputParameter": lambda workflow, _run: workflow["inputs"]["x"],
+    "WorkflowOutputParameter": lambda workflow, _run: workflow["outputs"]["o"],
+    "CommandLineTool": lambda _workflow, run: run,
+    "CommandInputParameter": lambda _workflow, run: run["inputs"]["x"],
+    "CommandLineBinding": lambda _workflow, run: run["inputs"]["x"]["inputBinding"],
+    "CommandOutputParameter": lambda _workflow, run: run["outputs"]["o"],
+    "CommandOutputBinding": lambda _workflow, run: run["outputs"]["o"]["outputBinding"],
+    "InputArraySchema": lambda workflow, _run: workflow["inputs"]["x"]["type"],
+    "CommandInputArraySchema": lambda _workflow, run: run["inputs"]["xs"]["type"],
+    "OutputArraySchema": lambda workflow, _run: workflow["outputs"]["o"]["type"],
 }
 
 
-def _position(cwl_class: str) -> tuple[str, Callable[[Yaml, Yaml], Yaml]]:
+def _position(cwl_class: str) -> Callable[[Yaml, Yaml], Yaml]:
     """A row's position; a requirement class's fields sit in the tool's requirements."""
-    if cwl_class in POSITIONS:
-        return POSITIONS[cwl_class]
-    return (
-        f"steps[0].run.requirements.{cwl_class}",
-        lambda _workflow, run: run["requirements"].setdefault(cwl_class, {}),
-    )
+    return POSITIONS.get(cwl_class, lambda _workflow, run: run["requirements"].setdefault(cwl_class, {}))
+
+
+# The subject of a refusal of a field, by its class: the port it sits on, or in the tool the path to it.
+PORT_SUBJECTS = {
+    "WorkflowStepInput": "x", "WorkflowInputParameter": "x", "InputArraySchema": "x",
+    "WorkflowOutputParameter": "o", "OutputArraySchema": "o",
+}
+TOOL_PATHS = {
+    "CommandLineTool": "", "CommandInputParameter": "inputs.x.", "CommandInputArraySchema": "inputs.xs.type.",
+    "CommandLineBinding": "inputs.x.inputBinding.", "CommandOutputParameter": "outputs.o.",
+    "CommandOutputBinding": "outputs.o.outputBinding.",
+}
+
+
+def _subject(cwl_class: str, name: str) -> str | None:
+    """What a refusal of the field `name` of `cwl_class` names, in `_documents()`; `None` for a construct of the
+    workflow's or a step's own."""
+    if cwl_class in PORT_SUBJECTS:
+        return PORT_SUBJECTS[cwl_class]
+    if cwl_class in TOOL_PATHS:
+        return f"T.cwl: {TOOL_PATHS[cwl_class]}{name}"
+    if cwl_class in REQUIREMENT_CLASSES["CommandLineTool"]:
+        return f"T.cwl: requirements.{cwl_class}.{name}"
+    return None
+
+
+def _refused(workflow: Yaml, run: Yaml, note: str) -> list[Refusal]:
+    """The refusals of the lowering of `workflow` whose reason ends with `note`."""
+    with pytest.raises(NotLowered) as raised:
+        _lower(workflow, run)
+    return [refusal for refusal in raised.value.refusals if refusal.reason.endswith(note)]
+
+
+def _constructs(cwl_class: str, name: str) -> set[str]:
+    """The constructs the join says a refusal of the field `name` of `cwl_class` names: its most specific rows'."""
+    specific = {construct for construct, rows in CONSTRUCTS.items() if (cwl_class, name) in rows}
+    return specific or {construct for construct, rows in CONSTRUCTS.items() if (cwl_class, None) in rows}
 
 
 def _lower(workflow: Yaml, run: Yaml, **values: Any) -> Any:
@@ -136,12 +174,12 @@ REJECTED = [
 @pytest.mark.fast
 @pytest.mark.parametrize(("cwl_class", "name"), REJECTED, ids=[f"{c}.{n}" for c, n in REJECTED])
 def test_a_rejected_field_is_a_finding_whose_message_is_its_note(cwl_class: str, name: str) -> None:
+    """One refusal carries the row's note, is of a construct the join gives the row, and names the field's place."""
     workflow, run = _documents()
-    path, place = _position(cwl_class)
-    place(workflow, run)[name] = "x"
-    finding = re.escape(f"- {path}.{name}: {FIELDS[cwl_class][name].note}")
-    with pytest.raises(ValueError, match=rf"{finding}(\n|\Z)"):
-        _lower(workflow, run)
+    _position(cwl_class)(workflow, run)[name] = "x"
+    refused = _refused(workflow, run, FIELDS[cwl_class][name].note)
+    assert [(refusal.construct in _constructs(cwl_class, name), refusal.subject)
+            for refusal in refused] == [(True, _subject(cwl_class, name))], refused
 
 
 SAMPLES = {
@@ -158,7 +196,7 @@ def test_compile_time_fields_leave_the_executable_model_unchanged() -> None:
     workflow["inputs"]["f"] = {"type": "File"}
     workflow["steps"][0]["in"]["f"] = {"wic_raw_cwl": {"source": "f"}}
     plain = _lower(copy.deepcopy(workflow), copy.deepcopy(run), f={"class": "File", "path": "f.txt"})
-    for cwl_class, (_path, place) in POSITIONS.items():
+    for cwl_class, place in POSITIONS.items():
         place(workflow, run).update({name: SAMPLES[name] for name in COMPILE_TIME & set(FIELDS[cwl_class])})
     run["requirements"]["NetworkAccess"] = {"networkAccess": True}
     run.update({"$namespaces": {"edam": "https://edamontology.org/"}, "$schemas": ["https://example.org/formats.rdf"]})
@@ -173,10 +211,9 @@ def test_compile_time_fields_leave_the_executable_model_unchanged() -> None:
 def test_network_access_other_than_the_literal_true_is_rejected_by_name(section: str, value: Any) -> None:
     workflow, run = _documents()
     run[section] = {"NetworkAccess": {} if value is None else {"networkAccess": value}}
-    with pytest.raises(ValueError, match=re.escape(
-        f"steps[0].run.{section}.NetworkAccess.networkAccess: only the literal true is supported"
-    )):
-        _lower(workflow, run)
+    assert [(refusal.construct, refusal.subject) for refusal in _refused(workflow, run, "only the literal true is "
+            "supported: a Nextflow task has network access, and the generated pipeline cannot withhold it")] == [
+        (Construct.TOOL, f"T.cwl: {section}.NetworkAccess.networkAccess")]
 
 
 REJECTED_CLASSES = sorted(
@@ -190,6 +227,6 @@ REJECTED_CLASSES = sorted(
 def test_a_rejected_requirement_class_is_a_finding_whose_message_is_its_note(section: str, name: str) -> None:
     workflow, run = _documents()
     run[section] = {name: {}}
-    finding = re.escape(f"- steps[0].run.{section}.{name}: {REQUIREMENT_CLASSES['CommandLineTool'][name].note}")
-    with pytest.raises(ValueError, match=rf"{finding}(\n|\Z)"):
-        _lower(workflow, run)
+    refused = _refused(workflow, run, REQUIREMENT_CLASSES["CommandLineTool"][name].note)
+    expected = [(Construct.TOOL, f"T.cwl: {section}.{name}")]
+    assert [(refusal.construct, refusal.subject) for refusal in refused] == expected

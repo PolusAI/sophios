@@ -6,29 +6,35 @@
   tool: {inputs: {verbose: {type: ['null', boolean], inputBinding: {position: 1, prefix: --verbose}}},
     arguments: [{position: 2, valueFrom: '--label=$(inputs.verbose)'}]}
   job: {verbose: null}
-  findings: ['steps[0].run.inputs.verbose: absent optional values are supported only for a val input whose absence
-    leaves command rendering unchanged']
+  findings: ['step ''make'': tool ''make.cwl: inputs.verbose'': absent optional values are supported only for a val
+    input whose absence leaves command rendering unchanged']
 - id: absent_optional_input_referenced_outside_its_own_binding
   why: Only the input's own binding is presence-gated; a reference elsewhere would render the sentinel.
   tool: {id: OPTIONAL, inputs: {message: {type: ['null', string], inputBinding: {position: 1, prefix: --message}}},
     arguments: [{position: 2, valueFrom: $(inputs.message)}]}
   job: &no_message {message: null}
-  error: &absent_message {re: 'steps\[0\].run.inputs.message: absent optional values are supported only for a val input
-    whose absence leaves command rendering unchanged'}
+  error: &absent_message {re: 'step ''OPTIONAL'': tool ''OPTIONAL\.cwl: inputs\.message'': absent optional values are
+    supported only for a val input whose absence leaves command rendering unchanged'}
 - id: absent_optional_input_whose_binding_emits_a_shell_literal
   why: CWL omits the entire binding when its optional source is absent.
   tool: {id: OPTIONAL, requirements: {ShellCommandRequirement: {}}, inputs: {message: {type: ['null', string],
     inputBinding: {position: 1, valueFrom: printf optional, shellQuote: false}}}}
   job: *no_message
-  error: *absent_message
-- {id: absent_optional_input_whose_binding_has_a_literal_value_from, job: *no_message, error: *absent_message, why: CWL
-   omits the prefix and the literal when the optional source is absent., tool: {id: OPTIONAL, inputs: {message: {type:
-   ['null', string], inputBinding: {position: 1, prefix: --message, valueFrom: literal}}}}}
-- {id: absent_optional_input_referenced_via_another_bindings_value_from, job: *no_message, error: *absent_message, why:
-   'No binding of its own, but referenced elsewhere.', tool: {id: OPTIONAL, inputs: {message: {type: ['null', string]}},
-   arguments: [{position: 1, valueFrom: $(inputs.message)}]}}
+  error: {re: 'step ''OPTIONAL'': tool ''OPTIONAL\.cwl: inputs\.message'': absent optional values are supported only for
+    a val input whose absence leaves command rendering unchanged'}
+- {id: absent_optional_input_whose_binding_has_a_literal_value_from, job: *no_message, error: {re: 'step ''OPTIONAL'':
+   tool ''OPTIONAL\.cwl: inputs\.message'': absent optional values are supported only for a val input whose absence
+   leaves command rendering unchanged'}, why: CWL omits the prefix and the literal when the optional source is absent.,
+   tool: {id: OPTIONAL, inputs: {message: {type: ['null', string], inputBinding: {position: 1, prefix: --message,
+   valueFrom: literal}}}}}
+- {id: absent_optional_input_referenced_via_another_bindings_value_from, job: *no_message, error: {re: 'step
+   ''OPTIONAL'': tool ''OPTIONAL\.cwl: inputs\.message'': absent optional values are supported only for a val input
+   whose absence leaves command rendering unchanged'}, why: 'No binding of its own, but referenced elsewhere.', tool:
+   {id: OPTIONAL, inputs: {message: {type: ['null', string]}}, arguments: [{position: 1, valueFrom:
+   $(inputs.message)}]}}
 - {id: absent_optional_path_input, why: Path channel construction always stages., job: *no_message, tool: {id: OPTIONAL,
-   inputs: {message: {type: ['null', File]}}}, error: *absent_message}
+   inputs: {message: {type: ['null', File]}}}, error: {re: 'step ''OPTIONAL'': tool ''OPTIONAL\.cwl: inputs\.message'':
+   absent optional values are supported only for a val input whose absence leaves command rendering unchanged'}}
 - {id: absent_optional_workflow_input_feeding_required_input, why: A required input takes a value., workflow: {steps:
    [{id: REQUIRED, in: {message: message}}], inputs: {message: {type: ['null', string]}}}, tools: [{id: REQUIRED,
    inputs: {message: {type: string}}}], error: {re: absent required}}
@@ -37,66 +43,67 @@
   tool: {inputs: {values: {type: ['null', {type: array, items: string}], inputBinding: {position: 1, prefix:
     --value}}}}
   job: {values: null}
-  error: {re: 'steps\[0\].run.inputs.values: absent optional'}
+  error: {re: 'step ''make'': tool ''make\.cwl: inputs\.values'': absent optional'}
 - id: an_env_var_from_an_absent_input
   why: An absent optional value has no text to export.
   tool: &env {id: ENV, inputs: {s: {type: string}, n: {type: int}, f: {type: File}, o: {type: 'string?'}}, requirements:
     {EnvVarRequirement: {envDef: [{envName: A, envValue: $(inputs.o)}]}}}
   job: &env_job_without_o {s: v, n: 1, f: {class: File, path: x.txt}}
-  findings: ['steps[0].run.inputs.o: absent optional values are supported only for a val input whose absence leaves
-    command rendering unchanged']
+  findings: ['step ''ENV'': tool ''ENV.cwl: inputs.o'': absent optional values are supported only for a val input whose
+    absence leaves command rendering unchanged']
 - {id: an_env_def_entry_with_an_unknown_field, why: A field nothing lowers is refused naming itself., tool: {<<: *env,
    requirements: {EnvVarRequirement: {envDef: {A: {envValue: x, foo: 1}}}}}, job: &env_job {<<: *env_job_without_o, o:
-   w}, findings: ['steps[0].run.requirements.EnvVarRequirement.envDef.A.foo: foo is not consumed by the Nextflow
-   lowering']}
+   w}, findings: ['step ''ENV'': tool ''ENV.cwl: requirements.EnvVarRequirement.envDef.A.foo'': foo is not consumed by
+   the Nextflow lowering']}
 - {id: an_env_var_from_an_int_input, why: &env_value 'design §6, Resources and containers: a variable is literal text or
    one string input''s value, read whole; every other value is refused by name.', job: *env_job, tool: {<<: *env,
-   requirements: {EnvVarRequirement: {envDef: [{envName: A, envValue: $(inputs.n)}]}}}, findings: [{re:
-   '^steps\[0\]\.run\.requirements\.EnvVarRequirement\.envDef\[0\]: .*needs a string input, read whole as
+   requirements: {EnvVarRequirement: {envDef: [{envName: A, envValue: $(inputs.n)}]}}}, findings: [{re: '^step ''ENV'':
+   tool ''ENV\.cwl: requirements\.EnvVarRequirement\.envDef\[0\]'': .*needs a string input, read whole as
    \$\(inputs\.<name>\); n is declared ''int'''}]}
 - {id: an_env_var_from_a_file_path, why: *env_value, job: *env_job, tool: {<<: *env, requirements: {EnvVarRequirement:
-   {envDef: [{envName: A, envValue: $(inputs.f.path)}]}}}, findings: [{re:
-   '^steps\[0\]\.run\.requirements\.EnvVarRequirement\.envDef\[0\]: .*needs a string input'}]}
+   {envDef: [{envName: A, envValue: $(inputs.f.path)}]}}}, findings: [{re: '^step ''ENV'': tool ''ENV\.cwl:
+   requirements\.EnvVarRequirement\.envDef\[0\]'': .*needs a string input'}]}
 - {id: an_env_var_from_a_basename, why: *env_value, job: *env_job, tool: {<<: *env, requirements: {EnvVarRequirement:
-   {envDef: [{envName: A, envValue: $(inputs.s.basename)}]}}}, findings: [{re:
-   '^steps\[0\]\.run\.requirements\.EnvVarRequirement\.envDef\[0\]: .*needs a string input'}]}
+   {envDef: [{envName: A, envValue: $(inputs.s.basename)}]}}}, findings: [{re: '^step ''ENV'': tool ''ENV\.cwl:
+   requirements\.EnvVarRequirement\.envDef\[0\]'': .*needs a string input'}]}
 - {id: an_env_var_with_text_beside_a_reference, why: *env_value, job: *env_job, tool: {<<: *env, requirements:
-   {EnvVarRequirement: {envDef: [{envName: A, envValue: pre-$(inputs.s)}]}}}, findings: [{re:
-   '^steps\[0\]\.run\.requirements\.EnvVarRequirement\.envDef\[0\]: .*is not supported: write literal text or exactly
+   {EnvVarRequirement: {envDef: [{envName: A, envValue: pre-$(inputs.s)}]}}}, findings: [{re: '^step ''ENV'': tool
+   ''ENV\.cwl: requirements\.EnvVarRequirement\.envDef\[0\]'': .*is not supported: write literal text or exactly
    \$\(inputs\.<name>\)'}]}
 - {id: an_env_var_from_javascript, why: *env_value, job: *env_job, tool: {<<: *env, requirements: {EnvVarRequirement:
-   {envDef: [{envName: A, envValue: '${return 1}'}]}}}, findings: [{re:
-   '^steps\[0\]\.run\.requirements\.EnvVarRequirement\.envDef\[0\]: .*is not supported'}]}
+   {envDef: [{envName: A, envValue: '${return 1}'}]}}}, findings: [{re: '^step ''ENV'': tool ''ENV\.cwl:
+   requirements\.EnvVarRequirement\.envDef\[0\]'': .*is not supported'}]}
 - {id: an_env_var_from_the_runtime, why: *env_value, job: *env_job, tool: {<<: *env, requirements: {EnvVarRequirement:
-   {envDef: [{envName: A, envValue: $(runtime.cores)}]}}}, findings: [{re:
-   '^steps\[0\]\.run\.requirements\.EnvVarRequirement\.envDef\[0\]: .*is not supported'}]}
+   {envDef: [{envName: A, envValue: $(runtime.cores)}]}}}, findings: [{re: '^step ''ENV'': tool ''ENV\.cwl:
+   requirements\.EnvVarRequirement\.envDef\[0\]'': .*is not supported'}]}
 - {id: an_env_var_name_that_is_not_a_shell_name, why: *env_value, job: *env_job, tool: {<<: *env, requirements:
-   {EnvVarRequirement: {envDef: [{envName: 1A, envValue: x}]}}}, findings: [{re:
-   '^steps\[0\]\.run\.requirements\.EnvVarRequirement\.envDef\[0\]: .*environment variable name must be a shell variable
-   name, got ''1A'''}]}
+   {EnvVarRequirement: {envDef: [{envName: 1A, envValue: x}]}}}, findings: [{re: '^step ''ENV'': tool ''ENV\.cwl:
+   requirements\.EnvVarRequirement\.envDef\[0\]'': .*environment variable name must be a shell variable name, got
+   ''1A'''}]}
 - {id: an_env_var_value_that_is_not_text, why: *env_value, job: *env_job, tool: {<<: *env, requirements:
-   {EnvVarRequirement: {envDef: [{envName: A, envValue: 3}]}}}, findings: &env_entry [{re:
-   '^steps\[0\]\.run\.requirements\.EnvVarRequirement\.envDef\[0\]: .*an envDef entry needs a string envName and a
-   string envValue'}]}
+   {EnvVarRequirement: {envDef: [{envName: A, envValue: 3}]}}}, findings: &env_entry [{re: '^step ''ENV'': tool
+   ''ENV\.cwl: requirements\.EnvVarRequirement\.envDef\[0\]'': .*an envDef entry needs a string envName and a string
+   envValue'}]}
 - {id: an_env_def_entry_that_is_not_a_mapping, why: *env_value, job: *env_job, tool: {<<: *env, requirements:
-   {EnvVarRequirement: {envDef: [A=x]}}}, findings: *env_entry}
-- {id: loadContents_on_an_arguments_entry, why: A binding's loadContents has no lowering., tool: {arguments:
-   [{valueFrom: x, loadContents: true}]}, findings: ["steps[0].run.arguments[0].loadContents: a binding's loadContents
-   is not supported"]}
+   {EnvVarRequirement: {envDef: [A=x]}}}, findings: [{re: '^step ''ENV'': tool ''ENV\.cwl:
+   requirements\.EnvVarRequirement\.envDef\[0\]'': .*an envDef entry needs a string envName and a string envValue'}]}
+- {id: loadContents_on_an_arguments_entry, why: A binding's loadContents has no lowering., tool: {id: ARGS, arguments:
+   [{valueFrom: x, loadContents: true}]}, findings: ['step ''ARGS'': tool ''ARGS.cwl: arguments[0].loadContents'': a
+   binding''s loadContents is not supported']}
 - id: shell_mode_in_a_container
   why: CWL runs the command as /bin/sh -c after the image's ENTRYPOINT, which the Nextflow task does not.
   tool: {id: SHELL, requirements: {DockerRequirement: &ubuntu {dockerPull: 'ubuntu:24.04'}, ShellCommandRequirement:
     {}}}
-  findings: ["steps[0].run: ShellCommandRequirement beside a DockerRequirement is not supported: CWL runs the command as
-    /bin/sh -c after the image's ENTRYPOINT, which the Nextflow task does not"]
+  findings: ['step ''SHELL'': tool ''SHELL.cwl'': ShellCommandRequirement beside a DockerRequirement is not supported:
+    CWL runs the command as /bin/sh -c after the image''s ENTRYPOINT, which the Nextflow task does not']
 - id: a_containerized_command_that_can_render_empty
   why: CWL then gives the container no arguments, so the image runs its CMD, which the Nextflow task does not.
   tool: {id: ENTRY, baseCommand: null, requirements: {DockerRequirement: *ubuntu}, inputs: {name: {type: 'string?',
     inputBinding: {prefix: --name}}, verbose: {type: boolean, inputBinding: {prefix: -v}}}}
   job: {verbose: false}
-  findings: ['steps[0]: a containerized tool whose command can render empty is not supported: CWL then gives the
-    container no arguments, so the image runs its CMD, after its ENTRYPOINT if it has one, which the Nextflow task does
-    not; name the program in baseCommand']
+  findings: ['step ''ENTRY'': step: a containerized tool whose command can render empty is not supported: CWL then gives
+    the container no arguments, so the image runs its CMD, after its ENTRYPOINT if it has one, which the Nextflow task
+    does not; name the program in baseCommand']
 - id: nested_arrays
   why: &producer_feeds A producing step feeds the array, so the items' schema is refused rather than the value's shape.
   workflow: &array_from_producer {steps: [{id: PRODUCER, out: [{out: {wic_anchor: produced}}]}, {id: ARRAY, in: {values:
@@ -118,13 +125,17 @@
    tool: {arguments: [{valueFrom: x, position: true}]}, error: {re: non-integer CWL command position}}
 - {id: a_boolean_array_binding-prefix, why: &booleans 'cwltool renders [true, false] bound with prefix -x as -x alone,
    and with no prefix as nothing.', job: &true_false {values: [true, false]}, tool: {id: ARRAY, inputs: {values: {type:
-   {type: array, items: boolean}, inputBinding: {position: 1, prefix: -x}}}}, error: &boolean_array {re:
-   'run\.inputs\.values\.inputBinding: a boolean array''s binding is not supported: CWL adds only its prefix'}}
-- {id: a_boolean_array_binding-no-prefix, why: *booleans, job: *true_false, error: *boolean_array, tool: {id: ARRAY,
-   inputs: {values: {type: {type: array, items: {type: boolean}}, inputBinding: {position: 1}}}}}
-- {id: a_boolean_array_binding-optional, why: *booleans, job: *true_false, error: *boolean_array, tool: {id: ARRAY,
-   inputs: {values: {type: {type: array, items: ['null', boolean]}, inputBinding: {position: 1, prefix: -x}}}}}
-- {id: a_boolean_array_binding-optional-shorthand, why: *booleans, job: *true_false, error: *boolean_array, tool: {id:
+   {type: array, items: boolean}, inputBinding: {position: 1, prefix: -x}}}}, error: &boolean_array {re: 'tool
+   ''ARRAY\.cwl: inputs\.values\.inputBinding'': a boolean array''s binding is not supported: CWL adds only its
+   prefix'}}
+- {id: a_boolean_array_binding-no-prefix, why: *booleans, job: *true_false, error: {re: 'tool ''ARRAY\.cwl:
+   inputs\.values\.inputBinding'': a boolean array''s binding is not supported: CWL adds only its prefix'}, tool: {id:
+   ARRAY, inputs: {values: {type: {type: array, items: {type: boolean}}, inputBinding: {position: 1}}}}}
+- {id: a_boolean_array_binding-optional, why: *booleans, job: *true_false, error: {re: 'tool ''ARRAY\.cwl:
+   inputs\.values\.inputBinding'': a boolean array''s binding is not supported: CWL adds only its prefix'}, tool: {id:
+   ARRAY, inputs: {values: {type: {type: array, items: ['null', boolean]}, inputBinding: {position: 1, prefix: -x}}}}}
+- {id: a_boolean_array_binding-optional-shorthand, why: *booleans, job: *true_false, error: {re: 'tool ''ARRAY\.cwl:
+   inputs\.values\.inputBinding'': a boolean array''s binding is not supported: CWL adds only its prefix'}, tool: {id:
    ARRAY, inputs: {values: {type: {type: array, items: 'boolean?'}, inputBinding: {position: 1, prefix: -x}}}}}
 - id: shell_quote_false_without_shell_command_requirement
   why: &unquoted 'design §6, Commands: only a literal valueFrom, under ShellCommandRequirement, is unquoted.'
@@ -184,72 +195,81 @@
     $(inputs.label.basename).txt}}}}
   out: *out
   job: {label: input}
-  findings: ["steps[0].run.outputs.result.outputBinding.glob: $(inputs.label.basename) requires a File or Directory
-    input, and label is declared 'string'"]
-- {id: path_of_a_string, why: *path_of_value, job: {value: x}, tool: {stdout: $(inputs.value.path).log,
-   inputs: {value: {type: string, inputBinding: {prefix: -v, valueFrom: $(inputs.value.path)}}}}, findings: {contains: [
-   "steps[0].run.inputs.value.inputBinding.valueFrom: $(inputs.value.path) requires a File or Directory input, and value
-   is declared 'string'", "steps[0].run.stdout: $(inputs.value.path) requires a File or Directory input, and value is
-   declared 'string'"]}}
-- {id: path_of_an_int, why: *path_of_value, job: {value: 1}, tool: {stdout: $(inputs.value.path).log,
-   inputs: {value: {type: int, inputBinding: {prefix: -v, valueFrom: $(inputs.value.path)}}}}, findings: {contains: [
-   "steps[0].run.inputs.value.inputBinding.valueFrom: $(inputs.value.path) requires a File or Directory input, and value
-   is declared 'int'", "steps[0].run.stdout: $(inputs.value.path) requires a File or Directory input, and value is
-   declared 'int'"]}}
-- {id: path_of_a_float, why: *path_of_value, job: {value: 1.5}, tool: {stdout: $(inputs.value.path).log,
-   inputs: {value: {type: float, inputBinding: {prefix: -v, valueFrom: $(inputs.value.path)}}}}, findings: {contains: [
-   "steps[0].run.inputs.value.inputBinding.valueFrom: $(inputs.value.path) requires a File or Directory input, and value
-   is declared 'float'", "steps[0].run.stdout: $(inputs.value.path) requires a File or Directory input, and value is
-   declared 'float'"]}}
-- {id: path_of_a_boolean, why: *path_of_value, job: {value: true}, tool: {stdout:
+  findings: ['step ''BASENAME'': tool ''BASENAME.cwl: outputs.result.outputBinding.glob'': $(inputs.label.basename)
+    requires a File or Directory input, and label is declared ''string''']
+- {id: path_of_a_string, why: *path_of_value, job: {value: x}, tool: {id: SUFFIXED, stdout: $(inputs.value.path).log,
+   inputs: {value: {type: string, inputBinding: {prefix: -v, valueFrom: $(inputs.value.path)}}}}, findings: {contains:
+   ['step ''SUFFIXED'': tool ''SUFFIXED.cwl: inputs.value.inputBinding.valueFrom'': $(inputs.value.path) requires a File
+   or Directory input, and value is declared ''string''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'':
+   $(inputs.value.path) requires a File or Directory input, and value is declared ''string''']}}
+- {id: path_of_an_int, why: *path_of_value, job: {value: 1}, tool: {id: SUFFIXED, stdout: $(inputs.value.path).log,
+   inputs: {value: {type: int, inputBinding: {prefix: -v, valueFrom: $(inputs.value.path)}}}}, findings: {contains:
+   ['step ''SUFFIXED'': tool ''SUFFIXED.cwl: inputs.value.inputBinding.valueFrom'': $(inputs.value.path) requires a File
+   or Directory input, and value is declared ''int''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'':
+   $(inputs.value.path) requires a File or Directory input, and value is declared ''int''']}}
+- {id: path_of_a_float, why: *path_of_value, job: {value: 1.5}, tool: {id: SUFFIXED, stdout: $(inputs.value.path).log,
+   inputs: {value: {type: float, inputBinding: {prefix: -v, valueFrom: $(inputs.value.path)}}}}, findings: {contains:
+   ['step ''SUFFIXED'': tool ''SUFFIXED.cwl: inputs.value.inputBinding.valueFrom'': $(inputs.value.path) requires a File
+   or Directory input, and value is declared ''float''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'':
+   $(inputs.value.path) requires a File or Directory input, and value is declared ''float''']}}
+- {id: path_of_a_boolean, why: *path_of_value, job: {value: true}, tool: {id: SUFFIXED, stdout:
    $(inputs.value.path).log, inputs: {value: {type: boolean, inputBinding: {prefix: -v, valueFrom:
-   $(inputs.value.path)}}}}, findings: {contains: [ "steps[0].run.inputs.value.inputBinding.valueFrom:
-   $(inputs.value.path) requires a File or Directory input, and value is declared 'boolean'", "steps[0].run.stdout:
-   $(inputs.value.path) requires a File or Directory input, and value is declared 'boolean'"]}}
-- {id: basename_of_a_string, why: *path_of_value, job: {value: x}, tool: {stdout:
+   $(inputs.value.path)}}}}, findings: {contains: ['step ''SUFFIXED'': tool ''SUFFIXED.cwl:
+   inputs.value.inputBinding.valueFrom'': $(inputs.value.path) requires a File or Directory input, and value is declared
+   ''boolean''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'': $(inputs.value.path) requires a File or Directory
+   input, and value is declared ''boolean''']}}
+- {id: basename_of_a_string, why: *path_of_value, job: {value: x}, tool: {id: SUFFIXED, stdout:
    $(inputs.value.basename).log, inputs: {value: {type: string, inputBinding: {prefix: -v, valueFrom:
-   $(inputs.value.basename)}}}}, findings: {contains: ["steps[0].run.inputs.value.inputBinding.valueFrom:
-   $(inputs.value.basename) requires a File or Directory input, and value is declared 'string'", "steps[0].run.stdout:
-   $(inputs.value.basename) requires a File or Directory input, and value is declared 'string'"]}}
-- {id: basename_of_an_int, why: *path_of_value, job: {value: 1}, tool: {stdout:
+   $(inputs.value.basename)}}}}, findings: {contains: ['step ''SUFFIXED'': tool ''SUFFIXED.cwl:
+   inputs.value.inputBinding.valueFrom'': $(inputs.value.basename) requires a File or Directory input, and value is
+   declared ''string''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'': $(inputs.value.basename) requires a File or
+   Directory input, and value is declared ''string''']}}
+- {id: basename_of_an_int, why: *path_of_value, job: {value: 1}, tool: {id: SUFFIXED, stdout:
    $(inputs.value.basename).log, inputs: {value: {type: int, inputBinding: {prefix: -v, valueFrom:
-   $(inputs.value.basename)}}}}, findings: {contains: ["steps[0].run.inputs.value.inputBinding.valueFrom:
-   $(inputs.value.basename) requires a File or Directory input, and value is declared 'int'", "steps[0].run.stdout:
-   $(inputs.value.basename) requires a File or Directory input, and value is declared 'int'"]}}
-- {id: basename_of_a_float, why: *path_of_value, job: {value: 1.5}, tool: {stdout:
+   $(inputs.value.basename)}}}}, findings: {contains: ['step ''SUFFIXED'': tool ''SUFFIXED.cwl:
+   inputs.value.inputBinding.valueFrom'': $(inputs.value.basename) requires a File or Directory input, and value is
+   declared ''int''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'': $(inputs.value.basename) requires a File or
+   Directory input, and value is declared ''int''']}}
+- {id: basename_of_a_float, why: *path_of_value, job: {value: 1.5}, tool: {id: SUFFIXED, stdout:
    $(inputs.value.basename).log, inputs: {value: {type: float, inputBinding: {prefix: -v, valueFrom:
-   $(inputs.value.basename)}}}}, findings: {contains: ["steps[0].run.inputs.value.inputBinding.valueFrom:
-   $(inputs.value.basename) requires a File or Directory input, and value is declared 'float'", "steps[0].run.stdout:
-   $(inputs.value.basename) requires a File or Directory input, and value is declared 'float'"]}}
-- {id: basename_of_a_boolean, why: *path_of_value, job: {value: true}, tool: {stdout:
+   $(inputs.value.basename)}}}}, findings: {contains: ['step ''SUFFIXED'': tool ''SUFFIXED.cwl:
+   inputs.value.inputBinding.valueFrom'': $(inputs.value.basename) requires a File or Directory input, and value is
+   declared ''float''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'': $(inputs.value.basename) requires a File or
+   Directory input, and value is declared ''float''']}}
+- {id: basename_of_a_boolean, why: *path_of_value, job: {value: true}, tool: {id: SUFFIXED, stdout:
    $(inputs.value.basename).log, inputs: {value: {type: boolean, inputBinding: {prefix: -v, valueFrom:
-   $(inputs.value.basename)}}}}, findings: {contains: ["steps[0].run.inputs.value.inputBinding.valueFrom:
-   $(inputs.value.basename) requires a File or Directory input, and value is declared 'boolean'", "steps[0].run.stdout:
-   $(inputs.value.basename) requires a File or Directory input, and value is declared 'boolean'"]}}
+   $(inputs.value.basename)}}}}, findings: {contains: ['step ''SUFFIXED'': tool ''SUFFIXED.cwl:
+   inputs.value.inputBinding.valueFrom'': $(inputs.value.basename) requires a File or Directory input, and value is
+   declared ''boolean''', 'step ''SUFFIXED'': tool ''SUFFIXED.cwl: stdout'': $(inputs.value.basename) requires a File or
+   Directory input, and value is declared ''boolean''']}}
 - {id: a_file_reference_embedded_in_text, why: 'design §6, Commands: CWL renders an embedded File object as JSON.', job:
    {f: {class: File, path: in.txt}, s: x}, tool: {id: EMBEDDED, inputs: {f: {type: File}, s: {type: string}}, arguments:
-   ['--input=$(inputs.f)']}, findings: ['steps[0].run.arguments[0]: $(inputs.f) embedded in other text renders a File
-   object as JSON in CWL; use $(inputs.f.path) or $(inputs.f.basename), or the reference alone']}
+   ['--input=$(inputs.f)']}, findings: ['step ''EMBEDDED'': tool ''EMBEDDED.cwl: arguments[0]'': $(inputs.f) embedded in
+   other text renders a File object as JSON in CWL; use $(inputs.f.path) or $(inputs.f.basename), or the reference
+   alone']}
 - id: an_empty_boolean_prefix
   why: &lowering_only A rejection only the lowering finds is a finding at its step, beside the rest.
   tool: {inputs: {b: {type: boolean, inputBinding: {prefix: ''}}}}
   job: &b {b: true}
-  findings: &bad_prefix [{re: '^steps\[0\]: .*prefix for ''b'' must be a non-empty string'}]
+  findings: &bad_prefix [{re: '^step ''make'': step: .*prefix for ''b'' must be a non-empty string'}]
 - {id: a_blank_boolean_prefix, why: 'A blank prefix hits the named diagnostic, not the flag''s own invariant.', job: *b,
-   tool: {inputs: {b: {type: boolean, inputBinding: {prefix: '   '}}}}, findings: *bad_prefix}
-- {id: separate_without_a_prefix, why: cwltool rejects separate without a prefix., job: {s: x}, tool: {inputs: {s:
-   {type: string, inputBinding: {separate: false}}}}, findings: &no_prefix [{re: '^steps\[0\]: .*separate
+   tool: {id: REJECTED, inputs: {b: {type: boolean, inputBinding: {prefix: '   '}}}}, findings: [{re: '^step
+   ''REJECTED'': step: .*prefix for ''b'' must be a non-empty string'}]}
+- {id: separate_without_a_prefix, why: cwltool rejects separate without a prefix., job: {s: x}, tool: {id: REJECTED,
+   inputs: {s: {type: string, inputBinding: {separate: false}}}}, findings: &no_prefix [{re: '^step ''REJECTED'': step:
+   .*separate cannot be specified without a prefix'}]}
+- {id: boolean_separate_without_a_prefix, why: cwltool rejects separate without a prefix., job: *b, tool: {id: REJECTED,
+   inputs: {b: {type: boolean, inputBinding: {separate: false}}}}, findings: [{re: '^step ''REJECTED'': step: .*separate
    cannot be specified without a prefix'}]}
-- {id: boolean_separate_without_a_prefix, why: cwltool rejects separate without a prefix., job: *b, tool: {inputs: {b:
-   {type: boolean, inputBinding: {separate: false}}}}, findings: *no_prefix}
 - {id: boolean_separate_null, why: &null_separate 'cwltool''s .get("separate", True) defaults only an absent key, so
-   separate: null rejects too.', job: *b, tool: {inputs: {b: {type: boolean, inputBinding: {separate:
-   null}}}}, findings: *no_prefix}
-- {id: string_separate_null, why: *null_separate, job: {s: x}, findings: *no_prefix, tool: {inputs: {s:
-   {type: string, inputBinding: {separate: null}}}}}
-- {id: a_value_from_on_an_array_binding, why: *lowering_only, job: {xs: [x]}, tool: {inputs: {xs: {type:
-   {type: array, items: string}, inputBinding: {valueFrom: $(inputs.xs)}}}}, findings: [{re: '^steps\[0\]: .*valueFrom
-   on an array-typed inputBinding'}]}
+   separate: null rejects too.', job: *b, tool: {id: REJECTED, inputs: {b: {type: boolean, inputBinding: {separate:
+   null}}}}, findings: [{re: '^step ''REJECTED'': step: .*separate cannot be specified without a prefix'}]}
+- {id: string_separate_null, why: *null_separate, job: {s: x}, findings: [{re: '^step ''REJECTED'': step: .*separate
+   cannot be specified without a prefix'}], tool: {id: REJECTED, inputs: {s: {type: string, inputBinding: {separate:
+   null}}}}}
+- {id: a_value_from_on_an_array_binding, why: *lowering_only, job: {xs: [x]}, tool: {id: REJECTED, inputs: {xs: {type:
+   {type: array, items: string}, inputBinding: {valueFrom: $(inputs.xs)}}}}, findings: [{re: '^step ''REJECTED'': step:
+   .*valueFrom on an array-typed inputBinding'}]}
 - id: lowering_rejections_aggregate_with_every_other_finding_by_step
   why: Each step's lowering rejection is a finding in step order, beside a capability finding.
   workflow: {steps: [{id: GATED, in: {a: a}, when: $(inputs.a ** 2 > 1)}, {id: GATED, in: {a: a}, when: $(inputs.a +
@@ -257,8 +277,8 @@
   tools: [&gated {id: GATED, inputs: {a: {type: int}}, baseCommand: 'true'}, *gated, {id: UNSUPPORTED, requirements:
     {ToolTimeLimit: {timelimit: 60}}}]
   job: {a: 1}
-  findings: [{startswith: 'steps[0]:'}, {re: '^steps\[1\]:.*must compute a boolean'}, {startswith:
-    'steps[2].run.requirements.ToolTimeLimit:'}]
+  findings: [{startswith: 'step ''GATED@1'': when:'}, {re: '^step ''GATED@2'': when: .*must compute a boolean'},
+    {startswith: 'step ''UNSUPPORTED'': tool ''UNSUPPORTED.cwl: requirements.ToolTimeLimit'':'}]
 - id: a_command_error_is_reported_instead_of_a_wrong_cause_absence_finding
   why: The command's own error is the one finding, not an absence finding a skipped producer would cause.
   workflow: {steps: [{id: PRODUCE, in: {x: x}, out: [{r: {wic_anchor: r}}], when: $(inputs.x > 1)}, {id: CONSUME, in:
@@ -267,7 +287,7 @@
     outputBinding: {glob: out.txt, loadContents: true, outputEval: '$(self[0].contents)'}}}}, {id: CONSUME, inputs: {v:
     {type: 'string?'}}, arguments: [$(runtime.cores)]}]
   job: {x: 2}
-  findings: [{startswith: 'steps[1]: CWL argument contains an unsupported CWL expression'}]
+  findings: [{startswith: 'step ''CONSUME'': step: CWL argument contains an unsupported CWL expression'}]
 - {id: a_command_error_is_reported_instead_of_an_absent_optional_finding, why: The command's own error is the one
-   finding., tool: {inputs: {v: {type: 'string?', inputBinding: {}}}, arguments: [$(runtime.cores)]},
-   findings: [{startswith: 'steps[0]: CWL argument contains an unsupported CWL expression'}]}
+   finding., tool: {id: ABSENT, inputs: {v: {type: 'string?', inputBinding: {}}}, arguments: [$(runtime.cores)]},
+   findings: [{startswith: 'step ''ABSENT'': step: CWL argument contains an unsupported CWL expression'}]}

@@ -10,6 +10,7 @@ import pytest
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, StepInput, Workflow
 from sophios.input_output_nf import render_nextflow
+from sophios.ir.resolved import NotLowered
 from sophios.nf_types import (
     ExecutableNextflowWorkflow, NfPort, NfProcess, NfProcessConnection, NfStepInputConnection,
     NfWorkflowInputConnection,
@@ -17,7 +18,7 @@ from sophios.nf_types import (
 from sophios.wic_types import Yaml
 
 from .test_channels import _lower
-from .testkit import command, lowered_case, output_port, step, tool
+from .testkit import command, lowered_case, output_port, refusal_lines, step, tool
 
 _STRINGS = {"type": "array", "items": "string"}
 
@@ -49,51 +50,51 @@ def _joined(step_input: Any, port_type: Any, inputs: dict[str, Any], *, scatter:
 
 
 def _findings(case: Yaml) -> list[str]:
-    """The exact aggregated finding lines of the case's rejected lowering."""
-    with pytest.raises(ValueError) as error:
+    """The refusals of the case's lowering, as they print, less their spans."""
+    with pytest.raises(NotLowered) as error:
         lowered_case(case)
-    header, *lines = str(error.value).splitlines()
-    assert header == "Nextflow capability analysis failed:"
-    return [line.removeprefix("- ") for line in lines]
+    return refusal_lines(error.value)
 
 
 _A, _B = ("string", "a"), ("string", "b")
+#: How a refusal of the joined step input begins.
+_WORDS = "step 'JOIN': input 'words': "
 
 
 @pytest.mark.fast
 @pytest.mark.parametrize(("step_input", "port_type", "inputs", "finding"), [
     ({"source": ["a", "b"], "linkMerge": "merge_deep"}, _STRINGS, {"a": _A, "b": _B},
-     "steps[0].in.words.linkMerge: unsupported linkMerge 'merge_deep'"),
+     _WORDS + "linkMerge: unsupported linkMerge 'merge_deep'"),
     ({"source": ["a", "b"], "pickValue": "any_non_null"}, "string", {"a": _A, "b": _B},
-     "steps[0].in.words.pickValue: unsupported pickValue 'any_non_null'"),
+     _WORDS + "pickValue: unsupported pickValue 'any_non_null'"),
     ({"source": "a", "pickValue": "first_non_null"}, "string", {"a": _A},
-     "steps[0].in.words.pickValue: pickValue picks from a list; one source with no linkMerge is not one"),
+     _WORDS + "pickValue picks from a list; one source with no linkMerge is not one"),
     ({"source": ["a", "b"], "default": "d"}, _STRINGS, {"a": _A, "b": _B},
-     "steps[0].in.words.default: a default never applies beside a linkMerge or a pickValue: the joined value "
+     _WORDS + "default: a default never applies beside a linkMerge or a pickValue: the joined value "
      "is not null"),
     ({"default": ["d"]}, _STRINGS, {},
-     "steps[0].in.words.default: the Nextflow target supports a JSON scalar default of the tool input's type"),
+     _WORDS + "default: the Nextflow target supports a JSON scalar default of the tool input's type"),
     ({"default": 1}, "string", {},
-     "steps[0].in.words.default: the Nextflow target supports a JSON scalar default of the tool input's type"),
+     _WORDS + "default: the Nextflow target supports a JSON scalar default of the tool input's type"),
     ({"source": ["xs", "b"], "pickValue": "first_non_null"}, "string", {"xs": (_STRINGS, ["x"]), "b": _B},
-     "steps[0].in.words: 'xs' is an array, and [] stands for both a null and an empty array, so pickValue "
+     _WORDS + "'xs' is an array, and [] stands for both a null and an empty array, so pickValue "
      "cannot take it"),
     ({"source": "xs", "default": ["d"]}, _STRINGS, {"xs": (_STRINGS, ["x"])},
-     "steps[0].in.words.default: the Nextflow target supports a JSON scalar default of the tool input's type"),
+     _WORDS + "default: the Nextflow target supports a JSON scalar default of the tool input's type"),
     ({"source": ["xs", "b"]}, _STRINGS, {"xs": (_STRINGS, ["x"]), "b": _B},
-     "steps[0].in.words: merge_nested over the array 'xs' makes a nested array, which is not supported"),
+     _WORDS + "merge_nested over the array 'xs' makes a nested array, which is not supported"),
     ({"source": ["maybe", "b"]}, _STRINGS, {"maybe": ("string?", "m"), "b": _B},
-     "steps[0].in.words: 'maybe' may be null, and a joined list has no lowering of a null element; pick from "
+     _WORDS + "'maybe' may be null, and a joined list has no lowering of a null element; pick from "
      "it with pickValue"),
     ({"source": ["a", "b"]}, "string", {"a": _A, "b": _B},
-     "steps[0].in.words: the step input gives a list, but its tool input declares 'string'"),
+     _WORDS + "the step input gives a list, but its tool input declares 'string'"),
     ({"source": ["a", "b"], "pickValue": "first_non_null"}, _STRINGS, {"a": _A, "b": _B},
-     "steps[0].in.words: the step input gives one value, but its tool input declares "
+     _WORDS + "the step input gives one value, but its tool input declares "
      "{'type': 'array', 'items': 'string'}"),
     ({"source": ["a", "b"], "pickValue": "first_non_null"}, "File", {"a": ("File?", None), "b": ("File", "b.txt")},
-     "workflow: workflow input 'a' is an absent optional File?, which has no lowering; give it a value"),
+     "workflow 'wf': workflow: workflow input 'a' is an absent optional File?, which has no lowering; give it a value"),
     ({"source": "a", "default": "b.txt"}, "File", {"a": ("File?", "a.txt")},
-     "steps[0].in.words.default: a step-input default of a File or Directory input is not supported; give the "
+     _WORDS + "default: a step-input default of a File or Directory input is not supported; give the "
      "path as a workflow input"),
 ], ids=["link-merge", "pick-value", "pick-one-source", "default-beside-merge", "array-default", "mistyped-default",
         "pick-over-array", "default-over-array", "nested-array", "null-element", "list-to-scalar", "one-to-list",
@@ -108,7 +109,7 @@ def test_each_step_input_the_idioms_cannot_take_is_rejected_by_name(
 def test_a_scattered_input_takes_its_one_source_as_it_is() -> None:
     rose = _joined({"source": ["xs"], "linkMerge": "merge_flattened"}, "string", {"xs": (_STRINGS, ["x"])},
                    scatter=True)
-    assert "steps[0].in.words: a scattered input takes its one source as it is" in _findings(rose)
+    assert "step 'JOIN': input 'words': a scattered input takes its one source as it is" in _findings(rose)
 
 
 @pytest.mark.fast

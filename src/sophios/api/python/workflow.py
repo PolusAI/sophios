@@ -855,7 +855,9 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             logger.warning("Adding a new input %s to workflow %s", parameter_name, self.process_name)
             if implicit:
                 _warn_implicit_workflow_parameter(self, parameter_name, "input")
-            return InputParameter(parameter_name, parameter_type, parent_obj=self)
+            created = InputParameter(parameter_name, parameter_type, parent_obj=self)
+            created._span = _caller_span()  # pylint: disable=protected-access
+            return created
 
         input_parameter = self._inputs.ensure(name, create_input)
         _resolve_parameter_type(

@@ -202,6 +202,8 @@ class InputParameter(_ParameterBase):
 
     declared: bool = field(default=True, init=False)
     _binding: InputBinding | None = field(default=None, init=False, repr=False)
+    #: The Python line that made a workflow's input.
+    _span: SourceSpan | None = field(default=None, init=False, repr=False)
 
     @property
     def value(self) -> Any:
