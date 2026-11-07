@@ -347,7 +347,7 @@ def _provoke_invalid_inference() -> None:
     """Renamings given while naming conventions are off."""
     from sophios.api.python.workflow import Inference  # pylint: disable=import-outside-toplevel
 
-    Inference(renamings=[('a', 'b')])
+    Inference(naming_conventions=False, renamings=[('a', 'b')])
 
 
 def _provoke_workflow_run_failed() -> None:
@@ -433,22 +433,7 @@ def _provoke_positional_output_source() -> None:
 COMPILED.update({SophiosErrorCode.POSITIONAL_OUTPUT_SOURCE: _provoke_positional_output_source})
 
 
-def _provoke_inference_tie() -> None:
-    """Under strict inference, one producer offering two matching outputs."""
-    from sophios.wic_types import StepId, Tool  # pylint: disable=import-outside-toplevel
-
-    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
-    from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt  # pylint: disable=import-outside-toplevel
-
-    multi = clt({}, {'first': {'type': 'File', 'outputBinding': {'glob': 'first'}},
-                     'last': {'type': 'File', 'outputBinding': {'glob': 'last'}}})
-    tools = {**SYNTHETIC_TOOLS,
-             StepId('multi_file', SYNTHETIC_NS): Tool('/synthetic/multi_file.cwl', multi)}
-    compile_hermetic({'steps': [{'id': 'multi_file'}, {'id': 'count'}]}, 'provoke',
-                     tools=tools, inference_strict=True)
-
-
-def _provoke_inference_recency() -> None:
+def _provoke_inference_guess() -> None:
     """Under strict inference, an earlier producer that also matched."""
     from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
 
@@ -458,9 +443,17 @@ def _provoke_inference_recency() -> None:
                      'provoke', inference_strict=True)
 
 
+def _provoke_inference_duplicate() -> None:
+    """Two inputs of one step that inference would both give the same file."""
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+
+    compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}},
+                                {'id': 'join', 'in': {'name': {'wic_inline_input': 'b'}}}]}, 'provoke')
+
+
 COMPILED.update({
-    SophiosErrorCode.INFERENCE_TIE: _provoke_inference_tie,
-    SophiosErrorCode.INFERENCE_RECENCY: _provoke_inference_recency,
+    SophiosErrorCode.INFERENCE_GUESS: _provoke_inference_guess,
+    SophiosErrorCode.INFERENCE_DUPLICATE: _provoke_inference_duplicate,
 })
 
 

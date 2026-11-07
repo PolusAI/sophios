@@ -360,8 +360,8 @@ for a document, or for what running it needs from the machine (kind
 `machine`: `wic015`, `wic016`, `wic021`, `wic029`, `wic037`), and `api0NN`
 for the Python API, where the document is fine and the call was not. A code
 is never renumbered, and a code that shipped in a release is never reused;
-`wic040` and `wic041` are unassigned. `wic042` and `wic043` are notes, errors
-under `--inference_strict`.
+`wic040`, `wic041`, `wic042` and `wic056` are unassigned. `wic043` is a note, an
+error under `--inference_strict`.
 
 Every member is provoked in `tests/core/provocations.py`, in one of two
 tiers: `PARSE` (source text through `parse()` alone) or `COMPILED` (a
@@ -414,8 +414,7 @@ Every member has an `Explanation` in `EXPLANATIONS` (kind, meaning, fix);
 | `wic037` | `IMAGE_UNAVAILABLE` | `COMPILED` |
 | `wic038` | `STEP_INPUT_RECORD` | `PARSE` |
 | `wic039` | `POSITIONAL_OUTPUT_SOURCE` | `COMPILED` |
-| `wic042` | `INFERENCE_TIE` | `COMPILED` |
-| `wic043` | `INFERENCE_RECENCY` | `COMPILED` |
+| `wic043` | `INFERENCE_GUESS` | `COMPILED` |
 | `wic044` | `REALTIME_DECLARATION` | `COMPILED` |
 | `api001` | `INVALID_INPUT_VALUE` | `COMPILED` |
 | `api002` | `INVALID_STEP` | `COMPILED` |

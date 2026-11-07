@@ -5,7 +5,6 @@ import shutil
 import subprocess as sub
 import traceback
 import json
-from collections.abc import Iterable
 from dataclasses import replace
 from typing import Final, Iterator, NoReturn
 
@@ -13,7 +12,7 @@ import graphviz
 import yaml
 
 from sophios.lang import wic_schema
-from sophios.lang.diagnostics import Diagnostic, Diagnostics, SophiosError
+from sophios.lang.diagnostics import Diagnostics, SophiosError, report
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.ir.artifacts import CompilationResult
 from . import input_output as io
@@ -93,7 +92,7 @@ def _write_nextflow_target(
         paths = io_nf.write_nextflow_artifacts(workflow, basepath)
     except ValueError as error:
         _not_lowered(error, yaml_stem)
-    _report(notes, diagnostics_form)
+    report(notes, diagnostics_form)
     return paths
 
 
@@ -114,7 +113,7 @@ def _run_nextflow(args: argparse.Namespace, unknown_args: list[str], compilation
                                                                     settings)
     except ValueError as error:
         _not_lowered(error, yaml_stem)
-    _report(prepared.notes, args.diagnostics)
+    report(prepared.notes, args.diagnostics)
     if args.check:
         _checked(prepared.artifact.name)
         return
@@ -290,7 +289,7 @@ def _pass_through(args: argparse.Namespace, unknown_args: list[str]) -> None:
     job = (str(Path(args.inputs_file).absolute()),) if args.inputs_file else ()
     if args.graphviz:
         Path(args.basepath).mkdir(parents=True, exist_ok=True)
-        _report(_draw(None, str(workflow), workflow.stem, Path(args.basepath)), args.diagnostics)
+        report(_draw(None, str(workflow), workflow.stem, Path(args.basepath)), args.diagnostics)
     if _is_local_run(args):
         jobs = (preflight.Job(io.read_inputs_file(args.inputs_file), Path(args.inputs_file).parent.absolute(),
                               '--inputs_file'),) if args.inputs_file else ()
@@ -303,12 +302,6 @@ def _pass_through(args: argparse.Namespace, unknown_args: list[str]) -> None:
     else:
         print('Please specify either --generate_cwl_workflow (compile), --check or --run_local (run)')
         sys.exit(1)
-
-
-def _report(diagnostics: Iterable[Diagnostic], form: str) -> None:
-    """Print diagnostics on stderr, as text or as one JSON object per line."""
-    for diagnostic in diagnostics:
-        print(json.dumps(diagnostic.to_json()) if form == 'json' else diagnostic, file=sys.stderr)
 
 
 #: Where a failure Sophios did not expect is reported.
@@ -339,7 +332,7 @@ def main() -> None:
     try:
         _main(args, unknown_args)
     except SophiosError as e:
-        _report(e.diagnostics, args.diagnostics)
+        report(e.diagnostics, args.diagnostics)
         sys.exit(1)
     except Exception as e:  # pylint: disable=broad-exception-caught
         _report_crash(e, Path(args.yaml).stem if args.yaml else 'sophios')
@@ -407,9 +400,9 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     # Everything below this line takes values; no Namespace goes further.
     compiler_options, graph_settings = cli.get_dicts_for_compilation(args)
     compiler_options['inference_rules'] = global_config.get('inference_rules', {})
-    compiler_options['renaming_conventions'] = global_config.get('renaming_conventions', [])
+    compiler_options['renaming_conventions'] = io.renamings_of(global_config)
     compilation, analyses = _compile_loaded_document(yaml_path, bundle, yml_paths, tools_cwl, compiler_options)
-    _report(compilation.diagnostics, args.diagnostics)
+    report(compilation.diagnostics, args.diagnostics)
     if args.target == 'nextflow':
         if _is_local_run(args):
             _run_nextflow(args, unknown_args, compilation, analyses, yaml_stem)
@@ -434,8 +427,8 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     def draw_after_write() -> None:
         # cwltool draws the CWL file, so it is drawn once this compile has written it.
         if args.graphviz:
-            _report(_draw(drawing_graph, str(Path(args.basepath) / f'{yaml_stem}.cwl'), yaml_stem,
-                          Path(args.basepath)), args.diagnostics)
+            report(_draw(drawing_graph, str(Path(args.basepath) / f'{yaml_stem}.cwl'), yaml_stem,
+                         Path(args.basepath)), args.diagnostics)
 
     if _is_local_run(args):
         prepared = backends.backend('cwl', args.cwl_runner).prepare(

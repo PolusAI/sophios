@@ -11,8 +11,8 @@ from .testkit import REPO_ROOT
 
 
 @pytest.fixture(scope="session")
-def unsupported_real_linear_result() -> CompilationResult:
-    """Compile the reviewer's real shell/primitive-output workflow."""
+def real_linear_result() -> CompilationResult:
+    """Compile the shipped touch, append and cat tools as one workflow."""
     touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl")
     touch.inputs.filename = "empty.txt"
     append = Step(clt_path=REPO_ROOT / "cwl_adapters" / "append.cwl")

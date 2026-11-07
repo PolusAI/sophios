@@ -352,7 +352,7 @@ _TWO_TOUCHES = ('steps:\n- id: touch\n  in:\n    filename: !ii a.txt\n'
 @pytest.mark.fast
 def test_cli_prints_an_inference_note_on_stderr_and_succeeds(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """A choice between equals is said, with its code, and the compile still succeeds."""
+    """A guessed edge is said under its code, with how to check it, and the compile still succeeds."""
     workflow = tmp_path / 'two_touches.wic'
     workflow.write_text(_TWO_TOUCHES, encoding='utf-8')
     monkeypatch.chdir(tmp_path)
@@ -361,8 +361,10 @@ def test_cli_prints_an_inference_note_on_stderr_and_succeeds(
     cli.main()  # returning, rather than raising SystemExit, is the first assertion
 
     captured = capsys.readouterr()
-    assert 'note [wic043]' in captured.err
-    assert "step 1 'touch' output 'file'" in captured.err
+    header, row = [line for line in captured.err.splitlines() if 'wic043' in line or ' <- ' in line]
+    assert header == ('note [wic043] 1 edge was guessed; draw the workflow to check it '
+                      '(--graphviz, or Workflow.draw() in Python)')
+    assert row.startswith('  ') and row.endswith('two_touches.wic:8:3  cat.file <- touch@2.file (1 other fits)')
     assert 'wic043' not in captured.out
 
 
@@ -380,7 +382,9 @@ def test_cli_with_inference_strict_refuses_a_choice_between_equals(
         cli.main()
 
     assert caught.value.code == 1
-    assert 'error [wic043]' in capsys.readouterr().err
+    printed = capsys.readouterr().err
+    assert 'error [wic043] cat.file <- touch@2.file was guessed, 1 other fits; write the edge it should read' in printed
+    assert 'draw the workflow' not in printed, 'the compile failed, so there is nothing to draw'
 
 
 @pytest.mark.fast
@@ -647,12 +651,12 @@ def test_to_json_has_every_key_when_nothing_is_known() -> None:
 def test_to_json_carries_the_position_the_step_and_the_catalog_fix() -> None:
     """The object holds where, which step and port, and what to do."""
     span = SourceSpan('w.wic', 2, 7, 2, 9)
-    found = Diagnostic(Severity.NOTE, SophiosErrorCode.INFERENCE_RECENCY, 'took the latest', span,
+    found = Diagnostic(Severity.NOTE, SophiosErrorCode.INFERENCE_GUESS, 'cat.file <- touch.file (1 other fits)', span,
                        Locator(step='cat', index=3, port='file')).to_json()
     assert (found['severity'], found['code'], found['file'], found['line'], found['column'],
             found['end_line'], found['end_column'], found['step'], found['index'], found['port']) == (
         'note', 'wic043', 'w.wic', 2, 7, 2, 9, 'cat', 3, 'file')
-    assert found['fix'] == SophiosErrorCode.INFERENCE_RECENCY.explanation.fix
+    assert found['fix'] == SophiosErrorCode.INFERENCE_GUESS.explanation.fix
 
 
 @pytest.mark.fast
@@ -685,8 +689,8 @@ def test_a_json_note_names_its_step_and_port_and_the_compile_succeeds(
                                      '--diagnostics', 'json'])
     cli.main()
     note, = [json.loads(line) for line in capsys.readouterr().err.splitlines() if line.startswith('{')]
-    assert (note['severity'], note['code'], note['step'], note['index'], note['port']) == (
-        'note', 'wic043', 'cat', 3, 'file')
+    assert (note['severity'], note['code'], note['message'], note['step'], note['index'], note['port']) == (
+        'note', 'wic043', 'cat.file <- touch@2.file (1 other fits)', 'cat', 3, 'file')
 
 
 @pytest.mark.fast

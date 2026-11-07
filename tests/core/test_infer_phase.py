@@ -24,12 +24,13 @@ from sophios.ir import (
     infer,
     link,
 )
+from sophios.ir.infer import Inferred
 from sophios.ir.names import Names
 from sophios.ir.declarations import input_rank, layered, output_rank
 from sophios.ir.types import (DerivedName, EdgeOrigin, Port, PortDeclaration, PortId, PortName,
                               StepNode, WorkflowGraph)
 from sophios.lang import SophiosErrorCode
-from sophios.lang.diagnostics import Locator, Severity, SophiosError
+from sophios.lang.diagnostics import Diagnostic, Locator, Severity, SophiosError
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
@@ -66,7 +67,7 @@ def test_every_inferred_edge_is_the_independent_models_choice(workflow: Yaml) ->
 
 
 @pytest.mark.fast
-def test_most_recent_step_and_last_declared_output_win() -> None:
+def test_most_recent_step_and_first_declared_output_win() -> None:
     """Candidate order is semantic, including ambiguity within one producer."""
     multi = clt({}, {
         'first': {'type': 'File', 'outputBinding': {'glob': 'first'}},
@@ -83,7 +84,7 @@ def test_most_recent_step_and_last_declared_output_win() -> None:
     count_edge = next(edge for edge in result.graph.linked_edges
                       if edge.origin is EdgeOrigin.INFERRED and edge.sink.step.name == 'count')
     assert count_edge.source.step.name == 'multi_file'
-    assert count_edge.source.port == 'last'
+    assert count_edge.source.port == 'first'
 
 
 def _multi_file_tools() -> Tools:
@@ -94,6 +95,11 @@ def _multi_file_tools() -> Tools:
             LegacyStepId('multi_file', SYNTHETIC_NS): Tool('/synthetic/multi_file.cwl', multi)}
 
 
+def _notes(result: Inferred, code: SophiosErrorCode) -> list[Diagnostic]:
+    """The diagnostics of `result` with `code`."""
+    return [d for d in result.diagnostics if d.code is code]
+
+
 _TWO_PRODUCERS: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}},
                                   {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'b'}}},
                                   {'id': 'count'}]}
@@ -101,13 +107,12 @@ _TWO_PRODUCERS: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_
 
 @pytest.mark.fast
 def test_a_tie_within_one_producer_is_noted_with_the_alternatives() -> None:
-    """The losing output and the pin that would make the choice explicit are named."""
+    """One line names the input, the output it reads and the output that also fit."""
     _, linked, _ = _typed({'steps': [{'id': 'multi_file'}, {'id': 'count'}]}, _multi_file_tools())
     result = infer(linked)
     assert result.graph is not None
-    (note,) = [d for d in result.diagnostics if d.severity is Severity.NOTE]
-    assert note.code is SophiosErrorCode.INFERENCE_TIE
-    assert "'first'" in note.message and '!&' in note.message
+    (note,) = _notes(result, SophiosErrorCode.INFERENCE_GUESS)
+    assert note.message == 'count.file <- multi_file.first (1 other fits)'
     assert note.locator == Locator(step='count', index=2, port='file')
 
 
@@ -117,11 +122,8 @@ def test_recency_between_producers_is_noted() -> None:
     _, linked, _ = _typed(_TWO_PRODUCERS)
     result = infer(linked)
     assert result.graph is not None
-    (note,) = [d for d in result.diagnostics if d.severity is Severity.NOTE]
-    assert note.code is SophiosErrorCode.INFERENCE_RECENCY
-    assert ("most recent match step 2 'mk_file' output 'file'; earlier steps also match: "
-            "step 1 'mk_file' output 'file'; pin it: `out: - file: !& <name>` on step 2 'mk_file'"
-            in note.message)
+    (note,) = _notes(result, SophiosErrorCode.INFERENCE_GUESS)
+    assert note.message == 'count.file <- mk_file@2.file (1 other fits)', 'a repeated name carries its position'
     edge = next(e for e in result.graph.linked_edges if e.sink.step.name == 'count')
     assert edge.source.step.index == 2, 'the choice itself is unchanged'
 
@@ -132,24 +134,20 @@ def _across_calls(pinned: bool) -> Yaml:
     producer: Yaml = {'id': 'multi_file'}
     consumer: Yaml = {'id': 'count'}
     if pinned:
-        producer['out'] = [{'last': {'wic_anchor': 'f'}}]
+        producer['out'] = [{'first': {'wic_anchor': 'f'}}]
         consumer['in'] = {'file': {'wic_alias': 'f'}}
     return {'steps': [subworkflow_step('make.wic', {'steps': [producer]}),
                       subworkflow_step('use.wic', {'steps': [consumer]})]}
 
 
 @pytest.mark.fast
-def test_a_note_across_subworkflow_calls_names_the_steps_an_author_can_pin() -> None:
-    """A call exposes inner ports under names nobody can write, so the note
-    points at the inner steps, and writing exactly the pin it gives compiles
-    without a note."""
+def test_a_note_across_subworkflow_calls_names_the_call_and_the_inner_output() -> None:
+    """The input is named at the call the author wrote, and the output by the
+    steps down to the one that makes it; writing the edge between the inner
+    steps compiles without a note."""
     result = compile_hermetic(_across_calls(pinned=False), tools=_multi_file_tools())
-    (note,) = list(result.diagnostics)
-    assert note.code is SophiosErrorCode.INFERENCE_TIE
-    assert "inferred from step 1 'make.wic' > step 1 'multi_file' output 'last'" in note.message
-    assert "also offers step 1 'make.wic' > step 1 'multi_file' output 'first'" in note.message
-    assert ("`out: - last: !& <name>` on step 1 'make.wic' > step 1 'multi_file' and "
-            "`in: file: !* <name>` on step 2 'use.wic' > step 1 'count'") in note.message
+    (note,) = [d for d in result.diagnostics if d.code is SophiosErrorCode.INFERENCE_GUESS]
+    assert note.message == 'use.wic.file <- make.wic/multi_file.first (1 other fits)'
 
     pinned = compile_hermetic(_across_calls(pinned=True), tools=_multi_file_tools())
     assert not list(pinned.diagnostics)
@@ -161,7 +159,18 @@ def test_strict_mode_turns_notes_into_errors() -> None:
     _, linked, _ = _typed(_TWO_PRODUCERS)
     result = infer(linked, InferencePolicy(strict=True))
     assert result.graph is None and result.diagnostics.has_errors
-    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.INFERENCE_RECENCY]
+    assert [(d.severity, d.code, d.message) for d in result.diagnostics] == [
+        (Severity.ERROR, SophiosErrorCode.INFERENCE_GUESS,
+         'count.file <- mk_file@2.file was guessed, 1 other fits; write the edge it should read')]
+
+
+@pytest.mark.fast
+def test_one_guess_fanned_out_inside_a_call_is_one_note() -> None:
+    """Two inner steps read the guessed output through the one call the author wrote, so one note says it."""
+    workflow: Yaml = {'steps': [subworkflow_step('make.wic', {'steps': [{'id': 'multi_file'}]}),
+                                subworkflow_step('use.wic', {'steps': [{'id': 'count'}, {'id': 'count'}]})]}
+    result = compile_hermetic(workflow, tools=_multi_file_tools())
+    assert [d.message for d in result.diagnostics] == ['use.wic.file <- make.wic/multi_file.first (1 other fits)']
 
 
 @pytest.mark.fast
@@ -187,6 +196,55 @@ def test_a_tie_settled_by_naming_conventions_is_not_noted() -> None:
 
 
 @pytest.mark.fast
+def test_an_input_pairs_by_its_own_name_when_its_renamed_name_pairs_with_nothing() -> None:
+    """`input_structure_file` is renamed to `tpr_file`; with no `output_tpr_file` it still takes
+    `output_structure_file` over the later `output_report_file`, and a renamed pairing wins when it exists."""
+    policy = InferencePolicy(use_naming_conventions=True, renaming_conventions=(('structure_', 'tpr_'),))
+
+    def chosen(outputs: list[str]) -> str:
+        producer = clt({}, {name: {'type': 'File', 'outputBinding': {'glob': name}} for name in outputs})
+        consumer = clt({'input_structure_file': {'type': 'File'}}, {})
+        tools = {**SYNTHETIC_TOOLS,
+                 LegacyStepId('maker', SYNTHETIC_NS): Tool('/synthetic/maker.cwl', producer),
+                 LegacyStepId('reader', SYNTHETIC_NS): Tool('/synthetic/reader.cwl', consumer)}
+        _, linked, _ = _typed({'steps': [{'id': 'maker'}, {'id': 'reader'}]}, tools)
+        result = infer(linked, policy)
+        assert result.graph is not None
+        (edge,) = [edge for edge in result.graph.linked_edges if edge.origin is EdgeOrigin.INFERRED]
+        return str(edge.source.port)
+
+    assert chosen(['output_structure_file', 'output_report_file']) == 'output_structure_file'
+    assert chosen(['output_structure_file', 'output_tpr_file', 'output_report_file']) == 'output_tpr_file'
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('producers, consumer_input, expected', [
+    # Names decide nothing against an output that fits: `output_log_path` feeds `input_log_path`, the
+    # sander_mdrun to process_mdout pattern.
+    ([('logger', 'output_log_path')], 'input_log_path', ('logger', 'output_log_path')),
+    # A log is a File like any other: the nearest step with a fitting output wins, and a step that
+    # makes only a log is not skipped for its name.
+    ([('make', 'output_crd_path'), ('logger', 'output_log_path')], 'input_crd_path',
+     ('logger', 'output_log_path')),
+], ids=['log-to-log', 'nearest-step-is-a-logger'])
+def test_an_output_named_log_is_an_output_like_any_other(
+        producers: list[tuple[str, str]], consumer_input: str, expected: tuple[str, str]) -> None:
+    """No output is left out because of its name."""
+    tools = dict(SYNTHETIC_TOOLS)
+    for name, output in producers:
+        tool = clt({}, {output: {'type': 'File', 'outputBinding': {'glob': 'a'}}})
+        tools[LegacyStepId(name, SYNTHETIC_NS)] = Tool(f'/synthetic/{name}.cwl', tool)
+    tools[LegacyStepId('reader', SYNTHETIC_NS)] = Tool(
+        '/synthetic/reader.cwl', clt({consumer_input: {'type': 'File'}}, {}))
+    steps = [{'id': name} for name, _ in producers] + [{'id': 'reader'}]
+    _, linked, _ = _typed({'steps': steps}, tools)
+    result = infer(linked, InferencePolicy(use_naming_conventions=True))
+    assert result.graph is not None
+    (edge,) = [edge for edge in result.graph.linked_edges if edge.origin is EdgeOrigin.INFERRED]
+    assert (edge.source.step.name, edge.source.port) == expected
+
+
+@pytest.mark.fast
 def test_a_scalar_literal_under_scatter_is_wic020() -> None:
     """A scatter splits its value; a scalar is not wrapped into a one-element list."""
     with pytest.raises(SophiosError) as caught:
@@ -208,10 +266,10 @@ def test_a_list_literal_under_scatter_is_scattered_over() -> None:
 def test_strict_compile_refuses_and_lenient_compile_carries_the_note() -> None:
     """The compiler forwards the strict flag and returns the notes with its result."""
     result = compile_hermetic(_TWO_PRODUCERS)
-    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.INFERENCE_RECENCY]
+    assert [d.code for d in result.diagnostics] == [SophiosErrorCode.INFERENCE_GUESS]
     with pytest.raises(SophiosError) as caught:
         compile_hermetic(_TWO_PRODUCERS, inference_strict=True)
-    assert caught.value.diagnostics[0].code is SophiosErrorCode.INFERENCE_RECENCY
+    assert caught.value.diagnostics[0].code is SophiosErrorCode.INFERENCE_GUESS
 
 
 @pytest.mark.fast
@@ -420,14 +478,24 @@ def _model_candidate(steps: tuple[StepNode, ...], position: int,
     sink_type = _model_sink_type(steps[position], sink)
     sink_formats = _model_formats(sink.declaration)
     for producer in reversed(steps[:position]):
-        for output in reversed(producer.outputs):
-            source_type = _model_source_type(producer, output)
-            source_formats = _model_formats(output.declaration)
-            if (not any('_log_' in name for name in _model_names(output.id.port))
-                    and _model_types_match(sink_type, source_type)
-                    and _model_formats_match(sink_formats, source_formats, source_type)):
-                return output.id
+        matches = [output for output in producer.outputs
+                   if _model_types_match(sink_type, _model_source_type(producer, output))
+                   and _model_formats_match(sink_formats, _model_formats(output.declaration),
+                                            _model_source_type(producer, output))]
+        if matches:
+            through = _model_exposed_through(matches[-1].id.port)
+            return next(output.id for output in matches
+                        if _model_exposed_through(output.id.port) == through)
     return None
+
+
+def _model_exposed_through(name: PortName) -> list[object]:
+    """The steps a port name was exposed through, outermost first."""
+    steps: list[object] = []
+    while isinstance(name, DerivedName):
+        steps.append(name.step)
+        name = name.port
+    return steps
 
 
 def _model_types_match(sink: Any, source: Any) -> bool:
@@ -473,10 +541,6 @@ def _model_source_type(step: StepNode, port: Port) -> Any:
 def _model_sink_type(step: StepNode, port: Port) -> Any:
     """One array per time `scatter:` names the input, which is `input_rank`."""
     return layered(port.type, input_rank(step, port.id.port)).canonical
-
-
-def _model_names(name: PortName) -> tuple[str, ...]:
-    return (name.step.name, *_model_names(name.port)) if isinstance(name, DerivedName) else (name,)
 
 
 def _port(ports: tuple[Port, ...], name: PortName) -> Port:
@@ -530,11 +594,11 @@ def test_a_positional_output_source_compiles_in_a_fully_explicit_workflow() -> N
 
 
 @pytest.mark.fast
-def test_naming_conventions_pick_the_name_matched_output_over_the_last_declared() -> None:
-    """With conventions on, `input_structure` takes `output_structure` although
-    `output_other` is declared last, which is the one taken with them off."""
-    producer = clt({}, {'output_structure': {'type': 'File', 'outputBinding': {'glob': 's'}},
-                        'output_other': {'type': 'File', 'outputBinding': {'glob': 'o'}}}, canonical=True)
+def test_naming_conventions_pick_the_name_matched_output_over_the_first_declared() -> None:
+    """With no setting, `input_structure` takes `output_structure` although
+    `output_other` is declared first, which is the one taken with conventions off."""
+    producer = clt({}, {'output_other': {'type': 'File', 'outputBinding': {'glob': 'o'}},
+                        'output_structure': {'type': 'File', 'outputBinding': {'glob': 's'}}}, canonical=True)
     consumer = clt({'input_structure': {'type': 'File', 'inputBinding': {'position': 1}}}, {}, canonical=True)
     tools = {**SYNTHETIC_TOOLS,
              LegacyStepId('producer', SYNTHETIC_NS): Tool('/synthetic/producer.cwl', producer),
@@ -543,8 +607,144 @@ def test_naming_conventions_pick_the_name_matched_output_over_the_last_declared(
     chosen: dict[bool, PortName] = {}
     for conventions in (True, False):
         _, linked, _ = _typed(copy.deepcopy(workflow), tools)
-        result = infer(linked, InferencePolicy(use_naming_conventions=conventions))
+        policy = InferencePolicy() if conventions else InferencePolicy(use_naming_conventions=False)
+        result = infer(linked, policy)
         assert result.graph is not None, list(result.diagnostics)
         (edge,) = [edge for edge in result.graph.linked_edges if edge.sink.step.name == 'consumer']
         chosen[conventions] = edge.source.port
     assert chosen == {True: 'output_structure', False: 'output_other'}
+
+
+_TXT = 'edam:format_2330'
+
+
+def _pair_tools(left: str | None, right: str | None) -> Tools:
+    """`pair`, a tool with two File inputs that declare the given formats (none when `None`)."""
+    def port(fmt: str | None) -> dict[str, Any]:
+        return {'type': 'File', 'inputBinding': {'position': 1}, **({'format': fmt} if fmt else {})}
+    pair = clt({'left': port(left), 'right': port(right)}, {}, canonical=True)
+    return {**SYNTHETIC_TOOLS, LegacyStepId('pair', SYNTHETIC_NS): Tool('/synthetic/pair.cwl', pair)}
+
+
+_MAKE: Yaml = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a.txt'}}, 'out': [{'file': {'wic_anchor': 'f'}}]}
+
+
+def _refusal(workflow: Yaml, tools: Tools) -> list[str]:
+    """The messages of the errors the compile of `workflow` stops with."""
+    _, linked, _ = _typed(workflow, tools)
+    result = infer(linked)
+    assert [d.code for d in result.diagnostics if d.severity is Severity.ERROR] in (
+        [], [SophiosErrorCode.INFERENCE_DUPLICATE])
+    return [d.message for d in result.diagnostics if d.severity is Severity.ERROR]
+
+
+@pytest.mark.fast
+def test_two_inferred_bare_file_inputs_reading_one_output_are_refused() -> None:
+    """`join` would take the one file as `left` and as `right`, and nothing says that is meant."""
+    _, linked, _ = _typed({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a.txt'}}},
+                                     {'id': 'join', 'in': {'name': {'wic_inline_input': 'o.txt'}}}]})
+    result = infer(linked)
+    assert result.graph is None
+    (error,) = [d for d in result.diagnostics if d.severity is Severity.ERROR]
+    assert error.code is SophiosErrorCode.INFERENCE_DUPLICATE
+    assert error.locator == Locator(step='join', index=2, port='left')
+    assert error.message == 'join.left and join.right would both read mk_file.file; write the edge each should read'
+
+
+@pytest.mark.fast
+def test_a_written_edge_and_an_inferred_one_reading_one_output_are_refused() -> None:
+    """The written `left` does not vouch for the inferred `right`."""
+    workflow: Yaml = {'steps': [_MAKE, {'id': 'join', 'in': {'name': {'wic_inline_input': 'o.txt'},
+                                                             'left': {'wic_alias': 'f'}}}]}
+    (message,) = _refusal(workflow, SYNTHETIC_TOOLS)
+    assert message == 'join.left and join.right would both read mk_file.file; write the edge each should read'
+
+
+@pytest.mark.fast
+def test_two_written_edges_reading_one_output_are_never_refused() -> None:
+    """An author who wrote both edges meant both."""
+    workflow: Yaml = {'steps': [_MAKE, {'id': 'join', 'in': {'name': {'wic_inline_input': 'o.txt'},
+                                                             'left': {'wic_alias': 'f'},
+                                                             'right': {'wic_alias': 'f'}}}]}
+    assert not _refusal(workflow, SYNTHETIC_TOOLS)
+
+
+@pytest.mark.fast
+def test_inputs_that_declare_the_format_the_output_carries_may_read_it_twice() -> None:
+    """`mk_file` makes text; both inputs of `pair` declare text, which counts as saying so."""
+    assert not _refusal({'steps': [_MAKE, {'id': 'pair'}]}, _pair_tools(_TXT, _TXT))
+
+
+@pytest.mark.fast
+def test_one_input_without_the_evidence_refuses_the_group() -> None:
+    """Every input has to declare a format the output carries: a bare `right` does not."""
+    (message,) = _refusal({'steps': [_MAKE, {'id': 'pair'}]}, _pair_tools(_TXT, None))
+    assert message == 'pair.left and pair.right would both read mk_file.file; write the edge each should read'
+
+
+@pytest.mark.fast
+def test_a_file_fanned_out_to_two_inner_steps_of_a_subworkflow_is_not_a_duplicate() -> None:
+    """Each inner `count` is a tool step of its own, so each reads the file once."""
+    inner = {'steps': [{'id': 'count'}, {'id': 'count'}]}
+    workflow: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a.txt'}}},
+                                subworkflow_step('fan.wic', inner)]}
+    assert not _refusal(workflow, SYNTHETIC_TOOLS)
+
+
+@pytest.mark.fast
+def test_an_output_read_through_its_inner_port_and_the_calls_twin_is_one_output() -> None:
+    """`f` is anchored inside the subworkflow; `left` is written to it and `right` is inferred from the call's
+    exposed twin of the same file."""
+    workflow: Yaml = {'steps': [subworkflow_step('src.wic', {'steps': [_MAKE]}),
+                                {'id': 'join', 'in': {'name': {'wic_inline_input': 'o.txt'},
+                                                      'left': {'wic_alias': 'f'}}}]}
+    (message,) = _refusal(workflow, SYNTHETIC_TOOLS)
+    assert message == ('join.left and join.right would both read src.wic/mk_file.file; '
+                       "write the edge each should read")
+
+
+@pytest.mark.fast
+def test_two_plain_inputs_of_a_subworkflow_for_different_inner_steps_are_not_a_duplicate() -> None:
+    """`a` goes to `count` and `b` to `xform`: two tool steps, each reading the one file once."""
+    inner = {'inputs': {'a': {'type': 'File'}, 'b': {'type': 'File'}},
+             'steps': [{'id': 'count', 'in': {'file': 'a'}}, {'id': 'xform', 'in': {'file': 'b'}}]}
+    workflow: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a.txt'}}},
+                                subworkflow_step('fan.wic', inner)]}
+    assert not _refusal(workflow, SYNTHETIC_TOOLS)
+
+
+@pytest.mark.fast
+def test_a_written_edge_to_an_anchor_in_a_call_and_the_calls_exposed_port_are_one_output() -> None:
+    """`left` is written to the anchor `f` inside the call; `right` is inferred from the call's exposed port.
+    Compiled whole, so the written edge reaches the deep output the way a document's does."""
+    workflow: Yaml = {'steps': [subworkflow_step('src.wic', {'steps': [_MAKE]}),
+                                {'id': 'pair', 'in': {'left': {'wic_alias': 'f'}}}]}
+    with pytest.raises(SophiosError) as caught:
+        compile_hermetic(workflow, tools=_pair_tools(None, None))
+    (error,) = caught.value.diagnostics
+    assert error.code is SophiosErrorCode.INFERENCE_DUPLICATE
+    assert error.message == ('pair.left and pair.right would both read src.wic/mk_file.file; '
+                             "write the edge each should read")
+
+
+@pytest.mark.fast
+def test_a_file_fanned_out_through_nested_subworkflows_to_different_leaves_is_not_a_duplicate() -> None:
+    """`x` and `y` reach `count` and `xform` two calls down: two tool steps, each reading the file once."""
+    fan = subworkflow_step('fan.wic', {
+        'inputs': {'a': {'type': 'File'}, 'b': {'type': 'File'}},
+        'steps': [{'id': 'count', 'in': {'file': 'a'}}, {'id': 'xform', 'in': {'file': 'b'}}]})
+    mid = {'inputs': {'x': {'type': 'File'}, 'y': {'type': 'File'}},
+           'steps': [{**fan, 'parentargs': {'in': {'a': 'x', 'b': 'y'}}}]}
+    workflow: Yaml = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a.txt'}}},
+                                subworkflow_step('mid.wic', mid)]}
+    assert not _refusal(workflow, SYNTHETIC_TOOLS)
+
+
+@pytest.mark.fast
+def test_the_refusal_points_at_the_first_inferred_input() -> None:
+    """The written `left` is not what was refused: the locator names `right`."""
+    workflow: Yaml = {'steps': [_MAKE, {'id': 'join', 'in': {'name': {'wic_inline_input': 'o.txt'},
+                                                             'left': {'wic_alias': 'f'}}}]}
+    _, linked, _ = _typed(workflow, SYNTHETIC_TOOLS)
+    (error,) = [d for d in infer(linked).diagnostics if d.severity is Severity.ERROR]
+    assert error.locator == Locator(step='join', index=2, port='right')
