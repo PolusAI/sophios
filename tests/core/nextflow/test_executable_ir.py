@@ -12,7 +12,7 @@ from hypothesis import example, given, strategies as st
 import pytest
 
 from sophios.input_output_nf import render_nextflow
-from sophios.nf_expr import Expr, parse
+from sophios.lang.subset import Expr, parse
 from sophios.nf_symbols import (
     NEXTFLOW_SCRIPT_DECLARED_NAMES, NEXTFLOW_SCRIPT_NAMES, is_nextflow_identifier, normalize_nextflow_identifier,
 )

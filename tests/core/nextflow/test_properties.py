@@ -18,7 +18,8 @@ from sophios.input_output_nf import (
     render_nextflow,
     render_nextflow_config,
 )
-from sophios.nf_expr import Expr, groovy_literal
+from sophios.lang.subset import Expr
+from sophios.nf_expr import groovy_literal
 from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,

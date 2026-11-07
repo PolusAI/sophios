@@ -8,7 +8,8 @@ from typing import Any
 
 import pytest
 
-from sophios.nf_expr import Expr, check, parse, render_groovy
+from sophios.lang.subset import Expr, check, parse
+from sophios.nf_expr import render_groovy
 from sophios.nf_types import ExecutableNextflowWorkflow, NfTemplate
 from sophios.utils_nf import compiled_source_to_nextflow
 
