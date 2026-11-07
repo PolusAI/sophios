@@ -486,7 +486,8 @@ def test_a_compilation_the_target_cannot_lower_is_refused_naming_each_cause(
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("case", cases("nextflow/rejected"))
+@pytest.mark.parametrize("case", cases(
+    "nextflow/rejected", "tool", "out", "job", "workflow", "tools", "error", "findings"))
 def test_a_rejected_source_is_refused_as_its_case_says(case: Yaml) -> None:
     """A case's source, its documents left as they were, is refused with exactly its `findings` after the
     aggregated header, or with an `error` that is no aggregate (tests/core/cases.py reads both)."""

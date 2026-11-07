@@ -108,10 +108,16 @@
 - {id: accepts_multi_input_scatter-flat_crossproduct, why: *every_method, tools: *pair_tools,
     job: {firsts: [a], seconds:
    [b]}, workflow: {<<: *pair, steps: [{id: SCATTER, in: {first: firsts, second: seconds}, out: [result], scatter:
-   [first, second], scatterMethod: flat_crossproduct}]}}
+   [first, second], scatterMethod: flat_crossproduct}]},
+   lowered: {connections: {contains: [{kind: workflow_input, from_port: firsts, to_process: _SCATTER, to_port: first,
+   adapter: flat_crossproduct}, {kind: workflow_input, from_port: seconds, to_process: _SCATTER, to_port: second,
+   adapter: flat_crossproduct}]}}}
 - {id: accepts_multi_input_scatter-nested_crossproduct, why: *every_method, tools: *pair_tools, job: {firsts: [a],
    seconds: [b]}, workflow: {<<: *pair, steps: [{id: SCATTER, in: {first: firsts, second: seconds}, out: [result],
-   scatter: [first, second], scatterMethod: nested_crossproduct}]}}
+   scatter: [first, second], scatterMethod: nested_crossproduct}]},
+   lowered: {connections: {contains: [{kind: workflow_input, from_port: firsts, to_process: _SCATTER, to_port: first,
+   adapter: nested_crossproduct}, {kind: workflow_input, from_port: seconds, to_process: _SCATTER, to_port: second,
+   adapter: nested_crossproduct}]}}}
 - id: an_inert_scatter_method_at_one_scattered_input-absent
   why: &inert All three methods coincide at one scattered input, so each is inert, as is either spelling of one input.
   workflow: &one {steps: [&scatter_step {id: SCATTER, in: {item: items}, out: [result], scatter: [item]}], inputs:

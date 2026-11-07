@@ -56,3 +56,6 @@
    why: &w3 "The other half: refusing everywhere would satisfy the test above."}
 - {id: the desugared edge definition on out, source: "steps:\n- id: s\n  out:\n  - f:\n      wic_anchor: e\n",
    report: [], recovers: true, why: *w3}
+- {id: an out value that is no edge definition is reported, source: "steps:\n- id: s\n  out:\n  - file: something\n",
+   ok: false, report: {contains: [{message: {contains: [file]}}]},
+   why: 'A non-!& out value is reported, never silently dropped.'}

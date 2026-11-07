@@ -135,7 +135,8 @@ _EXITED_127 = ['\x1b[1;30mWARNING\x1b[0m \x1b[33m[job echo_2] exited with status
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('case', cases('runner-transcripts'))
+@pytest.mark.parametrize('case', cases('runner-transcripts', 'stdout', 'stderr', 'exit', 'flags', 'failures',
+                                       'summary'))
 def test_a_run_says_what_its_runners_transcript_says(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
                                                      sophios: Callable[..., int],
                                                      capsys: pytest.CaptureFixture[str], case: Yaml) -> None:

@@ -28,7 +28,7 @@ from .synthetic_tools import STEMS, inputs_of, outputs_of
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('case', cases('equivalence'))
+@pytest.mark.parametrize('case', cases('equivalence', 'left', 'right', 'verdicts'))
 def test_equivalence_case(case: dict[str, Any]) -> None:
     """`equivalent(left, right, strength)` for each strength `verdicts` names (`all` names every one) is None for
     null, a divergence for `differs`, a `TypeError` for `TypeError`, or a divergence at `path` that reports `left`

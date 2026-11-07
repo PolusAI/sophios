@@ -200,7 +200,7 @@ def _warnings(err: str, base: Path, kind: str) -> list[list[Any]]:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('case', cases('discovery'))
+@pytest.mark.parametrize('case', cases('discovery', 'files', 'found', 'kinds', 'roots', 'warnings', 'links'))
 def test_each_stem_resolves_to_the_last_file_found(case: Yaml, tmp_path_factory: pytest.TempPathFactory,
                                                    monkeypatch: pytest.MonkeyPatch,
                                                    capsys: pytest.CaptureFixture[str]) -> None:

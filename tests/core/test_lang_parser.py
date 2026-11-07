@@ -33,7 +33,6 @@ from sophios.lang import (
     InputValue,
     RawCwlRef,
     Step,
-    StepKey,
     UnresolvedName,
     WicSidecar,
     parse,
@@ -277,6 +276,35 @@ class Accepted(NamedTuple):
     holds: Callable[[Document], bool]
 
 
+def _first_keys(sidecar: WicSidecar | None) -> list[tuple[int | None, str]]:
+    """The (index, name) of each step key, following the first `wic: steps:` entry down while there is one."""
+    keys = []
+    while sidecar is not None and sidecar.steps:
+        key, sidecar = sidecar.steps[0]
+        keys.append((key.index, key.name))
+    return keys
+
+
+def _merged_record(document: Document) -> bool:
+    """Whether step 0's input f is a CwlRecord: typed sources, verbatim fields."""
+    record = document.steps[0].input('f')
+    return (isinstance(record, CwlRecord)
+            and [(type(source).__name__, source.name) for source in record.sources]
+            == [('EdgeRef', 'a'), ('UnresolvedName', 'wf_in')]
+            and dict(record.fields) == {'linkMerge': 'merge_flattened'})
+
+
+def _defines_e(document: Document) -> bool:
+    edge = document.steps[0].outputs[0].edge_def
+    return edge is not None and edge.name == 'e'
+
+
+def _is_kv(value: Any) -> bool:
+    """`!ii {k: v}` is one InlineLiteral around plain data: the passthrough walk and the input's caller both wrap
+    tagged collections, and uncoordinated the same node was wrapped twice."""
+    return isinstance(value, InlineLiteral) and value.value == {'k': 'v'}
+
+
 ACCEPTED: Final[tuple[Accepted, ...]] = (
     Accepted('a bare name is an unresolved name',
              'steps:\n  s:\n    in:\n      e: plain\n',
@@ -305,11 +333,58 @@ ACCEPTED: Final[tuple[Accepted, ...]] = (
     Accepted('uninterpreted top-level keys survive',
              '$namespaces:\n  edam: http://example\nsteps:\n  s: {}\n',
              lambda d: dict(d.passthrough)['$namespaces'] == {'edam': 'http://example'}),
+    # `(index, name)` keys are StepKeys at every depth, not opaque strings: the child sidecar arrives wrapped in a
+    # `wic:` key, and the parser descends through it, or StepKey's "nothing downstream parses that string again"
+    # is false past the first depth.
+    Accepted('sidecar nesting is normalised at every depth',
+             'wic:\n  steps:\n    (1, outer):\n      wic:\n        steps:\n'
+             '          (1, inner):\n            wic:\n              steps:\n'
+             '                (1, innermost):\n                  namespace: global\n',
+             lambda d: _first_keys(d.sidecar) == [(1, 'outer'), (1, 'inner'), (1, 'innermost')]),
+    # A merged parent contribution lands beside a step's own `wic:` metadata once ast.py::merge_yml_trees combines
+    # a distant ancestor's unwrapped `out:` with this step's wrapped sidecar (`cg.wic`'s `mdrun`, through
+    # `basic.wic`). Both survive: the metadata is not stranded opaque under `wic:`, and `!&` under `out:` is accepted.
+    Accepted('a sidecar steps out sibling to wic: still unwraps',
+             'wic:\n  steps:\n    (1, s):\n      wic:\n        namespace: gpu\n'
+             '      out:\n      - value: !& e\nsteps:\n- id: s\n',
+             lambda d: d.sidecar is not None
+             and (entries := dict(d.sidecar.steps[0][1].entries))['namespace'] == 'gpu'
+             and entries['out'] == [{'value': {Key.ANCHOR: 'e'}}]),
+    # The siblings alone, rather than a wic033 naming the wrapper as an unknown key; the schema reads it the same way.
+    Accepted('an empty sidecar wrapper beside siblings is an empty mapping',
+             'wic:\n  steps:\n    (1, a):\n      wic:\n      in: {x: 1}\nsteps:\n- id: a\n',
+             lambda d: d.sidecar is not None and dict(d.sidecar.steps[0][1].entries) == {'in': {'x': 1}}),
+    # Both edge spellings are honoured, in each of three layouts; a non-!& value is the case in edges.yaml.
+    Accepted('an out value tagged !& defines an edge', 'steps:\n- id: s\n  out:\n  - file: !& e\n', _defines_e),
+    Accepted('an out value desugared to wic_anchor defines an edge',
+             'steps:\n- id: s\n  out:\n  - file: {wic_anchor: e}\n', _defines_e),
+    Accepted('an out value with a block wic_anchor defines an edge',
+             'steps:\n- id: s\n  out:\n  - f:\n      wic_anchor: e\n', _defines_e),
+    Accepted('an inline literal collection in input is wrapped exactly once',
+             'steps:\n- id: s\n  in:\n    a: !ii {k: v}\n', lambda d: _is_kv(d.steps[0].inputs[0][1])),
+    Accepted('an inline literal collection in passthrough is wrapped exactly once',
+             'top: !ii {k: v}\n', lambda d: _is_kv(dict(d.passthrough)['top'])),
+    Accepted('only a mapping made of record fields alone is read as one; any other key keeps it a literal',
+             'steps:\n  mk_file:\n    in:\n      name: {source: x, pdb_code: 1aki}\n',
+             lambda d: isinstance(d.steps[0].input('name'), InlineLiteral)),
+    Accepted('a bare step id is a sidecar step key with no index',
+             'wic:\n  steps:\n    echo:\n      wic:\n        graphviz:\n          label: x\nsteps:\n  echo:\n',
+             lambda d: d.sidecar is not None and _first_keys(d.sidecar) == [(None, 'echo')]
+             and str(d.sidecar.steps[0][0]) == 'echo'),
+    Accepted('!cwl builds a record: typed sources, verbatim fields',
+             'steps:\n  s:\n    in:\n      f: !cwl {source: [!* a, wf_in], linkMerge: merge_flattened}\n',
+             _merged_record),
+    Accepted('wic_raw_cwl builds the same record',
+             'steps:\n  s:\n    in:\n      f:\n        wic_raw_cwl:\n'
+             '          source: [{wic_alias: a}, wf_in]\n          linkMerge: merge_flattened\n', _merged_record),
 )
 
 
+PARSE_KEYS: Final = ('source', 'report', 'excludes', 'ok', 'recovers', 'passthrough', 'step_passthrough', 'yaml')
+
+
 @pytest.mark.fast
-@pytest.mark.parametrize('case', cases('parse'))
+@pytest.mark.parametrize('case', cases('parse', *PARSE_KEYS))
 def test_parse_case(case: dict[str, Any]) -> None:
     """`source` parses as the case says, each expectation optional: `report`, its diagnostics in reading order, each
     as `--diagnostics json` writes it with the code by name; `excludes`, codes it never reports; `ok`; `recovers`, a
@@ -623,29 +698,6 @@ def test_a_scalar_is_read_as_yaml_reads_it(spelled: tuple[str, str | None]) -> N
 
 
 @pytest.mark.fast
-def test_sidecar_nesting_is_normalised_at_every_depth() -> None:
-    """`(index, name)` keys are StepKeys at depth two, not opaque strings.
-
-    The child sidecar arrives wrapped in a `wic:` key on the surface; the
-    parser descends through it, or `StepKey`'s "nothing downstream should
-    ever parse that string again" is false at every depth past the first.
-    """
-    result = parse(
-        'wic:\n  steps:\n    (1, outer):\n      wic:\n        steps:\n'
-        '          (1, inner):\n            wic:\n              steps:\n'
-        '                (1, innermost):\n                  namespace: global\n',
-        'nested.wic')
-    assert result.ok and result.document is not None and result.document.sidecar is not None
-
-    level1 = result.document.sidecar.steps[0]
-    assert (level1[0].index, level1[0].name) == (1, 'outer')
-    level2 = level1[1].steps[0]
-    assert (level2[0].index, level2[0].name) == (1, 'inner')
-    level3 = level2[1].steps[0]
-    assert (level3[0].index, level3[0].name) == (1, 'innermost')
-
-
-@pytest.mark.fast
 def test_the_wic_block_is_closed_at_every_depth() -> None:
     """Each `wic:` key the language has parses clean; any other is `wic033`,
     positioned at the key itself.
@@ -675,40 +727,6 @@ def test_the_wic_block_is_closed_at_every_depth() -> None:
 
 
 @pytest.mark.fast
-def test_a_sidecar_steps_out_sibling_to_wic_still_unwraps() -> None:
-    """A merged parent contribution can land as a sibling of a step's own
-    `wic:` metadata — `{wic: {namespace: ...}, out: [...]}` — once
-    `ast.py::merge_yml_trees` combines a distant ancestor's unwrapped `out:`
-    with this step's own wrapped sidecar (see `cg.wic`'s `mdrun`, called
-    through `basic.wic`). Both must survive: the metadata is not stranded
-    opaque under the `wic:` key, and `!&` under `out:` is still accepted.
-    """
-    result = parse(
-        'wic:\n  steps:\n    (1, s):\n      wic:\n        namespace: gpu\n'
-        '      out:\n      - value: !& e\n'
-        'steps:\n- id: s\n', 'merged.wic')
-    assert result.ok, [str(d) for d in result.diagnostics]
-    assert result.document is not None and result.document.sidecar is not None
-    child = result.document.sidecar.steps[0][1]
-    assert dict(child.entries)['namespace'] == 'gpu'
-    assert dict(child.entries)['out'] == [{'value': {Key.ANCHOR: 'e'}}]
-
-
-@pytest.mark.fast
-def test_an_empty_sidecar_wrapper_beside_siblings_is_an_empty_mapping() -> None:
-    """`(1, a): {wic: , in: ...}` is the siblings alone, rather than a `wic033`
-    naming the wrapper itself as an unknown key. The schema reads it the same
-    way (`test_lang_schema.py`)."""
-    source = 'wic:\n  steps:\n    (1, a):\n      wic:\n      in: {x: 1}\nsteps:\n- id: a\n'
-
-    result = parse(source, 'empty_wrapper.wic')
-
-    assert result.ok, [str(d) for d in result.diagnostics]
-    assert result.document is not None and result.document.sidecar is not None
-    assert dict(result.document.sidecar.steps[0][1].entries) == {'in': {'x': 1}}
-
-
-@pytest.mark.fast
 def test_alias_expansion_is_bounded() -> None:
     """A widening alias chain is cut off by budget, quickly, once."""
     laughs = 'a0: &a0 [x, x, x, x, x, x, x, x, x]\n'
@@ -721,22 +739,6 @@ def test_alias_expansion_is_bounded() -> None:
     assert time.perf_counter() - started < 5.0
     assert not result.ok
     assert any(d.code is SophiosErrorCode.RECURSIVE_ALIAS for d in result.diagnostics)
-
-
-@pytest.mark.fast
-def test_out_values_are_never_silently_dropped() -> None:
-    """A non-!& out value is reported; both edge spellings are honoured."""
-    dropped = parse('steps:\n- id: s\n  out:\n  - file: something\n', 'x.wic')
-    assert not dropped.ok
-    assert any('file' in d.message for d in dropped.diagnostics)
-
-    tagged = parse('steps:\n- id: s\n  out:\n  - file: !& e\n', 'x.wic')
-    desugared = parse('steps:\n- id: s\n  out:\n  - file: {wic_anchor: e}\n', 'x.wic')
-    block = parse('steps:\n- id: s\n  out:\n  - f:\n      wic_anchor: e\n', 'x.wic')
-    for result in (tagged, desugared, block):
-        assert result.ok and result.document is not None
-        binding = result.document.steps[0].outputs[0]
-        assert binding.edge_def is not None and binding.edge_def.name == 'e'
 
 
 # --------------------------------------------------------------------------
@@ -867,26 +869,6 @@ def test_tag_decisions_agree_across_positions(tag: str, shape: str, data: st.Dat
         f'passthrough={unknown_through}')
 
 
-@pytest.mark.fast
-def test_inline_literal_collections_wrap_exactly_once() -> None:
-    """`!ii {a: 1}` is one InlineLiteral around plain data, in both positions.
-
-    The passthrough walk wraps tagged collections and `_literal`'s caller
-    wraps too; without coordination the same node wrapped twice and the AST
-    carried InlineLiteral(InlineLiteral(...)).
-    """
-    in_position = parse('steps:\n- id: s\n  in:\n    a: !ii {k: v}\n', 'x.wic')
-    assert in_position.ok and in_position.document is not None
-    literal = in_position.document.steps[0].inputs[0][1]
-    assert isinstance(literal, InlineLiteral)
-    assert literal.value == {'k': 'v'}
-
-    passthrough = parse('top: !ii {k: v}\n', 'x.wic')
-    assert passthrough.ok and passthrough.document is not None
-    wrapped = dict(passthrough.document.passthrough)['top']
-    assert isinstance(wrapped, InlineLiteral)
-    assert wrapped.value == {'k': 'v'}
-
 # --------------------------------------------------------------------------
 # Every diagnostic is provocable, mechanically (negative-testing rule 1)
 # --------------------------------------------------------------------------
@@ -980,47 +962,12 @@ def test_an_unknown_tag_and_a_misplaced_anchor_are_both_reported_in_both_positio
 
 
 @pytest.mark.fast
-def test_a_mapping_with_a_key_outside_the_record_is_still_a_literal() -> None:
-    """Only a mapping made of record fields alone is read as one; any other key keeps it a literal."""
-    result = parse('steps:\n  mk_file:\n    in:\n      name: {source: x, pdb_code: 1aki}\n', 'rec.wic')
-    assert result.ok and result.document is not None
-    assert isinstance(result.document.steps[0].input('name'), InlineLiteral)
-
-
-@pytest.mark.fast
 def test_a_run_stem_nowhere_is_reported() -> None:
     """A `run:` path with no file beside the document and no registry entry is wic013."""
     from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
     with pytest.raises(SophiosError) as caught:
         compile_hermetic({'steps': [{'id': 's', 'run': 'nowhere.cwl'}]})
     assert caught.value.diagnostics[0].code is SophiosErrorCode.SUBWORKFLOW_INVALID
-
-
-@pytest.mark.fast
-def test_a_bare_step_id_is_a_sidecar_key() -> None:
-    """A bare step id parses as a sidecar step key with no index."""
-    result = parse('wic:\n  steps:\n    echo:\n      wic:\n        graphviz:\n          label: x\n'
-                   'steps:\n  echo:\n', 'k.wic')
-    assert result.ok, [str(d) for d in result.diagnostics]
-    assert result.document is not None and result.document.sidecar is not None
-    (key, _child), = result.document.sidecar.steps
-    assert key == StepKey(None, 'echo') and str(key) == 'echo'
-
-
-@pytest.mark.fast
-def test_a_cwl_record_parses_in_both_spellings() -> None:
-    """`!cwl {...}` and `wic_raw_cwl: {...}` build one record: typed sources, verbatim fields."""
-    tagged = parse('steps:\n  s:\n    in:\n      f: !cwl {source: [!* a, wf_in], linkMerge: merge_flattened}\n',
-                   'r.wic')
-    desugared = parse('steps:\n  s:\n    in:\n      f:\n        wic_raw_cwl:\n'
-                      '          source: [{wic_alias: a}, wf_in]\n          linkMerge: merge_flattened\n', 'r.wic')
-    for result in (tagged, desugared):
-        assert result.ok and result.document is not None, [str(d) for d in result.diagnostics]
-        record = result.document.steps[0].input('f')
-        assert isinstance(record, CwlRecord)
-        assert [type(source).__name__ for source in record.sources] == ['EdgeRef', 'UnresolvedName']
-        assert [source.name for source in record.sources] == ['a', 'wf_in']
-        assert dict(record.fields) == {'linkMerge': 'merge_flattened'}
 
 
 _MERGE_TARGETS: Final = {

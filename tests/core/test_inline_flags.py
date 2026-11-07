@@ -25,7 +25,7 @@ MK_FILE: Yaml = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('case', cases('embedded_tools'))
+@pytest.mark.parametrize('case', cases('embedded_tools', 'tool', 'embedded', 'says'))
 def test_an_embedded_tool_keeps_the_defaults_its_own_version_gave_it(case: Yaml) -> None:
     """Embedded, a tool loses its `cwlVersion`, and nothing updates it as cwltool updates a file it loads: what its
     version implied is written out, what it declares itself is kept, or a version Sophios cannot read is refused."""
@@ -173,7 +173,7 @@ def _stays(artifact: CompilationArtifact, capsys: pytest.CaptureFixture[str]) ->
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('case', cases('kept_calls'))
+@pytest.mark.parametrize('case', cases('kept_calls', 'root', 'child', 'call', 'kept'))
 def test_a_call_dissolves_unless_it_or_its_child_says_otherwise(case: Yaml, capsys: pytest.CaptureFixture[str]) -> None:
     """A kept call keeps its place as a Workflow and the root its requirements, and one line says why; a dissolved
     call says nothing. `scatter` is pinned end to end by `test_a_scattered_call_stays_nested...`."""

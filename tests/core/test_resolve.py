@@ -251,7 +251,7 @@ _PAYLOAD: Final = {InlineLiteral: 'value', EdgeRef: 'name', RawCwlRef: 'expressi
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize('case', cases('contributions'))
+@pytest.mark.parametrize('case', cases('contributions', 'root', 'children', 'expect', 'stderr'))
 def test_contribution_case(case: dict[str, Any], capsys: pytest.CaptureFixture[str]) -> None:
     """A document contributes to a step of a subworkflow it calls by nesting `wic:` blocks keyed `(index, name)`,
     and a contribution gone astray deletes an edge rather than reporting anything.

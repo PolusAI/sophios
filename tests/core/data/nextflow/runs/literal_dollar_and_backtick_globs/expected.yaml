@@ -1,3 +1,5 @@
-why: A `$` before no `(` or `{` is text, and a backtick beside a reference is text, so each glob names the file made.
+why: A `$` before no `(` or `{` is text, and a backtick beside a reference is text, so each glob names the file made. A
+  plain input reference can carry a pattern, so globbing stays on.
+rendered: {contains: ["path 'out$name.txt', emit: result", "path \"`${name}.txt\", arity: '1', emit: result"]}
 outputs: {literal~result: {class: File, basename: out$name.txt, contents: ''}, mixed~result: {class: File, basename:
           '`report.txt', contents: ''}}

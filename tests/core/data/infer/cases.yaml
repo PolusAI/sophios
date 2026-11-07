@@ -1,0 +1,288 @@
+- id: the most recent step and the first declared output win
+  tools:
+    multi_file:
+      outputs:
+        first: &first {type: File, outputBinding: {glob: first}}
+        last: &last {type: File, outputBinding: {glob: last}}
+  steps: [{id: mk_file, in: {name: {wic_inline_input: x}}}, {id: multi_file}, {id: count}]
+  edges: {count@3.file: multi_file@2.first}
+  diagnostics:
+  - {code: INFERENCE_GUESS, message: "count.file <- multi_file.first (2 others fit)", step: count, index: 3, port: file}
+  why: "Candidate order is semantic, including ambiguity within one producer."
+- id: a tie within one producer is noted with the alternatives
+  tools: {multi_file: {outputs: {first: *first, last: *last}}}
+  steps: [{id: multi_file}, {id: count}]
+  diagnostics:
+  - {code: INFERENCE_GUESS, message: "count.file <- multi_file.first (1 other fits)", step: count, index: 2, port: file}
+  why: "One line names the input, the output it reads and the output that also fit."
+- id: recency between producers is noted
+  steps: &two_producers
+  - {id: mk_file, in: {name: {wic_inline_input: a}}}
+  - {id: mk_file, in: {name: {wic_inline_input: b}}}
+  - {id: count}
+  edges: {count@3.file: mk_file@2.file}
+  diagnostics:
+  - {code: INFERENCE_GUESS, message: "count.file <- mk_file@2.file (1 other fits)", step: count, index: 3, port: file}
+  why: "An earlier producer that also matched is named; a repeated name carries its position and the choice is
+      unchanged."
+- id: a note across subworkflow calls names the call and the inner output
+  tools: &multi {multi_file: {outputs: {first: *first, last: *last}}}
+  compiled: true
+  steps: [{id: make.wic, subtree: {steps: [{id: multi_file}]}}, {id: use.wic, subtree: {steps: [{id: count}]}}]
+  diagnostics:
+  - {code: INFERENCE_GUESS, message: "use.wic.file <- make.wic/multi_file.first (1 other fits)", step: use.wic,
+      index: 2, port: file}
+  why: "The input is named at the call the author wrote, and the output by the steps down to the one that makes it."
+- id: writing the edge between the inner steps of two calls compiles without a note
+  tools: *multi
+  compiled: true
+  steps:
+  - {id: make.wic, subtree: {steps: [{id: multi_file, out: [{first: {wic_anchor: f}}]}]}}
+  - {id: use.wic, subtree: {steps: [{id: count, in: {file: {wic_alias: f}}}]}}
+  why: "An edge written between the inner steps is not a choice, so nothing is said."
+- id: strict mode turns notes into errors
+  steps: *two_producers
+  policy: {strict: true}
+  refused: true
+  diagnostics:
+  - {code: INFERENCE_GUESS, severity: error, message: "count.file <- mk_file@2.file was guessed, 1 other fits; write
+      the edge it should read", step: count, index: 3, port: file}
+  why: "`InferencePolicy.strict` refuses a choice between equals."
+- id: one guess fanned out inside a call is one note
+  tools: *multi
+  compiled: true
+  steps:
+  - {id: make.wic, subtree: {steps: [{id: multi_file}]}}
+  - {id: use.wic, subtree: {steps: [{id: count}, {id: count}]}}
+  diagnostics:
+  - {code: INFERENCE_GUESS, message: "use.wic.file <- make.wic/multi_file.first (1 other fits)", step: use.wic,
+      index: 2, port: file}
+  why: "Two inner steps read the guessed output through the one call the author wrote, so one note says it."
+- id: a pinned edge is not noted
+  steps:
+  - {id: mk_file, in: {name: {wic_inline_input: a}}}
+  - {id: mk_file, in: {name: {wic_inline_input: b}}, out: [{file: {wic_anchor: f}}]}
+  - {id: count, in: {file: {wic_alias: f}}}
+  why: "An explicit `!&`/`!*` edge is not a choice, so nothing is said."
+- id: a tie settled by naming conventions is not noted
+  tools:
+    named:
+      outputs:
+        output_file: {type: File, outputBinding: {glob: a}}
+        output_other: {type: File, outputBinding: {glob: b}}
+  steps: [{id: named}, {id: count}]
+  policy: {use_naming_conventions: true}
+  why: "When the naming conventions single out one output, order did not decide."
+- id: an output named log feeds an input named log
+  tools:
+    logger: {outputs: {output_log_path: {type: File, outputBinding: {glob: a}}}}
+    reader: {inputs: {input_log_path: {type: File}}}
+  steps: [{id: logger}, {id: reader}]
+  policy: {use_naming_conventions: true}
+  edges: {reader@2.input_log_path: logger@1.output_log_path}
+  why: "Names decide nothing against an output that fits: `output_log_path` feeds `input_log_path`, the sander_mdrun
+      to process_mdout pattern."
+- id: a step that makes only a log is not skipped for its name
+  tools:
+    make: {outputs: {output_crd_path: {type: File, outputBinding: {glob: a}}}}
+    logger: {outputs: {output_log_path: {type: File, outputBinding: {glob: a}}}}
+    reader: {inputs: {input_crd_path: {type: File}}}
+  steps: [{id: make}, {id: logger}, {id: reader}]
+  policy: {use_naming_conventions: true}
+  edges: {reader@3.input_crd_path: logger@2.output_log_path}
+  diagnostics:
+  - {code: INFERENCE_GUESS, message: "reader.input_crd_path <- logger.output_log_path (1 other fits)", step: reader,
+      index: 3, port: input_crd_path}
+  why: "A log is a File like any other: the nearest step with a fitting output wins, and the guess is noted."
+- id: an input pairs by its own name before its renamed name
+  tools:
+    maker:
+      outputs:
+        output_structure_file: {type: File, outputBinding: {glob: s}}
+        output_tpr_file: {type: File, outputBinding: {glob: t}}
+        output_report_file: {type: File, outputBinding: {glob: r}}
+    reader: &structure_reader {inputs: {input_structure_file: {type: File}}}
+  steps: &make_read [{id: maker}, {id: reader}]
+  policy: &tpr {use_naming_conventions: true, renaming_conventions: [[structure_, tpr_]]}
+  edges: {reader@2.input_structure_file: maker@1.output_structure_file}
+  why: "`input_structure_file` takes `output_structure_file` over `output_tpr_file`, the name its renaming gives,
+      and over `output_report_file`."
+- id: a renamed name pairs when the input's own name pairs with nothing
+  tools:
+    maker:
+      outputs:
+        output_tpr_file: {type: File, outputBinding: {glob: t}}
+        output_report_file: {type: File, outputBinding: {glob: r}}
+    reader: *structure_reader
+  steps: *make_read
+  policy: *tpr
+  edges: {reader@2.input_structure_file: maker@1.output_tpr_file}
+  why: "No `output_structure_file`, so the renamed name of `input_structure_file` pairs: `output_tpr_file`."
+- id: a scalar literal under scatter is wic020
+  compiled: true
+  steps: [{id: mk_file, in: {name: {wic_inline_input: a}}, scatter: [name]}]
+  refused: true
+  diagnostics:
+  - {code: LITERAL_TYPE_MISMATCH, message: {contains: [scattered]}, step: mk_file, index: 1, port: name}
+  why: "A scatter splits its value; a scalar is not wrapped into a one-element list."
+- id: a list literal under scatter is scattered over
+  compiled: true
+  steps: [{id: mk_file, in: {name: {wic_inline_input: [a, b]}}, scatter: [name]}]
+  job_inputs: {exact: {mk_file~name: [a, b]}}
+  why: "The list form is unchanged: each element is one scattered value."
+- id: a lenient compile carries the note
+  compiled: true
+  steps: *two_producers
+  diagnostics:
+  - {code: INFERENCE_GUESS, message: "count.file <- mk_file@2.file (1 other fits)", step: count, index: 3, port: file}
+  why: "The compiler returns the notes with its result."
+- id: a strict compile refuses
+  compiled: true
+  steps: *two_producers
+  policy: {strict: true}
+  refused: true
+  diagnostics:
+  - {code: INFERENCE_GUESS, severity: error, message: "count.file <- mk_file@2.file was guessed, 1 other fits; write
+      the edge it should read", step: count, index: 3, port: file}
+  why: "The compiler forwards the strict flag."
+- id: naming conventions pick the name-matched output over the first declared
+  tools: &structure
+    producer:
+      canonical: true
+      outputs:
+        output_other: {type: File, outputBinding: {glob: o}}
+        output_structure: {type: File, outputBinding: {glob: s}}
+    consumer: {canonical: true, inputs: {input_structure: {type: File, inputBinding: {position: 1}}}}
+  steps: &produce_consume [{id: producer}, {id: consumer}]
+  edges: {consumer@2.input_structure: producer@1.output_structure}
+  why: "With no setting, `input_structure` takes `output_structure` although `output_other` is declared first."
+- id: naming conventions off take the first declared output
+  tools: *structure
+  steps: *produce_consume
+  policy: {use_naming_conventions: false}
+  edges: {consumer@2.input_structure: producer@1.output_other}
+  diagnostics:
+  - {code: INFERENCE_GUESS, message: "consumer.input_structure <- producer.output_other (1 other fits)",
+      step: consumer, index: 2, port: input_structure}
+  why: "With conventions off the first declared output is taken."
+- id: two inferred bare file inputs reading one output are refused
+  steps: &join_after_make
+  - {id: mk_file, in: {name: {wic_inline_input: a.txt}}}
+  - {id: join, in: {name: {wic_inline_input: o.txt}}}
+  refused: true
+  diagnostics:
+  - {code: INFERENCE_DUPLICATE, severity: error, message: "join.left and join.right would both read mk_file.file;
+      write the edge each should read", step: join, index: 2, port: left}
+  why: "`join` would take the one file as `left` and as `right`, and nothing says that is meant."
+- id: a written edge and an inferred one reading one output are refused
+  steps: &make_then_join_left
+  - &make {id: mk_file, in: {name: {wic_inline_input: a.txt}}, out: [{file: {wic_anchor: f}}]}
+  - {id: join, in: {name: {wic_inline_input: o.txt}, left: {wic_alias: f}}}
+  refused: true
+  diagnostics:
+  - {code: INFERENCE_DUPLICATE, severity: error, message: "join.left and join.right would both read mk_file.file;
+      write the edge each should read", step: join, index: 2, port: right}
+  why: "The written `left` does not vouch for the inferred `right`, so the refusal points at `right`, the first
+      inferred input."
+- id: two written edges reading one output are never refused
+  steps:
+  - *make
+  - {id: join, in: {name: {wic_inline_input: o.txt}, left: {wic_alias: f}, right: {wic_alias: f}}}
+  why: "An author who wrote both edges meant both."
+- id: inputs that declare the format the output carries may read it twice
+  tools: &pair_text
+    pair:
+      canonical: true
+      inputs:
+        left: &text {type: File, inputBinding: {position: 1}, format: 'edam:format_2330'}
+        right: *text
+  steps: [*make, {id: pair}]
+  why: "`mk_file` makes text; both inputs of `pair` declare text, which counts as saying so."
+- id: one input without the evidence refuses the group
+  tools: {pair: {canonical: true, inputs: {left: *text, right: {type: File, inputBinding: {position: 1}}}}}
+  steps: [*make, {id: pair}]
+  refused: true
+  diagnostics:
+  - {code: INFERENCE_DUPLICATE, severity: error, message: "pair.left and pair.right would both read mk_file.file;
+      write the edge each should read", step: pair, index: 2, port: left}
+  why: "Every input has to declare a format the output carries: a bare `right` does not."
+- id: a file fanned out to two inner steps of a subworkflow is not a duplicate
+  steps:
+  - {id: mk_file, in: {name: {wic_inline_input: a.txt}}}
+  - {id: fan.wic, subtree: {steps: [{id: count}, {id: count}]}}
+  why: "Each inner `count` is a tool step of its own, so each reads the file once."
+- id: an output read through its inner port and the calls twin is one output
+  steps:
+  - {id: src.wic, subtree: {steps: [*make]}}
+  - {id: join, in: {name: {wic_inline_input: o.txt}, left: {wic_alias: f}}}
+  refused: true
+  diagnostics:
+  - {code: INFERENCE_DUPLICATE, severity: error, message: "join.left and join.right would both read
+      src.wic/mk_file.file; write the edge each should read", step: join, index: 2, port: right}
+  why: "`f` is anchored inside the subworkflow; `left` is written to it and `right` is inferred from the call's
+      exposed twin of the same file."
+- id: two plain inputs of a subworkflow for different inner steps are not a duplicate
+  steps:
+  - {id: mk_file, in: {name: {wic_inline_input: a.txt}}}
+  - id: fan.wic
+    subtree:
+      inputs: {a: {type: File}, b: {type: File}}
+      steps: [{id: count, in: {file: a}}, {id: xform, in: {file: b}}]
+  why: "`a` goes to `count` and `b` to `xform`: two tool steps, each reading the one file once."
+- id: a written edge to an anchor in a call and the calls exposed port are one output
+  tools:
+    pair:
+      canonical: true
+      inputs:
+        left: &bare {type: File, inputBinding: {position: 1}}
+        right: *bare
+  compiled: true
+  steps: [{id: src.wic, subtree: {steps: [*make]}}, {id: pair, in: {left: {wic_alias: f}}}]
+  refused: true
+  diagnostics:
+  - {code: INFERENCE_DUPLICATE, severity: error, message: "pair.left and pair.right would both read
+      src.wic/mk_file.file; write the edge each should read", step: pair, index: 2, port: right}
+  why: "`left` is written to the anchor `f` inside the call; `right` is inferred from the call's exposed port.
+      Compiled whole, so the written edge reaches the deep output the way a document's does."
+- id: a file fanned out through nested subworkflows to different leaves is not a duplicate
+  steps:
+  - {id: mk_file, in: {name: {wic_inline_input: a.txt}}}
+  - id: mid.wic
+    subtree:
+      inputs: {x: {type: File}, y: {type: File}}
+      steps:
+      - id: fan.wic
+        parentargs: {in: {a: x, b: y}}
+        subtree:
+          inputs: {a: {type: File}, b: {type: File}}
+          steps: [{id: count, in: {file: a}}, {id: xform, in: {file: b}}]
+  why: "`x` and `y` reach `count` and `xform` two calls down: two tool steps, each reading the file once."
+- id: a format name that is merely a substring is not a candidate
+  tools:
+    producer: {canonical: true, outputs: {file: {type: File, format: 'edam:format_123'}}}
+    consumer: {canonical: true, inputs: {file: {type: File, format: 'edam:format_1234'}}}
+  steps: &produce_consume_formats [{id: producer}, {id: consumer}]
+  edges: {exact: {}}
+  why: "A format name that is merely a substring is not a candidate."
+- id: a non-File output without a format can satisfy a formatted input
+  tools:
+    producer: {canonical: true, outputs: {value: {type: string}}}
+    consumer: {canonical: true, inputs: {value: {type: string, format: someformat}}}
+  steps: *produce_consume_formats
+  edges: {exact: {consumer@2.value: producer@1.value}}
+  why: "A non-File cannot declare a format, so omission is unconstrained."
+- id: an unknown file format does not outrank an exact match
+  tools:
+    producer:
+      canonical: true
+      outputs: {matching: {type: File, format: 'edam:format_3816'}, unknown: {type: File}}
+    consumer: {canonical: true, inputs: {file: {type: File, format: ['edam:format_3816']}}}
+  steps: *produce_consume_formats
+  edges: {consumer@2.file: producer@1.matching}
+  why: "A formatless File is unknown, not a wildcard over exact formats."
+- id: iteration exhaustion is exactly wic022
+  steps: [{id: mk_file}]
+  policy: {iteration_limit: 0}
+  refused: true
+  diagnostics: [{code: FIXED_POINT_NOT_REACHED}]
+  why: "The limit cannot be removed or exhausted silently."

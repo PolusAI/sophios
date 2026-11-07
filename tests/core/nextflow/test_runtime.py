@@ -501,18 +501,24 @@ def test_two_workflows_started_from_one_base_path_each_run_their_own_pipeline(tm
 
 
 def _seen(value: Any) -> Any:
-    """A recorded output as test_reference_differential observes one, null as it is."""
-    return None if value is None else [_seen(item) for item in value] if isinstance(value, list) else _observed(value)
+    """A recorded output as test_reference_differential observes one, null as it is, a path also as whether it is a
+    symlink (`link`)."""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return [_seen(item) for item in value]
+    return {**_observed(value), "link": Path(value["path"]).is_symlink()}
 
 
 @pytest.mark.nextflow
 @pytest.mark.serial
-@pytest.mark.parametrize(("case", "expected"), case_dirs("nextflow/runs"))
+@pytest.mark.parametrize(("case", "expected"), case_dirs("nextflow/runs", "outputs", "fails", "rendered"))
 def test_a_workflow_runs_as_its_case_says(
         case: Path, expected: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A case's workflow.wic, its tools found beside it or among cwl_adapters, runs to each of its `outputs`, a
     workflow output by its Sophios name, observed as its class, basename and contents, or `fails` showing the text
-    given; the inputs beside it are left as they were (tests/core/cases.py reads each form)."""
+    given, no output unlisted, and a `rendered` match of the script written; the inputs beside it are left as they were
+    (tests/core/cases.py reads each form); an output's `link` is whether it is a symlink."""
     shutil.copytree(case, tmp_path, dirs_exist_ok=True)
     monkeypatch.chdir(tmp_path)
     inputs = {path.name: _tree(path) for path in tmp_path.iterdir() if path.suffix not in (".wic", ".cwl", ".yaml")}
@@ -521,6 +527,8 @@ def test_a_workflow_runs_as_its_case_says(
     compiled = compile_workflow_result(Workflow.from_wic(tmp_path / "workflow.wic", tool_registry=tools,
                                                          workflow_paths=children), tool_registry=tools)
     write_nextflow_artifacts(compiled_source_to_nextflow(compiled), tmp_path)
+    if "rendered" in expected:
+        assert match(expected["rendered"], (tmp_path / "workflow.nf").read_text(encoding="utf-8"))
     result = execute_nextflow(tmp_path)
     output = f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     if "fails" in expected:
@@ -528,7 +536,8 @@ def test_a_workflow_runs_as_its_case_says(
     else:
         assert result.returncode == 0, output
         names = nextflow_names(compiled)["outputs"]
-        assert match(expected["outputs"], {names[key]: _seen(value) for key, value in _recorded(result.stdout).items()})
+        observed = {names[key]: _seen(value) for key, value in _recorded(result.stdout).items()}
+        assert match(expected["outputs"], observed) and observed.keys() == expected["outputs"].keys()
     assert {path.name: _tree(path) for path in tmp_path.iterdir() if path.name in inputs} == inputs
 
 
@@ -685,7 +694,8 @@ def _printed(spec: _Step, printed: list[Any]) -> Any:
 @st.composite
 def _scatters(draw: st.DrawFn) -> list[_Step]:
     """1..5 steps; one may read an earlier step's gathered Files, scattered or whole, when that step scatters and does
-    not nest; a dotproduct is perhaps of equal lengths."""
+    not nest; a dotproduct's inputs are equally long unless the draw says otherwise, so later steps run; S3's mismatch
+    stays an @example."""
     steps: list[_Step] = []
     printed: list[Any] = []
     for _ in range(draw(st.integers(1, 5))):
@@ -698,7 +708,7 @@ def _scatters(draw: st.DrawFn) -> list[_Step]:
             first.append(("File", draw(st.sampled_from(gathered))))
         lengths = [len(source if isinstance(source, list) else printed[source]) for _, source in first]
         size = (lengths[0] if lengths else draw(st.integers(0, 3))) if method == "dotproduct" and draw(
-            st.booleans()) else None
+            st.integers(0, 7)) else None
         inputs = first + [(draw(st.sampled_from(["string", "File"])), draw(st.lists(
             _WORD, min_size=size or 0, max_size=3 if size is None else size))) for _ in range(draw(st.integers(
                 0, 3 - len(first))))]
