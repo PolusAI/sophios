@@ -128,7 +128,7 @@ def test_the_readme_shows_the_files_as_they_are() -> None:
 ])
 def test_naming_conventions_give_the_summary_to_the_step_that_wants_it(
         stem: str, consumer: str, port: str, renamings: list[tuple[str, str]]) -> None:
-    """By type alone the consumer takes `output_details`, the last of two files; with the naming conventions,
+    """By type alone the consumer takes `output_details`, the first of two files; with the naming conventions,
     and the renaming where the names differ, `docs/edge-inference.md` says it takes `output_summary`."""
     wic_path = COOKBOOK / f'{stem}.wic'
     workflows = {'global': {path.stem: path for path in COOKBOOK.glob('*.wic')}}

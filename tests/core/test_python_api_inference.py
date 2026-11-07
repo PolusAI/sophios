@@ -22,14 +22,14 @@ RENAMINGS = (("data", "file"),)
 
 
 def _workflow(consumer_input: str) -> Workflow:
-    """One producer with two File outputs, `file` then `other`, and a consumer whose File input is left to inference.
+    """One producer with two File outputs, `other` then `file`, and a consumer whose File input is left to inference.
 
-    With the naming conventions off the later output, `other`, feeds the consumer.
+    With the naming conventions off the first output, `other`, feeds the consumer.
     An input called `file` pairs with the output `file`; an input called `data`
     pairs with it only through a `data` -> `file` renaming.
     """
     emit = (CommandLineTool("emit", Inputs(message=Input(cwl.string, position=1)),
-                            Outputs(file=Output(cwl.file, glob="out.txt"), other=Output(cwl.file, glob="out.txt")))
+                            Outputs(other=Output(cwl.file, glob="out.txt"), file=Output(cwl.file, glob="out.txt")))
             .base_command("echo").stdout("out.txt"))
     consume = (CommandLineTool("consume", Inputs(**{consumer_input: Input(cwl.file, position=1)}),
                                Outputs(result=Output(cwl.file, glob="result.txt")))
@@ -39,12 +39,12 @@ def _workflow(consumer_input: str) -> Workflow:
     return Workflow([producer, Step(consume)], "wf")
 
 
-def _mdrun_workflow(last_output: str) -> Workflow:
-    """An mdrun-like producer with `output_edr_path` then `last_output`, both bare Files, and a consumer whose
+def _mdrun_workflow(other_output: str) -> Workflow:
+    """An mdrun-like producer with `other_output` then `output_edr_path`, both bare Files, and a consumer whose
     `input_energy_path` is left to inference."""
     mdrun = (CommandLineTool("mdrun", Inputs(message=Input(cwl.string, position=1)),
-                             Outputs(output_edr_path=Output(cwl.file, glob="out.txt"),
-                                     **{last_output: Output(cwl.file, glob="out.txt")}))
+                             Outputs(**{other_output: Output(cwl.file, glob="out.txt")},
+                                     output_edr_path=Output(cwl.file, glob="out.txt")))
              .base_command("echo").stdout("out.txt"))
     energy = (CommandLineTool("consume", Inputs(input_energy_path=Input(cwl.file, position=1)),
                               Outputs(result=Output(cwl.file, glob="result.txt")))
@@ -87,7 +87,7 @@ def _cli(workflow: Workflow, directory: Path, monkeypatch: pytest.MonkeyPatch, *
 def test_naming_conventions_pick_the_edge_the_cli_picks(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         consumer_input: str, renamings: tuple[tuple[str, str], ...]) -> None:
-    """With no setting the output the input's name pairs with feeds it; switched off, the later output does."""
+    """With no setting the output the input's name pairs with feeds it; switched off, the first output does."""
     (tmp_path / "on").mkdir()
     (tmp_path / "off").mkdir()
     chosen = _workflow(consumer_input).compile(inference=Inference(renamings=renamings))
@@ -99,13 +99,13 @@ def test_naming_conventions_pick_the_edge_the_cli_picks(
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("last_output", ["output_other_path", "output_log_path"])
+@pytest.mark.parametrize("other_output", ["output_other_path", "output_log_path"])
 def test_python_starts_from_the_shipped_renamings_the_cli_starts_from(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, last_output: str) -> None:
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, other_output: str) -> None:
     """With no arguments `energy_` pairs with `edr_` on both surfaces, so `input_energy_path` reads
-    `output_edr_path` and not the output declared last, a log included."""
-    chosen = _mdrun_workflow(last_output).compile()
-    from_cli = _cli(_mdrun_workflow(last_output), tmp_path, monkeypatch, renamings=SHIPPED_RENAMINGS)
+    `output_edr_path` and not the output declared first, a log included."""
+    chosen = _mdrun_workflow(other_output).compile()
+    from_cli = _cli(_mdrun_workflow(other_output), tmp_path, monkeypatch, renamings=SHIPPED_RENAMINGS)
 
     assert _feeds(chosen.cwl_workflow) == _feeds(from_cli)
     [feed] = _feeds(chosen.cwl_workflow)
@@ -119,7 +119,7 @@ def test_cli_config_without_renamings_uses_the_shipped_ones(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         renamings: tuple[tuple[str, str], ...] | None, edge: str) -> None:
     """A configuration lacking `renaming_conventions` means the shipped renamings, so `input_energy_path`
-    reads `output_edr_path` over a later `output_log_path`; an explicit `[]` keeps none."""
+    reads `output_edr_path` over an earlier `output_log_path`; an explicit `[]` keeps none."""
     from_cli = _cli(_mdrun_workflow("output_log_path"), tmp_path, monkeypatch, renamings=renamings)
 
     [feed] = _feeds(from_cli)

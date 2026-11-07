@@ -771,8 +771,8 @@ and [Configuration](configuration.md) explains namespaces.
 ## 8. Inference
 
 An input that no `in:` entry binds is connected by inference: Sophios looks
-back through the outputs of the earlier steps, most recent first and within a
-step last declared first (with a name that pairs with the input's taking
+back through the outputs of the earlier steps, most recent first and, within a
+step, first declared first (with a name that pairs with the input's taking
 precedence within a step), and connects the input to the first output whose
 type and format match. When more than one candidate matched it still takes
 that one and says so with a note: `wic042` when several outputs of the chosen
@@ -784,7 +784,7 @@ Pin a choice with an edge (§4) and the note goes away. For a port inside a
 subworkflow the pin goes on the inner step, and the note names it.
 `--inference_disable` turns inference off. Among several fitting outputs of
 the chosen step, the one whose name pairs with the input's wins before the
-last declared does; `--no_inference_naming_conventions` turns that off. The
+first declared does; `--no_inference_naming_conventions` turns that off. The
 configuration's `inference_rules` refine inference too;
 `--insert_steps_automatically` lets it insert a converter step, and inference
 that does not settle within its iteration limit is `wic022`.

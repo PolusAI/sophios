@@ -138,7 +138,7 @@ steps, the most recent first, for an output that fits:
    none, so one `format:` on the input keeps logs out.
 2. The most recent step with a fitting output wins. Within that step, an
    output whose name pairs with the input's wins, as the next section shows;
-   if none does, the output declared last wins.
+   if none does, the output declared first wins.
 3. If an earlier step also had a fitting output, Sophios notes the choice,
    as `wic043`. If the winning step had several, it notes that, as `wic042`.
 4. If nothing fits, the input becomes an input of the compiled workflow, for
@@ -200,8 +200,8 @@ the ones at the branch and leave the rest to inference.
 
 Types cannot always decide. A step often makes two files, and a later step
 wants one of them. Here a `summarize` step writes a one-line summary of a
-text and a line-numbered copy of it, as `output_summary` and
-`output_details`, and a `report` step wants the summary, on its input
+text and a line-numbered copy of it, as `output_details` and
+`output_summary`, and a `report` step wants the summary, on its input
 `input_summary`. Save the two tools beside your workflows:
 
 ```{literalinclude} cookbook/summarize.cwl
@@ -255,7 +255,7 @@ naming.wic:7:3: note [wic043] step 'report' input 'input_summary' was inferred f
 ```
 
 When no output's name pairs with the input's, or several do, the output
-declared last wins.
+declared first wins.
 
 ### Turning the names off
 
@@ -275,7 +275,7 @@ from naming import workflow
 workflow().run(inference=Inference(naming_conventions=False))
 ```
 
-By type alone the tie goes to the output declared last, `output_details`, and
+By type alone the tie goes to the output declared first, `output_details`, and
 the command line says so:
 
 ```text
@@ -310,7 +310,7 @@ wants the summary calls it an abstract, on an input `input_abstract`:
 ```
 
 `abstract` pairs with neither output, so the names alone fall back to the
-output declared last, and the `wic042` note appears. A **renaming** tells Sophios how
+output declared first, and the `wic042` note appears. A **renaming** tells Sophios how
 the two conventions correspond. It is a `[before, after]` pair, applied to
 the input's name, after `input_` is stripped and before the names are
 compared: with `['abstract', 'summary']`, `input_abstract` pairs with
