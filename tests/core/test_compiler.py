@@ -9,7 +9,7 @@ from sophios.ir.resolved import NotLowered
 from sophios.wic_types import StepId, Yaml
 
 from .cases import cases
-from .hermetic import compile_hermetic_cwl, subworkflow_step
+from .hermetic import compile_hermetic_cwl, compile_production, subworkflow_step
 from .nextflow.testkit import compiled_case, lowered_case, refusal_lines
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS
 
@@ -82,11 +82,15 @@ def test_an_output_source_names_the_spelling_the_compiler_generated_and_only_tha
         capsys: pytest.CaptureFixture[str], source: str, names: str, resolved: str, said: list[str]) -> None:
     """A bare id shared by two steps still means the first, and the line gives `(index, id)`; it is for the generated
     spelling only, so an authored one prints nothing; and the `(index, name)/port` spelling is what the line
-    recommends, so it is never reported; a position naming a step whose id is unique resolves to that plain id."""
-    compiled = compile_hermetic_cwl({'outputs': {'o': {'type': 'File', 'outputSource': source}},
-                                     'steps': [_mk_file(name) for name in names]})
+    recommends, so it is never reported; a position naming a step whose id is unique resolves to that plain id.
+    A quiet compile prints no line at all."""
+    document: Yaml = {'outputs': {'o': {'type': 'File', 'outputSource': source}},
+                      'steps': [_mk_file(name) for name in names]}
+    compiled = compile_production(document, 'oracle').artifact.cwl
     assert compiled['outputs']['o']['outputSource'] == resolved
     assert capsys.readouterr().err.splitlines() == said
+    compile_hermetic_cwl(document)
+    assert tuple(capsys.readouterr()) == ('', '')
 
 
 @pytest.mark.fast
@@ -98,7 +102,7 @@ def test_a_when_that_reads_an_input_the_step_lacks_is_named_and_still_compiles(
         capsys: pytest.CaptureFixture[str], expression: str, prints: bool) -> None:
     """`inputs.nope` has no value in a `when`, so the run stopped there or the step never ran, and nothing said
     so."""
-    compiled = compile_hermetic_cwl({'steps': [{**_mk_file(), 'when': expression}]})
+    compiled = compile_production({'steps': [{**_mk_file(), 'when': expression}]}, 'oracle').artifact.cwl
     assert compiled['steps'][0]['when'] == expression
     assert ('in `when:`, which its process does not declare' in capsys.readouterr().err) is prints
 
@@ -121,7 +125,7 @@ def test_a_when_on_a_call_that_reads_a_made_name_dotted_is_told_the_bracket_form
     """A call declares the names its child exposes, `mk_file~name` among them, and the bracket form reads it, so it
     draws no note. `inputs.mk_file~name` is `inputs.mk_file`, then `~name`: the note names the input and how to
     read it."""
-    compiled = compile_hermetic_cwl(_call_when(expression))
+    compiled = compile_production(_call_when(expression), 'oracle').artifact.cwl
     assert 'mk_file~name' in compiled['steps'][0]['in']
     assert capsys.readouterr().err.splitlines() == said
 

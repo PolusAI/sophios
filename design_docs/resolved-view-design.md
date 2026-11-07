@@ -552,19 +552,26 @@ not an array, and source and sink types that do not meet across a call boundary.
 - a `File` edge into a nested workflow's `string` input stops at the `!*` line.
 
 ```python
-def check(self, *, target: Literal["cwl", "nextflow"] = "cwl", tool_registry: Tools | None = None,
-          lang_version: str | None = None, inference: Inference = Inference(),
-          policy: RunPolicy = RunPolicy()) -> tuple[Diagnostic, ...]: ...
+def check(self, run_args_dict: dict[str, str] | None = None, basepath: str = DEFAULT_BASEPATH,
+          tool_registry: Tools | None = None, *, workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
+          target: Literal["cwl", "nextflow"] = "cwl", lang_version: str | None = None,
+          inference: Inference = Inference(), policy: RunPolicy = RunPolicy()) -> tuple[Diagnostic, ...]: ...
 ```
 
-`Workflow.check` compiles once and builds the view with the workflow's bound values and declared outputs. It
-then runs the shared check, and for `nextflow` the whole lowering in memory.
+`Workflow.check` is the Python form of the command line's `--check`, and takes `run()`'s arguments. It runs
+`run()`'s own preparation (`_run_request`) with `check=True`: it compiles once, builds the view with the
+workflow's bound values and declared outputs, runs the shared check (and for `nextflow` the whole lowering),
+then the pre-flight of the machine that `run()` and `--check` make, by the same code (`backend.prepare` with
+`Settings.check`): the input paths, the directories written, the programs called, and the container engine
+when a step uses a container.
 - **Returns** every note that the compile, the check and the lowering made. It does not print them, so a
-  `check()` followed by a `compile()` shows each note once.
-- **Writes and checks nothing outside.** It writes nothing, renders no text and pulls no image. It checks
-  nothing about the machine: the command line's `--check` does that (backend design §4.4, Check).
+  `check()` followed by a `run()` shows each note once.
+- **Writes nothing of its own.** What the runner would read goes to a temporary directory, removed when the
+  check ends; no image is pulled and nothing runs.
 - **Raises** what `compile()` raises: `SophiosError` for a compile error, and for `nextflow` a `NotLowered`
-  holding every refusal. `check(target="cwl")` never raises for the shared check.
+  holding every refusal. A machine that cannot run the workflow raises `SophiosError`, one diagnostic per
+  problem (`wic016`, `wic021`, `wic029`...) all at once, as `run()` raises them and `--check` exits 1 on them;
+  a check that finds nothing returns.
 
 `NotLowered`, `Refusal` and `Construct` are exported from `sophios.api.python.nextflow`, whose 22 names
 (`api/python/nextflow.py:84-107`) become 25.

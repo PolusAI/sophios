@@ -42,7 +42,7 @@ def compile_source(bundle: SourceBundle,
     The one door. A bundle read from files carries the spans of the text its
     author wrote, so a diagnostic names a position the reader can open; one
     the Python API built carries the span of the Python line that made each node.
-    `quiet` leaves out the lines that say the compile started and finished.
+    `quiet` prints nothing, the plain warnings included.
     """
     if not quiet:
         print(' starting compilation of', bundle.name)
@@ -57,8 +57,9 @@ def compile_source(bundle: SourceBundle,
                                  'workflows must define at least one step')
     authored, realtime = extract(front.graph)
     _check_unresolved_names(authored, compiler_options['allow_raw_cwl'])
-    for note in dict.fromkeys(_authored_spelling_notes(authored)):
-        print(note, file=sys.stderr)
+    if not quiet:
+        for note in dict.fromkeys(_authored_spelling_notes(authored)):
+            print(note, file=sys.stderr)
 
     prepared = complete(authored)
     linked = link(prepared)
@@ -77,8 +78,9 @@ def compile_source(bundle: SourceBundle,
         raise SophiosError(inferred.diagnostics)
     graph = declare_namespaces(complete(inferred.graph), bundle.registry)
     names = Names.of(graph)
-    for note in dict.fromkeys(_when_notes(graph, names)):
-        print(note, file=sys.stderr)
+    if not quiet:
+        for note in dict.fromkeys(_when_notes(graph, names)):
+            print(note, file=sys.stderr)
     run_policy = RunPolicy(compiler_options['partial_failure_enable'],
                            compiler_options['partial_failure_success_codes'])
     artifact = _artifact_tree(graph, graph.name, names, _Descriptions(bundle.registry), policy=run_policy)

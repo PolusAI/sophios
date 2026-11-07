@@ -13,7 +13,7 @@ import tempfile
 import traceback
 import warnings
 from types import SimpleNamespace
-from typing import Any, Callable, Final, Iterator, cast
+from typing import Any, Callable, Final, Iterator, Literal, cast
 from unittest.mock import Mock, patch
 
 from hypothesis import example, given, strategies as st
@@ -28,10 +28,12 @@ from sophios import input_output as io
 from sophios import preflight
 from sophios import run_local
 from sophios.backends import RunRequest
+from sophios.api.python import nextflow
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import (_python_api_types_match, InvalidInputValueError, InvalidLinkError,
                                          InvalidStepError, RunResult, RunState, RunStatus, SophiosError,
                                          SophiosErrorCode, Step, StepInput, Workflow, WorkflowRunError)
+from sophios.lang.diagnostics import lines as printed_lines
 from sophios.python_cwl_adapter import import_python_file
 from sophios.wic_types import Json, Tools
 
@@ -147,6 +149,134 @@ def test_a_python_workflow_compiles_as_the_wic_beside_it_and_as_the_wic_it_write
         compiled.cwl_workflow, compiled.cwl_job_inputs, _bodies(compiled.diagnostics))
     assert _through_the_file(workflow.write_wic(tmp_path)) == (
         compiled.cwl_workflow, compiled.cwl_job_inputs, _bodies(compiled.diagnostics))
+
+
+def _warned_on_cwl() -> Workflow:
+    """A guessed edge, noted on either target (`wic043`); a `when` that gives a string, noted on CWL (`wic056`); and
+    `cat` running on a `when` that reads an input it does not have, which the compile warns of in a plain line."""
+    echo = adapter_step("echo")
+    echo.inputs.message = "hi"
+    echo.when = "$(inputs.message)"
+    workflow = Workflow([*_PAIRED.equal_producers().steps, echo], "noted")
+    workflow.steps[2].when = "$(inputs.nope)"
+    return workflow
+
+
+def _noted_on_nextflow() -> Workflow:
+    """A CUDA field the Nextflow target does not check, which its lowering notes (`wic046`)."""
+    gpu = (CommandLineTool("gpu_tool", Inputs(), Outputs(file=Output(cwl.file, glob="out.txt")))
+           .base_command("touch", "out.txt").gpu(cuda_version_min="11.4"))
+    return Workflow([Step(gpu, step_name="gpu")], "noted")
+
+
+def _ambiguous() -> Workflow:
+    """Two inputs of one step that inference would both give `touch`'s file: `wic055`, an error."""
+    touch = adapter_step("touch", filename="a.txt")
+    both = Step.from_cwl_document({"cwlVersion": "v1.2", "class": "CommandLineTool", "baseCommand": "true",
+                                   "inputs": {"left": {"type": "File"}, "right": {"type": "File"}}, "outputs": {}},
+                                  process_name="both")
+    return Workflow([touch, both], "ambiguous")
+
+
+@pytest.fixture(name="machine_ready")
+def _machine_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A machine with every program a run calls and a container engine, whatever this one has: the pre-flight's
+    program and engine checks pass."""
+    monkeypatch.setattr(preflight, "PLATFORM_LACKS_RUNNERS", None)
+    monkeypatch.setattr(preflight, "runner_program", lambda name: name)
+    monkeypatch.setattr(preflight, "nextflow_problems", lambda _settings: [])
+    monkeypatch.setattr(preflight, "engine_problems", lambda _images, _settings: [])
+
+
+@pytest.mark.fast
+@pytest.mark.usefixtures("machine_ready")
+@pytest.mark.parametrize("target, build, codes, warned", [("cwl", _warned_on_cwl, ["wic043", "wic056"], 1),
+                                                          ("nextflow", _noted_on_nextflow, ["wic046"], 0)])
+def test_check_returns_the_notes_compile_keeps_and_prints_and_writes_nothing(
+        target: Literal["cwl", "nextflow"], build: Callable[[], Workflow], codes: list[str], warned: int,
+        capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`check()` makes every note `compile()` keeps, the target's own among them, and prints nothing: none of them,
+    no plain warning of the compile's, nothing at all, so a `check()` and then a `compile()` show each once; it writes
+    nothing into the working directory, where the base path is. `compile()` prints the warnings, then the notes."""
+    workflow = build()
+    capsys.readouterr()
+    monkeypatch.chdir(tmp_path)
+    notes = workflow.check(target=target)
+    assert not list(tmp_path.iterdir())
+    assert tuple(capsys.readouterr()) == ("", "")
+    compiled = workflow.compile(target=target)
+    assert notes == compiled.diagnostics
+    assert [str(note.code) for note in notes] == codes
+    printed = capsys.readouterr().err.splitlines()
+    assert printed == [*printed[:warned], *printed_lines(notes)]
+    assert all("reads inputs.nope in `when:`, which its process does not declare" in line for line in printed[:warned])
+
+
+def _reading_a_file(path: Path) -> Workflow:
+    """`cat` of a file bound on the workflow's input."""
+    tool = (CommandLineTool("cat_tool", Inputs(file=Input(cwl.file, position=1)),
+                            Outputs(out=Output(cwl.file, glob="stdout.txt")))
+            .base_command("cat").stdout("stdout.txt"))
+    step = tool.to_step(step_name="cat")
+    workflow = Workflow([step], "wf")
+    step.inputs.file = workflow.inputs.file.as_type("File")
+    workflow.inputs.file = str(path)
+    return workflow
+
+
+@pytest.mark.fast
+@pytest.mark.usefixtures("machine_ready")
+@pytest.mark.parametrize("target", ["cwl", "nextflow"])
+def test_check_reports_an_input_path_that_does_not_exist_as_run_does(
+        target: Literal["cwl", "nextflow"], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--check` reports a bound File that is not there (`wic016`), every problem at once; so does `check()`, as the
+    `SophiosError` `run()` raises, and it leaves the working directory as it found it."""
+    monkeypatch.chdir(tmp_path)
+    workflow = _reading_a_file(tmp_path / "absent.txt")
+    with pytest.raises(SophiosError) as error:
+        workflow.check(target=target)
+    problem, = error.value.diagnostics
+    assert str(problem.code) == "wic016" and f"'{tmp_path / 'absent.txt'}', which does not exist" in problem.message
+    assert not list(tmp_path.iterdir())
+    (tmp_path / "absent.txt").write_text("x", encoding="utf-8")
+    assert workflow.check(target=target) == workflow.compile(target=target).diagnostics
+
+
+@pytest.mark.fast
+def test_check_under_nextflow_reports_a_nextflow_that_is_not_installed(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--check --target nextflow` reports the missing `nextflow` (`wic029`) with the install instructions; so does
+    `check(target="nextflow")`, while a CWL check of the same workflow, which does not call Nextflow, passes."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(preflight, "PLATFORM_LACKS_RUNNERS", None)
+    monkeypatch.setattr(preflight, "runner_program", lambda name: None if name == "nextflow" else name)
+    workflow = _noted_on_nextflow()
+    with pytest.raises(SophiosError) as error:
+        workflow.check(target="nextflow")
+    problem, = error.value.diagnostics
+    assert str(problem.code) == "wic029" and "the run calls nextflow, which is neither" in problem.message
+    assert "install Nextflow" in problem.message
+    workflow.check()
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("target, build, raised, said", [
+    ("cwl", _ambiguous, SophiosError, "[wic055]"),
+    ("nextflow", _noted_on_cwl, nextflow.NotLowered,
+     "step 'echo': when: '$(inputs.message)' must compute a boolean, not a string")])
+def test_check_raises_what_compile_raises(target: Literal["cwl", "nextflow"], build: Callable[[], Workflow],
+                                          raised: type[Exception], said: str) -> None:
+    """A workflow that does not compile is the same `SophiosError` from `check()` as from `compile()`, and one the
+    Nextflow target cannot lower the same `NotLowered`, holding every `Refusal` by its `Construct`."""
+    workflow = build()
+    with pytest.raises(raised) as from_check:
+        workflow.check(target=target)
+    with pytest.raises(raised) as from_compile:
+        workflow.compile(target=target)
+    assert said in str(from_check.value) and str(from_check.value) == str(from_compile.value)
+    if isinstance(from_check.value, nextflow.NotLowered):
+        assert all(isinstance(refusal, nextflow.Refusal) for refusal in from_check.value.refusals)
+        assert [refusal.construct for refusal in from_check.value.refusals] == [nextflow.Construct.WHEN]
 
 
 @pytest.mark.fast

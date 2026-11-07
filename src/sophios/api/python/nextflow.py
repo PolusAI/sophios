@@ -43,11 +43,17 @@ What the compile does not keep does not come back:
   argument or an input's own binding, and its position; a single-input
   scatter's method; a ``when``'s spelling; adjacent ``shellQuote: false``
   texts; and a tool's input order.
+
+``Workflow.compile(target="nextflow")`` and ``Workflow.check(target="nextflow")``
+raise ``NotLowered``, a ``ValueError``, for a workflow the target cannot lower.
+Its ``refusals`` hold every ``Refusal`` at once, each naming the ``Construct``
+it refuses, the step, and the file and line its author wrote it at.
 """
 
 from pathlib import Path
 from typing import Any, NoReturn
 
+from sophios.ir.resolved import Construct, NotLowered, Refusal
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.spans import SourceSpan
@@ -85,6 +91,7 @@ from .workflow import Inference, Step, StepInput, Workflow
 
 
 __all__ = [
+    "Construct",
     "ExecutableNextflowWorkflow",
     "NfArrayBinding",
     "NfBasenameReference",
@@ -106,6 +113,8 @@ __all__ = [
     "NfTemplate",
     "NfWorkflowInputConnection",
     "NfWorkflowOutputConnection",
+    "NotLowered",
+    "Refusal",
     "import_nextflow",
 ]
 

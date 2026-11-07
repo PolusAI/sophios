@@ -448,6 +448,7 @@ def compile_workflow_result(
     tool_registry: Tools | None = None,
     lang_version: str | None = None,
     inference: Inference = Inference(),
+    quiet: bool = False,
 ) -> CompilationResult:
     """Compile a Python API workflow to the graph-derived internal result.
 
@@ -458,11 +459,12 @@ def compile_workflow_result(
             beats any file tag.
         tool_registry (Tools | None): Optional tool registry override.
         inference (Inference): How unbound inputs are connected.
+        quiet (bool): Print nothing: neither the compile's progress nor its plain warnings.
 
     Returns:
         CompilationResult: The typed compiler output for the workflow.
     """
-    return _compile_bundle(workflow, tool_registry, lang_version, inference)[1]
+    return _compile_bundle(workflow, tool_registry, lang_version, inference, quiet=quiet)[1]
 
 
 def _compile_bundle(
@@ -470,6 +472,8 @@ def _compile_bundle(
     tool_registry: Tools | None,
     lang_version: str | None,
     inference: Inference,
+    *,
+    quiet: bool = False,
 ) -> tuple[SourceBundle, CompilationResult]:
     """The documents `workflow` is compiled from, and the result of compiling them."""
     workflow._validate()
@@ -481,7 +485,7 @@ def _compile_bundle(
         ParseResult(workflow_document(workflow), Diagnostics()),
         Path(workflow.process_name).stem,
         RegistrySnapshot.from_tools(merged_tools, workflows=_nested_documents(workflow)))
-    return bundle, _with_bound_values(workflow, compiler.compile_source(bundle, options, quiet=False))
+    return bundle, _with_bound_values(workflow, compiler.compile_source(bundle, options, quiet=quiet))
 
 
 def _bound_values(workflow: "Workflow", graph: WorkflowGraph) -> dict[str, Any]:
@@ -591,6 +595,16 @@ def compiled_workflow_from_result(
     )
 
 
+def _compiled_nextflow(workflow: "Workflow", result: CompilationResult) -> CompiledNextflowWorkflow:
+    """`result` lowered to Nextflow, with every note the compile and the lowering made."""
+    executable, notes = NEXTFLOW.lower(_nextflow_view(workflow, result))
+    return CompiledNextflowWorkflow(
+        nextflow_workflow=executable,
+        lang_version=result.lang_version,
+        diagnostics=(*result.diagnostics, *notes),
+    )
+
+
 def compiled_workflow(
     workflow: "Workflow",
     *,
@@ -623,20 +637,18 @@ def compiled_nextflow_workflow(
     lang_version: str | None = None,
     inference: Inference = Inference(),
 ) -> CompiledNextflowWorkflow:
-    """Compile once through the core semantic pipeline and lower to Nextflow, keeping every note the two made."""
-    result = compile_workflow_result(
-        workflow,
-        tool_registry=tool_registry,
-        lang_version=lang_version,
-        inference=inference,
-    )
-    executable, notes = NEXTFLOW.lower(_nextflow_view(workflow, result))
-    report((*result.diagnostics, *notes))
-    return CompiledNextflowWorkflow(
-        nextflow_workflow=executable,
-        lang_version=result.lang_version,
-        diagnostics=(*result.diagnostics, *notes),
-    )
+    """Compile once through the core semantic pipeline and lower to Nextflow, keeping and printing every note the
+    two made."""
+    compiled = _compiled_nextflow(workflow, compile_workflow_result(
+        workflow, tool_registry=tool_registry, lang_version=lang_version, inference=inference))
+    report(compiled.diagnostics)
+    return compiled
+
+
+def check_workflow(workflow: "Workflow", options: "RunOptions") -> tuple[Diagnostic, ...]:
+    """Every note compiling `workflow` to `options.target` makes, after the checks of this machine a run makes
+    before it starts, and nothing written, pulled or printed: see `Workflow.check`."""
+    return _run_request(workflow, options, refuse_realtime=False, check=True).diagnostics
 
 
 def _run_args(overrides: dict[str, str] | None, target: str) -> dict[str, str]:
@@ -669,6 +681,7 @@ class RunOptions:  # pylint: disable=too-many-instance-attributes
     workflow_paths: Mapping[str, Mapping[str, Path]] | None = None
     inference: Inference = Inference()
     target: str = "cwl"
+    lang_version: str | None = None
 
 
 def _realtime_refused(declarations: tuple[Declaration, ...]) -> SophiosError:
@@ -679,10 +692,13 @@ def _realtime_refused(declarations: tuple[Declaration, ...]) -> SophiosError:
         "real-time analyses", declaration.span) for declaration in declarations)
 
 
-def _run_request(workflow: "Workflow", options: RunOptions, *,
-                 refuse_realtime: bool) -> backends.RunRequest:
+def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: bool,
+                 check: bool = False) -> backends.RunRequest:
     """Compile `workflow`, check this machine, write what the runner reads and pull its images: the run, ready.
     Its notes are printed on stderr, as the command line prints them, and the request carries them.
+
+    With `check`, as the command line's `--check` does: the same compile and the same checks of this machine,
+    but what the runner reads goes to a temporary directory, nothing is pulled, and nothing is printed.
 
     Raises:
         SophiosError: The workflow does not compile, this machine cannot run it, or it declares real-time
@@ -691,15 +707,18 @@ def _run_request(workflow: "Workflow", options: RunOptions, *,
             an environment variable name; or, for the Nextflow target, `run_args_dict` has a key only a CWL run
             reads, or the workflow has no Nextflow lowering.
     """
-    logger.info("Running %s", workflow.process_name)
-    plugins.logging_filters()
+    if not check:
+        logger.info("Running %s", workflow.process_name)
+        plugins.logging_filters()
 
     resolved_run_args = _run_args(options.run_args_dict, options.target)
     basepath = options.basepath
-    result = compile_workflow_result(workflow, tool_registry=options.tool_registry, inference=options.inference)
+    result = compile_workflow_result(workflow, tool_registry=options.tool_registry, inference=options.inference,
+                                     lang_version=options.lang_version, quiet=check)
     if options.target == "cwl":
         result = replace(result, diagnostics=Diagnostics([*result.diagnostics, *compiler.cwl_notes(result)]))
-    report(result.diagnostics)
+    if not check:
+        report(result.diagnostics)
     if refuse_realtime and result.realtime:
         raise _realtime_refused(result.realtime)
     analyses = realtime.compile_analyses(
@@ -709,7 +728,7 @@ def _run_request(workflow: "Workflow", options: RunOptions, *,
                                         "pass run() a basepath you can write to")) is not None:
         raise SophiosError([problem])
     if options.target == "nextflow":
-        return _nextflow_run_request(workflow, options, result, analyses, resolved_run_args)
+        return _nextflow_run_request(workflow, options, result, analyses, resolved_run_args, check=check)
     outdir = resolved_run_args.get("outdir")
     writes = ((Path(outdir), "the run's outputs", "give run() an outdir you can write to"),) if outdir else ()
     # One document, the workflow's and each analysis's, as `compile()` returns it.
@@ -722,7 +741,7 @@ def _run_request(workflow: "Workflow", options: RunOptions, *,
                                   runner=resolved_run_args["cwl_runner"],
                                   run_script=_enabled(resolved_run_args.get("generate_run_script", "no")),
                                   writes=writes),
-            Path.cwd(), resolved_run_args.get("inputs_file", ""), inputs_file_named="inputs_file",
+            Path.cwd(), resolved_run_args.get("inputs_file", ""), inputs_file_named="inputs_file", check=check,
             remove_entrypoints=_enabled(resolved_run_args.get("docker_remove_entrypoints"))))
     user_args = convert_args_dict_to_args_list(
         resolved_run_args,
@@ -730,7 +749,7 @@ def _run_request(workflow: "Workflow", options: RunOptions, *,
     )
 
     _, unknown_args = get_known_and_unknown_args(workflow.process_name, user_args)
-    return _noted(result, prepared.notes, backends.RunRequest(
+    return _noted(result, prepared.notes, check, backends.RunRequest(
         workflow.process_name, Path(basepath), runner=resolved_run_args["cwl_runner"],
         container_engine=resolved_run_args["container_engine"], cachedir=resolved_run_args.get("cachedir", ""),
         outdir=resolved_run_args.get("outdir", ""), quiet=resolved_run_args.get("quiet", "yes") == "yes",
@@ -739,9 +758,9 @@ def _run_request(workflow: "Workflow", options: RunOptions, *,
         generate_run_script=resolved_run_args.get("generate_run_script", "no") == "yes"))
 
 
-def _nextflow_run_request(workflow: "Workflow", options: RunOptions, result: CompilationResult,
-                          analyses: tuple[realtime.Analysis, ...],
-                          run_args: dict[str, str]) -> backends.RunRequest:
+def _nextflow_run_request(  # pylint: disable=too-many-arguments
+        workflow: "Workflow", options: RunOptions, result: CompilationResult, analyses: tuple[realtime.Analysis, ...],
+        run_args: dict[str, str], *, check: bool) -> backends.RunRequest:
     """`_run_request` for the Nextflow target, which lowers the outputs `compile()` returns: each `run_args` key
     Sophios does not read reaches Nextflow as `-<key> <value>`, or `-<key>` alone for an empty value, and one
     only a CWL run reads is refused.
@@ -760,18 +779,19 @@ def _nextflow_run_request(workflow: "Workflow", options: RunOptions, result: Com
     prepared = backends.backend("nextflow", "nextflow").prepare(
         result, analyses, Path(options.basepath),
         run_setup.Settings(preflight.RunSettings("docker", "", runner="nextflow", run_script=run_script), Path.cwd(),
-                           view=_nextflow_view(workflow, result)))
-    return _noted(result, prepared.notes, backends.RunRequest(
+                           check=check, view=_nextflow_view(workflow, result)))
+    return _noted(result, prepared.notes, check, backends.RunRequest(
         workflow.process_name, Path(options.basepath), runner="nextflow", target="nextflow",
         passthrough_args=passthrough, env=dict(options.user_env_vars or {}), realtime_plans=prepared.plans,
         generate_run_script=run_script))
 
 
-def _noted(result: CompilationResult, notes: tuple[Diagnostic, ...], request: backends.RunRequest
+def _noted(result: CompilationResult, notes: tuple[Diagnostic, ...], check: bool, request: backends.RunRequest
            ) -> backends.RunRequest:
     """`request` carrying the notes compiling and preparing the run made; the preparing ones are printed on
-    stderr here, as the command line prints them."""
-    report(notes)
+    stderr here, as the command line prints them, unless this is a check."""
+    if not check:
+        report(notes)
     return replace(request, diagnostics=(*result.diagnostics, *notes))
 
 
