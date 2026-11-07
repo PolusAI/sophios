@@ -174,3 +174,9 @@
   workflow: {steps: [{id: GATED, in: {a: a}, when: $(inputs.a > 1)}], inputs: {a: int}}
   tools: [{id: GATED, inputs: {a: {type: ['null', int]}}, baseCommand: 'true'}]
   job: {a: 2}
+- id: a_step_input_expression_requirement_is_a_declaration
+  why: A declaration is not a use (resolved-view design §8); a valueFrom it would allow stays refused by name.
+  workflow: {steps: [{id: ECHO, in: {message: message}}], inputs: {message: string}, requirements:
+    {StepInputExpressionRequirement: {}}}
+  tools: [{id: ECHO, inputs: {message: {type: string, inputBinding: {position: 1}}}, baseCommand: echo}]
+  job: {message: hi}

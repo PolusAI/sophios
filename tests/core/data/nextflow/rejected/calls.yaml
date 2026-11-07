@@ -45,11 +45,11 @@
   tools: *tools
   findings: {contains: [{re: a step input's valueFrom is not supported}]}
 - id: nested_findings_aggregate_across_workflow_calls
-  why: One finding per call, and no third.
-  workflow: {steps: [*write, {id: child_0.wic, subtree: &hinted {<<: *child, hints: {ResourceRequirement: {}}},
+  why: One finding per call, at the tool step that inherits the hint, and no third.
+  workflow: {steps: [*write, {id: child_0.wic, subtree: &hinted {<<: *child, hints: {SoftwareRequirement: {}}},
     parentargs: *bound}, {id: child_1.wic, subtree: *hinted, parentargs: *bound}]}
   tools: *tools
-  findings: [{re: &hints workflow hints are not supported}, {re: *hints}]
+  findings: [{re: &software "requirement 'SoftwareRequirement': SoftwareRequirement is not supported"}, {re: *software}]
 - id: scatter_on_a_resolved_subworkflow_call
   why: Scattering an inlined sub-DAG is not the single-process shape scatter supports.
   workflow: {inputs: {sources: {type: *files}}, steps: [{id: child.wic, subtree: *child, parentargs: {in: {source:
@@ -63,16 +63,17 @@
   tools: *tools
   findings: {contains: [{re: a when on a nested-workflow step is not supported}]}
 - id: unsupported_nested_workflow_requirements
-  why: &requirements A nested workflow's requirements and hints are judged as the root workflow's are.
-  workflow: {steps: [*write, {id: child.wic, subtree: {<<: *child, requirements: {StepInputExpressionRequirement: {}}},
+  why: &requirements A nested workflow's requirements and hints are inherited by its tool steps, each judged as the
+    same entry written on its tool (resolved-view design §8).
+  workflow: {steps: [*write, {id: child.wic, subtree: {<<: *child, requirements: {SoftwareRequirement: {}}},
     parentargs: *bound}]}
   tools: *tools
-  findings: {contains: [{re: StepInputExpressionRequirement is not supported}]}
+  findings: {contains: [{re: "step 'child~copy': requirement 'SoftwareRequirement': SoftwareRequirement is not"}]}
 - id: every_unconsumed_nested_workflow_field
   why: *requirements
   workflow: {steps: [*write, {id: child.wic, subtree: *hinted, parentargs: *bound}]}
   tools: *tools
-  findings: {contains: [{re: 'step ''child'': requirement: workflow hints are not supported'}]}
+  findings: {contains: [{re: "step 'child~copy': requirement 'SoftwareRequirement': SoftwareRequirement is not"}]}
 - id: a_nested_workflow_input_default_before_projection
   why: Inlining replaces a nested workflow's input with the call's binding, where CWL would apply the default to a null.
   workflow: {steps: [*write, {id: child.wic, subtree: {<<: *child, inputs: {source: {type: File, default:

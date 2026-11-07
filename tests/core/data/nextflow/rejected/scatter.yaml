@@ -50,9 +50,10 @@
   job: *ab
   findings: ['workflow ''wf'': requirement ''ScatterFeatureRequirement'': method is not consumed by the Nextflow
     lowering']
-- {id: workflow_requirement_of_an_unsupported_class, why: *workflow_requirements, tools: [*scatter], job: *ab, workflow:
-   {<<: *scatter_items, requirements: {StepInputExpressionRequirement: {}}}, findings: ['workflow ''wf'': requirement
-   ''StepInputExpressionRequirement'': StepInputExpressionRequirement is not supported at the Nextflow workflow level']}
+- {id: workflow_requirement_of_an_unsupported_class, why: 'A workflow-level requirement a tool cannot have is refused at
+   each tool step that inherits it (resolved-view design §8).', tools: [*scatter], job: *ab, workflow: {<<: *scatter_items,
+   requirements: {SoftwareRequirement: {}}}, findings: ['step ''SCATTER'': requirement ''SoftwareRequirement'':
+   SoftwareRequirement is not supported: use DockerRequirement']}
 - {id: workflow_requirements_of_the_wrong_shape, why: *workflow_requirements, tools: [*scatter], job: *ab, workflow:
    {<<: *scatter_items, requirements: ScatterFeatureRequirement}, findings: ['workflow ''wf'': requirement: CWL Workflow
    requirements must be a mapping or list']}

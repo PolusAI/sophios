@@ -47,28 +47,33 @@ _ARRAY_TYPE = Row(_L, '`array`')
 _ARRAY_ITEMS = Row(_L, 'the element type: one the parameter could declare itself, not an array')
 _ARRAY_NAME = Row(_R, "an array schema's name is not supported")
 
+_INHERITED = Row(_L, 'inherited by each tool step inside, as cwltool gives them to its tool; see the requirement '
+                 'classes')
+
 FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
     'Workflow': MappingProxyType({
         'class': Row(_L, '`Workflow`'),
         'cwlVersion': Row(_L, '`v1.2`, whose semantics the lowering follows'),
         'doc': _DOC,
-        'hints': Row(_R, 'workflow hints are not supported: put each one on the tool that needs it'),
+        'hints': _INHERITED,
         'id': Row(_L, 'names the Nextflow workflow'),
         'inputs': Row(_L, 'workflow parameters'),
         'intent': _INTENT,
         'label': _DOC,
         'outputs': Row(_L, 'workflow emits'),
-        'requirements': Row(_L, 'feature declarations, each inert; see the workflow requirement classes'),
+        'requirements': _INHERITED,
         'steps': Row(_L, "one process per tool step; a nested workflow's steps are inlined"),
     }),
     'WorkflowStep': MappingProxyType({
         'doc': _DOC,
-        'hints': Row(_R, "a step's hints are not supported: put them on the step's tool"),
+        'hints': Row(_L, "inherited by the step's tool, or by each tool step of its workflow; see the "
+                         'requirement classes'),
         'id': Row(_L, 'names the process'),
         'in': Row(_L, "the process's input channels"),
         'label': _DOC,
         'out': Row(_L, "the process's emits"),
-        'requirements': Row(_R, "a step's requirements are not supported: put them on the step's tool"),
+        'requirements': Row(_L, "inherited by the step's tool, or by each tool step of its workflow; see the "
+                                'requirement classes'),
         'run': Row(_L, 'a `CommandLineTool`, or a nested workflow, inlined'),
         'scatter': Row(_L, 'one task per invocation, indexed so a gather keeps order'),
         'scatterMethod': Row(_L, '`dotproduct`, `flat_crossproduct` or `nested_crossproduct`'),
@@ -253,6 +258,9 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
     'ShellCommandRequirement': MappingProxyType({
         'class': Row(_L, 'admits `shellQuote: false` on literal text; not beside a `DockerRequirement`'),
     }),
+    'StepInputExpressionRequirement': MappingProxyType({
+        'class': Row(_L, "a declaration only; a step input's valueFrom is rejected"),
+    }),
     'SubworkflowFeatureRequirement': MappingProxyType({
         'class': Row(_L, 'a declaration only; each nested workflow is inlined'),
     }),
@@ -267,9 +275,12 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
 
 _WORKFLOW_FEATURE = 'is a workflow requirement: declare it on the workflow'
 
-#: The requirement and hint classes a CommandLineTool may name, and the
-#: requirement classes a Workflow may name; any other class is rejected. A
-#: class that is not rejected has its fields in `FIELDS`.
+#: The requirement and hint classes a CommandLineTool may name, any other
+#: being rejected; and the feature classes, which a Workflow or a step
+#: declares and its tools inherit as nothing. Every other class a workflow or
+#: a step names is inherited by its tools, each judged as if the tool named it
+#: (resolved-view design §8). A class that is not rejected has its fields in
+#: `FIELDS`.
 REQUIREMENT_CLASSES: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
     'CommandLineTool': MappingProxyType({
         'DockerRequirement': Row(_L, 'the `container` directive'),
@@ -287,9 +298,9 @@ REQUIREMENT_CLASSES: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
         'cwltool:CUDARequirement': Row(_L, 'the `accelerator` directive'),
     }),
     'Workflow': MappingProxyType({
-        'InlineJavascriptRequirement': Row(_L, 'a declaration only; Sophios adds it for every `when`'),
         'MultipleInputFeatureRequirement': Row(_L, 'a declaration only'),
         'ScatterFeatureRequirement': Row(_L, 'a declaration only'),
+        'StepInputExpressionRequirement': Row(_L, "a declaration only; a step input's valueFrom is rejected"),
         'SubworkflowFeatureRequirement': Row(_L, 'a declaration only'),
     }),
 })

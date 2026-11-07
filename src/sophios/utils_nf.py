@@ -1544,8 +1544,9 @@ def _path_reference_findings(tool: Mapping[str, Any], entries: Mapping[str, NfEn
     return findings
 
 
-def _tool_capability_findings(tool: Mapping[str, Any], *, path: str) -> list[str]:
-    """Collect unsupported executable semantics of a step's tool without lowering it; `path` names the step."""
+def _tool_capability_findings(tool: Mapping[str, Any], *, path: str, inherited: Mapping[str, str]) -> list[str]:
+    """Collect unsupported executable semantics of a step's tool without lowering it; `path` names the step, and
+    `inherited` the places in `tool` the entries it inherits are written at, with their classes."""
     findings: list[str] = []
 
     match tool.get("class"):
@@ -1578,9 +1579,13 @@ def _tool_capability_findings(tool: Mapping[str, Any], *, path: str) -> list[str
     findings.extend(_iwdr_rename_reference_findings(tool, renamed_names, path=path))
     shell_mode_active = _requirement(tool, "ShellCommandRequirement") is not None
     if shell_mode_active and _requirement(tool, "DockerRequirement") is not None:
+        # A pair with an inherited half is refused where that half is written, which the tool's file does not hold.
+        written = next((place for name in ("ShellCommandRequirement", "DockerRequirement")
+                        for place, cls in inherited.items() if cls == name), None)
         findings.append(
-            f"{path}.run: ShellCommandRequirement beside a DockerRequirement is not supported: CWL runs the "
-            "command as /bin/sh -c after the image's ENTRYPOINT, which the Nextflow task does not"
+            f"{path}.run{'' if written is None else f'.{written}'}: ShellCommandRequirement beside a "
+            "DockerRequirement is not supported: CWL runs the command as /bin/sh -c after the image's ENTRYPOINT, "
+            "which the Nextflow task does not"
         )
     if isinstance(inputs := tool.get("inputs", {}), Mapping):
         findings.extend(
@@ -1699,6 +1704,8 @@ class _Step:
     index: int
     view: ToolStep
     tool: Mapping[str, Any]
+    #: Each place in `tool` an inherited entry is written at, `requirements.<key>` or `hints.<key>`, with its class.
+    inherited: Mapping[str, str]
     carried: frozenset[str]
 
     @property
@@ -1831,6 +1838,7 @@ def _call_findings(workflow: ResolvedWorkflow, *, path: str = "workflow") -> lis
         elif "scatterMethod" in dict(step.fields):
             findings.append(f"{step_path}.scatterMethod: scatterMethod without scatter is not executable")
         findings.extend(_unconsumed_field_findings(_step_fields(step), "WorkflowStep", path=step_path))
+        findings.extend(_own_requirement_findings(step.requirements, dict(step.fields), "WorkflowStep", path=step_path))
         for port in step.inputs:
             input_path = f"{step_path}.in.{port.name}"
             # The inlining joins one source to each input a call binds.
@@ -1933,6 +1941,8 @@ def _workflow_capability_findings(workflow: ResolvedWorkflow, steps: tuple[_Step
     for step in steps:
         fields = _step_fields(step.node)
         findings.extend(_unconsumed_field_findings(fields, "WorkflowStep", path=step.path))
+        findings.extend(_own_requirement_findings(step.node.requirements, dict(step.node.fields), "WorkflowStep",
+                                                  path=step.path))
         if step.node.scatter is None and "scatterMethod" in fields:
             findings.append(f"{step.path}.scatterMethod: scatterMethod without scatter is not executable")
         for port in step.node.inputs:
@@ -1943,13 +1953,23 @@ def _workflow_capability_findings(workflow: ResolvedWorkflow, steps: tuple[_Step
 
 
 def _workflow_requirement_findings(workflow: ResolvedWorkflow, *, path: str = "workflow") -> list[str]:
-    """Apply closed-world analysis to workflow-level requirements."""
-    if "requirements" in dict(workflow.fields):
-        return [f"{path}.requirements: CWL Workflow requirements must be a mapping or list"]
-    return _requirement_findings(
-        _requirement_section(workflow.requirements, hints=False), "Workflow", path=f"{path}.requirements",
-        otherwise="{} is not supported at the Nextflow workflow level",
-    )
+    """Apply closed-world analysis to a workflow's own requirements and hints (design §8)."""
+    return _own_requirement_findings(workflow.requirements, dict(workflow.fields), "Workflow", path=path)
+
+
+def _own_requirement_findings(requirements: tuple[Requirement, ...], fields: Mapping[str, Any], owner: str, *,
+                              path: str) -> list[str]:
+    """A workflow's or a step's own requirements and hints: a feature class is consumed there, an inert declaration
+    with no field of its own; every other class is inherited by each tool step inside, and judged there as written
+    on its tool (design §8)."""
+    findings = [f"{path}.{section}: CWL {owner} {section} must be a mapping or list"
+                for section in ("requirements", "hints") if section in fields]
+    for requirement in requirements:
+        if requirement.cls in _FEATURES:
+            findings.extend(_unconsumed_field_findings(
+                requirement.body if isinstance(requirement.body, Mapping) else {}, requirement.cls,
+                path=f"{path}.{'hints' if requirement.hint else 'requirements'}.{requirement.cls}"))
+    return findings
 
 
 _SCATTER_METHODS = frozenset({"dotproduct", "flat_crossproduct", "nested_crossproduct"})
@@ -2835,10 +2855,37 @@ def _apply_absent_sentinel(params: Mapping[str, Any]) -> dict[str, Any]:
     return {name: (ABSENT_VAL_SENTINEL if value is None else value) for name, value in params.items()}
 
 
-def _tool_of(run: ResolvedTool) -> dict[str, Any]:
-    """The tool a step runs, normalized on the lowering's own copy."""
-    return desugar_into_canonical_normal_form(copy.deepcopy(dict(
-        _as_mapping(run.document, error="a tool step's tool must be a CWL document"))))
+#: The classes that decide only whether a workflow may use a feature, which cwltool reads at the step (resolved-view
+#: design §8): on a workflow or a step each is an inert declaration, and a tool that inherits one lowers it to nothing.
+_FEATURES = frozenset({"SubworkflowFeatureRequirement", "ScatterFeatureRequirement",
+                       "MultipleInputFeatureRequirement", "StepInputExpressionRequirement"})
+
+
+def _tool_of(step: ResolvedStep) -> tuple[dict[str, Any], dict[str, str]]:
+    """The tool a step runs, normalized on the lowering's own copy, with what it inherits written into it (design
+    §8), so every entry is lowered, or refused, as the same entry written on the tool; and each place an inherited
+    entry is written at in the tool, `requirements.<key>` or `hints.<key>`, with its class; an inherited entry is
+    written where the tool names no entry that wins over it.
+    """
+    assert isinstance(step.run, ResolvedTool)
+    tool = desugar_into_canonical_normal_form(copy.deepcopy(dict(
+        _as_mapping(step.run.document, error="a tool step's tool must be a CWL document"))))
+    own = {section: {name for name, _suffix, _payload in _requirement_entries(tool.get(section))}
+           for section in ("requirements", "hints")}
+    written: dict[str, str] = {}
+    for requirement in step.inherited:
+        section = "hints" if requirement.hint else "requirements"
+        if requirement.cls in _FEATURES or requirement.cls in own["requirements"] or requirement.cls in own[section]:
+            continue
+        body = copy.deepcopy(dict(requirement.body)) if isinstance(requirement.body, Mapping) else {}
+        match tool.get(section):
+            case list() as entries:
+                written[f"{section}.{len(entries)}"] = requirement.cls
+                entries.append({"class": requirement.cls, **body})
+            case Mapping() | None as entries:
+                written[f"{section}.{requirement.cls}"] = requirement.cls
+                tool[section] = {**(entries or {}), requirement.cls: body}
+    return tool, written
 
 
 @dataclass(frozen=True, slots=True)
@@ -2858,7 +2905,7 @@ class _Lowering:
         if not isinstance(view, ResolvedWorkflow):
             raise TypeError("Nextflow conversion requires a resolved view of a compilation")
         steps = tuple(
-            _Step(index, tool, _tool_of(tool.step.run), _carried(tool))
+            _Step(index, tool, *_tool_of(tool.step), _carried(tool))
             for index, tool in enumerate(tool_steps(view)) if isinstance(tool.step.run, ResolvedTool)
         )
         return cls(view, steps, tuple(zip(view.outputs, output_sources(view), strict=True)),
@@ -2944,7 +2991,9 @@ def _step_refusal(node: ResolvedStep, rest: str, reason: str, *, root: str) -> R
             subject = f"{_tool_file(node)}: {field_path}" if field_path else _tool_file(node)
             return Refusal(Construct.TOOL, subject, root, node.name, node.span, reason)
         case "requirements" | "hints":
-            return Refusal(Construct.REQUIREMENT, None, root, node.name, node.span, _with_field(after, reason))
+            named = _PATH_FIELD.fullmatch(after)
+            return Refusal(Construct.REQUIREMENT, named["field"] if named else None, root, node.name, node.span,
+                           _with_field(named["rest"] if named else "", reason))
     return Refusal(own, None, root, node.name, node.span, _with_field(rest, reason))
 
 
@@ -2990,6 +3039,17 @@ def _refusal(finding: str, lowering: _Lowering) -> Refusal:
     return _within(lowering.view, locator.removeprefix("workflow"), reason, root=root, owner=None)
 
 
+def _inherited_at_step(finding: str, step: _Step) -> str:
+    """A finding about an entry the tool inherits, at the step's requirement of its class: the author wrote it
+    outside the tool's file (design §8). Every other finding as it is."""
+    for place, cls in step.inherited.items():
+        written = f"{step.path}.run.{place}"
+        if finding.startswith((f"{written}.", f"{written}: ")):
+            section = place.split(".", maxsplit=1)[0]
+            return f"{step.path}.{section}.{cls}{finding.removeprefix(written)}"
+    return finding
+
+
 @dataclass(frozen=True, slots=True)
 class _Analysis:
     """What the analysis of a view found: every refusal, the workflow it lowered when there is none, and the notes
@@ -3008,7 +3068,9 @@ def _analysis(lowering: _Lowering) -> _Analysis:
     processes: list[NfProcess] = []
     conditions: dict[str, Expr] = {}
     for step in steps:
-        if step_findings := _tool_capability_findings(step.tool, path=step.path):
+        if step_findings := [_inherited_at_step(finding, step)
+                             for finding in _tool_capability_findings(step.tool, path=step.path,
+                                                                      inherited=step.inherited)]:
             findings.extend(step_findings)
             continue
         try:
