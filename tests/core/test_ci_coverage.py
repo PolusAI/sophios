@@ -422,6 +422,14 @@ WINDOWS_EXCLUDED: Final = frozenset({
     # test_example_scripts.py's ground truth and the cookbook pairs.
     'tests/core/nextflow/test_shipped_append.py::'
     'test_the_shipped_append_tool_appends_the_message_as_written_under_cwltool',
+    # Four batches of up to twelve small workflows, each run under Nextflow and under cwltool, in about ten
+    # seconds; and one batch of four, whose tools run in containers, in about ten more. Lint And Test's Linux
+    # Nextflow step collects them, so the Windows leg gives up nothing it ran; what each lowers to is checked on
+    # every leg by the lowering's data cases and the import's fixed point.
+    'tests/core/nextflow/test_step_only_differential.py::'
+    'test_inherited_docker_requirements_and_greeting_if_run_as_under_cwltool',
+    'tests/core/nextflow/test_step_only_differential.py::'
+    'test_step_only_inputs_and_inherited_requirements_run_as_under_cwltool',
     # Both cwltool entry points, called in-process with cwltool's run stood in for, well under a second.
     # test_run_local.py is POSIX-only already, so the Windows leg gives up nothing it ran.
     'tests/core/test_run_local.py::test_the_runner_prints_no_rdflib_encoding_warning',
