@@ -22,7 +22,7 @@ from .synthetic_tools import clt
 from .budgets import budget
 from .hermetic import ORACLE, compile_hermetic
 from .reference_model import ReferenceExpectation, reference_expectation
-from .strategies import pinned
+from .strategies import cwl_types, pinned
 from .wic_reading import read_wic
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
@@ -66,11 +66,9 @@ _CASES: Final = (
 _ATOMS: Final = ('null', 'boolean', 'int', 'long', 'float', 'double', 'string', 'File', 'Directory', 'Any')
 #: Declarations as a tool may write them: atoms, `Any`, unions and arrays, the `?` and `[]` shorthands, and what the
 #: judge must survive without knowing: a record, an enum, a named schema, a malformed array, nothing.
-_DECLARATIONS: Final = st.recursive(
-    st.sampled_from([*_ATOMS, *(atom + '?' for atom in _ATOMS), *(atom + '[]' for atom in _ATOMS), 'example.org#Thing',
-                     None, {'type': 'array'}, {'type': 'record', 'fields': []}, {'type': 'enum', 'symbols': ['a']}]),
-    lambda inner: st.lists(inner, min_size=1, max_size=3) | st.builds(lambda items: {'type': 'array', 'items': items},
-                                                                      inner), max_leaves=4)
+_DECLARATIONS: Final = cwl_types(
+    *_ATOMS, 'example.org#Thing', None, {'type': 'array'}, {'type': 'record', 'fields': []},
+    {'type': 'enum', 'symbols': ['a']})
 
 
 def _loaded(declared: Any) -> bool:

@@ -46,7 +46,7 @@ from .budgets import budget
 from .fake_runner import POSIX_ONLY
 from .hermetic import compile_hermetic, compile_hermetic_source
 from .provocations import _provoke_duplicate_document_name
-from .strategies import pinned
+from .strategies import author_names, pinned
 from .synthetic_tools import SYNTHETIC_NS, clt
 from .test_lang_parser import FAST
 
@@ -321,41 +321,35 @@ _TWO_TOUCHES = ('steps:\n- id: touch\n  in:\n    filename: !ii a.txt\n'
 
 
 @pytest.mark.fast
-def test_cli_prints_an_inference_note_on_stderr_and_succeeds(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """A guessed edge is said under its code, with how to check it, and the compile still succeeds."""
+@pytest.mark.parametrize('flags, outcome', [
+    ((), (None, [re.escape('note [wic043] 1 edge was guessed; draw the workflow to check it '
+                           '(--graphviz, or Workflow.draw() in Python)'),
+                 r'  .*two_touches\.wic:8:3  cat\.file <- touch@2\.file \(1 other fits\)'])),
+    (('--inference_strict',), (1, [r'.*error \[wic043\] cat\.file <- touch@2\.file was guessed, 1 other fits; '
+                                   'write the edge it should read']))],
+    ids=['note', 'strict'])
+def test_cli_says_a_guessed_edge_and_strict_refuses_it(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+        flags: tuple[str, ...], outcome: tuple[int | None, list[str]]) -> None:
+    """A guessed edge is said under its code, with how to check it, and the compile still succeeds. With
+    `--inference_strict` the same note is an error and the exit code says so; the compile failed, so there is
+    nothing to draw. `outcome` is the exit code (None where main returns) and a pattern for each line it prints."""
+    code, said = outcome
     workflow = tmp_path / 'two_touches.wic'
     workflow.write_text(_TWO_TOUCHES, encoding='utf-8')
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), '--generate_cwl_workflow'])
-
-    cli.main()  # returning, rather than raising SystemExit, is the first assertion
-
-    captured = capsys.readouterr()
-    header, row = [line for line in captured.err.splitlines() if 'wic043' in line or ' <- ' in line]
-    assert header == ('note [wic043] 1 edge was guessed; draw the workflow to check it '
-                      '(--graphviz, or Workflow.draw() in Python)')
-    assert row.startswith('  ') and row.endswith('two_touches.wic:8:3  cat.file <- touch@2.file (1 other fits)')
-    assert 'wic043' not in captured.out
-
-
-@pytest.mark.fast
-def test_cli_with_inference_strict_refuses_a_choice_between_equals(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """`--inference_strict` makes the same note an error and the exit code says so."""
-    workflow = tmp_path / 'two_touches.wic'
-    workflow.write_text(_TWO_TOUCHES, encoding='utf-8')
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), '--generate_cwl_workflow',
-                                     '--inference_strict'])
-
-    with pytest.raises(SystemExit) as caught:
-        cli.main()
-
-    assert caught.value.code == 1
-    printed = capsys.readouterr().err
-    assert 'error [wic043] cat.file <- touch@2.file was guessed, 1 other fits; write the edge it should read' in printed
-    assert 'draw the workflow' not in printed, 'the compile failed, so there is nothing to draw'
+    monkeypatch.setattr('sys.argv', ['sophios', '--yaml', str(workflow), '--generate_cwl_workflow', *flags])
+    if code is None:
+        cli.main()  # returning, rather than raising SystemExit, is the first assertion
+    else:
+        with pytest.raises(SystemExit) as caught:
+            cli.main()
+        assert caught.value.code == code
+    out, err = capsys.readouterr()
+    lines = [line for line in err.splitlines() if 'wic043' in line or ' <- ' in line]
+    assert len(lines) == len(said) and all(re.fullmatch(pattern, line) for pattern, line in zip(said, lines)), lines
+    assert 'wic043' not in out
+    assert ('draw the workflow' in err) is (code is None)
 
 
 @pytest.mark.fast
@@ -498,26 +492,23 @@ def test_a_runner_that_cannot_start_says_why_with_or_without_a_cachedir(
 
 
 @pytest.mark.fast
-def test_an_unresolved_input_names_its_line_and_step() -> None:
-    """wic011 carried a message and nothing else; the parser had the span all along."""
+@pytest.mark.parametrize('step, code, message', [
+    ({'id': 'mk_file', 'in': {'name': 'x'}}, SophiosErrorCode.UNRESOLVED_INPUT, 'Did you forget to use !ii before x?'),
+    ({'id': 'scale', 'in': {'n': {'wic_inline_input': 'x'}}}, SophiosErrorCode.LITERAL_TYPE_MISMATCH, None)],
+    ids=['unresolved input', 'literal type mismatch'])
+def test_a_compile_error_names_its_line_step_and_port(step: dict[str, Any], code: SophiosErrorCode,
+                                                      message: str | None) -> None:
+    """wic011 carried a message and nothing else, the parser had the span all along; it is one line, with no
+    `Warning!` in front and no advice to compile anyway. wic020 names the line of the `!ii` literal and the step
+    and port it binds."""
     with pytest.raises(SophiosError) as caught:
-        compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': 'undeclared'}}]})
-    diagnostic = caught.value.diagnostics[0]
-    assert diagnostic.code is SophiosErrorCode.UNRESOLVED_INPUT
-    assert diagnostic.span is not None and diagnostic.span.file == 'oracle.wic'
-    assert diagnostic.locator == Locator(step='mk_file', index=1, port='name')
-
-
-@pytest.mark.fast
-def test_a_literal_type_mismatch_names_its_line_and_port() -> None:
-    """wic020 names the line of the `!ii` literal and the step and port it binds."""
-    with pytest.raises(SophiosError) as caught:
-        compile_hermetic({'steps': [{'id': 'scale', 'in': {'n': {'wic_inline_input': 'x'}}}]})
-    diagnostic = caught.value.diagnostics[0]
-    assert diagnostic.code is SophiosErrorCode.LITERAL_TYPE_MISMATCH
-    assert diagnostic.span is not None and diagnostic.span.file == 'oracle.wic'
-    assert diagnostic.span.start_line > 0
-    assert diagnostic.locator == Locator(step='scale', index=1, port='n')
+        compile_hermetic({'steps': [step]})
+    first = caught.value.diagnostics[0]
+    assert first.code is code
+    assert first.span is not None and first.span.file == 'oracle.wic' and first.span.start_line > 0
+    assert first.locator == Locator(step=step['id'], index=1, port=next(iter(step['in'])))
+    if message is not None:
+        assert [(d.code, d.message) for d in caught.value.diagnostics] == [(code, message)]
 
 
 @pytest.mark.fast
@@ -542,15 +533,6 @@ def test_a_duplicate_document_name_names_its_document() -> None:
     diagnostic = caught.value.diagnostics[0]
     assert diagnostic.code is SophiosErrorCode.DUPLICATE_DOCUMENT_NAME
     assert diagnostic.span is not None and diagnostic.span.file == 'provoke.wic'
-
-
-@pytest.mark.fast
-def test_an_unresolved_input_is_one_error_that_says_what_to_write() -> None:
-    """wic011 is one line, with no `Warning!` in front and no advice to compile anyway."""
-    with pytest.raises(SophiosError) as caught:
-        compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': 'x'}}]})
-    assert [(d.code, d.message) for d in caught.value.diagnostics] == \
-        [(SophiosErrorCode.UNRESOLVED_INPUT, 'Did you forget to use !ii before x?')]
 
 
 # --------------------------------------------------------------------------
@@ -1227,7 +1209,7 @@ _NAMED: Final = {
 
 
 @pytest.mark.fast
-@given(st.tuples(st.sampled_from(sorted(_NAMED)), st.text('aZ09_.-~@/\\ #?%:*"<>|\xe9', min_size=1, max_size=6)))
+@given(st.tuples(st.sampled_from(sorted(_NAMED)), author_names))
 @pinned(*[(where, name) for where in ('step id', 'mapping step id')
           for name in ['a~b', 'echo@2', 'a/b', 'a b', 'a#b', '.', '..', '.hidden', 'con', 'aux', 'nul', 'com1']],
         *[(where, name) for where in ('workflow input', 'workflow output', 'workflow name')
