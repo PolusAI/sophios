@@ -226,9 +226,11 @@ adds it. A `valueFrom` makes the type `Any`.
 
 A `when` is typed with each step input's delivered type, not with the tool's declaration. `inputs.x` in a
 `when` is the step input's value, which cwltool does not convert to the tool's type first: it evaluates the
-`when` over the step's own input object (`cwltool/workflow_job.py:660-675`). The Nextflow target types a `when`
-this way from PR B (§9). Until then it types a declared input by the tool's declaration, as today
-(`utils_nf.py:2994-3012`).
+`when` over the step's own input object (`cwltool/workflow_job.py:660-675`). It is evaluated per scatter job, so
+a scattered input is typed by its element. An input of a nested workflow holds what the call binds to it, so
+from PR B a nested workflow's input is typed, inside it, by the call's step input's delivered type, and by its
+declaration only where the call leaves it unbound. The Nextflow target types a `when` this way from PR B (§9).
+Until then it types a declared input by the tool's declaration, as today (`utils_nf.py:2994-3012`).
 
 **Checked:** a step-only input fed by a step output makes cwltool wait. `wait.wic` (§9, example 2), compiled to
 CWL and run with cwltool, logs `[step touch] completed success` before `[workflow ] starting step echo`.
@@ -338,7 +340,11 @@ Today `StepInputExpressionRequirement` is refused at the workflow level (`nf_sup
 it), and every step-level requirement is refused.
 
 Every other inherited entry is lowered, or refused, exactly as the same entry written on the tool would be
-(`nf_support.py:272-287`).
+(`nf_support.py:272-287`). The target writes it into its own copy of the tool, where the order above puts it, and
+judges the tool as it judges any: an entry the tool names one that wins over is not written. A refusal of a
+written entry is the step's `REQUIREMENT`, subject its class, at the step's span, since the author wrote it outside
+the tool's file; every other refusal of the tool stays the tool's. A workflow's or step's own section that is not a
+mapping is refused as today, and a feature class there with a field beyond `class` is refused by its row.
 
 **Byte identity.** A workflow that lowers today has no workflow hints and no step requirements or hints. Its
 workflow-level classes are features or `InlineJavascriptRequirement` without `expressionLib`
@@ -349,8 +355,12 @@ workflow-level classes are features or `InlineJavascriptRequirement` without `ex
 compares:
 - a workflow `DockerRequirement` hint against the tool's own `DockerRequirement` requirement (the tool's wins);
 - a workflow `DockerRequirement` requirement against the tool's hint (the workflow's wins);
-- a step's `ResourceRequirement` inside a nested workflow (the innermost wins);
+- a step's `EnvVarRequirement` inside a nested workflow against the root's (the innermost wins);
 - an `EnvVarRequirement` inherited from the root.
+
+A task cannot see its `ResourceRequirement` (the target refuses `$(runtime.cores)`), so the innermost rule runs
+with `EnvVarRequirement`, which the command prints, and `ResourceRequirement` is pinned by the lowering's data
+cases. A losing `DockerRequirement` image names nothing, so a run that took it fails.
 
 ## 9. Step-only inputs on Nextflow (PR B)
 
@@ -360,6 +370,9 @@ compares:
 
 Such an input cannot change what the step does or when it can start, and it is left out as today
 (`utils_nf.py:1958-1962`, `nf_support.py:80-81`), so every pipeline that compiles today stays byte-identical. A
+carried input lowers its `default`, `linkMerge` and `pickValue` as a declared one does; its type is what it
+delivers. A `default` of one with no source of a scalar type has no type to check the value against, and is
+refused by name. A
 step-only input inside a nested workflow, fed by that workflow's input, is carried when the call binds that
 input to a step output. Scatter over a step-only input stays refused, since no process port receives the
 element. `valueFrom` stays refused on every step input.
@@ -375,9 +388,16 @@ works:
 - `NfPort.scalar_type: str | None = None`, after `optional` (`nf_types.py:629`).
   - It is the CWL type of what a `val` port receives when that is one scalar: `boolean`, `int`, `float` or
     `string`, with `?` when the value may be `null`. It is `None` on every `path` port and every array.
-  - One function in `nf_types` computes it from a port's connection: a parameter's declared type, or what a
-    step-input connection's `pickValue` picks. The lowering and the reader both fill it with that function, and
-    the workflow's validation holds every port to it.
+  - One function in `nf_types`, `scalar_type`, computes it from a port's connection: a parameter's declared
+    type, one element of it for a scattered input; a process output's captured text, `string?` when its process
+    has a condition; or what a step-input connection's `pickValue` picks, which is never `null`, when its
+    sources agree on one type. The lowering and the reader both fill it with that function, and the workflow's
+    validation holds every port to it. The lowering fills it as it assembles the workflow, each process after
+    the processes it reads and before its condition is attached; `refusals` assembles the workflow too once
+    nothing else is refused, so a refusal the model's validation raises, such as a condition on a process with
+    no input at all, is among them.
+  - The workflow's validation does not hold a step-only input to its source's path kind: a `val` takes a path's
+    value and stages nothing. It refuses a scatter adapter into one.
   - The process's validation types its condition with the subset's `check` over its ports' `scalar_type` and
     requires `boolean`. This replaces the root-operator test (`nf_types.py:724`, `:856-857`).
 
@@ -491,14 +511,16 @@ For (3), a `null` makes cwltool fail ("Conditional 'when' must evaluate to 'true
 **The runtime differential** follows `tests/core/nextflow/test_subset_differential.py:114-118`:
 `@pytest.mark.nextflow`, `@pytest.mark.serial`, `@budget(3)` (`tests/core/budgets.py:36-40`, which sets
 `print_blob=True`) and `@given` over a list of up to 12 generated workflows, run as one batch under cwltool and
-one under Nextflow. Each generated workflow:
-- has at most 4 steps over the host tools of `cwl_adapters`;
-- uses step-only inputs fed by workflow inputs or earlier outputs;
+one under Nextflow. A batch is one data case compiled through `compile_source`, as the lowering's cases are,
+since the Python API writes no requirement on a workflow or a step. Each generated workflow:
+- has at most 4 steps over the host tools of `cwl_adapters`, `echo.cwl` and `append.cwl`;
+- uses step-only inputs fed by workflow inputs or earlier outputs, a skipped step's among them;
 - has a subset `when` over boolean, `int` and string workflow inputs.
 
-Outputs are compared by name and content. The hand-written cases are its `@example`s: the cookbook `when` with
-`loud` true and false, `greeting_if`, example 2, and the requirement cases of §8. It runs in Lint And Test's Linux
-Nextflow step.
+Outputs are compared by name and content. The hand-written cases are one `@example`, a batch of the cookbook
+`when` with `loud` true and false, example 2 and the two `EnvVarRequirement` cases of §8. It runs in Lint And Test's
+Linux Nextflow step. `greeting_if` and the two `DockerRequirement` cases of §8 run their tools in containers, so
+they are one batch in a test marked `docker` beside it.
 
 ## 10. Checks before anything is written (PR C)
 
