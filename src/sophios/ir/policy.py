@@ -38,16 +38,18 @@ class RunPolicy:
 
 
 def effective_when(step: StepNode, names: Names, policy: RunPolicy) -> OpaqueCwl:
-    """The `when` `step` is written with: the null checks of every input it requires, then its own.
+    """The `when` `step` is written with: the null checks of every input its process requires, then its own.
 
     The checks come first, so the author's condition is evaluated only once every
-    required input has arrived, and at most once: it is written once, verbatim.
-    Without partial failure, or with no input to check, the step keeps the `when`
-    its author wrote, or none. A `when` that is neither one `$(...)` nor one
-    `${...}` is not a condition cwltool evaluates, and is written as it is.
+    required input has arrived, and at most once: it is written once, verbatim. An
+    input only a record binds is not the process's, which never receives it, so it is
+    not checked. Without partial failure, or with no input to check, the step keeps
+    the `when` its author wrote, or none. A `when` that is neither one `$(...)` nor
+    one `${...}` is not a condition cwltool evaluates, and is written as it is.
     """
     authored = dict(step.interpreted).get('when')
-    needed = [names.port(port.id.port) for port in step.inputs if required(port.declaration)]
+    needed = [names.port(port.id.port) for port in step.inputs
+              if port.declaration is not None and required(port.declaration)]
     if not policy.partial_failure or not needed:
         return authored
     checks = ' && '.join(f'inputs["{name}"] != null' for name in needed)

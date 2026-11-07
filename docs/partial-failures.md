@@ -122,6 +122,15 @@ returns `false` first:
 `${if (!(inputs["message"] != null)) { return false; } return inputs.message < "27"; }`.
 A `when:` that is not one `$(...)` or one `${...}` is written as it is.
 
+The checks cover only the inputs the step's tool or subworkflow declares.
+An input that only the `when:` reads, as `show` in
+[`greeting_if.wic`](scatter-and-conditions.md), is not one of them: there
+`cat` gets `when: $(inputs["file"] != null && (inputs.show))`. So the
+condition must give a boolean even when such an input is `null`: on an
+unbound `boolean?`, `$(inputs.show)` makes cwltool stop with "Conditional
+'when' must evaluate to 'true' or 'false'", and `$(inputs.show == true)`
+skips the step instead.
+
 The codes that count as success are `0` plus those you name:
 
 - `--partial_failure_success_codes 1 2` lists codes;

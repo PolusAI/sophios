@@ -110,3 +110,9 @@
   tools: {say: {inputs: {message: string}}, tell: {inputs: {message: string}}}
   workflows: {w: "steps:\n- id: say\n  when: 'on $(inputs.message)'\n  in:\n    message: !ii a\n- id: tell\n  when: true\n  in:\n    message: !ii b\n"}
   written: {w.cwl: {steps: [{id: say, when: 'on $(inputs.message)'}, {id: tell, when: true}]}}
+- id: a-step-only-input
+  why: docs/cookbook/when.wic; an input only the when reads is not its tool's, which never receives it, yet it was
+    null-checked too
+  tools: {say: {inputs: {message: string}}}
+  workflows: {w: "inputs:\n  loud: boolean\nsteps:\n- id: say\n  when: $(inputs.enabled)\n  in:\n    message: !ii Hello\n    enabled: !cwl {source: loud}\n"}
+  written: {w.cwl: {steps: [{id: say, when: '$(inputs["message"] != null && (inputs.enabled))'}]}}
