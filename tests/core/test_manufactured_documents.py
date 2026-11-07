@@ -35,7 +35,6 @@ MANUFACTURING_SITES: Final[dict[str, str]] = {
     'sophios/lang/render.py::_Writer.sidecar': RENDERER,
     'sophios/lang/schema.py::_defs': SCHEMA,
     'sophios/utils_cwl.py::desugar_into_canonical_normal_form': TOOL,
-    'sophios/utils_nf.py::compilation_result_source': CWL,
     'sophios/contrib/converter.py::wfb_to_wic': CONTRIB,
     'sophios/contrib/rest/api.py::compile_wf': CONTRIB,
 }

@@ -319,3 +319,25 @@ name = "The run path takes values, never the command line's arguments"
 type = "forbidden"
 source_modules = ["sophios.run_setup", "sophios.backends", "sophios.run_local"]
 forbidden_modules = ["sophios.main", "sophios.cli"]
+
+[[tool.importlinter.contracts]]
+name = "The Nextflow target reads the resolved view, never emitted CWL"
+type = "forbidden"
+source_modules = ["sophios.utils_nf", "sophios.input_output_nf", "sophios.nf_reader", "sophios.nf_types",
+                  "sophios.nf_expr", "sophios.nf_support", "sophios.nf_symbols"]
+forbidden_modules = ["sophios.ir.artifacts", "sophios.ir.emit", "sophios.compiler", "sophios.post_compile"]
+
+[[tool.importlinter.contracts]]
+name = "The Nextflow target takes names and step inputs from the resolved view"
+type = "forbidden"
+source_modules = ["sophios.utils_nf", "sophios.input_output_nf", "sophios.nf_reader", "sophios.nf_types",
+                  "sophios.nf_expr", "sophios.nf_support", "sophios.nf_symbols"]
+forbidden_modules = ["sophios.ir.stepin", "sophios.ir.names"]
+# The view and ir.complete read them on the target's behalf; only the target's own imports are checked.
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "The resolved view reads the graph, never its CWL"
+type = "forbidden"
+source_modules = ["sophios.ir.resolved"]
+forbidden_modules = ["sophios.ir.artifacts", "sophios.ir.emit", "sophios.compiler", "sophios.post_compile"]
