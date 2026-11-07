@@ -52,6 +52,7 @@ from ._types import ScatterMethod
 from ._workflow_runtime import (
     RunHandle,
     RunOptions as _RunOptions,
+    RunPolicy,
     check_workflow as _check_workflow,
     coerce_path as _coerce_path,
     compiled_nextflow_workflow as _compiled_nextflow_workflow,
@@ -92,6 +93,7 @@ __all__ = [
     "InvalidLinkError",
     "InvalidStepError",
     "RunHandle",
+    "RunPolicy",
     "RunResult",
     "RunState",
     "RunStatus",
@@ -1096,6 +1098,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         tool_registry: Tools | None = None,
         lang_version: str | None = None,
         inference: Inference = Inference(),
+        policy: RunPolicy = RunPolicy(),
     ) -> CompiledWorkflow:
         ...
 
@@ -1107,16 +1110,18 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         tool_registry: Tools | None = None,
         lang_version: str | None = None,
         inference: Inference = Inference(),
+        policy: RunPolicy = RunPolicy(),
     ) -> CompiledNextflowWorkflow:
         ...
 
-    def compile(
+    def compile(  # pylint: disable=too-many-arguments
         self,
         *,
         target: Literal["cwl", "nextflow"] = "cwl",
         tool_registry: Tools | None = None,
         lang_version: str | None = None,
         inference: Inference = Inference(),
+        policy: RunPolicy = RunPolicy(),
     ) -> CompiledWorkflow | CompiledNextflowWorkflow:
         """Compile this workflow into the selected target representation.
 
@@ -1133,6 +1138,9 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 ships and format rules are empty unless passed, and ``insert_steps=True`` inserts only
                 converters among ``tool_registry``. See :class:`Inference`
                 for each option and its flag.
+            policy (RunPolicy): How the workflow runs: the CWL the command line's
+                partial-failure flags write, as :class:`RunPolicy` maps them. The
+                Nextflow target refuses partial failure.
 
         Returns:
             CompiledWorkflow | CompiledNextflowWorkflow: The CWL workflow and its job
@@ -1149,13 +1157,13 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         """
         if target == "cwl":
             return _compiled_workflow(self, tool_registry=tool_registry, lang_version=lang_version,
-                                      inference=inference)
+                                      inference=inference, policy=policy)
         if target == "nextflow":
             return _compiled_nextflow_workflow(self, tool_registry=tool_registry, lang_version=lang_version,
-                                               inference=inference)
+                                               inference=inference, policy=policy)
         raise ValueError(f"unsupported compilation target {target!r}")
 
-    def check(
+    def check(  # pylint: disable=too-many-arguments
         self,
         run_args_dict: dict[str, str] | None = None,
         basepath: str = DEFAULT_BASEPATH,
@@ -1165,6 +1173,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         target: Literal["cwl", "nextflow"] = "cwl",
         lang_version: str | None = None,
         inference: Inference = Inference(),
+        policy: RunPolicy = RunPolicy(),
     ) -> tuple[Diagnostic, ...]:
         """Check that this workflow compiles and that this machine can run it: the Python form of ``--check``.
 
@@ -1185,6 +1194,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             target (Literal["cwl", "nextflow"]): The target to check for.
             lang_version (str | None): As :meth:`compile` takes it.
             inference (Inference): As :meth:`compile` takes it.
+            policy (RunPolicy): As :meth:`compile` takes it.
 
         Returns:
             tuple[Diagnostic, ...]: Every note the compile, the target's checks and, for Nextflow, the
@@ -1200,7 +1210,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         if target not in ("cwl", "nextflow"):
             raise ValueError(f"unsupported compilation target {target!r}")
         return _check_workflow(self, _RunOptions(run_args_dict, None, basepath, tool_registry, workflow_paths,
-                                                 inference, target, lang_version=lang_version))
+                                                 inference, target, policy, lang_version))
 
     def draw(  # pylint: disable=too-many-arguments
         self,
@@ -1269,6 +1279,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         *,
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
+        policy: RunPolicy = RunPolicy(),
         target: Literal["cwl", "nextflow"] = "cwl",
     ) -> RunResult | None:
         """Compile and execute this workflow locally, and wait for it: :meth:`start`, then ``collect()``.
@@ -1301,6 +1312,8 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
                 ``.wic`` files a real-time analysis may be.
             inference (Inference): How an unbound input is connected; the run
                 infers the same edges ``compile(inference=...)`` does.
+            policy (RunPolicy): As :meth:`compile` takes it: the run writes the CWL
+                ``compile(policy=...)`` returns.
             target (Literal["cwl", "nextflow"]): What the workflow is run as: CWL, by
                 ``cwl_runner``, or the pipeline the Nextflow target lowers it to, by Nextflow.
 
@@ -1320,7 +1333,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             KeyboardInterrupt: On Ctrl-C, after the runner was stopped.
         """
         return _run_workflow(self, _RunOptions(run_args_dict, user_env_vars, basepath, tool_registry,
-                                               workflow_paths, inference, target))
+                                               workflow_paths, inference, target, policy))
 
     def start(  # pylint: disable=too-many-arguments
         self,
@@ -1331,6 +1344,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         *,
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
+        policy: RunPolicy = RunPolicy(),
         target: Literal["cwl", "nextflow"] = "cwl",
     ) -> RunHandle:
         """Compile this workflow, prepare its run, start its runner, and return without waiting for it.
@@ -1353,6 +1367,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             workflow_paths (Mapping[str, Mapping[str, Path]] | None): The
                 ``.wic`` files a real-time analysis may be.
             inference (Inference): How an unbound input is connected.
+            policy (RunPolicy): As :meth:`run` takes it.
             target (Literal["cwl", "nextflow"]): As :meth:`run` takes it.
 
         Returns:
@@ -1363,7 +1378,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             ValueError: As :meth:`run` raises it, and for ``generate_run_script``.
         """
         return _start_workflow(self, _RunOptions(run_args_dict, user_env_vars, basepath, tool_registry,
-                                                 workflow_paths, inference, target))
+                                                 workflow_paths, inference, target, policy))
 
     async def run_async(  # pylint: disable=too-many-arguments
         self,
@@ -1374,6 +1389,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
         *,
         workflow_paths: Mapping[str, Mapping[str, Path]] | None = None,
         inference: Inference = Inference(),
+        policy: RunPolicy = RunPolicy(),
         target: Literal["cwl", "nextflow"] = "cwl",
     ) -> RunResult | None:
         """:meth:`run`, as a coroutine that never blocks the event loop.
@@ -1395,6 +1411,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             workflow_paths (Mapping[str, Mapping[str, Path]] | None): Unused here: they
                 name real-time analyses, which are refused.
             inference (Inference): How an unbound input is connected.
+            policy (RunPolicy): As :meth:`run` takes it.
             target (Literal["cwl", "nextflow"]): As :meth:`run` takes it.
 
         Returns:
@@ -1407,7 +1424,7 @@ class Workflow(_ProcessBase):  # pylint: disable=too-many-instance-attributes
             asyncio.CancelledError: When the awaiting task is cancelled, after the runner was stopped.
         """
         return await _run_workflow_async(self, _RunOptions(run_args_dict, user_env_vars, basepath, tool_registry,
-                                                           workflow_paths, inference, target))
+                                                           workflow_paths, inference, target, policy))
 
     def _as_workflow_step(self) -> nodes.Step:
         """Return this workflow as a step naming its own ``.wic`` document, with its anchored outputs."""

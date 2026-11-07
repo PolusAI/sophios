@@ -31,6 +31,7 @@ from sophios.ir.artifacts import CompilationArtifact, CompilationResult
 from sophios.ir.complete import coerce_job_value
 from sophios.ir.frontdoor import SourceBundle
 from sophios.ir.locations import absolute_paths
+from sophios.ir.policy import RunPolicy
 from sophios.ir.realtime import ADAPTER, Declaration
 from sophios.ir.resolve import RegistrySnapshot
 from sophios.ir.resolved import ResolvedWorkflow
@@ -424,10 +425,14 @@ def _nested_documents(workflow: "Workflow") -> dict[tuple[str, str], ParseResult
     return documents
 
 
-def compiler_options(inference: Inference, lang_version: str | None = None) -> CompilerOptions:
-    """The options the command line builds from its inference flags, from `inference`. No configuration file is read."""
+def compiler_options(inference: Inference, lang_version: str | None = None,
+                     policy: RunPolicy = RunPolicy()) -> CompilerOptions:
+    """The options the command line builds from its inference and partial-failure flags, from `inference` and
+    `policy`. No configuration file is read."""
     options: CompilerOptions = {
         **default_compilation_settings(),
+        'partial_failure_enable': policy.partial_failure,
+        'partial_failure_success_codes': policy.success_codes,
         'inference_disable': not inference.enabled,
         'inference_strict': inference.strict,
         'inference_use_naming_conventions': inference.naming_conventions,
@@ -442,12 +447,13 @@ def compiler_options(inference: Inference, lang_version: str | None = None) -> C
     return options
 
 
-def compile_workflow_result(
+def compile_workflow_result(  # pylint: disable=too-many-arguments
     workflow: "Workflow",
     *,
     tool_registry: Tools | None = None,
     lang_version: str | None = None,
     inference: Inference = Inference(),
+    policy: RunPolicy = RunPolicy(),
     quiet: bool = False,
 ) -> CompilationResult:
     """Compile a Python API workflow to the graph-derived internal result.
@@ -459,28 +465,30 @@ def compile_workflow_result(
             beats any file tag.
         tool_registry (Tools | None): Optional tool registry override.
         inference (Inference): How unbound inputs are connected.
+        policy (RunPolicy): How the workflow runs: partial failure, and the exit codes that count as success.
         quiet (bool): Print nothing: neither the compile's progress nor its plain warnings.
 
     Returns:
         CompilationResult: The typed compiler output for the workflow.
     """
-    return _compile_bundle(workflow, tool_registry, lang_version, inference, quiet=quiet)[1]
+    return _compile_bundle(workflow, tool_registry, lang_version, inference, policy, quiet=quiet)[1]
 
 
-def _compile_bundle(
+def _compile_bundle(  # pylint: disable=too-many-arguments
     workflow: "Workflow",
     tool_registry: Tools | None,
     lang_version: str | None,
     inference: Inference,
+    policy: RunPolicy = RunPolicy(),
     *,
     quiet: bool = False,
 ) -> tuple[SourceBundle, CompilationResult]:
-    """The documents `workflow` is compiled from, and the result of compiling them."""
+    """The documents `workflow` is compiled from, and the result of compiling them under `policy`."""
     workflow._validate()
 
     merged_tools = _merged_known_tools(workflow, tool_registry)
 
-    options = compiler_options(inference, lang_version)
+    options = compiler_options(inference, lang_version, policy)
     bundle = SourceBundle(
         ParseResult(workflow_document(workflow), Diagnostics()),
         Path(workflow.process_name).stem,
@@ -611,6 +619,7 @@ def compiled_workflow(
     tool_registry: Tools | None = None,
     lang_version: str | None = None,
     inference: Inference = Inference(),
+    policy: RunPolicy = RunPolicy(),
 ) -> CompiledWorkflow:
     """Compile a workflow into the public compiled-workflow boundary object, and print its notes.
 
@@ -620,12 +629,13 @@ def compiled_workflow(
         lang_version (str | None): Pin the Sophios language version for this
             compilation; None infers it. An explicit setting beats file tags.
         inference (Inference): How unbound inputs are connected.
+        policy (RunPolicy): How the workflow runs.
 
     Returns:
         CompiledWorkflow: Compiled CWL workflow plus generated job inputs.
     """
     compiled = compiled_workflow_from_result(workflow, compile_workflow_result(
-        workflow, tool_registry=tool_registry, lang_version=lang_version, inference=inference))
+        workflow, tool_registry=tool_registry, lang_version=lang_version, inference=inference, policy=policy))
     report(compiled.diagnostics)
     return compiled
 
@@ -636,11 +646,12 @@ def compiled_nextflow_workflow(
     tool_registry: Tools | None = None,
     lang_version: str | None = None,
     inference: Inference = Inference(),
+    policy: RunPolicy = RunPolicy(),
 ) -> CompiledNextflowWorkflow:
     """Compile once through the core semantic pipeline and lower to Nextflow, keeping and printing every note the
     two made."""
     compiled = _compiled_nextflow(workflow, compile_workflow_result(
-        workflow, tool_registry=tool_registry, lang_version=lang_version, inference=inference))
+        workflow, tool_registry=tool_registry, lang_version=lang_version, inference=inference, policy=policy))
     report(compiled.diagnostics)
     return compiled
 
@@ -681,6 +692,7 @@ class RunOptions:  # pylint: disable=too-many-instance-attributes
     workflow_paths: Mapping[str, Mapping[str, Path]] | None = None
     inference: Inference = Inference()
     target: str = "cwl"
+    policy: RunPolicy = RunPolicy()
     lang_version: str | None = None
 
 
@@ -714,7 +726,7 @@ def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: 
     resolved_run_args = _run_args(options.run_args_dict, options.target)
     basepath = options.basepath
     result = compile_workflow_result(workflow, tool_registry=options.tool_registry, inference=options.inference,
-                                     lang_version=options.lang_version, quiet=check)
+                                     policy=options.policy, lang_version=options.lang_version, quiet=check)
     if options.target == "cwl":
         result = replace(result, diagnostics=Diagnostics([*result.diagnostics, *compiler.cwl_notes(result)]))
     if not check:
@@ -723,7 +735,8 @@ def _run_request(workflow: "Workflow", options: RunOptions, *, refuse_realtime: 
         raise _realtime_refused(result.realtime)
     analyses = realtime.compile_analyses(
         result.realtime, {namespace: dict(paths) for namespace, paths in (options.workflow_paths or {}).items()},
-        _merged_known_tools(workflow, options.tool_registry), compiler_options(options.inference))
+        _merged_known_tools(workflow, options.tool_registry),
+        compiler_options(options.inference, policy=options.policy))
     if (problem := preflight.unwritable(Path(basepath), "the workflow and its run",
                                         "pass run() a basepath you can write to")) is not None:
         raise SophiosError([problem])
