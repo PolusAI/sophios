@@ -1,10 +1,12 @@
 """Normalize the declared part of CWL process interfaces into the IR."""
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import replace
 from typing import Any, Final
 
 from ..lang.nodes import OpaqueCwl
-from .types import BoundaryDeclaration, Direction, Port, PortDeclaration, PortName, PortType, StepNode
+from .types import (BoundaryDeclaration, DerivedName, Direction, Port, PortDeclaration, PortName, PortType, StepNode,
+                    WorkflowGraph)
 
 #: What a workflow boundary port may state, by direction: the fields the CWL
 #: v1.2 schema gives `WorkflowOutputParameter` and `WorkflowInputParameter`.
@@ -66,6 +68,44 @@ def layered(port_type: PortType, rank: int) -> PortType:
     for _ in range(rank):
         raw = {'type': 'array', 'items': raw}
     return PortType(raw)
+
+
+def delivered(produced: Any, *, sources: int, link_merge: OpaqueCwl, pick_value: OpaqueCwl) -> Any:
+    """The type a step-input record delivers from sources of type `produced`: the list CWL's `linkMerge` makes of
+    them (a merged array stays flat; one source with no `linkMerge` is not wrapped) or, for a `pickValue` that picks
+    one value, one element of it. `Any` where a pick has no array to take an element of, so nothing is proved
+    against it."""
+    match produced:
+        case {'type': 'array'}:
+            flat = True
+        case _:
+            flat = False
+    if sources == 1 and link_merge is None:
+        merged = produced
+    elif link_merge == 'merge_flattened' and flat:
+        merged = produced
+    else:
+        merged = {'type': 'array', 'items': produced}
+    if pick_value not in ('first_non_null', 'the_only_non_null'):
+        return merged
+    match merged:
+        case {'type': 'array', 'items': items}:
+            return items
+        case _:
+            return 'Any'
+
+
+def written_order(graph: WorkflowGraph) -> Callable[[PortName], tuple[int, int]]:
+    """The key the CWL target orders `graph`'s boundary names by: the written names, then each name exposing one
+    of the graph's own steps, in step order. A name relayed from a step nested further down exposes none of them,
+    and sorts with the written names."""
+    positions = {step.id: index for index, step in enumerate(graph.steps)}
+
+    def key(name: PortName) -> tuple[int, int]:
+        if isinstance(name, DerivedName) and name.step in positions:
+            return (1, positions[name.step])
+        return (0, 0)
+    return key
 
 
 def feeding_declaration(step: StepNode, port: Port) -> BoundaryDeclaration:
