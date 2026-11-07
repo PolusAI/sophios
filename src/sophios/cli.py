@@ -81,7 +81,7 @@ neutral.add_argument('--inference_disable', default=False, action="store_true",
 neutral.add_argument('--no_inference_naming_conventions', dest='inference_use_naming_conventions',
                      default=True, action="store_false",
                      help='Do not let an input\'s name decide between equally typed outputs of the same step; '
-                     'the output declared last wins')
+                     'the output declared first wins')
 neutral.add_argument('--inference_strict', default=False, action="store_true",
                      help='Treat an inference choice between equal candidates (wic042, wic043) as an error.')
 neutral.add_argument('--validate_plugins', default=False, action="store_true",

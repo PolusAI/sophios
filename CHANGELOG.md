@@ -23,6 +23,8 @@ Codes in parentheses are the codes Sophios prints with each diagnostic.
   them. A renaming applies only when an input's own name pairs with no output.
 - An output with `_log_` in its name is no longer skipped: a log is a `File`
   like any other. Give the input a `format:` to keep logs out of its edge.
+- A tie that no name settles goes to the output declared first, where it went
+  to the last. Write the edge where you relied on the last.
 
 ## [0.7.0](https://github.com/PolusAI/sophios/compare/v0.6.0...v0.7.0) (2026-11-04)
 

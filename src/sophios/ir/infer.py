@@ -229,8 +229,9 @@ def _candidate(steps: list[StepNode], position: int, sink: Port, policy: Inferen
     """The source inferred for `sink`, the equal candidates it was chosen over,
     and every output looked at.
 
-    The most recent producer with a match wins, and within it the last
-    declared match (unless naming conventions single one out). The scan goes
+    The most recent producer with a match wins, and within it the first
+    declared match (unless naming conventions single one out); a subworkflow
+    call counts its inner steps as producers, the most recent inner step first. The scan goes
     on past the winner only to collect the earlier producers' matches, so
     the choice can be reported; it never changes the choice.
     """
@@ -259,7 +260,7 @@ def _candidate(steps: list[StepNode], position: int, sink: Port, policy: Inferen
                 break_scope = scope
         if matches and chosen is None:
             named = _named(matches, sink, policy)
-            chosen = named[0] if named else matches[0]
+            chosen = _first_declared(named or matches)
             if len(named) != 1:
                 alternatives.extend(match.id for match in matches if match is not chosen)
         elif matches:
@@ -269,6 +270,12 @@ def _candidate(steps: list[StepNode], position: int, sink: Port, policy: Inferen
     if chosen is None:
         return None, (), tuple(attempted)
     return chosen.id, tuple(alternatives), tuple(attempted)
+
+
+def _first_declared(matches: list[Port]) -> Port:
+    """Of `matches`, listed last declared first: the first declared of the most recent step that declares one."""
+    leaf = _steps(matches[0].id.port)
+    return [match for match in matches if _steps(match.id.port) == leaf][-1]
 
 
 def _named(matches: list[Port], sink: Port, policy: InferencePolicy) -> list[Port]:
