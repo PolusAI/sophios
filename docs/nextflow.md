@@ -926,6 +926,10 @@ given as a bare name that names nothing yet.
 
 ## Current limits
 
+Every construct the target cannot run yet has an `nf-sNNN` code: the
+[error codes](error_codes.md) list them all, and `sophios --explain` prints
+one. When the target learns a construct, its code is retired. Among them:
+
 - Processes must be `CommandLineTool`-equivalent.
 - The number types are `int` and `float`. A `long` or `double`, wherever it
   is declared, is rejected by name.
@@ -939,7 +943,7 @@ Every field the Nextflow target considers is in one of three states.
 and a declaration such as `ScatterFeatureRequirement` becomes nothing of its
 own. *Compile-time*: Sophios uses it while compiling, and the Nextflow output
 carries nothing for it. *Rejected*: compiling stops, naming the field with the
-note as the reason, and writes no artifacts. A field or class missing from
+note as the reason and the code the note ends with, and writes no artifacts. A field or class missing from
 these tables is rejected too, except the document keys Sophios writes:
 `$namespaces` and `$schemas` on a tool or workflow, and `sophios:lang_version`
 on a workflow, which the Nextflow output carries nothing for. For Sophios's

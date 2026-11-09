@@ -1,7 +1,7 @@
 from pathlib import Path
 import os
 import sys
-from typing import Dict
+from typing import Any, Dict
 
 from sphinx.application import Sphinx
 # Configuration file for the Sphinx documentation builder.
@@ -144,6 +144,11 @@ def _nf_support_table(head: str, rows: list[tuple[str, ...]]) -> list[str]:
     return [f'| {head} |', '|' + '---|' * len(columns), *(f"| {' | '.join(row)} |" for row in rows)]
 
 
+def _noted(row: Any) -> str:
+    """A row's note, and for a rejected field the code a refusal of it carries (docs/error_codes.md)."""
+    return row.note if row.code is None else f'{row.note} (`{row.code}`)'
+
+
 def _refused_as(constructs: tuple[str, ...]) -> str:
     """The line naming what a refusal of a field of a class says it is about."""
     return 'A refusal names it as ' + ' or '.join(f'`{construct}`' for construct in constructs) + '.'
@@ -173,15 +178,15 @@ def nf_support_markdown() -> str:
         lines += [_refused_as(constructs_of(cwl_class)), '']
         if (sophios := SUPPORT_MATRIX.get(cwl_class)) is None:
             lines += _nf_support_table('Field | Nextflow | Note', [
-                (f'`{name}`', row.state, row.note) for name, row in rows.items()])
+                (f'`{name}`', row.state, _noted(row)) for name, row in rows.items()])
         else:
             lines += _nf_support_table('Field | Sophios | Nextflow | Note', [
-                (f'`{name}`', sophios[name].support, row.state, row.note) for name, row in rows.items()])
+                (f'`{name}`', sophios[name].support, row.state, _noted(row)) for name, row in rows.items()])
     for level, classes in REQUIREMENT_CLASSES.items():
         tool = level == 'CommandLineTool'
         lines += ['', f'### Requirement and hint classes of a `{level}`' + ('' if tool else ' or a step'), '']
         lines += _nf_support_table('Class | Nextflow | Note', [
-            (f'`{name}`', row.state, row.note) for name, row in classes.items()])
+            (f'`{name}`', row.state, _noted(row)) for name, row in classes.items()])
         lines += ['', 'Any other class is rejected.' if tool else
                   'Any other class is inherited by each tool step inside, and lowered or rejected as the same '
                   'entry written on its tool.']
@@ -190,7 +195,7 @@ def nf_support_markdown() -> str:
             lines += ['', f'### `{cwl_class}` fields', '']
             lines += [_refused_as(constructs_of(cwl_class)), '']
             lines += _nf_support_table('Field | Nextflow | Note', [
-                (f'`{name}`', row.state, row.note) for name, row in rows.items()])
+                (f'`{name}`', row.state, _noted(row)) for name, row in rows.items()])
     return '\n'.join(lines) + '\n'
 
 
