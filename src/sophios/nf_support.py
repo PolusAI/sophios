@@ -18,6 +18,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Final, Mapping
 
+from .lang.error_codes import SophiosErrorCode
+
 
 class State(StrEnum):
     """What the Nextflow backend does with one field."""
@@ -29,23 +31,29 @@ class State(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Row:
-    """One field's state and what it means for that field."""
+    """One field's state and what it means for that field; a rejected one names the code a refusal of it carries."""
 
     state: State
     note: str
+    code: SophiosErrorCode | None = None
+
+    def __post_init__(self) -> None:
+        if (self.state is State.REJECTED) != (self.code is not None):
+            raise ValueError(f'a row has a code exactly when it is rejected: {self}')
 
 
 _L, _C, _R = State.LOWERED, State.COMPILE_TIME, State.REJECTED
+_E = SophiosErrorCode
 
 _DOC = Row(_C, 'documentation')
 _INTENT = Row(_C, 'documentation: an ontology term for what it is for')
 _FORMAT = Row(_C, 'read by EDAM inference')
 _STREAMABLE = Row(_C, 'a hint to the runner; a task reads a staged file')
-_SECONDARY_FILES = Row(_R, 'secondaryFiles are not supported: stage each file as its own input')
-_LOAD_LISTING = Row(_R, 'loadListing is not supported: a Directory is staged whole')
+_SECONDARY_FILES = Row(_R, 'secondaryFiles are not supported: stage each file as its own input', _E.NF_SECONDARY_FILES)
+_LOAD_LISTING = Row(_R, 'loadListing is not supported: a Directory is staged whole', _E.NF_LOAD_LISTING)
 _ARRAY_TYPE = Row(_L, '`array`')
 _ARRAY_ITEMS = Row(_L, 'the element type: one the parameter could declare itself, not an array')
-_ARRAY_NAME = Row(_R, "an array schema's name is not supported")
+_ARRAY_NAME = Row(_R, "an array schema's name is not supported", _E.NF_TYPE)
 
 _INHERITED = Row(_L, 'inherited by each tool step inside, as cwltool gives them to its tool; see the requirement '
                  'classes')
@@ -87,20 +95,20 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
                       'nor `scatter` is left out'),
         'label': _DOC,
         'linkMerge': Row(_L, 'joins the sources in order, `merge_nested` or `merge_flattened`'),
-        'loadContents': Row(_R, "a step input's loadContents is not supported"),
-        'loadListing': Row(_R, "a step input's loadListing is not supported"),
+        'loadContents': Row(_R, "a step input's loadContents is not supported", _E.NF_LOAD_CONTENTS),
+        'loadListing': Row(_R, "a step input's loadListing is not supported", _E.NF_LOAD_LISTING),
         'pickValue': Row(_L, '`first_non_null`, `the_only_non_null` or `all_non_null`, over the joined sources'),
         'source': Row(_L, 'workflow inputs and step outputs, each one value'),
-        'valueFrom': Row(_R, "a step input's valueFrom is not supported"),
+        'valueFrom': Row(_R, "a step input's valueFrom is not supported", _E.NF_STEP_INPUT_VALUE_FROM),
     }),
     'WorkflowInputParameter': MappingProxyType({
         'default': Row(_L, "the parameter's value when none is given; on a nested workflow's input it is rejected"),
         'doc': _DOC,
         'format': _FORMAT,
         'id': Row(_L, 'names the parameter'),
-        'inputBinding': Row(_R, "a workflow input's inputBinding is not supported"),
+        'inputBinding': Row(_R, "a workflow input's inputBinding is not supported", _E.NF_WORKFLOW_INPUT_BINDING),
         'label': _DOC,
-        'loadContents': Row(_R, "a workflow input's loadContents is not supported"),
+        'loadContents': Row(_R, "a workflow input's loadContents is not supported", _E.NF_LOAD_CONTENTS),
         'loadListing': _LOAD_LISTING,
         'secondaryFiles': _SECONDARY_FILES,
         'streamable': _STREAMABLE,
@@ -119,9 +127,11 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
         'format': _FORMAT,
         'id': Row(_L, 'names the emit'),
         'label': _DOC,
-        'linkMerge': Row(_R, "a workflow output's linkMerge is not supported"),
+        'linkMerge': Row(_R, 'refused before any target (wic038): '
+                             'a workflow output names one step output', _E.STEP_INPUT_RECORD),
         'outputSource': Row(_L, 'one step output'),
-        'pickValue': Row(_R, "a workflow output's pickValue is not supported"),
+        'pickValue': Row(_R, 'refused before any target (wic038): '
+                             'a workflow output names one step output', _E.STEP_INPUT_RECORD),
         'secondaryFiles': _SECONDARY_FILES,
         'streamable': _STREAMABLE,
         'type': Row(_L, "the emitted value's type"),
@@ -145,13 +155,15 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
         'intent': _INTENT,
         'label': _DOC,
         'outputs': Row(_L, "the process's outputs"),
-        'permanentFailCodes': Row(_R, 'permanentFailCodes is not supported: a nonzero exit fails the task'),
+        'permanentFailCodes': Row(_R, 'permanentFailCodes is not supported: '
+                                      'a nonzero exit fails the task', _E.NF_EXIT_CODES),
         'requirements': Row(_L, 'see the tool requirement classes'),
         'stderr': Row(_L, "the script's stderr redirection"),
         'stdin': Row(_L, "the script's stdin redirection"),
         'stdout': Row(_L, "the script's stdout redirection"),
-        'successCodes': Row(_R, 'successCodes is not supported: a nonzero exit fails the task'),
-        'temporaryFailCodes': Row(_R, 'temporaryFailCodes is not supported: a nonzero exit fails the task'),
+        'successCodes': Row(_R, 'successCodes is not supported: a nonzero exit fails the task', _E.NF_EXIT_CODES),
+        'temporaryFailCodes': Row(_R, 'temporaryFailCodes is not supported: '
+                                      'a nonzero exit fails the task', _E.NF_EXIT_CODES),
     }),
     'CommandInputParameter': MappingProxyType({
         'default': Row(_L, 'a workflow parameter for an input no step input binds'),
@@ -161,7 +173,7 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
         'inputBinding': Row(_L, "command tokens; a `boolean` array's is rejected"),
         'label': _DOC,
         'loadContents': Row(_R, "loadContents on an input is not supported: an input's contents would have to "
-                                'become a value channel read at staging time'),
+                                'become a value channel read at staging time', _E.NF_LOAD_CONTENTS),
         'loadListing': _LOAD_LISTING,
         'secondaryFiles': _SECONDARY_FILES,
         'streamable': _STREAMABLE,
@@ -170,15 +182,17 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
     }),
     'CommandInputArraySchema': MappingProxyType({
         'doc': _DOC,
-        'inputBinding': Row(_R, 'per-item array element bindings are not supported: bind the array as a whole'),
+        'inputBinding': Row(_R, 'per-item array element bindings are not supported: '
+                                'bind the array as a whole', _E.NF_ARRAY_BINDING),
         'items': _ARRAY_ITEMS,
         'label': _DOC,
         'name': _ARRAY_NAME,
         'type': _ARRAY_TYPE,
     }),
     'CommandLineBinding': MappingProxyType({
-        'itemSeparator': Row(_R, 'itemSeparator is not supported: an array binding gives each element its own word'),
-        'loadContents': Row(_R, "a binding's loadContents is not supported"),
+        'itemSeparator': Row(_R, 'itemSeparator is not supported: '
+                                 'an array binding gives each element its own word', _E.NF_ARRAY_BINDING),
+        'loadContents': Row(_R, "a binding's loadContents is not supported", _E.NF_LOAD_CONTENTS),
         'position': Row(_L, 'orders the tokens'),
         'prefix': Row(_L, "literal text before the value, or a `boolean`'s flag"),
         'separate': Row(_L, '`false` joins the prefix and the value into one word'),
@@ -205,11 +219,12 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
     'DockerRequirement': MappingProxyType({
         'class': Row(_L, "the `container` directive; the command runs after the image's ENTRYPOINT, and a tool "
                          'without one runs on the host'),
-        'dockerFile': Row(_R, 'dockerFile is not supported: use dockerPull'),
+        'dockerFile': Row(_R, 'dockerFile is not supported: use dockerPull', _E.NF_DOCKER),
         'dockerImageId': Row(_L, 'the image'),
-        'dockerImport': Row(_R, 'dockerImport is not supported: use dockerPull'),
-        'dockerLoad': Row(_R, 'dockerLoad is not supported: use dockerPull'),
-        'dockerOutputDirectory': Row(_R, 'dockerOutputDirectory is not supported: a task writes to its work directory'),
+        'dockerImport': Row(_R, 'dockerImport is not supported: use dockerPull', _E.NF_DOCKER),
+        'dockerLoad': Row(_R, 'dockerLoad is not supported: use dockerPull', _E.NF_DOCKER),
+        'dockerOutputDirectory': Row(_R, 'dockerOutputDirectory is not supported: '
+                                         'a task writes to its work directory', _E.NF_DOCKER),
         'dockerPull': Row(_L, 'the image'),
     }),
     'EnvVarRequirement': MappingProxyType({
@@ -232,7 +247,8 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
     }),
     'InlineJavascriptRequirement': MappingProxyType({
         'class': Row(_L, 'a declaration only; each expression is judged where it appears'),
-        'expressionLib': Row(_R, 'expressionLib is not supported: the safe JavaScript subset has no functions'),
+        'expressionLib': Row(_R, 'expressionLib is not supported: '
+                                 'the safe JavaScript subset has no functions', _E.NF_EXPRESSION),
     }),
     'MultipleInputFeatureRequirement': MappingProxyType({
         'class': Row(_L, 'a declaration only; each step input is joined where it is bound'),
@@ -245,12 +261,12 @@ FIELDS: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
         'class': Row(_L, 'the `cpus` and `memory` directives'),
         'coresMax': Row(_L, '`cpus`, when `coresMin` is absent; a whole number'),
         'coresMin': Row(_L, '`cpus`; a whole number'),
-        'outdirMax': Row(_R, 'outdirMax is not supported'),
-        'outdirMin': Row(_R, 'outdirMin is not supported'),
+        'outdirMax': Row(_R, 'outdirMax is not supported', _E.NF_RESOURCE),
+        'outdirMin': Row(_R, 'outdirMin is not supported', _E.NF_RESOURCE),
         'ramMax': Row(_L, '`memory`, when `ramMin` is absent'),
         'ramMin': Row(_L, '`memory`'),
-        'tmpdirMax': Row(_R, 'tmpdirMax is not supported'),
-        'tmpdirMin': Row(_R, 'tmpdirMin is not supported'),
+        'tmpdirMax': Row(_R, 'tmpdirMax is not supported', _E.NF_RESOURCE),
+        'tmpdirMin': Row(_R, 'tmpdirMin is not supported', _E.NF_RESOURCE),
     }),
     'ScatterFeatureRequirement': MappingProxyType({
         'class': Row(_L, 'a declaration only; each scatter is lowered at its step'),
@@ -287,14 +303,18 @@ REQUIREMENT_CLASSES: Final[Mapping[str, Mapping[str, Row]]] = MappingProxyType({
         'EnvVarRequirement': Row(_L, 'variables exported before the command'),
         'InitialWorkDirRequirement': Row(_L, 'entries the task makes before the command runs'),
         'InlineJavascriptRequirement': Row(_L, 'a declaration only'),
-        'LoadListingRequirement': Row(_R, 'LoadListingRequirement is not supported: a Directory is staged whole'),
-        'MultipleInputFeatureRequirement': Row(_R, f'MultipleInputFeatureRequirement {_WORKFLOW_FEATURE}'),
+        'LoadListingRequirement': Row(_R, 'LoadListingRequirement is not supported: '
+                                          'a Directory is staged whole', _E.NF_LOAD_LISTING),
+        'MultipleInputFeatureRequirement': Row(_R, f'MultipleInputFeatureRequirement {_WORKFLOW_FEATURE}',
+                                               _E.NF_REQUIREMENT),
         'NetworkAccess': Row(_C, '`networkAccess: true` only'),
         'ResourceRequirement': Row(_L, 'the `cpus` and `memory` directives'),
-        'ScatterFeatureRequirement': Row(_R, f'ScatterFeatureRequirement {_WORKFLOW_FEATURE}'),
+        'ScatterFeatureRequirement': Row(_R, f'ScatterFeatureRequirement {_WORKFLOW_FEATURE}', _E.NF_REQUIREMENT),
         'ShellCommandRequirement': Row(_L, 'admits `shellQuote: false` on literal text'),
-        'SoftwareRequirement': Row(_R, 'SoftwareRequirement is not supported: use DockerRequirement'),
-        'SubworkflowFeatureRequirement': Row(_R, f'SubworkflowFeatureRequirement {_WORKFLOW_FEATURE}'),
+        'SoftwareRequirement': Row(_R, 'SoftwareRequirement is not supported: '
+                                       'use DockerRequirement', _E.NF_REQUIREMENT),
+        'SubworkflowFeatureRequirement': Row(_R, f'SubworkflowFeatureRequirement {_WORKFLOW_FEATURE}',
+                                             _E.NF_REQUIREMENT),
         'cwltool:CUDARequirement': Row(_L, 'the `accelerator` directive'),
     }),
     'Workflow': MappingProxyType({

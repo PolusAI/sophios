@@ -4,17 +4,23 @@ What does a code in a Sophios message mean, and what do I change? This page is
 the catalog, one row per code; `sophios --explain <code>` prints the same row.
 
 Every problem Sophios reports carries a code: `wic0NN` for a document or for
-what running it needs from this machine, `api0NN` for a Python API call. A
+what running it needs from this machine, `api0NN` for a Python API call, and
+`nf-sNNN` for what the Nextflow target cannot run yet. A
 diagnostic reads `file:line:col: error [code] message (step, port)`; the
 position and the step are there when Sophios knows them. A note reports a
 choice Sophios made and stops nothing.
 
 The kind says what to change:
 
-- `document`: the `.wic` file, the Python workflow, or an imported Nextflow pipeline;
+- `document`: the `.wic` file, the Python workflow, a tool's CWL file, or an imported Nextflow pipeline;
 - `call`: the Python API call;
 - `machine`: this machine, what is installed, running, readable or writable;
-- `run`: nothing in Sophios, a tool failed while it ran.
+- `run`: nothing in Sophios, a tool failed while it ran;
+- `target`: nothing in the workflow; the target cannot run it yet. Change the
+  construct the message names, or compile with `--target cwl`.
+
+An `nf-sNNN` code is the Nextflow target's support table: when the target
+learns a construct, its code is retired and never reused.
 
 `wic040`, `wic041` and `wic042` are not assigned. Section numbers (§) refer to the
 [`.wic` reference](wic-reference.md). [Checks and errors](checks-and-errors.md)
@@ -83,6 +89,61 @@ explains when each kind of check runs and how a diagnostic is laid out.
 | `api006` | call | A `.wic` construct the Python API has no spelling for, met by `Workflow.from_wic`. | Write the workflow in the Python API in the way the message names, or keep it as a `.wic` file. |
 | `api007` | call | An `Inference` the compiler cannot be given: a format rule other than `continue` or `break`, a renaming that is not a pair of strings, renamings with naming conventions off, or format rules with step insertion off. | Do what the message names: use `continue` or `break`, write each renaming as `(before, after)`, set `naming_conventions=True` for renamings, or set `insert_steps=True` for format rules. |
 | `api008` | call | A workflow that declares real-time analyses, given to `Workflow.run_async`, which never runs them. | Run it with `Workflow.run()` or `Workflow.start()`; from a coroutine, `await asyncio.to_thread(workflow.run)` keeps the event loop free. |
+| `nf-s001` | target | Partial failure (`--partial_failure_enable`, `RunPolicy(partial_failure=True)`), a policy of the CWL target. | Compile without the policy, or compile with `--target cwl`. |
+| `nf-s002` | target | Two names that become one Nextflow identifier, or a name with none: steps, tool inputs or outputs, workflow inputs or outputs, or a parameter Sophios makes for a default. | Rename one of the names the message lists. |
+| `nf-s003` | target | A `scatter` on a step that calls a nested workflow. | Scatter the tool steps inside the nested workflow, or compile with `--target cwl`. |
+| `nf-s004` | target | A scatter over an input whose elements are arrays. | Scatter over an array of values, Files or Directories, or compile with `--target cwl`. |
+| `nf-s005` | target | A scatter over a step-only input, which no process port receives. | Scatter over an input the step's tool declares. |
+| `nf-s006` | target | A scattered input fed by anything but one source as it is: several sources, `linkMerge`, `pickValue` or `default`, or a workflow input that is not an array. | Feed the scattered input from one array, a workflow input or an earlier step's output. |
+| `nf-s007` | target | A `nested_crossproduct` result read by a later step. | Read it from a workflow output only, or scatter with `dotproduct` or `flat_crossproduct`. |
+| `nf-s008` | target | A `scatterMethod` on a step with no `scatter`, which cwltool ignores. | Remove the `scatterMethod`, or give the step its `scatter`. |
+| `nf-s009` | target | A `when` on a step that calls a nested workflow. | Put the `when` on the tool steps inside the nested workflow. |
+| `nf-s010` | target | A `when` outside the safe JavaScript subset: a `${...}` body, an operator or function the subset does not have, or an ordered comparison of anything but numbers. | Write the condition in the subset (docs/nextflow.md, Conditional steps), or compile with `--target cwl`. |
+| `nf-s011` | target | A `when` that reads an input its step does not bind, which cwltool reads as `undefined`. | Bind the input on the step, as a step-only input if its tool does not take it. |
+| `nf-s012` | target | A `when` on a step whose tool has no inputs: Nextflow decides a condition each time the step's inputs arrive. | Give the step an input to decide on, such as a step-only input from a workflow input. |
+| `nf-s013` | target | The output of a conditional step read where the value a skipped step gives, `[]` in Nextflow, cannot stand for `null`: an array output outside a scatter, or an array, File, Directory or required input that reads it. | Read it into an optional value input or a workflow output, or compile with `--target cwl`. |
+| `nf-s014` | target | A required workflow input with no value: the pipeline's parameters are written when it compiles. | Give the input a value: `!ii` in the `.wic` file, or `flow.inputs.<name> = ...` in Python. |
+| `nf-s015` | target | A workflow input's value the pipeline's parameters cannot hold, such as a File or Directory with `secondaryFiles`. | Give a plain value of the input's type. |
+| `nf-s016` | target | A nested workflow's input bound by anything but one source as it is (several sources, `linkMerge`, `pickValue`, `default`, `valueFrom`), or with a `default` of its own. | Merge, pick or default on a step inside the nested workflow, or bind the input on the calling step. |
+| `nf-s017` | target | A `default` the pipeline cannot hold: one that is not a JSON scalar of its input's type, a File or Directory on a step input, or one on a step-only input with no source of a scalar type. | Give a scalar default of the input's type, or the path as a workflow input. |
+| `nf-s018` | target | A step input that joins its sources in a way the target does not form: `merge_nested` over an array, `pickValue` over an array or over one source, a `null` element, a `default` beside them, or a join that gives a list to an input that takes one value, or the reverse. | Join the values in a tool step, or compile with `--target cwl`. |
+| `nf-s019` | target | `valueFrom` on a step input. | Compute the value in a tool step, or compile with `--target cwl`. |
+| `nf-s020` | target | An optional input with no value whose absence changes the command, or an absent optional File or Directory workflow input. | Give the input a value, or bind it so that its absence leaves the command as it is (docs/nextflow.md, Absent optional values). |
+| `nf-s021` | target | `inputBinding` on a workflow input. | Remove it: the steps that read the input bind it. |
+| `nf-s022` | target | `loadContents` on an input, a binding, a step input or a workflow input. | Read the file in the tool's command. |
+| `nf-s023` | target | `loadListing`, or `LoadListingRequirement`: a Directory is staged whole. | Remove it. |
+| `nf-s024` | target | `secondaryFiles`. | Stage each file as its own input. |
+| `nf-s025` | target | A workflow output that forwards a workflow input. | Output a step's output. |
+| `nf-s026` | target | A workflow output with no `outputSource`. | Name the step output it comes from. |
+| `nf-s027` | target | A source written as `step/port` text that names a nested workflow's step, which Sophios keeps as written and the target does not follow. | Read the nested workflow's output through an edge (`!&` and `!*`), or compile with `--target cwl`. |
+| `nf-s028` | document | A source written as `step/port` text whose step is no step of its workflow, or whose port is no output of that step. | Name a step of the workflow, as the compiled CWL spells it, or read the output through an edge (`!&` and `!*`). |
+| `nf-s029` | target | File text captured by `outputEval: $(self[0].contents)` read by another step. | Read the captured text from a workflow output only, or pass the File to the next step. |
+| `nf-s030` | target | An optional File or Directory output read by another step, or one whose glob may match more than one file and reaches no workflow output. | Make the output required, or read it from a workflow output only. |
+| `nf-s031` | target | A tool output that is not one File or Directory found by its glob, or one string captured as text: an array output among them. | Collect one File or Directory, or capture a `string` with `loadContents` and `outputEval: $(self[0].contents)`. |
+| `nf-s032` | target | An output whose glob is not one non-empty string: a list of globs, an empty glob, or none. | Write one glob. |
+| `nf-s033` | target | An `outputEval` other than `$(self[0])` and `$(self[0].contents)`. | Write one of those two, or compute the value in a later tool step. |
+| `nf-s034` | target | `$(self[0])` or `$(self[0].contents)` without what makes it a projection: `loadContents: true` beside the capture, a `string` output for captured text, one File or Directory output and one literal glob with no wildcard or input reference for `$(self[0])`. | Add what the message names. |
+| `nf-s035` | target | An output glob, `stdout` or `stderr` that writes through the name a staged input is linked under. | Derive a new name from the input, or make it a writable InitialWorkDirRequirement entry. |
+| `nf-s036` | target | A requirement or hint class the target does not lower, such as `SoftwareRequirement` or `ToolTimeLimit`, or a workflow feature class written on a tool. | Use `DockerRequirement` for software, declare a feature on the workflow, or remove the class. |
+| `nf-s037` | target | `NetworkAccess` other than the literal `true`: a Nextflow task has network access. | Remove it, or write `networkAccess: true`. |
+| `nf-s038` | target | `ShellCommandRequirement` beside `DockerRequirement`: CWL runs the command as `/bin/sh -c` after the image's entrypoint, which a Nextflow task does not. | Drop one of the two, or compile with `--target cwl`. |
+| `nf-s039` | target | A `DockerRequirement` with `dockerFile`, `dockerImport`, `dockerLoad` or `dockerOutputDirectory`. | Use `dockerPull` or `dockerImageId`. |
+| `nf-s040` | target | A resource request the target cannot make: `outdirMin`, `outdirMax`, `tmpdirMin`, `tmpdirMax`, fractional cores, or a value computed by an expression, a CUDA device count among them. | Request literal whole cores and literal memory and devices, or remove the field. |
+| `nf-s041` | target | An environment variable the task cannot set: a name that is not a shell variable name, or an `envValue` other than literal text or exactly `$(inputs.<name>)` of a string input. | Name the variable with letters, digits and `_`, and set it to text or a string input. |
+| `nf-s042` | target | `successCodes`, `permanentFailCodes` or `temporaryFailCodes`: a nonzero exit fails a Nextflow task. | Make the command exit 0 on success, or compile with `--target cwl`. |
+| `nf-s043` | target | An InitialWorkDirRequirement listing entry other than a bare `$(inputs.<name>)` or a Dirent of one File or Directory input: inline content, a listing that is not a list, a computed `entryname` or `writable`, an array or value input, an undeclared input, or an `entryname` with a path separator or Sophios's reserved prefix. | Stage each File or Directory input as its own entry, under a literal name or its own basename (docs/nextflow.md, Staging with InitialWorkDirRequirement). |
+| `nf-s044` | target | Staged names that collide: an input listed twice, two inputs under one literal name, or an input staged under a literal name and also referenced in the command. | Give each staged input one entry and one name, and name it by its literal in the command. |
+| `nf-s045` | target | A CWL expression the target does not lower: anything but `$(inputs.<name>)`, and on a File or Directory input `$(inputs.<name>.path)` and `$(inputs.<name>.basename)`; `expressionLib` among them. | Write one of those references, or compute the value in a tool step. |
+| `nf-s046` | document | A File or Directory reference whose CWL value is not the text it stands for: `.path` or `.basename` of an input that is not a File or Directory, a File object inside other text (cwltool writes it as JSON), an object where CWL takes a name, an absolute path where it takes a relative one, or a `stdin` that is not one file's whole path. | Write the reference the message names. |
+| `nf-s047` | target | A step that runs something other than a `CommandLineTool`, such as an `ExpressionTool`. | Write the step as a CommandLineTool, or compile with `--target cwl`. |
+| `nf-s048` | target | A type the target does not lower: `long`, `double`, `enum`, a record, `Any`, a union other than one type and `null`, nested arrays, or an array schema with fields beyond `type` and `items`. | Declare `int`, `float`, `string`, `boolean`, `File`, `Directory`, or one array of them. |
+| `nf-s049` | target | A boolean binding the target cannot render: a boolean array's binding, a `valueFrom` other than the input's own value, or a `valueFrom` on an optional boolean. | Bind the boolean as a flag with a `prefix` (docs/nextflow.md, Boolean flags). |
+| `nf-s050` | target | An array binding the target cannot render: `valueFrom`, `separate: false`, `itemSeparator`, or a binding on each item; or an array input read outside its own binding, as in a glob. | Bind the array as a whole, each element its own word (docs/nextflow.md, Array-typed inputs). |
+| `nf-s051` | target | `shellQuote: false` on anything but literal text with no input reference, `prefix` or `$`, beside `ShellCommandRequirement`. | Write the unquoted text as a literal `valueFrom` (docs/nextflow.md, Shell mode). |
+| `nf-s052` | target | A binding with an empty or blank `prefix`, which cwltool skips. | Remove the `prefix`, or write one. |
+| `nf-s053` | target | A containerized tool whose command can render empty: CWL then runs the image's `CMD`, which the Nextflow task does not. | Give the tool a `baseCommand`, or an argument that is always there. |
+| `nf-s054` | target | A field the target does not lower and the field table does not list. | Remove the field, or compile with `--target cwl`. |
+| `nf-s055` | document | CWL v1.2 that cwltool would not run either: a multi-input scatter with no `scatterMethod`; a `scatterMethod`, `linkMerge` or `pickValue` CWL does not have; a requirement without a string `class`; a section, binding, `envDef`, `outputBinding`, glob or `outputEval` of the wrong shape; a `prefix` that is not text; `separate` without `prefix`; a `position` that is not an integer; a port with no `type`; a `when` that is not a string; a resource or CUDA field that is not a positive number. | Correct what the message names; `cwltool --validate` on the tool reports the same. |
 
 ## Pinning an inference choice
 

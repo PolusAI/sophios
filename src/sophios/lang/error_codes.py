@@ -4,15 +4,19 @@ Its own module because a code is contract: a caller matches on
 `SophiosErrorCode.UNDEFINED_EDGE`, suppresses it, or reads it out of a log,
 without importing the reporting plumbing.
 
-Two ranges, one enum: `wic0NN` is a document (it said something the language
+Three ranges, one enum: `wic0NN` is a document (it said something the language
 does not accept) or what running it needs from the machine (kind `machine`,
 such as wic015, wic016, wic021 and wic029); `api0NN` is the Python API (the document is
-fine, the call was not). One type so a caller matches on one `except`;
-separate ranges so an API code does not point at the .wic reference.
+fine, the call was not); `nf-sNNN` is Nextflow support (kind `target`: the workflow is
+fine, the Nextflow target cannot run it yet). One type so a caller matches on one
+`except`; separate ranges so an API code does not point at the .wic reference. An
+`nf-sNNN` code is retired, never reused, when the Nextflow target learns its construct,
+so the range is the Nextflow target's support table.
 
 Every member has an `Explanation` (`EXPLANATIONS`): what it means and what to
 do, which `sophios --explain` and docs/error_codes.md show.
 """
+# pylint: disable=too-many-lines  # the catalog: one entry per code
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -155,10 +159,68 @@ class SophiosErrorCode(StrEnum):
     #: `Workflow.run_async`, which never runs them.
     REALTIME_NOT_ASYNC = 'api008'
 
+    #: --- Nextflow support. The workflow is valid; the Nextflow target cannot run it yet. ---
+    NF_PARTIAL_FAILURE = 'nf-s001'
+    NF_NAME = 'nf-s002'
+    NF_SCATTERED_CALL = 'nf-s003'
+    NF_SCATTER_OF_ARRAYS = 'nf-s004'
+    NF_SCATTERED_STEP_ONLY_INPUT = 'nf-s005'
+    NF_SCATTER_SOURCE = 'nf-s006'
+    NF_NESTED_RESULT = 'nf-s007'
+    NF_SCATTER_METHOD_ALONE = 'nf-s008'
+    NF_CONDITIONAL_CALL = 'nf-s009'
+    NF_WHEN_SUBSET = 'nf-s010'
+    NF_WHEN_UNBOUND = 'nf-s011'
+    NF_WHEN_WITHOUT_INPUTS = 'nf-s012'
+    NF_SKIPPED_OUTPUT = 'nf-s013'
+    NF_INPUT_WITHOUT_VALUE = 'nf-s014'
+    NF_INPUT_VALUE = 'nf-s015'
+    NF_CALL_INPUT = 'nf-s016'
+    NF_DEFAULT = 'nf-s017'
+    NF_JOIN = 'nf-s018'
+    NF_STEP_INPUT_VALUE_FROM = 'nf-s019'
+    NF_ABSENT_OPTIONAL = 'nf-s020'
+    NF_WORKFLOW_INPUT_BINDING = 'nf-s021'
+    NF_LOAD_CONTENTS = 'nf-s022'
+    NF_LOAD_LISTING = 'nf-s023'
+    NF_SECONDARY_FILES = 'nf-s024'
+    NF_FORWARDED_INPUT = 'nf-s025'
+    NF_OUTPUT_WITHOUT_SOURCE = 'nf-s026'
+    NF_SOURCE_AS_TEXT = 'nf-s027'
+    NF_SOURCE_NAMES_NO_STEP = 'nf-s028'
+    NF_CAPTURED_TEXT_READ = 'nf-s029'
+    NF_OPTIONAL_OUTPUT = 'nf-s030'
+    NF_OUTPUT_TYPE = 'nf-s031'
+    NF_GLOB = 'nf-s032'
+    NF_OUTPUT_EVAL = 'nf-s033'
+    NF_CAPTURE = 'nf-s034'
+    NF_WRITE_THROUGH_STAGED = 'nf-s035'
+    NF_REQUIREMENT = 'nf-s036'
+    NF_NETWORK_ACCESS = 'nf-s037'
+    NF_SHELL_IN_CONTAINER = 'nf-s038'
+    NF_DOCKER = 'nf-s039'
+    NF_RESOURCE = 'nf-s040'
+    NF_ENVIRONMENT = 'nf-s041'
+    NF_EXIT_CODES = 'nf-s042'
+    NF_STAGING = 'nf-s043'
+    NF_STAGED_NAMES = 'nf-s044'
+    NF_EXPRESSION = 'nf-s045'
+    NF_PATH_REFERENCE = 'nf-s046'
+    NF_NOT_A_COMMAND_LINE_TOOL = 'nf-s047'
+    NF_TYPE = 'nf-s048'
+    NF_BOOLEAN_BINDING = 'nf-s049'
+    NF_ARRAY_BINDING = 'nf-s050'
+    NF_SHELL_QUOTE = 'nf-s051'
+    NF_EMPTY_PREFIX = 'nf-s052'
+    NF_EMPTY_COMMAND = 'nf-s053'
+    NF_FIELD = 'nf-s054'
+    NF_INVALID_CWL = 'nf-s055'
+
     @property
     def is_language(self) -> bool:
-        """Whether this code describes a document rather than a call."""
-        return self.value.startswith('wic')
+        """Whether this code describes a document rather than a call: every `wic0NN` code, and an `nf-sNNN` code of
+        kind `document`, a mistake in the workflow the Nextflow target is the one to read."""
+        return self.value.startswith('wic') or EXPLANATIONS[self].kind is Kind.DOCUMENT
 
     @property
     def explanation(self) -> 'Explanation':
@@ -173,6 +235,7 @@ class Kind(StrEnum):
     CALL = 'call'          #: the Python API call
     MACHINE = 'machine'    #: this machine: what is installed, running, readable or writable
     RUN = 'run'            #: nothing in Sophios: a tool failed while it ran
+    TARGET = 'target'      #: nothing in the workflow: the target cannot run it yet
 
 
 @dataclass(frozen=True, slots=True)
@@ -477,4 +540,268 @@ EXPLANATIONS: Final[Mapping[SophiosErrorCode, Explanation]] = {
         'A workflow that declares real-time analyses, given to `Workflow.run_async`, which never runs them.',
         'Run it with `Workflow.run()` or `Workflow.start()`; from a coroutine, '
         '`await asyncio.to_thread(workflow.run)` keeps the event loop free.'),
+    SophiosErrorCode.NF_PARTIAL_FAILURE: Explanation(
+        Kind.TARGET,
+        'Partial failure (`--partial_failure_enable`, `RunPolicy(partial_failure=True)`), a policy of the CWL '
+        'target.',
+        'Compile without the policy, or compile with `--target cwl`.'),
+    SophiosErrorCode.NF_NAME: Explanation(
+        Kind.TARGET,
+        'Two names that become one Nextflow identifier, or a name with none: steps, tool inputs or outputs, '
+        'workflow inputs or outputs, or a parameter Sophios makes for a default.',
+        'Rename one of the names the message lists.'),
+    SophiosErrorCode.NF_SCATTERED_CALL: Explanation(
+        Kind.TARGET,
+        'A `scatter` on a step that calls a nested workflow.',
+        'Scatter the tool steps inside the nested workflow, or compile with `--target cwl`.'),
+    SophiosErrorCode.NF_SCATTER_OF_ARRAYS: Explanation(
+        Kind.TARGET,
+        'A scatter over an input whose elements are arrays.',
+        'Scatter over an array of values, Files or Directories, or compile with `--target cwl`.'),
+    SophiosErrorCode.NF_SCATTERED_STEP_ONLY_INPUT: Explanation(
+        Kind.TARGET,
+        'A scatter over a step-only input, which no process port receives.',
+        "Scatter over an input the step's tool declares."),
+    SophiosErrorCode.NF_SCATTER_SOURCE: Explanation(
+        Kind.TARGET,
+        'A scattered input fed by anything but one source as it is: several sources, `linkMerge`, `pickValue` or '
+        '`default`, or a workflow input that is not an array.',
+        "Feed the scattered input from one array, a workflow input or an earlier step's output."),
+    SophiosErrorCode.NF_NESTED_RESULT: Explanation(
+        Kind.TARGET,
+        'A `nested_crossproduct` result read by a later step.',
+        'Read it from a workflow output only, or scatter with `dotproduct` or `flat_crossproduct`.'),
+    SophiosErrorCode.NF_SCATTER_METHOD_ALONE: Explanation(
+        Kind.TARGET,
+        'A `scatterMethod` on a step with no `scatter`, which cwltool ignores.',
+        'Remove the `scatterMethod`, or give the step its `scatter`.'),
+    SophiosErrorCode.NF_CONDITIONAL_CALL: Explanation(
+        Kind.TARGET,
+        'A `when` on a step that calls a nested workflow.',
+        'Put the `when` on the tool steps inside the nested workflow.'),
+    SophiosErrorCode.NF_WHEN_SUBSET: Explanation(
+        Kind.TARGET,
+        'A `when` outside the safe JavaScript subset: a `${...}` body, an operator or function the subset does '
+        'not have, or an ordered comparison of anything but numbers.',
+        'Write the condition in the subset (docs/nextflow.md, Conditional steps), or compile with `--target cwl`.'),
+    SophiosErrorCode.NF_WHEN_UNBOUND: Explanation(
+        Kind.TARGET,
+        'A `when` that reads an input its step does not bind, which cwltool reads as `undefined`.',
+        'Bind the input on the step, as a step-only input if its tool does not take it.'),
+    SophiosErrorCode.NF_WHEN_WITHOUT_INPUTS: Explanation(
+        Kind.TARGET,
+        "A `when` on a step whose tool has no inputs: Nextflow decides a condition each time the step's inputs "
+        'arrive.',
+        'Give the step an input to decide on, such as a step-only input from a workflow input.'),
+    SophiosErrorCode.NF_SKIPPED_OUTPUT: Explanation(
+        Kind.TARGET,
+        'The output of a conditional step read where the value a skipped step gives, `[]` in Nextflow, cannot '
+        'stand for `null`: an array output outside a scatter, or an array, File, Directory or required input that'
+        ' reads it.',
+        'Read it into an optional value input or a workflow output, or compile with `--target cwl`.'),
+    SophiosErrorCode.NF_INPUT_WITHOUT_VALUE: Explanation(
+        Kind.TARGET,
+        "A required workflow input with no value: the pipeline's parameters are written when it compiles.",
+        'Give the input a value: `!ii` in the `.wic` file, or `flow.inputs.<name> = ...` in Python.'),
+    SophiosErrorCode.NF_INPUT_VALUE: Explanation(
+        Kind.TARGET,
+        "A workflow input's value the pipeline's parameters cannot hold, such as a File or Directory with "
+        '`secondaryFiles`.',
+        "Give a plain value of the input's type."),
+    SophiosErrorCode.NF_CALL_INPUT: Explanation(
+        Kind.TARGET,
+        "A nested workflow's input bound by anything but one source as it is (several sources, `linkMerge`, "
+        '`pickValue`, `default`, `valueFrom`), or with a `default` of its own.',
+        'Merge, pick or default on a step inside the nested workflow, or bind the input on the calling step.'),
+    SophiosErrorCode.NF_DEFAULT: Explanation(
+        Kind.TARGET,
+        "A `default` the pipeline cannot hold: one that is not a JSON scalar of its input's type, a File or "
+        'Directory on a step input, or one on a step-only input with no source of a scalar type.',
+        "Give a scalar default of the input's type, or the path as a workflow input."),
+    SophiosErrorCode.NF_JOIN: Explanation(
+        Kind.TARGET,
+        'A step input that joins its sources in a way the target does not form: `merge_nested` over an array, '
+        '`pickValue` over an array or over one source, a `null` element, a `default` beside them, or a join that '
+        'gives a list to an input that takes one value, or the reverse.',
+        'Join the values in a tool step, or compile with `--target cwl`.'),
+    SophiosErrorCode.NF_STEP_INPUT_VALUE_FROM: Explanation(
+        Kind.TARGET,
+        '`valueFrom` on a step input.',
+        'Compute the value in a tool step, or compile with `--target cwl`.'),
+    SophiosErrorCode.NF_ABSENT_OPTIONAL: Explanation(
+        Kind.TARGET,
+        'An optional input with no value whose absence changes the command, or an absent optional File or '
+        'Directory workflow input.',
+        'Give the input a value, or bind it so that its absence leaves the command as it is (docs/nextflow.md, '
+        'Absent optional values).'),
+    SophiosErrorCode.NF_WORKFLOW_INPUT_BINDING: Explanation(
+        Kind.TARGET,
+        '`inputBinding` on a workflow input.',
+        'Remove it: the steps that read the input bind it.'),
+    SophiosErrorCode.NF_LOAD_CONTENTS: Explanation(
+        Kind.TARGET,
+        '`loadContents` on an input, a binding, a step input or a workflow input.',
+        "Read the file in the tool's command."),
+    SophiosErrorCode.NF_LOAD_LISTING: Explanation(
+        Kind.TARGET,
+        '`loadListing`, or `LoadListingRequirement`: a Directory is staged whole.',
+        'Remove it.'),
+    SophiosErrorCode.NF_SECONDARY_FILES: Explanation(
+        Kind.TARGET,
+        '`secondaryFiles`.',
+        'Stage each file as its own input.'),
+    SophiosErrorCode.NF_FORWARDED_INPUT: Explanation(
+        Kind.TARGET,
+        'A workflow output that forwards a workflow input.',
+        "Output a step's output."),
+    SophiosErrorCode.NF_OUTPUT_WITHOUT_SOURCE: Explanation(
+        Kind.TARGET,
+        'A workflow output with no `outputSource`.',
+        'Name the step output it comes from.'),
+    SophiosErrorCode.NF_SOURCE_AS_TEXT: Explanation(
+        Kind.TARGET,
+        "A source written as `step/port` text that names a nested workflow's step, which Sophios keeps as written"
+        ' and the target does not follow.',
+        "Read the nested workflow's output through an edge (`!&` and `!*`), or compile with `--target cwl`."),
+    SophiosErrorCode.NF_SOURCE_NAMES_NO_STEP: Explanation(
+        Kind.DOCUMENT,
+        'A source written as `step/port` text whose step is no step of its workflow, or whose port is no output of'
+        ' that step.',
+        'Name a step of the workflow, as the compiled CWL spells it, or read the output through an edge (`!&` and'
+        ' `!*`).'),
+    SophiosErrorCode.NF_CAPTURED_TEXT_READ: Explanation(
+        Kind.TARGET,
+        'File text captured by `outputEval: $(self[0].contents)` read by another step.',
+        'Read the captured text from a workflow output only, or pass the File to the next step.'),
+    SophiosErrorCode.NF_OPTIONAL_OUTPUT: Explanation(
+        Kind.TARGET,
+        'An optional File or Directory output read by another step, or one whose glob may match more than one '
+        'file and reaches no workflow output.',
+        'Make the output required, or read it from a workflow output only.'),
+    SophiosErrorCode.NF_OUTPUT_TYPE: Explanation(
+        Kind.TARGET,
+        'A tool output that is not one File or Directory found by its glob, or one string captured as text: an '
+        'array output among them.',
+        'Collect one File or Directory, or capture a `string` with `loadContents` and `outputEval: '
+        '$(self[0].contents)`.'),
+    SophiosErrorCode.NF_GLOB: Explanation(
+        Kind.TARGET,
+        'An output whose glob is not one non-empty string: a list of globs, an empty glob, or none.',
+        'Write one glob.'),
+    SophiosErrorCode.NF_OUTPUT_EVAL: Explanation(
+        Kind.TARGET,
+        'An `outputEval` other than `$(self[0])` and `$(self[0].contents)`.',
+        'Write one of those two, or compute the value in a later tool step.'),
+    SophiosErrorCode.NF_CAPTURE: Explanation(
+        Kind.TARGET,
+        '`$(self[0])` or `$(self[0].contents)` without what makes it a projection: `loadContents: true` beside '
+        'the capture, a `string` output for captured text, one File or Directory output and one literal glob with'
+        ' no wildcard or input reference for `$(self[0])`.',
+        'Add what the message names.'),
+    SophiosErrorCode.NF_WRITE_THROUGH_STAGED: Explanation(
+        Kind.TARGET,
+        'An output glob, `stdout` or `stderr` that writes through the name a staged input is linked under.',
+        'Derive a new name from the input, or make it a writable InitialWorkDirRequirement entry.'),
+    SophiosErrorCode.NF_REQUIREMENT: Explanation(
+        Kind.TARGET,
+        'A requirement or hint class the target does not lower, such as `SoftwareRequirement` or `ToolTimeLimit`,'
+        ' or a workflow feature class written on a tool.',
+        'Use `DockerRequirement` for software, declare a feature on the workflow, or remove the class.'),
+    SophiosErrorCode.NF_NETWORK_ACCESS: Explanation(
+        Kind.TARGET,
+        '`NetworkAccess` other than the literal `true`: a Nextflow task has network access.',
+        'Remove it, or write `networkAccess: true`.'),
+    SophiosErrorCode.NF_SHELL_IN_CONTAINER: Explanation(
+        Kind.TARGET,
+        '`ShellCommandRequirement` beside `DockerRequirement`: CWL runs the command as `/bin/sh -c` after the '
+        "image's entrypoint, which a Nextflow task does not.",
+        'Drop one of the two, or compile with `--target cwl`.'),
+    SophiosErrorCode.NF_DOCKER: Explanation(
+        Kind.TARGET,
+        'A `DockerRequirement` with `dockerFile`, `dockerImport`, `dockerLoad` or `dockerOutputDirectory`.',
+        'Use `dockerPull` or `dockerImageId`.'),
+    SophiosErrorCode.NF_RESOURCE: Explanation(
+        Kind.TARGET,
+        'A resource request the target cannot make: `outdirMin`, `outdirMax`, `tmpdirMin`, `tmpdirMax`, '
+        'fractional cores, or a value computed by an expression, a CUDA device count among them.',
+        'Request literal whole cores and literal memory and devices, or remove the field.'),
+    SophiosErrorCode.NF_ENVIRONMENT: Explanation(
+        Kind.TARGET,
+        'An environment variable the task cannot set: a name that is not a shell variable name, or an `envValue` '
+        'other than literal text or exactly `$(inputs.<name>)` of a string input.',
+        'Name the variable with letters, digits and `_`, and set it to text or a string input.'),
+    SophiosErrorCode.NF_EXIT_CODES: Explanation(
+        Kind.TARGET,
+        '`successCodes`, `permanentFailCodes` or `temporaryFailCodes`: a nonzero exit fails a Nextflow task.',
+        'Make the command exit 0 on success, or compile with `--target cwl`.'),
+    SophiosErrorCode.NF_STAGING: Explanation(
+        Kind.TARGET,
+        'An InitialWorkDirRequirement listing entry other than a bare `$(inputs.<name>)` or a Dirent of one File '
+        'or Directory input: inline content, a listing that is not a list, a computed `entryname` or `writable`, '
+        "an array or value input, an undeclared input, or an `entryname` with a path separator or Sophios's "
+        'reserved prefix.',
+        'Stage each File or Directory input as its own entry, under a literal name or its own basename '
+        '(docs/nextflow.md, Staging with InitialWorkDirRequirement).'),
+    SophiosErrorCode.NF_STAGED_NAMES: Explanation(
+        Kind.TARGET,
+        'Staged names that collide: an input listed twice, two inputs under one literal name, or an input staged '
+        'under a literal name and also referenced in the command.',
+        'Give each staged input one entry and one name, and name it by its literal in the command.'),
+    SophiosErrorCode.NF_EXPRESSION: Explanation(
+        Kind.TARGET,
+        'A CWL expression the target does not lower: anything but `$(inputs.<name>)`, and on a File or Directory '
+        'input `$(inputs.<name>.path)` and `$(inputs.<name>.basename)`; `expressionLib` among them.',
+        'Write one of those references, or compute the value in a tool step.'),
+    SophiosErrorCode.NF_PATH_REFERENCE: Explanation(
+        Kind.DOCUMENT,
+        'A File or Directory reference whose CWL value is not the text it stands for: `.path` or `.basename` of '
+        'an input that is not a File or Directory, a File object inside other text (cwltool writes it as JSON), '
+        'an object where CWL takes a name, an absolute path where it takes a relative one, or a `stdin` that is '
+        "not one file's whole path.",
+        'Write the reference the message names.'),
+    SophiosErrorCode.NF_NOT_A_COMMAND_LINE_TOOL: Explanation(
+        Kind.TARGET,
+        'A step that runs something other than a `CommandLineTool`, such as an `ExpressionTool`.',
+        'Write the step as a CommandLineTool, or compile with `--target cwl`.'),
+    SophiosErrorCode.NF_TYPE: Explanation(
+        Kind.TARGET,
+        'A type the target does not lower: `long`, `double`, `enum`, a record, `Any`, a union other than one type'
+        ' and `null`, nested arrays, or an array schema with fields beyond `type` and `items`.',
+        'Declare `int`, `float`, `string`, `boolean`, `File`, `Directory`, or one array of them.'),
+    SophiosErrorCode.NF_BOOLEAN_BINDING: Explanation(
+        Kind.TARGET,
+        "A boolean binding the target cannot render: a boolean array's binding, a `valueFrom` other than the "
+        "input's own value, or a `valueFrom` on an optional boolean.",
+        'Bind the boolean as a flag with a `prefix` (docs/nextflow.md, Boolean flags).'),
+    SophiosErrorCode.NF_ARRAY_BINDING: Explanation(
+        Kind.TARGET,
+        'An array binding the target cannot render: `valueFrom`, `separate: false`, `itemSeparator`, or a binding'
+        ' on each item; or an array input read outside its own binding, as in a glob.',
+        'Bind the array as a whole, each element its own word (docs/nextflow.md, Array-typed inputs).'),
+    SophiosErrorCode.NF_SHELL_QUOTE: Explanation(
+        Kind.TARGET,
+        '`shellQuote: false` on anything but literal text with no input reference, `prefix` or `$`, beside '
+        '`ShellCommandRequirement`.',
+        'Write the unquoted text as a literal `valueFrom` (docs/nextflow.md, Shell mode).'),
+    SophiosErrorCode.NF_EMPTY_PREFIX: Explanation(
+        Kind.TARGET,
+        'A binding with an empty or blank `prefix`, which cwltool skips.',
+        'Remove the `prefix`, or write one.'),
+    SophiosErrorCode.NF_EMPTY_COMMAND: Explanation(
+        Kind.TARGET,
+        "A containerized tool whose command can render empty: CWL then runs the image's `CMD`, which the Nextflow"
+        ' task does not.',
+        'Give the tool a `baseCommand`, or an argument that is always there.'),
+    SophiosErrorCode.NF_FIELD: Explanation(
+        Kind.TARGET,
+        'A field the target does not lower and the field table does not list.',
+        'Remove the field, or compile with `--target cwl`.'),
+    SophiosErrorCode.NF_INVALID_CWL: Explanation(
+        Kind.DOCUMENT,
+        'CWL v1.2 that cwltool would not run either: a multi-input scatter with no `scatterMethod`; a '
+        '`scatterMethod`, `linkMerge` or `pickValue` CWL does not have; a requirement without a string `class`; a'
+        ' section, binding, `envDef`, `outputBinding`, glob or `outputEval` of the wrong shape; a `prefix` that '
+        'is not text; `separate` without `prefix`; a `position` that is not an integer; a port with no `type`; a '
+        '`when` that is not a string; a resource or CUDA field that is not a positive number.',
+        'Correct what the message names; `cwltool --validate` on the tool reports the same.'),
 }

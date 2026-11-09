@@ -8,7 +8,7 @@ import math
 import posixpath
 import re
 from types import MappingProxyType
-from typing import Any, ClassVar, Generic, TypeVar, get_args
+from typing import Any, ClassVar, Final, Generic, TypeVar, get_args
 
 from .lang.subset import Expr, canonical, check, references, validate
 from .nf_expr import NF_FINITE_HELPER, NF_ROUND_HELPER
@@ -115,6 +115,16 @@ def _freeze_json(value: Any) -> Any:
             raise ValueError("workflow params must contain JSON-compatible values")
 
 
+def json_value_problem(value: Any) -> str | None:
+    """Why `value` cannot be held as a workflow parameter, or None: the parameters are JSON, which has no NaN, no
+    infinity and no object key that is not a string."""
+    try:
+        _freeze_json(value)
+    except ValueError as error:
+        return str(error)
+    return None
+
+
 def _thaw_json(value: Any) -> Any:
     match value:
         case Mapping() as mapping:
@@ -136,6 +146,11 @@ def _validate_string_mapping(value: Mapping[str, str], *, field_name: str) -> No
                 raise ValueError(f"{field_name} keys must be non-empty strings")
 
 
+def literal_problem(text: str) -> str | None:
+    """Why `text` cannot be literal data in a command or path, or None: no program takes a NUL byte."""
+    return "template literals cannot contain NUL bytes" if "\x00" in text else None
+
+
 @dataclass(frozen=True, slots=True)
 class NfLiteral:
     """Literal data inside a command or path template."""
@@ -145,8 +160,8 @@ class NfLiteral:
     def __post_init__(self) -> None:
         if not isinstance(self.value, str):
             raise TypeError("template literal must be a string")
-        if "\x00" in self.value:
-            raise ValueError("template literals cannot contain NUL bytes")
+        if (problem := literal_problem(self.value)) is not None:
+            raise ValueError(problem)
 
     def to_dict(self) -> dict[str, str]:
         """Return a JSON-compatible representation.
@@ -355,6 +370,13 @@ NfCommandToken = NfTemplate | NfFlag | NfArrayBinding | NfOptionalBinding | NfSh
 _SHELL_VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
+def environment_name_problem(name: Any) -> str | None:
+    """Why `name` cannot name an environment variable a task exports, or None: it must be a shell variable name."""
+    if isinstance(name, str) and _SHELL_VARIABLE.fullmatch(name):
+        return None
+    return f"environment variable name must be a shell variable name, got {name!r}"
+
+
 @dataclass(frozen=True, slots=True)
 class NfEnvVar:
     """One environment variable the task exports before its command.
@@ -367,8 +389,8 @@ class NfEnvVar:
     value: NfTemplate
 
     def __post_init__(self) -> None:
-        if not isinstance(self.name, str) or not _SHELL_VARIABLE.fullmatch(self.name):
-            raise ValueError(f"environment variable name must be a shell variable name, got {self.name!r}")
+        if (problem := environment_name_problem(self.name)) is not None:
+            raise ValueError(problem)
         match self.value:
             case NfTemplate(segments=[NfLiteral() | NfInputReference()]):
                 pass
@@ -532,6 +554,19 @@ def _glob_names_one_file(template: NfTemplate) -> bool:
     )
 
 
+def entryname_problem(name: Any) -> str | None:
+    """Why `name` cannot name an InitialWorkDirRequirement entry in a task's directory, or None."""
+    if not isinstance(name, str) or not name.strip():
+        return "entryname must be a non-empty string"
+    if "/" in name or "\x00" in name:
+        return "entryname must not contain a path separator or NUL byte"
+    if name in {".", ".."}:
+        return f"entryname must not be {name!r}, which names a directory, not an entry"
+    if name.startswith(NF_ENTRY_STAGING_PREFIX):
+        return f"entryname must not begin with {NF_ENTRY_STAGING_PREFIX!r}, which Sophios reserves"
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class NfEntry:
     """An ``InitialWorkDirRequirement`` entry the task makes from its input before the command runs.
@@ -546,15 +581,8 @@ class NfEntry:
     copy: bool = False
 
     def __post_init__(self) -> None:
-        if self.name is not None:
-            if not isinstance(self.name, str) or not self.name.strip():
-                raise ValueError("entryname must be a non-empty string")
-            if "/" in self.name or "\x00" in self.name:
-                raise ValueError("entryname must not contain a path separator or NUL byte")
-            if self.name in {".", ".."}:
-                raise ValueError(f"entryname must not be {self.name!r}, which names a directory, not an entry")
-            if self.name.startswith(NF_ENTRY_STAGING_PREFIX):
-                raise ValueError(f"entryname must not begin with {NF_ENTRY_STAGING_PREFIX!r}, which Sophios reserves")
+        if self.name is not None and (problem := entryname_problem(self.name)) is not None:
+            raise ValueError(problem)
         if not isinstance(self.copy, bool):
             raise TypeError("entry copy must be a bool")
 
@@ -580,6 +608,24 @@ def linked_reference(template: NfTemplate | None) -> str | None:
     names = {mark: segment.name for mark, segment in zip(marks, template.segments, strict=True)
              if not isinstance(segment, NfLiteral)}
     return names.get(posixpath.normpath("".join(marks)).split("/")[0])
+
+
+def staged_write_problems(process: str, inputs: Sequence["NfPort"], outputs: Sequence["NfPort"],
+                          command: "NfCommand") -> list[str]:
+    """Each glob, stdout or stderr of a process at or inside the name an input is staged under, which names the link
+    the input is staged under, whatever that name is (design §6, Basename references)."""
+    problems: list[str] = []
+    paths = {port.name: port.entry for port in inputs if port.qualifier == "path"}
+    for port in outputs:
+        if (name := linked_reference(port.glob)) in paths and (advice := link_refusal(paths[name], writes=False)):
+            problems.append(f"process {process!r} output {port.name!r} globs the staged input {name!r}, or a name "
+                            f"inside it, which a CWL glob does not match: {advice}")
+    for stream in ("stdout", "stderr"):
+        name = linked_reference(getattr(command, stream))
+        if name in paths and (advice := link_refusal(paths[name], writes=True)):
+            problems.append(f"process {process!r} {stream} writes through the link input {name!r} is staged under, "
+                            f"into what the input names: {advice}")
+    return problems
 
 
 def link_refusal(entry: NfEntry | None, *, writes: bool) -> str | None:
@@ -735,6 +781,63 @@ class NfPort:  # pylint: disable=too-many-instance-attributes
         }
 
 
+def _referenced_names(command: "NfCommand", outputs: Sequence["NfPort"]) -> set[str]:
+    """Every input a process's command tokens, its templates and its output globs reference."""
+    templates = [*command.templates, *(port.glob for port in outputs if port.glob)]
+    segments = [segment for template in templates for segment in template.segments]
+    tokens = {token.name for token in command.tokens if isinstance(token, (NfFlag, NfArrayBinding, NfOptionalBinding))}
+    return tokens | {
+        segment.name for segment in segments if isinstance(segment, (NfBasenameReference, NfInputReference))}
+
+
+#: What `reference_problems` names a broken rule, so a caller can tell an array referenced as one value apart.
+ARRAY_REFERENCE: Final = "array-marked inputs may only be referenced by array bindings"
+
+
+def reference_problems(process: str, inputs: Sequence["NfPort"], step_only: Sequence["NfPort"],
+                       outputs: Sequence["NfPort"], command: "NfCommand") -> list[tuple[str, str]]:
+    """Each reference of a process's command, environment and globs that its inputs cannot take: the rule it
+    breaks, and why. A step-only input is never read; a name is a declared input; a flag, an optional binding and an
+    environment variable read a value, a basename a path, an array binding an array; and an array is read only by
+    an array binding, since a plain or basename reference renders it as a Groovy list and a flag lets list
+    truthiness decide."""
+    problems: list[tuple[str, str]] = []
+    input_names = {port.name for port in inputs}
+    flag_names = {token.name for token in command.tokens if isinstance(token, NfFlag)}
+    array_binding_names = {token.name for token in command.tokens if isinstance(token, NfArrayBinding)}
+    optional_binding_names = {token.name for token in command.tokens if isinstance(token, NfOptionalBinding)}
+    templates = [*command.templates, *(port.glob for port in outputs if port.glob)]
+    segments = [segment for template in templates for segment in template.segments]
+    basename_names = {segment.name for segment in segments if isinstance(segment, NfBasenameReference)}
+    plain_reference_names = {segment.name for segment in segments if isinstance(segment, NfInputReference)}
+    referenced_names = _referenced_names(command, outputs)
+    env_names = {
+        segment.name for variable in command.env for segment in variable.value.segments
+        if isinstance(segment, NfInputReference)
+    }
+    if carried := (referenced_names | env_names) & {port.name for port in step_only}:
+        problems.append(("step-only", f"process {process!r} command reads the step-only inputs "
+                         f"{', '.join(sorted(carried))}, which its tool does not declare"))
+    if unknown := (referenced_names | env_names) - input_names:
+        problems.append(("unknown", f"process {process!r} templates reference unknown inputs: "
+                         f"{', '.join(sorted(unknown))}"))
+        return problems
+    input_ports = {port.name: port for port in inputs}
+    rules: tuple[tuple[set[str], Callable[[NfPort], bool], str], ...] = (
+        (flag_names, lambda port: port.qualifier == "val", "flag tokens must reference val inputs"),
+        (optional_binding_names, lambda port: port.qualifier == "val", "optional bindings must reference val inputs"),
+        (env_names, lambda port: port.qualifier == "val", "environment variables must reference val inputs"),
+        (basename_names, lambda port: port.qualifier == "path", "basename references must target path inputs"),
+        (array_binding_names, lambda port: port.is_array, "array bindings must reference array-marked inputs"),
+        (plain_reference_names | basename_names | flag_names | optional_binding_names, lambda port: not port.is_array,
+         ARRAY_REFERENCE),
+    )
+    for referencing, admits, rule in rules:
+        if invalid := sorted(name for name in referencing if not admits(input_ports[name])):
+            problems.append((rule, f"process {process!r} {rule}: {', '.join(invalid)}"))
+    return problems
+
+
 @dataclass(frozen=True, slots=True)
 class NfProcess:
     """An immutable executable Nextflow process.
@@ -792,61 +895,9 @@ class NfProcess:
             raise ValueError("array-typed outputs are deferred beyond this lowering")
         if not isinstance(self.command, NfCommand):
             raise TypeError("process command must be an NfCommand")
-        input_names = {port.name for port in inputs}
-        flag_names = {token.name for token in self.command.tokens if isinstance(token, NfFlag)}
-        array_binding_names = {
-            token.name for token in self.command.tokens if isinstance(token, NfArrayBinding)
-        }
-        optional_binding_names = {
-            token.name for token in self.command.tokens if isinstance(token, NfOptionalBinding)
-        }
-        templates = [*self.command.templates, *(port.glob for port in outputs if port.glob)]
-        segments = [segment for template in templates for segment in template.segments]
-        basename_names = {
-            segment.name for segment in segments if isinstance(segment, NfBasenameReference)
-        }
-        plain_reference_names = {
-            segment.name for segment in segments if isinstance(segment, NfInputReference)
-        }
-        referenced_names = (
-            flag_names | array_binding_names | optional_binding_names | basename_names | plain_reference_names
-        )
-        env_names = {
-            segment.name for variable in self.command.env for segment in variable.value.segments
-            if isinstance(segment, NfInputReference)
-        }
-        if carried := (referenced_names | env_names) & {port.name for port in step_only}:
-            raise ValueError(
-                f"process {self.name!r} command reads the step-only inputs {', '.join(sorted(carried))}, which "
-                "its tool does not declare"
-            )
-        if unknown := (referenced_names | env_names) - input_names:
-            raise ValueError(
-                f"process {self.name!r} templates reference unknown inputs: {', '.join(sorted(unknown))}"
-            )
-        input_ports = {port.name: port for port in inputs}
-        rules: tuple[tuple[set[str], Callable[[NfPort], bool], str], ...] = (
-            (flag_names, lambda port: port.qualifier == "val", "flag tokens must reference val inputs"),
-            (
-                optional_binding_names, lambda port: port.qualifier == "val",
-                "optional bindings must reference val inputs",
-            ),
-            (env_names, lambda port: port.qualifier == "val", "environment variables must reference val inputs"),
-            (basename_names, lambda port: port.qualifier == "path", "basename references must target path inputs"),
-            (array_binding_names, lambda port: port.is_array, "array bindings must reference array-marked inputs"),
-            # The converse direction: every reference to an array-marked input
-            # must be an array binding. Plain and basename references render the
-            # collection as a Groovy list, while a flag lets list truthiness decide
-            # whether its prefix appears.
-            (
-                plain_reference_names | basename_names | flag_names | optional_binding_names,
-                lambda port: not port.is_array,
-                "array-marked inputs may only be referenced by array bindings",
-            ),
-        )
-        for referencing, admits, rule in rules:
-            if invalid := sorted(name for name in referencing if not admits(input_ports[name])):
-                raise ValueError(f"process {self.name!r} {rule}: {', '.join(invalid)}")
+        if broken := reference_problems(self.name, inputs, step_only, outputs, self.command):
+            raise ValueError(broken[0][1])
+        referenced_names = _referenced_names(self.command, outputs)
         entry_names = [port.entry.name for port in inputs if port.entry is not None and port.entry.name is not None]
         renamed = {port.name for port in inputs if port.entry is not None and port.entry.name is not None}
         if overlap := renamed & referenced_names:
@@ -856,22 +907,8 @@ class NfProcess:
             )
         if len(entry_names) != len(set(entry_names)):
             raise ValueError(f"process {self.name!r} makes two InitialWorkDirRequirement entries with one literal name")
-        # A glob, stdout or stderr at or inside an input's staged name names the
-        # link the input is staged under, whatever that name is.
-        paths = {port.name: port.entry for port in inputs if port.qualifier == "path"}
-        for port in outputs:
-            if (name := linked_reference(port.glob)) in paths and (advice := link_refusal(paths[name], writes=False)):
-                raise ValueError(
-                    f"process {self.name!r} output {port.name!r} globs the staged input {name!r}, or a name inside "
-                    f"it, which a CWL glob does not match: {advice}"
-                )
-        for stream in ("stdout", "stderr"):
-            name = linked_reference(getattr(self.command, stream))
-            if name in paths and (advice := link_refusal(paths[name], writes=True)):
-                raise ValueError(
-                    f"process {self.name!r} {stream} writes through the link input {name!r} is staged under, into "
-                    f"what the input names: {advice}"
-                )
+        if staged := staged_write_problems(self.name, inputs, outputs, self.command):
+            raise ValueError(staged[0])
         match self.container:
             case None:
                 pass
@@ -892,12 +929,8 @@ class NfProcess:
             raise TypeError("process condition must be a typed Expr or None")
         validate(condition)
         ports = {port.name: port for port in self.all_inputs}
-        if not ports:
-            raise ValueError(
-                f"process {self.name!r} has a condition but no inputs: a conditional step "
-                "is decided once per invocation of its inputs, so it needs at least one "
-                "input to gate on"
-            )
+        if (problem := condition_without_inputs(self.name, self.all_inputs)) is not None:
+            raise ValueError(problem)
         if invalid := sorted(
             name for name in references(condition)
             if name not in ports or ports[name].qualifier != "val" or ports[name].is_array
@@ -929,6 +962,15 @@ class NfProcess:
         if self.step_only_inputs:
             item["step_only_inputs"] = [port.to_dict() for port in self.step_only_inputs]
         return item
+
+
+def condition_without_inputs(process: str, inputs: Sequence[NfPort]) -> str | None:
+    """Why a process with `inputs` cannot carry a condition, or None: it is decided once per invocation of its
+    inputs, so it needs at least one."""
+    if inputs:
+        return None
+    return (f"process {process!r} has a condition but no inputs: a conditional step is decided once per invocation "
+            "of its inputs, so it needs at least one input to gate on")
 
 
 def _type_condition(name: str, condition: Expr, ports: Iterable[NfPort]) -> None:
@@ -1256,6 +1298,62 @@ def topological_order(
     return ordered
 
 
+def absent_path_problems(params: Mapping[str, Any], param_types: Mapping[str, str]) -> list[str]:
+    """Each parameter that holds the absent sentinel for a File? or a Directory?: no path parameter has a lowering of an
+    absent value."""
+    return [f"workflow input {name!r} is an absent optional {declared}, which has no lowering; give it a value"
+            for name, declared in sorted(param_types.items())
+            if declared in ("File?", "Directory?") and isinstance(params.get(name), (list, tuple)) and not params[name]]
+
+
+def optional_output_problems(processes: Sequence[NfProcess], connections: Sequence["NfConnection"]) -> list[str]:
+    """Each optional output a workflow cannot take as it is (design §6, Outputs and globs): one of a multi-input
+    scattered process, whose gather would drop the absent positions; one that may match more than one file and reaches
+    no workflow output, where at most one match is checked; and one another process reads, since null has one
+    representation, the [] sentinel, and no input has an approved lowering of it."""
+    by_name = {process.name: process for process in processes}
+    problems: list[str] = []
+    multi_scattered = sorted({connection.to_process for connection in connections
+                              if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
+                              and connection.adapter in MULTI_INPUT_ADAPTERS})
+    for name in multi_scattered:
+        if name in by_name and (optional := [port.name for port in by_name[name].outputs if port.optional]):
+            problems.append(f"scattered process {name!r} cannot have the optional outputs {', '.join(optional)}")
+    checked = {(connection.from_process, connection.from_port)
+               for connection in connections if isinstance(connection, NfWorkflowOutputConnection)}
+    for process in processes:
+        if unchecked := [port.name for port in process.outputs
+                         if port.optional and port.one_file and (process.name, port.name) not in checked]:
+            problems.append(f"process {process.name!r} optional outputs {', '.join(unchecked)} must match at most one "
+                            "file and must reach a workflow output, where that is checked")
+    for connection in connections:
+        for source in connection.sources if isinstance(connection, NfStepInputConnection) else (connection,):
+            if not isinstance(source, NfProcessConnection) or source.from_process not in by_name:
+                continue
+            port = next((port for port in by_name[source.from_process].outputs if port.name == source.from_port), None)
+            if port is not None and port.optional:
+                problems.append(f"connection {source.from_process}.{source.from_port} -> {source.to_process}."
+                                f"{source.to_port} consumes an optional output, which may be null; only a workflow "
+                                "output can take it")
+    return problems
+
+
+def endpoint_problems(processes: Sequence[NfProcess], connections: Sequence["NfConnection"]) -> list[str]:
+    """Each connection end that names no process, or no port of its process: an output a source names, an input a
+    destination names."""
+    by_name = {process.name: process for process in processes}
+    problems: list[str] = []
+    for connection in connections:
+        for each in connection.sources if isinstance(connection, NfStepInputConnection) else (connection,):
+            if isinstance(each, (NfProcessConnection, NfWorkflowOutputConnection)):
+                source = by_name.get(each.from_process)
+                if source is None:
+                    problems.append(f"connection references unknown source process {each.from_process!r}")
+                elif each.from_port not in {port.name for port in source.outputs}:
+                    problems.append(f"connection references unknown output port {each.from_process}.{each.from_port}")
+    return problems
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow.
@@ -1306,10 +1404,8 @@ class ExecutableNextflowWorkflow:
             raise ValueError(f"workflow param_types must be one of PARAM_TYPES, not {', '.join(map(repr, unknown))}")
         # The entry check stops a [] given for a File? or a Directory?: no path
         # parameter has a lowering of an absent value.
-        if absent := sorted(name for name, declared in self.param_types.items()
-                            if declared in ("File?", "Directory?") and frozen_params[name] == ()):
-            raise ValueError(f"workflow input {absent[0]!r} is an absent optional {self.param_types[absent[0]]}, "
-                             "which has no lowering; give it a value")
+        if absent := absent_path_problems(frozen_params, self.param_types):
+            raise ValueError(absent[0])
         object.__setattr__(self, "param_types", FrozenMapping(self.param_types))
         self._validate_graph()
         self._fill_scalar_types()
@@ -1333,6 +1429,8 @@ class ExecutableNextflowWorkflow:
             raise ValueError(f"workflow name {self.name!r} is also a process name")
         if len(set(self.connections)) != len(self.connections):
             raise ValueError("workflow contains a duplicate connection")
+        if unknown := endpoint_problems(self.processes, self.connections):
+            raise ValueError(unknown[0])
 
         incoming: set[tuple[str, str]] = set()
         workflow_outputs: set[str] = set()
@@ -1343,26 +1441,10 @@ class ExecutableNextflowWorkflow:
             if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
             and connection.adapter in MULTI_INPUT_ADAPTERS
         }
-        for name in multi_scattered:
-            if optional := [port.name for port in process_by_name[name].outputs if port.optional]:
-                # A gather would drop the absent positions instead of keeping null there.
-                raise ValueError(f"scattered process {name!r} cannot have the optional outputs {', '.join(optional)}")
+        if optional := optional_output_problems(self.processes, self.connections):
+            raise ValueError(optional[0])
         # A val input takes a path's value and stages nothing, so a step-only input takes any source.
         carried = {(process.name, port.name) for process in self.processes for port in process.step_only_inputs}
-        checked = {
-            (connection.from_process, connection.from_port)
-            for connection in self.connections if isinstance(connection, NfWorkflowOutputConnection)
-        }
-        for process in self.processes:
-            # The workflow output is where at most one match is checked (design §6, Outputs and globs).
-            if unchecked := [
-                port.name for port in process.outputs
-                if port.optional and port.one_file and (process.name, port.name) not in checked
-            ]:
-                raise ValueError(
-                    f"process {process.name!r} optional outputs {', '.join(unchecked)} must match at most one "
-                    "file and must reach a workflow output, where that is checked"
-                )
 
         for connection in self.connections:
             merge = connection if isinstance(connection, NfStepInputConnection) else None
@@ -1466,13 +1548,6 @@ class ExecutableNextflowWorkflow:
                             raise ValueError(
                                 f"connection {from_process}.{from_port} -> {to_process}.{to_port} joins a "
                                 f"{source.path_kind or 'value'} output to a {destination.path_kind or 'value'} input"
-                            )
-                        if source.optional:
-                            # Null has one representation, the [] sentinel, and no path port
-                            # has an approved lowering of it; a workflow output reports it.
-                            raise ValueError(
-                                f"connection {from_process}.{from_port} -> {to_process}.{to_port} consumes an "
-                                "optional output, which may be null; only a workflow output can take it"
                             )
                         if source.capture == "text" and process_by_name[from_process].condition is None:
                             # The qualifier axis still has no general agreement
